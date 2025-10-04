@@ -85,7 +85,7 @@ namespace gs {
         // Export methods - join_threads controls sync vs async
         // if stem is not empty save splat as stem.ply
         void save_ply(const std::filesystem::path& root, int iteration, bool join_threads = true, std::string stem = "") const;
-        void save_sog(const std::filesystem::path& root, int iteration, int kmeans_iterations = 10, bool join_threads = true) const;
+        std::filesystem::path save_sog(const std::filesystem::path& root, int iteration, int kmeans_iterations = 10, bool join_threads = true) const;
 
         // Get attribute names for the PLY format
         std::vector<std::string> get_attribute_names() const;

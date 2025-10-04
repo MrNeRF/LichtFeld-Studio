@@ -79,23 +79,6 @@ namespace gs::gui::panels {
     }
 #endif // WIN32
 
-    void SaveProjectButton(const UIContext& ctx, TrainingPanelState& state) {
-        // Add Save Project button
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.3f, 0.9f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.4f, 1.0f, 1.0f));
-        if (ImGui::Button("Save Project", ImVec2(-1, 0))) {
-            auto project = ctx.viewer->getProject();
-            if (project) {
-                if (project->getIsTempProject()) {
-                    state.show_save_browser = true;
-                } else {
-                    events::cmd::SaveProject{project->getProjectOutputFolder().string()}.emit();
-                }
-            }
-        }
-        ImGui::PopStyleColor(2);
-    }
-
     void DrawTrainingParameters(const UIContext& ctx) {
         auto* trainer_manager = ctx.viewer->getTrainerManager();
         if (!trainer_manager || !trainer_manager->hasTrainer()) {
@@ -721,7 +704,6 @@ namespace gs::gui::panels {
                 ImGui::PopStyleColor(2);
             }
 
-            SaveProjectButton(ctx, state);
             break;
 
         case TrainerManager::State::Running:
@@ -768,7 +750,6 @@ namespace gs::gui::panels {
             }
             ImGui::PopStyleColor(2);
 
-            SaveProjectButton(ctx, state);
             break;
 
         case TrainerManager::State::Error:
@@ -867,15 +848,6 @@ namespace gs::gui::panels {
         }
 
         ImGui::TextColored(memColor, "Used GPU Memory: %.1f%% (%.1f/%.1f GB)", pctUsed, used_t / 1e9f, total_t / 1e9f);
-
-        // Render save project file browser
-        if (state.show_save_browser) {
-            state.save_browser.render(&state.show_save_browser);
-#ifdef WIN32
-            SaveProjectFileDialog(&state.show_save_browser);
-            state.show_save_browser = false;
-#endif // WIN32
-        }
     }
 
 } // namespace gs::gui::panels

@@ -553,7 +553,8 @@ namespace gs::management {
 
         setProjectOutputFolder(dst_dir);
         if (!fs::is_regular_file(output_file_name_)) {
-            LOG_ERROR("PortProjectToDir: {} orig path does not exists", output_file_name_.string());
+            // this can happen if user save an empty project with no data
+            LOG_DEBUG("PortProjectToDir: {} orig path does not exists", output_file_name_.string());
         }
         const std::string proj_filename = output_file_name_.filename().string();
         const fs::path dst_project_file_path = dst_dir / proj_filename;
@@ -601,6 +602,10 @@ namespace gs::management {
         LOG_INFO("Project was successfully ported to {}", dst_project_file_path.string());
 
         return true;
+    }
+
+    bool Project::getIsProjectEmpty() const {
+        return project_data_.data_set_info.data_path.empty() && project_data_.outputs.plys.empty();
     }
 
     std::shared_ptr<Project> CreateNewProject(const gs::param::DatasetConfig& data,
@@ -765,8 +770,8 @@ namespace gs::management {
 
         auto project = CreateNewProject(data_with_temp_output, opt, project_name, udpdate_file_on_change);
 
+        project->setIsTempProject(true);
         if (project && !data.data_path.empty()) {
-            project->setIsTempProject(true);
             project->lockProject();
         }
 

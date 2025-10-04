@@ -43,6 +43,8 @@ add_library(gs_visualizer STATIC
 
         # Tools
         tools/translation_gizmo_tool.cpp
+        gui/panels/menu_bar.cpp
+        gui/panels/menu_bar.hpp
 )
 
 # Set include directories

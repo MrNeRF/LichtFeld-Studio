@@ -189,7 +189,7 @@ namespace gs::visualizer {
             handleTrainingCompleted(event);
         });
 
-        // Listen to load file ( we need to update project)
+        // Listen to load dataset (we need to update project)
         cmd::LoadFile::when([this](const auto& cmd) {
             handleLoadFileCommand(cmd);
         });
@@ -342,7 +342,7 @@ namespace gs::visualizer {
         // If we are trying to close and the project is temporary, show dialog
         if (window_manager_->shouldClose() && !gui_manager_->isForceExit()) {
             if (project_) {
-                if (project_->getIsTempProject()) {
+                if (project_->getIsTempProject() && !project_->getIsProjectEmpty()) {
                     gui_manager_->showWindow("project_changed_dialog_box", true);
                     window_manager_->cancelClose();
                 }
@@ -453,9 +453,14 @@ namespace gs::visualizer {
                 continue;
             }
             bool is_last = (std::next(it) == plys.end());
+
             LOG_TRACE("Adding PLY '{}' to scene (visible: {})", ply_name, is_last);
-            scene_manager_->addSplatFile(it->ply_path, ply_name, is_last);
-            scene_manager_->setPLYVisibility(ply_name, is_last);
+            try {
+                scene_manager_->addSplatFile(it->ply_path, ply_name, is_last);
+                scene_manager_->setPLYVisibility(ply_name, is_last);
+            } catch (const std::exception& e) {
+                LOG_ERROR("failed loading ply path {}. reason {} ", it->ply_path.string(), e.what());
+            }
         }
     }
 
@@ -590,9 +595,14 @@ namespace gs::visualizer {
         if (cmd.is_dataset && project_) {
             auto data_config = project_->getProjectData().data_set_info;
             data_config.data_path = cmd.path;
-            data_config.output_path.clear();
 
-            project_ = gs::management::CreateTempNewProject(data_config, project_->getOptimizationParams());
+            if (project_->getIsTempProject()) {
+                data_config.output_path.clear();
+                project_ = gs::management::CreateTempNewProject(data_config, project_->getOptimizationParams());
+            } else { // else: project already exits (with output dir) - only need to replace data path
+                project_->setDataInfo(data_config);
+            }
+
             updateProjectOnModules();
         }
     }

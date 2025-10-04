@@ -1010,10 +1010,11 @@ namespace gs::training {
         strategy_->get_model().save_ply(save_path, iter_num, join_threads);
 
         // Save SOG format if requested - ALWAYS synchronous
+        std::filesystem::path sog_path;
         if (params_.optimization.save_sog) {
-            strategy_->get_model().save_sog(save_path, iter_num,
-                                            params_.optimization.sog_iterations,
-                                            true); // Always synchronous
+            sog_path = strategy_->get_model().save_sog(save_path, iter_num,
+                                                       params_.optimization.sog_iterations,
+                                                       true); // Always synchronous
         }
 
         // Update project with PLY info
@@ -1021,6 +1022,10 @@ namespace gs::training {
             const std::string ply_name = "splat_" + std::to_string(iter_num);
             const std::filesystem::path ply_path = save_path / (ply_name + ".ply");
             lf_project_->addPly(gs::management::PlyData(false, ply_path, iter_num, ply_name));
+            if (params_.optimization.save_sog) {
+                std::string ply_name_sog = sog_path.stem().string();
+                lf_project_->addPly(gs::management::PlyData(false, sog_path, iter_num, ply_name_sog));
+            }
         }
 
         LOG_DEBUG("PLY save initiated: {} (sync={}), SOG always sync", save_path.string(), join_threads);

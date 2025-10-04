@@ -161,6 +161,9 @@ namespace gs::management {
         bool portProjectToDir(const std::filesystem::path& dst_dir);
 
         [[nodiscard]] bool getIsTempProject() const { return is_temp_project_; }
+        // is project has no dataset and has no ply - it is empty (in the start of the application)
+        [[nodiscard]] bool getIsProjectEmpty() const;
+
         void setIsTempProject(bool is_temp) { is_temp_project_ = is_temp; }
         bool lockProject();
         bool unlockProject();

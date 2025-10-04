@@ -34,7 +34,7 @@ namespace gs::visualizer {
 
     private:
         void setupEventHandlers();
-        void handleLoadFileCommand(const events::cmd::LoadFile& cmd);
+        void handleLoadFileCommand(bool is_dataset, const std::filesystem::path & path);
         void addPLYToScene(const std::filesystem::path& path);
         void addSOGToScene(const std::filesystem::path& path);
         void addSplatFileToScene(const std::filesystem::path& path);

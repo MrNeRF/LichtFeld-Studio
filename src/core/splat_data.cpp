@@ -168,7 +168,8 @@ namespace {
         }
     }
 
-    void write_sog_impl(const gs::SplatData& splat_data,
+    //returns the output path
+    std::filesystem::path write_sog_impl(const gs::SplatData& splat_data,
                         const std::filesystem::path& root,
                         int iteration,
                         int kmeans_iterations) {
@@ -179,9 +180,10 @@ namespace {
         fs::create_directories(sog_dir);
 
         // Set up SOG write options - use .sog extension to create bundle
+        std::filesystem::path sog_out_path = sog_dir / ("splat_" + std::to_string(iteration) + "_sog.sog");
         gs::core::SogWriteOptions options{
             .iterations = kmeans_iterations,
-            .output_path = sog_dir / ("splat_" + std::to_string(iteration) + ".sog")};
+            .output_path = sog_out_path};
 
         // Write SOG format
         auto result = gs::core::write_sog(splat_data, options);
@@ -190,6 +192,8 @@ namespace {
         } else {
             LOG_DEBUG("Successfully wrote SOG format for iteration {}", iteration);
         }
+
+        return sog_out_path;
     }
 } // namespace
 
@@ -471,10 +475,10 @@ namespace gs {
     }
 
     // Export to SOG
-    void SplatData::save_sog(const std::filesystem::path& root, int iteration, int kmeans_iterations, bool join_threads) const {
+    std::filesystem::path SplatData::save_sog(const std::filesystem::path& root, int iteration, int kmeans_iterations, bool join_threads) const {
         // SOG must always be synchronous - k-means clustering is too heavy for async
         // and the shared data access patterns don't work well with async execution
-        write_sog_impl(*this, root, iteration, kmeans_iterations);
+        return  write_sog_impl(*this, root, iteration, kmeans_iterations);
     }
 
     PointCloud SplatData::to_point_cloud() const {

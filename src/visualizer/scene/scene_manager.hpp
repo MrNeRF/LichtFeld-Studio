@@ -124,6 +124,9 @@ namespace gs {
         SceneInfo getSceneInfo() const;
 
         void setProject(std::shared_ptr<gs::management::Project> project) { lfs_project_ = project; }
+
+        [[nodiscard]] std::shared_ptr<gs::management::Project> getProject() const { return lfs_project_; }
+
         bool renamePLY(const std::string& old_name, const std::string& new_name);
         void updatePlyPath(const std::string& ply_name, const std::filesystem::path& ply_path);
 
