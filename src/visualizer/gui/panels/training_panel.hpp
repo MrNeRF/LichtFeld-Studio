@@ -21,8 +21,6 @@ namespace gs::gui::panels {
         bool save_in_progress = false;
         std::chrono::steady_clock::time_point save_start_time;
 
-        // Save project browser
-        bool show_save_browser = false;
         SaveProjectBrowser save_browser;
 
         static TrainingPanelState& getInstance() {

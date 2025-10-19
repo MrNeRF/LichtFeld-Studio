@@ -32,6 +32,7 @@ foreach ($SCENE in $SCENE_LIST) {
         --images "images_$DATA_FACTOR" `
         --iter 30000 `
         --headless
+		--config eval/mcmc_optimization_params.json
 
     # End timer for this scene
     $scene_end = Get-Date

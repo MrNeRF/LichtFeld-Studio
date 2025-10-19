@@ -30,6 +30,7 @@ namespace gs::rendering {
             bool point_cloud_mode = false;
             float voxel_size = 0.01f;
             bool gut = false;
+            int sh_degree = 0;
         };
 
         struct RenderResult {

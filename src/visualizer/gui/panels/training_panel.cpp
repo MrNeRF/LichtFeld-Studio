@@ -6,7 +6,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "gui/ui_widgets.hpp"
-#include "gui/utils/native_dialogs.hpp"
+#include "gui/utils/windows_utils.hpp"
 #include "visualizer_impl.hpp"
 
 #include <chrono>
@@ -78,23 +78,6 @@ namespace gs::gui::panels {
         }
     }
 #endif // WIN32
-
-    void SaveProjectButton(const UIContext& ctx, TrainingPanelState& state) {
-        // Add Save Project button
-        ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.7f, 0.3f, 0.9f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.8f, 0.4f, 1.0f, 1.0f));
-        if (ImGui::Button("Save Project", ImVec2(-1, 0))) {
-            auto project = ctx.viewer->getProject();
-            if (project) {
-                if (project->getIsTempProject()) {
-                    state.show_save_browser = true;
-                } else {
-                    events::cmd::SaveProject{project->getProjectOutputFolder().string()}.emit();
-                }
-            }
-        }
-        ImGui::PopStyleColor(2);
-    }
 
     void DrawTrainingParameters(const UIContext& ctx) {
         auto* trainer_manager = ctx.viewer->getTrainerManager();
@@ -697,7 +680,6 @@ namespace gs::gui::panels {
         // Get state directly from the single source of truth
         auto trainer_state = trainer_manager->getState();
         int current_iteration = trainer_manager->getCurrentIteration();
-        float current_loss = trainer_manager->getCurrentLoss();
 
         // Render controls based on trainer state
         switch (trainer_state) {
@@ -722,7 +704,6 @@ namespace gs::gui::panels {
                 ImGui::PopStyleColor(2);
             }
 
-            SaveProjectButton(ctx, state);
             break;
 
         case TrainerManager::State::Running:
@@ -769,7 +750,6 @@ namespace gs::gui::panels {
             }
             ImGui::PopStyleColor(2);
 
-            SaveProjectButton(ctx, state);
             break;
 
         case TrainerManager::State::Error:
@@ -852,19 +832,22 @@ namespace gs::gui::panels {
         // Display iteration with rate
         ImGui::Text("Iteration: %d (%.1f iters/sec)", current_iteration, iters_per_sec);
 
-        ImGui::Text("Loss: %.6f", current_loss);
-
         int num_splats = trainer_manager->getNumSplats();
         ImGui::Text("num Splats: %d", num_splats);
 
-        // Render save project file browser
-        if (state.show_save_browser) {
-            state.save_browser.render(&state.show_save_browser);
-#ifdef WIN32
-            SaveProjectFileDialog(&state.show_save_browser);
-            state.show_save_browser = false;
-#endif // WIN32
+        // display memory usage
+        size_t free_t, total_t;
+        cudaMemGetInfo(&free_t, &total_t);
+        size_t used_t = total_t - free_t;
+
+        ImVec4 memColor = ImVec4(0.0f, 0.0f, 0.0f, 1.0f);
+        float pctUsed = (used_t / 1e9f) / (total_t / 1e9f) * 100;
+
+        if (pctUsed > 75) {
+            memColor = ImVec4(0.9f, 0.2f, 0.2f, 1.0f); // red
         }
+
+        ImGui::TextColored(memColor, "Used GPU Memory: %.1f%% (%.1f/%.1f GB)", pctUsed, used_t / 1e9f, total_t / 1e9f);
     }
 
 } // namespace gs::gui::panels

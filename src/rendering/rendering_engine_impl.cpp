@@ -159,7 +159,8 @@ namespace gs::rendering {
             .background_color = request.background_color,
             .point_cloud_mode = request.point_cloud_mode,
             .voxel_size = request.voxel_size,
-            .gut = request.gut};
+            .gut = request.gut,
+            .sh_degree = request.sh_degree};
 
         // Convert crop box if present
         std::unique_ptr<gs::geometry::BoundingBox> temp_crop_box;
@@ -418,7 +419,8 @@ namespace gs::rendering {
             .background_color = request.background_color,
             .point_cloud_mode = request.point_cloud_mode,
             .voxel_size = request.voxel_size,
-            .gut = request.gut};
+            .gut = request.gut,
+            .sh_degree = request.sh_degree};
 
         auto result = pipeline_.render(model, internal_request);
 

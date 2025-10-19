@@ -20,10 +20,20 @@ jobs:
       image: nvidia/cuda:12.8.0-devel-ubuntu24.04
     env:
       VCPKG_ROOT: ${{ github.workspace }}/../vcpkg
+      CC: gcc-14
+      CXX: g++-14
+      VCPKG_BUILD_TYPE: release
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+
+      - name: Free up disk space
+        run: |
+          df -h
+          apt-get clean
+          rm -rf /var/lib/apt/lists/*
+          df -h
 
       - name: Install GCC 14 and dependencies
         run: |
@@ -55,6 +65,14 @@ jobs:
           cd ..
           git clone https://github.com/microsoft/vcpkg.git
           ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
+          
+          # Configure vcpkg to only build release and reduce parallelism
+          cat >> $VCPKG_ROOT/triplets/x64-linux.cmake << EOF
+          set(VCPKG_BUILD_TYPE release)
+          set(VCPKG_MAX_CONCURRENCY 2)
+          EOF
+          
+          cat $VCPKG_ROOT/triplets/x64-linux.cmake
 
       - name: Cache LibTorch
         id: cache-libtorch
@@ -83,13 +101,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /github/home/.cache/vcpkg/archives
-          key: vcpkg-binary-archives-${{ runner.os }}-${{ github.run_id }}
+          key: vcpkg-binary-archives-${{ runner.os }}-${{ hashFiles('**/vcpkg.json') }}
           restore-keys: |
-            vcpkg-binary-archives-${{ runner.os }}
+            vcpkg-binary-archives-${{ runner.os }}-
 
       - name: Configure with CMake
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -G Ninja
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -G Ninja \
+            -DCMAKE_MAKE_PROGRAM=/usr/bin/ninja \
+            -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
 
       - name: Build
-        run: cmake --build build --parallel 1
+        run: cmake --build build --config Release --parallel $(nproc)

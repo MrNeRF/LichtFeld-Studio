@@ -760,6 +760,7 @@ namespace gs::visualizer {
 
         // Set the FOV
         events::ui::RenderSettingsChanged{
+            .sh_degree = std::nullopt,
             .fov = fov_y_deg,
             .scaling_modifier = std::nullopt,
             .antialiasing = std::nullopt,

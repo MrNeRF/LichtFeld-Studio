@@ -71,9 +71,9 @@ namespace fast_gs::rasterization::kernels {
                 grad_coefficients_ptr[5] = (0.94617469575755997f * zz - 0.31539156525251999f) * grad_color;
                 grad_coefficients_ptr[6] = (-1.0925484305920792f * xz) * grad_color;
                 grad_coefficients_ptr[7] = (0.54627421529603959f * xx - 0.54627421529603959f * yy) * grad_color;
-                grad_direction_x = grad_direction_x + (1.0925484305920792f * y) * coefficients_ptr[3] + (-1.0925484305920792f * z) * coefficients_ptr[6] + (1.0925484305920792 * x) * coefficients_ptr[7];
-                grad_direction_y = grad_direction_y + (1.0925484305920792f * x) * coefficients_ptr[3] + (-1.0925484305920792f * z) * coefficients_ptr[4] + (-1.0925484305920792 * y) * coefficients_ptr[7];
-                grad_direction_z = grad_direction_z + (-1.0925484305920792f * y) * coefficients_ptr[4] + (1.8923493915151202 * z) * coefficients_ptr[5] + (-1.0925484305920792f * x) * coefficients_ptr[6];
+                grad_direction_x = grad_direction_x + (1.0925484305920792f * y) * coefficients_ptr[3] + (-1.0925484305920792f * z) * coefficients_ptr[6] + (1.0925484305920792f * x) * coefficients_ptr[7];
+                grad_direction_y = grad_direction_y + (1.0925484305920792f * x) * coefficients_ptr[3] + (-1.0925484305920792f * z) * coefficients_ptr[4] + (-1.0925484305920792f * y) * coefficients_ptr[7];
+                grad_direction_z = grad_direction_z + (-1.0925484305920792f * y) * coefficients_ptr[4] + (1.8923493915151202f * z) * coefficients_ptr[5] + (-1.0925484305920792f * x) * coefficients_ptr[6];
                 if (active_sh_bases > 9) {
                     grad_coefficients_ptr[8] = (0.59004358992664352f * y * (-3.0f * xx + yy)) * grad_color;
                     grad_coefficients_ptr[9] = (2.8906114426405538f * xy * z) * grad_color;

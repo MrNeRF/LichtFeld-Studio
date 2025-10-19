@@ -10,8 +10,10 @@
 #include "gui/panels/tools_panel.hpp"
 #include "gui/panels/training_panel.hpp"
 #include "gui/ui_widgets.hpp"
+#include "gui/utils/windows_utils.hpp"
 #include "gui/windows/file_browser.hpp"
 #include "gui/windows/project_changed_dialog_box.hpp"
+
 #include "internal/resource_paths.hpp"
 #include "visualizer_impl.hpp"
 
@@ -33,12 +35,14 @@ namespace gs::gui {
         project_changed_dialog_box_ = std::make_unique<ProjectChangedDialogBox>();
         scene_panel_ = std::make_unique<ScenePanel>(viewer->trainer_manager_);
         save_project_browser_ = std::make_unique<SaveProjectBrowser>();
+        menu_bar_ = std::make_unique<MenuBar>();
 
         // Initialize window states
         window_states_["file_browser"] = false;
         window_states_["scene_panel"] = true;
         window_states_["project_changed_dialog_box"] = false;
         window_states_["save_project_browser_before_exit"] = false;
+        window_states_["show_save_browser"] = false;
         window_states_["system_console"] = false;
         window_states_["training_tab"] = false;
 
@@ -54,6 +58,55 @@ namespace gs::gui {
 
     GuiManager::~GuiManager() {
         // Cleanup handled automatically
+    }
+
+    void GuiManager::initMenuBar() {
+        menu_bar_->setOnImportDataset([this]() {
+            window_states_["file_browser"] = true;
+#ifdef WIN32
+            // show native windows file dialog for project file selection
+            OpenDatasetFolderDialog();
+
+            // hide the file browser
+            events::cmd::ShowWindow{.window_name = "file_browser", .show = false}.emit();
+#endif // WIN32
+        });
+
+        menu_bar_->setOnOpenProject([this]() {
+            window_states_["file_browser"] = true;
+#ifdef WIN32
+            // show native windows file dialog for project file selection
+            OpenProjectFileDialog();
+
+            // hide the file browser
+            events::cmd::ShowWindow{.window_name = "file_browser", .show = false}.emit();
+#endif // WIN32
+        });
+
+        menu_bar_->setOnImportPLY([this]() {
+            window_states_["file_browser"] = true;
+#ifdef WIN32
+            // show native windows file dialog for project file selection
+            OpenPlyFileDialog();
+
+            // hide the file browser
+            events::cmd::ShowWindow{.window_name = "file_browser", .show = false}.emit();
+#endif // WIN32
+        });
+
+        menu_bar_->setOnSaveProjectAs([this]() {
+            window_states_["show_save_browser"] = true;
+        });
+
+        menu_bar_->setOnSaveProject([this]() {
+            if (viewer_->project_) {
+                events::cmd::SaveProject{viewer_->project_->getProjectOutputFolder().string()}.emit();
+            }
+        });
+
+        menu_bar_->setOnExit([this]() {
+            glfwSetWindowShouldClose(viewer_->getWindow(), true);
+        });
     }
 
     void GuiManager::init() {
@@ -129,6 +182,8 @@ namespace gs::gui {
                 events::cmd::LoadFile{.path = path, .is_dataset = true}.emit();
             }
         });
+
+        initMenuBar();
     }
 
     void GuiManager::shutdown() {
@@ -150,6 +205,10 @@ namespace gs::gui {
         bool mouse_in_viewport = isPositionInViewport(mouse_pos.x, mouse_pos.y);
 
         ImGui::NewFrame();
+
+        if (menu_bar_) {
+            menu_bar_->render();
+        }
 
         // Override ImGui's mouse capture for right/middle buttons when in viewport
         // This ensures that camera controls work properly
@@ -287,6 +346,19 @@ namespace gs::gui {
                 glfwSetWindowShouldClose(viewer_->getWindow(), true);
                 LOG_INFO("Exiting LichtFeldStudio gracefully after project save");
             }
+        }
+
+        if (window_states_["show_save_browser"]) {
+#ifdef WIN32
+            save_project_browser_->SaveProjectFileDialog(&window_states_["show_save_browser"]);
+#else
+            save_project_browser_->render(&window_states_["show_save_browser"]);
+#endif
+        }
+
+        if (menu_bar_ && viewer_) {
+            auto project = viewer_->getProject();
+            menu_bar_->setIsProjectTemp(project ? project->getIsTempProject() : false);
         }
 
         // Render speed overlay if visible

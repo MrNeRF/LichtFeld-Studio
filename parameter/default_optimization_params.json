@@ -1,7 +1,7 @@
 {
   "iterations": 30000,
   "sh_degree_interval": 1000,
-  "means_lr": 0.00016,
+  "means_lr": 0.000016,
   "shs_lr": 0.0025,
   "opacity_lr": 0.05,
   "scaling_lr": 0.005,

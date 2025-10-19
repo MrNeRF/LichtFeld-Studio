@@ -73,11 +73,11 @@ namespace gs::gui::widgets {
 
         // Simple line plot using ImGui
         ImGui::PlotLines(
-            plot_label,
+            "Plot##default",
             values,
             count,
             0,
-            nullptr,
+            plot_label,
             min_val,
             max_val,
             ImVec2(ImGui::GetContentRegionAvail().x, 80));

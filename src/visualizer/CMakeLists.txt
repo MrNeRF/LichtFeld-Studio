@@ -19,7 +19,6 @@ add_library(gs_visualizer STATIC
         # GUI system
         gui/gui_manager.cpp
         gui/ui_widgets.cpp
-        gui/utils/native_dialogs.cpp
         gui/panels/main_panel.cpp
         gui/panels/training_panel.cpp
         gui/panels/crop_box_panel.cpp
@@ -43,6 +42,9 @@ add_library(gs_visualizer STATIC
 
         # Tools
         tools/translation_gizmo_tool.cpp
+        gui/panels/menu_bar.cpp
+        gui/panels/menu_bar.hpp
+        gui/utils/windows_utils.cpp
 )
 
 # Set include directories
@@ -117,10 +119,10 @@ set(GUI_ASSET_FILES
 )
 
 foreach (GUI_ASSET_FILE ${GUI_ASSET_FILES})
-    if(EXISTS ${GUI_ASSET_FILE} AND NOT IS_DIRECTORY ${GUI_ASSET_FILE})
+    if (EXISTS ${GUI_ASSET_FILE} AND NOT IS_DIRECTORY ${GUI_ASSET_FILE})
         get_filename_component(ASSET_NAME ${GUI_ASSET_FILE} NAME)
         configure_file(${GUI_ASSET_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/${ASSET_NAME}" COPYONLY)
-    endif()
+    endif ()
 endforeach ()
 
 # Compile definitions

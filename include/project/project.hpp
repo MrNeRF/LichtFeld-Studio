@@ -143,6 +143,10 @@ namespace gs::management {
         bool addPly(const PlyData& ply);
         bool addPly(bool imported, const std::filesystem::path& path, int iter, const std::string& _ply_name);
         void removePly(size_t index);
+        void removePly(const std::string& name);
+        void renamePly(const std::string& old_name, const std::string& new_name);
+        bool updatePlyPath(const std::string& ply_name, const std::filesystem::path& new_path);
+
         void clearPlys();
         [[nodiscard]] std::vector<PlyData> getPlys() const;
 
@@ -158,14 +162,21 @@ namespace gs::management {
         bool portProjectToDir(const std::filesystem::path& dst_dir);
 
         [[nodiscard]] bool getIsTempProject() const { return is_temp_project_; }
+        // is project has no dataset and has no ply - it is empty (in the start of the application)
+        [[nodiscard]] bool getIsProjectEmpty() const;
+
         void setIsTempProject(bool is_temp) { is_temp_project_ = is_temp; }
         bool lockProject();
         bool unlockProject();
+
+        void setUpdateFileOnChange(bool update) { update_file_on_change_ = update; }
+        [[nodiscard]] bool getUpdateFileOnChange() const { return update_file_on_change_; }
 
     private:
         std::filesystem::path output_file_name_;
         bool update_file_on_change_ = false; // if true update file on every change
         mutable std::mutex io_mutex_;
+        mutable std::mutex data_mutex_;
         bool is_temp_project_ = false;
     };
     // go over all lfs folders in temp directory and remove unlocked ones

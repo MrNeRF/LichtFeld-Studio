@@ -40,7 +40,7 @@ do
         --eval \
         --headless \
         --save-eval-images \
-        --strategy mcmc
+        --config eval/mcmc_optimization_params.json
 
     echo "Completed $SCENE"
     echo

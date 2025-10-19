@@ -4,10 +4,6 @@
 
 #pragma once
 
-#ifdef WIN32
-#include <ShlObj.h>
-#include <windows.h>
-#endif // WIN32
 #include "core/events.hpp"
 #include <filesystem>
 #include <functional>
@@ -52,6 +48,16 @@ namespace gs {
             std::vector<PLYNode> m_plyNodes;
             int m_selectedPLYIndex = -1;
 
+            // Rename state
+            struct RenameState {
+                bool is_renaming = false;
+                int renaming_index = -1;
+                char buffer[256] = {};
+                bool focus_input = false;
+                bool input_was_active = false;
+                bool escape_pressed = false;
+            } m_renameState;
+
             // Tab management
             enum class TabType {
                 Images,
@@ -88,6 +94,7 @@ namespace gs {
             void handleSceneCleared();
             void handlePLYAdded(const events::state::PLYAdded& event);
             void handlePLYRemoved(const events::state::PLYRemoved& event);
+            void handlePLYRenamed(const events::cmd::RenamePLY& event);
             void handleGoToCamView(const events::cmd::GoToCamView& event);
             void loadImageCams(const std::filesystem::path& path);
             void onImageSelected(const std::filesystem::path& imagePath);
@@ -97,6 +104,11 @@ namespace gs {
             void renderPLYSceneGraph();
             void renderImageList();
             void updatePLYNodes();
+
+            // Rename functionality
+            void startRenaming(int nodeIndex);
+            void finishRenaming();
+            void cancelRenaming();
         };
 
     } // namespace gui

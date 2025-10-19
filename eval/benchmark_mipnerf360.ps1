@@ -38,7 +38,7 @@ foreach ($SCENE in $SCENE_LIST) {
         --eval `
         --headless `
         --save-eval-images `
-        --strategy mcmc
+        --config eval/mcmc_optimization_params.json
 
     Write-Host "Completed $SCENE"
     Write-Host ""

@@ -73,6 +73,8 @@ namespace gs::rendering {
 
             SplatData& mutable_model = request.crop_box ? const_cast<SplatData&>(cropped_model) : const_cast<SplatData&>(model);
 
+            mutable_model.set_active_sh_degree(request.sh_degree);
+
             RenderResult result;
             if (request.gut) {
                 auto render_result = gs::training::rasterize(

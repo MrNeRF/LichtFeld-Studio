@@ -18,6 +18,7 @@ jobs:
     runs-on: windows-2022
     env:
       VCPKG_ROOT: ${{ github.workspace }}\..\vcpkg
+      VCPKG_BUILD_TYPE: release
 
     steps:
       - name: Checkout source
@@ -40,6 +41,9 @@ jobs:
           cd ..
           git clone https://github.com/microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+          
+          # Reduce parallelism to avoid OOM during dependency builds
+          Add-Content -Path "$env:VCPKG_ROOT\triplets\x64-windows.cmake" -Value "set(VCPKG_MAX_CONCURRENCY 2)"
 
       - name: Cache LibTorch
         id: cache-libtorch
@@ -60,18 +64,21 @@ jobs:
         uses: actions/cache@v4
         with:
           path: C:\Users\runneradmin\AppData\Local\vcpkg\archives
-          key: vcpkg-binary-archives-${{ runner.os }}-${{ github.run_id }}
+          key: vcpkg-binary-archives-${{ runner.os }}-${{ hashFiles('**/vcpkg.json') }}
           restore-keys: |
-            vcpkg-binary-archives-${{ runner.os }}
+            vcpkg-binary-archives-${{ runner.os }}-
 
       - name: Configure with CMake
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -G Ninja
+          cmake -S . -B build ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -G Ninja ^
+            -DCMAKE_MAKE_PROGRAM=ninja
 
       - name: Build
         shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake --build build --parallel 1
+          cmake --build build --config Release --parallel %NUMBER_OF_PROCESSORS%

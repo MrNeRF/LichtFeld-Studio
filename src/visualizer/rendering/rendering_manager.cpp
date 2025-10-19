@@ -267,6 +267,10 @@ namespace gs::visualizer {
         // Listen for settings changes
         events::ui::RenderSettingsChanged::when([this](const auto& event) {
             std::lock_guard<std::mutex> lock(settings_mutex_);
+            if (event.sh_degree) {
+                settings_.sh_degree = *event.sh_degree;
+                LOG_TRACE("SH_DEGREE changed to: {}", settings_.sh_degree);
+            }
             if (event.fov) {
                 settings_.fov = *event.fov;
                 LOG_TRACE("FOV changed to: {}", settings_.fov);
@@ -533,7 +537,8 @@ namespace gs::visualizer {
             .crop_box = std::nullopt,
             .point_cloud_mode = settings_.point_cloud_mode,
             .voxel_size = settings_.voxel_size,
-            .gut = settings_.gut};
+            .gut = settings_.gut,
+            .sh_degree = settings_.sh_degree};
 
         // Add crop box if enabled
         if (settings_.use_crop_box) {
@@ -869,7 +874,8 @@ namespace gs::visualizer {
                 .gut = settings_.gut,
                 .show_dividers = true,
                 .divider_color = glm::vec4(1.0f, 0.85f, 0.0f, 1.0f),
-                .show_labels = true};
+                .show_labels = true,
+                .sh_degree = settings_.sh_degree};
         }
 
         // Handle PLY comparison mode
@@ -911,7 +917,9 @@ namespace gs::visualizer {
                 .gut = settings_.gut,
                 .show_dividers = true,
                 .divider_color = glm::vec4(1.0f, 0.85f, 0.0f, 1.0f),
-                .show_labels = true};
+                .show_labels = true,
+                .sh_degree = settings_.sh_degree,
+            };
         }
 
         return std::nullopt;

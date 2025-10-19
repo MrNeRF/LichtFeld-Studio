@@ -213,32 +213,36 @@ namespace gs::gui::panels {
 
                 bool bounds_changed = false;
 
-                const float min_range = -8.0f;
-                const float max_range = 8.0f;
+                const float max_box_size = 200.0f;
+                const float min_range = -max_box_size * 0.5f;
+                const float max_range = max_box_size * 0.5f;
                 const float bound_step = 0.01f;
                 const float bound_step_fast = 0.1f;
 
                 ImGui::Text("Ctrl+click for faster steps");
                 ImGui::Text("Min Bounds:");
 
+                // calculate the exact width to hold 0000.000 string in the text box + extra
+                float text_width = ImGui::CalcTextSize("0000.000").x + ImGui::GetStyle().FramePadding.x * 2.0f + 50.0f;
+
                 // Min bounds
                 ImGui::Text("X:");
                 ImGui::SameLine();
-                ImGui::SetNextItemWidth(110);
+                ImGui::SetNextItemWidth(text_width);
                 bounds_changed |= ImGui::InputFloat("##MinX", &min_bounds[0], bound_step, bound_step_fast, "%.3f");
                 min_bounds[0] = std::clamp(min_bounds[0], min_range, max_range);
                 min_bounds[0] = std::min(min_bounds[0], max_bounds[0]);
 
                 ImGui::Text("Y:");
                 ImGui::SameLine();
-                ImGui::SetNextItemWidth(110);
+                ImGui::SetNextItemWidth(text_width);
                 bounds_changed |= ImGui::InputFloat("##MinY", &min_bounds[1], bound_step, bound_step_fast, "%.3f");
                 min_bounds[1] = std::clamp(min_bounds[1], min_range, max_range);
                 min_bounds[1] = std::min(min_bounds[1], max_bounds[1]);
 
                 ImGui::Text("Z:");
                 ImGui::SameLine();
-                ImGui::SetNextItemWidth(110);
+                ImGui::SetNextItemWidth(text_width);
                 bounds_changed |= ImGui::InputFloat("##MinZ", &min_bounds[2], bound_step, bound_step_fast, "%.3f");
                 min_bounds[2] = std::clamp(min_bounds[2], min_range, max_range);
                 min_bounds[2] = std::min(min_bounds[2], max_bounds[2]);
@@ -249,21 +253,21 @@ namespace gs::gui::panels {
                 // Max bounds
                 ImGui::Text("X:");
                 ImGui::SameLine();
-                ImGui::SetNextItemWidth(110);
+                ImGui::SetNextItemWidth(text_width);
                 bounds_changed |= ImGui::InputFloat("##MaxX", &max_bounds[0], bound_step, bound_step_fast, "%.3f");
                 max_bounds[0] = std::clamp(max_bounds[0], min_range, max_range);
                 max_bounds[0] = std::max(max_bounds[0], min_bounds[0]);
 
                 ImGui::Text("Y:");
                 ImGui::SameLine();
-                ImGui::SetNextItemWidth(110);
+                ImGui::SetNextItemWidth(text_width);
                 bounds_changed |= ImGui::InputFloat("##MaxY", &max_bounds[1], bound_step, bound_step_fast, "%.3f");
                 max_bounds[1] = std::clamp(max_bounds[1], min_range, max_range);
                 max_bounds[1] = std::max(max_bounds[1], min_bounds[1]);
 
                 ImGui::Text("Z:");
                 ImGui::SameLine();
-                ImGui::SetNextItemWidth(110);
+                ImGui::SetNextItemWidth(text_width);
                 bounds_changed |= ImGui::InputFloat("##MaxZ", &max_bounds[2], bound_step, bound_step_fast, "%.3f");
                 max_bounds[2] = std::clamp(max_bounds[2], min_range, max_range);
                 max_bounds[2] = std::max(max_bounds[2], min_bounds[2]);

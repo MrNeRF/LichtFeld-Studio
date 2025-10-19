@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "scene/scene.hpp"
+#include "core/logger.hpp"
+
 #include <algorithm>
 #include <print>
 #include <ranges>
@@ -279,5 +281,40 @@ namespace gs {
             stats.total_scene_scale / visible_models.size());
 
         cache_valid_ = true;
+    }
+
+    bool Scene::renameNode(const std::string& old_name, const std::string& new_name) {
+        // Check if new name already exists (case-sensitive)
+        if (old_name == new_name) {
+            return true; // Same name, consider it successful
+        }
+
+        // Check if new name already exists
+        auto existing_it = std::find_if(nodes_.begin(), nodes_.end(),
+                                        [&new_name](const Node& node) {
+                                            return node.name == new_name;
+                                        });
+
+        if (existing_it != nodes_.end()) {
+            LOG_INFO("Scene: Cannot rename '{}' to '{}' - name already exists", old_name, new_name);
+            return false; // Name already exists
+        }
+
+        // Find the node to rename
+        auto it = std::find_if(nodes_.begin(), nodes_.end(),
+                               [&old_name](const Node& node) {
+                                   return node.name == old_name;
+                               });
+
+        if (it != nodes_.end()) {
+            std::string prev_name = it->name;
+            it->name = new_name;
+            invalidateCache();
+            LOG_INFO("Scene: Renamed node '{}' to '{}'", prev_name, new_name);
+            return true;
+        }
+
+        LOG_WARN("Scene: Cannot find node '{}' to rename", old_name);
+        return false;
     }
 } // namespace gs

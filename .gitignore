@@ -30,3 +30,4 @@ build*/**
 *.pt
 !weights/*.pt
 lichtfeld-studio.aps
+.vs

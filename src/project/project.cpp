@@ -379,6 +379,7 @@ namespace gs::management {
     }
 
     bool Project::addPly(const PlyData& ply_to_be_added) {
+        std::lock_guard<std::mutex> lock(data_mutex_);
 
         for (const auto& ply : project_data_.outputs.plys) {
             if (ply.ply_name == ply_to_be_added.ply_name) {
@@ -397,11 +398,18 @@ namespace gs::management {
         return true;
     }
 
+    bool Project::addPly(bool imported, const std::filesystem::path& path, int iter, const std::string& _ply_name) {
+        PlyData ply(imported, path, iter, _ply_name);
+        return addPly(ply);
+    }
+
     std::vector<PlyData> Project::getPlys() const {
         return project_data_.outputs.plys;
     }
 
     void Project::removePly(size_t index) {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+
         if (index < project_data_.outputs.plys.size()) {
             project_data_.outputs.plys.erase(project_data_.outputs.plys.begin() + index);
         }
@@ -411,7 +419,96 @@ namespace gs::management {
         }
     }
 
+    void Project::removePly(const std::string& name) {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+
+        LOG_DEBUG("Removing '{}' from project", name);
+
+        auto it = std::find_if(project_data_.outputs.plys.begin(), project_data_.outputs.plys.end(),
+                               [&name](const PlyData& ply) { return ply.ply_name == name; });
+
+        if (it != project_data_.outputs.plys.end()) {
+            project_data_.outputs.plys.erase(it);
+            LOG_DEBUG("Project: Removed ply '{}'", name);
+        }
+
+        if (update_file_on_change_ && !output_file_name_.empty()) {
+            writeToFile();
+        }
+    }
+
+    void Project::renamePly(const std::string& old_name, const std::string& new_name) {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+
+        bool found_ply = false;
+        for (auto& ply : project_data_.outputs.plys) {
+            if (ply.ply_name == old_name) {
+                ply.ply_name = new_name;
+                LOG_INFO("Project: changed project ply name successfully old name {} new name {}", old_name, new_name);
+                found_ply = true;
+                break;
+            }
+        }
+        if (!found_ply) {
+            LOG_WARN("could not find ply with name {}", old_name);
+        }
+        if (update_file_on_change_ && !output_file_name_.empty()) {
+            writeToFile();
+        }
+    }
+
+    static bool change_ply_path(const std::filesystem::path& old_path, const std::filesystem::path& new_path) {
+        try {
+            if (!std::filesystem::exists(old_path)) {
+                LOG_ERROR("ply path does not exists: {}", old_path.string());
+                return false; // path does not exist
+            }
+            std::filesystem::rename(old_path, new_path);
+            LOG_INFO("successfully changed ply path from {} to {}", old_path.string(), new_path.string());
+            return true;
+        } catch (const std::exception& e) {
+            LOG_ERROR("rename ply failed: ply path: {} reason: {}", old_path.string(), e.what());
+            return false; // any error (e.g., permission denied, invalid path)
+        } catch (...) {
+            LOG_ERROR("rename ply failed: ply path: {} for unknown reason", old_path.string());
+            return false;
+        }
+    }
+
+    bool Project::updatePlyPath(const std::string& ply_name, const std::filesystem::path& new_path) {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+
+        bool found_ply = false;
+        std::filesystem::path old_path;
+        for (auto& ply : project_data_.outputs.plys) {
+            if (ply.ply_name == ply_name) {
+                LOG_INFO("Project: changed project ply path successfully old path {} new path {}", ply.ply_path.string(), new_path.string());
+                old_path = ply.ply_path;
+                ply.ply_path = new_path;
+                found_ply = true;
+                break;
+            }
+        }
+        if (!found_ply) {
+            LOG_WARN("could not find ply with name {}", ply_name);
+            return false;
+        }
+
+        if (!change_ply_path(old_path, new_path)) {
+            return false;
+        }
+
+        if (update_file_on_change_ && !output_file_name_.empty()) {
+            if (!writeToFile()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     void Project::clearPlys() {
+        std::lock_guard<std::mutex> lock(data_mutex_);
+
         project_data_.outputs.plys.clear();
         if (update_file_on_change_ && !output_file_name_.empty()) {
             writeToFile();
@@ -474,7 +571,8 @@ namespace gs::management {
 
         setProjectOutputFolder(dst_dir);
         if (!fs::is_regular_file(output_file_name_)) {
-            LOG_ERROR("PortProjectToDir: {} orig path does not exists", output_file_name_.string());
+            // this can happen if user save an empty project with no data
+            LOG_DEBUG("PortProjectToDir: {} orig path does not exists", output_file_name_.string());
         }
         const std::string proj_filename = output_file_name_.filename().string();
         const fs::path dst_project_file_path = dst_dir / proj_filename;
@@ -522,6 +620,10 @@ namespace gs::management {
         LOG_INFO("Project was successfully ported to {}", dst_project_file_path.string());
 
         return true;
+    }
+
+    bool Project::getIsProjectEmpty() const {
+        return project_data_.data_set_info.data_path.empty() && project_data_.outputs.plys.empty();
     }
 
     std::shared_ptr<Project> CreateNewProject(const gs::param::DatasetConfig& data,
@@ -686,8 +788,8 @@ namespace gs::management {
 
         auto project = CreateNewProject(data_with_temp_output, opt, project_name, udpdate_file_on_change);
 
+        project->setIsTempProject(true);
         if (project && !data.data_path.empty()) {
-            project->setIsTempProject(true);
             project->lockProject();
         }
 

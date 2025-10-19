@@ -24,30 +24,6 @@
 namespace gs {
     namespace param {
         namespace {
-            /**
-             * @brief Get the path to a configuration file
-             * @param filename Name of the configuration file
-             * @return std::filesystem::path Full path to the configuration file
-             */
-            std::filesystem::path get_config_path(const std::string& filename) {
-#ifdef _WIN32
-                char executablePathWindows[MAX_PATH];
-                GetModuleFileNameA(nullptr, executablePathWindows, MAX_PATH);
-                std::filesystem::path executablePath = std::filesystem::path(executablePathWindows);
-                std::filesystem::path searchDir = executablePath.parent_path();
-                while (!searchDir.empty() && !std::filesystem::exists(searchDir / "parameter" / filename)) {
-                    searchDir = searchDir.parent_path();
-                }
-
-                if (searchDir.empty()) {
-                    throw std::runtime_error("could not find " + (std::filesystem::path("parameter") / filename).string());
-                }
-#else
-                std::filesystem::path executablePath = std::filesystem::canonical("/proc/self/exe");
-                std::filesystem::path searchDir = executablePath.parent_path().parent_path();
-#endif
-                return searchDir / "parameter" / filename;
-            }
 
             /**
              * @brief Read and parse a JSON configuration file
@@ -487,11 +463,12 @@ namespace gs {
 
         /**
          * @brief Read optimization parameters from JSON file
-         * @param[in] strategy Optimization strategy to load parameters for
+         * @param[in] json file to load
          * @return Expected OptimizationParameters or error message
          */
-        std::expected<OptimizationParameters, std::string> read_optim_params_from_json(const std::string strategy) {
-            auto json_result = read_json_file(get_config_path(strategy + "_optimization_params.json"));
+        std::expected<OptimizationParameters, std::string> read_optim_params_from_json(std::filesystem::path& path) {
+            auto json_result = read_json_file(path);
+
             if (!json_result) {
                 return std::unexpected(json_result.error());
             }

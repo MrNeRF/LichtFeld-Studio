@@ -14,6 +14,35 @@ endif()
 cmake_minimum_required(VERSION 3.30)
 project(LichtFeld-Studio LANGUAGES CUDA CXX C)
 
+# Get git commit hash (short and full)
+execute_process(
+        COMMAND git rev-parse --short HEAD
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE GIT_COMMIT_HASH_SHORT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+)
+
+execute_process(
+        COMMAND git describe --dirty
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE GIT_TAGGED_VERSION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+)
+
+# Fallback if not in a git repo
+if(NOT GIT_COMMIT_HASH_SHORT)
+    set(GIT_COMMIT_HASH_SHORT "unknown")
+endif()
+
+if(NOT GIT_TAGGED_VERSION)
+    set(GIT_TAGGED_VERSION "unknown")
+endif()
+
+message(STATUS "Git commit (short): ${GIT_COMMIT_HASH_SHORT}")
+message(STATUS "Git commit (full): ${GIT_TAGGED_VERSION}")
+
 # Setup
 get_filename_component(PROJ_ROOT_DIR "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
 
@@ -91,9 +120,9 @@ endif()
 find_program(NVIDIA_SMI nvidia-smi)
 if(NVIDIA_SMI)
     execute_process(
-        COMMAND ${NVIDIA_SMI} --query-gpu=compute_cap --format=csv,noheader
-        OUTPUT_VARIABLE DETECTED_COMPUTE_CAP
-        OUTPUT_STRIP_TRAILING_WHITESPACE
+            COMMAND ${NVIDIA_SMI} --query-gpu=compute_cap --format=csv,noheader
+            OUTPUT_VARIABLE DETECTED_COMPUTE_CAP
+            OUTPUT_STRIP_TRAILING_WHITESPACE
     )
 
     message(STATUS "Detected GPU compute capability: ${DETECTED_COMPUTE_CAP}")
@@ -113,19 +142,19 @@ function(gs_detect_supported_sms OUT_VAR)
     set(oneValueArgs MIN_SM)
     cmake_parse_arguments(GS "${options}" "${oneValueArgs}" "" ${ARGN})
 
-  # Use 'ptxas --help' to get the valid families
-  set(_sms_list "")
-  get_filename_component(_cuda_bin "${CMAKE_CUDA_COMPILER}" DIRECTORY)
-  find_program(PTXAS_EXECUTABLE NAMES ptxas
-               HINTS "${_cuda_bin}" "${_cuda_bin}/.." "${CUDAToolkit_BIN_DIR}"
-               PATHS ENV PATH)
+    # Use 'ptxas --help' to get the valid families
+    set(_sms_list "")
+    get_filename_component(_cuda_bin "${CMAKE_CUDA_COMPILER}" DIRECTORY)
+    find_program(PTXAS_EXECUTABLE NAMES ptxas
+            HINTS "${_cuda_bin}" "${_cuda_bin}/.." "${CUDAToolkit_BIN_DIR}"
+            PATHS ENV PATH)
 
     if(PTXAS_EXECUTABLE)
         execute_process(COMMAND "${PTXAS_EXECUTABLE}" --help
-            OUTPUT_VARIABLE _ptxas_help
-            ERROR_VARIABLE  _ptxas_err
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_STRIP_TRAILING_WHITESPACE)
+                OUTPUT_VARIABLE _ptxas_help
+                ERROR_VARIABLE  _ptxas_err
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_STRIP_TRAILING_WHITESPACE)
         set(_help "${_ptxas_help}\n${_ptxas_err}")
 
         string(REGEX MATCHALL "sm_[0-9]+" _matches "${_help}")
@@ -384,7 +413,7 @@ endif()
 # LIBRARY MODULES
 # =============================================================================
 add_subdirectory(src/core)        # Foundation module
-add_subdirectory(src/geometry)    # Geometry utilities  
+add_subdirectory(src/geometry)    # Geometry utilities
 add_subdirectory(src/project)     # Project management
 add_subdirectory(src/loader)      # Data loading
 add_subdirectory(src/training)    # Training functionality
@@ -406,7 +435,7 @@ target_include_directories(${PROJECT_NAME}
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_BINARY_DIR}/include
-        
+
         ${CUDAToolkit_INCLUDE_DIRS}
         ${OPENGL_INCLUDE_DIRS}
 )
@@ -423,7 +452,7 @@ target_link_libraries(${PROJECT_NAME}
         gs_kernels
         gsplat_backend
         fastgs_backend
-        
+
         ${OPENGL_LIBRARIES}
         CUDA::cudart
         spdlog::spdlog
@@ -520,7 +549,7 @@ if(BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR}/include
             ${CMAKE_CURRENT_BINARY_DIR}/include
             ${CMAKE_CURRENT_SOURCE_DIR}/tests
-            
+
             ${CUDAToolkit_INCLUDE_DIRS}
             ${OPENGL_INCLUDE_DIRS}
     )
@@ -538,7 +567,7 @@ if(BUILD_TESTS)
             fastgs_backend
             GTest::gtest
             GTest::gtest_main
-            
+
             ${OPENGL_LIBRARIES}
             CUDA::cudart
             spdlog::spdlog

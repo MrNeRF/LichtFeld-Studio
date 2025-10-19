@@ -38,6 +38,7 @@ namespace gs {
         void addNode(const std::string& name, std::unique_ptr<SplatData> model);
         void removeNode(const std::string& name);
         void setNodeVisibility(const std::string& name, bool visible);
+        bool renameNode(const std::string& old_name, const std::string& new_name);
         void clear();
         std::pair<std::string, std::string> cycleVisibilityWithNames();
 

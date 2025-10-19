@@ -22,36 +22,23 @@ namespace gs::visualizer {
 
         // Listen for file load commands
         cmd::LoadFile::when([this](const auto& cmd) {
-            handleLoadFileCommand(cmd);
+            handleLoadFileCommand(cmd.is_dataset, cmd.path);
         });
     }
 
-    void DataLoadingService::handleLoadFileCommand(const events::cmd::LoadFile& cmd) {
-        if (cmd.is_dataset) {
-            loadDataset(cmd.path);
+    void DataLoadingService::handleLoadFileCommand(bool is_dataset, const std::filesystem::path& path) {
+        if (is_dataset) {
+            loadDataset(path);
         } else {
+            scene_manager_->changeContentType(SceneManager::ContentType::SplatFiles);
             // Determine file type and load appropriately
-            if (isSOGFile(cmd.path)) {
-                // Check if we should add or replace
-                if (scene_manager_->hasSplatFiles()) {
-                    // In viewing mode, add to existing
-                    scene_manager_->addSplatFile(cmd.path);
-                } else {
-                    // Not in viewing mode - load as new scene
-                    scene_manager_->loadSplatFile(cmd.path);
-                }
-            } else if (isPLYFile(cmd.path)) {
-                // Check if we should add or replace
-                if (scene_manager_->hasSplatFiles()) {
-                    // In viewing mode, add to existing
-                    scene_manager_->addSplatFile(cmd.path);
-                } else {
-                    // Not in viewing mode - load as new scene
-                    scene_manager_->loadSplatFile(cmd.path);
-                }
+            if (isSOGFile(path) || isPLYFile(path)) {
+                std::string ply_name = path.stem().string();
+                scene_manager_->addSplatFile(path, ply_name);
+                scene_manager_->getProject()->addPly(true, path, -1, ply_name);
             } else {
                 // Let scene manager determine the type
-                scene_manager_->loadSplatFile(cmd.path);
+                scene_manager_->addSplatFile(path);
             }
         }
     }

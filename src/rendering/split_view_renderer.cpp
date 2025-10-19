@@ -192,7 +192,8 @@ namespace gs::rendering {
                 .background_color = request.background_color,
                 .point_cloud_mode = request.point_cloud_mode,
                 .voxel_size = request.voxel_size,
-                .gut = request.gut};
+                .gut = request.gut,
+                .sh_degree = request.sh_degree};
 
             // Handle crop box if present
             std::unique_ptr<geometry::BoundingBox> temp_crop_box;

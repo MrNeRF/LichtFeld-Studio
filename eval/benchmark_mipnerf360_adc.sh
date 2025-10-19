@@ -40,7 +40,7 @@ do
         --eval \
         --headless \
         --save-eval-images \
-        --strategy default
+        --config eval/default_optimization_params.json
 
     echo "Completed $SCENE"
     echo
