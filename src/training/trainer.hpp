@@ -25,6 +25,20 @@
 #include <stop_token>
 #include <torch/torch.h>
 
+// Uncomment ONE of these to select background mode:
+#define USE_SINGLE_COLOR_BACKGROUND
+//#define USE_FULL_NOISE_BACKGROUND
+
+// Default to sine if nothing is defined
+#if !defined(USE_SINGLE_COLOR_BACKGROUND) && !defined(USE_FULL_NOISE_BACKGROUND)
+#define USE_SINGLE_COLOR_BACKGROUND
+#endif
+
+// Ensure only one is defined
+#if defined(USE_SINGLE_COLOR_BACKGROUND) && defined(USE_FULL_NOISE_BACKGROUND)
+#error "Cannot define both USE_SINGLE_COLOR_BACKGROUND and USE_FULL_NOISE_BACKGROUND"
+#endif
+
 // Forward declaration
 class Camera;
 
@@ -111,7 +125,7 @@ namespace gs::training {
         };
 
         // Returns the background color to use at a given iteration
-        torch::Tensor& background_for_step(int iter);
+        torch::Tensor& background_for_step(int iter, int width, int height);
 
         // Protected method for processing a single training step
         std::expected<StepResult, std::string> train_step(
@@ -185,6 +199,7 @@ namespace gs::training {
 
         torch::Tensor background_{};
         torch::Tensor bg_mix_buffer_;
+        torch::Tensor noise_buffer_; // Full HxWx3 noise buffer
         std::unique_ptr<TrainingProgress> progress_;
         size_t train_dataset_size_ = 0;
 

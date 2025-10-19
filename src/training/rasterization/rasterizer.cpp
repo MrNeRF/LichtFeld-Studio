@@ -161,16 +161,34 @@ namespace gs::training {
         TORCH_CHECK(rotations.is_cuda(), "rotations must be on CUDA");
         TORCH_CHECK(sh_coeffs.is_cuda(), "sh_coeffs must be on CUDA");
 
-        // Handle background color - can be undefined
+        // Handle background color - can be undefined, [3] or [3, H, W]
         torch::Tensor prepared_bg_color;
         if (!bg_color.defined() || bg_color.numel() == 0) {
             // Keep it undefined
             prepared_bg_color = torch::Tensor();
         } else {
-            prepared_bg_color = bg_color.view({1, -1}).to(torch::kCUDA);
-            TORCH_CHECK(prepared_bg_color.size(0) == 1 && prepared_bg_color.size(1) == 3,
-                        "bg_color must be reshapeable to [1, 3], got ", prepared_bg_color.sizes());
-            TORCH_CHECK(prepared_bg_color.is_cuda(), "bg_color must be on CUDA");
+            bg_color = bg_color.to(torch::kCUDA);
+
+            // Check if it's a single color [3] or full image [3, H, W]
+            if (bg_color.numel() == 3) {
+                // Single color case - reshape to [1, 3]
+                prepared_bg_color = bg_color.view({1, -1});
+                TORCH_CHECK(prepared_bg_color.size(0) == 1 && prepared_bg_color.size(1) == 3,
+                            "bg_color must be reshapeable to [1, 3], got ", prepared_bg_color.sizes());
+            } else if (bg_color.dim() == 3 && bg_color.size(0) == 3) {
+                // Full image case [3, H, W] - reshape to [1, H, W, 3]
+                TORCH_CHECK(bg_color.size(1) == image_height && bg_color.size(2) == image_width,
+                            "bg_color full image size mismatch. Expected [3, ", image_height, ", ", image_width,
+                            "], got ", bg_color.sizes());
+
+                // Convert from [3, H, W] to [1, H, W, 3] for rasterizer
+                prepared_bg_color = bg_color.permute({1, 2, 0}).unsqueeze(0).contiguous();
+            } else {
+                TORCH_CHECK(false, "bg_color must be either [3] (single color) or [3, H, W] (full image), got ",
+                            bg_color.sizes());
+            }
+
+            TORCH_CHECK(prepared_bg_color.is_cuda(), "prepared_bg_color must be on CUDA");
         }
 
         const float eps2d = 0.3f;
@@ -279,9 +297,17 @@ namespace gs::training {
         case RenderMode::ED:
             render_colors = depths.unsqueeze(-1); // [C, N, 1]
             if (prepared_bg_color.defined()) {
-                final_bg = torch::zeros({1, 1}, prepared_bg_color.options());
+                // Check if it's single color or full image
+                if (prepared_bg_color.numel() == 3 ||
+                    (prepared_bg_color.dim() == 2 && prepared_bg_color.size(1) == 3)) {
+                    // Single color - use zeros
+                    final_bg = torch::zeros({1, 1}, prepared_bg_color.options());
+                } else {
+                    // Full image - extract single channel (use mean of RGB as depth bg)
+                    final_bg = prepared_bg_color.mean(/*dim=*/-1, /*keepdim=*/true);
+                }
             } else {
-                final_bg = torch::Tensor(); // Keep undefined
+                final_bg = torch::Tensor();
             }
             break;
 
@@ -290,9 +316,24 @@ namespace gs::training {
             // Concatenate colors and depths
             render_colors = torch::cat({colors, depths.unsqueeze(-1)}, -1); // [C, N, 4]
             if (prepared_bg_color.defined()) {
-                final_bg = torch::cat({prepared_bg_color, torch::zeros({1, 1}, prepared_bg_color.options())}, -1);
+                // Check if it's single color or full image
+                if (prepared_bg_color.numel() == 3 ||
+                    (prepared_bg_color.dim() == 2 && prepared_bg_color.size(1) == 3)) {
+                    // Single color - append zero for depth
+                    final_bg = torch::cat({prepared_bg_color,
+                                           torch::zeros({1, 1}, prepared_bg_color.options())},
+                                          -1);
+                } else {
+                    // Full image - append zero depth channel
+                    auto zero_depth = torch::zeros({prepared_bg_color.size(0),
+                                                    prepared_bg_color.size(1),
+                                                    prepared_bg_color.size(2),
+                                                    1},
+                                                   prepared_bg_color.options());
+                    final_bg = torch::cat({prepared_bg_color, zero_depth}, -1);
+                }
             } else {
-                final_bg = torch::Tensor(); // Keep undefined
+                final_bg = torch::Tensor();
             }
             break;
         }

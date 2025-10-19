@@ -60,7 +60,22 @@ namespace gs::training {
         output.image = raster_outputs[0];
         output.alpha = raster_outputs[1];
 
-        output.image = output.image + (1.0f - output.alpha) * bg_color.unsqueeze(-1).unsqueeze(-1);
+        // Apply background - handle both single color [3] and full image [3, H, W]
+        if (bg_color.numel() == 3) {
+            // Single color case - expand to image dimensions
+            output.image = output.image + (1.0f - output.alpha) * bg_color.unsqueeze(-1).unsqueeze(-1);
+        } else if (bg_color.dim() == 3 && bg_color.size(0) == 3) {
+            // Full image case [3, H, W] - already correct size
+            TORCH_CHECK(bg_color.size(1) == height && bg_color.size(2) == width,
+                        "bg_color full image size mismatch in fast_rasterizer. Expected [3, ", height, ", ", width,
+                        "], got ", bg_color.sizes());
+
+            // Apply background: rendered + (1 - alpha) * background
+            output.image = output.image + (1.0f - output.alpha) * bg_color;
+        } else {
+            TORCH_CHECK(false, "bg_color must be either [3] (single color) or [3, H, W] (full image), got ",
+                        bg_color.sizes());
+        }
 
         return output;
     }
