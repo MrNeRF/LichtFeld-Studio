@@ -317,7 +317,7 @@ TEST_F(TensorIndexingAdvancedTest, IndexSelectWithClampMode) {
     // PyTorch clamps by default in index_select when indices are clamped manually
     std::vector<int64_t> indices_clamped;
     for (int idx : indices_vec) {
-        indices_clamped.push_back(std::clamp(static_cast<int64_t>(idx), 0L, 4L));
+        indices_clamped.push_back(std::clamp(static_cast<int64_t>(idx), static_cast<int64_t>(0), static_cast<int64_t>(4)));
     }
     auto indices_torch = torch::tensor(indices_clamped, torch::kInt64);
 
@@ -361,7 +361,7 @@ TEST_F(TensorIndexingAdvancedTest, GatherWithClampMode) {
     // Clamp indices for PyTorch
     std::vector<int64_t> indices_clamped;
     for (int idx : indices_vec) {
-        indices_clamped.push_back(std::clamp(static_cast<int64_t>(idx), 0L, 2L));
+        indices_clamped.push_back(std::clamp(static_cast<int64_t>(idx), static_cast<int64_t>(0), static_cast<int64_t>(2)));
     }
     // Expand for gather
     auto indices_torch = torch::tensor(indices_clamped, torch::kInt64).reshape({1, 3}).expand({2, 3});

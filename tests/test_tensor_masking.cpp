@@ -326,7 +326,7 @@ TEST_F(TensorMaskingTest, IndexSelectWithBoundaryClamp) {
     // Clamp indices for PyTorch
     std::vector<int64_t> clamped_indices;
     for (int idx : indices_data) {
-        clamped_indices.push_back(std::clamp(static_cast<int64_t>(idx), 0L, 3L));
+        clamped_indices.push_back(std::clamp(static_cast<int64_t>(idx), static_cast<int64_t>(0), static_cast<int64_t>(3)));
     }
     auto indices_torch = torch::tensor(clamped_indices, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
 
