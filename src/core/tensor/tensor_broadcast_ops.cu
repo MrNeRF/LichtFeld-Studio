@@ -29,8 +29,8 @@ namespace gs::tensor_ops {
         int src_strides[MaxRank];
         int dst_strides[MaxRank];
 
-        broadcast_index_functor(const std::vector<size_t>& src_shape_vec,
-                                const std::vector<size_t>& dst_shape_vec)
+        __host__ __device__ broadcast_index_functor(const std::vector<size_t>& src_shape_vec,
+                                                     const std::vector<size_t>& dst_shape_vec)
             : src_rank(src_shape_vec.size()),
               dst_rank(dst_shape_vec.size()) {
 
