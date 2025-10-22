@@ -6,12 +6,17 @@
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_ops.hpp"
 #include <cuda_runtime.h>
+
+#ifndef _WIN32
+// Thrust headers only needed for non-Windows (Linux uses Thrust iterators)
+// Windows uses direct CUDA kernel to avoid nvcc 12.8 ICE with aggregate types
 #include <thrust/copy.h>
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/permutation_iterator.h>
 #include <thrust/iterator/transform_iterator.h>
+#endif
 
 namespace gs::tensor_ops {
 
