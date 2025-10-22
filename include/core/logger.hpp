@@ -86,7 +86,7 @@ namespace gs::core {
         // Internal log implementation
         template <typename... Args>
         void log_internal(LogLevel level, const std::source_location& loc,
-                          std::format_string<Args...> fmt, Args&&... args) {
+                          const char* fmt, Args&&... args) {
             if (!logger_)
                 return;
 
@@ -101,8 +101,22 @@ namespace gs::core {
                 return;
             }
 
-            // Format message
-            auto msg = std::format(fmt, std::forward<Args>(args)...);
+            // Format message using snprintf
+            char buffer[1024];
+            int written = std::snprintf(buffer, sizeof(buffer), fmt, std::forward<Args>(args)...);
+            if (written < 0) {
+                // formatting error
+                return;
+            }
+            std::string msg;
+            if (static_cast<size_t>(written) >= sizeof(buffer)) {
+                // message was truncated — reallocate
+                size_t size = written + 1;
+                msg.resize(size);
+                std::snprintf(msg.data(), size, fmt, std::forward<Args>(args)...);
+            } else {
+                msg.assign(buffer, written);
+            }
 
             logger_->log(
                 spdlog::source_loc{loc.file_name(),
