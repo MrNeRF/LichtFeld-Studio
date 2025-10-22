@@ -94,10 +94,13 @@ if(LFS_TENSOR_CUDA_SOURCES)
     # NOTE: Removed -O1 workaround as it conflicts with -Xcompiler=/O2
     # The proper fix is to use consistent optimization flags via -Xcompiler
 
-    # Windows NVCC 12.8 ICE workaround: DISABLE optimization for complex templates
-    # These files have complex functors with arrays that trigger ICE at ANY optimization level
-    # Must use -O0 (no optimization) to avoid "unexpected expression with aggregate type!" error
-    # This is a severe nvcc 12.8 compiler bug with aggregate types in template-heavy code
+    # Windows NVCC 12.8 ICE workaround for tensor_broadcast_ops.cu:
+    # - The ICE occurs when structs with array members are passed to Thrust device iterators
+    # - Even -O0 doesn't fix the ICE - the compiler bug is triggered by the code pattern itself
+    # - REAL FIX: Windows-specific implementation using direct CUDA kernel instead of Thrust
+    #   (see #ifdef _WIN32 in tensor_broadcast_ops.cu)
+    # - The -O0 flag below is kept as defensive measure but is redundant for tensor_broadcast_ops.cu
+    #   since the problematic Thrust code is not compiled on Windows
     if(WIN32)
         set_source_files_properties(
             tensor_broadcast_ops.cu
