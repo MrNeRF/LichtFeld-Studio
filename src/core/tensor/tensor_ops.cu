@@ -11,7 +11,10 @@
 #include <cfloat>
 #include <cmath>
 #include <cub/device/device_reduce.cuh>
+#ifndef _WIN32
+// CUB segmented reduce uses Thrust iterators internally - triggers nvcc 12.8 ICE on Windows
 #include <cub/device/device_segmented_reduce.cuh>
+#endif
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #include <limits>
