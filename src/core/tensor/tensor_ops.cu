@@ -244,6 +244,28 @@ namespace gs::tensor_ops {
 
     // ============= OPTIMIZED SEGMENTED REDUCTION =============
 
+#ifdef _WIN32
+    // Windows: Strided reduction kernel to avoid Thrust counting_iterator
+    template <typename T, typename Op>
+    __global__ void strided_reduce_kernel(
+        const T* input, T* output,
+        size_t outer_size, size_t reduce_size, size_t inner_size,
+        size_t output_size, T init_value, Op op) {
+        size_t out_idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (out_idx >= output_size) return;
+
+        size_t outer_idx = out_idx / inner_size;
+        size_t inner_idx = out_idx % inner_size;
+
+        T result = init_value;
+        for (size_t r = 0; r < reduce_size; ++r) {
+            size_t in_idx = (outer_idx * reduce_size + r) * inner_size + inner_idx;
+            result = op(result, input[in_idx]);
+        }
+        output[out_idx] = result;
+    }
+#endif
+
     template <typename T, typename Op>
     void launch_segmented_reduce(
         const T* input, T* output,
@@ -268,7 +290,9 @@ namespace gs::tensor_ops {
             return;
         }
 
+#ifndef _WIN32
         // OPTIMIZED PATH: Contiguous segments - use CUB's segmented reduce
+        // Windows: Skip this path to avoid Thrust transform_iterator ICE
         if (inner_size == 1) {
             // begin_offsets: [0, N, 2N, 3N, ...]
             auto begin_offsets = thrust::make_transform_iterator(
@@ -325,6 +349,7 @@ namespace gs::tensor_ops {
             CudaMemoryPool::instance().deallocate(d_temp_storage, stream);
             return;
         }
+#endif // !_WIN32
 
         // STRIDED PATH: Non-contiguous segments
         // For strided reductions (e.g., dim0 on [1024, 1024]), we have inner_size > 1
@@ -333,6 +358,13 @@ namespace gs::tensor_ops {
         // to use a custom CUDA kernel, but for now we keep the Thrust fallback.
         //
         // TODO: Implement optimized strided reduction kernel or use CUB with proper setup
+#ifdef _WIN32
+        // Windows: Use simple kernel to avoid Thrust counting_iterator
+        const int block_size = 256;
+        const int grid_size = (output_size + block_size - 1) / block_size;
+        strided_reduce_kernel<<<grid_size, block_size, 0, stream>>>(
+            input, output, outer_size, reduce_size, inner_size, output_size, init_value, op);
+#else
         if (stream) {
             thrust::for_each(thrust::cuda::par.on(stream),
                              thrust::counting_iterator<size_t>(0),
@@ -364,6 +396,7 @@ namespace gs::tensor_ops {
                                  output[out_idx] = result;
                              });
         }
+#endif // !_WIN32
     }
 
     // ============= MULTI-AXIS REDUCTION (USING FUNCTORS) =============
