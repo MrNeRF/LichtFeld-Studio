@@ -171,10 +171,11 @@ namespace gs::tensor_ops {
 
 // Include template implementation for inline instantiation
 // Only include in CUDA compilation units - C++ files will link to .cu implementations
-#ifdef __CUDACC__
+// WINDOWS: Exclude tensor_broadcast_ops.cuh to avoid nvcc 12.8 ICE
+#if defined(__CUDACC__) && !defined(_WIN32)
 #include "tensor_broadcast_ops.cuh"
 #else
-// Forward declaration for C++ files - implementation in tensor_broadcast_ops.cu
+// Forward declaration for C++ files (and Windows CUDA files) - implementation in tensor_broadcast_ops.cu
 namespace gs::tensor_ops {
     template <typename T, typename OutputT, typename BinaryOp>
     void launch_broadcast_binary(const T* a, const T* b, OutputT* c,

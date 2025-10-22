@@ -235,7 +235,117 @@ namespace gs::tensor_ops {
     }
 
     // ============================================================================
-    // NOTE: launch_broadcast_binary implementation is now in tensor_broadcast_ops.cuh
+    // NOTE: launch_broadcast_binary implementation is now in tensor_broadcast_ops.cuh (Linux only)
+    // On Windows, we provide a simplified implementation here to avoid including the header
+    // ============================================================================
+
+#ifdef _WIN32
+    // Windows-specific simplified binary broadcast implementation
+    // Avoids including tensor_broadcast_ops.cuh which triggers nvcc 12.8 ICE
+    template <typename T, typename OutputT, typename BinaryOp>
+    __global__ void simple_broadcast_binary_kernel(
+        const T* a, const T* b, OutputT* c,
+        const int* a_shape, const int* b_shape, const int* c_shape,
+        int a_rank, int b_rank, int c_rank,
+        size_t c_elements, BinaryOp op) {
+        size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= c_elements)
+            return;
+
+        // Compute c strides inline
+        int c_strides[8];
+        c_strides[c_rank - 1] = 1;
+        for (int i = c_rank - 2; i >= 0; --i) {
+            c_strides[i] = c_strides[i + 1] * c_shape[i + 1];
+        }
+
+        // Compute a strides inline
+        int a_strides[8];
+        if (a_rank > 0) {
+            a_strides[a_rank - 1] = 1;
+            for (int i = a_rank - 2; i >= 0; --i) {
+                a_strides[i] = a_strides[i + 1] * a_shape[i + 1];
+            }
+        }
+
+        // Compute b strides inline
+        int b_strides[8];
+        if (b_rank > 0) {
+            b_strides[b_rank - 1] = 1;
+            for (int i = b_rank - 2; i >= 0; --i) {
+                b_strides[i] = b_strides[i + 1] * b_shape[i + 1];
+            }
+        }
+
+        // Broadcast indexing
+        int a_idx = 0, b_idx = 0;
+        size_t remaining = idx;
+
+        for (int i = 0; i < c_rank; ++i) {
+            int c_coord = remaining / c_strides[i];
+            remaining %= c_strides[i];
+
+            // Map to a's coordinate
+            int offset_a = c_rank - a_rank;
+            if (i >= offset_a) {
+                int dim = i - offset_a;
+                int coord = (a_shape[dim] == 1) ? 0 : c_coord;
+                a_idx += coord * a_strides[dim];
+            }
+
+            // Map to b's coordinate
+            int offset_b = c_rank - b_rank;
+            if (i >= offset_b) {
+                int dim = i - offset_b;
+                int coord = (b_shape[dim] == 1) ? 0 : c_coord;
+                b_idx += coord * b_strides[dim];
+            }
+        }
+
+        c[idx] = op(a[a_idx], b[b_idx]);
+    }
+
+    template <typename T, typename OutputT, typename BinaryOp>
+    void launch_broadcast_binary(const T* a, const T* b, OutputT* c,
+                                 const size_t* a_shape, const size_t* b_shape, const size_t* c_shape,
+                                 size_t a_rank, size_t b_rank, size_t c_rank,
+                                 size_t c_elements, BinaryOp op, cudaStream_t stream) {
+        if (c_elements == 0)
+            return;
+
+        // Allocate device memory for shapes
+        constexpr int MaxRank = 8;
+        int *d_a_shape, *d_b_shape, *d_c_shape;
+        cudaMalloc(&d_a_shape, MaxRank * sizeof(int));
+        cudaMalloc(&d_b_shape, MaxRank * sizeof(int));
+        cudaMalloc(&d_c_shape, MaxRank * sizeof(int));
+
+        // Copy shapes to host arrays first
+        int h_a_shape[MaxRank] = {0}, h_b_shape[MaxRank] = {0}, h_c_shape[MaxRank] = {0};
+        for (size_t i = 0; i < a_rank; ++i) h_a_shape[i] = static_cast<int>(a_shape[i]);
+        for (size_t i = 0; i < b_rank; ++i) h_b_shape[i] = static_cast<int>(b_shape[i]);
+        for (size_t i = 0; i < c_rank; ++i) h_c_shape[i] = static_cast<int>(c_shape[i]);
+
+        // Copy to device
+        cudaMemcpyAsync(d_a_shape, h_a_shape, MaxRank * sizeof(int), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(d_b_shape, h_b_shape, MaxRank * sizeof(int), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(d_c_shape, h_c_shape, MaxRank * sizeof(int), cudaMemcpyHostToDevice, stream);
+
+        // Launch kernel
+        constexpr int block_size = 256;
+        int grid_size = (c_elements + block_size - 1) / block_size;
+        simple_broadcast_binary_kernel<<<grid_size, block_size, 0, stream>>>(
+            a, b, c, d_a_shape, d_b_shape, d_c_shape,
+            static_cast<int>(a_rank), static_cast<int>(b_rank), static_cast<int>(c_rank),
+            c_elements, op);
+
+        // Free device memory
+        cudaStreamSynchronize(stream);
+        cudaFree(d_a_shape);
+        cudaFree(d_b_shape);
+        cudaFree(d_c_shape);
+    }
+#endif // _WIN32
     // All CUDA kernels and the host function template are defined inline in the header
     // for correct template instantiation with expression template functors.
     // ============================================================================
@@ -244,6 +354,9 @@ namespace gs::tensor_ops {
     // EXPLICIT INSTANTIATIONS FOR C++ FILES
     // C++ files can't see tensor_broadcast_ops.cuh (which is #ifdef __CUDACC__),
     // so we need explicit instantiations for basic binary operations.
+    //
+    // On Windows, tensor_broadcast_ops.cuh is excluded even for CUDA files to avoid
+    // nvcc 12.8 ICE, so explicit instantiations are required for all platforms.
     // ============================================================================
 
     // Arithmetic operations (same input/output type - comprehensive list)
