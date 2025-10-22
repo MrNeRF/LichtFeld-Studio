@@ -3,7 +3,7 @@
 
 // Memory pool is now an internal implementation detail of tensor library
 // #include "core/memory_pool.hpp"
-#include "core/tensor.hpp"
+#include "core_new/tensor.hpp"
 #include <algorithm>
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <chrono>
@@ -13,7 +13,7 @@
 #include <thread>
 #include <torch/torch.h>
 
-using namespace gs;
+using namespace lfs::core;
 
 // ============= Helper Functions =============
 

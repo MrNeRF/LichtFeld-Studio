@@ -2,7 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/tensor.hpp"
+#include "core_new/tensor.hpp"
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <torch/torch.h>
@@ -15,8 +15,8 @@ namespace {
         std::cout << (passed ? "✓ PASS" : "✗ FAIL") << ": " << test_name << std::endl;
     }
 
-    // Helper to convert torch::Tensor to gs::Tensor
-    gs::Tensor torch_to_tensor(const torch::Tensor& torch_tensor) {
+    // Helper to convert torch::Tensor to lfs::core::Tensor
+    lfs::core::Tensor torch_to_tensor(const torch::Tensor& torch_tensor) {
         auto cpu_tensor = torch_tensor.cpu().contiguous();
         std::vector<size_t> shape;
         for (int i = 0; i < torch_tensor.dim(); ++i) {
@@ -26,23 +26,23 @@ namespace {
         if (torch_tensor.scalar_type() == torch::kFloat32) {
             std::vector<float> data(cpu_tensor.data_ptr<float>(),
                                     cpu_tensor.data_ptr<float>() + cpu_tensor.numel());
-            return gs::Tensor::from_vector(data, gs::TensorShape(shape), gs::Device::CUDA);
+            return lfs::core::Tensor::from_vector(data, lfs::core::TensorShape(shape), lfs::core::Device::CUDA);
         } else if (torch_tensor.scalar_type() == torch::kInt32) {
             std::vector<int> data(cpu_tensor.data_ptr<int>(),
                                   cpu_tensor.data_ptr<int>() + cpu_tensor.numel());
-            return gs::Tensor::from_vector(data, gs::TensorShape(shape), gs::Device::CUDA);
+            return lfs::core::Tensor::from_vector(data, lfs::core::TensorShape(shape), lfs::core::Device::CUDA);
         } else if (torch_tensor.scalar_type() == torch::kInt64) {
             std::vector<int64_t> data(cpu_tensor.data_ptr<int64_t>(),
                                       cpu_tensor.data_ptr<int64_t>() + cpu_tensor.numel());
             std::vector<int> data_int32(data.begin(), data.end());
-            return gs::Tensor::from_vector(data_int32, gs::TensorShape(shape), gs::Device::CUDA);
+            return lfs::core::Tensor::from_vector(data_int32, lfs::core::TensorShape(shape), lfs::core::Device::CUDA);
         }
 
-        return gs::Tensor();
+        return lfs::core::Tensor();
     }
 
     // Helper to compare float tensors
-    bool compare_float_tensors(const gs::Tensor& gs_t, const torch::Tensor& torch_t,
+    bool compare_float_tensors(const lfs::core::Tensor& gs_t, const torch::Tensor& torch_t,
                                float tol = FLOAT_TOLERANCE) {
         if (gs_t.numel() != torch_t.numel()) {
             std::cout << "  Size mismatch: gs=" << gs_t.numel()
@@ -66,7 +66,7 @@ namespace {
     }
 
     // Helper to compare int tensors
-    bool compare_int_tensors(const gs::Tensor& gs_t, const torch::Tensor& torch_t) {
+    bool compare_int_tensors(const lfs::core::Tensor& gs_t, const torch::Tensor& torch_t) {
         if (gs_t.numel() != torch_t.numel()) {
             std::cout << "  Size mismatch: gs=" << gs_t.numel()
                       << " torch=" << torch_t.numel() << std::endl;
@@ -78,13 +78,13 @@ namespace {
 
         // Get gs tensor data based on its dtype
         std::vector<int64_t> gs_data;
-        if (gs_cpu.dtype() == gs::DataType::Int64) {
+        if (gs_cpu.dtype() == lfs::core::DataType::Int64) {
             gs_data = gs_cpu.to_vector_int64();
-        } else if (gs_cpu.dtype() == gs::DataType::Int32) {
+        } else if (gs_cpu.dtype() == lfs::core::DataType::Int32) {
             auto gs_int32 = gs_cpu.to_vector_int();
             gs_data.assign(gs_int32.begin(), gs_int32.end());
         } else {
-            std::cout << "  Unsupported gs dtype: " << gs::dtype_name(gs_cpu.dtype()) << std::endl;
+            std::cout << "  Unsupported gs dtype: " << lfs::core::dtype_name(gs_cpu.dtype()) << std::endl;
             return false;
         }
 
@@ -122,7 +122,7 @@ protected:
     void SetUp() override {
         torch::manual_seed(42);
         torch::cuda::manual_seed(42);
-        gs::Tensor::manual_seed(42);
+        lfs::core::Tensor::manual_seed(42);
     }
 };
 
@@ -145,8 +145,8 @@ TEST_F(TensorDebugTest, Sort_Float32_Ascending) {
     std::cout << "  Indices: " << torch_idx << std::endl;
     std::cout << "  Index dtype: " << torch_idx.dtype() << std::endl;
 
-    // gs::Tensor
-    std::cout << "gs::Tensor result:" << std::endl;
+    // lfs::core::Tensor
+    std::cout << "lfs::core::Tensor result:" << std::endl;
     try {
         auto result = gs_data.sort(0);
         auto gs_vals = result.first;
@@ -154,7 +154,7 @@ TEST_F(TensorDebugTest, Sort_Float32_Ascending) {
 
         std::cout << "  Values shape: [" << gs_vals.shape()[0] << "]" << std::endl;
         std::cout << "  Indices shape: [" << gs_idx.shape()[0] << "]" << std::endl;
-        std::cout << "  Index dtype: " << gs::dtype_name(gs_idx.dtype()) << std::endl;
+        std::cout << "  Index dtype: " << lfs::core::dtype_name(gs_idx.dtype()) << std::endl;
 
         // Compare values
         bool vals_match = compare_float_tensors(gs_vals, torch_vals);
@@ -168,7 +168,7 @@ TEST_F(TensorDebugTest, Sort_Float32_Ascending) {
 
     } catch (const std::exception& e) {
         std::cout << "  ERROR: " << e.what() << std::endl;
-        FAIL() << "gs::Tensor sort() threw exception";
+        FAIL() << "lfs::core::Tensor sort() threw exception";
     }
 }
 
@@ -182,7 +182,7 @@ TEST_F(TensorDebugTest, Sort_Float32_Descending) {
     auto [torch_vals, torch_idx] = torch::sort(torch_data, 0, true);
     std::cout << "LibTorch descending: " << torch_vals << std::endl;
 
-    // gs::Tensor
+    // lfs::core::Tensor
     try {
         auto [gs_vals, gs_idx] = gs_data.sort(0, true);
 
@@ -196,7 +196,7 @@ TEST_F(TensorDebugTest, Sort_Float32_Descending) {
 
     } catch (const std::exception& e) {
         std::cout << "  ERROR: " << e.what() << std::endl;
-        FAIL() << "gs::Tensor descending sort() threw exception";
+        FAIL() << "lfs::core::Tensor descending sort() threw exception";
     }
 }
 
@@ -215,7 +215,7 @@ TEST_F(TensorDebugTest, Item_Float32) {
 
     try {
         float gs_val = gs_scalar.item();
-        std::cout << "gs::Tensor item(): " << gs_val << std::endl;
+        std::cout << "lfs::core::Tensor item(): " << gs_val << std::endl;
 
         bool match = std::abs(torch_val - gs_val) < FLOAT_TOLERANCE;
         print_comparison("Float item match", match);
@@ -237,7 +237,7 @@ TEST_F(TensorDebugTest, Item_Int32) {
 
     try {
         int gs_val = gs_scalar.item<int>();
-        std::cout << "gs::Tensor item<int>(): " << gs_val << std::endl;
+        std::cout << "lfs::core::Tensor item<int>(): " << gs_val << std::endl;
 
         bool match = (torch_val == gs_val);
         print_comparison("Int32 item match", match);
@@ -284,7 +284,7 @@ TEST_F(TensorDebugTest, Unsqueeze) {
 
     try {
         auto gs_unsq = gs_data.unsqueeze(1);
-        std::cout << "gs::Tensor unsqueeze(1): [" << gs_unsq.shape()[0]
+        std::cout << "lfs::core::Tensor unsqueeze(1): [" << gs_unsq.shape()[0]
                   << ", " << gs_unsq.shape()[1] << "]" << std::endl;
 
         bool shape_match = (torch_unsq.size(0) == gs_unsq.shape()[0] &&
@@ -312,7 +312,7 @@ TEST_F(TensorDebugTest, Squeeze) {
 
     try {
         auto gs_sq = gs_data.squeeze(1);
-        std::cout << "gs::Tensor squeeze(1): [" << gs_sq.shape()[0] << "]" << std::endl;
+        std::cout << "lfs::core::Tensor squeeze(1): [" << gs_sq.shape()[0] << "]" << std::endl;
 
         bool shape_match = (torch_sq.size(0) == gs_sq.shape()[0] && torch_sq.dim() == gs_sq.ndim());
         bool data_match = compare_float_tensors(gs_sq, torch_sq);
@@ -346,7 +346,7 @@ TEST_F(TensorDebugTest, MaskedSelect_Basic) {
 
     try {
         auto gs_selected = gs_data.masked_select(gs_mask);
-        std::cout << "gs::Tensor masked_select:" << std::endl;
+        std::cout << "lfs::core::Tensor masked_select:" << std::endl;
         std::cout << "  Shape: [" << gs_selected.shape()[0] << "]" << std::endl;
         std::cout << "  Numel: " << gs_selected.numel() << std::endl;
 
@@ -374,7 +374,7 @@ TEST_F(TensorDebugTest, MaskedSelect_WithReshape) {
 
     try {
         auto gs_selected = gs_data.masked_select(gs_mask).reshape({-1, 1});
-        std::cout << "gs::Tensor masked_select + reshape(-1, 1): ["
+        std::cout << "lfs::core::Tensor masked_select + reshape(-1, 1): ["
                   << gs_selected.shape()[0] << ", " << gs_selected.shape()[1] << "]" << std::endl;
 
         bool match = compare_float_tensors(gs_selected, torch_selected);
@@ -431,7 +431,7 @@ TEST_F(TensorDebugTest, Equality_Int32) {
         auto gs_mask = gs_labels.eq(1);
 
         auto torch_mask_float = torch_mask.to(torch::kFloat32);
-        auto gs_mask_float = gs_mask.to(gs::DataType::Float32);
+        auto gs_mask_float = gs_mask.to(lfs::core::DataType::Float32);
 
         bool match = compare_float_tensors(gs_mask_float, torch_mask_float);
         print_comparison("Int32 equality", match);
@@ -456,7 +456,7 @@ TEST_F(TensorDebugTest, GreaterThan_Float32) {
         auto gs_mask = gs_data > 0.0f;
 
         auto torch_mask_float = torch_mask.to(torch::kFloat32);
-        auto gs_mask_float = gs_mask.to(gs::DataType::Float32);
+        auto gs_mask_float = gs_mask.to(lfs::core::DataType::Float32);
 
         bool match = compare_float_tensors(gs_mask_float, torch_mask_float);
         print_comparison("Greater than", match);
@@ -478,8 +478,8 @@ TEST_F(TensorDebugTest, AnyScalar) {
     auto torch_all_false = torch::zeros({10}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
     auto torch_some_true = torch::ones({10}, torch::TensorOptions().dtype(torch::kBool).device(torch::kCUDA));
 
-    auto gs_all_false = gs::Tensor::zeros_bool({10}, gs::Device::CUDA);
-    auto gs_some_true = gs::Tensor::ones_bool({10}, gs::Device::CUDA);
+    auto gs_all_false = lfs::core::Tensor::zeros_bool({10}, lfs::core::Device::CUDA);
+    auto gs_some_true = lfs::core::Tensor::ones_bool({10}, lfs::core::Device::CUDA);
 
     bool torch_result_false = torch_all_false.any().item<bool>();
     bool torch_result_true = torch_some_true.any().item<bool>();
@@ -491,8 +491,8 @@ TEST_F(TensorDebugTest, AnyScalar) {
         bool gs_result_false = gs_all_false.any_scalar();
         bool gs_result_true = gs_some_true.any_scalar();
 
-        std::cout << "gs::Tensor all_false.any_scalar(): " << gs_result_false << std::endl;
-        std::cout << "gs::Tensor some_true.any_scalar(): " << gs_result_true << std::endl;
+        std::cout << "lfs::core::Tensor all_false.any_scalar(): " << gs_result_false << std::endl;
+        std::cout << "lfs::core::Tensor some_true.any_scalar(): " << gs_result_true << std::endl;
 
         bool match = (torch_result_false == gs_result_false) && (torch_result_true == gs_result_true);
         print_comparison("Any scalar", match);
@@ -608,7 +608,7 @@ TEST_F(TensorDebugTest, CopyFrom) {
     auto torch_dst = torch::zeros({5}, torch::kCUDA);
 
     auto gs_src = torch_to_tensor(torch_src);
-    auto gs_dst = gs::Tensor::zeros({5}, gs::Device::CUDA);
+    auto gs_dst = lfs::core::Tensor::zeros({5}, lfs::core::Device::CUDA);
 
     torch_dst.copy_(torch_src);
     try {
@@ -643,7 +643,7 @@ TEST_F(TensorDebugTest, Min_Max_Reductions) {
         float gs_min = gs_data.min().item();
         float gs_max = gs_data.max().item();
 
-        std::cout << "gs::Tensor min: " << gs_min << " max: " << gs_max << std::endl;
+        std::cout << "lfs::core::Tensor min: " << gs_min << " max: " << gs_max << std::endl;
 
         bool min_match = std::abs(torch_min - gs_min) < FLOAT_TOLERANCE;
         bool max_match = std::abs(torch_max - gs_max) < FLOAT_TOLERANCE;
@@ -709,7 +709,7 @@ TEST_F(TensorDebugTest, Linspace) {
     std::cout << "\n=== TEST: Linspace ===" << std::endl;
 
     auto torch_ls = torch::linspace(0, 100, 256, torch::kCUDA);
-    auto gs_ls = gs::Tensor::linspace(0, 100, 256, gs::Device::CUDA);
+    auto gs_ls = lfs::core::Tensor::linspace(0, 100, 256, lfs::core::Device::CUDA);
 
     bool match = compare_float_tensors(gs_ls, torch_ls, 1e-3f);
     print_comparison("Linspace", match);

@@ -2,7 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
-#include "core/pinned_memory_allocator.hpp"
+#include "core_new/pinned_memory_allocator.hpp"
 #include <gtest/gtest.h>
 
 int main(int argc, char** argv) {
@@ -13,7 +13,7 @@ int main(int argc, char** argv) {
 
     // Pre-warm pinned memory cache for fast CPU-GPU transfers
     // This eliminates cold-start penalties (e.g., 23.8ms for 4K allocations)
-    gs::PinnedMemoryAllocator::instance().prewarm();
+    lfs::core::PinnedMemoryAllocator::instance().prewarm();
 
     return RUN_ALL_TESTS();
 }

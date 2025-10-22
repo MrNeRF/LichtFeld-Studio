@@ -2,7 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/tensor.hpp"
+#include "core_new/tensor.hpp"
 #include <gtest/gtest.h>
 #include <iostream>
 #include <torch/torch.h>
@@ -11,7 +11,7 @@ class BugVerificationTest : public ::testing::Test {
 protected:
     void SetUp() override {
         torch::manual_seed(42);
-        gs::Tensor::manual_seed(42);
+        lfs::core::Tensor::manual_seed(42);
     }
 };
 
@@ -24,7 +24,7 @@ TEST_F(BugVerificationTest, Bug1_Int32_Equality) {
 
     // Create Int32 tensor
     std::vector<int> data = {0, 1, 2, 1, 0, 2};
-    auto gs_labels = gs::Tensor::from_vector(data, {6}, gs::Device::CUDA);
+    auto gs_labels = lfs::core::Tensor::from_vector(data, {6}, lfs::core::Device::CUDA);
 
     std::cout << "Input: [0, 1, 2, 1, 0, 2]" << std::endl;
     std::cout << "Testing: labels == 1" << std::endl;
@@ -33,21 +33,21 @@ TEST_F(BugVerificationTest, Bug1_Int32_Equality) {
     // Test equality
     auto mask = gs_labels.eq(1);
 
-    std::cout << "Result dtype: " << gs::dtype_name(mask.dtype()) << std::endl;
+    std::cout << "Result dtype: " << lfs::core::dtype_name(mask.dtype()) << std::endl;
 
     auto mask_cpu = mask.cpu();
 
     // Convert to readable format
     std::vector<bool> result;
-    if (mask_cpu.dtype() == gs::DataType::Bool) {
+    if (mask_cpu.dtype() == lfs::core::DataType::Bool) {
         auto vec = mask_cpu.to_vector_bool();
         result.assign(vec.begin(), vec.end());
-    } else if (mask_cpu.dtype() == gs::DataType::Float32) {
+    } else if (mask_cpu.dtype() == lfs::core::DataType::Float32) {
         auto vec = mask_cpu.to_vector();
         for (float v : vec) {
             result.push_back(v > 0.5f);
         }
-    } else if (mask_cpu.dtype() == gs::DataType::Int32) {
+    } else if (mask_cpu.dtype() == lfs::core::DataType::Int32) {
         auto vec = mask_cpu.to_vector_int();
         for (int v : vec) {
             result.push_back(v != 0);
@@ -87,7 +87,7 @@ TEST_F(BugVerificationTest, Bug1_Float32_Equality_AsBaseline) {
 
     // Test with Float32 to see if it works there
     std::vector<float> data = {0.0f, 1.0f, 2.0f, 1.0f, 0.0f, 2.0f};
-    auto gs_labels = gs::Tensor::from_vector(data, {6}, gs::Device::CUDA);
+    auto gs_labels = lfs::core::Tensor::from_vector(data, {6}, lfs::core::Device::CUDA);
 
     std::cout << "Input: [0.0, 1.0, 2.0, 1.0, 0.0, 2.0]" << std::endl;
     std::cout << "Testing: labels == 1.0" << std::endl;
@@ -96,7 +96,7 @@ TEST_F(BugVerificationTest, Bug1_Float32_Equality_AsBaseline) {
     auto mask_cpu = mask.cpu();
 
     std::vector<bool> result;
-    if (mask_cpu.dtype() == gs::DataType::Bool) {
+    if (mask_cpu.dtype() == lfs::core::DataType::Bool) {
         auto vec = mask_cpu.to_vector_bool();
         result.assign(vec.begin(), vec.end());
     } else {
@@ -139,7 +139,7 @@ TEST_F(BugVerificationTest, Bug2_Clone_Independence) {
 
     // Create original tensor
     std::vector<float> data = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f};
-    auto original = gs::Tensor::from_vector(data, {5}, gs::Device::CUDA);
+    auto original = lfs::core::Tensor::from_vector(data, {5}, lfs::core::Device::CUDA);
 
     std::cout << "Original values: ";
     auto orig_cpu = original.cpu().to_vector();
@@ -203,7 +203,7 @@ TEST_F(BugVerificationTest, Bug2_Clone_Independence) {
 TEST_F(BugVerificationTest, Bug2_Clone_MemoryOwnership) {
     std::cout << "\n=== Clone Memory Ownership Check ===" << std::endl;
 
-    auto original = gs::Tensor::from_vector({10.0f, 20.0f, 30.0f}, {3}, gs::Device::CUDA);
+    auto original = lfs::core::Tensor::from_vector({10.0f, 20.0f, 30.0f}, {3}, lfs::core::Device::CUDA);
 
     std::cout << "Original owns_memory: " << original.owns_memory() << std::endl;
     std::cout << "Original is_view: " << original.is_view() << std::endl;
@@ -234,10 +234,10 @@ TEST_F(BugVerificationTest, Bug_Impact_KMeans_CentroidUpdate) {
 
     // Simulate k-means centroid update
     std::vector<int> labels_data = {0, 1, 0, 2, 1, 0, 2, 1};
-    auto labels = gs::Tensor::from_vector(labels_data, {8}, gs::Device::CUDA);
+    auto labels = lfs::core::Tensor::from_vector(labels_data, {8}, lfs::core::Device::CUDA);
 
     std::vector<float> data_vals = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f, 7.0f, 8.0f};
-    auto data = gs::Tensor::from_vector(data_vals, {8}, gs::Device::CUDA);
+    auto data = lfs::core::Tensor::from_vector(data_vals, {8}, lfs::core::Device::CUDA);
 
     int cluster_id = 1;
 
@@ -293,7 +293,7 @@ TEST_F(BugVerificationTest, Bug_Impact_KMeans_ConvergenceCheck) {
     std::cout << "\n=== K-means Convergence Check Pattern ===" << std::endl;
 
     // Simulate convergence check
-    auto centroids = gs::Tensor::from_vector({1.0f, 2.0f, 3.0f}, {3}, gs::Device::CUDA);
+    auto centroids = lfs::core::Tensor::from_vector({1.0f, 2.0f, 3.0f}, {3}, lfs::core::Device::CUDA);
 
     std::cout << "Saving old centroids with clone()..." << std::endl;
     auto old_centroids = centroids.clone();

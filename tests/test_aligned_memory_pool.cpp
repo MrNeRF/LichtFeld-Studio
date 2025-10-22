@@ -5,7 +5,7 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
-using namespace gs;
+using namespace lfs::core;
 
 class AlignedMemoryPoolTest : public ::testing::Test {
 protected:

@@ -1,13 +1,13 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/tensor.hpp"
+#include "core_new/tensor.hpp"
 #include <chrono>
 #include <gtest/gtest.h>
 #include <iomanip>
 #include <torch/torch.h>
 
-using namespace gs;
+using namespace lfs::core;
 
 // ============= Broadcast Operation Benchmark =============
 

@@ -8,14 +8,14 @@
 #include <torch/torch.h>
 #include <vector>
 
-#include "core/tensor.hpp"
+#include "core_new/tensor.hpp"
 
 namespace {
 
     constexpr float FLOAT_TOLERANCE = 1e-4f;
 
-    // Helper to convert torch::Tensor to gs::Tensor
-    gs::Tensor torch_to_tensor(const torch::Tensor& torch_tensor) {
+    // Helper to convert torch::Tensor to lfs::core::Tensor
+    lfs::core::Tensor torch_to_tensor(const torch::Tensor& torch_tensor) {
         auto cpu_tensor = torch_tensor.cpu().contiguous();
         std::vector<size_t> shape;
         for (int i = 0; i < torch_tensor.dim(); ++i) {
@@ -25,40 +25,40 @@ namespace {
         if (torch_tensor.scalar_type() == torch::kFloat32) {
             std::vector<float> data(cpu_tensor.data_ptr<float>(),
                                     cpu_tensor.data_ptr<float>() + cpu_tensor.numel());
-            return gs::Tensor::from_vector(data, gs::TensorShape(shape), gs::Device::CUDA);
+            return lfs::core::Tensor::from_vector(data, lfs::core::TensorShape(shape), lfs::core::Device::CUDA);
         } else if (torch_tensor.scalar_type() == torch::kInt32) {
             std::vector<int> data(cpu_tensor.data_ptr<int>(),
                                   cpu_tensor.data_ptr<int>() + cpu_tensor.numel());
-            return gs::Tensor::from_vector(data, gs::TensorShape(shape), gs::Device::CUDA);
+            return lfs::core::Tensor::from_vector(data, lfs::core::TensorShape(shape), lfs::core::Device::CUDA);
         } else if (torch_tensor.scalar_type() == torch::kBool) {
             std::vector<bool> data;
             auto bool_ptr = cpu_tensor.data_ptr<bool>();
             for (int64_t i = 0; i < cpu_tensor.numel(); ++i) {
                 data.push_back(bool_ptr[i]);
             }
-            return gs::Tensor::from_vector(data, gs::TensorShape(shape), gs::Device::CUDA);
+            return lfs::core::Tensor::from_vector(data, lfs::core::TensorShape(shape), lfs::core::Device::CUDA);
         }
 
-        return gs::Tensor();
+        return lfs::core::Tensor();
     }
 
-    // Helper to convert gs::Tensor to torch::Tensor
-    torch::Tensor tensor_to_torch(const gs::Tensor& gs_tensor) {
+    // Helper to convert lfs::core::Tensor to torch::Tensor
+    torch::Tensor tensor_to_torch(const lfs::core::Tensor& gs_tensor) {
         auto cpu_tensor = gs_tensor.cpu();
         std::vector<int64_t> shape;
         for (size_t i = 0; i < cpu_tensor.ndim(); ++i) {
             shape.push_back(cpu_tensor.shape()[i]);
         }
 
-        if (gs_tensor.dtype() == gs::DataType::Float32) {
+        if (gs_tensor.dtype() == lfs::core::DataType::Float32) {
             auto data = cpu_tensor.to_vector();
             auto torch_tensor = torch::from_blob(data.data(), shape, torch::kFloat32).clone();
             return torch_tensor.cuda();
-        } else if (gs_tensor.dtype() == gs::DataType::Int32) {
+        } else if (gs_tensor.dtype() == lfs::core::DataType::Int32) {
             auto data = cpu_tensor.to_vector_int();
             auto torch_tensor = torch::from_blob(data.data(), shape, torch::kInt32).clone();
             return torch_tensor.cuda();
-        } else if (gs_tensor.dtype() == gs::DataType::Bool) {
+        } else if (gs_tensor.dtype() == lfs::core::DataType::Bool) {
             auto data = cpu_tensor.to_vector_bool();
             std::vector<uint8_t> uint8_data(data.begin(), data.end());
             auto torch_tensor = torch::from_blob(uint8_data.data(), shape, torch::kUInt8).clone().to(torch::kBool);
@@ -69,7 +69,7 @@ namespace {
     }
 
     // Helper to compare tensors
-    bool tensors_close(const gs::Tensor& a, const torch::Tensor& b, float tol = FLOAT_TOLERANCE) {
+    bool tensors_close(const lfs::core::Tensor& a, const torch::Tensor& b, float tol = FLOAT_TOLERANCE) {
         if (a.numel() != b.numel()) {
             std::cout << "Size mismatch: " << a.numel() << " vs " << b.numel() << std::endl;
             return false;
@@ -91,7 +91,7 @@ namespace {
     }
 
     // Helper for bool tensor comparison
-    bool bool_tensors_equal(const gs::Tensor& a, const torch::Tensor& b) {
+    bool bool_tensors_equal(const lfs::core::Tensor& a, const torch::Tensor& b) {
         if (a.numel() != b.numel()) {
             std::cout << "Size mismatch: " << a.numel() << " vs " << b.numel() << std::endl;
             return false;
@@ -118,7 +118,7 @@ protected:
         ASSERT_TRUE(torch::cuda::is_available()) << "CUDA not available";
         torch::manual_seed(42);
         torch::cuda::manual_seed(42);
-        gs::Tensor::manual_seed(42);
+        lfs::core::Tensor::manual_seed(42);
     }
 };
 
@@ -128,7 +128,7 @@ protected:
 
 TEST_F(TensorBugHuntingTest, CriticalCPUToGPUTransfer) {
     // The critical test mentioned in the requirements
-    auto t = gs::Tensor::ones({2, 3}, gs::Device::CPU);
+    auto t = lfs::core::Tensor::ones({2, 3}, lfs::core::Device::CPU);
     t.ptr<float>()[0] = 99.0f;
 
     auto gpu = t.cuda();
@@ -141,7 +141,7 @@ TEST_F(TensorBugHuntingTest, CriticalCPUToGPUTransfer) {
 }
 
 TEST_F(TensorBugHuntingTest, CPUToGPUTransferMultipleValues) {
-    auto t = gs::Tensor::zeros({5, 4}, gs::Device::CPU);
+    auto t = lfs::core::Tensor::zeros({5, 4}, lfs::core::Device::CPU);
     float* data = t.ptr<float>();
 
     // Set unique values
@@ -172,7 +172,7 @@ TEST_F(TensorBugHuntingTest, GPUToCPUTransferPreservesData) {
 }
 
 TEST_F(TensorBugHuntingTest, RepeatedCPUGPUTransfers) {
-    auto t = gs::Tensor::ones({3, 3}, gs::Device::CPU);
+    auto t = lfs::core::Tensor::ones({3, 3}, lfs::core::Device::CPU);
     t.ptr<float>()[4] = 123.456f; // Center element
 
     // Multiple round trips
@@ -190,7 +190,7 @@ TEST_F(TensorBugHuntingTest, RepeatedCPUGPUTransfers) {
 // ============================================================================
 
 TEST_F(TensorBugHuntingTest, CloneIsDeepCopy) {
-    auto original = gs::Tensor::ones({5, 5}, gs::Device::CUDA);
+    auto original = lfs::core::Tensor::ones({5, 5}, lfs::core::Device::CUDA);
     auto cloned = original.clone();
 
     // Modify original
@@ -205,7 +205,7 @@ TEST_F(TensorBugHuntingTest, CloneIsDeepCopy) {
 }
 
 TEST_F(TensorBugHuntingTest, CloneCPUTensor) {
-    auto original = gs::Tensor::ones({5, 5}, gs::Device::CPU);
+    auto original = lfs::core::Tensor::ones({5, 5}, lfs::core::Device::CPU);
     original.ptr<float>()[0] = 42.0f;
 
     auto cloned = original.clone();
@@ -235,8 +235,8 @@ TEST_F(TensorBugHuntingTest, TensorRowProxyAssignment2D) {
     auto torch_dest = torch::zeros({5, 3}, torch::kCUDA);
     auto torch_src = torch::ones({3}, torch::kCUDA) * 42.0f;
 
-    auto gs_dest = gs::Tensor::zeros({5, 3}, gs::Device::CUDA);
-    auto gs_src = gs::Tensor::ones({3}, gs::Device::CUDA).mul(42.0f);
+    auto gs_dest = lfs::core::Tensor::zeros({5, 3}, lfs::core::Device::CUDA);
+    auto gs_src = lfs::core::Tensor::ones({3}, lfs::core::Device::CUDA).mul(42.0f);
 
     // Assign to row 2
     torch_dest[2] = torch_src;
@@ -273,7 +273,7 @@ TEST_F(TensorBugHuntingTest, TensorRowProxyAssignmentFromAnotherRowDebug) {
     // Perform operation
     std::cout << "\n--- Extracting row 0 ---" << std::endl;
     auto torch_row0 = torch_data[0].clone();
-    gs::Tensor gs_row0_tensor = gs_data[0]; // TensorRowProxy → Tensor conversion
+    lfs::core::Tensor gs_row0_tensor = gs_data[0]; // TensorRowProxy → Tensor conversion
 
     std::vector<float> torch_row0_check(3);
     for (int i = 0; i < 3; ++i) {
@@ -433,7 +433,7 @@ TEST_F(TensorBugHuntingTest, DiagnosticAutoVsExplicitType) {
     std::cout << "\nTest 2: Using explicit Tensor type (forces conversion)" << std::endl;
     {
         auto torch_row0 = torch_data[0].clone();
-        gs::Tensor gs_row0 = gs_data[0]; // Explicit type forces conversion!
+        lfs::core::Tensor gs_row0 = gs_data[0]; // Explicit type forces conversion!
 
         std::cout << "  Type of gs_row0: " << typeid(gs_row0).name() << std::endl;
 
@@ -450,11 +450,11 @@ TEST_F(TensorBugHuntingTest, DiagnosticAutoVsExplicitType) {
 
 TEST_F(TensorBugHuntingTest, TensorRowProxyScalarAssignment) {
     auto torch_data = torch::zeros({5, 3}, torch::kCUDA);
-    auto gs_data = gs::Tensor::zeros({5, 3}, gs::Device::CUDA);
+    auto gs_data = lfs::core::Tensor::zeros({5, 3}, lfs::core::Device::CUDA);
 
     // Assign scalar to a row (should broadcast)
     auto torch_scalar = torch::full({3}, 99.0f, torch::kCUDA);
-    auto gs_scalar = gs::Tensor::full({3}, 99.0f, gs::Device::CUDA);
+    auto gs_scalar = lfs::core::Tensor::full({3}, 99.0f, lfs::core::Device::CUDA);
 
     torch_data[2] = torch_scalar;
     gs_data[2] = gs_scalar;
@@ -643,7 +643,7 @@ TEST_F(TensorBugHuntingTest, PointerAccessAfterReshape) {
 
 TEST_F(TensorBugHuntingTest, EmptyTensorOperations) {
     auto torch_empty = torch::empty({0}, torch::kCUDA);
-    auto gs_empty = gs::Tensor::empty({0}, gs::Device::CUDA);
+    auto gs_empty = lfs::core::Tensor::empty({0}, lfs::core::Device::CUDA);
 
     EXPECT_EQ(gs_empty.numel(), 0);
     EXPECT_EQ(gs_empty.is_empty(), true);
@@ -655,7 +655,7 @@ TEST_F(TensorBugHuntingTest, EmptyTensorOperations) {
 
 TEST_F(TensorBugHuntingTest, SingleElementTensor) {
     auto torch_single = torch::tensor({42.0f}, torch::kCUDA);
-    auto gs_single = gs::Tensor::from_vector({42.0f}, {1}, gs::Device::CUDA);
+    auto gs_single = lfs::core::Tensor::from_vector({42.0f}, {1}, lfs::core::Device::CUDA);
 
     EXPECT_FLOAT_EQ(gs_single.item(), 42.0f);
 
@@ -666,7 +666,7 @@ TEST_F(TensorBugHuntingTest, SingleElementTensor) {
 
 TEST_F(TensorBugHuntingTest, ZeroInOneDimension) {
     auto torch_zero_dim = torch::empty({0, 5}, torch::kCUDA);
-    auto gs_zero_dim = gs::Tensor::empty({0, 5}, gs::Device::CUDA);
+    auto gs_zero_dim = lfs::core::Tensor::empty({0, 5}, lfs::core::Device::CUDA);
 
     EXPECT_EQ(gs_zero_dim.numel(), 0);
 
@@ -684,7 +684,7 @@ TEST_F(TensorBugHuntingTest, FloatToIntConversion) {
     auto gs_float = torch_to_tensor(torch_float);
 
     auto torch_int = torch_float.to(torch::kInt32);
-    auto gs_int = gs_float.to(gs::DataType::Int32);
+    auto gs_int = gs_float.to(lfs::core::DataType::Int32);
 
     auto torch_cpu = torch_int.cpu();
     auto gs_cpu = gs_int.cpu();
@@ -703,7 +703,7 @@ TEST_F(TensorBugHuntingTest, BoolToFloatConversion) {
     auto gs_bool = torch_to_tensor(torch_bool);
 
     auto torch_float = torch_bool.to(torch::kFloat32);
-    auto gs_float = gs_bool.to(gs::DataType::Float32);
+    auto gs_float = gs_bool.to(lfs::core::DataType::Float32);
 
     EXPECT_TRUE(tensors_close(gs_float, torch_float));
 }
@@ -713,7 +713,7 @@ TEST_F(TensorBugHuntingTest, FloatToBoolConversion) {
     auto gs_float = torch_to_tensor(torch_float);
 
     auto torch_bool = torch_float.to(torch::kBool);
-    auto gs_bool = gs_float.to(gs::DataType::Bool);
+    auto gs_bool = gs_float.to(lfs::core::DataType::Bool);
 
     EXPECT_TRUE(bool_tensors_equal(gs_bool, torch_bool));
 }
@@ -988,7 +988,7 @@ TEST_F(TensorBugHuntingTest, NoMemoryLeakOnMultipleAllocations) {
 
     // Warm up the memory pool - first allocations will be cached
     for (int i = 0; i < 10; ++i) {
-        auto t = gs::Tensor::randn({1000, 1000}, gs::Device::CUDA);
+        auto t = lfs::core::Tensor::randn({1000, 1000}, lfs::core::Device::CUDA);
     }
     cudaDeviceSynchronize();
 
@@ -997,7 +997,7 @@ TEST_F(TensorBugHuntingTest, NoMemoryLeakOnMultipleAllocations) {
 
     // Now create and destroy many more tensors - pool should reuse cached memory
     for (int i = 0; i < 100; ++i) {
-        auto t = gs::Tensor::randn({1000, 1000}, gs::Device::CUDA);
+        auto t = lfs::core::Tensor::randn({1000, 1000}, lfs::core::Device::CUDA);
         // t goes out of scope, returns to pool
     }
 
@@ -1030,7 +1030,7 @@ TEST_F(TensorBugHuntingTest, DiagnosticCompareSliceIsView) {
     std::cout << "PyTorch: slice is " << (torch_is_view ? "VIEW" : "COPY") << std::endl;
 
     // GS
-    auto gs_data = gs::Tensor::randn({5, 3}, gs::Device::CUDA);
+    auto gs_data = lfs::core::Tensor::randn({5, 3}, lfs::core::Device::CUDA);
     void* gs_orig_ptr = gs_data.raw_ptr();
     auto gs_slice = gs_data.slice(0, 0, 1);
     void* gs_slice_ptr = gs_slice.raw_ptr();
@@ -1054,7 +1054,7 @@ TEST_F(TensorBugHuntingTest, DiagnosticCompareCloneIsCopy) {
     std::cout << "PyTorch: clone is " << (torch_is_copy ? "COPY" : "VIEW") << std::endl;
 
     // GS
-    auto gs_data = gs::Tensor::randn({5, 3}, gs::Device::CUDA);
+    auto gs_data = lfs::core::Tensor::randn({5, 3}, lfs::core::Device::CUDA);
     void* gs_orig_ptr = gs_data.raw_ptr();
     auto gs_clone = gs_data.clone();
     void* gs_clone_ptr = gs_clone.raw_ptr();
@@ -1078,7 +1078,7 @@ TEST_F(TensorBugHuntingTest, DiagnosticCompareSqueezeIsView) {
     std::cout << "PyTorch: squeeze is " << (torch_is_view ? "VIEW" : "COPY") << std::endl;
 
     // GS
-    auto gs_data = gs::Tensor::randn({1, 5}, gs::Device::CUDA);
+    auto gs_data = lfs::core::Tensor::randn({1, 5}, lfs::core::Device::CUDA);
     void* gs_orig_ptr = gs_data.raw_ptr();
     auto gs_squeezed = gs_data.squeeze(0);
     void* gs_squeeze_ptr = gs_squeezed.raw_ptr();
@@ -1102,7 +1102,7 @@ TEST_F(TensorBugHuntingTest, DiagnosticCompareReshapeIsView) {
     std::cout << "PyTorch: reshape is " << (torch_is_view ? "VIEW" : "COPY") << std::endl;
 
     // GS
-    auto gs_data = gs::Tensor::randn({6}, gs::Device::CUDA);
+    auto gs_data = lfs::core::Tensor::randn({6}, lfs::core::Device::CUDA);
     void* gs_orig_ptr = gs_data.raw_ptr();
     auto gs_reshaped = gs_data.reshape({2, 3});
     void* gs_reshape_ptr = gs_reshaped.raw_ptr();
@@ -1131,7 +1131,7 @@ TEST_F(TensorBugHuntingTest, DiagnosticCompareSliceSqueezeClone) {
               << (torch_clone_independent ? "INDEPENDENT" : "SHARED MEMORY") << std::endl;
 
     // GS
-    auto gs_data = gs::Tensor::randn({5, 3}, gs::Device::CUDA);
+    auto gs_data = lfs::core::Tensor::randn({5, 3}, lfs::core::Device::CUDA);
     void* gs_orig_ptr = gs_data.raw_ptr();
 
     auto gs_sliced = gs_data.slice(0, 0, 1);
@@ -1169,7 +1169,7 @@ TEST_F(TensorBugHuntingTest, DiagnosticCompareModificationPropagation) {
               << " modification" << std::endl;
 
     // GS - same test
-    auto gs_data = gs::Tensor::randn({5, 3}, gs::Device::CUDA);
+    auto gs_data = lfs::core::Tensor::randn({5, 3}, lfs::core::Device::CUDA);
     auto gs_slice = gs_data.slice(0, 0, 1);
 
     // Save original value
@@ -1213,7 +1213,7 @@ TEST_F(TensorBugHuntingTest, DiagnosticCompareCloneIndependence) {
               << std::endl;
 
     // GS - same test
-    auto gs_data = gs::Tensor::randn({5, 3}, gs::Device::CUDA);
+    auto gs_data = lfs::core::Tensor::randn({5, 3}, lfs::core::Device::CUDA);
     auto gs_clone = gs_data.clone();
 
     // Save clone's value

@@ -1,7 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/tensor.hpp"
+#include "core_new/tensor.hpp"
 #include <chrono>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
@@ -9,7 +9,7 @@
 #include <thread>
 #include <torch/torch.h>
 
-using namespace gs;
+using namespace lfs::core;
 
 // ============= Helper Functions =============
 

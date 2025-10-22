@@ -10,14 +10,14 @@
 #include <torch/torch.h>
 #include <vector>
 
-#include "core/tensor.hpp"
+#include "core_new/tensor.hpp"
 
 namespace {
 
     constexpr float TOLERANCE = 1e-5f;
 
-    // Helper to convert torch::Tensor to gs::Tensor
-    gs::Tensor torch_to_tensor(const torch::Tensor& torch_tensor) {
+    // Helper to convert torch::Tensor to lfs::core::Tensor
+    lfs::core::Tensor torch_to_tensor(const torch::Tensor& torch_tensor) {
         auto cpu_tensor = torch_tensor.cpu().contiguous();
         std::vector<size_t> shape;
         for (int i = 0; i < torch_tensor.dim(); ++i) {
@@ -27,19 +27,19 @@ namespace {
         if (torch_tensor.scalar_type() == torch::kFloat32) {
             std::vector<float> data(cpu_tensor.data_ptr<float>(),
                                     cpu_tensor.data_ptr<float>() + cpu_tensor.numel());
-            return gs::Tensor::from_vector(data, gs::TensorShape(shape), gs::Device::CUDA);
+            return lfs::core::Tensor::from_vector(data, lfs::core::TensorShape(shape), lfs::core::Device::CUDA);
         } else if (torch_tensor.scalar_type() == torch::kInt32) {
             std::vector<int> data(cpu_tensor.data_ptr<int>(),
                                   cpu_tensor.data_ptr<int>() + cpu_tensor.numel());
-            return gs::Tensor::from_vector(data, gs::TensorShape(shape), gs::Device::CUDA);
+            return lfs::core::Tensor::from_vector(data, lfs::core::TensorShape(shape), lfs::core::Device::CUDA);
         }
 
-        return gs::Tensor();
+        return lfs::core::Tensor();
     }
 
     // Helper to compare tensors
     bool tensors_equal(const torch::Tensor& torch_tensor,
-                       const gs::Tensor& gs_tensor,
+                       const lfs::core::Tensor& gs_tensor,
                        float tolerance = TOLERANCE) {
         if (torch_tensor.dim() != static_cast<int64_t>(gs_tensor.ndim())) {
             std::cerr << "Dimension mismatch: torch=" << torch_tensor.dim()
@@ -60,7 +60,7 @@ namespace {
 
         // Float32 comparison
         if (torch_tensor.scalar_type() == torch::kFloat32 &&
-            gs_tensor.dtype() == gs::DataType::Float32) {
+            gs_tensor.dtype() == lfs::core::DataType::Float32) {
             auto torch_data = torch_cpu.data_ptr<float>();
             auto gs_data = gs_cpu.to_vector();
 
@@ -83,7 +83,7 @@ namespace {
 
         // Int32 comparison
         if (torch_tensor.scalar_type() == torch::kInt32 &&
-            gs_tensor.dtype() == gs::DataType::Int32) {
+            gs_tensor.dtype() == lfs::core::DataType::Int32) {
             auto torch_data = torch_cpu.data_ptr<int>();
             auto gs_data = gs_cpu.to_vector_int();
 
@@ -103,7 +103,7 @@ namespace {
 
         // ADDED: Int64 comparison (for nonzero() output)
         if (torch_tensor.scalar_type() == torch::kInt64 &&
-            gs_tensor.dtype() == gs::DataType::Int64) {
+            gs_tensor.dtype() == lfs::core::DataType::Int64) {
             auto torch_data = torch_cpu.data_ptr<int64_t>();
             auto gs_data = gs_cpu.to_vector_int64();
 
@@ -125,13 +125,13 @@ namespace {
 
         // ADDED: Bool comparison or cross-dtype comparison (Bool vs Float32)
         // Handle the case where torch is Float32 and gs is Bool (or vice versa)
-        if ((torch_tensor.scalar_type() == torch::kFloat32 && gs_tensor.dtype() == gs::DataType::Bool) ||
-            (torch_tensor.scalar_type() == torch::kBool && gs_tensor.dtype() == gs::DataType::Float32)) {
+        if ((torch_tensor.scalar_type() == torch::kFloat32 && gs_tensor.dtype() == lfs::core::DataType::Bool) ||
+            (torch_tensor.scalar_type() == torch::kBool && gs_tensor.dtype() == lfs::core::DataType::Float32)) {
 
             // Convert both to Float32 for comparison
             auto torch_float = torch_cpu.to(torch::kFloat32);
-            auto gs_float = (gs_tensor.dtype() == gs::DataType::Bool)
-                                ? gs_cpu.to(gs::DataType::Float32)
+            auto gs_float = (gs_tensor.dtype() == lfs::core::DataType::Bool)
+                                ? gs_cpu.to(lfs::core::DataType::Float32)
                                 : gs_cpu;
 
             auto torch_data = torch_float.data_ptr<float>();
@@ -155,7 +155,7 @@ namespace {
 
         // ADDED: Direct Bool comparison
         if (torch_tensor.scalar_type() == torch::kBool &&
-            gs_tensor.dtype() == gs::DataType::Bool) {
+            gs_tensor.dtype() == lfs::core::DataType::Bool) {
             auto torch_data = torch_cpu.data_ptr<bool>();
             auto gs_data = gs_cpu.to_vector_bool();
 
@@ -180,7 +180,7 @@ namespace {
 
     void print_tensor_comparison(const std::string& name,
                                  const torch::Tensor& torch_tensor,
-                                 const gs::Tensor& gs_tensor) {
+                                 const lfs::core::Tensor& gs_tensor) {
         std::cout << "\n=== " << name << " ===" << std::endl;
 
         auto torch_cpu = torch_tensor.cpu().contiguous();
@@ -228,7 +228,7 @@ protected:
         ASSERT_TRUE(torch::cuda::is_available()) << "CUDA not available";
         torch::manual_seed(42);
         torch::cuda::manual_seed(42);
-        gs::Tensor::manual_seed(42);
+        lfs::core::Tensor::manual_seed(42);
     }
 };
 
@@ -239,27 +239,27 @@ protected:
 TEST_F(TensorVsTorchTest, BasicCreation) {
     // Test zeros
     auto torch_zeros = torch::zeros({10, 5}, torch::kCUDA);
-    auto gs_zeros = gs::Tensor::zeros({10, 5}, gs::Device::CUDA);
+    auto gs_zeros = lfs::core::Tensor::zeros({10, 5}, lfs::core::Device::CUDA);
     EXPECT_TRUE(tensors_equal(torch_zeros, gs_zeros));
 
     // Test ones
     auto torch_ones = torch::ones({10, 5}, torch::kCUDA);
-    auto gs_ones = gs::Tensor::ones({10, 5}, gs::Device::CUDA);
+    auto gs_ones = lfs::core::Tensor::ones({10, 5}, lfs::core::Device::CUDA);
     EXPECT_TRUE(tensors_equal(torch_ones, gs_ones));
 
     // Test full
     auto torch_full = torch::full({10, 5}, 3.14f, torch::kCUDA);
-    auto gs_full = gs::Tensor::full({10, 5}, 3.14f, gs::Device::CUDA);
+    auto gs_full = lfs::core::Tensor::full({10, 5}, 3.14f, lfs::core::Device::CUDA);
     EXPECT_TRUE(tensors_equal(torch_full, gs_full));
 }
 
 TEST_F(TensorVsTorchTest, RandInt) {
     // Test randint with same seed
     torch::manual_seed(123);
-    gs::Tensor::manual_seed(123);
+    lfs::core::Tensor::manual_seed(123);
 
     auto torch_randint = torch::randint(0, 100, {10}, torch::TensorOptions().device(torch::kCUDA).dtype(torch::kInt32));
-    auto gs_randint = gs::Tensor::randint({10}, 0, 100, gs::Device::CUDA, gs::DataType::Int32);
+    auto gs_randint = lfs::core::Tensor::randint({10}, 0, 100, lfs::core::Device::CUDA, lfs::core::DataType::Int32);
 
     std::cout << "\n=== RandInt Test ===" << std::endl;
     auto torch_cpu = torch_randint.cpu();
@@ -291,7 +291,7 @@ TEST_F(TensorVsTorchTest, RowIndexing) {
     // Test single row access
     for (int i = 0; i < 10; ++i) {
         auto torch_row = torch_data[i];
-        auto gs_row = gs::Tensor(gs_data[i]); // Convert proxy to tensor
+        auto gs_row = lfs::core::Tensor(gs_data[i]); // Convert proxy to tensor
 
         std::cout << "Row " << i << ":" << std::endl;
         print_tensor_comparison("Row Access", torch_row, gs_row);
@@ -309,7 +309,7 @@ TEST_F(TensorVsTorchTest, RowAssignment) {
     auto torch_dst = torch::zeros({10, 2}, torch::kCUDA);
 
     auto gs_src = torch_to_tensor(torch_src);
-    auto gs_dst = gs::Tensor::zeros({10, 2}, gs::Device::CUDA);
+    auto gs_dst = lfs::core::Tensor::zeros({10, 2}, lfs::core::Device::CUDA);
 
     // Assign each row
     for (int i = 0; i < 10; ++i) {
@@ -512,7 +512,7 @@ TEST_F(TensorVsTorchTest, BoolTensorToVector) {
     std::cout << "\n=== Testing Bool Tensor to_vector ===" << std::endl;
 
     // Create a Bool tensor directly
-    auto bool_tensor = gs::Tensor::full_bool({5}, true, gs::Device::CUDA);
+    auto bool_tensor = lfs::core::Tensor::full_bool({5}, true, lfs::core::Device::CUDA);
     std::cout << "Bool tensor created" << std::endl;
     std::cout << "Valid: " << bool_tensor.is_valid() << std::endl;
     std::cout << "Shape: " << bool_tensor.shape().str() << std::endl;
@@ -561,7 +561,7 @@ TEST_F(TensorVsTorchTest, ComparisonOperationsSimple) {
 
     std::cout << "\n*** COMPARING BEHAVIOR ***" << std::endl;
     std::cout << "Torch returns: bool tensor" << std::endl;
-    std::cout << "GS returns: " << ((gs_result.dtype() == gs::DataType::Bool) ? "Bool tensor" : "Float32 tensor") << std::endl;
+    std::cout << "GS returns: " << ((gs_result.dtype() == lfs::core::DataType::Bool) ? "Bool tensor" : "Float32 tensor") << std::endl;
 
     // Torch can convert Bool to Float
     auto torch_as_float = torch_result.to(torch::kFloat32);
@@ -574,7 +574,7 @@ TEST_F(TensorVsTorchTest, ComparisonOperationsSimple) {
 
     // Can GS convert Bool to Float?
     std::cout << "Attempting GS Bool->Float32 conversion..." << std::endl;
-    auto gs_as_float = gs_result.to(gs::DataType::Float32);
+    auto gs_as_float = gs_result.to(lfs::core::DataType::Float32);
     auto gs_cpu = gs_as_float.cpu();
     auto gs_vec = gs_cpu.to_vector();
     std::cout << "GS Bool->Float32 values (size=" << gs_vec.size() << "): ";
@@ -722,7 +722,7 @@ TEST_F(TensorVsTorchTest, KMeansPlusPlusInitialization) {
 
     // Create identical test data
     torch::manual_seed(999);
-    gs::Tensor::manual_seed(999);
+    lfs::core::Tensor::manual_seed(999);
 
     auto torch_data = torch::rand({n, d}, torch::kCUDA) * 10.0f;
     auto gs_data = torch_to_tensor(torch_data);
@@ -736,10 +736,10 @@ TEST_F(TensorVsTorchTest, KMeansPlusPlusInitialization) {
     auto torch_distances = torch::full({n}, INFINITY, torch::kCUDA);
 
     // GS IMPLEMENTATION
-    auto gs_centroids = gs::Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(d)},
-                                          gs::Device::CUDA);
-    auto gs_distances = gs::Tensor::full({static_cast<size_t>(n)}, INFINITY,
-                                         gs::Device::CUDA);
+    auto gs_centroids = lfs::core::Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(d)},
+                                          lfs::core::Device::CUDA);
+    auto gs_distances = lfs::core::Tensor::full({static_cast<size_t>(n)}, INFINITY,
+                                         lfs::core::Device::CUDA);
 
     // Choose first centroid using SHARED random value
     torch::manual_seed(123);
@@ -752,8 +752,8 @@ TEST_F(TensorVsTorchTest, KMeansPlusPlusInitialization) {
 
     // Compare first centroids
     std::cout << "\nFirst centroid comparison:" << std::endl;
-    print_tensor_comparison("First Centroid", torch_centroids[0], gs::Tensor(gs_centroids[0]));
-    EXPECT_TRUE(tensors_equal(torch_centroids[0], gs::Tensor(gs_centroids[0])))
+    print_tensor_comparison("First Centroid", torch_centroids[0], lfs::core::Tensor(gs_centroids[0]));
+    EXPECT_TRUE(tensors_equal(torch_centroids[0], lfs::core::Tensor(gs_centroids[0])))
         << "First centroid mismatch";
 
     // Iterate for remaining centroids
@@ -842,8 +842,8 @@ TEST_F(TensorVsTorchTest, KMeansPlusPlusInitialization) {
             torch_centroids[c] = torch_data[torch_idx];
             gs_centroids[c] = gs_data[gs_idx];
 
-            print_tensor_comparison("New Centroid", torch_centroids[c], gs::Tensor(gs_centroids[c]));
-            EXPECT_TRUE(tensors_equal(torch_centroids[c], gs::Tensor(gs_centroids[c])))
+            print_tensor_comparison("New Centroid", torch_centroids[c], lfs::core::Tensor(gs_centroids[c]));
+            EXPECT_TRUE(tensors_equal(torch_centroids[c], lfs::core::Tensor(gs_centroids[c])))
                 << "New centroid mismatch at iteration " << c;
         }
     }
@@ -861,11 +861,11 @@ TEST_F(TensorVsTorchTest, RandomGenerationComparison) {
     // Test 1: Same seed produces same sequence?
     std::cout << "\n--- Test 1: Reproducibility ---" << std::endl;
 
-    gs::Tensor::manual_seed(42);
-    auto gs_rand1 = gs::Tensor::rand({10}, gs::Device::CUDA);
+    lfs::core::Tensor::manual_seed(42);
+    auto gs_rand1 = lfs::core::Tensor::rand({10}, lfs::core::Device::CUDA);
 
-    gs::Tensor::manual_seed(42);
-    auto gs_rand2 = gs::Tensor::rand({10}, gs::Device::CUDA);
+    lfs::core::Tensor::manual_seed(42);
+    auto gs_rand2 = lfs::core::Tensor::rand({10}, lfs::core::Device::CUDA);
 
     auto gs_rand1_vec = gs_rand1.cpu().to_vector();
     auto gs_rand2_vec = gs_rand2.cpu().to_vector();
@@ -882,11 +882,11 @@ TEST_F(TensorVsTorchTest, RandomGenerationComparison) {
     // Test 2: Different seeds produce different sequences?
     std::cout << "\n--- Test 2: Different Seeds ---" << std::endl;
 
-    gs::Tensor::manual_seed(42);
-    auto gs_rand_a = gs::Tensor::rand({10}, gs::Device::CUDA);
+    lfs::core::Tensor::manual_seed(42);
+    auto gs_rand_a = lfs::core::Tensor::rand({10}, lfs::core::Device::CUDA);
 
-    gs::Tensor::manual_seed(999);
-    auto gs_rand_b = gs::Tensor::rand({10}, gs::Device::CUDA);
+    lfs::core::Tensor::manual_seed(999);
+    auto gs_rand_b = lfs::core::Tensor::rand({10}, lfs::core::Device::CUDA);
 
     auto gs_rand_a_vec = gs_rand_a.cpu().to_vector();
     auto gs_rand_b_vec = gs_rand_b.cpu().to_vector();
@@ -903,8 +903,8 @@ TEST_F(TensorVsTorchTest, RandomGenerationComparison) {
     // Test 3: Distribution properties (uniform [0,1])
     std::cout << "\n--- Test 3: Distribution Properties ---" << std::endl;
 
-    gs::Tensor::manual_seed(123);
-    auto gs_large = gs::Tensor::rand({10000}, gs::Device::CUDA);
+    lfs::core::Tensor::manual_seed(123);
+    auto gs_large = lfs::core::Tensor::rand({10000}, lfs::core::Device::CUDA);
 
     float mean = gs_large.mean().item();
     float min_val = gs_large.min().item();
@@ -924,8 +924,8 @@ TEST_F(TensorVsTorchTest, RandomGenerationComparison) {
     // Test 4: randint distribution
     std::cout << "\n--- Test 4: randint Distribution ---" << std::endl;
 
-    gs::Tensor::manual_seed(456);
-    auto gs_int = gs::Tensor::randint({1000}, 0, 10, gs::Device::CUDA, gs::DataType::Int32);
+    lfs::core::Tensor::manual_seed(456);
+    auto gs_int = lfs::core::Tensor::randint({1000}, 0, 10, lfs::core::Device::CUDA, lfs::core::DataType::Int32);
 
     auto gs_int_cpu = gs_int.cpu();
     auto gs_int_vec = gs_int_cpu.to_vector_int();
@@ -952,8 +952,8 @@ TEST_F(TensorVsTorchTest, RandomGenerationComparison) {
     // Test 5: randn (normal distribution)
     std::cout << "\n--- Test 5: randn Normal Distribution ---" << std::endl;
 
-    gs::Tensor::manual_seed(789);
-    auto gs_normal = gs::Tensor::randn({10000}, gs::Device::CUDA);
+    lfs::core::Tensor::manual_seed(789);
+    auto gs_normal = lfs::core::Tensor::randn({10000}, lfs::core::Device::CUDA);
 
     float normal_mean = gs_normal.mean().item();
     float normal_std = gs_normal.std().item();
@@ -1007,8 +1007,8 @@ TEST_F(TensorVsTorchTest, RowProxyInt64Extraction) {
     // Create Int64 tensor (like nonzero() output)
     auto torch_int64 = torch::tensor({10, 20, 30, 40, 50},
                                      torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
-    auto gs_int64 = gs::Tensor::from_vector({10, 20, 30, 40, 50}, {5}, gs::Device::CUDA)
-                        .to(gs::DataType::Int64);
+    auto gs_int64 = lfs::core::Tensor::from_vector({10, 20, 30, 40, 50}, {5}, lfs::core::Device::CUDA)
+                        .to(lfs::core::DataType::Int64);
 
     std::cout << "Testing item_int64() method..." << std::endl;
 
@@ -1029,8 +1029,8 @@ TEST_F(TensorVsTorchTest, RowProxyInt32Extraction) {
 
     auto torch_int32 = torch::tensor({100, 200, 300},
                                      torch::TensorOptions().dtype(torch::kInt32).device(torch::kCUDA));
-    auto gs_int32 = gs::Tensor::from_vector({100, 200, 300}, {3}, gs::Device::CUDA)
-                        .to(gs::DataType::Int32);
+    auto gs_int32 = lfs::core::Tensor::from_vector({100, 200, 300}, {3}, lfs::core::Device::CUDA)
+                        .to(lfs::core::DataType::Int32);
 
     std::cout << "Testing item_int() method..." << std::endl;
 
@@ -1057,7 +1057,7 @@ TEST_F(TensorVsTorchTest, RowProxy2DNoImplicitConversion) {
     // This should work: explicit Tensor conversion
     for (int i = 0; i < 5; ++i) {
         auto torch_row = torch_2d[i];
-        gs::Tensor gs_row = gs_2d[i]; // Explicit conversion
+        lfs::core::Tensor gs_row = gs_2d[i]; // Explicit conversion
 
         EXPECT_TRUE(tensors_equal(torch_row, gs_row))
             << "2D row extraction mismatch at index " << i;
@@ -1127,7 +1127,7 @@ TEST_F(TensorVsTorchTest, KMeansPlusPlusWithRowProxy) {
 
     // Create identical test data
     torch::manual_seed(12345);
-    gs::Tensor::manual_seed(12345);
+    lfs::core::Tensor::manual_seed(12345);
 
     auto torch_data = torch::rand({n, d}, torch::kCUDA) * 100.0f;
     auto gs_data = torch_to_tensor(torch_data);
@@ -1137,8 +1137,8 @@ TEST_F(TensorVsTorchTest, KMeansPlusPlusWithRowProxy) {
 
     // Initialize centroids
     auto torch_centroids = torch::zeros({k, d}, torch::kCUDA);
-    auto gs_centroids = gs::Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(d)},
-                                          gs::Device::CUDA);
+    auto gs_centroids = lfs::core::Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(d)},
+                                          lfs::core::Device::CUDA);
 
     // Choose first centroid
     torch::manual_seed(999);
@@ -1274,7 +1274,7 @@ TEST_F(TensorVsTorchTest, RowProxyAssignmentFromProxy) {
     auto torch_dst = torch::zeros({10}, torch::kCUDA);
 
     auto gs_src = torch_to_tensor(torch_src);
-    auto gs_dst = gs::Tensor::zeros({10}, gs::Device::CUDA);
+    auto gs_dst = lfs::core::Tensor::zeros({10}, lfs::core::Device::CUDA);
 
     std::cout << "\nTesting dst[4] = src[0] pattern..." << std::endl;
 
@@ -1304,7 +1304,7 @@ TEST_F(TensorVsTorchTest, RowProxyEdgeCases) {
     // Test with scalar (0D) tensor
     std::cout << "\n1. Scalar tensor test..." << std::endl;
     auto torch_scalar = torch::tensor(42.0f, torch::kCUDA);
-    auto gs_scalar = gs::Tensor::full({1}, 42.0f, gs::Device::CUDA).squeeze();
+    auto gs_scalar = lfs::core::Tensor::full({1}, 42.0f, lfs::core::Device::CUDA).squeeze();
 
     float torch_item = torch_scalar.item<float>();
     float gs_item = gs_scalar.item();
