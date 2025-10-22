@@ -75,7 +75,7 @@ namespace gsplat {
         // Interpolate to *center* shutter pose as single per-Gaussian camera pose
         const auto shutter_pose = interpolate_shutter_pose(0.5f, rs_params);
         const vec3 mean_c = glm::rotate(shutter_pose.q, mean) + shutter_pose.t;
-        if (mean_c.z < near_plane || mean_c.z > far_plane) {
+        if ((mean_c.z < near_plane && camera_model_type != CameraModelType::EQUIRECTANGULAR) || mean_c.z > far_plane) {
             radii[idx * 2] = 0;
             radii[idx * 2 + 1] = 0;
             return;
@@ -124,6 +124,13 @@ namespace gsplat {
                 cm_params.radial_coeffs = make_array<float, 4>(radial_coeffs + cid * 4);
             }
             OpenCVFisheyeCameraModel camera_model(cm_params);
+            image_gaussian_return =
+                world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
+                    camera_model, rs_params, ut_params, mean, scale, quat);
+        } else if (camera_model_type == CameraModelType::EQUIRECTANGULAR) {
+            EquirectangularCameraModel::Parameters cm_params = {};
+            cm_params.resolution = {image_width, image_height};
+            EquirectangularCameraModel camera_model(cm_params);
             image_gaussian_return =
                 world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
                     camera_model, rs_params, ut_params, mean, scale, quat);

@@ -47,6 +47,7 @@ namespace gsplat {
         PINHOLE = 0,
         ORTHO = 1,
         FISHEYE = 2,
+        EQUIRECTANGULAR = 3
     };
 
 #define N_THREADS_PACKED 256

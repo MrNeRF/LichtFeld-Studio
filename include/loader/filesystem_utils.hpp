@@ -79,4 +79,12 @@ namespace gs::loader {
         return std::find(image_extensions.begin(), image_extensions.end(), ext) != image_extensions.end();
     }
 
+    inline std::string strip_extension(const std::string& filename) {
+        auto last_dot = filename.find_last_of('.');
+        if (last_dot == std::string::npos) {
+            return filename; // No extension found
+        }
+        return filename.substr(0, last_dot);
+    }
+
 } // namespace gs::loader

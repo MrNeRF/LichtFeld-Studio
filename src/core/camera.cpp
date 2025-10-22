@@ -5,6 +5,8 @@
 #include "core/camera.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "loader/cache_image_loader.hpp"
+
 #include <c10/cuda/CUDAGuard.h>
 #include <torch/torch.h>
 
@@ -104,9 +106,12 @@ namespace gs {
 
         unsigned char* data;
         int w, h, c;
-
+        auto& loader = gs::loader::CacheLoader::getInstance();
         // Load image synchronously
-        auto result = load_image(_image_path, resize_factor, max_width);
+        gs::loader::LoadParams params{.resize_factor = resize_factor, .max_width = max_width};
+
+        auto result = loader.load_cached_image(_image_path, params);
+
         data = std::get<0>(result);
         w = std::get<1>(result);
         h = std::get<2>(result);

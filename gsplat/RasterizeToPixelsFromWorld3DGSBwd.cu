@@ -139,6 +139,12 @@ namespace gsplat {
             }
             OpenCVFisheyeCameraModel camera_model(cm_params);
             ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
+        } else if (camera_model_type == CameraModelType::EQUIRECTANGULAR) {
+            EquirectangularCameraModel::Parameters cm_params = {};
+            cm_params.resolution = {image_width, image_height};
+            cm_params.shutter_type = rs_type;
+            EquirectangularCameraModel camera_model(cm_params);
+            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
         } else {
             // should never reach here
             assert(false);

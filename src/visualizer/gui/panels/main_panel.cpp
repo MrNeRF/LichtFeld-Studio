@@ -230,7 +230,8 @@ namespace gs::gui::panels {
                 .fov = std::nullopt,
                 .scaling_modifier = scaling_modifier,
                 .antialiasing = std::nullopt,
-                .background_color = std::nullopt}
+                .background_color = std::nullopt,
+                .equirectangular = std::nullopt}
                 .emit();
         }
 
@@ -242,7 +243,8 @@ namespace gs::gui::panels {
                 .fov = fov,
                 .scaling_modifier = std::nullopt,
                 .antialiasing = std::nullopt,
-                .background_color = std::nullopt}
+                .background_color = std::nullopt,
+                .equirectangular = std::nullopt}
                 .emit();
         }
 
@@ -258,7 +260,21 @@ namespace gs::gui::panels {
                 .fov = std::nullopt,
                 .scaling_modifier = std::nullopt,
                 .antialiasing = std::nullopt,
-                .background_color = std::nullopt}
+                .background_color = std::nullopt,
+                .equirectangular = std::nullopt}
+                .emit();
+        }
+
+        if (ImGui::Checkbox("Equirectangular", &settings.equirectangular)) {
+            settings_changed = true;
+
+            events::ui::RenderSettingsChanged{
+                .sh_degree = std::nullopt,
+                .fov = std::nullopt,
+                .scaling_modifier = std::nullopt,
+                .antialiasing = std::nullopt,
+                .background_color = std::nullopt,
+                .equirectangular = settings.equirectangular}
                 .emit();
         }
 

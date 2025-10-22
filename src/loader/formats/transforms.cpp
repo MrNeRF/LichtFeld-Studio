@@ -59,16 +59,20 @@ namespace gs::loader {
 
     std::filesystem::path GetTransformImagePath(const std::filesystem::path& dir_path, const nlohmann::json& frame) {
         auto image_path = dir_path / frame["file_path"];
+        auto images_image_path = dir_path / "images" / frame["file_path"];
         auto image_path_png = std::filesystem::path(image_path.string() + ".png");
         if (std::filesystem::exists(image_path_png)) {
             // blender data set has not extension, must assumes png
             image_path = image_path_png;
             LOG_TRACE("Using PNG extension for image: {}", image_path.string());
         }
+        if (std::filesystem::exists(images_image_path) && std::filesystem::is_regular_file(images_image_path)) {
+            image_path = images_image_path;
+        }
         return image_path;
     }
 
-    std::tuple<std::vector<CameraData>, torch::Tensor> read_transforms_cameras_and_images(
+    std::tuple<std::vector<CameraData>, torch::Tensor, std::optional<std::tuple<std::vector<std::string>, std::vector<std::string>>>> read_transforms_cameras_and_images(
         const std::filesystem::path& transPath) {
 
         LOG_TIMER_TRACE("Read transforms file");
@@ -124,6 +128,7 @@ namespace gs::loader {
         }
 
         float fl_x = -1, fl_y = -1;
+        auto camera_model = gsplat::CameraModelType::PINHOLE;
         if (transforms.contains("fl_x")) {
             fl_x = float(transforms["fl_x"]);
         } else if (transforms.contains("camera_angle_x")) {
@@ -134,12 +139,22 @@ namespace gs::loader {
             fl_y = float(transforms["fl_y"]);
         } else if (transforms.contains("camera_angle_y")) {
             fl_y = fov_rad_to_focal_length(h, float(transforms["camera_angle_y"]));
-        } else { // we should be  here in this scope only for blender - if w!=h then we must throw exception
-            if (w != h) {
-                LOG_ERROR("No camera_angle_y but w!=h: {}!={}", w, h);
-                throw std::runtime_error("no camera_angle_y expected w!=h");
+        } else {
+            // OmniBlender no intrinsics
+            if (!transforms.contains("fl_x") && !transforms.contains("camera_angle_x") &&
+                !transforms.contains("fl_y") && !transforms.contains("camera_angle_y")) {
+                LOG_WARN("No camera intrinsics found, assuming equirectangular");
+                fl_x = 20.0;
+                fl_y = 20.0;
+                camera_model = gsplat::CameraModelType::EQUIRECTANGULAR;
+            } else {
+                // we should be  here in this scope only for blender - if w!=h then we must throw exception
+                if (w != h) {
+                    LOG_ERROR("No camera_angle_y but w!=h: {}!={}", w, h);
+                    throw std::runtime_error("no camera_angle_y expected w!=h");
+                }
+                fl_y = fl_x;
             }
-            fl_y = fl_x;
         }
 
         float cx = -1, cy = -1;
@@ -238,7 +253,7 @@ namespace gs::loader {
                 camdata._center_x = cx;
                 camdata._center_y = cy;
 
-                camdata._camera_model_type = gsplat::CameraModelType::PINHOLE;
+                camdata._camera_model_type = camera_model;
                 camdata._camera_ID = counter++;
 
                 camerasdata.push_back(camdata);
@@ -257,7 +272,34 @@ namespace gs::loader {
 
         LOG_INFO("Loaded {} cameras from transforms file", camerasdata.size());
 
-        return {camerasdata, center};
+        if (std::filesystem::is_regular_file(dir_path / "train.txt") &&
+            std::filesystem::is_regular_file(dir_path / "test.txt")) {
+            LOG_DEBUG("Found train.txt and test.txt files, loading image splits");
+
+            std::ifstream train_file(dir_path / "train.txt");
+            std::ifstream val_file(dir_path / "test.txt");
+
+            std::vector<std::string> train_images;
+            std::vector<std::string> val_images;
+
+            std::string line;
+            while (std::getline(train_file, line)) {
+                if (!line.empty()) {
+                    train_images.push_back(line);
+                }
+            }
+            while (std::getline(val_file, line)) {
+                if (!line.empty()) {
+                    val_images.push_back(line);
+                }
+            }
+
+            LOG_INFO("Loaded {} training images and {} validation images", train_images.size(), val_images.size());
+
+            return {camerasdata, center, std::make_tuple(train_images, val_images)};
+        }
+
+        return {camerasdata, center, std::nullopt};
     }
 
     PointCloud generate_random_point_cloud() {

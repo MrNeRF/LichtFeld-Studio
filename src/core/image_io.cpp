@@ -364,6 +364,73 @@ void save_image(const std::filesystem::path& path,
 
 void free_image(unsigned char* img) { std::free(img); }
 
+bool save_img_data(const std::filesystem::path& p, const std::tuple<unsigned char*, int, int, int>& image_data) {
+    init_oiio(); // Assuming this initializes OIIO like in your load_image
+
+    auto [data, width, height, channels] = image_data;
+
+    if (!data || width <= 0 || height <= 0 || channels <= 0) {
+        return false;
+    }
+
+    // Get file extension to determine format
+    std::string ext = p.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+    // Check if format is supported
+    if (ext != ".jpg" && ext != ".jpeg" && ext != ".png" && ext != ".tif" && ext != ".tiff") {
+        return false;
+    }
+
+    std::unique_ptr<OIIO::ImageOutput> out(OIIO::ImageOutput::create(p.string()));
+    if (!out) {
+        return false;
+    }
+
+    // Create image specification
+    OIIO::ImageSpec spec(width, height, channels, OIIO::TypeDesc::UINT8);
+
+    // Set format-specific attributes
+    if (ext == ".jpg" || ext == ".jpeg") {
+        spec.attribute("CompressionQuality", 95);
+        // JPEG doesn't support alpha channel, so force to 3 channels if we have 4
+        if (channels == 4) {
+            spec.nchannels = 3;
+        }
+    } else if (ext == ".png") {
+        // PNG supports alpha, no special handling needed
+    } else if (ext == ".tif" || ext == ".tiff") {
+        spec.attribute("Compression", "lzw");
+    }
+
+    if (!out->open(p.string(), spec)) {
+        return false;
+    }
+
+    bool success;
+    if (ext == ".jpg" || ext == ".jpeg") {
+        if (channels == 4) {
+            // Convert RGBA to RGB for JPEG
+            std::vector<unsigned char> rgb_data(width * height * 3);
+            for (int i = 0; i < width * height; ++i) {
+                rgb_data[i * 3 + 0] = data[i * 4 + 0]; // R
+                rgb_data[i * 3 + 1] = data[i * 4 + 1]; // G
+                rgb_data[i * 3 + 2] = data[i * 4 + 2]; // B
+                // Skip alpha channel
+            }
+            success = out->write_image(OIIO::TypeDesc::UINT8, rgb_data.data());
+        } else {
+            success = out->write_image(OIIO::TypeDesc::UINT8, data);
+        }
+    } else {
+        // PNG and TIFF can handle all channel counts
+        success = out->write_image(OIIO::TypeDesc::UINT8, data);
+    }
+
+    out->close();
+    return success;
+}
+
 namespace image_io {
 
     BatchImageSaver::BatchImageSaver(size_t num_workers)
@@ -491,5 +558,4 @@ namespace image_io {
             LOG_ERROR("[BatchImageSaver] Error saving {}: {}", t.path.string(), e.what());
         }
     }
-
 } // namespace image_io

@@ -89,6 +89,18 @@ namespace gs {
             static OptimizationParameters from_json(const nlohmann::json& j);
         };
 
+        struct LoadingParams {
+            bool use_cpu_memory = true;
+            float min_cpu_free_memory_ratio = 0.1f; // make sure at least 10% RAM is free
+            std::size_t min_cpu_free_GB = 1;        // min GB we want to be free
+            bool use_fs_cache = true;
+            bool print_cache_status = true;
+            int print_status_freq_num = 500; // every print_status_freq_num calls for load print cache status
+
+            nlohmann::json to_json() const;
+            static LoadingParams from_json(const nlohmann::json& j);
+        };
+
         struct DatasetConfig {
             std::filesystem::path data_path = "";
             std::filesystem::path output_path = "";
@@ -99,6 +111,10 @@ namespace gs {
             std::vector<std::string> timelapse_images = {};
             int timelapse_every = 50;
             int max_width = 3840;
+            LoadingParams loading_params;
+
+            nlohmann::json to_json() const;
+            static DatasetConfig from_json(const nlohmann::json& j);
         };
 
         struct TrainingParameters {
@@ -119,5 +135,7 @@ namespace gs {
         std::expected<void, std::string> save_training_parameters_to_json(
             const TrainingParameters& params,
             const std::filesystem::path& output_path);
+
+        std::expected<LoadingParams, std::string> read_loading_params_from_json(std::filesystem::path& path);
     } // namespace param
 } // namespace gs

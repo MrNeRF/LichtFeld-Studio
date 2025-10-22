@@ -114,7 +114,7 @@ namespace gs::training {
                 // Create trainer (without parameters)
                 auto trainer = std::make_unique<Trainer>(
                     data.cameras,
-                    std::move(strategy));
+                    std::move(strategy), load_result->provided_splits);
 
                 return TrainingSetup{
                     .trainer = std::move(trainer),

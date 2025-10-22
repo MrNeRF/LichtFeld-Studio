@@ -1,0 +1,8 @@
+{
+  "min_cpu_free_GB": 1,
+  "min_cpu_free_memory_ratio": 0.1,
+  "print_cache_status": true,
+  "print_status_freq_num": 500,
+  "use_cpu_memory": true,
+  "use_fs_cache": true
+}

@@ -287,6 +287,10 @@ namespace gs::visualizer {
                 settings_.background_color = *event.background_color;
                 LOG_TRACE("Background color changed");
             }
+            if (event.equirectangular) {
+                settings_.equirectangular = *event.equirectangular;
+                LOG_TRACE("Equirectangular rendering: {}", settings_.equirectangular ? "enabled" : "disabled");
+            }
             markDirty();
         });
 
@@ -538,6 +542,7 @@ namespace gs::visualizer {
             .point_cloud_mode = settings_.point_cloud_mode,
             .voxel_size = settings_.voxel_size,
             .gut = settings_.gut,
+            .equirectangular = settings_.equirectangular,
             .sh_degree = settings_.sh_degree};
 
         // Add crop box if enabled

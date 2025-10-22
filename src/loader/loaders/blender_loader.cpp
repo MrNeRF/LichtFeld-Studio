@@ -111,7 +111,7 @@ namespace gs::loader {
             LOG_INFO("Loading Blender/NeRF dataset from: {}", transforms_file.string());
 
             // Read transforms and create cameras
-            auto [camera_infos, scene_center] = read_transforms_cameras_and_images(transforms_file);
+            auto [camera_infos, scene_center, splits] = read_transforms_cameras_and_images(transforms_file);
 
             if (options.progress) {
                 options.progress(40.0f, std::format("Creating {} cameras...", camera_infos.size()));
@@ -197,7 +197,8 @@ namespace gs::loader {
                 .scene_center = scene_center,
                 .loader_used = name(),
                 .load_time = load_time,
-                .warnings = std::move(warnings)};
+                .warnings = std::move(warnings),
+                .provided_splits = splits};
 
             LOG_INFO("Blender/NeRF dataset loaded successfully in {}ms", load_time.count());
             LOG_INFO("  - {} cameras", camera_infos.size());

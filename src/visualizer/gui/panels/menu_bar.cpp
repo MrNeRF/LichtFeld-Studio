@@ -121,9 +121,6 @@ namespace gs::gui {
     void MenuBar::openURL(const char* url) {
 #ifdef _WIN32
         ShellExecuteA(nullptr, "open", url, nullptr, nullptr, SW_SHOWNORMAL);
-#elif __APPLE__
-        std::string cmd = "open " + std::string(url);
-        system(cmd.c_str());
 #else
         std::string cmd = "xdg-open " + std::string(url);
         system(cmd.c_str());

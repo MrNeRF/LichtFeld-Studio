@@ -225,6 +225,30 @@ namespace gs::gui::panels {
                     ImGui::Text("%d", dataset_params.max_width);
                 }
 
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("CPU Cache:");
+                ImGui::TableNextColumn();
+                if (can_edit) {
+                    if (ImGui::Checkbox("##use_cpu_cache", &dataset_params.loading_params.use_cpu_memory)) {
+                        dataset_params_changed = true;
+                    }
+                } else {
+                    ImGui::Text("%s", dataset_params.loading_params.use_cpu_memory ? "Enabled" : "Disabled");
+                }
+
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("FS Cache:");
+                ImGui::TableNextColumn();
+                if (can_edit) {
+                    if (ImGui::Checkbox("##use_fs_cache", &dataset_params.loading_params.use_fs_cache)) {
+                        dataset_params_changed = true;
+                    }
+                } else {
+                    ImGui::Text("%s", dataset_params.loading_params.use_fs_cache ? "Enabled" : "Disabled");
+                }
+
                 // Test Every - EDITABLE (only shown if evaluation is enabled)
                 if (opt_params.enable_eval) {
                     ImGui::TableNextRow();
@@ -651,6 +675,9 @@ namespace gs::gui::panels {
                 project_data.data_set_info.resize_factor = dataset_params.resize_factor;
                 project_data.data_set_info.max_width = dataset_params.max_width;
                 project_data.data_set_info.test_every = dataset_params.test_every;
+
+                project_data.data_set_info.loading_params.use_cpu_memory = dataset_params.loading_params.use_cpu_memory;
+                project_data.data_set_info.loading_params.use_fs_cache = dataset_params.loading_params.use_fs_cache;
 
                 // Set the updated project data back
                 project->setProjectData(project_data);
