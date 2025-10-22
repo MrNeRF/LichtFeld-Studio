@@ -690,8 +690,8 @@ namespace gs {
             size_t num_elements = numel();
 
             std::for_each(std::execution::par_unseq,
-                          std::views::iota(0uz, idx.numel()).begin(),
-                          std::views::iota(0uz, idx.numel()).end(),
+                          std::views::iota(size_t(0), idx.numel()).begin(),
+                          std::views::iota(size_t(0), idx.numel()).end(),
                           [data, indices, values, num_elements](size_t i) {
                               int pos = indices[i];
                               if (pos < 0)
