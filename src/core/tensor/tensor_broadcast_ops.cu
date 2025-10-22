@@ -18,78 +18,6 @@ namespace gs::tensor_ops {
     // Note: run_with_thrust_policy is now in include/core/tensor_generic_ops.cuh
 
     // ============================================================================
-    // BROADCASTING INDEX FUNCTOR (for single-array broadcast)
-    // ============================================================================
-
-    // Simplified broadcast index functor - aggregate type for nvcc 12.8 compatibility
-    // This struct is trivially copyable and avoids complex constructor that triggers ICE
-    template <int MaxRank = 8>
-    struct broadcast_index_functor {
-        int src_rank, dst_rank;
-        int src_shape[MaxRank];
-        int dst_shape[MaxRank];
-        int src_strides[MaxRank];
-        int dst_strides[MaxRank];
-
-        // Default constructor - trivially copyable
-        broadcast_index_functor() = default;
-
-        __device__ size_t operator()(size_t dst_linear_idx) const {
-            size_t src_idx = 0;
-            size_t remaining = dst_linear_idx;
-
-            for (int i = 0; i < dst_rank; ++i) {
-                int dst_coord = remaining / dst_strides[i];
-                remaining %= dst_strides[i];
-
-                int offset = dst_rank - src_rank;
-                if (i >= offset) {
-                    int src_dim = i - offset;
-                    int src_coord = (src_shape[src_dim] == 1) ? 0 : dst_coord;
-                    src_idx += src_coord * src_strides[src_dim];
-                }
-            }
-
-            return src_idx;
-        }
-    };
-
-    // Helper function to create and initialize the functor on host
-    template <int MaxRank = 8>
-    broadcast_index_functor<MaxRank> make_broadcast_functor(
-        const std::vector<size_t>& src_shape_vec,
-        const std::vector<size_t>& dst_shape_vec) {
-
-        broadcast_index_functor<MaxRank> functor{};
-        functor.src_rank = src_shape_vec.size();
-        functor.dst_rank = dst_shape_vec.size();
-
-        for (int i = 0; i < functor.src_rank; ++i) {
-            functor.src_shape[i] = static_cast<int>(src_shape_vec[i]);
-        }
-        for (int i = 0; i < functor.dst_rank; ++i) {
-            functor.dst_shape[i] = static_cast<int>(dst_shape_vec[i]);
-        }
-
-        // Compute row-major strides
-        if (functor.src_rank > 0) {
-            functor.src_strides[functor.src_rank - 1] = 1;
-            for (int i = functor.src_rank - 2; i >= 0; --i) {
-                functor.src_strides[i] = functor.src_strides[i + 1] * functor.src_shape[i + 1];
-            }
-        }
-
-        if (functor.dst_rank > 0) {
-            functor.dst_strides[functor.dst_rank - 1] = 1;
-            for (int i = functor.dst_rank - 2; i >= 0; --i) {
-                functor.dst_strides[i] = functor.dst_strides[i + 1] * functor.dst_shape[i + 1];
-            }
-        }
-
-        return functor;
-    }
-
-    // ============================================================================
     // SINGLE-ARRAY BROADCASTING (Generic) - NOT used by binary ops
     // ============================================================================
 
@@ -187,6 +115,79 @@ namespace gs::tensor_ops {
     }
 #else
     // Non-Windows: Use Thrust transform iterator (original code)
+
+    // ============================================================================
+    // BROADCASTING INDEX FUNCTOR (for single-array broadcast) - Linux only
+    // ============================================================================
+    // NOTE: This struct with array members triggers nvcc 12.8 ICE on Windows
+    // when passed to Thrust iterators. Keep this in #else block (Linux only).
+
+    template <int MaxRank = 8>
+    struct broadcast_index_functor {
+        int src_rank, dst_rank;
+        int src_shape[MaxRank];
+        int dst_shape[MaxRank];
+        int src_strides[MaxRank];
+        int dst_strides[MaxRank];
+
+        // Default constructor - trivially copyable
+        broadcast_index_functor() = default;
+
+        __device__ size_t operator()(size_t dst_linear_idx) const {
+            size_t src_idx = 0;
+            size_t remaining = dst_linear_idx;
+
+            for (int i = 0; i < dst_rank; ++i) {
+                int dst_coord = remaining / dst_strides[i];
+                remaining %= dst_strides[i];
+
+                int offset = dst_rank - src_rank;
+                if (i >= offset) {
+                    int src_dim = i - offset;
+                    int src_coord = (src_shape[src_dim] == 1) ? 0 : dst_coord;
+                    src_idx += src_coord * src_strides[src_dim];
+                }
+            }
+
+            return src_idx;
+        }
+    };
+
+    // Helper function to create and initialize the functor on host
+    template <int MaxRank = 8>
+    broadcast_index_functor<MaxRank> make_broadcast_functor(
+        const std::vector<size_t>& src_shape_vec,
+        const std::vector<size_t>& dst_shape_vec) {
+
+        broadcast_index_functor<MaxRank> functor{};
+        functor.src_rank = src_shape_vec.size();
+        functor.dst_rank = dst_shape_vec.size();
+
+        for (int i = 0; i < functor.src_rank; ++i) {
+            functor.src_shape[i] = static_cast<int>(src_shape_vec[i]);
+        }
+        for (int i = 0; i < functor.dst_rank; ++i) {
+            functor.dst_shape[i] = static_cast<int>(dst_shape_vec[i]);
+        }
+
+        // Compute row-major strides
+        if (functor.src_rank > 0) {
+            functor.src_strides[functor.src_rank - 1] = 1;
+            for (int i = functor.src_rank - 2; i >= 0; --i) {
+                functor.src_strides[i] = functor.src_strides[i + 1] * functor.src_shape[i + 1];
+            }
+        }
+
+        if (functor.dst_rank > 0) {
+            functor.dst_strides[functor.dst_rank - 1] = 1;
+            for (int i = functor.dst_rank - 2; i >= 0; --i) {
+                functor.dst_strides[i] = functor.dst_strides[i + 1] * functor.dst_shape[i + 1];
+            }
+        }
+
+        return functor;
+    }
+
     template <typename T>
     void launch_broadcast_generic(const T* src, T* dst,
                                   const size_t* src_shape, const size_t* dst_shape,
@@ -201,7 +202,7 @@ namespace gs::tensor_ops {
         auto src_ptr = thrust::device_pointer_cast(src);
         auto dst_ptr = thrust::device_pointer_cast(dst);
 
-        // Use helper function to create functor - avoids complex constructor that triggers nvcc ICE
+        // Use helper function to create functor
         auto index_mapper = make_broadcast_functor(src_vec, dst_vec);
 
         auto counting = thrust::make_counting_iterator<size_t>(0);
