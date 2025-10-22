@@ -126,6 +126,17 @@ namespace gs::tensor_ops {
         });
     }
 
+#ifdef _WIN32
+    // Windows: Simple scalar operation kernel to avoid Thrust constant_iterator
+    template <typename T, typename OutputT, typename Op>
+    __global__ void scalar_op_kernel(const T* data, T scalar, OutputT* result, size_t n, Op op) {
+        size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx < n) {
+            result[idx] = op(data[idx], scalar);
+        }
+    }
+#endif
+
     /**
      * Scalar operation: Applies binary operation with a scalar value
      * OPTIMIZED: Uses constant_iterator for zero-memory scalar broadcasting
@@ -153,16 +164,10 @@ namespace gs::tensor_ops {
 
         // FALLBACK: Use Thrust constant_iterator for unaligned or non-float types
 #ifdef _WIN32
-        // Windows: Simple kernel to avoid Thrust constant_iterator
+        // Windows: Use simple kernel to avoid Thrust constant_iterator
         const int block_size = 256;
         const int grid_size = (n + block_size - 1) / block_size;
-        auto kernel = [data, scalar, result, n, op] __global__ () {
-            size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx < n) {
-                result[idx] = op(data[idx], scalar);
-            }
-        };
-        kernel<<<grid_size, block_size, 0, stream>>>();
+        scalar_op_kernel<<<grid_size, block_size, 0, stream>>>(data, scalar, result, n, op);
 #else
         auto data_ptr = thrust::device_pointer_cast(data);
         auto result_ptr = thrust::device_pointer_cast(result);
