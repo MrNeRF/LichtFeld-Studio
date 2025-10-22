@@ -3,14 +3,17 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "trainer.hpp"
+#include "loader/filesystem_utils.hpp"
 #include "components/bilateral_grid.hpp"
 #include "components/poseopt.hpp"
 #include "components/sparsity_optimizer.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "kernels/fused_ssim.cuh"
+#include "loader/cache_image_loader.hpp"
 #include "rasterization/fast_rasterizer.hpp"
 #include "rasterization/rasterizer.hpp"
+
 #include <ATen/cuda/CUDAEvent.h>
 #include <atomic>
 #include <chrono>
@@ -247,9 +250,11 @@ namespace gs::training {
     }
 
     Trainer::Trainer(std::shared_ptr<CameraDataset> dataset,
-                     std::unique_ptr<IStrategy> strategy)
+                     std::unique_ptr<IStrategy> strategy,
+                     std::optional<std::tuple<std::vector<std::string>, std::vector<std::string>>> provided_splits)
         : base_dataset_(std::move(dataset)),
-          strategy_(std::move(strategy)) {
+          strategy_(std::move(strategy)),
+          provided_splits_(std::move(provided_splits)) {
         if (!torch::cuda::is_available()) {
             throw std::runtime_error("CUDA is not available – aborting.");
         }
@@ -284,9 +289,11 @@ namespace gs::training {
             if (params.optimization.enable_eval) {
                 // Create train/val split
                 train_dataset_ = std::make_shared<CameraDataset>(
-                    base_dataset_->get_cameras(), params.dataset, CameraDataset::Split::TRAIN);
+                    base_dataset_->get_cameras(), params.dataset, CameraDataset::Split::TRAIN,
+                    provided_splits_ ? std::make_optional(std::get<0>(*provided_splits_)) : std::nullopt);
                 val_dataset_ = std::make_shared<CameraDataset>(
-                    base_dataset_->get_cameras(), params.dataset, CameraDataset::Split::VAL);
+                    base_dataset_->get_cameras(), params.dataset, CameraDataset::Split::VAL,
+                    provided_splits_ ? std::make_optional(std::get<1>(*provided_splits_)) : std::nullopt);
 
                 LOG_INFO("Created train/val split: {} train, {} val images",
                          train_dataset_->size().value(),
@@ -824,15 +831,16 @@ namespace gs::training {
                                 cam_to_use->load_image_size(params_.dataset.resize_factor, params_.dataset.max_width);
                             }
 
-                            RenderOutput rendered_timelapse_output = fast_rasterize(
-                                *cam_to_use, strategy_->get_model(), background_);
+                            RenderOutput rendered_timelapse_output;
+                            if (params_.optimization.gut) {
+                                rendered_timelapse_output = rasterize(*cam_to_use, strategy_->get_model(), bg, 1.0f, false,
+                                                                     false, RenderMode::RGB, nullptr);
+                            } else {
+                                rendered_timelapse_output = fast_rasterize(*cam_to_use, strategy_->get_model(), background_);
+                            }
 
                             // Get folder name to save in by stripping file extension
-                            std::string folder_name = img_name;
-                            auto last_dot = folder_name.find_last_of('.');
-                            if (last_dot != std::string::npos) {
-                                folder_name = folder_name.substr(0, last_dot);
-                            }
+                            std::string folder_name = loader::strip_extension(img_name);
 
                             auto output_path = params_.dataset.output_path / "timelapse" / folder_name;
                             std::filesystem::create_directories(output_path);
@@ -886,6 +894,12 @@ namespace gs::training {
 
         is_running_ = true; // Now we can start
         LOG_INFO("Starting training loop with {} workers", params_.optimization.num_workers);
+        // initializing image loader
+        auto& cache_loader = gs::loader::CacheLoader::getInstance(params_.dataset.loading_params.use_cpu_memory, params_.dataset.loading_params.use_fs_cache);
+        cache_loader.reset_cache();
+        // in case we call getInstance multiple times and cache parameters/dataset were changed by user
+        cache_loader.update_cache_params(params_.dataset.loading_params.use_cpu_memory,
+                                         params_.dataset.loading_params.use_fs_cache, train_dataset_size_);
 
         try {
             int iter = 1;
@@ -978,10 +992,14 @@ namespace gs::training {
             is_running_ = false;
             training_complete_ = true;
 
+            cache_loader.clear_cpu_cache();
+
             LOG_INFO("Training completed successfully");
             return {};
         } catch (const std::exception& e) {
             is_running_ = false;
+            cache_loader.clear_cpu_cache();
+
             return std::unexpected(std::format("Training failed: {}", e.what()));
         }
     }

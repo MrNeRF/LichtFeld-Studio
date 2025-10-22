@@ -3,13 +3,13 @@
 
 // Memory pool is now an internal implementation detail of tensor library
 // #include "core/memory_pool.hpp"
-#include "core/tensor.hpp"
+#include "core_new/tensor.hpp"
 #include <chrono>
 #include <gtest/gtest.h>
 #include <iomanip>
 #include <torch/torch.h>
 
-using namespace gs;
+using namespace lfs::core;
 
 // ============= Memory Pool Allocation Benchmark =============
 

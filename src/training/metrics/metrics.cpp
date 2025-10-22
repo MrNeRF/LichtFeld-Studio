@@ -427,7 +427,12 @@ namespace gs::training {
 
             // TODO: const_cast is certainly not the correct solution here!
             auto& splatData_mutable = const_cast<SplatData&>(splatData);
-            RenderOutput r_output = fast_rasterize(*cam, splatData_mutable, background);
+            RenderOutput r_output;
+            if (_params.optimization.gut) {
+                r_output = rasterize(*cam, splatData_mutable, background, 1.0f, false, false, RenderMode::RGB, nullptr);
+            } else {
+                r_output = fast_rasterize(*cam, splatData_mutable, background);
+            }
 
             // Only compute metrics if we have RGB output
             if (has_rgb()) {

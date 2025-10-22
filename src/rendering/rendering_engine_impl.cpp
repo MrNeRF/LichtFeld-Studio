@@ -160,6 +160,7 @@ namespace gs::rendering {
             .point_cloud_mode = request.point_cloud_mode,
             .voxel_size = request.voxel_size,
             .gut = request.gut,
+            .equirectangular = request.equirectangular,
             .sh_degree = request.sh_degree};
 
         // Convert crop box if present

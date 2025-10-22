@@ -417,6 +417,7 @@ endif()
 # =============================================================================
 # LIBRARY MODULES
 # =============================================================================
+add_subdirectory(src/core_new)    # New core module (lfs::core namespace)
 add_subdirectory(src/core)        # Foundation module
 add_subdirectory(src/geometry)    # Geometry utilities
 add_subdirectory(src/project)     # Project management

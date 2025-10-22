@@ -32,6 +32,7 @@ add_library(gs_loader STATIC
         loaders/blender_loader.cpp
         loaders/sogs_loader.hpp
         loaders/sogs_loader.cpp
+        cache_image_loader.cpp
 )
 
 # Set include directories

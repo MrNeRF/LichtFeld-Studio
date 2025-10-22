@@ -27,6 +27,9 @@ void save_image(const std::filesystem::path& path,
                 const std::vector<torch::Tensor>& images,
                 bool horizontal = true,
                 int separator_width = 2);
+
+bool save_img_data(const std::filesystem::path& p, const std::tuple<unsigned char*, int, int, int>& image_data);
+
 void free_image(unsigned char* image);
 
 // Batch image saving functionality

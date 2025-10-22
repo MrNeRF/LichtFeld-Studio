@@ -789,7 +789,8 @@ namespace gs::visualizer {
             .fov = fov_y_deg,
             .scaling_modifier = std::nullopt,
             .antialiasing = std::nullopt,
-            .background_color = std::nullopt}
+            .background_color = std::nullopt,
+            .equirectangular = std::nullopt}
             .emit();
 
         // Force immediate camera update

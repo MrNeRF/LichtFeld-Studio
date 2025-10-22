@@ -76,7 +76,7 @@ namespace gs::rendering {
             mutable_model.set_active_sh_degree(request.sh_degree);
 
             RenderResult result;
-            if (request.gut) {
+            if (request.gut || request.equirectangular) {
                 auto render_result = gs::training::rasterize(
                     cam, mutable_model, background_, request.scaling_modifier, false, request.antialiasing, static_cast<training::RenderMode>(request.render_mode), nullptr);
                 result.image = render_result.image;
@@ -325,7 +325,7 @@ namespace gs::rendering {
                 request.viewport_size.y / 2.0f,
                 torch::empty({0}, torch::kFloat32),
                 torch::empty({0}, torch::kFloat32),
-                gsplat::CameraModelType::PINHOLE,
+                request.equirectangular ? gsplat::CameraModelType::EQUIRECTANGULAR : gsplat::CameraModelType::PINHOLE,
                 "render_camera",
                 "none",
                 request.viewport_size.x,

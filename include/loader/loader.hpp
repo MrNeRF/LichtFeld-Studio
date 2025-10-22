@@ -56,6 +56,7 @@ namespace gs::loader {
         std::string loader_used;
         std::chrono::milliseconds load_time{0};
         std::vector<std::string> warnings;
+        std::optional<std::tuple<std::vector<std::string>, std::vector<std::string>>> provided_splits;
     };
 
     /**

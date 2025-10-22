@@ -505,12 +505,7 @@ namespace gs {
                 nlohmann::json json;
 
                 // Dataset configuration
-                json["dataset"]["data_path"] = params.dataset.data_path.string();
-                json["dataset"]["output_path"] = params.dataset.output_path.string();
-                json["dataset"]["images"] = params.dataset.images;
-                json["dataset"]["resize_factor"] = params.dataset.resize_factor;
-                json["dataset"]["test_every"] = params.dataset.test_every;
-                json["dataset"]["max_width"] = params.dataset.max_width;
+                json["dataset"] = params.dataset.to_json();
 
                 // Optimization configuration
                 nlohmann::json opt_json = params.optimization.to_json();
@@ -540,6 +535,89 @@ namespace gs {
             } catch (const std::exception& e) {
                 return std::unexpected(std::format("Error saving training parameters: {}", e.what()));
             }
+        }
+
+        LoadingParams LoadingParams::from_json(const nlohmann::json& j) {
+
+            LoadingParams params;
+            if (j.contains("use_cpu_memory")) {
+                params.use_cpu_memory = j["use_cpu_memory"];
+            }
+            if (j.contains("min_cpu_free_memory_ratio")) {
+                params.min_cpu_free_memory_ratio = j["min_cpu_free_memory_ratio"];
+            }
+            if (j.contains("min_cpu_free_GB")) {
+                params.min_cpu_free_GB = j["min_cpu_free_GB"];
+            }
+            if (j.contains("use_fs_cache")) {
+                params.use_fs_cache = j["use_fs_cache"];
+            }
+            if (j.contains("print_cache_status")) {
+                params.print_cache_status = j["print_cache_status"];
+            }
+            if (j.contains("print_status_freq_num")) {
+                params.print_status_freq_num = j["print_status_freq_num"];
+            }
+
+            return params;
+        }
+
+        nlohmann::json LoadingParams::to_json() const {
+            nlohmann::json loading_json;
+            loading_json["use_cpu_memory"] = use_cpu_memory;
+            loading_json["min_cpu_free_memory_ratio"] = min_cpu_free_memory_ratio;
+            loading_json["min_cpu_free_GB"] = min_cpu_free_GB;
+            loading_json["use_fs_cache"] = use_fs_cache;
+            loading_json["print_cache_status"] = print_cache_status;
+            loading_json["print_status_freq_num"] = print_status_freq_num;
+
+            return loading_json;
+        }
+
+        nlohmann::json DatasetConfig::to_json() const {
+            nlohmann::json json;
+
+            json["data_path"] = data_path.string();
+            json["output_folder"] = output_path.string();
+            json["images"] = images;
+            json["resize_factor"] = resize_factor;
+            json["test_every"] = test_every;
+            json["max_width"] = max_width;
+            json["loading_params"] = loading_params.to_json();
+
+            return json;
+        }
+
+        DatasetConfig DatasetConfig::from_json(const nlohmann::json& j) {
+            DatasetConfig dataset;
+
+            dataset.data_path = j["data_path"].get<std::string>();
+            dataset.images = j["images"].get<std::string>();
+            dataset.resize_factor = j["resize_factor"].get<int>();
+            dataset.max_width = j["max_width"].get<int>();
+            dataset.test_every = j["test_every"].get<int>();
+            dataset.output_path = j["output_folder"].get<std::string>();
+
+            if (j.contains("loading_params")) {
+                dataset.loading_params = LoadingParams::from_json(j["loading_params"]);
+            }
+
+            return dataset;
+        }
+
+        std::expected<LoadingParams, std::string> read_loading_params_from_json(std::filesystem::path& path) {
+            auto json_result = read_json_file(path);
+
+            if (!json_result) {
+                return std::unexpected(json_result.error());
+            }
+            LoadingParams loading_params;
+            try {
+                loading_params = LoadingParams::from_json(*json_result);
+            } catch (const std::exception& e) {
+                return std::unexpected(std::format("Error reading loading parameters: {}", e.what()));
+            }
+            return loading_params;
         }
 
     } // namespace param

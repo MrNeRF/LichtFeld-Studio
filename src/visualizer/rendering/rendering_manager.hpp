@@ -82,6 +82,7 @@ namespace gs::visualizer {
         size_t split_view_offset = 0;
 
         bool gut = false;
+        bool equirectangular = false;
     };
 
     struct SplitViewInfo {

@@ -191,4 +191,7 @@ namespace gs::management {
     // find the
     std::filesystem::path FindProjectFile(const std::filesystem::path& directory);
 
+    std::string generateShortHash();
+    std::filesystem::path GetLichtFeldBaseTemporaryFolder();
+
 } // namespace gs::management

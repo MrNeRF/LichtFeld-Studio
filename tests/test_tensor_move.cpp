@@ -11,16 +11,16 @@
 #include <torch/torch.h>
 #include <vector>
 
-#include "core/tensor.hpp"
+#include "core_new/tensor.hpp"
 
 namespace {
 
     constexpr float FLOAT_TOLERANCE = 1e-5f;
 
     /**
-     * @brief Convert torch::Tensor to gs::Tensor
+     * @brief Convert torch::Tensor to lfs::core::Tensor
      */
-    gs::Tensor torch_to_tensor(const torch::Tensor& torch_tensor) {
+    lfs::core::Tensor torch_to_tensor(const torch::Tensor& torch_tensor) {
         auto cpu_tensor = torch_tensor.cpu().contiguous();
         std::vector<size_t> shape;
         for (int i = 0; i < torch_tensor.dim(); ++i) {
@@ -29,13 +29,13 @@ namespace {
 
         std::vector<float> data(cpu_tensor.data_ptr<float>(),
                                 cpu_tensor.data_ptr<float>() + cpu_tensor.numel());
-        return gs::Tensor::from_vector(data, gs::TensorShape(shape), gs::Device::CUDA);
+        return lfs::core::Tensor::from_vector(data, lfs::core::TensorShape(shape), lfs::core::Device::CUDA);
     }
 
     /**
-     * @brief Convert gs::Tensor to torch::Tensor
+     * @brief Convert lfs::core::Tensor to torch::Tensor
      */
-    torch::Tensor tensor_to_torch(const gs::Tensor& gs_tensor) {
+    torch::Tensor tensor_to_torch(const lfs::core::Tensor& gs_tensor) {
         auto cpu_tensor = gs_tensor.cpu();
         std::vector<int64_t> shape;
         for (size_t i = 0; i < cpu_tensor.ndim(); ++i) {
@@ -57,14 +57,14 @@ namespace {
         return diff < tol;
     }
 
-    bool tensors_equal(const gs::Tensor& t1, const gs::Tensor& t2, float tol = FLOAT_TOLERANCE) {
+    bool tensors_equal(const lfs::core::Tensor& t1, const lfs::core::Tensor& t2, float tol = FLOAT_TOLERANCE) {
         if (t1.shape() != t2.shape())
             return false;
         auto diff = t1.sub(t2).abs().max_scalar();
         return diff < tol;
     }
 
-    bool tensors_equal(const torch::Tensor& torch_t, const gs::Tensor& gs_t, float tol = FLOAT_TOLERANCE) {
+    bool tensors_equal(const torch::Tensor& torch_t, const lfs::core::Tensor& gs_t, float tol = FLOAT_TOLERANCE) {
         return tensors_equal(torch_t, tensor_to_torch(gs_t), tol);
     }
 
@@ -80,7 +80,7 @@ protected:
         ASSERT_TRUE(torch::cuda::is_available()) << "CUDA not available";
         torch::manual_seed(42);
         torch::cuda::manual_seed(42);
-        gs::Tensor::manual_seed(42);
+        lfs::core::Tensor::manual_seed(42);
     }
 
     void print_test_header(const std::string& test_name) {
@@ -105,7 +105,7 @@ TEST_F(TensorMoveTest, BasicMoveConstructor) {
     EXPECT_EQ(torch_moved.data_ptr<float>(), torch_orig_data) << "Torch: data pointer should match";
 
     // Our Tensor version
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_orig_ptr = gs_orig.ptr<float>();
     auto gs_moved = std::move(gs_orig);
 
@@ -130,9 +130,9 @@ TEST_F(TensorMoveTest, MoveAssignment) {
     EXPECT_EQ(torch_dest.data_ptr<float>(), torch_orig_data) << "Torch: data pointer should match";
 
     // Our Tensor version
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_orig_ptr = gs_orig.ptr<float>();
-    gs::Tensor gs_dest;
+    lfs::core::Tensor gs_dest;
     gs_dest = std::move(gs_orig);
 
     EXPECT_FALSE(gs_orig.is_valid()) << "Tensor: source should be invalid after move assignment";
@@ -156,8 +156,8 @@ TEST_F(TensorMoveTest, MoveToExistingTensor) {
     EXPECT_EQ(torch_existing.data_ptr<float>(), torch_orig_data);
 
     // Our Tensor version
-    auto gs_existing = gs::Tensor::ones({50, 2}, gs::Device::CUDA);
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_existing = lfs::core::Tensor::ones({50, 2}, lfs::core::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_orig_ptr = gs_orig.ptr<float>();
     gs_existing = std::move(gs_orig);
 
@@ -184,7 +184,7 @@ TEST_F(TensorMoveTest, DataPreservationAfterMove) {
     EXPECT_TRUE(tensors_equal(torch_moved, torch_copy));
 
     // Our Tensor version
-    auto gs_orig = gs::Tensor::arange(0, 100).reshape({10, 10});
+    auto gs_orig = lfs::core::Tensor::arange(0, 100).reshape({10, 10});
     auto gs_copy = gs_orig.clone();
     auto gs_moved = std::move(gs_orig);
 
@@ -209,7 +209,7 @@ TEST_F(TensorMoveTest, MultipleSequentialMoves) {
     EXPECT_FALSE(torch_2.defined());
 
     // Our Tensor version
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_copy = gs_orig.clone();
     auto gs_1 = std::move(gs_orig);
     auto gs_2 = std::move(gs_1);
@@ -239,7 +239,7 @@ TEST_F(TensorMoveTest, MoveScalarTensor) {
     EXPECT_FLOAT_EQ(torch_moved.item<float>(), 42.0f);
 
     // Our Tensor version
-    auto gs_scalar = gs::Tensor::full({1}, 42.0f, gs::Device::CUDA);
+    auto gs_scalar = lfs::core::Tensor::full({1}, 42.0f, lfs::core::Device::CUDA);
     auto gs_moved = std::move(gs_scalar);
 
     EXPECT_TRUE(gs_moved.is_valid());
@@ -263,7 +263,7 @@ TEST_F(TensorMoveTest, MoveLargeTensor) {
     EXPECT_EQ(torch_moved.numel(), large_size * large_size);
 
     // Our Tensor version
-    auto gs_large = gs::Tensor::randn({large_size, large_size}, gs::Device::CUDA);
+    auto gs_large = lfs::core::Tensor::randn({large_size, large_size}, lfs::core::Device::CUDA);
     auto gs_ptr = gs_large.ptr<float>();
     auto gs_moved = std::move(gs_large);
 
@@ -285,7 +285,7 @@ TEST_F(TensorMoveTest, MoveHighDimensionalTensor) {
     EXPECT_EQ(torch_moved.dim(), 4);
 
     // Our Tensor version
-    auto gs_nd = gs::Tensor::randn({5, 4, 3, 2}, gs::Device::CUDA);
+    auto gs_nd = lfs::core::Tensor::randn({5, 4, 3, 2}, lfs::core::Device::CUDA);
     auto gs_shape = gs_nd.shape();
     auto gs_moved = std::move(gs_nd);
 
@@ -313,8 +313,8 @@ TEST_F(TensorMoveTest, MoveIntoVector) {
     EXPECT_EQ(torch_vec[0].data_ptr<float>(), torch_ptr);
 
     // Our Tensor version
-    std::vector<gs::Tensor> gs_vec;
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    std::vector<lfs::core::Tensor> gs_vec;
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_ptr = gs_orig.ptr<float>();
     gs_vec.push_back(std::move(gs_orig));
 
@@ -339,8 +339,8 @@ TEST_F(TensorMoveTest, MoveFromVector) {
     EXPECT_EQ(torch_moved.data_ptr<float>(), torch_ptr);
 
     // Our Tensor version
-    std::vector<gs::Tensor> gs_vec;
-    gs_vec.push_back(gs::Tensor::randn({100, 3}, gs::Device::CUDA));
+    std::vector<lfs::core::Tensor> gs_vec;
+    gs_vec.push_back(lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA));
     auto gs_ptr = gs_vec[0].ptr<float>();
     auto gs_moved = std::move(gs_vec[0]);
 
@@ -371,10 +371,10 @@ TEST_F(TensorMoveTest, MoveMultipleIntoVector) {
     }
 
     // Our Tensor version
-    std::vector<gs::Tensor> gs_vec;
+    std::vector<lfs::core::Tensor> gs_vec;
     std::vector<float*> gs_ptrs;
     for (int i = 0; i < count; ++i) {
-        auto t = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+        auto t = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
         gs_ptrs.push_back(t.ptr<float>());
         gs_vec.push_back(std::move(t));
     }
@@ -405,7 +405,7 @@ TEST_F(TensorMoveTest, MoveAfterClone) {
     EXPECT_TRUE(tensors_equal(torch_orig, torch_moved));
 
     // Our Tensor version
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_clone = gs_orig.clone();
     auto gs_moved = std::move(gs_clone);
 
@@ -429,7 +429,7 @@ TEST_F(TensorMoveTest, MoveAfterContiguous) {
     EXPECT_TRUE(torch_moved.is_contiguous());
 
     // Our Tensor version
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_contig = gs_orig.contiguous();
     auto gs_moved = std::move(gs_contig);
 
@@ -451,7 +451,7 @@ TEST_F(TensorMoveTest, MoveAfterReshape) {
     EXPECT_EQ(torch_moved.sizes(), torch::IntArrayRef({10, 30}));
 
     // Our Tensor version
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_reshaped = gs_orig.reshape({10, 30});
     auto gs_moved = std::move(gs_reshaped);
 
@@ -471,8 +471,8 @@ torch::Tensor create_torch_tensor() {
     return t; // RVO should apply
 }
 
-gs::Tensor create_gs_tensor() {
-    auto t = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+lfs::core::Tensor create_gs_tensor() {
+    auto t = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     return t; // RVO should apply
 }
 
@@ -481,8 +481,8 @@ torch::Tensor create_torch_tensor_explicit_move() {
     return std::move(t);
 }
 
-gs::Tensor create_gs_tensor_explicit_move() {
-    auto t = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+lfs::core::Tensor create_gs_tensor_explicit_move() {
+    auto t = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     return std::move(t);
 }
 
@@ -529,8 +529,8 @@ std::expected<torch::Tensor, std::string> create_torch_expected() {
     return t;
 }
 
-std::expected<gs::Tensor, std::string> create_gs_expected() {
-    auto t = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+std::expected<lfs::core::Tensor, std::string> create_gs_expected() {
+    auto t = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     return t;
 }
 
@@ -564,9 +564,9 @@ struct TorchWrapper {
 };
 
 struct TensorWrapper {
-    gs::Tensor data;
+    lfs::core::Tensor data;
 
-    TensorWrapper(gs::Tensor t) : data(std::move(t)) {}
+    TensorWrapper(lfs::core::Tensor t) : data(std::move(t)) {}
 };
 
 TEST_F(TensorMoveTest, MoveIntoStructConstructor) {
@@ -582,7 +582,7 @@ TEST_F(TensorMoveTest, MoveIntoStructConstructor) {
     EXPECT_EQ(torch_wrapper.data.data_ptr<float>(), torch_ptr);
 
     // Our Tensor version
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_ptr = gs_orig.ptr<float>();
     TensorWrapper gs_wrapper(std::move(gs_orig));
 
@@ -605,7 +605,7 @@ TEST_F(TensorMoveTest, MoveClonedTensorIntoConstructor) {
     EXPECT_TRUE(tensors_equal(torch_wrapper.data, torch_orig));
 
     // Our Tensor version - simulating the SplatDataNew pattern
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_copy = gs_orig.clone();
     TensorWrapper gs_wrapper(gs_orig.clone());
 
@@ -632,7 +632,7 @@ TEST_F(TensorMoveTest, MoveWithUniquePtr) {
     EXPECT_EQ(torch_moved_ptr->data_ptr<float>(), torch_data_ptr);
 
     // Our Tensor version
-    auto gs_ptr = std::make_unique<gs::Tensor>(gs::Tensor::randn({100, 3}, gs::Device::CUDA));
+    auto gs_ptr = std::make_unique<lfs::core::Tensor>(lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA));
     auto gs_data_ptr = gs_ptr->ptr<float>();
     auto gs_moved_ptr = std::move(gs_ptr);
 
@@ -651,7 +651,7 @@ TEST_F(TensorMoveTest, MovedFromTensorState) {
     print_test_header("MovedFromTensorState");
 
     // Test the ACTUAL behavior of moved-from tensor
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto orig_ptr = gs_orig.ptr<float>();
 
     auto gs_moved = std::move(gs_orig);
@@ -687,7 +687,7 @@ TEST_F(TensorMoveTest, MoveEmptyTensor) {
     print_test_header("MoveEmptyTensor");
 
     // Test moving an empty tensor
-    auto gs_empty = gs::Tensor::empty({0}, gs::Device::CUDA);
+    auto gs_empty = lfs::core::Tensor::empty({0}, lfs::core::Device::CUDA);
     EXPECT_TRUE(gs_empty.is_valid());
     EXPECT_EQ(gs_empty.numel(), 0);
 
@@ -703,7 +703,7 @@ TEST_F(TensorMoveTest, CRITICAL_MovedFromNumelBug) {
     print_test_header("CRITICAL_MovedFromNumelBug");
 
     // This test MUST FAIL to expose the bug
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_moved = std::move(gs_orig);
 
     std::println("  After move - moved-from tensor:");
@@ -722,7 +722,7 @@ TEST_F(TensorMoveTest, CRITICAL_MovedFromNumelBug) {
 TEST_F(TensorMoveTest, CRITICAL_MovedFromShapeBug) {
     print_test_header("CRITICAL_MovedFromShapeBug");
 
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_moved = std::move(gs_orig);
 
     std::println("  After move - moved-from tensor:");
@@ -742,7 +742,7 @@ TEST_F(TensorMoveTest, CRITICAL_MovedFromShapeBug) {
 TEST_F(TensorMoveTest, CRITICAL_InconsistentState) {
     print_test_header("CRITICAL_InconsistentState");
 
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_moved = std::move(gs_orig);
 
     bool is_valid = gs_orig.is_valid();
@@ -769,7 +769,7 @@ TEST_F(TensorMoveTest, MoveSelfAssignment) {
     print_test_header("MoveSelfAssignment");
 
     // Test self-move-assignment (should be safe)
-    auto gs_tensor = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_tensor = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto original_ptr = gs_tensor.ptr<float>();
 
     gs_tensor = std::move(gs_tensor); // Self-move
@@ -785,7 +785,7 @@ TEST_F(TensorMoveTest, MoveWithViews) {
     print_test_header("MoveWithViews");
 
     // Create a view and move it
-    auto gs_orig = gs::Tensor::randn({100, 30}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 30}, lfs::core::Device::CUDA);
     auto gs_view = gs_orig.reshape({10, 300});
 
     EXPECT_TRUE(gs_view.is_view());
@@ -803,7 +803,7 @@ TEST_F(TensorMoveTest, MoveChainWithOperations) {
     print_test_header("MoveChainWithOperations");
 
     // Complex chain: create -> reshape -> move -> transpose -> move
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_copy = gs_orig.clone();
 
     auto gs_1 = std::move(gs_orig);
@@ -828,22 +828,22 @@ TEST_F(TensorMoveTest, MoveWithDifferentDtypes) {
     print_test_header("MoveWithDifferentDtypes");
 
     // Test moving tensors with different dtypes
-    auto gs_float = gs::Tensor::randn({100, 3}, gs::Device::CUDA, gs::DataType::Float32);
-    auto gs_int = gs::Tensor::randint({100, 3}, 0, 100, gs::Device::CUDA, gs::DataType::Int32);
-    auto gs_bool = gs::Tensor::full_bool({100, 3}, true, gs::Device::CUDA);
+    auto gs_float = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+    auto gs_int = lfs::core::Tensor::randint({100, 3}, 0, 100, lfs::core::Device::CUDA, lfs::core::DataType::Int32);
+    auto gs_bool = lfs::core::Tensor::full_bool({100, 3}, true, lfs::core::Device::CUDA);
 
     auto gs_float_moved = std::move(gs_float);
     auto gs_int_moved = std::move(gs_int);
     auto gs_bool_moved = std::move(gs_bool);
 
     EXPECT_TRUE(gs_float_moved.is_valid());
-    EXPECT_EQ(gs_float_moved.dtype(), gs::DataType::Float32);
+    EXPECT_EQ(gs_float_moved.dtype(), lfs::core::DataType::Float32);
 
     EXPECT_TRUE(gs_int_moved.is_valid());
-    EXPECT_EQ(gs_int_moved.dtype(), gs::DataType::Int32);
+    EXPECT_EQ(gs_int_moved.dtype(), lfs::core::DataType::Int32);
 
     EXPECT_TRUE(gs_bool_moved.is_valid());
-    EXPECT_EQ(gs_bool_moved.dtype(), gs::DataType::Bool);
+    EXPECT_EQ(gs_bool_moved.dtype(), lfs::core::DataType::Bool);
 
     std::println("✓ MoveWithDifferentDtypes: Different dtypes move correctly");
 }
@@ -853,7 +853,7 @@ TEST_F(TensorMoveTest, MoveFromTemporaryInExpression) {
 
     // Test that temporaries in expressions move correctly
     auto result = [] {
-        return gs::Tensor::randn({100, 3}, gs::Device::CUDA).add(1.0f);
+        return lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA).add(1.0f);
     }();
 
     EXPECT_TRUE(result.is_valid());
@@ -865,7 +865,7 @@ TEST_F(TensorMoveTest, MoveFromTemporaryInExpression) {
 TEST_F(TensorMoveTest, MoveInLambdaCapture) {
     print_test_header("MoveInLambdaCapture");
 
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_ptr = gs_orig.ptr<float>();
 
     auto lambda = [t = std::move(gs_orig)]() {
@@ -881,7 +881,7 @@ TEST_F(TensorMoveTest, MoveInLambdaCapture) {
 TEST_F(TensorMoveTest, MoveWithSlicing) {
     print_test_header("MoveWithSlicing");
 
-    auto gs_orig = gs::Tensor::randn({100, 30}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 30}, lfs::core::Device::CUDA);
     auto gs_slice = gs_orig.slice(0, 10, 20);
     auto gs_moved = std::move(gs_slice);
 
@@ -897,13 +897,13 @@ TEST_F(TensorMoveTest, MoveSequenceInVector) {
     print_test_header("MoveSequenceInVector");
 
     // Create vector, move into it, move out of it
-    std::vector<gs::Tensor> vec;
+    std::vector<lfs::core::Tensor> vec;
 
-    auto t1 = gs::Tensor::randn({10, 3}, gs::Device::CUDA);
+    auto t1 = lfs::core::Tensor::randn({10, 3}, lfs::core::Device::CUDA);
     auto ptr1 = t1.ptr<float>();
     vec.push_back(std::move(t1));
 
-    auto t2 = gs::Tensor::randn({20, 3}, gs::Device::CUDA);
+    auto t2 = lfs::core::Tensor::randn({20, 3}, lfs::core::Device::CUDA);
     auto ptr2 = t2.ptr<float>();
     vec.push_back(std::move(t2));
 
@@ -925,12 +925,12 @@ TEST_F(TensorMoveTest, MoveAfterDeviceTransfer) {
     print_test_header("MoveAfterDeviceTransfer");
 
     // Create on CUDA, move to CPU, then move the CPU tensor
-    auto gs_cuda = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_cuda = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_cpu = gs_cuda.cpu();
     auto gs_moved = std::move(gs_cpu);
 
     EXPECT_TRUE(gs_moved.is_valid());
-    EXPECT_EQ(gs_moved.device(), gs::Device::CPU);
+    EXPECT_EQ(gs_moved.device(), lfs::core::Device::CPU);
     EXPECT_FALSE(gs_cpu.is_valid());
 
     std::println("✓ MoveAfterDeviceTransfer: Moving after device transfer works");
@@ -939,8 +939,8 @@ TEST_F(TensorMoveTest, MoveAfterDeviceTransfer) {
 TEST_F(TensorMoveTest, MoveWithBroadcasting) {
     print_test_header("MoveWithBroadcasting");
 
-    auto gs_small = gs::Tensor::randn({1, 3}, gs::Device::CUDA);
-    auto gs_broadcast = gs_small.broadcast_to(gs::TensorShape({100, 3}));
+    auto gs_small = lfs::core::Tensor::randn({1, 3}, lfs::core::Device::CUDA);
+    auto gs_broadcast = gs_small.broadcast_to(lfs::core::TensorShape({100, 3}));
     auto gs_moved = std::move(gs_broadcast);
 
     EXPECT_TRUE(gs_moved.is_valid());
@@ -954,10 +954,10 @@ TEST_F(TensorMoveTest, MoveReassignmentLoop) {
     print_test_header("MoveReassignmentLoop");
 
     // Test repeated reassignment via move
-    gs::Tensor current = gs::Tensor::randn({10, 3}, gs::Device::CUDA);
+    lfs::core::Tensor current = lfs::core::Tensor::randn({10, 3}, lfs::core::Device::CUDA);
 
     for (int i = 0; i < 100; ++i) {
-        auto temp = gs::Tensor::randn({10, 3}, gs::Device::CUDA);
+        auto temp = lfs::core::Tensor::randn({10, 3}, lfs::core::Device::CUDA);
         current = std::move(temp);
         EXPECT_TRUE(current.is_valid());
         EXPECT_FALSE(temp.is_valid());
@@ -969,7 +969,7 @@ TEST_F(TensorMoveTest, MoveReassignmentLoop) {
 TEST_F(TensorMoveTest, CRITICAL_MovedFromBytesSize) {
     print_test_header("CRITICAL_MovedFromBytesSize");
 
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     size_t orig_bytes = gs_orig.bytes();
 
     auto gs_moved = std::move(gs_orig);
@@ -991,7 +991,7 @@ TEST_F(TensorMoveTest, CRITICAL_MovedFromBytesSize) {
 TEST_F(TensorMoveTest, CRITICAL_MovedFromShapeAccess) {
     print_test_header("CRITICAL_MovedFromShapeAccess");
 
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_moved = std::move(gs_orig);
 
     ASSERT_FALSE(gs_orig.is_valid());
@@ -1013,8 +1013,8 @@ TEST_F(TensorMoveTest, CRITICAL_ExpectedValueAccess) {
     print_test_header("CRITICAL_ExpectedValueAccess");
 
     // This reproduces the exact SplatDataNew pattern
-    auto create_in_expected = []() -> std::expected<gs::Tensor, std::string> {
-        auto t = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto create_in_expected = []() -> std::expected<lfs::core::Tensor, std::string> {
+        auto t = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
         std::println("    Created tensor - is_valid(): {}", t.is_valid());
         return t; // Moves into expected
     };
@@ -1041,15 +1041,15 @@ TEST_F(TensorMoveTest, CRITICAL_ConstructorMoveChain) {
     print_test_header("CRITICAL_ConstructorMoveChain");
 
     struct Wrapper {
-        gs::Tensor data;
-        Wrapper(gs::Tensor t) : data(std::move(t)) {
+        lfs::core::Tensor data;
+        Wrapper(lfs::core::Tensor t) : data(std::move(t)) {
             std::println("    In constructor - data.is_valid(): {}", data.is_valid());
             std::println("    In constructor - data.numel(): {}", data.numel());
         }
     };
 
     auto create_wrapped = []() -> std::expected<Wrapper, std::string> {
-        auto t = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+        auto t = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
         std::println("  Created tensor - is_valid(): {}", t.is_valid());
         return Wrapper(std::move(t)); // Move into Wrapper, then into expected
     };
@@ -1095,12 +1095,12 @@ TEST_F(TensorMoveTest, StressTest_ManyMoves) {
     EXPECT_TRUE(tensors_equal(torch_current, torch_copy));
 
     // Our Tensor version
-    auto gs_orig = gs::Tensor::randn({100, 3}, gs::Device::CUDA);
+    auto gs_orig = lfs::core::Tensor::randn({100, 3}, lfs::core::Device::CUDA);
     auto gs_copy = gs_orig.clone();
-    gs::Tensor gs_current = std::move(gs_orig);
+    lfs::core::Tensor gs_current = std::move(gs_orig);
 
     for (int i = 0; i < iterations; ++i) {
-        gs::Tensor gs_temp = std::move(gs_current);
+        lfs::core::Tensor gs_temp = std::move(gs_current);
         gs_current = std::move(gs_temp);
     }
 
@@ -1114,12 +1114,12 @@ TEST_F(TensorMoveTest, StressTest_VectorResize) {
     print_test_header("StressTest_VectorResize");
 
     // Test that moves work correctly during vector resizing
-    std::vector<gs::Tensor> vec;
+    std::vector<lfs::core::Tensor> vec;
     std::vector<float*> ptrs;
 
     const int count = 1000;
     for (int i = 0; i < count; ++i) {
-        auto t = gs::Tensor::randn({10, 3}, gs::Device::CUDA);
+        auto t = lfs::core::Tensor::randn({10, 3}, lfs::core::Device::CUDA);
         ptrs.push_back(t.ptr<float>());
         vec.push_back(std::move(t));
     }

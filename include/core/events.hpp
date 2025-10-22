@@ -142,7 +142,8 @@ namespace gs {
                   std::optional<float> fov;
                   std::optional<float> scaling_modifier;
                   std::optional<bool> antialiasing;
-                  std::optional<glm::vec3> background_color;);
+                  std::optional<glm::vec3> background_color;
+                  std::optional<bool> equirectangular;);
             EVENT(RenderModeChanged, std::string old_mode; std::string new_mode;);
             EVENT(PointCloudModeChanged, bool enabled; float voxel_size;);
             EVENT(GridSettingsChanged,

@@ -245,7 +245,6 @@ namespace gs::management {
                                json.contains("project_name") &&
                                json.contains("project_creation_time") &&
                                json.contains("project_last_update_time") &&
-                               json.contains("project_output_folder") &&
                                json.contains("data") &&
                                json.contains("outputs");
         if (!contains_basics) {
@@ -270,15 +269,13 @@ namespace gs::management {
         data.project_name = json["project_name"].get<std::string>();
         data.project_creation_time = json["project_creation_time"].get<std::string>();
         data.project_last_update_time = json["project_last_update_time"].get<std::string>();
-        data.data_set_info.output_path = std::filesystem::path(json["project_output_folder"].get<std::string>());
+
 
         // Parse data section
         const auto& dataJson = json["data"];
-        data.data_set_info.data_path = dataJson["data_path"].get<std::string>();
-        data.data_set_info.images = dataJson["images"].get<std::string>();
-        data.data_set_info.resize_factor = dataJson["resize_factor"].get<int>();
-        data.data_set_info.max_width = dataJson["max_width"].get<int>();
-        data.data_set_info.test_every = dataJson["test_every"].get<int>();
+        param::DatasetConfig data_set = param::DatasetConfig::from_json(dataJson);
+        (param::DatasetConfig&)data.data_set_info = data_set;
+
         data.data_set_info.data_type = dataJson["data_type"].get<std::string>();
 
         if (json.contains("training") && json["training"].contains("optimization")) {
@@ -321,15 +318,10 @@ namespace gs::management {
         json["project_name"] = data.project_name;
         json["project_creation_time"] = data.project_creation_time;
         json["project_last_update_time"] = data.project_last_update_time;
-        json["project_output_folder"] = data.data_set_info.output_path;
 
         // Data section
-        json["data"]["data_path"] = data.data_set_info.data_path;
+        json["data"] = static_cast<param::DatasetConfig>(data.data_set_info).to_json();
         json["data"]["data_type"] = data.data_set_info.data_type;
-        json["data"]["resize_factor"] = data.data_set_info.resize_factor;
-        json["data"]["max_width"] = data.data_set_info.max_width;
-        json["data"]["test_every"] = data.data_set_info.test_every;
-        json["data"]["images"] = data.data_set_info.images;
 
         // training optimization
         json["training"]["optimization"] = data.optimization.to_json();
@@ -698,7 +690,8 @@ namespace gs::management {
             fs::remove_all(entry);
         }
     }
-    static std::filesystem::path GetLichtFeldBaseTemporaryFolder() {
+
+    std::filesystem::path GetLichtFeldBaseTemporaryFolder() {
         return std::filesystem::temp_directory_path() / "LichtFeldStudio";
     }
 
@@ -734,7 +727,7 @@ namespace gs::management {
         return true;
     }
 
-    static std::string generateShortHash() {
+    std::string generateShortHash() {
         // Current time in nanoseconds
         auto now = std::chrono::high_resolution_clock::now();
         auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();

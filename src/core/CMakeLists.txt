@@ -2,12 +2,8 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-# ============================================================================
-# Add lfs_tensor library as subdirectory
-# ============================================================================
-add_subdirectory(tensor)
-
 # Core module - fundamental data structures and utilities
+# Note: lfs_tensor library is now in src/core_new/tensor
 set(CORE_SOURCES
         application.cpp
         argument_parser.cpp
@@ -144,7 +140,7 @@ message(STATUS "╔════════════════════�
 message(STATUS "║  gs_core - Core Application Library                           ║")
 message(STATUS "╚════════════════════════════════════════════════════════════════╝")
 message(STATUS "  • Core library: C++23 (gs_core)")
-message(STATUS "  • Tensor library: lfs_tensor (from tensor/ subdirectory)")
+message(STATUS "  • Tensor library: lfs_tensor (from src/core_new/tensor)")
 message(STATUS "  • Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "  • WebP library: ${WEBP_LIB}")
 message(STATUS "  • Archive library: ${ARCHIVE_LIB}")
