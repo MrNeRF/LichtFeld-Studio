@@ -21,6 +21,8 @@ namespace gs::tensor_ops {
     // BROADCASTING INDEX FUNCTOR (for single-array broadcast)
     // ============================================================================
 
+    // Simplified broadcast index functor - aggregate type for nvcc 12.8 compatibility
+    // This struct is trivially copyable and avoids complex constructor that triggers ICE
     template <int MaxRank = 8>
     struct broadcast_index_functor {
         int src_rank, dst_rank;
@@ -29,33 +31,8 @@ namespace gs::tensor_ops {
         int src_strides[MaxRank];
         int dst_strides[MaxRank];
 
-        __host__ __device__ broadcast_index_functor(const std::vector<size_t>& src_shape_vec,
-                                                     const std::vector<size_t>& dst_shape_vec)
-            : src_rank(src_shape_vec.size()),
-              dst_rank(dst_shape_vec.size()) {
-
-            for (int i = 0; i < src_rank; ++i) {
-                src_shape[i] = static_cast<int>(src_shape_vec[i]);
-            }
-            for (int i = 0; i < dst_rank; ++i) {
-                dst_shape[i] = static_cast<int>(dst_shape_vec[i]);
-            }
-
-            // Compute row-major strides
-            if (src_rank > 0) {
-                src_strides[src_rank - 1] = 1;
-                for (int i = src_rank - 2; i >= 0; --i) {
-                    src_strides[i] = src_strides[i + 1] * src_shape[i + 1];
-                }
-            }
-
-            if (dst_rank > 0) {
-                dst_strides[dst_rank - 1] = 1;
-                for (int i = dst_rank - 2; i >= 0; --i) {
-                    dst_strides[i] = dst_strides[i + 1] * dst_shape[i + 1];
-                }
-            }
-        }
+        // Default constructor - trivially copyable
+        broadcast_index_functor() = default;
 
         __device__ size_t operator()(size_t dst_linear_idx) const {
             size_t src_idx = 0;
@@ -77,6 +54,41 @@ namespace gs::tensor_ops {
         }
     };
 
+    // Helper function to create and initialize the functor on host
+    template <int MaxRank = 8>
+    broadcast_index_functor<MaxRank> make_broadcast_functor(
+        const std::vector<size_t>& src_shape_vec,
+        const std::vector<size_t>& dst_shape_vec) {
+
+        broadcast_index_functor<MaxRank> functor{};
+        functor.src_rank = src_shape_vec.size();
+        functor.dst_rank = dst_shape_vec.size();
+
+        for (int i = 0; i < functor.src_rank; ++i) {
+            functor.src_shape[i] = static_cast<int>(src_shape_vec[i]);
+        }
+        for (int i = 0; i < functor.dst_rank; ++i) {
+            functor.dst_shape[i] = static_cast<int>(dst_shape_vec[i]);
+        }
+
+        // Compute row-major strides
+        if (functor.src_rank > 0) {
+            functor.src_strides[functor.src_rank - 1] = 1;
+            for (int i = functor.src_rank - 2; i >= 0; --i) {
+                functor.src_strides[i] = functor.src_strides[i + 1] * functor.src_shape[i + 1];
+            }
+        }
+
+        if (functor.dst_rank > 0) {
+            functor.dst_strides[functor.dst_rank - 1] = 1;
+            for (int i = functor.dst_rank - 2; i >= 0; --i) {
+                functor.dst_strides[i] = functor.dst_strides[i + 1] * functor.dst_shape[i + 1];
+            }
+        }
+
+        return functor;
+    }
+
     // ============================================================================
     // SINGLE-ARRAY BROADCASTING (Generic) - NOT used by binary ops
     // ============================================================================
@@ -95,7 +107,8 @@ namespace gs::tensor_ops {
         auto src_ptr = thrust::device_pointer_cast(src);
         auto dst_ptr = thrust::device_pointer_cast(dst);
 
-        broadcast_index_functor<> index_mapper(src_vec, dst_vec);
+        // Use helper function to create functor - avoids complex constructor that triggers nvcc ICE
+        auto index_mapper = make_broadcast_functor(src_vec, dst_vec);
 
         auto counting = thrust::make_counting_iterator<size_t>(0);
         auto src_index_iter = thrust::make_transform_iterator(counting, index_mapper);
