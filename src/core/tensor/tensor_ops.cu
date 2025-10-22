@@ -997,6 +997,8 @@ namespace gs::tensor_ops {
         if (outer_size == 0 || dim_size == 0 || inner_size == 0)
             return;
 
+#ifndef _WIN32
+        // Linux: Thrust optimization for contiguous segments
         if (inner_size == 1 && dim_size > 1) {
             // Contiguous segments - use Thrust's optimized segmented scan
             auto data_ptr = thrust::device_pointer_cast(data);
@@ -1028,8 +1030,10 @@ namespace gs::tensor_ops {
                                               keys.begin(), keys.end(),
                                               data_ptr, data_ptr);
             }
-        } else {
-            // Non-contiguous - use custom kernel
+        } else
+#endif // !_WIN32
+        {
+            // Non-contiguous - use custom kernel (Windows: always use this path)
             size_t total_scans = outer_size * inner_size;
             int blocks = (total_scans + 255) / 256;
             cumsum_noncontiguous_kernel<<<blocks, 256, 0, stream>>>(data, outer_size, dim_size, inner_size);
