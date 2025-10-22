@@ -16,15 +16,20 @@
 #include <device_launch_parameters.h>
 #include <limits>
 
-// Thrust headers
+// Thrust headers - some conditionally excluded on Windows to avoid nvcc 12.8 ICE
 #include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
 #include <thrust/fill.h>
 #include <thrust/functional.h>
+
+#ifndef _WIN32
+// These Thrust iterator headers trigger nvcc 12.8 ICE on Windows
 #include <thrust/iterator/constant_iterator.h>
 #include <thrust/iterator/counting_iterator.h>
 #include <thrust/iterator/zip_iterator.h>
+#endif
+
 #include <thrust/reduce.h>
 #include <thrust/scan.h>
 #include <thrust/sequence.h>
@@ -482,6 +487,16 @@ namespace gs::tensor_ops {
         __device__ float operator()(float x) const { return x / divisor; }
     };
 
+#ifdef _WIN32
+    // Windows: Simple scale kernel to avoid Thrust constant_iterator
+    __global__ void scale_kernel(float* data, size_t n, float scale) {
+        size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx < n) {
+            data[idx] *= scale;
+        }
+    }
+#endif
+
     // ============= MAIN REDUCE OPERATION DISPATCH =============
 
     void launch_reduce_op(const void* input, void* output, const size_t* shape, size_t rank,
@@ -819,11 +834,19 @@ namespace gs::tensor_ops {
                     launch_warp_multi_axis_reduce(input_f, output_f, output_size, reduce_count, op, stream);
 
                     if (op == ReduceOp::Mean) {
+#ifdef _WIN32
+                        // Windows: Use simple scale kernel
+                        const int block_size = 256;
+                        const int grid_size = (output_size + block_size - 1) / block_size;
+                        float scale = 1.0f / static_cast<float>(reduce_count);
+                        scale_kernel<<<grid_size, block_size, 0, stream>>>(output_f, output_size, scale);
+#else
                         auto out_ptr = thrust::device_pointer_cast(output_f);
                         run_with_thrust_policy(stream, [&](auto policy) {
                             thrust::transform(policy, out_ptr, out_ptr + output_size, out_ptr,
                                               DivideByFunctor(static_cast<float>(reduce_count)));
                         });
+#endif
                     }
                     return;
                 }
@@ -875,11 +898,19 @@ namespace gs::tensor_ops {
                 reduce_count *= shape[axes[i]];
             }
             float scale = 1.0f / reduce_count;
+#ifdef _WIN32
+            // Windows: Use simple scale kernel to avoid Thrust constant_iterator
+            const int block_size = 256;
+            const int grid_size = (output_elements + block_size - 1) / block_size;
+            float* raw_output_ptr = thrust::raw_pointer_cast(output_ptr);
+            scale_kernel<<<grid_size, block_size, 0, stream>>>(raw_output_ptr, output_elements, scale);
+#else
             run_with_thrust_policy(stream, [&](auto policy) {
                 thrust::transform(policy, output_ptr, output_ptr + output_elements,
                                   thrust::make_constant_iterator(scale), output_ptr,
                                   ops::mul_op{});
             });
+#endif
         }
     }
 
