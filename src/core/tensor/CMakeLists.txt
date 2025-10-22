@@ -94,21 +94,13 @@ if(LFS_TENSOR_CUDA_SOURCES)
     # NOTE: Removed -O1 workaround as it conflicts with -Xcompiler=/O2
     # The proper fix is to use consistent optimization flags via -Xcompiler
 
-    # Windows NVCC 12.8 ICE workaround for tensor_broadcast_ops.cu:
-    # - The ICE occurs when structs with array members are passed to Thrust device iterators
-    # - Even -O0 doesn't fix the ICE - the compiler bug is triggered by the code pattern itself
-    # - REAL FIX: Windows-specific implementation using direct CUDA kernel instead of Thrust
-    #   (see #ifdef _WIN32 in tensor_broadcast_ops.cu)
-    # - The -O0 flag below is kept as defensive measure but is redundant for tensor_broadcast_ops.cu
-    #   since the problematic Thrust code is not compiled on Windows
-    if(WIN32)
-        set_source_files_properties(
-            tensor_broadcast_ops.cu
-            tensor_ops.cu
-            PROPERTIES
-            COMPILE_FLAGS "-O0"
-        )
-    endif()
+    # Windows NVCC 12.8 ICE workaround:
+    # The ICE occurs when structs with array members are passed to Thrust device iterators.
+    # REAL FIX: Platform-specific implementations using #ifdef _WIN32 guards in:
+    #   - tensor_broadcast_ops.cu: Windows uses direct CUDA kernels instead of Thrust
+    #   - tensor_ops.cu: Windows-specific kernels for reduce, cumsum, and scalar operations
+    #   - tensor_generic_ops.cuh: Windows-specific scalar_op_kernel
+    # The problematic Thrust iterator code is not compiled on Windows, so no -O0 flag needed.
 endif()
 
 # Main tensor library (C++23)
