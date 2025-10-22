@@ -6,7 +6,12 @@
 #include <cuda_runtime.h>
 #include <thrust/device_ptr.h>
 #include <thrust/execution_policy.h>
+
+#ifndef _WIN32
+// Windows: Exclude to avoid nvcc 12.8 ICE with aggregate types
 #include <thrust/iterator/constant_iterator.h>
+#endif
+
 #include <thrust/transform.h>
 
 // Include vectorized operations for float4 optimizations
@@ -147,6 +152,18 @@ namespace gs::tensor_ops {
         }
 
         // FALLBACK: Use Thrust constant_iterator for unaligned or non-float types
+#ifdef _WIN32
+        // Windows: Simple kernel to avoid Thrust constant_iterator
+        const int block_size = 256;
+        const int grid_size = (n + block_size - 1) / block_size;
+        auto kernel = [data, scalar, result, n, op] __global__ () {
+            size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx < n) {
+                result[idx] = op(data[idx], scalar);
+            }
+        };
+        kernel<<<grid_size, block_size, 0, stream>>>();
+#else
         auto data_ptr = thrust::device_pointer_cast(data);
         auto result_ptr = thrust::device_pointer_cast(result);
 
@@ -157,6 +174,7 @@ namespace gs::tensor_ops {
             // Binary transform: tensor op constant_iterator
             thrust::transform(policy, data_ptr, data_ptr + n, constant_scalar, result_ptr, op);
         });
+#endif
     }
 
 } // namespace gs::tensor_ops
