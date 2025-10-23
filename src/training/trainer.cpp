@@ -10,6 +10,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "kernels/fused_ssim.cuh"
+#include "kernels/regularization.cuh"
 #include "loader/cache_image_loader.hpp"
 #include "rasterization/fast_rasterizer.hpp"
 #include "rasterization/rasterizer.hpp"
@@ -132,29 +133,41 @@ namespace gs::training {
         }
     }
 
-    std::expected<torch::Tensor, std::string> Trainer::compute_scale_reg_loss(
-        const SplatData& splatData,
+    std::expected<float, std::string> Trainer::compute_scale_reg_loss(
+        SplatData& splatData,
         const param::OptimizationParameters& opt_params) {
         try {
             if (opt_params.scale_reg > 0.0f) {
-                auto scale_l1 = splatData.get_scaling().mean();
-                return opt_params.scale_reg * scale_l1;
+                // Efficient fused CUDA kernel for exp regularization with chain rule
+                // Forward:  scaling = exp(_scaling)
+                // Loss:     L = weight * mean(scaling)
+                // Gradient: ∂L/∂_scaling = (weight / N) * exp(_scaling)
+                float loss = regularization::compute_exp_l1_regularization_with_grad_cuda(
+                    splatData.scaling_raw(),
+                    opt_params.scale_reg);
+                return loss;
             }
-            return torch::zeros({1}, torch::kFloat32).requires_grad_();
+            return 0.0f;
         } catch (const std::exception& e) {
             return std::unexpected(std::format("Error computing scale regularization loss: {}", e.what()));
         }
     }
 
-    std::expected<torch::Tensor, std::string> Trainer::compute_opacity_reg_loss(
-        const SplatData& splatData,
+    std::expected<float, std::string> Trainer::compute_opacity_reg_loss(
+        SplatData& splatData,
         const param::OptimizationParameters& opt_params) {
         try {
             if (opt_params.opacity_reg > 0.0f) {
-                auto opacity_l1 = splatData.get_opacity().mean();
-                return opt_params.opacity_reg * opacity_l1;
+                // Use efficient fused CUDA kernel that computes:
+                // 1. sigmoid(opacity_raw)
+                // 2. Accumulates gradient with chain rule: ∂L/∂opacity_raw = (weight/N) * σ(x) * (1 - σ(x))
+                // 3. Returns loss: weight * mean(sigmoid(opacity_raw))
+                float loss_value = regularization::compute_sigmoid_l1_regularization_with_grad_cuda(
+                    splatData.opacity_raw(),
+                    opt_params.opacity_reg);
+                return loss_value;
             }
-            return torch::zeros({1}, torch::kFloat32).requires_grad_();
+            return 0.0f;
         } catch (const std::exception& e) {
             return std::unexpected(std::format("Error computing opacity regularization loss: {}", e.what()));
         }
@@ -689,18 +702,14 @@ namespace gs::training {
             if (!scale_loss_result) {
                 return std::unexpected(scale_loss_result.error());
             }
-            loss = *scale_loss_result;
-            loss.backward();
-            loss_value += loss.item<float>();
+            loss_value += *scale_loss_result;
 
             // Opacity regularization loss
             auto opacity_loss_result = compute_opacity_reg_loss(strategy_->get_model(), params_.optimization);
             if (!opacity_loss_result) {
                 return std::unexpected(opacity_loss_result.error());
             }
-            loss = *opacity_loss_result;
-            loss.backward();
-            loss_value += loss.item<float>();
+            loss_value += *opacity_loss_result;
 
             // Bilateral grid TV loss
             auto tv_loss_result = compute_bilateral_grid_tv_loss(bilateral_grid_, params_.optimization);

@@ -129,12 +129,12 @@ namespace gs::training {
             const SplatData& splatData,
             const param::OptimizationParameters& opt_params);
 
-        std::expected<torch::Tensor, std::string> compute_scale_reg_loss(
-            const SplatData& splatData,
+        std::expected<float, std::string> compute_scale_reg_loss(
+            SplatData& splatData,
             const param::OptimizationParameters& opt_params);
 
-        std::expected<torch::Tensor, std::string> compute_opacity_reg_loss(
-            const SplatData& splatData,
+        std::expected<float, std::string> compute_opacity_reg_loss(
+            SplatData& splatData,
             const param::OptimizationParameters& opt_params);
 
         std::expected<torch::Tensor, std::string> compute_bilateral_grid_tv_loss(

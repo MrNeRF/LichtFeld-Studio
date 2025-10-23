@@ -17,6 +17,7 @@ set(TEST_SOURCES
 
 # Check if new test files exist and add them
 set(OPTIONAL_TEST_FILES
+    test_regularization.cpp
     test_tensor_basic.cpp
     test_tensor_ops.cpp
     test_tensor_memory.cpp
