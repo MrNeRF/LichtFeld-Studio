@@ -357,7 +357,7 @@ namespace lfs::core::tensor_ops {
         auto mask_begin = thrust::make_transform_iterator(begin, ops::extract_mask_op());
 
         thrust::copy_if(thrust::cuda::par.on(stream),
-                        transform_begin, transform_end, mask_begin, output_ptr, thrust::identity<bool>());
+                        transform_begin, transform_end, mask_begin, output_ptr, [] __device__(bool x) { return x; });
     }
 
     __global__ void masked_scatter_compact_kernel(float* data, const unsigned char* mask,
