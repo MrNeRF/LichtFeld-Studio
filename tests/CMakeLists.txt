@@ -18,6 +18,8 @@ set(TEST_SOURCES
 # Check if new test files exist and add them
 set(OPTIONAL_TEST_FILES
     test_regularization.cpp
+    test_rasterization_equivalence.cpp
+    test_render_modes.cpp
     test_tensor_basic.cpp
     test_tensor_ops.cpp
     test_tensor_memory.cpp
@@ -50,6 +52,7 @@ set(OPTIONAL_TEST_FILES
     test_tensor_move.cpp
     test_mcmc.cpp
     test_loader_comparison.cpp  # Comprehensive comparison between old and new loaders
+    test_rasterization_equivalence.cpp  # Test equivalence between fused and multi-step rasterization
     test_tensor_benchmark.cpp
     test_memory_pool_benchmark.cpp  # benchmarks CudaMemoryPool (now internal)
     test_broadcast_benchmark.cpp

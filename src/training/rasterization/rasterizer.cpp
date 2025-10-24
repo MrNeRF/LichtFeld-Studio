@@ -11,37 +11,6 @@ namespace gs::training {
     using torch::indexing::None;
     using torch::indexing::Slice;
 
-    inline torch::Tensor spherical_harmonics(
-        int sh_degree,
-        const torch::Tensor& dirs,
-        const torch::Tensor& coeffs,
-        const torch::Tensor& masks = {}) {
-        // Validate inputs
-        TORCH_CHECK((sh_degree + 1) * (sh_degree + 1) <= coeffs.size(-2),
-                    "coeffs K dimension must be at least ", (sh_degree + 1) * (sh_degree + 1),
-                    ", got ", coeffs.size(-2));
-        TORCH_CHECK(dirs.sizes().slice(0, dirs.dim() - 1) == coeffs.sizes().slice(0, coeffs.dim() - 2),
-                    "dirs and coeffs batch dimensions must match");
-        TORCH_CHECK(dirs.size(-1) == 3, "dirs last dimension must be 3, got ", dirs.size(-1));
-        TORCH_CHECK(coeffs.size(-1) == 3, "coeffs last dimension must be 3, got ", coeffs.size(-1));
-
-        if (masks.defined()) {
-            TORCH_CHECK(masks.sizes() == dirs.sizes().slice(0, dirs.dim() - 1),
-                        "masks shape must match dirs shape without last dimension");
-        }
-
-        // Create sh_degree tensor
-        auto sh_degree_tensor = torch::tensor({sh_degree},
-                                              torch::TensorOptions().dtype(torch::kInt32).device(dirs.device()));
-
-        // Call the autograd function
-        return SphericalHarmonicsFunction::apply(
-            sh_degree_tensor,
-            dirs.contiguous(),
-            coeffs.contiguous(),
-            masks.defined() ? masks.contiguous() : masks)[0];
-    }
-
     // Main render function
     RenderOutput rasterize(
         Camera& viewpoint_camera,
@@ -150,161 +119,51 @@ namespace gs::training {
             tangential_distortion = tangential_distortion_val;
         }
 
-        // Step 1: Projection
-        torch::Tensor radii;
-        torch::Tensor means2d;
-        torch::Tensor depths;
-        torch::Tensor conics;
-        torch::Tensor compensations;
-
-        auto proj_settings = GUTProjectionSettings{
+        // Use fully fused rasterization with SH evaluation
+        // This combines: projection + SH + tile intersection + rasterization in one call
+        // Currently only supports RGB rendering; depth modes to be added
+        auto fused_settings = FusedRasterizationSettings{
             image_width,
             image_height,
+            tile_size,
             eps2d,
             near_plane,
             far_plane,
             radius_clip,
             scaling_modifier,
-            viewpoint_camera.camera_model_type()};
-        auto proj_outputs = fully_fused_projection_with_ut(
+            calc_compensations,
+            viewpoint_camera.camera_model_type(),
+            render_mode};
+
+        auto ut_params = UnscentedTransformParameters{};
+
+        auto fused_outputs = FusedRasterizationWithSHFunction::apply(
             means3D,
             rotations,
             scales,
             opacities,
+            sh_coeffs,
+            sh_degree,
+            prepared_bg_color.defined() ? prepared_bg_color : torch::tensor({0.0f, 0.0f, 0.0f}, means3D.options()),
+            std::nullopt,  // masks
             viewmat,
             K,
             radial_distortion,
             tangential_distortion,
-            std::nullopt,
-            proj_settings,
-            UnscentedTransformParameters());
+            std::nullopt,  // thin_prism_coeffs
+            fused_settings,
+            ut_params);
 
-        radii = proj_outputs[0];
-        means2d = proj_outputs[1];
-        depths = proj_outputs[2];
-        conics = proj_outputs[3];
-        compensations = proj_outputs[4];
+        auto rendered_image = fused_outputs[0];  // [1, H, W, channels]
+        auto rendered_alpha = fused_outputs[1];  // [1, H, W, 1]
+        auto radii = fused_outputs[2];           // [C, N, 2]
+        auto means2d_with_grad = fused_outputs[3]; // [C, N, 2]
+        auto depths = fused_outputs[4];          // [C, N]
 
-        // Create means2d with gradient tracking for backward compatibility
-        auto means2d_with_grad = means2d.contiguous();
+        // The fused function already computed all intermediate values - no need to recompute!
+        means2d_with_grad = means2d_with_grad.contiguous();
         means2d_with_grad.set_requires_grad(true);
         means2d_with_grad.retain_grad();
-
-        // Step 2: Compute colors from SH
-        // First, compute camera position from inverse viewmat
-        auto viewmat_inv = torch::inverse(viewmat);
-        auto campos = viewmat_inv.index({Slice(), Slice(None, 3), 3}); // [C, 3]
-
-        // Compute directions from camera to each Gaussian
-        auto dirs = means3D.unsqueeze(0) - campos.unsqueeze(1); // [C, N, 3]
-
-        // Create masks based on radii
-        auto masks = (radii > 0).all(-1); // [C, N]
-
-        // The Python code broadcasts colors from [N, K, 3] to [C, N, K, 3] if needed
-        auto shs = sh_coeffs.unsqueeze(0); // [1, N, K, 3]
-
-        // Now call spherical harmonics with proper directions
-        auto colors = spherical_harmonics(sh_degree, dirs, shs, masks); // [C, N, 3]
-
-        // Apply the SH offset and clamping for rendering (shift from [-0.5, 0.5] to [0, 1])
-        colors = torch::clamp_min(colors + 0.5f, 0.0f);
-
-        // Step 3: Handle depth based on render mode
-        torch::Tensor render_colors;
-        torch::Tensor final_bg;
-
-        switch (render_mode) {
-        case RenderMode::RGB:
-            render_colors = colors;
-            final_bg = prepared_bg_color;
-            break;
-
-        case RenderMode::D:
-        case RenderMode::ED:
-            render_colors = depths.unsqueeze(-1); // [C, N, 1]
-            if (prepared_bg_color.defined()) {
-                final_bg = torch::zeros({1, 1}, prepared_bg_color.options());
-            } else {
-                final_bg = torch::Tensor(); // Keep undefined
-            }
-            break;
-
-        case RenderMode::RGB_D:
-        case RenderMode::RGB_ED:
-            // Concatenate colors and depths
-            render_colors = torch::cat({colors, depths.unsqueeze(-1)}, -1); // [C, N, 4]
-            if (prepared_bg_color.defined()) {
-                final_bg = torch::cat({prepared_bg_color, torch::zeros({1, 1}, prepared_bg_color.options())}, -1);
-            } else {
-                final_bg = torch::Tensor(); // Keep undefined
-            }
-            break;
-        }
-
-        if (!final_bg.defined()) {
-            // Create empty tensor on CUDA - same pattern as compensations in projection
-            final_bg = at::empty({0}, colors.options().dtype(torch::kFloat32));
-        }
-
-        // Step 4: Apply opacity with compensations
-        torch::Tensor final_opacities;
-        if (calc_compensations && compensations.defined() && compensations.numel() > 0) {
-            final_opacities = opacities.unsqueeze(0) * compensations;
-        } else {
-            final_opacities = opacities.unsqueeze(0);
-        }
-        TORCH_CHECK(final_opacities.is_cuda(), "final_opacities must be on CUDA");
-
-        // Step 5: Tile intersection
-        const int tile_width = (image_width + tile_size - 1) / tile_size;
-        const int tile_height = (image_height + tile_size - 1) / tile_size;
-
-        const auto isect_results = gsplat::intersect_tile(
-            means2d_with_grad, radii, depths, {}, {},
-            1, tile_size, tile_width, tile_height,
-            true);
-
-        const auto tiles_per_gauss = std::get<0>(isect_results);
-        const auto isect_ids = std::get<1>(isect_results);
-        const auto flatten_ids = std::get<2>(isect_results);
-
-        auto isect_offsets = gsplat::intersect_offset(
-            isect_ids, 1, tile_width, tile_height);
-        isect_offsets = isect_offsets.reshape({1, tile_height, tile_width});
-
-        TORCH_CHECK(tiles_per_gauss.is_cuda(), "tiles_per_gauss must be on CUDA");
-        TORCH_CHECK(isect_ids.is_cuda(), "isect_ids must be on CUDA");
-        TORCH_CHECK(flatten_ids.is_cuda(), "flatten_ids must be on CUDA");
-        TORCH_CHECK(isect_offsets.is_cuda(), "isect_offsets must be on CUDA");
-
-        // Step 6: Rasterization
-        auto raster_settings = GUTRasterizationSettings{
-            image_width,
-            image_height,
-            tile_size,
-            scaling_modifier,
-            viewpoint_camera.camera_model_type()};
-        auto ut_params = UnscentedTransformParameters{};
-        auto raster_outputs = GUTRasterizationFunction::apply(
-            means3D,
-            rotations,
-            scales,
-            render_colors,
-            final_opacities,
-            final_bg,
-            std::nullopt,
-            viewmat,
-            K,
-            radial_distortion,
-            tangential_distortion,
-            std::nullopt, // thin_prism_coeffs
-            isect_offsets,
-            flatten_ids,
-            raster_settings,
-            ut_params);
-        auto rendered_image = raster_outputs[0];
-        auto rendered_alpha = raster_outputs[1];
 
         // Step 7: Post-process based on render mode
         torch::Tensor final_image, final_depth;
