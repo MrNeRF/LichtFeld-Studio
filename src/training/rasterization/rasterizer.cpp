@@ -80,61 +80,6 @@ namespace gs::training {
         auto sh_coeffs = gaussian_model.get_shs();
         const int sh_degree = gaussian_model.get_active_sh_degree();
 
-        // Apply bounding box filtering if provided
-        if (bounding_box != nullptr) {
-            torch::Tensor inside_indices;
-
-            // Convert GLM vectors to torch tensors
-            auto min_bounds = torch::tensor({bounding_box->getMinBounds().x,
-                                             bounding_box->getMinBounds().y,
-                                             bounding_box->getMinBounds().z},
-                                            torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
-            auto max_bounds = torch::tensor({bounding_box->getMaxBounds().x,
-                                             bounding_box->getMaxBounds().y,
-                                             bounding_box->getMaxBounds().z},
-                                            torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
-
-            // Get the world2BBox transformation matrix
-            const glm::mat4 world2bbox = bounding_box->getworld2BBox().toMat4();
-
-            // Convert GLM matrix to torch tensor [4, 4]
-            auto world2bbox_tensor = torch::zeros(
-                {4, 4}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
-            for (int i = 0; i < 4; ++i) {
-                for (int j = 0; j < 4; ++j) {
-                    world2bbox_tensor[i][j] = world2bbox[j][i]; // GLM is column-major!
-                }
-            }
-
-            // Transform points from world space to bounding box space
-            // means3D: [N, 3] -> homogeneous: [N, 4]
-            const int N = means3D.size(0);
-            auto means3D_homogeneous = torch::cat({means3D, torch::ones({N, 1}, means3D.options())}, /*dim=*/1);
-            // [N, 4]
-
-            // Apply transformation: [N, 4] @ [4, 4]^T = [N, 4]
-            auto means3D_bbox = torch::matmul(means3D_homogeneous, world2bbox_tensor.transpose(0, 1)); // [N, 4]
-
-            // Extract the transformed 3D coordinates (ignore homogeneous coordinate)
-            auto means3D_bbox_xyz = means3D_bbox.index({Slice(), Slice(None, 3)}); // [N, 3]
-
-            // Check which points are inside the axis-aligned bounding box in bbox space
-            // Now we can use simple axis-aligned box test since the points have been transformed
-            auto greater_than_min = torch::all(means3D_bbox_xyz >= min_bounds.unsqueeze(0), /*dim=*/1); // [N]
-            auto less_than_max = torch::all(means3D_bbox_xyz <= max_bounds.unsqueeze(0), /*dim=*/1);    // [N]
-            auto inside_mask = greater_than_min & less_than_max;                                        // [N]
-
-            // Get indices of points inside the bounding box
-            inside_indices = torch::nonzero(inside_mask).squeeze(-1); // [M] where M <= N
-
-            // Filter all Gaussian parameters using the inside indices
-            means3D = means3D.index({inside_indices});
-            opacities = opacities.index({inside_indices});
-            scales = scales.index({inside_indices});
-            rotations = rotations.index({inside_indices});
-            sh_coeffs = sh_coeffs.index({inside_indices});
-        }
-
         // Validate Gaussian parameters
         const int N = static_cast<int>(means3D.size(0));
         TORCH_CHECK(means3D.dim() == 2 && means3D.size(1) == 3,
