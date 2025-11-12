@@ -98,9 +98,17 @@ RUN git clone https://github.com/microsoft/vcpkg.git ${HOME}/vcpkg && \
 RUN echo 'export VCPKG_ROOT=$HOME/vcpkg' >> $HOME/.bashrc && \
     echo 'export PATH=$VCPKG_ROOT:$PATH' >> $HOME/.bashrc
 
-RUN wget https://download.pytorch.org/libtorch/cu128/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcu128.zip && \
-    unzip libtorch-cxx11-abi-shared-with-deps-2.7.1+cu128.zip -d ${HOME} && \
-    rm libtorch-cxx11-abi-shared-with-deps-2.7.1+cu128.zip
+RUN set -eux; \
+    echo "Detected CUDA version: ${CUDA_VERSION}"; \
+    if echo "${CUDA_VERSION}" | grep -q "^13\\.0\\.0"; then \
+        echo "Installing LibTorch for CUDA 13.0.0..."; \
+        wget -q https://download.pytorch.org/libtorch/cu130/libtorch-shared-with-deps-2.9.0%2Bcu130.zip -O /tmp/libtorch.zip; \
+    else \
+        echo "Installing default LibTorch (CUDA 12.8) for CUDA ${CUDA_VERSION}..."; \
+        wget https://download.pytorch.org/libtorch/cu128/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcu128.zip -O /tmp/libtorch.zip; \
+    fi && \
+    unzip /tmp/libtorch.zip -d ${HOME} && \
+    rm /tmp/libtorch.zip
 
 RUN wget https://github.com/Kitware/CMake/releases/download/v4.0.3/cmake-4.0.3-linux-x86_64.sh && \
     chmod +x cmake-4.0.3-linux-x86_64.sh && \
@@ -108,23 +116,6 @@ RUN wget https://github.com/Kitware/CMake/releases/download/v4.0.3/cmake-4.0.3-l
     rm cmake-4.0.3-linux-x86_64.sh
 
 # Modified from https://github.com/jmhardison/dockercolorlogo
-RUN echo '#!/bin/sh' >> ${HOME}/.docker_whale && \
-    echo 'colorred="\033[31m"' >> ${HOME}/.docker_whale && \
-    echo 'colorpowder_blue="\033[1;36m"' >> ${HOME}/.docker_whale && \
-    echo 'colorblue="\033[34m"' >> ${HOME}/.docker_whale && \
-    echo 'colornormal="\033[0m"' >> ${HOME}/.docker_whale && \
-    echo 'colorwhite="\033[97m"' >> ${HOME}/.docker_whale && \
-    echo 'colorlightgrey="\033[90m"' >> ${HOME}/.docker_whale && \
-    echo '' >> ${HOME}/.docker_whale && \
-    echo 'printf "                   ${colorred} ##       ${colorlightgrey} .         \n"' >> ${HOME}/.docker_whale && \
-    echo 'printf "             ${colorred} ## ## ##      ${colorlightgrey} ==         \n"' >> ${HOME}/.docker_whale && \
-    echo 'printf "           ${colorred}## ## ## ##      ${colorlightgrey}===         \n"' >> ${HOME}/.docker_whale && \
-    echo 'printf "       /\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\\\___/ ===       \n"' >> ${HOME}/.docker_whale && \
-    echo 'printf "  ${colorblue}~~~ ${colorlightgrey}{${colorblue}~~ ~~~~ ~~~ ~~~~ ~~ ~ ${colorlightgrey}/  ===- ${colorblue}~~~${colorlightgrey}\n"' >> ${HOME}/.docker_whale && \
-    echo 'printf "       \\\______${colorwhite} o ${colorlightgrey}         __/           \n"' >> ${HOME}/.docker_whale && \
-    echo 'printf "         \\\    \\\        __/            \n"' >> ${HOME}/.docker_whale && \
-    echo 'printf "          \\\____\\\______/               \n"' >> ${HOME}/.docker_whale && \
-    echo 'printf "\n${colorwhite}Welcome to gaussian-splatting-cuda dev container!${colornormal}\n"' >> ${HOME}/.docker_whale && \
-    echo "bash \$HOME/.docker_whale" >> ${HOME}/.bashrc
+RUN echo 'echo "\nWelcome to gaussian-splatting-cuda dev container!\n"' >> ${HOME}/.docker_whale && \
     
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

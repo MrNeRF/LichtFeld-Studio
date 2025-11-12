@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-echo "[ENTRYPOINT] Starting gaussian-splatting-cuda container..."
+echo "[ENTRYPOINT] Starting LicthFeld-Studio container..."
 
 # Define variables
-PROJECT_DIR="/home/${USER}/projects/gaussian-splatting-cuda"
+PROJECT_DIR="/home/${USER}/projects/LichtFeld-Studio"
 TORCH_SRC="/home/${USER}/libtorch"
 TORCH_DEST="${PROJECT_DIR}/external/libtorch"
 

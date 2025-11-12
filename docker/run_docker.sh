@@ -12,7 +12,7 @@ usage() {
 }
 
 # --- Default: auto-detect CUDA version
-detected_cuda=$(nvcc --version 2>/dev/null | grep -oP 'release \K[0-9]+\.[0-9]+' | head -1)
+detected_cuda=$(nvidia-smi | grep -oP 'CUDA Version: \K[0-9]+\.[0-9]+')
 if [[ -n "$detected_cuda" ]]; then
     CUDA_VERSION="${detected_cuda}.0" # Needed because nvcc returns version without patch
 else
@@ -76,5 +76,5 @@ if [ "$COMPOSEUP" = true ]; then
         echo "Docker compose up failed!"
         exit 1
     fi
-    docker compose -f $COMPOSE_FILE exec gs-cuda bash
+    docker compose -f $COMPOSE_FILE exec lichtfeld-studio bash
 fi

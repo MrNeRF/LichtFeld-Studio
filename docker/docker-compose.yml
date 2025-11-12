@@ -1,6 +1,6 @@
 services:
-  gs-cuda:
-    container_name: gs-cuda
+  lichtfeld-studio:
+    container_name: lichtfeld-studio
     build:
       context: ../
       dockerfile: ./docker/Dockerfile
@@ -11,11 +11,11 @@ services:
         HOSTNAME: ${HOSTNAME}
         USER_PASSWORD: ${USER_PASSWORD}
         CUDA_VERSION: ${CUDA_VERSION}
-    image: gs-cuda
+    image: lichtfeld-studio:latest
     network_mode: "host"
-    working_dir: /home/${USERNAME}
-    cpus: 8
-    mem_limit: 16g
+    working_dir: /home/${USERNAME}/projects/LichtFeld-Studio
+    cpus: 16
+    mem_limit: 24g
     ipc: host
     pid: host
     privileged: true
@@ -33,7 +33,7 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
     volumes:
-      - ../:/home/${USERNAME}/projects/gaussian-splatting-cuda
+      - ../:/home/${USERNAME}/projects/LichtFeld-Studio
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ${HOME}/.Xauthority:/home/${USERNAME}/.Xauthority:rw
       - ${HOME}/.ssh:/home/${USERNAME}/.ssh:ro
