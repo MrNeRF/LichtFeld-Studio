@@ -14,6 +14,7 @@
 #include <chrono>
 #include <filesystem>
 #include <format>
+#include <system_error>
 
 namespace lfs::loader {
 
@@ -99,10 +100,29 @@ namespace lfs::loader {
         std::string actual_images_folder = options.images_folder;
         std::filesystem::path image_dir = path / actual_images_folder;
 
+        auto is_dataset_root = [&](const std::filesystem::path& candidate) {
+            if (candidate.empty()) {
+                return false;
+            }
+
+            std::error_code ec;
+            bool equivalent = std::filesystem::equivalent(candidate, path, ec);
+            if (!ec) {
+                return equivalent;
+            }
+
+            return candidate.lexically_normal() == path.lexically_normal();
+        };
+
         // If specified folder doesn't exist, check for flat structure
         if (!std::filesystem::exists(image_dir)) {
-            bool is_flat_structure = (!cameras_txt.empty() && cameras_txt.parent_path() == path) ||
-                                     (!cameras_bin.empty() && cameras_bin.parent_path() == path);
+            const auto cameras_txt_parent =
+                cameras_txt.empty() ? std::filesystem::path{} : cameras_txt.parent_path();
+            const auto cameras_bin_parent =
+                cameras_bin.empty() ? std::filesystem::path{} : cameras_bin.parent_path();
+
+            bool is_flat_structure = is_dataset_root(cameras_txt_parent) ||
+                                     is_dataset_root(cameras_bin_parent);
 
             if (is_flat_structure) {
                 bool has_images_in_root = false;
