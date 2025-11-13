@@ -116,6 +116,23 @@ RUN wget https://github.com/Kitware/CMake/releases/download/v4.0.3/cmake-4.0.3-l
     rm cmake-4.0.3-linux-x86_64.sh
 
 # Modified from https://github.com/jmhardison/dockercolorlogo
-RUN echo 'echo "\nWelcome to gaussian-splatting-cuda dev container!\n"' >> ${HOME}/.docker_whale && \
+RUN echo '#!/bin/sh' >> ${HOME}/.docker_whale && \
+    echo 'colorred="\033[31m"' >> ${HOME}/.docker_whale && \
+    echo 'colorpowder_blue="\033[1;36m"' >> ${HOME}/.docker_whale && \
+    echo 'colorblue="\033[34m"' >> ${HOME}/.docker_whale && \
+    echo 'colornormal="\033[0m"' >> ${HOME}/.docker_whale && \
+    echo 'colorwhite="\033[97m"' >> ${HOME}/.docker_whale && \
+    echo 'colorlightgrey="\033[90m"' >> ${HOME}/.docker_whale && \
+    echo '' >> ${HOME}/.docker_whale && \
+    echo 'printf "                   ${colorred} ##       ${colorlightgrey} .         \n"' >> ${HOME}/.docker_whale && \
+    echo 'printf "             ${colorred} ## ## ##      ${colorlightgrey} ==         \n"' >> ${HOME}/.docker_whale && \
+    echo 'printf "           ${colorred}## ## ## ##      ${colorlightgrey}===         \n"' >> ${HOME}/.docker_whale && \
+    echo 'printf "       /\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\"\\\___/ ===       \n"' >> ${HOME}/.docker_whale && \
+    echo 'printf "  ${colorblue}~~~ ${colorlightgrey}{${colorblue}~~ ~~~~ ~~~ ~~~~ ~~ ~ ${colorlightgrey}/  ===- ${colorblue}~~~${colorlightgrey}\n"' >> ${HOME}/.docker_whale && \
+    echo 'printf "       \\\______${colorwhite} o ${colorlightgrey}         __/           \n"' >> ${HOME}/.docker_whale && \
+    echo 'printf "         \\\    \\\        __/            \n"' >> ${HOME}/.docker_whale && \
+    echo 'printf "          \\\____\\\______/               \n"' >> ${HOME}/.docker_whale && \
+    echo 'printf "\n${colorwhite}Welcome to LichtFeld-Studio dev container!${colornormal}\n"' >> ${HOME}/.docker_whale && \
+    echo "bash \$HOME/.docker_whale" >> ${HOME}/.bashrc
     
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
