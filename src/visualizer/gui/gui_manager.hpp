@@ -84,6 +84,10 @@ namespace gs {
             float current_speed_;
             float max_speed_;
 
+            // Dataset load error popup state
+            bool dataset_error_popup_pending_ = false;
+            std::string dataset_error_message_;
+
             // Viewport region tracking
             ImVec2 viewport_pos_;
             ImVec2 viewport_size_;
@@ -93,6 +97,9 @@ namespace gs {
             // Method declarations
             void renderSpeedOverlay();
             void showSpeedOverlay(float current_speed, float max_speed);
+            void renderDatasetErrorPopup();
+            void showDatasetErrorPopup(const std::string& message);
+
 
             std::unique_ptr<SaveProjectBrowser> save_project_browser_;
             std::unique_ptr<MenuBar> menu_bar_;

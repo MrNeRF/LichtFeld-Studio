@@ -28,7 +28,19 @@ namespace gs::visualizer {
 
     void DataLoadingService::handleLoadFileCommand(bool is_dataset, const std::filesystem::path& path) {
         if (is_dataset) {
-            loadDataset(path);
+            // Prevent GUI crash on unsupported dataset formats
+            try {
+                loadDataset(path);
+            } catch (const std::exception& e) {
+                events::state::DatasetLoadCompleted{
+                    .path = path,
+                    .success = false,
+                    .error = std::string(e.what()),
+                    .num_images = 0,
+                    .num_points = 0}
+                    .emit();
+            }
+
         } else {
             scene_manager_->changeContentType(SceneManager::ContentType::SplatFiles);
             // Determine file type and load appropriately
