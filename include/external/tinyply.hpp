@@ -49,7 +49,7 @@ namespace tinyply {
     };
 
     struct PropertyInfo {
-        PropertyInfo(){};
+        PropertyInfo() {};
         PropertyInfo(int stride, std::string str)
             : stride(stride),
               str(str) {}
@@ -77,7 +77,7 @@ namespace tinyply {
         size_t size{0};
 
     public:
-        Buffer(){};
+        Buffer() {};
         Buffer(const size_t size) : data(new uint8_t[size], delete_array()),
                                     size(size) { alias = data.get(); }   // allocating
         Buffer(const uint8_t* ptr) : alias(const_cast<uint8_t*>(ptr)) {} // non-allocating, todo: set size?

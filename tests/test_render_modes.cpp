@@ -4,12 +4,12 @@
 #include <gtest/gtest.h>
 #include <torch/torch.h>
 
-#include "rasterization/rasterizer.hpp"
 #include "core/camera.hpp"
 #include "core/splat_data.hpp"
+#include "rasterization/rasterizer.hpp"
 
 constexpr int RANDOM_SEED = 42;
-constexpr float TOLERANCE = 1e-3f;  // Slightly relaxed tolerance for numerical differences
+constexpr float TOLERANCE = 1e-3f; // Slightly relaxed tolerance for numerical differences
 
 class RenderModeTest : public ::testing::Test {
 protected:
@@ -21,7 +21,7 @@ protected:
 
     void setupTestData() {
         // Camera parameters
-        image_width_ = 128;  // Smaller for faster tests
+        image_width_ = 128; // Smaller for faster tests
         image_height_ = 128;
         fx_ = 100.0f;
         fy_ = 100.0f;
@@ -29,7 +29,7 @@ protected:
         cy_ = 64.0f;
 
         // Number of Gaussians
-        num_gaussians_ = 50;  // Smaller for faster tests
+        num_gaussians_ = 50; // Smaller for faster tests
 
         auto device = torch::kCUDA;
 
@@ -64,8 +64,7 @@ protected:
             radial_dist, tangential_dist,
             gsplat::CameraModelType::PINHOLE,
             "test_camera", "",
-            image_width_, image_height_, 0
-        );
+            image_width_, image_height_, 0);
     }
 
     bool tensorsAlmostEqual(const torch::Tensor& a, const torch::Tensor& b, float tolerance = TOLERANCE) {
@@ -115,8 +114,7 @@ TEST_F(RenderModeTest, RGBMode) {
         *camera_, splat_data, bg_color_,
         1.0f, false, false,
         gs::training::RenderMode::RGB,
-        nullptr
-    );
+        nullptr);
 
     ASSERT_TRUE(output.image.defined()) << "RGB image should be defined";
     ASSERT_EQ(output.image.size(0), 3) << "RGB should have 3 channels";
@@ -137,8 +135,7 @@ TEST_F(RenderModeTest, DMode) {
         *camera_, splat_data, bg_color_,
         1.0f, false, false,
         gs::training::RenderMode::D,
-        nullptr
-    );
+        nullptr);
 
     ASSERT_FALSE(output.image.defined()) << "RGB image should not be defined in D mode";
     ASSERT_TRUE(output.depth.defined()) << "Depth should be defined in D mode";
@@ -159,8 +156,7 @@ TEST_F(RenderModeTest, EDMode) {
         *camera_, splat_data, bg_color_,
         1.0f, false, false,
         gs::training::RenderMode::ED,
-        nullptr
-    );
+        nullptr);
 
     ASSERT_FALSE(output.image.defined()) << "RGB image should not be defined in ED mode";
     ASSERT_TRUE(output.depth.defined()) << "Depth should be defined in ED mode";
@@ -179,8 +175,7 @@ TEST_F(RenderModeTest, RGB_DMode) {
         *camera_, splat_data, bg_color_,
         1.0f, false, false,
         gs::training::RenderMode::RGB_D,
-        nullptr
-    );
+        nullptr);
 
     ASSERT_TRUE(output.image.defined()) << "RGB image should be defined in RGB_D mode";
     ASSERT_TRUE(output.depth.defined()) << "Depth should be defined in RGB_D mode";
@@ -200,8 +195,7 @@ TEST_F(RenderModeTest, RGB_EDMode) {
         *camera_, splat_data, bg_color_,
         1.0f, false, false,
         gs::training::RenderMode::RGB_ED,
-        nullptr
-    );
+        nullptr);
 
     ASSERT_TRUE(output.image.defined()) << "RGB image should be defined in RGB_ED mode";
     ASSERT_TRUE(output.depth.defined()) << "Depth should be defined in RGB_ED mode";

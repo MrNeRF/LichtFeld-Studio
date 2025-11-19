@@ -145,20 +145,20 @@ namespace gs::training {
             sh_coeffs,
             sh_degree,
             prepared_bg_color.defined() ? prepared_bg_color : torch::tensor({0.0f, 0.0f, 0.0f}, means3D.options()),
-            std::nullopt,  // masks
+            std::nullopt, // masks
             viewmat,
             K,
             radial_distortion,
             tangential_distortion,
-            std::nullopt,  // thin_prism_coeffs
+            std::nullopt, // thin_prism_coeffs
             fused_settings,
             ut_params);
 
-        auto rendered_image = fused_outputs[0];  // [1, H, W, channels]
-        auto rendered_alpha = fused_outputs[1];  // [1, H, W, 1]
-        auto radii = fused_outputs[2];           // [C, N, 2]
+        auto rendered_image = fused_outputs[0];    // [1, H, W, channels]
+        auto rendered_alpha = fused_outputs[1];    // [1, H, W, 1]
+        auto radii = fused_outputs[2];             // [C, N, 2]
         auto means2d_with_grad = fused_outputs[3]; // [C, N, 2]
-        auto depths = fused_outputs[4];          // [C, N]
+        auto depths = fused_outputs[4];            // [C, N]
 
         // The fused function already computed all intermediate values - no need to recompute!
         means2d_with_grad = means2d_with_grad.contiguous();

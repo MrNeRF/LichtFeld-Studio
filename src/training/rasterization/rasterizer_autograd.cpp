@@ -46,7 +46,7 @@ namespace gs::training {
             settings.height,
             settings.tile_size,
             viewmat.contiguous(),
-            std::nullopt,  // viewmats1 (rolling shutter)
+            std::nullopt, // viewmats1 (rolling shutter)
             K.contiguous(),
             settings.camera_model,
             settings.eps2d,
@@ -55,7 +55,7 @@ namespace gs::training {
             settings.radius_clip,
             settings.scaling_modifier,
             settings.calc_compensations,
-            static_cast<int>(settings.render_mode),  // Pass render_mode as int
+            static_cast<int>(settings.render_mode), // Pass render_mode as int
             ut_params,
             ShutterType::GLOBAL,
             radial_coeffs,
@@ -71,7 +71,7 @@ namespace gs::training {
         auto tile_offsets = std::get<6>(results).contiguous();
         auto flatten_ids = std::get<7>(results).contiguous();
         auto last_ids = std::get<8>(results).contiguous();
-        auto compensations = std::get<9>(results);  // May be empty
+        auto compensations = std::get<9>(results); // May be empty
 
         // Save for backward - save all intermediate values
         ctx->save_for_backward({means, quats, scales, opacities, sh_coeffs,
@@ -168,7 +168,7 @@ namespace gs::training {
             height,
             tile_size,
             viewmat,
-            std::nullopt,  // viewmats1
+            std::nullopt, // viewmats1
             K,
             camera_model,
             eps2d,
@@ -177,7 +177,7 @@ namespace gs::training {
             radius_clip,
             scaling_modifier,
             calc_compensations,
-            static_cast<int>(render_mode),  // Pass render_mode as int
+            static_cast<int>(render_mode), // Pass render_mode as int
             ut_params,
             ShutterType::GLOBAL,
             radial_coeffs,

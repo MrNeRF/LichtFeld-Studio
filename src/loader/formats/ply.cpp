@@ -153,7 +153,7 @@ namespace gs::loader {
                 return false;
             }
 
-            struct stat st {};
+            struct stat st{};
             if (fstat(fd, &st) < 0) {
                 LOG_ERROR("Failed to stat file: {}", filepath.string());
                 return false;

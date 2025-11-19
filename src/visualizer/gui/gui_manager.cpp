@@ -729,7 +729,6 @@ namespace gs::gui {
         dataset_error_popup_pending_ = true;
     }
 
-
     void GuiManager::setupEventHandlers() {
         using namespace events;
 
@@ -755,7 +754,6 @@ namespace gs::gui {
                 showDatasetErrorPopup(message);
             }
         });
-
     }
 
     void GuiManager::applyDefaultStyle() {

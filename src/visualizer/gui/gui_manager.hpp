@@ -100,7 +100,6 @@ namespace gs {
             void renderDatasetErrorPopup();
             void showDatasetErrorPopup(const std::string& message);
 
-
             std::unique_ptr<SaveProjectBrowser> save_project_browser_;
             std::unique_ptr<MenuBar> menu_bar_;
         };

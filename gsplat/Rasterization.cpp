@@ -265,17 +265,17 @@ namespace gsplat {
     ////////////////////////////////////////////////////
 
     std::tuple<
-        at::Tensor,  // render_colors
-        at::Tensor,  // render_alphas
-        at::Tensor,  // radii
-        at::Tensor,  // means2d
-        at::Tensor,  // depths
-        at::Tensor,  // colors
-        at::Tensor,  // tile_offsets
-        at::Tensor,  // flatten_ids
-        at::Tensor,  // last_ids
-        at::Tensor   // compensations
-    >
+        at::Tensor, // render_colors
+        at::Tensor, // render_alphas
+        at::Tensor, // radii
+        at::Tensor, // means2d
+        at::Tensor, // depths
+        at::Tensor, // colors
+        at::Tensor, // tile_offsets
+        at::Tensor, // flatten_ids
+        at::Tensor, // last_ids
+        at::Tensor  // compensations
+        >
     rasterize_from_world_with_sh_fwd(
         // Gaussian parameters
         const at::Tensor means,                     // [N, 3]
@@ -347,15 +347,15 @@ namespace gsplat {
             tangential_coeffs,
             thin_prism_coeffs);
 
-        auto radii = std::get<0>(proj_results);           // [C, N, 2]
-        auto means2d = std::get<1>(proj_results);         // [C, N, 2]
-        auto depths = std::get<2>(proj_results);          // [C, N]
-        auto conics = std::get<3>(proj_results);          // [C, N, 3]
-        auto compensations = std::get<4>(proj_results);   // [C, N] or empty
+        auto radii = std::get<0>(proj_results);         // [C, N, 2]
+        auto means2d = std::get<1>(proj_results);       // [C, N, 2]
+        auto depths = std::get<2>(proj_results);        // [C, N]
+        auto conics = std::get<3>(proj_results);        // [C, N, 3]
+        auto compensations = std::get<4>(proj_results); // [C, N] or empty
 
         // Step 2: Compute colors from Spherical Harmonics
         // Compute camera positions from inverse viewmats
-        auto viewmat_inv = at::inverse(viewmats0);  // [C, 4, 4]
+        auto viewmat_inv = at::inverse(viewmats0);                                               // [C, 4, 4]
         auto campos = viewmat_inv.index({"...", at::indexing::Slice(at::indexing::None, 3), 3}); // [C, 3]
 
         // Compute directions from camera to each Gaussian
@@ -383,7 +383,7 @@ namespace gsplat {
             } else {
                 // RGB + depth: concatenate RGB and depth
                 // depths is [C, N], need to add a channel dimension
-                auto depth_channel = depths.unsqueeze(-1); // [C, N, 1]
+                auto depth_channel = depths.unsqueeze(-1);         // [C, N, 1]
                 colors = at::cat({rgb_colors, depth_channel}, -1); // [C, N, 4]
             }
         } else {
@@ -412,9 +412,9 @@ namespace gsplat {
 
         auto isect_results = intersect_tile(
             means2d, radii, depths,
-            at::nullopt, at::nullopt,  // camera_ids, gaussian_ids
+            at::nullopt, at::nullopt, // camera_ids, gaussian_ids
             C, tile_size, tile_width, tile_height,
-            true);  // sort
+            true); // sort
 
         auto tiles_per_gauss = std::get<0>(isect_results);
         auto isect_ids = std::get<1>(isect_results);
@@ -462,8 +462,7 @@ namespace gsplat {
             isect_offsets,
             flatten_ids,
             last_ids,
-            compensations
-        );
+            compensations);
     }
 
     std::tuple<at::Tensor, at::Tensor, at::Tensor, at::Tensor, at::Tensor>
@@ -584,7 +583,7 @@ namespace gsplat {
             // Extract RGB gradients (first 3 channels)
             at::Tensor v_rgb_colors;
             if (render_mode == 0) {
-                v_rgb_colors = v_colors;  // All channels are RGB
+                v_rgb_colors = v_colors; // All channels are RGB
             } else {
                 // RGB + depth: extract RGB channels [C, N, 3]
                 v_rgb_colors = v_colors.index({"...", at::indexing::Slice(at::indexing::None, 3)});
@@ -593,9 +592,9 @@ namespace gsplat {
             // Recompute camera positions and directions
             auto viewmat_inv = at::inverse(viewmats0);
             auto campos = viewmat_inv.index({"...", at::indexing::Slice(at::indexing::None, 3), 3}); // [C, 3]
-            auto dirs = means.unsqueeze(0) - campos.unsqueeze(1); // [C, N, 3]
-            auto radii_masks = (radii > 0).all(-1); // [C, N]
-            auto shs = sh_coeffs.unsqueeze(0); // [1, N, K, 3]
+            auto dirs = means.unsqueeze(0) - campos.unsqueeze(1);                                    // [C, N, 3]
+            auto radii_masks = (radii > 0).all(-1);                                                  // [C, N]
+            auto shs = sh_coeffs.unsqueeze(0);                                                       // [1, N, K, 3]
 
             // Get RGB colors from saved colors
             at::Tensor rgb_colors;
@@ -617,11 +616,11 @@ namespace gsplat {
                 shs.reshape({-1, K, 3}),
                 radii_masks.reshape({-1}),
                 v_colors_pre_clamp.reshape({-1, 3}),
-                false  // don't compute v_dirs for now
+                false // don't compute v_dirs for now
             );
 
-            v_sh_coeffs = std::get<0>(sh_grads);  // Reshape back
-            v_sh_coeffs = v_sh_coeffs.reshape(shs.sizes()).sum(0);  // Sum over cameras
+            v_sh_coeffs = std::get<0>(sh_grads);                   // Reshape back
+            v_sh_coeffs = v_sh_coeffs.reshape(shs.sizes()).sum(0); // Sum over cameras
         } else {
             // Depth only modes: no SH gradients
             const uint32_t N = means.size(0);
@@ -637,8 +636,7 @@ namespace gsplat {
             v_quats_raster,
             v_scales_raster,
             v_opacities_raster,
-            v_sh_coeffs
-        );
+            v_sh_coeffs);
     }
 
 } // namespace gsplat

@@ -23,11 +23,11 @@ namespace lfs::core {
         __VA_ARGS__                                        \
                                                            \
         void emit() const {                                \
-            ::lfs::core::event::bus().emit(*this);                \
+            ::lfs::core::event::bus().emit(*this);         \
         }                                                  \
                                                            \
         static auto when(auto&& handler) {                 \
-            return ::lfs::core::event::bus().when<Name>(          \
+            return ::lfs::core::event::bus().when<Name>(   \
                 std::forward<decltype(handler)>(handler)); \
         }                                                  \
     }

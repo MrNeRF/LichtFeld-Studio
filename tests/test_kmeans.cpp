@@ -195,28 +195,19 @@ TEST_F(KMeansTest, FewerPointsThanClusters) {
 TEST_F(KMeansTest, WrongDimensionality) {
     auto data_3d = torch::rand({10, 5, 3}, torch::kCUDA);
 
-    EXPECT_THROW({
-        gs::cuda::kmeans(data_3d, 3, 10, 1e-4f);
-    },
-                 c10::Error);
+    EXPECT_THROW({ gs::cuda::kmeans(data_3d, 3, 10, 1e-4f); }, c10::Error);
 }
 
 TEST_F(KMeansTest, CPUTensor) {
     auto data_cpu = torch::rand({100, 2});
 
-    EXPECT_THROW({
-        gs::cuda::kmeans(data_cpu, 3, 10, 1e-4f);
-    },
-                 c10::Error);
+    EXPECT_THROW({ gs::cuda::kmeans(data_cpu, 3, 10, 1e-4f); }, c10::Error);
 }
 
 TEST_F(KMeansTest, WrongDtype) {
     auto data_double = torch::rand({100, 2}, torch::kDouble).cuda();
 
-    EXPECT_THROW({
-        gs::cuda::kmeans(data_double, 3, 10, 1e-4f);
-    },
-                 c10::Error);
+    EXPECT_THROW({ gs::cuda::kmeans(data_double, 3, 10, 1e-4f); }, c10::Error);
 }
 
 // ============================================================================

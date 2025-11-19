@@ -27,13 +27,13 @@ namespace lfs::core {
     public:
         performance_color_sink() {
             // ANSI color codes
-            colors_[spdlog::level::trace] = "\033[37m";     // white
-            colors_[spdlog::level::debug] = "\033[36m";     // cyan
-            colors_[spdlog::level::info] = "\033[32m";      // green
-            colors_[spdlog::level::warn] = "\033[33m";      // yellow
-            colors_[spdlog::level::err] = "\033[31m";       // red
+            colors_[spdlog::level::trace] = "\033[37m";      // white
+            colors_[spdlog::level::debug] = "\033[36m";      // cyan
+            colors_[spdlog::level::info] = "\033[32m";       // green
+            colors_[spdlog::level::warn] = "\033[33m";       // yellow
+            colors_[spdlog::level::err] = "\033[31m";        // red
             colors_[spdlog::level::critical] = "\033[1;31m"; // bold red
-            colors_[spdlog::level::off] = "\033[0m";        // reset
+            colors_[spdlog::level::off] = "\033[0m";         // reset
 
             // Custom color for performance logs: bright magenta/purple
             perf_color_ = "\033[95m"; // bright magenta
@@ -57,8 +57,8 @@ namespace lfs::core {
             std::string_view full_path(msg.source.filename);
             auto last_slash = full_path.find_last_of("/\\");
             std::string_view filename = (last_slash != std::string_view::npos)
-                ? full_path.substr(last_slash + 1)
-                : full_path;
+                                            ? full_path.substr(last_slash + 1)
+                                            : full_path;
 
             // Check if this is a Performance log (has [PERF] prefix)
             std::string_view msg_view(msg.payload.data(), msg.payload.size());
@@ -76,18 +76,19 @@ namespace lfs::core {
                 // Format: [timestamp] [perf] file:line message
                 char time_buf[64];
                 std::snprintf(time_buf, sizeof(time_buf),
-                    "[%02d:%02d:%02d.%03d] %s[perf]%s %.*s:%d  ",
-                    tm.tm_hour,
-                    tm.tm_min,
-                    tm.tm_sec,
-                    static_cast<int>(millis),
-                    perf_color_.c_str(),
-                    reset_color_.c_str(),
-                    static_cast<int>(filename.size()),
-                    filename.data(),
-                    msg.source.line);
+                              "[%02d:%02d:%02d.%03d] %s[perf]%s %.*s:%d  ",
+                              tm.tm_hour,
+                              tm.tm_min,
+                              tm.tm_sec,
+                              static_cast<int>(millis),
+                              perf_color_.c_str(),
+                              reset_color_.c_str(),
+                              static_cast<int>(filename.size()),
+                              filename.data(),
+                              msg.source.line);
 
-                std::cout << time_buf << clean_msg << "\n" << std::flush;
+                std::cout << time_buf << clean_msg << "\n"
+                          << std::flush;
             } else {
                 // Standard formatting for non-performance logs
                 std::string level_str;
@@ -127,21 +128,22 @@ namespace lfs::core {
                 // Use snprintf for nvcc compatibility
                 char time_buf[64];
                 std::snprintf(time_buf, sizeof(time_buf),
-                    "[%02d:%02d:%02d.%03d] %s[%s]%s %.*s:%d  ",
-                    tm.tm_hour,
-                    tm.tm_min,
-                    tm.tm_sec,
-                    static_cast<int>(millis),
-                    color.c_str(),
-                    level_str.c_str(),
-                    reset_color_.c_str(),
-                    static_cast<int>(filename.size()),
-                    filename.data(),
-                    msg.source.line);
+                              "[%02d:%02d:%02d.%03d] %s[%s]%s %.*s:%d  ",
+                              tm.tm_hour,
+                              tm.tm_min,
+                              tm.tm_sec,
+                              static_cast<int>(millis),
+                              color.c_str(),
+                              level_str.c_str(),
+                              reset_color_.c_str(),
+                              static_cast<int>(filename.size()),
+                              filename.data(),
+                              msg.source.line);
 
                 std::cout << time_buf
-                    << std::string_view(msg.payload.data(), msg.payload.size())
-                    << "\n" << std::flush;
+                          << std::string_view(msg.payload.data(), msg.payload.size())
+                          << "\n"
+                          << std::flush;
             }
         }
 
@@ -252,12 +254,12 @@ namespace lfs::core {
             auto global_lvl = static_cast<LogLevel>(global_level_.load());
             if (global_lvl == LogLevel::Performance) {
                 if (level != LogLevel::Performance) {
-                    return;  // Skip non-performance logs
+                    return; // Skip non-performance logs
                 }
             } else {
                 // Standard filtering: show logs >= global_level (but not Performance unless requested)
                 if (level == LogLevel::Performance) {
-                    return;  // Performance logs only show when explicitly set
+                    return; // Performance logs only show when explicitly set
                 }
                 if (static_cast<uint8_t>(level) < global_level_) {
                     return;
@@ -362,7 +364,7 @@ namespace lfs::core {
             case LogLevel::Trace: return spdlog::level::trace;
             case LogLevel::Debug: return spdlog::level::debug;
             case LogLevel::Info: return spdlog::level::info;
-            case LogLevel::Performance: return spdlog::level::info;  // Map to info but will have custom label
+            case LogLevel::Performance: return spdlog::level::info; // Map to info but will have custom label
             case LogLevel::Warn: return spdlog::level::warn;
             case LogLevel::Error: return spdlog::level::err;
             case LogLevel::Critical: return spdlog::level::critical;

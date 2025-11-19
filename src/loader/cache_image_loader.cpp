@@ -142,7 +142,7 @@ namespace gs::loader {
         // Check if parent path exists and is valid
         if (!std::filesystem::exists(cache_base.parent_path())) {
             LOG_ERROR("Cache base path does not exist: {}. Disabling filesystem cache.",
-                     cache_base.parent_path().string());
+                      cache_base.parent_path().string());
             use_fs_cache_ = false;
             return;
         }
@@ -153,7 +153,7 @@ namespace gs::loader {
             std::filesystem::remove_all(cache_folder, ec);
             if (ec) {
                 LOG_ERROR("Failed to wipe existing cache folder {}: {}. Disabling filesystem cache.",
-                         cache_folder.string(), ec.message());
+                          cache_folder.string(), ec.message());
                 use_fs_cache_ = false;
                 return;
             }
@@ -163,7 +163,7 @@ namespace gs::loader {
         std::filesystem::create_directories(cache_folder, ec);
         if (ec) {
             LOG_ERROR("Failed to create cache directory {}: {}. Disabling filesystem cache.",
-                     cache_folder.string(), ec.message());
+                      cache_folder.string(), ec.message());
             use_fs_cache_ = false;
             return;
         }

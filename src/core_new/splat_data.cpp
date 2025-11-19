@@ -242,7 +242,7 @@ namespace lfs::core {
                          Tensor opacity_,
                          float scene_scale_)
         : _max_sh_degree(sh_degree),
-          _active_sh_degree(0),  // Start at 0, increases during training to match old behavior
+          _active_sh_degree(0), // Start at 0, increases during training to match old behavior
           _scene_scale(scene_scale_),
           _means(std::move(means_)),
           _sh0(std::move(sh0_)),

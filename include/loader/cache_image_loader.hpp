@@ -68,7 +68,7 @@ namespace gs::loader {
         void update_cache_params(bool use_cpu_memory, bool use_fs_cache, int num_expected_images) {
             use_cpu_memory_ = use_cpu_memory;
             use_fs_cache_ = use_fs_cache;
-            num_expected_images_=num_expected_images;
+            num_expected_images_ = num_expected_images;
         }
 
         enum class CacheMode {

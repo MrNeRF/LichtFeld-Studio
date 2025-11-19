@@ -403,7 +403,8 @@ namespace lfs::loader {
 
         Tensor means = Tensor::from_vector(positions, {N, 3}, Device::CUDA);
         Tensor colors_tensor = Tensor::from_blob(colors.data(), {N, 3}, Device::CPU, DataType::UInt8)
-                                   .to(Device::CUDA).contiguous();
+                                   .to(Device::CUDA)
+                                   .contiguous();
 
         return PointCloud(std::move(means), std::move(colors_tensor));
     }
@@ -581,7 +582,8 @@ namespace lfs::loader {
 
         Tensor means = Tensor::from_vector(positions, {N, 3}, Device::CUDA);
         Tensor colors_tensor = Tensor::from_blob(colors.data(), {N, 3}, Device::CPU, DataType::UInt8)
-                                   .to(Device::CUDA).contiguous();
+                                   .to(Device::CUDA)
+                                   .contiguous();
 
         return PointCloud(std::move(means), std::move(colors_tensor));
     }

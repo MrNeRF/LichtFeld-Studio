@@ -27,8 +27,8 @@ namespace lfs::training {
 namespace lfs::loader {
 
     // Import types from lfs::core for convenience
-    using lfs::core::SplatData;
     using lfs::core::PointCloud;
+    using lfs::core::SplatData;
     using lfs::core::Tensor;
 
     // Progress callback type

@@ -36,7 +36,7 @@ protected:
             float diff = std::abs(a_vec[i] - b_ptr[i]);
             float threshold = atol + rtol * std::abs(b_ptr[i]);
             if (diff > threshold) {
-                if (failures < 5) {  // Only print first 5 failures
+                if (failures < 5) { // Only print first 5 failures
                     std::cout << "Mismatch at index " << i << ": " << a_vec[i]
                               << " vs " << b_ptr[i] << " (diff=" << diff
                               << ", threshold=" << threshold << ")" << std::endl;
@@ -286,13 +286,15 @@ TEST_F(TensorCriticalFixtures, Reduction_Mean_Keepdim_CUDA) {
     std::cout << "GS mean shape: [";
     for (size_t i = 0; i < gs_mean.ndim(); ++i) {
         std::cout << gs_mean.size(i);
-        if (i < gs_mean.ndim() - 1) std::cout << ", ";
+        if (i < gs_mean.ndim() - 1)
+            std::cout << ", ";
     }
     std::cout << "]" << std::endl;
     std::cout << "Torch mean shape: [";
     for (int64_t i = 0; i < torch_mean.dim(); ++i) {
         std::cout << torch_mean.size(i);
-        if (i < torch_mean.dim() - 1) std::cout << ", ";
+        if (i < torch_mean.dim() - 1)
+            std::cout << ", ";
     }
     std::cout << "]" << std::endl;
 

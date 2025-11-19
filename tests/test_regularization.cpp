@@ -2,11 +2,11 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "kernels/regularization.cuh"
+#include <cmath>
+#include <cuda_runtime.h>
 #include <gtest/gtest.h>
 #include <torch/torch.h>
-#include <cuda_runtime.h>
-#include <cmath>
-#include "kernels/regularization.cuh"
 
 /**
  * Regularization CUDA Kernel Tests
@@ -37,7 +37,7 @@ TEST_F(RegularizationTest, ExpKernel_MatchesAutograd_Loss) {
 
     // Create raw scaling parameter [N, 3] - 3 scales per Gaussian
     auto scaling_raw = torch::randn({n, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA))
-                          .requires_grad_(true);
+                           .requires_grad_(true);
 
     // Method 1: Our CUDA kernel
     auto scaling_raw_cuda = scaling_raw.clone().detach().requires_grad_(true);
@@ -66,7 +66,7 @@ TEST_F(RegularizationTest, ExpKernel_MatchesAutograd_Gradients) {
 
     // Create raw scaling parameter [N, 3] - 3 scales per Gaussian
     auto scaling_raw = torch::randn({n, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA))
-                          .requires_grad_(true);
+                           .requires_grad_(true);
 
     // Method 1: Our CUDA kernel
     auto scaling_raw_cuda = scaling_raw.clone().detach().requires_grad_(true);
@@ -102,7 +102,7 @@ TEST_F(RegularizationTest, ExpKernel_DifferentSizes) {
 
     for (int n : sizes) {
         auto scaling_raw = torch::randn({n, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA))
-                              .requires_grad_(true);
+                               .requires_grad_(true);
 
         // CUDA kernel
         auto scaling_raw_cuda = scaling_raw.clone().detach().requires_grad_(true);
@@ -133,7 +133,7 @@ TEST_F(RegularizationTest, ExpKernel_GradientAccumulation) {
     const float weight = 0.1f;
 
     auto scaling_raw = torch::randn({n, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA))
-                          .requires_grad_(true);
+                           .requires_grad_(true);
 
     // Simulate existing gradient from main loss
     scaling_raw.mutable_grad() = torch::ones_like(scaling_raw) * 0.5f;
@@ -165,7 +165,7 @@ TEST_F(RegularizationTest, SigmoidKernel_MatchesAutograd_Loss) {
 
     // Create raw opacity parameter [N, 1]
     auto opacity_raw = torch::randn({n, 1}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA))
-                          .requires_grad_(true);
+                           .requires_grad_(true);
 
     // Method 1: Our CUDA kernel
     auto opacity_raw_cuda = opacity_raw.clone().detach().requires_grad_(true);
@@ -194,7 +194,7 @@ TEST_F(RegularizationTest, SigmoidKernel_MatchesAutograd_Gradients) {
 
     // Create raw opacity parameter [N, 1]
     auto opacity_raw = torch::randn({n, 1}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA))
-                          .requires_grad_(true);
+                           .requires_grad_(true);
 
     // Method 1: Our CUDA kernel
     auto opacity_raw_cuda = opacity_raw.clone().detach().requires_grad_(true);
@@ -230,7 +230,7 @@ TEST_F(RegularizationTest, SigmoidKernel_DifferentSizes) {
 
     for (int n : sizes) {
         auto opacity_raw = torch::randn({n, 1}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA))
-                              .requires_grad_(true);
+                               .requires_grad_(true);
 
         // CUDA kernel
         auto opacity_raw_cuda = opacity_raw.clone().detach().requires_grad_(true);
@@ -261,7 +261,7 @@ TEST_F(RegularizationTest, SigmoidKernel_GradientAccumulation) {
     const float weight = 0.1f;
 
     auto opacity_raw = torch::randn({n, 1}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA))
-                          .requires_grad_(true);
+                           .requires_grad_(true);
 
     // Simulate existing gradient from main loss
     opacity_raw.mutable_grad() = torch::ones_like(opacity_raw) * 0.5f;
@@ -296,7 +296,7 @@ TEST_F(RegularizationTest, ZeroWeight_NoGradients) {
     // Test exp kernel
     {
         auto scaling_raw = torch::randn({n, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA))
-                              .requires_grad_(true);
+                               .requires_grad_(true);
         float loss = gs::regularization::compute_exp_l1_regularization_with_grad_cuda(
             scaling_raw, weight);
 
@@ -307,7 +307,7 @@ TEST_F(RegularizationTest, ZeroWeight_NoGradients) {
     // Test sigmoid kernel
     {
         auto opacity_raw = torch::randn({n, 1}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA))
-                              .requires_grad_(true);
+                               .requires_grad_(true);
         float loss = gs::regularization::compute_sigmoid_l1_regularization_with_grad_cuda(
             opacity_raw, weight);
 

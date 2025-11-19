@@ -805,7 +805,7 @@ namespace indicators {
 namespace indicators {
 
     static inline std::pair<size_t, size_t> terminal_size() {
-        struct winsize size {};
+        struct winsize size{};
         ioctl(STDOUT_FILENO, TIOCGWINSZ, &size);
         return {static_cast<size_t>(size.ws_row), static_cast<size_t>(size.ws_col)};
     }
@@ -2138,9 +2138,8 @@ namespace indicators {
 
         size_t current() {
             std::lock_guard<std::mutex> lock{mutex_};
-            return (std::min)(
-                progress_,
-                size_t(get_value<details::ProgressBarOption::max_progress>()));
+            return (std::min)(progress_,
+                              size_t(get_value<details::ProgressBarOption::max_progress>()));
         }
 
         bool is_completed() const {

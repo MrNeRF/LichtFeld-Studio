@@ -172,17 +172,17 @@ namespace gsplat {
     //           tile_offsets, flatten_ids, last_ids, compensations)
     // render_mode: 0=RGB, 1=D, 2=ED, 3=RGB_D, 4=RGB_ED
     std::tuple<
-        at::Tensor,  // render_colors [C, H, W, channels] where channels depends on render_mode
-        at::Tensor,  // render_alphas [C, H, W, 1]
-        at::Tensor,  // radii [C, N, 2]
-        at::Tensor,  // means2d [C, N, 2]
-        at::Tensor,  // depths [C, N]
-        at::Tensor,  // colors [C, N, channels] where channels depends on render_mode
-        at::Tensor,  // tile_offsets [C, tile_height, tile_width]
-        at::Tensor,  // flatten_ids [n_isects]
-        at::Tensor,  // last_ids [C, H, W]
-        at::Tensor   // compensations [C, N] or empty
-    >
+        at::Tensor, // render_colors [C, H, W, channels] where channels depends on render_mode
+        at::Tensor, // render_alphas [C, H, W, 1]
+        at::Tensor, // radii [C, N, 2]
+        at::Tensor, // means2d [C, N, 2]
+        at::Tensor, // depths [C, N]
+        at::Tensor, // colors [C, N, channels] where channels depends on render_mode
+        at::Tensor, // tile_offsets [C, tile_height, tile_width]
+        at::Tensor, // flatten_ids [n_isects]
+        at::Tensor, // last_ids [C, H, W]
+        at::Tensor  // compensations [C, N] or empty
+        >
     rasterize_from_world_with_sh_fwd(
         // Gaussian parameters
         const at::Tensor means,                     // [N, 3]

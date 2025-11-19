@@ -17,13 +17,13 @@
  * - Load time performance
  */
 
-#include <gtest/gtest.h>
+#include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <format>
-#include <cmath>
-#include <chrono>
-#include <thread>
+#include <gtest/gtest.h>
 #include <iomanip>
+#include <thread>
 
 // Old loader (torch-based)
 #include "loader/loader.hpp"
@@ -83,12 +83,12 @@ protected:
 
         // Check shapes match
         auto torch_sizes = torch_cpu.sizes();
-        const auto& lfs_shape = lfs_cpu.shape();  // Returns const TensorShape&
+        const auto& lfs_shape = lfs_cpu.shape(); // Returns const TensorShape&
 
         if (torch_sizes.size() != lfs_shape.rank()) {
             if (debug) {
                 std::cout << "Shape rank mismatch: torch=" << torch_sizes.size()
-                         << " lfs=" << lfs_shape.rank() << std::endl;
+                          << " lfs=" << lfs_shape.rank() << std::endl;
             }
             return false;
         }
@@ -97,7 +97,7 @@ protected:
             if (torch_sizes[i] != static_cast<int64_t>(lfs_shape[i])) {
                 if (debug) {
                     std::cout << "Shape dim " << i << " mismatch: torch=" << torch_sizes[i]
-                             << " lfs=" << lfs_shape[i] << std::endl;
+                              << " lfs=" << lfs_shape[i] << std::endl;
                 }
                 return false;
             }
@@ -114,7 +114,7 @@ protected:
         if (!dtype_compatible) {
             if (debug) {
                 std::cout << "Dtype mismatch: torch=" << torch_cpu.dtype()
-                         << " lfs=" << static_cast<int>(lfs_cpu.dtype()) << std::endl;
+                          << " lfs=" << static_cast<int>(lfs_cpu.dtype()) << std::endl;
             }
             return false;
         }
@@ -129,7 +129,7 @@ protected:
                 if (!floatEqual(torch_data[i], lfs_data[i], tolerance)) {
                     if (debug) {
                         std::cout << "Value mismatch at index " << i << ": torch=" << torch_data[i]
-                                 << " lfs=" << lfs_data[i] << " diff=" << std::abs(torch_data[i] - lfs_data[i]) << std::endl;
+                                  << " lfs=" << lfs_data[i] << " diff=" << std::abs(torch_data[i] - lfs_data[i]) << std::endl;
                         // Only show first few mismatches
                         static int mismatch_count = 0;
                         if (++mismatch_count >= 10) {
@@ -149,7 +149,7 @@ protected:
                 if (torch_data[i] != lfs_data[i]) {
                     if (debug) {
                         std::cout << "Value mismatch at index " << i << ": torch=" << (int)torch_data[i]
-                                 << " lfs=" << (int)lfs_data[i] << std::endl;
+                                  << " lfs=" << (int)lfs_data[i] << std::endl;
                         static int mismatch_count = 0;
                         if (++mismatch_count >= 10) {
                             std::cout << "... (suppressing further mismatches)" << std::endl;
@@ -188,7 +188,8 @@ protected:
             auto old_sizes = old_pc.colors.sizes();
             for (int i = 0; i < old_sizes.size(); ++i) {
                 std::cout << old_sizes[i];
-                if (i < old_sizes.size() - 1) std::cout << ", ";
+                if (i < old_sizes.size() - 1)
+                    std::cout << ", ";
             }
             std::cout << "] dtype=" << old_pc.colors.dtype() << " device=" << old_pc.colors.device() << std::endl;
 
@@ -196,10 +197,11 @@ protected:
             const auto& new_shape = new_pc.colors.shape();
             for (size_t i = 0; i < new_shape.rank(); ++i) {
                 std::cout << new_shape[i];
-                if (i < new_shape.rank() - 1) std::cout << ", ";
+                if (i < new_shape.rank() - 1)
+                    std::cout << ", ";
             }
             std::cout << "] dtype=" << static_cast<int>(new_pc.colors.dtype())
-                     << " device=" << static_cast<int>(new_pc.colors.device()) << std::endl;
+                      << " device=" << static_cast<int>(new_pc.colors.device()) << std::endl;
             return false;
         }
 
@@ -353,9 +355,11 @@ TEST_F(LoaderComparisonTest, LoadCOLMAPDataset) {
         << "Scene center Z differs: " << old_center_data[2] << " vs " << new_center_data[2];
 
     std::cout << std::format("Old scene center: [{:.6f}, {:.6f}, {:.6f}]",
-                            old_center_data[0], old_center_data[1], old_center_data[2]) << std::endl;
+                             old_center_data[0], old_center_data[1], old_center_data[2])
+              << std::endl;
     std::cout << std::format("New scene center: [{:.6f}, {:.6f}, {:.6f}]",
-                            new_center_data[0], new_center_data[1], new_center_data[2]) << std::endl;
+                             new_center_data[0], new_center_data[1], new_center_data[2])
+              << std::endl;
 
     // Compare load times (informational, not assertion)
     std::cout << "Old loader time: " << old_result->load_time.count() << "ms" << std::endl;
@@ -415,13 +419,13 @@ TEST_F(LoaderComparisonTest, SplatDataInitialization) {
     // Use only fields that both implementations support
     gs::param::TrainingParameters old_params;
     old_params.optimization.sh_degree = 3;
-    old_params.optimization.random = false;  // Use point cloud, not random init
+    old_params.optimization.random = false; // Use point cloud, not random init
     old_params.optimization.init_num_pts = 100000;
     old_params.optimization.init_extent = 3.0f;
 
     lfs::core::param::TrainingParameters new_params;
     new_params.optimization.sh_degree = 3;
-    new_params.optimization.random = false;  // Use point cloud, not random init
+    new_params.optimization.random = false; // Use point cloud, not random init
     new_params.optimization.init_num_pts = 100000;
     new_params.optimization.init_extent = 3.0f;
 
@@ -834,13 +838,13 @@ TEST_F(LoaderComparisonTest, BlenderDatasetComparison) {
     // 4. **CRITICAL**: Initialize SplatData and compare all attributes
     gs::param::TrainingParameters old_params;
     old_params.optimization.sh_degree = 3;
-    old_params.optimization.random = true;  // Blender uses random init
+    old_params.optimization.random = true; // Blender uses random init
     old_params.optimization.init_num_pts = old_pc.size();
     old_params.optimization.init_extent = 3.0f;
 
     lfs::core::param::TrainingParameters new_params;
     new_params.optimization.sh_degree = 3;
-    new_params.optimization.random = true;  // Blender uses random init
+    new_params.optimization.random = true; // Blender uses random init
     new_params.optimization.init_num_pts = new_pc.size();
     new_params.optimization.init_extent = 3.0f;
 
@@ -925,7 +929,8 @@ TEST_F(LoaderComparisonTest, GardenLoadingBenchmark) {
     std::cout << "\n=== Garden Dataset Loading Benchmark ===" << std::endl;
     std::cout << "Dataset: " << garden_path << std::endl;
     std::cout << "Iterations: 5 (alternating loader order)" << std::endl;
-    std::cout << "Measured: Loading + SplatData initialization\n" << std::endl;
+    std::cout << "Measured: Loading + SplatData initialization\n"
+              << std::endl;
 
     // Load options
     gs::loader::LoadOptions old_options;

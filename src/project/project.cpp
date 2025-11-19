@@ -270,7 +270,6 @@ namespace gs::management {
         data.project_creation_time = json["project_creation_time"].get<std::string>();
         data.project_last_update_time = json["project_last_update_time"].get<std::string>();
 
-
         // Parse data section
         const auto& dataJson = json["data"];
         param::DatasetConfig data_set = param::DatasetConfig::from_json(dataJson);

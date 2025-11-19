@@ -745,8 +745,7 @@ namespace gs::visualizer {
                     glm::vec4(cam_to_world_R[0], 0),
                     glm::vec4(cam_to_world_R[1], 0),
                     glm::vec4(cam_to_world_R[2], 0),
-                    glm::vec4(cam_to_world_T, 1)
-                );
+                    glm::vec4(cam_to_world_T, 1));
 
                 // Apply world transform
                 glm::mat4 transformed_cam = world_transform * cam_mat;

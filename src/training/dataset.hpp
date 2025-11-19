@@ -6,8 +6,8 @@
 
 #include "core/camera.hpp"
 #include "core/parameters.hpp"
-#include "loader/loader.hpp"
 #include "loader/filesystem_utils.hpp"
+#include "loader/loader.hpp"
 #include <expected>
 #include <format>
 #include <memory>
@@ -55,7 +55,7 @@ namespace gs::training {
                         (_split == Split::TRAIN && !is_test) ||
                         (_split == Split::VAL && is_test)) {
                         _indices.push_back(i);
-                        }
+                    }
                 }
             }
 
