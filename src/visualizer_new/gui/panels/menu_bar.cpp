@@ -489,6 +489,24 @@ namespace lfs::vis::gui {
                         ImGui::TextColored(actionColor, "* Adjust Movement Speed");
                         ImGui::TableNextColumn();
                         ImGui::TextColored(controlColor, "Ctrl + +/-");
+                        
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::TextColored(actionColor, "* Adjust Mouse zoom Speed");
+                        ImGui::TableNextColumn();
+                        ImGui::TextColored(controlColor, "Ctrl + Shift + +/-");
+						
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::TextColored(actionColor, "* Return To Home Location");
+                        ImGui::TableNextColumn();
+                        ImGui::TextColored(controlColor, "H");
+
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn();
+                        ImGui::TextColored(actionColor, "* Center On Mouse Cursor Location");
+                        ImGui::TableNextColumn();
+                        ImGui::TextColored(controlColor, "Double Click Left Mouse Button");
 
                         ImGui::EndTable();
                     }
