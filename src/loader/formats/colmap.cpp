@@ -675,11 +675,17 @@ namespace gs::loader {
 
             // Try both mask formats: prefer img_name.png (e.g., cam_1/00.png.png), fallback to img_name (e.g., cam_1/00.png)
             std::filesystem::path mask_path_png = masks_path / img._name;
+            std::filesystem::path mask_path_png_rs = masks_path / img._name;
+
             mask_path_png += ".png";  // Append .png to get cam_1/00.png.png
+            mask_path_png_rs += ".mask.png";  // Append .mask.png to get cam_1/00.png.mask.png
+
             std::filesystem::path mask_path_same = masks_path / img._name;
 
             if (std::filesystem::exists(mask_path_png)) {
                 out[i]._mask_path = mask_path_png;  // Prefer .ext.png format (e.g., cam_1/00.png.png)
+            } else if (std::filesystem::exists( mask_path_png_rs)) {
+                out[i]._mask_path =  mask_path_png_rs;  // Fallback to .mask.png format from reality scan (e.g., cam_1/00.png.mask.png)
             } else if (std::filesystem::exists(mask_path_same)) {
                 out[i]._mask_path = mask_path_same;  // Fallback to .ext format (e.g., cam_1/00.png)
             } else {
