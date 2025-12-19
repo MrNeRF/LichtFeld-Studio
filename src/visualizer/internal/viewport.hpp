@@ -268,6 +268,14 @@ class Viewport {
 
             // Transform orientation
             R = U * R;
+
+            // Re-orthogonalize to prevent roll accumulation from numerical drift
+            glm::vec3 forward = glm::normalize(R[2]);
+            glm::vec3 right = glm::normalize(glm::cross(worldUp, forward));
+            glm::vec3 up = glm::normalize(glm::cross(forward, right));
+            R[0] = right;
+            R[1] = up;
+            R[2] = forward;
         }
     };
 
