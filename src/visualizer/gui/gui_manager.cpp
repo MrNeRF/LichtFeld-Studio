@@ -2319,7 +2319,7 @@ namespace lfs::vis::gui {
         if (viewport_size_.x < 200.0f || viewport_size_.y < 200.0f)
             return;
 
-        constexpr float ZONE_PADDING = 40.0f;
+        constexpr float ZONE_PADDING = 120.0f;
         constexpr float DASH_LENGTH = 12.0f;
         constexpr float GAP_LENGTH = 8.0f;
         constexpr float BORDER_THICKNESS = 2.0f;
