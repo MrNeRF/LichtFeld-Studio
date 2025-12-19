@@ -74,7 +74,7 @@ namespace lfs::rendering {
             // Ring mode hover output
             unsigned long long* hovered_depth_id = nullptr;
             int highlight_gaussian_id = -1;
-            float far_plane = 1e10f;
+            float far_plane = DEFAULT_FAR_PLANE;
             std::vector<bool> selected_node_mask;
             bool desaturate_unselected = false;
             float selection_flash_intensity = 0.0f;
@@ -92,6 +92,12 @@ namespace lfs::rendering {
             Tensor depth;
             Tensor screen_positions; // Optional: screen positions [N, 2] for brush tool
             bool valid = false;
+            bool depth_is_ndc = false;  // True if depth is already NDC (0-1), e.g., from OpenGL
+            GLuint external_depth_texture = 0;  // If set, use this OpenGL texture directly (zero-copy)
+            // Depth conversion parameters (needed for view-space to NDC conversion)
+            float near_plane = DEFAULT_NEAR_PLANE;
+            float far_plane = DEFAULT_FAR_PLANE;
+            bool orthographic = false;
         };
 
         RenderingPipeline();
@@ -100,7 +106,7 @@ namespace lfs::rendering {
         // Main render function - now returns Result
         Result<RenderResult> render(const lfs::core::SplatData& model, const RenderRequest& request);
 
-        // Static upload function - now returns Result
+        // Static upload function
         static Result<void> uploadToScreen(const RenderResult& result,
                                            ScreenQuadRenderer& renderer,
                                            const glm::ivec2& viewport_size);
@@ -109,6 +115,10 @@ namespace lfs::rendering {
         Result<RenderResult> renderRawPointCloud(const lfs::core::PointCloud& point_cloud, const RenderRequest& request);
 
     private:
+        // Apply depth params from RenderResult to ScreenQuadRenderer
+        static void applyDepthParams(const RenderResult& result,
+                                     ScreenQuadRenderer& renderer,
+                                     const glm::ivec2& viewport_size);
         Result<lfs::core::Camera> createCamera(const RenderRequest& request);
         glm::vec2 computeFov(float fov_degrees, int width, int height);
         Result<RenderResult> renderPointCloud(const lfs::core::SplatData& model, const RenderRequest& request);

@@ -100,14 +100,45 @@ namespace lfs::rendering {
         ShaderScope s(shader);
 
         VAOBinder vao_bind(quadVAO_);
+
+        // Bind color texture
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, getTextureID());
-
         if (auto result = shader.set("screenTexture", 0); !result) {
             return result;
         }
 
+        // Bind depth texture and set depth parameters
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, getDepthTextureID());
+        shader.set("depthTexture", 1);  // Ignore error - optional uniform
+        shader.set("has_depth", depth_params_.has_depth);
+        shader.set("near_plane", depth_params_.near_plane);
+        shader.set("far_plane", depth_params_.far_plane);
+        shader.set("orthographic", depth_params_.orthographic);
+        shader.set("depth_is_ndc", depth_params_.depth_is_ndc);
+
+        // Enable depth writing when we have depth data
+        GLboolean prev_depth_mask;
+        GLboolean prev_depth_test;
+        glGetBooleanv(GL_DEPTH_WRITEMASK, &prev_depth_mask);
+        prev_depth_test = glIsEnabled(GL_DEPTH_TEST);
+
+        if (depth_params_.has_depth) {
+            glEnable(GL_DEPTH_TEST);
+            glDepthMask(GL_TRUE);
+            glDepthFunc(GL_ALWAYS);  // Always write depth from CUDA render
+        }
+
         glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        // Restore depth state
+        glDepthMask(prev_depth_mask);
+        if (!prev_depth_test) {
+            glDisable(GL_DEPTH_TEST);
+        }
+        glDepthFunc(GL_LESS);
+
         return {};
     }
 
@@ -147,6 +178,52 @@ namespace lfs::rendering {
 #endif
     }
 
+    Result<void> ScreenQuadRenderer::uploadDepth(const float* depth_data, int width, int height) {
+        if (!framebuffer) {
+            LOG_ERROR("Framebuffer not initialized");
+            return std::unexpected("Framebuffer not initialized");
+        }
+
+        LOG_TRACE("Uploading depth data: {}x{}", width, height);
+        framebuffer->uploadDepth(depth_data, width, height);
+        return {};
+    }
+
+    Result<void> ScreenQuadRenderer::uploadDepthFromCUDA(const Tensor& cuda_depth, int width, int height) {
+        if (!framebuffer) {
+            LOG_ERROR("Framebuffer not initialized");
+            return std::unexpected("Framebuffer not initialized");
+        }
+
+        LOG_TRACE("Uploading depth from CUDA: {}x{}", width, height);
+
+#ifdef CUDA_GL_INTEROP_ENABLED
+        // Try interop path for direct CUDA→GL transfer
+        if (auto interop_fb = std::dynamic_pointer_cast<InteropFrameBuffer>(framebuffer)) {
+            LOG_TRACE("Using CUDA-GL interop for depth upload");
+            return interop_fb->uploadDepthFromCUDA(cuda_depth);
+        }
+#endif
+
+        // Fallback: Copy depth tensor to CPU and upload
+        auto depth_cpu = cuda_depth.cpu().contiguous();
+
+        // Handle [1, H, W] shape
+        if (depth_cpu.ndim() == 3 && depth_cpu.size(0) == 1) {
+            depth_cpu = depth_cpu.squeeze(0);
+        }
+
+        if (depth_cpu.size(0) != static_cast<size_t>(height) ||
+            depth_cpu.size(1) != static_cast<size_t>(width)) {
+            LOG_ERROR("Depth tensor size mismatch: expected {}x{}, got {}x{}",
+                      height, width, depth_cpu.size(0), depth_cpu.size(1));
+            return std::unexpected("Depth tensor size mismatch");
+        }
+
+        framebuffer->uploadDepth(depth_cpu.ptr<float>(), width, height);
+        return {};
+    }
+
     GLuint ScreenQuadRenderer::getTextureID() const {
 #ifdef CUDA_GL_INTEROP_ENABLED
         if (auto interop_fb = std::dynamic_pointer_cast<InteropFrameBuffer>(framebuffer)) {
@@ -154,6 +231,20 @@ namespace lfs::rendering {
         }
 #endif
         return framebuffer->getFrameTexture();
+    }
+
+    GLuint ScreenQuadRenderer::getDepthTextureID() const {
+        // Use external depth texture if provided (zero-copy from FBO)
+        if (depth_params_.external_depth_texture != 0) {
+            return depth_params_.external_depth_texture;
+        }
+#ifdef CUDA_GL_INTEROP_ENABLED
+        // Use interop depth texture if available (direct CUDA→GL)
+        if (auto interop_fb = std::dynamic_pointer_cast<InteropFrameBuffer>(framebuffer)) {
+            return interop_fb->getDepthInteropTexture();
+        }
+#endif
+        return framebuffer ? framebuffer->getDepthTexture() : 0;
     }
 
 } // namespace lfs::rendering

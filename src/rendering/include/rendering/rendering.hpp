@@ -100,7 +100,7 @@ namespace lfs::rendering {
         float selection_flash_intensity = 0.0f;
         unsigned long long* hovered_depth_id = nullptr;
         int highlight_gaussian_id = -1;
-        float far_plane = 1e10f;
+        float far_plane = DEFAULT_FAR_PLANE;
         bool orthographic = false;  // Use orthographic projection instead of perspective
         float ortho_scale = 100.0f; // Pixels per world unit for orthographic projection
     };
@@ -110,6 +110,12 @@ namespace lfs::rendering {
         std::shared_ptr<lfs::core::Tensor> depth;
         std::shared_ptr<lfs::core::Tensor> screen_positions; // Optional: screen positions [N, 2] for brush tool
         bool valid = false;
+        // Depth conversion parameters (needed for proper depth buffer writing)
+        bool depth_is_ndc = false;       // True if depth is already NDC (0-1), e.g., from OpenGL
+        unsigned int external_depth_texture = 0;  // If set, use this OpenGL texture directly (zero-copy)
+        float near_plane = DEFAULT_NEAR_PLANE;
+        float far_plane = DEFAULT_FAR_PLANE;
+        bool orthographic = false;
     };
 
     // Split view support

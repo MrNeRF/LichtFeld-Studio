@@ -165,6 +165,101 @@ namespace lfs::rendering {
         return {};
     }
 
+    Result<void> CudaGLInteropTextureImpl<true>::initForDepth(const int width, const int height) {
+        LOG_TIMER_TRACE("CudaGLInteropTextureImpl::initForDepth");
+        cleanup();
+
+        width_ = width;
+        height_ = height;
+        is_depth_format_ = true;
+
+        glGenTextures(1, &texture_id_);
+        glBindTexture(GL_TEXTURE_2D, texture_id_);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, width, height, 0, GL_RED, GL_FLOAT, nullptr);
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        if (const GLenum gl_err = glGetError(); gl_err != GL_NO_ERROR) {
+            cleanup();
+            return std::unexpected(std::format("GL error creating depth texture: {}", gl_err));
+        }
+
+        cudaGetLastError();
+        cudaGraphicsResource_t raw_resource;
+        const cudaError_t err = cudaGraphicsGLRegisterImage(
+            &raw_resource, texture_id_, GL_TEXTURE_2D, cudaGraphicsRegisterFlagsWriteDiscard);
+
+        if (err != cudaSuccess) {
+            cleanup();
+            return std::unexpected(std::format("CUDA register failed: {}", cudaGetErrorString(err)));
+        }
+
+        cuda_resource_.reset(raw_resource);
+        is_registered_ = true;
+        LOG_DEBUG("Depth interop initialized: {}x{}", width, height);
+        return {};
+    }
+
+    Result<void> CudaGLInteropTextureImpl<true>::updateDepthFromTensor(const Tensor& depth) {
+        LOG_TIMER_TRACE("CudaGLInteropTextureImpl::updateDepthFromTensor");
+
+        if (!is_registered_) {
+            return std::unexpected("Depth texture not initialized");
+        }
+        if (depth.device() != lfs::core::Device::CUDA) {
+            return std::unexpected("Depth must be on CUDA");
+        }
+
+        // Handle [1, H, W] or [H, W] formats
+        Tensor depth_2d = (depth.ndim() == 3 && depth.size(0) == 1) ? depth.squeeze(0) : depth;
+        if (depth_2d.ndim() != 2) {
+            return std::unexpected("Depth must be [H, W] or [1, H, W]");
+        }
+
+        const int h = static_cast<int>(depth_2d.size(0));
+        const int w = static_cast<int>(depth_2d.size(1));
+
+        if (w != width_ || h != height_) {
+            if (auto result = initForDepth(w, h); !result) {
+                return result;
+            }
+        }
+
+        auto raw_resource = static_cast<cudaGraphicsResource_t>(cuda_resource_.get());
+        cudaError_t err = cudaGraphicsMapResources(1, &raw_resource, 0);
+        if (err != cudaSuccess) {
+            return std::unexpected(std::format("Map failed: {}", cudaGetErrorString(err)));
+        }
+
+        const struct UnmapGuard {
+            cudaGraphicsResource_t* res;
+            ~UnmapGuard() { if (res) cudaGraphicsUnmapResources(1, res, 0); }
+        } guard{&raw_resource};
+
+        cudaArray_t cuda_array;
+        err = cudaGraphicsSubResourceGetMappedArray(&cuda_array, raw_resource, 0, 0);
+        if (err != cudaSuccess) {
+            return std::unexpected(std::format("Get array failed: {}", cudaGetErrorString(err)));
+        }
+
+        Tensor depth_contig = depth_2d.contiguous();
+        if (depth_contig.dtype() != lfs::core::DataType::Float32) {
+            depth_contig = depth_contig.to(lfs::core::DataType::Float32);
+        }
+
+        err = cudaMemcpy2DToArray(cuda_array, 0, 0, depth_contig.ptr<float>(),
+                                   w * sizeof(float), w * sizeof(float), h,
+                                   cudaMemcpyDeviceToDevice);
+        if (err != cudaSuccess) {
+            return std::unexpected(std::format("Copy failed: {}", cudaGetErrorString(err)));
+        }
+
+        return {};
+    }
+
     Result<void> CudaGLInteropTextureImpl<true>::initForReading(GLuint texture_id, int width, int height) {
         LOG_TIMER_TRACE("CudaGLInteropTextureImpl<true>::initForReading");
         LOG_DEBUG("Initializing CUDA-GL interop for reading texture {}: {}x{}", texture_id, width, height);
@@ -628,16 +723,64 @@ namespace lfs::rendering {
         return {};
     }
 
-    void InteropFrameBuffer::resize(int new_width, int new_height) {
-        LOG_TRACE("InteropFrameBuffer::resize {}x{} -> {}x{}", width, height, new_width, new_height);
+    Result<void> InteropFrameBuffer::uploadDepthFromCUDA(const Tensor& cuda_depth) {
+        LOG_TIMER_TRACE("InteropFrameBuffer::uploadDepthFromCUDA");
+
+#ifdef CUDA_GL_INTEROP_ENABLED
+        // Lazy initialization
+        if (use_depth_interop_ && !depth_interop_texture_) {
+            int depth_width = 0, depth_height = 0;
+            if (cuda_depth.ndim() == 3 && cuda_depth.size(0) == 1) {
+                depth_height = static_cast<int>(cuda_depth.size(1));
+                depth_width = static_cast<int>(cuda_depth.size(2));
+            } else if (cuda_depth.ndim() == 2) {
+                depth_height = static_cast<int>(cuda_depth.size(0));
+                depth_width = static_cast<int>(cuda_depth.size(1));
+            } else {
+                use_depth_interop_ = false;
+            }
+
+            if (use_depth_interop_ && depth_width > 0 && depth_height > 0) {
+                depth_interop_texture_.emplace();
+                if (auto result = depth_interop_texture_->initForDepth(depth_width, depth_height); !result) {
+                    LOG_WARN("Depth interop init failed: {}", result.error());
+                    depth_interop_texture_.reset();
+                    use_depth_interop_ = false;
+                }
+            }
+        }
+
+        if (use_depth_interop_ && depth_interop_texture_) {
+            if (auto result = depth_interop_texture_->updateDepthFromTensor(cuda_depth); !result) {
+                LOG_WARN("Depth interop update failed, falling back to CPU");
+                use_depth_interop_ = false;
+                depth_interop_texture_.reset();
+                return uploadDepthFromCUDA(cuda_depth);
+            }
+            return {};
+        }
+#endif
+
+        // CPU fallback
+        auto depth_cpu = cuda_depth.cpu().contiguous();
+        if (depth_cpu.ndim() == 3 && depth_cpu.size(0) == 1) {
+            depth_cpu = depth_cpu.squeeze(0);
+        }
+        uploadDepth(depth_cpu.ptr<float>(), static_cast<int>(depth_cpu.size(1)),
+                    static_cast<int>(depth_cpu.size(0)));
+        return {};
+    }
+
+    void InteropFrameBuffer::resize(const int new_width, const int new_height) {
         FrameBuffer::resize(new_width, new_height);
         if (use_interop_ && interop_texture_) {
             if (auto result = interop_texture_->resize(new_width, new_height); !result) {
-                LOG_WARN("Failed to resize interop texture: {}", result.error());
+                LOG_WARN("Interop resize failed: {}", result.error());
                 use_interop_ = false;
                 interop_texture_.reset();
             }
         }
+        // depth_interop_texture_ resizes lazily on next upload
     }
 
 } // namespace lfs::rendering

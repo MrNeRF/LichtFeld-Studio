@@ -176,6 +176,8 @@ namespace lfs::rendering {
                 const_cast<lfs::core::SplatData&>(model).set_active_sh_degree(original_sh_degree);
 
                 result.valid = true;
+                result.orthographic = request.orthographic;
+                result.far_plane = request.far_plane;
                 LOG_TRACE("Rasterization completed successfully (sh_degree restored to {})", original_sh_degree);
                 return result;
             }
@@ -193,6 +195,8 @@ namespace lfs::rendering {
                 result.image = std::move(render_output.image);
                 result.depth = std::move(render_output.depth);
                 result.valid = true;
+                result.orthographic = request.orthographic;
+                result.far_plane = request.far_plane;
                 LOG_TRACE("Rasterization completed successfully");
                 return result;
             }
@@ -228,6 +232,8 @@ namespace lfs::rendering {
                 result.screen_positions = std::move(screen_positions);
             }
             result.valid = true;
+            result.orthographic = request.orthographic;
+            result.far_plane = request.far_plane;
 
             LOG_TRACE("Rasterization completed successfully");
             return result;
@@ -376,7 +382,9 @@ namespace lfs::rendering {
                     // Convert to CHW format
                     result.image = image_hwc.permute({2, 0, 1}).contiguous();
                     result.valid = true;
-                    LOG_TRACE("Successfully read FBO via CUDA-GL interop");
+                    result.external_depth_texture = persistent_depth_texture_;
+                    result.depth_is_ndc = true;
+                    LOG_TRACE("Read FBO via CUDA-GL interop");
                 } else {
                     LOG_TRACE("Failed to read FBO via interop: {}", read_result.error());
                     fbo_interop_texture_.reset();
@@ -389,7 +397,6 @@ namespace lfs::rendering {
         if (!result.valid)
 #endif
         {
-            // OPTIMIZATION: Use PBO for async GPU→CPU readback via DMA
             LOG_TIMER_TRACE("PBO fallback readback");
 
             ensurePBOSize(width, height);
@@ -422,18 +429,19 @@ namespace lfs::rendering {
             // Swap PBO index for next frame
             pbo_index_ = next_pbo;
 
-            // Create tensor from the pixel data
-            // OPTIMIZATION: No CPU flip needed! Image is already pre-flipped by projection matrix
-            auto image_cpu = Tensor::from_vector(pixels, {static_cast<size_t>(height), static_cast<size_t>(width), 3},
-                                                 lfs::core::Device::CPU);
-
-            // Convert to CHW format and move to CUDA
+            const auto image_cpu = Tensor::from_vector(pixels, {static_cast<size_t>(height), static_cast<size_t>(width), 3},
+                                                        lfs::core::Device::CPU);
             {
                 LOG_TIMER_TRACE("permute and cuda upload");
                 result.image = image_cpu.permute({2, 0, 1}).cuda();
             }
+            result.external_depth_texture = persistent_depth_texture_;
+            result.depth_is_ndc = true;
             result.valid = true;
         }
+
+        result.orthographic = request.orthographic;
+        result.far_plane = request.far_plane;
 
         LOG_TRACE("Point cloud rendering completed");
         return result;
@@ -576,7 +584,9 @@ namespace lfs::rendering {
                 if (auto read_result = fbo_interop_texture_->readToTensor(image_hwc); read_result) {
                     result.image = image_hwc.permute({2, 0, 1}).contiguous();
                     result.valid = true;
-                    LOG_TRACE("Successfully read FBO via CUDA-GL interop");
+                    result.external_depth_texture = persistent_depth_texture_;
+                    result.depth_is_ndc = true;
+                    LOG_TRACE("Read FBO via CUDA-GL interop");
                 } else {
                     LOG_TRACE("Failed to read FBO via interop: {}", read_result.error());
                     fbo_interop_texture_.reset();
@@ -616,18 +626,48 @@ namespace lfs::rendering {
 
             pbo_index_ = next_pbo;
 
-            auto image_cpu = Tensor::from_vector(pixels, {static_cast<size_t>(height), static_cast<size_t>(width), 3},
-                                                 lfs::core::Device::CPU);
-
+            const auto image_cpu = Tensor::from_vector(pixels, {static_cast<size_t>(height), static_cast<size_t>(width), 3},
+                                                        lfs::core::Device::CPU);
             {
                 LOG_TIMER_TRACE("permute and cuda upload");
                 result.image = image_cpu.permute({2, 0, 1}).cuda();
             }
+            result.external_depth_texture = persistent_depth_texture_;
+            result.depth_is_ndc = true;
             result.valid = true;
         }
 
+        result.orthographic = request.orthographic;
+        result.far_plane = request.far_plane;
         LOG_TRACE("Raw point cloud rendering completed");
         return result;
+    }
+
+    void RenderingPipeline::applyDepthParams(
+        const RenderResult& result,
+        ScreenQuadRenderer& renderer,
+        const glm::ivec2& viewport_size) {
+
+        DepthParams params = renderer.getDepthParams();
+        params.near_plane = result.near_plane;
+        params.far_plane = result.far_plane;
+        params.orthographic = result.orthographic;
+
+        if (result.external_depth_texture != 0) {
+            // Use external OpenGL texture directly (zero-copy)
+            params.has_depth = true;
+            params.depth_is_ndc = result.depth_is_ndc;
+            params.external_depth_texture = result.external_depth_texture;
+        } else if (result.depth.is_valid()) {
+            // Upload depth from CUDA
+            if (renderer.uploadDepthFromCUDA(result.depth, viewport_size.x, viewport_size.y)) {
+                params.has_depth = true;
+                params.depth_is_ndc = result.depth_is_ndc;
+                params.external_depth_texture = 0;
+            }
+        }
+
+        renderer.setDepthParams(params);
     }
 
     Result<void> RenderingPipeline::uploadToScreen(
@@ -644,22 +684,26 @@ namespace lfs::rendering {
         // Try direct CUDA upload if available
         if (renderer.isInteropEnabled() && result.image.device() == lfs::core::Device::CUDA) {
             LOG_TRACE("Using CUDA interop for screen upload");
-            // Keep data on GPU - convert [C, H, W] to [H, W, C] format
-            auto image_hwc = result.image.permute({1, 2, 0}).contiguous();
+            const auto image_hwc = result.image.permute({1, 2, 0}).contiguous();
 
             if (image_hwc.size(0) == static_cast<size_t>(viewport_size.y) &&
                 image_hwc.size(1) == static_cast<size_t>(viewport_size.x)) {
-                return renderer.uploadFromCUDA(image_hwc, viewport_size.x, viewport_size.y);
+                if (auto upload_result = renderer.uploadFromCUDA(image_hwc, viewport_size.x, viewport_size.y);
+                    !upload_result) {
+                    return upload_result;
+                }
+                applyDepthParams(result, renderer, viewport_size);
+                return {};
             }
         }
 
-        // Fallback to CPU copy
+        // CPU fallback
         LOG_TRACE("Using CPU copy for screen upload");
-        auto image = (result.image * 255.0f)
-                         .cpu()
-                         .to(lfs::core::DataType::UInt8)
-                         .permute({1, 2, 0})
-                         .contiguous();
+        const auto image = (result.image * 255.0f)
+                               .cpu()
+                               .to(lfs::core::DataType::UInt8)
+                               .permute({1, 2, 0})
+                               .contiguous();
 
         if (image.size(0) != static_cast<size_t>(viewport_size.y) ||
             image.size(1) != static_cast<size_t>(viewport_size.x) ||
@@ -668,8 +712,14 @@ namespace lfs::rendering {
             return std::unexpected("Image dimensions mismatch or invalid data");
         }
 
-        return renderer.uploadData(image.ptr<unsigned char>(),
-                                   viewport_size.x, viewport_size.y);
+        if (auto upload_result = renderer.uploadData(image.ptr<unsigned char>(),
+                                                      viewport_size.x, viewport_size.y);
+            !upload_result) {
+            return upload_result;
+        }
+
+        applyDepthParams(result, renderer, viewport_size);
+        return {};
     }
 
     Result<lfs::core::Camera> RenderingPipeline::createCamera(const RenderRequest& request) {
