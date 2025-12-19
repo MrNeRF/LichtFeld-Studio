@@ -38,13 +38,13 @@ class Viewport {
         float getMaxZoomSpeed() const { return maxZoomSpeed; }
 
         // Camera state
-        glm::vec3 t = glm::vec3(0.0f, -3.0f, -8.0f);
+        glm::vec3 t = glm::vec3(-5.657f, -3.0f, -5.657f);
         glm::vec3 pivot = glm::vec3(0.0f);
         glm::mat3 R = computeLookAtRotation(t, pivot); // Look at pivot from t
         std::chrono::steady_clock::time_point pivot_set_time{};
 
         // Home position
-        glm::vec3 home_t = glm::vec3(0.0f, -3.0f, -8.0f);
+        glm::vec3 home_t = glm::vec3(-5.657f, -3.0f, -5.657f);
         glm::vec3 home_pivot = glm::vec3(0.0f);
         glm::mat3 home_R = computeLookAtRotation(home_t, home_pivot);
         bool home_saved = true;
