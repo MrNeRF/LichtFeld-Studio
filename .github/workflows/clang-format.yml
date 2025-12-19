@@ -19,7 +19,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.ACTIONS }}  # Use PAT instead of default token
 
       - name: Install clang-format
         run: |
@@ -27,22 +26,21 @@ jobs:
           sudo apt-get install -y clang-format
 
       - name: Print clang-format version
-        run: |
-          clang-format --version
+        run: clang-format --version
 
       - name: Run clang-format
         run: |
           find . -regex '.*\.\(cpp\|hpp\|cc\|c\|h\|cu\|cuh\)' \
             -exec clang-format -i {} +
 
-      - name: Commit changes (if any)
+      - name: Commit and push changes
         run: |
           if [[ -n "$(git status --porcelain)" ]]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add .
-            git commit -m "Apply clang-format"
-            git push  # Simplified push since we're using the PAT in checkout
+            git commit -m "style: apply clang-format"
+            git push
           else
             echo "No formatting changes needed."
           fi
