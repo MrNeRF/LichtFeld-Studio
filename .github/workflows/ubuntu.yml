@@ -2,12 +2,12 @@ name: Ubuntu CUDA Build
 
 on:
   push:
-    branches: [ dev ]
+    branches: [ dev, master ]
     paths-ignore:
       - '**.md'
       - 'docs/**'
   pull_request:
-    branches: [ dev ]
+    branches: [ dev, master ]
     paths-ignore:
       - '**.md'
       - 'docs/**'
