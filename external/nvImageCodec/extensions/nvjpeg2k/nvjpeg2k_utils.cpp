@@ -21,7 +21,7 @@
 namespace nvjpeg2k {
 
     int flat_version(int major, int minor, int patch) {
-        return ((major)*1000000 + (minor)*1000 + (patch));
+        return ((major) * 1000000 + (minor) * 1000 + (patch));
     }
 
     int get_version() {

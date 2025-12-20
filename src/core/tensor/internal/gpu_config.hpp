@@ -152,7 +152,7 @@ namespace lfs::core {
  *
  * This is the classic CEIL_DIV pattern: (N + M - 1) / M
  */
-#define CEIL_DIV(M, N) (((M) + (N)-1) / (N))
+#define CEIL_DIV(M, N) (((M) + (N) - 1) / (N))
 
 /**
  * @brief Get optimal grid size for a kernel launch

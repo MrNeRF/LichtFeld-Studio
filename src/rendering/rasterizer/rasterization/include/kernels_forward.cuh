@@ -647,7 +647,7 @@ namespace lfs::rendering::kernels::forward {
                         final_color = final_color * OUTLINE_DARKEN;
 
                     color_pixel = final_color;
-                    depth_pixel = collected_depth[j];  // Set depth for center markers
+                    depth_pixel = collected_depth[j]; // Set depth for center markers
                     transmittance = 0.0f;
                     done = true;
                     continue;

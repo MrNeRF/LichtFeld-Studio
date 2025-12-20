@@ -2,8 +2,8 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "memory_arena.hpp"
 #include "core/logger.hpp"
+#include "memory_arena.hpp"
 #include <algorithm>
 #include <cstring>
 #include <cuda_runtime.h>

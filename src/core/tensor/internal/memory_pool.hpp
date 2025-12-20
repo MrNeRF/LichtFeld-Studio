@@ -164,9 +164,12 @@ namespace lfs::core {
 
                 constexpr size_t ONE_MB = 1 << 20;
                 constexpr size_t HUNDRED_MB = 100 << 20;
-                if (bytes < ONE_MB) ++small_allocs;
-                else if (bytes < HUNDRED_MB) ++medium_allocs;
-                else ++large_allocs;
+                if (bytes < ONE_MB)
+                    ++small_allocs;
+                else if (bytes < HUNDRED_MB)
+                    ++medium_allocs;
+                else
+                    ++large_allocs;
 
                 constexpr int LOG_INTERVAL = 2000;
                 if (alloc_count % LOG_INTERVAL == 0) {

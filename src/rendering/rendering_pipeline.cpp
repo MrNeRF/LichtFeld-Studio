@@ -430,7 +430,7 @@ namespace lfs::rendering {
             pbo_index_ = next_pbo;
 
             const auto image_cpu = Tensor::from_vector(pixels, {static_cast<size_t>(height), static_cast<size_t>(width), 3},
-                                                        lfs::core::Device::CPU);
+                                                       lfs::core::Device::CPU);
             {
                 LOG_TIMER_TRACE("permute and cuda upload");
                 result.image = image_cpu.permute({2, 0, 1}).cuda();
@@ -627,7 +627,7 @@ namespace lfs::rendering {
             pbo_index_ = next_pbo;
 
             const auto image_cpu = Tensor::from_vector(pixels, {static_cast<size_t>(height), static_cast<size_t>(width), 3},
-                                                        lfs::core::Device::CPU);
+                                                       lfs::core::Device::CPU);
             {
                 LOG_TIMER_TRACE("permute and cuda upload");
                 result.image = image_cpu.permute({2, 0, 1}).cuda();
@@ -713,7 +713,7 @@ namespace lfs::rendering {
         }
 
         if (auto upload_result = renderer.uploadData(image.ptr<unsigned char>(),
-                                                      viewport_size.x, viewport_size.y);
+                                                     viewport_size.x, viewport_size.y);
             !upload_result) {
             return upload_result;
         }

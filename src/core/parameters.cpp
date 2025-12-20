@@ -189,7 +189,8 @@ namespace lfs::core {
                                 std::string default_val;
                                 std::visit([&](const auto& val) {
                                     default_val = std::format("{}", val);
-                                }, p.value);
+                                },
+                                           p.value);
                                 LOG_DEBUG("Parameter mismatch: {} (JSON={}, default={})",
                                           param, json[param].dump(), default_val);
                                 break;
