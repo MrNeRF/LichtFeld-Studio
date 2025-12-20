@@ -125,6 +125,13 @@ namespace lfs::training {
         // Returns the background color to use at a given iteration
         lfs::core::Tensor& background_for_step(int iter);
 
+        // Apply per-pixel noise to background (for bg_noise mode)
+        // Called after rasterization, before bilateral grid
+        lfs::core::Tensor apply_background_noise(
+            const lfs::core::Tensor& rendered,
+            const lfs::core::Tensor& alpha,
+            int iter);
+
         // Protected method for processing a single training step
         std::expected<StepResult, std::string> train_step(
             int iter,
@@ -197,6 +204,7 @@ namespace lfs::training {
 
         lfs::core::Tensor background_{};
         lfs::core::Tensor bg_mix_buffer_;
+        lfs::core::Tensor bg_noise_buffer_; 
         std::unique_ptr<TrainingProgress> progress_;
         size_t train_dataset_size_ = 0;
 

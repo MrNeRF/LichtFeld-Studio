@@ -126,6 +126,7 @@ namespace lfs::core {
                     {"init_rho", defaults.init_rho, "Initial ADMM penalty parameter"},
                     {"prune_ratio", defaults.prune_ratio, "Final pruning ratio for sparsity"},
                     {"bg_modulation", defaults.bg_modulation, "Enable sinusoidal background modulation"},
+                    {"bg_noise", defaults.bg_noise, "Enable per-pixel noise background (overrides bg-modulation)"},
                     {"gut", defaults.gut, "Enable GUT mode"},
                     {"mask_mode", std::string("none"), "Mask mode: none, segment, ignore, alpha_consistent"},
                     {"invert_masks", defaults.invert_masks, "Invert mask values"},
@@ -260,6 +261,7 @@ namespace lfs::core {
             opt_json["init_rho"] = init_rho;
             opt_json["prune_ratio"] = prune_ratio;
             opt_json["bg_modulation"] = bg_modulation;
+            opt_json["bg_noise"] = bg_noise;
 
             // Mask parameters
             static constexpr const char* MASK_MODE_NAMES[] = {"none", "segment", "ignore", "alpha_consistent"};
@@ -411,6 +413,9 @@ namespace lfs::core {
             }
             if (json.contains("bg_modulation")) {
                 params.bg_modulation = json["bg_modulation"];
+            }
+            if (json.contains("bg_noise")) {
+                params.bg_noise = json["bg_noise"];
             }
             if (json.contains("gut")) {
                 params.gut = json["gut"];

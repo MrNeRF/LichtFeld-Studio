@@ -589,26 +589,36 @@ namespace lfs::training {
         }
     }
 
-    inline float inv_weight_piecewise(int step, int max_steps) {
-        // Phases by fraction of training
-        const float phase = std::max(0.f, std::min(1.f, step / float(std::max(1, max_steps))));
+    // ramp up -> short hold -> long decay -> small floor (avoid late halos).
+    inline float inv_weight_piecewise(int step, int max_steps, bool isNoise) {
+        if (max_steps <= 0)
+            return 0.0f;
 
-        const float limit_hi = 1.0f / 4.0f;  // start limit
-        const float limit_mid = 2.0f / 4.0f; // middle limit
-        const float limit_lo = 3.0f / 4.0f;  // final limit
+        const float phase = std::clamp(
+            static_cast<float>(step) / static_cast<float>(max_steps),
+            0.0f, 1.0f);
 
-        const float weight_hi = 1.0f;  // start weight
-        const float weight_mid = 0.5f; // middle weight
-        const float weight_lo = 0.0f;  // final weight
+        constexpr float P_WARMUP_END = 0.10f;
+        constexpr float P_HOLD_END = 0.3f;
+        const float P_DECAY_END = isNoise ? 0.8f : 0.60f;
 
-        if (phase < limit_hi) {
-            return weight_hi; // hold until bypasses the start limit
-        } else if (phase < limit_mid) {
-            const float t = (phase - limit_hi) / (limit_mid - limit_hi);
-            return weight_hi + (weight_mid - weight_hi) * t; // decay to mid value
+        const float MAX_INTENSITY = isNoise ? 0.85f : 0.6f; // peak intensity
+        constexpr float MIN_INTENSITY = 0.01f;             // floor near the end (prevents late halos)
+
+        if (phase < P_WARMUP_END) {
+            // Linear warmup: 0 -> MAX_NOISE
+            const float t = phase / P_WARMUP_END;
+            return MAX_INTENSITY * t;
+        } else if (phase < P_HOLD_END) {
+            // Hold at peak
+            return MAX_INTENSITY;
+        } else if (phase < P_DECAY_END) {
+            // Linear decay: MAX_INTENSITY -> MIN_INTENSITY
+            const float t = (phase - P_HOLD_END) / (P_DECAY_END - P_HOLD_END);
+            return MAX_INTENSITY + (MIN_INTENSITY - MAX_INTENSITY) * t;
         } else {
-            const float t = (phase - limit_mid) / (limit_lo - limit_mid);
-            return weight_mid + (weight_lo - weight_mid) * t; // decay to final value
+            // Keep a small floor until the end
+            return MIN_INTENSITY;
         }
     }
 
@@ -623,11 +633,11 @@ namespace lfs::training {
     } // anonymous namespace
 
     lfs::core::Tensor& Trainer::background_for_step(int iter) {
-        if (!params_.optimization.bg_modulation) {
+        if (!params_.optimization.bg_modulation || params_.optimization.bg_noise) {
             return background_;
         }
 
-        const float w = inv_weight_piecewise(iter, params_.optimization.iterations);
+        const float w = inv_weight_piecewise(iter, params_.optimization.iterations, false);
         if (w <= 0.0f) {
             return background_;
         }
@@ -649,6 +659,90 @@ namespace lfs::training {
         cudaMemcpyAsync(bg_mix_buffer_.ptr<float>(), result, sizeof(result), cudaMemcpyHostToDevice, nullptr);
         return bg_mix_buffer_;
     }
+
+    
+    lfs::core::Tensor Trainer::apply_background_noise(
+        const lfs::core::Tensor& rendered, // [C, H, W] (usually C=3)
+        const lfs::core::Tensor& alpha,    // [1, H, W]
+        int iter) {
+        // Compute noise intensity weight based on training progress
+        const float w = inv_weight_piecewise(iter, params_.optimization.iterations, true);
+
+        // Early exit: skip blending if noise contribution is negligible
+        if (w <= CLAMP_EPS) {
+            return rendered; // shallow return is fine
+        }
+
+        // Basic shape assumptions (keep lightweight; training path should be consistent)
+        const size_t C = rendered.shape()[0];
+        const size_t H = rendered.shape()[1];
+        const size_t W = rendered.shape()[2];
+
+        const lfs::core::TensorShape noise_shape({C, H, W});
+        const lfs::core::TensorShape alpha_shape({1, H, W});
+        const auto dev = rendered.device();
+
+        // Persistent buffers to avoid per-iteration VRAM allocations.
+        // thread_local keeps it safe if multiple trainers run in parallel on different threads.
+        static thread_local lfs::core::Tensor noise_buffer;     // [C, H, W]
+        static thread_local lfs::core::Tensor weighted_buffer;  // [C, H, W]
+        static thread_local lfs::core::Tensor alpha_inv_buffer; // [1, H, W]
+
+        // Re-allocate only if strictly necessary (shape/device changes)
+        bool buffer_reset = false;
+        if (noise_buffer.is_empty() || noise_buffer.shape() != noise_shape || noise_buffer.device() != dev) {
+            noise_buffer = lfs::core::Tensor::empty(noise_shape, dev, lfs::core::DataType::Float32);
+            buffer_reset = true;
+        }
+        if (weighted_buffer.is_empty() || weighted_buffer.shape() != noise_shape || weighted_buffer.device() != dev) {
+            weighted_buffer = lfs::core::Tensor::empty(noise_shape, dev, lfs::core::DataType::Float32);
+        }
+        if (alpha_inv_buffer.is_empty() || alpha_inv_buffer.shape() != alpha_shape || alpha_inv_buffer.device() != dev) {
+            alpha_inv_buffer = lfs::core::Tensor::empty(alpha_shape, dev, lfs::core::DataType::Float32);
+        }
+
+        // Constants
+        constexpr int NOISE_RESET_INTERVAL = 100;
+        constexpr float GOLDEN_RATIO = 0.61803398875f;
+
+        // NOISE GENERATION STRATEGY:
+        // 1) Periodic full reset: expensive RNG for statistical independence.
+        // 2) Per-step cheap update: add constant offset and wrap to [0,1).
+        //
+        // IMPORTANT: In this tensor library, "a = a + b" materializes a new tensor.
+        // Use in-place scalar ops to avoid allocations and extra kernels.
+        if (buffer_reset || (iter % NOISE_RESET_INTERVAL == 0)) {
+            // Expensive path
+            noise_buffer.uniform_(0.0f, 1.0f);
+        } else {
+            // Cheap path: noise = fract(noise + phi)
+            // In-place scalar add (no allocation)
+            noise_buffer.add_(GOLDEN_RATIO);
+
+            // Wrap around 1.0: fract(x) = x - floor(x)
+            // NOTE: floor() currently materializes a temporary (1 allocation).
+            // Still much cheaper than materializing (a + scalar) AND floor() AND subtraction.
+            noise_buffer.sub_(noise_buffer.floor());
+        }
+
+        // Prepare alpha_inv = (1 - alpha) in a reusable buffer.
+        // Avoid scalar Tensor "{}" (rank-0) which can be fragile depending on broadcast rules.
+        alpha_inv_buffer.copy_(alpha); // alpha is expected to be Float32 on the training path
+        alpha_inv_buffer.mul_(-1.0f);
+        alpha_inv_buffer.add_(1.0f); // alpha_inv_buffer = 1 - alpha
+
+        // weighted_buffer = noise * w (reused buffer, no allocation)
+        weighted_buffer.copy_(noise_buffer);
+        weighted_buffer.mul_(w);
+
+        // Blend: out = rendered + (1 - alpha) * (noise * w)
+        // This multiply will broadcast [1,H,W] over [C,H,W] and materialize ONE output tensor.
+        lfs::core::Tensor out = alpha_inv_buffer * weighted_buffer;
+        out.add_(rendered); // in-place add, shapes match exactly
+
+        return out;
+    }
+
 
     std::expected<Trainer::StepResult, std::string> Trainer::train_step(
         int iter,
@@ -822,6 +916,14 @@ namespace lfs::training {
 
                 r_output = output; // Save last tile for densification
                 nvtxRangePop();
+
+                 // Apply background noise if enabled
+                lfs::core::Tensor processed_image = output.image;
+                if (params_.optimization.bg_noise) {
+                    nvtxRangePush("apply_background_noise");
+                    processed_image = apply_background_noise(output.image, output.alpha, iter);
+                    nvtxRangePop();
+                }
 
                 // Apply bilateral grid if enabled (before loss computation)
                 lfs::core::Tensor corrected_image = output.image;

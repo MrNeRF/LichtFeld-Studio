@@ -359,9 +359,31 @@ namespace lfs::vis::gui::panels {
             ImGui::Text("BG Modulation:");
             ImGui::TableNextColumn();
             if (can_edit) {
-                ImGui::Checkbox("##bg_modulation", &opt_params.bg_modulation);
+                if (ImGui::Checkbox("##bg_modulation", &opt_params.bg_modulation)) {
+                     if (opt_params.bg_modulation) {
+                         opt_params.bg_noise = false; // Disable noise if modulation is enabled
+                     }
+                }
             } else {
                 ImGui::Text("%s", opt_params.bg_modulation ? "Enabled" : "Disabled");
+            }
+
+            // BG Noise (per-pixel)
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("BG Noise:");
+            ImGui::TableNextColumn();
+            if (can_edit) {
+                if (ImGui::Checkbox("##bg_noise", &opt_params.bg_noise)) {
+                    if (opt_params.bg_noise) {
+                        opt_params.bg_modulation = false;
+                    }
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Per-pixel random noise background (overrides BG Modulation)");
+                }
+            } else {
+                ImGui::Text("%s", opt_params.bg_noise ? "Enabled" : "Disabled");
             }
 
             // Evaluation

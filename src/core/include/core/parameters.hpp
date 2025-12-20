@@ -45,6 +45,7 @@ namespace lfs::core {
             std::vector<size_t> eval_steps = {7'000, 30'000}; // Steps to evaluate the model
             std::vector<size_t> save_steps = {7'000, 30'000}; // Steps to save the model
             bool bg_modulation = false;                       // Enable sinusoidal background modulation
+            bool bg_noise = false;                            // Enable per-pixel noise background (overrides bg_modulation)
             bool enable_eval = false;                         // Only evaluate when explicitly enabled
             bool enable_save_eval_images = true;              // Save during evaluation images
             bool headless = false;                            // Disable visualization during training
