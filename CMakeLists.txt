@@ -599,28 +599,49 @@ if(UNIX)
             COMMENT "Creating lib directory for portable build"
         )
 
-        # Copy CUDA runtime libraries
-        set(CUDA_LIB_PATTERNS
-            "libcudart.so*"
-            "libcublas.so*"
-            "libcublasLt.so*"
-            "libcusolver.so*"
-            "libcusparse.so*"
-            "libnvrtc.so*"
-            "libnvJitLink.so*"
+        # Copy CUDA runtime libraries (only real files, recreate symlinks)
+        # This avoids copying the same library 3x (libfoo.so, libfoo.so.12, libfoo.so.12.x.x)
+        set(CUDA_LIB_BASES
+            "libcudart"
+            "libcublas"
+            "libcublasLt"
+            "libcurand"
+            "libnvrtc"
+            "libnvJitLink"
         )
 
-        foreach(pattern ${CUDA_LIB_PATTERNS})
-            file(GLOB CUDA_LIBS "${CUDAToolkit_LIBRARY_DIR}/${pattern}")
-            foreach(lib ${CUDA_LIBS})
-                add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        "${lib}"
-                        "${LIB_DIR}/"
-                    COMMENT "Copying CUDA library: ${lib}"
-                )
-            endforeach()
-        endforeach()
+        # Create a script to copy libraries properly (real files only, symlinks recreated)
+        file(WRITE "${CMAKE_BINARY_DIR}/copy_cuda_libs.sh"
+"#!/bin/bash
+set -e
+CUDA_LIB_DIR=\"$1\"
+DEST_DIR=\"$2\"
+shift 2
+for base in \"$@\"; do
+    # Find all matching files
+    for f in \"$CUDA_LIB_DIR/$base\".so*; do
+        [ -e \"$f\" ] || continue
+        fname=\$(basename \"$f\")
+        if [ -L \"$f\" ]; then
+            # It's a symlink - recreate it
+            target=\$(readlink \"$f\")
+            ln -sf \"$target\" \"$DEST_DIR/$fname\"
+        else
+            # It's a real file - copy it
+            cp -f \"$f\" \"$DEST_DIR/$fname\"
+        fi
+    done
+done
+")
+
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND chmod +x "${CMAKE_BINARY_DIR}/copy_cuda_libs.sh"
+            COMMAND "${CMAKE_BINARY_DIR}/copy_cuda_libs.sh"
+                "${CUDAToolkit_LIBRARY_DIR}"
+                "${LIB_DIR}"
+                ${CUDA_LIB_BASES}
+            COMMENT "Copying CUDA libraries (with proper symlinks)"
+        )
 
         # Create a launcher script that sets LD_LIBRARY_PATH
         file(WRITE "${CMAKE_BINARY_DIR}/run_lichtfeld.sh"
@@ -664,13 +685,11 @@ elseif(WIN32)
         )
 
         # Copy CUDA runtime DLLs
-        # These are typically: cudart64_*.dll, cublas64_*.dll, cublasLt64_*.dll, cusolver64_*.dll, cusparse64_*.dll
         set(CUDA_DLL_PATTERNS
             "cudart64_*.dll"
             "cublas64_*.dll"
             "cublasLt64_*.dll"
-            "cusolver64_*.dll"
-            "cusparse64_*.dll"
+            "curand64_*.dll"
             "nvrtc64_*.dll"
             "nvJitLink_*.dll"
         )

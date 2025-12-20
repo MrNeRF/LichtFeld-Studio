@@ -73,7 +73,6 @@ if(LFS_TENSOR_CUDA_SOURCES)
             CUDA::cudart
             CUDA::cublas      # For matrix operations
             CUDA::curand      # For random number generation
-            CUDA::cusolver    # Optional: for advanced linear algebra
             spdlog::spdlog
     )
 
