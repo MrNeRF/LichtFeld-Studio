@@ -124,16 +124,14 @@ target_include_directories(lfs_tensor
 
 target_link_libraries(lfs_tensor
         PUBLIC
-        # ${TORCH_LIBRARIES}  # Removed - lfs_tensor is LibTorch-free
         TBB::tbb
         nlohmann_json::nlohmann_json
         glm::glm
         spdlog::spdlog
         CUDA::cudart
-        CUDA::cublas          # For matrix operations
-        CUDA::curand          # For random operations
+        CUDA::curand
         PRIVATE
-        lfs_tensor_kernels    # CUDA kernels are implementation detail (linked privately)
+        lfs_tensor_kernels
 )
 
 # Platform-specific settings

@@ -34,7 +34,6 @@ target_link_libraries(lfs_rasterizer
         PUBLIC
         CUDA::cudart
         CUDA::curand
-        CUDA::cublas
         CUDA::cuda_driver
         spdlog::spdlog
         lfs_core_cuda       # Required for shared memory arena

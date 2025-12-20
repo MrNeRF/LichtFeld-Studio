@@ -13,10 +13,6 @@ if(NOT TARGET CUDA::curand)
     message(FATAL_ERROR "CUDA::curand not found - ensure parent CMakeLists.txt sets up CUDA properly")
 endif()
 
-if(NOT TARGET CUDA::cublas)
-    message(FATAL_ERROR "CUDA::cublas not found - ensure parent CMakeLists.txt sets up CUDA properly")
-endif()
-
 # All gsplat sources together
 set(GSPLAT_SOURCES
         # C++ files
@@ -63,7 +59,6 @@ target_link_libraries(gsplat_backend_lfs
         PUBLIC
         CUDA::cudart
         CUDA::curand
-        CUDA::cublas
         glm::glm
 )
 

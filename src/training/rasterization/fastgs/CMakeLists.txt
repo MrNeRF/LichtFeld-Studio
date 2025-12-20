@@ -39,7 +39,6 @@ target_link_libraries(fastlfs_backend
         PUBLIC
         CUDA::cudart
         CUDA::curand
-        CUDA::cublas
         ${CUDA_CUDA_LIBRARY}
         lfs_core_cuda  # CUDA utilities from core module (memory arena)
 )
