@@ -112,7 +112,7 @@ endif()
 # Minimum SM (compute capability) to include when BUILD_CUDA_ALL_SM=ON.
 # Examples: 75, 80, 86, 89, 90, 100...
 # Only has effect if BUILD_CUDA_ALL_SM is ON.
-set(BUILD_CUDA_ALL_MIN_SM "86" CACHE STRING "Minimum SM (compute capability) used when BUILD_CUDA_ALL_SM=ON Examples: 75, 80, 86, 89...")
+set(BUILD_CUDA_ALL_MIN_SM "75" CACHE STRING "Minimum SM (compute capability) used when BUILD_CUDA_ALL_SM=ON Examples: 75, 80, 86, 89...")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CUDA_STANDARD 20)
