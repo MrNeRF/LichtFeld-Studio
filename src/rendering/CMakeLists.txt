@@ -78,6 +78,7 @@ target_compile_definitions(lfs_rendering PRIVATE
         SHADER_PATH="${RENDERING_BUILD_RESOURCE_DIR}/shaders"
         RENDERING_SOURCE_SHADER_PATH="${RENDERING_SOURCE_RESOURCE_DIR}/shaders"
         $<$<BOOL:${CUDA_GL_INTEROP_ENABLED}>:CUDA_GL_INTEROP_ENABLED>
+        $<$<PLATFORM_ID:Windows>:NOMINMAX>
 )
 
 # Export only the public header
