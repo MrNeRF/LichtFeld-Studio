@@ -71,7 +71,6 @@ if(LFS_TENSOR_CUDA_SOURCES)
     target_link_libraries(lfs_tensor_kernels
             PUBLIC
             CUDA::cudart
-            CUDA::cublas      # For matrix operations
             CUDA::curand      # For random number generation
             spdlog::spdlog
     )

@@ -603,8 +603,6 @@ if(UNIX)
         # This avoids copying the same library 3x (libfoo.so, libfoo.so.12, libfoo.so.12.x.x)
         set(CUDA_LIB_BASES
             "libcudart"
-            "libcublas"
-            "libcublasLt"
             "libcurand"
             "libnvrtc"
             "libnvJitLink"
@@ -687,8 +685,6 @@ elseif(WIN32)
         # Copy CUDA runtime DLLs
         set(CUDA_DLL_PATTERNS
             "cudart64_*.dll"
-            "cublas64_*.dll"
-            "cublasLt64_*.dll"
             "curand64_*.dll"
             "nvrtc64_*.dll"
             "nvJitLink_*.dll"
