@@ -21,8 +21,8 @@ namespace lfs::rendering {
         float far_plane = 100000.0f;
         bool orthographic = false;
         bool has_depth = false;
-        bool depth_is_ndc = false;  // True if depth is already NDC (0-1), skip conversion
-        GLuint external_depth_texture = 0;  // If set, use this texture instead of framebuffer's depth
+        bool depth_is_ndc = false;         // True if depth is already NDC (0-1), skip conversion
+        GLuint external_depth_texture = 0; // If set, use this texture instead of framebuffer's depth
     };
 
     class ScreenQuadRenderer {

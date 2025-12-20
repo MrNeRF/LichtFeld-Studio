@@ -111,8 +111,8 @@ namespace lfs::rendering {
         std::shared_ptr<lfs::core::Tensor> screen_positions; // Optional: screen positions [N, 2] for brush tool
         bool valid = false;
         // Depth conversion parameters (needed for proper depth buffer writing)
-        bool depth_is_ndc = false;       // True if depth is already NDC (0-1), e.g., from OpenGL
-        unsigned int external_depth_texture = 0;  // If set, use this OpenGL texture directly (zero-copy)
+        bool depth_is_ndc = false;               // True if depth is already NDC (0-1), e.g., from OpenGL
+        unsigned int external_depth_texture = 0; // If set, use this OpenGL texture directly (zero-copy)
         float near_plane = DEFAULT_NEAR_PLANE;
         float far_plane = DEFAULT_FAR_PLANE;
         bool orthographic = false;

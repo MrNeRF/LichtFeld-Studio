@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/camera.hpp"
+#include "core/logger.hpp"
 #include "core/tensor.hpp"
 #include <algorithm>
 #include <chrono>
@@ -18,7 +19,6 @@
 #include <string>
 #include <thread>
 #include <vector>
-#include "core/logger.hpp"
 
 namespace lfs::training {
 

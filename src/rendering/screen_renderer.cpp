@@ -111,7 +111,7 @@ namespace lfs::rendering {
         // Bind depth texture and set depth parameters
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, getDepthTextureID());
-        shader.set("depthTexture", 1);  // Ignore error - optional uniform
+        shader.set("depthTexture", 1); // Ignore error - optional uniform
         shader.set("has_depth", depth_params_.has_depth);
         shader.set("near_plane", depth_params_.near_plane);
         shader.set("far_plane", depth_params_.far_plane);
@@ -127,7 +127,7 @@ namespace lfs::rendering {
         if (depth_params_.has_depth) {
             glEnable(GL_DEPTH_TEST);
             glDepthMask(GL_TRUE);
-            glDepthFunc(GL_ALWAYS);  // Always write depth from CUDA render
+            glDepthFunc(GL_ALWAYS); // Always write depth from CUDA render
         }
 
         glDrawArrays(GL_TRIANGLES, 0, 6);

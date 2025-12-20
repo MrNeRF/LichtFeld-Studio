@@ -5,8 +5,8 @@
 #include "ply.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
-#include "tinyply.hpp"
 #include "io/error.hpp"
+#include "tinyply.hpp"
 #include <algorithm>
 #include <charconv>
 #include <chrono>

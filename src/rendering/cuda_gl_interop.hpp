@@ -72,18 +72,18 @@ namespace lfs::rendering {
         int width_ = 0;
         int height_ = 0;
         bool is_registered_ = false;
-        bool is_depth_format_ = false;  // True if R32F, false if RGBA8
+        bool is_depth_format_ = false; // True if R32F, false if RGBA8
 
     public:
         CudaGLInteropTextureImpl();
         ~CudaGLInteropTextureImpl();
 
         Result<void> init(int width, int height);
-        Result<void> initForDepth(int width, int height);  // R32F format for depth
+        Result<void> initForDepth(int width, int height); // R32F format for depth
         Result<void> initForReading(GLuint texture_id, int width, int height);
         Result<void> resize(int new_width, int new_height);
         Result<void> updateFromTensor(const Tensor& image);
-        Result<void> updateDepthFromTensor(const Tensor& depth);  // Single-channel float
+        Result<void> updateDepthFromTensor(const Tensor& depth); // Single-channel float
         Result<void> readToTensor(Tensor& output);
         GLuint getTextureID() const { return texture_id_; }
 
@@ -152,7 +152,7 @@ namespace lfs::rendering {
     // Modified FrameBuffer to support interop
     class InteropFrameBuffer : public FrameBuffer {
         std::optional<CudaGLInteropTexture> interop_texture_;
-        std::optional<CudaGLInteropTexture> depth_interop_texture_;  // For depth upload
+        std::optional<CudaGLInteropTexture> depth_interop_texture_; // For depth upload
         bool use_interop_;
         bool use_depth_interop_ = true;
 
@@ -160,7 +160,7 @@ namespace lfs::rendering {
         explicit InteropFrameBuffer(bool use_interop = true);
 
         Result<void> uploadFromCUDA(const Tensor& cuda_image);
-        Result<void> uploadDepthFromCUDA(const Tensor& cuda_depth);  // Direct CUDA→GL depth
+        Result<void> uploadDepthFromCUDA(const Tensor& cuda_depth); // Direct CUDA→GL depth
 
         GLuint getInteropTexture() const {
             return use_interop_ && interop_texture_ ? interop_texture_->getTextureID() : getFrameTexture();

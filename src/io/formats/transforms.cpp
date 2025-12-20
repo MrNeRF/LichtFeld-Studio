@@ -6,8 +6,8 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
-#include "tinyply.hpp"
 #include "formats/colmap.hpp"
+#include "tinyply.hpp"
 #include <filesystem>
 #include <format>
 #include <fstream>

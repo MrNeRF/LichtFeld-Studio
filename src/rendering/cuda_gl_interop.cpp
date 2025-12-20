@@ -236,7 +236,10 @@ namespace lfs::rendering {
 
         const struct UnmapGuard {
             cudaGraphicsResource_t* res;
-            ~UnmapGuard() { if (res) cudaGraphicsUnmapResources(1, res, 0); }
+            ~UnmapGuard() {
+                if (res)
+                    cudaGraphicsUnmapResources(1, res, 0);
+            }
         } guard{&raw_resource};
 
         cudaArray_t cuda_array;
@@ -251,8 +254,8 @@ namespace lfs::rendering {
         }
 
         err = cudaMemcpy2DToArray(cuda_array, 0, 0, depth_contig.ptr<float>(),
-                                   w * sizeof(float), w * sizeof(float), h,
-                                   cudaMemcpyDeviceToDevice);
+                                  w * sizeof(float), w * sizeof(float), h,
+                                  cudaMemcpyDeviceToDevice);
         if (err != cudaSuccess) {
             return std::unexpected(std::format("Copy failed: {}", cudaGetErrorString(err)));
         }
