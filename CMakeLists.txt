@@ -80,10 +80,11 @@ option(BUILD_CUDA_ALL_SM "Build CUDA fat binaries targeting all modern SMs (>= m
 # Portable/distributable build - creates a self-contained package with all dependencies
 option(BUILD_PORTABLE "Build portable distribution (fat CUDA binaries + bundled DLLs)" OFF)
 
-# If portable build, force fat binaries
+# Portable build: fat binaries, no tests (tests require LibTorch which bundles unnecessary DLLs)
 if(BUILD_PORTABLE)
-    set(BUILD_CUDA_ALL_SM ON CACHE BOOL "Forced ON by BUILD_PORTABLE" FORCE)
-    message(STATUS "Portable build enabled - fat CUDA binaries will be built")
+    set(BUILD_CUDA_ALL_SM ON CACHE BOOL "" FORCE)
+    set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    message(STATUS "Portable build: fat CUDA binaries enabled, tests disabled")
 endif()
 
 # Compiler cache (CUDA caching disabled on Windows due to nvcc compatibility issues)
