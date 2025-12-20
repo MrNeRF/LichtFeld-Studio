@@ -17,9 +17,16 @@ set(FASTLFS_SOURCES
 # One unified library - renamed from fastgs_backend to fastlfs_backend
 add_library(fastlfs_backend STATIC ${FASTLFS_SOURCES})
 
+# PTX-only builds require separable compilation OFF
+if(LFS_DEFER_DEVICE_SYMBOLS)
+    set(_sep_comp OFF)
+else()
+    set(_sep_comp ON)
+endif()
+
 set_target_properties(fastlfs_backend PROPERTIES
         CUDA_ARCHITECTURES "${LichtFeld-Studio_CUDA_ARCH}"
-        CUDA_SEPARABLE_COMPILATION ON
+        CUDA_SEPARABLE_COMPILATION ${_sep_comp}
         POSITION_INDEPENDENT_CODE ON
         CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )

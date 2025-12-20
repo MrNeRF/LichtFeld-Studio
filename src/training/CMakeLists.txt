@@ -38,8 +38,15 @@ target_link_libraries(lfs_training_kernels
         CUDA::cudart
 )
 
+# PTX-only builds require separable compilation OFF
+if(LFS_DEFER_DEVICE_SYMBOLS)
+    set(_sep_comp OFF)
+else()
+    set(_sep_comp ON)
+endif()
+
 set_target_properties(lfs_training_kernels PROPERTIES
-    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_SEPARABLE_COMPILATION ${_sep_comp}
     CUDA_RESOLVE_DEVICE_SYMBOLS ON
     POSITION_INDEPENDENT_CODE ON
     CUDA_STANDARD 20

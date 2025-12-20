@@ -4,8 +4,15 @@ This guide explains how to build LichtFeld Studio for different use cases: local
 
 ## Requirements
 
+### Linux
 - **CUDA Toolkit 12.8+** (required for GCC 14 / C++23 support)
 - **GCC 14+** (for C++23 features)
+- **CMake 3.30+**
+- **vcpkg** (set `VCPKG_ROOT` environment variable)
+
+### Windows
+- **CUDA Toolkit 12.8+**
+- **Visual Studio 2022** (v17.10+ for C++23 support)
 - **CMake 3.30+**
 - **vcpkg** (set `VCPKG_ROOT` environment variable)
 

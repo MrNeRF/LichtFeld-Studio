@@ -50,9 +50,16 @@ set(LFS_TENSOR_CUDA_SOURCES
 if(LFS_TENSOR_CUDA_SOURCES)
     add_library(lfs_tensor_kernels STATIC ${LFS_TENSOR_CUDA_SOURCES})
 
+    # For PTX-only builds, disable separable compilation to avoid device linking issues
+    if(LFS_DEFER_DEVICE_SYMBOLS)
+        set(_separable_compilation OFF)
+    else()
+        set(_separable_compilation ON)
+    endif()
+
     set_target_properties(lfs_tensor_kernels PROPERTIES
             CUDA_ARCHITECTURES "${LichtFeld-Studio_CUDA_ARCH}"
-            CUDA_SEPARABLE_COMPILATION ON
+            CUDA_SEPARABLE_COMPILATION ${_separable_compilation}
             POSITION_INDEPENDENT_CODE ON
             CUDA_RESOLVE_DEVICE_SYMBOLS ON
             CUDA_STANDARD 20  # CUDA only supports up to C++20
