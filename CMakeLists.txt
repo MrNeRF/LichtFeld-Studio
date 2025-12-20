@@ -77,6 +77,15 @@ endif()
 # Build fat binaries for all modern SMs (>= minimum). When OFF (default), build for the native GPU only.
 option(BUILD_CUDA_ALL_SM "Build CUDA fat binaries targeting all modern SMs (>= minimum SM)" OFF)
 
+# Portable/distributable build - creates a self-contained package with all dependencies
+option(BUILD_PORTABLE "Build portable distribution (fat CUDA binaries + bundled DLLs)" OFF)
+
+# If portable build, force fat binaries
+if(BUILD_PORTABLE)
+    set(BUILD_CUDA_ALL_SM ON CACHE BOOL "Forced ON by BUILD_PORTABLE" FORCE)
+    message(STATUS "Portable build enabled - fat CUDA binaries will be built")
+endif()
+
 # Compiler cache (CUDA caching disabled on Windows due to nvcc compatibility issues)
 find_program(SCCACHE_PROGRAM sccache)
 find_program(CCACHE_PROGRAM ccache)
@@ -493,20 +502,206 @@ if(TARGET nvimgcodec)
     message(STATUS "Post-build: nvImageCodec libraries will be copied to executable directory")
 endif()
 
+# =============================================================================
+# RESOURCE COPYING - Copy all resources to build/resources for runtime access
+# =============================================================================
+set(RESOURCE_DIR "$<TARGET_FILE_DIR:${PROJECT_NAME}>/resources")
+
+# Create resource directory structure
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/shaders"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/assets/icon"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/assets/icon/scene"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/assets/fonts"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/assets/themes"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${RESOURCE_DIR}/parameter"
+    COMMENT "Creating resource directory structure"
+)
+
+# Copy rendering shaders
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/src/rendering/resources/shaders"
+        "${RESOURCE_DIR}/shaders"
+    COMMENT "Copying rendering shaders"
+)
+
+# Copy visualizer icons
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/icon"
+        "${RESOURCE_DIR}/assets/icon"
+    COMMENT "Copying visualizer icons"
+)
+
+# Copy fonts (from visualizer)
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/fonts"
+        "${RESOURCE_DIR}/assets/fonts"
+    COMMENT "Copying visualizer fonts"
+)
+
+# Copy fonts (from rendering - JetBrainsMono for viewport gizmo)
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/src/rendering/resources/assets/JetBrainsMono-Regular.ttf"
+        "${RESOURCE_DIR}/assets/fonts/"
+    COMMENT "Copying rendering fonts"
+)
+
+# Copy themes
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/themes"
+        "${RESOURCE_DIR}/assets/themes"
+    COMMENT "Copying themes"
+)
+
+# Copy additional assets (logo, etc.)
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-icon.png"
+        "${RESOURCE_DIR}/assets/"
+    COMMENT "Copying application icon"
+)
+
+# Copy parameter files
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/parameter"
+        "${RESOURCE_DIR}/parameter"
+    COMMENT "Copying parameter files"
+)
+
+message(STATUS "Post-build: Resources will be copied to \${BUILD_DIR}/resources/")
+
 # Platform-specific settings
 if(UNIX)
     target_link_libraries(${PROJECT_NAME} PRIVATE GL GLU)
 
     set_target_properties(${PROJECT_NAME} PROPERTIES
-            INSTALL_RPATH "$ORIGIN:${CUDAToolkit_LIBRARY_DIR}"
+            INSTALL_RPATH "$ORIGIN:$ORIGIN/lib:${CUDAToolkit_LIBRARY_DIR}"
             BUILD_WITH_INSTALL_RPATH TRUE
             INSTALL_RPATH_USE_LINK_PATH TRUE
     )
+
+    # =============================================================================
+    # PORTABLE BUILD: Bundle shared libraries for Linux distribution
+    # =============================================================================
+    if(BUILD_PORTABLE)
+        set(DIST_DIR "$<TARGET_FILE_DIR:${PROJECT_NAME}>")
+        set(LIB_DIR "${DIST_DIR}/lib")
+
+        # Create lib directory
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${LIB_DIR}"
+            COMMENT "Creating lib directory for portable build"
+        )
+
+        # Copy CUDA runtime libraries
+        set(CUDA_LIB_PATTERNS
+            "libcudart.so*"
+            "libcublas.so*"
+            "libcublasLt.so*"
+            "libcusolver.so*"
+            "libcusparse.so*"
+            "libnvrtc.so*"
+            "libnvJitLink.so*"
+        )
+
+        foreach(pattern ${CUDA_LIB_PATTERNS})
+            file(GLOB CUDA_LIBS "${CUDAToolkit_LIBRARY_DIR}/${pattern}")
+            foreach(lib ${CUDA_LIBS})
+                add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${lib}"
+                        "${LIB_DIR}/"
+                    COMMENT "Copying CUDA library: ${lib}"
+                )
+            endforeach()
+        endforeach()
+
+        # Create a launcher script that sets LD_LIBRARY_PATH
+        file(WRITE "${CMAKE_BINARY_DIR}/run_lichtfeld.sh"
+"#!/bin/bash
+SCRIPT_DIR=\"$( cd \"$( dirname \"\${BASH_SOURCE[0]}\" )\" && pwd )\"
+export LD_LIBRARY_PATH=\"\$SCRIPT_DIR:\$SCRIPT_DIR/lib:\$LD_LIBRARY_PATH\"
+exec \"\$SCRIPT_DIR/LichtFeld-Studio\" \"$@\"
+")
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_BINARY_DIR}/run_lichtfeld.sh"
+                "${DIST_DIR}/"
+            COMMAND chmod +x "${DIST_DIR}/run_lichtfeld.sh"
+            COMMENT "Creating launcher script"
+        )
+
+        message(STATUS "Portable build: Libraries will be copied to lib/ directory")
+        message(STATUS "Portable build: Use run_lichtfeld.sh to launch with bundled libraries")
+    endif()
 elseif(WIN32)
     # On Windows, DLLs in the same directory as the .exe are automatically found
     set_target_properties(${PROJECT_NAME} PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
     )
+
+    # =============================================================================
+    # PORTABLE BUILD: Bundle all DLLs for Windows distribution
+    # =============================================================================
+    if(BUILD_PORTABLE)
+        # Create distribution directory
+        set(DIST_DIR "$<TARGET_FILE_DIR:${PROJECT_NAME}>")
+
+        # Copy vcpkg DLLs (Release builds)
+        set(VCPKG_BIN_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin")
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E echo "Copying vcpkg DLLs for portable build..."
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${VCPKG_BIN_DIR}"
+                "${DIST_DIR}"
+            COMMENT "Copying vcpkg runtime DLLs"
+        )
+
+        # Copy CUDA runtime DLLs
+        # These are typically: cudart64_*.dll, cublas64_*.dll, cublasLt64_*.dll, cusolver64_*.dll, cusparse64_*.dll
+        set(CUDA_DLL_PATTERNS
+            "cudart64_*.dll"
+            "cublas64_*.dll"
+            "cublasLt64_*.dll"
+            "cusolver64_*.dll"
+            "cusparse64_*.dll"
+            "nvrtc64_*.dll"
+            "nvJitLink_*.dll"
+        )
+
+        foreach(pattern ${CUDA_DLL_PATTERNS})
+            file(GLOB CUDA_DLLS "${CUDAToolkit_BIN_DIR}/${pattern}")
+            foreach(dll ${CUDA_DLLS})
+                add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${dll}"
+                        "${DIST_DIR}/"
+                    COMMENT "Copying CUDA DLL: ${dll}"
+                )
+            endforeach()
+        endforeach()
+
+        # Copy OpenSSL DLLs if present
+        if(OPENSSL_ROOT_DIR)
+            file(GLOB OPENSSL_DLLS "${OPENSSL_ROOT_DIR}/bin/*.dll")
+            foreach(dll ${OPENSSL_DLLS})
+                add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${dll}"
+                        "${DIST_DIR}/"
+                    COMMENT "Copying OpenSSL DLL: ${dll}"
+                )
+            endforeach()
+        endif()
+
+        message(STATUS "Portable build: DLLs will be copied to executable directory")
+    endif()
 endif()
 
 # Build type configuration function
@@ -587,6 +782,16 @@ message(STATUS "  C++ Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "  CUDA Standard: ${CMAKE_CUDA_STANDARD}")
 message(STATUS "  OpenImageIO Found: ${OpenImageIO_FOUND}")
 message(STATUS "  Tests: ${BUILD_TESTS}")
+message(STATUS "  Portable Build: ${BUILD_PORTABLE}")
+if(BUILD_PORTABLE)
+    message(STATUS "  -> Fat CUDA binaries: ON (SM >= ${BUILD_CUDA_ALL_MIN_SM})")
+    if(WIN32)
+        message(STATUS "  -> DLL bundling: ON")
+    elseif(UNIX)
+        message(STATUS "  -> Library bundling: ON (lib/ directory)")
+        message(STATUS "  -> Launcher script: run_lichtfeld.sh")
+    endif()
+endif()
 message(STATUS "===========================================")
 
 # Enable ccache if available

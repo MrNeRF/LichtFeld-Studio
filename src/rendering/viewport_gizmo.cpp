@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "viewport_gizmo.hpp"
+#include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "gl_state_guard.hpp"
 #include "rendering/render_constants.hpp"
@@ -51,8 +52,7 @@ namespace lfs::rendering {
         text_renderer_ = std::make_unique<TextRenderer>(width, height);
 
         // Load font from our assets
-        std::string font_path = std::string(PROJECT_ROOT_PATH) +
-                                "/src/rendering/resources/assets/JetBrainsMono-Regular.ttf";
+        auto font_path = (lfs::core::getFontsDir() / "JetBrainsMono-Regular.ttf").string();
         if (auto result = text_renderer_->LoadFont(font_path, 48); !result) {
             LOG_WARN("ViewportGizmo: Failed to load font: {}", result.error());
             text_renderer_.reset();
