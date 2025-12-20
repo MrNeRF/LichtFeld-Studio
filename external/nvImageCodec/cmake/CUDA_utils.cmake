@@ -87,7 +87,6 @@ function(CUDA_check_cudacc_flag out_status compiler flags)
     set(NULL_DEVICE "nul")
   endif()
 
-  set(compiler_wrapper "")
   if (${compiler} MATCHES "clang")
     set(preprocess_empty_cu_file "-E" "-x" "cuda" "${NULL_DEVICE}")
   else()
@@ -108,7 +107,6 @@ function(CUDA_check_cudacc_flag out_status compiler flags)
                   OUTPUT_QUIET
                   ERROR_QUIET
                   )
-
   if (${tmp_out_status} EQUAL 0)
     set(${out_status} TRUE PARENT_SCOPE)
   else()
