@@ -27,6 +27,8 @@ jobs:
       CC: gcc-14
       CXX: g++-14
       VCPKG_BUILD_TYPE: release
+      VCPKG_FORCE_SYSTEM_BINARIES: 1
+      CMAKE_MAKE_PROGRAM: /usr/bin/ninja
 
     steps:
       - name: Checkout source
@@ -61,7 +63,7 @@ jobs:
           git clone https://github.com/microsoft/vcpkg.git
           ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
 
-          cat >> $VCPKG_ROOT/triplets/x64-linux.cmake << EOF
+          cat >> $VCPKG_ROOT/triplets/x64-linux.cmake << 'EOF'
           set(VCPKG_BUILD_TYPE release)
           set(VCPKG_MAX_CONCURRENCY 2)
           EOF
@@ -84,8 +86,7 @@ jobs:
         run: |
           cmake -B build -S . -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
-            -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
-            -DCMAKE_MAKE_PROGRAM=$(which ninja)
+            -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
 
       - name: Build
         run: cmake --build build -j 2
