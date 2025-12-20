@@ -82,18 +82,33 @@ endif()
 # @param flags        flags to check
 # @return out_status
 function(CUDA_check_cudacc_flag out_status compiler flags)
+  set(NULL_DEVICE "/dev/null")
+  if(WIN32)
+    set(NULL_DEVICE "nul")
+  endif()
+
+  set(compiler_wrapper "")
   if (${compiler} MATCHES "clang")
-    set(preprocess_empty_cu_file "-E" "-x" "cuda" "/dev/null")
+    set(preprocess_empty_cu_file "-E" "-x" "cuda" "${NULL_DEVICE}")
   else()
-    set(preprocess_empty_cu_file "--dryrun" "-E" "-x" "cu" "/dev/null")
+    set(preprocess_empty_cu_file "--dryrun" "-E" "-x" "cu" "${NULL_DEVICE}")
+    if(WIN32)
+      get_filename_component(CXX_COMPILER_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)
+      set(ENV_PATH "$ENV{PATH}")
+      # Escape semicolons in the current PATH so CMake treats it as a single string, not a list
+      string(REPLACE ";" "\;" ENV_PATH "${ENV_PATH}")
+      set(PATH_WITH_CXX_COMPILER "${CXX_COMPILER_DIR}\;${ENV_PATH}")
+      set(compiler_env "${CMAKE_COMMAND}" "-E" "env" "PATH=${PATH_WITH_CXX_COMPILER}")
+    endif()
   endif()
   set(cudacc_command ${flags} ${preprocess_empty_cu_file})
   # Run the compiler and check the exit status
-  execute_process(COMMAND ${compiler} ${cudacc_command}
+  execute_process(COMMAND ${compiler_env} ${compiler} ${cudacc_command}
                   RESULT_VARIABLE tmp_out_status
                   OUTPUT_QUIET
                   ERROR_QUIET
                   )
+
   if (${tmp_out_status} EQUAL 0)
     set(${out_status} TRUE PARENT_SCOPE)
   else()
