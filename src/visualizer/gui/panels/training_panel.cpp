@@ -18,6 +18,7 @@
 #include <deque>
 #include <filesystem>
 #include <imgui.h>
+#include <set>
 
 #ifdef _WIN32
 #include <Windows.h>
@@ -27,6 +28,31 @@ namespace lfs::vis::gui::panels {
 
     namespace {
         constexpr float RATE_WINDOW_SECONDS = 5.0f;
+
+        void scale_steps_vector(std::vector<size_t>& steps, const float scaler) {
+            std::set<size_t> unique;
+            for (const auto s : steps) {
+                if (const auto scaled = static_cast<size_t>(static_cast<float>(s) * scaler); scaled > 0) {
+                    unique.insert(scaled);
+                }
+            }
+            steps.assign(unique.begin(), unique.end());
+        }
+
+        void apply_step_scaling(lfs::core::param::OptimizationParameters& opt, const float scaler) {
+            if (scaler <= 0.0f) return;
+            const auto scale = [scaler](const size_t v) {
+                return static_cast<size_t>(static_cast<float>(v) * scaler);
+            };
+            opt.iterations = scale(opt.iterations);
+            opt.start_refine = scale(opt.start_refine);
+            opt.reset_every = scale(opt.reset_every);
+            opt.stop_refine = scale(opt.stop_refine);
+            opt.refine_every = scale(opt.refine_every);
+            opt.sh_degree_interval = scale(opt.sh_degree_interval);
+            scale_steps_vector(opt.eval_steps, scaler);
+            scale_steps_vector(opt.save_steps, scaler);
+        }
     }
 
     struct IterationRateTracker {
@@ -224,15 +250,16 @@ namespace lfs::vis::gui::panels {
             ImGui::Text("Steps Scaler:");
             ImGui::TableNextColumn();
             if (can_edit) {
+                const float prev = opt_params.steps_scaler;
                 ImGui::PushItemWidth(-1);
                 if (ImGui::InputFloat("##steps_scaler", &opt_params.steps_scaler, 0.1f, 0.5f, "%.2f")) {
                     opt_params.steps_scaler = std::max(0.0f, opt_params.steps_scaler);
+                    if (opt_params.steps_scaler > 0.0f) {
+                        const float ratio = (prev > 0.0f) ? (opt_params.steps_scaler / prev) : opt_params.steps_scaler;
+                        apply_step_scaling(opt_params, ratio);
+                    }
                 }
                 ImGui::PopItemWidth();
-                if (opt_params.steps_scaler > 0) {
-                    ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "(scaling active)");
-                }
             } else {
                 ImGui::Text("%.2f", opt_params.steps_scaler);
             }
@@ -337,7 +364,14 @@ namespace lfs::vis::gui::panels {
             ImGui::Text("Sparsity:");
             ImGui::TableNextColumn();
             if (can_edit) {
-                ImGui::Checkbox("##enable_sparsity", &opt_params.enable_sparsity);
+                if (ImGui::Checkbox("##enable_sparsity", &opt_params.enable_sparsity)) {
+                    const auto steps = static_cast<size_t>(opt_params.sparsify_steps);
+                    if (opt_params.enable_sparsity) {
+                        opt_params.iterations += steps;
+                    } else if (opt_params.iterations > steps) {
+                        opt_params.iterations -= steps;
+                    }
+                }
             } else {
                 ImGui::Text("%s", opt_params.enable_sparsity ? "Enabled" : "Disabled");
             }
@@ -1208,8 +1242,15 @@ namespace lfs::vis::gui::panels {
                     ImGui::TableNextColumn();
                     if (can_edit) {
                         ImGui::PushItemWidth(-1);
+                        const int prev = opt_params.sparsify_steps;
                         if (ImGui::InputInt("##sparsify_steps", &opt_params.sparsify_steps, 1000, 5000)) {
                             opt_params.sparsify_steps = std::max(1, opt_params.sparsify_steps);
+                            const int delta = opt_params.sparsify_steps - prev;
+                            if (delta > 0) {
+                                opt_params.iterations += static_cast<size_t>(delta);
+                            } else if (opt_params.iterations > static_cast<size_t>(-delta)) {
+                                opt_params.iterations -= static_cast<size_t>(-delta);
+                            }
                         }
                         ImGui::PopItemWidth();
                     } else {
