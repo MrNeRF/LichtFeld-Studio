@@ -24,7 +24,9 @@ namespace lfs::vis {
     VisualizerImpl::VisualizerImpl(const ViewerOptions& options)
         : options_(options),
           viewport_(options.width, options.height),
-          window_manager_(std::make_unique<WindowManager>(options.title, options.width, options.height)) {
+          window_manager_(std::make_unique<WindowManager>(options.title, options.width, options.height,
+                                                          options.monitor_x, options.monitor_y,
+                                                          options.monitor_width, options.monitor_height)) {
 
         LOG_DEBUG("Creating visualizer with window size {}x{}", options.width, options.height);
 

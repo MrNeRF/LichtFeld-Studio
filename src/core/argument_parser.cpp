@@ -123,6 +123,7 @@ namespace {
             ::args::Flag use_bilateral_grid(parser, "bilateral_grid", "Enable bilateral grid filtering", {"bilateral-grid"});
             ::args::Flag enable_eval(parser, "eval", "Enable evaluation during training", {"eval"});
             ::args::Flag headless(parser, "headless", "Disable visualization during training", {"headless"});
+            ::args::Flag no_splash(parser, "no_splash", "Skip splash screen on startup", {"no-splash"});
             ::args::Flag enable_save_eval_images(parser, "save_eval_images", "Save eval images and depth maps", {"save-eval-images"});
             ::args::Flag save_depth(parser, "save_depth", "Save depth maps during training", {"save-depth"});
             ::args::Flag bg_modulation(parser, "bg_modulation", "Enable sinusoidal background modulation mixed with base background", {"bg-modulation"});
@@ -398,6 +399,7 @@ namespace {
                                         use_bilateral_grid_flag = bool(use_bilateral_grid),
                                         enable_eval_flag = bool(enable_eval),
                                         headless_flag = bool(headless),
+                                        no_splash_flag = bool(no_splash),
                                         enable_save_eval_images_flag = bool(enable_save_eval_images),
                                         bg_modulation_flag = bool(bg_modulation),
                                         random_flag = bool(random),
@@ -447,6 +449,7 @@ namespace {
                 setFlag(use_bilateral_grid_flag, opt.use_bilateral_grid);
                 setFlag(enable_eval_flag, opt.enable_eval);
                 setFlag(headless_flag, opt.headless);
+                setFlag(no_splash_flag, opt.no_splash);
                 setFlag(enable_save_eval_images_flag, opt.enable_save_eval_images);
                 setFlag(bg_modulation_flag, opt.bg_modulation);
                 setFlag(random_flag, opt.random);
@@ -579,11 +582,24 @@ namespace {
 } // namespace
 
 std::expected<lfs::core::args::ParsedArgs, std::string>
-lfs::core::args::parse_args(int argc, const char* const argv[]) {
-    if (argc < 2 || std::string_view(argv[1]) != "convert") {
+lfs::core::args::parse_args(const int argc, const char* const argv[]) {
+    if (argc >= 2) {
+        const std::string_view arg1 = argv[1];
+
+        if (arg1 == "--warmup") {
+            return WarmupMode{};
+        }
+
+        if (arg1 == "convert") {
+            // Handle convert subcommand below
+        } else {
+            auto result = parse_args_and_params(argc, argv);
+            if (!result) return std::unexpected(result.error());
+            return TrainingMode{std::move(*result)};
+        }
+    } else {
         auto result = parse_args_and_params(argc, argv);
-        if (!result)
-            return std::unexpected(result.error());
+        if (!result) return std::unexpected(result.error());
         return TrainingMode{std::move(*result)};
     }
 

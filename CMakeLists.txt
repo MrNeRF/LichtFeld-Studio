@@ -309,8 +309,9 @@ add_subdirectory(src/geometry)  # Geometry utilities
 # LichtFeld-Studio
 # -----------------------------------------------------------------------------
 add_executable(${PROJECT_NAME}
-    src/main.cpp
-    src/application.cpp
+    src/app/main.cpp
+    src/app/application.cpp
+    src/app/splash_screen.cpp
     resources/lichtfeld-studio.rc
 )
 
@@ -324,8 +325,9 @@ target_include_directories(${PROJECT_NAME}
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_BINARY_DIR}/include
-        ${CMAKE_CURRENT_SOURCE_DIR}/src       # For application.cpp to find training_new/, visualizer/, etc.
-        ${CMAKE_CURRENT_SOURCE_DIR}/external  # For external headers
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/app/include  # For app headers
+        ${CMAKE_CURRENT_SOURCE_DIR}/src              # For training/, visualizer/, etc.
+        ${CMAKE_CURRENT_SOURCE_DIR}/external         # For external headers
 
         ${CUDAToolkit_INCLUDE_DIRS}
         ${OPENGL_INCLUDE_DIRS}
@@ -346,6 +348,8 @@ target_link_libraries(${PROJECT_NAME}
         spdlog::spdlog
         taywee::args
         OpenImageIO::OpenImageIO
+        glad::glad         # For splash screen
+        glfw               # For splash screen
 )
 
 # Copy nvImageCodec shared libraries next to executable for easy deployment
@@ -474,12 +478,18 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMENT "Copying themes"
 )
 
-# Copy additional assets (logo, etc.)
+# Copy additional assets (logo, splash images, etc.)
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-icon.png"
         "${RESOURCE_DIR}/assets/"
-    COMMENT "Copying application icon"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-splash-logo.png"
+        "${RESOURCE_DIR}/assets/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-splash-loading.png"
+        "${RESOURCE_DIR}/assets/"
+    COMMENT "Copying application assets"
 )
 
 # Copy parameter files
@@ -744,6 +754,8 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/fonts" DESTINAT
 install(FILES "${CMAKE_SOURCE_DIR}/src/rendering/resources/assets/JetBrainsMono-Regular.ttf" DESTINATION "${INSTALL_RESOURCE_DIR}/assets/fonts")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/themes" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-icon.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
+install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-splash-logo.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
+install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-splash-loading.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/parameter" DESTINATION "${INSTALL_RESOURCE_DIR}")
 
 if(TARGET nvimgcodec)

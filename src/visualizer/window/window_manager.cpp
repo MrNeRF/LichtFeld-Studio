@@ -25,10 +25,14 @@ namespace lfs::vis {
         }
     }
 
-    WindowManager::WindowManager(const std::string& title, int width, int height)
+    WindowManager::WindowManager(const std::string& title, const int width, const int height,
+                                  const int monitor_x, const int monitor_y,
+                                  const int monitor_width, const int monitor_height)
         : title_(title),
           window_size_(width, height),
-          framebuffer_size_(width, height) {
+          framebuffer_size_(width, height),
+          monitor_pos_(monitor_x, monitor_y),
+          monitor_size_(monitor_width, monitor_height) {
     }
 
     WindowManager::~WindowManager() {
@@ -62,6 +66,13 @@ namespace lfs::vis {
             std::cerr << "Failed to create GLFW window!" << std::endl;
             glfwTerminate();
             return false;
+        }
+
+        // Position window on specified monitor (if provided)
+        if (monitor_size_.x > 0 && monitor_size_.y > 0) {
+            const int xpos = monitor_pos_.x + (monitor_size_.x - window_size_.x) / 2;
+            const int ypos = monitor_pos_.y + (monitor_size_.y - window_size_.y) / 2;
+            glfwSetWindowPos(window_, xpos, ypos);
         }
 
         glfwMakeContextCurrent(window_);
