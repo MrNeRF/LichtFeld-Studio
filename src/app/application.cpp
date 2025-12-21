@@ -12,6 +12,7 @@
 #include "visualizer/visualizer.hpp"
 
 #include <cuda_runtime.h>
+#include <rasterization_api.h>
 
 #ifdef WIN32
 #include <windows.h>
@@ -58,18 +59,21 @@ int runHeadless(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
     return 0;
 }
 
-int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
-    MonitorInfo monitor;
+void warmupCuda() {
+    cudaDeviceProp prop;
+    if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess) {
+        LOG_INFO("GPU: {} (SM {}.{}, {} MB)", prop.name, prop.major, prop.minor,
+                 prop.totalGlobalMem / (1024 * 1024));
+    }
+    LOG_INFO("Initializing CUDA...");
+    fast_lfs::rasterization::warmup_kernels();
+}
 
+int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
     if (params->optimization.no_splash) {
-        cudaFree(nullptr);
-        cudaDeviceSynchronize();
+        warmupCuda();
     } else {
-        SplashScreen::runAndGetMonitor([]() {
-            cudaFree(nullptr);
-            cudaDeviceSynchronize();
-            return 0;
-        }, monitor);
+        SplashScreen::runWithDelay([]() { warmupCuda(); return 0; });
     }
 
     auto viewer = vis::Visualizer::create({
@@ -79,10 +83,6 @@ int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
         .antialiasing = false,
         .enable_cuda_interop = true,
         .gut = params->optimization.gut,
-        .monitor_x = monitor.x,
-        .monitor_y = monitor.y,
-        .monitor_width = monitor.width,
-        .monitor_height = monitor.height
     });
 
     viewer->setParameters(*params);

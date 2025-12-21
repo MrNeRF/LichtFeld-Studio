@@ -8,17 +8,10 @@
 
 namespace lfs::app {
 
-struct MonitorInfo {
-    int x = 0;
-    int y = 0;
-    int width = 0;
-    int height = 0;
-};
-
 class SplashScreen {
 public:
-    static int run(std::function<int()> task);
-    static int runAndGetMonitor(std::function<int()> task, MonitorInfo& monitor);
+    // Run task; show splash only if it takes longer than delay_ms
+    static int runWithDelay(std::function<int()> task, int delay_ms = 300);
 };
 
 } // namespace lfs::app

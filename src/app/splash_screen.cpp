@@ -28,10 +28,6 @@ constexpr int SPINNER_SEGMENTS = 12;
 constexpr float SPINNER_RADIUS = 10.0f;
 constexpr float SPINNER_THICKNESS = 2.0f;
 constexpr float PI = 3.14159265358979f;
-constexpr double MIN_DISPLAY_TIME = 1.0;
-
-// Only show splash if task takes longer than this
-constexpr auto SPLASH_DELAY = std::chrono::milliseconds(200);
 
 constexpr float SPINNER_R = 0.4f;
 constexpr float SPINNER_G = 0.7f;
@@ -95,14 +91,14 @@ GLuint compileShader(const GLenum type, const char* const source) {
 }
 
 GLuint createProgram(const char* const vs, const char* const fs) {
-    const GLuint vsId = compileShader(GL_VERTEX_SHADER, vs);
-    const GLuint fsId = compileShader(GL_FRAGMENT_SHADER, fs);
+    const GLuint vs_id = compileShader(GL_VERTEX_SHADER, vs);
+    const GLuint fs_id = compileShader(GL_FRAGMENT_SHADER, fs);
     const GLuint program = glCreateProgram();
-    glAttachShader(program, vsId);
-    glAttachShader(program, fsId);
+    glAttachShader(program, vs_id);
+    glAttachShader(program, fs_id);
     glLinkProgram(program);
-    glDeleteShader(vsId);
-    glDeleteShader(fsId);
+    glDeleteShader(vs_id);
+    glDeleteShader(fs_id);
     return program;
 }
 
@@ -116,7 +112,6 @@ struct ImageData {
 
 ImageData loadImage(const std::filesystem::path& path) {
     ImageData img;
-
     int channels;
     stbi_set_flip_vertically_on_load(true);
     unsigned char* const data = stbi_load(path.string().c_str(), &img.width, &img.height, &channels, 4);
@@ -152,15 +147,13 @@ ImageData loadImage(const std::filesystem::path& path) {
     return img;
 }
 
-void drawImage(const ImageData& img, const GLuint program, const float centerX, const float centerY) {
+void drawImage(const ImageData& img, const GLuint program, const float center_x, const float center_y) {
     if (!img.texture) return;
-
-    const float scaleX = static_cast<float>(img.width) / SPLASH_WIDTH;
-    const float scaleY = static_cast<float>(img.height) / SPLASH_HEIGHT;
-
+    const float scale_x = static_cast<float>(img.width) / SPLASH_WIDTH;
+    const float scale_y = static_cast<float>(img.height) / SPLASH_HEIGHT;
     glUseProgram(program);
-    glUniform2f(glGetUniformLocation(program, "uOffset"), centerX, centerY);
-    glUniform2f(glGetUniformLocation(program, "uScale"), scaleX, scaleY);
+    glUniform2f(glGetUniformLocation(program, "uOffset"), center_x, center_y);
+    glUniform2f(glGetUniformLocation(program, "uScale"), scale_x, scale_y);
     glBindTexture(GL_TEXTURE_2D, img.texture);
     glBindVertexArray(img.vao);
     glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -178,17 +171,17 @@ struct SpinnerData {
     GLuint program = 0;
     GLuint vao = 0;
     GLuint vbo = 0;
-    GLint colorLoc = -1;
-    GLint offsetLoc = -1;
-    GLint scaleLoc = -1;
+    GLint color_loc = -1;
+    GLint offset_loc = -1;
+    GLint scale_loc = -1;
 };
 
 SpinnerData createSpinner() {
     SpinnerData s;
     s.program = createProgram(SPINNER_VS, SPINNER_FS);
-    s.colorLoc = glGetUniformLocation(s.program, "uColor");
-    s.offsetLoc = glGetUniformLocation(s.program, "uOffset");
-    s.scaleLoc = glGetUniformLocation(s.program, "uScale");
+    s.color_loc = glGetUniformLocation(s.program, "uColor");
+    s.offset_loc = glGetUniformLocation(s.program, "uOffset");
+    s.scale_loc = glGetUniformLocation(s.program, "uScale");
 
     glGenVertexArrays(1, &s.vao);
     glGenBuffers(1, &s.vbo);
@@ -202,23 +195,20 @@ SpinnerData createSpinner() {
     return s;
 }
 
-void drawSpinner(const SpinnerData& s, const float time, const float centerX, const float centerY) {
+void drawSpinner(const SpinnerData& s, const float time, const float center_x, const float center_y) {
     glUseProgram(s.program);
     glBindVertexArray(s.vao);
-    glUniform2f(s.offsetLoc, centerX, centerY);
-    glUniform2f(s.scaleLoc, SPINNER_RADIUS / SPLASH_WIDTH, SPINNER_RADIUS / SPLASH_HEIGHT);
+    glUniform2f(s.offset_loc, center_x, center_y);
+    glUniform2f(s.scale_loc, SPINNER_RADIUS / SPLASH_WIDTH, SPINNER_RADIUS / SPLASH_HEIGHT);
     glLineWidth(SPINNER_THICKNESS);
 
     for (int i = 0; i < SPINNER_SEGMENTS; ++i) {
         const float angle = (2.0f * PI * static_cast<float>(i) / SPINNER_SEGMENTS) - time * 4.0f;
         const float alpha = static_cast<float>(i) / SPINNER_SEGMENTS;
-
-        glUniform4f(s.colorLoc, SPINNER_R, SPINNER_G, SPINNER_B, alpha);
-
-        const float cosA = std::cos(angle);
-        const float sinA = std::sin(angle);
-        const float vertices[] = {cosA * 0.5f, sinA * 0.5f, cosA, sinA};
-
+        glUniform4f(s.color_loc, SPINNER_R, SPINNER_G, SPINNER_B, alpha);
+        const float cos_a = std::cos(angle);
+        const float sin_a = std::sin(angle);
+        const float vertices[] = {cos_a * 0.5f, sin_a * 0.5f, cos_a, sin_a};
         glBindBuffer(GL_ARRAY_BUFFER, s.vbo);
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
         glDrawArrays(GL_LINES, 0, 2);
@@ -233,44 +223,28 @@ void freeSpinner(SpinnerData& s) {
     s = {};
 }
 
-int runSplashImpl(std::function<int()> task, MonitorInfo* outMonitor, const bool keepGlfwAlive) {
-    using Clock = std::chrono::steady_clock;
+} // namespace
 
-    // Start task immediately
+int SplashScreen::runWithDelay(std::function<int()> task, const int delay_ms) {
     std::atomic<bool> done{false};
     std::atomic<int> result{0};
-    const auto startTime = Clock::now();
-
     std::thread worker([&]() {
         result = task();
         done = true;
     });
 
-    // Wait briefly to see if task completes quickly (cached kernels)
-    while (!done && (Clock::now() - startTime) < SPLASH_DELAY) {
+    // Wait for delay; if task completes quickly, skip splash
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(delay_ms);
+    while (!done && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    // If task already done, skip splash entirely
     if (done) {
         worker.join();
-        if (outMonitor && keepGlfwAlive) {
-            // Still need monitor info - init GLFW briefly
-            if (glfwInit()) {
-                GLFWmonitor* const monitor = glfwGetPrimaryMonitor();
-                const GLFWvidmode* const mode = glfwGetVideoMode(monitor);
-                int monitorX, monitorY;
-                glfwGetMonitorPos(monitor, &monitorX, &monitorY);
-                outMonitor->x = monitorX;
-                outMonitor->y = monitorY;
-                outMonitor->width = mode->width;
-                outMonitor->height = mode->height;
-            }
-        }
         return result;
     }
 
-    // Task is slow - show splash
+    // Task still running - show splash
     if (!glfwInit()) {
         worker.join();
         return result;
@@ -278,15 +252,8 @@ int runSplashImpl(std::function<int()> task, MonitorInfo* outMonitor, const bool
 
     GLFWmonitor* const monitor = glfwGetPrimaryMonitor();
     const GLFWvidmode* const mode = glfwGetVideoMode(monitor);
-    int monitorX, monitorY;
-    glfwGetMonitorPos(monitor, &monitorX, &monitorY);
-
-    if (outMonitor) {
-        outMonitor->x = monitorX;
-        outMonitor->y = monitorY;
-        outMonitor->width = mode->width;
-        outMonitor->height = mode->height;
-    }
+    int monitor_x, monitor_y;
+    glfwGetMonitorPos(monitor, &monitor_x, &monitor_y);
 
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
@@ -295,12 +262,12 @@ int runSplashImpl(std::function<int()> task, MonitorInfo* outMonitor, const bool
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
     glfwWindowHint(GLFW_FLOATING, GLFW_TRUE);
 
-    const int xpos = monitorX + (mode->width - SPLASH_WIDTH) / 2;
-    const int ypos = monitorY + (mode->height - SPLASH_HEIGHT) / 2;
+    const int xpos = monitor_x + (mode->width - SPLASH_WIDTH) / 2;
+    const int ypos = monitor_y + (mode->height - SPLASH_HEIGHT) / 2;
 
     GLFWwindow* const window = glfwCreateWindow(SPLASH_WIDTH, SPLASH_HEIGHT, "LichtFeld Studio", nullptr, nullptr);
     if (!window) {
-        if (!keepGlfwAlive) glfwTerminate();
+        glfwTerminate();
         worker.join();
         return result;
     }
@@ -311,64 +278,45 @@ int runSplashImpl(std::function<int()> task, MonitorInfo* outMonitor, const bool
 
     if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
         glfwDestroyWindow(window);
-        if (!keepGlfwAlive) glfwTerminate();
+        glfwTerminate();
         worker.join();
         return result;
     }
 
-    const GLuint texturedProgram = createProgram(TEXTURED_VS, TEXTURED_FS);
+    const GLuint textured_program = createProgram(TEXTURED_VS, TEXTURED_FS);
     SpinnerData spinner = createSpinner();
 
-    const auto assetsDir = core::getAssetsDir();
-    ImageData logo = loadImage(assetsDir / "lichtfeld-splash-logo.png");
-    ImageData loadingText = loadImage(assetsDir / "lichtfeld-splash-loading.png");
+    const auto assets_dir = core::getAssetsDir();
+    ImageData logo = loadImage(assets_dir / "lichtfeld-splash-logo.png");
+    ImageData loading_text = loadImage(assets_dir / "lichtfeld-splash-loading.png");
 
-    const double splashStartTime = glfwGetTime();
     glClearColor(BG_R, BG_G, BG_B, 1.0f);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    while (!glfwWindowShouldClose(window)) {
+    const double start_time = glfwGetTime();
+
+    while (!glfwWindowShouldClose(window) && !done) {
+        const float elapsed = static_cast<float>(glfwGetTime() - start_time);
         glClear(GL_COLOR_BUFFER_BIT);
-
-        const double elapsed = glfwGetTime() - splashStartTime;
-
-        drawImage(logo, texturedProgram, 0.5f, LOGO_Y);
-        drawImage(loadingText, texturedProgram, 0.5f, TEXT_Y);
-        drawSpinner(spinner, static_cast<float>(elapsed), 0.5f, SPINNER_Y);
-
+        drawImage(logo, textured_program, 0.5f, LOGO_Y);
+        drawImage(loading_text, textured_program, 0.5f, TEXT_Y);
+        drawSpinner(spinner, elapsed, 0.5f, SPINNER_Y);
         glfwSwapBuffers(window);
         glfwPollEvents();
-
-        if (done && elapsed >= MIN_DISPLAY_TIME) {
-            break;
-        }
     }
 
     worker.join();
 
     freeImage(logo);
-    freeImage(loadingText);
+    freeImage(loading_text);
     freeSpinner(spinner);
-    glDeleteProgram(texturedProgram);
+    glDeleteProgram(textured_program);
     glfwDestroyWindow(window);
     glfwDefaultWindowHints();
-
-    if (!keepGlfwAlive) {
-        glfwTerminate();
-    }
+    glfwTerminate();
 
     return result;
-}
-
-} // namespace
-
-int SplashScreen::run(std::function<int()> task) {
-    return runSplashImpl(std::move(task), nullptr, false);
-}
-
-int SplashScreen::runAndGetMonitor(std::function<int()> task, MonitorInfo& monitor) {
-    return runSplashImpl(std::move(task), &monitor, true);
 }
 
 } // namespace lfs::app

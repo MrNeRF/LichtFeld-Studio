@@ -97,7 +97,20 @@ namespace lfs::vis {
         glBlendEquation(GL_FUNC_ADD);
         glEnable(GL_PROGRAM_POINT_SIZE);
 
+        // Clear to dark background immediately
+        glClearColor(0.11f, 0.11f, 0.14f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glfwSwapBuffers(window_);
+        glfwPollEvents();
+
         return true;
+    }
+
+    void WindowManager::showWindow() {
+        if (window_) {
+            glfwShowWindow(window_);
+            glfwFocusWindow(window_);
+        }
     }
 
     void WindowManager::updateWindowSize() {

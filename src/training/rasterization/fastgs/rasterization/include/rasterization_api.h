@@ -105,4 +105,7 @@ namespace fast_lfs::rasterization {
         float center_x,
         float center_y);
 
+    // Pre-compile all CUDA kernels to avoid JIT delays during rendering
+    void warmup_kernels();
+
 } // namespace fast_lfs::rasterization
