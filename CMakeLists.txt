@@ -725,6 +725,104 @@ if(BUILD_PORTABLE)
 endif()
 message(STATUS "===========================================")
 
+# =============================================================================
+# INSTALLATION (cmake --install build --prefix ./dist)
+# =============================================================================
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install" CACHE PATH "" FORCE)
+endif()
+
+include(GNUInstallDirs)
+
+install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(FILES "${CMAKE_SOURCE_DIR}/LICENSE" DESTINATION ".")
+
+set(INSTALL_RESOURCE_DIR "${CMAKE_INSTALL_DATADIR}/LichtFeld-Studio")
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/rendering/resources/shaders" DESTINATION "${INSTALL_RESOURCE_DIR}")
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/icon" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/fonts" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
+install(FILES "${CMAKE_SOURCE_DIR}/src/rendering/resources/assets/JetBrainsMono-Regular.ttf" DESTINATION "${INSTALL_RESOURCE_DIR}/assets/fonts")
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/themes" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
+install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-icon.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/parameter" DESTINATION "${INSTALL_RESOURCE_DIR}")
+
+if(TARGET nvimgcodec)
+    install(FILES "$<TARGET_FILE:nvimgcodec>" DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    if(TARGET nvjpeg_ext)
+        install(FILES "$<TARGET_FILE:nvjpeg_ext>" DESTINATION "${CMAKE_INSTALL_LIBDIR}/extensions")
+    endif()
+    if(TARGET nvjpeg2k_ext)
+        install(FILES "$<TARGET_FILE:nvjpeg2k_ext>" DESTINATION "${CMAKE_INSTALL_LIBDIR}/extensions")
+    endif()
+endif()
+
+# =============================================================================
+# PORTABLE: Bundle runtime dependencies
+# =============================================================================
+if(BUILD_PORTABLE)
+    # Collect runtime dependencies (exclude system libs)
+    install(CODE "
+        file(GET_RUNTIME_DEPENDENCIES
+            EXECUTABLES \$<TARGET_FILE:${PROJECT_NAME}>
+            RESOLVED_DEPENDENCIES_VAR _resolved
+            UNRESOLVED_DEPENDENCIES_VAR _unresolved
+            PRE_EXCLUDE_REGEXES \"^/lib\" \"^/usr/lib\" \"libstdc\\\\+\\\\+\" \"libgcc\" \"libm\\\\.so\" \"libdl\\\\.so\" \"librt\\\\.so\" \"ld-linux\"
+            POST_INCLUDE_REGEXES \"libcuda\" \"libnv\" \"libcurand\"
+        )
+        foreach(dep \${_resolved})
+            file(INSTALL \${dep} DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\" FOLLOW_SYMLINK_CHAIN)
+        endforeach()
+    " COMPONENT Runtime)
+
+    if(UNIX AND NOT APPLE)
+        set(CUDA_LIBS_TO_BUNDLE "libcudart.so" "libcurand.so" "libnvrtc.so" "libnvJitLink.so")
+        install(CODE "
+            foreach(lib ${CUDA_LIBS_TO_BUNDLE})
+                file(GLOB lib_files \"${CUDAToolkit_LIBRARY_DIR}/\${lib}*\")
+                foreach(f \${lib_files})
+                    file(INSTALL \${f} DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\" FOLLOW_SYMLINK_CHAIN)
+                endforeach()
+            endforeach()
+        " COMPONENT Runtime)
+
+        # Launcher script
+        install(CODE "
+            file(WRITE \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/run_lichtfeld.sh\"
+\"#!/bin/bash
+SCRIPT_DIR=\\\"\\$( cd \\\"\\$( dirname \\\"\\\${BASH_SOURCE[0]}\\\" )\\\" && pwd )\\\"
+export LD_LIBRARY_PATH=\\\"\\\$SCRIPT_DIR/../lib:\\\$LD_LIBRARY_PATH\\\"
+exec \\\"\\\$SCRIPT_DIR/LichtFeld-Studio\\\" \\\"\\$@\\\"
+\")
+            execute_process(COMMAND chmod +x \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/run_lichtfeld.sh\")
+        " COMPONENT Runtime)
+
+        # nvImageCodec symlinks
+        install(CODE "
+            file(GLOB nvimgcodec_lib \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libnvimgcodec.so.*.*.*\")
+            if(nvimgcodec_lib)
+                get_filename_component(name \${nvimgcodec_lib} NAME)
+                execute_process(COMMAND ln -sf \${name} \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libnvimgcodec.so.0\")
+                execute_process(COMMAND ln -sf libnvimgcodec.so.0 \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libnvimgcodec.so\")
+            endif()
+        " COMPONENT Runtime)
+
+    elseif(WIN32)
+        install(CODE "
+            file(GLOB cuda_dlls \"${CUDAToolkit_BIN_DIR}/cudart64_*.dll\" \"${CUDAToolkit_BIN_DIR}/curand64_*.dll\"
+                                \"${CUDAToolkit_BIN_DIR}/nvrtc64_*.dll\" \"${CUDAToolkit_BIN_DIR}/nvJitLink_*.dll\")
+            foreach(dll \${cuda_dlls})
+                file(INSTALL \${dll} DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
+            endforeach()
+            if(EXISTS \"${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin\")
+                file(GLOB vcpkg_dlls \"${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin/*.dll\")
+                foreach(dll \${vcpkg_dlls})
+                    file(INSTALL \${dll} DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
+                endforeach()
+            endif()
+        " COMPONENT Runtime)
+    endif()
+endif()
+
 # Build statistics (parses .ninja_log, no Python required)
 if(CMAKE_GENERATOR MATCHES "Ninja")
     # Manual target: ninja build_stats

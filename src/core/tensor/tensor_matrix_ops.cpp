@@ -52,11 +52,9 @@ Tensor Tensor::mm(const Tensor& other) const {
     const size_t k = shape_[1];
     const size_t n = other.shape_[1];
 
-    // For GPU tensors, compute on CPU then transfer back (small matrices don't benefit from GPU)
+    // GPU: transfer to CPU, compute, transfer back
     if (device_ == Device::CUDA) {
-        const auto a_cpu = cpu().contiguous();
-        const auto b_cpu = other.cpu().contiguous();
-        return a_cpu.mm(b_cpu).cuda();
+        return cpu().contiguous().mm(other.cpu().contiguous()).cuda();
     }
 
     const Tensor& a = is_contiguous() ? *this : contiguous();
@@ -99,11 +97,9 @@ Tensor Tensor::bmm(const Tensor& other) const {
     const size_t k = shape_[2];
     const size_t n = other.shape_[2];
 
-    // For GPU tensors, compute on CPU then transfer back
+    // GPU: transfer to CPU, compute, transfer back
     if (device_ == Device::CUDA) {
-        const auto a_cpu = cpu().contiguous();
-        const auto b_cpu = other.cpu().contiguous();
-        return a_cpu.bmm(b_cpu).cuda();
+        return cpu().contiguous().bmm(other.cpu().contiguous()).cuda();
     }
 
     const Tensor& a = is_contiguous() ? *this : contiguous();
@@ -237,29 +233,24 @@ Tensor Tensor::dot(const Tensor& other) const {
         return Tensor();
     }
 
-    // For GPU tensors, compute on CPU then transfer back
+    // GPU: transfer to CPU, compute, transfer back
     if (device_ == Device::CUDA) {
-        const auto a_cpu = cpu().contiguous();
-        const auto b_cpu = other.cpu().contiguous();
-        return a_cpu.dot(b_cpu).cuda();
+        return cpu().contiguous().dot(other.cpu().contiguous()).cuda();
     }
 
     const Tensor& a = is_contiguous() ? *this : contiguous();
     const Tensor& b = other.is_contiguous() ? other : other.contiguous();
-
-    const float* a_data = a.ptr<float>();
-    const float* b_data = b.ptr<float>();
     const size_t n = a.shape_[0];
 
     float sum = 0.0f;
     for (size_t i = 0; i < n; ++i) {
-        sum += a_data[i] * b_data[i];
+        sum += a.ptr<float>()[i] * b.ptr<float>()[i];
     }
 
     auto result = empty({1}, Device::CPU, dtype_);
     *result.ptr<float>() = sum;
 
-    // Return as scalar (rank-0)
+    // Return as scalar (rank-0 view)
     Tensor scalar(result.data_ptr(), TensorShape(std::vector<size_t>{}), Device::CPU, dtype_);
     scalar.data_owner_ = result.data_owner_;
     scalar.is_view_ = true;

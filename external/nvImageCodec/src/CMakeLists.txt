@@ -216,12 +216,16 @@ install(
     PUBLIC_HEADER DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" COMPONENT lib
 )
 
-# License file
-install(
-    FILES "${CMAKE_SOURCE_DIR}/LICENSE.txt" "${CMAKE_SOURCE_DIR}/Acknowledgements.txt"
-    DESTINATION "."
-    COMPONENT lib
-)
+# License file - install to nvImageCodec-specific directory (not root)
+set(NVIMGCODEC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
+if(EXISTS "${NVIMGCODEC_ROOT}/LICENSE.txt")
+    install(
+        FILES "${NVIMGCODEC_ROOT}/LICENSE.txt" "${NVIMGCODEC_ROOT}/Acknowledgements.txt"
+        DESTINATION "share/nvImageCodec"
+        COMPONENT lib
+        OPTIONAL
+    )
+endif()
 
 # Config
 #   * <prefix>/cmake/nvimgcodec/nvimgcodecConfig.cmake
