@@ -98,7 +98,7 @@ function(CUDA_check_cudacc_flag out_status compiler flags)
     # most reliable way to verify support.
     try_compile(compilation_result
       SOURCES "${source_file}"
-      COMPILE_OPTIONS "${flags}"
+      CMAKE_FLAGS -DCOMPILE_DEFINITIONS="${flags}"
     )
 
     # Save the result to the cache and return it.
