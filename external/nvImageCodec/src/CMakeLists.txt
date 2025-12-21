@@ -163,15 +163,20 @@ if(UNIX)
         SOVERSION ${PROJECT_VERSION_MAJOR})
 else()
     # Windows: set explicit output directories for multi-config generators
+    # Must set per-config properties to prevent config subdirectory being added
     set_target_properties(${NVIMGCODEC_LIBRARY_NAME} PROPERTIES
         POSITION_INDEPENDENT_CODE ON
         PUBLIC_HEADER ${NVIMGCODEC_PUBLIC_HEADERS}
         VERSION ${PROJECT_VERSION}
         OUTPUT_NAME ${NVIMGCODEC_LIBRARY_NAME}_${PROJECT_VERSION_MAJOR}
-        ARCHIVE_OUTPUT_NAME ${NVIMGCODEC_LIBRARY_NAME}
-        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
-        LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}"
-        ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+        ARCHIVE_OUTPUT_NAME ${NVIMGCODEC_LIBRARY_NAME})
+    # Set per-config output directories to flatten structure for multi-config generators
+    foreach(_config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+        set_target_properties(${NVIMGCODEC_LIBRARY_NAME} PROPERTIES
+            "RUNTIME_OUTPUT_DIRECTORY_${_config}" "${CMAKE_CURRENT_BINARY_DIR}"
+            "LIBRARY_OUTPUT_DIRECTORY_${_config}" "${CMAKE_CURRENT_BINARY_DIR}"
+            "ARCHIVE_OUTPUT_DIRECTORY_${_config}" "${CMAKE_CURRENT_BINARY_DIR}")
+    endforeach()
 endif()
 
 # Installation (https://github.com/forexample/package-example) {
