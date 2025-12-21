@@ -48,25 +48,20 @@ namespace nvimgcodec {
     std::string GetDefaultExtensionsPath() {
         Dl_info info;
         if (dladdr((const void*)GetDefaultExtensionsPath, &info)) {
-            fs::path path(info.dli_fname);
-            // If this comes from a shared_object in the installation dir,
-            // go level up dir (or two levels when there is yet lib64) and add "extensions" to the path
-            // Examples:
-            // /opt/nvidia/nvimgcodec_cuda<major_cuda_ver>/lib64/libnvimgcodec.so -> /opt/nvidia/nvimgcodec_cuda<major_cuda_ver>/extensions
-            // ~/.local/lib/python3.8/site-packages/nvidia/nvimgcodec/libnvimgcodec.so ->
-            //      ~/.local/lib/python3.8/site-packages/nvidia/nvimgcodec/extensions
-            path = path.parent_path();
-            if (path.filename().string() == "lib64") {
-                path = path.parent_path();
+            const fs::path lib_dir = fs::path(info.dli_fname).parent_path();
+
+            // Installed layout: lib64/../extensions
+            fs::path installed_path = lib_dir;
+            if (installed_path.filename() == "lib64") {
+                installed_path = installed_path.parent_path();
             }
+            installed_path /= "extensions";
 
-            path /= "extensions";
-            return path.string();
+            // Portable layout: ./extensions (priority)
+            const fs::path portable_path = lib_dir / "extensions";
+            return portable_path.string() + ":" + installed_path.string();
         }
-        std::stringstream ss;
-
-        ss << "/opt/nvidia/nvimgcodec_cuda" << CUDART_MAJOR_VERSION << "/extensions";
-        return ss.str();
+        return "/opt/nvidia/nvimgcodec_cuda" + std::to_string(CUDART_MAJOR_VERSION) + "/extensions";
     }
 
     char GetPathSeparator() {
@@ -82,28 +77,22 @@ namespace nvimgcodec {
         if (GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                               (LPCSTR)&GetDefaultExtensionsPath, &hm) != 0) {
             if (GetModuleFileName(hm, dll_path, sizeof(dll_path)) != 0) {
-                fs::path path(dll_path);
-                // If this comes from a shared_object in the installation dir,
-                // go level up dir (or two levels when there is yet bin) and add "extensions" to the path
-                // Examples:
-                //
-                // "C:\Program Files\NVIDIA nvImageCodec\v0.3\12\bin\nvimgcodec_0.dll -> C:\Program Files\NVIDIA nvImageCodec\v0.3\12\extensions
-                //  C:/Python39/Lib/site-packages/nvidia/nvimgcodec/nvimgcodec_0.dll -> C:/Python39/Lib/site-packages/nvidia/nvimgcodec/extensions
-                path = path.parent_path();
-                if (path.filename().string() == "bin") {
-                    path = path.parent_path();
-                }
+                const fs::path lib_dir = fs::path(dll_path).parent_path();
 
-                path /= "extensions";
-                return path.string();
+                // Installed layout: bin/../extensions
+                fs::path installed_path = lib_dir;
+                if (installed_path.filename() == "bin") {
+                    installed_path = installed_path.parent_path();
+                }
+                installed_path /= "extensions";
+
+                // Portable layout: ./extensions (priority)
+                const fs::path portable_path = lib_dir / "extensions";
+                return portable_path.string() + ";" + installed_path.string();
             }
         }
-
-        std::stringstream ss;
-        ss << "C:/Program Files/NVIDIA nvImageCodec/v" << NVIMGCODEC_VER_MAJOR << "." << NVIMGCODEC_VER_MINOR
-           << "/" << CUDART_MAJOR_VERSION
-           << " / extensions ";
-        return ss.str();
+        return "C:/Program Files/NVIDIA nvImageCodec/v" + std::to_string(NVIMGCODEC_VER_MAJOR) + "." +
+               std::to_string(NVIMGCODEC_VER_MINOR) + "/" + std::to_string(CUDART_MAJOR_VERSION) + "/extensions";
     }
 
     char GetPathSeparator() {
