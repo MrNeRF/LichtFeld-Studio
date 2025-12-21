@@ -14,6 +14,7 @@
 #include <stb_image.h>
 
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <thread>
 
@@ -27,19 +28,19 @@ constexpr int SPINNER_SEGMENTS = 12;
 constexpr float SPINNER_RADIUS = 10.0f;
 constexpr float SPINNER_THICKNESS = 2.0f;
 constexpr float PI = 3.14159265358979f;
-constexpr double MIN_DISPLAY_TIME = 1.5;
+constexpr double MIN_DISPLAY_TIME = 1.0;
 
-// Spinner colors
+// Only show splash if task takes longer than this
+constexpr auto SPLASH_DELAY = std::chrono::milliseconds(200);
+
 constexpr float SPINNER_R = 0.4f;
 constexpr float SPINNER_G = 0.7f;
 constexpr float SPINNER_B = 1.0f;
 
-// Background color (matches app theme)
 constexpr float BG_R = 0.11f;
 constexpr float BG_G = 0.11f;
 constexpr float BG_B = 0.14f;
 
-// Layout positions (normalized, Y: 0=bottom, 1=top)
 constexpr float LOGO_Y = 0.70f;
 constexpr float TEXT_Y = 0.35f;
 constexpr float SPINNER_Y = 0.15f;
@@ -233,8 +234,46 @@ void freeSpinner(SpinnerData& s) {
 }
 
 int runSplashImpl(std::function<int()> task, MonitorInfo* outMonitor, const bool keepGlfwAlive) {
+    using Clock = std::chrono::steady_clock;
+
+    // Start task immediately
+    std::atomic<bool> done{false};
+    std::atomic<int> result{0};
+    const auto startTime = Clock::now();
+
+    std::thread worker([&]() {
+        result = task();
+        done = true;
+    });
+
+    // Wait briefly to see if task completes quickly (cached kernels)
+    while (!done && (Clock::now() - startTime) < SPLASH_DELAY) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    // If task already done, skip splash entirely
+    if (done) {
+        worker.join();
+        if (outMonitor && keepGlfwAlive) {
+            // Still need monitor info - init GLFW briefly
+            if (glfwInit()) {
+                GLFWmonitor* const monitor = glfwGetPrimaryMonitor();
+                const GLFWvidmode* const mode = glfwGetVideoMode(monitor);
+                int monitorX, monitorY;
+                glfwGetMonitorPos(monitor, &monitorX, &monitorY);
+                outMonitor->x = monitorX;
+                outMonitor->y = monitorY;
+                outMonitor->width = mode->width;
+                outMonitor->height = mode->height;
+            }
+        }
+        return result;
+    }
+
+    // Task is slow - show splash
     if (!glfwInit()) {
-        return task();
+        worker.join();
+        return result;
     }
 
     GLFWmonitor* const monitor = glfwGetPrimaryMonitor();
@@ -262,7 +301,8 @@ int runSplashImpl(std::function<int()> task, MonitorInfo* outMonitor, const bool
     GLFWwindow* const window = glfwCreateWindow(SPLASH_WIDTH, SPLASH_HEIGHT, "LichtFeld Studio", nullptr, nullptr);
     if (!window) {
         if (!keepGlfwAlive) glfwTerminate();
-        return task();
+        worker.join();
+        return result;
     }
 
     glfwSetWindowPos(window, xpos, ypos);
@@ -272,7 +312,8 @@ int runSplashImpl(std::function<int()> task, MonitorInfo* outMonitor, const bool
     if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
         glfwDestroyWindow(window);
         if (!keepGlfwAlive) glfwTerminate();
-        return task();
+        worker.join();
+        return result;
     }
 
     const GLuint texturedProgram = createProgram(TEXTURED_VS, TEXTURED_FS);
@@ -282,15 +323,7 @@ int runSplashImpl(std::function<int()> task, MonitorInfo* outMonitor, const bool
     ImageData logo = loadImage(assetsDir / "lichtfeld-splash-logo.png");
     ImageData loadingText = loadImage(assetsDir / "lichtfeld-splash-loading.png");
 
-    std::atomic<bool> done{false};
-    std::atomic<int> result{0};
-
-    std::thread worker([&]() {
-        result = task();
-        done = true;
-    });
-
-    const double startTime = glfwGetTime();
+    const double splashStartTime = glfwGetTime();
     glClearColor(BG_R, BG_G, BG_B, 1.0f);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -298,7 +331,7 @@ int runSplashImpl(std::function<int()> task, MonitorInfo* outMonitor, const bool
     while (!glfwWindowShouldClose(window)) {
         glClear(GL_COLOR_BUFFER_BIT);
 
-        const double elapsed = glfwGetTime() - startTime;
+        const double elapsed = glfwGetTime() - splashStartTime;
 
         drawImage(logo, texturedProgram, 0.5f, LOGO_Y);
         drawImage(loadingText, texturedProgram, 0.5f, TEXT_Y);
