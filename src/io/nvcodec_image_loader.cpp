@@ -4,6 +4,7 @@
 
 #include "io/nvcodec_image_loader.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
+#include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
 
@@ -72,18 +73,29 @@ namespace lfs::io {
         impl_->device_id = options.device_id;
         impl_->fallback_enabled = options.enable_fallback;
 
+        // Get extensions path for portable builds
+        auto extensions_dir = lfs::core::getExtensionsDir();
+        std::string extensions_path_str;
+        const char* extensions_path_ptr = nullptr;
+
+        if (!extensions_dir.empty() && std::filesystem::exists(extensions_dir)) {
+            extensions_path_str = extensions_dir.string();
+            extensions_path_ptr = extensions_path_str.c_str();
+            LOG_DEBUG("nvImageCodec extensions path: {}", extensions_path_str);
+        }
+
         // Create nvImageCodec instance
         nvimgcodecInstanceCreateInfo_t create_info{
             NVIMGCODEC_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
             sizeof(nvimgcodecInstanceCreateInfo_t),
             nullptr,
-            1,       // load_builtin_modules
-            1,       // load_extension_modules
-            nullptr, // extension_modules_path
-            0,       // create_debug_messenger
-            nullptr, // debug_messenger_desc
-            0,       // message_severity
-            0        // message_category
+            1,                    // load_builtin_modules
+            1,                    // load_extension_modules
+            extensions_path_ptr,  // extension_modules_path - set for portable builds
+            0,                    // create_debug_messenger
+            nullptr,              // debug_messenger_desc
+            0,                    // message_severity
+            0                     // message_category
         };
 
         auto status = nvimgcodecInstanceCreate(&impl_->instance, &create_info);
