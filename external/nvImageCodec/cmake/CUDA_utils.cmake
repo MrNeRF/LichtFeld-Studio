@@ -70,34 +70,43 @@ if ("${CUDA_TARGET_ARCHS}" STREQUAL "")
 endif()
 
 # Find if passing `flags` to CUDA compiler producess success or failure
-# Unix only
-#
-# Equivalent to dry-running preprocessing on /dev/null as .cu file
-# and checking the exit code
-# $ nvcc ${flags} --dryrun -E -x cu /dev/null
-# or
-# $ clang++ ${flags} -E -x cuda /dev/null
 #
 # @param out_status   TRUE iff exit code is 0, FALSE otherwise
 # @param flags        flags to check
 # @return out_status
 function(CUDA_check_cudacc_flag out_status compiler flags)
-  if (${compiler} MATCHES "clang")
-    set(preprocess_empty_cu_file "-E" "-x" "cuda" "/dev/null")
+  # Only support checking the current CMAKE_CUDA_COMPILER using try_compile.
+  # This ensures we use the correct toolchain environment (fixing PATH issues on Windows
+  # where cl.exe might not be in the global PATH but is known to the CMake generator).
+  if("${compiler}" STREQUAL "${CMAKE_CUDA_COMPILER}")
+    # Generate a unique cache variable name based on the flags to implement result caching.
+    string(REGEX REPLACE "[^a-zA-Z0-9_]+" "_" flag_var "CUDA_FLAG_SUPPORTED_${flags}")
+
+    # Return cached result if available to speed up subsequent configuration runs.
+    if(DEFINED ${flag_var})
+      set(${out_status} ${${flag_var}} PARENT_SCOPE)
+      return()
+    endif()
+
+    set(source_file "${CMAKE_CURRENT_BINARY_DIR}/check_cuda_flag.cu")
+    if(NOT EXISTS "${source_file}")
+      file(WRITE "${source_file}" "int main() { return 0; }\n")
+    endif()
+
+    # Use try_compile to check the flag
+    # This actually attempts to compile a tiny file with the flag, which is the
+    # most reliable way to verify support.
+    try_compile(compilation_result
+      SOURCES "${source_file}"
+      CMAKE_FLAGS -DCOMPILE_DEFINITIONS="${flags}"
+    )
+
+    # Save the result to the cache and return it.
+    set(${flag_var} ${compilation_result} CACHE INTERNAL "Check CUDA flag ${flags}")
+    set(${out_status} ${compilation_result} PARENT_SCOPE)
   else()
-    set(preprocess_empty_cu_file "--dryrun" "-E" "-x" "cu" "/dev/null")
-  endif()
-  set(cudacc_command ${flags} ${preprocess_empty_cu_file})
-  # Run the compiler and check the exit status
-  execute_process(COMMAND ${compiler} ${cudacc_command}
-                  RESULT_VARIABLE tmp_out_status
-                  OUTPUT_QUIET
-                  ERROR_QUIET
-                  )
-  if (${tmp_out_status} EQUAL 0)
-    set(${out_status} TRUE PARENT_SCOPE)
-  else()
-    set(${out_status} FALSE PARENT_SCOPE)
+     # Fallback for compilers that don't match the current project compiler.
+     set(${out_status} FALSE PARENT_SCOPE)
   endif()
 endfunction()
 
