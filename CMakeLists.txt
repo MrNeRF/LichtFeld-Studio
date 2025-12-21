@@ -138,6 +138,7 @@ if(NVIDIA_SMI)
             OUTPUT_VARIABLE DETECTED_COMPUTE_CAP
             OUTPUT_STRIP_TRAILING_WHITESPACE
     )
+    string(REGEX REPLACE "\n.*" "" DETECTED_COMPUTE_CAP "${DETECTED_COMPUTE_CAP}")
 
     message(STATUS "Detected GPU compute capability: ${DETECTED_COMPUTE_CAP}")
     set(LichtFeld-Studio_CUDA_ARCH "native")
