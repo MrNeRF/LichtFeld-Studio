@@ -13,6 +13,7 @@
 #include "gui/panels/transform_panel.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/utils/drag_drop_native.hpp"
+#include "windows/exit_confirmation_popup.hpp"
 #include "windows/export_dialog.hpp"
 #include "windows/notification_popup.hpp"
 #include "windows/save_directory_popup.hpp"
@@ -86,6 +87,10 @@ namespace lfs::vis {
 
             bool isForceExit() const { return force_exit_; }
 
+            // Exit confirmation
+            void requestExitConfirmation();
+            bool isExitConfirmationPending() const;
+
             // Input capture for key rebinding
             bool isCapturingInput() const;
             bool isModalWindowOpen() const;
@@ -108,6 +113,7 @@ namespace lfs::vis {
             std::unique_ptr<ExportDialog> export_dialog_;
             std::unique_ptr<NotificationPopup> notification_popup_;
             std::unique_ptr<SaveDirectoryPopup> save_directory_popup_;
+            std::unique_ptr<ExitConfirmationPopup> exit_confirmation_popup_;
 
             // UI state only
             std::unordered_map<std::string, bool> window_states_;
