@@ -384,6 +384,183 @@ namespace lfs::vis::gui::panels {
         ImGui::PopStyleVar();
     }
 
+    void DrawTrainingParams(const UIContext& ctx) {
+
+        auto& state = TrainingPanelState::getInstance();
+        const auto& t = theme();
+
+        if (ImGui::CollapsingHeader("Basic Training Params", ImGuiTreeNodeFlags_DefaultOpen)) {
+            DrawTrainingParameters(ctx);
+        }
+        if (ImGui::CollapsingHeader("Advanced Training Params")) {
+            DrawTrainingAdvancedParameters(ctx);
+        }
+
+        // Save feedback
+        if (state.save_in_progress) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               now - state.save_start_time)
+                               .count();
+            if (elapsed < 2000) {
+                ImGui::TextColored(t.palette.success, "Checkpoint saved!");
+            } else {
+                state.save_in_progress = false;
+            }
+        }
+    }
+
+    void DrawTrainingStatus(const UIContext& ctx) {
+        auto* trainer_manager = ctx.viewer->getTrainerManager();
+        if (!trainer_manager || !trainer_manager->hasTrainer()) {
+            ImGui::TextColored(darken(theme().palette.text_dim, 0.15f), "No trainer loaded");
+            return;
+        }
+
+        auto trainer_state = trainer_manager->getState();
+        int current_iteration = trainer_manager->getCurrentIteration();
+
+        // Status display
+        ImGui::Separator();
+
+        const char* state_str = "Unknown";
+        switch (trainer_state) {
+        case TrainerManager::State::Idle: state_str = "Idle"; break;
+        case TrainerManager::State::Ready: state_str = (current_iteration > 0) ? "Resume" : "Ready"; break;
+        case TrainerManager::State::Running: state_str = "Running"; break;
+        case TrainerManager::State::Paused: state_str = "Paused"; break;
+        case TrainerManager::State::Stopping: state_str = "Stopping"; break;
+        case TrainerManager::State::Finished: {
+            const auto reason = trainer_manager->getStateMachine().getFinishReason();
+            switch (reason) {
+            case FinishReason::Completed: state_str = "Completed"; break;
+            case FinishReason::UserStopped: state_str = "Stopped"; break;
+            case FinishReason::Error: state_str = "Error"; break;
+            default: state_str = "Finished";
+            }
+            break;
+        }
+        }
+
+        static IterationRateTracker g_iter_rate_tracker;
+
+        ImGui::Text("Status: %s", state_str);
+        g_iter_rate_tracker.addSample(current_iteration);
+        float iters_per_sec = g_iter_rate_tracker.getIterationsPerSecond();
+        iters_per_sec = iters_per_sec > 0.0f ? iters_per_sec : 0.0f;
+
+        ImGui::Text("Iteration: %d (%.1f iters/sec)", current_iteration, iters_per_sec);
+
+        int num_splats = trainer_manager->getNumSplats();
+        ImGui::Text("num Splats: %d", num_splats);
+    }
+
+    void DrawTrainingControls(const UIContext& ctx) {
+
+        auto& state = TrainingPanelState::getInstance();
+
+        auto* trainer_manager = ctx.viewer->getTrainerManager();
+        if (!trainer_manager || !trainer_manager->hasTrainer()) {
+            ImGui::TextColored(darken(theme().palette.text_dim, 0.15f), "No trainer loaded");
+            return;
+        }
+
+        auto trainer_state = trainer_manager->getState();
+        int current_iteration = trainer_manager->getCurrentIteration();
+
+        using widgets::ButtonStyle;
+        using widgets::ColoredButton;
+
+        const auto& t = theme();
+        constexpr ImVec2 FULL_WIDTH = {-1, 0};
+
+        switch (trainer_state) {
+        case TrainerManager::State::Idle:
+            ImGui::TextColored(darken(t.palette.text_dim, 0.15f), "No trainer loaded");
+            break;
+
+        case TrainerManager::State::Ready: {
+            const char* const label = current_iteration > 0 ? "Resume Training" : "Start Training";
+            if (ColoredButton(label, ButtonStyle::Success, FULL_WIDTH)) {
+                lfs::core::events::cmd::StartTraining{}.emit();
+            }
+            if (current_iteration > 0) {
+                if (ColoredButton("Reset Training", ButtonStyle::Secondary, FULL_WIDTH)) {
+                    lfs::core::events::cmd::ResetTraining{}.emit();
+                }
+            }
+            break;
+        }
+
+        case TrainerManager::State::Running:
+            if (ColoredButton("Pause", ButtonStyle::Warning, FULL_WIDTH)) {
+                lfs::core::events::cmd::PauseTraining{}.emit();
+            }
+            break;
+
+        case TrainerManager::State::Paused:
+            if (ColoredButton("Resume", ButtonStyle::Success, FULL_WIDTH)) {
+                lfs::core::events::cmd::ResumeTraining{}.emit();
+            }
+            if (ColoredButton("Reset Training", ButtonStyle::Secondary, FULL_WIDTH)) {
+                lfs::core::events::cmd::ResetTraining{}.emit();
+            }
+            if (ColoredButton("Clear", ButtonStyle::Error, FULL_WIDTH)) {
+                lfs::core::events::cmd::ClearScene{}.emit();
+            }
+            break;
+
+        case TrainerManager::State::Finished: {
+            const auto reason = trainer_manager->getStateMachine().getFinishReason();
+            switch (reason) {
+            case FinishReason::Completed:
+                ImGui::TextColored(t.palette.success, "Training Complete!");
+                break;
+            case FinishReason::UserStopped:
+                ImGui::TextColored(t.palette.text_dim, "Training Stopped");
+                break;
+            case FinishReason::Error:
+                ImGui::TextColored(t.palette.error, "Training Error!");
+                if (const auto error_msg = trainer_manager->getLastError(); !error_msg.empty()) {
+                    ImGui::TextWrapped("%s", error_msg.c_str());
+                }
+                break;
+            default:
+                ImGui::TextColored(t.palette.text_dim, "Training Finished");
+            }
+
+            if (reason == FinishReason::Completed || reason == FinishReason::UserStopped) {
+                if (ColoredButton("Switch to Edit Mode", ButtonStyle::Success, FULL_WIDTH)) {
+                    lfs::core::events::cmd::SwitchToEditMode{}.emit();
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Keep trained model, discard dataset");
+                }
+            }
+            if (ColoredButton("Reset Training", ButtonStyle::Secondary, FULL_WIDTH)) {
+                lfs::core::events::cmd::ResetTraining{}.emit();
+            }
+            break;
+        }
+
+        case TrainerManager::State::Stopping:
+            ImGui::TextColored(t.palette.text_dim, "Stopping...");
+            break;
+        }
+
+        // Save checkpoint button
+        if (trainer_state == TrainerManager::State::Running ||
+            trainer_state == TrainerManager::State::Paused) {
+            if (ColoredButton("Save Checkpoint", ButtonStyle::Primary, FULL_WIDTH)) {
+                lfs::core::events::cmd::SaveCheckpoint{}.emit();
+                state.save_in_progress = true;
+                state.save_start_time = std::chrono::steady_clock::now();
+            }
+        }
+
+        ImGui::Separator();
+    }
+
     void DrawTrainingAdvancedParameters(const UIContext& ctx) {
         auto* const trainer_manager = ctx.viewer->getTrainerManager();
         if (!trainer_manager || !trainer_manager->hasTrainer()) {
@@ -1295,181 +1472,5 @@ namespace lfs::vis::gui::panels {
         }
     }
 
-    void DrawTrainingParams(const UIContext& ctx) {
-
-        auto& state = TrainingPanelState::getInstance();
-        const auto& t = theme();
-
-        if (ImGui::CollapsingHeader("Basic Training Params", ImGuiTreeNodeFlags_DefaultOpen)) {
-            DrawTrainingParameters(ctx);
-        }
-        if (ImGui::CollapsingHeader("Advanced Training Params")) {
-            DrawTrainingAdvancedParameters(ctx);
-        }
-
-        // Save feedback
-        if (state.save_in_progress) {
-            auto now = std::chrono::steady_clock::now();
-            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                               now - state.save_start_time)
-                               .count();
-            if (elapsed < 2000) {
-                ImGui::TextColored(t.palette.success, "Checkpoint saved!");
-            } else {
-                state.save_in_progress = false;
-            }
-        }
-    }
-
-    void DrawTrainingStatus(const UIContext& ctx) {
-        auto* trainer_manager = ctx.viewer->getTrainerManager();
-        if (!trainer_manager || !trainer_manager->hasTrainer()) {
-            ImGui::TextColored(darken(theme().palette.text_dim, 0.15f), "No trainer loaded");
-            return;
-        }
-
-        auto trainer_state = trainer_manager->getState();
-        int current_iteration = trainer_manager->getCurrentIteration();
-
-        // Status display
-        ImGui::Separator();
-
-        const char* state_str = "Unknown";
-        switch (trainer_state) {
-        case TrainerManager::State::Idle: state_str = "Idle"; break;
-        case TrainerManager::State::Ready: state_str = (current_iteration > 0) ? "Resume" : "Ready"; break;
-        case TrainerManager::State::Running: state_str = "Running"; break;
-        case TrainerManager::State::Paused: state_str = "Paused"; break;
-        case TrainerManager::State::Stopping: state_str = "Stopping"; break;
-        case TrainerManager::State::Finished: {
-            const auto reason = trainer_manager->getStateMachine().getFinishReason();
-            switch (reason) {
-            case FinishReason::Completed: state_str = "Completed"; break;
-            case FinishReason::UserStopped: state_str = "Stopped"; break;
-            case FinishReason::Error: state_str = "Error"; break;
-            default: state_str = "Finished";
-            }
-            break;
-        }
-        }
-
-        static IterationRateTracker g_iter_rate_tracker;
-
-        ImGui::Text("Status: %s", state_str);
-        g_iter_rate_tracker.addSample(current_iteration);
-        float iters_per_sec = g_iter_rate_tracker.getIterationsPerSecond();
-        iters_per_sec = iters_per_sec > 0.0f ? iters_per_sec : 0.0f;
-
-        ImGui::Text("Iteration: %d (%.1f iters/sec)", current_iteration, iters_per_sec);
-
-        int num_splats = trainer_manager->getNumSplats();
-        ImGui::Text("num Splats: %d", num_splats);
-    }
-
-    void DrawTrainingControls(const UIContext& ctx) {
-
-        auto& state = TrainingPanelState::getInstance();
-
-        auto* trainer_manager = ctx.viewer->getTrainerManager();
-        if (!trainer_manager || !trainer_manager->hasTrainer()) {
-            ImGui::TextColored(darken(theme().palette.text_dim, 0.15f), "No trainer loaded");
-            return;
-        }
-
-        auto trainer_state = trainer_manager->getState();
-        int current_iteration = trainer_manager->getCurrentIteration();
-
-        using widgets::ButtonStyle;
-        using widgets::ColoredButton;
-
-        const auto& t = theme();
-        constexpr ImVec2 FULL_WIDTH = {-1, 0};
-
-        switch (trainer_state) {
-        case TrainerManager::State::Idle:
-            ImGui::TextColored(darken(t.palette.text_dim, 0.15f), "No trainer loaded");
-            break;
-
-        case TrainerManager::State::Ready: {
-            const char* const label = current_iteration > 0 ? "Resume Training" : "Start Training";
-            if (ColoredButton(label, ButtonStyle::Success, FULL_WIDTH)) {
-                lfs::core::events::cmd::StartTraining{}.emit();
-            }
-            if (current_iteration > 0) {
-                if (ColoredButton("Reset Training", ButtonStyle::Secondary, FULL_WIDTH)) {
-                    lfs::core::events::cmd::ResetTraining{}.emit();
-                }
-            }
-            break;
-        }
-
-        case TrainerManager::State::Running:
-            if (ColoredButton("Pause", ButtonStyle::Warning, FULL_WIDTH)) {
-                lfs::core::events::cmd::PauseTraining{}.emit();
-            }
-            break;
-
-        case TrainerManager::State::Paused:
-            if (ColoredButton("Resume", ButtonStyle::Success, FULL_WIDTH)) {
-                lfs::core::events::cmd::ResumeTraining{}.emit();
-            }
-            if (ColoredButton("Reset Training", ButtonStyle::Secondary, FULL_WIDTH)) {
-                lfs::core::events::cmd::ResetTraining{}.emit();
-            }
-            if (ColoredButton("Clear", ButtonStyle::Error, FULL_WIDTH)) {
-                lfs::core::events::cmd::ClearScene{}.emit();
-            }
-            break;
-
-        case TrainerManager::State::Finished: {
-            const auto reason = trainer_manager->getStateMachine().getFinishReason();
-            switch (reason) {
-            case FinishReason::Completed:
-                ImGui::TextColored(t.palette.success, "Training Complete!");
-                break;
-            case FinishReason::UserStopped:
-                ImGui::TextColored(t.palette.text_dim, "Training Stopped");
-                break;
-            case FinishReason::Error:
-                ImGui::TextColored(t.palette.error, "Training Error!");
-                if (const auto error_msg = trainer_manager->getLastError(); !error_msg.empty()) {
-                    ImGui::TextWrapped("%s", error_msg.c_str());
-                }
-                break;
-            default:
-                ImGui::TextColored(t.palette.text_dim, "Training Finished");
-            }
-
-            if (reason == FinishReason::Completed || reason == FinishReason::UserStopped) {
-                if (ColoredButton("Switch to Edit Mode", ButtonStyle::Success, FULL_WIDTH)) {
-                    lfs::core::events::cmd::SwitchToEditMode{}.emit();
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Keep trained model, discard dataset");
-                }
-            }
-            if (ColoredButton("Reset Training", ButtonStyle::Secondary, FULL_WIDTH)) {
-                lfs::core::events::cmd::ResetTraining{}.emit();
-            }
-            break;
-        }
-
-        case TrainerManager::State::Stopping:
-            ImGui::TextColored(t.palette.text_dim, "Stopping...");
-            break;
-        }
-
-        // Save checkpoint button
-        if (trainer_state == TrainerManager::State::Running ||
-            trainer_state == TrainerManager::State::Paused) {
-            if (ColoredButton("Save Checkpoint", ButtonStyle::Primary, FULL_WIDTH)) {
-                lfs::core::events::cmd::SaveCheckpoint{}.emit();
-                state.save_in_progress = true;
-                state.save_start_time = std::chrono::steady_clock::now();
-            }
-        }
-
-        ImGui::Separator();
-    }
 
 } // namespace lfs::vis::gui::panels
