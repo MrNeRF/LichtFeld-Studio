@@ -163,13 +163,12 @@ namespace lfs::training {
                 strategy.reserve_optimizer_capacity(max_cap);
             }
 
-            // Load params, preserving CLI overrides
+            // Load params from checkpoint, preserving CLI path overrides
             if (header.params_json_size > 0) {
                 file.seekg(static_cast<std::streamoff>(header.params_json_offset));
                 std::string params_str(header.params_json_size, '\0');
                 file.read(params_str.data(), static_cast<std::streamsize>(header.params_json_size));
 
-                const int cli_iterations = params.optimization.iterations;
                 const auto cli_data_path = params.dataset.data_path;
                 const auto cli_output_path = params.dataset.output_path;
 
@@ -183,8 +182,6 @@ namespace lfs::training {
                     params.optimization = lfs::core::param::OptimizationParameters::from_json(params_json);
                 }
 
-                // CLI overrides checkpoint
-                params.optimization.iterations = cli_iterations;
                 if (!cli_data_path.empty())
                     params.dataset.data_path = cli_data_path;
                 if (!cli_output_path.empty())

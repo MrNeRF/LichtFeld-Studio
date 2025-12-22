@@ -26,10 +26,8 @@ namespace lfs::rendering::config {
     DEF int block_size_blend = tile_width * tile_height;
     DEF int n_sequential_threshold = 4;
 
-    // Selection group colors: index 0 = center marker, 1-255 = group colors
+    // Selection group colors (0 = center marker, 1-255 = groups). Defined in forward.cu.
     constexpr int MAX_SELECTION_GROUPS = 256;
-    extern __constant__ float3 SELECTION_GROUP_COLORS[MAX_SELECTION_GROUPS];
-    extern __constant__ float3 SELECTION_COLOR_PREVIEW;
 
     void setSelectionGroupColor(int group_id, float3 color);
     void setSelectionPreviewColor(float3 color);

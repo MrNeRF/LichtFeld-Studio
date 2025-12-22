@@ -48,6 +48,7 @@ namespace lfs::core {
             bool enable_eval = false;                         // Only evaluate when explicitly enabled
             bool enable_save_eval_images = true;              // Save during evaluation images
             bool headless = false;                            // Disable visualization during training
+            bool no_splash = false;                           // Skip splash screen on startup
             std::string strategy = "mcmc";                    // Optimization strategy: mcmc, default.
 
             // Mask parameters

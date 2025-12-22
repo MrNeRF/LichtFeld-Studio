@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/parameters.hpp"
+#include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include <chrono>
 #include <ctime>
@@ -250,6 +251,7 @@ namespace lfs::core {
             opt_json["reset_every"] = reset_every;
             opt_json["pause_refine_after_reset"] = pause_refine_after_reset;
             opt_json["revised_opacity"] = revised_opacity;
+            opt_json["gut"] = gut;
             opt_json["steps_scaler"] = steps_scaler;
             opt_json["sh_degree_interval"] = sh_degree_interval;
             opt_json["random"] = random;
@@ -615,6 +617,14 @@ namespace lfs::core {
 
         std::filesystem::path get_parameter_file_path(const std::string& filename) {
             static constexpr const char* PARAM_DIR = "parameter";
+
+            // Primary: Use runtime-detected resource directory
+            auto runtime_path = lfs::core::getResourceBaseDir() / PARAM_DIR / filename;
+            if (std::filesystem::exists(runtime_path)) {
+                return runtime_path;
+            }
+
+            // Fallback: Search up from executable directory
 #ifdef _WIN32
             char exe_buf[MAX_PATH];
             GetModuleFileNameA(nullptr, exe_buf, MAX_PATH);
@@ -631,7 +641,7 @@ namespace lfs::core {
                     break;
                 search_dir = parent;
             }
-            return search_dir / PARAM_DIR / filename;
+            return runtime_path; // Return runtime path even if not found (for error message)
         }
 
     } // namespace param

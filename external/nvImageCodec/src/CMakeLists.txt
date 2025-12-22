@@ -162,12 +162,21 @@ if(UNIX)
         VERSION ${PROJECT_VERSION}
         SOVERSION ${PROJECT_VERSION_MAJOR})
 else()
+    # Windows: set explicit output directories for multi-config generators
+    # Must set per-config properties to prevent config subdirectory being added
     set_target_properties(${NVIMGCODEC_LIBRARY_NAME} PROPERTIES
         POSITION_INDEPENDENT_CODE ON
         PUBLIC_HEADER ${NVIMGCODEC_PUBLIC_HEADERS}
         VERSION ${PROJECT_VERSION}
         OUTPUT_NAME ${NVIMGCODEC_LIBRARY_NAME}_${PROJECT_VERSION_MAJOR}
         ARCHIVE_OUTPUT_NAME ${NVIMGCODEC_LIBRARY_NAME})
+    # Set per-config output directories to flatten structure for multi-config generators
+    foreach(_config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+        set_target_properties(${NVIMGCODEC_LIBRARY_NAME} PROPERTIES
+            "RUNTIME_OUTPUT_DIRECTORY_${_config}" "${CMAKE_CURRENT_BINARY_DIR}"
+            "LIBRARY_OUTPUT_DIRECTORY_${_config}" "${CMAKE_CURRENT_BINARY_DIR}"
+            "ARCHIVE_OUTPUT_DIRECTORY_${_config}" "${CMAKE_CURRENT_BINARY_DIR}")
+    endforeach()
 endif()
 
 # Installation (https://github.com/forexample/package-example) {
@@ -216,12 +225,16 @@ install(
     PUBLIC_HEADER DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" COMPONENT lib
 )
 
-# License file
-install(
-    FILES "${CMAKE_SOURCE_DIR}/LICENSE.txt" "${CMAKE_SOURCE_DIR}/Acknowledgements.txt"
-    DESTINATION "."
-    COMPONENT lib
-)
+# License file - install to nvImageCodec-specific directory (not root)
+set(NVIMGCODEC_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
+if(EXISTS "${NVIMGCODEC_ROOT}/LICENSE.txt")
+    install(
+        FILES "${NVIMGCODEC_ROOT}/LICENSE.txt" "${NVIMGCODEC_ROOT}/Acknowledgements.txt"
+        DESTINATION "share/nvImageCodec"
+        COMPONENT lib
+        OPTIONAL
+    )
+endif()
 
 # Config
 #   * <prefix>/cmake/nvimgcodec/nvimgcodecConfig.cmake

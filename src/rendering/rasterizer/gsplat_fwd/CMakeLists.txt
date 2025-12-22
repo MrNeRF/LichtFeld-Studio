@@ -29,13 +29,20 @@ set(GSPLAT_FWD_SOURCES
 # Forward-only gsplat backend for rendering
 add_library(gsplat_fwd STATIC ${GSPLAT_FWD_SOURCES})
 
+# PTX-only builds require separable compilation OFF
+if(LFS_DEFER_DEVICE_SYMBOLS)
+    set(_sep_comp OFF)
+else()
+    set(_sep_comp ON)
+endif()
+
 set_target_properties(gsplat_fwd PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CUDA_STANDARD 20
         CUDA_STANDARD_REQUIRED ON
         CUDA_ARCHITECTURES "${LichtFeld-Studio_CUDA_ARCH}"
-        CUDA_SEPARABLE_COMPILATION ON
+        CUDA_SEPARABLE_COMPILATION ${_sep_comp}
         POSITION_INDEPENDENT_CODE ON
         CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )

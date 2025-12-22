@@ -135,5 +135,13 @@
 
     "border_darken": 0.12,
     "_border_darken": "How much to darken border from background"
+  },
+
+  "button": {
+    "_info": "Colored button tint values (blend factor with accent color)",
+
+    "tint_normal": 0.18,
+    "tint_hover": 0.28,
+    "tint_active": 0.38
   }
 }

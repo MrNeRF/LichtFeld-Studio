@@ -650,6 +650,13 @@ namespace lfs::vis {
                 t.vignette.softness = v.value("softness", t.vignette.softness);
             }
 
+            if (j.contains("button")) {
+                const auto& b = j["button"];
+                t.button.tint_normal = b.value("tint_normal", t.button.tint_normal);
+                t.button.tint_hover = b.value("tint_hover", t.button.tint_hover);
+                t.button.tint_active = b.value("tint_active", t.button.tint_active);
+            }
+
             return true;
         } catch (...) {
             return false;

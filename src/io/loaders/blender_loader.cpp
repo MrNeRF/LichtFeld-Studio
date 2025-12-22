@@ -4,6 +4,7 @@
 
 #include "io/loaders/blender_loader.hpp"
 #include "core/camera.hpp"
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/point_cloud.hpp"
 #include "formats/transforms.hpp"
@@ -173,6 +174,19 @@ namespace lfs::io {
                 try {
                     // Find mask path if available
                     std::filesystem::path mask_path = find_mask_path(base_path, info._image_name);
+
+                    // Validate mask dimensions match image dimensions
+                    if (!mask_path.empty()) {
+                        auto [img_w, img_h, img_c] = lfs::core::get_image_info(info._image_path);
+                        auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(mask_path);
+                        if (img_w != mask_w || img_h != mask_h) {
+                            return make_error(ErrorCode::MASK_SIZE_MISMATCH,
+                                              std::format("Mask '{}' is {}x{} but image '{}' is {}x{}",
+                                                          mask_path.filename().string(), mask_w, mask_h,
+                                                          info._image_name, img_w, img_h),
+                                              mask_path);
+                        }
+                    }
 
                     auto cam = std::make_shared<lfs::core::Camera>(
                         info._R,

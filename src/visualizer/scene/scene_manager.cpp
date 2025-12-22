@@ -1143,15 +1143,12 @@ namespace lfs::vis {
             }
             auto checkpoint_params = *params_result;
 
-            // CLI params override checkpoint params (only if explicitly set)
+            // CLI path overrides
             if (!params.dataset.data_path.empty()) {
                 checkpoint_params.dataset.data_path = params.dataset.data_path;
             }
             if (!params.dataset.output_path.empty()) {
                 checkpoint_params.dataset.output_path = params.dataset.output_path;
-            }
-            if (params.optimization.iterations > 0) {
-                checkpoint_params.optimization.iterations = params.optimization.iterations;
             }
 
             if (checkpoint_params.dataset.data_path.empty()) {
@@ -1201,6 +1198,9 @@ namespace lfs::vis {
 
             scene_.addSplat(MODEL_NAME, std::move(splat_data), lfs::vis::NULL_NODE);
             scene_.setTrainingModelNode(MODEL_NAME);
+
+            // Mark as checkpoint restore for sparsity handling
+            checkpoint_params.resume_checkpoint = path;
 
             auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
             const auto init_result = trainer->initialize(checkpoint_params);
