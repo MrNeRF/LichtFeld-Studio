@@ -533,40 +533,32 @@ namespace lfs::vis::gui {
 
                 // Rendering panel
                 ImGui::PushStyleColor(ImGuiCol_ChildBg, {0, 0, 0, 0});
-                if (viewer_->getTrainer()) {
-                    if (ImGui::BeginTabBar("##BottomTabs")) {
-                        if (ImGui::BeginTabItem("Rendering")) {
-                            if (ImGui::BeginChild("##RenderingPanel", {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
+                if (ImGui::BeginChild("##RenderingPanel", {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
+                    if (viewer_->getTrainer()) {
+                        if (ImGui::BeginTabBar("##BottomTabs")) {
+                            if (ImGui::BeginTabItem("Rendering")) {
                                 draw_rendering();
+                                ImGui::EndTabItem();
                             }
-                            ImGui::EndChild();
-                            ImGui::EndTabItem();
-                        }
-                        const ImGuiTabItemFlags flags = focus_training_panel_
-                                                            ? ImGuiTabItemFlags_SetSelected
-                                                            : ImGuiTabItemFlags_None;
-                        if (focus_training_panel_)
-                            focus_training_panel_ = false;
-                        if (ImGui::BeginTabItem("Training", nullptr, flags)) {
-                            panels::DrawTrainingControls(ctx);
-                            if (ImGui::BeginChild("##TrainingPanel", {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
-                                panels::DrawTrainingParams(ctx);
-                                panels::DrawTrainingStatus(ctx);
+                            const ImGuiTabItemFlags flags = focus_training_panel_
+                                                                ? ImGuiTabItemFlags_SetSelected
+                                                                : ImGuiTabItemFlags_None;
+                            if (focus_training_panel_)
+                                focus_training_panel_ = false;
+                            if (ImGui::BeginTabItem("Training", nullptr, flags)) {
+                                panels::DrawTrainingControls(ctx);
                                 ImGui::Separator();
                                 panels::DrawProgressInfo(ctx);
+                                ImGui::EndTabItem();
                             }
-                            ImGui::EndChild();
-                            ImGui::EndTabItem();
+                            ImGui::EndTabBar();
                         }
-                        ImGui::EndTabBar();
-                    }
-                } else {
-                    widgets::SectionHeader("RENDERING", ctx.fonts);
-                    if (ImGui::BeginChild("##RenderingPanel", {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
+                    } else {
+                        widgets::SectionHeader("RENDERING", ctx.fonts);
                         draw_rendering();
                     }
-                    ImGui::EndChild();
                 }
+                ImGui::EndChild();
                 ImGui::PopStyleColor();
             }
             ImGui::End();

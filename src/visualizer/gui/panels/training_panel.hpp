@@ -14,8 +14,6 @@
 namespace lfs::vis::gui::panels {
 
     void DrawTrainingControls(const UIContext& ctx);
-    void DrawTrainingStatus(const UIContext& ctx);
-    void DrawTrainingParams(const UIContext& ctx);
 
     // Training panel state
     struct TrainingPanelState {
