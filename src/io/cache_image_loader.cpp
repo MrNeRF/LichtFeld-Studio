@@ -638,19 +638,65 @@ namespace lfs::io {
             }
         }
 
-        // Check magic bytes
-        const bool is_jpeg = jpeg_bytes.size() >= 2 && jpeg_bytes[0] == 0xFF && jpeg_bytes[1] == 0xD8;
+        // Check magic bytes to determine actual file format
+        const bool has_jpeg_magic = jpeg_bytes.size() >= 2 && jpeg_bytes[0] == 0xFF && jpeg_bytes[1] == 0xD8;
+        const bool has_png_magic = jpeg_bytes.size() >= 8 &&
+            jpeg_bytes[0] == 0x89 && jpeg_bytes[1] == 0x50 && jpeg_bytes[2] == 0x4E && jpeg_bytes[3] == 0x47;
+        const bool has_webp_magic = jpeg_bytes.size() >= 12 &&
+            jpeg_bytes[0] == 0x52 && jpeg_bytes[1] == 0x49 && jpeg_bytes[2] == 0x46 && jpeg_bytes[3] == 0x46 &&
+            jpeg_bytes[8] == 0x57 && jpeg_bytes[9] == 0x45 && jpeg_bytes[10] == 0x42 && jpeg_bytes[11] == 0x50;
 
-        if (is_jpeg) {
+        // Get file extension for comparison
+        std::string file_ext = path.extension().string();
+        std::transform(file_ext.begin(), file_ext.end(), file_ext.begin(), ::tolower);
+
+        // Determine actual format from magic bytes
+        const char* detected_format = has_jpeg_magic ? "JPEG" :
+                                      has_png_magic ? "PNG" :
+                                      has_webp_magic ? "WebP" : "Unknown";
+
+        LOG_DEBUG("[CacheLoader] File '{}': extension='{}', detected_format={}, magic_bytes=0x{:02X}{:02X}{:02X}{:02X}, size={} bytes",
+            path.filename().string(),
+            file_ext,
+            detected_format,
+            jpeg_bytes.size() >= 1 ? jpeg_bytes[0] : 0,
+            jpeg_bytes.size() >= 2 ? jpeg_bytes[1] : 0,
+            jpeg_bytes.size() >= 3 ? jpeg_bytes[2] : 0,
+            jpeg_bytes.size() >= 4 ? jpeg_bytes[3] : 0,
+            jpeg_bytes.size());
+
+        // Warn if extension doesn't match detected format
+        if ((file_ext == ".jpg" || file_ext == ".jpeg") && !has_jpeg_magic) {
+            LOG_WARN("[CacheLoader] File '{}' has .jpg/.jpeg extension but is NOT a JPEG (magic: 0x{:02X}{:02X}, detected: {})",
+                path.filename().string(),
+                jpeg_bytes.size() >= 1 ? jpeg_bytes[0] : 0,
+                jpeg_bytes.size() >= 2 ? jpeg_bytes[1] : 0,
+                detected_format);
+        }
+
+        if (has_jpeg_magic) {
             try {
                 auto& nvcodec = get_nvcodec_loader();
                 return nvcodec.load_image_from_memory_gpu(jpeg_bytes, params.resize_factor, params.max_width, params.cuda_stream);
             } catch (const std::exception& e) {
-                LOG_WARN("nvImageCodec failed: {} - using CPU fallback", e.what());
+                // Log comprehensive warning with file context
+                LOG_WARN("[CacheLoader] nvImageCodec decode failed for '{}': {}",
+                    path.filename().string(), e.what());
+                LOG_WARN("[CacheLoader] File info: extension='{}', detected_format={}, size={} bytes",
+                    file_ext, detected_format, jpeg_bytes.size());
+                LOG_WARN("[CacheLoader] Using CPU fallback decoder (slower but compatible)");
+                LOG_DEBUG("[CacheLoader] Full path: {}, resize_factor={}, max_width={}",
+                    path.string(), params.resize_factor, params.max_width);
+
+                // Note: The detailed error logging is already done in NvCodecImageLoader
+                // This just adds context about which file failed
                 return decode_with_cpu_fallback(path, params);
             }
         }
 
+        // Not a JPEG - use CPU fallback
+        LOG_DEBUG("[CacheLoader] File '{}' is not JPEG (detected: {}), using CPU decoder",
+            path.filename().string(), detected_format);
         return decode_with_cpu_fallback(path, params);
     }
 
@@ -662,10 +708,20 @@ namespace lfs::io {
         if (nv_image_codec_available_ != NvImageCodecMode::Undetermined)
             return;
 
-        nv_image_codec_available_ = NvCodecImageLoader::is_available()
+        LOG_INFO("[CacheLoader] Checking nvImageCodec availability...");
+
+        // is_available() now runs comprehensive diagnostics and logs detailed info
+        bool available = NvCodecImageLoader::is_available();
+        nv_image_codec_available_ = available
                                         ? NvImageCodecMode::Available
                                         : NvImageCodecMode::UnAvailable;
-        LOG_DEBUG("nvImageCodec: {}", nv_image_codec_available_ == NvImageCodecMode::Available ? "available" : "unavailable");
+
+        if (available) {
+            LOG_INFO("[CacheLoader] nvImageCodec: AVAILABLE - GPU-accelerated JPEG decoding enabled");
+        } else {
+            LOG_WARN("[CacheLoader] nvImageCodec: UNAVAILABLE - will use CPU fallback for all images");
+            LOG_WARN("[CacheLoader] Check diagnostic logs above for details on why nvImageCodec is unavailable");
+        }
     }
 
 } // namespace lfs::io
