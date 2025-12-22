@@ -24,7 +24,7 @@
 #include "visualizer/scene/scene.hpp"
 
 #include <atomic>
-#include <chrono>
+#include <cmath>
 #include <cuda_runtime.h>
 #include <expected>
 #include <memory>
@@ -1001,6 +1001,10 @@ namespace lfs::training {
                                       ? (loss_tensor_gpu + sparsity_loss_gpu)
                                       : loss_tensor_gpu;
                 loss_value = total_loss.item<float>();
+
+                if (std::isnan(loss_value) || std::isinf(loss_value)) {
+                    return std::unexpected(std::format("NaN/Inf loss at iteration {}", iter));
+                }
 
                 current_loss_ = loss_value;
                 if (progress_) {

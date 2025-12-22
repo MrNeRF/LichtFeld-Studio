@@ -12,6 +12,16 @@ namespace cg = cooperative_groups;
 
 namespace fast_lfs::rasterization::kernels {
 
+    // Safe normalize: returns (0,0,1) for degenerate vectors to prevent NaN
+    __device__ inline float3 safe_normalize(const float3 v) {
+        constexpr float NORM_SQ_MIN = 1e-12f;
+        const float norm_sq = dot(v, v);
+        if (norm_sq < NORM_SQ_MIN) {
+            return make_float3(0.0f, 0.0f, 1.0f);
+        }
+        return v * rsqrtf(norm_sq);
+    }
+
     __device__ inline float3 convert_sh_to_color(
         const float3* sh_coefficients_0,
         const float3* sh_coefficients_rest,
@@ -24,7 +34,7 @@ namespace fast_lfs::rasterization::kernels {
         float3 result = 0.5f + 0.28209479177387814f * sh_coefficients_0[primitive_idx];
         if (active_sh_bases > 1) {
             const float3* coefficients_ptr = sh_coefficients_rest + primitive_idx * total_bases_sh_rest;
-            auto [x, y, z] = normalize(position - cam_position);
+            auto [x, y, z] = safe_normalize(position - cam_position);
             result = result + (-0.48860251190291987f * y) * coefficients_ptr[0] + (0.48860251190291987f * z) * coefficients_ptr[1] + (-0.48860251190291987f * x) * coefficients_ptr[2];
             if (active_sh_bases > 4) {
                 const float xx = x * x, yy = y * y, zz = z * z;
@@ -56,7 +66,7 @@ namespace fast_lfs::rasterization::kernels {
         float3 dcolor_dposition = make_float3(0.0f);
         if (active_sh_bases > 1) {
             auto [x_raw, y_raw, z_raw] = position - cam_position;
-            auto [x, y, z] = normalize(make_float3(x_raw, y_raw, z_raw));
+            auto [x, y, z] = safe_normalize(make_float3(x_raw, y_raw, z_raw));
             grad_coefficients_ptr[0] += (-0.48860251190291987f * y) * grad_color;
             grad_coefficients_ptr[1] += (0.48860251190291987f * z) * grad_color;
             grad_coefficients_ptr[2] += (-0.48860251190291987f * x) * grad_color;
@@ -95,12 +105,15 @@ namespace fast_lfs::rasterization::kernels {
             const float xx_raw = x_raw * x_raw, yy_raw = y_raw * y_raw, zz_raw = z_raw * z_raw;
             const float xy_raw = x_raw * y_raw, xz_raw = x_raw * z_raw, yz_raw = y_raw * z_raw;
             const float norm_sq = xx_raw + yy_raw + zz_raw;
-            const float norm_sq_safe = fmaxf(norm_sq, 1e-12f);
+            constexpr float NORM_SQ_GRAD_MIN = 1e-6f;
+            constexpr float INV_NORM_CUBED_MAX = 1e6f;
+            const float norm_sq_safe = fmaxf(norm_sq, NORM_SQ_GRAD_MIN);
+            const float inv_norm_cubed = fminf(rsqrtf(norm_sq_safe * norm_sq_safe * norm_sq_safe), INV_NORM_CUBED_MAX);
             dcolor_dposition = make_float3(
                                    (yy_raw + zz_raw) * grad_direction.x - xy_raw * grad_direction.y - xz_raw * grad_direction.z,
                                    -xy_raw * grad_direction.x + (xx_raw + zz_raw) * grad_direction.y - yz_raw * grad_direction.z,
                                    -xz_raw * grad_direction.x - yz_raw * grad_direction.y + (xx_raw + yy_raw) * grad_direction.z) *
-                               rsqrtf(norm_sq_safe * norm_sq_safe * norm_sq_safe);
+                               inv_norm_cubed;
         }
         return dcolor_dposition;
     }
