@@ -93,6 +93,8 @@ namespace lfs::vis::gui::panels {
 
     void DrawTrainingAdvancedParameters(const UIContext& ctx) {
 
+        // Advanced Training Parameters
+
         auto* const trainer_manager = ctx.viewer->getTrainerManager();
         if (!trainer_manager || !trainer_manager->hasTrainer()) {
             return;
