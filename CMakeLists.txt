@@ -646,7 +646,9 @@ if(BUILD_PORTABLE)
         [[.*libdl\\.so.*]] [[.*libm\\.so\\..*]] [[.*librt\\.so.*]]
         [[.*libstdc\\+\\+.*]] [[.*libgcc_s.*]]
         [[.*libnvimgcodec.*]] [[.*libnvjpeg_ext.*]])
-    set(_SEARCH_DIRS "${CMAKE_BINARY_DIR}" "${CUDAToolkit_BIN_DIR}" "${CUDAToolkit_LIBRARY_DIR}")
+
+    # Search directories for runtime dependencies (quoted for paths with spaces on Windows)
+    set(_SEARCH_DIRS_STR "\"${CMAKE_BINARY_DIR}\" \"${CUDAToolkit_BIN_DIR}\" \"${CUDAToolkit_LIBRARY_DIR}\"")
 
     # Helper: bundle runtime dependencies for a target
     function(bundle_runtime_deps TARGET_FILE IS_LIBRARY)
@@ -660,7 +662,7 @@ if(BUILD_PORTABLE)
             file(GET_RUNTIME_DEPENDENCIES
                 ${_type} \"${TARGET_FILE}\"
                 RESOLVED_DEPENDENCIES_VAR _deps
-                DIRECTORIES ${_SEARCH_DIRS}
+                DIRECTORIES ${_SEARCH_DIRS_STR}
                 PRE_EXCLUDE_REGEXES ${_PRE_EXCLUDE}
                 POST_EXCLUDE_REGEXES ${_POST_EXCLUDE})
             foreach(_d IN LISTS _deps)
