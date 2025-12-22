@@ -158,5 +158,13 @@
 
     "softness": 0.45,
     "_softness": "How gradual the falloff is"
+  },
+
+  "button": {
+    "_info": "Colored button tint values (blend factor with accent color)",
+
+    "tint_normal": 0.55,
+    "tint_hover": 0.65,
+    "tint_active": 0.75
   }
 }

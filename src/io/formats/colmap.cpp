@@ -631,7 +631,7 @@ namespace lfs::io {
         return {};
     }
 
-    std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>
+    Result<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>
     assemble_colmap_cameras(const std::filesystem::path& base_path,
                             const std::unordered_map<uint32_t, CameraDataIntermediate>& cam_map,
                             const std::vector<ImageData>& images,
@@ -642,8 +642,8 @@ namespace lfs::io {
         std::filesystem::path images_path = base_path / images_folder;
 
         if (!std::filesystem::exists(images_path)) {
-            LOG_ERROR("Images folder does not exist: {}", images_path.string());
-            throw std::runtime_error("Images folder does not exist");
+            return make_error(ErrorCode::PATH_NOT_FOUND,
+                              "Images folder does not exist", images_path);
         }
 
         std::vector<std::shared_ptr<Camera>> cameras;
@@ -658,8 +658,9 @@ namespace lfs::io {
 
             auto it = cam_map.find(img.camera_id);
             if (it == cam_map.end()) {
-                LOG_ERROR("Camera ID {} not found", img.camera_id);
-                throw std::runtime_error("Camera ID not found");
+                return make_error(ErrorCode::CORRUPTED_DATA,
+                                  std::format("Camera ID {} not found for image '{}'", img.camera_id, img.name),
+                                  images_path / img.name);
             }
 
             const auto& cam_data = it->second;
@@ -695,8 +696,9 @@ namespace lfs::io {
             // Extract camera parameters based on model
             auto model_it = camera_model_ids.find(cam_data.model_id);
             if (model_it == camera_model_ids.end()) {
-                LOG_ERROR("Invalid camera model ID: {}", cam_data.model_id);
-                throw std::runtime_error("Invalid camera model ID");
+                return make_error(ErrorCode::UNSUPPORTED_FORMAT,
+                                  std::format("Invalid camera model ID {} for image '{}'", cam_data.model_id, img.name),
+                                  images_path / img.name);
             }
 
             CAMERA_MODEL model = model_it->second.first;
@@ -805,15 +807,31 @@ namespace lfs::io {
                 break;
 
             case CAMERA_MODEL::FOV:
-                LOG_ERROR("FOV camera model not supported");
-                throw std::runtime_error("FOV camera model not supported");
+                return make_error(ErrorCode::UNSUPPORTED_FORMAT,
+                                  std::format("FOV camera model not supported for image '{}'", img.name),
+                                  images_path / img.name);
 
             default:
-                LOG_ERROR("Unsupported camera model");
-                throw std::runtime_error("Unsupported camera model");
+                return make_error(ErrorCode::UNSUPPORTED_FORMAT,
+                                  std::format("Unsupported camera model for image '{}'", img.name),
+                                  images_path / img.name);
             }
 
             std::filesystem::path mask_path = find_mask_path(base_path, img.name);
+
+            // Validate mask dimensions match image dimensions
+            if (!mask_path.empty()) {
+                auto [img_w, img_h, img_c] = lfs::core::get_image_info(images_path / img.name);
+                auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(mask_path);
+                if (img_w != mask_w || img_h != mask_h) {
+                    return make_error(ErrorCode::MASK_SIZE_MISMATCH,
+                                      std::format("Mask '{}' is {}x{} but image '{}' is {}x{}",
+                                                  mask_path.filename().string(), mask_w, mask_h,
+                                                  img.name, img_w, img_h),
+                                      mask_path);
+                }
+            }
+
             // Create Camera
             auto camera = std::make_shared<Camera>(
                 R,
@@ -839,7 +857,7 @@ namespace lfs::io {
 
         LOG_INFO("Training with {} images", cameras.size());
 
-        return {std::move(cameras), scene_center};
+        return std::make_tuple(std::move(cameras), scene_center);
     }
 
     // -----------------------------------------------------------------------------
@@ -866,7 +884,7 @@ namespace lfs::io {
         return read_point3D_binary(points3d_file);
     }
 
-    std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>
+    Result<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>
     read_colmap_cameras_and_images(const std::filesystem::path& base,
                                    const std::string& images_folder) {
 
@@ -891,7 +909,7 @@ namespace lfs::io {
         return read_point3D_text(points3d_file);
     }
 
-    std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>
+    Result<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>
     read_colmap_cameras_and_images_text(const std::filesystem::path& base,
                                         const std::string& images_folder) {
 

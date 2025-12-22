@@ -13,9 +13,16 @@ set(RASTERIZER_SOURCES
 
 add_library(lfs_rasterizer STATIC ${RASTERIZER_SOURCES})
 
+# PTX-only builds require separable compilation OFF
+if(LFS_DEFER_DEVICE_SYMBOLS)
+    set(_sep_comp OFF)
+else()
+    set(_sep_comp ON)
+endif()
+
 set_target_properties(lfs_rasterizer PROPERTIES
         CUDA_ARCHITECTURES "${LichtFeld-Studio_CUDA_ARCH}"
-        CUDA_SEPARABLE_COMPILATION ON
+        CUDA_SEPARABLE_COMPILATION ${_sep_comp}
         POSITION_INDEPENDENT_CODE ON
         CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )
@@ -34,7 +41,6 @@ target_link_libraries(lfs_rasterizer
         PUBLIC
         CUDA::cudart
         CUDA::curand
-        CUDA::cublas
         CUDA::cuda_driver
         spdlog::spdlog
         lfs_core_cuda       # Required for shared memory arena

@@ -105,6 +105,12 @@ namespace lfs::vis {
         float softness = 0.5f;
     };
 
+    struct ThemeButton {
+        float tint_normal = 0.15f;
+        float tint_hover = 0.25f;
+        float tint_active = 0.35f;
+    };
+
     // Complete theme
     struct Theme {
         std::string name;
@@ -116,6 +122,7 @@ namespace lfs::vis {
         ThemeViewport viewport;
         ThemeShadows shadows;
         ThemeVignette vignette;
+        ThemeButton button;
 
         // ImU32 accessors for ImDrawList
         [[nodiscard]] ImU32 primary_u32() const;

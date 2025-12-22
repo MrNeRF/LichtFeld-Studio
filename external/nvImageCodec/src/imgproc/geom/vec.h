@@ -321,7 +321,7 @@ namespace nvimgcodec {
     template <typename U>                                                               \
     NVIMGCODEC_HOST_DEV NVIMGCODEC_FORCEINLINE                                          \
         std::enable_if_t<is_scalar<U>::value, vec&>                                     \
-        operator op(const U& rhs) {                                                     \
+        operator op(const U & rhs) {                                                    \
         for (int i = 0; i < N; i++)                                                     \
             v[i] op rhs;                                                                \
         return *this;                                                                   \
@@ -380,7 +380,7 @@ namespace nvimgcodec {
     }                                                                                                                  \
     template <int N, typename T, typename U, typename R = promote_vec_scalar_t<T, U>>                                  \
     NVIMGCODEC_HOST_DEV NVIMGCODEC_FORCEINLINE constexpr std::enable_if_t<is_scalar<U>::value, vec<N, R>> operator op( \
-        const vec<N, T>& a, const U& b) {                                                                              \
+        const vec<N, T>& a, const U & b) {                                                                             \
         vec<N, R> ret{};                                                                                               \
         for (int i = 0; i < N; i++)                                                                                    \
             ret[i] = a[i] op b;                                                                                        \
@@ -388,7 +388,7 @@ namespace nvimgcodec {
     }                                                                                                                  \
     template <int N, typename T, typename U, typename R = promote_vec_scalar_t<U, T>>                                  \
     NVIMGCODEC_HOST_DEV NVIMGCODEC_FORCEINLINE constexpr std::enable_if_t<is_scalar<T>::value, vec<N, R>> operator op( \
-        const T& a, const vec<N, U>& b) {                                                                              \
+        const T & a, const vec<N, U>& b) {                                                                             \
         vec<N, R> ret{};                                                                                               \
         for (int i = 0; i < N; i++)                                                                                    \
             ret[i] = a op b[i];                                                                                        \
@@ -418,7 +418,7 @@ namespace nvimgcodec {
     }                                                                                                                    \
     template <int N, typename T, typename U>                                                                             \
     NVIMGCODEC_HOST_DEV NVIMGCODEC_FORCEINLINE constexpr std::enable_if_t<is_scalar<U>::value, vec<N, T>>                \
-    operator op(const vec<N, T>& a, const U& b) {                                                                        \
+    operator op(const vec<N, T>& a, const U & b) {                                                                       \
         vec<N, T> ret{};                                                                                                 \
         for (int i = 0; i < N; i++)                                                                                      \
             ret[i] = a[i] op b;                                                                                          \
@@ -426,7 +426,7 @@ namespace nvimgcodec {
     }                                                                                                                    \
     template <int N, typename T, typename U>                                                                             \
     NVIMGCODEC_HOST_DEV NVIMGCODEC_FORCEINLINE constexpr std::enable_if_t<is_scalar<T>::value, vec<N, T>>                \
-    operator op(const T& a, const vec<N, U>& b) {                                                                        \
+    operator op(const T & a, const vec<N, U>& b) {                                                                       \
         vec<N, T> ret{};                                                                                                 \
         for (int i = 0; i < N; i++)                                                                                      \
             ret[i] = a op b[i];                                                                                          \

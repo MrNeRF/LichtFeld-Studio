@@ -439,23 +439,29 @@ namespace lfs::training {
 
             // Initialize sparsity optimizer
             if (params.optimization.enable_sparsity) {
-                constexpr int SPARSITY_UPDATE_INTERVAL = 50;
-                const int base_iterations = params.optimization.iterations;
-                const int total_iterations = base_iterations + params.optimization.sparsify_steps;
-                params_.optimization.iterations = total_iterations;
+                constexpr int UPDATE_INTERVAL = 50;
+                const int sparsify_steps = params.optimization.sparsify_steps;
+                const int stored_iters = static_cast<int>(params.optimization.iterations);
 
-                const ADMMSparsityOptimizer::Config sparsity_config{
-                    .sparsify_steps = params.optimization.sparsify_steps,
+                // Checkpoint already has total iterations; fresh start needs sparsify_steps added
+                const bool is_resume = params.resume_checkpoint.has_value();
+                const int base_iters = is_resume ? (stored_iters - sparsify_steps) : stored_iters;
+
+                if (!is_resume) {
+                    params_.optimization.iterations = static_cast<size_t>(base_iters + sparsify_steps);
+                }
+
+                const ADMMSparsityOptimizer::Config config{
+                    .sparsify_steps = sparsify_steps,
                     .init_rho = params.optimization.init_rho,
                     .prune_ratio = params.optimization.prune_ratio,
-                    .update_every = SPARSITY_UPDATE_INTERVAL,
-                    .start_iteration = base_iterations};
+                    .update_every = UPDATE_INTERVAL,
+                    .start_iteration = base_iters};
 
-                sparsity_optimizer_ = SparsityOptimizerFactory::create("admm", sparsity_config);
+                sparsity_optimizer_ = SparsityOptimizerFactory::create("admm", config);
                 if (sparsity_optimizer_) {
-                    LOG_INFO("Sparsity: base={}, start={}, steps={}, prune={}%, rho={}",
-                             base_iterations, base_iterations, params.optimization.sparsify_steps,
-                             params.optimization.prune_ratio * 100, params.optimization.init_rho);
+                    LOG_INFO("Sparsity: base={}, steps={}, prune={:.0f}%",
+                             base_iters, sparsify_steps, params.optimization.prune_ratio * 100);
                 }
             }
 

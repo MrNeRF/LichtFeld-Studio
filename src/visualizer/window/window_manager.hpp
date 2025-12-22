@@ -16,7 +16,9 @@ namespace lfs::vis {
 
     class WindowManager {
     public:
-        WindowManager(const std::string& title, int width, int height);
+        WindowManager(const std::string& title, int width, int height,
+                      int monitor_x = 0, int monitor_y = 0,
+                      int monitor_width = 0, int monitor_height = 0);
         ~WindowManager();
 
         // Delete copy operations
@@ -27,6 +29,7 @@ namespace lfs::vis {
         bool init();
 
         // Window operations
+        void showWindow(); // Show window (call after initialization complete)
         void updateWindowSize();
         void swapBuffers();
         void pollEvents();
@@ -51,6 +54,9 @@ namespace lfs::vis {
         std::string title_;
         glm::ivec2 window_size_;
         glm::ivec2 framebuffer_size_;
+
+        glm::ivec2 monitor_pos_{0, 0};
+        glm::ivec2 monitor_size_{0, 0};
 
         // Fullscreen state
         bool is_fullscreen_ = false;

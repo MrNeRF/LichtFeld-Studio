@@ -92,6 +92,7 @@ namespace lfs::vis::gui {
         export_dialog_ = std::make_unique<ExportDialog>();
         notification_popup_ = std::make_unique<NotificationPopup>();
         save_directory_popup_ = std::make_unique<SaveDirectoryPopup>();
+        exit_confirmation_popup_ = std::make_unique<ExitConfirmationPopup>();
 
         // Initialize window states
         window_states_["file_browser"] = false;
@@ -201,7 +202,7 @@ namespace lfs::vis::gui {
         });
 
         menu_bar_->setOnExit([this]() {
-            glfwSetWindowShouldClose(viewer_->getWindow(), true);
+            requestExitConfirmation();
         });
 
         menu_bar_->setOnNewProject([this]() {
@@ -918,10 +919,10 @@ namespace lfs::vis::gui {
             save_directory_popup_->render(viewport_pos_, viewport_size_);
         }
 
-        // Render notification popups (errors, warnings, etc.)
-        if (notification_popup_) {
+        if (notification_popup_)
             notification_popup_->render();
-        }
+        if (exit_confirmation_popup_)
+            exit_confirmation_popup_->render();
 
         // End frame
         ImGui::Render();
@@ -2319,7 +2320,7 @@ namespace lfs::vis::gui {
         if (viewport_size_.x < 200.0f || viewport_size_.y < 200.0f)
             return;
 
-        constexpr float ZONE_PADDING = 40.0f;
+        constexpr float ZONE_PADDING = 120.0f;
         constexpr float DASH_LENGTH = 12.0f;
         constexpr float GAP_LENGTH = 8.0f;
         constexpr float BORDER_THICKNESS = 2.0f;
@@ -2485,6 +2486,19 @@ namespace lfs::vis::gui {
         draw_list->AddText({center_x - subtitle_size.x * 0.5f, center_y + 35.0f}, SUBTITLE_COLOR, SUBTITLE);
         if (font_small_)
             ImGui::PopFont();
+    }
+
+    void GuiManager::requestExitConfirmation() {
+        if (!exit_confirmation_popup_)
+            return;
+        exit_confirmation_popup_->show([this]() {
+            force_exit_ = true;
+            glfwSetWindowShouldClose(viewer_->getWindow(), true);
+        });
+    }
+
+    bool GuiManager::isExitConfirmationPending() const {
+        return exit_confirmation_popup_ && exit_confirmation_popup_->isOpen();
     }
 
 } // namespace lfs::vis::gui

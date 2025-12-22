@@ -33,9 +33,8 @@ target_link_libraries(lfs_core_cuda
     PUBLIC
         lfs_tensor      # Tensor library needed by lanczos_resize and kernels
         CUDA::cudart
-        CUDA::cuda_driver  # For VMM support in memory_arena
-        CUDA::cublas      # For k-means gemm optimization
-        OpenMP::OpenMP_CXX  # For parallel k-means
+        CUDA::cuda_driver
+        OpenMP::OpenMP_CXX
 )
 
 set_target_properties(lfs_core_cuda PROPERTIES

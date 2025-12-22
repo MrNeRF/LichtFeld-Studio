@@ -7,6 +7,7 @@
 #include "core/camera.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "rendering/render_constants.hpp"
 #include <tuple>
 
 namespace lfs::rendering {
@@ -44,7 +45,7 @@ namespace lfs::rendering {
         const Tensor* deleted_mask = nullptr,
         unsigned long long* hovered_depth_id = nullptr,
         int highlight_gaussian_id = -1,
-        float far_plane = 1e10f,
+        float far_plane = DEFAULT_FAR_PLANE,
         const std::vector<bool>& selected_node_mask = {},
         bool desaturate_unselected = false,
         float selection_flash_intensity = 0.0f,

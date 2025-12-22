@@ -579,7 +579,7 @@ namespace lfs::training {
     namespace {
         constexpr uint32_t DEFAULT_MAGIC = 0x4C464446; // "LFDF"
         constexpr uint32_t DEFAULT_VERSION = 2;        // v2 adds free_mask serialization
-    }                                                  // namespace
+    } // namespace
 
     void DefaultStrategy::serialize(std::ostream& os) const {
         os.write(reinterpret_cast<const char*>(&DEFAULT_MAGIC), sizeof(DEFAULT_MAGIC));

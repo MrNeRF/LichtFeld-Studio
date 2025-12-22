@@ -7,6 +7,7 @@
 #include "core/camera.hpp"
 #include "core/point_cloud.hpp"
 #include "core/tensor.hpp"
+#include "io/error.hpp"
 #include <filesystem>
 #include <memory>
 #include <vector>
@@ -52,9 +53,9 @@ namespace lfs::io {
      * @brief Read COLMAP cameras and images
      * @param base Base directory containing COLMAP data
      * @param images_folder Folder containing images (default: "images")
-     * @return Tuple of (vector of Camera, scene_center tensor [3])
+     * @return Result containing tuple of (vector of Camera, scene_center tensor [3])
      */
-    std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>
+    Result<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>
     read_colmap_cameras_and_images(
         const std::filesystem::path& base,
         const std::string& images_folder = "images");
@@ -70,9 +71,9 @@ namespace lfs::io {
      * @brief Read COLMAP cameras and images from text files
      * @param base Base directory containing COLMAP data
      * @param images_folder Folder containing images (default: "images")
-     * @return Tuple of (vector of Camera, scene_center tensor [3])
+     * @return Result containing tuple of (vector of Camera, scene_center tensor [3])
      */
-    std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>
+    Result<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>
     read_colmap_cameras_and_images_text(
         const std::filesystem::path& base,
         const std::string& images_folder = "images");

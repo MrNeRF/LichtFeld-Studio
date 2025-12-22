@@ -68,18 +68,14 @@ namespace lfs::rendering {
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                    GL_TEXTURE_2D, texture, 0);
 
-            // --- Depth texture ---
+            // Depth texture (R32F for CUDA depth storage, not FBO-attached)
             glGenTextures(1, &depthTexture);
             glBindTexture(GL_TEXTURE_2D, depthTexture);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, width, height,
-                         0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, width, height, 0, GL_RED, GL_FLOAT, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                                   GL_TEXTURE_2D, depthTexture, 0);
 
             if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
                 LOG_ERROR("Framebuffer is not complete");
@@ -114,16 +110,11 @@ namespace lfs::rendering {
 
             // Resize depth texture
             glBindTexture(GL_TEXTURE_2D, depthTexture);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, width, height,
-                         0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, width, height, 0, GL_RED, GL_FLOAT, nullptr);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-            // Re-attach depth texture to framebuffer
-            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-                                   GL_TEXTURE_2D, depthTexture, 0);
 
             // Check framebuffer completeness after resize
             if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
@@ -159,7 +150,7 @@ namespace lfs::rendering {
 
             glBindTexture(GL_TEXTURE_2D, depthTexture);
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height,
-                            GL_DEPTH_COMPONENT, GL_FLOAT, depth_data);
+                            GL_RED, GL_FLOAT, depth_data);
         }
 
         void uploadImageAndDepth(const unsigned char* rgb_data,
@@ -178,7 +169,7 @@ namespace lfs::rendering {
                             GL_RGB, GL_UNSIGNED_BYTE, rgb_data);
             glBindTexture(GL_TEXTURE_2D, depthTexture);
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height,
-                            GL_DEPTH_COMPONENT, GL_FLOAT, depth_data);
+                            GL_RED, GL_FLOAT, depth_data);
         }
 
         void bind() const {

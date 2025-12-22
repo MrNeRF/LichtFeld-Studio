@@ -257,7 +257,12 @@ namespace lfs::rendering {
             .screen_positions = pipeline_result->screen_positions.is_valid()
                                     ? std::make_shared<Tensor>(pipeline_result->screen_positions)
                                     : nullptr,
-            .valid = true};
+            .valid = true,
+            .depth_is_ndc = pipeline_result->depth_is_ndc,
+            .external_depth_texture = pipeline_result->external_depth_texture,
+            .near_plane = pipeline_result->near_plane,
+            .far_plane = pipeline_result->far_plane,
+            .orthographic = pipeline_result->orthographic};
 
         return result;
     }
@@ -313,7 +318,7 @@ namespace lfs::rendering {
             .selection_mode_rings = false,
             .hovered_depth_id = nullptr,
             .highlight_gaussian_id = -1,
-            .far_plane = 1e10f,
+            .far_plane = DEFAULT_FAR_PLANE,
             .selected_node_mask = {}};
 
         auto pipeline_result = pipeline_.renderRawPointCloud(point_cloud, pipeline_req);
@@ -328,7 +333,12 @@ namespace lfs::rendering {
             .image = std::make_shared<Tensor>(pipeline_result->image),
             .depth = std::make_shared<Tensor>(pipeline_result->depth),
             .screen_positions = nullptr,
-            .valid = true};
+            .valid = true,
+            .depth_is_ndc = pipeline_result->depth_is_ndc,
+            .external_depth_texture = pipeline_result->external_depth_texture,
+            .near_plane = pipeline_result->near_plane,
+            .far_plane = pipeline_result->far_plane,
+            .orthographic = pipeline_result->orthographic};
 
         return result;
     }
@@ -375,6 +385,11 @@ namespace lfs::rendering {
         internal_result.image = *result.image;
         internal_result.depth = result.depth ? *result.depth : Tensor();
         internal_result.valid = true;
+        internal_result.depth_is_ndc = result.depth_is_ndc;
+        internal_result.external_depth_texture = result.external_depth_texture;
+        internal_result.near_plane = result.near_plane;
+        internal_result.far_plane = result.far_plane;
+        internal_result.orthographic = result.orthographic;
 
         if (auto upload_result = RenderingPipeline::uploadToScreen(internal_result, *screen_renderer_, viewport_size);
             !upload_result) {

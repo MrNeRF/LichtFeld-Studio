@@ -196,9 +196,8 @@ target_link_libraries(lichtfeld_tests PRIVATE
 
     # CUDA libraries
     CUDA::cudart
-    CUDA::cublas
     CUDA::curand
-    CUDA::cupti      # Required by PyTorch profiling
+    CUDA::cupti
 
     # System libraries
     spdlog::spdlog

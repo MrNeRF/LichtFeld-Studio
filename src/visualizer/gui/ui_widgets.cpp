@@ -288,10 +288,6 @@ namespace lfs::vis::gui::widgets {
     }
 
     bool ColoredButton(const char* label, const ButtonStyle style, const ImVec2& size) {
-        constexpr float TINT_NORMAL = 0.15f;
-        constexpr float TINT_HOVER = 0.25f;
-        constexpr float TINT_ACTIVE = 0.35f;
-
         const auto& t = theme();
         const ImVec4& base = t.palette.surface;
 
@@ -311,9 +307,9 @@ namespace lfs::vis::gui::widgets {
                           base.z + (accent.z - base.z) * f, 1.0f};
         };
 
-        ImGui::PushStyleColor(ImGuiCol_Button, blend(TINT_NORMAL));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, blend(TINT_HOVER));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, blend(TINT_ACTIVE));
+        ImGui::PushStyleColor(ImGuiCol_Button, blend(t.button.tint_normal));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, blend(t.button.tint_hover));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, blend(t.button.tint_active));
 
         const bool clicked = ImGui::Button(label, size);
 

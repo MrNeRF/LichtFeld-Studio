@@ -52,7 +52,7 @@ namespace lfs::rendering {
         uint* n_visible_primitives;
         uint* n_instances;
 
-        static PerPrimitiveBuffers from_blob(char*& blob, size_t n_primitives) {
+        static PerPrimitiveBuffers from_blob(char*& blob, int n_primitives) {
             PerPrimitiveBuffers buffers;
             uint* depth_keys_current;
             obtain(blob, depth_keys_current, n_primitives, 128);
@@ -96,7 +96,7 @@ namespace lfs::rendering {
         cub::DoubleBuffer<ushort> keys;
         cub::DoubleBuffer<uint> primitive_indices;
 
-        static PerInstanceBuffers from_blob(char*& blob, size_t n_instances) {
+        static PerInstanceBuffers from_blob(char*& blob, int n_instances) {
             PerInstanceBuffers buffers;
             ushort* keys_current;
             obtain(blob, keys_current, n_instances, 128);
@@ -124,7 +124,7 @@ namespace lfs::rendering {
         uint* n_buckets;
         uint* bucket_offsets;
 
-        static PerTileBuffers from_blob(char*& blob, size_t n_tiles) {
+        static PerTileBuffers from_blob(char*& blob, int n_tiles) {
             PerTileBuffers buffers;
             obtain(blob, buffers.instance_ranges, n_tiles, 128);
             obtain(blob, buffers.n_buckets, n_tiles, 128);

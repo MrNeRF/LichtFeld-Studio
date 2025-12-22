@@ -1,0 +1,6 @@
+#!/bin/bash
+# SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+# SPDX-License-Identifier: GPL-3.0-or-later
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+export LD_LIBRARY_PATH="$SCRIPT_DIR/../lib:$LD_LIBRARY_PATH"
+exec "$SCRIPT_DIR/@PROJECT_NAME@" "$@"

@@ -5,8 +5,8 @@
 #include "ply.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
-#include "tinyply.hpp"
 #include "io/error.hpp"
+#include "tinyply.hpp"
 #include <algorithm>
 #include <charconv>
 #include <chrono>
@@ -356,10 +356,10 @@ namespace lfs::io {
             __cpuid(cpuInfo, 7);
             has_avx2 = (cpuInfo[1] & (1 << 5)) != 0;
 #elif defined(__GNUC__) || defined(__clang__)
-                __builtin_cpu_init();
-                has_avx2 = __builtin_cpu_supports("avx2");
+            __builtin_cpu_init();
+            has_avx2 = __builtin_cpu_supports("avx2");
 #else
-                has_avx2 = false;
+            has_avx2 = false;
 #endif
         });
 
