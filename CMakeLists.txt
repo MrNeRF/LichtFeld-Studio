@@ -373,51 +373,28 @@ if(TARGET nvimgcodec)
         )
     endif()
 
-    # Create extensions directory and copy extension libraries
-    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:${PROJECT_NAME}>/extensions"
-        COMMENT "Creating extensions directory"
-    )
-
-    # Copy extension libraries to extensions/ subdirectory
-    if(TARGET nvjpeg_ext)
-        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "$<TARGET_FILE:nvjpeg_ext>"
-                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/extensions/"
-            COMMENT "Copying nvjpeg extension to extensions/"
-        )
-        # Create symlink only on Unix-like systems
-        if(UNIX)
-            add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E create_symlink
-                    "$<TARGET_FILE_NAME:nvjpeg_ext>"
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/extensions/libnvjpeg_ext.so"
-                COMMENT "Creating nvjpeg extension symlink"
-            )
-        endif()
-    endif()
-
-    if(TARGET nvjpeg2k_ext)
-        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "$<TARGET_FILE:nvjpeg2k_ext>"
-                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/extensions/"
-            COMMENT "Copying nvjpeg2k extension to extensions/"
-        )
-        # Create symlink only on Unix-like systems
-        if(UNIX)
-            add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E create_symlink
-                    "$<TARGET_FILE_NAME:nvjpeg2k_ext>"
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>/extensions/libnvjpeg2k_ext.so"
-                COMMENT "Creating nvjpeg2k extension symlink"
-            )
-        endif()
-    endif()
-
     message(STATUS "Post-build: nvImageCodec libraries will be copied to executable directory")
+endif()
+
+# =============================================================================
+# EXTENSIONS COPYING - Copy nvImageCodec extensions to build/extensions
+# =============================================================================
+if(TARGET nvjpeg_ext)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "$<TARGET_FILE_DIR:nvjpeg_ext>"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>/extensions"
+        COMMENT "Copying nvjpeg extension + dependencies"
+    )
+endif()
+
+if(TARGET nvjpeg2k_ext)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "$<TARGET_FILE_DIR:nvjpeg2k_ext>"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>/extensions"
+        COMMENT "Copying nvjpeg2k extension + dependencies"
+    )
 endif()
 
 # =============================================================================
@@ -690,10 +667,19 @@ if(BUILD_PORTABLE)
             foreach(_d IN LISTS _dlls)
                 file(INSTALL \"\${_d}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
             endforeach()
-            # Copy extensions/ from build to bin/extensions/ (includes nvjpeg_ext + nvjpeg64_12.dll)
-            if(EXISTS \"${CMAKE_BINARY_DIR}/extensions\")
-                file(INSTALL \"${CMAKE_BINARY_DIR}/extensions/\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/extensions\")
-            endif()
+            # Copy extensions/ from build to dist/extensions/
+            # Handle both single-config (Ninja) and multi-config (VS) generators
+            foreach(_cfg IN ITEMS \"\" \"Release\" \"Debug\" \"RelWithDebInfo\" \"MinSizeRel\")
+                if(_cfg)
+                    set(_ext_dir \"${CMAKE_BINARY_DIR}/\${_cfg}/extensions\")
+                else()
+                    set(_ext_dir \"${CMAKE_BINARY_DIR}/extensions\")
+                endif()
+                if(EXISTS \"\${_ext_dir}\")
+                    file(INSTALL \"\${_ext_dir}/\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/extensions\")
+                    break()
+                endif()
+            endforeach()
             # Copy vcpkg DLLs
             if(EXISTS \"${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin\")
                 file(GLOB _vcpkg \"${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin/*.dll\")
