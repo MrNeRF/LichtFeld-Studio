@@ -176,10 +176,18 @@ namespace lfs::io {
 
             if (has_cameras && has_images) {
                 LOG_DEBUG("Reading binary COLMAP data");
-                std::tie(cameras, scene_center) = read_colmap_cameras_and_images(path, actual_images_folder);
+                auto result = read_colmap_cameras_and_images(path, actual_images_folder);
+                if (!result) {
+                    return std::unexpected(result.error());
+                }
+                std::tie(cameras, scene_center) = std::move(*result);
             } else if (has_cameras_text && has_images_text) {
                 LOG_DEBUG("Reading text COLMAP data");
-                std::tie(cameras, scene_center) = read_colmap_cameras_and_images_text(path, actual_images_folder);
+                auto result = read_colmap_cameras_and_images_text(path, actual_images_folder);
+                if (!result) {
+                    return std::unexpected(result.error());
+                }
+                std::tie(cameras, scene_center) = std::move(*result);
             } else {
                 return make_error(ErrorCode::MISSING_REQUIRED_FILES,
                                   "No valid COLMAP camera and image data found", path);
