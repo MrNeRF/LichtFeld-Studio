@@ -377,14 +377,6 @@ namespace lfs::vis::gui::panels {
         }
         ImGui::EndTable();
 
-        // Advanced Training Parameters section
-        // ImGui::Spacing();
-
-        //        if (ImGui::TreeNode("Advanced Training Params")) {
-
-        // ImGui::TreePop();
-        //}
-
         if (can_edit && dataset_params_changed) {
             trainer_manager->getEditableDatasetParams() = dataset_params;
         }
