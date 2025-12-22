@@ -1040,12 +1040,14 @@ namespace lfs::training {
                     LOG_INFO("{}", metrics.to_string());
                 }
 
-                // Save model at specified steps
-                for (size_t save_step : params_.optimization.save_steps) {
-                    if (iter == static_cast<int>(save_step) && iter != params_.optimization.iterations) {
-                        const bool join_threads = (iter == params_.optimization.save_steps.back());
-                        auto save_path = params_.dataset.output_path;
-                        save_ply(save_path, iter, /*join=*/join_threads);
+                // Save model at specified steps (skip if --skip-intermediate is enabled)
+                if (!params_.optimization.skip_intermediate) {
+                    for (size_t save_step : params_.optimization.save_steps) {
+                        if (iter == static_cast<int>(save_step) && iter != params_.optimization.iterations) {
+                            const bool join_threads = (iter == params_.optimization.save_steps.back());
+                            auto save_path = params_.dataset.output_path;
+                            save_ply(save_path, iter, /*join=*/join_threads);
+                        }
                     }
                 }
 
@@ -1283,11 +1285,13 @@ namespace lfs::training {
         // Save PLY format - join_threads controls sync vs async
         lfs::core::save_ply(strategy_->get_model(), save_path, iter_num, join_threads);
 
-        // Save checkpoint alongside PLY for training resumption
-        auto ckpt_result = lfs::training::save_checkpoint(
-            save_path, iter_num, *strategy_, params_, bilateral_grid_.get());
-        if (!ckpt_result) {
-            LOG_WARN("Failed to save checkpoint: {}", ckpt_result.error());
+        // Save checkpoint alongside PLY for training resumption (skip if --skip-intermediate)
+        if (!params_.optimization.skip_intermediate) {
+            auto ckpt_result = lfs::training::save_checkpoint(
+                save_path, iter_num, *strategy_, params_, bilateral_grid_.get());
+            if (!ckpt_result) {
+                LOG_WARN("Failed to save checkpoint: {}", ckpt_result.error());
+            }
         }
 
         LOG_DEBUG("PLY save initiated: {} (sync={})", save_path.string(), join_threads);
