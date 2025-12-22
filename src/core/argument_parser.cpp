@@ -129,6 +129,7 @@ namespace {
             ::args::Flag random(parser, "random", "Use random initialization instead of SfM", {"random"});
             ::args::Flag gut(parser, "gut", "Enable GUT mode", {"gut"});
             ::args::Flag enable_sparsity(parser, "enable_sparsity", "Enable sparsity optimization", {"enable-sparsity"});
+            ::args::Flag skip_intermediate(parser, "skip_intermediate", "Skip intermediate PLY/checkpoint saves (only save final)", {"skip-intermediate"});
 
             // Mask-related arguments
             ::args::MapFlag<std::string, lfs::core::param::MaskMode> mask_mode(parser, "mask_mode",
@@ -403,6 +404,7 @@ namespace {
                                         random_flag = bool(random),
                                         gut_flag = bool(gut),
                                         enable_sparsity_flag = bool(enable_sparsity),
+                                        skip_intermediate_flag = bool(skip_intermediate),
                                         invert_masks_flag = bool(invert_masks)]() {
                 auto& opt = params.optimization;
                 auto& ds = params.dataset;
@@ -452,6 +454,7 @@ namespace {
                 setFlag(random_flag, opt.random);
                 setFlag(gut_flag, opt.gut);
                 setFlag(enable_sparsity_flag, opt.enable_sparsity);
+                setFlag(skip_intermediate_flag, opt.skip_intermediate);
 
                 // Mask parameters
                 setVal(mask_mode_val, opt.mask_mode);
