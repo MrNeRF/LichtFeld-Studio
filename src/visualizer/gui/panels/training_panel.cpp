@@ -64,6 +64,334 @@ namespace lfs::vis::gui::panels {
         void clear() { samples.clear(); }
     };
 
+    void DrawTrainingParameters(const UIContext& ctx) {
+        auto* const trainer_manager = ctx.viewer->getTrainerManager();
+        if (!trainer_manager || !trainer_manager->hasTrainer()) {
+            return;
+        }
+
+        auto* const param_manager = services().paramsOrNull();
+        if (!param_manager) {
+            ImGui::TextColored(ImVec4(1, 0, 0, 1), "ParameterManager not available");
+            return;
+        }
+
+        if (const auto result = param_manager->ensureLoaded(); !result) {
+            ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "Failed to load params: %s", result.error().c_str());
+            return;
+        }
+
+        const auto trainer_state = trainer_manager->getState();
+        const int current_iteration = trainer_manager->getCurrentIteration();
+        const bool can_edit = (trainer_state == TrainerManager::State::Ready) && (current_iteration == 0);
+
+        auto& opt_params = param_manager->getActiveParams();
+
+        lfs::core::param::DatasetConfig dataset_params;
+        if (can_edit) {
+            dataset_params = trainer_manager->getEditableDatasetParams();
+        } else {
+            const auto* const trainer = trainer_manager->getTrainer();
+            if (!trainer)
+                return;
+            dataset_params = trainer->getParams().dataset;
+        }
+
+        bool dataset_params_changed = false;
+
+        bool has_masks = false;
+        if (!dataset_params.data_path.empty()) {
+            static constexpr std::array<const char*, 3> MASK_FOLDERS = {"masks", "mask", "segmentation"};
+            for (const auto* const folder : MASK_FOLDERS) {
+                if (std::filesystem::exists(dataset_params.data_path / folder)) {
+                    has_masks = true;
+                    break;
+                }
+            }
+        }
+
+        ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 12.0f);
+        if (ImGui::BeginTable("DatasetTable", 2, ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Strategy:");
+            ImGui::TableNextColumn();
+            if (can_edit) {
+                ImGui::PushItemWidth(-1);
+                static constexpr const char* const STRATEGY_LABELS[] = {"MCMC", "Default"};
+                int current_strategy = (opt_params.strategy == "mcmc") ? 0 : 1;
+                if (ImGui::Combo("##strategy", &current_strategy, STRATEGY_LABELS, 2)) {
+                    const auto new_strategy = (current_strategy == 0) ? "mcmc" : "default";
+                    if (new_strategy != opt_params.strategy) {
+                        param_manager->setActiveStrategy(new_strategy);
+                    }
+                }
+                ImGui::PopItemWidth();
+            } else {
+                ImGui::Text("%s", opt_params.strategy == "mcmc" ? "MCMC" : "Default");
+            }
+
+            // Iterations
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Iterations:");
+            ImGui::TableNextColumn();
+            if (can_edit) {
+                ImGui::PushItemWidth(-1);
+                int iterations = static_cast<int>(opt_params.iterations);
+                if (ImGui::InputInt("##iterations", &iterations, 1000, 5000)) {
+                    if (iterations > 0 && iterations <= 1000000) {
+                        opt_params.iterations = static_cast<size_t>(iterations);
+                    }
+                }
+                ImGui::PopItemWidth();
+            } else {
+                ImGui::Text("%zu", opt_params.iterations);
+            }
+
+            // Max Gaussians
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Max Gaussians:");
+            ImGui::TableNextColumn();
+            if (can_edit) {
+                ImGui::PushItemWidth(-1);
+                if (ImGui::InputInt("##max_cap", &opt_params.max_cap, 10000, 100000)) {
+                    opt_params.max_cap = std::max(1, opt_params.max_cap);
+                }
+                ImGui::PopItemWidth();
+            } else {
+                ImGui::Text("%d", opt_params.max_cap);
+            }
+
+            // SH Degree
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("SH Degree:");
+            ImGui::TableNextColumn();
+            if (can_edit) {
+                ImGui::PushItemWidth(-1);
+                static constexpr const char* const SH_DEGREE_LABELS[] = {"0", "1", "2", "3"};
+                ImGui::Combo("##sh_degree", &opt_params.sh_degree, SH_DEGREE_LABELS, 4);
+                ImGui::PopItemWidth();
+            } else {
+                ImGui::Text("%d", opt_params.sh_degree);
+            }
+
+            // Tile Mode
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Tile Mode:");
+            ImGui::TableNextColumn();
+            if (can_edit) {
+                ImGui::PushItemWidth(-1);
+                static constexpr int TILE_OPTIONS[] = {1, 2, 4};
+                static constexpr const char* const TILE_LABELS[] = {"1 (Full)", "2 (Half)", "4 (Quarter)"};
+                int current_tile_index = 0;
+                for (int i = 0; i < 3; ++i) {
+                    if (opt_params.tile_mode == TILE_OPTIONS[i])
+                        current_tile_index = i;
+                }
+                if (ImGui::Combo("##tile_mode", &current_tile_index, TILE_LABELS, 3)) {
+                    opt_params.tile_mode = TILE_OPTIONS[current_tile_index];
+                }
+                ImGui::PopItemWidth();
+            } else {
+                ImGui::Text("%d", opt_params.tile_mode);
+            }
+
+            // Num Workers
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Num Workers:");
+            ImGui::TableNextColumn();
+            if (can_edit) {
+                ImGui::PushItemWidth(-1);
+                if (ImGui::InputInt("##num_workers", &opt_params.num_workers, 1, 4)) {
+                    opt_params.num_workers = std::clamp(opt_params.num_workers, 1, 64);
+                }
+                ImGui::PopItemWidth();
+            } else {
+                ImGui::Text("%d", opt_params.num_workers);
+            }
+
+            // Steps Scaler
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Steps Scaler:");
+            ImGui::TableNextColumn();
+            if (can_edit) {
+                ImGui::PushItemWidth(-1);
+                if (ImGui::InputFloat("##steps_scaler", &opt_params.steps_scaler, 0.1f, 0.5f, "%.2f")) {
+                    opt_params.steps_scaler = std::max(0.0f, opt_params.steps_scaler);
+                }
+                ImGui::PopItemWidth();
+                if (opt_params.steps_scaler > 0) {
+                    ImGui::SameLine();
+                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "(scaling active)");
+                }
+            } else {
+                ImGui::Text("%.2f", opt_params.steps_scaler);
+            }
+
+            // Bilateral Grid Enable
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Bilateral Grid:");
+            ImGui::TableNextColumn();
+            if (can_edit) {
+                ImGui::Checkbox("##use_bilateral_grid", &opt_params.use_bilateral_grid);
+            } else {
+                ImGui::Text("%s", opt_params.use_bilateral_grid ? "Enabled" : "Disabled");
+            }
+
+            // Mask Mode
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Mask Mode:");
+            ImGui::TableNextColumn();
+            static constexpr const char* const MASK_MODE_LABELS[] = {"None", "Segment", "Ignore", "Alpha Consistent"};
+            if (can_edit && has_masks) {
+                ImGui::PushItemWidth(-1);
+                int current_mask_mode = static_cast<int>(opt_params.mask_mode);
+                if (ImGui::Combo("##mask_mode", &current_mask_mode, MASK_MODE_LABELS, IM_ARRAYSIZE(MASK_MODE_LABELS))) {
+                    opt_params.mask_mode = static_cast<lfs::core::param::MaskMode>(current_mask_mode);
+                }
+                ImGui::PopItemWidth();
+            } else {
+                ImGui::Text("%s", MASK_MODE_LABELS[static_cast<int>(opt_params.mask_mode)]);
+                if (!has_masks && can_edit) {
+                    ImGui::SameLine();
+                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "(no masks)");
+                }
+            }
+
+            if (opt_params.mask_mode != lfs::core::param::MaskMode::None && has_masks) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("  Invert Masks:");
+                ImGui::TableNextColumn();
+                if (can_edit) {
+                    ImGui::Checkbox("##invert_masks", &opt_params.invert_masks);
+                } else {
+                    ImGui::Text("%s", opt_params.invert_masks ? "Yes" : "No");
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Swap object/background in masks");
+                }
+            }
+
+            if (opt_params.mask_mode == lfs::core::param::MaskMode::Segment) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("  Opacity Penalty Weight:");
+                ImGui::TableNextColumn();
+                if (can_edit) {
+                    ImGui::PushItemWidth(-1);
+                    ImGui::InputFloat("##mask_penalty_weight", &opt_params.mask_opacity_penalty_weight, 0.1f, 1.0f, "%.1f");
+                    ImGui::PopItemWidth();
+                } else {
+                    ImGui::Text("%.1f", opt_params.mask_opacity_penalty_weight);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Weight for opacity penalty in background regions");
+                }
+
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("  Opacity Penalty Power:");
+                ImGui::TableNextColumn();
+                if (can_edit) {
+                    ImGui::PushItemWidth(-1);
+                    ImGui::SliderFloat("##mask_penalty_power", &opt_params.mask_opacity_penalty_power, 0.5f, 4.0f, "%.1f");
+                    ImGui::PopItemWidth();
+                } else {
+                    ImGui::Text("%.1f", opt_params.mask_opacity_penalty_power);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Penalty falloff: 1=linear, 2=quadratic, >2=gentler");
+                }
+
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("  Mask Threshold:");
+                ImGui::TableNextColumn();
+                if (can_edit) {
+                    ImGui::PushItemWidth(-1);
+                    ImGui::SliderFloat("##mask_threshold", &opt_params.mask_threshold, 0.0f, 1.0f, "%.2f");
+                    ImGui::PopItemWidth();
+                } else {
+                    ImGui::Text("%.2f", opt_params.mask_threshold);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Values >= threshold become 1.0 (object)");
+                }
+            }
+
+            // Enable Sparsity
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Sparsity:");
+            ImGui::TableNextColumn();
+            if (can_edit) {
+                ImGui::Checkbox("##enable_sparsity", &opt_params.enable_sparsity);
+            } else {
+                ImGui::Text("%s", opt_params.enable_sparsity ? "Enabled" : "Disabled");
+            }
+
+            // GUT
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("GUT:");
+            ImGui::TableNextColumn();
+            if (can_edit) {
+                ImGui::Checkbox("##gut", &opt_params.gut);
+            } else {
+                ImGui::Text("%s", opt_params.gut ? "Enabled" : "Disabled");
+            }
+
+            // BG Modulation
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("BG Modulation:");
+            ImGui::TableNextColumn();
+            if (can_edit) {
+                ImGui::Checkbox("##bg_modulation", &opt_params.bg_modulation);
+            } else {
+                ImGui::Text("%s", opt_params.bg_modulation ? "Enabled" : "Disabled");
+            }
+
+            // Evaluation
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Evaluation:");
+            ImGui::TableNextColumn();
+            if (can_edit) {
+                ImGui::Checkbox("##enable_eval", &opt_params.enable_eval);
+            } else {
+                ImGui::Text("%s", opt_params.enable_eval ? "Enabled" : "Disabled");
+            }
+        }
+        ImGui::EndTable();
+
+        // Advanced Training Parameters section
+        // ImGui::Spacing();
+
+        //        if (ImGui::TreeNode("Advanced Training Params")) {
+
+        // ImGui::TreePop();
+        //}
+
+        if (can_edit && dataset_params_changed) {
+            trainer_manager->getEditableDatasetParams() = dataset_params;
+        }
+
+        ImGui::PopStyleVar();
+    }
+
     void DrawTrainingAdvancedParameters(const UIContext& ctx) {
         auto* const trainer_manager = ctx.viewer->getTrainerManager();
         if (!trainer_manager || !trainer_manager->hasTrainer()) {
@@ -110,7 +438,7 @@ namespace lfs::vis::gui::panels {
             }
         }
 
-            // Dataset Parameters
+        // Dataset Parameters
         if (ImGui::TreeNode("Dataset")) {
             if (ImGui::BeginTable("DatasetTable", 2, ImGuiTableFlags_SizingStretchProp)) {
                 ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 120.0f);
@@ -975,342 +1303,10 @@ namespace lfs::vis::gui::panels {
         }
     }
 
-
-    void DrawTrainingParameters(const UIContext& ctx) {
-        auto* const trainer_manager = ctx.viewer->getTrainerManager();
-        if (!trainer_manager || !trainer_manager->hasTrainer()) {
-            return;
-        }
-
-        auto* const param_manager = services().paramsOrNull();
-        if (!param_manager) {
-            ImGui::TextColored(ImVec4(1, 0, 0, 1), "ParameterManager not available");
-            return;
-        }
-
-        if (const auto result = param_manager->ensureLoaded(); !result) {
-            ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "Failed to load params: %s", result.error().c_str());
-            return;
-        }
-
-        const auto trainer_state = trainer_manager->getState();
-        const int current_iteration = trainer_manager->getCurrentIteration();
-        const bool can_edit = (trainer_state == TrainerManager::State::Ready) && (current_iteration == 0);
-
-        auto& opt_params = param_manager->getActiveParams();
-
-        lfs::core::param::DatasetConfig dataset_params;
-        if (can_edit) {
-            dataset_params = trainer_manager->getEditableDatasetParams();
-        } else {
-            const auto* const trainer = trainer_manager->getTrainer();
-            if (!trainer)
-                return;
-            dataset_params = trainer->getParams().dataset;
-        }
-
-        bool dataset_params_changed = false;
-
-        bool has_masks = false;
-        if (!dataset_params.data_path.empty()) {
-            static constexpr std::array<const char*, 3> MASK_FOLDERS = {"masks", "mask", "segmentation"};
-            for (const auto* const folder : MASK_FOLDERS) {
-                if (std::filesystem::exists(dataset_params.data_path / folder)) {
-                    has_masks = true;
-                    break;
-                }
-            }
-        }
-
-        ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 12.0f);
-        if (ImGui::BeginTable("DatasetTable", 2, ImGuiTableFlags_SizingStretchProp)) {
-            ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 120.0f);
-            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
-
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("Strategy:");
-            ImGui::TableNextColumn();
-            if (can_edit) {
-                ImGui::PushItemWidth(-1);
-                static constexpr const char* const STRATEGY_LABELS[] = {"MCMC", "Default"};
-                int current_strategy = (opt_params.strategy == "mcmc") ? 0 : 1;
-                if (ImGui::Combo("##strategy", &current_strategy, STRATEGY_LABELS, 2)) {
-                    const auto new_strategy = (current_strategy == 0) ? "mcmc" : "default";
-                    if (new_strategy != opt_params.strategy) {
-                        param_manager->setActiveStrategy(new_strategy);
-                    }
-                }
-                ImGui::PopItemWidth();
-            } else {
-                ImGui::Text("%s", opt_params.strategy == "mcmc" ? "MCMC" : "Default");
-            }
-
-            // Iterations
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("Iterations:");
-            ImGui::TableNextColumn();
-            if (can_edit) {
-                ImGui::PushItemWidth(-1);
-                int iterations = static_cast<int>(opt_params.iterations);
-                if (ImGui::InputInt("##iterations", &iterations, 1000, 5000)) {
-                    if (iterations > 0 && iterations <= 1000000) {
-                        opt_params.iterations = static_cast<size_t>(iterations);
-                    }
-                }
-                ImGui::PopItemWidth();
-            } else {
-                ImGui::Text("%zu", opt_params.iterations);
-            }
-
-            // Max Gaussians
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("Max Gaussians:");
-            ImGui::TableNextColumn();
-            if (can_edit) {
-                ImGui::PushItemWidth(-1);
-                if (ImGui::InputInt("##max_cap", &opt_params.max_cap, 10000, 100000)) {
-                    opt_params.max_cap = std::max(1, opt_params.max_cap);
-                }
-                ImGui::PopItemWidth();
-            } else {
-                ImGui::Text("%d", opt_params.max_cap);
-            }
-
-            // SH Degree
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("SH Degree:");
-            ImGui::TableNextColumn();
-            if (can_edit) {
-                ImGui::PushItemWidth(-1);
-                static constexpr const char* const SH_DEGREE_LABELS[] = {"0", "1", "2", "3"};
-                ImGui::Combo("##sh_degree", &opt_params.sh_degree, SH_DEGREE_LABELS, 4);
-                ImGui::PopItemWidth();
-            } else {
-                ImGui::Text("%d", opt_params.sh_degree);
-            }
-
-            // Tile Mode
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("Tile Mode:");
-            ImGui::TableNextColumn();
-            if (can_edit) {
-                ImGui::PushItemWidth(-1);
-                static constexpr int TILE_OPTIONS[] = {1, 2, 4};
-                static constexpr const char* const TILE_LABELS[] = {"1 (Full)", "2 (Half)", "4 (Quarter)"};
-                int current_tile_index = 0;
-                for (int i = 0; i < 3; ++i) {
-                    if (opt_params.tile_mode == TILE_OPTIONS[i])
-                        current_tile_index = i;
-                }
-                if (ImGui::Combo("##tile_mode", &current_tile_index, TILE_LABELS, 3)) {
-                    opt_params.tile_mode = TILE_OPTIONS[current_tile_index];
-                }
-                ImGui::PopItemWidth();
-            } else {
-                ImGui::Text("%d", opt_params.tile_mode);
-            }
-
-            // Num Workers
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("Num Workers:");
-            ImGui::TableNextColumn();
-            if (can_edit) {
-                ImGui::PushItemWidth(-1);
-                if (ImGui::InputInt("##num_workers", &opt_params.num_workers, 1, 4)) {
-                    opt_params.num_workers = std::clamp(opt_params.num_workers, 1, 64);
-                }
-                ImGui::PopItemWidth();
-            } else {
-                ImGui::Text("%d", opt_params.num_workers);
-            }
-
-            // Steps Scaler
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("Steps Scaler:");
-            ImGui::TableNextColumn();
-            if (can_edit) {
-                ImGui::PushItemWidth(-1);
-                if (ImGui::InputFloat("##steps_scaler", &opt_params.steps_scaler, 0.1f, 0.5f, "%.2f")) {
-                    opt_params.steps_scaler = std::max(0.0f, opt_params.steps_scaler);
-                }
-                ImGui::PopItemWidth();
-                if (opt_params.steps_scaler > 0) {
-                    ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "(scaling active)");
-                }
-            } else {
-                ImGui::Text("%.2f", opt_params.steps_scaler);
-            }
-
-            // Bilateral Grid Enable
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("Bilateral Grid:");
-            ImGui::TableNextColumn();
-            if (can_edit) {
-                ImGui::Checkbox("##use_bilateral_grid", &opt_params.use_bilateral_grid);
-            } else {
-                ImGui::Text("%s", opt_params.use_bilateral_grid ? "Enabled" : "Disabled");
-            }
-
-            // Mask Mode
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("Mask Mode:");
-            ImGui::TableNextColumn();
-            static constexpr const char* const MASK_MODE_LABELS[] = {"None", "Segment", "Ignore", "Alpha Consistent"};
-            if (can_edit && has_masks) {
-                ImGui::PushItemWidth(-1);
-                int current_mask_mode = static_cast<int>(opt_params.mask_mode);
-                if (ImGui::Combo("##mask_mode", &current_mask_mode, MASK_MODE_LABELS, IM_ARRAYSIZE(MASK_MODE_LABELS))) {
-                    opt_params.mask_mode = static_cast<lfs::core::param::MaskMode>(current_mask_mode);
-                }
-                ImGui::PopItemWidth();
-            } else {
-                ImGui::Text("%s", MASK_MODE_LABELS[static_cast<int>(opt_params.mask_mode)]);
-                if (!has_masks && can_edit) {
-                    ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "(no masks)");
-                }
-            }
-
-            if (opt_params.mask_mode != lfs::core::param::MaskMode::None && has_masks) {
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::Text("  Invert Masks:");
-                ImGui::TableNextColumn();
-                if (can_edit) {
-                    ImGui::Checkbox("##invert_masks", &opt_params.invert_masks);
-                } else {
-                    ImGui::Text("%s", opt_params.invert_masks ? "Yes" : "No");
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Swap object/background in masks");
-                }
-            }
-
-            if (opt_params.mask_mode == lfs::core::param::MaskMode::Segment) {
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::Text("  Opacity Penalty Weight:");
-                ImGui::TableNextColumn();
-                if (can_edit) {
-                    ImGui::PushItemWidth(-1);
-                    ImGui::InputFloat("##mask_penalty_weight", &opt_params.mask_opacity_penalty_weight, 0.1f, 1.0f, "%.1f");
-                    ImGui::PopItemWidth();
-                } else {
-                    ImGui::Text("%.1f", opt_params.mask_opacity_penalty_weight);
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Weight for opacity penalty in background regions");
-                }
-
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::Text("  Opacity Penalty Power:");
-                ImGui::TableNextColumn();
-                if (can_edit) {
-                    ImGui::PushItemWidth(-1);
-                    ImGui::SliderFloat("##mask_penalty_power", &opt_params.mask_opacity_penalty_power, 0.5f, 4.0f, "%.1f");
-                    ImGui::PopItemWidth();
-                } else {
-                    ImGui::Text("%.1f", opt_params.mask_opacity_penalty_power);
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Penalty falloff: 1=linear, 2=quadratic, >2=gentler");
-                }
-
-                ImGui::TableNextRow();
-                ImGui::TableNextColumn();
-                ImGui::Text("  Mask Threshold:");
-                ImGui::TableNextColumn();
-                if (can_edit) {
-                    ImGui::PushItemWidth(-1);
-                    ImGui::SliderFloat("##mask_threshold", &opt_params.mask_threshold, 0.0f, 1.0f, "%.2f");
-                    ImGui::PopItemWidth();
-                } else {
-                    ImGui::Text("%.2f", opt_params.mask_threshold);
-                }
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Values >= threshold become 1.0 (object)");
-                }
-            }
-
-            // Enable Sparsity
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("Sparsity:");
-            ImGui::TableNextColumn();
-            if (can_edit) {
-                ImGui::Checkbox("##enable_sparsity", &opt_params.enable_sparsity);
-            } else {
-                ImGui::Text("%s", opt_params.enable_sparsity ? "Enabled" : "Disabled");
-            }
-
-            // GUT
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("GUT:");
-            ImGui::TableNextColumn();
-            if (can_edit) {
-                ImGui::Checkbox("##gut", &opt_params.gut);
-            } else {
-                ImGui::Text("%s", opt_params.gut ? "Enabled" : "Disabled");
-            }
-
-            // BG Modulation
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("BG Modulation:");
-            ImGui::TableNextColumn();
-            if (can_edit) {
-                ImGui::Checkbox("##bg_modulation", &opt_params.bg_modulation);
-            } else {
-                ImGui::Text("%s", opt_params.bg_modulation ? "Enabled" : "Disabled");
-            }
-
-            // Evaluation
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("Evaluation:");
-            ImGui::TableNextColumn();
-            if (can_edit) {
-                ImGui::Checkbox("##enable_eval", &opt_params.enable_eval);
-            } else {
-                ImGui::Text("%s", opt_params.enable_eval ? "Enabled" : "Disabled");
-            }
-        }
-        ImGui::EndTable();
-
-        // Advanced Training Parameters section
-        //ImGui::Spacing();
-
-//        if (ImGui::TreeNode("Advanced Training Params")) {
-
-
-
-           // ImGui::TreePop();
-        //}
-
-        if (can_edit && dataset_params_changed) {
-            trainer_manager->getEditableDatasetParams() = dataset_params;
-        }
-
-        ImGui::PopStyleVar();
-    }
-
     void DrawTrainingParams(const UIContext& ctx) {
 
         auto& state = TrainingPanelState::getInstance();
         const auto& t = theme();
-
 
         if (ImGui::CollapsingHeader("Basic Training Params", ImGuiTreeNodeFlags_DefaultOpen)) {
             DrawTrainingParameters(ctx);
@@ -1377,7 +1373,6 @@ namespace lfs::vis::gui::panels {
         int num_splats = trainer_manager->getNumSplats();
         ImGui::Text("num Splats: %d", num_splats);
     }
-
 
     void DrawTrainingControls(const UIContext& ctx) {
 
