@@ -648,7 +648,7 @@ if(BUILD_PORTABLE)
         [[.*libnvimgcodec.*]] [[.*libnvjpeg_ext.*]])
 
     # Search directories for runtime dependencies (quoted for paths with spaces on Windows)
-    set(_SEARCH_DIRS_STR "\"${CMAKE_BINARY_DIR}\" \"${CUDAToolkit_BIN_DIR}\" \"${CUDAToolkit_LIBRARY_DIR}\"")
+    set(_SEARCH_DIRS_STR "\"${CMAKE_BINARY_DIR}\" \"${CMAKE_BINARY_DIR}/external/nvImageCodec\" \"${CUDAToolkit_BIN_DIR}\" \"${CUDAToolkit_LIBRARY_DIR}\"")
 
     # Helper: bundle runtime dependencies for a target
     function(bundle_runtime_deps TARGET_FILE IS_LIBRARY)
@@ -685,10 +685,24 @@ if(BUILD_PORTABLE)
     elseif(WIN32)
         # Copy DLLs to bin/ for Windows search path
         install(CODE "
+            # Copy all DLLs from lib/ to bin/
             file(GLOB _dlls \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/*.dll\")
             foreach(_d IN LISTS _dlls)
                 file(INSTALL \"\${_d}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
             endforeach()
+            # Copy extensions/ to bin/extensions/ for nvImageCodec
+            if(EXISTS \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/extensions\")
+                file(GLOB _ext \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/extensions/*.dll\")
+                foreach(_e IN LISTS _ext)
+                    file(INSTALL \"\${_e}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/extensions\")
+                endforeach()
+            endif()
+            # Copy nvjpeg DLLs from build dir (required by nvjpeg_ext)
+            file(GLOB _nvjpeg \"${CMAKE_BINARY_DIR}/external/nvImageCodec/extensions/nvjpeg/nvjpeg*.dll\")
+            foreach(_nj IN LISTS _nvjpeg)
+                file(INSTALL \"\${_nj}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
+            endforeach()
+            # Copy vcpkg DLLs
             if(EXISTS \"${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin\")
                 file(GLOB _vcpkg \"${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin/*.dll\")
                 foreach(_v IN LISTS _vcpkg)
