@@ -380,6 +380,13 @@ if(TARGET nvimgcodec)
     message(STATUS "Post-build: nvImageCodec libraries will be copied to executable directory")
 endif()
 
+# Before extension post-build copying: remove stale 'extensions' file if present (prevent mkdir failure)
+set(_target_extensions_dir "${CMAKE_BINARY_DIR}/extensions")
+if(EXISTS "${_target_extensions_dir}" AND NOT IS_DIRECTORY "${_target_extensions_dir}")
+    file(REMOVE "${_target_extensions_dir}")
+    message(STATUS "Removed stale file '${_target_extensions_dir}' to make way for extensions/ directory")
+endif()
+
 # =============================================================================
 # EXTENSIONS COPYING - Copy nvImageCodec extensions to build/extensions
 # =============================================================================
@@ -388,10 +395,11 @@ if(TARGET nvjpeg_ext)
     add_dependencies(${PROJECT_NAME} nvjpeg_ext)
 
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "$<TARGET_FILE_DIR:nvjpeg_ext>"
-            "$<TARGET_FILE_DIR:${PROJECT_NAME}>/extensions"
-        COMMENT "Copying nvjpeg extension + dependencies"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PROJECT_NAME}>/extensions"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:nvjpeg_ext>"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>/extensions/"
+        COMMENT "Copying nvjpeg extension binary only"
     )
 endif()
 
@@ -400,10 +408,11 @@ if(TARGET nvjpeg2k_ext)
     add_dependencies(${PROJECT_NAME} nvjpeg2k_ext)
 
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "$<TARGET_FILE_DIR:nvjpeg2k_ext>"
-            "$<TARGET_FILE_DIR:${PROJECT_NAME}>/extensions"
-        COMMENT "Copying nvjpeg2k extension + dependencies"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${PROJECT_NAME}>/extensions"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:nvjpeg2k_ext>"
+            "$<TARGET_FILE_DIR:${PROJECT_NAME}>/extensions/"
+        COMMENT "Copying nvjpeg2k extension binary only"
     )
 endif()
 
@@ -626,14 +635,14 @@ endif()
 if(BUILD_PORTABLE)
     # Exclusion patterns for system libraries
     # nvcuda.dll is provided by the NVIDIA GPU driver, not the CUDA Toolkit
-    set(_PRE_EXCLUDE [[api-ms-.*]] [[ext-ms-.*]] [[API-MS-.*]] [[EXT-MS-.*]] [[nvcuda\.dll]])
+    set(_PRE_EXCLUDE [[api-ms-.*]] [[ext-ms-.*]] [[API-MS-.*]] [[EXT-MS-.*]] [[nvcuda[.]dll]])
     set(_POST_EXCLUDE
-        [[.*[Ss]ystem32.*]] [[.*[Ww]indows.*]]
-        [[/lib/x86_64-linux-gnu/.*]] [[/lib64/ld-linux.*]] [[/usr/lib.*]]
-        [[.*ld-linux.*]] [[.*libc\\.so\\..*]] [[.*libpthread.*]]
-        [[.*libdl\\.so.*]] [[.*libm\\.so\\..*]] [[.*librt\\.so.*]]
-        [[.*libstdc\\+\\+.*]] [[.*libgcc_s.*]]
-        [[.*libnvimgcodec.*]] [[.*libnvjpeg_ext.*]])
+            [[.*[Ss]ystem32.*]] [[.*[Ww]indows.*]]
+            [[/lib/x86_64-linux-gnu/.*]] [[/lib64/ld-linux.*]] [[/usr/lib.*]]
+            [[.*ld-linux.*]] [[.*libc[.]so[.].*]] [[.*libpthread.*]]
+            [[.*libdl[.]so.*]] [[.*libm[.]so[.].*]] [[.*librt[.]so.*]]
+            [[.*libstdc[+][+].*]] [[.*libgcc_s.*]]
+            [[.*libnvimgcodec.*]] [[.*libnvjpeg_ext.*]])
 
     # Search directories for runtime dependencies (quoted for paths with spaces on Windows)
     set(_SEARCH_DIRS_STR "\"${CMAKE_BINARY_DIR}\" \"${CMAKE_BINARY_DIR}/external/nvImageCodec\" \"${CUDAToolkit_BIN_DIR}\" \"${CUDAToolkit_LIBRARY_DIR}\"")
@@ -666,9 +675,9 @@ if(BUILD_PORTABLE)
 
     if(UNIX AND NOT APPLE)
         configure_file(
-            "${CMAKE_SOURCE_DIR}/cmake/templates/run_lichtfeld.sh.in"
-            "${CMAKE_BINARY_DIR}/run_lichtfeld.sh"
-            @ONLY)
+                "${CMAKE_SOURCE_DIR}/cmake/templates/run_lichtfeld.sh.in"
+                "${CMAKE_BINARY_DIR}/run_lichtfeld.sh"
+                @ONLY)
         install(PROGRAMS "${CMAKE_BINARY_DIR}/run_lichtfeld.sh" DESTINATION ${CMAKE_INSTALL_BINDIR})
     elseif(WIN32)
         # Copy DLLs to bin/ for Windows search path
@@ -687,7 +696,13 @@ if(BUILD_PORTABLE)
                     set(_ext_dir \"${CMAKE_BINARY_DIR}/extensions\")
                 endif()
                 if(EXISTS \"\${_ext_dir}\")
-                    file(INSTALL \"\${_ext_dir}/\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/extensions\")
+                    # Install only DLLs from the build extensions directory to avoid non-binary files
+                    file(GLOB _ext_dlls \"\${_ext_dir}/*.dll\")
+                    if(_ext_dlls)
+                        foreach(_e IN LISTS _ext_dlls)
+                            file(INSTALL \"\${_e}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/extensions\")
+                        endforeach()
+                    endif()
                     break()
                 endif()
             endforeach()
