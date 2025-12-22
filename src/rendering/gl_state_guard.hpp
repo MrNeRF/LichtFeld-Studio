@@ -19,9 +19,9 @@ namespace lfs::rendering {
     // Concept for renderable objects (C++20)
     template <typename T>
     concept Renderable = requires(T t, glm::mat4 m) {
-                             { t.render(m, m) } -> std::same_as<void>;
-                             { t.isInitialized() } -> std::convertible_to<bool>;
-                         };
+        { t.render(m, m) } -> std::same_as<void>;
+        { t.isInitialized() } -> std::convertible_to<bool>;
+    };
 
     // RAII class for OpenGL state management
     class GLStateGuard {

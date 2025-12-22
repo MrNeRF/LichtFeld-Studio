@@ -197,21 +197,20 @@ namespace nvimgcodec {
             return result;
         }
 
-#define DEFINE_ASSIGN_MAT_OP(op)                       \
-    template <typename U>                              \
-    NVIMGCODEC_HOST_DEV NVIMGCODEC_FORCEINLINE         \
-        mat&                                           \
-        operator op(const mat<rows, cols, U>& other) { \
-        MAT_STORAGE_LOOP(i)                            \
-        m[i] op other.m[i];                            \
-        return *this;                                  \
+#define DEFINE_ASSIGN_MAT_OP(op)                    \
+    template <typename U>                           \
+    NVIMGCODEC_HOST_DEV NVIMGCODEC_FORCEINLINE mat& \
+    operator op(const mat<rows, cols, U>& other) {  \
+        MAT_STORAGE_LOOP(i)                         \
+        m[i] op other.m[i];                         \
+        return *this;                               \
     }
 
 #define DEFINE_ASSIGN_MAT_SCALAR_OP(op)                                  \
     template <typename U>                                                \
     NVIMGCODEC_HOST_DEV NVIMGCODEC_FORCEINLINE                           \
         std::enable_if_t<is_scalar<U>::value, mat<rows, cols, Element>&> \
-        operator op(const U& other) {                                    \
+        operator op(const U & other) {                                   \
         MAT_STORAGE_LOOP(i)                                              \
         m[i] op other;                                                   \
         return *this;                                                    \
@@ -342,7 +341,7 @@ namespace nvimgcodec {
     template <int rows, int cols, typename T1, typename T2,                                  \
               typename R = promote_vec_scalar_t<T1, T2>>                                     \
     NVIMGCODEC_HOST_DEV constexpr std::enable_if_t<is_scalar<T2>::value, mat<rows, cols, R>> \
-    operator op(const mat<rows, cols, T1>& a, const T2& b) {                                 \
+    operator op(const mat<rows, cols, T1>& a, const T2 & b) {                                \
         mat<rows, cols, R> result{};                                                         \
         MAT_ELEMENT_LOOP(i, j)                                                               \
         result(i, j) = a(i, j) op b;                                                         \
@@ -353,7 +352,7 @@ namespace nvimgcodec {
     template <int rows, int cols, typename T1, typename T2,                                  \
               typename R = promote_vec_scalar_t<T2, T1>>                                     \
     NVIMGCODEC_HOST_DEV constexpr std::enable_if_t<is_scalar<T1>::value, mat<rows, cols, R>> \
-    operator op(const T1& a, const mat<rows, cols, T2>& b) {                                 \
+    operator op(const T1 & a, const mat<rows, cols, T2>& b) {                                \
         mat<rows, cols, R> result{};                                                         \
         MAT_ELEMENT_LOOP(i, j)                                                               \
         result(i, j) = a op b(i, j);                                                         \

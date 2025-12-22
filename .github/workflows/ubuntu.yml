@@ -2,12 +2,12 @@ name: Ubuntu CUDA Build
 
 on:
   push:
-    branches: [ master, dev ]
+    branches: [ dev, master ]
     paths-ignore:
       - '**.md'
       - 'docs/**'
   pull_request:
-    branches: [ master, dev ]
+    branches: [ dev, master ]
     paths-ignore:
       - '**.md'
       - 'docs/**'
@@ -18,11 +18,17 @@ jobs:
     runs-on: ubuntu-24.04
     container:
       image: nvidia/cuda:12.8.0-devel-ubuntu24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Release, Debug]
     env:
       VCPKG_ROOT: ${{ github.workspace }}/../vcpkg
       CC: gcc-14
       CXX: g++-14
       VCPKG_BUILD_TYPE: release
+      VCPKG_FORCE_SYSTEM_BINARIES: 1
+      CMAKE_MAKE_PROGRAM: /usr/bin/ninja
 
     steps:
       - name: Checkout source
@@ -57,7 +63,7 @@ jobs:
           git clone https://github.com/microsoft/vcpkg.git
           ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
 
-          cat >> $VCPKG_ROOT/triplets/x64-linux.cmake << EOF
+          cat >> $VCPKG_ROOT/triplets/x64-linux.cmake << 'EOF'
           set(VCPKG_BUILD_TYPE release)
           set(VCPKG_MAX_CONCURRENCY 2)
           EOF
@@ -66,8 +72,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /github/home/.cache/ccache
-          key: ccache-${{ runner.os }}-${{ github.run_id }}
-          restore-keys: ccache-${{ runner.os }}-
+          key: ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ github.run_id }}
+          restore-keys: ccache-${{ runner.os }}-${{ matrix.build_type }}-
 
       - name: Cache vcpkg
         uses: actions/cache@v4
@@ -79,7 +85,7 @@ jobs:
       - name: Configure
         run: |
           cmake -B build -S . -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
 
       - name: Build

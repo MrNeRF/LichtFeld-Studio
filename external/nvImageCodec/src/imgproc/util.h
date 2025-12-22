@@ -288,9 +288,8 @@ namespace nvimgcodec {
     // Imported from C++20 https://en.cppreference.com/w/cpp/utility/functional/identity
     struct identity {
         template <typename T>
-        NVIMGCODEC_HOST_DEV NVIMGCODEC_FORCEINLINE
-            T&&
-            operator()(T&& x) const noexcept {
+        NVIMGCODEC_HOST_DEV NVIMGCODEC_FORCEINLINE T&&
+        operator()(T&& x) const noexcept {
             return std::forward<T>(x);
         }
     };

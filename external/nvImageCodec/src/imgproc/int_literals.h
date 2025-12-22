@@ -84,6 +84,6 @@ namespace nvimgcodec {
             return x;
         }
 
-    }                        // namespace literal
+    } // namespace literal
     using namespace literal; // NOLINT
 } // namespace nvimgcodec

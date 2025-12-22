@@ -627,7 +627,7 @@ namespace lfs::vis {
             .selection_flash_intensity = getSelectionFlashIntensity(),
             .hovered_depth_id = nullptr,
             .highlight_gaussian_id = (selection_mode_ == lfs::rendering::SelectionMode::Rings) ? hovered_gaussian_id_ : -1,
-            .far_plane = settings_.depth_clip_enabled ? settings_.depth_clip_far : 1e10f,
+            .far_plane = settings_.depth_clip_enabled ? settings_.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE,
             .orthographic = settings_.orthographic,
             .ortho_scale = settings_.ortho_scale};
 
@@ -1024,7 +1024,7 @@ namespace lfs::vis {
                     .selected_node_mask = {},
                     .hovered_depth_id = nullptr,
                     .highlight_gaussian_id = -1,
-                    .far_plane = 1e10f};
+                    .far_plane = lfs::rendering::DEFAULT_FAR_PLANE};
 
                 auto render_result = engine_->renderPointCloud(*point_cloud_to_render, pc_request);
                 if (render_result) {
@@ -1239,10 +1239,7 @@ namespace lfs::vis {
             .orthographic = settings_.orthographic,
             .ortho_scale = settings_.ortho_scale};
 
-        // Reset depth for overlay rendering
-        glClear(GL_DEPTH_BUFFER_BIT);
-
-        // Wireframe overlays (render before grid to avoid depth occlusion)
+        // Render wireframe overlays before grid
         if (settings_.show_crop_box && engine_ && context.scene_manager) {
             const auto visible_cropboxes = context.scene_manager->getScene().getVisibleCropBoxes();
             const NodeId selected_cropbox_id = context.scene_manager->getSelectedNodeCropBoxId();

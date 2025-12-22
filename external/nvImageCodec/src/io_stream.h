@@ -147,12 +147,12 @@ namespace nvimgcodec {
          * @brief Provides expected bytes of data which are going to be written.
          *        Gives possibility to pre/re-allocate buffer for map function
          */
-        virtual void reserve(size_t bytes){};
+        virtual void reserve(size_t bytes) {};
 
         /**
          * @brief Requests all data to be written to the output.
          */
-        virtual void flush(){};
+        virtual void flush() {};
 
         /**
          * @brief  Maps stream data into memory
@@ -170,7 +170,7 @@ namespace nvimgcodec {
          * @param addr Pointer to mapped data
          * @param size Length of data to unmap
          */
-        virtual void unmap(void* ptr, size_t size){};
+        virtual void unmap(void* ptr, size_t size) {};
     };
 
 } // namespace nvimgcodec
