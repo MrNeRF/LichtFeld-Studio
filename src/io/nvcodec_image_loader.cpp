@@ -176,24 +176,29 @@ namespace lfs::io {
             }
 
 #ifdef _WIN32
-            // On Windows, check if we can actually load the DLLs
+            // Test DLL loading with all dependencies
+            constexpr DWORD ERROR_MOD_NOT_FOUND_CODE = 126;
+            constexpr DWORD ERROR_BAD_EXE_FORMAT_CODE = 193;
+            constexpr DWORD ERROR_PROC_NOT_FOUND_CODE = 127;
+            constexpr DWORD ERROR_SXS_CANT_GEN_ACTCTX_CODE = 14001;
+
             for (const auto& f : dll_files) {
-                auto full_path = ext_dir / f;
-                HMODULE hModule = LoadLibraryExW(full_path.wstring().c_str(), nullptr, LOAD_LIBRARY_AS_DATAFILE);
+                const auto full_path = ext_dir / f;
+                const HMODULE hModule = LoadLibraryExW(full_path.wstring().c_str(), nullptr, 0);
                 if (hModule) {
-                    LOG_DEBUG("[nvImageCodec Diagnostics] Extension {} can be loaded", f);
+                    LOG_DEBUG("[nvImageCodec] {} loaded OK", f);
                     FreeLibrary(hModule);
                 } else {
-                    DWORD err = GetLastError();
-                    LOG_WARN("[nvImageCodec Diagnostics] Extension {} CANNOT be loaded: Windows error {}", f, err);
-
-                    // Common error codes
-                    if (err == 126) {
-                        LOG_WARN("[nvImageCodec Diagnostics]   -> Error 126: DLL not found or missing dependency");
-                    } else if (err == 193) {
-                        LOG_WARN("[nvImageCodec Diagnostics]   -> Error 193: Not a valid Win32 application (32/64-bit mismatch?)");
-                    } else if (err == 14001) {
-                        LOG_WARN("[nvImageCodec Diagnostics]   -> Error 14001: Application failed to initialize (missing VC++ runtime?)");
+                    const DWORD err = GetLastError();
+                    LOG_ERROR("[nvImageCodec] {} load failed: error {}", f, err);
+                    if (err == ERROR_MOD_NOT_FOUND_CODE) {
+                        LOG_ERROR("[nvImageCodec] Missing dependency (likely nvjpeg64_12.dll)");
+                    } else if (err == ERROR_BAD_EXE_FORMAT_CODE) {
+                        LOG_ERROR("[nvImageCodec] 32/64-bit mismatch");
+                    } else if (err == ERROR_SXS_CANT_GEN_ACTCTX_CODE) {
+                        LOG_ERROR("[nvImageCodec] Missing VC++ Redistributable");
+                    } else if (err == ERROR_PROC_NOT_FOUND_CODE) {
+                        LOG_ERROR("[nvImageCodec] DLL version mismatch");
                     }
                 }
             }

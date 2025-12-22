@@ -286,10 +286,8 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -g -G -O0")
 endif()
 
-# =============================================================================
-# External dependencies (new build only)
-# =============================================================================
-add_subdirectory(external)
+# External dependencies (EXCLUDE_FROM_ALL to handle install ourselves)
+add_subdirectory(external EXCLUDE_FROM_ALL)
 
 # =============================================================================
 # LIBRARY MODULES
@@ -512,137 +510,11 @@ if(UNIX)
             INSTALL_RPATH_USE_LINK_PATH TRUE
     )
 
-    # =============================================================================
-    # PORTABLE BUILD: Bundle shared libraries for Linux distribution
-    # =============================================================================
-    if(BUILD_PORTABLE)
-        set(DIST_DIR "$<TARGET_FILE_DIR:${PROJECT_NAME}>")
-        set(LIB_DIR "${DIST_DIR}/lib")
-
-        # Create lib directory
-        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory "${LIB_DIR}"
-            COMMENT "Creating lib directory for portable build"
-        )
-
-        # Copy CUDA runtime libraries (only real files, recreate symlinks)
-        # This avoids copying the same library 3x (libfoo.so, libfoo.so.12, libfoo.so.12.x.x)
-        set(CUDA_LIB_BASES
-            "libcudart"
-            "libcurand"
-            "libnvrtc"
-            "libnvJitLink"
-        )
-
-        # Create a script to copy libraries properly (real files only, symlinks recreated)
-        file(WRITE "${CMAKE_BINARY_DIR}/copy_cuda_libs.sh"
-"#!/bin/bash
-set -e
-CUDA_LIB_DIR=\"$1\"
-DEST_DIR=\"$2\"
-shift 2
-for base in \"$@\"; do
-    # Find all matching files
-    for f in \"$CUDA_LIB_DIR/$base\".so*; do
-        [ -e \"$f\" ] || continue
-        fname=\$(basename \"$f\")
-        if [ -L \"$f\" ]; then
-            # It's a symlink - recreate it
-            target=\$(readlink \"$f\")
-            ln -sf \"$target\" \"$DEST_DIR/$fname\"
-        else
-            # It's a real file - copy it
-            cp -f \"$f\" \"$DEST_DIR/$fname\"
-        fi
-    done
-done
-")
-
-        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-            COMMAND chmod +x "${CMAKE_BINARY_DIR}/copy_cuda_libs.sh"
-            COMMAND "${CMAKE_BINARY_DIR}/copy_cuda_libs.sh"
-                "${CUDAToolkit_LIBRARY_DIR}"
-                "${LIB_DIR}"
-                ${CUDA_LIB_BASES}
-            COMMENT "Copying CUDA libraries (with proper symlinks)"
-        )
-
-        # Create a launcher script that sets LD_LIBRARY_PATH
-        file(WRITE "${CMAKE_BINARY_DIR}/run_lichtfeld.sh"
-"#!/bin/bash
-SCRIPT_DIR=\"$( cd \"$( dirname \"\${BASH_SOURCE[0]}\" )\" && pwd )\"
-export LD_LIBRARY_PATH=\"\$SCRIPT_DIR:\$SCRIPT_DIR/lib:\$LD_LIBRARY_PATH\"
-exec \"\$SCRIPT_DIR/LichtFeld-Studio\" \"$@\"
-")
-        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_BINARY_DIR}/run_lichtfeld.sh"
-                "${DIST_DIR}/"
-            COMMAND chmod +x "${DIST_DIR}/run_lichtfeld.sh"
-            COMMENT "Creating launcher script"
-        )
-
-        message(STATUS "Portable build: Libraries will be copied to lib/ directory")
-        message(STATUS "Portable build: Use run_lichtfeld.sh to launch with bundled libraries")
-    endif()
 elseif(WIN32)
     # On Windows, DLLs in the same directory as the .exe are automatically found
     set_target_properties(${PROJECT_NAME} PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
     )
-
-    # =============================================================================
-    # PORTABLE BUILD: Bundle all DLLs for Windows distribution
-    # =============================================================================
-    if(BUILD_PORTABLE)
-        # Create distribution directory
-        set(DIST_DIR "$<TARGET_FILE_DIR:${PROJECT_NAME}>")
-
-        # Copy vcpkg DLLs (Release builds)
-        set(VCPKG_BIN_DIR "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin")
-        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E echo "Copying vcpkg DLLs for portable build..."
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${VCPKG_BIN_DIR}"
-                "${DIST_DIR}"
-            COMMENT "Copying vcpkg runtime DLLs"
-        )
-
-        # Copy CUDA runtime DLLs
-        set(CUDA_DLL_PATTERNS
-            "cudart64_*.dll"
-            "curand64_*.dll"
-            "nvrtc64_*.dll"
-            "nvJitLink_*.dll"
-        )
-
-        foreach(pattern ${CUDA_DLL_PATTERNS})
-            file(GLOB CUDA_DLLS "${CUDAToolkit_BIN_DIR}/${pattern}")
-            foreach(dll ${CUDA_DLLS})
-                add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        "${dll}"
-                        "${DIST_DIR}/"
-                    COMMENT "Copying CUDA DLL: ${dll}"
-                )
-            endforeach()
-        endforeach()
-
-        # Copy OpenSSL DLLs if present
-        if(OPENSSL_ROOT_DIR)
-            file(GLOB OPENSSL_DLLS "${OPENSSL_ROOT_DIR}/bin/*.dll")
-            foreach(dll ${OPENSSL_DLLS})
-                add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        "${dll}"
-                        "${DIST_DIR}/"
-                    COMMENT "Copying OpenSSL DLL: ${dll}"
-                )
-            endforeach()
-        endif()
-
-        message(STATUS "Portable build: DLLs will be copied to executable directory")
-    endif()
 endif()
 
 # Build type configuration function
@@ -726,12 +598,7 @@ message(STATUS "  Tests: ${BUILD_TESTS}")
 message(STATUS "  Portable Build: ${BUILD_PORTABLE}")
 if(BUILD_PORTABLE)
     message(STATUS "  -> PTX-only: ON (SM >= ${BUILD_CUDA_MIN_SM}, JIT at runtime)")
-    if(WIN32)
-        message(STATUS "  -> DLL bundling: ON")
-    elseif(UNIX)
-        message(STATUS "  -> Library bundling: ON (lib/ directory)")
-        message(STATUS "  -> Launcher script: run_lichtfeld.sh")
-    endif()
+    message(STATUS "  -> Use: cmake --install build --prefix ./dist")
 endif()
 message(STATUS "===========================================")
 
@@ -759,79 +626,74 @@ install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-splash-lo
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/parameter" DESTINATION "${INSTALL_RESOURCE_DIR}")
 
 if(TARGET nvimgcodec)
-    install(FILES "$<TARGET_FILE:nvimgcodec>" DESTINATION ${CMAKE_INSTALL_LIBDIR})
+    install(TARGETS nvimgcodec LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
     if(TARGET nvjpeg_ext)
-        install(FILES "$<TARGET_FILE:nvjpeg_ext>" DESTINATION "${CMAKE_INSTALL_LIBDIR}/extensions")
+        install(TARGETS nvjpeg_ext LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/extensions")
     endif()
     if(TARGET nvjpeg2k_ext)
-        install(FILES "$<TARGET_FILE:nvjpeg2k_ext>" DESTINATION "${CMAKE_INSTALL_LIBDIR}/extensions")
+        install(TARGETS nvjpeg2k_ext LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/extensions")
     endif()
 endif()
 
-# =============================================================================
-# PORTABLE: Bundle runtime dependencies
-# =============================================================================
+# Portable build: bundle runtime dependencies via GET_RUNTIME_DEPENDENCIES
 if(BUILD_PORTABLE)
-    # Collect runtime dependencies (exclude system libs)
-    install(CODE "
-        file(GET_RUNTIME_DEPENDENCIES
-            EXECUTABLES \$<TARGET_FILE:${PROJECT_NAME}>
-            RESOLVED_DEPENDENCIES_VAR _resolved
-            UNRESOLVED_DEPENDENCIES_VAR _unresolved
-            PRE_EXCLUDE_REGEXES \"^/lib\" \"^/usr/lib\" \"libstdc\\\\+\\\\+\" \"libgcc\" \"libm\\\\.so\" \"libdl\\\\.so\" \"librt\\\\.so\" \"ld-linux\"
-            POST_INCLUDE_REGEXES \"libcuda\" \"libnv\" \"libcurand\"
-        )
-        foreach(dep \${_resolved})
-            file(INSTALL \${dep} DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\" FOLLOW_SYMLINK_CHAIN)
-        endforeach()
-    " COMPONENT Runtime)
+    # Exclusion patterns for system libraries
+    set(_PRE_EXCLUDE [[api-ms-.*]] [[ext-ms-.*]] [[API-MS-.*]] [[EXT-MS-.*]])
+    set(_POST_EXCLUDE
+        [[.*[Ss]ystem32.*]] [[.*[Ww]indows.*]]
+        [[/lib/x86_64-linux-gnu/.*]] [[/lib64/ld-linux.*]] [[/usr/lib.*]]
+        [[.*ld-linux.*]] [[.*libc\\.so\\..*]] [[.*libpthread.*]]
+        [[.*libdl\\.so.*]] [[.*libm\\.so\\..*]] [[.*librt\\.so.*]]
+        [[.*libstdc\\+\\+.*]] [[.*libgcc_s.*]]
+        [[.*libnvimgcodec.*]] [[.*libnvjpeg_ext.*]])
+    set(_SEARCH_DIRS "${CMAKE_BINARY_DIR}" "${CUDAToolkit_BIN_DIR}" "${CUDAToolkit_LIBRARY_DIR}")
+
+    # Helper: bundle runtime dependencies for a target
+    function(bundle_runtime_deps TARGET_FILE IS_LIBRARY)
+        if(IS_LIBRARY)
+            set(_type "LIBRARIES")
+        else()
+            set(_type "EXECUTABLES")
+        endif()
+        install(CODE "
+            set(_lib \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\")
+            file(GET_RUNTIME_DEPENDENCIES
+                ${_type} \"${TARGET_FILE}\"
+                RESOLVED_DEPENDENCIES_VAR _deps
+                DIRECTORIES ${_SEARCH_DIRS}
+                PRE_EXCLUDE_REGEXES ${_PRE_EXCLUDE}
+                POST_EXCLUDE_REGEXES ${_POST_EXCLUDE})
+            foreach(_d IN LISTS _deps)
+                file(INSTALL \"\${_d}\" DESTINATION \"\${_lib}\" FOLLOW_SYMLINK_CHAIN)
+            endforeach()
+        " COMPONENT runtime)
+    endfunction()
+
+    bundle_runtime_deps("$<TARGET_FILE:${PROJECT_NAME}>" FALSE)
+    if(TARGET nvjpeg_ext)
+        bundle_runtime_deps("$<TARGET_FILE:nvjpeg_ext>" TRUE)
+    endif()
 
     if(UNIX AND NOT APPLE)
-        set(CUDA_LIBS_TO_BUNDLE "libcudart.so" "libcurand.so" "libnvrtc.so" "libnvJitLink.so")
-        install(CODE "
-            foreach(lib ${CUDA_LIBS_TO_BUNDLE})
-                file(GLOB lib_files \"${CUDAToolkit_LIBRARY_DIR}/\${lib}*\")
-                foreach(f \${lib_files})
-                    file(INSTALL \${f} DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}\" FOLLOW_SYMLINK_CHAIN)
-                endforeach()
-            endforeach()
-        " COMPONENT Runtime)
-
-        # Launcher script
-        install(CODE "
-            file(WRITE \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/run_lichtfeld.sh\"
-\"#!/bin/bash
-SCRIPT_DIR=\\\"\\$( cd \\\"\\$( dirname \\\"\\\${BASH_SOURCE[0]}\\\" )\\\" && pwd )\\\"
-export LD_LIBRARY_PATH=\\\"\\\$SCRIPT_DIR/../lib:\\\$LD_LIBRARY_PATH\\\"
-exec \\\"\\\$SCRIPT_DIR/LichtFeld-Studio\\\" \\\"\\$@\\\"
-\")
-            execute_process(COMMAND chmod +x \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/run_lichtfeld.sh\")
-        " COMPONENT Runtime)
-
-        # nvImageCodec symlinks
-        install(CODE "
-            file(GLOB nvimgcodec_lib \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libnvimgcodec.so.*.*.*\")
-            if(nvimgcodec_lib)
-                get_filename_component(name \${nvimgcodec_lib} NAME)
-                execute_process(COMMAND ln -sf \${name} \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libnvimgcodec.so.0\")
-                execute_process(COMMAND ln -sf libnvimgcodec.so.0 \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/libnvimgcodec.so\")
-            endif()
-        " COMPONENT Runtime)
-
+        configure_file(
+            "${CMAKE_SOURCE_DIR}/cmake/templates/run_lichtfeld.sh.in"
+            "${CMAKE_BINARY_DIR}/run_lichtfeld.sh"
+            @ONLY)
+        install(PROGRAMS "${CMAKE_BINARY_DIR}/run_lichtfeld.sh" DESTINATION ${CMAKE_INSTALL_BINDIR})
     elseif(WIN32)
+        # Copy DLLs to bin/ for Windows search path
         install(CODE "
-            file(GLOB cuda_dlls \"${CUDAToolkit_BIN_DIR}/cudart64_*.dll\" \"${CUDAToolkit_BIN_DIR}/curand64_*.dll\"
-                                \"${CUDAToolkit_BIN_DIR}/nvrtc64_*.dll\" \"${CUDAToolkit_BIN_DIR}/nvJitLink_*.dll\")
-            foreach(dll \${cuda_dlls})
-                file(INSTALL \${dll} DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
+            file(GLOB _dlls \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}/*.dll\")
+            foreach(_d IN LISTS _dlls)
+                file(INSTALL \"\${_d}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
             endforeach()
             if(EXISTS \"${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin\")
-                file(GLOB vcpkg_dlls \"${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin/*.dll\")
-                foreach(dll \${vcpkg_dlls})
-                    file(INSTALL \${dll} DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
+                file(GLOB _vcpkg \"${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/bin/*.dll\")
+                foreach(_v IN LISTS _vcpkg)
+                    file(INSTALL \"\${_v}\" DESTINATION \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
                 endforeach()
             endif()
-        " COMPONENT Runtime)
+        " COMPONENT runtime)
     endif()
 endif()
 
