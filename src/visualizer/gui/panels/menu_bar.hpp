@@ -29,6 +29,7 @@ namespace lfs::vis::gui {
         void setOnImportDataset(std::function<void()> callback);
         void setOnImportPLY(std::function<void()> callback);
         void setOnImportCheckpoint(std::function<void()> callback);
+        void setOnImportConfig(std::function<void()> callback);
         void setOnExport(std::function<void()> callback);
         void setOnExit(std::function<void()> callback);
 
@@ -72,6 +73,7 @@ namespace lfs::vis::gui {
         std::function<void()> on_import_dataset_;
         std::function<void()> on_import_ply_;
         std::function<void()> on_import_checkpoint_;
+        std::function<void()> on_import_config_;
         std::function<void()> on_export_;
         std::function<void()> on_exit_;
         std::function<bool()> can_clear_;

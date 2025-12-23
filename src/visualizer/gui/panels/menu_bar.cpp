@@ -174,6 +174,9 @@ namespace lfs::vis::gui {
                 if (ImGui::MenuItem("Import Checkpoint") && on_import_checkpoint_) {
                     on_import_checkpoint_();
                 }
+                if (ImGui::MenuItem("Import Config") && on_import_config_) {
+                    on_import_config_();
+                }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Export...") && on_export_) {
                     on_export_();
@@ -501,6 +504,10 @@ namespace lfs::vis::gui {
 
     void MenuBar::setOnImportCheckpoint(std::function<void()> callback) {
         on_import_checkpoint_ = std::move(callback);
+    }
+
+    void MenuBar::setOnImportConfig(std::function<void()> callback) {
+        on_import_config_ = std::move(callback);
     }
 
     void MenuBar::setOnExport(std::function<void()> callback) {

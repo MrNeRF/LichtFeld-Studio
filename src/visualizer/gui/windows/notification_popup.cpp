@@ -55,6 +55,11 @@ namespace lfs::vis::gui {
             }
         });
 
+        state::ConfigLoadFailed::when([this](const auto& e) {
+            show(Type::FAILURE, "Invalid Config File",
+                 std::format("Could not load '{}':\n\n{}", e.path.filename().string(), e.error));
+        });
+
         state::TrainingCompleted::when([this](const auto& e) {
             if (e.success) {
                 const auto message = std::format(

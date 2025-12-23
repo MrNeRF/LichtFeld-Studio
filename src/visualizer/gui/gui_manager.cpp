@@ -144,6 +144,13 @@ namespace lfs::vis::gui {
             }
         });
 
+        menu_bar_->setOnImportConfig([]() {
+            const auto path = OpenJsonFileDialog();
+            if (!path.empty()) {
+                lfs::core::events::cmd::LoadConfigFile{.path = path}.emit();
+            }
+        });
+
         menu_bar_->setOnExport([this]() {
             window_states_["export_dialog"] = true;
         });
