@@ -27,41 +27,55 @@ namespace lfs::training::mcmc {
 
     // Equation (9) in "3D Gaussian Splatting as Markov Chain Monte Carlo"
     __global__ void relocation_kernel(
-        const float* opacities,
-        const float* scales,
-        const int32_t* ratios,
-        const float* binoms,
-        int n_max,
-        float* new_opacities,
-        float* new_scales,
-        size_t N) {
+        const float* __restrict__ opacities,
+        const float* __restrict__ scales,
+        const int32_t* __restrict__ ratios,
+        const float* __restrict__ binoms,
+        const int n_max,
+        float* __restrict__ new_opacities,
+        float* __restrict__ new_scales,
+        const size_t N) {
 
-        size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
+        const size_t idx = threadIdx.x + blockIdx.x * blockDim.x;
         if (idx >= N)
             return;
 
-        int n_idx = ratios[idx];
+        constexpr float OPACITY_MIN = 1e-6f;
+        constexpr float OPACITY_MAX = 1.0f - 1e-6f;
+        constexpr float DENOM_MIN = 1e-8f;
+        constexpr float COEFF_MAX = 1e6f;
+        constexpr float SCALE_MIN = 1e-10f;
+
+        const int n_idx = ratios[idx];
+        const float opacity = fminf(fmaxf(opacities[idx], OPACITY_MIN), OPACITY_MAX);
+
+        // new_opacity = 1 - (1 - opacity)^(1/n_idx)
+        const float new_opacity = fminf(fmaxf(
+                                            1.0f - powf(1.0f - opacity, 1.0f / static_cast<float>(n_idx)),
+                                            OPACITY_MIN),
+                                        OPACITY_MAX);
+        new_opacities[idx] = new_opacity;
+
+        // Compute denominator sum for scale calculation
         float denom_sum = 0.0f;
-
-        // Compute new opacity: 1 - (1 - old_opacity)^(1/n_idx)
-        // Match legacy gsplat implementation exactly - no clamping, no safety checks
-        // Use pow() instead of powf() to match legacy exactly
-        new_opacities[idx] = 1.0f - pow(1.0f - opacities[idx], 1.0f / n_idx);
-
-        // Compute new scale
         for (int i = 1; i <= n_idx; ++i) {
             for (int k = 0; k <= (i - 1); ++k) {
-                float bin_coeff = binoms[(i - 1) * n_max + k];
-                float term = (pow(-1.0f, k) / sqrt(static_cast<float>(k + 1))) *
-                             pow(new_opacities[idx], k + 1);
-                denom_sum += (bin_coeff * term);
+                const float sign = (k & 1) ? -1.0f : 1.0f;
+                const float term = (sign / sqrtf(static_cast<float>(k + 1))) *
+                                   powf(new_opacity, static_cast<float>(k + 1));
+                denom_sum += binoms[(i - 1) * n_max + k] * term;
             }
         }
 
-        // Match legacy exactly - use raw opacity, no division by zero check
-        float coeff = (opacities[idx] / denom_sum);
+        // Safe division with sign preservation
+        float safe_denom = fmaxf(fabsf(denom_sum), DENOM_MIN);
+        if (denom_sum < 0.0f)
+            safe_denom = -safe_denom;
+
+        const float coeff = fminf(fmaxf(opacity / safe_denom, -COEFF_MAX), COEFF_MAX);
+
         for (int i = 0; i < 3; ++i) {
-            new_scales[idx * 3 + i] = coeff * scales[idx * 3 + i];
+            new_scales[idx * 3 + i] = fmaxf(fabsf(coeff * scales[idx * 3 + i]), SCALE_MIN);
         }
     }
 

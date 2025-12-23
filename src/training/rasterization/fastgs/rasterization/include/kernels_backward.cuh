@@ -15,6 +15,21 @@ namespace cg = cooperative_groups;
 
 namespace fast_lfs::rasterization::kernels::backward {
 
+    // Gradient clamping to prevent NaN from exploding gradients
+    constexpr float GRAD_CLAMP_MAX = 1e4f;
+
+    __device__ inline float clamp_grad(const float g) {
+        return fminf(fmaxf(g, -GRAD_CLAMP_MAX), GRAD_CLAMP_MAX);
+    }
+
+    __device__ inline float3 clamp_grad3(const float3 g) {
+        return make_float3(clamp_grad(g.x), clamp_grad(g.y), clamp_grad(g.z));
+    }
+
+    __device__ inline float4 clamp_grad4(const float4 g) {
+        return make_float4(clamp_grad(g.x), clamp_grad(g.y), clamp_grad(g.z), clamp_grad(g.w));
+    }
+
     __global__ void preprocess_backward_cu(
         const float3* means,
         const float3* raw_scales,
@@ -195,9 +210,8 @@ namespace fast_lfs::rasterization::kernels::backward {
             w2c_r1.y * dL_dmean3d_cam.x + w2c_r2.y * dL_dmean3d_cam.y + w2c_r3.y * dL_dmean3d_cam.z,
             w2c_r1.z * dL_dmean3d_cam.x + w2c_r2.z * dL_dmean3d_cam.y + w2c_r3.z * dL_dmean3d_cam.z);
 
-        // write total 3d mean gradient
         const float3 dL_dmean3d = dL_dmean3d_from_splatting + dL_dmean3d_from_color;
-        grad_means[primitive_idx] += dL_dmean3d;
+        grad_means[primitive_idx] += clamp_grad3(dL_dmean3d);
 
         // raw scale gradient (zero gradient for clamped scales)
         const float dL_dvariance_x = rotation.m11 * rotation.m11 * dL_dcov3d.m11 + rotation.m21 * rotation.m21 * dL_dcov3d.m22 + rotation.m31 * rotation.m31 * dL_dcov3d.m33 +
@@ -210,7 +224,7 @@ namespace fast_lfs::rasterization::kernels::backward {
             (raw_scale.x < config::max_raw_scale) ? 2.0f * variance.x * dL_dvariance_x : 0.0f,
             (raw_scale.y < config::max_raw_scale) ? 2.0f * variance.y * dL_dvariance_y : 0.0f,
             (raw_scale.z < config::max_raw_scale) ? 2.0f * variance.z * dL_dvariance_z : 0.0f);
-        grad_raw_scales[primitive_idx] += dL_draw_scale;
+        grad_raw_scales[primitive_idx] += clamp_grad3(dL_draw_scale);
 
         // raw rotation gradient
         const mat3x3 dL_drotation = {
@@ -234,7 +248,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float dL_dqrz = dL_drotation.m21 - dL_drotation.m12;
         const float dL_dq_norm_helper = qxx * dL_dqxx + qyy * dL_dqyy + qzz * dL_dqzz + qxy * dL_dqxy + qxz * dL_dqxz + qyz * dL_dqyz + qrx * dL_dqrx + qry * dL_dqry + qrz * dL_dqrz;
         const float4 dL_draw_rotation = 2.0f * make_float4(qx * dL_dqrx + qy * dL_dqry + qz * dL_dqrz - qr * dL_dq_norm_helper, 2.0f * qx * dL_dqxx + qy * dL_dqxy + qz * dL_dqxz + qr * dL_dqrx - qx * dL_dq_norm_helper, 2.0f * qy * dL_dqyy + qx * dL_dqxy + qz * dL_dqyz + qr * dL_dqry - qy * dL_dq_norm_helper, 2.0f * qz * dL_dqzz + qx * dL_dqxz + qy * dL_dqyz + qr * dL_dqrz - qz * dL_dq_norm_helper) / q_norm_sq_safe;
-        grad_raw_rotations[primitive_idx] += dL_draw_rotation;
+        grad_raw_rotations[primitive_idx] += clamp_grad4(dL_draw_rotation);
 
         // TODO: only needed for adaptive density control from the original 3dgs
         if (densification_info != nullptr) {
@@ -447,18 +461,21 @@ namespace fast_lfs::rasterization::kernels::backward {
             transmittance *= one_minus_alpha;
         }
 
-        // finally add the gradients using atomics
+        // Add clamped gradients using atomics
         if (valid_primitive) {
-            atomicAdd(&grad_mean2d[primitive_idx].x, dL_dmean2d_accum.x);
-            atomicAdd(&grad_mean2d[primitive_idx].y, dL_dmean2d_accum.y);
-            atomicAdd(&grad_conic[primitive_idx], dL_dconic_accum.x);
-            atomicAdd(&grad_conic[n_primitives + primitive_idx], dL_dconic_accum.y);
-            atomicAdd(&grad_conic[2 * n_primitives + primitive_idx], dL_dconic_accum.z);
-            const float dL_draw_opacity = dL_draw_opacity_partial_accum * (1.0f - opacity);
+            const float2 clamped_mean2d = make_float2(clamp_grad(dL_dmean2d_accum.x), clamp_grad(dL_dmean2d_accum.y));
+            atomicAdd(&grad_mean2d[primitive_idx].x, clamped_mean2d.x);
+            atomicAdd(&grad_mean2d[primitive_idx].y, clamped_mean2d.y);
+            const float3 clamped_conic = clamp_grad3(dL_dconic_accum);
+            atomicAdd(&grad_conic[primitive_idx], clamped_conic.x);
+            atomicAdd(&grad_conic[n_primitives + primitive_idx], clamped_conic.y);
+            atomicAdd(&grad_conic[2 * n_primitives + primitive_idx], clamped_conic.z);
+            const float dL_draw_opacity = clamp_grad(dL_draw_opacity_partial_accum * (1.0f - opacity));
             atomicAdd(&grad_raw_opacity[primitive_idx], dL_draw_opacity);
-            atomicAdd(&grad_color[primitive_idx].x, dL_dcolor_accum.x);
-            atomicAdd(&grad_color[primitive_idx].y, dL_dcolor_accum.y);
-            atomicAdd(&grad_color[primitive_idx].z, dL_dcolor_accum.z);
+            const float3 clamped_color = clamp_grad3(dL_dcolor_accum);
+            atomicAdd(&grad_color[primitive_idx].x, clamped_color.x);
+            atomicAdd(&grad_color[primitive_idx].y, clamped_color.y);
+            atomicAdd(&grad_color[primitive_idx].z, clamped_color.z);
         }
     }
 

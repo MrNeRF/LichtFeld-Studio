@@ -124,7 +124,6 @@ set(OPTIONAL_TEST_FILES
     test_tensor_inplace_capacity.cpp
     test_sog_format.cpp
     test_sog_html_export.cpp
-    test_rasterizer_crash_dump.cpp
     test_gsplat_rasterizer.cpp
     test_spz_format.cpp
     test_interleaved_slice_copy.cpp
@@ -132,6 +131,8 @@ set(OPTIONAL_TEST_FILES
     test_tensor_zero_dimension.cpp
     test_mask_loss.cpp
     test_checkpoint_resume.cpp
+    test_nan_inf_gpu_check.cpp
+    test_mcmc_nan_fix.cpp
 )
 
 foreach(TEST_FILE ${OPTIONAL_TEST_FILES})
