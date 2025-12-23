@@ -176,15 +176,20 @@ namespace lfs::io {
         std::error_code ec;
 
         if (!std::filesystem::exists(cache_base.parent_path())) {
-            LOG_ERROR("Cache base path missing: {}", cache_base.parent_path().string());
-            use_fs_cache_ = false;
-            return;
+            std::filesystem::create_directories(cache_base.parent_path(), ec);
+            if (ec) {
+                LOG_ERROR("Failed to create parent dir : {}", cache_base.parent_path().string());
+                LOG_ERROR("Disabling FS cache");
+                use_fs_cache_ = false;
+                return;
+            }
         }
 
         if (std::filesystem::exists(cache_folder)) {
             std::filesystem::remove_all(cache_folder, ec);
             if (ec) {
                 LOG_ERROR("Failed to wipe cache folder: {}", ec.message());
+                LOG_ERROR("Disabling FS cache");
                 use_fs_cache_ = false;
                 return;
             }
@@ -193,6 +198,7 @@ namespace lfs::io {
         std::filesystem::create_directories(cache_folder, ec);
         if (ec) {
             LOG_ERROR("Failed to create cache directory: {}", ec.message());
+            LOG_ERROR("Disabling FS cache");
             use_fs_cache_ = false;
             return;
         }
