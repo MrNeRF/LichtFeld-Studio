@@ -189,7 +189,8 @@ namespace lfs::training {
         int tile_x_offset,
         int tile_y_offset,
         int tile_width,
-        int tile_height) {
+        int tile_height,
+        bool mip_filter) {
         // Get camera parameters
         const int full_width = viewpoint_camera.image_width();
         const int full_height = viewpoint_camera.image_height();
@@ -269,7 +270,8 @@ namespace lfs::training {
                 cx_adjusted, // Use adjusted cx for tile offset
                 cy_adjusted, // Use adjusted cy for tile offset
                 near_plane,
-                far_plane);
+                far_plane,
+                mip_filter);
         } catch (const std::exception& e) {
             // Dump all input data for debugging
             dump_crash_data(
@@ -355,6 +357,7 @@ namespace lfs::training {
         ctx.means = means;
         ctx.raw_scales = raw_scales;
         ctx.raw_rotations = raw_rotations;
+        ctx.raw_opacities = raw_opacities;
         ctx.shN = shN;
 
         // Store camera pointers directly (tensors are managed by camera, already contiguous)
@@ -374,6 +377,7 @@ namespace lfs::training {
         ctx.center_y = cy_adjusted; // Store adjusted cy for backward
         ctx.near_plane = near_plane;
         ctx.far_plane = far_plane;
+        ctx.mip_filter = mip_filter;
 
         // Store tile information
         ctx.tile_x_offset = tile_x_offset;
@@ -436,6 +440,7 @@ namespace lfs::training {
             ctx.means.ptr<float>(),
             ctx.raw_scales.ptr<float>(),
             ctx.raw_rotations.ptr<float>(),
+            ctx.raw_opacities.ptr<float>(),
             ctx.shN.ptr<float>(),
             ctx.w2c_ptr,
             ctx.cam_position_ptr,
@@ -455,7 +460,8 @@ namespace lfs::training {
             ctx.focal_x,
             ctx.focal_y,
             ctx.center_x,
-            ctx.center_y);
+            ctx.center_y,
+            ctx.mip_filter);
 
         if (!backward_result.success) {
             throw std::runtime_error(std::string("Backward failed: ") + backward_result.error_message);

@@ -55,7 +55,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float fx,
         const float fy,
         const float cx,
-        const float cy) {
+        const float cy,
+        const bool mip_filter) {
         auto primitive_idx = cg::this_grid().thread_rank();
         if (primitive_idx >= n_primitives || primitive_n_touched_tiles[primitive_idx] == 0)
             return;
@@ -136,8 +137,9 @@ namespace fast_lfs::rasterization::kernels::backward {
             jw_r2.x * cov3d.m12 + jw_r2.y * cov3d.m22 + jw_r2.z * cov3d.m23,
             jw_r2.x * cov3d.m13 + jw_r2.y * cov3d.m23 + jw_r2.z * cov3d.m33);
 
-        // 2d covariance gradient
-        const float a = dot(jwc_r1, jw_r1) + config::dilation, b = dot(jwc_r1, jw_r2), c = dot(jwc_r2, jw_r2) + config::dilation;
+        // 2d covariance gradient (use same dilation as forward pass)
+        const float kernel_size = mip_filter ? config::dilation_mip_filter : config::dilation;
+        const float a = dot(jwc_r1, jw_r1) + kernel_size, b = dot(jwc_r1, jw_r2), c = dot(jwc_r2, jw_r2) + kernel_size;
         const float aa = a * a, bb = b * b, cc = c * c;
         const float ac = a * c, ab = a * b, bc = b * c;
         const float determinant = ac - bb;
@@ -265,6 +267,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const float2* primitive_mean2d,
         const float4* primitive_conic_opacity,
         const float3* primitive_color,
+        const float* raw_opacities,
         const float* grad_image,
         const float* grad_alpha_map,
         const float* image,
@@ -281,7 +284,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         const uint n_primitives,
         const uint width,
         const uint height,
-        const uint grid_width) {
+        const uint grid_width,
+        const bool mip_filter) {
         auto block = cg::this_thread_block();
         const uint bucket_idx = block.group_index().x;
         if (bucket_idx >= n_buckets)
@@ -305,7 +309,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         uint primitive_idx = 0;
         float2 mean2d = {0.0f, 0.0f};
         float3 conic = {0.0f, 0.0f, 0.0f};
-        float opacity = 0.0f;
+        float compensated_opacity = 0.0f;
+        float original_opacity = 0.0f;
         float3 color = {0.0f, 0.0f, 0.0f};
         float3 color_grad_factor = {0.0f, 0.0f, 0.0f};
         if (valid_primitive) {
@@ -313,7 +318,8 @@ namespace fast_lfs::rasterization::kernels::backward {
             mean2d = primitive_mean2d[primitive_idx];
             const float4 conic_opacity = primitive_conic_opacity[primitive_idx];
             conic = make_float3(conic_opacity);
-            opacity = conic_opacity.w;
+            compensated_opacity = conic_opacity.w;
+            original_opacity = mip_filter ? __frcp_rn(1.0f + __expf(-raw_opacities[primitive_idx])) : compensated_opacity;
             const float3 color_unclamped = primitive_color[primitive_idx];
             color = fmaxf(color_unclamped, 0.0f);
             if (color_unclamped.x >= 0.0f)
@@ -424,7 +430,7 @@ namespace fast_lfs::rasterization::kernels::backward {
             if (sigma_over_2 < 0.0f)
                 continue;
             const float gaussian = expf(-sigma_over_2);
-            const float unclamped_alpha = opacity * gaussian;
+            const float unclamped_alpha = compensated_opacity * gaussian;
             const float alpha = fminf(unclamped_alpha, config::max_fragment_alpha);
             if (alpha < config::min_alpha_threshold)
                 continue;
@@ -445,9 +451,10 @@ namespace fast_lfs::rasterization::kernels::backward {
             const float dL_dalpha_from_color = dot(transmittance * color - color_pixel_after * one_minus_alpha_rcp, grad_color_pixel);
             const float dL_dalpha_from_alpha = grad_alpha_common * one_minus_alpha_rcp;
             const float dL_dalpha = dL_dalpha_from_color + dL_dalpha_from_alpha;
-            // unactivated opacity gradient (zero when alpha is clamped - no gradient flows through clamp)
-            const float dL_draw_opacity_partial = alpha_saturated ? 0.0f : alpha * dL_dalpha;
-            dL_draw_opacity_partial_accum += dL_draw_opacity_partial;
+            // opacity gradient w.r.t. compensated_opacity (zero when alpha is clamped - no gradient flows through clamp)
+            // dL/d(compensated_opacity) = dL/d(alpha) * d(alpha)/d(compensated_opacity) = dL_dalpha * gaussian
+            const float dL_dcompensated_opacity = alpha_saturated ? 0.0f : gaussian * dL_dalpha;
+            dL_draw_opacity_partial_accum += dL_dcompensated_opacity;
 
             // conic and mean2d gradient (zero when alpha is clamped)
             const float gaussian_grad_helper = alpha_saturated ? 0.0f : -alpha * dL_dalpha;
@@ -470,7 +477,12 @@ namespace fast_lfs::rasterization::kernels::backward {
             atomicAdd(&grad_conic[primitive_idx], clamped_conic.x);
             atomicAdd(&grad_conic[n_primitives + primitive_idx], clamped_conic.y);
             atomicAdd(&grad_conic[2 * n_primitives + primitive_idx], clamped_conic.z);
-            const float dL_draw_opacity = clamp_grad(dL_draw_opacity_partial_accum * (1.0f - opacity));
+            // Chain rule: dL/d(raw_opacity) = dL/d(comp_opacity) * d(comp)/d(orig) * d(orig)/d(raw)
+            // d(comp)/d(orig) = conv_factor = comp_opacity / orig_opacity (when mip_filter)
+            // d(orig)/d(raw) = sigmoid_derivative = orig_opacity * (1 - orig_opacity)
+            const float conv_factor = mip_filter ? compensated_opacity / fmaxf(original_opacity, 1e-6f) : 1.0f;
+            const float sigmoid_derivative = original_opacity * (1.0f - original_opacity);
+            const float dL_draw_opacity = clamp_grad(dL_draw_opacity_partial_accum * conv_factor * sigmoid_derivative);
             atomicAdd(&grad_raw_opacity[primitive_idx], dL_draw_opacity);
             const float3 clamped_color = clamp_grad3(dL_dcolor_accum);
             atomicAdd(&grad_color[primitive_idx].x, clamped_color.x);

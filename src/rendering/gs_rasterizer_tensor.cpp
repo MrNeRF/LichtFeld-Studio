@@ -45,7 +45,8 @@ namespace lfs::rendering {
         bool desaturate_unselected,
         float selection_flash_intensity,
         bool orthographic,
-        float ortho_scale) {
+        float ortho_scale,
+        bool mip_filter) {
 
         // Get camera parameters
         const float fx = viewpoint_camera.focal_x();
@@ -158,7 +159,8 @@ namespace lfs::rendering {
             desaturate_unselected,
             selection_flash_intensity,
             orthographic,
-            ortho_scale);
+            ortho_scale,
+            mip_filter);
 
         // Manually blend the background since the forward pass does not support it
         // bg_color is [3], need to make it [3, 1, 1]

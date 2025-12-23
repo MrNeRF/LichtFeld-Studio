@@ -40,7 +40,8 @@ namespace fast_lfs::rasterization {
         float center_x,
         float center_y,
         float near_plane,
-        float far_plane) {
+        float far_plane,
+        bool mip_filter) {
 
         // Validate inputs using pure CUDA validation
         CHECK_CUDA_PTR(means_ptr, "means_ptr");
@@ -172,7 +173,8 @@ namespace fast_lfs::rasterization {
                                                                  center_x,
                                                                  center_y,
                                                                  near_plane,
-                                                                 far_plane);
+                                                                 far_plane,
+                                                                 mip_filter);
 
             // Verify allocations happened
             if (n_instances > 0 && !per_instance_buffers_blob) {
@@ -235,6 +237,7 @@ namespace fast_lfs::rasterization {
         const float* means_ptr,
         const float* scales_raw_ptr,
         const float* rotations_raw_ptr,
+        const float* raw_opacities_ptr,
         const float* sh_coefficients_rest_ptr,
         const float* w2c_ptr,
         const float* cam_position_ptr,
@@ -254,7 +257,8 @@ namespace fast_lfs::rasterization {
         float focal_x,
         float focal_y,
         float center_x,
-        float center_y) {
+        float center_y,
+        bool mip_filter) {
 
         BackwardOutputs outputs;
         outputs.success = false;
@@ -345,6 +349,7 @@ namespace fast_lfs::rasterization {
                 reinterpret_cast<const float3*>(means_ptr),
                 reinterpret_cast<const float3*>(scales_raw_ptr),
                 reinterpret_cast<const float4*>(rotations_raw_ptr),
+                raw_opacities_ptr,
                 reinterpret_cast<const float3*>(sh_coefficients_rest_ptr),
                 reinterpret_cast<const float4*>(w2c_ptr),
                 reinterpret_cast<const float3*>(cam_position_ptr),
@@ -375,7 +380,8 @@ namespace fast_lfs::rasterization {
                 focal_x,
                 focal_y,
                 center_x,
-                center_y);
+                center_y,
+                mip_filter);
 
             // Mark frame as complete
             auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
@@ -465,11 +471,11 @@ namespace fast_lfs::rasterization {
             // Backward pass compiles backward kernels (also releases arena)
             backward_raw(
                 nullptr, grad_image, grad_alpha, image, alpha,
-                means, scales, rotations, nullptr, w2c, cam_pos, ctx,
+                means, scales, rotations, opacities, nullptr, w2c, cam_pos, ctx,
                 grad_means, grad_scales, grad_rotations, grad_opacities,
                 grad_sh0, nullptr, nullptr,
                 NUM_GAUSSIANS, 1, 0,
-                IMG_WIDTH, IMG_HEIGHT, FOCAL, FOCAL, CENTER_X, CENTER_Y);
+                IMG_WIDTH, IMG_HEIGHT, FOCAL, FOCAL, CENTER_X, CENTER_Y, true);
 
             cudaFree(grad_buffer);
         } else {

@@ -120,6 +120,7 @@ namespace {
             ::args::ValueFlag<std::string> log_filter(parser, "pattern", "Filter log messages (glob: *foo*, regex: \\\\d+)", {"log-filter"});
 
             // Optional flag arguments
+            ::args::Flag no_mip_filter(parser, "no_mip_filter", "Disable mip filter (anti-aliasing)", {"no-mip-filter"});
             ::args::Flag use_bilateral_grid(parser, "bilateral_grid", "Enable bilateral grid filtering", {"bilateral-grid"});
             ::args::Flag enable_eval(parser, "eval", "Enable evaluation during training", {"eval"});
             ::args::Flag headless(parser, "headless", "Disable visualization during training", {"headless"});
@@ -396,6 +397,7 @@ namespace {
                                         // Mask parameters
                                         mask_mode_val = mask_mode ? std::optional<lfs::core::param::MaskMode>(::args::get(mask_mode)) : std::optional<lfs::core::param::MaskMode>(),
                                         // Capture flag states
+                                        no_mip_filter_flag = bool(no_mip_filter),
                                         use_bilateral_grid_flag = bool(use_bilateral_grid),
                                         enable_eval_flag = bool(enable_eval),
                                         headless_flag = bool(headless),
@@ -446,6 +448,8 @@ namespace {
                 setVal(init_rho_val, opt.init_rho);
                 setVal(prune_ratio_val, opt.prune_ratio);
 
+                if (no_mip_filter_flag)
+                    opt.mip_filter = false;
                 setFlag(use_bilateral_grid_flag, opt.use_bilateral_grid);
                 setFlag(enable_eval_flag, opt.enable_eval);
                 setFlag(headless_flag, opt.headless);

@@ -84,7 +84,8 @@ namespace lfs::rendering {
         bool desaturate_unselected,
         float selection_flash_intensity,
         bool orthographic,
-        float ortho_scale) {
+        float ortho_scale,
+        bool mip_filter) {
 
         check_tensor_input(config::debug, means, "means");
         check_tensor_input(config::debug, scales_raw, "scales_raw");
@@ -272,7 +273,8 @@ namespace lfs::rendering {
             desaturate_unselected,
             selection_flash_intensity,
             orthographic,
-            ortho_scale);
+            ortho_scale,
+            mip_filter);
 
         arena.end_frame(frame_id, true); // true = from_rendering
         arena.set_rendering_active(false);

@@ -164,7 +164,8 @@ namespace lfs::rendering {
                                                            request.desaturate_unselected,
                                                            request.selection_flash_intensity,
                                                            request.orthographic,
-                                                           request.ortho_scale);
+                                                           request.ortho_scale,
+                                                           request.mip_filter);
                     result.image = std::move(image);
                     result.depth = std::move(depth);
                     if (request.output_screen_positions) {
@@ -225,7 +226,8 @@ namespace lfs::rendering {
                                                    request.desaturate_unselected,
                                                    request.selection_flash_intensity,
                                                    request.orthographic,
-                                                   request.ortho_scale);
+                                                   request.ortho_scale,
+                                                   request.mip_filter);
             result.image = std::move(image);
             result.depth = std::move(depth);
             if (request.output_screen_positions) {

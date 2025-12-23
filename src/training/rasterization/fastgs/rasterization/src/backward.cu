@@ -19,6 +19,7 @@ void fast_lfs::rasterization::backward(
     const float3* means,
     const float3* scales_raw,
     const float4* rotations_raw,
+    const float* raw_opacities,
     const float3* sh_coefficients_rest,
     const float4* w2c,
     const float3* cam_position,
@@ -49,7 +50,8 @@ void fast_lfs::rasterization::backward(
     const float fx,
     const float fy,
     const float cx,
-    const float cy) {
+    const float cy,
+    bool mip_filter) {
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const int n_tiles = grid.x * grid.y;
 
@@ -71,6 +73,7 @@ void fast_lfs::rasterization::backward(
         per_primitive_buffers.mean2d,
         per_primitive_buffers.conic_opacity,
         per_primitive_buffers.color,
+        raw_opacities,
         grad_image,
         grad_alpha,
         image,
@@ -87,7 +90,8 @@ void fast_lfs::rasterization::backward(
         n_primitives,
         width,
         height,
-        grid.x);
+        grid.x,
+        mip_filter);
     CHECK_CUDA(config::debug, "blend_backward")
 
     // Backward preprocess
@@ -116,6 +120,7 @@ void fast_lfs::rasterization::backward(
         fx,
         fy,
         cx,
-        cy);
+        cy,
+        mip_filter);
     CHECK_CUDA(config::debug, "preprocess_backward")
 }

@@ -10,7 +10,8 @@
 
 namespace lfs::rendering::config {
     DEF bool debug = false;
-    DEF float dilation = 0.3f;
+    DEF float dilation = 0.3f;                      // Standard dilation when mip_filter OFF
+    DEF float dilation_mip_filter = 0.1f;           // Smaller dilation when mip_filter ON
     DEF float min_alpha_threshold_rcp = 255.0f;
     DEF float min_alpha_threshold = 1.0f / min_alpha_threshold_rcp;
     DEF float max_fragment_alpha = 0.999f;

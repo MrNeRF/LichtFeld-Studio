@@ -23,6 +23,7 @@ namespace lfs::training {
         lfs::core::Tensor means;
         lfs::core::Tensor raw_scales;
         lfs::core::Tensor raw_rotations;
+        lfs::core::Tensor raw_opacities;
         lfs::core::Tensor shN;
 
         const float* w2c_ptr = nullptr;
@@ -41,6 +42,7 @@ namespace lfs::training {
         float center_y;
         float near_plane;
         float far_plane;
+        bool mip_filter = true;
 
         // Tile information (for tile-based training)
         int tile_x_offset = 0; // Horizontal offset of this tile
@@ -58,7 +60,8 @@ namespace lfs::training {
         int tile_x_offset = 0,
         int tile_y_offset = 0,
         int tile_width = 0,
-        int tile_height = 0);
+        int tile_height = 0,
+        bool mip_filter = true);
 
     // Backward pass with optional extra alpha gradient for masked training
     void fast_rasterize_backward(
