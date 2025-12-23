@@ -175,10 +175,15 @@ namespace lfs::io {
         const std::filesystem::path cache_folder = cache_base / unique_cache_path;
         std::error_code ec;
 
+        // Create LichtFeld temp folder if it doesn't exist
         if (!std::filesystem::exists(cache_base.parent_path())) {
-            LOG_ERROR("Cache base path missing: {}", cache_base.parent_path().string());
-            use_fs_cache_ = false;
-            return;
+            std::filesystem::create_directories(cache_base.parent_path(), ec);
+            if (ec) {
+                LOG_ERROR("Failed to create cache base path: {} - {}", cache_base.parent_path().string(), ec.message());
+                use_fs_cache_ = false;
+                return;
+            }
+            LOG_DEBUG("Created cache base path: {}", cache_base.parent_path().string());
         }
 
         if (std::filesystem::exists(cache_folder)) {
