@@ -990,10 +990,15 @@ namespace lfs::vis::gui {
         if (!show_debug_window_)
             return;
 
-        constexpr ImGuiWindowFlags WINDOW_FLAGS = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize;
+        // Fixed dimensions to prevent DPI-related resize feedback loop
+        constexpr float WINDOW_WIDTH = 450.0f;
+        constexpr float WINDOW_HEIGHT = 400.0f;
+        constexpr ImGuiWindowFlags WINDOW_FLAGS = ImGuiWindowFlags_NoDocking |
+                                                  ImGuiWindowFlags_NoResize |
+                                                  ImGuiWindowFlags_NoScrollbar;
         const auto& t = theme();
 
-        ImGui::SetNextWindowSize(ImVec2(450, 0), ImGuiCond_Once);
+        ImGui::SetNextWindowSize({WINDOW_WIDTH, WINDOW_HEIGHT}, ImGuiCond_Always);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 20.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 10.0f));

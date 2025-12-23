@@ -95,11 +95,9 @@ namespace lfs::vis::gui {
             ImGui::TextColored(t.palette.text_dim, "Dataset:");
             ImGui::SameLine();
             const std::string dataset_str = dataset_path_.string();
-            const bool is_truncated = ImGui::CalcTextSize(dataset_str.c_str()).x > MAX_PATH_WIDTH;
-            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + MAX_PATH_WIDTH);
+            const bool is_clipped = ImGui::CalcTextSize(dataset_str.c_str()).x > MAX_PATH_WIDTH;
             ImGui::TextUnformatted(dataset_str.c_str());
-            ImGui::PopTextWrapPos();
-            if (is_truncated && ImGui::IsItemHovered()) {
+            if (is_clipped && ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("%s", dataset_str.c_str());
             }
 
