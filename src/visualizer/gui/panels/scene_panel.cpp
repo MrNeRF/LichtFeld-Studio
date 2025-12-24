@@ -270,17 +270,19 @@ namespace lfs::vis::gui {
         const bool blnTraininMode = m_trainerManager->hasTrainer();
 
         if (ImGui::BeginPopupContextItem("##ModelsMenu")) {
-            if (ImGui::MenuItem("Add PLY...", nullptr, false, !blnTraininMode)) {
-                cmd::ShowWindow{.window_name = "file_browser", .show = true}.emit();
+            if (!blnTraininMode) {
+                if (ImGui::MenuItem("Add PLY...")) {
+                    cmd::ShowWindow{.window_name = "file_browser", .show = true}.emit();
 #ifdef _WIN32
-                OpenPlyFileDialogNative();
-                cmd::ShowWindow{.window_name = "file_browser", .show = false}.emit();
+                    OpenPlyFileDialogNative();
+                    cmd::ShowWindow{.window_name = "file_browser", .show = false}.emit();
 #endif
+                }
+                if (ImGui::MenuItem("Add Group")) {
+                    cmd::AddGroup{.name = "New Group", .parent_name = ""}.emit();
+                }
+                ImGui::Separator();
             }
-            if (ImGui::MenuItem("Add Group", nullptr, false, !blnTraininMode)) {
-                cmd::AddGroup{.name = "New Group", .parent_name = ""}.emit();
-            }
-            ImGui::Separator();
             if (ImGui::MenuItem("Export...", nullptr, false, splat_count > 0)) {
                 cmd::ShowWindow{.window_name = "export_dialog", .show = true}.emit();
             }
