@@ -28,6 +28,8 @@
 #include "tools/align_tool.hpp"
 
 #include "core/events.hpp"
+#include "core/parameters.hpp"
+#include "core/services.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene.hpp"
@@ -153,6 +155,24 @@ namespace lfs::vis::gui {
 
         menu_bar_->setOnExport([this]() {
             window_states_["export_dialog"] = true;
+        });
+
+        menu_bar_->setOnExportConfig([]() {
+            const auto* const param_manager = services().paramsOrNull();
+            if (!param_manager)
+                return;
+
+            const auto path = SaveJsonFileDialog("training_config");
+            if (path.empty())
+                return;
+
+            lfs::core::param::TrainingParameters params;
+            params.dataset = param_manager->getDatasetConfig();
+            params.optimization = param_manager->getActiveParams();
+
+            if (const auto result = lfs::core::param::save_training_parameters_to_json(params, path); !result) {
+                LOG_ERROR("Failed to export config: {}", result.error());
+            }
         });
 
         // Export dialog: when user clicks Export, show native file dialog and perform export

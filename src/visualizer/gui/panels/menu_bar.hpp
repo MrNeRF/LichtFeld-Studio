@@ -31,6 +31,7 @@ namespace lfs::vis::gui {
         void setOnImportCheckpoint(std::function<void()> callback);
         void setOnImportConfig(std::function<void()> callback);
         void setOnExport(std::function<void()> callback);
+        void setOnExportConfig(std::function<void()> callback);
         void setOnExit(std::function<void()> callback);
 
         // Permission check for New Project (returns true if clearing is allowed)
@@ -75,6 +76,7 @@ namespace lfs::vis::gui {
         std::function<void()> on_import_checkpoint_;
         std::function<void()> on_import_config_;
         std::function<void()> on_export_;
+        std::function<void()> on_export_config_;
         std::function<void()> on_exit_;
         std::function<bool()> can_clear_;
 

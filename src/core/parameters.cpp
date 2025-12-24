@@ -506,8 +506,10 @@ namespace lfs::core {
                 ss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
                 json["timestamp"] = ss.str();
 
-                // Save to file
-                std::filesystem::path filepath = output_path / "training_config.json";
+                // Use path directly if .json, otherwise append default filename
+                const std::filesystem::path filepath = (output_path.extension() == ".json")
+                                                           ? output_path
+                                                           : output_path / "training_config.json";
                 std::ofstream file(filepath);
                 if (!file.is_open()) {
                     return std::unexpected(std::format("Could not open file for writing: {}", filepath.string()));

@@ -181,6 +181,9 @@ namespace lfs::vis::gui {
                 if (ImGui::MenuItem("Export...") && on_export_) {
                     on_export_();
                 }
+                if (ImGui::MenuItem("Export Config...") && on_export_config_) {
+                    on_export_config_();
+                }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Exit") && on_exit_) {
                     on_exit_();
@@ -512,6 +515,10 @@ namespace lfs::vis::gui {
 
     void MenuBar::setOnExport(std::function<void()> callback) {
         on_export_ = std::move(callback);
+    }
+
+    void MenuBar::setOnExportConfig(std::function<void()> callback) {
+        on_export_config_ = std::move(callback);
     }
 
     void MenuBar::setOnExit(std::function<void()> callback) {
