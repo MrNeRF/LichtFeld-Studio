@@ -1428,7 +1428,6 @@ namespace lfs::vis::gui::panels {
     }
 
     void DrawTrainingControls(const UIContext& ctx) {
-        ImGui::Text("Training Control");
         ImGui::Separator();
 
         auto& state = TrainingPanelState::getInstance();
@@ -1463,6 +1462,9 @@ namespace lfs::vis::gui::panels {
                     lfs::core::events::cmd::ResetTraining{}.emit();
                 }
             }
+            if (ColoredButton("Clear", ButtonStyle::Error, FULL_WIDTH)) {
+                lfs::core::events::cmd::ClearScene{}.emit();
+            }
             break;
         }
 
@@ -1479,8 +1481,8 @@ namespace lfs::vis::gui::panels {
             if (ColoredButton("Reset Training", ButtonStyle::Secondary, FULL_WIDTH)) {
                 lfs::core::events::cmd::ResetTraining{}.emit();
             }
-            if (ColoredButton("Clear", ButtonStyle::Error, FULL_WIDTH)) {
-                lfs::core::events::cmd::ClearScene{}.emit();
+            if (ColoredButton("Stop Training", ButtonStyle::Error, FULL_WIDTH)) {
+                lfs::core::events::cmd::StopTraining{}.emit();
             }
             break;
 
@@ -1514,6 +1516,11 @@ namespace lfs::vis::gui::panels {
             if (ColoredButton("Reset Training", ButtonStyle::Secondary, FULL_WIDTH)) {
                 lfs::core::events::cmd::ResetTraining{}.emit();
             }
+
+            if (ColoredButton("Clear", ButtonStyle::Error, FULL_WIDTH)) {
+                lfs::core::events::cmd::ClearScene{}.emit();
+            }
+
             break;
         }
 
