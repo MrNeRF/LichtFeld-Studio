@@ -266,15 +266,18 @@ namespace lfs::vis::gui {
 
         // Context menu for folder
         theme().pushContextMenuStyle();
+
+        const bool blnTraininMode = m_trainerManager->hasTrainer();
+
         if (ImGui::BeginPopupContextItem("##ModelsMenu")) {
-            if (ImGui::MenuItem("Add PLY...")) {
+            if (ImGui::MenuItem("Add PLY...", nullptr, false, !blnTraininMode)) {
                 cmd::ShowWindow{.window_name = "file_browser", .show = true}.emit();
 #ifdef _WIN32
                 OpenPlyFileDialogNative();
                 cmd::ShowWindow{.window_name = "file_browser", .show = false}.emit();
 #endif
             }
-            if (ImGui::MenuItem("Add Group")) {
+            if (ImGui::MenuItem("Add Group", nullptr, false, !blnTraininMode)) {
                 cmd::AddGroup{.name = "New Group", .parent_name = ""}.emit();
             }
             ImGui::Separator();
