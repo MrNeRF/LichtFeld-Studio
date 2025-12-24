@@ -266,7 +266,6 @@ namespace lfs::vis::gui {
 
         // Context menu for folder
         theme().pushContextMenuStyle();
-
         if (ImGui::BeginPopupContextItem("##ModelsMenu")) {
             if (!m_trainerManager->hasTrainer()) {
                 if (ImGui::MenuItem("Add PLY...")) {
