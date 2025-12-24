@@ -171,6 +171,12 @@ namespace lfs::vis::gui {
                 if (ImGui::MenuItem("Import Ply") && on_import_ply_) {
                     on_import_ply_();
                 }
+                if (ImGui::MenuItem("Import Checkpoint") && on_import_checkpoint_) {
+                    on_import_checkpoint_();
+                }
+                if (ImGui::MenuItem("Import Config") && on_import_config_) {
+                    on_import_config_();
+                }
                 ImGui::Separator();
                 if (ImGui::MenuItem("Export...") && on_export_) {
                     on_export_();
@@ -494,6 +500,14 @@ namespace lfs::vis::gui {
 
     void MenuBar::setOnImportPLY(std::function<void()> callback) {
         on_import_ply_ = std::move(callback);
+    }
+
+    void MenuBar::setOnImportCheckpoint(std::function<void()> callback) {
+        on_import_checkpoint_ = std::move(callback);
+    }
+
+    void MenuBar::setOnImportConfig(std::function<void()> callback) {
+        on_import_config_ = std::move(callback);
     }
 
     void MenuBar::setOnExport(std::function<void()> callback) {
@@ -990,10 +1004,15 @@ namespace lfs::vis::gui {
         if (!show_debug_window_)
             return;
 
-        constexpr ImGuiWindowFlags WINDOW_FLAGS = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize;
+        // Fixed dimensions to prevent DPI-related resize feedback loop
+        constexpr float WINDOW_WIDTH = 450.0f;
+        constexpr float WINDOW_HEIGHT = 400.0f;
+        constexpr ImGuiWindowFlags WINDOW_FLAGS = ImGuiWindowFlags_NoDocking |
+                                                  ImGuiWindowFlags_NoResize |
+                                                  ImGuiWindowFlags_NoScrollbar;
         const auto& t = theme();
 
-        ImGui::SetNextWindowSize(ImVec2(450, 0), ImGuiCond_Once);
+        ImGui::SetNextWindowSize({WINDOW_WIDTH, WINDOW_HEIGHT}, ImGuiCond_Always);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 20.0f));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 10.0f));

@@ -37,7 +37,8 @@ std::tuple<int, int, int, int, int> fast_lfs::rasterization::forward(
     const float cx,
     const float cy,
     const float near_, // near and far are macros in windows
-    const float far_) {
+    const float far_,
+    bool mip_filter) {
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const dim3 block(config::tile_width, config::tile_height, 1);
     const int n_tiles = grid.x * grid.y;
@@ -97,7 +98,8 @@ std::tuple<int, int, int, int, int> fast_lfs::rasterization::forward(
         cx,
         cy,
         near_,
-        far_);
+        far_,
+        mip_filter);
     CHECK_CUDA(config::debug, "preprocess")
 
     int n_visible_primitives;

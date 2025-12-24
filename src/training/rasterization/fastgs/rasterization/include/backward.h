@@ -17,6 +17,7 @@ namespace fast_lfs::rasterization {
         const float3* means,
         const float3* scales_raw,
         const float4* rotations_raw,
+        const float* raw_opacities,
         const float3* sh_coefficients_rest,
         const float4* w2c,
         const float3* cam_position,
@@ -47,6 +48,7 @@ namespace fast_lfs::rasterization {
         const float fx,
         const float fy,
         const float cx,
-        const float cy);
+        const float cy,
+        bool mip_filter);
 
 }

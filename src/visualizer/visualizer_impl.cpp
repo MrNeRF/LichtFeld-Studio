@@ -245,6 +245,10 @@ namespace lfs::vis {
             handleLoadFileCommand(cmd);
         });
 
+        cmd::LoadConfigFile::when([this](const auto& cmd) {
+            handleLoadConfigFile(cmd.path);
+        });
+
         cmd::SwitchToLatestCheckpoint::when([this](const auto&) {
             handleSwitchToLatestCheckpoint();
         });
@@ -753,6 +757,15 @@ namespace lfs::vis {
 
     void VisualizerImpl::handleLoadFileCommand([[maybe_unused]] const lfs::core::events::cmd::LoadFile& cmd) {
         // File loading is handled by the data_loader_ service
+    }
+
+    void VisualizerImpl::handleLoadConfigFile(const std::filesystem::path& path) {
+        auto result = lfs::core::param::read_optim_params_from_json(path);
+        if (!result) {
+            state::ConfigLoadFailed{.path = path, .error = result.error()}.emit();
+            return;
+        }
+        parameter_manager_->importParams(*result);
     }
 
     void VisualizerImpl::handleTrainingCompleted([[maybe_unused]] const state::TrainingCompleted& event) {

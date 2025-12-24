@@ -110,6 +110,20 @@ namespace lfs::vis {
         LOG_DEBUG("Current params updated: strategy={}, iter={}, sh={}", params.strategy, params.iterations, params.sh_degree);
     }
 
+    void ParameterManager::importParams(const lfs::core::param::OptimizationParameters& params) {
+        if (!params.strategy.empty()) {
+            setActiveStrategy(params.strategy);
+        }
+        if (active_strategy_ == "mcmc") {
+            mcmc_session_ = params;
+            mcmc_current_ = params;
+        } else {
+            default_session_ = params;
+            default_current_ = params;
+        }
+        LOG_INFO("Imported params: strategy={}, iter={}, sh={}", params.strategy, params.iterations, params.sh_degree);
+    }
+
     void ParameterManager::setActiveStrategy(const std::string_view strategy) {
         if (strategy == "mcmc" || strategy == "default") {
             active_strategy_ = std::string(strategy);

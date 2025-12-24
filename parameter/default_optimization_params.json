@@ -23,6 +23,7 @@
   "save_steps": [7000, 30000],
   "enable_eval": false,
   "enable_save_eval_images": true,
+  "mip_filter": false,
   "use_bilateral_grid": false,
   "bg_modulation": false,
   "bilateral_grid_X": 16,

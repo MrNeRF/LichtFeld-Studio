@@ -35,6 +35,7 @@ namespace fast_lfs::rasterization {
         const float cx,
         const float cy,
         const float near,
-        const float far);
+        const float far,
+        bool mip_filter);
 
 }

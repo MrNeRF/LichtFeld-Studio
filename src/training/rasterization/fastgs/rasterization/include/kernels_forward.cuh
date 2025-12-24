@@ -45,7 +45,8 @@ namespace fast_lfs::rasterization::kernels::forward {
         const float cx,
         const float cy,
         const float near_, // near and far are macros in windowns
-        const float far_) {
+        const float far_,
+        const bool mip_filter) {
         auto primitive_idx = cg::this_grid().thread_rank();
         bool active = true;
         if (primitive_idx >= n_primitives) {
@@ -140,27 +141,26 @@ namespace fast_lfs::rasterization::kernels::forward {
             jw_r2.x * cov3d.m11 + jw_r2.y * cov3d.m12 + jw_r2.z * cov3d.m13,
             jw_r2.x * cov3d.m12 + jw_r2.y * cov3d.m22 + jw_r2.z * cov3d.m23,
             jw_r2.x * cov3d.m13 + jw_r2.y * cov3d.m23 + jw_r2.z * cov3d.m33);
-        float3 cov2d = make_float3(
-            dot(jwc_r1, jw_r1),
-            dot(jwc_r1, jw_r2),
-            dot(jwc_r2, jw_r2));
-        cov2d.x += config::dilation;
-        cov2d.z += config::dilation;
-        const float determinant = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
-        if (determinant < 1e-8f)
+        float3 cov2d = make_float3(dot(jwc_r1, jw_r1), dot(jwc_r1, jw_r2), dot(jwc_r2, jw_r2));
+
+        // Mip filter: use smaller dilation and compensate opacity
+        const float det_raw = mip_filter ? fmaxf(cov2d.x * cov2d.z - cov2d.y * cov2d.y, 0.0f) : 0.0f;
+        const float kernel_size = mip_filter ? config::dilation_mip_filter : config::dilation;
+        cov2d.x += kernel_size;
+        cov2d.z += kernel_size;
+        const float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
+        if (det < 1e-8f)
             active = false;
-        const float3 conic = make_float3(
-            cov2d.z / determinant,
-            -cov2d.y / determinant,
-            cov2d.x / determinant);
+        const float det_rcp = 1.0f / det;
+        const float output_opacity = mip_filter ? opacity * sqrtf(det_raw * det_rcp) : opacity;
+        if (output_opacity < config::min_alpha_threshold)
+            active = false;
 
-        // 2d mean in screen space
-        const float2 mean2d = make_float2(
-            x * fx + cx,
-            y * fy + cy);
+        const float3 conic = make_float3(cov2d.z * det_rcp, -cov2d.y * det_rcp, cov2d.x * det_rcp);
+        const float2 mean2d = make_float2(x * fx + cx, y * fy + cy);
 
-        // compute bounds
-        const float power_threshold = logf(opacity * config::min_alpha_threshold_rcp);
+        // Compute bounds
+        const float power_threshold = logf(output_opacity * config::min_alpha_threshold_rcp);
         const float power_threshold_factor = sqrtf(2.0f * power_threshold);
         float extent_x = fmaxf(power_threshold_factor * sqrtf(cov2d.x) - 0.5f, 0.0f);
         float extent_y = fmaxf(power_threshold_factor * sqrtf(cov2d.z) - 0.5f, 0.0f);
@@ -195,7 +195,7 @@ namespace fast_lfs::rasterization::kernels::forward {
             static_cast<ushort>(screen_bounds.z),
             static_cast<ushort>(screen_bounds.w));
         primitive_mean2d[primitive_idx] = mean2d;
-        primitive_conic_opacity[primitive_idx] = make_float4(conic, opacity);
+        primitive_conic_opacity[primitive_idx] = make_float4(conic, output_opacity);
         primitive_color[primitive_idx] = convert_sh_to_color(
             sh_coefficients_0, sh_coefficients_rest,
             mean3d, cam_position[0],

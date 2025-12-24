@@ -442,6 +442,23 @@ namespace lfs::vis::gui {
 #endif
     }
 
+    std::filesystem::path OpenCheckpointFileDialog() {
+#ifdef _WIN32
+        PWSTR filePath = nullptr;
+        COMDLG_FILTERSPEC rgSpec[] = {{L"Checkpoint", L"*.resume"}};
+
+        if (SUCCEEDED(utils::selectFileNative(filePath, rgSpec, 1, false))) {
+            return std::filesystem::path(filePath);
+        }
+        return {};
+#else
+        const std::string result = runDialogCommand(
+            "zenity --file-selection --file-filter='Checkpoint|*.resume' --title='Open Checkpoint' 2>/dev/null",
+            "kdialog --getopenfilename . 'Checkpoint (*.resume)' 2>/dev/null");
+        return result.empty() ? std::filesystem::path{} : std::filesystem::path(result);
+#endif
+    }
+
     std::filesystem::path OpenDatasetFolderDialogNative() {
 #ifdef _WIN32
         PWSTR filePath = nullptr;

@@ -67,7 +67,8 @@ namespace fast_lfs::rasterization {
         float center_x,
         float center_y,
         float near_plane,
-        float far_plane);
+        float far_plane,
+        bool mip_filter = true);
 
     struct BackwardOutputs {
         // These are filled in the provided pointers, not allocated
@@ -84,6 +85,7 @@ namespace fast_lfs::rasterization {
         const float* means_ptr,                // Device pointer [N*3]
         const float* scales_raw_ptr,           // Device pointer [N*3]
         const float* rotations_raw_ptr,        // Device pointer [N*4]
+        const float* raw_opacities_ptr,        // Device pointer [N]
         const float* sh_coefficients_rest_ptr, // Device pointer [N*total_bases_sh_rest*3]
         const float* w2c_ptr,                  // Device pointer [4*4]
         const float* cam_position_ptr,         // Device pointer [3]
@@ -103,7 +105,8 @@ namespace fast_lfs::rasterization {
         float focal_x,
         float focal_y,
         float center_x,
-        float center_y);
+        float center_y,
+        bool mip_filter = true);
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();

@@ -98,15 +98,20 @@ namespace lfs::core {
 
     // nvImageCodec extensions directory
     inline std::filesystem::path getExtensionsDir() {
-        const auto lib_dir = getLibDir();
+        const auto exe_dir = getExecutableDir();
+
+        // Distribution: exe in bin/, extensions in ../extensions/ (sibling directories)
+        if (const auto ext = exe_dir.parent_path() / "extensions"; std::filesystem::exists(ext)) {
+            return ext;
+        }
 
         // Standard location: lib/extensions/
+        const auto lib_dir = getLibDir();
         if (const auto ext = lib_dir / "extensions"; std::filesystem::exists(ext)) {
             return ext;
         }
 
-        // Fallback: extensions/ in exe directory
-        const auto exe_dir = getExecutableDir();
+        // Fallback: extensions/ in exe directory (development)
         if (const auto ext = exe_dir / "extensions"; std::filesystem::exists(ext)) {
             return ext;
         }

@@ -31,6 +31,9 @@ namespace lfs::vis {
         // Set current params (e.g., from loaded checkpoint)
         void setCurrentParams(const lfs::core::param::OptimizationParameters& params);
 
+        // Import params: overwrites both session and current for active strategy
+        void importParams(const lfs::core::param::OptimizationParameters& params);
+
         [[nodiscard]] const std::string& getActiveStrategy() const { return active_strategy_; }
         void setActiveStrategy(std::string_view strategy);
 

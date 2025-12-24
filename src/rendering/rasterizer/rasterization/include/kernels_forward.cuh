@@ -83,7 +83,8 @@ namespace lfs::rendering::kernels::forward {
         const int num_selected_nodes,
         const bool desaturate_unselected,
         const bool orthographic,
-        const float ortho_scale) {
+        const float ortho_scale,
+        const bool mip_filter) {
         auto primitive_idx = cg::this_grid().thread_rank();
         bool active = true;
         if (primitive_idx >= n_primitives) {
@@ -251,18 +252,24 @@ namespace lfs::rendering::kernels::forward {
                               : kernels::project_perspective(cam_x, cam_y, depth, fx, fy, cx, cy, w, h, w2c_r1, w2c_r2, w2c_r3);
         const float2 mean2d = proj.mean2d;
         float3 cov2d = kernels::project_cov3d(proj.jw_r1, proj.jw_r2, cov3d);
-        cov2d.x += config::dilation;
-        cov2d.z += config::dilation;
-        const float determinant = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
-        if (determinant < 1e-8f)
-            active = false;
-        const float3 conic = make_float3(
-            cov2d.z / determinant,
-            -cov2d.y / determinant,
-            cov2d.x / determinant);
 
-        // compute bounds
-        const float power_threshold = logf(opacity * config::min_alpha_threshold_rcp);
+        // Mip filter: use smaller dilation and compensate opacity
+        const float det_raw = mip_filter ? fmaxf(cov2d.x * cov2d.z - cov2d.y * cov2d.y, 0.0f) : 0.0f;
+        const float kernel_size = mip_filter ? config::dilation_mip_filter : config::dilation;
+        cov2d.x += kernel_size;
+        cov2d.z += kernel_size;
+        const float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
+        if (det < 1e-8f)
+            active = false;
+        const float det_rcp = 1.0f / det;
+        const float output_opacity = mip_filter ? opacity * sqrtf(det_raw * det_rcp) : opacity;
+        if (output_opacity < config::min_alpha_threshold)
+            active = false;
+
+        const float3 conic = make_float3(cov2d.z * det_rcp, -cov2d.y * det_rcp, cov2d.x * det_rcp);
+
+        // Compute bounds
+        const float power_threshold = logf(output_opacity * config::min_alpha_threshold_rcp);
         const float power_threshold_factor = sqrtf(2.0f * power_threshold);
         float extent_x = fmaxf(power_threshold_factor * sqrtf(cov2d.x) - 0.5f, 0.0f);
         float extent_y = fmaxf(power_threshold_factor * sqrtf(cov2d.z) - 0.5f, 0.0f);
@@ -297,7 +304,7 @@ namespace lfs::rendering::kernels::forward {
             static_cast<ushort>(screen_bounds.z),
             static_cast<ushort>(screen_bounds.w));
         primitive_mean2d[primitive_idx] = mean2d;
-        primitive_conic_opacity[primitive_idx] = make_float4(conic, opacity);
+        primitive_conic_opacity[primitive_idx] = make_float4(conic, output_opacity);
         float3 color = convert_sh_to_color(
             sh_coefficients_0, sh_coefficients_rest,
             mean3d, cam_position[0],
@@ -341,7 +348,7 @@ namespace lfs::rendering::kernels::forward {
                 const float sigma = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) +
                                     conic.y * delta.x * delta.y;
                 if (sigma >= 0.0f) {
-                    const float hover_alpha = opacity * expf(-sigma);
+                    const float hover_alpha = output_opacity * expf(-sigma);
                     if (hover_alpha >= config::min_alpha_threshold) {
                         const unsigned int depth_bits = __float_as_uint(depth);
                         const unsigned long long packed =

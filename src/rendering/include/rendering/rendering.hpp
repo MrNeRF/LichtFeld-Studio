@@ -64,6 +64,7 @@ namespace lfs::rendering {
         ViewportData viewport;
         float scaling_modifier = 1.0f;
         bool antialiasing = false;
+        bool mip_filter = false;
         int sh_degree = 3;
         glm::vec3 background_color{0.0f, 0.0f, 0.0f};
         std::optional<BoundingBox> crop_box;
@@ -147,6 +148,7 @@ namespace lfs::rendering {
         // Common render settings
         float scaling_modifier = 1.0f;
         bool antialiasing = false;
+        bool mip_filter = false;
         int sh_degree = 3;
         glm::vec3 background_color{0.0f, 0.0f, 0.0f};
         std::optional<BoundingBox> crop_box;

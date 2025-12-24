@@ -341,7 +341,8 @@ void lfs::rendering::forward(
     bool desaturate_unselected,
     float selection_flash_intensity,
     bool orthographic,
-    float ortho_scale) {
+    float ortho_scale,
+    bool mip_filter) {
 
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const dim3 block(config::tile_width, config::tile_height, 1);
@@ -437,7 +438,8 @@ void lfs::rendering::forward(
         num_selected_nodes,
         desaturate_unselected,
         orthographic,
-        ortho_scale);
+        ortho_scale,
+        mip_filter);
     CHECK_CUDA(config::debug, "preprocess")
 
     // Copy screen positions if requested (for brush tool selection)

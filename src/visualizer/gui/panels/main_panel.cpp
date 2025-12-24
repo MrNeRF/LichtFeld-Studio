@@ -353,6 +353,15 @@ namespace lfs::vis::gui::panels {
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Enable for fisheye, distorted, or equirectangular cameras.\nRequired for viewing PLYs trained with --gut flag.");
         }
+
+        // Mip Filter (anti-aliasing for distant/small Gaussians)
+        if (ImGui::Checkbox("Mip Filter", &settings.mip_filter)) {
+            settings_changed = true;
+            render_manager->updateSettings(settings);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Enable mip-splatting filter to reduce aliasing artifacts.\nCompensates opacity for Gaussians smaller than a pixel.");
+        }
     }
 
     void DrawSelectionGroups(const UIContext& ctx) {

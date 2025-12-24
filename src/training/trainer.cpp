@@ -788,7 +788,8 @@ namespace lfs::training {
                         *cam, strategy_->get_model(), bg,
                         tile_x_offset, tile_y_offset,
                         (num_tiles > 1) ? tile_width : 0, // 0 means full image
-                        (num_tiles > 1) ? tile_height : 0);
+                        (num_tiles > 1) ? tile_height : 0,
+                        params_.optimization.mip_filter);
 
                     // Check for OOM error
                     if (!rasterize_result) {

@@ -35,6 +35,7 @@ namespace lfs::rendering {
             float fov = 60.0f;
             float scaling_modifier = 1.0f;
             bool antialiasing = false;
+            bool mip_filter = false;
             int sh_degree = 3;
             RenderMode render_mode = RenderMode::RGB;
             const lfs::geometry::BoundingBox* crop_box = nullptr;

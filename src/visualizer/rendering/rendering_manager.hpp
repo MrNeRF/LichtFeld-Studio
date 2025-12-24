@@ -32,6 +32,7 @@ namespace lfs::vis {
         float fov = 60.0f;
         float scaling_modifier = 1.0f;
         bool antialiasing = false;
+        bool mip_filter = false;
         int sh_degree = 3;
 
         // Crop box (data stored in scene graph CropBoxData, these are UI toggles only)

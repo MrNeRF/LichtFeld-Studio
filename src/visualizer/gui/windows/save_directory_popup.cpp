@@ -10,15 +10,22 @@
 namespace lfs::vis::gui {
 
     namespace {
+        // Fixed dimensions to prevent DPI-related resize feedback loop
         constexpr float POPUP_WIDTH = 500.0f;
+        constexpr float POPUP_HEIGHT = 260.0f;
+        constexpr float INPUT_WIDTH = 340.0f;
+        constexpr float MAX_PATH_WIDTH = 380.0f;
+
         constexpr float POPUP_ALPHA = 0.98f;
         constexpr float BORDER_SIZE = 2.0f;
-        constexpr float INPUT_WIDTH_OFFSET = -80.0f;
         constexpr ImVec2 WINDOW_PADDING = {20.0f, 16.0f};
         constexpr ImVec2 BUTTON_SIZE = {100.0f, 0.0f};
-        constexpr ImGuiWindowFlags POPUP_FLAGS = ImGuiWindowFlags_AlwaysAutoResize |
-                                                 ImGuiWindowFlags_NoCollapse |
-                                                 ImGuiWindowFlags_NoDocking;
+
+        constexpr ImGuiWindowFlags POPUP_FLAGS = ImGuiWindowFlags_NoCollapse |
+                                                 ImGuiWindowFlags_NoDocking |
+                                                 ImGuiWindowFlags_NoResize |
+                                                 ImGuiWindowFlags_NoScrollbar |
+                                                 ImGuiWindowFlags_NoScrollWithMouse;
         constexpr size_t PATH_BUFFER_SIZE = 1024;
         constexpr float DARKEN_TITLE = 0.1f;
         constexpr float DARKEN_TITLE_ACTIVE = 0.05f;
@@ -60,7 +67,7 @@ namespace lfs::vis::gui {
                                   : ImGui::GetMainViewport()->GetCenter();
 
         ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, {0.5f, 0.5f});
-        ImGui::SetNextWindowSize({POPUP_WIDTH, 0}, ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize({POPUP_WIDTH, POPUP_HEIGHT}, ImGuiCond_Always);
 
         ImGui::PushStyleColor(ImGuiCol_WindowBg, popup_bg);
         ImGui::PushStyleColor(ImGuiCol_TitleBg, title_bg);
@@ -87,12 +94,17 @@ namespace lfs::vis::gui {
 
             ImGui::TextColored(t.palette.text_dim, "Dataset:");
             ImGui::SameLine();
-            ImGui::TextUnformatted(dataset_path_.string().c_str());
+            const std::string dataset_str = dataset_path_.string();
+            const bool is_clipped = ImGui::CalcTextSize(dataset_str.c_str()).x > MAX_PATH_WIDTH;
+            ImGui::TextUnformatted(dataset_str.c_str());
+            if (is_clipped && ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", dataset_str.c_str());
+            }
 
             ImGui::Spacing();
 
             ImGui::TextColored(t.palette.text_dim, "Output Directory:");
-            ImGui::SetNextItemWidth(INPUT_WIDTH_OFFSET);
+            ImGui::SetNextItemWidth(INPUT_WIDTH);
             ImGui::InputText("##output_path", output_path_buffer_.data(), PATH_BUFFER_SIZE);
 
             ImGui::SameLine();

@@ -10,15 +10,21 @@
 namespace lfs::vis::gui {
 
     namespace {
+        // Fixed dimensions to prevent DPI-related resize feedback loop
+        constexpr float POPUP_WIDTH = 340.0f;
+        constexpr float POPUP_HEIGHT = 150.0f;
+
         constexpr float BUTTON_WIDTH = 100.0f;
         constexpr float BUTTON_SPACING = 12.0f;
         constexpr float POPUP_ALPHA = 0.98f;
         constexpr float BORDER_SIZE = 2.0f;
         constexpr ImVec2 WINDOW_PADDING{24.0f, 20.0f};
-        constexpr ImGuiWindowFlags POPUP_FLAGS = ImGuiWindowFlags_AlwaysAutoResize |
-                                                 ImGuiWindowFlags_NoCollapse |
+
+        constexpr ImGuiWindowFlags POPUP_FLAGS = ImGuiWindowFlags_NoCollapse |
                                                  ImGuiWindowFlags_NoMove |
-                                                 ImGuiWindowFlags_NoDocking;
+                                                 ImGuiWindowFlags_NoDocking |
+                                                 ImGuiWindowFlags_NoResize |
+                                                 ImGuiWindowFlags_NoScrollbar;
         constexpr const char* POPUP_TITLE = "Exit Application?";
     } // namespace
 
@@ -46,6 +52,7 @@ namespace lfs::vis::gui {
         const ImVec4 title_bg_active = darken(t.palette.surface, 0.05f);
 
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, {0.5f, 0.5f});
+        ImGui::SetNextWindowSize({POPUP_WIDTH, POPUP_HEIGHT}, ImGuiCond_Always);
 
         ImGui::PushStyleColor(ImGuiCol_WindowBg, popup_bg);
         ImGui::PushStyleColor(ImGuiCol_TitleBg, title_bg);

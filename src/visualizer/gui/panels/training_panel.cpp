@@ -1309,6 +1309,20 @@ namespace lfs::vis::gui::panels {
                 ImGui::Text("%s", opt_params.gut ? "Enabled" : "Disabled");
             }
 
+            // Mip Filter (anti-aliasing)
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Mip Filter:");
+            ImGui::TableNextColumn();
+            if (can_edit) {
+                ImGui::Checkbox("##mip_filter", &opt_params.mip_filter);
+            } else {
+                ImGui::Text("%s", opt_params.mip_filter ? "Enabled" : "Disabled");
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Anti-aliasing filter for training (mip-splatting)");
+            }
+
             // BG Modulation
             ImGui::TableNextRow();
             ImGui::TableNextColumn();

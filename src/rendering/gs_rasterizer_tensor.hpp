@@ -50,7 +50,8 @@ namespace lfs::rendering {
         bool desaturate_unselected = false,
         float selection_flash_intensity = 0.0f,
         bool orthographic = false,
-        float ortho_scale = 1.0f);
+        float ortho_scale = 1.0f,
+        bool mip_filter = false);
 
     // GUT rasterization for viewer (forward-only, no training dependency)
     struct GutRenderOutput {
