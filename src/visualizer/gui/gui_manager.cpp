@@ -1724,7 +1724,26 @@ namespace lfs::vis::gui {
     }
 
     bool GuiManager::isModalWindowOpen() const {
-        return menu_bar_ && menu_bar_->isInputSettingsOpen();
+        // Check exit confirmation popup
+        if (exit_confirmation_popup_ && exit_confirmation_popup_->isOpen())
+            return true;
+        
+        // Check save directory popup
+        if (save_directory_popup_ && save_directory_popup_->isOpen())
+            return true;
+        
+        // Check export dialog
+        if (window_states_.contains("export_dialog") && window_states_.at("export_dialog"))
+            return true;
+        
+        // Check menu bar dialog windows
+        if (!menu_bar_)
+            return false;
+        
+        return menu_bar_->isInputSettingsOpen() ||
+               menu_bar_->isAboutWindowOpen() ||
+               menu_bar_->isGettingStartedWindowOpen() ||
+               menu_bar_->isDebugWindowOpen();
     }
 
     void GuiManager::captureKey(int key, int mods) {
@@ -1779,9 +1798,6 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::renderCropBoxGizmo(const UIContext& ctx) {
-        if (isModalWindowOpen())
-            return;
-
         auto* const render_manager = ctx.viewer->getRenderingManager();
         auto* const scene_manager = ctx.viewer->getSceneManager();
         if (!render_manager || !scene_manager)
@@ -1845,8 +1861,8 @@ namespace lfs::vis::gui {
             }
         }
 
-        // Clip to viewport
-        ImDrawList* overlay_drawlist = ImGui::GetForegroundDrawList();
+        // Clip to viewport - use background drawlist when modal is open to render below dialogs
+        ImDrawList* overlay_drawlist = isModalWindowOpen() ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
         const ImVec2 clip_min(viewport_pos_.x, viewport_pos_.y);
         const ImVec2 clip_max(clip_min.x + viewport_size_.x, clip_min.y + viewport_size_.y);
         overlay_drawlist->PushClipRect(clip_min, clip_max, true);
@@ -1966,8 +1982,6 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::renderNodeTransformGizmo(const UIContext& ctx) {
-        if (isModalWindowOpen())
-            return;
         if (!show_node_gizmo_)
             return;
 
@@ -2039,7 +2053,8 @@ namespace lfs::vis::gui {
             ImGuizmo::SetAxisMask(s_node_hovered_axis, s_node_hovered_axis, s_node_hovered_axis);
         }
 
-        ImDrawList* overlay_drawlist = ImGui::GetForegroundDrawList();
+        // Use background drawlist when modal is open to render below dialogs
+        ImDrawList* overlay_drawlist = isModalWindowOpen() ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
         const ImVec2 clip_min(viewport_pos_.x, viewport_pos_.y);
         const ImVec2 clip_max(clip_min.x + viewport_size_.x, clip_min.y + viewport_size_.y);
         overlay_drawlist->PushClipRect(clip_min, clip_max, true);

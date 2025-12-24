@@ -46,6 +46,9 @@ namespace lfs::vis::gui {
 
         bool isCapturingInput() const { return rebinding_action_.has_value(); }
         bool isInputSettingsOpen() const { return show_input_settings_; }
+        bool isAboutWindowOpen() const { return show_about_window_; }
+        bool isGettingStartedWindowOpen() const { return show_getting_started_; }
+        bool isDebugWindowOpen() const { return show_debug_window_; }
         void captureKey(int key, int mods);
         void captureMouseButton(int button, int mods);
         void cancelCapture();
