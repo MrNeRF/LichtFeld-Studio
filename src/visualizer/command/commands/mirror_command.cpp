@@ -15,7 +15,6 @@ namespace lfs::vis::command {
                                  std::shared_ptr<lfs::core::Tensor> selection_mask,
                                  std::shared_ptr<lfs::core::Tensor> old_means,
                                  std::shared_ptr<lfs::core::Tensor> old_rotation,
-                                 std::shared_ptr<lfs::core::Tensor> old_sh0,
                                  std::shared_ptr<lfs::core::Tensor> old_shN)
         : scene_manager_(scene_manager),
           node_name_(std::move(node_name)),
@@ -24,7 +23,6 @@ namespace lfs::vis::command {
           selection_mask_(std::move(selection_mask)),
           old_means_(std::move(old_means)),
           old_rotation_(std::move(old_rotation)),
-          old_sh0_(std::move(old_sh0)),
           old_shN_(std::move(old_shN)) {}
 
     void MirrorCommand::restoreState() {
@@ -42,9 +40,6 @@ namespace lfs::vis::command {
         }
         if (old_rotation_ && old_rotation_->is_valid()) {
             model.rotation_raw().copy_from(*old_rotation_);
-        }
-        if (old_sh0_ && old_sh0_->is_valid()) {
-            model.sh0().copy_from(*old_sh0_);
         }
         if (old_shN_ && old_shN_->is_valid() && model.shN().is_valid()) {
             model.shN().copy_from(*old_shN_);

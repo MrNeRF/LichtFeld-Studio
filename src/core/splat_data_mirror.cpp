@@ -5,62 +5,70 @@
 #include "core/splat_data_mirror.hpp"
 #include "core/logger.hpp"
 #include "core/splat_data.hpp"
+#include <mutex>
 
 namespace lfs::core {
 
     namespace {
 
-        // Pre-computed sign/multiplier tables
+        // Sign multipliers for position reflection per axis
         constexpr float POS_MULT[3][3] = {
-            {-1.0f, 1.0f, 1.0f}, // X
-            {1.0f, -1.0f, 1.0f}, // Y
-            {1.0f, 1.0f, -1.0f}  // Z
+            {-1.0f, 1.0f, 1.0f},  // X
+            {1.0f, -1.0f, 1.0f},  // Y
+            {1.0f, 1.0f, -1.0f}   // Z
         };
 
+        // Quaternion sign multipliers per axis (w,x,y,z)
         constexpr float QUAT_MULT[3][4] = {
-            {1.0f, 1.0f, -1.0f, -1.0f}, // X: negate y,z
-            {1.0f, -1.0f, 1.0f, -1.0f}, // Y: negate x,z
-            {1.0f, -1.0f, -1.0f, 1.0f}  // Z: negate x,y
+            {1.0f, 1.0f, -1.0f, -1.0f},  // X
+            {1.0f, -1.0f, 1.0f, -1.0f},  // Y
+            {1.0f, -1.0f, -1.0f, 1.0f}   // Z
         };
 
+        // SH coefficient multipliers per axis (15 coeffs for degrees 1-3, excluding DC)
         constexpr float SH_MULT[3][15] = {
-            {1, 1, -1, -1, 1, 1, -1, 1, 1, -1, 1, 1, -1, 1, -1}, // X
-            {-1, 1, 1, -1, -1, 1, 1, 1, -1, -1, -1, 1, 1, 1, 1}, // Y
-            {1, -1, 1, 1, -1, 1, -1, 1, 1, -1, 1, -1, 1, -1, 1}  // Z
+            {1, 1, -1, -1, 1, 1, -1, 1, 1, -1, 1, 1, -1, 1, -1},  // X
+            {-1, 1, 1, -1, -1, 1, 1, 1, -1, -1, -1, 1, 1, 1, 1},  // Y
+            {1, -1, 1, 1, -1, 1, -1, 1, 1, -1, 1, -1, 1, -1, 1}   // Z
         };
 
-        // Cached GPU tensors (lazy init)
+        // Cumulative SH coefficient counts per degree (excluding DC)
+        constexpr int SH_COEFF_COUNT[4] = {0, 3, 8, 15};
+
         struct MirrorCache {
             Tensor pos_mult[3];
             Tensor quat_mult[3];
-            Tensor sh_mult[3][4]; // [axis][degree 0-3]
+            Tensor sh_mult[3][3];  // [axis][degree 1-3] - no degree 0 (empty)
             Device device = Device::CPU;
             bool valid = false;
         };
 
-        MirrorCache& get_cache() {
-            static MirrorCache cache;
-            return cache;
-        }
+        std::mutex g_cache_mutex;
+        MirrorCache g_cache;
 
         void ensure_cache(const Device device) {
-            auto& c = get_cache();
-            if (c.valid && c.device == device)
+            std::lock_guard lock(g_cache_mutex);
+
+            if (g_cache.valid && g_cache.device == device)
                 return;
 
             for (int a = 0; a < 3; ++a) {
-                c.pos_mult[a] = Tensor::from_vector({POS_MULT[a][0], POS_MULT[a][1], POS_MULT[a][2]}, {1, 3}, device);
-                c.quat_mult[a] = Tensor::from_vector({QUAT_MULT[a][0], QUAT_MULT[a][1], QUAT_MULT[a][2], QUAT_MULT[a][3]}, {1, 4}, device);
-                for (int d = 0; d < 4; ++d) {
-                    const int n = (d + 1) * (d + 1) - 1; // SH coeffs for degree d (excluding DC)
+                g_cache.pos_mult[a] = Tensor::from_vector(
+                    {POS_MULT[a][0], POS_MULT[a][1], POS_MULT[a][2]}, {1, 3}, device);
+                g_cache.quat_mult[a] = Tensor::from_vector(
+                    {QUAT_MULT[a][0], QUAT_MULT[a][1], QUAT_MULT[a][2], QUAT_MULT[a][3]}, {1, 4}, device);
+
+                // Only degrees 1-3 (degree 0 has no coeffs in shN)
+                for (int d = 1; d <= 3; ++d) {
+                    const int n = SH_COEFF_COUNT[d];
                     std::vector<float> v(n);
                     for (int i = 0; i < n; ++i)
                         v[i] = SH_MULT[a][i];
-                    c.sh_mult[a][d] = Tensor::from_vector(v, {1, static_cast<size_t>(n), 1}, device);
+                    g_cache.sh_mult[a][d - 1] = Tensor::from_vector(v, {1, static_cast<size_t>(n), 1}, device);
                 }
             }
-            c.device = device;
-            c.valid = true;
+            g_cache.device = device;
+            g_cache.valid = true;
         }
 
     } // namespace
@@ -98,7 +106,6 @@ namespace lfs::core {
         const int a = static_cast<int>(axis);
         const auto device = means.device();
         ensure_cache(device);
-        auto& cache = get_cache();
 
         const auto selected = selection_mask.ne(0);
         if (selected.sum_scalar() == 0)
@@ -110,31 +117,25 @@ namespace lfs::core {
         if (indices.dtype() != DataType::Int32)
             indices = indices.to(DataType::Int32);
 
-        // Position: new = old * mult + offset
+        // Position: p' = p * mult + offset
         {
             const auto sel = means.index_select(0, indices);
-            const float off_val = 2.0f * center[a];
+            const float off = 2.0f * center[a];
             const auto offset = Tensor::from_vector(
-                {a == 0 ? off_val : 0.0f, a == 1 ? off_val : 0.0f, a == 2 ? off_val : 0.0f}, {1, 3}, device);
-            means.index_copy_(0, indices, sel * cache.pos_mult[a] + offset);
+                {a == 0 ? off : 0.0f, a == 1 ? off : 0.0f, a == 2 ? off : 0.0f}, {1, 3}, device);
+            means.index_copy_(0, indices, sel * g_cache.pos_mult[a] + offset);
         }
 
         // Quaternion
-        {
-            auto& rot = splat_data.rotation_raw();
-            if (rot.is_valid() && rot.size(0) > 0) {
-                rot.index_copy_(0, indices, rot.index_select(0, indices) * cache.quat_mult[a]);
-            }
+        if (auto& rot = splat_data.rotation_raw(); rot.is_valid() && rot.size(0) > 0) {
+            rot.index_copy_(0, indices, rot.index_select(0, indices) * g_cache.quat_mult[a]);
         }
 
-        // SH coefficients
-        {
-            auto& shN = splat_data.shN();
-            if (shN.is_valid() && shN.size(0) > 0 && shN.size(1) > 0) {
-                const int degree = static_cast<int>(std::sqrt(shN.size(1) + 1)) - 1;
-                if (degree >= 0 && degree <= 3) {
-                    shN.index_copy_(0, indices, shN.index_select(0, indices) * cache.sh_mult[a][degree]);
-                }
+        // SH coefficients (degrees 1-3 only, shN excludes DC)
+        if (auto& shN = splat_data.shN(); shN.is_valid() && shN.size(0) > 0 && shN.size(1) > 0) {
+            const int degree = static_cast<int>(std::sqrt(shN.size(1) + 1)) - 1;
+            if (degree >= 1 && degree <= 3) {
+                shN.index_copy_(0, indices, shN.index_select(0, indices) * g_cache.sh_mult[a][degree - 1]);
             }
         }
     }

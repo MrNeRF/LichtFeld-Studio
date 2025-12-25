@@ -2131,10 +2131,9 @@ namespace lfs::vis {
         const auto center = lfs::core::compute_selection_center(model, *mask);
         const int count = mask->ne(0).sum_scalar();
 
-        // Snapshot state for undo
+        // Snapshot state for undo (sh0 excluded - DC component is isotropic)
         auto old_means = std::make_shared<lfs::core::Tensor>(model.means_raw().clone());
         auto old_rotation = std::make_shared<lfs::core::Tensor>(model.rotation_raw().clone());
-        auto old_sh0 = std::make_shared<lfs::core::Tensor>(model.sh0_raw().clone());
         auto old_shN = model.shN_raw().is_valid()
                            ? std::make_shared<lfs::core::Tensor>(model.shN_raw().clone())
                            : nullptr;
@@ -2145,8 +2144,7 @@ namespace lfs::vis {
             cmd_history->execute(std::make_unique<command::MirrorCommand>(
                 this, target_node->name, axis, center,
                 std::make_shared<lfs::core::Tensor>(mask->clone()),
-                std::move(old_means), std::move(old_rotation),
-                std::move(old_sh0), std::move(old_shN)));
+                std::move(old_means), std::move(old_rotation), std::move(old_shN)));
         }
 
         scene_.invalidateCache();

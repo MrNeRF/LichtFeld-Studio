@@ -27,7 +27,6 @@ namespace lfs::vis::command {
                       std::shared_ptr<lfs::core::Tensor> selection_mask,
                       std::shared_ptr<lfs::core::Tensor> old_means,
                       std::shared_ptr<lfs::core::Tensor> old_rotation,
-                      std::shared_ptr<lfs::core::Tensor> old_sh0,
                       std::shared_ptr<lfs::core::Tensor> old_shN);
 
         void undo() override;
@@ -45,7 +44,6 @@ namespace lfs::vis::command {
         const std::shared_ptr<lfs::core::Tensor> selection_mask_;
         const std::shared_ptr<lfs::core::Tensor> old_means_;
         const std::shared_ptr<lfs::core::Tensor> old_rotation_;
-        const std::shared_ptr<lfs::core::Tensor> old_sh0_;
         const std::shared_ptr<lfs::core::Tensor> old_shN_;
     };
 
