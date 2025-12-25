@@ -1010,6 +1010,11 @@ namespace lfs::vis::gui::panels {
             }
             ImGui::TreePop();
         }
+
+        // Save dataset params if changed
+        if (can_edit && dataset_params_changed) {
+            trainer_manager->getEditableDatasetParams() = dataset_params;
+        }
     }
 
     void DrawTrainingParameters(const UIContext& ctx) {
@@ -1044,8 +1049,6 @@ namespace lfs::vis::gui::panels {
                 return;
             dataset_params = trainer->getParams().dataset;
         }
-
-        bool dataset_params_changed = false;
 
         bool has_masks = false;
         if (!dataset_params.data_path.empty()) {
@@ -1346,12 +1349,6 @@ namespace lfs::vis::gui::panels {
             }
         }
         ImGui::EndTable();
-
-        // Advanced Training Parameters section
-        ImGui::Spacing();
-        if (can_edit && dataset_params_changed) {
-            trainer_manager->getEditableDatasetParams() = dataset_params;
-        }
 
         ImGui::PopStyleVar();
     }
