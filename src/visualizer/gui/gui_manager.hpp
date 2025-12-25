@@ -230,13 +230,21 @@ namespace lfs::vis {
             void renderExportOverlay();
             void renderEmptyStateOverlay();
             void renderDragDropOverlay();
+            void renderStartupOverlay();
+
+            // Startup overlay state
+            bool show_startup_overlay_ = true;
+            unsigned int startup_logo_texture_ = 0;
+            unsigned int startup_core11_texture_ = 0;
+            int startup_logo_width_ = 0, startup_logo_height_ = 0;
+            int startup_core11_width_ = 0, startup_core11_height_ = 0;
             void startAsyncExport(lfs::core::ExportFormat format,
                                   const std::filesystem::path& path,
                                   std::unique_ptr<lfs::core::SplatData> data);
             void cancelExport();
             bool isExporting() const { return export_state_.active.load(); }
 
-            // Native drag-drop handler for visual feedback
+            // Native drag-drop handler
             NativeDragDrop drag_drop_;
             bool drag_drop_hovering_ = false;
         };

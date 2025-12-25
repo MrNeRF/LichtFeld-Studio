@@ -986,6 +986,9 @@ namespace lfs::vis {
     }
 
     void InputController::handleFileDrop(const std::vector<std::string>& paths) {
+        using namespace lfs::core::events;
+        ui::FileDropReceived{}.emit();
+
         std::vector<std::filesystem::path> splat_files;
         std::optional<std::filesystem::path> dataset_path;
 

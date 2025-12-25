@@ -361,6 +361,32 @@ namespace lfs::vis::gui {
 
         initMenuBar();
         menu_bar_->setFonts({font_regular_, font_bold_, font_heading_, font_small_, font_section_});
+
+        // Load startup overlay textures
+        const auto loadOverlayTexture = [](const std::filesystem::path& path, unsigned int& tex, int& w, int& h) {
+            try {
+                const auto [data, width, height, channels] = lfs::core::load_image_with_alpha(path);
+                glGenTextures(1, &tex);
+                glBindTexture(GL_TEXTURE_2D, tex);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
+                             channels == 4 ? GL_RGBA : GL_RGB, GL_UNSIGNED_BYTE, data);
+                lfs::core::free_image(data);
+                glBindTexture(GL_TEXTURE_2D, 0);
+                w = width;
+                h = height;
+            } catch (const std::exception& e) {
+                LOG_WARN("Failed to load overlay texture {}: {}", path.string(), e.what());
+            }
+        };
+        loadOverlayTexture(lfs::vis::getAssetPath("lichtfeld-splash-logo.png"),
+                           startup_logo_texture_, startup_logo_width_, startup_logo_height_);
+        loadOverlayTexture(lfs::vis::getAssetPath("core11-logo.png"),
+                           startup_core11_texture_, startup_core11_width_, startup_core11_height_);
+
         drag_drop_.init(viewer_->getWindow());
         drag_drop_.setFileDropCallback([this](const std::vector<std::string>& paths) {
             if (auto* const ic = viewer_->getInputController())
@@ -371,6 +397,11 @@ namespace lfs::vis::gui {
     void GuiManager::shutdown() {
         drag_drop_.shutdown();
         panels::ShutdownGizmoToolbar(gizmo_toolbar_state_);
+
+        if (startup_logo_texture_)
+            glDeleteTextures(1, &startup_logo_texture_);
+        if (startup_core11_texture_)
+            glDeleteTextures(1, &startup_core11_texture_);
 
         if (ImGui::GetCurrentContext()) {
             ImGui_ImplOpenGL3_Shutdown();
@@ -954,8 +985,8 @@ namespace lfs::vis::gui {
         // Render empty state welcome screen when no content loaded
         renderEmptyStateOverlay();
 
-        // Render drag-drop overlay when files are being dragged over the window
         renderDragDropOverlay();
+        renderStartupOverlay();
 
         if (save_directory_popup_) {
             save_directory_popup_->render(viewport_pos_, viewport_size_);
@@ -1562,6 +1593,10 @@ namespace lfs::vis::gui {
 
     void GuiManager::setupEventHandlers() {
         using namespace lfs::core::events;
+
+        ui::FileDropReceived::when([this](const auto&) {
+            show_startup_overlay_ = false;
+        });
 
         cmd::ShowWindow::when([this](const auto& e) {
             showWindow(e.window_name, e.show);
@@ -2541,6 +2576,112 @@ namespace lfs::vis::gui {
         if (font_small_)
             ImGui::PushFont(font_small_);
         draw_list->AddText({center_x - subtitle_size.x * 0.5f, center_y + 35.0f}, SUBTITLE_COLOR, SUBTITLE);
+        if (font_small_)
+            ImGui::PopFont();
+    }
+
+    void GuiManager::renderStartupOverlay() {
+        if (!show_startup_overlay_)
+            return;
+
+        // Dismiss on user interaction
+        const auto& io = ImGui::GetIO();
+        const bool modal_open = (save_directory_popup_ && save_directory_popup_->isOpen()) ||
+                                (exit_confirmation_popup_ && exit_confirmation_popup_->isOpen());
+        const bool mouse_action = ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                                  ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+                                  ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
+                                  std::abs(io.MouseWheel) > 0.0f || std::abs(io.MouseWheelH) > 0.0f;
+        const bool key_action = io.InputQueueCharacters.Size > 0 ||
+                                ImGui::IsKeyPressed(ImGuiKey_Escape) ||
+                                ImGui::IsKeyPressed(ImGuiKey_Space) ||
+                                ImGui::IsKeyPressed(ImGuiKey_Enter);
+
+        if (modal_open || drag_drop_hovering_ || mouse_action || key_action) {
+            show_startup_overlay_ = false;
+            return;
+        }
+
+        static constexpr float MIN_VIEWPORT_SIZE = 100.0f;
+        if (viewport_size_.x < MIN_VIEWPORT_SIZE || viewport_size_.y < MIN_VIEWPORT_SIZE)
+            return;
+
+        // Layout constants
+        static constexpr float MAIN_LOGO_SCALE = 1.3f;
+        static constexpr float CORE11_LOGO_SCALE = 0.5f;
+        static constexpr float CORNER_RADIUS = 12.0f;
+        static constexpr float PADDING_X = 40.0f;
+        static constexpr float PADDING_Y = 28.0f;
+        static constexpr float GAP_LOGO_TEXT = 20.0f;
+        static constexpr float GAP_TEXT_CORE11 = 10.0f;
+        static constexpr float GAP_CORE11_HINT = 16.0f;
+        static constexpr const char* SUPPORTED_TEXT = "Supported by";
+        static constexpr const char* CLICK_HINT = "Click anywhere to continue";
+
+        // Theme colors
+        const auto& t = theme();
+        const ImU32 BG_COLOR = toU32WithAlpha(t.palette.surface, 0.96f);
+        const ImU32 BORDER_COLOR = toU32WithAlpha(t.palette.border, 0.7f);
+        const ImU32 TEXT_COLOR = toU32WithAlpha(t.palette.text_dim, 0.85f);
+        const ImU32 HINT_COLOR = toU32WithAlpha(t.palette.text_dim, 0.5f);
+
+        // Logo dimensions
+        const float main_logo_w = static_cast<float>(startup_logo_width_) * MAIN_LOGO_SCALE;
+        const float main_logo_h = static_cast<float>(startup_logo_height_) * MAIN_LOGO_SCALE;
+        const float core11_w = static_cast<float>(startup_core11_width_) * CORE11_LOGO_SCALE;
+        const float core11_h = static_cast<float>(startup_core11_height_) * CORE11_LOGO_SCALE;
+
+        // Text sizes
+        if (font_small_)
+            ImGui::PushFont(font_small_);
+        const ImVec2 supported_size = ImGui::CalcTextSize(SUPPORTED_TEXT);
+        const ImVec2 hint_size = ImGui::CalcTextSize(CLICK_HINT);
+        if (font_small_)
+            ImGui::PopFont();
+
+        // Overlay dimensions
+        const float content_width = std::max({main_logo_w, core11_w, supported_size.x, hint_size.x});
+        const float content_height = main_logo_h + GAP_LOGO_TEXT + supported_size.y + GAP_TEXT_CORE11 +
+                                     core11_h + GAP_CORE11_HINT + hint_size.y;
+        const float overlay_width = content_width + PADDING_X * 2.0f;
+        const float overlay_height = content_height + PADDING_Y * 2.0f;
+
+        // Center in viewport
+        const float center_x = viewport_pos_.x + viewport_size_.x * 0.5f;
+        const float center_y = viewport_pos_.y + viewport_size_.y * 0.5f;
+        const ImVec2 overlay_min(center_x - overlay_width * 0.5f, center_y - overlay_height * 0.5f);
+        const ImVec2 overlay_max(center_x + overlay_width * 0.5f, center_y + overlay_height * 0.5f);
+
+        ImDrawList* const draw_list = ImGui::GetForegroundDrawList();
+        draw_list->AddRectFilled(overlay_min, overlay_max, BG_COLOR, CORNER_RADIUS);
+        draw_list->AddRect(overlay_min, overlay_max, BORDER_COLOR, CORNER_RADIUS, 0, 1.5f);
+
+        float y = overlay_min.y + PADDING_Y;
+
+        // Main logo
+        if (startup_logo_texture_ && startup_logo_width_ > 0) {
+            const float x = center_x - main_logo_w * 0.5f;
+            draw_list->AddImage(static_cast<ImTextureID>(startup_logo_texture_),
+                                {x, y}, {x + main_logo_w, y + main_logo_h});
+            y += main_logo_h + GAP_LOGO_TEXT;
+        }
+
+        // Supported by text
+        if (font_small_)
+            ImGui::PushFont(font_small_);
+        draw_list->AddText({center_x - supported_size.x * 0.5f, y}, TEXT_COLOR, SUPPORTED_TEXT);
+        y += supported_size.y + GAP_TEXT_CORE11;
+
+        // Core11 logo
+        if (startup_core11_texture_ && startup_core11_width_ > 0) {
+            const float x = center_x - core11_w * 0.5f;
+            draw_list->AddImage(static_cast<ImTextureID>(startup_core11_texture_),
+                                {x, y}, {x + core11_w, y + core11_h});
+            y += core11_h + GAP_CORE11_HINT;
+        }
+
+        // Dismiss hint
+        draw_list->AddText({center_x - hint_size.x * 0.5f, y}, HINT_COLOR, CLICK_HINT);
         if (font_small_)
             ImGui::PopFont();
     }
