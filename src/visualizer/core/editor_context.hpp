@@ -29,6 +29,7 @@ namespace lfs::vis {
         Translate,
         Rotate,
         Scale,
+        Mirror,
         Brush,
         Align,
         CropBox

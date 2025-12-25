@@ -7,7 +7,10 @@
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/services.hpp"
+#include "core/splat_data_mirror.hpp"
 #include "gui/panels/gizmo_toolbar.hpp"
+#include "scene/scene_manager.hpp"
 #include "gui/ui_widgets.hpp"
 #include "internal/resource_paths.hpp"
 #include "internal/viewport.hpp"
@@ -153,6 +156,10 @@ namespace lfs::vis::gui::panels {
         state.home_texture = LoadIconTexture("home.png");
         state.perspective_texture = LoadIconTexture("perspective.png");
         state.orthographic_texture = LoadIconTexture("box.png");
+        state.mirror_texture = LoadIconTexture("mirror.png");
+        state.mirror_x_texture = LoadIconTexture("mirror-x.png");
+        state.mirror_y_texture = LoadIconTexture("mirror-y.png");
+        state.mirror_z_texture = LoadIconTexture("mirror-z.png");
         state.initialized = true;
     }
 
@@ -212,6 +219,14 @@ namespace lfs::vis::gui::panels {
             glDeleteTextures(1, &state.perspective_texture);
         if (state.orthographic_texture)
             glDeleteTextures(1, &state.orthographic_texture);
+        if (state.mirror_texture)
+            glDeleteTextures(1, &state.mirror_texture);
+        if (state.mirror_x_texture)
+            glDeleteTextures(1, &state.mirror_x_texture);
+        if (state.mirror_y_texture)
+            glDeleteTextures(1, &state.mirror_y_texture);
+        if (state.mirror_z_texture)
+            glDeleteTextures(1, &state.mirror_z_texture);
 
         state.selection_texture = 0;
         state.rectangle_texture = 0;
@@ -231,6 +246,10 @@ namespace lfs::vis::gui::panels {
         state.hide_ui_texture = 0;
         state.fullscreen_texture = 0;
         state.exit_fullscreen_texture = 0;
+        state.mirror_texture = 0;
+        state.mirror_x_texture = 0;
+        state.mirror_y_texture = 0;
+        state.mirror_z_texture = 0;
         state.initialized = false;
     }
 
@@ -246,7 +265,7 @@ namespace lfs::vis::gui::panels {
 
         editor->validateActiveTool();
 
-        constexpr int NUM_MAIN_BUTTONS = 7;
+        constexpr int NUM_MAIN_BUTTONS = 8;
         constexpr float TOOLBAR_MARGIN_Y = 5.0f;
         const ImVec2 toolbar_size = ComputeToolbarSize(NUM_MAIN_BUTTONS);
         const float pos_x = viewport_pos.x + (viewport_size.x - toolbar_size.x) * 0.5f;
@@ -300,6 +319,8 @@ namespace lfs::vis::gui::panels {
                 ToolButton("##rotate", state.rotation_texture, ToolType::Rotate, ImGuizmo::ROTATE, "R", "Rotate");
                 ImGui::SameLine();
                 ToolButton("##scale", state.scaling_texture, ToolType::Scale, ImGuizmo::SCALE, "S", "Scale");
+                ImGui::SameLine();
+                ToolButton("##mirror", state.mirror_texture, ToolType::Mirror, ImGuizmo::TRANSLATE, "M", "Mirror");
                 ImGui::SameLine();
                 ToolButton("##brush", state.painting_texture, ToolType::Brush, ImGuizmo::TRANSLATE, "P", "Painting");
                 ImGui::SameLine();
@@ -440,6 +461,44 @@ namespace lfs::vis::gui::panels {
                     ImGui::SetTooltip("Reset to Default");
             }
             ImGui::End();
+        }
+
+        // Mirror axis sub-toolbar
+        if (active_tool == ToolType::Mirror) {
+            constexpr int NUM_MIRROR_BUTTONS = 3;
+            const ImVec2 sub_size = ComputeToolbarSize(NUM_MIRROR_BUTTONS);
+            const float sub_x = viewport_pos.x + (viewport_size.x - sub_size.x) * 0.5f;
+            const float sub_y = viewport_pos.y + toolbar_size.y + SUBTOOLBAR_OFFSET_Y;
+
+            widgets::DrawWindowShadow({sub_x, sub_y}, sub_size, theme().sizes.window_rounding);
+            ImGui::SetNextWindowPos(ImVec2(sub_x, sub_y), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(sub_size, ImGuiCond_Always);
+
+            {
+                const SubToolbarStyle style;
+                if (ImGui::Begin("##MirrorToolbar", nullptr, TOOLBAR_FLAGS)) {
+                    const auto& t = theme();
+                    const ImVec2 btn_size(t.sizes.toolbar_button_size, t.sizes.toolbar_button_size);
+
+                    const auto MirrorButton = [&](const char* id, const unsigned int tex,
+                                                  const lfs::core::MirrorAxis axis,
+                                                  const char* label) {
+                        if (widgets::IconButton(id, tex, btn_size, false, label)) {
+                            services().scene().executeMirror(axis);
+                        }
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("Mirror %s", label);
+                        }
+                    };
+
+                    MirrorButton("##mirror_x", state.mirror_x_texture, lfs::core::MirrorAxis::X, "X");
+                    ImGui::SameLine();
+                    MirrorButton("##mirror_y", state.mirror_y_texture, lfs::core::MirrorAxis::Y, "Y");
+                    ImGui::SameLine();
+                    MirrorButton("##mirror_z", state.mirror_z_texture, lfs::core::MirrorAxis::Z, "Z");
+                }
+                ImGui::End();
+            }
         }
     }
 

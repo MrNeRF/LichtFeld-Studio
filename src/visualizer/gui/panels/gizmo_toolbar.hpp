@@ -86,6 +86,12 @@ namespace lfs::vis::gui::panels {
         // Projection mode icons
         unsigned int perspective_texture = 0;
         unsigned int orthographic_texture = 0;
+
+        // Mirror tool icons
+        unsigned int mirror_texture = 0;
+        unsigned int mirror_x_texture = 0;
+        unsigned int mirror_y_texture = 0;
+        unsigned int mirror_z_texture = 0;
     };
 
     void InitGizmoToolbar(GizmoToolbarState& state);

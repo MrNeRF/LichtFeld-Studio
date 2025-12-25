@@ -7,6 +7,7 @@
 #include "core/events.hpp"
 #include "core/parameters.hpp"
 #include "core/services.hpp"
+#include "core/splat_data_mirror.hpp"
 #include "geometry/bounding_box.hpp"
 #include "scene/scene.hpp"
 #include "scene/scene_render_state.hpp"
@@ -183,6 +184,9 @@ namespace lfs::vis {
         bool copySelectedGaussians();
         std::vector<std::string> pasteGaussians();
         [[nodiscard]] bool hasGaussianClipboard() const { return gaussian_clipboard_ != nullptr; }
+
+        /// Mirror selected gaussians along specified axis
+        bool executeMirror(lfs::core::MirrorAxis axis);
 
     private:
         void setupEventHandlers();

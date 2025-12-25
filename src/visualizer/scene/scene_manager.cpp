@@ -5,6 +5,7 @@
 #include "scene/scene_manager.hpp"
 #include "command/command_history.hpp"
 #include "command/commands/crop_command.hpp"
+#include "command/commands/mirror_command.hpp"
 #include "core/logger.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/services.hpp"
@@ -2096,6 +2097,66 @@ namespace lfs::vis {
 
         LOG_INFO("Pasted {} Gaussians as '{}'", count, name);
         return {name};
+    }
+
+    bool SceneManager::executeMirror(const lfs::core::MirrorAxis axis) {
+        // Find single visible SPLAT node
+        Scene::Node* target_node = nullptr;
+        for (const auto* node : scene_.getNodes()) {
+            if (node->type == NodeType::SPLAT && scene_.isNodeEffectivelyVisible(node->id) && node->model) {
+                if (target_node) {
+                    LOG_WARN("Mirror requires exactly one visible SPLAT node");
+                    return false;
+                }
+                target_node = scene_.getMutableNode(node->name);
+            }
+        }
+
+        if (!target_node || !target_node->model || target_node->model->size() == 0) {
+            LOG_WARN("Mirror: no valid SPLAT node found");
+            return false;
+        }
+
+        auto& model = *target_node->model;
+
+        // Get or create selection mask (select all if no selection)
+        auto mask = scene_.getSelectionMask();
+        const bool has_selection = mask && mask->is_valid() && mask->ne(0).sum_scalar() > 0;
+
+        if (!has_selection) {
+            mask = std::make_shared<lfs::core::Tensor>(
+                lfs::core::Tensor::ones({model.size()}, model.means().device(), lfs::core::DataType::UInt8));
+        }
+
+        const auto center = lfs::core::compute_selection_center(model, *mask);
+        const int count = mask->ne(0).sum_scalar();
+
+        // Snapshot state for undo
+        auto old_means = std::make_shared<lfs::core::Tensor>(model.means_raw().clone());
+        auto old_rotation = std::make_shared<lfs::core::Tensor>(model.rotation_raw().clone());
+        auto old_sh0 = std::make_shared<lfs::core::Tensor>(model.sh0_raw().clone());
+        auto old_shN = model.shN_raw().is_valid()
+            ? std::make_shared<lfs::core::Tensor>(model.shN_raw().clone())
+            : nullptr;
+
+        lfs::core::mirror_gaussians(model, *mask, axis, center);
+
+        if (auto* cmd_history = getCommandHistory()) {
+            cmd_history->execute(std::make_unique<command::MirrorCommand>(
+                this, target_node->name, axis, center,
+                std::make_shared<lfs::core::Tensor>(mask->clone()),
+                std::move(old_means), std::move(old_rotation),
+                std::move(old_sh0), std::move(old_shN)));
+        }
+
+        scene_.invalidateCache();
+        if (auto* rendering = services().renderingOrNull()) {
+            rendering->markDirty();
+        }
+
+        constexpr const char* AXIS_NAMES[] = {"X", "Y", "Z"};
+        LOG_INFO("Mirrored {} gaussians along {} axis", count, AXIS_NAMES[static_cast<int>(axis)]);
+        return true;
     }
 
     std::vector<std::string> SceneManager::pasteNodes() {

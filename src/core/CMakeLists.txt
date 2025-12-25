@@ -23,6 +23,7 @@ set(CORE_SOURCES
         parameters.cpp
         splat_data.cpp
         splat_data_export.cpp
+        splat_data_mirror.cpp
         splat_data_transform.cpp
         sogs.cpp
         tensor_debug.cpp

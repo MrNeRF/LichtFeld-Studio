@@ -78,6 +78,7 @@ namespace lfs::vis {
             return true;
         case ToolType::Selection:
         case ToolType::Brush:
+        case ToolType::Mirror:
             return has_gaussians_;
         case ToolType::Translate:
         case ToolType::Rotate:
@@ -102,6 +103,7 @@ namespace lfs::vis {
             return nullptr;
         case ToolType::Selection:
         case ToolType::Brush:
+        case ToolType::Mirror:
             return has_gaussians_ ? nullptr : "no gaussians";
         case ToolType::Translate:
         case ToolType::Rotate:
