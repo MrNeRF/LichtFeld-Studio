@@ -5,6 +5,7 @@
 #include "scene/scene_manager.hpp"
 #include "command/command_history.hpp"
 #include "command/commands/crop_command.hpp"
+#include "command/commands/composite_command.hpp"
 #include "command/commands/mirror_command.hpp"
 #include "core/logger.hpp"
 #include "core/parameter_manager.hpp"
@@ -2100,51 +2101,56 @@ namespace lfs::vis {
     }
 
     bool SceneManager::executeMirror(const lfs::core::MirrorAxis axis) {
-        // Find single visible SPLAT node
-        Scene::Node* target_node = nullptr;
-        for (const auto* node : scene_.getNodes()) {
-            if (node->type == NodeType::SPLAT && scene_.isNodeEffectivelyVisible(node->id) && node->model) {
-                if (target_node) {
-                    LOG_WARN("Mirror requires exactly one visible SPLAT node");
-                    return false;
-                }
-                target_node = scene_.getMutableNode(node->name);
+        std::vector<Scene::Node*> nodes;
+        nodes.reserve(selected_nodes_.size());
+        for (const auto& name : selected_nodes_) {
+            if (auto* n = scene_.getMutableNode(name); n && n->type == NodeType::SPLAT && n->model) {
+                nodes.push_back(n);
             }
         }
 
-        if (!target_node || !target_node->model || target_node->model->size() == 0) {
-            LOG_WARN("Mirror: no valid SPLAT node found");
+        if (nodes.empty()) {
+            LOG_WARN("Mirror: no SPLAT nodes selected");
             return false;
         }
 
-        auto& model = *target_node->model;
+        // Cache selection mask count to avoid redundant GPU->CPU syncs
+        const auto scene_mask = scene_.getSelectionMask();
+        const size_t selection_count =
+            (scene_mask && scene_mask->is_valid()) ? static_cast<size_t>(scene_mask->ne(0).sum_scalar()) : 0;
+        const bool use_selection = selection_count > 0 && nodes.size() == 1 &&
+                                   static_cast<size_t>(scene_mask->size(0)) == nodes[0]->model->size();
 
-        // Get or create selection mask (select all if no selection)
-        auto mask = scene_.getSelectionMask();
-        const bool has_selection = mask && mask->is_valid() && mask->ne(0).sum_scalar() > 0;
+        auto composite_cmd = std::make_unique<command::CompositeCommand>();
+        size_t total_count = 0;
 
-        if (!has_selection) {
-            mask = std::make_shared<lfs::core::Tensor>(
-                lfs::core::Tensor::ones({model.size()}, model.means().device(), lfs::core::DataType::UInt8));
+        for (auto* node : nodes) {
+            auto& model = *node->model;
+            const size_t count = use_selection ? selection_count : model.size();
+            total_count += count;
+
+            auto mask = use_selection
+                            ? scene_mask
+                            : std::make_shared<lfs::core::Tensor>(lfs::core::Tensor::ones(
+                                  {model.size()}, model.means().device(), lfs::core::DataType::UInt8));
+
+            const auto center = lfs::core::compute_selection_center(model, *mask);
+
+            // Snapshot for undo (sh0 excluded - DC component is isotropic)
+            auto old_means = std::make_shared<lfs::core::Tensor>(model.means_raw().clone());
+            auto old_rotation = std::make_shared<lfs::core::Tensor>(model.rotation_raw().clone());
+            auto old_shN =
+                model.shN_raw().is_valid() ? std::make_shared<lfs::core::Tensor>(model.shN_raw().clone()) : nullptr;
+
+            lfs::core::mirror_gaussians(model, *mask, axis, center);
+
+            composite_cmd->add(std::make_unique<command::MirrorCommand>(
+                this, node->name, axis, center, std::make_shared<lfs::core::Tensor>(mask->clone()),
+                std::move(old_means), std::move(old_rotation), std::move(old_shN)));
         }
 
-        const auto center = lfs::core::compute_selection_center(model, *mask);
-        const int count = mask->ne(0).sum_scalar();
-
-        // Snapshot state for undo (sh0 excluded - DC component is isotropic)
-        auto old_means = std::make_shared<lfs::core::Tensor>(model.means_raw().clone());
-        auto old_rotation = std::make_shared<lfs::core::Tensor>(model.rotation_raw().clone());
-        auto old_shN = model.shN_raw().is_valid()
-                           ? std::make_shared<lfs::core::Tensor>(model.shN_raw().clone())
-                           : nullptr;
-
-        lfs::core::mirror_gaussians(model, *mask, axis, center);
-
-        if (auto* cmd_history = getCommandHistory()) {
-            cmd_history->execute(std::make_unique<command::MirrorCommand>(
-                this, target_node->name, axis, center,
-                std::make_shared<lfs::core::Tensor>(mask->clone()),
-                std::move(old_means), std::move(old_rotation), std::move(old_shN)));
+        if (auto* history = getCommandHistory(); !composite_cmd->empty()) {
+            history->execute(std::move(composite_cmd));
         }
 
         scene_.invalidateCache();
@@ -2152,8 +2158,9 @@ namespace lfs::vis {
             rendering->markDirty();
         }
 
-        constexpr const char* AXIS_NAMES[] = {"X", "Y", "Z"};
-        LOG_INFO("Mirrored {} gaussians along {} axis", count, AXIS_NAMES[static_cast<int>(axis)]);
+        static constexpr const char* AXIS_NAMES[] = {"X", "Y", "Z"};
+        LOG_INFO("Mirrored {} gaussians ({} nodes) along {} axis", total_count, nodes.size(),
+                 AXIS_NAMES[static_cast<int>(axis)]);
         return true;
     }
 
