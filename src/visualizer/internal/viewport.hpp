@@ -245,36 +245,44 @@ class Viewport {
         }
 
     private:
-        void applyRotationAroundCenter(float yaw, float pitch) {
-            // Rotate around the pivot point
-            // Use world Y-axis for yaw rotation to maintain height
-            // and camera's local right axis for pitch
-            glm::vec3 worldUp(0.0f, 1.0f, 0.0f);
+        void applyRotationAroundCenter(const float yaw, const float pitch) {
+            constexpr glm::vec3 WORLD_UP(0.0f, 1.0f, 0.0f);
+            constexpr float MAX_VERTICAL_DOT = 0.98f;
+            constexpr float HORIZONTAL_COMPONENT = 0.19899749f; // sqrt(1 - 0.98^2)
 
-            // Yaw rotation around world Y-axis
-            glm::mat3 Ry = glm::mat3(glm::rotate(glm::mat4(1.0f), yaw, worldUp));
+            // Apply yaw (world Y) and pitch (local right)
+            const glm::mat3 Ry = glm::mat3(glm::rotate(glm::mat4(1.0f), yaw, WORLD_UP));
+            const glm::mat3 Rp = glm::mat3(glm::rotate(glm::mat4(1.0f), pitch, R[0]));
+            const glm::mat3 U = Rp * Ry;
 
-            // Pitch rotation around camera's local right axis
-            glm::mat3 Rp = glm::mat3(glm::rotate(glm::mat4(1.0f), pitch, R[0]));
-
-            // Apply rotations: first yaw (around world), then pitch (around local)
-            // This order maintains the horizon level during pure horizontal orbiting
-            glm::mat3 U = Rp * Ry;
-
-            // Transform position relative to pivot
-            glm::vec3 relative_pos = t - pivot;
-            relative_pos = U * relative_pos;
-            t = pivot + relative_pos;
-
-            // Transform orientation
+            // Transform position and orientation
+            const float dist = glm::length(t - pivot);
+            t = pivot + U * (t - pivot);
             R = U * R;
 
-            // Re-orthogonalize to prevent roll accumulation from numerical drift
+            // Clamp forward to prevent gimbal lock
             glm::vec3 forward = glm::normalize(R[2]);
-            glm::vec3 right = glm::normalize(glm::cross(worldUp, forward));
-            glm::vec3 up = glm::normalize(glm::cross(forward, right));
+            const float upDot = glm::dot(forward, WORLD_UP);
+
+            if (std::abs(upDot) > MAX_VERTICAL_DOT) {
+                const glm::vec3 horizontal = forward - WORLD_UP * upDot;
+                const float horizLen = glm::length(horizontal);
+
+                if (horizLen > 1e-4f) {
+                    const float sign = upDot > 0.0f ? 1.0f : -1.0f;
+                    forward = (horizontal / horizLen) * HORIZONTAL_COMPONENT + WORLD_UP * (sign * MAX_VERTICAL_DOT);
+                    t = pivot - forward * dist;
+                }
+            }
+
+            // Re-orthogonalize to prevent roll drift
+            glm::vec3 right = glm::cross(WORLD_UP, forward);
+            const float rightLen = glm::length(right);
+            right = (rightLen > 1e-2f) ? right / rightLen
+                                       : glm::normalize(R[0] - forward * glm::dot(R[0], forward));
+
             R[0] = right;
-            R[1] = up;
+            R[1] = glm::cross(forward, right);
             R[2] = forward;
         }
     };
