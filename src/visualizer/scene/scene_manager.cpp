@@ -2136,8 +2136,8 @@ namespace lfs::vis {
         auto old_rotation = std::make_shared<lfs::core::Tensor>(model.rotation_raw().clone());
         auto old_sh0 = std::make_shared<lfs::core::Tensor>(model.sh0_raw().clone());
         auto old_shN = model.shN_raw().is_valid()
-            ? std::make_shared<lfs::core::Tensor>(model.shN_raw().clone())
-            : nullptr;
+                           ? std::make_shared<lfs::core::Tensor>(model.shN_raw().clone())
+                           : nullptr;
 
         lfs::core::mirror_gaussians(model, *mask, axis, center);
 

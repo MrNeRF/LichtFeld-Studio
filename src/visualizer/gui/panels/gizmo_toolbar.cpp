@@ -10,11 +10,11 @@
 #include "core/services.hpp"
 #include "core/splat_data_mirror.hpp"
 #include "gui/panels/gizmo_toolbar.hpp"
-#include "scene/scene_manager.hpp"
 #include "gui/ui_widgets.hpp"
 #include "internal/resource_paths.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_manager.hpp"
+#include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
 #include <imgui.h>
 
