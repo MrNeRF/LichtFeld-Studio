@@ -483,6 +483,9 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-splash-loading.png"
         "${RESOURCE_DIR}/assets/"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/core11-logo.png"
+        "${RESOURCE_DIR}/assets/"
     COMMENT "Copying application assets"
 )
 
@@ -619,6 +622,7 @@ install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/themes" DESTINA
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-icon.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-splash-logo.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-splash-loading.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
+install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/core11-logo.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/parameter" DESTINATION "${INSTALL_RESOURCE_DIR}")
 
 if(TARGET nvimgcodec)
