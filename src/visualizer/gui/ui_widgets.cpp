@@ -253,9 +253,17 @@ namespace lfs::vis::gui::widgets {
         constexpr float TINT_BASE = 0.7f;
         constexpr float TINT_ACCENT = 0.3f;
         constexpr float FALLBACK_PADDING = 8.0f;
-        constexpr ImVec4 TINT_NORMAL = {1.0f, 1.0f, 1.0f, 0.9f};
 
         const auto& t = theme();
+        
+        // Calculate background brightness to detect light themes
+        const float bg_brightness = (t.palette.background.x + t.palette.background.y + t.palette.background.z) / 3.0f;
+        
+        // Use darker tint for light themes, lighter tint for dark themes
+        const ImVec4 TINT_NORMAL = bg_brightness > 0.5f 
+            ? ImVec4{0.2f, 0.2f, 0.2f, 0.9f}  // Dark tint for light themes
+            : ImVec4{1.0f, 1.0f, 1.0f, 0.9f}; // Light tint for dark themes
+
         const ImVec4 bg_normal = selected ? t.button_selected() : t.button_normal();
         const ImVec4 bg_hovered = selected ? t.button_selected_hovered() : t.button_hovered();
         const ImVec4 bg_active = selected ? darken(t.button_selected(), ACTIVE_DARKEN) : t.button_active();
