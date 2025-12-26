@@ -243,7 +243,7 @@ namespace Scene {
     inline constexpr const char* ADD_GROUP = "scene.add_group";
     inline constexpr const char* ADD_GROUP_ELLIPSIS = "scene.add_group_ellipsis";
     inline constexpr const char* EXPORT = "scene.export";
-    inline constexpr const char* DELETE = "scene.delete";
+    inline constexpr const char* DELETE_ITEM = "scene.delete";
     inline constexpr const char* RENAME = "scene.rename";
     inline constexpr const char* DUPLICATE = "scene.duplicate";
     inline constexpr const char* GO_TO_CAMERA_VIEW = "scene.go_to_camera_view";
@@ -296,7 +296,7 @@ namespace Common {
     inline constexpr const char* LOAD = "common.load";
     inline constexpr const char* ADD = "common.add";
     inline constexpr const char* REMOVE = "common.remove";
-    inline constexpr const char* DELETE = "common.delete";
+    inline constexpr const char* DELETE_ITEM = "common.delete";
     inline constexpr const char* EDIT = "common.edit";
     inline constexpr const char* BROWSE = "common.browse";
     inline constexpr const char* APPLY = "common.apply";
@@ -310,7 +310,7 @@ namespace Status {
     inline constexpr const char* STOPPED = "status.stopped";
     inline constexpr const char* STOPPING = "status.stopping";
     inline constexpr const char* COMPLETE = "status.complete";
-    inline constexpr const char* ERROR = "status.error";
+    inline constexpr const char* ERROR_STATE = "status.error";
     inline constexpr const char* LOADING = "status.loading";
     inline constexpr const char* EMPTY = "status.empty";
     inline constexpr const char* MODE = "status.mode";
@@ -536,7 +536,7 @@ namespace FileBrowserExt {
     inline constexpr const char* NOT_A_DATASET = "file_browser_ext.not_a_dataset";
     inline constexpr const char* SOG_DIRECTORY = "file_browser_ext.sog_directory";
     inline constexpr const char* SOG_META = "file_browser_ext.sog_meta";
-    inline constexpr const char* ERROR = "file_browser_ext.error";
+    inline constexpr const char* ERROR_MSG = "file_browser_ext.error";
 }
 
 namespace Progress {

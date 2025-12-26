@@ -478,7 +478,7 @@ namespace lfs::vis::gui::panels {
                         }
                         scene.clearSelectionGroup(group.id);
                     }
-                    if (ImGui::MenuItem(LOC(Common::DELETE))) {
+                    if (ImGui::MenuItem(LOC(Common::DELETE_ITEM))) {
                         if (is_active && selection_tool->hasActivePolygon()) {
                             selection_tool->clearPolygon();
                         }

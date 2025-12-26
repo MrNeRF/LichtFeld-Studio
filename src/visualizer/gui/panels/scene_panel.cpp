@@ -633,7 +633,7 @@ namespace lfs::vis::gui {
                 }
 
                 if (is_dataset) {
-                    if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::DELETE), nullptr, false, !is_training_protected)) {
+                    if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::DELETE_ITEM), nullptr, false, !is_training_protected)) {
                         cmd::RemovePLY{.name = node.name, .keep_children = false}.emit();
                     }
                     showDisabledDeleteTooltip(is_training_protected);
@@ -694,7 +694,7 @@ namespace lfs::vis::gui {
                 }
 
                 ImGui::Separator();
-                if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::DELETE), nullptr, false, !is_training_protected)) {
+                if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::DELETE_ITEM), nullptr, false, !is_training_protected)) {
                     cmd::RemovePLY{.name = node.name, .keep_children = false}.emit();
                 }
                 showDisabledDeleteTooltip(is_training_protected);

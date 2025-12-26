@@ -85,7 +85,7 @@ namespace lfs::vis::gui {
                     }
                 }
             } catch (const std::filesystem::filesystem_error& e) {
-                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s %s", LOC(FileBrowserExt::ERROR), e.what());
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s %s", LOC(FileBrowserExt::ERROR_MSG), e.what());
             }
 
             std::sort(dirs.begin(), dirs.end(), [](const auto& a, const auto& b) {
