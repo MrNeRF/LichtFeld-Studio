@@ -25,6 +25,7 @@ add_library(lfs_visualizer STATIC
         gui/gui_manager.cpp
         gui/html_viewer_export.cpp
         gui/ui_widgets.cpp
+        gui/localization_manager.cpp
         gui/panels/main_panel.cpp
         gui/panels/training_panel.cpp
         gui/panels/crop_box_panel.cpp
@@ -157,12 +158,21 @@ foreach (ICON_FILE ${ICON_FILES})
     configure_file(${ICON_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/${ICON_NAME}" COPYONLY)
 endforeach ()
 
+# Copy locale files
+file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/locales")
+file(GLOB LOCALE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locales/*.json")
+foreach (LOCALE_FILE ${LOCALE_FILES})
+    get_filename_component(LOCALE_NAME ${LOCALE_FILE} NAME)
+    configure_file(${LOCALE_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/locales/${LOCALE_NAME}" COPYONLY)
+endforeach ()
+
 # Compile definitions
 target_compile_definitions(lfs_visualizer PRIVATE
         $<$<BOOL:${CUDA_GL_INTEROP_ENABLED}>:CUDA_GL_INTEROP_ENABLED>
         PROJECT_ROOT_PATH="${PROJECT_SOURCE_DIR}"
         VISUALIZER_SHADER_PATH="${VISUALIZER_BUILD_RESOURCE_DIR}/shaders"
         VISUALIZER_ASSET_PATH="${VISUALIZER_BUILD_RESOURCE_DIR}/assets"
+        VISUALIZER_LOCALE_PATH="${VISUALIZER_BUILD_RESOURCE_DIR}/locales"
         VISUALIZER_SOURCE_SHADER_PATH="${VISUALIZER_SOURCE_RESOURCE_DIR}/shaders"
         VISUALIZER_SOURCE_ASSET_PATH="${VISUALIZER_SOURCE_RESOURCE_DIR}/assets"
         $<$<CONFIG:Debug>:DEBUG_BUILD>
@@ -198,6 +208,13 @@ install(DIRECTORY ${VISUALIZER_SOURCE_RESOURCE_DIR}/
         PATTERN "*.vert"
         PATTERN "*.frag"
         PATTERN "*.ttf"
+)
+
+# Install locale files
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locales/
+        DESTINATION share/LichtFeld-Studio/locales
+        FILES_MATCHING
+        PATTERN "*.json"
 )
 
 # Add custom target for resource files (makes them show up in IDEs)

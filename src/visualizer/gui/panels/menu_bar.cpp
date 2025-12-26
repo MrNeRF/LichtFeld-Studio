@@ -11,8 +11,12 @@
 #ifdef WIN32
 #include <winsock2.h>
 #endif
+#include "gui/localization_manager.hpp"
+#include "gui/string_keys.hpp"
 #include "gui/utils/windows_utils.hpp"
 #include "theme/theme.hpp"
+
+using namespace lichtfeld::Strings;
 
 #include <GLFW/glfw3.h>
 #include <glad/glad.h>
@@ -133,7 +137,7 @@ namespace lfs::vis::gui {
                 toU32(withAlpha(t.palette.text, 0.6f)));
 
             if (thumb.state == Thumbnail::State::LOADING)
-                dl->AddText({cursor.x + 4, cursor.y + CARD_HEIGHT - 16}, toU32(t.palette.text_dim), "Loading...");
+                dl->AddText({cursor.x + 4, cursor.y + CARD_HEIGHT - 16}, toU32(t.palette.text_dim), LOC("getting_started.loading"));
         }
 
         dl->AddText({cursor.x + 4, cursor.y + CARD_HEIGHT + 4.0f}, toU32(t.palette.text), title);
@@ -159,68 +163,83 @@ namespace lfs::vis::gui {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, t.menu.item_spacing);
 
         if (ImGui::BeginMainMenuBar()) {
-            if (ImGui::BeginMenu("File")) {
+            if (ImGui::BeginMenu(LOC(Menu::File::MENU))) {
                 const bool can_clear = !can_clear_ || can_clear_();
-                if (ImGui::MenuItem("New Project", nullptr, false, can_clear) && on_new_project_) {
+                if (ImGui::MenuItem(LOC(Menu::File::NEW_PROJECT), nullptr, false, can_clear) && on_new_project_) {
                     on_new_project_();
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Import Dataset") && on_import_dataset_) {
+                if (ImGui::MenuItem(LOC(Menu::File::IMPORT_DATASET)) && on_import_dataset_) {
                     on_import_dataset_();
                 }
-                if (ImGui::MenuItem("Import Ply") && on_import_ply_) {
+                if (ImGui::MenuItem(LOC(Menu::File::IMPORT_PLY)) && on_import_ply_) {
                     on_import_ply_();
                 }
-                if (ImGui::MenuItem("Import Checkpoint") && on_import_checkpoint_) {
+                if (ImGui::MenuItem(LOC(Menu::File::IMPORT_CHECKPOINT)) && on_import_checkpoint_) {
                     on_import_checkpoint_();
                 }
-                if (ImGui::MenuItem("Import Config") && on_import_config_) {
+                if (ImGui::MenuItem(LOC(Menu::File::IMPORT_CONFIG)) && on_import_config_) {
                     on_import_config_();
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Export...") && on_export_) {
+                if (ImGui::MenuItem(LOC(Menu::File::EXPORT)) && on_export_) {
                     on_export_();
                 }
-                if (ImGui::MenuItem("Export Config...") && on_export_config_) {
+                if (ImGui::MenuItem(LOC(Menu::File::EXPORT_CONFIG)) && on_export_config_) {
                     on_export_config_();
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Exit") && on_exit_) {
+                if (ImGui::MenuItem(LOC(Menu::File::EXIT)) && on_exit_) {
                     on_exit_();
                 }
                 ImGui::EndMenu();
             }
 
-            if (ImGui::BeginMenu("Edit")) {
-                if (ImGui::MenuItem("Input Settings...")) {
+            if (ImGui::BeginMenu(LOC(Menu::Edit::MENU))) {
+                if (ImGui::MenuItem(LOC(Menu::Edit::INPUT_SETTINGS))) {
                     show_input_settings_ = true;
+                }
+                ImGui::Separator();
+                if (ImGui::BeginMenu(LOC(Preferences::LANGUAGE))) {
+                    auto& loc = lichtfeld::LocalizationManager::getInstance();
+                    const auto& current_lang = loc.getCurrentLanguage();
+                    const auto available_langs = loc.getAvailableLanguages();
+                    const auto lang_names = loc.getAvailableLanguageNames();
+
+                    for (size_t i = 0; i < available_langs.size(); ++i) {
+                        const bool is_selected = (available_langs[i] == current_lang);
+                        if (ImGui::MenuItem(lang_names[i].c_str(), nullptr, is_selected)) {
+                            loc.setLanguage(available_langs[i]);
+                        }
+                    }
+                    ImGui::EndMenu();
                 }
                 ImGui::EndMenu();
             }
 
-            if (ImGui::BeginMenu("View")) {
-                if (ImGui::BeginMenu("Theme")) {
+            if (ImGui::BeginMenu(LOC(Menu::View::MENU))) {
+                if (ImGui::BeginMenu(LOC(Menu::View::THEME))) {
                     const bool is_dark = (theme().name == "Dark");
-                    if (ImGui::MenuItem("Dark", nullptr, is_dark)) {
+                    if (ImGui::MenuItem(LOC(Menu::View::THEME_DARK), nullptr, is_dark)) {
                         setTheme(darkTheme());
                     }
-                    if (ImGui::MenuItem("Light", nullptr, !is_dark)) {
+                    if (ImGui::MenuItem(LOC(Menu::View::THEME_LIGHT), nullptr, !is_dark)) {
                         setTheme(lightTheme());
                     }
                     ImGui::EndMenu();
                 }
                 ImGui::Separator();
-                if (ImGui::MenuItem("Debug Info...")) {
+                if (ImGui::MenuItem(LOC(Menu::View::DEBUG_INFO))) {
                     show_debug_window_ = true;
                 }
                 ImGui::EndMenu();
             }
 
-            if (ImGui::BeginMenu("Help")) {
-                if (ImGui::MenuItem("Getting Started")) {
+            if (ImGui::BeginMenu(LOC(Menu::Help::MENU))) {
+                if (ImGui::MenuItem(LOC(Menu::Help::GETTING_STARTED))) {
                     show_getting_started_ = true;
                 }
-                if (ImGui::MenuItem("About LichtFeld Studio")) {
+                if (ImGui::MenuItem(LOC(Menu::Help::ABOUT))) {
                     show_about_window_ = true;
                 }
                 ImGui::EndMenu();
@@ -276,27 +295,27 @@ namespace lfs::vis::gui {
         ImGui::PushStyleColor(ImGuiCol_TitleBgActive, t.palette.surface_bright);
         ImGui::PushStyleColor(ImGuiCol_Border, withAlpha(t.palette.info, 0.3f));
 
-        if (ImGui::Begin("Getting Started", &show_getting_started_, WINDOW_FLAGS)) {
+        if (ImGui::Begin(LOC("window.getting_started"), &show_getting_started_, WINDOW_FLAGS)) {
             updateThumbnails();
 
             if (fonts_.heading)
                 ImGui::PushFont(fonts_.heading);
-            ImGui::TextColored(t.palette.info, "QUICK START GUIDE");
+            ImGui::TextColored(t.palette.info, LOC("getting_started.title"));
             if (fonts_.heading)
                 ImGui::PopFont();
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
 
-            ImGui::TextWrapped("Learn how to prepare datasets and get started with LichtFeld Studio:");
+            ImGui::TextWrapped("%s", LOC("getting_started.description"));
             ImGui::Spacing();
             ImGui::Spacing();
 
-            renderVideoCard("Reality Scan Dataset", "JWmkhTlbDvg", "https://www.youtube.com/watch?v=JWmkhTlbDvg");
+            renderVideoCard(LOC("getting_started.video_reality_scan"), "JWmkhTlbDvg", "https://www.youtube.com/watch?v=JWmkhTlbDvg");
             ImGui::SameLine(0.0f, VIDEO_SPACING);
-            renderVideoCard("COLMAP Tutorial", "-3TBbukYN00", "https://www.youtube.com/watch?v=-3TBbukYN00");
+            renderVideoCard(LOC("getting_started.video_colmap"), "-3TBbukYN00", "https://www.youtube.com/watch?v=-3TBbukYN00");
             ImGui::SameLine(0.0f, VIDEO_SPACING);
-            renderVideoCard("LichtFeld Tutorial", "aX8MTlr9Ypc", "https://www.youtube.com/watch?v=aX8MTlr9Ypc");
+            renderVideoCard(LOC("getting_started.video_lichtfeld"), "aX8MTlr9Ypc", "https://www.youtube.com/watch?v=aX8MTlr9Ypc");
 
             ImGui::Spacing();
             ImGui::Spacing();
@@ -305,7 +324,7 @@ namespace lfs::vis::gui {
 
             if (fonts_.section)
                 ImGui::PushFont(fonts_.section);
-            ImGui::TextColored(t.palette.text_dim, "WIKI & FAQ");
+            ImGui::TextColored(t.palette.text_dim, LOC("getting_started.wiki_section"));
             if (fonts_.section)
                 ImGui::PopFont();
             ImGui::Spacing();
@@ -352,26 +371,24 @@ namespace lfs::vis::gui {
         static constexpr const char* REPO_URL = "https://github.com/MrNeRF/LichtFeld-Studio";
         static constexpr const char* WEBSITE_URL = "https://lichtfeld.io";
 
-        if (ImGui::Begin("About LichtFeld Studio", &show_about_window_, WINDOW_FLAGS)) {
+        if (ImGui::Begin(LOC("window.about"), &show_about_window_, WINDOW_FLAGS)) {
             if (fonts_.heading)
                 ImGui::PushFont(fonts_.heading);
-            ImGui::TextColored(t.palette.info, "LICHTFELD STUDIO");
+            ImGui::TextColored(t.palette.info, LOC("about.title"));
             if (fonts_.heading)
                 ImGui::PopFont();
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
 
-            ImGui::TextWrapped(
-                "A high-performance C++ and CUDA implementation of 3D Gaussian Splatting for "
-                "real-time neural rendering, training, and visualization.");
+            ImGui::TextWrapped("%s", LOC("about.description"));
 
             ImGui::Spacing();
             ImGui::Spacing();
 
             if (fonts_.section)
                 ImGui::PushFont(fonts_.section);
-            ImGui::TextColored(t.palette.text_dim, "BUILD INFORMATION");
+            ImGui::TextColored(t.palette.text_dim, LOC("about.build_info"));
             if (fonts_.section)
                 ImGui::PopFont();
             ImGui::Spacing();
@@ -385,7 +402,7 @@ namespace lfs::vis::gui {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::TextColored(LABEL_COLOR, "Version");
+                ImGui::TextColored(LABEL_COLOR, LOC("about.build_info.version"));
                 ImGui::TableNextColumn();
                 ImGui::TextWrapped("%s", GIT_TAGGED_VERSION);
                 if (ImGui::IsItemHovered()) {
@@ -397,7 +414,7 @@ namespace lfs::vis::gui {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::TextColored(LABEL_COLOR, "Commit");
+                ImGui::TextColored(LABEL_COLOR, LOC("about.build_info.commit"));
                 ImGui::TableNextColumn();
                 ImGui::Text("%s", GIT_COMMIT_HASH_SHORT);
                 if (ImGui::IsItemHovered()) {
@@ -409,34 +426,34 @@ namespace lfs::vis::gui {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::TextColored(LABEL_COLOR, "Build Type");
+                ImGui::TextColored(LABEL_COLOR, LOC("about.build_info.build_type"));
                 ImGui::TableNextColumn();
 #ifdef DEBUG_BUILD
-                ImGui::Text("Debug");
+                ImGui::Text("%s", LOC("about.build_type.debug"));
 #else
-                ImGui::Text("Release");
+                ImGui::Text("%s", LOC("about.build_type.release"));
 #endif
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::TextColored(LABEL_COLOR, "Platform");
+                ImGui::TextColored(LABEL_COLOR, LOC("about.build_info.platform"));
                 ImGui::TableNextColumn();
 #ifdef PLATFORM_WINDOWS
-                ImGui::Text("Windows");
+                ImGui::Text("%s", LOC("about.platform.windows"));
 #elif defined(PLATFORM_LINUX)
-                ImGui::Text("Linux");
+                ImGui::Text("%s", LOC("about.platform.linux"));
 #else
-                ImGui::Text("Unknown");
+                ImGui::Text("%s", LOC("about.platform.unknown"));
 #endif
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::TextColored(LABEL_COLOR, "CUDA-GL Interop");
+                ImGui::TextColored(LABEL_COLOR, LOC("about.build_info.cuda_gl_interop"));
                 ImGui::TableNextColumn();
 #ifdef CUDA_GL_INTEROP_ENABLED
-                ImGui::Text("Enabled");
+                ImGui::Text("%s", LOC("about.interop.enabled"));
 #else
-                ImGui::Text("Disabled");
+                ImGui::Text("%s", LOC("about.interop.disabled"));
 #endif
 
                 ImGui::EndTable();
@@ -447,14 +464,14 @@ namespace lfs::vis::gui {
 
             if (fonts_.section)
                 ImGui::PushFont(fonts_.section);
-            ImGui::TextColored(t.palette.text_dim, "LINKS");
+            ImGui::TextColored(t.palette.text_dim, LOC("about.links"));
             if (fonts_.section)
                 ImGui::PopFont();
             ImGui::Spacing();
 
             const ImVec4 LINK_COLOR = lighten(t.palette.info, 0.3f);
 
-            ImGui::Text("Repository:");
+            ImGui::Text("%s", LOC("about.repository"));
             ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Text, LINK_COLOR);
             ImGui::Text("%s", REPO_URL);
@@ -466,7 +483,7 @@ namespace lfs::vis::gui {
                 openURL(REPO_URL);
             }
 
-            ImGui::Text("Website:");
+            ImGui::Text("%s", LOC("about.website"));
             ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Text, LINK_COLOR);
             ImGui::Text("%s", WEBSITE_URL);
@@ -481,11 +498,11 @@ namespace lfs::vis::gui {
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
-            ImGui::TextColored(t.palette.text_dim, "LichtFeld Studio Authors");
+            ImGui::TextColored(t.palette.text_dim, LOC("about.authors"));
             ImGui::SameLine();
             ImGui::TextColored(darken(t.palette.text_dim, 0.15f), " | ");
             ImGui::SameLine();
-            ImGui::TextColored(t.palette.text_dim, "Licensed under GPLv3");
+            ImGui::TextColored(t.palette.text_dim, LOC("about.license"));
         }
         ImGui::End();
 
@@ -710,7 +727,7 @@ namespace lfs::vis::gui {
         ImGui::PushStyleColor(ImGuiCol_TableHeaderBg, t.palette.surface_bright);
         ImGui::PushStyleColor(ImGuiCol_TableBorderStrong, lighten(t.palette.surface_bright, 0.15f));
 
-        if (ImGui::Begin("Input Settings", &show_input_settings_, WINDOW_FLAGS)) {
+        if (ImGui::Begin(LOC(Window::INPUT_SETTINGS), &show_input_settings_, WINDOW_FLAGS)) {
             if (fonts_.heading)
                 ImGui::PushFont(fonts_.heading);
             ImGui::TextColored(t.palette.info, "INPUT SETTINGS");
@@ -721,7 +738,7 @@ namespace lfs::vis::gui {
             ImGui::Spacing();
 
             if (input_bindings_) {
-                ImGui::Text("Active Profile:");
+                ImGui::Text("%s", LOC(InputSettings::ACTIVE_PROFILE));
                 ImGui::SameLine();
 
                 const auto profiles = input_bindings_->getAvailableProfiles();
@@ -944,7 +961,7 @@ namespace lfs::vis::gui {
                 ImGui::PushStyleColor(ImGuiCol_Button, BTN_SAVE);
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, BTN_SAVE_HOVER);
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive, BTN_SAVE_ACTIVE);
-                if (ImGui::Button("Save Current Profile")) {
+                if (ImGui::Button(LOC(InputSettings::SAVE_CURRENT_PROFILE))) {
                     input_bindings_->saveProfile(input_bindings_->getCurrentProfileName());
                 }
                 ImGui::PopStyleColor(3);
@@ -954,7 +971,7 @@ namespace lfs::vis::gui {
                 ImGui::PushStyleColor(ImGuiCol_Button, BTN_RESET);
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, BTN_RESET_HOVER);
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive, BTN_RESET_ACTIVE);
-                if (ImGui::Button("Reset to Default")) {
+                if (ImGui::Button(LOC(InputSettings::RESET_TO_DEFAULT))) {
                     const auto config_dir = input::InputBindings::getConfigDir();
                     const auto saved_path = config_dir / "Default.json";
                     if (std::filesystem::exists(saved_path)) {
@@ -975,7 +992,7 @@ namespace lfs::vis::gui {
                 ImGui::PushStyleColor(ImGuiCol_Button, BTN_IO);
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, BTN_IO_HOVER);
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive, BTN_IO_ACTIVE);
-                if (ImGui::Button("Export...")) {
+                if (ImGui::Button(LOC(InputSettings::EXPORT))) {
                     const auto path = SaveJsonFileDialog("input_bindings");
                     if (!path.empty()) {
                         input_bindings_->saveProfileToFile(path);
@@ -988,7 +1005,7 @@ namespace lfs::vis::gui {
                 ImGui::PushStyleColor(ImGuiCol_Button, BTN_IO);
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, BTN_IO_HOVER);
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive, BTN_IO_ACTIVE);
-                if (ImGui::Button("Import...")) {
+                if (ImGui::Button(LOC(InputSettings::IMPORT))) {
                     if (const auto path = OpenJsonFileDialog(); !path.empty() && std::filesystem::exists(path)) {
                         input_bindings_->loadProfileFromFile(path);
                     }
@@ -1029,7 +1046,7 @@ namespace lfs::vis::gui {
         ImGui::PushStyleColor(ImGuiCol_TitleBgActive, t.palette.surface_bright);
         ImGui::PushStyleColor(ImGuiCol_Border, withAlpha(t.palette.info, 0.3f));
 
-        if (ImGui::Begin("Debug Info", &show_debug_window_, WINDOW_FLAGS)) {
+        if (ImGui::Begin(LOC(Window::DEBUG_INFO), &show_debug_window_, WINDOW_FLAGS)) {
             if (fonts_.heading)
                 ImGui::PushFont(fonts_.heading);
             ImGui::TextColored(t.palette.info, "DEBUG INFORMATION");
@@ -1052,7 +1069,7 @@ namespace lfs::vis::gui {
                         mem.gpu_used_bytes / 1e9,
                         mem.gpu_total_bytes / 1e9,
                         mem.gpu_usage_percent());
-            ImGui::Text("Free: %.2f GB", mem.gpu_free_bytes / 1e9);
+            ImGui::Text(LOC(DebugInfo::FREE_MEMORY), mem.gpu_free_bytes / 1e9);
 
             // Progress bar for memory usage
             const float usage_ratio = mem.gpu_total_bytes > 0
@@ -1080,7 +1097,7 @@ namespace lfs::vis::gui {
             auto& tracer = lfs::core::debug::TensorOpTracer::instance();
             bool tracing_enabled = tracer.is_enabled();
 
-            if (ImGui::Checkbox("Enable Operation Tracing", &tracing_enabled)) {
+            if (ImGui::Checkbox(LOC(DebugInfo::ENABLE_TRACING), &tracing_enabled)) {
                 tracer.set_enabled(tracing_enabled);
             }
             ImGui::SameLine();
@@ -1088,13 +1105,13 @@ namespace lfs::vis::gui {
 
             if (tracing_enabled) {
                 const auto& history = tracer.get_history();
-                ImGui::Text("Recorded operations: %zu", history.size());
+                ImGui::Text(LOC(DebugInfo::RECORDED_OPERATIONS), history.size());
 
-                if (ImGui::Button("Clear History")) {
+                if (ImGui::Button(LOC(DebugInfo::CLEAR_HISTORY))) {
                     tracer.clear_history();
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("Print to Log")) {
+                if (ImGui::Button(LOC(DebugInfo::PRINT_TO_LOG))) {
                     tracer.print_history(50);
                 }
 

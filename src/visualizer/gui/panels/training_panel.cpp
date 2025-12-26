@@ -8,6 +8,8 @@
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
 #include "core/services.hpp"
+#include "gui/localization_manager.hpp"
+#include "gui/string_keys.hpp"
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/windows_utils.hpp"
 #include "theme/theme.hpp"
@@ -25,6 +27,8 @@
 #endif
 
 namespace lfs::vis::gui::panels {
+
+    using namespace lichtfeld::Strings;
 
     namespace {
         constexpr float RATE_WINDOW_SECONDS = 5.0f;
@@ -102,12 +106,12 @@ namespace lfs::vis::gui::panels {
 
         auto* const param_manager = services().paramsOrNull();
         if (!param_manager) {
-            ImGui::TextColored(ImVec4(1, 0, 0, 1), "ParameterManager not available");
+            ImGui::TextColored(ImVec4(1, 0, 0, 1), "%s", LOC(Messages::PARAM_MANAGER_UNAVAILABLE));
             return;
         }
 
         if (const auto result = param_manager->ensureLoaded(); !result) {
-            ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "Failed to load params: %s", result.error().c_str());
+            ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "%s %s", LOC(Messages::FAILED_TO_LOAD_PARAMS), result.error().c_str());
             return;
         }
 
@@ -141,27 +145,27 @@ namespace lfs::vis::gui::panels {
         }
 
         // Dataset Parameters
-        if (ImGui::TreeNode("Dataset")) {
+        if (ImGui::TreeNode(LOC(Training::Section::DATASET))) {
             if (ImGui::BeginTable("DatasetTable", 2, ImGuiTableFlags_SizingStretchProp)) {
                 ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 120.0f);
                 ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Path:");
+                ImGui::Text("%s", LOC(Training::Dataset::PATH));
                 ImGui::TableNextColumn();
                 ImGui::Text("%s", dataset_params.data_path.filename().string().c_str());
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Images:");
+                ImGui::Text("%s", LOC(Training::Dataset::IMAGES));
                 ImGui::TableNextColumn();
                 ImGui::Text("%s", dataset_params.images.c_str());
 
                 // Resize Factor
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Resize Factor:");
+                ImGui::Text("%s", LOC(Training::Dataset::RESIZE_FACTOR));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -183,7 +187,7 @@ namespace lfs::vis::gui::panels {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Max Width (px):");
+                ImGui::Text("%s", LOC(Training::Dataset::MAX_WIDTH));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -199,32 +203,32 @@ namespace lfs::vis::gui::panels {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("CPU Cache:");
+                ImGui::Text("%s", LOC(Training::Dataset::CPU_CACHE));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     if (ImGui::Checkbox("##use_cpu_cache", &dataset_params.loading_params.use_cpu_memory)) {
                         dataset_params_changed = true;
                     }
                 } else {
-                    ImGui::Text("%s", dataset_params.loading_params.use_cpu_memory ? "Enabled" : "Disabled");
+                    ImGui::Text("%s", dataset_params.loading_params.use_cpu_memory ? LOC(Training::Status::ENABLED) : LOC(Training::Status::DISABLED));
                 }
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("FS Cache:");
+                ImGui::Text("%s", LOC(Training::Dataset::FS_CACHE));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     if (ImGui::Checkbox("##use_fs_cache", &dataset_params.loading_params.use_fs_cache)) {
                         dataset_params_changed = true;
                     }
                 } else {
-                    ImGui::Text("%s", dataset_params.loading_params.use_fs_cache ? "Enabled" : "Disabled");
+                    ImGui::Text("%s", dataset_params.loading_params.use_fs_cache ? LOC(Training::Status::ENABLED) : LOC(Training::Status::DISABLED));
                 }
 
                 if (opt_params.enable_eval) {
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
-                    ImGui::Text("Test Every:");
+                    ImGui::Text("%s", LOC(Training::Dataset::TEST_EVERY));
                     ImGui::TableNextColumn();
                     if (can_edit) {
                         ImGui::PushItemWidth(-1);
@@ -241,7 +245,7 @@ namespace lfs::vis::gui::panels {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Output:");
+                ImGui::Text("%s", LOC(Training::Dataset::OUTPUT));
                 ImGui::TableNextColumn();
                 {
                     const std::string output_display = dataset_params.output_path.empty()
@@ -259,27 +263,27 @@ namespace lfs::vis::gui::panels {
         }
 
         // Optimization Parameters
-        if (ImGui::TreeNode("Optimization")) {
+        if (ImGui::TreeNode(LOC(Training::Section::OPTIMIZATION))) {
             if (ImGui::BeginTable("OptimizationTable", 2, ImGuiTableFlags_SizingStretchProp)) {
                 ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 120.0f);
                 ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Strategy:");
+                ImGui::Text("%s", LOC(Training::Opt::STRATEGY));
                 ImGui::TableNextColumn();
                 ImGui::Text("%s", opt_params.strategy.c_str());
 
                 // Learning Rates section
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::TextColored(theme().palette.text_dim, "Learning Rates:");
+                ImGui::TextColored(theme().palette.text_dim, "%s", LOC(Training::Opt::LEARNING_RATES));
                 ImGui::TableNextColumn();
 
                 // Position LR
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("  Position:");
+                ImGui::Text("%s", LOC(Training::Opt::LR_POSITION));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -292,7 +296,7 @@ namespace lfs::vis::gui::panels {
                 // SH Coeff LR
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("  SH Coeff:");
+                ImGui::Text("%s", LOC(Training::Opt::LR_SH_COEFF));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -305,7 +309,7 @@ namespace lfs::vis::gui::panels {
                 // Opacity LR
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("  Opacity:");
+                ImGui::Text("%s", LOC(Training::Opt::LR_OPACITY));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -318,7 +322,7 @@ namespace lfs::vis::gui::panels {
                 // Scaling LR
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("  Scaling:");
+                ImGui::Text("%s", LOC(Training::Opt::LR_SCALING));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -331,7 +335,7 @@ namespace lfs::vis::gui::panels {
                 // Rotation LR
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("  Rotation:");
+                ImGui::Text("%s", LOC(Training::Opt::LR_ROTATION));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -344,13 +348,13 @@ namespace lfs::vis::gui::panels {
                 // Refinement section
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::TextColored(theme().palette.text_dim, "Refinement:");
+                ImGui::TextColored(theme().palette.text_dim, "%s", LOC(Training::Section::REFINEMENT));
                 ImGui::TableNextColumn();
 
                 // Refine Every
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("  Refine Every:");
+                ImGui::Text("%s", LOC(Training::Refinement::REFINE_EVERY));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -368,7 +372,7 @@ namespace lfs::vis::gui::panels {
                 // Start Refine
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("  Start Refine:");
+                ImGui::Text("%s", LOC(Training::Refinement::START_REFINE));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -386,7 +390,7 @@ namespace lfs::vis::gui::panels {
                 // Stop Refine
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("  Stop Refine:");
+                ImGui::Text("%s", LOC(Training::Refinement::STOP_REFINE));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -404,7 +408,7 @@ namespace lfs::vis::gui::panels {
                 // Gradient Threshold
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("  Gradient Thr:");
+                ImGui::Text("%s", LOC(Training::Refinement::GRADIENT_THR));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -417,7 +421,7 @@ namespace lfs::vis::gui::panels {
                 // Reset Every
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("  Reset Every:");
+                ImGui::Text("%s", LOC(Training::Refinement::RESET_EVERY));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -431,13 +435,13 @@ namespace lfs::vis::gui::panels {
                 } else if (opt_params.reset_every > 0) {
                     ImGui::Text("%zu", opt_params.reset_every);
                 } else {
-                    ImGui::Text("Disabled");
+                    ImGui::Text("%s", LOC(TrainingParams::DISABLED));
                 }
 
                 // SH Degree Interval
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("  SH Upgrade Every:");
+                ImGui::Text("%s", LOC(Training::Refinement::SH_UPGRADE_EVERY));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -458,12 +462,12 @@ namespace lfs::vis::gui::panels {
         }
 
         // Save Steps
-        if (ImGui::TreeNode("Save Steps")) {
+        if (ImGui::TreeNode(LOC(Training::Section::SAVE_STEPS))) {
             if (can_edit) {
                 static int new_step = 1000;
-                ImGui::InputInt("New Step", &new_step, 100, 1000);
+                ImGui::InputInt(LOC(TrainingPanel::NEW_STEP), &new_step, 100, 1000);
                 ImGui::SameLine();
-                if (ImGui::Button("Add")) {
+                if (ImGui::Button(LOC(Training::Button::ADD))) {
                     if (new_step > 0 && std::find(opt_params.save_steps.begin(),
                                                   opt_params.save_steps.end(),
                                                   new_step) == opt_params.save_steps.end()) {
@@ -487,7 +491,7 @@ namespace lfs::vis::gui::panels {
                     }
 
                     ImGui::SameLine();
-                    if (ImGui::Button("Remove")) {
+                    if (ImGui::Button(LOC(Training::Button::REMOVE))) {
                         opt_params.save_steps.erase(opt_params.save_steps.begin() + i);
                     }
 
@@ -495,7 +499,7 @@ namespace lfs::vis::gui::panels {
                 }
 
                 if (opt_params.save_steps.empty()) {
-                    ImGui::TextColored(darken(theme().palette.text_dim, 0.15f), "No save steps configured");
+                    ImGui::TextColored(darken(theme().palette.text_dim, 0.15f), "%s", LOC(TrainingPanel::NO_SAVE_STEPS));
                 }
             } else {
                 if (!opt_params.save_steps.empty()) {
@@ -514,14 +518,14 @@ namespace lfs::vis::gui::panels {
         }
 
         // Bilateral Grid Settings
-        if (opt_params.use_bilateral_grid && ImGui::TreeNode("Bilateral Grid Settings")) {
+        if (opt_params.use_bilateral_grid && ImGui::TreeNode(LOC(Training::Section::BILATERAL_GRID))) {
             if (ImGui::BeginTable("BilateralTable", 2, ImGuiTableFlags_SizingStretchProp)) {
                 ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 140.0f);
                 ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Grid X:");
+                ImGui::Text("%s", LOC(Training::Bilateral::GRID_X));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -535,7 +539,7 @@ namespace lfs::vis::gui::panels {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Grid Y:");
+                ImGui::Text("%s", LOC(Training::Bilateral::GRID_Y));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -549,7 +553,7 @@ namespace lfs::vis::gui::panels {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Grid W:");
+                ImGui::Text("%s", LOC(Training::Bilateral::GRID_W));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -563,7 +567,7 @@ namespace lfs::vis::gui::panels {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Learning Rate:");
+                ImGui::Text("%s", LOC(Training::Bilateral::LEARNING_RATE));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -579,24 +583,24 @@ namespace lfs::vis::gui::panels {
         }
 
         // Mask Settings
-        if (opt_params.mask_mode != lfs::core::param::MaskMode::None && ImGui::TreeNode("Mask Settings")) {
+        if (opt_params.mask_mode != lfs::core::param::MaskMode::None && ImGui::TreeNode(LOC(Training::Section::MASKING))) {
             if (ImGui::BeginTable("MaskTable", 2, ImGuiTableFlags_SizingStretchProp)) {
                 ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 140.0f);
                 ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Invert Masks:");
+                ImGui::Text("%s", LOC(Training::Masking::INVERT_MASKS));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::Checkbox("##invert_masks", &opt_params.invert_masks);
                 } else {
-                    ImGui::Text("%s", opt_params.invert_masks ? "Yes" : "No");
+                    ImGui::Text("%s", opt_params.invert_masks ? LOC(Training::Status::YES) : LOC(Training::Status::NO));
                 }
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Threshold:");
+                ImGui::Text("%s", LOC(Training::Masking::THRESHOLD));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -609,7 +613,7 @@ namespace lfs::vis::gui::panels {
                 if (opt_params.mask_mode == lfs::core::param::MaskMode::Segment) {
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
-                    ImGui::Text("Penalty Weight:");
+                    ImGui::Text("%s", LOC(Training::Masking::PENALTY_WEIGHT));
                     ImGui::TableNextColumn();
                     if (can_edit) {
                         ImGui::PushItemWidth(-1);
@@ -621,7 +625,7 @@ namespace lfs::vis::gui::panels {
 
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
-                    ImGui::Text("Penalty Power:");
+                    ImGui::Text("%s", LOC(Training::Masking::PENALTY_POWER));
                     ImGui::TableNextColumn();
                     if (can_edit) {
                         ImGui::PushItemWidth(-1);
@@ -638,19 +642,19 @@ namespace lfs::vis::gui::panels {
         }
 
         // Evaluation Settings
-        if (opt_params.enable_eval && ImGui::TreeNode("Evaluation Settings")) {
+        if (opt_params.enable_eval && ImGui::TreeNode(LOC(Training::Section::EVALUATION))) {
             if (ImGui::BeginTable("EvalTable", 2, ImGuiTableFlags_SizingStretchProp)) {
                 ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 140.0f);
                 ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Save Images:");
+                ImGui::Text("%s", LOC(Training::Eval::SAVE_IMAGES));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::Checkbox("##enable_save_eval_images", &opt_params.enable_save_eval_images);
                 } else {
-                    ImGui::Text("%s", opt_params.enable_save_eval_images ? "Yes" : "No");
+                    ImGui::Text("%s", opt_params.enable_save_eval_images ? LOC(Training::Status::YES) : LOC(Training::Status::NO));
                 }
 
                 ImGui::EndTable();
@@ -659,12 +663,12 @@ namespace lfs::vis::gui::panels {
             // Eval Steps
             {
                 ImGui::Separator();
-                ImGui::Text("Evaluation Steps:");
+                ImGui::Text("%s", LOC(Training::Eval::EVALUATION_STEPS));
                 if (can_edit) {
                     static int new_eval_step = 7000;
-                    ImGui::InputInt("New Eval Step", &new_eval_step, 1000, 5000);
+                    ImGui::InputInt(LOC(TrainingParams::NEW_EVAL_STEP), &new_eval_step, 1000, 5000);
                     ImGui::SameLine();
-                    if (ImGui::Button("Add##eval")) {
+                    if (ImGui::Button(LOC(Training::Button::ADD))) {
                         if (new_eval_step > 0 && std::find(opt_params.eval_steps.begin(),
                                                            opt_params.eval_steps.end(),
                                                            new_eval_step) == opt_params.eval_steps.end()) {
@@ -686,7 +690,7 @@ namespace lfs::vis::gui::panels {
                         }
 
                         ImGui::SameLine();
-                        if (ImGui::Button("Remove##eval")) {
+                        if (ImGui::Button(LOC(Training::Button::REMOVE))) {
                             opt_params.eval_steps.erase(opt_params.eval_steps.begin() + i);
                         }
 
@@ -714,14 +718,14 @@ namespace lfs::vis::gui::panels {
         }
 
         // Loss Parameters
-        if (ImGui::TreeNode("Loss Parameters")) {
+        if (ImGui::TreeNode(LOC(Training::Section::LOSSES))) {
             if (ImGui::BeginTable("LossTable", 2, ImGuiTableFlags_SizingStretchProp)) {
                 ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 140.0f);
                 ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Lambda DSSIM:");
+                ImGui::Text("%s", LOC(Training::Losses::LAMBDA_DSSIM));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -733,7 +737,7 @@ namespace lfs::vis::gui::panels {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Opacity Reg:");
+                ImGui::Text("%s", LOC(Training::Losses::OPACITY_REG));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -745,7 +749,7 @@ namespace lfs::vis::gui::panels {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Scale Reg:");
+                ImGui::Text("%s", LOC(Training::Losses::SCALE_REG));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -757,7 +761,7 @@ namespace lfs::vis::gui::panels {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("TV Loss Weight:");
+                ImGui::Text("%s", LOC(Training::Losses::TV_LOSS_WEIGHT));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -773,14 +777,14 @@ namespace lfs::vis::gui::panels {
         }
 
         // Initialization Parameters
-        if (ImGui::TreeNode("Initialization")) {
+        if (ImGui::TreeNode(LOC(Training::Section::INITIALIZATION))) {
             if (ImGui::BeginTable("InitTable", 2, ImGuiTableFlags_SizingStretchProp)) {
                 ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 140.0f);
                 ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Init Opacity:");
+                ImGui::Text("%s", LOC(TrainingParams::INIT_OPACITY));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -792,7 +796,7 @@ namespace lfs::vis::gui::panels {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Init Scaling:");
+                ImGui::Text("%s", LOC(TrainingParams::INIT_SCALING));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -804,7 +808,7 @@ namespace lfs::vis::gui::panels {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Random Init:");
+                ImGui::Text("%s", LOC(TrainingParams::RANDOM_INIT));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::Checkbox("##random", &opt_params.random);
@@ -815,7 +819,7 @@ namespace lfs::vis::gui::panels {
                 if (opt_params.random) {
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
-                    ImGui::Text("  Num Points:");
+                    ImGui::Text("%s", LOC(TrainingParams::NUM_POINTS));
                     ImGui::TableNextColumn();
                     if (can_edit) {
                         ImGui::PushItemWidth(-1);
@@ -829,7 +833,7 @@ namespace lfs::vis::gui::panels {
 
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
-                    ImGui::Text("  Extent:");
+                    ImGui::Text("%s", LOC(TrainingParams::EXTENT));
                     ImGui::TableNextColumn();
                     if (can_edit) {
                         ImGui::PushItemWidth(-1);
@@ -848,7 +852,7 @@ namespace lfs::vis::gui::panels {
         }
 
         // Pruning/Growing Thresholds (for default strategy)
-        if (opt_params.strategy == "default" && ImGui::TreeNode("Pruning/Growing")) {
+        if (opt_params.strategy == "default" && ImGui::TreeNode(LOC(Training::Section::PRUNING_GROWING))) {
             if (ImGui::BeginTable("PruneTable", 2, ImGuiTableFlags_SizingStretchProp)) {
                 ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 140.0f);
                 ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
@@ -903,7 +907,7 @@ namespace lfs::vis::gui::panels {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Prune Scale 3D:");
+                ImGui::Text("%s", LOC(TrainingParams::PRUNE_SCALE_3D));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -915,7 +919,7 @@ namespace lfs::vis::gui::panels {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Prune Scale 2D:");
+                ImGui::Text("%s", LOC(TrainingParams::PRUNE_SCALE_2D));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -927,7 +931,7 @@ namespace lfs::vis::gui::panels {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Pause After Reset:");
+                ImGui::Text("%s", LOC(TrainingParams::PAUSE_AFTER_RESET));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -942,7 +946,7 @@ namespace lfs::vis::gui::panels {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Revised Opacity:");
+                ImGui::Text("%s", LOC(TrainingParams::REVISED_OPACITY));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::Checkbox("##revised_opacity", &opt_params.revised_opacity);
@@ -956,14 +960,14 @@ namespace lfs::vis::gui::panels {
         }
 
         // Sparsity Settings
-        if (opt_params.enable_sparsity && ImGui::TreeNode("Sparsity Settings")) {
+        if (opt_params.enable_sparsity && ImGui::TreeNode(LOC(Training::Section::SPARSITY))) {
             if (ImGui::BeginTable("SparsityTable", 2, ImGuiTableFlags_SizingStretchProp)) {
                 ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 140.0f);
                 ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Sparsify Steps:");
+                ImGui::Text("%s", LOC(TrainingParams::SPARSIFY_STEPS));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -984,7 +988,7 @@ namespace lfs::vis::gui::panels {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Init Rho:");
+                ImGui::Text("%s", LOC(TrainingParams::INIT_RHO));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -996,7 +1000,7 @@ namespace lfs::vis::gui::panels {
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("Prune Ratio:");
+                ImGui::Text("%s", LOC(TrainingParams::PRUNE_RATIO));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -1025,12 +1029,12 @@ namespace lfs::vis::gui::panels {
 
         auto* const param_manager = services().paramsOrNull();
         if (!param_manager) {
-            ImGui::TextColored(ImVec4(1, 0, 0, 1), "ParameterManager not available");
+            ImGui::TextColored(ImVec4(1, 0, 0, 1), "%s", LOC(Messages::PARAM_MANAGER_UNAVAILABLE));
             return;
         }
 
         if (const auto result = param_manager->ensureLoaded(); !result) {
-            ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "Failed to load params: %s", result.error().c_str());
+            ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "%s %s", LOC(Messages::FAILED_TO_LOAD_PARAMS), result.error().c_str());
             return;
         }
 
@@ -1068,7 +1072,7 @@ namespace lfs::vis::gui::panels {
 
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::Text("Strategy:");
+            ImGui::Text("%s", LOC(TrainingParams::STRATEGY));
             ImGui::TableNextColumn();
             if (can_edit) {
                 ImGui::PushItemWidth(-1);
@@ -1088,7 +1092,7 @@ namespace lfs::vis::gui::panels {
             // Iterations
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::Text("Iterations:");
+            ImGui::Text("%s", LOC(TrainingParams::ITERATIONS));
             ImGui::TableNextColumn();
             if (can_edit) {
                 ImGui::PushItemWidth(-1);
@@ -1106,7 +1110,7 @@ namespace lfs::vis::gui::panels {
             // Max Gaussians
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::Text("Max Gaussians:");
+            ImGui::Text("%s", LOC(TrainingParams::MAX_GAUSSIANS));
             ImGui::TableNextColumn();
             if (can_edit) {
                 ImGui::PushItemWidth(-1);
@@ -1121,7 +1125,7 @@ namespace lfs::vis::gui::panels {
             // SH Degree
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::Text("SH Degree:");
+            ImGui::Text("%s", LOC(TrainingParams::SH_DEGREE));
             ImGui::TableNextColumn();
             if (can_edit) {
                 ImGui::PushItemWidth(-1);
@@ -1135,7 +1139,7 @@ namespace lfs::vis::gui::panels {
             // Tile Mode
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::Text("Tile Mode:");
+            ImGui::Text("%s", LOC(TrainingParams::TILE_MODE));
             ImGui::TableNextColumn();
             if (can_edit) {
                 ImGui::PushItemWidth(-1);
@@ -1157,7 +1161,7 @@ namespace lfs::vis::gui::panels {
             // Num Workers
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::Text("Num Workers:");
+            ImGui::Text("%s", LOC(TrainingParams::NUM_WORKERS));
             ImGui::TableNextColumn();
             if (can_edit) {
                 ImGui::PushItemWidth(-1);
@@ -1172,7 +1176,7 @@ namespace lfs::vis::gui::panels {
             // Steps Scaler
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::Text("Steps Scaler:");
+            ImGui::Text("%s", LOC(TrainingParams::STEPS_SCALER));
             ImGui::TableNextColumn();
             if (can_edit) {
                 const float prev = opt_params.steps_scaler;
@@ -1192,7 +1196,7 @@ namespace lfs::vis::gui::panels {
             // Bilateral Grid Enable
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::Text("Bilateral Grid:");
+            ImGui::Text("%s", LOC(TrainingParams::BILATERAL_GRID));
             ImGui::TableNextColumn();
             if (can_edit) {
                 ImGui::Checkbox("##use_bilateral_grid", &opt_params.use_bilateral_grid);
@@ -1203,7 +1207,7 @@ namespace lfs::vis::gui::panels {
             // Mask Mode
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::Text("Mask Mode:");
+            ImGui::Text("%s", LOC(TrainingParams::MASK_MODE));
             ImGui::TableNextColumn();
             static constexpr const char* const MASK_MODE_LABELS[] = {"None", "Segment", "Ignore", "Alpha Consistent"};
             if (can_edit && has_masks) {
@@ -1224,7 +1228,7 @@ namespace lfs::vis::gui::panels {
             if (opt_params.mask_mode != lfs::core::param::MaskMode::None && has_masks) {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("  Invert Masks:");
+                ImGui::Text("%s", LOC(TrainingParams::INVERT_MASKS));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::Checkbox("##invert_masks", &opt_params.invert_masks);
@@ -1239,7 +1243,7 @@ namespace lfs::vis::gui::panels {
             if (opt_params.mask_mode == lfs::core::param::MaskMode::Segment) {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("  Opacity Penalty Weight:");
+                ImGui::Text("%s", LOC(TrainingParams::OPACITY_PENALTY_WEIGHT));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -1249,12 +1253,12 @@ namespace lfs::vis::gui::panels {
                     ImGui::Text("%.1f", opt_params.mask_opacity_penalty_weight);
                 }
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Weight for opacity penalty in background regions");
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::PENALTY_WEIGHT));
                 }
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("  Opacity Penalty Power:");
+                ImGui::Text("%s", LOC(TrainingParams::OPACITY_PENALTY_POWER));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -1264,12 +1268,12 @@ namespace lfs::vis::gui::panels {
                     ImGui::Text("%.1f", opt_params.mask_opacity_penalty_power);
                 }
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Penalty falloff: 1=linear, 2=quadratic, >2=gentler");
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::PENALTY_POWER));
                 }
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                ImGui::Text("  Mask Threshold:");
+                ImGui::Text("%s", LOC(TrainingParams::MASK_THRESHOLD));
                 ImGui::TableNextColumn();
                 if (can_edit) {
                     ImGui::PushItemWidth(-1);
@@ -1279,14 +1283,14 @@ namespace lfs::vis::gui::panels {
                     ImGui::Text("%.2f", opt_params.mask_threshold);
                 }
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Values >= threshold become 1.0 (object)");
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::MASK_THRESHOLD));
                 }
             }
 
             // Enable Sparsity
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::Text("Sparsity:");
+            ImGui::Text("%s", LOC(TrainingParams::SPARSITY));
             ImGui::TableNextColumn();
             if (can_edit) {
                 if (ImGui::Checkbox("##enable_sparsity", &opt_params.enable_sparsity)) {
@@ -1304,7 +1308,7 @@ namespace lfs::vis::gui::panels {
             // GUT
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::Text("GUT:");
+            ImGui::Text("%s", LOC(TrainingParams::GUT));
             ImGui::TableNextColumn();
             if (can_edit) {
                 ImGui::Checkbox("##gut", &opt_params.gut);
@@ -1315,7 +1319,7 @@ namespace lfs::vis::gui::panels {
             // Mip Filter (anti-aliasing)
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::Text("Mip Filter:");
+            ImGui::Text("%s", LOC(TrainingParams::MIP_FILTER));
             ImGui::TableNextColumn();
             if (can_edit) {
                 ImGui::Checkbox("##mip_filter", &opt_params.mip_filter);
@@ -1323,13 +1327,13 @@ namespace lfs::vis::gui::panels {
                 ImGui::Text("%s", opt_params.mip_filter ? "Enabled" : "Disabled");
             }
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Anti-aliasing filter for training (mip-splatting)");
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::MIP_FILTER));
             }
 
             // BG Modulation
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::Text("BG Modulation:");
+            ImGui::Text("%s", LOC(TrainingParams::BG_MODULATION));
             ImGui::TableNextColumn();
             if (can_edit) {
                 ImGui::Checkbox("##bg_modulation", &opt_params.bg_modulation);
@@ -1340,7 +1344,7 @@ namespace lfs::vis::gui::panels {
             // Evaluation
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
-            ImGui::Text("Evaluation:");
+            ImGui::Text("%s", LOC(TrainingParams::EVALUATION));
             ImGui::TableNextColumn();
             if (can_edit) {
                 ImGui::Checkbox("##enable_eval", &opt_params.enable_eval);
@@ -1358,10 +1362,10 @@ namespace lfs::vis::gui::panels {
         auto& state = TrainingPanelState::getInstance();
         const auto& t = theme();
 
-        if (ImGui::CollapsingHeader("Basic Training Params", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::CollapsingHeader(LOC(Training::Section::BASIC_PARAMS), ImGuiTreeNodeFlags_DefaultOpen)) {
             DrawTrainingParameters(ctx);
         }
-        if (ImGui::CollapsingHeader("Advanced Training Params")) {
+        if (ImGui::CollapsingHeader(LOC(Training::Section::ADVANCED_PARAMS))) {
             DrawTrainingAdvancedParameters(ctx);
         }
 
@@ -1413,7 +1417,7 @@ namespace lfs::vis::gui::panels {
 
         static IterationRateTracker g_iter_rate_tracker;
 
-        ImGui::Text("Status: %s", state_str);
+        ImGui::Text(LOC(Progress::STATUS_LABEL), state_str);
         g_iter_rate_tracker.addSample(current_iteration);
         float iters_per_sec = g_iter_rate_tracker.getIterationsPerSecond();
         iters_per_sec = iters_per_sec > 0.0f ? iters_per_sec : 0.0f;
@@ -1421,7 +1425,7 @@ namespace lfs::vis::gui::panels {
         ImGui::Text("Iteration: %d (%.1f iters/sec)", current_iteration, iters_per_sec);
 
         int num_splats = trainer_manager->getNumSplats();
-        ImGui::Text("num Splats: %d", num_splats);
+        ImGui::Text(LOC(Progress::NUM_SPLATS), num_splats);
     }
 
     void DrawTrainingControls(const UIContext& ctx) {
@@ -1450,35 +1454,35 @@ namespace lfs::vis::gui::panels {
             break;
 
         case TrainerManager::State::Ready: {
-            const char* const label = current_iteration > 0 ? "Resume Training" : "Start Training";
+            const char* const label = current_iteration > 0 ? LOC(TrainingPanel::RESUME_TRAINING) : LOC(TrainingPanel::START_TRAINING);
             if (ColoredButton(label, ButtonStyle::Success, FULL_WIDTH)) {
                 lfs::core::events::cmd::StartTraining{}.emit();
             }
             if (current_iteration > 0) {
-                if (ColoredButton("Reset Training", ButtonStyle::Secondary, FULL_WIDTH)) {
+                if (ColoredButton(LOC(TrainingPanel::RESET), ButtonStyle::Secondary, FULL_WIDTH)) {
                     lfs::core::events::cmd::ResetTraining{}.emit();
                 }
             }
-            if (ColoredButton("Clear", ButtonStyle::Error, FULL_WIDTH)) {
+            if (ColoredButton(LOC(TrainingPanel::CLEAR), ButtonStyle::Error, FULL_WIDTH)) {
                 lfs::core::events::cmd::ClearScene{}.emit();
             }
             break;
         }
 
         case TrainerManager::State::Running:
-            if (ColoredButton("Pause", ButtonStyle::Warning, FULL_WIDTH)) {
+            if (ColoredButton(LOC(TrainingPanel::PAUSE), ButtonStyle::Warning, FULL_WIDTH)) {
                 lfs::core::events::cmd::PauseTraining{}.emit();
             }
             break;
 
         case TrainerManager::State::Paused:
-            if (ColoredButton("Resume", ButtonStyle::Success, FULL_WIDTH)) {
+            if (ColoredButton(LOC(TrainingPanel::RESUME), ButtonStyle::Success, FULL_WIDTH)) {
                 lfs::core::events::cmd::ResumeTraining{}.emit();
             }
-            if (ColoredButton("Reset Training", ButtonStyle::Secondary, FULL_WIDTH)) {
+            if (ColoredButton(LOC(TrainingPanel::RESET), ButtonStyle::Secondary, FULL_WIDTH)) {
                 lfs::core::events::cmd::ResetTraining{}.emit();
             }
-            if (ColoredButton("Stop Training", ButtonStyle::Error, FULL_WIDTH)) {
+            if (ColoredButton(LOC(TrainingPanel::STOP), ButtonStyle::Error, FULL_WIDTH)) {
                 lfs::core::events::cmd::StopTraining{}.emit();
             }
             break;
@@ -1487,34 +1491,34 @@ namespace lfs::vis::gui::panels {
             const auto reason = trainer_manager->getStateMachine().getFinishReason();
             switch (reason) {
             case FinishReason::Completed:
-                ImGui::TextColored(t.palette.success, "Training Complete!");
+                ImGui::TextColored(t.palette.success, "%s", LOC(Messages::TRAINING_COMPLETE));
                 break;
             case FinishReason::UserStopped:
-                ImGui::TextColored(t.palette.text_dim, "Training Stopped");
+                ImGui::TextColored(t.palette.text_dim, "%s", LOC(Messages::TRAINING_STOPPED));
                 break;
             case FinishReason::Error:
-                ImGui::TextColored(t.palette.error, "Training Error!");
+                ImGui::TextColored(t.palette.error, "%s", LOC(Messages::TRAINING_ERROR));
                 if (const auto error_msg = trainer_manager->getLastError(); !error_msg.empty()) {
                     ImGui::TextWrapped("%s", error_msg.c_str());
                 }
                 break;
             default:
-                ImGui::TextColored(t.palette.text_dim, "Training Finished");
+                ImGui::TextColored(t.palette.text_dim, "%s", LOC(TrainingPanel::FINISHED));
             }
 
             if (reason == FinishReason::Completed || reason == FinishReason::UserStopped) {
-                if (ColoredButton("Switch to Edit Mode", ButtonStyle::Success, FULL_WIDTH)) {
+                if (ColoredButton(LOC(TrainingPanel::SWITCH_EDIT_MODE), ButtonStyle::Success, FULL_WIDTH)) {
                     lfs::core::events::cmd::SwitchToEditMode{}.emit();
                 }
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Keep trained model, discard dataset");
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::KEEP_MODEL));
                 }
             }
-            if (ColoredButton("Reset Training", ButtonStyle::Secondary, FULL_WIDTH)) {
+            if (ColoredButton(LOC(TrainingPanel::RESET), ButtonStyle::Secondary, FULL_WIDTH)) {
                 lfs::core::events::cmd::ResetTraining{}.emit();
             }
 
-            if (ColoredButton("Clear", ButtonStyle::Error, FULL_WIDTH)) {
+            if (ColoredButton(LOC(TrainingPanel::CLEAR), ButtonStyle::Error, FULL_WIDTH)) {
                 lfs::core::events::cmd::ClearScene{}.emit();
             }
 
@@ -1522,14 +1526,14 @@ namespace lfs::vis::gui::panels {
         }
 
         case TrainerManager::State::Stopping:
-            ImGui::TextColored(t.palette.text_dim, "Stopping...");
+            ImGui::TextColored(t.palette.text_dim, "%s", LOC(Status::STOPPING));
             break;
         }
 
         // Save checkpoint button
         if (trainer_state == TrainerManager::State::Running ||
             trainer_state == TrainerManager::State::Paused) {
-            if (ColoredButton("Save Checkpoint", ButtonStyle::Primary, FULL_WIDTH)) {
+            if (ColoredButton(LOC(TrainingPanel::SAVE_CHECKPOINT), ButtonStyle::Primary, FULL_WIDTH)) {
                 lfs::core::events::cmd::SaveCheckpoint{}.emit();
                 state.save_in_progress = true;
                 state.save_start_time = std::chrono::steady_clock::now();
@@ -1545,7 +1549,7 @@ namespace lfs::vis::gui::panels {
                                now - state.save_start_time)
                                .count();
             if (elapsed < 2000) {
-                ImGui::TextColored(t.palette.success, "Checkpoint saved!");
+                ImGui::TextColored(t.palette.success, "%s", LOC(TrainingPanel::CHECKPOINT_SAVED));
             } else {
                 state.save_in_progress = false;
             }

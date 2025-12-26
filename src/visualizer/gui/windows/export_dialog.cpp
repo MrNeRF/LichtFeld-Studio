@@ -3,11 +3,15 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/windows/export_dialog.hpp"
+#include "gui/localization_manager.hpp"
+#include "gui/string_keys.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
 #include <imgui.h>
 
 namespace lfs::vis::gui {
+
+    using namespace lichtfeld::Strings;
 
     namespace {
         constexpr float WINDOW_WIDTH = 380.0f;
@@ -60,7 +64,7 @@ namespace lfs::vis::gui {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, WINDOW_PADDING);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ITEM_SPACING);
 
-        if (!ImGui::Begin("Export", p_open, WINDOW_FLAGS)) {
+        if (!ImGui::Begin(LOC(Export::TITLE), p_open, WINDOW_FLAGS)) {
             ImGui::End();
             ImGui::PopStyleVar(2);
             ImGui::PopStyleColor(4);
@@ -100,15 +104,15 @@ namespace lfs::vis::gui {
         }
 
         // Format selection
-        ImGui::TextColored(t.palette.text_dim, "FORMAT");
+        ImGui::TextColored(t.palette.text_dim, "%s", LOC(lichtfeld::Strings::ExportDialog::FORMAT));
         ImGui::Spacing();
 
         pushInputStyle(t);
         int format_idx = static_cast<int>(selected_format_);
-        ImGui::RadioButton("PLY (Standard)", &format_idx, static_cast<int>(ExportFormat::PLY));
-        ImGui::RadioButton("SOG (SuperSplat)", &format_idx, static_cast<int>(ExportFormat::SOG));
-        ImGui::RadioButton("SPZ (Niantic)", &format_idx, static_cast<int>(ExportFormat::SPZ));
-        ImGui::RadioButton("HTML Viewer", &format_idx, static_cast<int>(ExportFormat::HTML_VIEWER));
+        ImGui::RadioButton(LOC(Export::FORMAT_PLY_STANDARD), &format_idx, static_cast<int>(ExportFormat::PLY));
+        ImGui::RadioButton(LOC(Export::FORMAT_SOG_SUPERSPLAT), &format_idx, static_cast<int>(ExportFormat::SOG));
+        ImGui::RadioButton(LOC(Export::FORMAT_SPZ_NIANTIC), &format_idx, static_cast<int>(ExportFormat::SPZ));
+        ImGui::RadioButton(LOC(Export::FORMAT_HTML_VIEWER), &format_idx, static_cast<int>(ExportFormat::HTML_VIEWER));
         selected_format_ = static_cast<ExportFormat>(format_idx);
         popInputStyle();
 
@@ -116,21 +120,21 @@ namespace lfs::vis::gui {
         ImGui::Spacing();
 
         // Model selection
-        ImGui::TextColored(t.palette.text_dim, "MODELS");
+        ImGui::TextColored(t.palette.text_dim, "%s", LOC(lichtfeld::Strings::ExportDialog::MODELS));
         ImGui::Spacing();
 
         if (splat_nodes.empty()) {
-            ImGui::TextColored(t.palette.text_dim, "No models in scene");
+            ImGui::TextColored(t.palette.text_dim, "%s", LOC(lichtfeld::Strings::ExportDialog::NO_MODELS));
         } else {
             pushButtonStyle(t);
-            if (ImGui::SmallButton("All")) {
+            if (ImGui::SmallButton(LOC(Export::ALL))) {
                 for (const auto* node : splat_nodes) {
                     selected_nodes_.insert(node->name);
                 }
                 updateMaxSHDegree();
             }
             ImGui::SameLine();
-            if (ImGui::SmallButton("None")) {
+            if (ImGui::SmallButton(LOC(Export::NONE))) {
                 selected_nodes_.clear();
                 updateMaxSHDegree();
             }
@@ -159,7 +163,7 @@ namespace lfs::vis::gui {
         ImGui::Spacing();
 
         // SH Degree selection
-        ImGui::TextColored(t.palette.text_dim, "SH DEGREE");
+        ImGui::TextColored(t.palette.text_dim, "%s", LOC(lichtfeld::Strings::ExportDialog::SH_DEGREE));
         ImGui::Spacing();
 
         pushInputStyle(t);
@@ -180,7 +184,7 @@ namespace lfs::vis::gui {
         const bool can_export = !selected_nodes_.empty();
 
         if (!can_export) {
-            ImGui::TextColored(t.palette.error, "Select at least one model");
+            ImGui::TextColored(t.palette.error, "%s", LOC(Export::SELECT_AT_LEAST_ONE));
             ImGui::Spacing();
         }
 
@@ -195,7 +199,7 @@ namespace lfs::vis::gui {
         ImGui::PushStyleColor(ImGuiCol_Text, btn_text);
 
         ImGui::BeginDisabled(!can_export);
-        const char* label = selected_nodes_.size() > 1 ? "Export Merged..." : "Export...";
+        const char* label = selected_nodes_.size() > 1 ? LOC(lichtfeld::Strings::ExportDialog::EXPORT_MERGED) : LOC(Export::EXPORT);
         if (ImGui::Button(label, EXPORT_BUTTON_SIZE)) {
             if (on_browse_) {
                 const std::string default_name = selected_nodes_.size() == 1
@@ -213,7 +217,7 @@ namespace lfs::vis::gui {
         ImGui::SameLine();
 
         pushButtonStyle(t);
-        if (ImGui::Button("Cancel", CANCEL_BUTTON_SIZE)) {
+        if (ImGui::Button(LOC(Export::CANCEL), CANCEL_BUTTON_SIZE)) {
             *p_open = false;
             initialized_ = false;
         }

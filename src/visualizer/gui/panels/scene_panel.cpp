@@ -6,6 +6,8 @@
 
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "gui/localization_manager.hpp"
+#include "gui/string_keys.hpp"
 #include "gui/panels/scene_panel.hpp"
 #include "gui/utils/windows_utils.hpp"
 #include "gui/windows/image_preview.hpp"
@@ -21,6 +23,8 @@
 #include <imgui.h>
 
 namespace lfs::vis::gui {
+
+    using namespace lichtfeld::Strings;
 
     using namespace lfs::core::events;
     using lfs::core::ExportFormat;
@@ -58,11 +62,9 @@ namespace lfs::vis::gui {
             }
         }
 
-        constexpr const char* TRAINING_DELETE_TOOLTIP = "Cannot delete while training is in progress";
-
         void showDisabledDeleteTooltip(const bool is_protected) {
             if (is_protected && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                ImGui::SetTooltip("%s", TRAINING_DELETE_TOOLTIP);
+                ImGui::SetTooltip("%s", LOC(lichtfeld::Strings::Scene::CANNOT_DELETE_TRAINING));
             }
         }
     } // namespace
@@ -162,7 +164,7 @@ namespace lfs::vis::gui {
     void ScenePanel::render(bool* p_open, const UIContext* ctx) {
         ImGui::PushStyleColor(ImGuiCol_WindowBg, withAlpha(theme().palette.surface_bright, 0.8f));
 
-        if (!ImGui::Begin("Scene", p_open)) {
+        if (!ImGui::Begin(LOC(Window::SCENE), p_open)) {
             ImGui::End();
             ImGui::PopStyleColor();
             return;
@@ -181,8 +183,8 @@ namespace lfs::vis::gui {
         if (hasPLYs(ctx)) {
             renderPLYSceneGraph(ctx);
         } else {
-            ImGui::TextDisabled("No data loaded");
-            ImGui::TextDisabled("Use File menu to import");
+            ImGui::TextDisabled("%s", LOC(lichtfeld::Strings::Scene::NO_DATA_LOADED));
+            ImGui::TextDisabled("%s", LOC(lichtfeld::Strings::Scene::USE_FILE_MENU));
         }
     }
 
@@ -211,7 +213,7 @@ namespace lfs::vis::gui {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.0f, 2.0f));
         ImGui::PushStyleColor(ImGuiCol_FrameBg, withAlpha(t.palette.surface, 0.5f));
         ImGui::SetNextItemWidth(-1);
-        ImGui::InputTextWithHint("##filter", "Filter...", m_filterText, sizeof(m_filterText));
+        ImGui::InputTextWithHint("##filter", LOC(lichtfeld::Strings::Scene::FILTER), m_filterText, sizeof(m_filterText));
         ImGui::PopStyleColor();
         ImGui::PopStyleVar();
 
@@ -257,7 +259,7 @@ namespace lfs::vis::gui {
         const size_t splat_count = std::ranges::count_if(nodes,
                                                          [](const SceneNode* n) { return n->type == NodeType::SPLAT; });
 
-        const std::string label = std::format("Models ({})", splat_count);
+        const std::string label = std::vformat(LOC(lichtfeld::Strings::Scene::MODELS), std::make_format_args(splat_count));
         if (!ImGui::TreeNodeEx(label.c_str(), FOLDER_FLAGS))
             return;
 
@@ -268,19 +270,19 @@ namespace lfs::vis::gui {
         theme().pushContextMenuStyle();
         if (ImGui::BeginPopupContextItem("##ModelsMenu")) {
             if (!m_trainerManager->hasTrainer()) {
-                if (ImGui::MenuItem("Add PLY...")) {
+                if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::ADD_PLY))) {
                     cmd::ShowWindow{.window_name = "file_browser", .show = true}.emit();
 #ifdef _WIN32
                     OpenPlyFileDialogNative();
                     cmd::ShowWindow{.window_name = "file_browser", .show = false}.emit();
 #endif
                 }
-                if (ImGui::MenuItem("Add Group")) {
+                if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::ADD_GROUP))) {
                     cmd::AddGroup{.name = "New Group", .parent_name = ""}.emit();
                 }
                 ImGui::Separator();
             }
-            if (ImGui::MenuItem("Export...", nullptr, false, splat_count > 0)) {
+            if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::EXPORT), nullptr, false, splat_count > 0)) {
                 cmd::ShowWindow{.window_name = "export_dialog", .show = true}.emit();
             }
             ImGui::EndPopup();
@@ -295,8 +297,8 @@ namespace lfs::vis::gui {
         }
 
         if (!scene.hasNodes()) {
-            ImGui::TextDisabled("No models loaded");
-            ImGui::TextDisabled("Right-click to add...");
+            ImGui::TextDisabled("%s", LOC(lichtfeld::Strings::Scene::NO_MODELS_LOADED));
+            ImGui::TextDisabled("%s", LOC(lichtfeld::Strings::Scene::RIGHT_CLICK_TO_ADD));
         }
 
         ImGui::TreePop();
@@ -425,7 +427,7 @@ namespace lfs::vis::gui {
             if (ImGui::ImageButton("##del", static_cast<ImTextureID>(m_icons.trash), icon_sz, {0, 0}, {1, 1}, {0, 0, 0, 0}, trash_tint))
                 cmd::RemovePLY{.name = node.name, .keep_children = false}.emit();
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Delete");
+                ImGui::SetTooltip("%s", LOC(lichtfeld::Strings::Scene::DELETE_NODE));
             ImGui::SameLine(0.0f, ICON_SPACING);
         }
 
@@ -523,7 +525,7 @@ namespace lfs::vis::gui {
             // Drag source (only for reparentable nodes)
             if (can_drag && ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
                 ImGui::SetDragDropPayload("SCENE_NODE", node.name.c_str(), node.name.size() + 1);
-                ImGui::Text("Move: %s", node.name.c_str());
+                ImGui::Text(LOC(lichtfeld::Strings::Scene::MOVE_NODE), node.name.c_str());
                 ImGui::EndDragDropSource();
             }
 
@@ -617,7 +619,7 @@ namespace lfs::vis::gui {
                 };
 
                 if (is_camera) {
-                    if (ImGui::MenuItem("Go to Camera View")) {
+                    if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::GO_TO_CAMERA_VIEW))) {
                         cmd::GoToCamView{.cam_id = node.camera_uid}.emit();
                     }
                     finishNode();
@@ -625,13 +627,13 @@ namespace lfs::vis::gui {
                 }
 
                 if (is_camera_group || parent_is_dataset) {
-                    ImGui::TextDisabled("(No actions)");
+                    ImGui::TextDisabled("%s", LOC(lichtfeld::Strings::Scene::NO_ACTIONS));
                     finishNode();
                     return;
                 }
 
                 if (is_dataset) {
-                    if (ImGui::MenuItem("Delete", nullptr, false, !is_training_protected)) {
+                    if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::DELETE), nullptr, false, !is_training_protected)) {
                         cmd::RemovePLY{.name = node.name, .keep_children = false}.emit();
                     }
                     showDisabledDeleteTooltip(is_training_protected);
@@ -640,10 +642,10 @@ namespace lfs::vis::gui {
                 }
 
                 if (is_cropbox) {
-                    if (ImGui::MenuItem("Fit to Scene")) {
+                    if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::FIT_TO_SCENE))) {
                         cmd::FitCropBoxToScene{.use_percentile = false}.emit();
                     }
-                    if (ImGui::MenuItem("Fit to Scene (Trimmed)")) {
+                    if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::FIT_TO_SCENE_TRIMMED))) {
                         cmd::FitCropBoxToScene{.use_percentile = true}.emit();
                     }
                     finishNode();
@@ -651,26 +653,26 @@ namespace lfs::vis::gui {
                 }
 
                 if (is_group) {
-                    if (ImGui::MenuItem("Add Group...")) {
+                    if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::ADD_GROUP_ELLIPSIS))) {
                         cmd::AddGroup{.name = "New Group", .parent_name = node.name}.emit();
                     }
-                    if (ImGui::MenuItem("Merge to Single PLY")) {
+                    if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::MERGE_TO_SINGLE_PLY))) {
                         cmd::MergeGroup{.name = node.name}.emit();
                     }
                     ImGui::Separator();
                 }
-                if (!is_group && ImGui::MenuItem("Export...")) {
+                if (!is_group && ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::EXPORT))) {
                     cmd::ShowWindow{.window_name = "export_dialog", .show = true}.emit();
                 }
-                if (ImGui::MenuItem("Rename"))
+                if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::RENAME)))
                     startRenaming(node.name);
-                if (ImGui::MenuItem("Duplicate"))
+                if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::DUPLICATE)))
                     cmd::DuplicateNode{.name = node.name}.emit();
 
-                if (ImGui::BeginMenu("Move to")) {
+                if (ImGui::BeginMenu(LOC(lichtfeld::Strings::Scene::MOVE_TO))) {
                     const auto* parent_node = scene.getNodeById(node.parent_id);
                     if (parent_node) {
-                        if (ImGui::MenuItem("Root")) {
+                        if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::MOVE_TO_ROOT))) {
                             cmd::ReparentNode{.node_name = node.name, .new_parent_name = ""}.emit();
                         }
                         ImGui::Separator();
@@ -686,13 +688,13 @@ namespace lfs::vis::gui {
                         }
                     }
                     if (!found_group && !parent_node) {
-                        ImGui::TextDisabled("No groups available");
+                        ImGui::TextDisabled("%s", LOC(lichtfeld::Strings::Scene::NO_GROUPS_AVAILABLE));
                     }
                     ImGui::EndMenu();
                 }
 
                 ImGui::Separator();
-                if (ImGui::MenuItem("Delete", nullptr, false, !is_training_protected)) {
+                if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::DELETE), nullptr, false, !is_training_protected)) {
                     cmd::RemovePLY{.name = node.name, .keep_children = false}.emit();
                 }
                 showDisabledDeleteTooltip(is_training_protected);
@@ -837,7 +839,7 @@ namespace lfs::vis::gui {
         ImGui::BeginChild("ImageList", ImVec2(0, 0), true);
 
         if (!m_imagePaths.empty()) {
-            ImGui::Text("Images (%zu):", m_imagePaths.size());
+            ImGui::Text(LOC(lichtfeld::Strings::Scene::IMAGES), m_imagePaths.size());
             ImGui::Separator();
 
             for (size_t i = 0; i < m_imagePaths.size(); ++i) {
@@ -874,7 +876,7 @@ namespace lfs::vis::gui {
                 const std::string context_menu_id = std::format("context_menu_{}", i);
                 theme().pushContextMenuStyle();
                 if (ImGui::BeginPopupContextItem(context_menu_id.c_str())) {
-                    if (ImGui::MenuItem("Go to Cam View")) {
+                    if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::GO_TO_CAM_VIEW))) {
                         if (const auto cam_it = m_pathToCamId.find(imagePath); cam_it != m_pathToCamId.end()) {
                             cmd::GoToCamView{.cam_id = cam_it->second}.emit();
                         }
@@ -884,8 +886,8 @@ namespace lfs::vis::gui {
                 Theme::popContextMenuStyle();
             }
         } else {
-            ImGui::Text("No images loaded.");
-            ImGui::Text("Use 'Open File Browser' to load a dataset.");
+            ImGui::TextUnformatted(LOC(lichtfeld::Strings::Scene::NO_IMAGES));
+            ImGui::TextUnformatted(LOC(lichtfeld::Strings::Scene::USE_FILE_BROWSER));
         }
 
         ImGui::EndChild();

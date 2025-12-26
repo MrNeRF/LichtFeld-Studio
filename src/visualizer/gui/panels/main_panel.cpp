@@ -8,6 +8,8 @@
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "gui/localization_manager.hpp"
+#include "gui/string_keys.hpp"
 #include "gui/panels/main_panel.hpp"
 #include "gui/panels/tools_panel.hpp"
 #include "gui/panels/training_panel.hpp"
@@ -27,6 +29,7 @@
 namespace lfs::vis::gui::panels {
 
     using namespace lfs::core::events;
+    using namespace lichtfeld::Strings;
 
     namespace {
         // Selection group icons (Tabler Icons - MIT license)
@@ -74,8 +77,8 @@ namespace lfs::vis::gui::panels {
 
     void DrawWindowControls(const UIContext& ctx) {
 
-        ImGui::Text("Windows");
-        ImGui::Checkbox("Scene Panel", &(*ctx.window_states)["scene_panel"]);
+        ImGui::Text("%s", LOC(MainPanel::WINDOWS));
+        ImGui::Checkbox(LOC(MainPanel::SCENE_PANEL), &(*ctx.window_states)["scene_panel"]);
     }
 
     void DrawSystemConsoleButton(const UIContext& ctx) {
@@ -84,7 +87,7 @@ namespace lfs::vis::gui::panels {
         // On non-Windows platforms, dont show the console toggle button
 
         if (!ctx.window_states->at("system_console")) {
-            if (ImGui::Button("Show system Console", ImVec2(-1, 0))) {
+            if (ImGui::Button(LOC(MainPanel::SHOW_CONSOLE), ImVec2(-1, 0))) {
                 HWND hwnd = GetConsoleWindow();
                 Sleep(1);
                 HWND owner = GetWindow(hwnd, GW_OWNER);
@@ -97,7 +100,7 @@ namespace lfs::vis::gui::panels {
                 ctx.window_states->at("system_console") = true;
             }
         } else {
-            if (ImGui::Button("Hide system Console", ImVec2(-1, 0))) {
+            if (ImGui::Button(LOC(MainPanel::HIDE_CONSOLE), ImVec2(-1, 0))) {
                 HWND hwnd = GetConsoleWindow();
                 Sleep(1);
                 HWND owner = GetWindow(hwnd, GW_OWNER);
@@ -133,27 +136,27 @@ namespace lfs::vis::gui::panels {
 
         // Background Color
         ImGui::Separator();
-        ImGui::Text("Background");
+        ImGui::Text("%s", LOC(MainPanel::BACKGROUND));
         float bg_color[3] = {settings.background_color.x, settings.background_color.y, settings.background_color.z};
-        if (ImGui::ColorEdit3("Color##Background", bg_color)) {
+        if (ImGui::ColorEdit3(LOC(MainPanel::COLOR), bg_color)) {
             settings.background_color = glm::vec3(bg_color[0], bg_color[1], bg_color[2]);
             settings_changed = true;
         }
 
         // Coordinate Axes
         ImGui::Separator();
-        if (ImGui::Checkbox("Show Coordinate Axes", &settings.show_coord_axes)) {
+        if (ImGui::Checkbox(LOC(MainPanel::SHOW_COORD_AXES), &settings.show_coord_axes)) {
             settings_changed = true;
         }
 
         if (settings.show_coord_axes) {
             ImGui::Indent();
 
-            if (ImGui::SliderFloat("Axes Size", &settings.axes_size, 0.5f, 10.0f)) {
+            if (ImGui::SliderFloat(LOC(MainPanel::AXES_SIZE), &settings.axes_size, 0.5f, 10.0f)) {
                 settings_changed = true;
             }
 
-            ImGui::Text("Visible Axes:");
+            ImGui::Text("%s", LOC(MainPanel::VISIBLE_AXES));
             bool axes_changed = false;
             if (ImGui::Checkbox("X##axis", &settings.axes_visibility[0])) {
                 axes_changed = true;
@@ -176,13 +179,13 @@ namespace lfs::vis::gui::panels {
 
         // Pivot Point
         ImGui::Separator();
-        if (ImGui::Checkbox("Show Pivot Point", &settings.show_pivot)) {
+        if (ImGui::Checkbox(LOC(MainPanel::SHOW_PIVOT), &settings.show_pivot)) {
             settings_changed = true;
         }
 
         // Grid checkbox and settings
         ImGui::Separator();
-        if (ImGui::Checkbox("Show Grid", &settings.show_grid)) {
+        if (ImGui::Checkbox(LOC(MainPanel::SHOW_GRID), &settings.show_grid)) {
             settings_changed = true;
 
             // Emit grid settings changed event
@@ -198,9 +201,9 @@ namespace lfs::vis::gui::panels {
             ImGui::Indent();
 
             // Grid plane selection
-            const char* planes[] = {"YZ (X-plane)", "XZ (Y-plane)", "XY (Z-plane)"};
+            const char* planes[] = {LOC(MainPanel::PLANE_YZ), LOC(MainPanel::PLANE_XZ), LOC(MainPanel::PLANE_XY)};
             int current_plane = static_cast<int>(settings.grid_plane);
-            if (ImGui::Combo("Plane", &current_plane, planes, IM_ARRAYSIZE(planes))) {
+            if (ImGui::Combo(LOC(MainPanel::PLANE), &current_plane, planes, IM_ARRAYSIZE(planes))) {
                 settings.grid_plane = current_plane;
                 settings_changed = true;
 
@@ -212,7 +215,7 @@ namespace lfs::vis::gui::panels {
             }
 
             // Grid opacity
-            if (ImGui::SliderFloat("Grid Opacity", &settings.grid_opacity, 0.0f, 1.0f)) {
+            if (ImGui::SliderFloat(LOC(MainPanel::GRID_OPACITY), &settings.grid_opacity, 0.0f, 1.0f)) {
                 settings_changed = true;
 
                 ui::GridSettingsChanged{
@@ -227,13 +230,14 @@ namespace lfs::vis::gui::panels {
 
         // Camera Frustums
         ImGui::Separator();
-        if (ImGui::Checkbox("Show Camera Frustums", &settings.show_camera_frustums)) {
+        if (ImGui::Checkbox(LOC(MainPanel::CAMERA_FRUSTUMS), &settings.show_camera_frustums)) {
             settings_changed = true;
         }
 
         if (settings.show_camera_frustums) {
             ImGui::Indent();
-            if (widgets::SliderWithReset("Scale##camera", &settings.camera_frustum_scale, 0.01f, 10.0f, 0.25f)) {
+            const std::string scale_label = std::string(LOC(Tooltip::SCALE_CAMERA)) + "##camera";
+            if (widgets::SliderWithReset(scale_label.c_str(), &settings.camera_frustum_scale, 0.01f, 10.0f, 0.25f)) {
                 settings_changed = true;
             }
             ImGui::Unindent();
@@ -242,7 +246,7 @@ namespace lfs::vis::gui::panels {
         // Point Cloud Mode
         ImGui::Separator();
         ImGui::BeginDisabled(force_point_cloud);
-        if (ImGui::Checkbox("Point Cloud Mode", &settings.point_cloud_mode)) {
+        if (ImGui::Checkbox(LOC(MainPanel::POINT_CLOUD_MODE), &settings.point_cloud_mode)) {
             settings_changed = true;
             ui::PointCloudModeChanged{
                 .enabled = settings.point_cloud_mode,
@@ -251,12 +255,12 @@ namespace lfs::vis::gui::panels {
         }
         ImGui::EndDisabled();
         if (force_point_cloud && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("Point cloud mode is forced on before training starts");
+            ImGui::SetTooltip("%s", LOC(Tooltip::POINT_CLOUD_FORCED));
         }
 
         if (settings.point_cloud_mode || force_point_cloud) {
             ImGui::Indent();
-            if (widgets::SliderWithReset("Point Size", &settings.voxel_size, 0.001f, 0.1f, 0.03f)) {
+            if (widgets::SliderWithReset(LOC(Tooltip::POINT_SIZE), &settings.voxel_size, 0.001f, 0.1f, 0.03f)) {
                 settings_changed = true;
                 ui::PointCloudModeChanged{
                     .enabled = settings.point_cloud_mode,
@@ -268,7 +272,7 @@ namespace lfs::vis::gui::panels {
 
         // Selection Colors
         ImGui::Separator();
-        if (ImGui::CollapsingHeader("Selection Colors")) {
+        if (ImGui::CollapsingHeader(LOC(MainPanel::SELECTION_COLORS))) {
             ImGui::Indent();
 
             auto color_edit = [&](const char* label, glm::vec3& color) {
@@ -279,20 +283,20 @@ namespace lfs::vis::gui::panels {
                 }
             };
 
-            color_edit("Committed##sel", settings.selection_color_committed);
-            color_edit("Preview##sel", settings.selection_color_preview);
-            color_edit("Center Marker##sel", settings.selection_color_center_marker);
+            color_edit(LOC(MainPanel::COMMITTED), settings.selection_color_committed);
+            color_edit(LOC(MainPanel::PREVIEW), settings.selection_color_preview);
+            color_edit(LOC(MainPanel::CENTER_MARKER), settings.selection_color_center_marker);
 
             ImGui::Unindent();
         }
 
         // Selection Behavior
         ImGui::Separator();
-        if (ImGui::Checkbox("Desaturate Unselected", &settings.desaturate_unselected)) {
+        if (ImGui::Checkbox(LOC(MainPanel::DESATURATE_UNSELECTED), &settings.desaturate_unselected)) {
             settings_changed = true;
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Dim unselected PLYs when one or more are selected");
+            ImGui::SetTooltip("%s", LOC(Tooltip::DESATURATE_UNSELECTED));
         }
 
         // Apply settings changes if any
@@ -303,7 +307,7 @@ namespace lfs::vis::gui::panels {
         ImGui::Separator();
 
         float fov = settings.fov;
-        if (widgets::SliderWithReset("FoV", &fov, 45.0f, 120.0f, 75.0f)) {
+        if (widgets::SliderWithReset(LOC(MainPanel::FOV), &fov, 45.0f, 120.0f, 75.0f)) {
             render_manager->setFov(fov);
 
             ui::RenderSettingsChanged{
@@ -318,7 +322,7 @@ namespace lfs::vis::gui::panels {
         // SH DEGREE selection
         const char* sh_degrees[] = {"0", "1", "2", "3"};
         int current_sh_degree = static_cast<int>(settings.sh_degree);
-        if (ImGui::Combo("SH Degree", &current_sh_degree, sh_degrees, IM_ARRAYSIZE(sh_degrees))) {
+        if (ImGui::Combo(LOC(MainPanel::SH_DEGREE), &current_sh_degree, sh_degrees, IM_ARRAYSIZE(sh_degrees))) {
             settings.sh_degree = current_sh_degree;
             settings_changed = true;
 
@@ -332,7 +336,7 @@ namespace lfs::vis::gui::panels {
                 .emit();
         }
 
-        if (ImGui::Checkbox("Equirectangular", &settings.equirectangular)) {
+        if (ImGui::Checkbox(LOC(MainPanel::EQUIRECTANGULAR), &settings.equirectangular)) {
             settings_changed = true;
 
             ui::RenderSettingsChanged{
@@ -346,21 +350,21 @@ namespace lfs::vis::gui::panels {
         }
 
         // GUT (Gaussian Unscented Transform) for non-pinhole cameras
-        if (ImGui::Checkbox("GUT (3DGUT)", &settings.gut)) {
+        if (ImGui::Checkbox(LOC(MainPanel::GUT_MODE), &settings.gut)) {
             settings_changed = true;
             render_manager->updateSettings(settings);
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Enable for fisheye, distorted, or equirectangular cameras.\nRequired for viewing PLYs trained with --gut flag.");
+            ImGui::SetTooltip("%s", LOC(Tooltip::GUT_MODE));
         }
 
         // Mip Filter (anti-aliasing for distant/small Gaussians)
-        if (ImGui::Checkbox("Mip Filter", &settings.mip_filter)) {
+        if (ImGui::Checkbox(LOC(MainPanel::MIP_FILTER), &settings.mip_filter)) {
             settings_changed = true;
             render_manager->updateSettings(settings);
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Enable mip-splatting filter to reduce aliasing artifacts.\nCompensates opacity for Gaussians smaller than a pixel.");
+            ImGui::SetTooltip("%s", LOC(Tooltip::MIP_FILTER));
         }
     }
 
@@ -379,12 +383,12 @@ namespace lfs::vis::gui::panels {
 
         Scene& scene = scene_manager->getScene();
 
-        if (!ImGui::CollapsingHeader("Selection Groups", ImGuiTreeNodeFlags_DefaultOpen))
+        if (!ImGui::CollapsingHeader(LOC(MainPanel::SELECTION_GROUPS), ImGuiTreeNodeFlags_DefaultOpen))
             return;
 
         const float button_width = ImGui::GetContentRegionAvail().x;
 
-        if (ImGui::Button("+ Add Group", ImVec2(button_width, 0))) {
+        if (ImGui::Button(LOC(MainPanel::ADD_GROUP), ImVec2(button_width, 0))) {
             if (selection_tool->hasActivePolygon()) {
                 selection_tool->clearPolygon();
             }
@@ -395,7 +399,7 @@ namespace lfs::vis::gui::panels {
         const uint8_t active_id = scene.getActiveSelectionGroup();
 
         if (groups.empty()) {
-            ImGui::TextColored(theme().palette.text_dim, "No selection groups");
+            ImGui::TextColored(theme().palette.text_dim, "%s", LOC(MainPanel::NO_SELECTION_GROUPS));
         } else {
             scene.updateSelectionGroupCounts();
 
@@ -436,7 +440,7 @@ namespace lfs::vis::gui::panels {
                 ImGui::PopStyleColor(3);
 
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip(is_locked ? "Locked: other groups cannot overwrite" : "Unlocked: can be overwritten");
+                    ImGui::SetTooltip("%s", is_locked ? LOC(Tooltip::LOCKED) : LOC(Tooltip::UNLOCKED));
                 }
                 ImGui::SameLine();
 
@@ -465,16 +469,16 @@ namespace lfs::vis::gui::panels {
 
                 // Context menu
                 if (ImGui::BeginPopupContextItem("##ctx")) {
-                    if (ImGui::MenuItem(is_locked ? "Unlock" : "Lock")) {
+                    if (ImGui::MenuItem(is_locked ? LOC(lichtfeld::Strings::SelectionGroup::UNLOCK) : LOC(lichtfeld::Strings::SelectionGroup::LOCK))) {
                         scene.setSelectionGroupLocked(group.id, !is_locked);
                     }
-                    if (ImGui::MenuItem("Clear")) {
+                    if (ImGui::MenuItem(LOC(MainPanel::CLEAR))) {
                         if (is_active && selection_tool->hasActivePolygon()) {
                             selection_tool->clearPolygon();
                         }
                         scene.clearSelectionGroup(group.id);
                     }
-                    if (ImGui::MenuItem("Delete")) {
+                    if (ImGui::MenuItem(LOC(Common::DELETE))) {
                         if (is_active && selection_tool->hasActivePolygon()) {
                             selection_tool->clearPolygon();
                         }

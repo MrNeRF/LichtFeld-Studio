@@ -9,6 +9,8 @@
 #include "core/logger.hpp"
 #include "core/services.hpp"
 #include "core/splat_data_mirror.hpp"
+#include "gui/localization_manager.hpp"
+#include "gui/string_keys.hpp"
 #include "gui/panels/gizmo_toolbar.hpp"
 #include "gui/ui_widgets.hpp"
 #include "internal/resource_paths.hpp"
@@ -19,6 +21,8 @@
 #include <imgui.h>
 
 namespace lfs::vis::gui::panels {
+
+    using namespace lichtfeld::Strings;
 
     constexpr float SUBTOOLBAR_OFFSET_Y = 8.0f;
 
@@ -312,21 +316,21 @@ namespace lfs::vis::gui::panels {
                     }
                 };
 
-                ToolButton("##selection", state.selection_texture, ToolType::Selection, ImGuizmo::TRANSLATE, "S", "Selection");
+                ToolButton("##selection", state.selection_texture, ToolType::Selection, ImGuizmo::TRANSLATE, "S", LOC(Toolbar::SELECTION));
                 ImGui::SameLine();
-                ToolButton("##translate", state.translation_texture, ToolType::Translate, ImGuizmo::TRANSLATE, "T", "Translate");
+                ToolButton("##translate", state.translation_texture, ToolType::Translate, ImGuizmo::TRANSLATE, "T", LOC(Toolbar::TRANSLATE));
                 ImGui::SameLine();
-                ToolButton("##rotate", state.rotation_texture, ToolType::Rotate, ImGuizmo::ROTATE, "R", "Rotate");
+                ToolButton("##rotate", state.rotation_texture, ToolType::Rotate, ImGuizmo::ROTATE, "R", LOC(Toolbar::ROTATE));
                 ImGui::SameLine();
-                ToolButton("##scale", state.scaling_texture, ToolType::Scale, ImGuizmo::SCALE, "S", "Scale");
+                ToolButton("##scale", state.scaling_texture, ToolType::Scale, ImGuizmo::SCALE, "S", LOC(Toolbar::SCALE));
                 ImGui::SameLine();
-                ToolButton("##mirror", state.mirror_texture, ToolType::Mirror, ImGuizmo::TRANSLATE, "M", "Mirror");
+                ToolButton("##mirror", state.mirror_texture, ToolType::Mirror, ImGuizmo::TRANSLATE, "M", LOC(Toolbar::MIRROR));
                 ImGui::SameLine();
-                ToolButton("##brush", state.painting_texture, ToolType::Brush, ImGuizmo::TRANSLATE, "P", "Painting");
+                ToolButton("##brush", state.painting_texture, ToolType::Brush, ImGuizmo::TRANSLATE, "P", LOC(Toolbar::PAINTING));
                 ImGui::SameLine();
-                ToolButton("##align", state.align_texture, ToolType::Align, ImGuizmo::TRANSLATE, "A", "3-Point Align");
+                ToolButton("##align", state.align_texture, ToolType::Align, ImGuizmo::TRANSLATE, "A", LOC(Toolbar::ALIGN_3POINT));
                 ImGui::SameLine();
-                ToolButton("##cropbox", state.cropbox_texture, ToolType::CropBox, ImGuizmo::BOUNDS, "C", "Crop Box");
+                ToolButton("##cropbox", state.cropbox_texture, ToolType::CropBox, ImGuizmo::BOUNDS, "C", LOC(Toolbar::CROP_BOX));
             }
             ImGui::End();
         }
@@ -363,19 +367,19 @@ namespace lfs::vis::gui::panels {
                     };
 
                     SelectionModeButton("##centers", state.brush_texture, SelectionSubMode::Centers,
-                                        "B", "Brush selection (Ctrl+1)");
+                                        "B", LOC(Toolbar::BRUSH_SELECTION));
                     ImGui::SameLine();
                     SelectionModeButton("##rect", state.rectangle_texture, SelectionSubMode::Rectangle,
-                                        "R", "Rectangle selection (Ctrl+2)");
+                                        "R", LOC(Toolbar::RECT_SELECTION));
                     ImGui::SameLine();
                     SelectionModeButton("##polygon", state.polygon_texture, SelectionSubMode::Polygon,
-                                        "P", "Polygon selection (Ctrl+3)");
+                                        "P", LOC(Toolbar::POLYGON_SELECTION));
                     ImGui::SameLine();
                     SelectionModeButton("##lasso", state.lasso_texture, SelectionSubMode::Lasso,
-                                        "L", "Lasso selection (Ctrl+4)");
+                                        "L", LOC(Toolbar::LASSO_SELECTION));
                     ImGui::SameLine();
                     SelectionModeButton("##rings", state.ring_texture, SelectionSubMode::Rings,
-                                        "O", "Ring selection (Ctrl+5)");
+                                        "O", LOC(Toolbar::RING_SELECTION));
                 }
                 ImGui::End();
             }
@@ -411,9 +415,9 @@ namespace lfs::vis::gui::panels {
                         ImGui::SetTooltip("%s", tooltip);
                 };
 
-                SpaceButton("##local", state.local_texture, TransformSpace::Local, "L", "Local Space");
+                SpaceButton("##local", state.local_texture, TransformSpace::Local, "L", LOC(Toolbar::LOCAL_SPACE));
                 ImGui::SameLine();
-                SpaceButton("##world", state.world_texture, TransformSpace::World, "W", "World Space");
+                SpaceButton("##world", state.world_texture, TransformSpace::World, "W", LOC(Toolbar::WORLD_SPACE));
             }
             ImGui::End();
         }
@@ -445,20 +449,20 @@ namespace lfs::vis::gui::panels {
                         ImGui::SetTooltip("%s", tooltip);
                 };
 
-                CropOpButton("##crop_bounds", state.bounds_texture, CropBoxOperation::Bounds, "B", "Resize Bounds");
+                CropOpButton("##crop_bounds", state.bounds_texture, CropBoxOperation::Bounds, "B", LOC(Toolbar::RESIZE_BOUNDS));
                 ImGui::SameLine();
-                CropOpButton("##crop_translate", state.translation_texture, CropBoxOperation::Translate, "T", "Translate");
+                CropOpButton("##crop_translate", state.translation_texture, CropBoxOperation::Translate, "T", LOC(Toolbar::TRANSLATE));
                 ImGui::SameLine();
-                CropOpButton("##crop_rotate", state.rotation_texture, CropBoxOperation::Rotate, "R", "Rotate");
+                CropOpButton("##crop_rotate", state.rotation_texture, CropBoxOperation::Rotate, "R", LOC(Toolbar::ROTATE));
                 ImGui::SameLine();
-                CropOpButton("##crop_scale", state.scaling_texture, CropBoxOperation::Scale, "S", "Scale");
+                CropOpButton("##crop_scale", state.scaling_texture, CropBoxOperation::Scale, "S", LOC(Toolbar::SCALE));
                 ImGui::SameLine();
 
                 if (widgets::IconButton("##crop_reset", state.reset_texture, btn_size, false, "X")) {
                     state.reset_cropbox_requested = true;
                 }
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Reset to Default");
+                    ImGui::SetTooltip("%s", LOC(Toolbar::RESET_DEFAULT));
             }
             ImGui::End();
         }
@@ -482,20 +486,20 @@ namespace lfs::vis::gui::panels {
 
                     const auto MirrorButton = [&](const char* id, const unsigned int tex,
                                                   const lfs::core::MirrorAxis axis,
-                                                  const char* label) {
+                                                  const char* label, const char* tooltip) {
                         if (widgets::IconButton(id, tex, btn_size, false, label)) {
                             services().scene().executeMirror(axis);
                         }
                         if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip("Mirror %s", label);
+                            ImGui::SetTooltip("%s", tooltip);
                         }
                     };
 
-                    MirrorButton("##mirror_x", state.mirror_x_texture, lfs::core::MirrorAxis::X, "X");
+                    MirrorButton("##mirror_x", state.mirror_x_texture, lfs::core::MirrorAxis::X, "X", LOC(Toolbar::MIRROR_X));
                     ImGui::SameLine();
-                    MirrorButton("##mirror_y", state.mirror_y_texture, lfs::core::MirrorAxis::Y, "Y");
+                    MirrorButton("##mirror_y", state.mirror_y_texture, lfs::core::MirrorAxis::Y, "Y", LOC(Toolbar::MIRROR_Y));
                     ImGui::SameLine();
-                    MirrorButton("##mirror_z", state.mirror_z_texture, lfs::core::MirrorAxis::Z, "Z");
+                    MirrorButton("##mirror_z", state.mirror_z_texture, lfs::core::MirrorAxis::Z, "Z", LOC(Toolbar::MIRROR_Z));
                 }
                 ImGui::End();
             }
@@ -558,7 +562,7 @@ namespace lfs::vis::gui::panels {
                 lfs::core::events::cmd::ResetCamera{}.emit();
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Home (H)");
+                ImGui::SetTooltip("%s", LOC(Toolbar::HOME));
 
             // Fullscreen
             const auto fs_tex = is_fullscreen ? state.exit_fullscreen_texture : state.fullscreen_texture;
@@ -566,14 +570,14 @@ namespace lfs::vis::gui::panels {
                 lfs::core::events::ui::ToggleFullscreen{}.emit();
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Fullscreen (F11)");
+                ImGui::SetTooltip("%s", LOC(Toolbar::FULLSCREEN));
 
             // Toggle UI
             if (widgets::IconButton("##hide_ui", state.hide_ui_texture, btn_size, ui_hidden, "U")) {
                 lfs::core::events::ui::ToggleUI{}.emit();
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Toggle UI (F12)");
+                ImGui::SetTooltip("%s", LOC(Toolbar::TOGGLE_UI));
 
             if (render_manager) {
                 DrawToolbarSeparator(btn_size.x);
@@ -589,17 +593,17 @@ namespace lfs::vis::gui::panels {
                         ImGui::SetTooltip("%s", tooltip);
                 };
 
-                vizButton("##splat", state.splat_texture, "S", RenderVisualization::Splat, "Splat Rendering");
-                vizButton("##pointcloud", state.pointcloud_texture, "P", RenderVisualization::PointCloud, "Point Cloud");
-                vizButton("##rings", state.rings_texture, "R", RenderVisualization::Rings, "Gaussian Rings");
-                vizButton("##centers", state.centers_texture, "C", RenderVisualization::Centers, "Center Markers");
+                vizButton("##splat", state.splat_texture, "S", RenderVisualization::Splat, LOC(Toolbar::SPLAT_RENDERING));
+                vizButton("##pointcloud", state.pointcloud_texture, "P", RenderVisualization::PointCloud, LOC(Toolbar::POINT_CLOUD));
+                vizButton("##rings", state.rings_texture, "R", RenderVisualization::Rings, LOC(Toolbar::GAUSSIAN_RINGS));
+                vizButton("##centers", state.centers_texture, "C", RenderVisualization::Centers, LOC(Toolbar::CENTER_MARKERS));
 
                 DrawToolbarSeparator(btn_size.x);
 
                 const auto settings = render_manager->getSettings();
                 const bool is_ortho = settings.orthographic;
                 const auto proj_tex = is_ortho ? state.orthographic_texture : state.perspective_texture;
-                const char* proj_tooltip = is_ortho ? "Orthographic (O)" : "Perspective (O)";
+                const char* proj_tooltip = is_ortho ? LOC(Toolbar::ORTHOGRAPHIC) : LOC(Toolbar::PERSPECTIVE);
 
                 if (widgets::IconButton("##projection", proj_tex, btn_size, is_ortho, "O")) {
                     if (viewport) {

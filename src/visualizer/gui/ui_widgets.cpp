@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/ui_widgets.hpp"
+#include "gui/localization_manager.hpp"
+#include "gui/string_keys.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
 #include "training/training_manager.hpp"
@@ -19,7 +21,7 @@ namespace lfs::vis::gui::widgets {
 
         ImGui::SameLine();
         ImGui::PushID(label);
-        if (ImGui::Button("Reset")) {
+        if (ImGui::Button(LOC(lichtfeld::Strings::Common::RESET))) {
             *v = reset_value;
             changed = true;
         }
@@ -33,7 +35,7 @@ namespace lfs::vis::gui::widgets {
 
         ImGui::SameLine();
         ImGui::PushID(label);
-        if (ImGui::Button("Reset")) {
+        if (ImGui::Button(LOC(lichtfeld::Strings::Common::RESET))) {
             v[0] = v[1] = v[2] = reset_value;
             changed = true;
         }
@@ -87,14 +89,16 @@ namespace lfs::vis::gui::widgets {
     }
 
     void DrawModeStatus(const UIContext& ctx) {
+        using namespace lichtfeld::Strings;
+
         auto* scene_manager = ctx.viewer->getSceneManager();
         if (!scene_manager) {
-            ImGui::Text("Mode: Unknown");
+            ImGui::Text("%s %s", LOC(Status::MODE), LOC(Status::UNKNOWN));
             return;
         }
 
         const auto& t = theme();
-        const char* mode_str = "Unknown";
+        const char* mode_str = LOC(Status::UNKNOWN);
         ImVec4 mode_color = t.palette.text_dim;
 
         // Content determines base mode
@@ -102,12 +106,12 @@ namespace lfs::vis::gui::widgets {
 
         switch (content) {
         case SceneManager::ContentType::Empty:
-            mode_str = "Empty";
+            mode_str = LOC(Mode::EMPTY);
             mode_color = t.palette.text_dim;
             break;
 
         case SceneManager::ContentType::SplatFiles:
-            mode_str = "Edit Mode";
+            mode_str = LOC(Mode::EDIT_MODE);
             mode_color = t.palette.info;
             break;
 
@@ -115,51 +119,51 @@ namespace lfs::vis::gui::widgets {
             // For dataset, check training state from TrainerManager
             auto* trainer_manager = scene_manager->getTrainerManager();
             if (!trainer_manager || !trainer_manager->hasTrainer()) {
-                mode_str = "Dataset (No Trainer)";
+                mode_str = LOC(Status::DATASET_NO_TRAINER);
                 mode_color = t.palette.text_dim;
             } else {
                 // Use trainer state for specific mode
                 auto state = trainer_manager->getState();
                 switch (state) {
                 case TrainerManager::State::Ready:
-                    mode_str = "Dataset (Ready)";
+                    mode_str = LOC(Status::DATASET_READY);
                     mode_color = t.palette.success;
                     break;
                 case TrainerManager::State::Running:
-                    mode_str = "Training";
+                    mode_str = LOC(Status::TRAINING);
                     mode_color = t.palette.warning;
                     break;
                 case TrainerManager::State::Paused:
-                    mode_str = "Training (Paused)";
+                    mode_str = LOC(Status::TRAINING_PAUSED);
                     mode_color = lighten(t.palette.warning, -0.3f);
                     break;
                 case TrainerManager::State::Finished: {
                     const auto reason = trainer_manager->getStateMachine().getFinishReason();
                     switch (reason) {
                     case FinishReason::Completed:
-                        mode_str = "Training Complete";
+                        mode_str = LOC(Messages::TRAINING_COMPLETE);
                         mode_color = t.palette.success;
                         break;
                     case FinishReason::UserStopped:
-                        mode_str = "Training Stopped";
+                        mode_str = LOC(Messages::TRAINING_STOPPED);
                         mode_color = t.palette.text_dim;
                         break;
                     case FinishReason::Error:
-                        mode_str = "Training Error";
+                        mode_str = LOC(Messages::TRAINING_ERROR);
                         mode_color = t.palette.error;
                         break;
                     default:
-                        mode_str = "Training Finished";
+                        mode_str = LOC(Status::TRAINING_FINISHED);
                         mode_color = t.palette.text_dim;
                     }
                     break;
                 }
                 case TrainerManager::State::Stopping:
-                    mode_str = "Stopping...";
+                    mode_str = LOC(Status::STOPPING);
                     mode_color = darken(t.palette.error, 0.3f);
                     break;
                 default:
-                    mode_str = "Dataset";
+                    mode_str = LOC(Mode::DATASET);
                     mode_color = t.palette.text_dim;
                 }
             }
@@ -167,16 +171,16 @@ namespace lfs::vis::gui::widgets {
         }
         }
 
-        ImGui::TextColored(mode_color, "Mode: %s", mode_str);
+        ImGui::TextColored(mode_color, "%s %s", LOC(Status::MODE), mode_str);
 
         // Display scene info
         auto info = scene_manager->getSceneInfo();
         if (info.num_gaussians > 0) {
-            ImGui::Text("Gaussians: %zu", info.num_gaussians);
+            ImGui::Text("%s %zu", LOC(Status::GAUSSIANS), info.num_gaussians);
         }
 
         if (info.source_type == "PLY" && info.num_nodes > 0) {
-            ImGui::Text("PLY Models: %zu", info.num_nodes);
+            ImGui::Text(LOC(Status::PLY_MODELS_COUNT), info.num_nodes);
         }
 
         // Display training iteration if actively training
@@ -185,7 +189,7 @@ namespace lfs::vis::gui::widgets {
             if (trainer_manager && trainer_manager->isRunning()) {
                 int iteration = trainer_manager->getCurrentIteration();
                 if (iteration > 0) {
-                    ImGui::Text("Iteration: %d", iteration);
+                    ImGui::Text("%s %d", LOC(Status::ITERATION), iteration);
                 }
             }
         }

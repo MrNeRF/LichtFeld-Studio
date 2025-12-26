@@ -497,6 +497,14 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
     COMMENT "Copying parameter files"
 )
 
+# Copy locale files
+add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales"
+        "${RESOURCE_DIR}/locales"
+    COMMENT "Copying locale files"
+)
+
 message(STATUS "Post-build: Resources will be copied to \${BUILD_DIR}/resources/")
 
 # Platform-specific settings

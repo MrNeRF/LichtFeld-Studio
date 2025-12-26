@@ -14,6 +14,8 @@
 #include "core/sogs.hpp"
 #include "core/splat_data_export.hpp"
 #include "gui/html_viewer_export.hpp"
+#include "gui/localization_manager.hpp"
+#include "gui/string_keys.hpp"
 #include "gui/panels/main_panel.hpp"
 #include "gui/panels/scene_panel.hpp"
 #include "gui/panels/tools_panel.hpp"
@@ -265,6 +267,15 @@ namespace lfs::vis::gui {
         ImGui_ImplGlfw_InitForOpenGL(viewer_->getWindow(), true);
         ImGui_ImplOpenGL3_Init("#version 430");
 
+        // Initialize localization system
+        auto& loc = lichtfeld::LocalizationManager::getInstance();
+        const std::string locale_path = lfs::core::getLocalesDir().string();
+        if (!loc.initialize(locale_path)) {
+            LOG_WARN("Failed to initialize localization system, using default strings");
+        } else {
+            LOG_INFO("Localization initialized with language: {}", loc.getCurrentLanguageName());
+        }
+
         float xscale, yscale;
         glfwGetWindowContentScale(viewer_->getWindow(), &xscale, &yscale);
 
@@ -291,21 +302,43 @@ namespace lfs::vis::gui {
         try {
             const auto regular_path = lfs::vis::getAssetPath("fonts/" + t.fonts.regular_path);
             const auto bold_path = lfs::vis::getAssetPath("fonts/" + t.fonts.bold_path);
+            const auto japanese_path = lfs::vis::getAssetPath("fonts/NotoSansJP-Regular.ttf");
 
-            constexpr size_t MIN_FONT_FILE_SIZE = 100;
-            const auto load_font = [&](const std::filesystem::path& path, const float size) -> ImFont* {
-                if (!std::filesystem::exists(path) || std::filesystem::file_size(path) < MIN_FONT_FILE_SIZE) {
+            // Helper to check if font file is valid
+            const auto is_font_valid = [](const std::filesystem::path& path) -> bool {
+                constexpr size_t MIN_FONT_FILE_SIZE = 100;
+                return std::filesystem::exists(path) && std::filesystem::file_size(path) >= MIN_FONT_FILE_SIZE;
+            };
+
+            // Load font with optional Japanese glyph merging
+            const auto load_font_with_japanese =
+                [&](const std::filesystem::path& path, const float size) -> ImFont* {
+                if (!is_font_valid(path)) {
                     LOG_WARN("Font file invalid: {}", path.string());
                     return nullptr;
                 }
-                return io.Fonts->AddFontFromFileTTF(path.string().c_str(), size);
+
+                // Load base font (Latin characters)
+                ImFont* font = io.Fonts->AddFontFromFileTTF(path.string().c_str(), size);
+                if (!font)
+                    return nullptr;
+
+                // Merge Japanese glyphs if available
+                if (is_font_valid(japanese_path)) {
+                    ImFontConfig config;
+                    config.MergeMode = true;
+                    io.Fonts->AddFontFromFileTTF(japanese_path.string().c_str(), size, &config,
+                                                 io.Fonts->GetGlyphRangesJapanese());
+                }
+
+                return font;
             };
 
-            font_regular_ = load_font(regular_path, t.fonts.base_size * xscale);
-            font_bold_ = load_font(bold_path, t.fonts.base_size * xscale);
-            font_heading_ = load_font(bold_path, t.fonts.heading_size * xscale);
-            font_small_ = load_font(regular_path, t.fonts.small_size * xscale);
-            font_section_ = load_font(bold_path, t.fonts.section_size * xscale);
+            font_regular_ = load_font_with_japanese(regular_path, t.fonts.base_size * xscale);
+            font_bold_ = load_font_with_japanese(bold_path, t.fonts.base_size * xscale);
+            font_heading_ = load_font_with_japanese(bold_path, t.fonts.heading_size * xscale);
+            font_small_ = load_font_with_japanese(regular_path, t.fonts.small_size * xscale);
+            font_section_ = load_font_with_japanese(bold_path, t.fonts.section_size * xscale);
 
             const bool all_loaded = font_regular_ && font_bold_ && font_heading_ && font_small_ && font_section_;
             if (!all_loaded) {
@@ -323,6 +356,9 @@ namespace lfs::vis::gui {
                     font_section_ = fallback;
             } else {
                 LOG_INFO("Loaded fonts: {} and {}", t.fonts.regular_path, t.fonts.bold_path);
+                if (is_font_valid(japanese_path)) {
+                    LOG_INFO("Japanese font support enabled");
+                }
             }
         } catch (const std::exception& e) {
             LOG_ERROR("Font loading failed: {}", e.what());
@@ -569,7 +605,7 @@ namespace lfs::vis::gui {
                 const float scene_h = std::max(MIN_H, avail_h * scene_panel_ratio_ - SPLITTER_H * 0.5f);
                 ImGui::PushStyleColor(ImGuiCol_ChildBg, {0, 0, 0, 0});
                 if (ImGui::BeginChild("##ScenePanel", {0, scene_h}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
-                    widgets::SectionHeader("SCENE", ctx.fonts);
+                    widgets::SectionHeader(LOC(lichtfeld::Strings::Window::SCENE), ctx.fonts);
                     scene_panel_->renderContent(&ctx);
                 }
                 ImGui::EndChild();
@@ -600,7 +636,7 @@ namespace lfs::vis::gui {
                 ImGui::PushStyleColor(ImGuiCol_ChildBg, {0, 0, 0, 0});
                 if (viewer_->getTrainer()) {
                     if (ImGui::BeginTabBar("##BottomTabs")) {
-                        if (ImGui::BeginTabItem("Rendering")) {
+                        if (ImGui::BeginTabItem(LOC(lichtfeld::Strings::Window::RENDERING))) {
                             if (ImGui::BeginChild("##RenderingPanel", {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
                                 draw_rendering();
                             }
@@ -612,7 +648,7 @@ namespace lfs::vis::gui {
                                                             : ImGuiTabItemFlags_None;
                         if (focus_training_panel_)
                             focus_training_panel_ = false;
-                        if (ImGui::BeginTabItem("Training", nullptr, flags)) {
+                        if (ImGui::BeginTabItem(LOC(lichtfeld::Strings::Window::TRAINING), nullptr, flags)) {
                             panels::DrawTrainingControls(ctx);
                             if (ImGui::BeginChild("##TrainingPanel", {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
                                 panels::DrawTrainingParams(ctx);
@@ -626,7 +662,7 @@ namespace lfs::vis::gui {
                         ImGui::EndTabBar();
                     }
                 } else {
-                    widgets::SectionHeader("RENDERING", ctx.fonts);
+                    widgets::SectionHeader(LOC(lichtfeld::Strings::Window::RENDERING), ctx.fonts);
                     if (ImGui::BeginChild("##RenderingPanel", {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
                         draw_rendering();
                     }
@@ -1354,9 +1390,9 @@ namespace lfs::vis::gui {
                     if (ctx.fonts.bold)
                         ImGui::PushFont(ctx.fonts.bold);
                     if (visible == total)
-                        ImGui::Text("%s Gaussians", fmt(total).c_str());
+                        ImGui::Text(LOC(lichtfeld::Strings::Progress::GAUSSIANS_COUNT), fmt(total).c_str());
                     else
-                        ImGui::Text("%s / %s Gaussians", fmt(visible).c_str(), fmt(total).c_str());
+                        ImGui::Text("%s / %s", fmt(visible).c_str(), fmt(total).c_str());
                     if (ctx.fonts.bold)
                         ImGui::PopFont();
                 }
@@ -1499,7 +1535,7 @@ namespace lfs::vis::gui {
                 ImGui::PushFont(ctx.fonts.bold);
             ImGui::TextColored(fps_color, "%s", fps_buf);
             ImGui::SameLine(0.0f, 0.0f);
-            ImGui::TextColored(t.palette.text_dim, " FPS");
+            ImGui::TextColored(t.palette.text_dim, " %s", LOC(lichtfeld::Strings::Status::FPS));
             if (ctx.fonts.bold)
                 ImGui::PopFont();
 
@@ -2367,7 +2403,7 @@ namespace lfs::vis::gui {
                 case ExportFormat::SPZ: format_name = "SPZ"; break;
                 case ExportFormat::HTML_VIEWER: format_name = "HTML"; break;
                 }
-                ImGui::Text("Exporting %s...", format_name);
+                ImGui::Text(LOC(lichtfeld::Strings::Progress::EXPORTING), format_name);
             }
             ImGui::PopFont();
 
@@ -2387,7 +2423,7 @@ namespace lfs::vis::gui {
             ImGui::Spacing();
 
             ImGui::SetCursorPosX((OVERLAY_WIDTH - BUTTON_WIDTH) * 0.5f - ImGui::GetStyle().WindowPadding.x);
-            if (ImGui::Button("Cancel", ImVec2(BUTTON_WIDTH, BUTTON_HEIGHT))) {
+            if (ImGui::Button(LOC(lichtfeld::Strings::Common::CANCEL), ImVec2(BUTTON_WIDTH, BUTTON_HEIGHT))) {
                 cancelExport();
             }
 
@@ -2584,24 +2620,6 @@ namespace lfs::vis::gui {
         if (!show_startup_overlay_)
             return;
 
-        // Dismiss on user interaction
-        const auto& io = ImGui::GetIO();
-        const bool modal_open = (save_directory_popup_ && save_directory_popup_->isOpen()) ||
-                                (exit_confirmation_popup_ && exit_confirmation_popup_->isOpen());
-        const bool mouse_action = ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                                  ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
-                                  ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
-                                  std::abs(io.MouseWheel) > 0.0f || std::abs(io.MouseWheelH) > 0.0f;
-        const bool key_action = io.InputQueueCharacters.Size > 0 ||
-                                ImGui::IsKeyPressed(ImGuiKey_Escape) ||
-                                ImGui::IsKeyPressed(ImGuiKey_Space) ||
-                                ImGui::IsKeyPressed(ImGuiKey_Enter);
-
-        if (modal_open || drag_drop_hovering_ || mouse_action || key_action) {
-            show_startup_overlay_ = false;
-            return;
-        }
-
         static constexpr float MIN_VIEWPORT_SIZE = 100.0f;
         if (viewport_size_.x < MIN_VIEWPORT_SIZE || viewport_size_.y < MIN_VIEWPORT_SIZE)
             return;
@@ -2615,15 +2633,13 @@ namespace lfs::vis::gui {
         static constexpr float GAP_LOGO_TEXT = 20.0f;
         static constexpr float GAP_TEXT_CORE11 = 10.0f;
         static constexpr float GAP_CORE11_HINT = 16.0f;
+        static constexpr float GAP_LANG_HINT = 12.0f;
+        static constexpr float LANG_COMBO_WIDTH = 140.0f;
         static constexpr const char* SUPPORTED_TEXT = "Supported by";
         static constexpr const char* CLICK_HINT = "Click anywhere to continue";
 
         // Theme colors
         const auto& t = theme();
-        const ImU32 BG_COLOR = toU32WithAlpha(t.palette.surface, 0.96f);
-        const ImU32 BORDER_COLOR = toU32WithAlpha(t.palette.border, 0.7f);
-        const ImU32 TEXT_COLOR = toU32WithAlpha(t.palette.text_dim, 0.85f);
-        const ImU32 HINT_COLOR = toU32WithAlpha(t.palette.text_dim, 0.5f);
 
         // Logo dimensions
         const float main_logo_w = static_cast<float>(startup_logo_width_) * MAIN_LOGO_SCALE;
@@ -2636,54 +2652,147 @@ namespace lfs::vis::gui {
             ImGui::PushFont(font_small_);
         const ImVec2 supported_size = ImGui::CalcTextSize(SUPPORTED_TEXT);
         const ImVec2 hint_size = ImGui::CalcTextSize(CLICK_HINT);
+        const ImVec2 lang_label_size = ImGui::CalcTextSize(LOC(lichtfeld::Strings::Preferences::LANGUAGE));
         if (font_small_)
             ImGui::PopFont();
 
-        // Overlay dimensions
-        const float content_width = std::max({main_logo_w, core11_w, supported_size.x, hint_size.x});
+        // Overlay dimensions (include language selector height)
+        const float lang_row_height = ImGui::GetFrameHeight() + 4.0f;
+        const float content_width = std::max({main_logo_w, core11_w, supported_size.x, hint_size.x, LANG_COMBO_WIDTH + lang_label_size.x + 8.0f});
         const float content_height = main_logo_h + GAP_LOGO_TEXT + supported_size.y + GAP_TEXT_CORE11 +
-                                     core11_h + GAP_CORE11_HINT + hint_size.y;
+                                     core11_h + GAP_CORE11_HINT + lang_row_height + GAP_LANG_HINT + hint_size.y;
         const float overlay_width = content_width + PADDING_X * 2.0f;
         const float overlay_height = content_height + PADDING_Y * 2.0f;
 
         // Center in viewport
         const float center_x = viewport_pos_.x + viewport_size_.x * 0.5f;
         const float center_y = viewport_pos_.y + viewport_size_.y * 0.5f;
-        const ImVec2 overlay_min(center_x - overlay_width * 0.5f, center_y - overlay_height * 0.5f);
-        const ImVec2 overlay_max(center_x + overlay_width * 0.5f, center_y + overlay_height * 0.5f);
+        const ImVec2 overlay_pos(center_x - overlay_width * 0.5f, center_y - overlay_height * 0.5f);
 
-        ImDrawList* const draw_list = ImGui::GetForegroundDrawList();
-        draw_list->AddRectFilled(overlay_min, overlay_max, BG_COLOR, CORNER_RADIUS);
-        draw_list->AddRect(overlay_min, overlay_max, BORDER_COLOR, CORNER_RADIUS, 0, 1.5f);
+        // Style the overlay window
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, CORNER_RADIUS);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {PADDING_X, PADDING_Y});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.5f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, t.palette.surface);
+        ImGui::PushStyleColor(ImGuiCol_Border, t.palette.border);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, t.palette.background);
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, lighten(t.palette.background, 0.05f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, lighten(t.palette.background, 0.08f));
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, t.palette.surface);
+        ImGui::PushStyleColor(ImGuiCol_Header, t.palette.primary);
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, lighten(t.palette.primary, 0.1f));
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, t.palette.primary);
 
-        float y = overlay_min.y + PADDING_Y;
+        ImGui::SetNextWindowPos(overlay_pos);
+        ImGui::SetNextWindowSize({overlay_width, overlay_height});
 
-        // Main logo
-        if (startup_logo_texture_ && startup_logo_width_ > 0) {
-            const float x = center_x - main_logo_w * 0.5f;
-            draw_list->AddImage(static_cast<ImTextureID>(startup_logo_texture_),
-                                {x, y}, {x + main_logo_w, y + main_logo_h});
-            y += main_logo_h + GAP_LOGO_TEXT;
+        bool overlay_hovered = false;
+        if (ImGui::Begin("##StartupOverlay", nullptr,
+                         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
+                         ImGuiWindowFlags_NoCollapse)) {
+
+            ImDrawList* draw_list = ImGui::GetWindowDrawList();
+            const ImVec2 window_pos = ImGui::GetWindowPos();
+            const float window_center_x = window_pos.x + overlay_width * 0.5f;
+            float y = window_pos.y + PADDING_Y;
+
+            // Main logo
+            if (startup_logo_texture_ && startup_logo_width_ > 0) {
+                const float x = window_center_x - main_logo_w * 0.5f;
+                draw_list->AddImage(static_cast<ImTextureID>(startup_logo_texture_),
+                                    {x, y}, {x + main_logo_w, y + main_logo_h});
+                y += main_logo_h + GAP_LOGO_TEXT;
+            }
+
+            // Supported by text
+            if (font_small_)
+                ImGui::PushFont(font_small_);
+            draw_list->AddText({window_center_x - supported_size.x * 0.5f, y},
+                              toU32WithAlpha(t.palette.text_dim, 0.85f), SUPPORTED_TEXT);
+            y += supported_size.y + GAP_TEXT_CORE11;
+
+            // Core11 logo
+            if (startup_core11_texture_ && startup_core11_width_ > 0) {
+                const float x = window_center_x - core11_w * 0.5f;
+                draw_list->AddImage(static_cast<ImTextureID>(startup_core11_texture_),
+                                    {x, y}, {x + core11_w, y + core11_h});
+                y += core11_h + GAP_CORE11_HINT;
+            }
+
+            // Language selector - center the row in content area
+            const float lang_total_width = lang_label_size.x + 8.0f + LANG_COMBO_WIDTH;
+            const float content_area_width = overlay_width - 2.0f * PADDING_X;
+            const float lang_indent = (content_area_width - lang_total_width) * 0.5f;
+            ImGui::SetCursorPosY(y - window_pos.y);
+            ImGui::SetCursorPosX(lang_indent);
+            ImGui::TextColored(t.palette.text_dim, "%s", LOC(lichtfeld::Strings::Preferences::LANGUAGE));
+            ImGui::SameLine(0.0f, 8.0f);
+            ImGui::SetNextItemWidth(LANG_COMBO_WIDTH);
+
+            auto& loc = lichtfeld::LocalizationManager::getInstance();
+            const auto& current_lang = loc.getCurrentLanguage();
+            const auto available_langs = loc.getAvailableLanguages();
+            const auto lang_names = loc.getAvailableLanguageNames();
+
+            // Find current language name for preview
+            std::string current_name = current_lang;
+            for (size_t i = 0; i < available_langs.size(); ++i) {
+                if (available_langs[i] == current_lang) {
+                    current_name = lang_names[i];
+                    break;
+                }
+            }
+
+            if (ImGui::BeginCombo("##LangCombo", current_name.c_str())) {
+                for (size_t i = 0; i < available_langs.size(); ++i) {
+                    const bool is_selected = (available_langs[i] == current_lang);
+                    if (ImGui::Selectable(lang_names[i].c_str(), is_selected)) {
+                        loc.setLanguage(available_langs[i]);
+                    }
+                    if (is_selected) {
+                        ImGui::SetItemDefaultFocus();
+                    }
+                }
+                ImGui::EndCombo();
+            }
+
+            y += lang_row_height + GAP_LANG_HINT;
+
+            // Dismiss hint
+            draw_list->AddText({window_center_x - hint_size.x * 0.5f, y},
+                              toU32WithAlpha(t.palette.text_dim, 0.5f), CLICK_HINT);
+            if (font_small_)
+                ImGui::PopFont();
+
+            overlay_hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
+                                                     ImGuiHoveredFlags_ChildWindows);
         }
+        ImGui::End();
+        ImGui::PopStyleColor(9);
+        ImGui::PopStyleVar(5);
 
-        // Supported by text
-        if (font_small_)
-            ImGui::PushFont(font_small_);
-        draw_list->AddText({center_x - supported_size.x * 0.5f, y}, TEXT_COLOR, SUPPORTED_TEXT);
-        y += supported_size.y + GAP_TEXT_CORE11;
+        // Dismiss on user interaction (but not when interacting with overlay)
+        const auto& io = ImGui::GetIO();
+        const bool modal_open = (save_directory_popup_ && save_directory_popup_->isOpen()) ||
+                                (exit_confirmation_popup_ && exit_confirmation_popup_->isOpen());
+        const bool mouse_action = ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                                  ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
+                                  ImGui::IsMouseClicked(ImGuiMouseButton_Middle) ||
+                                  std::abs(io.MouseWheel) > 0.0f || std::abs(io.MouseWheelH) > 0.0f;
+        const bool key_action = io.InputQueueCharacters.Size > 0 ||
+                                ImGui::IsKeyPressed(ImGuiKey_Escape) ||
+                                ImGui::IsKeyPressed(ImGuiKey_Space) ||
+                                ImGui::IsKeyPressed(ImGuiKey_Enter);
 
-        // Core11 logo
-        if (startup_core11_texture_ && startup_core11_width_ > 0) {
-            const float x = center_x - core11_w * 0.5f;
-            draw_list->AddImage(static_cast<ImTextureID>(startup_core11_texture_),
-                                {x, y}, {x + core11_w, y + core11_h});
-            y += core11_h + GAP_CORE11_HINT;
+        // Don't dismiss if interacting with overlay or its popup
+        const bool any_popup_open = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        if (!overlay_hovered && !any_popup_open && !modal_open && !drag_drop_hovering_ && (mouse_action || key_action)) {
+            show_startup_overlay_ = false;
         }
-
-        // Dismiss hint
-        draw_list->AddText({center_x - hint_size.x * 0.5f, y}, HINT_COLOR, CLICK_HINT);
-        if (font_small_)
-            ImGui::PopFont();
     }
 
     void GuiManager::requestExitConfirmation() {

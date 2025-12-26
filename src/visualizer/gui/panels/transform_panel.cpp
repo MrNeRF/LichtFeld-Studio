@@ -5,6 +5,8 @@
 #include "gui/panels/transform_panel.hpp"
 #include "command/command_history.hpp"
 #include "command/commands/transform_command.hpp"
+#include "gui/localization_manager.hpp"
+#include "gui/string_keys.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer_impl.hpp"
@@ -13,6 +15,8 @@
 #include <imgui.h>
 
 namespace lfs::vis::gui::panels {
+
+    using namespace lichtfeld::Strings;
 
     namespace {
         constexpr float TRANSLATE_STEP = 0.01f;
@@ -62,9 +66,9 @@ namespace lfs::vis::gui::panels {
 
         const char* header_label = nullptr;
         switch (current_tool) {
-        case ToolType::Translate: header_label = "Translate"; break;
-        case ToolType::Rotate: header_label = "Rotate"; break;
-        case ToolType::Scale: header_label = "Scale"; break;
+        case ToolType::Translate: header_label = LOC(Toolbar::TRANSLATE); break;
+        case ToolType::Rotate: header_label = LOC(Toolbar::ROTATE); break;
+        case ToolType::Scale: header_label = LOC(Toolbar::SCALE); break;
         default: return;
         }
 
@@ -73,10 +77,10 @@ namespace lfs::vis::gui::panels {
 
         // Multi-selection: show info only, use gizmo to transform
         if (is_multi_selection) {
-            ImGui::Text("%zu nodes selected", selected_names.size());
-            ImGui::TextDisabled("Use gizmo to transform");
+            ImGui::Text(LOC(Transform::NODES_SELECTED), selected_names.size());
+            ImGui::TextDisabled("%s", LOC(Transform::USE_GIZMO));
             ImGui::Separator();
-            if (ImGui::Button("Reset All Transforms")) {
+            if (ImGui::Button(LOC(Transform::RESET_ALL))) {
                 static const glm::mat4 IDENTITY(1.0f);
                 const size_t count = selected_names.size();
                 std::vector<glm::mat4> old_transforms;
@@ -110,15 +114,15 @@ namespace lfs::vis::gui::panels {
         const float text_width = ImGui::CalcTextSize("-000.000").x +
                                  ImGui::GetStyle().FramePadding.x * 2.0f + INPUT_WIDTH_PADDING;
 
-        ImGui::Text("Node: %s", node_name.c_str());
-        ImGui::Text("Space: %s", use_world_space ? "World" : "Local");
+        ImGui::Text(LOC(Transform::NODE), node_name.c_str());
+        ImGui::Text(LOC(Transform::SPACE), use_world_space ? LOC(Transform::WORLD) : LOC(Transform::LOCAL));
         ImGui::Separator();
 
         bool changed = false;
         bool any_active = false;
 
         if (current_tool == ToolType::Translate) {
-            ImGui::Text("Position:");
+            ImGui::Text("%s", LOC(Transform::POSITION));
             ImGui::Text("X:");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(text_width);
@@ -139,7 +143,7 @@ namespace lfs::vis::gui::panels {
         }
 
         if (current_tool == ToolType::Rotate) {
-            ImGui::Text("Rotation (degrees):");
+            ImGui::Text("%s", LOC(Transform::ROTATION_DEGREES));
             ImGui::Text("X:");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(text_width);
@@ -164,7 +168,7 @@ namespace lfs::vis::gui::panels {
         }
 
         if (current_tool == ToolType::Scale) {
-            ImGui::Text("Scale:");
+            ImGui::Text("%s", LOC(Transform::SCALE));
 
             float uniform = (scale.x + scale.y + scale.z) / 3.0f;
             ImGui::Text("U:");
@@ -263,7 +267,7 @@ namespace lfs::vis::gui::panels {
         }
 
         ImGui::Separator();
-        if (ImGui::Button("Reset Transform")) {
+        if (ImGui::Button(LOC(Transform::RESET_TRANSFORM))) {
             auto cmd = std::make_unique<command::TransformCommand>(
                 node_name, current_transform, glm::mat4(1.0f));
             services().commands().execute(std::move(cmd));
