@@ -16,6 +16,7 @@
 #include "visualizer_impl.hpp"
 
 #include <algorithm>
+#include <cstring>
 #include <format>
 #include <ranges>
 #include <imgui.h>
@@ -29,7 +30,59 @@ namespace lfs::vis::gui {
         unsigned int loadSceneIcon(const std::string& name) {
             try {
                 const auto path = lfs::vis::getAssetPath("icon/scene/" + name);
-                const auto [data, width, height, channels] = lfs::core::load_image_with_alpha(path);
+                auto [data, width, height, channels] = lfs::core::load_image_with_alpha(path);
+
+                // Detect if we're using a light theme (background brightness > 0.5)
+                const auto& t = theme();
+                const float bg_brightness = (t.palette.background.x + t.palette.background.y + t.palette.background.z) / 3.0f;
+
+                // Add a dark border for light themes to improve visibility
+                if (bg_brightness > 0.5f && channels == 4) {
+                    // Create bordered image data
+                    const size_t pixel_count = width * height;
+                    auto* bordered_data = new unsigned char[pixel_count * 4];
+                    std::memcpy(bordered_data, data, pixel_count * 4);
+
+                    // Apply border by darkening adjacent pixels with alpha
+                    for (int y = 0; y < height; ++y) {
+                        for (int x = 0; x < width; ++x) {
+                            const int idx = (y * width + x) * 4;
+                            const unsigned char alpha = data[idx + 3];
+
+                            // If this pixel has alpha, check neighbors for border
+                            if (alpha > 10) {
+                                // Check 8 neighbors
+                                for (int dy = -1; dy <= 1; ++dy) {
+                                    for (int dx = -1; dx <= 1; ++dx) {
+                                        if (dx == 0 && dy == 0)
+                                            continue;
+
+                                        const int nx = x + dx;
+                                        const int ny = y + dy;
+
+                                        if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                                            const int nidx = (ny * width + nx) * 4;
+                                            const unsigned char neighbor_alpha = bordered_data[nidx + 3];
+
+                                            // If neighbor is transparent or semi-transparent, add dark border
+                                            if (neighbor_alpha < alpha) {
+                                                // Darken the RGB channels at the border
+                                                bordered_data[nidx] = static_cast<unsigned char>(bordered_data[nidx] * 0.3f);
+                                                bordered_data[nidx + 1] = static_cast<unsigned char>(bordered_data[nidx + 1] * 0.3f);
+                                                bordered_data[nidx + 2] = static_cast<unsigned char>(bordered_data[nidx + 2] * 0.3f);
+                                                // Increase alpha slightly for border visibility
+                                                bordered_data[nidx + 3] = std::max(neighbor_alpha, static_cast<unsigned char>(128));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    lfs::core::free_image(data);
+                    data = bordered_data;
+                }
 
                 unsigned int texture_id;
                 glGenTextures(1, &texture_id);
