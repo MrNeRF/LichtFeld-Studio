@@ -264,9 +264,10 @@ namespace lfs::vis::gui::widgets {
             ? ImVec4{0.2f, 0.2f, 0.2f, 0.9f}  // Dark tint for light themes
             : ImVec4{1.0f, 1.0f, 1.0f, 0.9f}; // Light tint for dark themes
 
-        const ImVec4 bg_normal = selected ? t.button_selected() : t.button_normal();
-        const ImVec4 bg_hovered = selected ? t.button_selected_hovered() : t.button_hovered();
-        const ImVec4 bg_active = selected ? darken(t.button_selected(), ACTIVE_DARKEN) : t.button_active();
+        // Make button backgrounds transparent so they blend with toolbar, except when selected
+        const ImVec4 bg_normal = selected ? t.button_selected() : ImVec4{0, 0, 0, 0};
+        const ImVec4 bg_hovered = selected ? t.button_selected_hovered() : withAlpha(t.palette.surface_bright, 0.3f);
+        const ImVec4 bg_active = selected ? darken(t.button_selected(), ACTIVE_DARKEN) : withAlpha(t.palette.surface_bright, 0.5f);
         const ImVec4 tint = selected
                                 ? ImVec4{TINT_BASE + t.palette.primary.x * TINT_ACCENT,
                                          TINT_BASE + t.palette.primary.y * TINT_ACCENT,

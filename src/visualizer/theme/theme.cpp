@@ -223,7 +223,8 @@ namespace lfs::vis {
         colors[ImGuiCol_TextDisabled] = p.text_dim;
         colors[ImGuiCol_WindowBg] = p.background;
         colors[ImGuiCol_ChildBg] = p.background;
-        colors[ImGuiCol_PopupBg] = p.surface;
+        // Use opaque surface for tooltips/popups to ensure good contrast
+        colors[ImGuiCol_PopupBg] = withAlpha(p.surface, 0.95f);
         colors[ImGuiCol_Border] = p.border;
         colors[ImGuiCol_BorderShadow] = ImVec4(0, 0, 0, 0);
         colors[ImGuiCol_FrameBg] = darken(p.surface, 0.05f);
