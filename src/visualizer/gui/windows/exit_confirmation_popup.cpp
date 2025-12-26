@@ -58,7 +58,7 @@ namespace lfs::vis::gui {
         ImGui::PushStyleColor(ImGuiCol_TitleBg, title_bg);
         ImGui::PushStyleColor(ImGuiCol_TitleBgActive, title_bg_active);
         ImGui::PushStyleColor(ImGuiCol_Border, t.palette.primary);
-        ImGui::PushStyleColor(ImGuiCol_Text, t.palette.text);
+        // Don't override text color - let it use the theme's global text color
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, BORDER_SIZE);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, WINDOW_PADDING);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, t.sizes.popup_rounding);
@@ -95,7 +95,7 @@ namespace lfs::vis::gui {
         }
 
         ImGui::PopStyleVar(3);
-        ImGui::PopStyleColor(5);
+        ImGui::PopStyleColor(4);
     }
 
 } // namespace lfs::vis::gui

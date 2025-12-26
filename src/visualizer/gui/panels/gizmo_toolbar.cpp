@@ -442,7 +442,7 @@ namespace lfs::vis::gui::panels {
                         state.cropbox_operation = op;
                     }
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("%s", tooltip);
+                        widgets::SetThemedTooltip("%s", tooltip);
                 };
 
                 CropOpButton("##crop_bounds", state.bounds_texture, CropBoxOperation::Bounds, "B", "Resize Bounds");
@@ -458,7 +458,7 @@ namespace lfs::vis::gui::panels {
                     state.reset_cropbox_requested = true;
                 }
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Reset to Default");
+                    widgets::SetThemedTooltip("Reset to Default");
             }
             ImGui::End();
         }
@@ -487,7 +487,7 @@ namespace lfs::vis::gui::panels {
                             services().scene().executeMirror(axis);
                         }
                         if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip("Mirror %s", label);
+                            widgets::SetThemedTooltip("Mirror %s", label);
                         }
                     };
 
@@ -558,7 +558,7 @@ namespace lfs::vis::gui::panels {
                 lfs::core::events::cmd::ResetCamera{}.emit();
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Home (H)");
+                widgets::SetThemedTooltip("Home (H)");
 
             // Fullscreen
             const auto fs_tex = is_fullscreen ? state.exit_fullscreen_texture : state.fullscreen_texture;
@@ -566,14 +566,14 @@ namespace lfs::vis::gui::panels {
                 lfs::core::events::ui::ToggleFullscreen{}.emit();
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Fullscreen (F11)");
+                widgets::SetThemedTooltip("Fullscreen (F11)");
 
             // Toggle UI
             if (widgets::IconButton("##hide_ui", state.hide_ui_texture, btn_size, ui_hidden, "U")) {
                 lfs::core::events::ui::ToggleUI{}.emit();
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Toggle UI (F12)");
+                widgets::SetThemedTooltip("Toggle UI (F12)");
 
             if (render_manager) {
                 DrawToolbarSeparator(btn_size.x);
@@ -586,7 +586,7 @@ namespace lfs::vis::gui::panels {
                         setVisualization(render_manager, mode);
                     }
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("%s", tooltip);
+                        widgets::SetThemedTooltip("%s", tooltip);
                 };
 
                 vizButton("##splat", state.splat_texture, "S", RenderVisualization::Splat, "Splat Rendering");
@@ -612,7 +612,7 @@ namespace lfs::vis::gui::panels {
                     }
                 }
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", proj_tooltip);
+                    widgets::SetThemedTooltip("%s", proj_tooltip);
             }
         }
         ImGui::End();
