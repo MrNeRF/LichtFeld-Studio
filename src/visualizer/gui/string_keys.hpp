@@ -245,7 +245,7 @@ namespace Scene {
     inline constexpr const char* EXPORT = "scene.export";
     inline constexpr const char* DELETE_ITEM = "scene.delete";
     inline constexpr const char* RENAME = "scene.rename";
-    inline constexpr const char* DUPLICATE = "scene.duplicate";
+    inline constexpr const char* DUPLICATE_ITEM = "scene.duplicate";
     inline constexpr const char* GO_TO_CAMERA_VIEW = "scene.go_to_camera_view";
     inline constexpr const char* GO_TO_CAM_VIEW = "scene.go_to_cam_view";
     inline constexpr const char* FIT_TO_SCENE = "scene.fit_to_scene";

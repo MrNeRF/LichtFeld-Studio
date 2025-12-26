@@ -666,7 +666,7 @@ namespace lfs::vis::gui {
                 }
                 if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::RENAME)))
                     startRenaming(node.name);
-                if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::DUPLICATE)))
+                if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::DUPLICATE_ITEM)))
                     cmd::DuplicateNode{.name = node.name}.emit();
 
                 if (ImGui::BeginMenu(LOC(lichtfeld::Strings::Scene::MOVE_TO))) {
