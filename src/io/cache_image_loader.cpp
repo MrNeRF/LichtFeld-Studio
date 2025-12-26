@@ -581,127 +581,95 @@ namespace lfs::io {
 
     } // anonymous namespace
 
+    namespace {
+        constexpr int CACHE_JPEG_QUALITY = 100;
+    }
+
     lfs::core::Tensor CacheLoader::load_jpeg_with_hardware_decode(
         const std::filesystem::path& path, const LoadParams& params) {
         using namespace lfs::core;
 
         const std::string cache_key = generate_cache_key(path, params);
         std::vector<uint8_t> jpeg_bytes;
-        bool found_in_cache = false;
+        bool from_cache = false;
 
-        // Check cache
         {
             std::lock_guard lock(jpeg_blob_mutex_);
             if (auto it = jpeg_blob_cache_.find(cache_key); it != jpeg_blob_cache_.end()) {
                 it->second.last_access = std::chrono::steady_clock::now();
                 jpeg_bytes = it->second.compressed_data;
-                found_in_cache = true;
+                from_cache = true;
             }
         }
 
-        // Load from disk if not cached
-        if (!found_in_cache) {
-            bool is_being_loaded = false;
-            {
-                std::lock_guard lock(jpeg_blob_mutex_);
-                is_being_loaded = jpeg_being_loaded_.contains(cache_key);
-                if (!is_being_loaded)
-                    jpeg_being_loaded_.insert(cache_key);
-            }
-
+        if (!from_cache) {
             std::ifstream file(path, std::ios::binary | std::ios::ate);
             if (!file) {
-                if (!is_being_loaded) {
-                    std::lock_guard lock(jpeg_blob_mutex_);
-                    jpeg_being_loaded_.erase(cache_key);
-                }
                 throw std::runtime_error("Failed to open: " + path.string());
             }
-
             const auto size = file.tellg();
             file.seekg(0, std::ios::beg);
             jpeg_bytes.resize(size);
             if (!file.read(reinterpret_cast<char*>(jpeg_bytes.data()), size)) {
-                if (!is_being_loaded) {
-                    std::lock_guard lock(jpeg_blob_mutex_);
-                    jpeg_being_loaded_.erase(cache_key);
-                }
                 throw std::runtime_error("Failed to read: " + path.string());
             }
-
-            // Cache if we're the loading thread
-            if (!is_being_loaded) {
-                std::lock_guard lock(jpeg_blob_mutex_);
-                if (has_sufficient_memory(jpeg_bytes.size())) {
-                    evict_jpeg_blobs_if_needed(jpeg_bytes.size());
-                    jpeg_blob_cache_[cache_key] = CachedJpegBlob{
-                        .compressed_data = jpeg_bytes,
-                        .size_bytes = jpeg_bytes.size(),
-                        .last_access = std::chrono::steady_clock::now()};
-                }
-                jpeg_being_loaded_.erase(cache_key);
-            }
         }
 
-        // Check magic bytes to determine actual file format
-        const bool has_jpeg_magic = jpeg_bytes.size() >= 2 && jpeg_bytes[0] == 0xFF && jpeg_bytes[1] == 0xD8;
-        const bool has_png_magic = jpeg_bytes.size() >= 8 &&
-                                   jpeg_bytes[0] == 0x89 && jpeg_bytes[1] == 0x50 && jpeg_bytes[2] == 0x4E && jpeg_bytes[3] == 0x47;
-        const bool has_webp_magic = jpeg_bytes.size() >= 12 &&
-                                    jpeg_bytes[0] == 0x52 && jpeg_bytes[1] == 0x49 && jpeg_bytes[2] == 0x46 && jpeg_bytes[3] == 0x46 &&
-                                    jpeg_bytes[8] == 0x57 && jpeg_bytes[9] == 0x45 && jpeg_bytes[10] == 0x42 && jpeg_bytes[11] == 0x50;
+        const bool is_jpeg = jpeg_bytes.size() >= 2 && jpeg_bytes[0] == 0xFF && jpeg_bytes[1] == 0xD8;
 
-        // Get file extension for comparison
-        std::string file_ext = path.extension().string();
-        std::transform(file_ext.begin(), file_ext.end(), file_ext.begin(), ::tolower);
-
-        // Determine actual format from magic bytes
-        const char* detected_format = has_jpeg_magic ? "JPEG" : has_png_magic ? "PNG"
-                                                            : has_webp_magic  ? "WebP"
-                                                                              : "Unknown";
-
-        LOG_DEBUG("[CacheLoader] File '{}': extension='{}', detected_format={}, magic_bytes=0x{:02X}{:02X}{:02X}{:02X}, size={} bytes",
-                  path.filename().string(),
-                  file_ext,
-                  detected_format,
-                  jpeg_bytes.size() >= 1 ? jpeg_bytes[0] : 0,
-                  jpeg_bytes.size() >= 2 ? jpeg_bytes[1] : 0,
-                  jpeg_bytes.size() >= 3 ? jpeg_bytes[2] : 0,
-                  jpeg_bytes.size() >= 4 ? jpeg_bytes[3] : 0,
-                  jpeg_bytes.size());
-
-        // Warn if extension doesn't match detected format
-        if ((file_ext == ".jpg" || file_ext == ".jpeg") && !has_jpeg_magic) {
-            LOG_WARN("[CacheLoader] File '{}' has .jpg/.jpeg extension but is NOT a JPEG (magic: 0x{:02X}{:02X}, detected: {})",
-                     path.filename().string(),
-                     jpeg_bytes.size() >= 1 ? jpeg_bytes[0] : 0,
-                     jpeg_bytes.size() >= 2 ? jpeg_bytes[1] : 0,
-                     detected_format);
-        }
-
-        if (has_jpeg_magic) {
+        if (is_jpeg) {
             try {
                 auto& nvcodec = get_nvcodec_loader();
-                return nvcodec.load_image_from_memory_gpu(jpeg_bytes, params.resize_factor, params.max_width, params.cuda_stream);
-            } catch (const std::exception& e) {
-                // Log comprehensive warning with file context
-                LOG_WARN("[CacheLoader] nvImageCodec decode failed for '{}': {}",
-                         path.filename().string(), e.what());
-                LOG_WARN("[CacheLoader] File info: extension='{}', detected_format={}, size={} bytes",
-                         file_ext, detected_format, jpeg_bytes.size());
-                LOG_WARN("[CacheLoader] Using CPU fallback decoder (slower but compatible)");
-                LOG_DEBUG("[CacheLoader] Full path: {}, resize_factor={}, max_width={}",
-                          path.string(), params.resize_factor, params.max_width);
 
-                // Note: The detailed error logging is already done in NvCodecImageLoader
-                // This just adds context about which file failed
+                if (from_cache) {
+                    return nvcodec.load_image_from_memory_gpu(jpeg_bytes, 1, 0, params.cuda_stream);
+                }
+
+                const bool needs_resize = (params.resize_factor > 1 || params.max_width > 0);
+                auto tensor = nvcodec.load_image_from_memory_gpu(
+                    jpeg_bytes, params.resize_factor, params.max_width, params.cuda_stream);
+
+                bool should_cache = false;
+                {
+                    std::lock_guard lock(jpeg_blob_mutex_);
+                    should_cache = !jpeg_being_loaded_.contains(cache_key);
+                    if (should_cache) {
+                        jpeg_being_loaded_.insert(cache_key);
+                    }
+                }
+
+                if (should_cache) {
+                    std::vector<uint8_t> cache_bytes;
+                    if (needs_resize) {
+                        // Re-encode resized image
+                        try {
+                            cache_bytes = nvcodec.encode_to_jpeg(tensor, CACHE_JPEG_QUALITY, params.cuda_stream);
+                        } catch (...) {
+                            cache_bytes = jpeg_bytes; // Fall back to original
+                        }
+                    } else {
+                        // No resize - cache original bytes directly
+                        cache_bytes = jpeg_bytes;
+                    }
+
+                    const std::size_t cache_size = cache_bytes.size();
+                    std::lock_guard lock(jpeg_blob_mutex_);
+                    if (has_sufficient_memory(cache_size)) {
+                        evict_jpeg_blobs_if_needed(cache_size);
+                        jpeg_blob_cache_[cache_key] = CachedJpegBlob{
+                            .compressed_data = std::move(cache_bytes),
+                            .size_bytes = cache_size,
+                            .last_access = std::chrono::steady_clock::now()};
+                    }
+                    jpeg_being_loaded_.erase(cache_key);
+                }
+                return tensor;
+            } catch (const std::exception& e) {
+                LOG_WARN("[CacheLoader] GPU decode failed, using CPU: {}", e.what());
                 return decode_with_cpu_fallback(path, params);
             }
         }
 
-        // Not a JPEG - use CPU fallback
-        LOG_DEBUG("[CacheLoader] File '{}' is not JPEG (detected: {}), using CPU decoder",
-                  path.filename().string(), detected_format);
         return decode_with_cpu_fallback(path, params);
     }
 

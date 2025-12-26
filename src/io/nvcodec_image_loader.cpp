@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <condition_variable>
+#include <cstring>
 #include <cuda.h> // For CUcontext, cuCtxGetCurrent, cuCtxSetCurrent
 #include <cuda_runtime.h>
 #include <fstream>
@@ -321,35 +322,32 @@ namespace lfs::io {
 
     } // anonymous namespace
 
-    // Internal implementation (PIMPL pattern to hide nvImageCodec types)
     struct NvCodecImageLoader::Impl {
         nvimgcodecInstance_t instance = nullptr;
-        std::vector<nvimgcodecDecoder_t> decoder_pool; // Pool of decoders (one per thread)
-        std::vector<bool> decoder_available;           // Track which decoders are available
-        std::mutex pool_mutex;                         // Protect pool access
-        std::condition_variable pool_cv;               // Wait for available decoder
+        std::vector<nvimgcodecDecoder_t> decoder_pool;
+        std::vector<bool> decoder_available;
+        std::mutex pool_mutex;
+        std::condition_variable pool_cv;
+        nvimgcodecEncoder_t encoder = nullptr;
+        std::mutex encoder_mutex;
         int device_id = 0;
         bool fallback_enabled = true;
 
-        // Acquire a decoder from the pool (blocks until one is available)
         size_t acquire_decoder() {
             std::unique_lock<std::mutex> lock(pool_mutex);
             pool_cv.wait(lock, [this] {
                 return std::find(decoder_available.begin(), decoder_available.end(), true) != decoder_available.end();
             });
-
-            // Find first available decoder
             for (size_t i = 0; i < decoder_available.size(); ++i) {
                 if (decoder_available[i]) {
                     decoder_available[i] = false;
                     return i;
                 }
             }
-            return 0; // Should never reach here
+            return 0;
         }
 
-        // Release a decoder back to the pool
-        void release_decoder(size_t idx) {
+        void release_decoder(const size_t idx) {
             {
                 std::lock_guard<std::mutex> lock(pool_mutex);
                 decoder_available[idx] = true;
@@ -357,130 +355,72 @@ namespace lfs::io {
             pool_cv.notify_one();
         }
 
-        ~Impl() {
-            // Clean up nvImageCodec resources
-            for (auto decoder : decoder_pool) {
-                if (decoder) {
-                    nvimgcodecDecoderDestroy(decoder);
-                }
-            }
-            if (instance) {
-                nvimgcodecInstanceDestroy(instance);
-            }
-        }
+        // Skip cleanup - nvJPEG crashes when destroyed after CUDA runtime cleanup
+        ~Impl() = default;
     };
+
+    namespace {
+        constexpr size_t DEFAULT_POOL_SIZE = 8;
+        constexpr int DEFAULT_LANCZOS_KERNEL = 2;
+    }
 
     NvCodecImageLoader::NvCodecImageLoader(const Options& options)
         : impl_(std::make_unique<Impl>()) {
 
-        LOG_INFO("[NvCodecImageLoader] Initializing with device_id={}, pool_size={}, fallback={}",
+        LOG_INFO("[NvCodecImageLoader] Initializing: device={}, pool={}, fallback={}",
                  options.device_id, options.decoder_pool_size, options.enable_fallback);
 
         impl_->device_id = options.device_id;
         impl_->fallback_enabled = options.enable_fallback;
 
-        // Get extensions path for portable builds
-        auto extensions_dir = lfs::core::getExtensionsDir();
+        const auto extensions_dir = lfs::core::getExtensionsDir();
         std::string extensions_path_str;
         const char* extensions_path_ptr = nullptr;
-
-        // Log executable and lib paths for debugging
-        LOG_DEBUG("[NvCodecImageLoader] Executable dir: {}", lfs::core::getExecutableDir().string());
-        LOG_DEBUG("[NvCodecImageLoader] Lib dir: {}", lfs::core::getLibDir().string());
 
         if (!extensions_dir.empty() && std::filesystem::exists(extensions_dir)) {
             extensions_path_str = extensions_dir.string();
             extensions_path_ptr = extensions_path_str.c_str();
-            LOG_INFO("[NvCodecImageLoader] Extensions path: {}", extensions_path_str);
-
-            // Log extension files found
-            std::error_code ec;
-            int ext_count = 0;
-            for (const auto& entry : std::filesystem::directory_iterator(extensions_dir, ec)) {
-                if (!ec) {
-                    std::string ext = entry.path().extension().string();
-                    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-#ifdef _WIN32
-                    if (ext == ".dll") {
-#else
-                    if (ext == ".so") {
-#endif
-                        LOG_DEBUG("[NvCodecImageLoader] Found extension: {}", entry.path().filename().string());
-                        ext_count++;
-                    }
-                }
-            }
-            LOG_INFO("[NvCodecImageLoader] Found {} extension modules", ext_count);
-        } else {
-            LOG_WARN("[NvCodecImageLoader] No extensions directory found - using builtin modules only");
-            LOG_WARN("[NvCodecImageLoader]   Checked: {}", extensions_dir.empty() ? "(empty path)" : extensions_dir.string());
+            LOG_DEBUG("[NvCodecImageLoader] Extensions: {}", extensions_path_str);
         }
 
-        // Create nvImageCodec instance
-        nvimgcodecInstanceCreateInfo_t create_info{
+        const nvimgcodecInstanceCreateInfo_t create_info{
             NVIMGCODEC_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
             sizeof(nvimgcodecInstanceCreateInfo_t),
-            nullptr,
-            1,                   // load_builtin_modules
-            1,                   // load_extension_modules
-            extensions_path_ptr, // extension_modules_path - set for portable builds
-            0,                   // create_debug_messenger
-            nullptr,             // debug_messenger_desc
-            0,                   // message_severity
-            0                    // message_category
+            nullptr, 1, 1, extensions_path_ptr, 0, nullptr, 0, 0
         };
-
-        LOG_DEBUG("[NvCodecImageLoader] Creating nvImageCodec instance (builtin=1, extensions={}, path={})",
-                  create_info.load_extension_modules,
-                  extensions_path_ptr ? extensions_path_ptr : "(null)");
 
         auto status = nvimgcodecInstanceCreate(&impl_->instance, &create_info);
         if (status != NVIMGCODEC_STATUS_SUCCESS) {
-            LOG_ERROR("[NvCodecImageLoader] nvimgcodecInstanceCreate failed: {} ({})",
-                      nvimgcodec_status_to_string(status), static_cast<int>(status));
-            throw std::runtime_error("Failed to create nvImageCodec instance: " +
+            throw std::runtime_error("nvImageCodec init failed: " +
                                      std::string(nvimgcodec_status_to_string(status)));
         }
 
-        LOG_INFO("[NvCodecImageLoader] nvImageCodec instance created successfully");
-
-        // Create pool of decoders (one per worker thread)
-        // Use pool_size based on expected worker threads (default: 16)
-        size_t pool_size = options.decoder_pool_size > 0 ? options.decoder_pool_size : 16;
+        const size_t pool_size = options.decoder_pool_size > 0 ? options.decoder_pool_size : DEFAULT_POOL_SIZE;
         impl_->decoder_pool.resize(pool_size);
         impl_->decoder_available.resize(pool_size, true);
 
-        // Use default execution params (will use GPU backend if available via nvjpeg extension)
-        nvimgcodecExecutionParams_t exec_params{
+        const nvimgcodecExecutionParams_t exec_params{
             NVIMGCODEC_STRUCTURE_TYPE_EXECUTION_PARAMS,
             sizeof(nvimgcodecExecutionParams_t),
-            nullptr,
-            nullptr,                     // device_allocator
-            nullptr,                     // pinned_allocator
-            options.max_num_cpu_threads, // max_num_cpu_threads
-            nullptr,                     // executor
-            options.device_id,           // device_id
-            0,                           // pre_init
-            0,                           // skip_pre_sync
-            0,                           // num_backends
-            nullptr                      // backends
+            nullptr, nullptr, nullptr,
+            options.max_num_cpu_threads, nullptr, options.device_id, 0, 0, 0, nullptr
         };
-
-        LOG_DEBUG("[NvCodecImageLoader] Creating {} decoders (device_id={}, cpu_threads={})",
-                  pool_size, options.device_id, options.max_num_cpu_threads);
 
         for (size_t i = 0; i < pool_size; ++i) {
             status = nvimgcodecDecoderCreate(impl_->instance, &impl_->decoder_pool[i], &exec_params, nullptr);
             if (status != NVIMGCODEC_STATUS_SUCCESS) {
-                LOG_ERROR("[NvCodecImageLoader] nvimgcodecDecoderCreate({}) failed: {} ({})",
-                          i, nvimgcodec_status_to_string(status), static_cast<int>(status));
-                throw std::runtime_error("Failed to create nvImageCodec decoder " + std::to_string(i) +
-                                         ": " + std::string(nvimgcodec_status_to_string(status)));
+                throw std::runtime_error("Decoder creation failed: " +
+                                         std::string(nvimgcodec_status_to_string(status)));
             }
         }
 
-        LOG_INFO("[NvCodecImageLoader] Initialized with {} decoders (GPU backend preferred, fallback={})",
-                 pool_size, options.enable_fallback);
+        LOG_INFO("[NvCodecImageLoader] {} decoders ready", pool_size);
+
+        status = nvimgcodecEncoderCreate(impl_->instance, &impl_->encoder, &exec_params, nullptr);
+        if (status != NVIMGCODEC_STATUS_SUCCESS) {
+            LOG_WARN("[NvCodecImageLoader] Encoder unavailable: {}", nvimgcodec_status_to_string(status));
+            impl_->encoder = nullptr;
+        }
     }
 
     NvCodecImageLoader::~NvCodecImageLoader() = default;
@@ -583,16 +523,24 @@ namespace lfs::io {
         int src_width = image_info.plane_info[0].width;
         int src_height = image_info.plane_info[0].height;
 
-        // Calculate target dimensions based on resize_factor
+        // Calculate target dimensions based on resize_factor and max_width
         int target_width = src_width;
         int target_height = src_height;
         if (resize_factor > 1) {
             target_width /= resize_factor;
             target_height /= resize_factor;
         }
+        if (max_width > 0 && (target_width > max_width || target_height > max_width)) {
+            const float scale = (target_width > target_height)
+                ? static_cast<float>(max_width) / target_width
+                : static_cast<float>(max_width) / target_height;
+            target_width = static_cast<int>(target_width * scale);
+            target_height = static_cast<int>(target_height * scale);
+        }
+        const bool needs_resize = (target_width != src_width || target_height != src_height);
 
-        LOG_DEBUG("Image info: {}x{} → {}x{} (resize factor {})",
-                  src_width, src_height, target_width, target_height, resize_factor);
+        LOG_DEBUG("Image info: {}x{} → {}x{} (resize_factor={}, max_width={})",
+                  src_width, src_height, target_width, target_height, resize_factor, max_width);
 
         // Save/restore CUDA context for thread safety
         CUcontext saved_context = nullptr;
@@ -718,96 +666,148 @@ namespace lfs::io {
             throw std::runtime_error(std::string("Decode failed: ") + status_str);
         }
 
-        // Apply Lanczos resize if needed
         Tensor output_tensor;
-
-        if (resize_factor > 1) {
-            // Apply Lanczos GPU resize: [H,W,3] uint8 → [C,H,W] float32
-            LOG_DEBUG("Applying Lanczos resize: {}x{} → {}x{}",
-                      src_width, src_height, target_width, target_height);
-
-            output_tensor = lanczos_resize(
-                uint8_tensor,
-                target_height,
-                target_width,
-                2, // kernel_size=2 (good balance of quality and speed)
-                static_cast<cudaStream_t>(cuda_stream));
-
-            LOG_DEBUG("Successfully decoded+resized image to GPU: {}x{} → {}x{}",
-                      src_width, src_height, target_width, target_height);
+        if (needs_resize) {
+            output_tensor = lanczos_resize(uint8_tensor, target_height, target_width,
+                                           DEFAULT_LANCZOS_KERNEL, static_cast<cudaStream_t>(cuda_stream));
         } else {
-            // No resize needed - convert [H,W,3] uint8 to [C,H,W] float32
             output_tensor = uint8_tensor.to(DataType::Float32) / 255.0f;
-            output_tensor = output_tensor.permute({2, 0, 1}).contiguous(); // [H,W,3] → [3,H,W]
-
-            LOG_DEBUG("Successfully decoded image to GPU: {}x{} (no resize)",
-                      src_width, src_height);
+            output_tensor = output_tensor.permute({2, 0, 1}).contiguous();
         }
 
-        // Restore CUDA context
-        if (saved_context != nullptr) {
+        if (saved_context) {
             cuCtxSetCurrent(saved_context);
         }
-
         return output_tensor;
-    }
-
-    lfs::core::Tensor NvCodecImageLoader::resize_if_needed(
-        lfs::core::Tensor input,
-        int width,
-        int height,
-        int resize_factor,
-        int max_width) {
-
-        // Calculate target dimensions
-        int target_width = width;
-        int target_height = height;
-
-        if (resize_factor > 1) {
-            target_width /= resize_factor;
-            target_height /= resize_factor;
-        }
-
-        if (max_width > 0 && (width > max_width || height > max_width)) {
-            float scale;
-            if (width > height) {
-                scale = static_cast<float>(max_width) / width;
-            } else {
-                scale = static_cast<float>(max_width) / height;
-            }
-            target_width = static_cast<int>(width * scale);
-            target_height = static_cast<int>(height * scale);
-        }
-
-        // If no resize needed, return as-is
-        if (target_width == width && target_height == height) {
-            return input;
-        }
-
-        LOG_DEBUG("Resizing from {}x{} to {}x{}", width, height, target_width, target_height);
-
-        // TODO: Implement GPU-based bilinear resize using CUDA or NPP
-        // For now, just return the input (resize will be handled by fallback)
-        LOG_WARN("GPU resize not yet implemented, returning original size");
-        return input;
     }
 
     std::vector<lfs::core::Tensor> NvCodecImageLoader::load_images_batch_gpu(
         const std::vector<std::filesystem::path>& paths,
-        int resize_factor,
-        int max_width) {
-
-        // Phase 2: TODO - implement batch decoding
-        LOG_WARN("Batch loading not yet implemented, falling back to sequential");
+        const int resize_factor,
+        const int max_width) {
 
         std::vector<lfs::core::Tensor> results;
         results.reserve(paths.size());
-
         for (const auto& path : paths) {
             results.push_back(load_image_gpu(path, resize_factor, max_width));
         }
-
         return results;
+    }
+
+    std::vector<uint8_t> NvCodecImageLoader::encode_to_jpeg(
+        const lfs::core::Tensor& image,
+        const int quality,
+        void* cuda_stream) {
+
+        using namespace lfs::core;
+
+        if (!impl_->encoder) {
+            throw std::runtime_error("JPEG encoder not available");
+        }
+
+        std::lock_guard<std::mutex> lock(impl_->encoder_mutex);
+
+        const auto& shape = image.shape();
+        if (shape.rank() != 3) {
+            throw std::runtime_error("Expected 3D tensor");
+        }
+
+        const bool is_chw = (shape[0] == 3 && shape[1] > 3 && shape[2] > 3);
+        const int height = static_cast<int>(is_chw ? shape[1] : shape[0]);
+        const int width = static_cast<int>(is_chw ? shape[2] : shape[1]);
+
+        Tensor hwc_uint8;
+        if (is_chw) {
+            auto permuted = image.permute({1, 2, 0}).contiguous();
+            hwc_uint8 = (permuted.dtype() == DataType::Float32)
+                ? (permuted * 255.0f).clamp(0.0f, 255.0f).to(DataType::UInt8)
+                : permuted.to(DataType::UInt8);
+        } else {
+            hwc_uint8 = (image.dtype() == DataType::Float32)
+                ? (image * 255.0f).clamp(0.0f, 255.0f).to(DataType::UInt8)
+                : image.to(DataType::UInt8);
+        }
+
+        if (hwc_uint8.device() != Device::CUDA) {
+            hwc_uint8 = hwc_uint8.to(Device::CUDA);
+        }
+        hwc_uint8 = hwc_uint8.contiguous();
+
+        nvimgcodecImageInfo_t image_info{};
+        image_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
+        image_info.struct_size = sizeof(nvimgcodecImageInfo_t);
+        image_info.sample_format = NVIMGCODEC_SAMPLEFORMAT_I_RGB;
+        image_info.color_spec = NVIMGCODEC_COLORSPEC_SRGB;
+        image_info.chroma_subsampling = NVIMGCODEC_SAMPLING_444;
+        image_info.num_planes = 1;
+        image_info.plane_info[0].height = height;
+        image_info.plane_info[0].width = width;
+        image_info.plane_info[0].row_stride = width * 3;
+        image_info.plane_info[0].num_channels = 3;
+        image_info.plane_info[0].sample_type = NVIMGCODEC_SAMPLE_DATA_TYPE_UINT8;
+        image_info.buffer_kind = NVIMGCODEC_IMAGE_BUFFER_KIND_STRIDED_DEVICE;
+        image_info.buffer = hwc_uint8.data_ptr();
+        image_info.buffer_size = height * width * 3;
+        image_info.cuda_stream = static_cast<cudaStream_t>(cuda_stream);
+
+        nvimgcodecImage_t nv_image;
+        auto status = nvimgcodecImageCreate(impl_->instance, &nv_image, &image_info);
+        if (status != NVIMGCODEC_STATUS_SUCCESS) {
+            throw std::runtime_error("Failed to create image for encoding");
+        }
+
+        std::vector<uint8_t> output_buffer;
+
+        nvimgcodecImageInfo_t output_info{};
+        output_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
+        output_info.struct_size = sizeof(nvimgcodecImageInfo_t);
+        std::strncpy(output_info.codec_name, "jpeg", sizeof(output_info.codec_name) - 1);
+
+        nvimgcodecCodeStream_t code_stream;
+        status = nvimgcodecCodeStreamCreateToHostMem(
+            impl_->instance, &code_stream, &output_buffer,
+            [](void* ctx, size_t req_size) -> unsigned char* {
+                auto* vec = static_cast<std::vector<uint8_t>*>(ctx);
+                vec->resize(req_size);
+                return vec->data();
+            },
+            &output_info);
+
+        if (status != NVIMGCODEC_STATUS_SUCCESS) {
+            nvimgcodecImageDestroy(nv_image);
+            throw std::runtime_error("Failed to create output code stream");
+        }
+
+        nvimgcodecEncodeParams_t encode_params{};
+        encode_params.struct_type = NVIMGCODEC_STRUCTURE_TYPE_ENCODE_PARAMS;
+        encode_params.struct_size = sizeof(nvimgcodecEncodeParams_t);
+        encode_params.quality_value = static_cast<float>(quality);
+        encode_params.quality_type = NVIMGCODEC_QUALITY_TYPE_DEFAULT;
+
+        nvimgcodecFuture_t encode_future;
+        status = nvimgcodecEncoderEncode(
+            impl_->encoder, &nv_image, &code_stream, 1, &encode_params, &encode_future);
+
+        if (status != NVIMGCODEC_STATUS_SUCCESS) {
+            nvimgcodecCodeStreamDestroy(code_stream);
+            nvimgcodecImageDestroy(nv_image);
+            throw std::runtime_error("Encode failed");
+        }
+
+        nvimgcodecFutureWaitForAll(encode_future);
+
+        nvimgcodecProcessingStatus_t encode_status;
+        size_t status_size;
+        nvimgcodecFutureGetProcessingStatus(encode_future, &encode_status, &status_size);
+        nvimgcodecFutureDestroy(encode_future);
+        nvimgcodecCodeStreamDestroy(code_stream);
+        nvimgcodecImageDestroy(nv_image);
+
+        if (encode_status != NVIMGCODEC_PROCESSING_STATUS_SUCCESS) {
+            throw std::runtime_error("JPEG encoding failed: " +
+                std::string(processing_status_to_string(encode_status)));
+        }
+        return output_buffer;
     }
 
 } // namespace lfs::io

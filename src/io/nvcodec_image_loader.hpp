@@ -12,6 +12,7 @@
 // Forward declarations to avoid including nvImageCodec headers in public API
 typedef struct nvimgcodecInstance* nvimgcodecInstance_t;
 typedef struct nvimgcodecDecoder* nvimgcodecDecoder_t;
+typedef struct nvimgcodecEncoder* nvimgcodecEncoder_t;
 
 namespace lfs::io {
 
@@ -24,10 +25,10 @@ namespace lfs::io {
     class NvCodecImageLoader {
     public:
         struct Options {
-            int device_id = 0;             // CUDA device to use
-            int max_num_cpu_threads = 0;   // 0 = auto
-            bool enable_fallback = true;   // Fall back to CPU if GPU decode fails
-            size_t decoder_pool_size = 16; // Number of decoders in pool (one per worker thread)
+            int device_id = 0;
+            int max_num_cpu_threads = 0;
+            bool enable_fallback = true;
+            size_t decoder_pool_size = 8;
         };
 
         explicit NvCodecImageLoader(const Options& options);
@@ -78,6 +79,12 @@ namespace lfs::io {
             int resize_factor = 1,
             int max_width = 0);
 
+        // Encode GPU tensor to JPEG bytes
+        std::vector<uint8_t> encode_to_jpeg(
+            const lfs::core::Tensor& image,
+            int quality = 100,
+            void* cuda_stream = nullptr);
+
         /**
          * @brief Check if nvImageCodec is available and working
          */
@@ -87,16 +94,7 @@ namespace lfs::io {
         struct Impl;
         std::unique_ptr<Impl> impl_;
 
-        // Helper to read file into memory
         std::vector<uint8_t> read_file(const std::filesystem::path& path);
-
-        // Helper to resize image if needed (using CUDA kernels)
-        lfs::core::Tensor resize_if_needed(
-            lfs::core::Tensor input,
-            int target_width,
-            int target_height,
-            int resize_factor,
-            int max_width);
     };
 
 } // namespace lfs::io

@@ -31,7 +31,7 @@ namespace lfs::io {
     inline constexpr float DEFAULT_MIN_FREE_MEMORY_RATIO = 0.1f;
     inline constexpr float DEFAULT_MIN_FREE_GB = 1.0f;
     inline constexpr int DEFAULT_PRINT_STATUS_FREQ = 500;
-    inline constexpr int DEFAULT_DECODER_POOL_SIZE = 16;
+    inline constexpr int DEFAULT_DECODER_POOL_SIZE = 8;
     inline constexpr std::string_view CACHE_PREFIX = "lfs_cache_";
 
     struct LoadParams {
