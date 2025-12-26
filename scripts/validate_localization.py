@@ -18,10 +18,9 @@ Usage:
 
 import json
 import sys
-import os
 import re
 from pathlib import Path
-from typing import Dict, Set, List, Tuple
+from typing import Dict, Set
 from collections import defaultdict
 
 
@@ -103,7 +102,7 @@ def extract_keys_from_code(code_dir: Path) -> Set[str]:
                 matches = re.findall(pattern, content)
                 keys.update(matches)
         except Exception:
-            pass
+            pass  # Skip unreadable files silently
 
     return keys
 

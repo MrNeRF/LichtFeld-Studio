@@ -632,6 +632,14 @@ namespace ImagePreview {
     inline constexpr const char* FIT_STATUS = "image_preview.fit_status";
     inline constexpr const char* OVERLAY_STATUS = "image_preview.overlay_status";
     inline constexpr const char* FILE_LABEL = "image_preview.file_label";
+    inline constexpr const char* VISIBLE = "image_preview.visible";
+    inline constexpr const char* HIDDEN = "image_preview.hidden";
+    inline constexpr const char* MASK_SECTION = "image_preview.mask_section";
+}
+
+namespace Startup {
+    inline constexpr const char* SUPPORTED_BY = "startup.supported_by";
+    inline constexpr const char* CLICK_TO_CONTINUE = "startup.click_to_continue";
 }
 
 namespace Axis {

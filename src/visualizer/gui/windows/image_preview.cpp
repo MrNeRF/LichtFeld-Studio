@@ -1004,9 +1004,9 @@ namespace lfs::vis::gui {
             if (hasValidOverlay()) {
                 ImGui::Spacing();
                 ImGui::Spacing();
-                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "MASK");
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", LOC(lichtfeld::Strings::ImagePreview::MASK_SECTION));
                 ImGui::Separator();
-                ImGui::Text(LOC(lichtfeld::Strings::ImagePreview::OVERLAY_STATUS), show_overlay_ ? "Visible" : "Hidden");
+                ImGui::Text(LOC(lichtfeld::Strings::ImagePreview::OVERLAY_STATUS), show_overlay_ ? LOC(lichtfeld::Strings::ImagePreview::VISIBLE) : LOC(lichtfeld::Strings::ImagePreview::HIDDEN));
                 ImGui::Text(LOC(lichtfeld::Strings::ImagePreview::FILE_LABEL), overlay_paths_[current_index_].filename().string().c_str());
             }
 

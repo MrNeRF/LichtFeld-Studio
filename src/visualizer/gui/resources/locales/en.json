@@ -577,7 +577,15 @@
     "software": "Software: %s",
     "fit_status": "Fit to Window: %s",
     "overlay_status": "Overlay: %s",
-    "file_label": "File: %s"
+    "file_label": "File: %s",
+    "visible": "Visible",
+    "hidden": "Hidden",
+    "mask_section": "MASK"
+  },
+
+  "startup": {
+    "supported_by": "Supported by",
+    "click_to_continue": "Click anywhere to continue"
   },
 
   "axis": {

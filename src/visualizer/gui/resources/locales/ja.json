@@ -577,7 +577,15 @@
     "software": "ソフトウェア: %s",
     "fit_status": "ウィンドウに合わせる: %s",
     "overlay_status": "オーバーレイ: %s",
-    "file_label": "ファイル: %s"
+    "file_label": "ファイル: %s",
+    "visible": "表示中",
+    "hidden": "非表示",
+    "mask_section": "マスク"
+  },
+
+  "startup": {
+    "supported_by": "サポート",
+    "click_to_continue": "クリックして続行"
   },
 
   "axis": {

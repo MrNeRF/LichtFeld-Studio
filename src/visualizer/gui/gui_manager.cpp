@@ -2635,8 +2635,6 @@ namespace lfs::vis::gui {
         static constexpr float GAP_CORE11_HINT = 16.0f;
         static constexpr float GAP_LANG_HINT = 12.0f;
         static constexpr float LANG_COMBO_WIDTH = 140.0f;
-        static constexpr const char* SUPPORTED_TEXT = "Supported by";
-        static constexpr const char* CLICK_HINT = "Click anywhere to continue";
 
         // Theme colors
         const auto& t = theme();
@@ -2647,11 +2645,13 @@ namespace lfs::vis::gui {
         const float core11_w = static_cast<float>(startup_core11_width_) * CORE11_LOGO_SCALE;
         const float core11_h = static_cast<float>(startup_core11_height_) * CORE11_LOGO_SCALE;
 
-        // Text sizes
+        // Text sizes (use localized strings)
+        const char* supported_text = LOC(lichtfeld::Strings::Startup::SUPPORTED_BY);
+        const char* click_hint = LOC(lichtfeld::Strings::Startup::CLICK_TO_CONTINUE);
         if (font_small_)
             ImGui::PushFont(font_small_);
-        const ImVec2 supported_size = ImGui::CalcTextSize(SUPPORTED_TEXT);
-        const ImVec2 hint_size = ImGui::CalcTextSize(CLICK_HINT);
+        const ImVec2 supported_size = ImGui::CalcTextSize(supported_text);
+        const ImVec2 hint_size = ImGui::CalcTextSize(click_hint);
         const ImVec2 lang_label_size = ImGui::CalcTextSize(LOC(lichtfeld::Strings::Preferences::LANGUAGE));
         if (font_small_)
             ImGui::PopFont();
@@ -2712,7 +2712,7 @@ namespace lfs::vis::gui {
             if (font_small_)
                 ImGui::PushFont(font_small_);
             draw_list->AddText({window_center_x - supported_size.x * 0.5f, y},
-                              toU32WithAlpha(t.palette.text_dim, 0.85f), SUPPORTED_TEXT);
+                              toU32WithAlpha(t.palette.text_dim, 0.85f), supported_text);
             y += supported_size.y + GAP_TEXT_CORE11;
 
             // Core11 logo
@@ -2764,7 +2764,7 @@ namespace lfs::vis::gui {
 
             // Dismiss hint
             draw_list->AddText({window_center_x - hint_size.x * 0.5f, y},
-                              toU32WithAlpha(t.palette.text_dim, 0.5f), CLICK_HINT);
+                              toU32WithAlpha(t.palette.text_dim, 0.5f), click_hint);
             if (font_small_)
                 ImGui::PopFont();
 
