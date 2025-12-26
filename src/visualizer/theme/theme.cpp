@@ -219,11 +219,17 @@ namespace lfs::vis {
         style.WindowTitleAlign = ImVec2(0.5f, 0.5f);
 
         ImVec4* const colors = style.Colors;
-        colors[ImGuiCol_Text] = p.text;
+        
+        // Calculate background brightness to detect light themes
+        const float bg_brightness = (p.background.x + p.background.y + p.background.z) / 3.0f;
+        const bool is_light_theme = bg_brightness > 0.5f;
+        
+        // Use dark text on light themes (matching icon tint of 0.2), normal text on dark themes
+        colors[ImGuiCol_Text] = is_light_theme ? ImVec4{0.2f, 0.2f, 0.2f, 1.0f} : p.text;
         colors[ImGuiCol_TextDisabled] = p.text_dim;
         colors[ImGuiCol_WindowBg] = p.background;
         colors[ImGuiCol_ChildBg] = p.background;
-        // Use opaque surface for tooltips/popups to ensure good contrast
+        // Keep tooltip background matching theme (light on light theme, dark on dark theme)
         colors[ImGuiCol_PopupBg] = withAlpha(p.surface, 0.95f);
         colors[ImGuiCol_Border] = p.border;
         colors[ImGuiCol_BorderShadow] = ImVec4(0, 0, 0, 0);
