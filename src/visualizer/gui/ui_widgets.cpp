@@ -331,9 +331,11 @@ namespace lfs::vis::gui::widgets {
         
         // Calculate background brightness to detect light themes
         const float bg_brightness = (t.palette.background.x + t.palette.background.y + t.palette.background.z) / 3.0f;
+        const bool is_light_theme = bg_brightness > 0.5f;
         
-        // Use dark text on light themes (matching icon tint), normal text on dark themes
-        if (bg_brightness > 0.5f) {
+        // Push both background and text colors for tooltips
+        if (is_light_theme) {
+            ImGui::PushStyleColor(ImGuiCol_PopupBg, withAlpha(t.palette.surface, 0.95f));
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{0.2f, 0.2f, 0.2f, 1.0f});
         }
         
@@ -346,8 +348,8 @@ namespace lfs::vis::gui::widgets {
         
         ImGui::EndTooltip();
         
-        if (bg_brightness > 0.5f) {
-            ImGui::PopStyleColor();
+        if (is_light_theme) {
+            ImGui::PopStyleColor(2);
         }
     }
 
