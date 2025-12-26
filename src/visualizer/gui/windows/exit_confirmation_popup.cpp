@@ -46,10 +46,15 @@ namespace lfs::vis::gui {
         }
 
         const auto& t = theme();
-        const ImVec4 popup_bg{t.palette.surface.x, t.palette.surface.y,
-                              t.palette.surface.z, POPUP_ALPHA};
-        const ImVec4 title_bg = darken(t.palette.surface, 0.1f);
-        const ImVec4 title_bg_active = darken(t.palette.surface, 0.05f);
+        
+        // Detect light theme
+        const float bg_brightness = (t.palette.background.x + t.palette.background.y + t.palette.background.z) / 3.0f;
+        const bool is_light_theme = bg_brightness > 0.5f;
+        
+        const ImVec4 popup_bg = withAlpha(t.palette.surface, POPUP_ALPHA);
+        // For light themes, lighten the title; for dark themes, darken it
+        const ImVec4 title_bg = is_light_theme ? lighten(t.palette.surface, 0.05f) : darken(t.palette.surface, 0.1f);
+        const ImVec4 title_bg_active = is_light_theme ? lighten(t.palette.surface, 0.08f) : darken(t.palette.surface, 0.05f);
 
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, {0.5f, 0.5f});
         ImGui::SetNextWindowSize({POPUP_WIDTH, POPUP_HEIGHT}, ImGuiCond_Always);
