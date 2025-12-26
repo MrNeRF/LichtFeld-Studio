@@ -309,9 +309,9 @@ namespace lfs::vis::gui::panels {
 
                     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
                         if (!enabled && disabled_reason) {
-                            ImGui::SetTooltip("%s (%s)", tooltip, disabled_reason);
+                            widgets::SetThemedTooltip("%s (%s)", tooltip, disabled_reason);
                         } else {
-                            ImGui::SetTooltip("%s", tooltip);
+                            widgets::SetThemedTooltip("%s", tooltip);
                         }
                     }
                 };
@@ -363,7 +363,7 @@ namespace lfs::vis::gui::panels {
                             state.selection_mode = mode;
                         }
                         if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip("%s", tooltip);
+                            widgets::SetThemedTooltip("%s", tooltip);
                     };
 
                     SelectionModeButton("##centers", state.brush_texture, SelectionSubMode::Centers,
@@ -412,7 +412,7 @@ namespace lfs::vis::gui::panels {
                         state.transform_space = space;
                     }
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("%s", tooltip);
+                        widgets::SetThemedTooltip("%s", tooltip);
                 };
 
                 SpaceButton("##local", state.local_texture, TransformSpace::Local, "L", LOC(Toolbar::LOCAL_SPACE));
@@ -446,7 +446,7 @@ namespace lfs::vis::gui::panels {
                         state.cropbox_operation = op;
                     }
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("%s", tooltip);
+                        widgets::SetThemedTooltip("%s", tooltip);
                 };
 
                 CropOpButton("##crop_bounds", state.bounds_texture, CropBoxOperation::Bounds, "B", LOC(Toolbar::RESIZE_BOUNDS));
@@ -462,7 +462,7 @@ namespace lfs::vis::gui::panels {
                     state.reset_cropbox_requested = true;
                 }
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", LOC(Toolbar::RESET_DEFAULT));
+                    widgets::SetThemedTooltip("%s", LOC(Toolbar::RESET_DEFAULT));
             }
             ImGui::End();
         }
@@ -491,7 +491,7 @@ namespace lfs::vis::gui::panels {
                             services().scene().executeMirror(axis);
                         }
                         if (ImGui::IsItemHovered()) {
-                            ImGui::SetTooltip("%s", tooltip);
+                            widgets::SetThemedTooltip("%s", tooltip);
                         }
                     };
 
@@ -562,7 +562,7 @@ namespace lfs::vis::gui::panels {
                 lfs::core::events::cmd::ResetCamera{}.emit();
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s", LOC(Toolbar::HOME));
+                widgets::SetThemedTooltip("%s", LOC(Toolbar::HOME));
 
             // Fullscreen
             const auto fs_tex = is_fullscreen ? state.exit_fullscreen_texture : state.fullscreen_texture;
@@ -570,14 +570,14 @@ namespace lfs::vis::gui::panels {
                 lfs::core::events::ui::ToggleFullscreen{}.emit();
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s", LOC(Toolbar::FULLSCREEN));
+                widgets::SetThemedTooltip("%s", LOC(Toolbar::FULLSCREEN));
 
             // Toggle UI
             if (widgets::IconButton("##hide_ui", state.hide_ui_texture, btn_size, ui_hidden, "U")) {
                 lfs::core::events::ui::ToggleUI{}.emit();
             }
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s", LOC(Toolbar::TOGGLE_UI));
+                widgets::SetThemedTooltip("%s", LOC(Toolbar::TOGGLE_UI));
 
             if (render_manager) {
                 DrawToolbarSeparator(btn_size.x);
@@ -590,7 +590,7 @@ namespace lfs::vis::gui::panels {
                         setVisualization(render_manager, mode);
                     }
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("%s", tooltip);
+                        widgets::SetThemedTooltip("%s", tooltip);
                 };
 
                 vizButton("##splat", state.splat_texture, "S", RenderVisualization::Splat, LOC(Toolbar::SPLAT_RENDERING));
@@ -616,7 +616,7 @@ namespace lfs::vis::gui::panels {
                     }
                 }
                 if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("%s", proj_tooltip);
+                    widgets::SetThemedTooltip("%s", proj_tooltip);
             }
         }
         ImGui::End();

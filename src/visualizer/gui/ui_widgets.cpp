@@ -257,12 +257,21 @@ namespace lfs::vis::gui::widgets {
         constexpr float TINT_BASE = 0.7f;
         constexpr float TINT_ACCENT = 0.3f;
         constexpr float FALLBACK_PADDING = 8.0f;
-        constexpr ImVec4 TINT_NORMAL = {1.0f, 1.0f, 1.0f, 0.9f};
 
         const auto& t = theme();
-        const ImVec4 bg_normal = selected ? t.button_selected() : t.button_normal();
-        const ImVec4 bg_hovered = selected ? t.button_selected_hovered() : t.button_hovered();
-        const ImVec4 bg_active = selected ? darken(t.button_selected(), ACTIVE_DARKEN) : t.button_active();
+
+        // Calculate background brightness to detect light themes
+        const float bg_brightness = (t.palette.background.x + t.palette.background.y + t.palette.background.z) / 3.0f;
+
+        // Use darker tint for light themes, lighter tint for dark themes
+        const ImVec4 TINT_NORMAL = bg_brightness > 0.5f
+                                       ? ImVec4{0.2f, 0.2f, 0.2f, 0.9f}  // Dark tint for light themes
+                                       : ImVec4{1.0f, 1.0f, 1.0f, 0.9f}; // Light tint for dark themes
+
+        // Make button backgrounds transparent so they blend with toolbar, except when selected
+        const ImVec4 bg_normal = selected ? t.button_selected() : ImVec4{0, 0, 0, 0};
+        const ImVec4 bg_hovered = selected ? t.button_selected_hovered() : withAlpha(t.palette.surface_bright, 0.3f);
+        const ImVec4 bg_active = selected ? darken(t.button_selected(), ACTIVE_DARKEN) : withAlpha(t.palette.surface_bright, 0.5f);
         const ImVec4 tint = selected
                                 ? ImVec4{TINT_BASE + t.palette.primary.x * TINT_ACCENT,
                                          TINT_BASE + t.palette.primary.y * TINT_ACCENT,
@@ -319,6 +328,33 @@ namespace lfs::vis::gui::widgets {
 
         ImGui::PopStyleColor(3);
         return clicked;
+    }
+
+    void SetThemedTooltip(const char* fmt, ...) {
+        const auto& t = theme();
+
+        // Calculate background brightness to detect light themes
+        const float bg_brightness = (t.palette.background.x + t.palette.background.y + t.palette.background.z) / 3.0f;
+        const bool is_light_theme = bg_brightness > 0.5f;
+
+        // Push both background and text colors for tooltips
+        if (is_light_theme) {
+            ImGui::PushStyleColor(ImGuiCol_PopupBg, withAlpha(t.palette.surface, 0.95f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{0.2f, 0.2f, 0.2f, 1.0f});
+        }
+
+        ImGui::BeginTooltip();
+
+        va_list args;
+        va_start(args, fmt);
+        ImGui::TextV(fmt, args);
+        va_end(args);
+
+        ImGui::EndTooltip();
+
+        if (is_light_theme) {
+            ImGui::PopStyleColor(2);
+        }
     }
 
 } // namespace lfs::vis::gui::widgets
