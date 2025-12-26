@@ -305,9 +305,9 @@ namespace lfs::vis::gui::panels {
 
                     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
                         if (!enabled && disabled_reason) {
-                            ImGui::SetTooltip("%s (%s)", tooltip, disabled_reason);
+                            widgets::SetThemedTooltip("%s (%s)", tooltip, disabled_reason);
                         } else {
-                            ImGui::SetTooltip("%s", tooltip);
+                            widgets::SetThemedTooltip("%s", tooltip);
                         }
                     }
                 };
@@ -359,7 +359,7 @@ namespace lfs::vis::gui::panels {
                             state.selection_mode = mode;
                         }
                         if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip("%s", tooltip);
+                            widgets::SetThemedTooltip("%s", tooltip);
                     };
 
                     SelectionModeButton("##centers", state.brush_texture, SelectionSubMode::Centers,
@@ -408,7 +408,7 @@ namespace lfs::vis::gui::panels {
                         state.transform_space = space;
                     }
                     if (ImGui::IsItemHovered())
-                        ImGui::SetTooltip("%s", tooltip);
+                        widgets::SetThemedTooltip("%s", tooltip);
                 };
 
                 SpaceButton("##local", state.local_texture, TransformSpace::Local, "L", "Local Space");

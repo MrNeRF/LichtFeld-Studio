@@ -326,4 +326,29 @@ namespace lfs::vis::gui::widgets {
         return clicked;
     }
 
+    void SetThemedTooltip(const char* fmt, ...) {
+        const auto& t = theme();
+        
+        // Calculate background brightness to detect light themes
+        const float bg_brightness = (t.palette.background.x + t.palette.background.y + t.palette.background.z) / 3.0f;
+        
+        // Use dark text on light themes (matching icon tint), normal text on dark themes
+        if (bg_brightness > 0.5f) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{0.2f, 0.2f, 0.2f, 1.0f});
+        }
+        
+        ImGui::BeginTooltip();
+        
+        va_list args;
+        va_start(args, fmt);
+        ImGui::TextV(fmt, args);
+        va_end(args);
+        
+        ImGui::EndTooltip();
+        
+        if (bg_brightness > 0.5f) {
+            ImGui::PopStyleColor();
+        }
+    }
+
 } // namespace lfs::vis::gui::widgets

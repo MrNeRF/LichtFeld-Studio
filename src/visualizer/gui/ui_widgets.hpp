@@ -45,4 +45,7 @@ namespace lfs::vis::gui::widgets {
     // Typography
     void SectionHeader(const char* text, const FontSet& fonts);
 
+    // Tooltip with theme-aware text color (dark text on light themes)
+    void SetThemedTooltip(const char* fmt, ...);
+
 } // namespace lfs::vis::gui::widgets
