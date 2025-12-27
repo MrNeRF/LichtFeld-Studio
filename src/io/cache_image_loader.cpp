@@ -644,7 +644,11 @@ namespace lfs::io {
                         // Re-encode resized image
                         try {
                             cache_bytes = nvcodec.encode_to_jpeg(tensor, CACHE_JPEG_QUALITY, params.cuda_stream);
+                        } catch (const std::exception& enc_err) {
+                            LOG_DEBUG("[CacheLoader] JPEG re-encode failed: {}, using original bytes", enc_err.what());
+                            cache_bytes = jpeg_bytes; // Fall back to original
                         } catch (...) {
+                            LOG_DEBUG("[CacheLoader] JPEG re-encode failed with unknown error, using original bytes");
                             cache_bytes = jpeg_bytes; // Fall back to original
                         }
                     } else {
@@ -660,8 +664,12 @@ namespace lfs::io {
                             .compressed_data = std::move(cache_bytes),
                             .size_bytes = cache_size,
                             .last_access = std::chrono::steady_clock::now()};
+                        // Only remove from tracking set after successful caching
+                        jpeg_being_loaded_.erase(cache_key);
+                    } else {
+                        // Memory insufficient - remove from tracking to allow retry later
+                        jpeg_being_loaded_.erase(cache_key);
                     }
-                    jpeg_being_loaded_.erase(cache_key);
                 }
                 return tensor;
             } catch (const std::exception& e) {

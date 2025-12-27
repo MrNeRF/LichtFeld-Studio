@@ -355,8 +355,38 @@ namespace lfs::io {
             pool_cv.notify_one();
         }
 
-        // Skip cleanup - nvJPEG crashes when destroyed after CUDA runtime cleanup
-        ~Impl() = default;
+        ~Impl() {
+            // Check if CUDA context is still valid before cleanup
+            CUcontext current_ctx = nullptr;
+            CUresult ctx_result = cuCtxGetCurrent(&current_ctx);
+
+            // Only cleanup if CUDA runtime is still initialized and context is valid
+            if (ctx_result == CUDA_SUCCESS && current_ctx != nullptr) {
+                // Destroy encoder first (if created)
+                if (encoder) {
+                    nvimgcodecEncoderDestroy(encoder);
+                    encoder = nullptr;
+                }
+
+                // Destroy all decoders in the pool
+                for (auto& decoder : decoder_pool) {
+                    if (decoder) {
+                        nvimgcodecDecoderDestroy(decoder);
+                        decoder = nullptr;
+                    }
+                }
+                decoder_pool.clear();
+                decoder_available.clear();
+
+                // Destroy the instance last
+                if (instance) {
+                    nvimgcodecInstanceDestroy(instance);
+                    instance = nullptr;
+                }
+            }
+            // If CUDA context is invalid, skip cleanup to avoid crashes
+            // This can happen during program shutdown when CUDA runtime is already torn down
+        }
     };
 
     namespace {
@@ -709,10 +739,14 @@ namespace lfs::io {
 
         const auto& shape = image.shape();
         if (shape.rank() != 3) {
-            throw std::runtime_error("Expected 3D tensor");
+            throw std::runtime_error("Expected 3D tensor, got " + std::to_string(shape.rank()) + "D");
         }
 
-        const bool is_chw = (shape[0] == 3 && shape[1] > 3 && shape[2] > 3);
+        // Detect CHW vs HWC format:
+        // - Prioritize HWC when shape[2]==3 (channels last is standard for images)
+        // - Fall back to CHW when shape[0]==3 and dimensions are clearly spatial
+        const bool is_hwc = (shape[2] == 3);
+        const bool is_chw = !is_hwc && (shape[0] == 3 && shape[1] > 3 && shape[2] > 3);
         const int height = static_cast<int>(is_chw ? shape[1] : shape[0]);
         const int width = static_cast<int>(is_chw ? shape[2] : shape[1]);
 
@@ -753,7 +787,8 @@ namespace lfs::io {
         nvimgcodecImage_t nv_image;
         auto status = nvimgcodecImageCreate(impl_->instance, &nv_image, &image_info);
         if (status != NVIMGCODEC_STATUS_SUCCESS) {
-            throw std::runtime_error("Failed to create image for encoding");
+            throw std::runtime_error("Failed to create image for encoding: " +
+                                     std::string(nvimgcodec_status_to_string(status)));
         }
 
         std::vector<uint8_t> output_buffer;
@@ -761,7 +796,7 @@ namespace lfs::io {
         nvimgcodecImageInfo_t output_info{};
         output_info.struct_type = NVIMGCODEC_STRUCTURE_TYPE_IMAGE_INFO;
         output_info.struct_size = sizeof(nvimgcodecImageInfo_t);
-        std::strncpy(output_info.codec_name, "jpeg", sizeof(output_info.codec_name) - 1);
+        std::snprintf(output_info.codec_name, sizeof(output_info.codec_name), "%s", "jpeg");
 
         nvimgcodecCodeStream_t code_stream;
         status = nvimgcodecCodeStreamCreateToHostMem(
