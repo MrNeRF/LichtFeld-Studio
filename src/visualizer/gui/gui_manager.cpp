@@ -8,6 +8,7 @@
 // clang-format on
 
 #include "gui/gui_manager.hpp"
+#include "gui/dpi_scale.hpp"
 #include "command/command_history.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
@@ -279,8 +280,12 @@ namespace lfs::vis::gui {
         float xscale, yscale;
         glfwGetWindowContentScale(viewer_->getWindow(), &xscale, &yscale);
 
-        // some clamping / safety net for weird DPI values
-        xscale = std::clamp(xscale, 1.0f, 2.0f);
+        // Clamping / safety net for weird DPI values
+        // Support up to 4.0x scale for high-DPI displays (e.g., 6K monitors)
+        xscale = std::clamp(xscale, 1.0f, 4.0f);
+
+        // Store DPI scale for use by UI components
+        setDpiScale(xscale);
 
         // Set application icon - use the resource path helper
         try {

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "save_directory_popup.hpp"
+#include "gui/dpi_scale.hpp"
 #include "gui/localization_manager.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/utils/windows_utils.hpp"
@@ -14,16 +15,16 @@ namespace lfs::vis::gui {
     using namespace lichtfeld::Strings;
 
     namespace {
-        // Fixed dimensions to prevent DPI-related resize feedback loop
-        constexpr float POPUP_WIDTH = 500.0f;
-        constexpr float POPUP_HEIGHT = 260.0f;
-        constexpr float INPUT_WIDTH = 340.0f;
-        constexpr float MAX_PATH_WIDTH = 380.0f;
+        // Base dimensions (scaled by DPI factor at runtime)
+        constexpr float BASE_POPUP_WIDTH = 500.0f;
+        constexpr float BASE_POPUP_HEIGHT = 260.0f;
+        constexpr float BASE_INPUT_WIDTH = 340.0f;
+        constexpr float BASE_MAX_PATH_WIDTH = 380.0f;
 
         constexpr float POPUP_ALPHA = 0.98f;
         constexpr float BORDER_SIZE = 2.0f;
-        constexpr ImVec2 WINDOW_PADDING = {20.0f, 16.0f};
-        constexpr ImVec2 BUTTON_SIZE = {100.0f, 0.0f};
+        constexpr ImVec2 BASE_WINDOW_PADDING = {20.0f, 16.0f};
+        constexpr ImVec2 BASE_BUTTON_SIZE = {100.0f, 0.0f};
 
         constexpr ImGuiWindowFlags POPUP_FLAGS = ImGuiWindowFlags_NoCollapse |
                                                  ImGuiWindowFlags_NoDocking |
@@ -62,6 +63,7 @@ namespace lfs::vis::gui {
             return;
 
         const auto& t = theme();
+        const float scale = getDpiScale();
         const ImVec4 popup_bg = {t.palette.surface.x, t.palette.surface.y, t.palette.surface.z, POPUP_ALPHA};
         const ImVec4 title_bg = darken(t.palette.surface, DARKEN_TITLE);
         const ImVec4 title_bg_active = darken(t.palette.surface, DARKEN_TITLE_ACTIVE);
@@ -73,7 +75,7 @@ namespace lfs::vis::gui {
                                   : ImGui::GetMainViewport()->GetCenter();
 
         ImGui::SetNextWindowPos(center, ImGuiCond_Appearing, {0.5f, 0.5f});
-        ImGui::SetNextWindowSize({POPUP_WIDTH, POPUP_HEIGHT}, ImGuiCond_Always);
+        ImGui::SetNextWindowSize({BASE_POPUP_WIDTH * scale, BASE_POPUP_HEIGHT * scale}, ImGuiCond_Always);
 
         ImGui::PushStyleColor(ImGuiCol_WindowBg, popup_bg);
         ImGui::PushStyleColor(ImGuiCol_TitleBg, title_bg);
@@ -84,7 +86,7 @@ namespace lfs::vis::gui {
         ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, t.palette.surface_bright);
         ImGui::PushStyleColor(ImGuiCol_FrameBgActive, t.palette.primary_dim);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, BORDER_SIZE);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, WINDOW_PADDING);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(BASE_WINDOW_PADDING.x * scale, BASE_WINDOW_PADDING.y * scale));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, t.sizes.popup_rounding);
 
         if (ImGui::BeginPopupModal(popup_title, nullptr, POPUP_FLAGS)) {
@@ -101,7 +103,7 @@ namespace lfs::vis::gui {
             ImGui::TextColored(t.palette.text_dim, "%s", LOC(SaveDirPopup::DATASET_LABEL));
             ImGui::SameLine();
             const std::string dataset_str = dataset_path_.string();
-            const bool is_clipped = ImGui::CalcTextSize(dataset_str.c_str()).x > MAX_PATH_WIDTH;
+            const bool is_clipped = ImGui::CalcTextSize(dataset_str.c_str()).x > BASE_MAX_PATH_WIDTH * scale;
             ImGui::TextUnformatted(dataset_str.c_str());
             if (is_clipped && ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("%s", dataset_str.c_str());
@@ -110,7 +112,7 @@ namespace lfs::vis::gui {
             ImGui::Spacing();
 
             ImGui::TextColored(t.palette.text_dim, "%s", LOC(SaveDirPopup::OUTPUT_DIR));
-            ImGui::SetNextItemWidth(INPUT_WIDTH);
+            ImGui::SetNextItemWidth(BASE_INPUT_WIDTH * scale);
             ImGui::InputText("##output_path", output_path_buffer_.data(), PATH_BUFFER_SIZE);
 
             ImGui::SameLine();
@@ -143,10 +145,11 @@ namespace lfs::vis::gui {
             ImGui::Spacing();
 
             const float avail = ImGui::GetContentRegionAvail().x;
-            const float total_width = BUTTON_SIZE.x * 2 + ImGui::GetStyle().ItemSpacing.x;
+            const ImVec2 button_size = {BASE_BUTTON_SIZE.x * scale, BASE_BUTTON_SIZE.y};
+            const float total_width = button_size.x * 2 + ImGui::GetStyle().ItemSpacing.x;
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + avail - total_width);
 
-            if (ImGui::Button(LOC(Common::CANCEL), BUTTON_SIZE) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            if (ImGui::Button(LOC(Common::CANCEL), button_size) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                 popup_open_ = false;
                 ImGui::CloseCurrentPopup();
             }
@@ -156,7 +159,7 @@ namespace lfs::vis::gui {
             ImGui::PushStyleColor(ImGuiCol_Button, darken(t.palette.success, DARKEN_SUCCESS_BUTTON));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, darken(t.palette.success, DARKEN_SUCCESS_HOVER));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, darken(t.palette.success, DARKEN_SUCCESS_ACTIVE));
-            if (ImGui::Button(LOC(Common::LOAD), BUTTON_SIZE) || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+            if (ImGui::Button(LOC(Common::LOAD), button_size) || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
                 popup_open_ = false;
                 if (on_confirm_) {
                     on_confirm_(dataset_path_, std::filesystem::path(output_path_buffer_.c_str()));

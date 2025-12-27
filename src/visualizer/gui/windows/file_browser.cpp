@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/windows/file_browser.hpp"
+#include "gui/dpi_scale.hpp"
 #include "gui/localization_manager.hpp"
 #include "gui/string_keys.hpp"
 #include "io/loader.hpp"
@@ -18,7 +19,8 @@ namespace lfs::vis::gui {
     }
 
     void FileBrowser::render(bool* p_open) {
-        ImGui::SetNextWindowSize(ImVec2(700, 450), ImGuiCond_FirstUseEver);
+        const float scale = getDpiScale();
+        ImGui::SetNextWindowSize(ImVec2(700 * scale, 450 * scale), ImGuiCond_FirstUseEver);
 
         // Add NoDocking flag
         ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
@@ -215,7 +217,7 @@ namespace lfs::vis::gui {
 
                 if (is_dataset) {
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.4f, 0.8f, 1.0f));
-                    if (ImGui::Button(LOC(lichtfeld::Strings::FileBrowser::LOAD_DATASET), ImVec2(120, 0))) {
+                    if (ImGui::Button(LOC(lichtfeld::Strings::FileBrowser::LOAD_DATASET), ImVec2(120 * scale, 0))) {
                         if (on_file_selected_) {
                             on_file_selected_(selected_path, true);
                             *p_open = false;
@@ -231,7 +233,7 @@ namespace lfs::vis::gui {
                     ImGui::TextDisabled("%s", type_str);
                 } else if (is_sog_dir) {
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.5f, 0.1f, 1.0f)); // Orange button
-                    if (ImGui::Button(LOC(lichtfeld::Strings::FileBrowser::LOAD_SOG), ImVec2(120, 0))) {
+                    if (ImGui::Button(LOC(lichtfeld::Strings::FileBrowser::LOAD_SOG), ImVec2(120 * scale, 0))) {
                         if (on_file_selected_) {
                             on_file_selected_(selected_path, false);
                             *p_open = false;
@@ -243,7 +245,7 @@ namespace lfs::vis::gui {
                     ImGui::TextDisabled("%s", LOC(FileBrowserExt::SOG_DIRECTORY));
                 } else {
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
-                    if (ImGui::Button(LOC(lichtfeld::Strings::FileBrowser::ENTER_DIR), ImVec2(120, 0))) {
+                    if (ImGui::Button(LOC(lichtfeld::Strings::FileBrowser::ENTER_DIR), ImVec2(120 * scale, 0))) {
                         current_path_ = selected_path.string();
                         selected_file_.clear();
                     }
@@ -258,7 +260,7 @@ namespace lfs::vis::gui {
 
                 if (ext == ".ply") {
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.6f, 0.2f, 1.0f));
-                    if (ImGui::Button(LOC(lichtfeld::Strings::FileBrowser::LOAD_PLY), ImVec2(120, 0))) {
+                    if (ImGui::Button(LOC(lichtfeld::Strings::FileBrowser::LOAD_PLY), ImVec2(120 * scale, 0))) {
                         if (on_file_selected_) {
                             on_file_selected_(selected_path, false);
                             *p_open = false;
@@ -267,7 +269,7 @@ namespace lfs::vis::gui {
                     ImGui::PopStyleColor();
                 } else if (ext == ".sog") {
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.5f, 0.1f, 1.0f)); // Orange button
-                    if (ImGui::Button(LOC(lichtfeld::Strings::FileBrowser::LOAD_SOG), ImVec2(120, 0))) {
+                    if (ImGui::Button(LOC(lichtfeld::Strings::FileBrowser::LOAD_SOG), ImVec2(120 * scale, 0))) {
                         if (on_file_selected_) {
                             on_file_selected_(selected_path, false);
                             *p_open = false;
@@ -288,7 +290,7 @@ namespace lfs::vis::gui {
 
                     if (is_sog_meta) {
                         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.8f, 0.5f, 0.1f, 1.0f)); // Orange button
-                        if (ImGui::Button(LOC(lichtfeld::Strings::FileBrowser::LOAD_SOG), ImVec2(120, 0))) {
+                        if (ImGui::Button(LOC(lichtfeld::Strings::FileBrowser::LOAD_SOG), ImVec2(120 * scale, 0))) {
                             if (on_file_selected_) {
                                 on_file_selected_(selected_path, false);
                                 *p_open = false;
@@ -309,7 +311,7 @@ namespace lfs::vis::gui {
 
         ImGui::SameLine();
 
-        if (ImGui::Button(LOC(Common::CANCEL), ImVec2(120, 0))) {
+        if (ImGui::Button(LOC(Common::CANCEL), ImVec2(120 * scale, 0))) {
             *p_open = false;
             selected_file_.clear();
         }
