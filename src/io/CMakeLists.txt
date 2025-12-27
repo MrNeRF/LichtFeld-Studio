@@ -8,6 +8,8 @@ add_library(lfs_io_cuda STATIC
         cuda/morton_encoding.cu
         cuda/kmeans.hpp
         cuda/kmeans.cu
+        cuda/image_format_kernels.cuh
+        cuda/image_format_kernels.cu
 )
 
 target_include_directories(lfs_io_cuda
@@ -103,6 +105,7 @@ add_library(lfs_io STATIC
         cache_image_loader.cpp
         nvcodec_image_loader.hpp
         nvcodec_image_loader.cpp
+        pipelined_image_loader.cpp
 )
 
 # Set include directories

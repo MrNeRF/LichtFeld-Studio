@@ -7,6 +7,7 @@
 #include "core/camera.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
+#include "io/pipelined_image_loader.hpp"
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -18,6 +19,7 @@
 #include <random>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 namespace lfs::training {
@@ -278,6 +280,21 @@ namespace lfs::training {
         void set_resize_factor(int resize_factor) { config_.resize_factor = resize_factor; }
         void set_max_width(int max_width) { config_.max_width = max_width; }
 
+        int get_resize_factor() const { return config_.resize_factor; }
+        int get_max_width() const { return config_.max_width; }
+
+        /// Returns fraction of non-JPEG images (0.0 = all JPEG, 1.0 = none)
+        [[nodiscard]] float get_non_jpeg_ratio() const {
+            if (cameras_.empty())
+                return 0.0f;
+            const auto count = std::count_if(cameras_.begin(), cameras_.end(), [](const auto& cam) {
+                auto ext = cam->image_path().extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                return ext != ".jpg" && ext != ".jpeg";
+            });
+            return static_cast<float>(count) / static_cast<float>(cameras_.size());
+        }
+
     private:
         std::vector<std::shared_ptr<lfs::core::Camera>> cameras_;
         DatasetConfig config_;
@@ -498,29 +515,135 @@ namespace lfs::training {
         bool shutdown_;
     };
 
-    // ============================================================================
-    // Helper Functions
-    // ============================================================================
+    // Pipelined DataLoader with GPU batch JPEG decoding
+    template <typename Sampler>
+    class PipelinedDataLoader {
+    public:
+        using BatchType = std::vector<CameraExample>;
 
-    /// Create dataloader with standard random sampling
+        PipelinedDataLoader(std::shared_ptr<CameraDataset> dataset,
+                            Sampler sampler,
+                            lfs::io::PipelinedLoaderConfig config = {})
+            : dataset_(dataset),
+              sampler_(std::move(sampler)),
+              config_(config),
+              loader_(std::make_unique<lfs::io::PipelinedImageLoader>(config)),
+              shutdown_(false) {
+
+            // Prefetch initial batch
+            prefetch_next_batch();
+        }
+
+        ~PipelinedDataLoader() {
+            shutdown();
+        }
+
+        PipelinedDataLoader(const PipelinedDataLoader&) = delete;
+        PipelinedDataLoader& operator=(const PipelinedDataLoader&) = delete;
+
+        std::optional<CameraExample> next() {
+            if (shutdown_)
+                return std::nullopt;
+            prefetch_next_batch();
+
+            try {
+                auto ready = loader_->get();
+                const auto it = sequence_to_camera_.find(ready.sequence_id);
+                if (it == sequence_to_camera_.end()) {
+                    LOG_ERROR("[PipelinedDataLoader] Unknown sequence_id: {}", ready.sequence_id);
+                    return std::nullopt;
+                }
+                const size_t camera_idx = it->second;
+                sequence_to_camera_.erase(it);
+
+                auto& cam = dataset_->get_cameras()[camera_idx];
+                const auto shape = ready.tensor.shape();
+                cam->set_image_dimensions(static_cast<int>(shape[2]), static_cast<int>(shape[1]));
+
+                return CameraExample{
+                    CameraWithImage{cam.get(), std::move(ready.tensor)},
+                    lfs::core::Tensor()};
+            } catch (const std::exception& e) {
+                LOG_ERROR("[PipelinedDataLoader] Error: {}", e.what());
+                return std::nullopt;
+            }
+        }
+
+        void reset() {
+            loader_->clear();
+            sampler_.reset();
+            sequence_to_camera_.clear();
+            next_sequence_id_ = 0;
+            prefetch_next_batch();
+        }
+
+        void shutdown() {
+            if (shutdown_)
+                return;
+            shutdown_ = true;
+            loader_->shutdown();
+        }
+
+        auto get_stats() const { return loader_->get_stats(); }
+
+    private:
+        void prefetch_next_batch() {
+            while (loader_->in_flight_count() < config_.prefetch_count) {
+                const auto indices = sampler_.next(1);
+                if (!indices || indices->empty())
+                    break;
+
+                const size_t camera_idx = (*indices)[0];
+                auto& cam = dataset_->get_cameras()[camera_idx];
+                const size_t seq_id = next_sequence_id_++;
+                sequence_to_camera_[seq_id] = camera_idx;
+
+                lfs::io::LoadParams params;
+                params.resize_factor = dataset_->get_resize_factor();
+                params.max_width = dataset_->get_max_width();
+                loader_->prefetch(seq_id, cam->image_path(), params);
+            }
+        }
+
+        std::shared_ptr<CameraDataset> dataset_;
+        Sampler sampler_;
+        lfs::io::PipelinedLoaderConfig config_;
+        std::unique_ptr<lfs::io::PipelinedImageLoader> loader_;
+
+        std::unordered_map<size_t, size_t> sequence_to_camera_;
+        size_t next_sequence_id_ = 0;
+
+        bool shutdown_ = false;
+    };
+
     template <typename SamplerType = RandomSampler>
     inline auto create_dataloader_from_dataset(std::shared_ptr<CameraDataset> dataset,
                                                int num_workers = 4) {
         const size_t dataset_size = dataset->size();
-
         DataLoaderOptions options;
         options.batch_size = 1;
         options.num_workers = num_workers;
         options.enforce_ordering = false;
-
         return std::make_unique<DataLoader<SamplerType>>(
             dataset, SamplerType(dataset_size), options);
     }
 
-    /// Create dataloader with infinite random sampling (auto-resets)
     inline auto create_infinite_dataloader_from_dataset(std::shared_ptr<CameraDataset> dataset,
                                                         int num_workers = 4) {
         return create_dataloader_from_dataset<InfiniteRandomSampler>(dataset, num_workers);
+    }
+
+    template <typename SamplerType = RandomSampler>
+    inline auto create_pipelined_dataloader(std::shared_ptr<CameraDataset> dataset,
+                                            lfs::io::PipelinedLoaderConfig config = {}) {
+        const size_t dataset_size = dataset->size();
+        return std::make_unique<PipelinedDataLoader<SamplerType>>(
+            dataset, SamplerType(dataset_size), config);
+    }
+
+    inline auto create_infinite_pipelined_dataloader(std::shared_ptr<CameraDataset> dataset,
+                                                     lfs::io::PipelinedLoaderConfig config = {}) {
+        return create_pipelined_dataloader<InfiniteRandomSampler>(dataset, config);
     }
 
 } // namespace lfs::training

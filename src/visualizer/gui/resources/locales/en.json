@@ -499,7 +499,33 @@
     "save_current_profile": "Save Current Profile",
     "reset_to_default": "Reset to Default",
     "export": "Export...",
-    "import": "Import..."
+    "import": "Import...",
+    "action": "Action",
+    "binding": "Binding",
+    "rebind": "Rebind",
+    "cancel": "Cancel",
+    "press_key_or_click": "Press key or click mouse...",
+    "click_again_double": "Click again for double-click...",
+    "tool_mode": "TOOL MODE",
+    "select_tool_mode": "Select tool mode to view/edit bindings",
+    "current_bindings": "CURRENT BINDINGS",
+    "global_bindings_hint": "Global bindings apply everywhere unless overridden",
+    "tool_bindings_hint": "Tool-specific bindings override global bindings",
+    "section.navigation": "NAVIGATION",
+    "section.selection": "SELECTION",
+    "section.brush": "BRUSH",
+    "section.crop_box": "CROP BOX",
+    "section.editing": "EDITING",
+    "section.view": "VIEW",
+    "mode.global": "Global",
+    "mode.selection": "Selection Tool",
+    "mode.brush": "Brush Tool",
+    "mode.translate": "Translate",
+    "mode.rotate": "Rotate",
+    "mode.scale": "Scale",
+    "mode.align": "Align Tool",
+    "mode.crop_box": "Crop Box",
+    "mode.unknown": "Unknown"
   },
 
   "debug_info": {
@@ -586,7 +612,12 @@
 
   "startup": {
     "supported_by": "Supported by",
-    "click_to_continue": "Click anywhere to continue"
+    "click_to_continue": "Click anywhere to continue",
+    "drop_files_title": "Drop files here to get started",
+    "drop_files_subtitle": "PLY, SOG, COLMAP dataset, or Project file",
+    "drop_files_hint": "Or use File > Import Dataset / Import Ply",
+    "drop_to_import": "Drop to Import",
+    "drop_to_import_subtitle": "PLY, SOG, COLMAP dataset, or Project"
   },
 
   "axis": {

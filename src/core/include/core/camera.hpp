@@ -82,6 +82,10 @@ namespace lfs::core {
 
         int image_height() const noexcept { return _image_height; }
         int image_width() const noexcept { return _image_width; }
+        void set_image_dimensions(int width, int height) noexcept {
+            _image_width = width;
+            _image_height = height;
+        }
         int camera_height() const noexcept { return _camera_height; }
         int camera_width() const noexcept { return _camera_width; }
         float focal_x() const noexcept { return _focal_x; }

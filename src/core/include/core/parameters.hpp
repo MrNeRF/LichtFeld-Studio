@@ -40,7 +40,7 @@ namespace lfs::core {
             float scale_reg = 0.01f;
             float init_opacity = 0.5f;
             float init_scaling = 0.1f;
-            int num_workers = 16;
+            int num_workers = 2;
             int max_cap = 1000000;
             std::vector<size_t> eval_steps = {7'000, 30'000}; // Steps to evaluate the model
             std::vector<size_t> save_steps = {7'000, 30'000}; // Steps to save the model
@@ -49,6 +49,7 @@ namespace lfs::core {
             bool enable_save_eval_images = true;              // Save during evaluation images
             bool headless = false;                            // Disable visualization during training
             bool no_splash = false;                           // Skip splash screen on startup
+            bool no_interop = false;                          // Disable CUDA-GL interop (use CPU fallback)
             std::string strategy = "mcmc";                    // Optimization strategy: mcmc, default.
 
             // Mask parameters

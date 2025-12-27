@@ -554,6 +554,32 @@ namespace lichtfeld::Strings {
         inline constexpr const char* RESET_TO_DEFAULT = "input_settings.reset_to_default";
         inline constexpr const char* EXPORT = "input_settings.export";
         inline constexpr const char* IMPORT = "input_settings.import";
+        inline constexpr const char* ACTION = "input_settings.action";
+        inline constexpr const char* BINDING = "input_settings.binding";
+        inline constexpr const char* REBIND = "input_settings.rebind";
+        inline constexpr const char* CANCEL = "input_settings.cancel";
+        inline constexpr const char* PRESS_KEY_OR_CLICK = "input_settings.press_key_or_click";
+        inline constexpr const char* CLICK_AGAIN_DOUBLE = "input_settings.click_again_double";
+        inline constexpr const char* TOOL_MODE = "input_settings.tool_mode";
+        inline constexpr const char* SELECT_TOOL_MODE = "input_settings.select_tool_mode";
+        inline constexpr const char* CURRENT_BINDINGS = "input_settings.current_bindings";
+        inline constexpr const char* GLOBAL_BINDINGS_HINT = "input_settings.global_bindings_hint";
+        inline constexpr const char* TOOL_BINDINGS_HINT = "input_settings.tool_bindings_hint";
+        inline constexpr const char* SECTION_NAVIGATION = "input_settings.section.navigation";
+        inline constexpr const char* SECTION_SELECTION = "input_settings.section.selection";
+        inline constexpr const char* SECTION_BRUSH = "input_settings.section.brush";
+        inline constexpr const char* SECTION_CROP_BOX = "input_settings.section.crop_box";
+        inline constexpr const char* SECTION_EDITING = "input_settings.section.editing";
+        inline constexpr const char* SECTION_VIEW = "input_settings.section.view";
+        inline constexpr const char* MODE_GLOBAL = "input_settings.mode.global";
+        inline constexpr const char* MODE_SELECTION = "input_settings.mode.selection";
+        inline constexpr const char* MODE_BRUSH = "input_settings.mode.brush";
+        inline constexpr const char* MODE_TRANSLATE = "input_settings.mode.translate";
+        inline constexpr const char* MODE_ROTATE = "input_settings.mode.rotate";
+        inline constexpr const char* MODE_SCALE = "input_settings.mode.scale";
+        inline constexpr const char* MODE_ALIGN = "input_settings.mode.align";
+        inline constexpr const char* MODE_CROP_BOX = "input_settings.mode.crop_box";
+        inline constexpr const char* MODE_UNKNOWN = "input_settings.mode.unknown";
     } // namespace InputSettings
 
     namespace DebugInfo {
@@ -641,6 +667,11 @@ namespace lichtfeld::Strings {
     namespace Startup {
         inline constexpr const char* SUPPORTED_BY = "startup.supported_by";
         inline constexpr const char* CLICK_TO_CONTINUE = "startup.click_to_continue";
+        inline constexpr const char* DROP_FILES_TITLE = "startup.drop_files_title";
+        inline constexpr const char* DROP_FILES_SUBTITLE = "startup.drop_files_subtitle";
+        inline constexpr const char* DROP_FILES_HINT = "startup.drop_files_hint";
+        inline constexpr const char* DROP_TO_IMPORT = "startup.drop_to_import";
+        inline constexpr const char* DROP_TO_IMPORT_SUBTITLE = "startup.drop_to_import_subtitle";
     } // namespace Startup
 
     namespace Axis {

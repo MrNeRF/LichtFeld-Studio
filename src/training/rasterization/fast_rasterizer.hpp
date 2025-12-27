@@ -42,7 +42,7 @@ namespace lfs::training {
         float center_y;
         float near_plane;
         float far_plane;
-        bool mip_filter = true;
+        bool mip_filter = false;
 
         // Tile information (for tile-based training)
         int tile_x_offset = 0; // Horizontal offset of this tile
@@ -61,7 +61,7 @@ namespace lfs::training {
         int tile_y_offset = 0,
         int tile_width = 0,
         int tile_height = 0,
-        bool mip_filter = true);
+        bool mip_filter = false);
 
     // Backward pass with optional extra alpha gradient for masked training
     void fast_rasterize_backward(

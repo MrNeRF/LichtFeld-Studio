@@ -6,6 +6,7 @@
 #include "app/splash_screen.hpp"
 #include "core/logger.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
+#include "rendering/framebuffer_factory.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/scene/scene.hpp"
@@ -70,6 +71,11 @@ namespace lfs::app {
         }
 
         int runGui(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
+            if (params->optimization.no_interop) {
+                LOG_INFO("CUDA-GL interop disabled");
+                lfs::rendering::disableInterop();
+            }
+
             if (params->optimization.no_splash) {
                 warmupCuda();
             } else {

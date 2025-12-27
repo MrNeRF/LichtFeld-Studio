@@ -546,15 +546,15 @@ namespace lfs::vis::gui {
     namespace {
         const char* getToolModeName(input::ToolMode mode) {
             switch (mode) {
-            case input::ToolMode::GLOBAL: return "Global";
-            case input::ToolMode::SELECTION: return "Selection Tool";
-            case input::ToolMode::BRUSH: return "Brush Tool";
-            case input::ToolMode::TRANSLATE: return "Translate";
-            case input::ToolMode::ROTATE: return "Rotate";
-            case input::ToolMode::SCALE: return "Scale";
-            case input::ToolMode::ALIGN: return "Align Tool";
-            case input::ToolMode::CROP_BOX: return "Crop Box";
-            default: return "Unknown";
+            case input::ToolMode::GLOBAL: return LOC(lichtfeld::Strings::InputSettings::MODE_GLOBAL);
+            case input::ToolMode::SELECTION: return LOC(lichtfeld::Strings::InputSettings::MODE_SELECTION);
+            case input::ToolMode::BRUSH: return LOC(lichtfeld::Strings::InputSettings::MODE_BRUSH);
+            case input::ToolMode::TRANSLATE: return LOC(lichtfeld::Strings::InputSettings::MODE_TRANSLATE);
+            case input::ToolMode::ROTATE: return LOC(lichtfeld::Strings::InputSettings::MODE_ROTATE);
+            case input::ToolMode::SCALE: return LOC(lichtfeld::Strings::InputSettings::MODE_SCALE);
+            case input::ToolMode::ALIGN: return LOC(lichtfeld::Strings::InputSettings::MODE_ALIGN);
+            case input::ToolMode::CROP_BOX: return LOC(lichtfeld::Strings::InputSettings::MODE_CROP_BOX);
+            default: return LOC(lichtfeld::Strings::InputSettings::MODE_UNKNOWN);
             }
         }
     } // namespace
@@ -581,9 +581,9 @@ namespace lfs::vis::gui {
         ImGui::TableNextColumn();
         if (is_rebinding) {
             if (waiting_for_double_click_) {
-                ImGui::TextColored(COLOR_WAITING, "Click again for double-click...");
+                ImGui::TextColored(COLOR_WAITING, "%s", LOC(lichtfeld::Strings::InputSettings::CLICK_AGAIN_DOUBLE));
             } else {
-                ImGui::TextColored(COLOR_WAITING, "Press key or click mouse...");
+                ImGui::TextColored(COLOR_WAITING, "%s", LOC(lichtfeld::Strings::InputSettings::PRESS_KEY_OR_CLICK));
             }
         } else {
             const std::string desc = input_bindings_->getTriggerDescription(action, mode);
@@ -596,8 +596,8 @@ namespace lfs::vis::gui {
             ImGui::PushStyleColor(ImGuiCol_Button, COLOR_CANCEL);
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, COLOR_CANCEL_HOVER);
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, COLOR_CANCEL_ACTIVE);
-            char label[32];
-            snprintf(label, sizeof(label), "Cancel##%d", unique_id);
+            char label[64];
+            snprintf(label, sizeof(label), "%s##%d", LOC(lichtfeld::Strings::InputSettings::CANCEL), unique_id);
             if (ImGui::Button(label, ImVec2(-1, 0))) {
                 cancelCapture();
             }
@@ -606,8 +606,8 @@ namespace lfs::vis::gui {
             ImGui::PushStyleColor(ImGuiCol_Button, COLOR_REBIND);
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, COLOR_REBIND_HOVER);
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, COLOR_REBIND_ACTIVE);
-            char label[32];
-            snprintf(label, sizeof(label), "Rebind##%d", unique_id);
+            char label[64];
+            snprintf(label, sizeof(label), "%s##%d", LOC(lichtfeld::Strings::InputSettings::REBIND), unique_id);
             if (ImGui::Button(label, ImVec2(-1, 0))) {
                 rebinding_action_ = action;
                 rebinding_mode_ = mode;
@@ -769,12 +769,12 @@ namespace lfs::vis::gui {
 
                 if (fonts_.section)
                     ImGui::PushFont(fonts_.section);
-                ImGui::TextColored(t.palette.text_dim, "TOOL MODE");
+                ImGui::TextColored(t.palette.text_dim, "%s", LOC(lichtfeld::Strings::InputSettings::TOOL_MODE));
                 if (fonts_.section)
                     ImGui::PopFont();
                 if (fonts_.small_font)
                     ImGui::PushFont(fonts_.small_font);
-                ImGui::TextColored(t.palette.text_dim, "Select tool mode to view/edit bindings");
+                ImGui::TextColored(t.palette.text_dim, "%s", LOC(lichtfeld::Strings::InputSettings::SELECT_TOOL_MODE));
                 if (fonts_.small_font)
                     ImGui::PopFont();
                 ImGui::Spacing();
@@ -814,15 +814,15 @@ namespace lfs::vis::gui {
 
                 if (fonts_.section)
                     ImGui::PushFont(fonts_.section);
-                ImGui::TextColored(t.palette.text_dim, "CURRENT BINDINGS");
+                ImGui::TextColored(t.palette.text_dim, "%s", LOC(lichtfeld::Strings::InputSettings::CURRENT_BINDINGS));
                 if (fonts_.section)
                     ImGui::PopFont();
                 if (fonts_.small_font)
                     ImGui::PushFont(fonts_.small_font);
                 if (selected_tool_mode_ == input::ToolMode::GLOBAL) {
-                    ImGui::TextColored(t.palette.text_dim, "Global bindings apply everywhere unless overridden");
+                    ImGui::TextColored(t.palette.text_dim, "%s", LOC(lichtfeld::Strings::InputSettings::GLOBAL_BINDINGS_HINT));
                 } else {
-                    ImGui::TextColored(t.palette.text_dim, "Tool-specific bindings override global bindings");
+                    ImGui::TextColored(t.palette.text_dim, "%s", LOC(lichtfeld::Strings::InputSettings::TOOL_BINDINGS_HINT));
                 }
                 if (fonts_.small_font)
                     ImGui::PopFont();
@@ -834,8 +834,8 @@ namespace lfs::vis::gui {
                 const float table_height = std::max(200.0f, available_height);
 
                 if (ImGui::BeginTable("bindings_table", 3, TABLE_FLAGS, ImVec2(0, table_height))) {
-                    ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 180.0f);
-                    ImGui::TableSetupColumn("Binding", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn(LOC(lichtfeld::Strings::InputSettings::ACTION), ImGuiTableColumnFlags_WidthFixed, 180.0f);
+                    ImGui::TableSetupColumn(LOC(lichtfeld::Strings::InputSettings::BINDING), ImGuiTableColumnFlags_WidthStretch);
                     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 70.0f);
                     ImGui::TableHeadersRow();
 
@@ -854,7 +854,7 @@ namespace lfs::vis::gui {
                     const auto mode = selected_tool_mode_;
 
                     // Navigation - always relevant for all tools
-                    renderSectionHeader("NAVIGATION");
+                    renderSectionHeader(LOC(lichtfeld::Strings::InputSettings::SECTION_NAVIGATION));
                     renderBindingRow(input::Action::CAMERA_ORBIT, mode);
                     renderBindingRow(input::Action::CAMERA_PAN, mode);
                     renderBindingRow(input::Action::CAMERA_ZOOM, mode);
@@ -881,7 +881,7 @@ namespace lfs::vis::gui {
                     if (mode == input::ToolMode::GLOBAL ||
                         mode == input::ToolMode::SELECTION ||
                         mode == input::ToolMode::BRUSH) {
-                        renderSectionHeader("SELECTION");
+                        renderSectionHeader(LOC(lichtfeld::Strings::InputSettings::SECTION_SELECTION));
                         renderBindingRow(input::Action::SELECTION_REPLACE, mode);
                         renderBindingRow(input::Action::SELECTION_ADD, mode);
                         renderBindingRow(input::Action::SELECTION_REMOVE, mode);
@@ -902,18 +902,18 @@ namespace lfs::vis::gui {
                     }
 
                     if (mode == input::ToolMode::BRUSH) {
-                        renderSectionHeader("BRUSH");
+                        renderSectionHeader(LOC(lichtfeld::Strings::InputSettings::SECTION_BRUSH));
                         renderBindingRow(input::Action::CYCLE_BRUSH_MODE, mode);
                         renderBindingRow(input::Action::BRUSH_RESIZE, mode);
                     }
 
                     if (mode == input::ToolMode::CROP_BOX) {
-                        renderSectionHeader("CROP BOX");
+                        renderSectionHeader(LOC(lichtfeld::Strings::InputSettings::SECTION_CROP_BOX));
                         renderBindingRow(input::Action::APPLY_CROP_BOX, mode);
                     }
 
                     // Editing - available in all modes
-                    renderSectionHeader("EDITING");
+                    renderSectionHeader(LOC(lichtfeld::Strings::InputSettings::SECTION_EDITING));
                     // Delete action depends on mode: GLOBAL/transform = delete node, others = delete Gaussians
                     if (mode == input::ToolMode::GLOBAL ||
                         mode == input::ToolMode::TRANSLATE ||
@@ -931,7 +931,7 @@ namespace lfs::vis::gui {
                     renderBindingRow(input::Action::DESELECT_ALL, mode);
 
                     if (mode == input::ToolMode::GLOBAL) {
-                        renderSectionHeader("VIEW");
+                        renderSectionHeader(LOC(lichtfeld::Strings::InputSettings::SECTION_VIEW));
                         renderBindingRow(input::Action::TOGGLE_SPLIT_VIEW, mode);
                         renderBindingRow(input::Action::TOGGLE_GT_COMPARISON, mode);
                         renderBindingRow(input::Action::CYCLE_PLY, mode);

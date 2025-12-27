@@ -66,18 +66,21 @@ namespace lfs::io {
             int max_width = 0,
             void* cuda_stream = nullptr);
 
-        /**
-         * @brief Load and decode multiple images in batch (Phase 2 - TODO)
-         *
-         * @param paths Paths to image files
-         * @param resize_factor Downscale factor
-         * @param max_width Maximum width/height
-         * @return Vector of tensors, each in format [C, H, W], float32, RGB, normalized [0-1]
-         */
+        // Load and decode multiple images in batch
         std::vector<lfs::core::Tensor> load_images_batch_gpu(
             const std::vector<std::filesystem::path>& paths,
             int resize_factor = 1,
             int max_width = 0);
+
+        // Batch decode JPEG blobs from memory
+        std::vector<lfs::core::Tensor> batch_decode_from_memory(
+            const std::vector<std::vector<uint8_t>>& jpeg_blobs,
+            void* cuda_stream = nullptr);
+
+        // Batch decode from spans (zero-copy)
+        std::vector<lfs::core::Tensor> batch_decode_from_spans(
+            const std::vector<std::pair<const uint8_t*, size_t>>& jpeg_spans,
+            void* cuda_stream = nullptr);
 
         // Encode GPU tensor to JPEG bytes
         std::vector<uint8_t> encode_to_jpeg(
