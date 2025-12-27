@@ -1154,7 +1154,21 @@ namespace lfs::training {
             pipelined_config.output_queue_size = 4;
             const size_t worker_threads = std::clamp(static_cast<size_t>(num_workers), size_t{2}, size_t{4});
             pipelined_config.io_threads = worker_threads;
-            pipelined_config.cold_process_threads = worker_threads;
+
+            // Non-JPEG images (PNG, WebP) need CPU decoding - use more threads until cache warms
+            constexpr float NON_JPEG_THRESHOLD = 0.1f;
+            constexpr size_t MIN_COLD_THREADS = 4;
+            constexpr size_t COLD_PREFETCH_COUNT = 16;
+            const float non_jpeg_ratio = train_dataset_->get_non_jpeg_ratio();
+            if (non_jpeg_ratio > NON_JPEG_THRESHOLD) {
+                const size_t cold_threads = std::max(MIN_COLD_THREADS,
+                    static_cast<size_t>(std::thread::hardware_concurrency() / 2));
+                pipelined_config.cold_process_threads = cold_threads;
+                pipelined_config.prefetch_count = COLD_PREFETCH_COUNT;
+                LOG_INFO("{:.0f}% non-JPEG images, using {} cold threads", non_jpeg_ratio * 100.0f, cold_threads);
+            } else {
+                pipelined_config.cold_process_threads = worker_threads;
+            }
             auto train_dataloader = create_infinite_pipelined_dataloader(train_dataset_, pipelined_config);
 
             LOG_DEBUG("Starting training iterations");

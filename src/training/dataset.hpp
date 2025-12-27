@@ -283,6 +283,17 @@ namespace lfs::training {
         int get_resize_factor() const { return config_.resize_factor; }
         int get_max_width() const { return config_.max_width; }
 
+        /// Returns fraction of non-JPEG images (0.0 = all JPEG, 1.0 = none)
+        [[nodiscard]] float get_non_jpeg_ratio() const {
+            if (cameras_.empty()) return 0.0f;
+            const auto count = std::count_if(cameras_.begin(), cameras_.end(), [](const auto& cam) {
+                auto ext = cam->image_path().extension().string();
+                std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+                return ext != ".jpg" && ext != ".jpeg";
+            });
+            return static_cast<float>(count) / static_cast<float>(cameras_.size());
+        }
+
     private:
         std::vector<std::shared_ptr<lfs::core::Camera>> cameras_;
         DatasetConfig config_;
