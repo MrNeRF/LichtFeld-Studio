@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/ui_widgets.hpp"
+#include "gui/dpi_scale.hpp"
 #include "gui/localization_manager.hpp"
 #include "gui/string_keys.hpp"
 #include "scene/scene_manager.hpp"
@@ -57,7 +58,7 @@ namespace lfs::vis::gui::widgets {
 
     void TableRow(const char* label, const char* format, ...) {
         ImGui::Text("%s:", label);
-        ImGui::SameLine(120); // Align values at column 120
+        ImGui::SameLine(120 * getDpiScale()); // Align values at column 120
 
         va_list args;
         va_start(args, format);
@@ -85,7 +86,7 @@ namespace lfs::vis::gui::widgets {
             plot_label,
             min_val,
             max_val,
-            ImVec2(ImGui::GetContentRegionAvail().x, 80));
+            ImVec2(ImGui::GetContentRegionAvail().x, 80 * getDpiScale()));
     }
 
     void DrawModeStatus(const UIContext& ctx) {
