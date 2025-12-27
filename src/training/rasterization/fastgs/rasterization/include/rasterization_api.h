@@ -68,7 +68,7 @@ namespace fast_lfs::rasterization {
         float center_y,
         float near_plane,
         float far_plane,
-        bool mip_filter = true);
+        bool mip_filter = false);
 
     struct BackwardOutputs {
         // These are filled in the provided pointers, not allocated
@@ -106,7 +106,7 @@ namespace fast_lfs::rasterization {
         float focal_y,
         float center_x,
         float center_y,
-        bool mip_filter = true);
+        bool mip_filter = false);
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();

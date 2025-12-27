@@ -275,9 +275,15 @@ namespace lfs::training {
                 gt_image = gt_image.to(lfs::core::Device::CUDA);
             }
 
-            // Rasterize
+            // Rasterize with same mip_filter setting as training
             auto& splatData_mutable = const_cast<lfs::core::SplatData&>(splatData);
-            RenderOutput r_output = fast_rasterize(*cam, splatData_mutable, background);
+            auto rasterize_result = fast_rasterize_forward(*cam, splatData_mutable, background,
+                                                           0, 0, 0, 0, // no tiling
+                                                           _params.optimization.mip_filter);
+            if (!rasterize_result) {
+                throw std::runtime_error("Evaluation rasterization failed: " + rasterize_result.error());
+            }
+            RenderOutput r_output = std::move(rasterize_result->first);
 
             // Clamp rendered image to [0, 1]
             r_output.image = r_output.image.clamp(0.0f, 1.0f);
