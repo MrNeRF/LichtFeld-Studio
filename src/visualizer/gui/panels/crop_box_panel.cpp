@@ -5,6 +5,7 @@
 #include "gui/panels/crop_box_panel.hpp"
 #include "command/command_history.hpp"
 #include "command/commands/cropbox_command.hpp"
+#include "gui/dpi_scale.hpp"
 #include "gui/localization_manager.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_widgets.hpp"
@@ -29,7 +30,7 @@ namespace lfs::vis::gui::panels {
         constexpr float ROTATION_STEP = 1.0f;
         constexpr float ROTATION_STEP_FAST = 15.0f;
         constexpr float MIN_SIZE = 0.001f;
-        constexpr float INPUT_WIDTH_PADDING = 40.0f;
+        constexpr float BASE_INPUT_WIDTH_PADDING = 40.0f;
 
         std::optional<command::CropBoxState> s_state_before_edit;
         std::string s_editing_cropbox_name;
@@ -112,7 +113,7 @@ namespace lfs::vis::gui::panels {
         bool any_active = false;
         bool any_deactivated = false;
 
-        const float width = ImGui::CalcTextSize("-000.000").x + ImGui::GetStyle().FramePadding.x * 2.0f + INPUT_WIDTH_PADDING;
+        const float width = ImGui::CalcTextSize("-000.000").x + ImGui::GetStyle().FramePadding.x * 2.0f + BASE_INPUT_WIDTH_PADDING * getDpiScale();
 
         // Decompose local_transform
         glm::vec3 translation, scale, skew;

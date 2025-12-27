@@ -5,6 +5,7 @@
 #include "gui/panels/transform_panel.hpp"
 #include "command/command_history.hpp"
 #include "command/commands/transform_command.hpp"
+#include "gui/dpi_scale.hpp"
 #include "gui/localization_manager.hpp"
 #include "gui/string_keys.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -28,7 +29,7 @@ namespace lfs::vis::gui::panels {
         constexpr float SCALE_STEP = 0.01f;
         constexpr float SCALE_STEP_FAST = 0.1f;
         constexpr float MIN_SCALE = 0.001f;
-        constexpr float INPUT_WIDTH_PADDING = 40.0f;
+        constexpr float BASE_INPUT_WIDTH_PADDING = 40.0f;
 
         struct DecomposedTransform {
             glm::vec3 translation;
@@ -112,7 +113,7 @@ namespace lfs::vis::gui::panels {
         const float translate_step = ctrl_pressed ? TRANSLATE_STEP_CTRL : TRANSLATE_STEP;
         const float translate_step_fast = ctrl_pressed ? TRANSLATE_STEP_CTRL_FAST : TRANSLATE_STEP_FAST;
         const float text_width = ImGui::CalcTextSize("-000.000").x +
-                                 ImGui::GetStyle().FramePadding.x * 2.0f + INPUT_WIDTH_PADDING;
+                                 ImGui::GetStyle().FramePadding.x * 2.0f + BASE_INPUT_WIDTH_PADDING * getDpiScale();
 
         ImGui::Text(LOC(Transform::NODE), node_name.c_str());
         ImGui::Text(LOC(Transform::SPACE), use_world_space ? LOC(Transform::WORLD) : LOC(Transform::LOCAL));

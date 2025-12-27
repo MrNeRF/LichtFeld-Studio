@@ -9,6 +9,7 @@
 #include "core/logger.hpp"
 #include "core/services.hpp"
 #include "core/splat_data_mirror.hpp"
+#include "gui/dpi_scale.hpp"
 #include "gui/localization_manager.hpp"
 #include "gui/panels/gizmo_toolbar.hpp"
 #include "gui/string_keys.hpp"
@@ -24,7 +25,8 @@ namespace lfs::vis::gui::panels {
 
     using namespace lichtfeld::Strings;
 
-    constexpr float SUBTOOLBAR_OFFSET_Y = 8.0f;
+    // Base margin (scaled by DPI)
+    constexpr float BASE_SUBTOOLBAR_OFFSET_Y = 8.0f;
 
     constexpr ImGuiWindowFlags TOOLBAR_FLAGS =
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
@@ -270,7 +272,9 @@ namespace lfs::vis::gui::panels {
         editor->validateActiveTool();
 
         constexpr int NUM_MAIN_BUTTONS = 8;
-        constexpr float TOOLBAR_MARGIN_Y = 5.0f;
+        const float scale = getDpiScale();
+        const float TOOLBAR_MARGIN_Y = 5.0f * scale;
+        const float SUBTOOLBAR_OFFSET_Y = BASE_SUBTOOLBAR_OFFSET_Y * scale;
         const ImVec2 toolbar_size = ComputeToolbarSize(NUM_MAIN_BUTTONS);
         const float pos_x = viewport_pos.x + (viewport_size.x - toolbar_size.x) * 0.5f;
         const float pos_y = viewport_pos.y + TOOLBAR_MARGIN_Y;
@@ -536,8 +540,9 @@ namespace lfs::vis::gui::panels {
         if (!state.initialized)
             InitGizmoToolbar(state);
 
-        constexpr float MARGIN_RIGHT = 10.0f;
-        constexpr float MARGIN_TOP = 5.0f;
+        const float scale = getDpiScale();
+        const float MARGIN_RIGHT = 10.0f * scale;
+        const float MARGIN_TOP = 5.0f * scale;
         constexpr int FULL_BUTTON_COUNT = 8;    // Home, Fullscreen, ToggleUI, Splat, PointCloud, Rings, Centers, Projection
         constexpr int MINIMAL_BUTTON_COUNT = 3; // Home, Fullscreen, ToggleUI
         constexpr int SEPARATOR_COUNT = 2;

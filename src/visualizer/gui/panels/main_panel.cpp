@@ -8,6 +8,7 @@
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "gui/dpi_scale.hpp"
 #include "gui/localization_manager.hpp"
 #include "gui/panels/main_panel.hpp"
 #include "gui/panels/tools_panel.hpp"
@@ -425,7 +426,7 @@ namespace lfs::vis::gui::panels {
                 ImGui::PushStyleColor(ImGuiCol_ButtonHovered, withAlpha(theme().palette.surface_bright, 0.5f));
                 ImGui::PushStyleColor(ImGuiCol_ButtonActive, withAlpha(theme().palette.surface_bright, 0.7f));
 
-                constexpr float LOCK_ICON_SIZE = 14.0f;
+                const float LOCK_ICON_SIZE = 14.0f * getDpiScale();
                 if (lock_tex) {
                     if (ImGui::ImageButton("##lock", static_cast<ImTextureID>(lock_tex),
                                            ImVec2(LOCK_ICON_SIZE, LOCK_ICON_SIZE),

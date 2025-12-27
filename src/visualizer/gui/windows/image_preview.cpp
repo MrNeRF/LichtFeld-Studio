@@ -6,6 +6,7 @@
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "gui/dpi_scale.hpp"
 #include "gui/localization_manager.hpp"
 #include "gui/string_keys.hpp"
 #include <algorithm>
@@ -842,7 +843,8 @@ namespace lfs::vis::gui {
             return;
         }
 
-        constexpr float INFO_PANEL_WIDTH = 260.0f;
+        const float scale = getDpiScale();
+        const float INFO_PANEL_WIDTH = 260.0f * scale;
 
         const auto [display_width, display_height] = calculateDisplaySize(
             static_cast<int>(content_size.x), static_cast<int>(content_size.y));
@@ -872,8 +874,8 @@ namespace lfs::vis::gui {
 
         // Floating info panel
         if (show_info_panel_ && current_texture_) {
-            constexpr float PANEL_MARGIN = 8.0f;
-            constexpr float MAX_PANEL_HEIGHT = 400.0f;
+            const float PANEL_MARGIN = 8.0f * scale;
+            const float MAX_PANEL_HEIGHT = 400.0f * scale;
             const float panel_height = std::min(content_size.y - 2.0f * PANEL_MARGIN, MAX_PANEL_HEIGHT);
             ImGui::SetCursorPos(ImVec2(content_size.x - INFO_PANEL_WIDTH - PANEL_MARGIN, base_cursor_y + PANEL_MARGIN));
 
