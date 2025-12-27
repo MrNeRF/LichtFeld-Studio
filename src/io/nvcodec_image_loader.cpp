@@ -929,6 +929,9 @@ namespace lfs::io {
             results.push_back(std::move(output));
         }
 
+        // Ensure all conversion kernels complete before returning tensors
+        cudaDeviceSynchronize();
+
         if (saved_context) {
             cuCtxSetCurrent(saved_context);
         }
@@ -1103,6 +1106,9 @@ namespace lfs::io {
 
             results.push_back(std::move(output));
         }
+
+        // Ensure all conversion kernels complete before returning tensors
+        cudaDeviceSynchronize();
 
         if (saved_context) {
             cuCtxSetCurrent(saved_context);

@@ -220,8 +220,23 @@ namespace lfs::io {
     }
 
     std::filesystem::path PipelinedImageLoader::get_fs_cache_path(const std::string& cache_key) const {
-        const auto hash = std::hash<std::string>{}(cache_key);
-        return fs_cache_folder_ / (std::to_string(hash) + ".jpg");
+        // Use the full cache_key as filename to avoid hash collisions
+        // Replace path separators and colons with underscores for filesystem safety
+        std::string safe_name = cache_key;
+        for (char& c : safe_name) {
+            if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+                c = '_';
+            }
+        }
+
+        // If name is too long (>200 chars), use hash of the full key as prefix + last 100 chars
+        // This ensures uniqueness while keeping reasonable filename length
+        if (safe_name.length() > 200) {
+            const auto hash = std::hash<std::string>{}(cache_key);
+            safe_name = std::to_string(hash) + "_" + safe_name.substr(safe_name.length() - 100);
+        }
+
+        return fs_cache_folder_ / (safe_name + ".jpg");
     }
 
     bool PipelinedImageLoader::is_jpeg_data(const std::vector<uint8_t>& data) const {
@@ -521,6 +536,9 @@ namespace lfs::io {
                         reinterpret_cast<const uint8_t*>(gpu_uint8.data_ptr()),
                         reinterpret_cast<float*>(decoded.data_ptr()),
                         H, W, C, nullptr);
+
+                    // Ensure kernel completes before returning tensor to avoid race conditions
+                    cudaDeviceSynchronize();
 
                     gpu_uint8 = lfs::core::Tensor();
                 }
