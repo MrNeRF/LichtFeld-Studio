@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/tensor_trace.hpp"
 #include "core/training_snapshot.hpp"
+#include "gui/dpi_scale.hpp"
 #ifdef WIN32
 #include <winsock2.h>
 #endif
@@ -97,17 +98,18 @@ namespace lfs::vis::gui {
     }
 
     void MenuBar::renderVideoCard(const char* title, const char* video_id, const char* url) {
-        constexpr float CARD_WIDTH = 160.0f;
-        constexpr float CARD_HEIGHT = 90.0f;
-        constexpr float CARD_ROUNDING = 4.0f;
-        constexpr float PLAY_ICON_RADIUS = 15.0f;
+        const float scale = getDpiScale();
+        const float CARD_WIDTH = 160.0f * scale;
+        const float CARD_HEIGHT = 90.0f * scale;
+        const float CARD_ROUNDING = 4.0f * scale;
+        const float PLAY_ICON_RADIUS = 15.0f * scale;
 
         if (!thumbnails_.contains(video_id))
             startThumbnailDownload(video_id);
 
         auto& thumb = thumbnails_[video_id];
         const auto& t = theme();
-        const ImVec2 card_size(CARD_WIDTH, CARD_HEIGHT + 30.0f);
+        const ImVec2 card_size(CARD_WIDTH, CARD_HEIGHT + 30.0f * scale);
         const ImVec2 cursor = ImGui::GetCursorScreenPos();
 
         if (ImGui::InvisibleButton(video_id, card_size))
@@ -137,10 +139,10 @@ namespace lfs::vis::gui {
                 toU32(withAlpha(t.palette.text, 0.6f)));
 
             if (thumb.state == Thumbnail::State::LOADING)
-                dl->AddText({cursor.x + 4, cursor.y + CARD_HEIGHT - 16}, toU32(t.palette.text_dim), LOC(GettingStarted::LOADING));
+                dl->AddText({cursor.x + 4 * scale, cursor.y + CARD_HEIGHT - 16 * scale}, toU32(t.palette.text_dim), LOC(GettingStarted::LOADING));
         }
 
-        dl->AddText({cursor.x + 4, cursor.y + CARD_HEIGHT + 4.0f}, toU32(t.palette.text), title);
+        dl->AddText({cursor.x + 4 * scale, cursor.y + CARD_HEIGHT + 4.0f * scale}, toU32(t.palette.text), title);
     }
 
     void MenuBar::render() {
@@ -276,18 +278,19 @@ namespace lfs::vis::gui {
             return;
 
         constexpr ImGuiWindowFlags WINDOW_FLAGS = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize;
-        constexpr float WINDOW_ROUNDING = 8.0f;
-        constexpr float WINDOW_PADDING = 20.0f;
-        constexpr float ITEM_SPACING_Y = 12.0f;
-        constexpr float VIDEO_SPACING = 16.0f;
-        constexpr float INDENT = 25.0f;
+        const float scale = getDpiScale();
+        const float WINDOW_ROUNDING = 8.0f * scale;
+        const float WINDOW_PADDING = 20.0f * scale;
+        const float ITEM_SPACING_Y = 12.0f * scale;
+        const float VIDEO_SPACING = 16.0f * scale;
+        const float INDENT = 25.0f * scale;
 
         const auto& t = theme();
 
-        ImGui::SetNextWindowSize(ImVec2(560, 0), ImGuiCond_Once);
+        ImGui::SetNextWindowSize(ImVec2(560 * scale, 0), ImGuiCond_Once);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, WINDOW_ROUNDING);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {WINDOW_PADDING, WINDOW_PADDING});
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {8.0f, ITEM_SPACING_Y});
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {8.0f * scale, ITEM_SPACING_Y});
         ImGui::PushStyleColor(ImGuiCol_WindowBg, withAlpha(t.palette.surface, 0.98f));
         ImGui::PushStyleColor(ImGuiCol_Text, t.palette.text);
         ImGui::PushStyleColor(ImGuiCol_TitleBg, t.palette.surface);
@@ -355,11 +358,12 @@ namespace lfs::vis::gui {
         }
 
         constexpr ImGuiWindowFlags WINDOW_FLAGS = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize;
-        ImGui::SetNextWindowSize(ImVec2(750, 0), ImGuiCond_Once);
+        const float scale = getDpiScale();
+        ImGui::SetNextWindowSize(ImVec2(750 * scale, 0), ImGuiCond_Once);
 
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 20.0f));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 10.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f * scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f * scale, 20.0f * scale));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f * scale, 10.0f * scale));
         const auto& t = theme();
         ImGui::PushStyleColor(ImGuiCol_WindowBg, withAlpha(t.palette.surface, 0.98f));
         ImGui::PushStyleColor(ImGuiCol_Text, t.palette.text);
@@ -698,12 +702,13 @@ namespace lfs::vis::gui {
         updateCapture();
 
         constexpr ImGuiWindowFlags WINDOW_FLAGS = ImGuiWindowFlags_NoDocking;
-        ImGui::SetNextWindowSize(ImVec2(600, 600), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSizeConstraints(ImVec2(400, 300), ImVec2(FLT_MAX, FLT_MAX));
+        const float scale = getDpiScale();
+        ImGui::SetNextWindowSize(ImVec2(600 * scale, 600 * scale), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSizeConstraints(ImVec2(400 * scale, 300 * scale), ImVec2(FLT_MAX, FLT_MAX));
 
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 20.0f));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 10.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f * scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f * scale, 20.0f * scale));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f * scale, 10.0f * scale));
         const auto& t = theme();
         ImGui::PushStyleColor(ImGuiCol_WindowBg, withAlpha(t.palette.surface, 0.98f));
         ImGui::PushStyleColor(ImGuiCol_Text, t.palette.text);
@@ -1021,18 +1026,19 @@ namespace lfs::vis::gui {
         if (!show_debug_window_)
             return;
 
-        // Fixed dimensions to prevent DPI-related resize feedback loop
-        constexpr float WINDOW_WIDTH = 450.0f;
-        constexpr float WINDOW_HEIGHT = 400.0f;
+        // Base dimensions (scaled by DPI factor)
+        const float scale = getDpiScale();
+        const float WINDOW_WIDTH = 450.0f * scale;
+        const float WINDOW_HEIGHT = 400.0f * scale;
         constexpr ImGuiWindowFlags WINDOW_FLAGS = ImGuiWindowFlags_NoDocking |
                                                   ImGuiWindowFlags_NoResize |
                                                   ImGuiWindowFlags_NoScrollbar;
         const auto& t = theme();
 
         ImGui::SetNextWindowSize({WINDOW_WIDTH, WINDOW_HEIGHT}, ImGuiCond_Always);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f, 20.0f));
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f, 10.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f * scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f * scale, 20.0f * scale));
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f * scale, 10.0f * scale));
         ImGui::PushStyleColor(ImGuiCol_WindowBg, withAlpha(t.palette.surface, 0.98f));
         ImGui::PushStyleColor(ImGuiCol_Text, t.palette.text);
         ImGui::PushStyleColor(ImGuiCol_TitleBg, t.palette.surface);

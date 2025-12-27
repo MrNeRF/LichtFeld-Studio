@@ -8,6 +8,7 @@
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
 #include "core/services.hpp"
+#include "gui/dpi_scale.hpp"
 #include "gui/localization_manager.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_widgets.hpp"
@@ -482,7 +483,7 @@ namespace lfs::vis::gui::panels {
                     ImGui::PushID(static_cast<int>(i));
 
                     int step = static_cast<int>(opt_params.save_steps[i]);
-                    ImGui::SetNextItemWidth(100);
+                    ImGui::SetNextItemWidth(100 * getDpiScale());
                     if (ImGui::InputInt("##step", &step, 0, 0)) {
                         if (step > 0) {
                             opt_params.save_steps[i] = static_cast<size_t>(step);
@@ -681,7 +682,7 @@ namespace lfs::vis::gui::panels {
                         ImGui::PushID(static_cast<int>(i + 1000));
 
                         int step = static_cast<int>(opt_params.eval_steps[i]);
-                        ImGui::SetNextItemWidth(100);
+                        ImGui::SetNextItemWidth(100 * getDpiScale());
                         if (ImGui::InputInt("##eval_step", &step, 0, 0)) {
                             if (step > 0) {
                                 opt_params.eval_steps[i] = static_cast<size_t>(step);
