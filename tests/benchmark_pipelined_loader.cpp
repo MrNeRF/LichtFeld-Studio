@@ -13,9 +13,18 @@
 using namespace lfs::io;
 
 namespace {
-    // Test dataset paths
-    const std::filesystem::path BOTANIC2_PATH = "/media/paja/T7/botanic2";
-    const std::filesystem::path BERLIN_PATH = "/media/paja/T7/berlin/undistorted/images_4";
+    // Get test data path from environment or use default.
+    // Set LICHTFELD_TEST_DATA_PATH to your dataset root (e.g., /media/user/data)
+    std::filesystem::path get_test_data_root() {
+        if (const char* env = std::getenv("LICHTFELD_TEST_DATA_PATH")) {
+            return std::filesystem::path(env);
+        }
+        return std::filesystem::path("/media/paja/T7"); // Default fallback
+    }
+
+    // Test dataset paths (relative to test data root)
+    const std::filesystem::path BOTANIC2_PATH = get_test_data_root() / "botanic2";
+    const std::filesystem::path BERLIN_PATH = get_test_data_root() / "berlin/undistorted/images_4";
 
     // Helper: Get all image files from directory
     std::vector<std::filesystem::path> get_image_files(const std::filesystem::path& dir) {
@@ -737,7 +746,7 @@ TEST(PipelinedLoaderBenchmark, MaxWidth_CombinedWithResize) {
 // =============================================================================
 
 TEST(PipelinedLoaderBenchmark, ImagesFolders_Berlin) {
-    const std::filesystem::path base_path = "/media/paja/T7/berlin/undistorted";
+    const std::filesystem::path base_path = get_test_data_root() / "berlin/undistorted";
 
     std::cout << "\n=== Images Folder Resolution Test (Berlin) ===\n";
 

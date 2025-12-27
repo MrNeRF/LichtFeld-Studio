@@ -21,10 +21,12 @@ constexpr int CACHE_HASH_LENGTH = 8;
 constexpr int DECODER_POOL_SIZE = 8;
 
 std::string generate_cache_hash() {
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
-    static std::uniform_int_distribution<> dis(0, 15);
-    static const char HEX_CHARS[] = "0123456789abcdef";
+    static constexpr char HEX_CHARS[] = "0123456789abcdef";
+
+    // Thread-safe: use local RNG objects to avoid data races
+    thread_local std::random_device rd;
+    thread_local std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, 15);
 
     std::string hash;
     hash.reserve(CACHE_HASH_LENGTH);
@@ -156,30 +158,30 @@ void PipelinedImageLoader::shutdown() {
 void PipelinedImageLoader::prefetch(const std::vector<ImageRequest>& requests) {
     for (const auto& req : requests) {
         prefetch_queue_.push(req);
-        ++in_flight_;
+        in_flight_.fetch_add(1, std::memory_order_acq_rel);
     }
 }
 
 void PipelinedImageLoader::prefetch(size_t sequence_id, const std::filesystem::path& path, const LoadParams& params) {
     prefetch_queue_.push({sequence_id, path, params});
-    ++in_flight_;
+    in_flight_.fetch_add(1, std::memory_order_acq_rel);
 }
 
 ReadyImage PipelinedImageLoader::get() {
     auto result = output_queue_.pop();
-    --in_flight_;
+    in_flight_.fetch_sub(1, std::memory_order_acq_rel);
     return result;
 }
 
 std::optional<ReadyImage> PipelinedImageLoader::try_get() {
     auto result = output_queue_.try_pop();
-    if (result) --in_flight_;
+    if (result) in_flight_.fetch_sub(1, std::memory_order_acq_rel);
     return result;
 }
 
 std::optional<ReadyImage> PipelinedImageLoader::try_get_for(std::chrono::milliseconds timeout) {
     auto result = output_queue_.try_pop_for(timeout);
-    if (result) --in_flight_;
+    if (result) in_flight_.fetch_sub(1, std::memory_order_acq_rel);
     return result;
 }
 
@@ -287,8 +289,17 @@ void PipelinedImageLoader::save_to_fs_cache(const std::string& cache_key, const 
     std::ofstream file(path, std::ios::binary);
     if (file) {
         file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
-        file.close();
-        std::ofstream(path.string() + ".done").close();
+        if (!file.good()) {
+            LOG_WARN("[PipelinedImageLoader] Failed to write cache file: {}", path.string());
+        } else {
+            file.close();
+            std::ofstream done_file(path.string() + ".done");
+            if (!done_file.good()) {
+                LOG_WARN("[PipelinedImageLoader] Failed to create .done marker: {}", path.string());
+            }
+        }
+    } else {
+        LOG_WARN("[PipelinedImageLoader] Failed to open cache file for writing: {}", path.string());
     }
     files_being_written_.erase(cache_key);
 }
@@ -358,7 +369,7 @@ void PipelinedImageLoader::prefetch_thread_func() {
             }
         } catch (const std::exception& e) {
             LOG_ERROR("[PipelinedImageLoader] Prefetch error {}: {}", request.path.string(), e.what());
-            --in_flight_;
+            in_flight_.fetch_sub(1, std::memory_order_acq_rel);
         }
     }
 }
@@ -413,7 +424,7 @@ void PipelinedImageLoader::gpu_batch_decode_thread_func() {
                     item.needs_processing = true;
                     if (item.raw_bytes.empty()) {
                         try { item.raw_bytes = read_file(item.path); }
-                        catch (...) { --in_flight_; continue; }
+                        catch (...) { in_flight_.fetch_sub(1, std::memory_order_acq_rel); continue; }
                     }
                     cold_queue_.push(std::move(item));
                 }
@@ -430,7 +441,7 @@ void PipelinedImageLoader::gpu_batch_decode_thread_func() {
                 item.needs_processing = true;
                 if (item.raw_bytes.empty()) {
                     try { item.raw_bytes = read_file(item.path); }
-                    catch (...) { --in_flight_; continue; }
+                    catch (...) { in_flight_.fetch_sub(1, std::memory_order_acq_rel); continue; }
                 }
                 cold_queue_.push(std::move(item));
             }
@@ -506,7 +517,7 @@ void PipelinedImageLoader::cold_process_thread_func() {
 
         } catch (const std::exception& e) {
             LOG_ERROR("[PipelinedImageLoader] Cold process error {}: {}", item.path.string(), e.what());
-            --in_flight_;
+            in_flight_.fetch_sub(1, std::memory_order_acq_rel);
         }
     }
 }

@@ -593,7 +593,7 @@ namespace lfs::io {
         }
         const bool needs_resize = (target_width != src_width || target_height != src_height);
 
-        LOG_DEBUG("Image info: {}x{} → {}x{} (resize_factor={}, max_width={})",
+        LOG_DEBUG("Image info: {}x{} -> {}x{} (resize_factor={}, max_width={})",
                   src_width, src_height, target_width, target_height, resize_factor, max_width);
 
         // Save/restore CUDA context for thread safety
@@ -726,7 +726,7 @@ namespace lfs::io {
             output_tensor = lanczos_resize(uint8_tensor, target_height, target_width,
                                            DEFAULT_LANCZOS_KERNEL, static_cast<cudaStream_t>(cuda_stream));
         } else {
-            // Fused uint8 HWC → float32 CHW normalized (single kernel!)
+            // Fused uint8 HWC -> float32 CHW normalized (single kernel!)
             auto shape = uint8_tensor.shape();
             size_t H = shape[0], W = shape[1], C = shape[2];
             output_tensor = Tensor::zeros(TensorShape({C, H, W}), Device::CUDA, DataType::Float32);
@@ -910,7 +910,7 @@ namespace lfs::io {
                 continue;
             }
 
-            // Fused uint8 HWC → float32 CHW normalized (single kernel, no intermediates!)
+            // Fused uint8 HWC -> float32 CHW normalized (single kernel, no intermediates!)
             auto shape = uint8_tensors[i].shape();
             size_t H = shape[0], W = shape[1], C = shape[2];
 
@@ -1089,7 +1089,7 @@ namespace lfs::io {
                 continue;
             }
 
-            // Fused uint8 HWC → float32 CHW normalized (single kernel!)
+            // Fused uint8 HWC -> float32 CHW normalized (single kernel!)
             auto shape = uint8_tensors[i].shape();
             size_t H = shape[0], W = shape[1], C = shape[2];
             auto output = Tensor::zeros(TensorShape({C, H, W}), Device::CUDA, DataType::Float32);

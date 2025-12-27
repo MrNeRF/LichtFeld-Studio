@@ -36,10 +36,12 @@ namespace lfs::io {
         }
 
         std::string generate_short_hash() {
-            static std::random_device rd;
-            static std::mt19937 gen(rd());
-            static std::uniform_int_distribution<> dis(0, 15);
-            static const char hex_chars[] = "0123456789abcdef";
+            static constexpr char hex_chars[] = "0123456789abcdef";
+
+            // Thread-safe: use local RNG objects to avoid data races
+            thread_local std::random_device rd;
+            thread_local std::mt19937 gen(rd());
+            std::uniform_int_distribution<> dis(0, 15);
 
             std::string hash;
             hash.reserve(8);
