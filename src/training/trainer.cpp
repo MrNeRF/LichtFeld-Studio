@@ -1147,34 +1147,30 @@ namespace lfs::training {
                                   strategy_->is_refining(iter));
             }
 
-            // Use infinite dataloader to avoid epoch restarts
-            auto train_dataloader = create_infinite_dataloader_from_dataset(train_dataset_, num_workers);
+            // Conservative prefetch to avoid VRAM exhaustion
+            lfs::io::PipelinedLoaderConfig pipelined_config;
+            pipelined_config.jpeg_batch_size = 8;
+            pipelined_config.prefetch_count = 8;
+            pipelined_config.output_queue_size = 4;
+            const size_t worker_threads = std::clamp(static_cast<size_t>(num_workers), size_t{2}, size_t{4});
+            pipelined_config.io_threads = worker_threads;
+            pipelined_config.cold_process_threads = worker_threads;
+            auto train_dataloader = create_infinite_pipelined_dataloader(train_dataset_, pipelined_config);
 
             LOG_DEBUG("Starting training iterations");
-            // Single loop without epochs
             while (iter <= params_.optimization.iterations) {
-                // Update iteration tracker for memory profiling
                 lfs::core::CudaMemoryPool::instance().set_iteration(iter);
+                if (stop_token.stop_requested() || stop_requested_.load()) break;
+                if (callback_busy_.load()) cudaStreamSynchronize(callback_stream_);
 
-                if (stop_token.stop_requested() || stop_requested_.load()) {
-                    break;
-                }
-
-                // Wait for previous callback if still running
-                if (callback_busy_.load()) {
-                    cudaStreamSynchronize(callback_stream_);
-                }
-
-                // Get next batch from dataloader
-                auto batch_opt = train_dataloader->next();
-                if (!batch_opt) {
+                auto example_opt = train_dataloader->next();
+                if (!example_opt) {
                     LOG_ERROR("DataLoader returned nullopt unexpectedly");
                     break;
                 }
-                auto& batch = *batch_opt;
-                auto camera_with_image = batch[0].data;
-                lfs::core::Camera* cam = camera_with_image.camera;
-                lfs::core::Tensor gt_image = std::move(camera_with_image.image);
+                auto& example = *example_opt;
+                lfs::core::Camera* cam = example.data.camera;
+                lfs::core::Tensor gt_image = std::move(example.data.image);
 
                 auto step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
                 if (!step_result) {

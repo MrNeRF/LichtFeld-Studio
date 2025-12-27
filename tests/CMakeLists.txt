@@ -98,6 +98,7 @@ set(OPTIONAL_TEST_FILES
     test_sparsity_debug.cpp
     test_default_strategy.cpp
     benchmark_default_strategy.cpp
+    benchmark_pipelined_loader.cpp
     test_dtype_operations_comprehensive.cpp
     test_tensor_bugs.cpp
     test_densification_performance.cpp
