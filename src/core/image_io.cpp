@@ -20,6 +20,10 @@
 #include <thread>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace {
 
     // Helper function to convert filesystem path to UTF-8 string for OIIO
@@ -37,12 +41,19 @@ namespace {
                                                    static_cast<int>(wstr.size()),
                                                    nullptr, 0, nullptr, nullptr);
         if (size_needed <= 0) {
+            LOG_ERROR("Wide string to UTF-8 conversion failed: size calculation returned {}", size_needed);
             return std::string();
         }
 
         std::string utf8_str(size_needed, 0);
-        WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()),
-                           &utf8_str[0], size_needed, nullptr, nullptr);
+        const int converted = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(),
+                                                  static_cast<int>(wstr.size()),
+                                                  &utf8_str[0], size_needed, nullptr, nullptr);
+        if (converted <= 0) {
+            LOG_ERROR("Wide string to UTF-8 conversion failed during write");
+            return std::string();
+        }
+        utf8_str.resize(converted);
         return utf8_str;
 #else
         // On Linux/Mac, native encoding is UTF-8

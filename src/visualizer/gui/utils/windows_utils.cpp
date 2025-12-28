@@ -96,9 +96,14 @@ namespace lfs::vis::gui {
 
             // Perform conversion
             std::wstring wstr(size_needed, 0);
-            MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(),
-                               static_cast<int>(utf8_str.size()),
-                               &wstr[0], size_needed);
+            const int converted = MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(),
+                                                      static_cast<int>(utf8_str.size()),
+                                                      &wstr[0], size_needed);
+            if (converted <= 0) {
+                LOG_ERROR("UTF-8 to wide string conversion failed during write");
+                return std::wstring();
+            }
+            wstr.resize(converted);
             return wstr;
         }
 
