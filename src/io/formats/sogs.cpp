@@ -745,7 +745,13 @@ namespace lfs::io {
                     return;
                 }
 
-                const int result = archive_write_open_filename(a_, output_path.string().c_str());
+                // Use wide-character API on Windows for proper Unicode path handling
+                int result;
+#ifdef _WIN32
+                result = archive_write_open_filename_w(a_, output_path.wstring().c_str());
+#else
+                result = archive_write_open_filename(a_, output_path.c_str());
+#endif
                 if (result != ARCHIVE_OK) {
                     last_error_ = std::format("Failed to create archive '{}': {}",
                                               output_path.string(),

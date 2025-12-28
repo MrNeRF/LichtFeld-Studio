@@ -168,7 +168,22 @@ namespace lfs::io {
         spz::PackOptions pack_options;
         pack_options.from = spz::CoordinateSystem::RDF;
 
-        if (!spz::saveSpz(cloud, pack_options, options.output_path.string())) {
+        // Pack to memory first, then write to file ourselves to handle Unicode paths correctly
+        std::vector<uint8_t> data;
+        if (!spz::saveSpz(cloud, pack_options, &data)) {
+            return make_error(ErrorCode::WRITE_FAILURE,
+                              "Failed to pack SPZ data", options.output_path);
+        }
+
+        // Write file using std::ofstream with path object (C++17+) for proper Unicode handling
+        std::ofstream out(options.output_path, std::ios::binary | std::ios::out);
+        if (!out) {
+            return make_error(ErrorCode::WRITE_FAILURE,
+                              "Failed to open SPZ file for writing", options.output_path);
+        }
+        out.write(reinterpret_cast<const char*>(data.data()), data.size());
+        out.close();
+        if (!out.good()) {
             return make_error(ErrorCode::WRITE_FAILURE,
                               "Failed to write SPZ file", options.output_path);
         }
