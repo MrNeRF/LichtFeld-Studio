@@ -9,6 +9,7 @@
 #include <glad/glad.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <filesystem>
 #include <map>
 #include <string>
 
@@ -26,7 +27,7 @@ namespace lfs::rendering {
         TextRenderer(unsigned int width, unsigned int height);
         ~TextRenderer();
 
-        Result<void> LoadFont(const std::string& fontPath, unsigned int fontSize);
+        Result<void> LoadFont(const std::filesystem::path& fontPath, unsigned int fontSize);
         Result<void> RenderText(const std::string& text, float x, float y, float scale,
                                 const glm::vec3& color = glm::vec3(1.0f));
         void updateScreenSize(unsigned int width, unsigned int height);

@@ -90,7 +90,9 @@ namespace lfs::io {
     std::filesystem::path GetTransformImagePath(const std::filesystem::path& dir_path, const nlohmann::json& frame) {
         auto image_path = dir_path / frame["file_path"];
         auto images_image_path = dir_path / "images" / frame["file_path"];
-        auto image_path_png = std::filesystem::path(image_path.string() + ".png");
+        // Use path concatenation for proper Unicode handling
+        auto image_path_png = image_path;
+        image_path_png += ".png";
         if (std::filesystem::exists(image_path_png)) {
             // blender data set has not extension, must assumes png
             image_path = image_path_png;

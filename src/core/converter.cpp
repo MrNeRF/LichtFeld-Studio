@@ -91,6 +91,7 @@ namespace lfs::core {
 
             const auto ext = getFormatExtension(format);
             const auto cwd = std::filesystem::current_path();
+            // Use proper path operations for Unicode handling
             const auto converted_name = input.stem().string() + "_converted" + ext;
 
             if (output_template.empty()) {
@@ -104,7 +105,8 @@ namespace lfs::core {
 
             auto out = output_template;
             if (out.extension().empty()) {
-                out = std::filesystem::path(out.string() + ext);
+                // Use path concatenation for proper Unicode handling
+                out += ext;
             }
             return out.is_absolute() ? out : cwd / out;
         }

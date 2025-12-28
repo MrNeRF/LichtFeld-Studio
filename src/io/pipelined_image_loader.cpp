@@ -360,7 +360,9 @@ namespace lfs::io {
 
                 if (config_.use_filesystem_cache) {
                     const auto fs_path = get_fs_cache_path(result.cache_key);
-                    if (std::filesystem::exists(fs_path) && std::filesystem::exists(fs_path.string() + ".done")) {
+                    auto done_path = fs_path;
+                    done_path += ".done";
+                    if (std::filesystem::exists(fs_path) && std::filesystem::exists(done_path)) {
                         auto data = std::make_shared<std::vector<uint8_t>>(read_file(fs_path));
                         put_in_jpeg_cache(result.cache_key, data);
                         result.jpeg_data = data;

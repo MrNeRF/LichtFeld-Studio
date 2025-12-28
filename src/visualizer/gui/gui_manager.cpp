@@ -11,6 +11,7 @@
 #include "command/command_history.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/sogs.hpp"
 #include "core/splat_data_export.hpp"
 #include "gui/dpi_scale.hpp"
@@ -324,7 +325,8 @@ namespace lfs::vis::gui {
                 }
 
                 // Load base font (Latin characters)
-                ImFont* font = io.Fonts->AddFontFromFileTTF(path.string().c_str(), size);
+                const std::string path_utf8 = lfs::core::path_to_utf8(path);
+                ImFont* font = io.Fonts->AddFontFromFileTTF(path_utf8.c_str(), size);
                 if (!font)
                     return nullptr;
 
@@ -332,7 +334,8 @@ namespace lfs::vis::gui {
                 if (is_font_valid(japanese_path)) {
                     ImFontConfig config;
                     config.MergeMode = true;
-                    io.Fonts->AddFontFromFileTTF(japanese_path.string().c_str(), size, &config,
+                    const std::string japanese_path_utf8 = lfs::core::path_to_utf8(japanese_path);
+                    io.Fonts->AddFontFromFileTTF(japanese_path_utf8.c_str(), size, &config,
                                                  io.Fonts->GetGlyphRangesJapanese());
                 }
 
