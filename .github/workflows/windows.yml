@@ -71,4 +71,4 @@ jobs:
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cd build
-          ctest -R unicode_paths -V --output-on-failure
+          ctest -R UnicodePathTest -V --output-on-failure
