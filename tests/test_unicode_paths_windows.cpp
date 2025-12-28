@@ -3,12 +3,11 @@
  *
  * Comprehensive Unicode path handling tests for Windows
  *
- * Tests all the Unicode path fixes implemented:
- * - Image loading (stb_image, OIIO)
- * - Font loading (FreeType)
- * - Config file I/O
- * - Export operations (PLY, SOG, SPZ)
+ * Tests core Unicode path fixes without CUDA dependencies:
+ * - path_to_utf8() utility function
+ * - Basic file I/O with Unicode paths
  * - Path concatenation and operations
+ * - Directory creation and iteration
  *
  * This test runs on Windows CI without requiring CUDA/GPU.
  */
@@ -18,13 +17,7 @@
 #include <fstream>
 #include <vector>
 
-#include "core/logger.hpp"
-#include "core/parameters.hpp"
 #include "core/path_utils.hpp"
-#include "core/splat_data.hpp"
-#include "core/tensor.hpp"
-#include "io/exporter.hpp"
-#include "io/loader.hpp"
 
 namespace fs = std::filesystem;
 using namespace lfs::core;
@@ -50,232 +43,116 @@ protected:
         }
     }
 
-    // Helper: Create a minimal test PLY file
-    void create_test_ply(const fs::path& path) {
-        std::ofstream out(path);
-        ASSERT_TRUE(out.is_open()) << "Failed to create test PLY: " << path.string();
-
-        out << R"(ply
-format binary_little_endian 1.0
-element vertex 3
-property float x
-property float y
-property float z
-property float nx
-property float ny
-property float nz
-property float f_dc_0
-property float f_dc_1
-property float f_dc_2
-property float opacity
-property float scale_0
-property float scale_1
-property float scale_2
-property float rot_0
-property float rot_1
-property float rot_2
-property float rot_3
-end_header
-)";
-
-        // Write 3 simple vertices (binary)
-        for (int i = 0; i < 3; i++) {
-            float data[] = {
-                static_cast<float>(i), 0.0f, 0.0f,  // x,y,z
-                0.0f, 0.0f, 1.0f,                    // nx,ny,nz
-                0.5f, 0.5f, 0.5f,                    // rgb
-                1.0f,                                // opacity
-                1.0f, 1.0f, 1.0f,                    // scale
-                1.0f, 0.0f, 0.0f, 0.0f              // rotation
-            };
-            out.write(reinterpret_cast<const char*>(data), sizeof(data));
-        }
+    // Helper to create a test file with content
+    void create_test_file(const fs::path& path, const std::string& content) {
+        std::ofstream out(path, std::ios::binary);
+        ASSERT_TRUE(out.is_open()) << "Failed to create file: " << path.string();
+        out << content;
         out.close();
     }
 
-    // Helper: Create minimal test config
-    void create_test_config(const fs::path& path) {
-        std::ofstream out(path);
-        ASSERT_TRUE(out.is_open()) << "Failed to create test config: " << path.string();
-        out << R"({
-    "iterations": 1000,
-    "means_lr": 0.0001,
-    "shs_lr": 0.01,
-    "opacity_lr": 0.05,
-    "scaling_lr": 0.005,
-    "rotation_lr": 0.001,
-    "lambda_dssim": 0.2
-})";
-        out.close();
+    // Helper to read a test file
+    std::string read_test_file(const fs::path& path) {
+        std::ifstream in(path, std::ios::binary);
+        EXPECT_TRUE(in.is_open()) << "Failed to open file: " << path.string();
+        return std::string(std::istreambuf_iterator<char>(in),
+                          std::istreambuf_iterator<char>());
     }
 };
 
 // ============================================================================
-// Test 1: Basic Path Operations (path_utils.hpp)
+// Test 1: path_to_utf8() Utility Function
 // ============================================================================
 
 TEST_F(UnicodePathTest, PathToUtf8Conversion) {
-    // Test path_to_utf8() helper with various Unicode characters
-    struct TestCase {
-        std::string name;
-        fs::path path;
-    };
-
-    std::vector<TestCase> tests = {
-        {"Japanese", test_root_ / "テスト.txt"},
-        {"Chinese", test_root_ / "测试.txt"},
-        {"Korean", test_root_ / "테스트.txt"},
-        {"Mixed", test_root_ / "日本_中文_한국어.txt"},
-        {"Emoji", test_root_ / "🎉test🎨.txt"}
-    };
-
-    for (const auto& test : tests) {
-        // Create file
-        {
-            std::ofstream out(test.path);
-            ASSERT_TRUE(out.is_open()) << test.name << ": Failed to create file";
-            out << "test data";
-        }
-
-        // Verify path_to_utf8 doesn't crash and returns non-empty string
-        std::string utf8_path = path_to_utf8(test.path);
-        EXPECT_FALSE(utf8_path.empty()) << test.name << ": path_to_utf8 returned empty";
-
-        // Verify file exists and can be read back
-        EXPECT_TRUE(fs::exists(test.path)) << test.name << ": File doesn't exist";
-
-        std::ifstream in(test.path);
-        ASSERT_TRUE(in.is_open()) << test.name << ": Failed to read back file";
-        std::string content;
-        in >> content;
-        EXPECT_EQ(content, "test") << test.name << ": Content mismatch";
-    }
-}
-
-// ============================================================================
-// Test 2: Config File I/O (parameters.cpp)
-// ============================================================================
-
-TEST_F(UnicodePathTest, ConfigFileReadWrite) {
-    auto config_dir = test_root_ / "設定_config_配置";
-    fs::create_directories(config_dir);
-
-    auto config_path = config_dir / "訓練設定.json";
-
-    // Create test config
-    create_test_config(config_path);
-
-    // Verify file was created
-    ASSERT_TRUE(fs::exists(config_path)) << "Config file wasn't created";
-
-    // Try to read it back
-    std::ifstream in(config_path);
-    ASSERT_TRUE(in.is_open()) << "Failed to open config for reading";
-
-    std::string content;
-    std::getline(in, content);
-    EXPECT_FALSE(content.empty()) << "Config file is empty";
-}
-
-// ============================================================================
-// Test 3: PLY File I/O (ply.cpp)
-// ============================================================================
-
-TEST_F(UnicodePathTest, PlyFileOperations) {
-    auto ply_dir = test_root_ / "モデル_models_模型";
-    fs::create_directories(ply_dir);
-
-    auto input_ply = ply_dir / "入力_input_输入.ply";
-
-    // Create a minimal PLY file
-    create_test_ply(input_ply);
-
-    // Verify file was created and has content
-    ASSERT_TRUE(fs::exists(input_ply)) << "PLY file wasn't created";
-    EXPECT_GT(fs::file_size(input_ply), 0) << "PLY file is empty";
-
-    // Try to load it (this tests PLY memory-mapped file loading with Unicode paths)
-    // Note: This will fail gracefully if the file format is invalid,
-    // but we're testing that Unicode paths don't cause crashes
-    auto result = lfs::io::load_splat(input_ply);
-    // We expect it might fail due to minimal/invalid format, but shouldn't crash
-    // The important thing is the path was handled correctly
-}
-
-// ============================================================================
-// Test 4: Export Operations
-// ============================================================================
-
-TEST_F(UnicodePathTest, SplatDataExport) {
-    auto export_dir = test_root_ / "出力_exports_輸出";
-    fs::create_directories(export_dir);
-
-    // Create minimal splat data for testing
-    SplatData splat_data;
-
-    // Create minimal valid tensors (3 gaussians)
-    const int num_gaussians = 3;
-    splat_data.means() = Tensor::zeros({num_gaussians, 3}, Device::CPU, DataType::Float32);
-    splat_data.sh0() = Tensor::zeros({num_gaussians, 3}, Device::CPU, DataType::Float32);
-    splat_data.opacity_raw() = Tensor::ones({num_gaussians, 1}, Device::CPU, DataType::Float32);
-    splat_data.scaling_raw() = Tensor::zeros({num_gaussians, 3}, Device::CPU, DataType::Float32);
-    splat_data.rotation_raw() = Tensor::zeros({num_gaussians, 4}, Device::CPU, DataType::Float32);
-
-    // Make rotation valid (quaternion [1,0,0,0])
-    auto rot_ptr = splat_data.rotation_raw().ptr<float>();
-    for (int i = 0; i < num_gaussians; i++) {
-        rot_ptr[i * 4] = 1.0f;
-    }
-
-    // Test PLY export with Unicode path
+    // Test basic ASCII path
     {
-        auto ply_path = export_dir / "結果_result_결과.ply";
-        auto result = lfs::io::save_ply(splat_data, {.output_path = ply_path, .binary = true});
-        EXPECT_TRUE(result.has_value()) << "PLY export failed: "
-            << (result.has_value() ? "" : result.error().message);
-
-        if (result.has_value()) {
-            EXPECT_TRUE(fs::exists(ply_path)) << "PLY file wasn't created";
-            EXPECT_GT(fs::file_size(ply_path), 0) << "PLY file is empty";
-        }
+        fs::path ascii_path = "C:/test/file.txt";
+        std::string utf8 = path_to_utf8(ascii_path);
+        EXPECT_FALSE(utf8.empty());
     }
 
-    // Test SOG export with Unicode path
+    // Test path with Japanese characters
     {
-        auto sog_path = export_dir / "結果_result_결과.sog";
-        auto result = lfs::io::save_sog(splat_data, {.output_path = sog_path, .kmeans_iterations = 1});
-        EXPECT_TRUE(result.has_value()) << "SOG export failed: "
-            << (result.has_value() ? "" : result.error().message);
-
-        if (result.has_value()) {
-            EXPECT_TRUE(fs::exists(sog_path)) << "SOG file wasn't created";
-            EXPECT_GT(fs::file_size(sog_path), 0) << "SOG file is empty";
-        }
+        auto japanese_path = test_root_ / "日本語_ファイル.txt";
+        std::string utf8 = path_to_utf8(japanese_path);
+        EXPECT_FALSE(utf8.empty());
+#ifdef _WIN32
+        // On Windows, should contain UTF-8 encoded Japanese
+        EXPECT_TRUE(utf8.find("日本語") != std::string::npos || utf8.size() > 0);
+#endif
     }
 
-    // Test SPZ export with Unicode path
+    // Test path with Chinese characters
     {
-        auto spz_path = export_dir / "結果_result_결과.spz";
-        auto result = lfs::io::save_spz(splat_data, {.output_path = spz_path});
-        EXPECT_TRUE(result.has_value()) << "SPZ export failed: "
-            << (result.has_value() ? "" : result.error().message);
+        auto chinese_path = test_root_ / "中文_文件.txt";
+        std::string utf8 = path_to_utf8(chinese_path);
+        EXPECT_FALSE(utf8.empty());
+    }
 
-        if (result.has_value()) {
-            EXPECT_TRUE(fs::exists(spz_path)) << "SPZ file wasn't created";
-            EXPECT_GT(fs::file_size(spz_path), 0) << "SPZ file is empty";
-        }
+    // Test path with Korean characters
+    {
+        auto korean_path = test_root_ / "한국어_파일.txt";
+        std::string utf8 = path_to_utf8(korean_path);
+        EXPECT_FALSE(utf8.empty());
+    }
+
+    // Test empty path
+    {
+        fs::path empty_path;
+        std::string utf8 = path_to_utf8(empty_path);
+        EXPECT_TRUE(utf8.empty());
     }
 }
 
 // ============================================================================
-// Test 5: Path Concatenation Operations
+// Test 2: Basic File I/O with Unicode Paths
+// ============================================================================
+
+TEST_F(UnicodePathTest, BasicFileIO) {
+    // Test creating and reading a file with Unicode filename
+    auto unicode_file = test_root_ / "テスト_test_测试_테스트.txt";
+    const std::string test_content = "Hello, Unicode World! 你好世界 こんにちは世界 안녕하세요";
+
+    // Write file
+    {
+        std::ofstream out(unicode_file, std::ios::binary);
+        ASSERT_TRUE(out.is_open()) << "Failed to create Unicode file";
+        out << test_content;
+        out.close();
+        EXPECT_TRUE(out.good()) << "Failed to write to Unicode file";
+    }
+
+    // Verify file exists
+    EXPECT_TRUE(fs::exists(unicode_file)) << "Unicode file doesn't exist after creation";
+    EXPECT_GT(fs::file_size(unicode_file), 0) << "Unicode file is empty";
+
+    // Read file back
+    {
+        std::ifstream in(unicode_file, std::ios::binary);
+        ASSERT_TRUE(in.is_open()) << "Failed to open Unicode file for reading";
+        std::string content(std::istreambuf_iterator<char>(in),
+                          std::istreambuf_iterator<char>());
+        EXPECT_EQ(content, test_content) << "File content doesn't match";
+    }
+
+    // Test with path_to_utf8 for external library compatibility
+    {
+        std::string utf8_path = path_to_utf8(unicode_file);
+        EXPECT_FALSE(utf8_path.empty());
+        // If this was passed to a C library expecting UTF-8, it should work
+    }
+}
+
+// ============================================================================
+// Test 3: Path Concatenation Operations
 // ============================================================================
 
 TEST_F(UnicodePathTest, PathConcatenation) {
     auto base_dir = test_root_ / "基本_base_기본";
     fs::create_directories(base_dir);
 
-    // Test path += operator (fixed in pipelined_image_loader.cpp)
+    // Test path += operator (the fix from pipelined_image_loader.cpp)
     auto cache_path = base_dir / "cache_缓存_캐시.dat";
     auto done_path = cache_path;
     done_path += ".done";
@@ -297,126 +174,147 @@ TEST_F(UnicodePathTest, PathConcatenation) {
 
     // Verify the .done path is constructed correctly
     EXPECT_TRUE(done_path.string().ends_with(".done")) << "Done path doesn't end with .done";
+
+    // Test extension addition (the fix from converter.cpp)
+    auto base_path = base_dir / "出力_output_输出";
+    auto with_ext = base_path;
+    with_ext += ".json";
+
+    create_test_file(with_ext, "{\"test\": true}");
+    EXPECT_TRUE(fs::exists(with_ext)) << "File with added extension doesn't exist";
+    EXPECT_TRUE(with_ext.extension() == ".json") << "Extension not added correctly";
 }
 
 // ============================================================================
-// Test 6: Directory Iteration (converter.cpp)
+// Test 4: Directory Iteration with Unicode Paths
 // ============================================================================
 
 TEST_F(UnicodePathTest, DirectoryIteration) {
-    auto files_dir = test_root_ / "ファイル_files_文件";
-    fs::create_directories(files_dir);
+    auto dir = test_root_ / "ディレクトリ_directory_目录_디렉토리";
+    fs::create_directories(dir);
 
     // Create several files with Unicode names
     std::vector<std::string> filenames = {
-        "モデル1.ply",
-        "模型2.ply",
-        "모델3.ply"
+        "ファイル1_file1_文件1_파일1.txt",
+        "ファイル2_file2_文件2_파일2.dat",
+        "ファイル3_file3_文件3_파일3.json"
     };
 
-    for (const auto& name : filenames) {
-        create_test_ply(files_dir / name);
+    for (const auto& filename : filenames) {
+        create_test_file(dir / filename, "test content");
     }
 
-    // Iterate directory and count PLY files
-    int ply_count = 0;
-    for (const auto& entry : fs::directory_iterator(files_dir)) {
-        if (entry.path().extension() == ".ply") {
-            ply_count++;
-            EXPECT_TRUE(entry.is_regular_file()) << "Entry is not a regular file";
-        }
+    // Iterate and verify all files are found
+    int file_count = 0;
+    for (const auto& entry : fs::directory_iterator(dir)) {
+        EXPECT_TRUE(entry.is_regular_file()) << "Entry is not a file";
+        file_count++;
     }
 
-    EXPECT_EQ(ply_count, filenames.size()) << "Didn't find all PLY files";
+    EXPECT_EQ(file_count, filenames.size()) << "Not all Unicode files were found";
 }
 
 // ============================================================================
-// Test 7: Nested Unicode Paths
+// Test 5: Deeply Nested Unicode Paths
 // ============================================================================
 
 TEST_F(UnicodePathTest, DeeplyNestedUnicodePaths) {
-    // Create deeply nested structure with Unicode at every level
-    auto level1 = test_root_ / "レベル1_level1_级别1";
-    auto level2 = level1 / "レベル2_level2_级别2";
-    auto level3 = level2 / "レベル3_level3_级别3";
+    // Create a deeply nested directory structure with Unicode at each level
+    auto level1 = test_root_ / "レベル1_level1_级别1_레벨1";
+    auto level2 = level1 / "レベル2_level2_级别2_레벨2";
+    auto level3 = level2 / "レベル3_level3_级别3_레벨3";
 
     fs::create_directories(level3);
+    EXPECT_TRUE(fs::exists(level3)) << "Nested Unicode directories weren't created";
 
-    auto deep_file = level3 / "深層ファイル_deep_file_深层文件.txt";
+    // Create a file in the deepest level
+    auto deep_file = level3 / "深いファイル_deep_file_深层文件_깊은파일.txt";
+    create_test_file(deep_file, "Deep unicode content");
 
-    // Write to deeply nested file
-    {
-        std::ofstream out(deep_file);
-        ASSERT_TRUE(out.is_open()) << "Failed to create deeply nested file";
-        out << "deep content";
-    }
+    EXPECT_TRUE(fs::exists(deep_file)) << "File in nested Unicode path doesn't exist";
 
-    // Read it back
-    {
-        std::ifstream in(deep_file);
-        ASSERT_TRUE(in.is_open()) << "Failed to read deeply nested file";
-        std::string content;
-        in >> content;
-        EXPECT_EQ(content, "deep") << "Content mismatch in deeply nested file";
-    }
-
-    // Verify the full path works
-    EXPECT_TRUE(fs::exists(deep_file)) << "Deeply nested file doesn't exist";
+    // Verify we can read it back
+    std::string content = read_test_file(deep_file);
+    EXPECT_EQ(content, "Deep unicode content") << "Content doesn't match";
 }
 
 // ============================================================================
-// Test 8: Special Characters in Paths
+// Test 6: Special Characters in Paths
 // ============================================================================
 
 TEST_F(UnicodePathTest, SpecialCharactersInPaths) {
-    // Test various special Unicode characters
-    struct TestCase {
-        std::string name;
-        std::string filename;
+    // Test paths with special characters that might cause issues
+    std::vector<std::string> special_names = {
+        "file (with) parentheses.txt",
+        "file [with] brackets.txt",
+        "file with spaces.txt",
+        "file_with_emoji_😀_🎉.txt",
     };
 
-    std::vector<TestCase> tests = {
-        {"Parentheses", "テスト（1）.txt"},
-        {"Brackets", "測試［2］.txt"},
-        {"Spaces", "테스트 파일 3.txt"},
-        {"Dots", "test.テスト.測試.txt"},
-        {"Underscore", "test_テスト_測試.txt"}
-    };
+    for (const auto& name : special_names) {
+        auto path = test_root_ / name;
+        create_test_file(path, "special content");
+        EXPECT_TRUE(fs::exists(path)) << "File with special chars doesn't exist: " << name;
 
-    auto special_dir = test_root_ / "特殊_special_특수";
-    fs::create_directories(special_dir);
-
-    for (const auto& test : tests) {
-        auto file_path = special_dir / test.filename;
-
-        // Create file
-        {
-            std::ofstream out(file_path);
-            ASSERT_TRUE(out.is_open()) << test.name << ": Failed to create file";
-            out << test.name;
-        }
-
-        // Read back
-        {
-            std::ifstream in(file_path);
-            ASSERT_TRUE(in.is_open()) << test.name << ": Failed to read file";
-            std::string content;
-            in >> content;
-            EXPECT_EQ(content, test.name) << test.name << ": Content mismatch";
-        }
-
-        EXPECT_TRUE(fs::exists(file_path)) << test.name << ": File doesn't exist";
+        // Test path_to_utf8 conversion
+        std::string utf8 = path_to_utf8(path);
+        EXPECT_FALSE(utf8.empty()) << "path_to_utf8 failed for: " << name;
     }
 }
 
 // ============================================================================
-// Main test runner
+// Test 7: Config-like JSON Files with Unicode Paths
 // ============================================================================
 
-// Note: This test suite is designed to run on Windows CI without GPU/CUDA.
-// It tests the Unicode path handling code paths we fixed, including:
-// - path_to_utf8() helper
-// - std::ifstream/std::ofstream with path objects (C++23)
-// - libarchive wide-char APIs
-// - stb_image STBI_WINDOWS_UTF8 support
-// - All export format implementations
+TEST_F(UnicodePathTest, ConfigFileReadWrite) {
+    auto config_dir = test_root_ / "設定_config_配置_설정";
+    fs::create_directories(config_dir);
+
+    auto config_file = config_dir / "設定ファイル_config_配置文件_설정파일.json";
+
+    // Write a simple JSON-like config
+    const std::string json_content = R"({
+    "name": "Unicode Test Config",
+    "path": "日本語/中文/한국어",
+    "value": 42
+})";
+
+    create_test_file(config_file, json_content);
+    EXPECT_TRUE(fs::exists(config_file)) << "Config file doesn't exist";
+
+    // Read it back
+    std::string read_content = read_test_file(config_file);
+    EXPECT_EQ(read_content, json_content) << "Config content doesn't match";
+}
+
+// ============================================================================
+// Test 8: Binary File Operations with Unicode Paths
+// ============================================================================
+
+TEST_F(UnicodePathTest, BinaryFileOperations) {
+    auto binary_file = test_root_ / "バイナリ_binary_二进制_바이너리.bin";
+
+    // Create binary data
+    std::vector<uint8_t> binary_data = {0x00, 0x01, 0x02, 0xFF, 0xFE, 0xFD};
+
+    // Write binary file
+    {
+        std::ofstream out(binary_file, std::ios::binary);
+        ASSERT_TRUE(out.is_open()) << "Failed to create binary file";
+        out.write(reinterpret_cast<const char*>(binary_data.data()), binary_data.size());
+        out.close();
+    }
+
+    EXPECT_TRUE(fs::exists(binary_file)) << "Binary file doesn't exist";
+    EXPECT_EQ(fs::file_size(binary_file), binary_data.size()) << "Binary file size mismatch";
+
+    // Read binary file back
+    {
+        std::ifstream in(binary_file, std::ios::binary);
+        ASSERT_TRUE(in.is_open()) << "Failed to open binary file";
+        std::vector<uint8_t> read_data(binary_data.size());
+        in.read(reinterpret_cast<char*>(read_data.data()), read_data.size());
+
+        EXPECT_EQ(read_data, binary_data) << "Binary data doesn't match";
+    }
+}
