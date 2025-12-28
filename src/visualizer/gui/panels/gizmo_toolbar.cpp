@@ -35,10 +35,12 @@ namespace lfs::vis::gui::panels {
 
     static ImVec2 ComputeToolbarSize(int num_buttons) {
         const auto& t = theme();
-        const float width = num_buttons * t.sizes.toolbar_button_size +
-                            (num_buttons - 1) * t.sizes.toolbar_spacing +
-                            2.0f * t.sizes.toolbar_padding;
-        const float height = t.sizes.toolbar_button_size + 2.0f * t.sizes.toolbar_padding;
+        const float scale = getDpiScale();
+        const float btn_size = t.sizes.toolbar_button_size * scale;
+        const float spacing = t.sizes.toolbar_spacing * scale;
+        const float padding = t.sizes.toolbar_padding * scale;
+        const float width = num_buttons * btn_size + (num_buttons - 1) * spacing + 2.0f * padding;
+        const float height = btn_size + 2.0f * padding;
         return ImVec2(width, height);
     }
 
@@ -46,9 +48,12 @@ namespace lfs::vis::gui::panels {
     struct ToolbarStyle {
         ToolbarStyle() {
             const auto& t = theme();
+            const float scale = getDpiScale();
+            const float padding = t.sizes.toolbar_padding * scale;
+            const float spacing = t.sizes.toolbar_spacing * scale;
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, t.sizes.window_rounding);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(t.sizes.toolbar_padding, t.sizes.toolbar_padding));
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(t.sizes.toolbar_spacing, 0.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(padding, padding));
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(spacing, 0.0f));
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
             ImGui::PushStyleColor(ImGuiCol_WindowBg, t.toolbar_background());
         }
@@ -62,9 +67,12 @@ namespace lfs::vis::gui::panels {
     struct SubToolbarStyle {
         SubToolbarStyle() {
             const auto& t = theme();
+            const float scale = getDpiScale();
+            const float padding = t.sizes.toolbar_padding * scale;
+            const float spacing = t.sizes.toolbar_spacing * scale;
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, t.sizes.window_rounding);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(t.sizes.toolbar_padding, t.sizes.toolbar_padding));
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(t.sizes.toolbar_spacing, 0.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(padding, padding));
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(spacing, 0.0f));
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.0f, 0.0f));
             ImGui::PushStyleColor(ImGuiCol_WindowBg, t.subtoolbar_background());
         }
@@ -76,28 +84,32 @@ namespace lfs::vis::gui::panels {
 
     static ImVec2 ComputeVerticalToolbarSize(const int num_buttons, const int num_separators = 0) {
         const auto& t = theme();
-        const float separator_extra = t.sizes.toolbar_spacing;
+        const float scale = getDpiScale();
+        const float btn_size = t.sizes.toolbar_button_size * scale;
+        const float spacing = t.sizes.toolbar_spacing * scale;
+        const float padding = t.sizes.toolbar_padding * scale;
         return {
-            t.sizes.toolbar_button_size + 2.0f * t.sizes.toolbar_padding,
-            num_buttons * t.sizes.toolbar_button_size +
-                (num_buttons - 1) * t.sizes.toolbar_spacing +
-                num_separators * separator_extra +
-                2.0f * t.sizes.toolbar_padding};
+            btn_size + 2.0f * padding,
+            num_buttons * btn_size + (num_buttons - 1) * spacing +
+                num_separators * spacing + 2.0f * padding};
     }
 
     // Draws vertical gap between toolbar button groups
     static void DrawToolbarSeparator(const float width) {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0, 0));
-        ImGui::Dummy(ImVec2(width, theme().sizes.toolbar_spacing));
+        ImGui::Dummy(ImVec2(width, theme().sizes.toolbar_spacing * getDpiScale()));
         ImGui::PopStyleVar();
     }
 
     struct VerticalToolbarStyle {
         VerticalToolbarStyle() {
             const auto& t = theme();
+            const float scale = getDpiScale();
+            const float padding = t.sizes.toolbar_padding * scale;
+            const float spacing = t.sizes.toolbar_spacing * scale;
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, t.sizes.window_rounding);
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {t.sizes.toolbar_padding, t.sizes.toolbar_padding});
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0f, t.sizes.toolbar_spacing});
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {padding, padding});
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0f, spacing});
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0.0f, 0.0f});
             ImGui::PushStyleColor(ImGuiCol_WindowBg, t.toolbar_background());
         }
@@ -287,7 +299,8 @@ namespace lfs::vis::gui::panels {
             const ToolbarStyle style;
             if (ImGui::Begin("##GizmoToolbar", nullptr, TOOLBAR_FLAGS)) {
                 const auto& t = theme();
-                const ImVec2 btn_size(t.sizes.toolbar_button_size, t.sizes.toolbar_button_size);
+                const float btn_sz = t.sizes.toolbar_button_size * scale;
+                const ImVec2 btn_size(btn_sz, btn_sz);
 
                 // Tool button helper
                 const auto ToolButton = [&](const char* id, unsigned int texture,
@@ -357,7 +370,8 @@ namespace lfs::vis::gui::panels {
                 const SubToolbarStyle style;
                 if (ImGui::Begin("##SelectionModeToolbar", nullptr, TOOLBAR_FLAGS)) {
                     const auto& t = theme();
-                    const ImVec2 btn_size(t.sizes.toolbar_button_size, t.sizes.toolbar_button_size);
+                    const float btn_sz = t.sizes.toolbar_button_size * scale;
+                    const ImVec2 btn_size(btn_sz, btn_sz);
 
                     const auto SelectionModeButton = [&](const char* id, unsigned int texture,
                                                          SelectionSubMode mode, const char* fallback,
@@ -406,7 +420,8 @@ namespace lfs::vis::gui::panels {
             const SubToolbarStyle style;
             if (ImGui::Begin("##TransformSpaceToolbar", nullptr, TOOLBAR_FLAGS)) {
                 const auto& t = theme();
-                const ImVec2 btn_size(t.sizes.toolbar_button_size, t.sizes.toolbar_button_size);
+                const float btn_sz = t.sizes.toolbar_button_size * scale;
+                const ImVec2 btn_size(btn_sz, btn_sz);
 
                 const auto SpaceButton = [&](const char* id, unsigned int tex,
                                              TransformSpace space, const char* fallback,
@@ -440,7 +455,8 @@ namespace lfs::vis::gui::panels {
             const SubToolbarStyle style;
             if (ImGui::Begin("##CropBoxToolbar", nullptr, TOOLBAR_FLAGS)) {
                 const auto& t = theme();
-                const ImVec2 btn_size(t.sizes.toolbar_button_size, t.sizes.toolbar_button_size);
+                const float btn_sz = t.sizes.toolbar_button_size * scale;
+                const ImVec2 btn_size(btn_sz, btn_sz);
 
                 const auto CropOpButton = [&](const char* id, unsigned int tex,
                                               CropBoxOperation op, const char* fallback,
@@ -486,7 +502,8 @@ namespace lfs::vis::gui::panels {
                 const SubToolbarStyle style;
                 if (ImGui::Begin("##MirrorToolbar", nullptr, TOOLBAR_FLAGS)) {
                     const auto& t = theme();
-                    const ImVec2 btn_size(t.sizes.toolbar_button_size, t.sizes.toolbar_button_size);
+                    const float btn_sz = t.sizes.toolbar_button_size * scale;
+                    const ImVec2 btn_size(btn_sz, btn_sz);
 
                     const auto MirrorButton = [&](const char* id, const unsigned int tex,
                                                   const lfs::core::MirrorAxis axis,
@@ -560,7 +577,8 @@ namespace lfs::vis::gui::panels {
         const VerticalToolbarStyle style;
         if (ImGui::Begin("##UtilityToolbar", nullptr, TOOLBAR_FLAGS)) {
             const auto& t = theme();
-            const ImVec2 btn_size{t.sizes.toolbar_button_size, t.sizes.toolbar_button_size};
+            const float btn_sz = t.sizes.toolbar_button_size * scale;
+            const ImVec2 btn_size{btn_sz, btn_sz};
 
             // Home
             if (widgets::IconButton("##home", state.home_texture, btn_size, false, "H")) {
