@@ -524,7 +524,14 @@ namespace lfs::io {
             archive_read_support_format_zip(a);
             archive_read_support_filter_all(a);
 
-            if (archive_read_open_filename(a, path.string().c_str(), 10240) != ARCHIVE_OK) {
+            // Use wide-character API on Windows for proper Unicode path handling
+            int result;
+#ifdef _WIN32
+            result = archive_read_open_filename_w(a, path.wstring().c_str(), 10240);
+#else
+            result = archive_read_open_filename(a, path.c_str(), 10240);
+#endif
+            if (result != ARCHIVE_OK) {
                 archive_read_free(a);
                 return std::unexpected(std::format("Failed to open archive: {}",
                                                    archive_error_string(a)));
