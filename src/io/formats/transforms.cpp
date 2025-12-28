@@ -125,7 +125,8 @@ namespace lfs::io {
         }
 
         LOG_DEBUG("Reading transforms from: {}", transformsFile.string());
-        std::ifstream trans_file{transformsFile.string()};
+        // Pass path object directly for proper Unicode handling on Windows
+        std::ifstream trans_file{transformsFile};
 
         std::filesystem::path dir_path = transformsFile.parent_path();
 

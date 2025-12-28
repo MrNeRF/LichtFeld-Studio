@@ -22,6 +22,34 @@
 
 namespace {
 
+    // Helper function to convert filesystem path to UTF-8 string for OIIO
+    // On Windows, path.string() uses system codepage (not UTF-8), which breaks Unicode
+    // On Linux/Mac, path.string() is already UTF-8
+    inline std::string path_to_utf8(const std::filesystem::path& p) {
+#ifdef _WIN32
+        // On Windows, convert wide string to UTF-8
+        const std::wstring wstr = p.wstring();
+        if (wstr.empty()) {
+            return std::string();
+        }
+
+        const int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(),
+                                                   static_cast<int>(wstr.size()),
+                                                   nullptr, 0, nullptr, nullptr);
+        if (size_needed <= 0) {
+            return std::string();
+        }
+
+        std::string utf8_str(size_needed, 0);
+        WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), static_cast<int>(wstr.size()),
+                           &utf8_str[0], size_needed, nullptr, nullptr);
+        return utf8_str;
+#else
+        // On Linux/Mac, native encoding is UTF-8
+        return p.string();
+#endif
+    }
+
     // Run once: set global OIIO attributes (threading, etc.)
     std::once_flag g_oiio_once;
     inline void init_oiio() {
@@ -62,9 +90,10 @@ namespace lfs::core {
     std::tuple<int, int, int> get_image_info(std::filesystem::path p) {
         init_oiio();
 
-        auto in = OIIO::ImageInput::open(p.string());
+        const std::string path_utf8 = path_to_utf8(p);
+        auto in = OIIO::ImageInput::open(path_utf8);
         if (!in) {
-            throw std::runtime_error("OIIO open failed: " + p.string() + " : " + OIIO::geterror());
+            throw std::runtime_error("OIIO open failed: " + path_utf8 + " : " + OIIO::geterror());
         }
         const OIIO::ImageSpec& spec = in->spec();
         const int w = spec.width;
@@ -78,9 +107,10 @@ namespace lfs::core {
     load_image_with_alpha(std::filesystem::path p) {
         init_oiio();
 
-        std::unique_ptr<OIIO::ImageInput> in(OIIO::ImageInput::open(p.string()));
+        const std::string path_utf8 = path_to_utf8(p);
+        std::unique_ptr<OIIO::ImageInput> in(OIIO::ImageInput::open(path_utf8));
         if (!in)
-            throw std::runtime_error("Load failed: " + p.string() + " : " + OIIO::geterror());
+            throw std::runtime_error("Load failed: " + path_utf8 + " : " + OIIO::geterror());
 
         const OIIO::ImageSpec& spec = in->spec();
         int w = spec.width, h = spec.height, file_c = spec.nchannels;
@@ -105,7 +135,7 @@ namespace lfs::core {
                 std::string e = in->geterror();
                 std::free(out);
                 in->close();
-                throw std::runtime_error("Read failed: " + p.string() + (e.empty() ? "" : (" : " + e)));
+                throw std::runtime_error("Read failed: " + path_utf8 + (e.empty() ? "" : (" : " + e)));
             }
             return finish(out, w, h, 4);
         } else {
@@ -152,12 +182,13 @@ namespace lfs::core {
             init_oiio();
         }
 
+        const std::string path_utf8 = path_to_utf8(p);
         std::unique_ptr<OIIO::ImageInput> in;
         {
             LOG_TIMER("OIIO::ImageInput::open");
-            in = std::unique_ptr<OIIO::ImageInput>(OIIO::ImageInput::open(p.string()));
+            in = std::unique_ptr<OIIO::ImageInput>(OIIO::ImageInput::open(path_utf8));
             if (!in)
-                throw std::runtime_error("Load failed: " + p.string() + " : " + OIIO::geterror());
+                throw std::runtime_error("Load failed: " + path_utf8 + " : " + OIIO::geterror());
         }
 
         const OIIO::ImageSpec& spec = in->spec();
@@ -188,7 +219,7 @@ namespace lfs::core {
                         std::string e = in->geterror();
                         std::free(out);
                         in->close();
-                        throw std::runtime_error("Read failed: " + p.string() + (e.empty() ? "" : (" : " + e)));
+                        throw std::runtime_error("Read failed: " + path_utf8 + (e.empty() ? "" : (" : " + e)));
                     }
                 }
 
@@ -240,7 +271,7 @@ namespace lfs::core {
                         std::string e = in->geterror();
                         std::free(full);
                         in->close();
-                        throw std::runtime_error("Read failed: " + p.string() + (e.empty() ? "" : (" : " + e)));
+                        throw std::runtime_error("Read failed: " + path_utf8 + (e.empty() ? "" : (" : " + e)));
                     }
                 }
 
@@ -296,7 +327,7 @@ namespace lfs::core {
                 if (!in->read_image(0, 0, 0, in_c, OIIO::TypeDesc::UINT8, tmp.data())) {
                     auto e = in->geterror();
                     in->close();
-                    throw std::runtime_error("Read failed: " + p.string() + (e.empty() ? "" : (" : " + e)));
+                    throw std::runtime_error("Read failed: " + path_utf8 + (e.empty() ? "" : (" : " + e)));
                 }
             }
 
@@ -369,15 +400,15 @@ namespace lfs::core {
         if (channels < 1 || channels > 4)
             throw std::runtime_error("save_image: channels must be in [1..4]");
 
-        LOG_INFO("Saving image: {} shape: [{}, {}, {}]", path.string(), height, width, channels);
+        const std::string path_utf8 = path_to_utf8(path);
+        LOG_INFO("Saving image: {} shape: [{}, {}, {}]", path_utf8, height, width, channels);
 
         auto img_uint8 = (image.clamp(0, 1) * 255.0f).to(lfs::core::DataType::UInt8).contiguous();
 
         // Prepare OIIO output
-        const std::string fname = path.string();
-        auto out = OIIO::ImageOutput::create(fname);
+        auto out = OIIO::ImageOutput::create(path_utf8);
         if (!out) {
-            throw std::runtime_error("ImageOutput::create failed for " + fname + " : " + OIIO::geterror());
+            throw std::runtime_error("ImageOutput::create failed for " + path_utf8 + " : " + OIIO::geterror());
         }
 
         OIIO::ImageSpec spec(width, height, channels, OIIO::TypeDesc::UINT8);
@@ -388,9 +419,9 @@ namespace lfs::core {
         if (ext == ".jpg" || ext == ".jpeg")
             spec.attribute("CompressionQuality", 95);
 
-        if (!out->open(fname, spec)) {
+        if (!out->open(path_utf8, spec)) {
             auto e = out->geterror();
-            throw std::runtime_error("open('" + fname + "') failed: " + (e.empty() ? OIIO::geterror() : e));
+            throw std::runtime_error("open('" + path_utf8 + "') failed: " + (e.empty() ? OIIO::geterror() : e));
         }
 
         if (!out->write_image(OIIO::TypeDesc::UINT8, img_uint8.ptr<uint8_t>())) {
@@ -485,7 +516,8 @@ namespace lfs::core {
             return false;
         }
 
-        std::unique_ptr<OIIO::ImageOutput> out(OIIO::ImageOutput::create(p.string()));
+        const std::string path_utf8 = path_to_utf8(p);
+        std::unique_ptr<OIIO::ImageOutput> out(OIIO::ImageOutput::create(path_utf8));
         if (!out) {
             return false;
         }
@@ -506,7 +538,7 @@ namespace lfs::core {
             spec.attribute("Compression", "lzw");
         }
 
-        if (!out->open(p.string(), spec)) {
+        if (!out->open(path_utf8, spec)) {
             return false;
         }
 

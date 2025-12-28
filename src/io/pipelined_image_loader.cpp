@@ -319,7 +319,10 @@ namespace lfs::io {
                 LOG_WARN("[PipelinedImageLoader] Failed to write cache file: {}", path.string());
             } else {
                 file.close();
-                std::ofstream done_file(path.string() + ".done");
+                // Use path concatenation for proper Unicode handling on Windows
+                auto done_path = path;
+                done_path += ".done";
+                std::ofstream done_file(done_path);
                 if (!done_file.good()) {
                     LOG_WARN("[PipelinedImageLoader] Failed to create .done marker: {}", path.string());
                 }
