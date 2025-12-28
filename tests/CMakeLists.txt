@@ -127,6 +127,7 @@ set(OPTIONAL_TEST_FILES
     test_sog_html_export.cpp
     test_gsplat_rasterizer.cpp
     test_spz_format.cpp
+    test_unicode_paths_windows.cpp
     test_interleaved_slice_copy.cpp
     test_default_strategy_tensor_ops.cpp
     test_tensor_zero_dimension.cpp

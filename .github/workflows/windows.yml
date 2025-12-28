@@ -65,3 +65,10 @@ jobs:
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake --build build -j %NUMBER_OF_PROCESSORS%
+
+      - name: Run Unicode Path Tests
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cd build
+          ctest -R unicode_paths -V --output-on-failure
