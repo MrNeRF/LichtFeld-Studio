@@ -437,21 +437,22 @@ namespace lfs::io {
             try {
                 auto& nvcodec = get_nvcodec_loader();
 
-                std::vector<std::pair<const uint8_t*, size_t>> jpeg_spans;
-                jpeg_spans.reserve(batch.size());
-                for (const auto& item : batch) {
-                    jpeg_spans.emplace_back(item.jpeg_data->data(), item.jpeg_data->size());
-                }
-
-                auto tensors = nvcodec.batch_decode_from_spans(jpeg_spans, nullptr);
-
-                for (size_t i = 0; i < tensors.size(); ++i) {
-                    if (tensors[i].is_valid() && tensors[i].numel() > 0) {
-                        output_queue_.push({batch[i].sequence_id, std::move(tensors[i]), nullptr});
+                // RTX 50xx workaround: Decode one-by-one instead of batch to avoid corruption
+                for (size_t i = 0; i < batch.size(); ++i) {
+                    try {
+                        std::vector<uint8_t> jpeg_data(*batch[i].jpeg_data);
+                        auto tensor = nvcodec.load_image_from_memory_gpu(jpeg_data, 1, 0, nullptr);
+                        
+                        if (!tensor.is_valid() || tensor.numel() == 0) {
+                            LOG_WARN("[PipelinedImageLoader] GPU decode returned invalid tensor for {}", batch[i].path.string());
+                            throw std::runtime_error("Invalid tensor");
+                        }
+                        
+                        output_queue_.push({batch[i].sequence_id, std::move(tensor), nullptr});
                         std::lock_guard<std::mutex> lock(stats_mutex_);
                         ++stats_.total_images_loaded;
-                    } else {
-                        LOG_WARN("[PipelinedImageLoader] Decode failed for {}", batch[i].path.string());
+                    } catch (const std::exception& e) {
+                        // Single decode failed, fall back to CPU
                         auto& item = batch[i];
                         item.is_cache_hit = false;
                         item.needs_processing = true;
