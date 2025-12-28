@@ -460,7 +460,12 @@ namespace lfs::io {
     }
 
     std::vector<uint8_t> NvCodecImageLoader::read_file(const std::filesystem::path& path) {
+#ifdef _WIN32
+        // Use wide string path for Unicode support on Windows
+        std::ifstream file(path.wstring(), std::ios::binary | std::ios::ate);
+#else
         std::ifstream file(path, std::ios::binary | std::ios::ate);
+#endif
         if (!file) {
             throw std::runtime_error("Failed to open file: " + path.string());
         }

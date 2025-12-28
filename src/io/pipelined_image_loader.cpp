@@ -246,7 +246,12 @@ namespace lfs::io {
     }
 
     std::vector<uint8_t> PipelinedImageLoader::read_file(const std::filesystem::path& path) const {
+#ifdef _WIN32
+        // Use wide string path for Unicode support on Windows
+        std::ifstream file(path.wstring(), std::ios::binary | std::ios::ate);
+#else
         std::ifstream file(path, std::ios::binary | std::ios::ate);
+#endif
         if (!file)
             throw std::runtime_error("Failed to open: " + path.string());
 
@@ -312,7 +317,12 @@ namespace lfs::io {
         files_being_written_.insert(cache_key);
 
         const auto path = get_fs_cache_path(cache_key);
+#ifdef _WIN32
+        // Use wide string path for Unicode support on Windows
+        std::ofstream file(path.wstring(), std::ios::binary);
+#else
         std::ofstream file(path, std::ios::binary);
+#endif
         if (file) {
             file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
             if (!file.good()) {
@@ -322,7 +332,11 @@ namespace lfs::io {
                 // Use path concatenation for proper Unicode handling on Windows
                 auto done_path = path;
                 done_path += ".done";
+#ifdef _WIN32
+                std::ofstream done_file(done_path.wstring());
+#else
                 std::ofstream done_file(done_path);
+#endif
                 if (!done_file.good()) {
                     LOG_WARN("[PipelinedImageLoader] Failed to create .done marker: {}", path.string());
                 }
