@@ -5,6 +5,7 @@
 #include "io/cache_image_loader.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "io/nvcodec_image_loader.hpp"
 
@@ -296,7 +297,7 @@ namespace lfs::io {
     }
 
     std::string CacheLoader::generate_cache_key(const std::filesystem::path& path, const LoadParams& params) const {
-        return std::format("{}:rf{}_mw{}", path.string(), params.resize_factor, params.max_width);
+        return std::format("{}:rf{}_mw{}", lfs::core::path_to_utf8(path), params.resize_factor, params.max_width);
     }
 
     lfs::core::Tensor CacheLoader::load_cached_image_from_cpu(
@@ -408,23 +409,24 @@ namespace lfs::io {
             result = load_image(path, params.resize_factor, params.max_width);
 
             bool is_being_saved = false;
+            const std::string path_key = lfs::core::path_to_utf8(path);
             {
                 std::lock_guard lock(cache_mutex_);
-                is_being_saved = image_being_saved_.contains(path.string());
+                is_being_saved = image_being_saved_.contains(path_key);
                 if (!is_being_saved) {
-                    image_being_saved_.insert(path.string());
+                    image_being_saved_.insert(path_key);
                 }
             }
 
             if (!is_being_saved) {
                 if (!save_img_data(cache_img_path, result)) {
-                    throw std::runtime_error("Failed to save cache: " + cache_img_path.string());
+                    throw std::runtime_error("Failed to save cache: " + lfs::core::path_to_utf8(cache_img_path));
                 }
                 if (!create_done_file(cache_img_path)) {
-                    throw std::runtime_error("Failed to create .done: " + cache_img_path.string());
+                    throw std::runtime_error("Failed to create .done: " + lfs::core::path_to_utf8(cache_img_path));
                 }
                 std::lock_guard lock(cache_mutex_);
-                image_being_saved_.erase(path.string());
+                image_being_saved_.erase(path_key);
             }
         }
 
