@@ -6,6 +6,51 @@
 # Find GTest
 find_package(GTest CONFIG REQUIRED)
 
+# =============================================================================
+# Unicode Path Test Only (no CUDA dependencies)
+# =============================================================================
+if(BUILD_UNICODE_TEST_ONLY)
+    # Standalone Unicode path test without CUDA
+    add_executable(unicode_path_test
+        test_unicode_paths_windows.cpp
+    )
+
+    target_include_directories(unicode_path_test PRIVATE
+        ${CMAKE_SOURCE_DIR}/include
+        ${CMAKE_BINARY_DIR}/include
+        ${CMAKE_SOURCE_DIR}/src
+    )
+
+    target_link_libraries(unicode_path_test PRIVATE
+        GTest::gtest
+        GTest::gtest_main
+    )
+
+    # C++23 standard
+    set_target_properties(unicode_path_test PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+    )
+
+    # Enable Windows long path support (paths > MAX_PATH/260 chars)
+    if(WIN32 AND MSVC)
+        # Add manifest file as a source to enable long path awareness
+        target_sources(unicode_path_test PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/unicode_path_test.manifest
+        )
+    endif()
+
+    # Register with CTest
+    include(GoogleTest)
+    gtest_discover_tests(unicode_path_test
+        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+        PROPERTIES TIMEOUT 30
+    )
+
+    message(STATUS "Building standalone Unicode path test (no CUDA)")
+    return()  # Skip the rest of the file
+endif()
+
 # Find LibTorch for tensor comparison tests
 # Set Torch_DIR based on platform
 get_filename_component(PROJ_ROOT_DIR "${CMAKE_SOURCE_DIR}" ABSOLUTE)
@@ -127,6 +172,7 @@ set(OPTIONAL_TEST_FILES
     test_sog_html_export.cpp
     test_gsplat_rasterizer.cpp
     test_spz_format.cpp
+    test_unicode_paths_windows.cpp
     test_interleaved_slice_copy.cpp
     test_default_strategy_tensor_ops.cpp
     test_tensor_zero_dimension.cpp

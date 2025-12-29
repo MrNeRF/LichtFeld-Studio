@@ -524,7 +524,14 @@ namespace lfs::io {
             archive_read_support_format_zip(a);
             archive_read_support_filter_all(a);
 
-            if (archive_read_open_filename(a, path.string().c_str(), 10240) != ARCHIVE_OK) {
+            // Use wide-character API on Windows for proper Unicode path handling
+            int result;
+#ifdef _WIN32
+            result = archive_read_open_filename_w(a, path.wstring().c_str(), 10240);
+#else
+            result = archive_read_open_filename(a, path.c_str(), 10240);
+#endif
+            if (result != ARCHIVE_OK) {
                 archive_read_free(a);
                 return std::unexpected(std::format("Failed to open archive: {}",
                                                    archive_error_string(a)));
@@ -745,7 +752,13 @@ namespace lfs::io {
                     return;
                 }
 
-                const int result = archive_write_open_filename(a_, output_path.string().c_str());
+                // Use wide-character API on Windows for proper Unicode path handling
+                int result;
+#ifdef _WIN32
+                result = archive_write_open_filename_w(a_, output_path.wstring().c_str());
+#else
+                result = archive_write_open_filename(a_, output_path.c_str());
+#endif
                 if (result != ARCHIVE_OK) {
                     last_error_ = std::format("Failed to create archive '{}': {}",
                                               output_path.string(),
