@@ -60,8 +60,8 @@ namespace lfs::vis::input {
     std::filesystem::path InputBindings::getConfigDir() {
         std::filesystem::path config_dir;
 #ifdef _WIN32
-        char path[MAX_PATH];
-        if (SUCCEEDED(SHGetFolderPathA(nullptr, CSIDL_APPDATA, nullptr, 0, path))) {
+        wchar_t path[MAX_PATH];
+        if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, path))) {
             config_dir = std::filesystem::path(path) / "LichtFeldStudio" / "input_profiles";
         } else {
             config_dir = std::filesystem::current_path() / "config" / "input_profiles";

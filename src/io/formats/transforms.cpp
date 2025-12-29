@@ -5,6 +5,7 @@
 #include "transforms.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "formats/colmap.hpp"
 #include "tinyply.hpp"
@@ -278,7 +279,7 @@ namespace lfs::io {
 
                 camdata._image_path = GetTransformImagePath(dir_path, frame);
 
-                camdata._image_name = std::filesystem::path(camdata._image_path).filename().string();
+                camdata._image_name = lfs::core::path_to_utf8(camdata._image_path.filename());
 
                 camdata._width = w;
                 camdata._height = h;

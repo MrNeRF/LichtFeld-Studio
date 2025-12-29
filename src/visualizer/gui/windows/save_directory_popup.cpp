@@ -163,7 +163,7 @@ namespace lfs::vis::gui {
             if (ImGui::Button(LOC(Common::LOAD), button_size) || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
                 popup_open_ = false;
                 if (on_confirm_) {
-                    on_confirm_(dataset_path_, std::filesystem::path(output_path_buffer_.c_str()));
+                    on_confirm_(dataset_path_, lfs::core::utf8_to_path(output_path_buffer_));
                 }
                 ImGui::CloseCurrentPopup();
             }

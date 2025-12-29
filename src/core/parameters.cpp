@@ -629,8 +629,8 @@ namespace lfs::core {
 
             // Fallback: Search up from executable directory
 #ifdef _WIN32
-            char exe_buf[MAX_PATH];
-            GetModuleFileNameA(nullptr, exe_buf, MAX_PATH);
+            wchar_t exe_buf[MAX_PATH];
+            GetModuleFileNameW(nullptr, exe_buf, MAX_PATH);
             auto search_dir = std::filesystem::path(exe_buf).parent_path();
 #else
             auto search_dir = std::filesystem::canonical("/proc/self/exe").parent_path();

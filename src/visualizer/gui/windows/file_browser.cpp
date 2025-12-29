@@ -185,7 +185,7 @@ namespace lfs::vis::gui {
         ImGui::EndChild();
 
         if (!selected_file_.empty()) {
-            ImGui::Text(LOC(lichtfeld::Strings::FileBrowser::SELECTED), lfs::core::path_to_utf8(std::filesystem::path(selected_file_).filename()).c_str());
+            ImGui::Text(LOC(lichtfeld::Strings::FileBrowser::SELECTED), lfs::core::path_to_utf8(lfs::core::utf8_to_path(selected_file_).filename()).c_str());
         } else {
             ImGui::TextDisabled("%s", LOC(FileBrowserExt::NO_FILE_SELECTED));
         }
@@ -199,7 +199,7 @@ namespace lfs::vis::gui {
         }
 
         if (can_load) {
-            std::filesystem::path selected_path(selected_file_);
+            std::filesystem::path selected_path = lfs::core::utf8_to_path(selected_file_);
 
             if (std::filesystem::is_directory(selected_path)) {
                 bool is_dataset = lfs::io::Loader::isDatasetPath(selected_path);

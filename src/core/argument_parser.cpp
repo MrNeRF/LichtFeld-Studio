@@ -5,6 +5,7 @@
 #include "core/argument_parser.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
+#include "core/path_utils.hpp"
 #include <algorithm>
 #include <args.hxx>
 #include <array>
@@ -513,7 +514,7 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
     std::string strategy = params->optimization.strategy; // empty when config files is used and not passed as command line argument
     std::string config_file = params->optimization.config_file;
     std::filesystem::path config_file_to_read = config_file != ""
-                                                    ? std::filesystem::path(reinterpret_cast<const char8_t*>(config_file.c_str()))
+                                                    ? lfs::core::utf8_to_path(config_file)
                                                     : lfs::core::param::get_parameter_file_path(params->optimization.strategy + "_optimization_params.json");
 
     if (!parse_result) {
