@@ -1198,7 +1198,8 @@ TEST_F(UnicodePathTest, DirectoryIterationWithPathToUtf8) {
 
     std::map<std::string, fs::path> created_paths;
     for (const auto& name : folder_names) {
-        auto subdir = test_dir / name;
+        // Use utf8_to_path to properly convert UTF-8 string to path on Windows
+        auto subdir = test_dir / utf8_to_path(name);
         fs::create_directories(subdir);
         created_paths[name] = subdir;
     }
@@ -1517,7 +1518,8 @@ TEST_F(UnicodePathTest, SingleUnicodeCharacterPaths) {
 
     for (const auto& ch : single_chars) {
         SCOPED_TRACE(ch);
-        auto path = test_dir / ch;
+        // Use utf8_to_path to properly convert UTF-8 string to path on Windows
+        auto path = test_dir / utf8_to_path(ch);
 
         fs::create_directories(path);
 
