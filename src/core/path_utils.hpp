@@ -53,4 +53,44 @@ namespace lfs::core {
 #endif
     }
 
+    /**
+     * @brief Convert UTF-8 string to filesystem path
+     *
+     * On Windows, std::filesystem::path constructor from std::string interprets
+     * the string as being in the system codepage. This function properly converts
+     * UTF-8 strings to paths by converting to wide string first on Windows.
+     * On Linux/Mac, the native encoding is already UTF-8.
+     *
+     * @param utf8_str UTF-8 encoded string to convert
+     * @return filesystem path constructed from the UTF-8 string
+     */
+    inline std::filesystem::path utf8_to_path(const std::string& utf8_str) {
+#ifdef _WIN32
+        // On Windows, convert UTF-8 string to wide string, then to path
+        if (utf8_str.empty()) {
+            return std::filesystem::path();
+        }
+
+        const int size_needed = MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(),
+                                                    static_cast<int>(utf8_str.size()),
+                                                    nullptr, 0);
+        if (size_needed <= 0) {
+            return std::filesystem::path();
+        }
+
+        std::wstring wstr(size_needed, 0);
+        const int converted = MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(),
+                                                  static_cast<int>(utf8_str.size()),
+                                                  &wstr[0], size_needed);
+        if (converted <= 0) {
+            return std::filesystem::path();
+        }
+        wstr.resize(converted);
+        return std::filesystem::path(wstr);
+#else
+        // On Linux/Mac, native encoding is UTF-8, so use string directly
+        return std::filesystem::path(utf8_str);
+#endif
+    }
+
 } // namespace lfs::core

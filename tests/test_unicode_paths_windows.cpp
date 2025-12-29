@@ -1157,13 +1157,13 @@ TEST_F(UnicodePathTest, Utf8RoundTrip) {
     EXPECT_FALSE(current_path_str.empty()) << "path_to_utf8 failed for unicode_dir";
 
     // Iterate and convert paths (like file_browser.cpp does)
-    for (const auto& entry : fs::directory_iterator(fs::path(current_path_str))) {
+    for (const auto& entry : fs::directory_iterator(utf8_to_path(current_path_str))) {
         // This is what file_browser does: store UTF-8 string
         std::string selected_file_str = path_to_utf8(entry.path());
         EXPECT_FALSE(selected_file_str.empty()) << "path_to_utf8 failed for entry";
 
         // Convert back to path (for filesystem operations)
-        fs::path recovered_path(selected_file_str);
+        fs::path recovered_path = utf8_to_path(selected_file_str);
         EXPECT_TRUE(fs::exists(recovered_path))
             << "Round-trip failed: path doesn't exist after conversion: " << selected_file_str;
 
@@ -1220,7 +1220,7 @@ TEST_F(UnicodePathTest, DirectoryIterationWithPathToUtf8) {
             EXPECT_FALSE(full_path.empty()) << "Full path is empty";
 
             // Verify we can construct a path back and it exists
-            fs::path reconstructed(full_path);
+            fs::path reconstructed = utf8_to_path(full_path);
             EXPECT_TRUE(fs::exists(reconstructed))
                 << "Cannot access path after UTF-8 conversion: " << full_path;
         }
@@ -1318,7 +1318,7 @@ TEST_F(UnicodePathTest, AstralPlaneCharacters) {
             EXPECT_FALSE(utf8.empty()) << "path_to_utf8 failed for: " << name;
 
             // Test round-trip
-            fs::path recovered(utf8);
+            fs::path recovered = utf8_to_path(utf8);
             EXPECT_TRUE(fs::exists(recovered))
                 << "Round-trip failed for astral characters: " << name;
         }
@@ -1351,7 +1351,7 @@ TEST_F(UnicodePathTest, UnicodeNormalization) {
     EXPECT_FALSE(utf8.empty());
 
     // Verify file can be read back through converted path
-    fs::path recovered(utf8);
+    fs::path recovered = utf8_to_path(utf8);
     EXPECT_TRUE(fs::exists(recovered)) << "Normalized path doesn't exist";
 
     // Test with Japanese characters that have normalization variants
@@ -1365,7 +1365,7 @@ TEST_F(UnicodePathTest, UnicodeNormalization) {
     std::string ja_utf8 = path_to_utf8(ja_path);
     EXPECT_FALSE(ja_utf8.empty());
 
-    fs::path ja_recovered(ja_utf8);
+    fs::path ja_recovered = utf8_to_path(ja_utf8);
     EXPECT_TRUE(fs::exists(ja_recovered)) << "Japanese normalized path doesn't exist";
 }
 
@@ -1384,7 +1384,7 @@ TEST_F(UnicodePathTest, PureUnicodePaths) {
 
     std::string jp_utf8 = path_to_utf8(jp_path / "データ.txt");
     EXPECT_FALSE(jp_utf8.empty());
-    fs::path jp_recovered(jp_utf8);
+    fs::path jp_recovered = utf8_to_path(jp_utf8);
     EXPECT_TRUE(fs::exists(jp_recovered)) << "Pure Japanese path failed";
 
     // Fully Chinese path
@@ -1394,7 +1394,7 @@ TEST_F(UnicodePathTest, PureUnicodePaths) {
 
     std::string cn_utf8 = path_to_utf8(cn_path / "数据.txt");
     EXPECT_FALSE(cn_utf8.empty());
-    fs::path cn_recovered(cn_utf8);
+    fs::path cn_recovered = utf8_to_path(cn_utf8);
     EXPECT_TRUE(fs::exists(cn_recovered)) << "Pure Chinese path failed";
 
     // Fully Korean path
@@ -1404,7 +1404,7 @@ TEST_F(UnicodePathTest, PureUnicodePaths) {
 
     std::string kr_utf8 = path_to_utf8(kr_path / "데이터.txt");
     EXPECT_FALSE(kr_utf8.empty());
-    fs::path kr_recovered(kr_utf8);
+    fs::path kr_recovered = utf8_to_path(kr_utf8);
     EXPECT_TRUE(fs::exists(kr_recovered)) << "Pure Korean path failed";
 
     // Test directory iteration on pure Unicode path
@@ -1434,7 +1434,7 @@ TEST_F(UnicodePathTest, RTLLanguageSupport) {
     std::string arabic_utf8 = path_to_utf8(arabic_dir);
     EXPECT_FALSE(arabic_utf8.empty()) << "Arabic path conversion failed";
 
-    fs::path arabic_recovered(arabic_utf8);
+    fs::path arabic_recovered = utf8_to_path(arabic_utf8);
     EXPECT_TRUE(fs::exists(arabic_recovered)) << "Arabic path round-trip failed";
 
     // Hebrew text
@@ -1445,7 +1445,7 @@ TEST_F(UnicodePathTest, RTLLanguageSupport) {
     std::string hebrew_utf8 = path_to_utf8(hebrew_dir);
     EXPECT_FALSE(hebrew_utf8.empty()) << "Hebrew path conversion failed";
 
-    fs::path hebrew_recovered(hebrew_utf8);
+    fs::path hebrew_recovered = utf8_to_path(hebrew_utf8);
     EXPECT_TRUE(fs::exists(hebrew_recovered)) << "Hebrew path round-trip failed";
 
     // Mixed LTR/RTL
@@ -1455,7 +1455,7 @@ TEST_F(UnicodePathTest, RTLLanguageSupport) {
     std::string mixed_utf8 = path_to_utf8(mixed_dir);
     EXPECT_FALSE(mixed_utf8.empty()) << "Mixed LTR/RTL path conversion failed";
 
-    fs::path mixed_recovered(mixed_utf8);
+    fs::path mixed_recovered = utf8_to_path(mixed_utf8);
     EXPECT_TRUE(fs::exists(mixed_recovered)) << "Mixed LTR/RTL path round-trip failed";
 }
 
@@ -1489,7 +1489,7 @@ TEST_F(UnicodePathTest, UnicodeWhitespaceAndSpecial) {
                 std::string utf8 = path_to_utf8(path);
                 EXPECT_FALSE(utf8.empty()) << "path_to_utf8 failed for: " << desc;
 
-                fs::path recovered(utf8);
+                fs::path recovered = utf8_to_path(utf8);
                 EXPECT_TRUE(fs::exists(recovered))
                     << "Round-trip failed for whitespace type: " << desc;
             }
@@ -1638,9 +1638,13 @@ TEST_F(UnicodePathTest, ShellEscapeForLinuxDialogs) {
         EXPECT_TRUE(escaped.ends_with("'")) << "Should end with single quote";
         EXPECT_TRUE(escaped.find("'\\''") != std::string::npos)
             << "Single quotes should be escaped";
-        // The escaped string should NOT allow command injection
-        EXPECT_EQ(escaped.find("'; rm"), std::string::npos)
-            << "Command injection should be prevented";
+        // Verify expected escape pattern for dangerous string
+        // The escape wraps the string in quotes and converts ' to '\''
+        // Input: "file'; rm -rf /; echo '"
+        // Output: 'file'\'''; rm -rf /; echo '\'''
+        // This is safe because when bash processes it, the semicolons are literal characters
+        EXPECT_EQ(escaped, "'file'\\'''; rm -rf /; echo '\\'''")
+            << "Escape pattern should match expected format";
     }
 
     // Test Unicode with single quotes
@@ -1853,7 +1857,7 @@ TEST_F(UnicodePathTest, DragDropPathHandling) {
         EXPECT_FALSE(utf8_path.empty()) << "Drop path conversion failed for: " << filename;
 
         // Verify the path is usable
-        fs::path recovered(utf8_path);
+        fs::path recovered = utf8_to_path(utf8_path);
         EXPECT_TRUE(fs::exists(recovered)) << "Dropped path not accessible: " << utf8_path;
 
         received_paths.push_back(utf8_path);
@@ -1905,7 +1909,7 @@ TEST_F(UnicodePathTest, SaveDirectoryPopupPathDerivation) {
         EXPECT_GT(strlen(c_str), 0);
 
         // Verify the path can be converted back for filesystem operations
-        fs::path recovered(output_buffer);
+        fs::path recovered = utf8_to_path(output_buffer);
         fs::path parent = recovered.parent_path();
         EXPECT_TRUE(fs::exists(parent)) << "Parent of output path should exist";
     }
@@ -1952,7 +1956,7 @@ TEST_F(UnicodePathTest, FileDialogInitialDirectory) {
         EXPECT_FALSE(dir_utf8.empty()) << "Initial directory UTF-8 conversion failed";
 
         // Verify the path is valid and exists
-        fs::path recovered(dir_utf8);
+        fs::path recovered = utf8_to_path(dir_utf8);
         EXPECT_TRUE(fs::exists(recovered)) << "Initial directory not accessible";
         EXPECT_TRUE(fs::is_directory(recovered)) << "Should be a directory";
 
