@@ -55,8 +55,8 @@ protected:
     std::string read_test_file(const fs::path& path) {
         std::ifstream in(path, std::ios::binary);
         EXPECT_TRUE(in.is_open()) << "Failed to open file: " << path.string();
-        return std::string(std::istreambuf_iterator<char>(in),
-                          std::istreambuf_iterator<char>());
+        return std::string{std::istreambuf_iterator<char>(in),
+                          std::istreambuf_iterator<char>()};
     }
 };
 
@@ -131,8 +131,8 @@ TEST_F(UnicodePathTest, BasicFileIO) {
     {
         std::ifstream in(unicode_file, std::ios::binary);
         ASSERT_TRUE(in.is_open()) << "Failed to open Unicode file for reading";
-        std::string content(std::istreambuf_iterator<char>(in),
-                          std::istreambuf_iterator<char>());
+        std::string content{std::istreambuf_iterator<char>(in),
+                          std::istreambuf_iterator<char>()};
         EXPECT_EQ(content, test_content) << "File content doesn't match";
     }
 
