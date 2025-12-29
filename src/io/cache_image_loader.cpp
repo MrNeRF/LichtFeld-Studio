@@ -255,7 +255,7 @@ namespace lfs::io {
     bool CacheLoader::has_sufficient_memory(std::size_t required_bytes) const {
         const std::size_t available = get_available_physical_memory();
         const std::size_t total = get_total_physical_memory();
-        const std::size_t min_free_bytes = std::max(
+        const std::size_t min_free_bytes = (std::max)(
             static_cast<std::size_t>(total * min_cpu_free_memory_ratio_),
             static_cast<std::size_t>(min_cpu_free_GB_ * BYTES_PER_GB));
         return available > required_bytes + min_free_bytes;
@@ -263,7 +263,7 @@ namespace lfs::io {
 
     void CacheLoader::evict_until_satisfied() {
         const std::size_t total = get_total_physical_memory();
-        const std::size_t min_free_bytes = std::max(
+        const std::size_t min_free_bytes = (std::max)(
             static_cast<std::size_t>(total * min_cpu_free_memory_ratio_),
             static_cast<std::size_t>(min_cpu_free_GB_ * BYTES_PER_GB));
 
