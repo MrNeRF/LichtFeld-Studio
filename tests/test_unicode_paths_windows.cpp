@@ -1641,9 +1641,11 @@ TEST_F(UnicodePathTest, ShellEscapeForLinuxDialogs) {
         // Verify expected escape pattern for dangerous string
         // The escape wraps the string in quotes and converts ' to '\''
         // Input: "file'; rm -rf /; echo '"
-        // Output: 'file'\'''; rm -rf /; echo '\'''
+        // Output: 'file'\''; rm -rf /; echo '\'''
         // This is safe because when bash processes it, the semicolons are literal characters
-        EXPECT_EQ(escaped, "'file'\\'''; rm -rf /; echo '\\'''")
+        // The pattern '\'' means: close quote, escaped quote, open new quote
+        // So the semicolon and other chars after escape are INSIDE the new quoted section
+        EXPECT_EQ(escaped, "'file'\\''; rm -rf /; echo '\\'''")
             << "Escape pattern should match expected format";
     }
 
