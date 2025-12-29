@@ -221,6 +221,11 @@ namespace lfs::io {
         if (transforms.contains("p2")) {
             p2 = float(transforms["p2"]);
         }
+        bool is_distorted = (k1 != 0.0f) || (k2 != 0.0f) || (k3 != 0.0f) || (p1 != 0.0f) || (p2 != 0.0f);
+
+        if (is_distorted) {
+            LOG_DEBUG("Blender Loader: identified distortion in data set");
+        }
 
         std::vector<CameraData> camerasdata;
         if (transforms.contains("frames") && transforms["frames"].is_array()) {
@@ -281,11 +286,18 @@ namespace lfs::io {
                 camdata._width = w;
                 camdata._height = h;
 
-                camdata._T = T;
-                camdata._R = R;
+                camdata._T = T.contiguous();
+                camdata._R = R.contiguous();
 
-                camdata._radial_distortion = Tensor::from_vector({k1, k2, k3}, {3}, Device::CPU);
-                camdata._tangential_distortion = Tensor::from_vector({p1, p2}, {2}, Device::CPU);
+                if (is_distorted) {
+                    camdata._radial_distortion = Tensor::from_vector({k1, k2, k3}, {3}, Device::CPU);
+                    camdata._tangential_distortion = Tensor::from_vector({p1, p2}, {2}, Device::CPU);
+                }
+                else {
+                    camdata._radial_distortion = Tensor::empty({0}, Device::CPU);;
+                    camdata._tangential_distortion = Tensor::empty({0}, Device::CPU);;
+                }
+
 
                 camdata._focal_x = fl_x;
                 camdata._focal_y = fl_y;

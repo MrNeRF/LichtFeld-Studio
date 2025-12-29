@@ -675,6 +675,10 @@ namespace lfs::core {
                     " dims, requested " + std::to_string(N));
             }
 
+            if (!is_contiguous()) {
+                throw std::runtime_error("accessor() only works on contiguous tensors");
+            }
+
             std::array<size_t, N> sizes;
             for (size_t i = 0; i < N; ++i) {
                 sizes[i] = shape_[i];
