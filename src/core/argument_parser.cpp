@@ -220,7 +220,7 @@ namespace {
             if (view_ply) {
                 const auto& view_path_str = ::args::get(view_ply);
                 if (!view_path_str.empty()) {
-                    const std::filesystem::path view_path{view_path_str};
+                    const std::filesystem::path view_path = lfs::core::utf8_to_path(view_path_str);
 
                     if (!std::filesystem::exists(view_path)) {
                         return std::unexpected(std::format("Path does not exist: {}", view_path.string()));
@@ -263,21 +263,22 @@ namespace {
 
             // Check for resume mode
             if (resume_checkpoint) {
-                const auto ckpt_path = ::args::get(resume_checkpoint);
-                if (!ckpt_path.empty()) {
+                const auto ckpt_path_str = ::args::get(resume_checkpoint);
+                if (!ckpt_path_str.empty()) {
+                    const auto ckpt_path = lfs::core::utf8_to_path(ckpt_path_str);
                     if (!std::filesystem::exists(ckpt_path)) {
-                        return std::unexpected(std::format("Checkpoint file does not exist: {}", ckpt_path));
+                        return std::unexpected(std::format("Checkpoint file does not exist: {}", ckpt_path_str));
                     }
                     params.resume_checkpoint = ckpt_path;
                 }
             }
 
             if (init_path) {
-                const auto path = ::args::get(init_path);
-                params.init_path = path;
+                const auto path_str = ::args::get(init_path);
+                params.init_path = path_str;
 
-                if (!std::filesystem::exists(path)) {
-                    return std::unexpected(std::format("Initialization file does not exist: {}", path));
+                if (!std::filesystem::exists(lfs::core::utf8_to_path(path_str))) {
+                    return std::unexpected(std::format("Initialization file does not exist: {}", path_str));
                 }
             }
 
@@ -296,8 +297,8 @@ namespace {
             // Training/resume mode requires both data-path and output-path
             // Exception: resume mode can work without explicit paths (extracted from checkpoint)
             if (has_data_path && has_output_path) {
-                params.dataset.data_path = ::args::get(data_path);
-                params.dataset.output_path = ::args::get(output_path);
+                params.dataset.data_path = lfs::core::utf8_to_path(::args::get(data_path));
+                params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
 
                 // Create output directory
                 std::error_code ec;
@@ -315,10 +316,10 @@ namespace {
             } else if (has_resume) {
                 // Resume mode: paths are optional (will be read from checkpoint)
                 if (has_data_path) {
-                    params.dataset.data_path = ::args::get(data_path);
+                    params.dataset.data_path = lfs::core::utf8_to_path(::args::get(data_path));
                 }
                 if (has_output_path) {
-                    params.dataset.output_path = ::args::get(output_path);
+                    params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
 
                     // Create output directory if provided
                     std::error_code ec;
@@ -640,7 +641,7 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
     }
 
     param::ConvertParameters params;
-    params.input_path = ::args::get(input);
+    params.input_path = lfs::core::utf8_to_path(::args::get(input));
     params.sh_degree = sh_degree ? ::args::get(sh_degree) : -1;
 
     if (!std::filesystem::exists(params.input_path)) {
@@ -652,7 +653,7 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
     }
 
     if (output)
-        params.output_path = ::args::get(output);
+        params.output_path = lfs::core::utf8_to_path(::args::get(output));
     if (sog_iter)
         params.sog_iterations = ::args::get(sog_iter);
     params.overwrite = overwrite;

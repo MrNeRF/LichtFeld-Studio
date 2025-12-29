@@ -89,8 +89,10 @@ namespace lfs::io {
     }
 
     std::filesystem::path GetTransformImagePath(const std::filesystem::path& dir_path, const nlohmann::json& frame) {
-        auto image_path = dir_path / frame["file_path"];
-        auto images_image_path = dir_path / "images" / frame["file_path"];
+        // Use utf8_to_path for proper Unicode handling since JSON is UTF-8 encoded
+        const auto file_path = lfs::core::utf8_to_path(frame["file_path"].get<std::string>());
+        auto image_path = dir_path / file_path;
+        auto images_image_path = dir_path / "images" / file_path;
         // Use path concatenation for proper Unicode handling
         auto image_path_png = image_path;
         image_path_png += ".png";

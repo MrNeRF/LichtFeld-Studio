@@ -41,7 +41,8 @@ namespace lfs::vis::gui {
                     current_path_ = lfs::core::path_to_utf8(std::filesystem::current_path());
                 }
                 if (ImGui::MenuItem(LOC(lichtfeld::Strings::FileBrowser::HOME))) {
-                    current_path_ = lfs::core::path_to_utf8(std::filesystem::path(std::getenv("HOME") ? std::getenv("HOME") : "/"));
+                    const char* home = std::getenv("HOME");
+                    current_path_ = lfs::core::path_to_utf8(home ? lfs::core::utf8_to_path(home) : std::filesystem::path("/"));
                 }
                 ImGui::EndMenu();
             }
@@ -52,7 +53,7 @@ namespace lfs::vis::gui {
         ImGui::Separator();
 
         if (ImGui::BeginChild("FileList", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() * 2), true)) {
-            std::filesystem::path current_path(current_path_);
+            std::filesystem::path current_path = lfs::core::utf8_to_path(current_path_);
 
             if (current_path.has_parent_path()) {
                 if (ImGui::Selectable("../", false, ImGuiSelectableFlags_DontClosePopups)) {
