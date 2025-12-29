@@ -32,6 +32,26 @@ if(BUILD_UNICODE_TEST_ONLY)
         CXX_STANDARD_REQUIRED ON
     )
 
+    # Enable Windows long path support (paths > MAX_PATH/260 chars)
+    if(WIN32)
+        if(MSVC)
+            # Enable long path awareness via linker flag (Windows 10 1607+)
+            target_link_options(unicode_path_test PRIVATE /MANIFEST:EMBED)
+            # Add longPathAware manifest element
+            set(MANIFEST_FILE "${CMAKE_CURRENT_BINARY_DIR}/unicode_test.manifest")
+            file(WRITE "${MANIFEST_FILE}"
+"<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>
+<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">
+  <application xmlns=\"urn:schemas-microsoft-com:asm.v3\">
+    <windowsSettings>
+      <longPathAware xmlns=\"http://schemas.microsoft.com/SMI/2016/WindowsSettings\">true</longPathAware>
+    </windowsSettings>
+  </application>
+</assembly>")
+            target_link_options(unicode_path_test PRIVATE "/MANIFESTINPUT:${MANIFEST_FILE}")
+        endif()
+    endif()
+
     # Register with CTest
     include(GoogleTest)
     gtest_discover_tests(unicode_path_test
