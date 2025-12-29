@@ -1585,3 +1585,393 @@ TEST_F(UnicodePathTest, FileBrowserDisplayStrings) {
         }
     }
 }
+
+// ============================================================================
+// Test 31: Shell Escape for Linux File Dialogs
+// ============================================================================
+
+TEST_F(UnicodePathTest, ShellEscapeForLinuxDialogs) {
+    // Test the shell_escape() function pattern used in windows_utils.cpp
+    // for Linux file dialogs (zenity/kdialog)
+    //
+    // The escape function wraps strings in single quotes and escapes
+    // any single quotes within as: ' -> '\''
+
+    auto shell_escape = [](const std::string& str) -> std::string {
+        std::string result = "'";
+        for (char c : str) {
+            if (c == '\'') {
+                result += "'\\''";
+            } else {
+                result += c;
+            }
+        }
+        result += "'";
+        return result;
+    };
+
+    // Test basic Unicode strings
+    std::vector<std::pair<std::string, std::string>> test_cases = {
+        // {input, expected_output}
+        {"simple", "'simple'"},
+        {"with space", "'with space'"},
+        {"日本語テスト", "'日本語テスト'"},
+        {"한국어_테스트", "'한국어_테스트'"},
+        {"中文测试", "'中文测试'"},
+        {"Mixed_混合_ミックス", "'Mixed_混合_ミックス'"},
+        {"file.json", "'file.json'"},
+        {"path/to/file", "'path/to/file'"},
+    };
+
+    for (const auto& [input, expected] : test_cases) {
+        SCOPED_TRACE(input);
+        std::string escaped = shell_escape(input);
+        EXPECT_EQ(escaped, expected) << "Shell escape mismatch for: " << input;
+    }
+
+    // Test strings with single quotes (injection attempt)
+    {
+        std::string dangerous = "file'; rm -rf /; echo '";
+        std::string escaped = shell_escape(dangerous);
+        // Should be: 'file'\'''; rm -rf /; echo '\'''
+        EXPECT_TRUE(escaped.starts_with("'")) << "Should start with single quote";
+        EXPECT_TRUE(escaped.ends_with("'")) << "Should end with single quote";
+        EXPECT_TRUE(escaped.find("'\\''") != std::string::npos)
+            << "Single quotes should be escaped";
+        // The escaped string should NOT allow command injection
+        EXPECT_EQ(escaped.find("'; rm"), std::string::npos)
+            << "Command injection should be prevented";
+    }
+
+    // Test Unicode with single quotes
+    {
+        std::string unicode_quote = "フォルダ'名前_한국어";
+        std::string escaped = shell_escape(unicode_quote);
+        EXPECT_TRUE(escaped.starts_with("'"));
+        EXPECT_TRUE(escaped.ends_with("'"));
+        EXPECT_TRUE(escaped.find("'\\''") != std::string::npos)
+            << "Quote in Unicode should be escaped";
+    }
+
+    // Test empty string
+    {
+        std::string empty = "";
+        std::string escaped = shell_escape(empty);
+        EXPECT_EQ(escaped, "''") << "Empty string should become ''";
+    }
+
+    // Test string with only single quote
+    {
+        std::string just_quote = "'";
+        std::string escaped = shell_escape(just_quote);
+        EXPECT_EQ(escaped, "''\\'''") << "Single quote should be properly escaped";
+    }
+
+    // Test multiple consecutive single quotes
+    {
+        std::string multi_quote = "a'''b";
+        std::string escaped = shell_escape(multi_quote);
+        // Count the escape sequences
+        size_t escape_count = 0;
+        size_t pos = 0;
+        while ((pos = escaped.find("'\\''", pos)) != std::string::npos) {
+            escape_count++;
+            pos += 4;
+        }
+        EXPECT_EQ(escape_count, 3) << "Should have 3 escaped quotes";
+    }
+
+    // Test real-world Linux dialog filename patterns
+    {
+        // Pattern from saveConfigDialog: defaultName + ".json"
+        std::string config_name = "設定_config_설정";
+        std::string with_ext = config_name + ".json";
+        std::string escaped = shell_escape(with_ext);
+        EXPECT_TRUE(escaped.starts_with("'"));
+        EXPECT_TRUE(escaped.ends_with("'"));
+        EXPECT_TRUE(escaped.find(".json") != std::string::npos);
+    }
+}
+
+// ============================================================================
+// Test 32: Cache Key Generation with Unicode Paths
+// ============================================================================
+
+TEST_F(UnicodePathTest, CacheKeyGenerationWithUnicodePaths) {
+    // Test the cache key generation pattern from cache_image_loader.cpp
+    // Cache keys use: path_to_utf8(path) + parameters
+
+    auto test_dir = test_root_ / "cache_key_test";
+    fs::create_directories(test_dir);
+
+    // Simulate cache key generation like CacheLoader::generate_cache_key
+    auto generate_cache_key = [](const fs::path& path, int resize_factor, int max_width) -> std::string {
+        // This is the fixed pattern using path_to_utf8
+        return path_to_utf8(path) + ":rf" + std::to_string(resize_factor) + "_mw" + std::to_string(max_width);
+    };
+
+    std::vector<std::string> unicode_filenames = {
+        "画像_image_이미지_图像.png",
+        "テスト_test_테스트_测试.jpg",
+        "データ_data_데이터_数据.bin",
+        "Mixed_混合_ミックス_혼합.tiff"
+    };
+
+    std::map<std::string, std::string> generated_keys;
+
+    for (const auto& filename : unicode_filenames) {
+        SCOPED_TRACE(filename);
+        auto file_path = test_dir / filename;
+        create_file(file_path, "mock image data");
+
+        // Generate cache key
+        std::string key = generate_cache_key(file_path, 2, 1024);
+
+        // Verify key is not empty
+        EXPECT_FALSE(key.empty()) << "Cache key is empty for: " << filename;
+
+        // Verify key contains the parameters
+        EXPECT_TRUE(key.find(":rf2_mw1024") != std::string::npos)
+            << "Cache key missing parameters: " << key;
+
+        // Verify key is unique
+        EXPECT_EQ(generated_keys.count(key), 0)
+            << "Duplicate cache key generated: " << key;
+        generated_keys[key] = filename;
+
+        // Verify cache key is consistent (calling twice gives same result)
+        std::string key2 = generate_cache_key(file_path, 2, 1024);
+        EXPECT_EQ(key, key2) << "Cache key not consistent for: " << filename;
+    }
+
+    // Test that different parameters produce different keys
+    {
+        auto test_file = test_dir / unicode_filenames[0];
+        std::string key1 = generate_cache_key(test_file, 1, 512);
+        std::string key2 = generate_cache_key(test_file, 2, 1024);
+        std::string key3 = generate_cache_key(test_file, 1, 1024);
+
+        EXPECT_NE(key1, key2) << "Different resize factors should produce different keys";
+        EXPECT_NE(key1, key3) << "Different max widths should produce different keys";
+        EXPECT_NE(key2, key3) << "Different parameters should produce different keys";
+    }
+}
+
+// ============================================================================
+// Test 33: Image Being Saved Tracking with Unicode Paths
+// ============================================================================
+
+TEST_F(UnicodePathTest, ImageBeingSavedTrackingWithUnicodePaths) {
+    // Test the image_being_saved_ tracking pattern from cache_image_loader.cpp
+    // Uses path_to_utf8() for consistent key generation
+
+    auto test_dir = test_root_ / "image_tracking_test";
+    fs::create_directories(test_dir);
+
+    // Simulate the image tracking map
+    std::set<std::string> image_being_saved;
+
+    std::vector<fs::path> unicode_paths = {
+        test_dir / "画像1_image1.png",
+        test_dir / "画像2_image2.png",
+        test_dir / "한국어_korean.jpg",
+        test_dir / "中文_chinese.png"
+    };
+
+    // Create files and add to tracking
+    for (const auto& path : unicode_paths) {
+        create_file(path, "mock");
+
+        // This is the fixed pattern: use path_to_utf8 for consistent keys
+        std::string path_key = path_to_utf8(path);
+        EXPECT_FALSE(path_key.empty()) << "path_to_utf8 failed";
+
+        image_being_saved.insert(path_key);
+    }
+
+    EXPECT_EQ(image_being_saved.size(), unicode_paths.size())
+        << "All paths should be tracked";
+
+    // Test lookup (simulating the check before saving)
+    for (const auto& path : unicode_paths) {
+        std::string path_key = path_to_utf8(path);
+        bool is_being_saved = image_being_saved.contains(path_key);
+        EXPECT_TRUE(is_being_saved) << "Path should be tracked: " << path_key;
+    }
+
+    // Test that a non-existent path is not found
+    {
+        auto non_existent = test_dir / "存在しない_nonexistent.png";
+        std::string path_key = path_to_utf8(non_existent);
+        bool is_being_saved = image_being_saved.contains(path_key);
+        EXPECT_FALSE(is_being_saved) << "Non-existent path should not be tracked";
+    }
+
+    // Simulate removal from tracking
+    {
+        auto path_to_remove = unicode_paths[0];
+        std::string path_key = path_to_utf8(path_to_remove);
+        image_being_saved.erase(path_key);
+        EXPECT_FALSE(image_being_saved.contains(path_key))
+            << "Path should be removed from tracking";
+        EXPECT_EQ(image_being_saved.size(), unicode_paths.size() - 1);
+    }
+}
+
+// ============================================================================
+// Test 34: Drag-Drop Path Handling (Windows IDropTarget Pattern)
+// ============================================================================
+
+TEST_F(UnicodePathTest, DragDropPathHandling) {
+    // Test the pattern used in drag_drop_native.cpp for Windows
+    // Paths from drag-drop are converted via WideCharToMultiByte(CP_UTF8,...)
+    // We simulate this by testing path_to_utf8 on various Unicode paths
+
+    auto test_dir = test_root_ / "drag_drop_test";
+    fs::create_directories(test_dir);
+
+    // Simulate files that might be dropped from Explorer
+    std::vector<std::string> dropped_filenames = {
+        "ドラッグ_drag_드래그_拖拽.png",
+        "ドロップ_drop_드롭_放下.jpg",
+        "混合ファイル_Mixed_혼합파일_混合文件.ply",
+        "Special (file) [test].sog"
+    };
+
+    std::vector<std::string> received_paths;
+
+    for (const auto& filename : dropped_filenames) {
+        auto file_path = test_dir / filename;
+        create_file(file_path, "dropped content");
+
+        // Simulate what the Windows drop handler does:
+        // 1. Receive wide string from DragQueryFileW
+        // 2. Convert to UTF-8 with WideCharToMultiByte
+        // We use path_to_utf8 which does the same thing on Windows
+        std::string utf8_path = path_to_utf8(file_path);
+
+        EXPECT_FALSE(utf8_path.empty()) << "Drop path conversion failed for: " << filename;
+
+        // Verify the path is usable
+        fs::path recovered(utf8_path);
+        EXPECT_TRUE(fs::exists(recovered)) << "Dropped path not accessible: " << utf8_path;
+
+        received_paths.push_back(utf8_path);
+    }
+
+    // Verify all dropped files are accessible
+    EXPECT_EQ(received_paths.size(), dropped_filenames.size());
+
+    // Simulate the handleFileDrop callback pattern
+    for (const auto& path_str : received_paths) {
+        fs::path p(path_str);
+        EXPECT_TRUE(fs::exists(p)) << "File from drop not accessible";
+        EXPECT_TRUE(fs::is_regular_file(p)) << "Dropped item should be a file";
+    }
+}
+
+// ============================================================================
+// Test 35: Save Directory Popup Path Derivation
+// ============================================================================
+
+TEST_F(UnicodePathTest, SaveDirectoryPopupPathDerivation) {
+    // Test the pattern from save_directory_popup.cpp
+    // deriveDefaultOutputPath uses the dataset path to create output path
+
+    auto test_dir = test_root_ / "save_popup_test";
+
+    // Create dataset directories with Unicode names
+    std::vector<fs::path> dataset_paths = {
+        test_dir / "プロジェクト_project_프로젝트_项目" / "dataset",
+        test_dir / "作品_work_작품_作品" / "images",
+        test_dir / "Mixed_混合_ミックス" / "colmap"
+    };
+
+    for (const auto& dataset_path : dataset_paths) {
+        SCOPED_TRACE(path_to_utf8(dataset_path));
+        fs::create_directories(dataset_path);
+
+        // Simulate deriveDefaultOutputPath pattern
+        // output_path_buffer_ = path_to_utf8(deriveDefaultOutputPath(dataset_path));
+        fs::path derived_output = dataset_path.parent_path() / "output";
+
+        std::string output_buffer = path_to_utf8(derived_output);
+        EXPECT_FALSE(output_buffer.empty()) << "Output path buffer is empty";
+
+        // Simulate storing in input buffer (like ImGui text input)
+        // This tests that the UTF-8 string can be used with ImGui
+        const char* c_str = output_buffer.c_str();
+        EXPECT_NE(c_str, nullptr);
+        EXPECT_GT(strlen(c_str), 0);
+
+        // Verify the path can be converted back for filesystem operations
+        fs::path recovered(output_buffer);
+        fs::path parent = recovered.parent_path();
+        EXPECT_TRUE(fs::exists(parent)) << "Parent of output path should exist";
+    }
+
+    // Test the dataset_str display pattern
+    for (const auto& dataset_path : dataset_paths) {
+        // const std::string dataset_str = path_to_utf8(dataset_path_);
+        std::string dataset_str = path_to_utf8(dataset_path);
+
+        EXPECT_FALSE(dataset_str.empty());
+
+        // Verify it can be used for ImGui::Text display
+        const char* display_str = dataset_str.c_str();
+        EXPECT_NE(display_str, nullptr);
+        EXPECT_GT(strlen(display_str), 0);
+    }
+}
+
+// ============================================================================
+// Test 36: File Dialog Initial Directory with Unicode
+// ============================================================================
+
+TEST_F(UnicodePathTest, FileDialogInitialDirectory) {
+    // Test the pattern used in windows_utils.cpp file dialogs
+    // Initial directories need proper Unicode handling
+
+    auto test_dir = test_root_ / "file_dialog_test";
+
+    // Create directories that might be used as initial directories
+    std::vector<fs::path> initial_dirs = {
+        test_dir / "Documents" / "プロジェクト_Projects",
+        test_dir / "桌面_Desktop" / "3D模型_3DModels",
+        test_dir / "다운로드_Downloads" / "데이터셋_Datasets"
+    };
+
+    for (const auto& dir : initial_dirs) {
+        SCOPED_TRACE(path_to_utf8(dir));
+        fs::create_directories(dir);
+
+        // Simulate the pattern from openFileDialog:
+        // Using path_to_utf8 for zenity/kdialog commands on Linux
+        std::string dir_utf8 = path_to_utf8(dir);
+
+        EXPECT_FALSE(dir_utf8.empty()) << "Initial directory UTF-8 conversion failed";
+
+        // Verify the path is valid and exists
+        fs::path recovered(dir_utf8);
+        EXPECT_TRUE(fs::exists(recovered)) << "Initial directory not accessible";
+        EXPECT_TRUE(fs::is_directory(recovered)) << "Should be a directory";
+
+        // Test the shell escape pattern for Linux dialogs
+        auto shell_escape = [](const std::string& str) -> std::string {
+            std::string result = "'";
+            for (char c : str) {
+                if (c == '\'') {
+                    result += "'\\''";
+                } else {
+                    result += c;
+                }
+            }
+            result += "'";
+            return result;
+        };
+
+        std::string escaped = shell_escape(dir_utf8);
+        EXPECT_TRUE(escaped.starts_with("'"));
+        EXPECT_TRUE(escaped.ends_with("'"));
+    }
+}
