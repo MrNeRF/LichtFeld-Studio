@@ -1868,7 +1868,7 @@ TEST_F(UnicodePathTest, DragDropPathHandling) {
 
     // Simulate the handleFileDrop callback pattern
     for (const auto& path_str : received_paths) {
-        fs::path p(path_str);
+        fs::path p = utf8_to_path(path_str);
         EXPECT_TRUE(fs::exists(p)) << "File from drop not accessible";
         EXPECT_TRUE(fs::is_regular_file(p)) << "Dropped item should be a file";
     }
