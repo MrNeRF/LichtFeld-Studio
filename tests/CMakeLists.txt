@@ -18,6 +18,7 @@ if(BUILD_UNICODE_TEST_ONLY)
     target_include_directories(unicode_path_test PRIVATE
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_BINARY_DIR}/include
+        ${CMAKE_SOURCE_DIR}/src
     )
 
     target_link_libraries(unicode_path_test PRIVATE
