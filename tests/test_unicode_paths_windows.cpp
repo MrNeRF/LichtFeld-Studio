@@ -1122,3 +1122,466 @@ TEST_F(UnicodePathTest, RealWorld_PathResolution) {
     auto resolved3 = resolve_image("紅葉_autumn_003.jpg");
     EXPECT_TRUE(fs::exists(resolved3)) << "Failed to resolve: 紅葉_autumn_003.jpg";
 }
+
+// ============================================================================
+// Test 21: UTF-8 Round-Trip Conversion (File Browser Scenario)
+// ============================================================================
+
+TEST_F(UnicodePathTest, Utf8RoundTrip) {
+    // This tests the exact pattern used in file_browser.cpp:
+    // 1. Get path from filesystem
+    // 2. Convert to UTF-8 string with path_to_utf8()
+    // 3. Store in std::string member variable
+    // 4. Convert back to fs::path for operations
+    // 5. Compare stored string with new path_to_utf8() results
+
+    auto unicode_dir = test_root_ / "テスト_unicode_test_유니코드_测试";
+    fs::create_directories(unicode_dir);
+
+    // Create test files
+    std::vector<std::string> test_names = {
+        "日本語フォルダ",
+        "한국어_korean_test",
+        "中文测试_chinese_test",
+        "Mixed_混合_ミックス_혼합"
+    };
+
+    for (const auto& name : test_names) {
+        auto subdir = unicode_dir / name;
+        fs::create_directories(subdir);
+        create_file(subdir / "test.txt", "content");
+    }
+
+    // Simulate file browser pattern
+    std::string current_path_str = path_to_utf8(unicode_dir);
+    EXPECT_FALSE(current_path_str.empty()) << "path_to_utf8 failed for unicode_dir";
+
+    // Iterate and convert paths (like file_browser.cpp does)
+    for (const auto& entry : fs::directory_iterator(fs::path(current_path_str))) {
+        // This is what file_browser does: store UTF-8 string
+        std::string selected_file_str = path_to_utf8(entry.path());
+        EXPECT_FALSE(selected_file_str.empty()) << "path_to_utf8 failed for entry";
+
+        // Convert back to path (for filesystem operations)
+        fs::path recovered_path(selected_file_str);
+        EXPECT_TRUE(fs::exists(recovered_path))
+            << "Round-trip failed: path doesn't exist after conversion: " << selected_file_str;
+
+        // Compare UTF-8 strings (like is_selected check in file_browser)
+        std::string dirname_utf8 = path_to_utf8(entry.path().filename());
+        EXPECT_FALSE(dirname_utf8.empty()) << "path_to_utf8 failed for filename";
+
+        // Verify the comparison would work
+        std::string entry_path_utf8 = path_to_utf8(entry.path());
+        EXPECT_EQ(selected_file_str, entry_path_utf8)
+            << "UTF-8 path comparison would fail in file browser";
+    }
+}
+
+// ============================================================================
+// Test 22: Directory Iteration with path_to_utf8 (Exact File Browser Fix)
+// ============================================================================
+
+TEST_F(UnicodePathTest, DirectoryIterationWithPathToUtf8) {
+    // This directly tests the file browser iteration pattern we fixed
+    auto test_dir = test_root_ / "ファイルブラウザ_FileBrowser";
+    fs::create_directories(test_dir);
+
+    // Create directories with various Unicode names (exactly like user's screenshot)
+    std::vector<std::string> folder_names = {
+        "テスト_unicode_test",       // Japanese
+        "한국어_korean_test",        // Korean
+        "中文测试_chinese_test",     // Chinese
+        "العربية_arabic_test",      // Arabic (RTL)
+        "עברית_hebrew_test",        // Hebrew (RTL)
+        "emoji_😀_🎉_🚀_test"        // Emoji
+    };
+
+    std::map<std::string, fs::path> created_paths;
+    for (const auto& name : folder_names) {
+        auto subdir = test_dir / name;
+        fs::create_directories(subdir);
+        created_paths[name] = subdir;
+    }
+
+    // Simulate file browser iteration
+    std::vector<std::pair<std::string, std::string>> iteration_results;
+
+    for (const auto& entry : fs::directory_iterator(test_dir)) {
+        if (entry.is_directory()) {
+            // This is exactly what the fixed file_browser.cpp does:
+            std::string dirname = path_to_utf8(entry.path().filename());
+            std::string full_path = path_to_utf8(entry.path());
+
+            iteration_results.push_back({dirname, full_path});
+
+            // Verify dirname is not empty/corrupted
+            EXPECT_FALSE(dirname.empty()) << "Dirname is empty for entry";
+            EXPECT_FALSE(full_path.empty()) << "Full path is empty";
+
+            // Verify we can construct a path back and it exists
+            fs::path reconstructed(full_path);
+            EXPECT_TRUE(fs::exists(reconstructed))
+                << "Cannot access path after UTF-8 conversion: " << full_path;
+        }
+    }
+
+    // Verify we found all directories
+    EXPECT_EQ(iteration_results.size(), folder_names.size())
+        << "Not all Unicode directories were found during iteration";
+
+    // Verify each folder name was properly converted
+    for (const auto& name : folder_names) {
+        bool found = false;
+        for (const auto& [dirname, fullpath] : iteration_results) {
+            if (dirname == name) {
+                found = true;
+                break;
+            }
+        }
+        EXPECT_TRUE(found) << "Folder not found after iteration: " << name;
+    }
+}
+
+// ============================================================================
+// Test 23: Path Comparison for Selection State
+// ============================================================================
+
+TEST_F(UnicodePathTest, PathComparisonForSelection) {
+    // Tests the is_selected comparison: (selected_file_ == path_to_utf8(dir.path()))
+    auto test_dir = test_root_ / "選択テスト_SelectionTest";
+    fs::create_directories(test_dir);
+
+    // Create test directories
+    auto dir1 = test_dir / "フォルダ1_Folder1";
+    auto dir2 = test_dir / "フォルダ2_Folder2";
+    auto dir3 = test_dir / "폴더3_Folder3";
+
+    fs::create_directories(dir1);
+    fs::create_directories(dir2);
+    fs::create_directories(dir3);
+
+    // Simulate selection (storing UTF-8 path)
+    std::string selected_file = path_to_utf8(dir2);
+    EXPECT_FALSE(selected_file.empty());
+
+    // Iterate and check selection (like file_browser does)
+    int selected_count = 0;
+    for (const auto& entry : fs::directory_iterator(test_dir)) {
+        std::string entry_path_utf8 = path_to_utf8(entry.path());
+        bool is_selected = (selected_file == entry_path_utf8);
+
+        if (is_selected) {
+            selected_count++;
+            // Verify it's actually dir2
+            EXPECT_EQ(entry.path().filename(), fs::path("フォルダ2_Folder2").filename())
+                << "Wrong directory marked as selected";
+        }
+    }
+
+    EXPECT_EQ(selected_count, 1) << "Expected exactly one selected directory";
+}
+
+// ============================================================================
+// Test 24: Characters Outside BMP (Astral Plane)
+// ============================================================================
+
+TEST_F(UnicodePathTest, AstralPlaneCharacters) {
+    // Test characters outside Basic Multilingual Plane (U+10000 and above)
+    // These require surrogate pairs in UTF-16 (Windows internal encoding)
+    auto test_dir = test_root_ / "astral_test";
+    fs::create_directories(test_dir);
+
+    std::vector<std::string> astral_names = {
+        "emoji_face_😀😁😂🤣",           // Emoji faces
+        "emoji_flags_🇯🇵🇰🇷🇨🇳",         // Flag emoji (ZWJ sequences)
+        "emoji_complex_👨‍👩‍👧‍👦",            // Family emoji (ZWJ sequence)
+        "rare_cjk_𠀀𠀁𠀂",               // CJK Extension B characters
+        "math_symbols_𝔸𝔹ℂ𝔻",           // Mathematical symbols
+        "musical_𝄞𝄢𝄪",                // Musical symbols
+    };
+
+    for (const auto& name : astral_names) {
+        SCOPED_TRACE(name);
+        auto path = test_dir / name;
+
+        // Create directory
+        std::error_code ec;
+        fs::create_directories(path, ec);
+
+        // Some filesystems may not support all characters
+        if (!ec) {
+            EXPECT_TRUE(fs::exists(path)) << "Directory not created: " << name;
+
+            // Test path_to_utf8
+            std::string utf8 = path_to_utf8(path);
+            EXPECT_FALSE(utf8.empty()) << "path_to_utf8 failed for: " << name;
+
+            // Test round-trip
+            fs::path recovered(utf8);
+            EXPECT_TRUE(fs::exists(recovered))
+                << "Round-trip failed for astral characters: " << name;
+        }
+    }
+}
+
+// ============================================================================
+// Test 25: Unicode Normalization (NFC vs NFD)
+// ============================================================================
+
+TEST_F(UnicodePathTest, UnicodeNormalization) {
+    // Test that paths work regardless of Unicode normalization form
+    // This is particularly important on macOS (HFS+ uses NFD)
+    auto test_dir = test_root_ / "normalization_test";
+    fs::create_directories(test_dir);
+
+    // "ä" can be represented as:
+    // - NFC: U+00E4 (single codepoint)
+    // - NFD: U+0061 U+0308 (a + combining diaeresis)
+
+    // Create with one form, access with potentially different form
+    std::string nfc_name = "Ärger_NFC";  // Using precomposed ä
+    auto nfc_path = test_dir / nfc_name;
+
+    create_file(nfc_path, "NFC content");
+    verify_file(nfc_path);
+
+    // Test path_to_utf8 preserves the content
+    std::string utf8 = path_to_utf8(nfc_path);
+    EXPECT_FALSE(utf8.empty());
+
+    // Verify file can be read back through converted path
+    fs::path recovered(utf8);
+    EXPECT_TRUE(fs::exists(recovered)) << "Normalized path doesn't exist";
+
+    // Test with Japanese characters that have normalization variants
+    // が (U+304C, NFC) vs か゛ (U+304B U+3099, NFD)
+    std::string ja_nfc = "が_NFC_test";  // Precomposed
+    auto ja_path = test_dir / ja_nfc;
+
+    create_file(ja_path, "Japanese NFC content");
+    verify_file(ja_path);
+
+    std::string ja_utf8 = path_to_utf8(ja_path);
+    EXPECT_FALSE(ja_utf8.empty());
+
+    fs::path ja_recovered(ja_utf8);
+    EXPECT_TRUE(fs::exists(ja_recovered)) << "Japanese normalized path doesn't exist";
+}
+
+// ============================================================================
+// Test 26: Pure Unicode Paths (No ASCII)
+// ============================================================================
+
+TEST_F(UnicodePathTest, PureUnicodePaths) {
+    // Test paths that contain absolutely no ASCII characters
+    // This is a common scenario for users in CJK regions
+
+    // Fully Japanese path
+    auto jp_path = test_root_ / "日本語" / "テスト" / "ファイル";
+    fs::create_directories(jp_path);
+    create_file(jp_path / "データ.txt", "純粋な日本語パス");
+
+    std::string jp_utf8 = path_to_utf8(jp_path / "データ.txt");
+    EXPECT_FALSE(jp_utf8.empty());
+    fs::path jp_recovered(jp_utf8);
+    EXPECT_TRUE(fs::exists(jp_recovered)) << "Pure Japanese path failed";
+
+    // Fully Chinese path
+    auto cn_path = test_root_ / "中文" / "测试" / "文件夹";
+    fs::create_directories(cn_path);
+    create_file(cn_path / "数据.txt", "纯中文路径");
+
+    std::string cn_utf8 = path_to_utf8(cn_path / "数据.txt");
+    EXPECT_FALSE(cn_utf8.empty());
+    fs::path cn_recovered(cn_utf8);
+    EXPECT_TRUE(fs::exists(cn_recovered)) << "Pure Chinese path failed";
+
+    // Fully Korean path
+    auto kr_path = test_root_ / "한국어" / "테스트" / "폴더";
+    fs::create_directories(kr_path);
+    create_file(kr_path / "데이터.txt", "순수한 한국어 경로");
+
+    std::string kr_utf8 = path_to_utf8(kr_path / "데이터.txt");
+    EXPECT_FALSE(kr_utf8.empty());
+    fs::path kr_recovered(kr_utf8);
+    EXPECT_TRUE(fs::exists(kr_recovered)) << "Pure Korean path failed";
+
+    // Test directory iteration on pure Unicode path
+    int count = 0;
+    for (const auto& entry : fs::directory_iterator(test_root_ / "日本語" / "テスト")) {
+        std::string name = path_to_utf8(entry.path().filename());
+        EXPECT_FALSE(name.empty()) << "path_to_utf8 failed for pure Unicode entry";
+        count++;
+    }
+    EXPECT_GE(count, 1) << "Failed to iterate pure Unicode directory";
+}
+
+// ============================================================================
+// Test 27: RTL Language Support (Arabic/Hebrew)
+// ============================================================================
+
+TEST_F(UnicodePathTest, RTLLanguageSupport) {
+    // Test Right-to-Left languages which have special handling requirements
+    auto test_dir = test_root_ / "rtl_test";
+    fs::create_directories(test_dir);
+
+    // Arabic text
+    auto arabic_dir = test_dir / "مجلد_عربي_ArabicFolder";
+    fs::create_directories(arabic_dir);
+    create_file(arabic_dir / "ملف.txt", "محتوى عربي");
+
+    std::string arabic_utf8 = path_to_utf8(arabic_dir);
+    EXPECT_FALSE(arabic_utf8.empty()) << "Arabic path conversion failed";
+
+    fs::path arabic_recovered(arabic_utf8);
+    EXPECT_TRUE(fs::exists(arabic_recovered)) << "Arabic path round-trip failed";
+
+    // Hebrew text
+    auto hebrew_dir = test_dir / "תיקייה_עברית_HebrewFolder";
+    fs::create_directories(hebrew_dir);
+    create_file(hebrew_dir / "קובץ.txt", "תוכן עברי");
+
+    std::string hebrew_utf8 = path_to_utf8(hebrew_dir);
+    EXPECT_FALSE(hebrew_utf8.empty()) << "Hebrew path conversion failed";
+
+    fs::path hebrew_recovered(hebrew_utf8);
+    EXPECT_TRUE(fs::exists(hebrew_recovered)) << "Hebrew path round-trip failed";
+
+    // Mixed LTR/RTL
+    auto mixed_dir = test_dir / "Mixed_مختلط_Test_テスト";
+    fs::create_directories(mixed_dir);
+
+    std::string mixed_utf8 = path_to_utf8(mixed_dir);
+    EXPECT_FALSE(mixed_utf8.empty()) << "Mixed LTR/RTL path conversion failed";
+
+    fs::path mixed_recovered(mixed_utf8);
+    EXPECT_TRUE(fs::exists(mixed_recovered)) << "Mixed LTR/RTL path round-trip failed";
+}
+
+// ============================================================================
+// Test 28: Whitespace and Special Unicode Characters
+// ============================================================================
+
+TEST_F(UnicodePathTest, UnicodeWhitespaceAndSpecial) {
+    auto test_dir = test_root_ / "whitespace_test";
+    fs::create_directories(test_dir);
+
+    // Various Unicode whitespace characters
+    std::vector<std::pair<std::string, std::string>> whitespace_tests = {
+        {"regular space", "file with spaces.txt"},
+        {"ideographic_space", "file\u3000space.txt"},  // U+3000 ideographic space (CJK)
+        {"nbsp", "file\u00A0nbsp.txt"},                // U+00A0 non-breaking space
+        {"en_space", "file\u2002enspace.txt"},         // U+2002 en space
+    };
+
+    for (const auto& [desc, filename] : whitespace_tests) {
+        SCOPED_TRACE(desc);
+        auto path = test_dir / filename;
+
+        std::error_code ec;
+        std::ofstream out(path, std::ios::binary);
+        if (out.is_open()) {
+            out << "content";
+            out.close();
+
+            if (fs::exists(path)) {
+                std::string utf8 = path_to_utf8(path);
+                EXPECT_FALSE(utf8.empty()) << "path_to_utf8 failed for: " << desc;
+
+                fs::path recovered(utf8);
+                EXPECT_TRUE(fs::exists(recovered))
+                    << "Round-trip failed for whitespace type: " << desc;
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Test 29: Single Unicode Character Paths
+// ============================================================================
+
+TEST_F(UnicodePathTest, SingleUnicodeCharacterPaths) {
+    // Test with minimal Unicode paths (single character names)
+    auto test_dir = test_root_ / "single_char_test";
+    fs::create_directories(test_dir);
+
+    std::vector<std::string> single_chars = {
+        "あ",    // Hiragana
+        "字",    // Kanji
+        "한",    // Hangul
+        "Ä",     // Latin with diacritic
+        "α",     // Greek
+        "Я",     // Cyrillic
+        "😀",   // Emoji
+    };
+
+    for (const auto& ch : single_chars) {
+        SCOPED_TRACE(ch);
+        auto path = test_dir / ch;
+
+        fs::create_directories(path);
+
+        if (fs::exists(path)) {
+            std::string utf8 = path_to_utf8(path);
+            EXPECT_FALSE(utf8.empty()) << "path_to_utf8 failed for single char: " << ch;
+
+            // Verify iteration works
+            bool found = false;
+            for (const auto& entry : fs::directory_iterator(test_dir)) {
+                std::string name = path_to_utf8(entry.path().filename());
+                if (name == ch) {
+                    found = true;
+                    break;
+                }
+            }
+            EXPECT_TRUE(found) << "Single char directory not found in iteration: " << ch;
+        }
+    }
+}
+
+// ============================================================================
+// Test 30: File Browser Display String Generation
+// ============================================================================
+
+TEST_F(UnicodePathTest, FileBrowserDisplayStrings) {
+    // Test the exact string generation used for ImGui display in file_browser.cpp
+    // Pattern: dirname = "[DIR] " + path_to_utf8(dir.path().filename())
+
+    auto test_dir = test_root_ / "display_test";
+    fs::create_directories(test_dir);
+
+    // Create directories with names that caused crashes
+    std::vector<std::string> problem_names = {
+        "テスト_unicode_test",
+        "한국어_korean_test",
+        "中文测试_chinese_test"
+    };
+
+    for (const auto& name : problem_names) {
+        fs::create_directories(test_dir / name);
+    }
+
+    // Simulate the display string generation from file_browser.cpp
+    const char* directory_prefix = "[DIR] ";  // Similar to LOC(FileBrowser::DIRECTORY)
+
+    for (const auto& entry : fs::directory_iterator(test_dir)) {
+        if (entry.is_directory()) {
+            // This is the exact pattern from the fix:
+            std::string dirname = std::string(directory_prefix) + path_to_utf8(entry.path().filename());
+
+            // Verify the string is valid for ImGui display
+            EXPECT_FALSE(dirname.empty()) << "Display string is empty";
+            EXPECT_TRUE(dirname.starts_with(directory_prefix)) << "Prefix missing";
+            EXPECT_GT(dirname.length(), strlen(directory_prefix)) << "No filename after prefix";
+
+            // Verify the UTF-8 is valid (no null bytes in middle, reasonable length)
+            EXPECT_EQ(dirname.find('\0'), std::string::npos) << "Null byte in display string";
+
+            // Verify we can get c_str() safely (what ImGui::Selectable uses)
+            const char* c_str = dirname.c_str();
+            EXPECT_NE(c_str, nullptr);
+            EXPECT_GT(strlen(c_str), 0);
+        }
+    }
+}
