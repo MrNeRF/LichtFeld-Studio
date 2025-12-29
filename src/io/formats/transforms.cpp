@@ -203,6 +203,7 @@ namespace lfs::io {
 
         float k1 = 0;
         float k2 = 0;
+        float k3 = 0;
         float p1 = 0;
         float p2 = 0;
         if (transforms.contains("k1")) {
@@ -211,15 +212,14 @@ namespace lfs::io {
         if (transforms.contains("k2")) {
             k2 = float(transforms["k2"]);
         }
+        if (transforms.contains("k3")) {
+            k3 = float(transforms["k3"]);
+        }
         if (transforms.contains("p1")) {
             p1 = float(transforms["p1"]);
         }
         if (transforms.contains("p2")) {
             p2 = float(transforms["p2"]);
-        }
-        if (k1 > 0 || k2 > 0 || p1 > 0 || p2 > 0) {
-            LOG_ERROR("Distortion parameters not supported: k1={}, k2={}, p1={}, p2={}", k1, k2, p1, p2);
-            throw std::runtime_error(std::format("GS don't support distortion for now: k1={}, k2={}, p1={}, p2={}", k1, k2, p1, p2));
         }
 
         std::vector<CameraData> camerasdata;
@@ -283,8 +283,9 @@ namespace lfs::io {
 
                 camdata._T = T;
                 camdata._R = R;
-                camdata._radial_distortion = lfs::core::Tensor::empty({0}, Device::CPU, DataType::Float32);
-                camdata._tangential_distortion = lfs::core::Tensor::empty({0}, Device::CPU, DataType::Float32);
+
+                camdata._radial_distortion = Tensor::from_vector({k1, k2, k3}, {3}, Device::CPU);
+                camdata._tangential_distortion = Tensor::from_vector({p1, p2}, {2}, Device::CPU);
 
                 camdata._focal_x = fl_x;
                 camdata._focal_y = fl_y;
@@ -292,7 +293,7 @@ namespace lfs::io {
                 camdata._center_x = cx;
                 camdata._center_y = cy;
 
-                camdata._camera_model_type = camera_model;
+                camdata._camera_model_type = lfs::core::CameraModelType::PINHOLE;
                 camdata._camera_ID = counter++;
 
                 camerasdata.push_back(camdata);

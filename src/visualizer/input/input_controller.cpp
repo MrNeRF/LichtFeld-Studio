@@ -1004,9 +1004,13 @@ namespace lfs::vis {
                 LOG_INFO("Loading checkpoint via drag-and-drop: {}", filepath.filename().string());
                 return;
             } else if (ext == ".json") {
-                cmd::LoadConfigFile{.path = filepath}.emit();
-                LOG_INFO("Loading config via drag-and-drop: {}", filepath.filename().string());
-                return;
+                if (lfs::io::Loader::isDatasetPath(filepath)) {
+                    dataset_path = filepath;
+                }else {
+                    cmd::LoadConfigFile{.path = filepath}.emit();
+                    LOG_INFO("Loading config via drag-and-drop: {}", filepath.filename().string());
+                    return;
+                }
             } else if (ext == ".ply" || ext == ".sog" || ext == ".spz") {
                 splat_files.push_back(filepath);
             } else if (!dataset_path && std::filesystem::is_directory(filepath)) {

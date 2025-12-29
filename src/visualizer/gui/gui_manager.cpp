@@ -1645,8 +1645,12 @@ namespace lfs::vis::gui {
         });
 
         cmd::ShowDatasetLoadPopup::when([this](const auto& e) {
+            std::filesystem::path output_dir =e.dataset_path;
+            if (std::filesystem::is_regular_file(output_dir)) {
+                output_dir = output_dir.parent_path();
+            }
             if (save_directory_popup_) {
-                save_directory_popup_->show(e.dataset_path);
+                save_directory_popup_->show(output_dir);
             }
         });
 
