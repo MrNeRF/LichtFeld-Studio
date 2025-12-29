@@ -1001,7 +1001,7 @@ namespace lfs::vis {
         std::vector<std::string> unrecognized_files;
 
         for (const auto& path_str : paths) {
-            std::filesystem::path filepath(path_str);
+            std::filesystem::path filepath = lfs::core::utf8_to_path(path_str);
             LOG_DEBUG("Processing dropped file: {}", lfs::core::path_to_utf8(filepath));
 
             auto ext = filepath.extension().string();
