@@ -4,6 +4,7 @@
 
 #include "spz.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "load-spz.h"
 #include <chrono>
@@ -139,7 +140,7 @@ namespace lfs::io {
         // Load using Niantic's library (outputs RDF coordinate system like PLY)
         spz::UnpackOptions options;
         options.to = spz::CoordinateSystem::RDF;
-        auto cloud = spz::loadSpz(filepath.string(), options);
+        auto cloud = spz::loadSpz(lfs::core::path_to_utf8(filepath), options);
 
         if (cloud.numPoints == 0) {
             return std::unexpected(std::format("Failed to load SPZ file: {}", filepath.string()));
