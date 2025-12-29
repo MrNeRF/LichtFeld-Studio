@@ -4,6 +4,7 @@
 
 #include "input/input_controller.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "gui/gui_manager.hpp"
 #include "io/loader.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -158,6 +159,8 @@ namespace lfs::vis {
     }
 
     void InputController::dropCallback(GLFWwindow* w, int count, const char** paths) {
+        LOG_INFO("GLFW drop callback: {} file(s)", count);
+
         // Let ImGui handle first (though it probably doesn't use this)
         if (instance_ && instance_->imgui_callbacks_.drop) {
             instance_->imgui_callbacks_.drop(w, count, paths);
@@ -167,6 +170,8 @@ namespace lfs::vis {
         if (instance_) {
             std::vector<std::string> files(paths, paths + count);
             instance_->handleFileDrop(files);
+        } else {
+            LOG_ERROR("InputController instance not available for drop callback");
         }
     }
 
@@ -989,44 +994,70 @@ namespace lfs::vis {
         using namespace lfs::core::events;
         ui::FileDropReceived{}.emit();
 
+        LOG_INFO("Processing {} dropped file(s)", paths.size());
+
         std::vector<std::filesystem::path> splat_files;
         std::optional<std::filesystem::path> dataset_path;
+        std::vector<std::string> unrecognized_files;
 
         for (const auto& path_str : paths) {
             std::filesystem::path filepath(path_str);
-            LOG_TRACE("Processing dropped file: {}", filepath.string());
+            LOG_DEBUG("Processing dropped file: {}", lfs::core::path_to_utf8(filepath));
 
             auto ext = filepath.extension().string();
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
             if (ext == ".resume") {
                 cmd::LoadCheckpointForTraining{.path = filepath}.emit();
-                LOG_INFO("Loading checkpoint via drag-and-drop: {}", filepath.filename().string());
+                LOG_INFO("Loading checkpoint via drag-and-drop: {}", lfs::core::path_to_utf8(filepath.filename()));
                 return;
             } else if (ext == ".json") {
                 cmd::LoadConfigFile{.path = filepath}.emit();
-                LOG_INFO("Loading config via drag-and-drop: {}", filepath.filename().string());
+                LOG_INFO("Loading config via drag-and-drop: {}", lfs::core::path_to_utf8(filepath.filename()));
                 return;
             } else if (ext == ".ply" || ext == ".sog" || ext == ".spz") {
                 splat_files.push_back(filepath);
-            } else if (!dataset_path && std::filesystem::is_directory(filepath)) {
+            } else if (std::filesystem::is_directory(filepath)) {
                 // Check for dataset markers
-                LOG_TRACE("Checking directory for dataset markers: {}", filepath.string());
+                LOG_DEBUG("Checking directory for dataset markers: {}", lfs::core::path_to_utf8(filepath));
                 if (lfs::io::Loader::isDatasetPath(filepath)) {
-                    dataset_path = filepath;
+                    if (!dataset_path) {
+                        dataset_path = filepath;
+                    }
+                } else {
+                    // Check if it's a SOG directory (WebP-based format)
+                    if (std::filesystem::exists(filepath / "meta.json") &&
+                        std::filesystem::exists(filepath / "means_l.webp")) {
+                        splat_files.push_back(filepath);
+                        LOG_DEBUG("Detected SOG directory: {}", lfs::core::path_to_utf8(filepath));
+                    } else {
+                        unrecognized_files.push_back(lfs::core::path_to_utf8(filepath));
+                    }
                 }
+            } else {
+                unrecognized_files.push_back(lfs::core::path_to_utf8(filepath));
             }
         }
 
-        // Load splat files (PLY or SOG)
+        // Load splat files (PLY, SOG, or SPZ)
         for (const auto& splat : splat_files) {
             cmd::LoadFile{.path = splat, .is_dataset = false}.emit();
             LOG_INFO("Loading {} via drag-and-drop: {}",
-                     splat.extension().string(), splat.filename().string());
+                     lfs::core::path_to_utf8(splat.extension()), lfs::core::path_to_utf8(splat.filename()));
         }
 
         if (dataset_path) {
+            LOG_INFO("Showing dataset load popup for: {}", lfs::core::path_to_utf8(*dataset_path));
             cmd::ShowDatasetLoadPopup{.dataset_path = *dataset_path}.emit();
+        }
+
+        // Warn about unrecognized files
+        if (!unrecognized_files.empty() && splat_files.empty() && !dataset_path) {
+            LOG_WARN("Dropped {} file(s) with unrecognized format:", unrecognized_files.size());
+            for (const auto& f : unrecognized_files) {
+                LOG_WARN("  - {}", f);
+            }
+            LOG_WARN("Supported formats: .ply, .sog, .spz, .json, .resume, or dataset directories");
         }
     }
 

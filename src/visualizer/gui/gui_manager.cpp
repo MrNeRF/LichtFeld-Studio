@@ -431,10 +431,16 @@ namespace lfs::vis::gui {
         loadOverlayTexture(lfs::vis::getAssetPath("core11-logo.png"),
                            startup_core11_texture_, startup_core11_width_, startup_core11_height_);
 
-        drag_drop_.init(viewer_->getWindow());
+        if (!drag_drop_.init(viewer_->getWindow())) {
+            LOG_WARN("Native drag-drop initialization failed, falling back to GLFW");
+        }
         drag_drop_.setFileDropCallback([this](const std::vector<std::string>& paths) {
-            if (auto* const ic = viewer_->getInputController())
+            LOG_INFO("Files dropped via native drag-drop: {} file(s)", paths.size());
+            if (auto* const ic = viewer_->getInputController()) {
                 ic->handleFileDrop(paths);
+            } else {
+                LOG_ERROR("InputController not available for file drop handling");
+            }
         });
     }
 
