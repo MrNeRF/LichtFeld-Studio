@@ -4,12 +4,15 @@
 
 #include "app/splash_screen.hpp"
 #include "core/executable_path.hpp"
+#include "core/path_utils.hpp"
 
 // clang-format off
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 // clang-format on
 
+// Enable UTF-8 file path support in stb_image on Windows
+#define STBI_WINDOWS_UTF8
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
@@ -114,7 +117,8 @@ void main() {
             ImageData img;
             int channels;
             stbi_set_flip_vertically_on_load(true);
-            unsigned char* const data = stbi_load(path.string().c_str(), &img.width, &img.height, &channels, 4);
+            const std::string path_utf8 = lfs::core::path_to_utf8(path);
+            unsigned char* const data = stbi_load(path_utf8.c_str(), &img.width, &img.height, &channels, 4);
             if (!data)
                 return img;
 

@@ -5,6 +5,7 @@
 #include "app/application.hpp"
 #include "app/splash_screen.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "rendering/framebuffer_factory.hpp"
 #include "training/trainer.hpp"
@@ -96,23 +97,23 @@ namespace lfs::app {
             if (!params->view_paths.empty()) {
                 LOG_INFO("Loading {} splat file(s)", params->view_paths.size());
                 if (const auto result = viewer->loadPLY(params->view_paths[0]); !result) {
-                    LOG_ERROR("Failed to load {}: {}", params->view_paths[0].string(), result.error());
+                    LOG_ERROR("Failed to load {}: {}", lfs::core::path_to_utf8(params->view_paths[0]), result.error());
                     return 1;
                 }
                 for (size_t i = 1; i < params->view_paths.size(); ++i) {
                     if (const auto result = viewer->addSplatFile(params->view_paths[i]); !result) {
-                        LOG_ERROR("Failed to load {}: {}", params->view_paths[i].string(), result.error());
+                        LOG_ERROR("Failed to load {}: {}", lfs::core::path_to_utf8(params->view_paths[i]), result.error());
                         return 1;
                     }
                 }
             } else if (params->resume_checkpoint) {
-                LOG_INFO("Loading checkpoint: {}", params->resume_checkpoint->string());
+                LOG_INFO("Loading checkpoint: {}", lfs::core::path_to_utf8(*params->resume_checkpoint));
                 if (const auto result = viewer->loadCheckpointForTraining(*params->resume_checkpoint); !result) {
                     LOG_ERROR("Failed to load checkpoint: {}", result.error());
                     return 1;
                 }
             } else if (!params->dataset.data_path.empty()) {
-                LOG_INFO("Loading dataset: {}", params->dataset.data_path.string());
+                LOG_INFO("Loading dataset: {}", lfs::core::path_to_utf8(params->dataset.data_path));
                 if (const auto result = viewer->loadDataset(params->dataset.data_path); !result) {
                     LOG_ERROR("Failed to load dataset: {}", result.error());
                     return 1;

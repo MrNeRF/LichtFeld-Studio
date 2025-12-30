@@ -4,6 +4,7 @@
 
 #include "ply.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "io/error.hpp"
 #include "tinyply.hpp"
@@ -129,26 +130,26 @@ namespace lfs::io {
             file_handle = CreateFileW(wide_path.c_str(), GENERIC_READ, FILE_SHARE_READ,
                                       nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
             if (file_handle == INVALID_HANDLE_VALUE) {
-                LOG_ERROR("Failed to open file for mapping: {}", filepath.string());
+                LOG_ERROR("Failed to open file for mapping: {}", lfs::core::path_to_utf8(filepath));
                 return false;
             }
 
             LARGE_INTEGER file_size_li;
             if (!GetFileSizeEx(file_handle, &file_size_li)) {
-                LOG_ERROR("Failed to get file size: {}", filepath.string());
+                LOG_ERROR("Failed to get file size: {}", lfs::core::path_to_utf8(filepath));
                 return false;
             }
             size = static_cast<size_t>(file_size_li.QuadPart);
 
             mapping_handle = CreateFileMappingW(file_handle, nullptr, PAGE_READONLY, 0, 0, nullptr);
             if (!mapping_handle) {
-                LOG_ERROR("Failed to create file mapping: {}", filepath.string());
+                LOG_ERROR("Failed to create file mapping: {}", lfs::core::path_to_utf8(filepath));
                 return false;
             }
 
             data = MapViewOfFile(mapping_handle, FILE_MAP_READ, 0, 0, 0);
             if (!data) {
-                LOG_ERROR("Failed to map view of file: {}", filepath.string());
+                LOG_ERROR("Failed to map view of file: {}", lfs::core::path_to_utf8(filepath));
             }
             return data != nullptr;
         }
@@ -165,20 +166,20 @@ namespace lfs::io {
         [[nodiscard]] bool map(const std::filesystem::path& filepath) {
             fd = open(filepath.c_str(), O_RDONLY);
             if (fd < 0) {
-                LOG_ERROR("Failed to open file for mapping: {}", filepath.string());
+                LOG_ERROR("Failed to open file for mapping: {}", lfs::core::path_to_utf8(filepath));
                 return false;
             }
 
             struct stat st {};
             if (fstat(fd, &st) < 0) {
-                LOG_ERROR("Failed to stat file: {}", filepath.string());
+                LOG_ERROR("Failed to stat file: {}", lfs::core::path_to_utf8(filepath));
                 return false;
             }
             size = st.st_size;
 
             data = mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0);
             if (data == MAP_FAILED) {
-                LOG_ERROR("Failed to mmap file: {}", filepath.string());
+                LOG_ERROR("Failed to mmap file: {}", lfs::core::path_to_utf8(filepath));
                 return false;
             }
 
@@ -506,7 +507,7 @@ namespace lfs::io {
             auto start_time = std::chrono::high_resolution_clock::now();
 
             if (!std::filesystem::exists(filepath)) {
-                std::string error_msg = std::format("PLY file does not exist: {}", filepath.string());
+                std::string error_msg = std::format("PLY file does not exist: {}", lfs::core::path_to_utf8(filepath));
                 LOG_ERROR("{}", error_msg);
                 throw std::runtime_error(error_msg);
             }
@@ -514,7 +515,7 @@ namespace lfs::io {
             // Memory map
             MMappedFile mapped_file;
             if (!mapped_file.map(filepath)) {
-                LOG_ERROR("Failed to memory map PLY file: {}", filepath.string());
+                LOG_ERROR("Failed to memory map PLY file: {}", lfs::core::path_to_utf8(filepath));
                 throw std::runtime_error("Failed to memory map PLY file");
             }
 
@@ -851,10 +852,10 @@ namespace lfs::io {
                 std::async(std::launch::async, [pc = point_cloud, path = options.output_path]() {
                     try {
                         write_ply_binary(pc, path);
-                        LOG_INFO("PLY saved: {}", path.string());
+                        LOG_INFO("PLY saved: {}", lfs::core::path_to_utf8(path));
                     } catch (const std::exception& e) {
                         // Log error - async saves report via logs
-                        LOG_ERROR("Async PLY save failed for '{}': {}", path.string(), e.what());
+                        LOG_ERROR("Async PLY save failed for '{}': {}", lfs::core::path_to_utf8(path), e.what());
                     }
                 }));
             // Note: Async save errors are logged but not returned
@@ -862,7 +863,7 @@ namespace lfs::io {
         } else {
             try {
                 write_ply_binary(point_cloud, options.output_path);
-                LOG_INFO("PLY saved: {}", options.output_path.string());
+                LOG_INFO("PLY saved: {}", lfs::core::path_to_utf8(options.output_path));
             } catch (const std::exception& e) {
                 return make_error(ErrorCode::WRITE_FAILURE,
                                   std::format("Failed to write PLY: {}", e.what()),
@@ -902,13 +903,13 @@ namespace lfs::io {
         constexpr uint8_t DEFAULT_COLOR = 255;
 
         if (!std::filesystem::exists(filepath)) {
-            return std::unexpected(std::format("File not found: {}", filepath.string()));
+            return std::unexpected(std::format("File not found: {}", lfs::core::path_to_utf8(filepath)));
         }
 
         try {
             std::ifstream file(filepath, std::ios::binary);
             if (!file) {
-                return std::unexpected(std::format("Cannot open: {}", filepath.string()));
+                return std::unexpected(std::format("Cannot open: {}", lfs::core::path_to_utf8(filepath)));
             }
 
             tinyply::PlyFile ply;

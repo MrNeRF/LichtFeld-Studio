@@ -52,7 +52,7 @@ namespace lfs::rendering {
         text_renderer_ = std::make_unique<TextRenderer>(width, height);
 
         // Load font from our assets
-        auto font_path = (lfs::core::getFontsDir() / "JetBrainsMono-Regular.ttf").string();
+        auto font_path = lfs::core::getFontsDir() / "JetBrainsMono-Regular.ttf";
         if (auto result = text_renderer_->LoadFont(font_path, 48); !result) {
             LOG_WARN("ViewportGizmo: Failed to load font: {}", result.error());
             text_renderer_.reset();

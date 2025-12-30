@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/windows/file_browser.hpp"
+#include "core/path_utils.hpp"
 #include "gui/dpi_scale.hpp"
 #include "gui/localization_manager.hpp"
 #include "gui/string_keys.hpp"
@@ -15,7 +16,7 @@ namespace lfs::vis::gui {
     using namespace lichtfeld::Strings;
 
     FileBrowser::FileBrowser() {
-        current_path_ = std::filesystem::current_path().string();
+        current_path_ = lfs::core::path_to_utf8(std::filesystem::current_path());
     }
 
     void FileBrowser::render(bool* p_open) {
@@ -37,10 +38,11 @@ namespace lfs::vis::gui {
         if (ImGui::BeginMenuBar()) {
             if (ImGui::BeginMenu(LOC(lichtfeld::Strings::FileBrowser::QUICK_ACCESS))) {
                 if (ImGui::MenuItem(LOC(lichtfeld::Strings::FileBrowser::CURRENT_DIR))) {
-                    current_path_ = std::filesystem::current_path().string();
+                    current_path_ = lfs::core::path_to_utf8(std::filesystem::current_path());
                 }
                 if (ImGui::MenuItem(LOC(lichtfeld::Strings::FileBrowser::HOME))) {
-                    current_path_ = std::filesystem::path(std::getenv("HOME") ? std::getenv("HOME") : "/").string();
+                    const char* home = std::getenv("HOME");
+                    current_path_ = lfs::core::path_to_utf8(home ? lfs::core::utf8_to_path(home) : std::filesystem::path("/"));
                 }
                 ImGui::EndMenu();
             }
@@ -51,11 +53,11 @@ namespace lfs::vis::gui {
         ImGui::Separator();
 
         if (ImGui::BeginChild("FileList", ImVec2(0, -ImGui::GetFrameHeightWithSpacing() * 2), true)) {
-            std::filesystem::path current_path(current_path_);
+            std::filesystem::path current_path = lfs::core::utf8_to_path(current_path_);
 
             if (current_path.has_parent_path()) {
                 if (ImGui::Selectable("../", false, ImGuiSelectableFlags_DontClosePopups)) {
-                    current_path_ = current_path.parent_path().string();
+                    current_path_ = lfs::core::path_to_utf8(current_path.parent_path());
                     selected_file_.clear();
                 }
             }
@@ -101,8 +103,8 @@ namespace lfs::vis::gui {
             auto loader = lfs::io::Loader::create();
 
             for (const auto& dir : dirs) {
-                std::string dirname = std::string(LOC(lichtfeld::Strings::FileBrowser::DIRECTORY)) + " " + dir.path().filename().string();
-                bool is_selected = (selected_file_ == dir.path().string());
+                std::string dirname = std::string(LOC(lichtfeld::Strings::FileBrowser::DIRECTORY)) + " " + lfs::core::path_to_utf8(dir.path().filename());
+                bool is_selected = (selected_file_ == lfs::core::path_to_utf8(dir.path()));
 
                 bool is_dataset = lfs::io::Loader::isDatasetPath(dir.path());
                 bool is_sog_dir = false;
@@ -131,14 +133,14 @@ namespace lfs::vis::gui {
                                       ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_DontClosePopups)) {
                     if (ImGui::IsMouseDoubleClicked(0)) {
                         if (!is_sog_dir) {
-                            current_path_ = dir.path().string();
+                            current_path_ = lfs::core::path_to_utf8(dir.path());
                             selected_file_.clear();
                         } else {
                             // For SOG directories, select them instead of entering
-                            selected_file_ = dir.path().string();
+                            selected_file_ = lfs::core::path_to_utf8(dir.path());
                         }
                     } else {
-                        selected_file_ = dir.path().string();
+                        selected_file_ = lfs::core::path_to_utf8(dir.path());
                     }
                 }
 
@@ -148,8 +150,8 @@ namespace lfs::vis::gui {
             }
 
             for (const auto& file : files) {
-                std::string filename = file.path().filename().string();
-                bool is_selected = (selected_file_ == file.path().string());
+                std::string filename = lfs::core::path_to_utf8(file.path().filename());
+                bool is_selected = (selected_file_ == lfs::core::path_to_utf8(file.path()));
 
                 ImVec4 color = ImVec4(0.8f, 0.8f, 0.8f, 1.0f);
                 if (file.path().extension() == ".ply") {
@@ -176,7 +178,7 @@ namespace lfs::vis::gui {
 
                 ImGui::PushStyleColor(ImGuiCol_Text, color);
                 if (ImGui::Selectable(filename.c_str(), is_selected, ImGuiSelectableFlags_DontClosePopups)) {
-                    selected_file_ = file.path().string();
+                    selected_file_ = lfs::core::path_to_utf8(file.path());
                 }
                 ImGui::PopStyleColor();
             }
@@ -184,7 +186,7 @@ namespace lfs::vis::gui {
         ImGui::EndChild();
 
         if (!selected_file_.empty()) {
-            ImGui::Text(LOC(lichtfeld::Strings::FileBrowser::SELECTED), std::filesystem::path(selected_file_).filename().string().c_str());
+            ImGui::Text(LOC(lichtfeld::Strings::FileBrowser::SELECTED), lfs::core::path_to_utf8(lfs::core::utf8_to_path(selected_file_).filename()).c_str());
         } else {
             ImGui::TextDisabled("%s", LOC(FileBrowserExt::NO_FILE_SELECTED));
         }
@@ -198,7 +200,7 @@ namespace lfs::vis::gui {
         }
 
         if (can_load) {
-            std::filesystem::path selected_path(selected_file_);
+            std::filesystem::path selected_path = lfs::core::utf8_to_path(selected_file_);
 
             if (std::filesystem::is_directory(selected_path)) {
                 bool is_dataset = lfs::io::Loader::isDatasetPath(selected_path);
@@ -246,7 +248,7 @@ namespace lfs::vis::gui {
                 } else {
                     ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.5f, 0.5f, 0.5f, 1.0f));
                     if (ImGui::Button(LOC(lichtfeld::Strings::FileBrowser::ENTER_DIR), ImVec2(120 * scale, 0))) {
-                        current_path_ = selected_path.string();
+                        current_path_ = lfs::core::path_to_utf8(selected_path);
                         selected_file_.clear();
                     }
                     ImGui::PopStyleColor();
@@ -325,15 +327,15 @@ namespace lfs::vis::gui {
     }
 
     void FileBrowser::setCurrentPath(const std::filesystem::path& path) {
-        current_path_ = path.string();
+        current_path_ = lfs::core::path_to_utf8(path);
     }
 
     void FileBrowser::setSelectedPath(const std::filesystem::path& path) {
-        selected_file_ = path.string();
+        selected_file_ = lfs::core::path_to_utf8(path);
         if (std::filesystem::is_directory(path)) {
-            current_path_ = path.string();
+            current_path_ = lfs::core::path_to_utf8(path);
         } else {
-            current_path_ = path.parent_path().string();
+            current_path_ = lfs::core::path_to_utf8(path.parent_path());
         }
     }
 } // namespace lfs::vis::gui

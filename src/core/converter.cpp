@@ -4,6 +4,7 @@
 
 #include "core/converter.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
@@ -91,6 +92,7 @@ namespace lfs::core {
 
             const auto ext = getFormatExtension(format);
             const auto cwd = std::filesystem::current_path();
+            // Use proper path operations for Unicode handling
             const auto converted_name = input.stem().string() + "_converted" + ext;
 
             if (output_template.empty()) {
@@ -104,7 +106,8 @@ namespace lfs::core {
 
             auto out = output_template;
             if (out.extension().empty()) {
-                out = std::filesystem::path(out.string() + ext);
+                // Use path concatenation for proper Unicode handling
+                out += ext;
             }
             return out.is_absolute() ? out : cwd / out;
         }
@@ -114,7 +117,7 @@ namespace lfs::core {
             const std::filesystem::path& output,
             const param::ConvertParameters& params) {
 
-            std::println("Converting: {} -> {}", input.string(), output.string());
+            std::println("Converting: {} -> {}", lfs::core::path_to_utf8(input), lfs::core::path_to_utf8(output));
 
             const auto loader = lfs::io::Loader::create();
             auto load_result = loader->load(input);
@@ -126,7 +129,7 @@ namespace lfs::core {
 
             auto* splat_ptr = std::get_if<std::shared_ptr<SplatData>>(&load_result->data);
             if (!splat_ptr || !*splat_ptr) {
-                LOG_ERROR("Not a splat file: {}", input.string());
+                LOG_ERROR("Not a splat file: {}", lfs::core::path_to_utf8(input));
                 std::println(stderr, "  Error: not a splat file");
                 return false;
             }
@@ -170,7 +173,7 @@ namespace lfs::core {
     int run_converter(const param::ConvertParameters& params) {
         const auto files = getInputFiles(params.input_path);
         if (files.empty()) {
-            LOG_ERROR("No convertible files in: {}", params.input_path.string());
+            LOG_ERROR("No convertible files in: {}", lfs::core::path_to_utf8(params.input_path));
             std::println(stderr, "Error: No .ply, .sog, or .resume files found");
             return 1;
         }

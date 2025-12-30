@@ -6,6 +6,7 @@
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "gui/dpi_scale.hpp"
 #include "gui/localization_manager.hpp"
 #include "gui/string_keys.hpp"
@@ -278,7 +279,7 @@ namespace lfs::vis::gui {
         LOG_INFO("Opened image {}/{}: {}",
                  current_index_ + 1,
                  image_paths_.size(),
-                 image_paths_[current_index_].filename().string());
+                 lfs::core::path_to_utf8(image_paths_[current_index_].filename()));
     }
 
     void ImagePreview::open(const std::filesystem::path& image_path) {
@@ -334,7 +335,7 @@ namespace lfs::vis::gui {
     std::unique_ptr<ImageData> ImagePreview::loadImageData(const std::filesystem::path& path) {
         LOG_TIMER("LoadImageData");
 
-        LOG_TRACE("Loading image data from: {}", path.string());
+        LOG_TRACE("Loading image data from: {}", lfs::core::path_to_utf8(path));
 
         // Load image (max_width = -1 disables downscaling for preview)
         auto [data, width, height, channels] = [&]() {
@@ -352,17 +353,17 @@ namespace lfs::vis::gui {
         {
             LOG_TIMER("Image validation");
             if (!image_data->valid()) {
-                LOG_ERROR("Failed to load image data from: {}", path.string());
+                LOG_ERROR("Failed to load image data from: {}", lfs::core::path_to_utf8(path));
                 throw std::runtime_error("Failed to load image data");
             }
 
             if (width <= 0 || height <= 0) {
-                LOG_ERROR("Invalid image dimensions: {}x{} for: {}", width, height, path.string());
+                LOG_ERROR("Invalid image dimensions: {}x{} for: {}", width, height, lfs::core::path_to_utf8(path));
                 throw std::runtime_error(std::format("Invalid image dimensions: {}x{}", width, height));
             }
 
             if (channels < 1 || channels > 4) {
-                LOG_ERROR("Invalid number of channels: {} for: {}", channels, path.string());
+                LOG_ERROR("Invalid number of channels: {} for: {}", channels, lfs::core::path_to_utf8(path));
                 throw std::runtime_error(std::format("Invalid number of channels: {}", channels));
             }
         }
@@ -419,7 +420,7 @@ namespace lfs::vis::gui {
             LOG_TIMER("GL texture generation");
             // Generate texture
             if (!texture->texture.generate()) {
-                LOG_ERROR("Failed to generate texture ID for: {}", path.string());
+                LOG_ERROR("Failed to generate texture ID for: {}", lfs::core::path_to_utf8(path));
                 throw std::runtime_error("Failed to generate texture ID");
             }
         }
@@ -456,7 +457,7 @@ namespace lfs::vis::gui {
             internal_format = GL_RGBA8;
             break;
         default:
-            LOG_ERROR("Unsupported channel count: {} for: {}", channels, path.string());
+            LOG_ERROR("Unsupported channel count: {} for: {}", channels, lfs::core::path_to_utf8(path));
             throw std::runtime_error(std::format("Unsupported channel count: {}", channels));
         }
 
@@ -481,7 +482,7 @@ namespace lfs::vis::gui {
                 case GL_OUT_OF_MEMORY: error_str = "GL_OUT_OF_MEMORY"; break;
                 default: error_str = std::format("0x{:X}", error); break;
                 }
-                LOG_ERROR("OpenGL error creating texture: {} for: {}", error_str, path.string());
+                LOG_ERROR("OpenGL error creating texture: {} for: {}", error_str, lfs::core::path_to_utf8(path));
                 throw std::runtime_error(std::format("OpenGL error: {}", error_str));
             }
 
@@ -493,7 +494,7 @@ namespace lfs::vis::gui {
         }
 
         // State guard will restore texture binding automatically
-        LOG_DEBUG("Created texture {}x{} for: {}", width, height, path.filename().string());
+        LOG_DEBUG("Created texture {}x{} for: {}", width, height, lfs::core::path_to_utf8(path.filename()));
         return texture;
     }
 
@@ -502,7 +503,7 @@ namespace lfs::vis::gui {
             is_loading_ = true;
             load_error_.clear();
 
-            LOG_DEBUG("Loading image: {}", path.string());
+            LOG_DEBUG("Loading image: {}", lfs::core::path_to_utf8(path));
 
             // Load image data with RAII
             auto image_data = loadImageData(path);
@@ -517,7 +518,7 @@ namespace lfs::vis::gui {
         } catch (const std::exception& e) {
             load_error_ = e.what();
             is_loading_ = false;
-            LOG_ERROR("Error loading image '{}': {}", path.string(), e.what());
+            LOG_ERROR("Error loading image '{}': {}", lfs::core::path_to_utf8(path), e.what());
             return false;
         }
     }
@@ -771,7 +772,7 @@ namespace lfs::vis::gui {
                                       ? "Image Preview###ImagePreview"
                                       : std::format("Image Preview - {}/{} - {}###ImagePreview",
                                                     current_index_ + 1, image_paths_.size(),
-                                                    image_paths_[current_index_].filename().string());
+                                                    lfs::core::path_to_utf8(image_paths_[current_index_].filename()));
 
         if (focus_on_next_frame_) {
             ImGui::SetNextWindowFocus();
@@ -883,7 +884,7 @@ namespace lfs::vis::gui {
             ImGui::BeginChild("##ImageInfoPanel", ImVec2(INFO_PANEL_WIDTH, panel_height), true);
 
             const auto& path = image_paths_[current_index_];
-            const std::string filename = path.filename().string();
+            const std::string filename = lfs::core::path_to_utf8(path.filename());
             std::string ext = path.extension().string();
             if (!ext.empty() && ext[0] == '.')
                 ext = ext.substr(1);
@@ -911,7 +912,7 @@ namespace lfs::vis::gui {
                 std::strftime(time_buf, sizeof(time_buf), "%Y-%m-%d %H:%M", std::localtime(&time_t));
                 ImGui::Text(LOC(lichtfeld::Strings::ImagePreview::MODIFIED), time_buf);
             }
-            ImGui::Text(LOC(lichtfeld::Strings::ImagePreview::PATH), path.parent_path().string().c_str());
+            ImGui::Text(LOC(lichtfeld::Strings::ImagePreview::PATH), lfs::core::path_to_utf8(path.parent_path()).c_str());
 
             ImGui::Spacing();
             ImGui::Spacing();
@@ -1009,7 +1010,7 @@ namespace lfs::vis::gui {
                 ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", LOC(lichtfeld::Strings::ImagePreview::MASK_SECTION));
                 ImGui::Separator();
                 ImGui::Text(LOC(lichtfeld::Strings::ImagePreview::OVERLAY_STATUS), show_overlay_ ? LOC(lichtfeld::Strings::ImagePreview::VISIBLE) : LOC(lichtfeld::Strings::ImagePreview::HIDDEN));
-                ImGui::Text(LOC(lichtfeld::Strings::ImagePreview::FILE_LABEL), overlay_paths_[current_index_].filename().string().c_str());
+                ImGui::Text(LOC(lichtfeld::Strings::ImagePreview::FILE_LABEL), lfs::core::path_to_utf8(overlay_paths_[current_index_].filename()).c_str());
             }
 
             ImGui::EndChild();

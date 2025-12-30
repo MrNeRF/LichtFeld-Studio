@@ -5,6 +5,7 @@
 #include "io/loaders/blender_loader.hpp"
 #include "core/camera.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "formats/transforms.hpp"
 #include "training/dataset.hpp"
@@ -25,7 +26,7 @@ namespace lfs::io {
 
         // Validate path exists
         if (!std::filesystem::exists(path)) {
-            std::string error_msg = std::format("Path does not exist: {}", path.string());
+            std::string error_msg = std::format("Path does not exist: {}", lfs::core::path_to_utf8(path));
             LOG_ERROR("{}", error_msg);
             throw std::runtime_error(error_msg);
         }
@@ -47,26 +48,26 @@ namespace lfs::io {
                 transforms_file = path / "transforms.json";
                 LOG_DEBUG("Found transforms.json");
             } else {
-                LOG_ERROR("No transforms file found in directory: {}", path.string());
+                LOG_ERROR("No transforms file found in directory: {}", lfs::core::path_to_utf8(path));
                 throw std::runtime_error(
                     "No transforms file found (expected 'transforms.json' or 'transforms_train.json')");
             }
         } else if (path.extension() == ".json") {
             // Direct path to transforms file
             transforms_file = path;
-            LOG_DEBUG("Using direct transforms file: {}", transforms_file.string());
+            LOG_DEBUG("Using direct transforms file: {}", lfs::core::path_to_utf8(transforms_file));
         } else {
-            LOG_ERROR("Path must be a directory or a JSON file: {}", path.string());
+            LOG_ERROR("Path must be a directory or a JSON file: {}", lfs::core::path_to_utf8(path));
             throw std::runtime_error("Path must be a directory or a JSON file");
         }
 
         // Validation only mode
         if (options.validate_only) {
-            LOG_DEBUG("Validation only mode for Blender/NeRF: {}", transforms_file.string());
+            LOG_DEBUG("Validation only mode for Blender/NeRF: {}", lfs::core::path_to_utf8(transforms_file));
             // Check if the transforms file is valid JSON
             std::ifstream file(transforms_file);
             if (!file) {
-                LOG_ERROR("Cannot open transforms file: {}", transforms_file.string());
+                LOG_ERROR("Cannot open transforms file: {}", lfs::core::path_to_utf8(transforms_file));
                 throw std::runtime_error("Cannot open transforms file");
             }
 
@@ -108,7 +109,7 @@ namespace lfs::io {
         }
 
         try {
-            LOG_INFO("Loading Blender/NeRF dataset from: {}", transforms_file.string());
+            LOG_INFO("Loading Blender/NeRF dataset from: {}", lfs::core::path_to_utf8(transforms_file));
 
             // Read transforms and create cameras
             auto [camera_infos, scene_center, splits] = read_transforms_cameras_and_images(transforms_file);
@@ -165,7 +166,7 @@ namespace lfs::io {
             std::shared_ptr<PointCloud> point_cloud;
             std::vector<std::string> warnings;
 
-            LOG_DEBUG("Looking for point cloud at: {}", pointcloud_path.string());
+            LOG_DEBUG("Looking for point cloud at: {}", lfs::core::path_to_utf8(pointcloud_path));
 
             if (std::filesystem::exists(pointcloud_path)) {
                 LOG_DEBUG("Loading point cloud from PLY file");
@@ -173,7 +174,7 @@ namespace lfs::io {
                 point_cloud = std::make_shared<PointCloud>(std::move(loaded_pc));
                 LOG_INFO("Loaded point cloud with {} points from pointcloud.ply", point_cloud->size());
             } else {
-                LOG_WARN("No pointcloud.ply found in dataset directory: {}", transforms_file.parent_path().string());
+                LOG_WARN("No pointcloud.ply found in dataset directory: {}", lfs::core::path_to_utf8(transforms_file.parent_path()));
                 LOG_DEBUG("Generating random point cloud for initialization");
                 auto random_pc = generate_random_point_cloud();
                 point_cloud = std::make_shared<PointCloud>(std::move(random_pc));

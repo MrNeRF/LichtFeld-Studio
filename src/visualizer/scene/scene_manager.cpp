@@ -9,6 +9,7 @@
 #include "command/commands/mirror_command.hpp"
 #include "core/logger.hpp"
 #include "core/parameter_manager.hpp"
+#include "core/path_utils.hpp"
 #include "core/services.hpp"
 #include "core/splat_data_export.hpp"
 #include "core/splat_data_transform.hpp"
@@ -172,7 +173,7 @@ namespace lfs::vis {
         LOG_TIMER("SceneManager::loadSplatFile");
 
         try {
-            LOG_INFO("Loading splat file: {}", path.string());
+            LOG_INFO("Loading splat file: {}", lfs::core::path_to_utf8(path));
 
             // Clear existing scene
             clear();
@@ -195,12 +196,12 @@ namespace lfs::vis {
 
             auto* splat_data = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&load_result->data);
             if (!splat_data || !*splat_data) {
-                LOG_ERROR("Expected splat file but got different data type from: {}", path.string());
+                LOG_ERROR("Expected splat file but got different data type from: {}", lfs::core::path_to_utf8(path));
                 throw std::runtime_error("Expected splat file but got different data type");
             }
 
             // Add to scene
-            std::string name = path.stem().string();
+            std::string name = lfs::core::path_to_utf8(path.stem());
             size_t gaussian_count = (*splat_data)->size();
             LOG_DEBUG("Adding '{}' to scene with {} gaussians", name, gaussian_count);
 
@@ -280,7 +281,7 @@ namespace lfs::vis {
             LOG_INFO("Loaded '{}' with {} gaussians", name, gaussian_count);
 
         } catch (const std::exception& e) {
-            LOG_ERROR("Failed to load splat file: {} (path: {})", e.what(), path.string());
+            LOG_ERROR("Failed to load splat file: {} (path: {})", e.what(), lfs::core::path_to_utf8(path));
             throw;
         }
     }
@@ -292,7 +293,7 @@ namespace lfs::vis {
         try {
             if (content_type_ != ContentType::SplatFiles) {
                 loadSplatFile(path);
-                return path.stem().string();
+                return lfs::core::path_to_utf8(path.stem());
             }
 
             auto loader = lfs::io::Loader::create();
@@ -313,7 +314,7 @@ namespace lfs::vis {
             }
 
             // Generate unique name
-            const std::string base_name = name_hint.empty() ? path.stem().string() : name_hint;
+            const std::string base_name = name_hint.empty() ? lfs::core::path_to_utf8(path.stem()) : name_hint;
             std::string name = base_name;
             int counter = 1;
             while (scene_.getNode(name) != nullptr) {
@@ -371,7 +372,7 @@ namespace lfs::vis {
             return name;
 
         } catch (const std::exception& e) {
-            LOG_ERROR("Failed to add splat file: {} (path: {})", e.what(), path.string());
+            LOG_ERROR("Failed to add splat file: {} (path: {})", e.what(), lfs::core::path_to_utf8(path));
             throw;
         }
     }
@@ -1010,7 +1011,7 @@ namespace lfs::vis {
         LOG_TIMER("SceneManager::loadDataset");
 
         try {
-            LOG_INFO("Loading dataset: {}", path.string());
+            LOG_INFO("Loading dataset: {}", lfs::core::path_to_utf8(path));
 
             // Setup training parameters
             auto dataset_params = params;
@@ -1114,7 +1115,7 @@ namespace lfs::vis {
             }
 
         } catch (const std::exception& e) {
-            LOG_ERROR("Failed to load dataset: {} (path: {})", e.what(), path.string());
+            LOG_ERROR("Failed to load dataset: {} (path: {})", e.what(), lfs::core::path_to_utf8(path));
 
             // Emit failure event instead of throwing
             state::DatasetLoadCompleted{
@@ -1158,7 +1159,7 @@ namespace lfs::vis {
             }
             if (!std::filesystem::exists(checkpoint_params.dataset.data_path)) {
                 throw std::runtime_error("Dataset path does not exist: " +
-                                         checkpoint_params.dataset.data_path.string());
+                                         lfs::core::path_to_utf8(checkpoint_params.dataset.data_path));
             }
 
             // Validate dataset structure before clearing

@@ -6,6 +6,7 @@
 #include "core/camera.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "formats/transforms.hpp"
 #include "io/error.hpp"
@@ -33,7 +34,7 @@ namespace lfs::io {
     // Priority: exact match, stem+ext (e.g., img.png), full+ext (e.g., img.jpg.png)
     static std::filesystem::path find_mask_path(const std::filesystem::path& base_path,
                                                 const std::string& image_name) {
-        const std::filesystem::path img_path(image_name);
+        const std::filesystem::path img_path = lfs::core::utf8_to_path(image_name);
         const std::filesystem::path stem_path = img_path.parent_path() / img_path.stem();
 
         for (const auto& folder : MASK_FOLDERS) {
@@ -41,7 +42,7 @@ namespace lfs::io {
             if (!std::filesystem::exists(mask_dir))
                 continue;
 
-            if (const auto exact = mask_dir / image_name; std::filesystem::exists(exact))
+            if (const auto exact = mask_dir / img_path; std::filesystem::exists(exact))
                 return exact;
 
             for (const auto& ext : MASK_EXTENSIONS) {
@@ -52,7 +53,7 @@ namespace lfs::io {
             }
 
             for (const auto& ext : MASK_EXTENSIONS) {
-                auto path = mask_dir / image_name;
+                auto path = mask_dir / img_path;
                 path += ext;
                 if (std::filesystem::exists(path))
                     return path;

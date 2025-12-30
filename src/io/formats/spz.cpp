@@ -4,6 +4,7 @@
 
 #include "spz.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "load-spz.h"
 #include <chrono>
@@ -134,15 +135,15 @@ namespace lfs::io {
     std::expected<SplatData, std::string> load_spz(const std::filesystem::path& filepath) {
         auto start = std::chrono::high_resolution_clock::now();
 
-        LOG_INFO("Loading SPZ file: {}", filepath.string());
+        LOG_INFO("Loading SPZ file: {}", lfs::core::path_to_utf8(filepath));
 
         // Load using Niantic's library (outputs RDF coordinate system like PLY)
         spz::UnpackOptions options;
         options.to = spz::CoordinateSystem::RDF;
-        auto cloud = spz::loadSpz(filepath.string(), options);
+        auto cloud = spz::loadSpz(lfs::core::path_to_utf8(filepath), options);
 
         if (cloud.numPoints == 0) {
-            return std::unexpected(std::format("Failed to load SPZ file: {}", filepath.string()));
+            return std::unexpected(std::format("Failed to load SPZ file: {}", lfs::core::path_to_utf8(filepath)));
         }
 
         LOG_DEBUG("SPZ loaded: {} points, SH degree {}", cloud.numPoints, cloud.shDegree);
@@ -160,7 +161,7 @@ namespace lfs::io {
     Result<void> save_spz(const SplatData& splat_data, const SpzSaveOptions& options) {
         auto start = std::chrono::high_resolution_clock::now();
 
-        LOG_INFO("Saving SPZ file: {}", options.output_path.string());
+        LOG_INFO("Saving SPZ file: {}", lfs::core::path_to_utf8(options.output_path));
 
         auto cloud = convert_to_spz(splat_data);
 
@@ -168,7 +169,22 @@ namespace lfs::io {
         spz::PackOptions pack_options;
         pack_options.from = spz::CoordinateSystem::RDF;
 
-        if (!spz::saveSpz(cloud, pack_options, options.output_path.string())) {
+        // Pack to memory first, then write to file ourselves to handle Unicode paths correctly
+        std::vector<uint8_t> data;
+        if (!spz::saveSpz(cloud, pack_options, &data)) {
+            return make_error(ErrorCode::WRITE_FAILURE,
+                              "Failed to pack SPZ data", options.output_path);
+        }
+
+        // Write file using std::ofstream with Unicode path handling
+        std::ofstream out;
+        if (!lfs::core::open_file_for_write(options.output_path, std::ios::binary | std::ios::out, out)) {
+            return make_error(ErrorCode::WRITE_FAILURE,
+                              "Failed to open SPZ file for writing", options.output_path);
+        }
+        out.write(reinterpret_cast<const char*>(data.data()), data.size());
+        out.close();
+        if (!out.good()) {
             return make_error(ErrorCode::WRITE_FAILURE,
                               "Failed to write SPZ file", options.output_path);
         }

@@ -4,6 +4,7 @@
 
 #include "text_renderer.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "gl_state_guard.hpp"
 #include <format>
 #include <ft2build.h>
@@ -29,9 +30,9 @@ namespace lfs::rendering {
         }
     }
 
-    Result<void> TextRenderer::LoadFont(const std::string& fontPath, unsigned int fontSize) {
+    Result<void> TextRenderer::LoadFont(const std::filesystem::path& fontPath, unsigned int fontSize) {
         LOG_TIMER("TextRenderer::LoadFont");
-        LOG_INFO("Loading font: {} at size {}", fontPath, fontSize);
+        LOG_INFO("Loading font: {} at size {}", fontPath.string(), fontSize);
 
         // Clear existing characters
         for (auto& pair : characters) {
@@ -54,10 +55,12 @@ namespace lfs::rendering {
             }
         } ft_guard{ft};
 
+        // Convert path to UTF-8 for FreeType which uses fopen internally
+        const std::string fontPath_utf8 = lfs::core::path_to_utf8(fontPath);
         FT_Face face;
-        if (FT_New_Face(ft, fontPath.c_str(), 0, &face)) {
-            LOG_ERROR("Failed to load font from: {}", fontPath);
-            return std::unexpected(std::format("Failed to load font from: {}", fontPath));
+        if (FT_New_Face(ft, fontPath_utf8.c_str(), 0, &face)) {
+            LOG_ERROR("Failed to load font from: {}", fontPath.string());
+            return std::unexpected(std::format("Failed to load font from: {}", fontPath.string()));
         }
 
         // RAII wrapper for FreeType face

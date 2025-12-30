@@ -5,6 +5,7 @@
 #include "colmap.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "io/filesystem_utils.hpp"
 #include <algorithm>
 #include <cmath>
@@ -159,11 +160,11 @@ namespace lfs::io {
     // -----------------------------------------------------------------------------
     static std::unique_ptr<std::vector<char>>
     read_binary(const std::filesystem::path& p) {
-        LOG_TRACE("Reading binary file: {}", p.string());
+        LOG_TRACE("Reading binary file: {}", lfs::core::path_to_utf8(p));
         std::ifstream f(p, std::ios::binary | std::ios::ate);
         if (!f) {
-            LOG_ERROR("Failed to open binary file: {}", p.string());
-            throw std::runtime_error("Failed to open " + p.string());
+            LOG_ERROR("Failed to open binary file: {}", lfs::core::path_to_utf8(p));
+            throw std::runtime_error("Failed to open " + lfs::core::path_to_utf8(p));
         }
 
         auto sz = static_cast<std::streamsize>(f.tellg());
@@ -172,10 +173,10 @@ namespace lfs::io {
         f.seekg(0, std::ios::beg);
         f.read(buf->data(), sz);
         if (!f) {
-            LOG_ERROR("Short read on binary file: {}", p.string());
-            throw std::runtime_error("Short read on " + p.string());
+            LOG_ERROR("Short read on binary file: {}", lfs::core::path_to_utf8(p));
+            throw std::runtime_error("Short read on " + lfs::core::path_to_utf8(p));
         }
-        LOG_TRACE("Read {} bytes from {}", sz, p.string());
+        LOG_TRACE("Read {} bytes from {}", sz, lfs::core::path_to_utf8(p));
         return buf;
     }
 
@@ -413,11 +414,11 @@ namespace lfs::io {
     //  Text-file helpers
     // -----------------------------------------------------------------------------
     std::vector<std::string> read_text_file(const std::filesystem::path& file_path) {
-        LOG_TRACE("Reading text file: {}", file_path.string());
+        LOG_TRACE("Reading text file: {}", lfs::core::path_to_utf8(file_path));
         std::ifstream file(file_path);
         if (!file.is_open()) {
-            LOG_ERROR("Failed to open text file: {}", file_path.string());
-            throw std::runtime_error("Failed to open " + file_path.string());
+            LOG_ERROR("Failed to open text file: {}", lfs::core::path_to_utf8(file_path));
+            throw std::runtime_error("Failed to open " + lfs::core::path_to_utf8(file_path));
         }
 
         std::vector<std::string> lines;
@@ -434,7 +435,7 @@ namespace lfs::io {
         }
 
         if (lines.empty()) {
-            LOG_ERROR("File is empty: {}", file_path.string());
+            LOG_ERROR("File is empty: {}", lfs::core::path_to_utf8(file_path));
             throw std::runtime_error("File is empty");
         }
 
@@ -603,7 +604,7 @@ namespace lfs::io {
     // Priority: exact match, stem+ext (e.g., img.png), full+ext (e.g., img.jpg.png)
     static std::filesystem::path find_mask_path(const std::filesystem::path& base_path,
                                                 const std::string& image_name) {
-        const std::filesystem::path img_path(image_name);
+        const std::filesystem::path img_path = lfs::core::utf8_to_path(image_name);
         const std::filesystem::path stem_path = img_path.parent_path() / img_path.stem();
 
         for (const auto& folder : MASK_FOLDERS) {
@@ -611,7 +612,7 @@ namespace lfs::io {
             if (!std::filesystem::exists(mask_dir))
                 continue;
 
-            if (const auto exact = mask_dir / image_name; std::filesystem::exists(exact))
+            if (const auto exact = mask_dir / img_path; std::filesystem::exists(exact))
                 return exact;
 
             for (const auto& ext : MASK_EXTENSIONS) {
@@ -622,7 +623,7 @@ namespace lfs::io {
             }
 
             for (const auto& ext : MASK_EXTENSIONS) {
-                auto path = mask_dir / image_name;
+                auto path = mask_dir / img_path;
                 path += ext;
                 if (std::filesystem::exists(path))
                     return path;
@@ -826,7 +827,7 @@ namespace lfs::io {
                 if (img_w != mask_w || img_h != mask_h) {
                     return make_error(ErrorCode::MASK_SIZE_MISMATCH,
                                       std::format("Mask '{}' is {}x{} but image '{}' is {}x{}",
-                                                  mask_path.filename().string(), mask_w, mask_h,
+                                                  lfs::core::path_to_utf8(mask_path.filename()), mask_w, mask_h,
                                                   img.name, img_w, img_h),
                                       mask_path);
                 }
@@ -869,7 +870,7 @@ namespace lfs::io {
         auto found = find_file_in_paths(search_paths, filename);
 
         if (!found.empty()) {
-            LOG_TRACE("Found sparse file at: {}", found.string());
+            LOG_TRACE("Found sparse file at: {}", lfs::core::path_to_utf8(found));
             return found;
         }
 

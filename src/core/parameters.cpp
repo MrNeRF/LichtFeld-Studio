@@ -5,6 +5,7 @@
 #include "core/parameters.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include <chrono>
 #include <ctime>
 #include <expected>
@@ -33,12 +34,12 @@ namespace lfs::core {
              */
             std::expected<nlohmann::json, std::string> read_json_file(const std::filesystem::path& path) {
                 if (!std::filesystem::exists(path)) {
-                    return std::unexpected(std::format("Configuration file does not exist: {}", path.string()));
+                    return std::unexpected(std::format("Configuration file does not exist: {}", path_to_utf8(path)));
                 }
 
                 std::ifstream file(path);
                 if (!file.is_open()) {
-                    return std::unexpected(std::format("Could not open configuration file: {}", path.string()));
+                    return std::unexpected(std::format("Could not open configuration file: {}", path_to_utf8(path)));
                 }
 
                 try {
@@ -46,7 +47,7 @@ namespace lfs::core {
                     buffer << file.rdbuf();
                     return nlohmann::json::parse(buffer.str());
                 } catch (const nlohmann::json::parse_error& e) {
-                    return std::unexpected(std::format("JSON parsing error in {}: {}", path.string(), e.what()));
+                    return std::unexpected(std::format("JSON parsing error in {}: {}", path_to_utf8(path), e.what()));
                 }
             }
 
@@ -511,15 +512,15 @@ namespace lfs::core {
                 const std::filesystem::path filepath = (output_path.extension() == ".json")
                                                            ? output_path
                                                            : output_path / "training_config.json";
-                std::ofstream file(filepath);
-                if (!file.is_open()) {
-                    return std::unexpected(std::format("Could not open file for writing: {}", filepath.string()));
+                std::ofstream file;
+                if (!open_file_for_write(filepath, file)) {
+                    return std::unexpected(std::format("Could not open file for writing: {}", path_to_utf8(filepath)));
                 }
 
                 file << json.dump(4);
                 file.close();
 
-                LOG_INFO("Saved training config to: {}", filepath.string());
+                LOG_INFO("Saved training config to: {}", path_to_utf8(filepath));
                 return {};
 
             } catch (const std::exception& e) {
@@ -567,8 +568,8 @@ namespace lfs::core {
         nlohmann::json DatasetConfig::to_json() const {
             nlohmann::json json;
 
-            json["data_path"] = data_path.string();
-            json["output_folder"] = output_path.string();
+            json["data_path"] = path_to_utf8(data_path);
+            json["output_folder"] = path_to_utf8(output_path);
             json["images"] = images;
             json["resize_factor"] = resize_factor;
             json["test_every"] = test_every;
@@ -583,12 +584,13 @@ namespace lfs::core {
         DatasetConfig DatasetConfig::from_json(const nlohmann::json& j) {
             DatasetConfig dataset;
 
-            dataset.data_path = j["data_path"].get<std::string>();
+            // Use utf8_to_path for proper Unicode handling since JSON is UTF-8 encoded
+            dataset.data_path = utf8_to_path(j["data_path"].get<std::string>());
             dataset.images = j["images"].get<std::string>();
             dataset.resize_factor = j["resize_factor"].get<int>();
             dataset.max_width = j["max_width"].get<int>();
             dataset.test_every = j["test_every"].get<int>();
-            dataset.output_path = j["output_folder"].get<std::string>();
+            dataset.output_path = utf8_to_path(j["output_folder"].get<std::string>());
 
             if (j.contains("loading_params")) {
                 dataset.loading_params = LoadingParams::from_json(j["loading_params"]);
@@ -629,8 +631,8 @@ namespace lfs::core {
 
             // Fallback: Search up from executable directory
 #ifdef _WIN32
-            char exe_buf[MAX_PATH];
-            GetModuleFileNameA(nullptr, exe_buf, MAX_PATH);
+            wchar_t exe_buf[MAX_PATH];
+            GetModuleFileNameW(nullptr, exe_buf, MAX_PATH);
             auto search_dir = std::filesystem::path(exe_buf).parent_path();
 #else
             auto search_dir = std::filesystem::canonical("/proc/self/exe").parent_path();

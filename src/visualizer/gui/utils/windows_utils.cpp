@@ -4,6 +4,7 @@
 
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 
 #include "gui/utils/windows_utils.hpp"
 
@@ -159,6 +160,23 @@ namespace lfs::vis::gui {
 #ifndef _WIN32
         constexpr size_t DIALOG_BUFFER_SIZE = 4096;
 
+        // Escape a string for safe use in shell single-quoted arguments
+        // Single quotes in the string are handled by ending the quote, adding escaped quote, resuming quote
+        // Example: "it's" becomes 'it'\''s'
+        std::string shell_escape(const std::string& str) {
+            std::string result = "'";
+            for (char c : str) {
+                if (c == '\'') {
+                    // End single quote, add escaped single quote, start new single quote
+                    result += "'\\''";
+                } else {
+                    result += c;
+                }
+            }
+            result += "'";
+            return result;
+        }
+
         // Execute dialog command, trying fallback if primary fails
         std::string runDialogCommand(const std::string& primary_cmd, const std::string& fallback_cmd) {
             FILE* pipe = popen(primary_cmd.c_str(), "r");
@@ -200,10 +218,11 @@ namespace lfs::vis::gui {
         }
         return {};
 #else
+        const std::string escaped_name = shell_escape(defaultName + ".json");
         const std::string primary = "zenity --file-selection --save --confirm-overwrite "
                                     "--file-filter='JSON files|*.json' "
-                                    "--filename='" +
-                                    defaultName + ".json' 2>/dev/null";
+                                    "--filename=" +
+                                    escaped_name + " 2>/dev/null";
         const std::string fallback = "kdialog --getsavefilename . 'JSON files (*.json)' 2>/dev/null";
 
         const std::string result = runDialogCommand(primary, fallback);
@@ -256,10 +275,11 @@ namespace lfs::vis::gui {
         }
         return {};
 #else
+        const std::string escaped_name = shell_escape(defaultName + ".ply");
         const std::string primary = "zenity --file-selection --save --confirm-overwrite "
                                     "--file-filter='PLY files|*.ply' "
-                                    "--filename='" +
-                                    defaultName + ".ply' 2>/dev/null";
+                                    "--filename=" +
+                                    escaped_name + " 2>/dev/null";
         const std::string fallback = "kdialog --getsavefilename . 'PLY files (*.ply)' 2>/dev/null";
 
         const std::string result = runDialogCommand(primary, fallback);
@@ -290,10 +310,11 @@ namespace lfs::vis::gui {
         }
         return {};
 #else
+        const std::string escaped_name = shell_escape(defaultName + ".sog");
         const std::string primary = "zenity --file-selection --save --confirm-overwrite "
                                     "--file-filter='SOG files (SuperSplat)|*.sog' "
-                                    "--filename='" +
-                                    defaultName + ".sog' 2>/dev/null";
+                                    "--filename=" +
+                                    escaped_name + " 2>/dev/null";
         const std::string fallback = "kdialog --getsavefilename . 'SOG files (*.sog)' 2>/dev/null";
 
         const std::string result = runDialogCommand(primary, fallback);
@@ -324,10 +345,11 @@ namespace lfs::vis::gui {
         }
         return {};
 #else
+        const std::string escaped_name = shell_escape(defaultName + ".spz");
         const std::string primary = "zenity --file-selection --save --confirm-overwrite "
                                     "--file-filter='SPZ files (Niantic)|*.spz' "
-                                    "--filename='" +
-                                    defaultName + ".spz' 2>/dev/null";
+                                    "--filename=" +
+                                    escaped_name + " 2>/dev/null";
         const std::string fallback = "kdialog --getsavefilename . 'SPZ files (*.spz)' 2>/dev/null";
 
         const std::string result = runDialogCommand(primary, fallback);
@@ -358,10 +380,11 @@ namespace lfs::vis::gui {
         }
         return {};
 #else
+        const std::string escaped_name = shell_escape(defaultName + ".html");
         const std::string primary = "zenity --file-selection --save --confirm-overwrite "
                                     "--file-filter='HTML files|*.html' "
-                                    "--filename='" +
-                                    defaultName + ".html' 2>/dev/null";
+                                    "--filename=" +
+                                    escaped_name + " 2>/dev/null";
         const std::string fallback = "kdialog --getsavefilename . 'HTML files (*.html)' 2>/dev/null";
 
         const std::string result = runDialogCommand(primary, fallback);
@@ -435,15 +458,22 @@ namespace lfs::vis::gui {
                                      std::filesystem::exists(abs_start_dir) &&
                                      std::filesystem::is_directory(abs_start_dir);
 
+        // Use path_to_utf8 for proper Unicode handling on Linux
+        const std::string start_dir_utf8 = has_valid_start
+                                               ? lfs::core::path_to_utf8(abs_start_dir) + "/"
+                                               : "";
         const std::string start_arg = has_valid_start
-                                          ? " --filename='" + abs_start_dir.string() + "/'"
+                                          ? " --filename=" + shell_escape(start_dir_utf8)
                                           : "";
 
+        const std::string escaped_title = shell_escape(title);
         const std::string primary = "zenity --file-selection --directory "
-                                    "--title='" +
-                                    title + "'" + start_arg + " 2>/dev/null";
-        const std::string fallback = "kdialog --getexistingdirectory '" +
-                                     (has_valid_start ? abs_start_dir.string() : ".") + "' 2>/dev/null";
+                                    "--title=" +
+                                    escaped_title + start_arg + " 2>/dev/null";
+        const std::string fallback_dir = has_valid_start
+                                             ? shell_escape(lfs::core::path_to_utf8(abs_start_dir))
+                                             : "'.'";
+        const std::string fallback = "kdialog --getexistingdirectory " + fallback_dir + " 2>/dev/null";
 
         const std::string result = runDialogCommand(primary, fallback);
         return result.empty() ? std::filesystem::path{} : std::filesystem::path(result);

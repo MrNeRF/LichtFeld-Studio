@@ -5,6 +5,7 @@
 #include "transforms.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "formats/colmap.hpp"
 #include "tinyply.hpp"
@@ -88,13 +89,17 @@ namespace lfs::io {
     }
 
     std::filesystem::path GetTransformImagePath(const std::filesystem::path& dir_path, const nlohmann::json& frame) {
-        auto image_path = dir_path / frame["file_path"];
-        auto images_image_path = dir_path / "images" / frame["file_path"];
-        auto image_path_png = std::filesystem::path(image_path.string() + ".png");
+        // Use utf8_to_path for proper Unicode handling since JSON is UTF-8 encoded
+        const auto file_path = lfs::core::utf8_to_path(frame["file_path"].get<std::string>());
+        auto image_path = dir_path / file_path;
+        auto images_image_path = dir_path / "images" / file_path;
+        // Use path concatenation for proper Unicode handling
+        auto image_path_png = image_path;
+        image_path_png += ".png";
         if (std::filesystem::exists(image_path_png)) {
             // blender data set has not extension, must assumes png
             image_path = image_path_png;
-            LOG_TRACE("Using PNG extension for image: {}", image_path.string());
+            LOG_TRACE("Using PNG extension for image: {}", lfs::core::path_to_utf8(image_path));
         }
         if (std::filesystem::exists(images_image_path) && std::filesystem::is_regular_file(images_image_path)) {
             image_path = images_image_path;
@@ -114,17 +119,17 @@ namespace lfs::io {
             } else if (std::filesystem::is_regular_file(transPath / "transforms.json")) {
                 transformsFile = transPath / "transforms.json";
             } else {
-                LOG_ERROR("Could not find transforms file in: {}", transPath.string());
-                throw std::runtime_error("could not find transforms_train.json nor transforms.json in " + transPath.string());
+                LOG_ERROR("Could not find transforms file in: {}", lfs::core::path_to_utf8(transPath));
+                throw std::runtime_error("could not find transforms_train.json nor transforms.json in " + lfs::core::path_to_utf8(transPath));
             }
         }
 
         if (!std::filesystem::is_regular_file(transformsFile)) {
-            LOG_ERROR("Not a valid file: {}", transformsFile.string());
-            throw std::runtime_error(transformsFile.string() + " is not a valid file");
+            LOG_ERROR("Not a valid file: {}", lfs::core::path_to_utf8(transformsFile));
+            throw std::runtime_error(lfs::core::path_to_utf8(transformsFile) + " is not a valid file");
         }
 
-        LOG_DEBUG("Reading transforms from: {}", transformsFile.string());
+        LOG_DEBUG("Reading transforms from: {}", lfs::core::path_to_utf8(transformsFile));
         // Pass path object directly for proper Unicode handling on Windows
         std::ifstream trans_file{transformsFile};
 
@@ -281,7 +286,7 @@ namespace lfs::io {
 
                 camdata._image_path = GetTransformImagePath(dir_path, frame);
 
-                camdata._image_name = std::filesystem::path(camdata._image_path).filename().string();
+                camdata._image_name = lfs::core::path_to_utf8(camdata._image_path.filename());
 
                 camdata._width = w;
                 camdata._height = h;
@@ -372,17 +377,17 @@ namespace lfs::io {
     }
 
     PointCloud load_simple_ply_point_cloud(const std::filesystem::path& filepath) {
-        LOG_DEBUG("Loading simple PLY point cloud from: {}", filepath.string());
+        LOG_DEBUG("Loading simple PLY point cloud from: {}", lfs::core::path_to_utf8(filepath));
 
         if (!std::filesystem::exists(filepath)) {
-            throw std::runtime_error(std::format("PLY file not found: {}", filepath.string()));
+            throw std::runtime_error(std::format("PLY file not found: {}", lfs::core::path_to_utf8(filepath)));
         }
 
         try {
             // Open the PLY file
             std::ifstream ss(filepath, std::ios::binary);
             if (!ss) {
-                throw std::runtime_error(std::format("Failed to open PLY file: {}", filepath.string()));
+                throw std::runtime_error(std::format("Failed to open PLY file: {}", lfs::core::path_to_utf8(filepath)));
             }
 
             // Parse PLY header
@@ -485,7 +490,7 @@ namespace lfs::io {
             return PointCloud(positions, color_tensor);
 
         } catch (const std::exception& e) {
-            throw std::runtime_error(std::format("Failed to load PLY file {}: {}", filepath.string(), e.what()));
+            throw std::runtime_error(std::format("Failed to load PLY file {}: {}", lfs::core::path_to_utf8(filepath), e.what()));
         }
     }
 

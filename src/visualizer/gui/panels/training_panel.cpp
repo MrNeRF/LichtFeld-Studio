@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/parameters.hpp"
+#include "core/path_utils.hpp"
 #include "core/services.hpp"
 #include "gui/dpi_scale.hpp"
 #include "gui/localization_manager.hpp"
@@ -155,7 +156,7 @@ namespace lfs::vis::gui::panels {
                 ImGui::TableNextColumn();
                 ImGui::Text("%s", LOC(Training::Dataset::PATH));
                 ImGui::TableNextColumn();
-                ImGui::Text("%s", dataset_params.data_path.filename().string().c_str());
+                ImGui::Text("%s", lfs::core::path_to_utf8(dataset_params.data_path.filename()).c_str());
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
@@ -251,10 +252,10 @@ namespace lfs::vis::gui::panels {
                 {
                     const std::string output_display = dataset_params.output_path.empty()
                                                            ? "(not set)"
-                                                           : dataset_params.output_path.filename().string();
+                                                           : lfs::core::path_to_utf8(dataset_params.output_path.filename());
                     ImGui::Text("%s", output_display.c_str());
                     if (!dataset_params.output_path.empty() && ImGui::IsItemHovered()) {
-                        ImGui::SetTooltip("%s", dataset_params.output_path.string().c_str());
+                        ImGui::SetTooltip("%s", lfs::core::path_to_utf8(dataset_params.output_path).c_str());
                     }
                 }
 
@@ -466,7 +467,7 @@ namespace lfs::vis::gui::panels {
         if (ImGui::TreeNode(LOC(Training::Section::SAVE_STEPS))) {
             if (can_edit) {
                 static int new_step = 1000;
-                ImGui::InputInt(LOC(TrainingPanel::NEW_STEP), &new_step, 100, 1000);
+                ImGui::InputInt("##new_step", &new_step, 100, 1000);
                 ImGui::SameLine();
                 if (ImGui::Button(LOC(Training::Button::ADD))) {
                     if (new_step > 0 && std::find(opt_params.save_steps.begin(),

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/training_snapshot.hpp"
+#include "core/path_utils.hpp"
 #include <cuda_runtime.h>
 #include <fstream>
 #include <sstream>
@@ -71,22 +72,22 @@ namespace lfs::core::debug {
     }
 
     bool TrainingSnapshot::save(const std::filesystem::path& path) const {
-        std::ofstream file(path);
-        if (!file.is_open()) {
-            LOG_ERROR("Failed to open snapshot file for writing: {}", path.string());
+        std::ofstream file;
+        if (!lfs::core::open_file_for_write(path, file)) {
+            LOG_ERROR("Failed to open snapshot file for writing: {}", lfs::core::path_to_utf8(path));
             return false;
         }
         file << to_json();
         file.close();
-        LOG_INFO("Saved training snapshot to {}", path.string());
+        LOG_INFO("Saved training snapshot to {}", lfs::core::path_to_utf8(path));
         return true;
     }
 
     std::optional<TrainingSnapshot> TrainingSnapshot::load(const std::filesystem::path& path) {
         // Simple JSON parsing - for full implementation use nlohmann/json
-        std::ifstream file(path);
-        if (!file.is_open()) {
-            LOG_ERROR("Failed to open snapshot file: {}", path.string());
+        std::ifstream file;
+        if (!lfs::core::open_file_for_read(path, file)) {
+            LOG_ERROR("Failed to open snapshot file: {}", lfs::core::path_to_utf8(path));
             return std::nullopt;
         }
 

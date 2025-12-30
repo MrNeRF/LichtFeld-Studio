@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "save_directory_popup.hpp"
+#include "core/path_utils.hpp"
 #include "gui/dpi_scale.hpp"
 #include "gui/localization_manager.hpp"
 #include "gui/string_keys.hpp"
@@ -41,7 +42,7 @@ namespace lfs::vis::gui {
 
     void SaveDirectoryPopup::show(const std::filesystem::path& dataset_path) {
         dataset_path_ = dataset_path;
-        output_path_buffer_ = deriveDefaultOutputPath(dataset_path).string();
+        output_path_buffer_ = lfs::core::path_to_utf8(deriveDefaultOutputPath(dataset_path));
         output_path_buffer_.resize(PATH_BUFFER_SIZE);
         should_open_ = true;
     }
@@ -102,7 +103,7 @@ namespace lfs::vis::gui {
 
             ImGui::TextColored(t.palette.text_dim, "%s", LOC(SaveDirPopup::DATASET_LABEL));
             ImGui::SameLine();
-            const std::string dataset_str = dataset_path_.string();
+            const std::string dataset_str = lfs::core::path_to_utf8(dataset_path_);
             const bool is_clipped = ImGui::CalcTextSize(dataset_str.c_str()).x > BASE_MAX_PATH_WIDTH * scale;
             ImGui::TextUnformatted(dataset_str.c_str());
             if (is_clipped && ImGui::IsItemHovered()) {
@@ -121,12 +122,13 @@ namespace lfs::vis::gui {
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, t.button_hovered());
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, t.button_active());
             if (ImGui::Button(LOC(Common::BROWSE))) {
-                std::filesystem::path start_dir(output_path_buffer_.c_str());
+                // Use utf8_to_path for proper Unicode handling
+                std::filesystem::path start_dir = lfs::core::utf8_to_path(output_path_buffer_);
                 if (!std::filesystem::exists(start_dir)) {
                     start_dir = dataset_path_;
                 }
                 if (const auto selected = SelectFolderDialog(LOC(SaveDirPopup::TITLE), start_dir); !selected.empty()) {
-                    output_path_buffer_ = selected.string();
+                    output_path_buffer_ = lfs::core::path_to_utf8(selected);
                     output_path_buffer_.resize(PATH_BUFFER_SIZE);
                 }
             }
@@ -162,7 +164,7 @@ namespace lfs::vis::gui {
             if (ImGui::Button(LOC(Common::LOAD), button_size) || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
                 popup_open_ = false;
                 if (on_confirm_) {
-                    on_confirm_(dataset_path_, std::filesystem::path(output_path_buffer_.c_str()));
+                    on_confirm_(dataset_path_, lfs::core::utf8_to_path(output_path_buffer_));
                 }
                 ImGui::CloseCurrentPopup();
             }

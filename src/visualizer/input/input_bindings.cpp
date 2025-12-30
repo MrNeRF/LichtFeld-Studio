@@ -4,6 +4,7 @@
 
 #include "input/input_bindings.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include <algorithm>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -60,8 +61,8 @@ namespace lfs::vis::input {
     std::filesystem::path InputBindings::getConfigDir() {
         std::filesystem::path config_dir;
 #ifdef _WIN32
-        char path[MAX_PATH];
-        if (SUCCEEDED(SHGetFolderPathA(nullptr, CSIDL_APPDATA, nullptr, 0, path))) {
+        wchar_t path[MAX_PATH];
+        if (SUCCEEDED(SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, 0, path))) {
             config_dir = std::filesystem::path(path) / "LichtFeldStudio" / "input_profiles";
         } else {
             config_dir = std::filesystem::current_path() / "config" / "input_profiles";
@@ -126,9 +127,9 @@ namespace lfs::vis::input {
         j["bindings"] = bindings_array;
 
         try {
-            std::ofstream file(path);
-            if (!file.is_open()) {
-                LOG_ERROR("Failed to open file for writing: {}", path.string());
+            std::ofstream file;
+            if (!lfs::core::open_file_for_write(path, file)) {
+                LOG_ERROR("Failed to open file for writing: {}", lfs::core::path_to_utf8(path));
                 return false;
             }
             file << j.dump(4);
@@ -143,9 +144,9 @@ namespace lfs::vis::input {
         using json = nlohmann::json;
 
         try {
-            std::ifstream file(path);
-            if (!file.is_open()) {
-                LOG_ERROR("Failed to open profile file: {}", path.string());
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(path, file)) {
+                LOG_ERROR("Failed to open profile file: {}", lfs::core::path_to_utf8(path));
                 return false;
             }
 
@@ -193,7 +194,7 @@ namespace lfs::vis::input {
             }
 
             rebuildLookupMaps();
-            LOG_INFO("Loaded profile '{}' ({} bindings) from {}", current_profile_name_, bindings_.size(), path.string());
+            LOG_INFO("Loaded profile '{}' ({} bindings) from {}", current_profile_name_, bindings_.size(), lfs::core::path_to_utf8(path));
             return true;
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to load profile: {}", e.what());
@@ -208,7 +209,7 @@ namespace lfs::vis::input {
         if (std::filesystem::exists(config_dir)) {
             for (const auto& entry : std::filesystem::directory_iterator(config_dir)) {
                 if (entry.path().extension() == ".json") {
-                    const std::string name = entry.path().stem().string();
+                    const std::string name = lfs::core::path_to_utf8(entry.path().stem());
                     if (name != "Default") {
                         profiles.push_back(name);
                     }

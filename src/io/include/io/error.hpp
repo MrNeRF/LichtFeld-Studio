@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/path_utils.hpp"
 #include <expected>
 #include <filesystem>
 #include <format>
@@ -95,7 +96,7 @@ namespace lfs::io {
             if (path.empty()) {
                 return std::format("[{}] {}", error_code_to_string(code), message);
             }
-            return std::format("[{}] {}: {}", error_code_to_string(code), message, path.string());
+            return std::format("[{}] {}: {}", error_code_to_string(code), message, lfs::core::path_to_utf8(path));
         }
 
         [[nodiscard]] bool is(ErrorCode c) const { return code == c; }

@@ -83,14 +83,17 @@ namespace lfs::vis::gui {
         HRESULT STDMETHODCALLTYPE Drop(IDataObject* const pDataObj, DWORD /*grfKeyState*/,
                                        POINTL /*pt*/, DWORD* const pdwEffect) override {
             *pdwEffect = DROPEFFECT_COPY;
+            LOG_DEBUG("IDropTarget::Drop called");
 
             std::vector<std::string> paths;
             constexpr FORMATETC FMT = {CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
             STGMEDIUM stg = {TYMED_HGLOBAL};
 
-            if (SUCCEEDED(pDataObj->GetData(const_cast<FORMATETC*>(&FMT), &stg))) {
+            HRESULT hr = pDataObj->GetData(const_cast<FORMATETC*>(&FMT), &stg);
+            if (SUCCEEDED(hr)) {
                 if (const HDROP hdrop = static_cast<HDROP>(GlobalLock(stg.hGlobal))) {
                     const UINT count = DragQueryFileW(hdrop, 0xFFFFFFFF, nullptr, 0);
+                    LOG_DEBUG("Drop contains {} files", count);
                     paths.reserve(count);
                     for (UINT i = 0; i < count; ++i) {
                         const UINT len = DragQueryFileW(hdrop, i, nullptr, 0);
@@ -99,21 +102,31 @@ namespace lfs::vis::gui {
                         std::wstring wpath(len + 1, L'\0');
                         DragQueryFileW(hdrop, i, wpath.data(), len + 1);
                         const int utf8_len = WideCharToMultiByte(CP_UTF8, 0, wpath.c_str(), -1, nullptr, 0, nullptr, nullptr);
-                        if (utf8_len <= 0)
+                        if (utf8_len <= 0) {
+                            LOG_WARN("Failed to convert dropped path to UTF-8");
                             continue;
+                        }
                         std::string utf8_path(utf8_len - 1, '\0');
                         WideCharToMultiByte(CP_UTF8, 0, wpath.c_str(), -1, utf8_path.data(), utf8_len, nullptr, nullptr);
+                        LOG_DEBUG("Dropped file: {}", utf8_path);
                         paths.push_back(std::move(utf8_path));
                     }
                     GlobalUnlock(stg.hGlobal);
+                } else {
+                    LOG_WARN("GlobalLock failed for dropped data");
                 }
                 ReleaseStgMedium(&stg);
+            } else {
+                LOG_WARN("GetData failed for CF_HDROP format: 0x{:08X}", static_cast<unsigned>(hr));
             }
 
             if (owner_) {
                 owner_->setDragHovering(false);
-                if (!paths.empty())
+                if (!paths.empty()) {
                     owner_->handleFileDrop(paths);
+                } else {
+                    LOG_WARN("No valid files extracted from drop");
+                }
             }
             return S_OK;
         }

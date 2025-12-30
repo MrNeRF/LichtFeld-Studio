@@ -6,6 +6,7 @@
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "cuda/image_format_kernels.cuh"
 
@@ -132,7 +133,7 @@ namespace lfs::io {
                 return;
             }
 
-            LOG_INFO("[nvImageCodec Diagnostics] Extensions directory: {}", ext_dir.string());
+            LOG_INFO("[nvImageCodec Diagnostics] Extensions directory: {}", lfs::core::path_to_utf8(ext_dir));
 
             if (!std::filesystem::exists(ext_dir)) {
                 LOG_ERROR("[nvImageCodec Diagnostics] Extensions directory does not exist!");
@@ -155,20 +156,20 @@ namespace lfs::io {
 
 #ifdef _WIN32
                 if (ext == ".dll") {
-                    dll_files.push_back(path.filename().string());
+                    dll_files.push_back(lfs::core::path_to_utf8(path.filename()));
                 }
 #else
                 if (ext == ".so") {
-                    dll_files.push_back(path.filename().string());
+                    dll_files.push_back(lfs::core::path_to_utf8(path.filename()));
                 }
 #endif
             }
 
             if (dll_files.empty()) {
 #ifdef _WIN32
-                LOG_WARN("[nvImageCodec Diagnostics] No .dll extension files found in {}", ext_dir.string());
+                LOG_WARN("[nvImageCodec Diagnostics] No .dll extension files found in {}", lfs::core::path_to_utf8(ext_dir));
 #else
-                LOG_WARN("[nvImageCodec Diagnostics] No .so extension files found in {}", ext_dir.string());
+                LOG_WARN("[nvImageCodec Diagnostics] No .so extension files found in {}", lfs::core::path_to_utf8(ext_dir));
 #endif
             } else {
                 LOG_INFO("[nvImageCodec Diagnostics] Found {} extension files:", dll_files.size());
@@ -234,7 +235,7 @@ namespace lfs::io {
             const char* extensions_path_ptr = nullptr;
 
             if (!extensions_dir.empty() && std::filesystem::exists(extensions_dir)) {
-                extensions_path_str = extensions_dir.string();
+                extensions_path_str = lfs::core::path_to_utf8(extensions_dir);
                 extensions_path_ptr = extensions_path_str.c_str();
             }
 
@@ -409,7 +410,7 @@ namespace lfs::io {
         const char* extensions_path_ptr = nullptr;
 
         if (!extensions_dir.empty() && std::filesystem::exists(extensions_dir)) {
-            extensions_path_str = extensions_dir.string();
+            extensions_path_str = lfs::core::path_to_utf8(extensions_dir);
             extensions_path_ptr = extensions_path_str.c_str();
             LOG_DEBUG("[NvCodecImageLoader] Extensions: {}", extensions_path_str);
         }
@@ -462,7 +463,7 @@ namespace lfs::io {
     std::vector<uint8_t> NvCodecImageLoader::read_file(const std::filesystem::path& path) {
         std::ifstream file(path, std::ios::binary | std::ios::ate);
         if (!file) {
-            throw std::runtime_error("Failed to open file: " + path.string());
+            throw std::runtime_error("Failed to open file: " + lfs::core::path_to_utf8(path));
         }
 
         std::streamsize size = file.tellg();
@@ -470,7 +471,7 @@ namespace lfs::io {
 
         std::vector<uint8_t> buffer(size);
         if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
-            throw std::runtime_error("Failed to read file: " + path.string());
+            throw std::runtime_error("Failed to read file: " + lfs::core::path_to_utf8(path));
         }
 
         return buffer;
@@ -482,7 +483,7 @@ namespace lfs::io {
         int max_width,
         void* cuda_stream) {
 
-        LOG_DEBUG("NvCodecImageLoader: Loading {}", path.string());
+        LOG_DEBUG("NvCodecImageLoader: Loading {}", lfs::core::path_to_utf8(path));
 
         // Read file into memory first
         auto file_data = read_file(path);

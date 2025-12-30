@@ -5,6 +5,7 @@
 #include "core/argument_parser.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
+#include "core/path_utils.hpp"
 #include <algorithm>
 #include <args.hxx>
 #include <array>
@@ -219,10 +220,10 @@ namespace {
             if (view_ply) {
                 const auto& view_path_str = ::args::get(view_ply);
                 if (!view_path_str.empty()) {
-                    const std::filesystem::path view_path{view_path_str};
+                    const std::filesystem::path view_path = lfs::core::utf8_to_path(view_path_str);
 
                     if (!std::filesystem::exists(view_path)) {
-                        return std::unexpected(std::format("Path does not exist: {}", view_path.string()));
+                        return std::unexpected(std::format("Path does not exist: {}", lfs::core::path_to_utf8(view_path)));
                     }
 
                     constexpr std::array<std::string_view, 4> SUPPORTED_EXTENSIONS = {".ply", ".sog", ".spz", ".resume"};
@@ -242,13 +243,13 @@ namespace {
 
                         if (params.view_paths.empty()) {
                             return std::unexpected(std::format(
-                                "No supported files (.ply, .sog, .spz, .resume) found in: {}", view_path.string()));
+                                "No supported files (.ply, .sog, .spz, .resume) found in: {}", lfs::core::path_to_utf8(view_path)));
                         }
                         LOG_DEBUG("Found {} view files in directory", params.view_paths.size());
                     } else {
                         if (!is_supported(view_path)) {
                             return std::unexpected(std::format(
-                                "Unsupported format. Expected: .ply, .sog, .spz, .resume. Got: {}", view_path.string()));
+                                "Unsupported format. Expected: .ply, .sog, .spz, .resume. Got: {}", lfs::core::path_to_utf8(view_path)));
                         }
                         params.view_paths.push_back(view_path);
                     }
@@ -262,21 +263,22 @@ namespace {
 
             // Check for resume mode
             if (resume_checkpoint) {
-                const auto ckpt_path = ::args::get(resume_checkpoint);
-                if (!ckpt_path.empty()) {
+                const auto ckpt_path_str = ::args::get(resume_checkpoint);
+                if (!ckpt_path_str.empty()) {
+                    const auto ckpt_path = lfs::core::utf8_to_path(ckpt_path_str);
                     if (!std::filesystem::exists(ckpt_path)) {
-                        return std::unexpected(std::format("Checkpoint file does not exist: {}", ckpt_path));
+                        return std::unexpected(std::format("Checkpoint file does not exist: {}", ckpt_path_str));
                     }
                     params.resume_checkpoint = ckpt_path;
                 }
             }
 
             if (init_path) {
-                const auto path = ::args::get(init_path);
-                params.init_path = path;
+                const auto path_str = ::args::get(init_path);
+                params.init_path = path_str;
 
-                if (!std::filesystem::exists(path)) {
-                    return std::unexpected(std::format("Initialization file does not exist: {}", path));
+                if (!std::filesystem::exists(lfs::core::utf8_to_path(path_str))) {
+                    return std::unexpected(std::format("Initialization file does not exist: {}", path_str));
                 }
             }
 
@@ -295,8 +297,8 @@ namespace {
             // Training/resume mode requires both data-path and output-path
             // Exception: resume mode can work without explicit paths (extracted from checkpoint)
             if (has_data_path && has_output_path) {
-                params.dataset.data_path = ::args::get(data_path);
-                params.dataset.output_path = ::args::get(output_path);
+                params.dataset.data_path = lfs::core::utf8_to_path(::args::get(data_path));
+                params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
 
                 // Create output directory
                 std::error_code ec;
@@ -304,7 +306,7 @@ namespace {
                 if (ec) {
                     return std::unexpected(std::format(
                         "Failed to create output directory '{}': {}",
-                        params.dataset.output_path.string(), ec.message()));
+                        lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
                 }
             } else if (has_data_path != has_output_path && !has_resume) {
                 // Only require both if not in resume mode
@@ -314,10 +316,10 @@ namespace {
             } else if (has_resume) {
                 // Resume mode: paths are optional (will be read from checkpoint)
                 if (has_data_path) {
-                    params.dataset.data_path = ::args::get(data_path);
+                    params.dataset.data_path = lfs::core::utf8_to_path(::args::get(data_path));
                 }
                 if (has_output_path) {
-                    params.dataset.output_path = ::args::get(output_path);
+                    params.dataset.output_path = lfs::core::utf8_to_path(::args::get(output_path));
 
                     // Create output directory if provided
                     std::error_code ec;
@@ -325,7 +327,7 @@ namespace {
                     if (ec) {
                         return std::unexpected(std::format(
                             "Failed to create output directory '{}': {}",
-                            params.dataset.output_path.string(), ec.message()));
+                            lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
                     }
                 }
             }
@@ -513,7 +515,7 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
     std::string strategy = params->optimization.strategy; // empty when config files is used and not passed as command line argument
     std::string config_file = params->optimization.config_file;
     std::filesystem::path config_file_to_read = config_file != ""
-                                                    ? std::filesystem::path(reinterpret_cast<const char8_t*>(config_file.c_str()))
+                                                    ? lfs::core::utf8_to_path(config_file)
                                                     : lfs::core::param::get_parameter_file_path(params->optimization.strategy + "_optimization_params.json");
 
     if (!parse_result) {
@@ -639,11 +641,11 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
     }
 
     param::ConvertParameters params;
-    params.input_path = ::args::get(input);
+    params.input_path = lfs::core::utf8_to_path(::args::get(input));
     params.sh_degree = sh_degree ? ::args::get(sh_degree) : -1;
 
     if (!std::filesystem::exists(params.input_path)) {
-        return std::unexpected(std::format("Input not found: {}", params.input_path.string()));
+        return std::unexpected(std::format("Input not found: {}", lfs::core::path_to_utf8(params.input_path)));
     }
 
     if (params.sh_degree < -1 || params.sh_degree > 3) {
@@ -651,7 +653,7 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
     }
 
     if (output)
-        params.output_path = ::args::get(output);
+        params.output_path = lfs::core::utf8_to_path(::args::get(output));
     if (sog_iter)
         params.sog_iterations = ::args::get(sog_iter);
     params.overwrite = overwrite;
