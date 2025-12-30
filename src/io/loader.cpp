@@ -4,6 +4,7 @@
 
 #include "io/loader.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "io/filesystem_utils.hpp"
 #include "loader_service.hpp"
 #include <algorithm>
@@ -26,7 +27,7 @@ namespace lfs::io {
                 const std::filesystem::path& path,
                 const LoadOptions& options) override {
 
-                LOG_DEBUG("Loading from path: {}", path.string());
+                LOG_DEBUG("Loading from path: {}", lfs::core::path_to_utf8(path));
                 // Just delegate to the service
                 return service_->load(path, options);
             }
@@ -34,25 +35,25 @@ namespace lfs::io {
             bool canLoad(const std::filesystem::path& path) const override {
                 // Check if any registered loader can handle this path
                 if (!safe_exists(path)) {
-                    LOG_TRACE("Path does not exist: {}", path.string());
+                    LOG_TRACE("Path does not exist: {}", lfs::core::path_to_utf8(path));
                     return false;
                 }
 
                 // Check for SOG files
                 if (path.extension() == ".sog" || path.extension() == ".SOG") {
-                    LOG_TRACE("SOG file detected: {}", path.string());
+                    LOG_TRACE("SOG file detected: {}", lfs::core::path_to_utf8(path));
                     return true;
                 }
 
                 // Check for directory with meta.json (SOG directory format)
                 if (safe_is_directory(path) && safe_exists(path / "meta.json")) {
-                    LOG_TRACE("SOG directory detected: {}", path.string());
+                    LOG_TRACE("SOG directory detected: {}", lfs::core::path_to_utf8(path));
                     return true;
                 }
 
                 // Check for meta.json file directly (SOG)
                 if (path.filename() == "meta.json") {
-                    LOG_TRACE("SOG meta.json detected: {}", path.string());
+                    LOG_TRACE("SOG meta.json detected: {}", lfs::core::path_to_utf8(path));
                     return true;
                 }
 
@@ -62,17 +63,17 @@ namespace lfs::io {
 
                 // Check common extensions
                 if (ext == ".ply") {
-                    LOG_TRACE("PLY file detected: {}", path.string());
+                    LOG_TRACE("PLY file detected: {}", lfs::core::path_to_utf8(path));
                     return true;
                 }
 
                 if (ext == ".resume") {
-                    LOG_TRACE("Checkpoint file detected: {}", path.string());
+                    LOG_TRACE("Checkpoint file detected: {}", lfs::core::path_to_utf8(path));
                     return true;
                 }
 
                 if (ext == ".json") {
-                    LOG_TRACE("JSON file detected (potential transforms): {}", path.string());
+                    LOG_TRACE("JSON file detected (potential transforms): {}", lfs::core::path_to_utf8(path));
                     return true;
                 }
 
@@ -84,7 +85,7 @@ namespace lfs::io {
 
                     for (const auto& marker : colmap_markers) {
                         if (!find_file_in_paths(colmap_paths, marker).empty()) {
-                            LOG_TRACE("COLMAP dataset detected: {}", path.string());
+                            LOG_TRACE("COLMAP dataset detected: {}", lfs::core::path_to_utf8(path));
                             return true;
                         }
                     }
@@ -92,12 +93,12 @@ namespace lfs::io {
                     // Check for Blender/NeRF dataset
                     if (safe_exists(path / "transforms.json") ||
                         safe_exists(path / "transforms_train.json")) {
-                        LOG_TRACE("Blender/NeRF dataset detected: {}", path.string());
+                        LOG_TRACE("Blender/NeRF dataset detected: {}", lfs::core::path_to_utf8(path));
                         return true;
                     }
                 }
 
-                LOG_TRACE("No compatible loader found for: {}", path.string());
+                LOG_TRACE("No compatible loader found for: {}", lfs::core::path_to_utf8(path));
                 return false;
             }
 
@@ -122,7 +123,7 @@ namespace lfs::io {
 
     bool Loader::isDatasetPath(const std::filesystem::path& path) {
         if (!safe_exists(path)) {
-            LOG_TRACE("Path does not exist for dataset check: {}", path.string());
+            LOG_TRACE("Path does not exist for dataset check: {}", lfs::core::path_to_utf8(path));
             return false;
         }
 
@@ -132,29 +133,29 @@ namespace lfs::io {
 
             // JSON files might be datasets (transforms.json)
             if (ext == ".json") {
-                LOG_TRACE("JSON file detected, treating as potential dataset: {}", path.string());
+                LOG_TRACE("JSON file detected, treating as potential dataset: {}", lfs::core::path_to_utf8(path));
                 return true;
             }
 
             // SOG files are NOT datasets - they're single splat files like PLY
             if (ext == ".sog") {
-                LOG_TRACE("SOG file detected, not a dataset: {}", path.string());
+                LOG_TRACE("SOG file detected, not a dataset: {}", lfs::core::path_to_utf8(path));
                 return false;
             }
 
             // PLY files are definitely not datasets
             if (ext == ".ply") {
-                LOG_TRACE("PLY file detected, not a dataset: {}", path.string());
+                LOG_TRACE("PLY file detected, not a dataset: {}", lfs::core::path_to_utf8(path));
                 return false;
             }
 
             // Checkpoint files are not datasets
             if (ext == ".resume") {
-                LOG_TRACE("Checkpoint file detected, not a dataset: {}", path.string());
+                LOG_TRACE("Checkpoint file detected, not a dataset: {}", lfs::core::path_to_utf8(path));
                 return false;
             }
 
-            LOG_TRACE("Non-dataset file detected: {}", path.string());
+            LOG_TRACE("Non-dataset file detected: {}", lfs::core::path_to_utf8(path));
             return false;
         }
 
@@ -170,7 +171,7 @@ namespace lfs::io {
                                  safe_exists(path / "sh0.webp");
 
             if (has_sog_files) {
-                LOG_TRACE("SOG directory detected, not a dataset: {}", path.string());
+                LOG_TRACE("SOG directory detected, not a dataset: {}", lfs::core::path_to_utf8(path));
                 return false; // SOG directories are treated as single splat files
             }
         }
@@ -182,7 +183,7 @@ namespace lfs::io {
 
         for (const auto& marker : colmap_markers) {
             if (!find_file_in_paths(colmap_paths, marker).empty()) {
-                LOG_TRACE("COLMAP dataset detected at: {}", path.string());
+                LOG_TRACE("COLMAP dataset detected at: {}", lfs::core::path_to_utf8(path));
                 return true;
             }
         }
@@ -190,11 +191,11 @@ namespace lfs::io {
         // Blender/NeRF markers
         if (safe_exists(path / "transforms.json") ||
             safe_exists(path / "transforms_train.json")) {
-            LOG_TRACE("Blender/NeRF dataset detected at: {}", path.string());
+            LOG_TRACE("Blender/NeRF dataset detected at: {}", lfs::core::path_to_utf8(path));
             return true;
         }
 
-        LOG_TRACE("No dataset markers found in directory: {}", path.string());
+        LOG_TRACE("No dataset markers found in directory: {}", lfs::core::path_to_utf8(path));
         return false;
     }
 

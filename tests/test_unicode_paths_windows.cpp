@@ -1927,7 +1927,235 @@ TEST_F(UnicodePathTest, SaveDirectoryPopupPathDerivation) {
 }
 
 // ============================================================================
-// Test 36: File Dialog Initial Directory with Unicode
+// Test 36: Logging Safety - path_to_utf8 Never Throws
+// ============================================================================
+
+TEST_F(UnicodePathTest, LoggingSafety_PathToUtf8NeverThrows) {
+    // This test verifies that path_to_utf8() NEVER throws, unlike path.string()
+    // which can throw std::system_error when the path contains characters that
+    // cannot be represented in the current Windows code page.
+    //
+    // This is the exact issue that caused the crash in DataLoadingService::loadDataset:
+    //   LOG_INFO("Loading dataset from: {}", path.string());  // THROWS!
+    // Fixed to:
+    //   LOG_INFO("Loading dataset from: {}", path_to_utf8(path));  // SAFE
+
+    auto test_dir = test_root_ / "logging_safety_test";
+    fs::create_directories(test_dir);
+
+    // Create paths with characters that may not be representable in Windows code pages
+    std::vector<std::string> problematic_names = {
+        "日本語_Japanese_日本語",              // Japanese
+        "中文_Chinese_中文",                   // Chinese Simplified
+        "繁體中文_TraditionalChinese",         // Chinese Traditional
+        "한국어_Korean_한국어",                // Korean
+        "ไทย_Thai_ไทย",                        // Thai
+        "العربية_Arabic_العربية",              // Arabic
+        "עברית_Hebrew_עברית",                  // Hebrew
+        "Ελληνικά_Greek_Ελληνικά",             // Greek
+        "Кириллица_Cyrillic_Кириллица",        // Cyrillic
+        "emoji_😀_🎉_🚀_emoji",                // Emoji
+        "mathematical_𝔸𝔹ℂ_symbols",            // Mathematical symbols
+        "music_𝄞𝄢𝄪_notes",                     // Musical notation
+        "mixed_日本語_한국어_中文_emoji_😀",   // Maximum mixing
+    };
+
+    for (const auto& name : problematic_names) {
+        SCOPED_TRACE(name);
+        auto path = test_dir / utf8_to_path(name);
+
+        // Ensure directory exists (some OS may not support all characters)
+        std::error_code ec;
+        fs::create_directories(path, ec);
+        if (ec) {
+            // Skip this test case if OS doesn't support these characters
+            continue;
+        }
+
+        // THE CRITICAL TEST: path_to_utf8 should NEVER throw
+        std::string utf8_result;
+        EXPECT_NO_THROW({
+            utf8_result = path_to_utf8(path);
+        }) << "path_to_utf8 should NEVER throw for: " << name;
+
+        // Verify result is usable
+        EXPECT_FALSE(utf8_result.empty()) << "path_to_utf8 returned empty string";
+
+        // Verify result can be used in string formatting (like LOG_INFO)
+        std::string log_message;
+        EXPECT_NO_THROW({
+            log_message = "Loading dataset from: " + utf8_result;
+        }) << "String concatenation should work with path_to_utf8 result";
+
+        EXPECT_FALSE(log_message.empty());
+
+        // Test nested path components
+        auto nested_path = path / "subdir" / "file.txt";
+        EXPECT_NO_THROW({
+            utf8_result = path_to_utf8(nested_path);
+        }) << "path_to_utf8 should work on nested paths";
+    }
+}
+
+// ============================================================================
+// Test 37: DataLoadingService Logging Pattern Safety
+// ============================================================================
+
+TEST_F(UnicodePathTest, DataLoadingServiceLoggingPatternSafety) {
+    // Tests the exact logging patterns used in DataLoadingService and SceneManager
+    // These patterns were causing crashes on Windows due to path.string() throwing
+
+    auto test_dir = test_root_ / "data_loading_test";
+    fs::create_directories(test_dir);
+
+    // Create a mock dataset path with Unicode
+    auto dataset_path = test_dir / "データセット_dataset_데이터셋_数据集";
+    fs::create_directories(dataset_path);
+
+    // Pattern from DataLoadingService::loadDataset (FIXED)
+    // Original: LOG_INFO("Loading dataset from: {}", path.string());
+    // Fixed:    LOG_INFO("Loading dataset from: {}", path_to_utf8(path));
+    {
+        std::string log_msg;
+        EXPECT_NO_THROW({
+            log_msg = "Loading dataset from: " + path_to_utf8(dataset_path);
+        }) << "Dataset loading log should not throw";
+        EXPECT_FALSE(log_msg.empty());
+    }
+
+    // Pattern from SceneManager::loadSplatFile (FIXED)
+    // Original: LOG_INFO("Loading splat file: {}", path.string());
+    // Fixed:    LOG_INFO("Loading splat file: {}", path_to_utf8(path));
+    auto splat_file = test_dir / "スプラット_splat_스플랫.ply";
+    create_file(splat_file, "mock ply");
+    {
+        std::string log_msg;
+        EXPECT_NO_THROW({
+            log_msg = "Loading splat file: " + path_to_utf8(splat_file);
+        }) << "Splat file loading log should not throw";
+        EXPECT_FALSE(log_msg.empty());
+    }
+
+    // Pattern from error messages (FIXED)
+    // Original: std::format("Failed to load: {}", path.string())
+    // Fixed:    std::format("Failed to load: {}", path_to_utf8(path))
+    {
+        std::string error_msg;
+        EXPECT_NO_THROW({
+            error_msg = "Failed to load: " + path_to_utf8(splat_file);
+        }) << "Error message formatting should not throw";
+        EXPECT_FALSE(error_msg.empty());
+    }
+
+    // Pattern for stem extraction (FIXED)
+    // Original: std::string name = path.stem().string();
+    // Fixed:    std::string name = path_to_utf8(path.stem());
+    {
+        std::string name;
+        EXPECT_NO_THROW({
+            name = path_to_utf8(splat_file.stem());
+        }) << "Stem extraction should not throw";
+        EXPECT_FALSE(name.empty());
+        // Should be "スプラット_splat_스플랫"
+        EXPECT_TRUE(name.find("splat") != std::string::npos);
+    }
+
+    // Pattern for filename extraction (FIXED)
+    // Original: path.filename().string()
+    // Fixed:    path_to_utf8(path.filename())
+    {
+        std::string filename;
+        EXPECT_NO_THROW({
+            filename = path_to_utf8(splat_file.filename());
+        }) << "Filename extraction should not throw";
+        EXPECT_FALSE(filename.empty());
+        EXPECT_TRUE(filename.find(".ply") != std::string::npos);
+    }
+
+    // Pattern for parent path extraction (FIXED)
+    // Original: path.parent_path().string()
+    // Fixed:    path_to_utf8(path.parent_path())
+    {
+        std::string parent;
+        EXPECT_NO_THROW({
+            parent = path_to_utf8(splat_file.parent_path());
+        }) << "Parent path extraction should not throw";
+        EXPECT_FALSE(parent.empty());
+    }
+}
+
+// ============================================================================
+// Test 38: COLMAP Loader Logging Pattern Safety
+// ============================================================================
+
+TEST_F(UnicodePathTest, COLMAPLoaderLoggingPatternSafety) {
+    // Tests the exact logging patterns used in colmap.cpp
+    // These were causing crashes when loading datasets from Unicode paths
+
+    auto test_dir = test_root_ / "colmap_test";
+    auto sparse_dir = test_dir / "sparse" / "0";
+    fs::create_directories(sparse_dir);
+
+    // Create mock COLMAP files with Unicode in parent path
+    auto cameras_bin = sparse_dir / "cameras.bin";
+    auto images_bin = sparse_dir / "images.bin";
+    auto points3d_bin = sparse_dir / "points3D.bin";
+
+    // Create minimal binary files
+    std::vector<uint8_t> minimal_data = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    create_binary_file(cameras_bin, minimal_data);
+    create_binary_file(images_bin, minimal_data);
+    create_binary_file(points3d_bin, minimal_data);
+
+    // Pattern from read_binary (FIXED)
+    // Original: LOG_TRACE("Reading binary file: {}", p.string());
+    // Fixed:    LOG_TRACE("Reading binary file: {}", path_to_utf8(p));
+    {
+        std::string log_msg;
+        EXPECT_NO_THROW({
+            log_msg = "Reading binary file: " + path_to_utf8(cameras_bin);
+        }) << "Binary file logging should not throw";
+        EXPECT_FALSE(log_msg.empty());
+    }
+
+    // Pattern from read_text_file (FIXED)
+    // Original: LOG_TRACE("Reading text file: {}", file_path.string());
+    // Fixed:    LOG_TRACE("Reading text file: {}", path_to_utf8(file_path));
+    auto transforms_file = test_dir / "変換_transforms_변환.json";
+    create_file(transforms_file, "{}");
+    {
+        std::string log_msg;
+        EXPECT_NO_THROW({
+            log_msg = "Reading text file: " + path_to_utf8(transforms_file);
+        }) << "Text file logging should not throw";
+        EXPECT_FALSE(log_msg.empty());
+    }
+
+    // Pattern from get_sparse_file_path (FIXED)
+    // Original: LOG_TRACE("Found sparse file at: {}", found.string());
+    // Fixed:    LOG_TRACE("Found sparse file at: {}", path_to_utf8(found));
+    {
+        std::string log_msg;
+        EXPECT_NO_THROW({
+            log_msg = "Found sparse file at: " + path_to_utf8(cameras_bin);
+        }) << "Sparse file logging should not throw";
+        EXPECT_FALSE(log_msg.empty());
+    }
+
+    // Pattern from error messages (FIXED)
+    // Original: throw std::runtime_error("Failed to open " + p.string());
+    // Fixed:    throw std::runtime_error("Failed to open " + path_to_utf8(p));
+    {
+        std::string error_msg;
+        EXPECT_NO_THROW({
+            error_msg = "Failed to open " + path_to_utf8(cameras_bin);
+        }) << "Error message should not throw";
+        EXPECT_FALSE(error_msg.empty());
+    }
+}
+
+// ============================================================================
+// Test 39: File Dialog Initial Directory with Unicode
 // ============================================================================
 
 TEST_F(UnicodePathTest, FileDialogInitialDirectory) {

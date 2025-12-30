@@ -4,6 +4,7 @@
 
 #include "io/loader_service.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "io/error.hpp"
 #include "io/loaders/blender_loader.hpp"
 #include "io/loaders/checkpoint_loader.hpp"
@@ -37,7 +38,7 @@ namespace lfs::io {
         std::error_code ec;
         if (!std::filesystem::exists(path, ec)) {
             return make_error(ErrorCode::PATH_NOT_FOUND,
-                              std::format("Path does not exist: {}", path.string()), path);
+                              std::format("Path does not exist: {}", lfs::core::path_to_utf8(path)), path);
         }
 
         // Find appropriate loader
@@ -46,7 +47,7 @@ namespace lfs::io {
             // Build user-friendly error message
             const bool is_directory = std::filesystem::is_directory(path, ec);
             const std::string path_type = is_directory ? "folder" : "file";
-            const std::string filename = path.filename().string();
+            const std::string filename = lfs::core::path_to_utf8(path.filename());
 
             std::string message;
             if (is_directory) {
@@ -70,11 +71,11 @@ namespace lfs::io {
                     filename);
             }
 
-            LOG_ERROR("Unsupported format: {} ({})", path.string(), path_type);
+            LOG_ERROR("Unsupported format: {} ({})", lfs::core::path_to_utf8(path), path_type);
             return make_error(ErrorCode::UNSUPPORTED_FORMAT, message, path);
         }
 
-        LOG_INFO("Using {} loader for: {}", loader->name(), path.string());
+        LOG_INFO("Using {} loader for: {}", loader->name(), lfs::core::path_to_utf8(path));
 
         // Perform the load - let the loader return proper errors
         return loader->load(path, options);
