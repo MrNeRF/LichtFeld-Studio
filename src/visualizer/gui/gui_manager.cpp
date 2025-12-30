@@ -309,6 +309,7 @@ namespace lfs::vis::gui {
             const auto regular_path = lfs::vis::getAssetPath("fonts/" + t.fonts.regular_path);
             const auto bold_path = lfs::vis::getAssetPath("fonts/" + t.fonts.bold_path);
             const auto japanese_path = lfs::vis::getAssetPath("fonts/NotoSansJP-Regular.ttf");
+            const auto korean_path = lfs::vis::getAssetPath("fonts/NotoSansKR-Regular.ttf");
 
             // Helper to check if font file is valid
             const auto is_font_valid = [](const std::filesystem::path& path) -> bool {
@@ -316,8 +317,8 @@ namespace lfs::vis::gui {
                 return std::filesystem::exists(path) && std::filesystem::file_size(path) >= MIN_FONT_FILE_SIZE;
             };
 
-            // Load font with optional Japanese glyph merging
-            const auto load_font_with_japanese =
+            // Load font with optional CJK glyph merging (Japanese + Korean)
+            const auto load_font_with_cjk =
                 [&](const std::filesystem::path& path, const float size) -> ImFont* {
                 if (!is_font_valid(path)) {
                     LOG_WARN("Font file invalid: {}", lfs::core::path_to_utf8(path));
@@ -339,14 +340,23 @@ namespace lfs::vis::gui {
                                                  io.Fonts->GetGlyphRangesJapanese());
                 }
 
+                // Merge Korean glyphs if available
+                if (is_font_valid(korean_path)) {
+                    ImFontConfig config;
+                    config.MergeMode = true;
+                    const std::string korean_path_utf8 = lfs::core::path_to_utf8(korean_path);
+                    io.Fonts->AddFontFromFileTTF(korean_path_utf8.c_str(), size, &config,
+                                                 io.Fonts->GetGlyphRangesKorean());
+                }
+
                 return font;
             };
 
-            font_regular_ = load_font_with_japanese(regular_path, t.fonts.base_size * xscale);
-            font_bold_ = load_font_with_japanese(bold_path, t.fonts.base_size * xscale);
-            font_heading_ = load_font_with_japanese(bold_path, t.fonts.heading_size * xscale);
-            font_small_ = load_font_with_japanese(regular_path, t.fonts.small_size * xscale);
-            font_section_ = load_font_with_japanese(bold_path, t.fonts.section_size * xscale);
+            font_regular_ = load_font_with_cjk(regular_path, t.fonts.base_size * xscale);
+            font_bold_ = load_font_with_cjk(bold_path, t.fonts.base_size * xscale);
+            font_heading_ = load_font_with_cjk(bold_path, t.fonts.heading_size * xscale);
+            font_small_ = load_font_with_cjk(regular_path, t.fonts.small_size * xscale);
+            font_section_ = load_font_with_cjk(bold_path, t.fonts.section_size * xscale);
 
             const bool all_loaded = font_regular_ && font_bold_ && font_heading_ && font_small_ && font_section_;
             if (!all_loaded) {
@@ -366,6 +376,9 @@ namespace lfs::vis::gui {
                 LOG_INFO("Loaded fonts: {} and {}", t.fonts.regular_path, t.fonts.bold_path);
                 if (is_font_valid(japanese_path)) {
                     LOG_INFO("Japanese font support enabled");
+                }
+                if (is_font_valid(korean_path)) {
+                    LOG_INFO("Korean font support enabled");
                 }
             }
         } catch (const std::exception& e) {
