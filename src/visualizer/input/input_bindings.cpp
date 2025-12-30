@@ -4,6 +4,7 @@
 
 #include "input/input_bindings.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include <algorithm>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -128,7 +129,7 @@ namespace lfs::vis::input {
         try {
             std::ofstream file(path);
             if (!file.is_open()) {
-                LOG_ERROR("Failed to open file for writing: {}", path.string());
+                LOG_ERROR("Failed to open file for writing: {}", lfs::core::path_to_utf8(path));
                 return false;
             }
             file << j.dump(4);
@@ -145,7 +146,7 @@ namespace lfs::vis::input {
         try {
             std::ifstream file(path);
             if (!file.is_open()) {
-                LOG_ERROR("Failed to open profile file: {}", path.string());
+                LOG_ERROR("Failed to open profile file: {}", lfs::core::path_to_utf8(path));
                 return false;
             }
 
@@ -193,7 +194,7 @@ namespace lfs::vis::input {
             }
 
             rebuildLookupMaps();
-            LOG_INFO("Loaded profile '{}' ({} bindings) from {}", current_profile_name_, bindings_.size(), path.string());
+            LOG_INFO("Loaded profile '{}' ({} bindings) from {}", current_profile_name_, bindings_.size(), lfs::core::path_to_utf8(path));
             return true;
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to load profile: {}", e.what());
@@ -208,7 +209,7 @@ namespace lfs::vis::input {
         if (std::filesystem::exists(config_dir)) {
             for (const auto& entry : std::filesystem::directory_iterator(config_dir)) {
                 if (entry.path().extension() == ".json") {
-                    const std::string name = entry.path().stem().string();
+                    const std::string name = lfs::core::path_to_utf8(entry.path().stem());
                     if (name != "Default") {
                         profiles.push_back(name);
                     }

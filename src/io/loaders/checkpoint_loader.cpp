@@ -4,6 +4,7 @@
 
 #include "checkpoint_loader.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "io/error.hpp"
 #include <algorithm>
@@ -42,7 +43,7 @@ namespace lfs::io {
 
         // Validation only mode
         if (options.validate_only) {
-            LOG_DEBUG("Validation only mode for checkpoint: {}", path.string());
+            LOG_DEBUG("Validation only mode for checkpoint: {}", lfs::core::path_to_utf8(path));
 
             auto header_result = loadHeader(path);
             if (!header_result) {
@@ -70,7 +71,7 @@ namespace lfs::io {
             options.progress(50.0f, "Parsing checkpoint data...");
         }
 
-        LOG_INFO("Loading checkpoint file: {}", path.string());
+        LOG_INFO("Loading checkpoint file: {}", lfs::core::path_to_utf8(path));
         auto splat_result = lfs::training::load_checkpoint_splat_data(path);
         if (!splat_result) {
             return make_error(ErrorCode::CORRUPTED_DATA,

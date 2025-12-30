@@ -4,6 +4,7 @@
 
 #include "sogs_loader.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "formats/sogs.hpp"
 #include "io/error.hpp"
@@ -40,7 +41,7 @@ namespace lfs::io {
 
         // Validation only mode
         if (options.validate_only) {
-            LOG_DEBUG("Validation only mode for SOG: {}", path.string());
+            LOG_DEBUG("Validation only mode for SOG: {}", lfs::core::path_to_utf8(path));
 
             bool valid = false;
 
@@ -96,7 +97,7 @@ namespace lfs::io {
             options.progress(50.0f, "Parsing SOG data...");
         }
 
-        LOG_INFO("Loading SOG file: {}", path.string());
+        LOG_INFO("Loading SOG file: {}", lfs::core::path_to_utf8(path));
         auto splat_result = load_sog(path);
         if (!splat_result) {
             return make_error(ErrorCode::CORRUPTED_DATA,

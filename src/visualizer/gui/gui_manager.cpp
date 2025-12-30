@@ -271,7 +271,7 @@ namespace lfs::vis::gui {
 
         // Initialize localization system
         auto& loc = lichtfeld::LocalizationManager::getInstance();
-        const std::string locale_path = lfs::core::getLocalesDir().string();
+        const std::string locale_path = lfs::core::path_to_utf8(lfs::core::getLocalesDir());
         if (!loc.initialize(locale_path)) {
             LOG_WARN("Failed to initialize localization system, using default strings");
         } else {
@@ -320,7 +320,7 @@ namespace lfs::vis::gui {
             const auto load_font_with_japanese =
                 [&](const std::filesystem::path& path, const float size) -> ImFont* {
                 if (!is_font_valid(path)) {
-                    LOG_WARN("Font file invalid: {}", path.string());
+                    LOG_WARN("Font file invalid: {}", lfs::core::path_to_utf8(path));
                     return nullptr;
                 }
 
@@ -423,7 +423,7 @@ namespace lfs::vis::gui {
                 w = width;
                 h = height;
             } catch (const std::exception& e) {
-                LOG_WARN("Failed to load overlay texture {}: {}", path.string(), e.what());
+                LOG_WARN("Failed to load overlay texture {}: {}", lfs::core::path_to_utf8(path), e.what());
             }
         };
         loadOverlayTexture(lfs::vis::getAssetPath("lichtfeld-splash-logo.png"),
@@ -1426,7 +1426,7 @@ namespace lfs::vis::gui {
                     if (cam) {
                         // Image filename and extension
                         const auto& path = cam->image_path();
-                        const std::string filename = path.filename().string();
+                        const std::string filename = lfs::core::path_to_utf8(path.filename());
                         std::string ext = path.extension().string();
                         if (!ext.empty() && ext[0] == '.')
                             ext = ext.substr(1);
@@ -2281,7 +2281,7 @@ namespace lfs::vis::gui {
         }
 
         auto splat_data = std::make_shared<lfs::core::SplatData>(std::move(*data));
-        LOG_INFO("Export started: {} (format: {})", path.string(), static_cast<int>(format));
+        LOG_INFO("Export started: {} (format: {})", lfs::core::path_to_utf8(path), static_cast<int>(format));
 
         export_state_.thread = std::make_unique<std::jthread>(
             [this, format, path, splat_data](std::stop_token stop_token) {
@@ -2304,7 +2304,7 @@ namespace lfs::vis::gui {
                 switch (format) {
                 case ExportFormat::PLY: {
                     update_progress(0.1f, "Writing PLY");
-                    lfs::core::save_ply(*splat_data, path.parent_path(), 0, true, path.stem().string());
+                    lfs::core::save_ply(*splat_data, path.parent_path(), 0, true, lfs::core::path_to_utf8(path.stem()));
                     success = true;
                     update_progress(1.0f, "Complete");
                     break;
@@ -2348,7 +2348,7 @@ namespace lfs::vis::gui {
                 }
 
                 if (success) {
-                    LOG_INFO("Export completed: {}", path.string());
+                    LOG_INFO("Export completed: {}", lfs::core::path_to_utf8(path));
                     const std::lock_guard lock(export_state_.mutex);
                     export_state_.stage = "Complete";
                 } else {

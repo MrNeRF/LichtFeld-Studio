@@ -135,7 +135,7 @@ namespace lfs::io {
     std::expected<SplatData, std::string> load_spz(const std::filesystem::path& filepath) {
         auto start = std::chrono::high_resolution_clock::now();
 
-        LOG_INFO("Loading SPZ file: {}", filepath.string());
+        LOG_INFO("Loading SPZ file: {}", lfs::core::path_to_utf8(filepath));
 
         // Load using Niantic's library (outputs RDF coordinate system like PLY)
         spz::UnpackOptions options;
@@ -143,7 +143,7 @@ namespace lfs::io {
         auto cloud = spz::loadSpz(lfs::core::path_to_utf8(filepath), options);
 
         if (cloud.numPoints == 0) {
-            return std::unexpected(std::format("Failed to load SPZ file: {}", filepath.string()));
+            return std::unexpected(std::format("Failed to load SPZ file: {}", lfs::core::path_to_utf8(filepath)));
         }
 
         LOG_DEBUG("SPZ loaded: {} points, SH degree {}", cloud.numPoints, cloud.shDegree);
@@ -161,7 +161,7 @@ namespace lfs::io {
     Result<void> save_spz(const SplatData& splat_data, const SpzSaveOptions& options) {
         auto start = std::chrono::high_resolution_clock::now();
 
-        LOG_INFO("Saving SPZ file: {}", options.output_path.string());
+        LOG_INFO("Saving SPZ file: {}", lfs::core::path_to_utf8(options.output_path));
 
         auto cloud = convert_to_spz(splat_data);
 

@@ -8,6 +8,7 @@
 
 #include "sogs.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor.hpp"
 #include "cuda/kmeans.hpp"
 #include "cuda/morton_encoding.hpp"
@@ -518,7 +519,7 @@ namespace lfs::io {
         std::expected<SplatData, std::string> read_sog_bundle(
             const std::filesystem::path& path) {
 
-            LOG_INFO("Reading SOG bundle: {}", path.string());
+            LOG_INFO("Reading SOG bundle: {}", lfs::core::path_to_utf8(path));
 
             struct archive* a = archive_read_new();
             archive_read_support_format_zip(a);
@@ -589,7 +590,7 @@ namespace lfs::io {
         std::expected<SplatData, std::string> read_sog_directory(
             const std::filesystem::path& path) {
 
-            LOG_INFO("Reading SOG from directory: {}", path.string());
+            LOG_INFO("Reading SOG from directory: {}", lfs::core::path_to_utf8(path));
 
             // Read meta.json
             auto meta_path = path / "meta.json";
@@ -623,14 +624,14 @@ namespace lfs::io {
                 }
 
                 if (!std::filesystem::exists(file_path)) {
-                    LOG_ERROR("Missing file: {}", file_path.string());
+                    LOG_ERROR("Missing file: {}", lfs::core::path_to_utf8(file_path));
                     return false;
                 }
 
                 // Read file
                 std::ifstream file(file_path, std::ios::binary);
                 if (!file) {
-                    LOG_ERROR("Failed to open: {}", file_path.string());
+                    LOG_ERROR("Failed to open: {}", lfs::core::path_to_utf8(file_path));
                     return false;
                 }
 
@@ -692,7 +693,7 @@ namespace lfs::io {
         LOG_TIMER("SOG File Loading");
 
         if (!std::filesystem::exists(path)) {
-            std::string error_msg = std::format("SOG file/directory does not exist: {}", path.string());
+            std::string error_msg = std::format("SOG file/directory does not exist: {}", lfs::core::path_to_utf8(path));
             LOG_ERROR("{}", error_msg);
             return std::unexpected(error_msg);
         }
@@ -711,7 +712,7 @@ namespace lfs::io {
         else if (std::filesystem::is_directory(path)) {
             result = read_sog_directory(path);
         } else {
-            return std::unexpected(std::format("Unknown SOG format: {}", path.string()));
+            return std::unexpected(std::format("Unknown SOG format: {}", lfs::core::path_to_utf8(path)));
         }
 
         return result;
@@ -761,7 +762,7 @@ namespace lfs::io {
 #endif
                 if (result != ARCHIVE_OK) {
                     last_error_ = std::format("Failed to create archive '{}': {}",
-                                              output_path.string(),
+                                              lfs::core::path_to_utf8(output_path),
                                               archive_error_string(a_) ? archive_error_string(a_) : "unknown error");
                     return;
                 }
@@ -917,7 +918,7 @@ namespace lfs::io {
     } // anonymous namespace
 
     Result<void> save_sog(const SplatData& splat_data, const SogSaveOptions& options) {
-        LOG_INFO("SOG write: {}", options.output_path.string());
+        LOG_INFO("SOG write: {}", lfs::core::path_to_utf8(options.output_path));
 
         const auto report_progress = [&](float progress, const std::string& stage) -> bool {
             return !options.progress_callback || options.progress_callback(progress, stage);

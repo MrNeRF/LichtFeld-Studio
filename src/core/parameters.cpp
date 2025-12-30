@@ -5,6 +5,7 @@
 #include "core/parameters.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include <chrono>
 #include <ctime>
 #include <expected>
@@ -33,12 +34,12 @@ namespace lfs::core {
              */
             std::expected<nlohmann::json, std::string> read_json_file(const std::filesystem::path& path) {
                 if (!std::filesystem::exists(path)) {
-                    return std::unexpected(std::format("Configuration file does not exist: {}", path.string()));
+                    return std::unexpected(std::format("Configuration file does not exist: {}", path_to_utf8(path)));
                 }
 
                 std::ifstream file(path);
                 if (!file.is_open()) {
-                    return std::unexpected(std::format("Could not open configuration file: {}", path.string()));
+                    return std::unexpected(std::format("Could not open configuration file: {}", path_to_utf8(path)));
                 }
 
                 try {
@@ -46,7 +47,7 @@ namespace lfs::core {
                     buffer << file.rdbuf();
                     return nlohmann::json::parse(buffer.str());
                 } catch (const nlohmann::json::parse_error& e) {
-                    return std::unexpected(std::format("JSON parsing error in {}: {}", path.string(), e.what()));
+                    return std::unexpected(std::format("JSON parsing error in {}: {}", path_to_utf8(path), e.what()));
                 }
             }
 
@@ -513,13 +514,13 @@ namespace lfs::core {
                                                            : output_path / "training_config.json";
                 std::ofstream file(filepath);
                 if (!file.is_open()) {
-                    return std::unexpected(std::format("Could not open file for writing: {}", filepath.string()));
+                    return std::unexpected(std::format("Could not open file for writing: {}", path_to_utf8(filepath)));
                 }
 
                 file << json.dump(4);
                 file.close();
 
-                LOG_INFO("Saved training config to: {}", filepath.string());
+                LOG_INFO("Saved training config to: {}", path_to_utf8(filepath));
                 return {};
 
             } catch (const std::exception& e) {
@@ -567,8 +568,8 @@ namespace lfs::core {
         nlohmann::json DatasetConfig::to_json() const {
             nlohmann::json json;
 
-            json["data_path"] = data_path.string();
-            json["output_folder"] = output_path.string();
+            json["data_path"] = path_to_utf8(data_path);
+            json["output_folder"] = path_to_utf8(output_path);
             json["images"] = images;
             json["resize_factor"] = resize_factor;
             json["test_every"] = test_every;

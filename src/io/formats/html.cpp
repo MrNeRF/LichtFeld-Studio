@@ -4,6 +4,7 @@
 
 #include "html.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "html_viewer_resources.hpp"
 #include "io/error.hpp"
 #include "sogs.hpp"
@@ -197,7 +198,7 @@ namespace lfs::io {
         }
 
         LOG_INFO("Exported HTML viewer: {} ({:.1f} MB)",
-                 options.output_path.string(),
+                 lfs::core::path_to_utf8(options.output_path),
                  static_cast<float>(html.size()) / (1024 * 1024));
 
         return {};

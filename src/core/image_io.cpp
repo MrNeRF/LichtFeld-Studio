@@ -665,7 +665,7 @@ namespace lfs::core::image_io {
                 lfs::core::save_image(t.path, t.image);
             }
         } catch (const std::exception& e) {
-            LOG_ERROR("[BatchImageSaver] Error saving {}: {}", t.path.string(), e.what());
+            LOG_ERROR("[BatchImageSaver] Error saving {}: {}", lfs::core::path_to_utf8(t.path), e.what());
         }
     }
 } // namespace lfs::core::image_io

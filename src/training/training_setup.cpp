@@ -4,6 +4,7 @@
 
 #include "training_setup.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_data_transform.hpp"
@@ -54,7 +55,7 @@ namespace lfs::training {
             }};
 
         // 3. Load the dataset
-        LOG_INFO("Loading dataset from: {}", params.dataset.data_path.string());
+        LOG_INFO("Loading dataset from: {}", lfs::core::path_to_utf8(params.dataset.data_path));
         auto load_result = data_loader->load(params.dataset.data_path, load_options);
         if (!load_result) {
             return std::unexpected(std::format("Failed to load dataset: {}", load_result.error().format()));
@@ -97,9 +98,9 @@ namespace lfs::training {
                 //     └── ...
 
                 // Get dataset name from path
-                std::string dataset_name = params.dataset.data_path.filename().string();
+                std::string dataset_name = lfs::core::path_to_utf8(params.dataset.data_path.filename());
                 if (dataset_name.empty()) {
-                    dataset_name = params.dataset.data_path.parent_path().filename().string();
+                    dataset_name = lfs::core::path_to_utf8(params.dataset.data_path.parent_path().filename());
                 }
                 if (dataset_name.empty()) {
                     dataset_name = "Dataset";
@@ -131,7 +132,7 @@ namespace lfs::training {
 
                         auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
                         LOG_INFO("Initialized {} Gaussians from {} (sh={})",
-                                 model->size(), init_file.filename().string(), model->get_max_sh_degree());
+                                 model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
                         scene.addSplat("Model", std::move(model), dataset_id);
                         scene.setTrainingModelNode("Model");
                     } else {
@@ -155,7 +156,7 @@ namespace lfs::training {
                             }
 
                             LOG_INFO("Loaded {} Gaussians from {} (sh={})",
-                                     model->size(), init_file.filename().string(), model->get_max_sh_degree());
+                                     model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
                             scene.addSplat("Model", std::move(model), dataset_id);
                             scene.setTrainingModelNode("Model");
                         } catch (const std::bad_variant_access&) {
@@ -209,8 +210,8 @@ namespace lfs::training {
                     if (!enable_eval || (i % test_every) != 0) { // Training camera (all if no eval)
                         scene.addCamera(cameras[i]->image_name(), train_cameras_id,
                                         static_cast<int>(i), cameras[i]->uid(),
-                                        cameras[i]->image_path().string(),
-                                        cameras[i]->mask_path().string());
+                                        lfs::core::path_to_utf8(cameras[i]->image_path()),
+                                        lfs::core::path_to_utf8(cameras[i]->mask_path()));
                     }
                 }
 
@@ -226,8 +227,8 @@ namespace lfs::training {
                         if ((i % test_every) == 0) { // Validation camera
                             scene.addCamera(cameras[i]->image_name(), val_cameras_id,
                                             static_cast<int>(i), cameras[i]->uid(),
-                                            cameras[i]->image_path().string(),
-                                            cameras[i]->mask_path().string());
+                                            lfs::core::path_to_utf8(cameras[i]->image_path()),
+                                            lfs::core::path_to_utf8(cameras[i]->mask_path()));
                         }
                     }
                 }

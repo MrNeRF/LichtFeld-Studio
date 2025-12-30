@@ -6,6 +6,7 @@
 #include "core/camera.hpp"
 #include "core/image_io.hpp" // Use existing image_io utilities
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "geometry/euclidean_transform.hpp"
 #include "rendering/cuda_kernels.hpp"
@@ -83,7 +84,7 @@ namespace lfs::vis {
 
     unsigned int GTTextureCache::loadTexture(const std::filesystem::path& path) {
         if (!std::filesystem::exists(path)) {
-            LOG_ERROR("GT image file does not exist: {}", path.string());
+            LOG_ERROR("GT image file does not exist: {}", lfs::core::path_to_utf8(path));
             return 0;
         }
 
@@ -92,7 +93,7 @@ namespace lfs::vis {
             auto [data, width, height, channels] = lfs::core::load_image(path);
 
             if (!data) {
-                LOG_ERROR("Failed to load image data: {}", path.string());
+                LOG_ERROR("Failed to load image data: {}", lfs::core::path_to_utf8(path));
                 return 0;
             }
 
@@ -150,11 +151,11 @@ namespace lfs::vis {
             lfs::core::free_image(data);
 
             LOG_DEBUG("Created GL texture {} for image: {} ({}x{})",
-                      texture, path.filename().string(), width, height);
+                      texture, lfs::core::path_to_utf8(path.filename()), width, height);
             return texture;
 
         } catch (const std::exception& e) {
-            LOG_ERROR("Exception loading image {}: {}", path.string(), e.what());
+            LOG_ERROR("Exception loading image {}: {}", lfs::core::path_to_utf8(path), e.what());
             return 0;
         }
     }
