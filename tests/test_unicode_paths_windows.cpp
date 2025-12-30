@@ -2205,3 +2205,722 @@ TEST_F(UnicodePathTest, FileDialogInitialDirectory) {
         EXPECT_TRUE(escaped.ends_with("'"));
     }
 }
+
+// ============================================================================
+// Test 40: open_file_for_write() and open_file_for_read() Helper Functions
+// ============================================================================
+
+TEST_F(UnicodePathTest, OpenFileHelpers_BasicWrite) {
+    // Test the open_file_for_write() helper function directly
+    auto test_dir = test_root_ / "file_helpers_test";
+    fs::create_directories(test_dir);
+
+    struct TestCase {
+        std::string name;
+        std::string filename;
+        std::string content;
+    };
+
+    std::vector<TestCase> test_cases = {
+        {"Japanese", "日本語ファイル_japanese.txt", "Japanese content 日本語テスト"},
+        {"Chinese", "中文文件_chinese.txt", "Chinese content 中文测试"},
+        {"Korean", "한국어파일_korean.txt", "Korean content 한국어테스트"},
+        {"Mixed", "混合_ミックス_혼합_mixed.txt", "Mixed Unicode content"},
+        {"Emoji", "emoji_😀_🎉_test.txt", "Emoji content 🚀"},
+    };
+
+    for (const auto& tc : test_cases) {
+        SCOPED_TRACE(tc.name);
+        auto file_path = test_dir / tc.filename;
+
+        // Test open_file_for_write
+        std::ofstream out_stream;
+        bool write_opened = open_file_for_write(file_path, out_stream);
+        EXPECT_TRUE(write_opened) << "open_file_for_write failed for: " << tc.name;
+
+        if (write_opened) {
+            out_stream << tc.content;
+            out_stream.close();
+            EXPECT_TRUE(out_stream.good()) << "Write failed for: " << tc.name;
+        }
+
+        // Verify file exists
+        EXPECT_TRUE(fs::exists(file_path)) << "File not created: " << tc.name;
+
+        // Test open_file_for_read
+        std::ifstream in_stream;
+        bool read_opened = open_file_for_read(file_path, in_stream);
+        EXPECT_TRUE(read_opened) << "open_file_for_read failed for: " << tc.name;
+
+        if (read_opened) {
+            std::string read_content{std::istreambuf_iterator<char>(in_stream),
+                                     std::istreambuf_iterator<char>()};
+            EXPECT_EQ(read_content, tc.content) << "Content mismatch for: " << tc.name;
+        }
+    }
+}
+
+TEST_F(UnicodePathTest, OpenFileHelpers_BinaryMode) {
+    // Test binary mode with open_file_for_write/read
+    auto test_dir = test_root_ / "binary_helpers_test";
+    fs::create_directories(test_dir);
+
+    std::vector<uint8_t> binary_data = {
+        0x00, 0x01, 0x02, 0xFF, 0xFE, 0xFD,
+        0x89, 0x50, 0x4E, 0x47, // PNG magic bytes
+        0x0D, 0x0A, 0x1A, 0x0A};
+
+    struct TestCase {
+        std::string name;
+        std::string filename;
+    };
+
+    std::vector<TestCase> test_cases = {
+        {"Checkpoint_Japanese", "チェックポイント_checkpoint.resume"},
+        {"Checkpoint_Chinese", "检查点_checkpoint.resume"},
+        {"SOG_Korean", "압축된_compressed.sog"},
+        {"SPZ_Mixed", "スプラット_splat_스플랫.spz"},
+    };
+
+    for (const auto& tc : test_cases) {
+        SCOPED_TRACE(tc.name);
+        auto file_path = test_dir / tc.filename;
+
+        // Write binary data using helper
+        std::ofstream out_stream;
+        bool write_opened = open_file_for_write(file_path, std::ios::binary, out_stream);
+        EXPECT_TRUE(write_opened) << "Binary write open failed: " << tc.name;
+
+        if (write_opened) {
+            out_stream.write(reinterpret_cast<const char*>(binary_data.data()),
+                             static_cast<std::streamsize>(binary_data.size()));
+            out_stream.close();
+        }
+
+        // Read binary data back using helper
+        std::ifstream in_stream;
+        bool read_opened = open_file_for_read(file_path, std::ios::binary, in_stream);
+        EXPECT_TRUE(read_opened) << "Binary read open failed: " << tc.name;
+
+        if (read_opened) {
+            std::vector<uint8_t> read_data{std::istreambuf_iterator<char>(in_stream),
+                                           std::istreambuf_iterator<char>()};
+            EXPECT_EQ(read_data, binary_data) << "Binary data mismatch: " << tc.name;
+        }
+    }
+}
+
+TEST_F(UnicodePathTest, OpenFileHelpers_AppendMode) {
+    // Test append mode (used in metrics CSV)
+    auto test_dir = test_root_ / "append_test";
+    fs::create_directories(test_dir);
+
+    auto csv_path = test_dir / "メトリクス_metrics_지표.csv";
+
+    // Write initial content
+    {
+        std::ofstream out_stream;
+        EXPECT_TRUE(open_file_for_write(csv_path, out_stream));
+        out_stream << "iteration,psnr,ssim\n";
+        out_stream.close();
+    }
+
+    // Append more content
+    {
+        std::ofstream out_stream;
+        EXPECT_TRUE(open_file_for_write(csv_path, std::ios::app, out_stream));
+        out_stream << "1000,25.5,0.92\n";
+        out_stream.close();
+    }
+
+    // Append even more
+    {
+        std::ofstream out_stream;
+        EXPECT_TRUE(open_file_for_write(csv_path, std::ios::app, out_stream));
+        out_stream << "2000,28.3,0.95\n";
+        out_stream.close();
+    }
+
+    // Read and verify
+    std::ifstream in_stream;
+    EXPECT_TRUE(open_file_for_read(csv_path, in_stream));
+    std::string content{std::istreambuf_iterator<char>(in_stream),
+                        std::istreambuf_iterator<char>()};
+
+    EXPECT_TRUE(content.find("iteration,psnr,ssim") != std::string::npos);
+    EXPECT_TRUE(content.find("1000,25.5,0.92") != std::string::npos);
+    EXPECT_TRUE(content.find("2000,28.3,0.95") != std::string::npos);
+}
+
+// ============================================================================
+// Test 41: Checkpoint Save/Load Simulation with Unicode Paths
+// ============================================================================
+
+TEST_F(UnicodePathTest, CheckpointSaveLoad) {
+    // Simulate checkpoint operations from checkpoint.cpp
+    auto output_dir = test_root_ / "出力_output_輸出_출력";
+    auto checkpoints_dir = output_dir / "checkpoints";
+    fs::create_directories(checkpoints_dir);
+
+    // Checkpoint header structure simulation
+    struct MockCheckpointHeader {
+        uint32_t magic = 0x4C465343;  // "LFSC"
+        uint32_t version = 1;
+        uint32_t iteration;
+        uint32_t num_gaussians;
+    };
+
+    // Test multiple checkpoint saves
+    std::vector<std::pair<int, int>> checkpoints = {
+        {1000, 50000},
+        {5000, 75000},
+        {10000, 100000},
+    };
+
+    for (const auto& [iteration, num_gaussians] : checkpoints) {
+        auto checkpoint_path = checkpoints_dir /
+                               ("checkpoint_" + std::to_string(iteration) + ".resume");
+
+        // Simulate save_checkpoint
+        {
+            std::ofstream file;
+            EXPECT_TRUE(open_file_for_write(checkpoint_path, std::ios::binary, file))
+                << "Failed to open checkpoint for writing: " << path_to_utf8(checkpoint_path);
+
+            if (file.is_open()) {
+                MockCheckpointHeader header;
+                header.iteration = iteration;
+                header.num_gaussians = num_gaussians;
+                file.write(reinterpret_cast<const char*>(&header), sizeof(header));
+
+                // Write some mock model data
+                std::vector<float> mock_data(100, 1.0f);
+                file.write(reinterpret_cast<const char*>(mock_data.data()),
+                           mock_data.size() * sizeof(float));
+                file.close();
+            }
+        }
+
+        // Simulate load_checkpoint
+        {
+            std::ifstream file;
+            EXPECT_TRUE(open_file_for_read(checkpoint_path, std::ios::binary, file))
+                << "Failed to open checkpoint for reading: " << path_to_utf8(checkpoint_path);
+
+            if (file.is_open()) {
+                MockCheckpointHeader header;
+                file.read(reinterpret_cast<char*>(&header), sizeof(header));
+                EXPECT_EQ(header.magic, 0x4C465343u);
+                EXPECT_EQ(header.iteration, static_cast<uint32_t>(iteration));
+                EXPECT_EQ(header.num_gaussians, static_cast<uint32_t>(num_gaussians));
+            }
+        }
+
+        EXPECT_TRUE(fs::exists(checkpoint_path))
+            << "Checkpoint file missing: " << path_to_utf8(checkpoint_path);
+    }
+}
+
+// ============================================================================
+// Test 42: Training Config JSON Export with Unicode Paths
+// ============================================================================
+
+TEST_F(UnicodePathTest, TrainingConfigExport) {
+    // Simulate training config export from parameters.cpp
+    auto output_dir = test_root_ / "訓練_training_训练_훈련";
+    fs::create_directories(output_dir);
+
+    auto config_path = output_dir / "training_config.json";
+
+    // Simulate save_training_parameters
+    {
+        std::ofstream file;
+        EXPECT_TRUE(open_file_for_write(config_path, file))
+            << "Failed to create training config: " << path_to_utf8(config_path);
+
+        if (file.is_open()) {
+            std::ostringstream json;
+            json << "{\n";
+            json << "  \"dataset\": {\n";
+            json << "    \"data_path\": \"C:/データ/日本語フォルダ/dataset\",\n";
+            json << "    \"output_path\": \"" << path_to_utf8(output_dir) << "\"\n";
+            json << "  },\n";
+            json << "  \"optimization\": {\n";
+            json << "    \"iterations\": 30000,\n";
+            json << "    \"learning_rate\": 0.001\n";
+            json << "  },\n";
+            json << "  \"timestamp\": \"2024-12-30 12:00:00\"\n";
+            json << "}\n";
+            file << json.str();
+            file.close();
+        }
+    }
+
+    // Verify config was written
+    EXPECT_TRUE(fs::exists(config_path));
+
+    // Read back and verify
+    {
+        std::ifstream file;
+        EXPECT_TRUE(open_file_for_read(config_path, file));
+        std::string content{std::istreambuf_iterator<char>(file),
+                            std::istreambuf_iterator<char>()};
+        EXPECT_TRUE(content.find("iterations") != std::string::npos);
+        EXPECT_TRUE(content.find("learning_rate") != std::string::npos);
+    }
+}
+
+// ============================================================================
+// Test 43: Metrics CSV and Report Export with Unicode Paths
+// ============================================================================
+
+TEST_F(UnicodePathTest, MetricsExport) {
+    // Simulate metrics export from metrics.cpp
+    auto output_dir = test_root_ / "評価_evaluation_평가_评估";
+    fs::create_directories(output_dir);
+
+    auto csv_path = output_dir / "metrics.csv";
+    auto txt_path = output_dir / "metrics_report.txt";
+
+    // Create CSV header (like MetricsReporter constructor)
+    {
+        std::ofstream csv_file;
+        EXPECT_TRUE(open_file_for_write(csv_path, csv_file))
+            << "Failed to create metrics CSV";
+        csv_file << "iteration,psnr,ssim,elapsed_time,num_gaussians\n";
+        csv_file.close();
+    }
+
+    // Append metrics (like MetricsReporter::add_metrics)
+    struct MockMetrics {
+        int iteration;
+        float psnr;
+        float ssim;
+        float elapsed_time;
+        int num_gaussians;
+    };
+
+    std::vector<MockMetrics> all_metrics = {
+        {1000, 22.5f, 0.85f, 0.5f, 50000},
+        {5000, 26.3f, 0.91f, 0.6f, 75000},
+        {10000, 28.1f, 0.94f, 0.7f, 100000},
+        {30000, 30.5f, 0.97f, 0.8f, 120000},
+    };
+
+    for (const auto& m : all_metrics) {
+        std::ofstream csv_file;
+        EXPECT_TRUE(open_file_for_write(csv_path, std::ios::app, csv_file))
+            << "Failed to append to metrics CSV";
+        csv_file << m.iteration << "," << m.psnr << "," << m.ssim << ","
+                 << m.elapsed_time << "," << m.num_gaussians << "\n";
+        csv_file.close();
+    }
+
+    // Create report (like MetricsReporter::save_report)
+    {
+        std::ofstream report_file;
+        EXPECT_TRUE(open_file_for_write(txt_path, report_file))
+            << "Failed to create metrics report";
+
+        report_file << "==============================================\n";
+        report_file << "3D Gaussian Splatting Evaluation Report\n";
+        report_file << "==============================================\n";
+        report_file << "Output Directory: " << path_to_utf8(output_dir) << "\n";
+        report_file << "Generated: 2024-12-30 12:00:00\n\n";
+        report_file << "Summary Statistics:\n";
+        report_file << "------------------\n";
+        report_file << "Best PSNR: 30.5 (at iteration 30000)\n";
+        report_file << "Best SSIM: 0.97 (at iteration 30000)\n";
+        report_file.close();
+    }
+
+    // Verify files exist
+    EXPECT_TRUE(fs::exists(csv_path));
+    EXPECT_TRUE(fs::exists(txt_path));
+
+    // Verify CSV content
+    {
+        std::ifstream csv_file;
+        EXPECT_TRUE(open_file_for_read(csv_path, csv_file));
+        std::string content{std::istreambuf_iterator<char>(csv_file),
+                            std::istreambuf_iterator<char>()};
+        EXPECT_TRUE(content.find("iteration,psnr,ssim") != std::string::npos);
+        EXPECT_TRUE(content.find("30000,30.5,0.97") != std::string::npos);
+    }
+
+    // Verify report content
+    {
+        std::ifstream txt_file;
+        EXPECT_TRUE(open_file_for_read(txt_path, txt_file));
+        std::string content{std::istreambuf_iterator<char>(txt_file),
+                            std::istreambuf_iterator<char>()};
+        EXPECT_TRUE(content.find("Evaluation Report") != std::string::npos);
+        EXPECT_TRUE(content.find("Best PSNR") != std::string::npos);
+    }
+}
+
+// ============================================================================
+// Test 44: HTML Export with Unicode Paths
+// ============================================================================
+
+TEST_F(UnicodePathTest, HtmlExport) {
+    // Simulate HTML export from html.cpp
+    auto output_dir = test_root_ / "HTMLビューア_viewer_뷰어_查看器";
+    fs::create_directories(output_dir);
+
+    auto html_path = output_dir / "ガウシアンスプラット_gaussian_viewer.html";
+
+    // Simulate export_html
+    {
+        std::ofstream out;
+        EXPECT_TRUE(open_file_for_write(html_path, out))
+            << "Failed to create HTML file: " << path_to_utf8(html_path);
+
+        if (out.is_open()) {
+            out << "<!DOCTYPE html>\n";
+            out << "<html>\n";
+            out << "<head><title>Gaussian Splat Viewer - ガウシアンスプラット</title></head>\n";
+            out << "<body>\n";
+            out << "  <h1>3D Gaussian Splat Viewer</h1>\n";
+            out << "  <p>日本語コンテンツ - Chinese: 中文 - Korean: 한국어</p>\n";
+            out << "  <script>/* embedded SOG data */</script>\n";
+            out << "</body>\n";
+            out << "</html>\n";
+            out.close();
+        }
+    }
+
+    EXPECT_TRUE(fs::exists(html_path));
+    EXPECT_GT(fs::file_size(html_path), 100u);
+
+    // Verify content
+    {
+        std::ifstream in;
+        EXPECT_TRUE(open_file_for_read(html_path, in));
+        std::string content{std::istreambuf_iterator<char>(in),
+                            std::istreambuf_iterator<char>()};
+        EXPECT_TRUE(content.find("<!DOCTYPE html>") != std::string::npos);
+        EXPECT_TRUE(content.find("ガウシアンスプラット") != std::string::npos);
+    }
+}
+
+// ============================================================================
+// Test 45: SPZ Export with Unicode Paths
+// ============================================================================
+
+TEST_F(UnicodePathTest, SpzExport) {
+    // Simulate SPZ export from spz.cpp
+    auto output_dir = test_root_ / "SPZ出力_spz_export_SPZ输出";
+    fs::create_directories(output_dir);
+
+    auto spz_path = output_dir / "モデル_model_模型_모델.spz";
+
+    // SPZ is gzipped data - simulate writing binary SPZ file
+    std::vector<uint8_t> spz_data = {
+        0x1F, 0x8B,             // Gzip magic
+        0x08,                   // Compression method
+        0x00,                   // Flags
+        0x00, 0x00, 0x00, 0x00, // Timestamp
+        0x00, 0xFF,             // Extra flags + OS
+        // Mock compressed data
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+
+    // Write SPZ file
+    {
+        std::ofstream out;
+        EXPECT_TRUE(open_file_for_write(spz_path, std::ios::binary | std::ios::out, out))
+            << "Failed to create SPZ file: " << path_to_utf8(spz_path);
+        out.write(reinterpret_cast<const char*>(spz_data.data()), spz_data.size());
+        out.close();
+        EXPECT_TRUE(out.good());
+    }
+
+    EXPECT_TRUE(fs::exists(spz_path));
+    EXPECT_EQ(fs::file_size(spz_path), spz_data.size());
+
+    // Verify content
+    {
+        std::ifstream in;
+        EXPECT_TRUE(open_file_for_read(spz_path, std::ios::binary, in));
+        std::vector<uint8_t> read_data{std::istreambuf_iterator<char>(in),
+                                       std::istreambuf_iterator<char>()};
+        EXPECT_EQ(read_data, spz_data);
+        // Verify gzip magic
+        EXPECT_EQ(read_data[0], 0x1Fu);
+        EXPECT_EQ(read_data[1], 0x8Bu);
+    }
+}
+
+// ============================================================================
+// Test 46: Theme Save/Load with Unicode Paths
+// ============================================================================
+
+TEST_F(UnicodePathTest, ThemeSaveLoad) {
+    // Simulate theme save/load from theme.cpp
+    auto themes_dir = test_root_ / "テーマ_themes_主题_테마";
+    fs::create_directories(themes_dir);
+
+    auto theme_path = themes_dir / "カスタムテーマ_custom_theme.json";
+
+    // Simulate saveTheme
+    {
+        std::ofstream file;
+        // Theme uses string paths, so test utf8_to_path conversion
+        auto path = utf8_to_path(path_to_utf8(theme_path));
+        EXPECT_TRUE(open_file_for_write(path, file))
+            << "Failed to save theme: " << path_to_utf8(theme_path);
+
+        if (file.is_open()) {
+            std::ostringstream json;
+            json << "{\n";
+            json << "  \"name\": \"ダークテーマ_Dark_暗色\",\n";
+            json << "  \"palette\": {\n";
+            json << "    \"background\": [0.1, 0.1, 0.1, 1.0],\n";
+            json << "    \"text\": [0.9, 0.9, 0.9, 1.0]\n";
+            json << "  },\n";
+            json << "  \"fonts\": {\n";
+            json << "    \"regular_path\": \"C:/Fonts/日本語フォント.ttf\"\n";
+            json << "  }\n";
+            json << "}\n";
+            file << json.str();
+            file.close();
+        }
+    }
+
+    EXPECT_TRUE(fs::exists(theme_path));
+
+    // Simulate loadTheme
+    {
+        std::ifstream file;
+        auto path = utf8_to_path(path_to_utf8(theme_path));
+        EXPECT_TRUE(open_file_for_read(path, file))
+            << "Failed to load theme: " << path_to_utf8(theme_path);
+
+        std::string content{std::istreambuf_iterator<char>(file),
+                            std::istreambuf_iterator<char>()};
+        EXPECT_TRUE(content.find("ダークテーマ") != std::string::npos);
+        EXPECT_TRUE(content.find("palette") != std::string::npos);
+    }
+}
+
+// ============================================================================
+// Test 47: Input Bindings Save/Load with Unicode Paths
+// ============================================================================
+
+TEST_F(UnicodePathTest, InputBindingsSaveLoad) {
+    // Simulate input bindings save/load from input_bindings.cpp
+    auto profiles_dir = test_root_ / "プロファイル_profiles_配置文件_프로필";
+    fs::create_directories(profiles_dir);
+
+    auto profile_path = profiles_dir / "カスタム入力_custom_bindings.json";
+
+    // Simulate saveProfileToFile
+    {
+        std::ofstream file;
+        EXPECT_TRUE(open_file_for_write(profile_path, file))
+            << "Failed to save input profile: " << path_to_utf8(profile_path);
+
+        if (file.is_open()) {
+            std::ostringstream json;
+            json << "{\n";
+            json << "  \"version\": 2,\n";
+            json << "  \"name\": \"カスタムプロファイル_Custom_自定义\",\n";
+            json << "  \"bindings\": [\n";
+            json << "    {\"action\": \"orbit\", \"trigger\": {\"button\": 0}},\n";
+            json << "    {\"action\": \"pan\", \"trigger\": {\"button\": 1}},\n";
+            json << "    {\"action\": \"zoom\", \"trigger\": {\"button\": 2}}\n";
+            json << "  ]\n";
+            json << "}\n";
+            file << json.str();
+            file.close();
+        }
+    }
+
+    EXPECT_TRUE(fs::exists(profile_path));
+
+    // Simulate loadProfileFromFile
+    {
+        std::ifstream file;
+        EXPECT_TRUE(open_file_for_read(profile_path, file))
+            << "Failed to load input profile: " << path_to_utf8(profile_path);
+
+        std::string content{std::istreambuf_iterator<char>(file),
+                            std::istreambuf_iterator<char>()};
+        EXPECT_TRUE(content.find("version") != std::string::npos);
+        EXPECT_TRUE(content.find("カスタムプロファイル") != std::string::npos);
+        EXPECT_TRUE(content.find("bindings") != std::string::npos);
+    }
+}
+
+// ============================================================================
+// Test 48: Training Snapshot Save/Load with Unicode Paths
+// ============================================================================
+
+TEST_F(UnicodePathTest, TrainingSnapshotSaveLoad) {
+    // Simulate training snapshot save/load from training_snapshot.cpp
+    auto snapshots_dir = test_root_ / "スナップショット_snapshots_快照_스냅샷";
+    fs::create_directories(snapshots_dir);
+
+    auto snapshot_path = snapshots_dir / "トレーニング状態_training_snapshot.json";
+
+    // Simulate TrainingSnapshot::save
+    {
+        std::ofstream file;
+        EXPECT_TRUE(open_file_for_write(snapshot_path, file))
+            << "Failed to save snapshot: " << path_to_utf8(snapshot_path);
+
+        if (file.is_open()) {
+            std::ostringstream json;
+            json << "{\n";
+            json << "  \"iteration\": 15000,\n";
+            json << "  \"num_gaussians\": 85000,\n";
+            json << "  \"psnr\": 27.5,\n";
+            json << "  \"ssim\": 0.93,\n";
+            json << "  \"data_path\": \"C:/データ/日本語プロジェクト\",\n";
+            json << "  \"output_path\": \"" << path_to_utf8(snapshots_dir) << "\"\n";
+            json << "}\n";
+            file << json.str();
+            file.close();
+        }
+    }
+
+    EXPECT_TRUE(fs::exists(snapshot_path));
+
+    // Simulate TrainingSnapshot::load
+    {
+        std::ifstream file;
+        EXPECT_TRUE(open_file_for_read(snapshot_path, file))
+            << "Failed to load snapshot: " << path_to_utf8(snapshot_path);
+
+        std::string content{std::istreambuf_iterator<char>(file),
+                            std::istreambuf_iterator<char>()};
+        EXPECT_TRUE(content.find("iteration") != std::string::npos);
+        EXPECT_TRUE(content.find("15000") != std::string::npos);
+        EXPECT_TRUE(content.find("日本語プロジェクト") != std::string::npos);
+    }
+}
+
+// ============================================================================
+// Test 49: Cache File Operations with Unicode Paths
+// ============================================================================
+
+TEST_F(UnicodePathTest, CacheFileOperations) {
+    // Simulate cache operations from cache_image_loader.cpp and pipelined_image_loader.cpp
+    auto cache_dir = test_root_ / "キャッシュ_cache_缓存_캐시";
+    fs::create_directories(cache_dir);
+
+    // Test cache file write and .done marker creation
+    std::vector<std::string> cache_keys = {
+        "日本語画像_japanese_image",
+        "中文图片_chinese_image",
+        "한국어이미지_korean_image",
+    };
+
+    for (const auto& key : cache_keys) {
+        SCOPED_TRACE(key);
+        auto cache_path = cache_dir / (key + ".cache");
+        auto done_path = cache_path;
+        done_path += ".done";
+
+        // Write cache data
+        std::vector<uint8_t> cache_data = {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+        {
+            std::ofstream file;
+            EXPECT_TRUE(open_file_for_write(cache_path, std::ios::binary, file))
+                << "Failed to write cache file";
+            file.write(reinterpret_cast<const char*>(cache_data.data()), cache_data.size());
+            file.close();
+        }
+
+        // Create .done marker
+        {
+            std::ofstream done_file;
+            EXPECT_TRUE(open_file_for_write(done_path, std::ios::trunc, done_file))
+                << "Failed to create .done marker";
+            done_file.close();
+        }
+
+        // Verify both files exist
+        EXPECT_TRUE(fs::exists(cache_path)) << "Cache file missing";
+        EXPECT_TRUE(fs::exists(done_path)) << ".done marker missing";
+    }
+}
+
+// ============================================================================
+// Test 50: Complete Export Workflow with Unicode Paths
+// ============================================================================
+
+TEST_F(UnicodePathTest, CompleteExportWorkflow) {
+    // Simulate a complete training + export workflow with Unicode paths
+    auto project_dir = test_root_ / "プロジェクト_project_项目_프로젝트";
+    auto output_dir = project_dir / "出力_output";
+    auto checkpoints_dir = output_dir / "checkpoints";
+    auto exports_dir = output_dir / "exports";
+
+    fs::create_directories(checkpoints_dir);
+    fs::create_directories(exports_dir);
+
+    // 1. Save training config
+    {
+        auto config_path = output_dir / "training_config.json";
+        std::ofstream file;
+        EXPECT_TRUE(open_file_for_write(config_path, file));
+        file << "{\"iterations\": 30000, \"path\": \"" << path_to_utf8(project_dir) << "\"}";
+        file.close();
+        EXPECT_TRUE(fs::exists(config_path));
+    }
+
+    // 2. Save checkpoints at intervals
+    for (int iter : {10000, 20000, 30000}) {
+        auto cp_path = checkpoints_dir / ("checkpoint_" + std::to_string(iter) + ".resume");
+        std::ofstream file;
+        EXPECT_TRUE(open_file_for_write(cp_path, std::ios::binary, file));
+        uint32_t header[4] = {0x4C465343, 1, static_cast<uint32_t>(iter), 100000};
+        file.write(reinterpret_cast<const char*>(header), sizeof(header));
+        file.close();
+        EXPECT_TRUE(fs::exists(cp_path));
+    }
+
+    // 3. Save metrics
+    {
+        auto csv_path = output_dir / "metrics.csv";
+        std::ofstream file;
+        EXPECT_TRUE(open_file_for_write(csv_path, file));
+        file << "iteration,psnr,ssim\n10000,25.0,0.90\n20000,28.0,0.94\n30000,30.0,0.97\n";
+        file.close();
+        EXPECT_TRUE(fs::exists(csv_path));
+    }
+
+    // 4. Export to various formats
+    {
+        auto ply_path = exports_dir / "モデル_model.ply";
+        std::ofstream file;
+        EXPECT_TRUE(open_file_for_write(ply_path, std::ios::binary, file));
+        file << "ply\nformat binary 1.0\nelement vertex 100\nend_header\n";
+        file.close();
+        EXPECT_TRUE(fs::exists(ply_path));
+    }
+
+    {
+        auto spz_path = exports_dir / "圧縮モデル_compressed.spz";
+        std::ofstream file;
+        EXPECT_TRUE(open_file_for_write(spz_path, std::ios::binary, file));
+        std::vector<uint8_t> gzip = {0x1F, 0x8B, 0x08, 0x00};
+        file.write(reinterpret_cast<const char*>(gzip.data()), gzip.size());
+        file.close();
+        EXPECT_TRUE(fs::exists(spz_path));
+    }
+
+    {
+        auto html_path = exports_dir / "ビューア_viewer.html";
+        std::ofstream file;
+        EXPECT_TRUE(open_file_for_write(html_path, file));
+        file << "<!DOCTYPE html><html><body>Viewer</body></html>";
+        file.close();
+        EXPECT_TRUE(fs::exists(html_path));
+    }
+
+    // Verify complete workflow succeeded
+    EXPECT_EQ(fs::directory_iterator(checkpoints_dir) != fs::directory_iterator(), true);
+    EXPECT_EQ(fs::directory_iterator(exports_dir) != fs::directory_iterator(), true);
+}
