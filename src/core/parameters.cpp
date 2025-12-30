@@ -584,12 +584,13 @@ namespace lfs::core {
         DatasetConfig DatasetConfig::from_json(const nlohmann::json& j) {
             DatasetConfig dataset;
 
-            dataset.data_path = j["data_path"].get<std::string>();
+            // Use utf8_to_path for proper Unicode handling since JSON is UTF-8 encoded
+            dataset.data_path = utf8_to_path(j["data_path"].get<std::string>());
             dataset.images = j["images"].get<std::string>();
             dataset.resize_factor = j["resize_factor"].get<int>();
             dataset.max_width = j["max_width"].get<int>();
             dataset.test_every = j["test_every"].get<int>();
-            dataset.output_path = j["output_folder"].get<std::string>();
+            dataset.output_path = utf8_to_path(j["output_folder"].get<std::string>());
 
             if (j.contains("loading_params")) {
                 dataset.loading_params = LoadingParams::from_json(j["loading_params"]);

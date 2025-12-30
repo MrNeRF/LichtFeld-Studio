@@ -22,6 +22,13 @@
 #include <sstream>
 #include <vector>
 
+// Check if we have access to the full library (not standalone unicode test build)
+#if __has_include("core/parameters.hpp")
+#define LFS_HAS_FULL_LIBRARY 1
+#include "core/parameters.hpp"
+#include <nlohmann/json.hpp>
+#endif
+
 #include "core/path_utils.hpp"
 
 namespace fs = std::filesystem;
@@ -2924,3 +2931,95 @@ TEST_F(UnicodePathTest, CompleteExportWorkflow) {
     EXPECT_EQ(fs::directory_iterator(checkpoints_dir) != fs::directory_iterator(), true);
     EXPECT_EQ(fs::directory_iterator(exports_dir) != fs::directory_iterator(), true);
 }
+
+// ============================================================================
+// Test 51: DatasetConfig::from_json with Unicode Paths
+// This tests the critical path where paths are read from JSON and must be
+// properly converted from UTF-8 to filesystem paths.
+// Only available when full library is linked (not standalone unicode test build)
+// ============================================================================
+
+#ifdef LFS_HAS_FULL_LIBRARY
+TEST_F(UnicodePathTest, DatasetConfigFromJsonUnicodePaths) {
+    // Create directories with Unicode characters
+    auto data_dir = test_root_ / "データ_data_数据_데이터";
+    auto output_dir = test_root_ / "出力_output_輸出_출력";
+    fs::create_directories(data_dir);
+    fs::create_directories(output_dir);
+
+    // Create JSON with Unicode paths encoded as UTF-8
+    nlohmann::json j;
+    j["data_path"] = path_to_utf8(data_dir);
+    j["output_folder"] = path_to_utf8(output_dir);
+    j["images"] = "images";
+    j["resize_factor"] = 1;
+    j["max_width"] = 1920;
+    j["test_every"] = 8;
+
+    // Parse JSON to DatasetConfig - this should use utf8_to_path internally
+    auto dataset = lfs::core::param::DatasetConfig::from_json(j);
+
+    // Verify paths were correctly converted from UTF-8
+    EXPECT_EQ(dataset.data_path, data_dir);
+    EXPECT_EQ(dataset.output_path, output_dir);
+
+    // Verify we can use these paths for actual filesystem operations
+    // This tests the round-trip: path -> UTF-8 JSON -> path -> filesystem
+    auto test_file = dataset.output_path / "checkpoints" / "test.txt";
+    fs::create_directories(test_file.parent_path());
+
+    std::ofstream file;
+    EXPECT_TRUE(open_file_for_write(test_file, file));
+    file << "checkpoint test";
+    file.close();
+
+    EXPECT_TRUE(fs::exists(test_file));
+
+    // Verify path_to_utf8 output matches the original JSON
+    EXPECT_EQ(path_to_utf8(dataset.data_path), j["data_path"].get<std::string>());
+    EXPECT_EQ(path_to_utf8(dataset.output_path), j["output_folder"].get<std::string>());
+}
+
+// ============================================================================
+// Test 52: DatasetConfig round-trip through JSON with Unicode Paths
+// Tests to_json and from_json preserve Unicode paths correctly
+// ============================================================================
+
+TEST_F(UnicodePathTest, DatasetConfigJsonRoundTrip) {
+    // Create directories with various Unicode character sets
+    auto data_dir = test_root_ / "プロジェクト_project_项目";
+    auto output_dir = test_root_ / "結果_results_结果";
+    fs::create_directories(data_dir);
+    fs::create_directories(output_dir);
+
+    // Create original config
+    lfs::core::param::DatasetConfig original;
+    original.data_path = data_dir;
+    original.output_path = output_dir;
+    original.images = "images";
+    original.resize_factor = 2;
+    original.max_width = 3840;
+    original.test_every = 4;
+
+    // Round-trip through JSON
+    nlohmann::json j = original.to_json();
+    auto restored = lfs::core::param::DatasetConfig::from_json(j);
+
+    // Verify paths are identical after round-trip
+    EXPECT_EQ(restored.data_path, original.data_path);
+    EXPECT_EQ(restored.output_path, original.output_path);
+
+    // Verify JSON contains UTF-8 encoded paths
+    std::string json_data_path = j["data_path"].get<std::string>();
+    std::string json_output_path = j["output_folder"].get<std::string>();
+
+    // The JSON should contain the UTF-8 representation
+    EXPECT_EQ(json_data_path, path_to_utf8(data_dir));
+    EXPECT_EQ(json_output_path, path_to_utf8(output_dir));
+
+    // Verify filesystem operations work with restored paths
+    auto checkpoint_dir = restored.output_path / "checkpoints";
+    fs::create_directories(checkpoint_dir);
+    EXPECT_TRUE(fs::exists(checkpoint_dir));
+}
+#endif // LFS_HAS_FULL_LIBRARY
