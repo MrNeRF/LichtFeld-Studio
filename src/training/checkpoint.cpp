@@ -23,8 +23,8 @@ namespace lfs::training {
             std::filesystem::create_directories(checkpoint_dir);
             const auto checkpoint_path = checkpoint_dir / ("checkpoint_" + std::to_string(iteration) + ".resume");
 
-            std::ofstream file(checkpoint_path, std::ios::binary);
-            if (!file) {
+            std::ofstream file;
+            if (!lfs::core::open_file_for_write(checkpoint_path, std::ios::binary, file)) {
                 return std::unexpected("Failed to open: " + lfs::core::path_to_utf8(checkpoint_path));
             }
 
@@ -84,8 +84,8 @@ namespace lfs::training {
         const std::filesystem::path& path) {
 
         try {
-            std::ifstream file(path, std::ios::binary);
-            if (!file) {
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(path, std::ios::binary, file)) {
                 return std::unexpected("Failed to open: " + lfs::core::path_to_utf8(path));
             }
 
@@ -112,8 +112,8 @@ namespace lfs::training {
         BilateralGrid* bilateral_grid) {
 
         try {
-            std::ifstream file(path, std::ios::binary);
-            if (!file) {
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(path, std::ios::binary, file)) {
                 return std::unexpected("Failed to open: " + lfs::core::path_to_utf8(path));
             }
 
@@ -202,8 +202,8 @@ namespace lfs::training {
         const std::filesystem::path& path) {
 
         try {
-            std::ifstream file(path, std::ios::binary);
-            if (!file) {
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(path, std::ios::binary, file)) {
                 return std::unexpected("Failed to open: " + lfs::core::path_to_utf8(path));
             }
 
@@ -237,8 +237,8 @@ namespace lfs::training {
         const std::filesystem::path& path) {
 
         try {
-            std::ifstream file(path, std::ios::binary);
-            if (!file) {
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(path, std::ios::binary, file)) {
                 return std::unexpected("Failed to open: " + lfs::core::path_to_utf8(path));
             }
 

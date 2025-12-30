@@ -38,8 +38,8 @@ namespace lfs::io {
         }
 
         std::vector<uint8_t> read_file_binary(const std::filesystem::path& path) {
-            std::ifstream file(path, std::ios::binary | std::ios::ate);
-            if (!file)
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(path, std::ios::binary | std::ios::ate, file))
                 return {};
 
             const auto size = file.tellg();
@@ -180,8 +180,8 @@ namespace lfs::io {
 
         const auto html = generate_html(base64_data);
 
-        std::ofstream out(options.output_path);
-        if (!out) {
+        std::ofstream out;
+        if (!lfs::core::open_file_for_write(options.output_path, out)) {
             return make_error(ErrorCode::WRITE_FAILURE,
                               "Failed to open output file for writing", options.output_path);
         }

@@ -176,9 +176,9 @@ namespace lfs::io {
                               "Failed to pack SPZ data", options.output_path);
         }
 
-        // Write file using std::ofstream with path object (C++17+) for proper Unicode handling
-        std::ofstream out(options.output_path, std::ios::binary | std::ios::out);
-        if (!out) {
+        // Write file using std::ofstream with Unicode path handling
+        std::ofstream out;
+        if (!lfs::core::open_file_for_write(options.output_path, std::ios::binary | std::ios::out, out)) {
             return make_error(ErrorCode::WRITE_FAILURE,
                               "Failed to open SPZ file for writing", options.output_path);
         }

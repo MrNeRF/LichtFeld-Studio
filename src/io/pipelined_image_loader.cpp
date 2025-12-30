@@ -313,8 +313,8 @@ namespace lfs::io {
         files_being_written_.insert(cache_key);
 
         const auto path = get_fs_cache_path(cache_key);
-        std::ofstream file(path, std::ios::binary);
-        if (file) {
+        std::ofstream file;
+        if (lfs::core::open_file_for_write(path, std::ios::binary, file)) {
             file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
             if (!file.good()) {
                 LOG_WARN("[PipelinedImageLoader] Failed to write cache file: {}", lfs::core::path_to_utf8(path));
@@ -323,8 +323,8 @@ namespace lfs::io {
                 // Use path concatenation for proper Unicode handling on Windows
                 auto done_path = path;
                 done_path += ".done";
-                std::ofstream done_file(done_path);
-                if (!done_file.good()) {
+                std::ofstream done_file;
+                if (!lfs::core::open_file_for_write(done_path, done_file) || !done_file.good()) {
                     LOG_WARN("[PipelinedImageLoader] Failed to create .done marker: {}", lfs::core::path_to_utf8(path));
                 }
             }

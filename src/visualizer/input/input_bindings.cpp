@@ -127,8 +127,8 @@ namespace lfs::vis::input {
         j["bindings"] = bindings_array;
 
         try {
-            std::ofstream file(path);
-            if (!file.is_open()) {
+            std::ofstream file;
+            if (!lfs::core::open_file_for_write(path, file)) {
                 LOG_ERROR("Failed to open file for writing: {}", lfs::core::path_to_utf8(path));
                 return false;
             }
@@ -144,8 +144,8 @@ namespace lfs::vis::input {
         using json = nlohmann::json;
 
         try {
-            std::ifstream file(path);
-            if (!file.is_open()) {
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(path, file)) {
                 LOG_ERROR("Failed to open profile file: {}", lfs::core::path_to_utf8(path));
                 return false;
             }

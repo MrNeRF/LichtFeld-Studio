@@ -512,8 +512,8 @@ namespace lfs::core {
                 const std::filesystem::path filepath = (output_path.extension() == ".json")
                                                            ? output_path
                                                            : output_path / "training_config.json";
-                std::ofstream file(filepath);
-                if (!file.is_open()) {
+                std::ofstream file;
+                if (!open_file_for_write(filepath, file)) {
                     return std::unexpected(std::format("Could not open file for writing: {}", path_to_utf8(filepath)));
                 }
 

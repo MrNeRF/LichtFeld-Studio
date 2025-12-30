@@ -150,8 +150,8 @@ namespace lfs::io {
         bool create_done_file(const std::filesystem::path& img_path) {
             auto done_path = img_path;
             done_path += ".done";
-            std::ofstream ofs(done_path, std::ios::trunc);
-            return ofs.good();
+            std::ofstream ofs;
+            return lfs::core::open_file_for_write(done_path, std::ios::trunc, ofs) && ofs.good();
         }
 
         bool does_cache_image_exist(const std::filesystem::path& img_path) {

@@ -72,8 +72,8 @@ namespace lfs::core::debug {
     }
 
     bool TrainingSnapshot::save(const std::filesystem::path& path) const {
-        std::ofstream file(path);
-        if (!file.is_open()) {
+        std::ofstream file;
+        if (!lfs::core::open_file_for_write(path, file)) {
             LOG_ERROR("Failed to open snapshot file for writing: {}", lfs::core::path_to_utf8(path));
             return false;
         }
@@ -85,8 +85,8 @@ namespace lfs::core::debug {
 
     std::optional<TrainingSnapshot> TrainingSnapshot::load(const std::filesystem::path& path) {
         // Simple JSON parsing - for full implementation use nlohmann/json
-        std::ifstream file(path);
-        if (!file.is_open()) {
+        std::ifstream file;
+        if (!lfs::core::open_file_for_read(path, file)) {
             LOG_ERROR("Failed to open snapshot file: {}", lfs::core::path_to_utf8(path));
             return std::nullopt;
         }

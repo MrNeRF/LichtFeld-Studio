@@ -5,6 +5,7 @@
 #include "metrics.hpp"
 #include "../rasterization/fast_rasterizer.hpp"
 #include "core/image_io.hpp"
+#include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include <chrono>
@@ -64,8 +65,8 @@ namespace lfs::training {
           txt_path_(output_dir_ / "metrics_report.txt") {
         // Create CSV header if file doesn't exist
         if (!std::filesystem::exists(csv_path_)) {
-            std::ofstream csv_file(csv_path_);
-            if (csv_file.is_open()) {
+            std::ofstream csv_file;
+            if (lfs::core::open_file_for_write(csv_path_, csv_file)) {
                 csv_file << EvalMetrics{}.to_csv_header() << std::endl;
                 csv_file.close();
             }
@@ -76,17 +77,17 @@ namespace lfs::training {
         all_metrics_.push_back(metrics);
 
         // Append to CSV immediately
-        std::ofstream csv_file(csv_path_, std::ios::app);
-        if (csv_file.is_open()) {
+        std::ofstream csv_file;
+        if (lfs::core::open_file_for_write(csv_path_, std::ios::app, csv_file)) {
             csv_file << metrics.to_csv_row() << std::endl;
             csv_file.close();
         }
     }
 
     void MetricsReporter::save_report() const {
-        std::ofstream report_file(txt_path_);
-        if (!report_file.is_open()) {
-            std::cerr << "Failed to open report file: " << txt_path_ << std::endl;
+        std::ofstream report_file;
+        if (!lfs::core::open_file_for_write(txt_path_, report_file)) {
+            std::cerr << "Failed to open report file: " << lfs::core::path_to_utf8(txt_path_) << std::endl;
             return;
         }
 
@@ -94,7 +95,7 @@ namespace lfs::training {
         report_file << "==============================================\n";
         report_file << "3D Gaussian Splatting Evaluation Report\n";
         report_file << "==============================================\n";
-        report_file << "Output Directory: " << output_dir_ << "\n";
+        report_file << "Output Directory: " << lfs::core::path_to_utf8(output_dir_) << "\n";
 
         // Get current time
         const auto now = std::chrono::system_clock::now();
@@ -149,8 +150,8 @@ namespace lfs::training {
         }
 
         report_file.close();
-        std::cout << "Evaluation report saved to: " << txt_path_ << std::endl;
-        std::cout << "Metrics CSV saved to: " << csv_path_ << std::endl;
+        std::cout << "Evaluation report saved to: " << lfs::core::path_to_utf8(txt_path_) << std::endl;
+        std::cout << "Metrics CSV saved to: " << lfs::core::path_to_utf8(csv_path_) << std::endl;
     }
 
     // MetricsEvaluator Implementation
@@ -330,7 +331,7 @@ namespace lfs::training {
         _reporter->add_metrics(result);
 
         if (_params.optimization.enable_save_eval_images) {
-            std::cout << "Saved " << image_idx << " evaluation images to: " << eval_dir << std::endl;
+            std::cout << "Saved " << image_idx << " evaluation images to: " << lfs::core::path_to_utf8(eval_dir) << std::endl;
         }
 
         return result;

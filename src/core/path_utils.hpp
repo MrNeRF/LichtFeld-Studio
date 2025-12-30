@@ -5,6 +5,7 @@
 #pragma once
 
 #include <filesystem>
+#include <fstream>
 #include <string>
 
 #ifdef _WIN32
@@ -94,6 +95,81 @@ namespace lfs::core {
         // On Linux/Mac, native encoding is UTF-8, so use string directly
         return std::filesystem::path(utf8_str);
 #endif
+    }
+
+    /**
+     * @brief Open an output file stream with proper Unicode path handling
+     *
+     * On Windows, std::ofstream constructor with std::filesystem::path may not work
+     * correctly with Unicode paths in all implementations. This function ensures
+     * proper handling by using the path object directly which MSVC handles correctly.
+     *
+     * @param path The filesystem path to open
+     * @param mode The open mode (default: std::ios::out)
+     * @param[out] stream Reference to store the opened ofstream
+     * @return true if the file was opened successfully, false otherwise
+     */
+    inline bool open_file_for_write(
+        const std::filesystem::path& path,
+        std::ios_base::openmode mode,
+        std::ofstream& stream) {
+#ifdef _WIN32
+        // On Windows, explicitly use wstring to open with Unicode support
+        // This ensures we bypass any narrow string conversion issues
+        stream.open(path.wstring(), mode);
+#else
+        // On Linux/Mac, standard ofstream works with UTF-8 paths
+        stream.open(path, mode);
+#endif
+        return stream.is_open();
+    }
+
+    /**
+     * @brief Open an output file stream for writing (convenience overload)
+     *
+     * @param path The filesystem path to open
+     * @param[out] stream Reference to store the opened ofstream
+     * @return true if the file was opened successfully, false otherwise
+     */
+    inline bool open_file_for_write(
+        const std::filesystem::path& path,
+        std::ofstream& stream) {
+        return open_file_for_write(path, std::ios::out, stream);
+    }
+
+    /**
+     * @brief Open an input file stream with proper Unicode path handling
+     *
+     * @param path The filesystem path to open
+     * @param mode The open mode (default: std::ios::in)
+     * @param[out] stream Reference to store the opened ifstream
+     * @return true if the file was opened successfully, false otherwise
+     */
+    inline bool open_file_for_read(
+        const std::filesystem::path& path,
+        std::ios_base::openmode mode,
+        std::ifstream& stream) {
+#ifdef _WIN32
+        // On Windows, explicitly use wstring to open with Unicode support
+        stream.open(path.wstring(), mode);
+#else
+        // On Linux/Mac, standard ifstream works with UTF-8 paths
+        stream.open(path, mode);
+#endif
+        return stream.is_open();
+    }
+
+    /**
+     * @brief Open an input file stream for reading (convenience overload)
+     *
+     * @param path The filesystem path to open
+     * @param[out] stream Reference to store the opened ifstream
+     * @return true if the file was opened successfully, false otherwise
+     */
+    inline bool open_file_for_read(
+        const std::filesystem::path& path,
+        std::ifstream& stream) {
+        return open_file_for_read(path, std::ios::in, stream);
     }
 
 } // namespace lfs::core

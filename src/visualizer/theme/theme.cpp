@@ -3,6 +3,7 @@
 
 #include "theme.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "internal/resource_paths.hpp"
 #include <algorithm>
 #include <filesystem>
@@ -502,8 +503,8 @@ namespace lfs::vis {
             vignette["radius"] = t.vignette.radius;
             vignette["softness"] = t.vignette.softness;
 
-            std::ofstream file(path);
-            if (!file.is_open())
+            std::ofstream file;
+            if (!lfs::core::open_file_for_write(lfs::core::utf8_to_path(path), file))
                 return false;
             file << j.dump(2);
             return true;
@@ -514,8 +515,8 @@ namespace lfs::vis {
 
     bool loadTheme(Theme& t, const std::string& path) {
         try {
-            std::ifstream file(path);
-            if (!file.is_open())
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(lfs::core::utf8_to_path(path), file))
                 return false;
 
             json j;
