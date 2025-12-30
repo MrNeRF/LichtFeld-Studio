@@ -25,8 +25,6 @@ namespace lfs::training {
             }
 
             const auto checkpoint_dir = path / "checkpoints";
-            LOG_INFO("Checkpoint save: output_path='{}', checkpoint_dir='{}'",
-                     lfs::core::path_to_utf8(path), lfs::core::path_to_utf8(checkpoint_dir));
 
             // Create checkpoint directory with error checking
             std::error_code ec;
@@ -37,7 +35,6 @@ namespace lfs::training {
             }
 
             const auto checkpoint_path = checkpoint_dir / ("checkpoint_" + std::to_string(iteration) + ".resume");
-            LOG_INFO("Checkpoint file path: '{}'", lfs::core::path_to_utf8(checkpoint_path));
 
             std::ofstream file;
             if (!lfs::core::open_file_for_write(checkpoint_path, std::ios::binary, file)) {

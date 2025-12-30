@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -71,20 +72,24 @@ namespace lfs::core {
     inline std::filesystem::path utf8_to_path(const std::string& utf8_str) {
 #ifdef _WIN32
         // On Windows, convert UTF-8 string to wide string, then to path
-        if (utf8_str.empty()) {
+        // Use c_str() and strlen to handle strings with embedded null characters
+        // (common when using fixed-size buffers like ImGui InputText)
+        const char* str = utf8_str.c_str();
+        const size_t len = std::strlen(str);
+        if (len == 0) {
             return std::filesystem::path();
         }
 
-        const int size_needed = MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(),
-                                                    static_cast<int>(utf8_str.size()),
+        const int size_needed = MultiByteToWideChar(CP_UTF8, 0, str,
+                                                    static_cast<int>(len),
                                                     nullptr, 0);
         if (size_needed <= 0) {
             return std::filesystem::path();
         }
 
         std::wstring wstr(size_needed, 0);
-        const int converted = MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(),
-                                                  static_cast<int>(utf8_str.size()),
+        const int converted = MultiByteToWideChar(CP_UTF8, 0, str,
+                                                  static_cast<int>(len),
                                                   &wstr[0], size_needed);
         if (converted <= 0) {
             return std::filesystem::path();
@@ -93,7 +98,8 @@ namespace lfs::core {
         return std::filesystem::path(wstr);
 #else
         // On Linux/Mac, native encoding is UTF-8, so use string directly
-        return std::filesystem::path(utf8_str);
+        // Also handle embedded nulls by using c_str()
+        return std::filesystem::path(utf8_str.c_str());
 #endif
     }
 
