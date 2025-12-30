@@ -223,7 +223,7 @@ namespace {
                     const std::filesystem::path view_path = lfs::core::utf8_to_path(view_path_str);
 
                     if (!std::filesystem::exists(view_path)) {
-                        return std::unexpected(std::format("Path does not exist: {}", view_path.string()));
+                        return std::unexpected(std::format("Path does not exist: {}", lfs::core::path_to_utf8(view_path)));
                     }
 
                     constexpr std::array<std::string_view, 4> SUPPORTED_EXTENSIONS = {".ply", ".sog", ".spz", ".resume"};
@@ -243,13 +243,13 @@ namespace {
 
                         if (params.view_paths.empty()) {
                             return std::unexpected(std::format(
-                                "No supported files (.ply, .sog, .spz, .resume) found in: {}", view_path.string()));
+                                "No supported files (.ply, .sog, .spz, .resume) found in: {}", lfs::core::path_to_utf8(view_path)));
                         }
                         LOG_DEBUG("Found {} view files in directory", params.view_paths.size());
                     } else {
                         if (!is_supported(view_path)) {
                             return std::unexpected(std::format(
-                                "Unsupported format. Expected: .ply, .sog, .spz, .resume. Got: {}", view_path.string()));
+                                "Unsupported format. Expected: .ply, .sog, .spz, .resume. Got: {}", lfs::core::path_to_utf8(view_path)));
                         }
                         params.view_paths.push_back(view_path);
                     }
@@ -306,7 +306,7 @@ namespace {
                 if (ec) {
                     return std::unexpected(std::format(
                         "Failed to create output directory '{}': {}",
-                        params.dataset.output_path.string(), ec.message()));
+                        lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
                 }
             } else if (has_data_path != has_output_path && !has_resume) {
                 // Only require both if not in resume mode
@@ -327,7 +327,7 @@ namespace {
                     if (ec) {
                         return std::unexpected(std::format(
                             "Failed to create output directory '{}': {}",
-                            params.dataset.output_path.string(), ec.message()));
+                            lfs::core::path_to_utf8(params.dataset.output_path), ec.message()));
                     }
                 }
             }
@@ -645,7 +645,7 @@ lfs::core::args::parse_args(const int argc, const char* const argv[]) {
     params.sh_degree = sh_degree ? ::args::get(sh_degree) : -1;
 
     if (!std::filesystem::exists(params.input_path)) {
-        return std::unexpected(std::format("Input not found: {}", params.input_path.string()));
+        return std::unexpected(std::format("Input not found: {}", lfs::core::path_to_utf8(params.input_path)));
     }
 
     if (params.sh_degree < -1 || params.sh_degree > 3) {

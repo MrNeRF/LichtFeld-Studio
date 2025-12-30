@@ -8,6 +8,7 @@
 #include "core/data_loading_service.hpp"
 #include "core/event_bus.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/services.hpp"
 #include "scene/scene_manager.hpp"
 #include "tools/align_tool.hpp"
@@ -172,7 +173,7 @@ namespace lfs::vis {
                 const auto& prev = data_loader_->getParameters();
                 data_loader_->setParameters(param_mgr->createForDataset(path, prev.dataset.output_path));
             }
-            LOG_DEBUG("Resetting: reloading {}", path.string());
+            LOG_DEBUG("Resetting: reloading {}", lfs::core::path_to_utf8(path));
             if (const auto result = data_loader_->loadDataset(path); !result) {
                 LOG_ERROR("Reload failed: {}", result.error());
             }
@@ -714,7 +715,7 @@ namespace lfs::vis {
             return std::unexpected("Failed to initialize visualizer");
         }
 
-        LOG_INFO("Loading PLY file: {}", path.string());
+        LOG_INFO("Loading PLY file: {}", lfs::core::path_to_utf8(path));
         return data_loader_->loadPLY(path);
     }
 
@@ -737,7 +738,7 @@ namespace lfs::vis {
             return std::unexpected("Failed to initialize visualizer");
         }
 
-        LOG_INFO("Loading dataset: {}", path.string());
+        LOG_INFO("Loading dataset: {}", lfs::core::path_to_utf8(path));
         return data_loader_->loadDataset(path);
     }
 
@@ -749,7 +750,7 @@ namespace lfs::vis {
             return std::unexpected("Failed to initialize visualizer");
         }
 
-        LOG_INFO("Loading checkpoint for training: {}", path.string());
+        LOG_INFO("Loading checkpoint for training: {}", lfs::core::path_to_utf8(path));
         return data_loader_->loadCheckpointForTraining(path);
     }
 

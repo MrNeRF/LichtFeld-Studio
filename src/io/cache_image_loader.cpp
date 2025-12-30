@@ -182,11 +182,11 @@ namespace lfs::io {
         if (!std::filesystem::exists(cache_base.parent_path())) {
             std::filesystem::create_directories(cache_base.parent_path(), ec);
             if (ec) {
-                LOG_ERROR("Failed to create cache base path: {} - {}", cache_base.parent_path().string(), ec.message());
+                LOG_ERROR("Failed to create cache base path: {} - {}", lfs::core::path_to_utf8(cache_base.parent_path()), ec.message());
                 use_fs_cache_ = false;
                 return;
             }
-            LOG_DEBUG("Created cache base path: {}", cache_base.parent_path().string());
+            LOG_DEBUG("Created cache base path: {}", lfs::core::path_to_utf8(cache_base.parent_path()));
         }
 
         if (std::filesystem::exists(cache_folder)) {
@@ -206,7 +206,7 @@ namespace lfs::io {
         }
 
         cache_folder_ = cache_folder;
-        LOG_DEBUG("Cache directory: {}", cache_folder.string());
+        LOG_DEBUG("Cache directory: {}", lfs::core::path_to_utf8(cache_folder));
     }
 
     void CacheLoader::reset_cache() {
@@ -236,7 +236,7 @@ namespace lfs::io {
             std::error_code ec;
             std::filesystem::remove_all(entry.path(), ec);
             if (ec) {
-                LOG_ERROR("Failed to remove {}: {}", entry.path().string(), ec.message());
+                LOG_ERROR("Failed to remove {}: {}", lfs::core::path_to_utf8(entry.path()), ec.message());
             }
         }
     }
@@ -345,7 +345,7 @@ namespace lfs::io {
         if (!img_data) {
             std::lock_guard lock(cpu_cache_mutex_);
             image_being_loaded_cpu_.erase(cache_key);
-            throw std::runtime_error("Failed to load: " + path.string());
+            throw std::runtime_error("Failed to load: " + lfs::core::path_to_utf8(path));
         }
 
         auto tensor = Tensor::from_blob(img_data,
@@ -399,7 +399,7 @@ namespace lfs::io {
             return load_and_preprocess(data, w, h, c);
         }
 
-        const std::string unique_name = std::format("rf{}_mw{}_{}", params.resize_factor, params.max_width, path.filename().string());
+        const std::string unique_name = std::format("rf{}_mw{}_{}", params.resize_factor, params.max_width, lfs::core::path_to_utf8(path.filename()));
         const auto cache_img_path = cache_folder_ / unique_name;
 
         std::tuple<unsigned char*, int, int, int> result;
@@ -570,7 +570,7 @@ namespace lfs::io {
 
             auto [img_data, width, height, channels] = load_image(path, params.resize_factor, params.max_width);
             if (!img_data) {
-                throw std::runtime_error("Failed to load: " + path.string());
+                throw std::runtime_error("Failed to load: " + lfs::core::path_to_utf8(path));
             }
 
             auto cpu_tensor = Tensor::empty_unpinned(
@@ -609,13 +609,13 @@ namespace lfs::io {
         if (!from_cache) {
             std::ifstream file(path, std::ios::binary | std::ios::ate);
             if (!file) {
-                throw std::runtime_error("Failed to open: " + path.string());
+                throw std::runtime_error("Failed to open: " + lfs::core::path_to_utf8(path));
             }
             const auto size = file.tellg();
             file.seekg(0, std::ios::beg);
             jpeg_bytes.resize(size);
             if (!file.read(reinterpret_cast<char*>(jpeg_bytes.data()), size)) {
-                throw std::runtime_error("Failed to read: " + path.string());
+                throw std::runtime_error("Failed to read: " + lfs::core::path_to_utf8(path));
             }
         }
 

@@ -4,6 +4,7 @@
 #include "io/pipelined_image_loader.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "cuda/image_format_kernels.cuh"
 #include "io/nvcodec_image_loader.hpp"
 
@@ -216,7 +217,7 @@ namespace lfs::io {
     }
 
     std::string PipelinedImageLoader::make_cache_key(const std::filesystem::path& path, const LoadParams& params) const {
-        return path.string() + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
+        return lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
     }
 
     std::filesystem::path PipelinedImageLoader::get_fs_cache_path(const std::string& cache_key) const {
@@ -248,14 +249,14 @@ namespace lfs::io {
     std::vector<uint8_t> PipelinedImageLoader::read_file(const std::filesystem::path& path) const {
         std::ifstream file(path, std::ios::binary | std::ios::ate);
         if (!file)
-            throw std::runtime_error("Failed to open: " + path.string());
+            throw std::runtime_error("Failed to open: " + lfs::core::path_to_utf8(path));
 
         const auto size = file.tellg();
         file.seekg(0, std::ios::beg);
 
         std::vector<uint8_t> buffer(size);
         if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
-            throw std::runtime_error("Failed to read: " + path.string());
+            throw std::runtime_error("Failed to read: " + lfs::core::path_to_utf8(path));
         }
         return buffer;
     }
@@ -316,7 +317,7 @@ namespace lfs::io {
         if (file) {
             file.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
             if (!file.good()) {
-                LOG_WARN("[PipelinedImageLoader] Failed to write cache file: {}", path.string());
+                LOG_WARN("[PipelinedImageLoader] Failed to write cache file: {}", lfs::core::path_to_utf8(path));
             } else {
                 file.close();
                 // Use path concatenation for proper Unicode handling on Windows
@@ -324,11 +325,11 @@ namespace lfs::io {
                 done_path += ".done";
                 std::ofstream done_file(done_path);
                 if (!done_file.good()) {
-                    LOG_WARN("[PipelinedImageLoader] Failed to create .done marker: {}", path.string());
+                    LOG_WARN("[PipelinedImageLoader] Failed to create .done marker: {}", lfs::core::path_to_utf8(path));
                 }
             }
         } else {
-            LOG_WARN("[PipelinedImageLoader] Failed to open cache file for writing: {}", path.string());
+            LOG_WARN("[PipelinedImageLoader] Failed to open cache file for writing: {}", lfs::core::path_to_utf8(path));
         }
         files_being_written_.erase(cache_key);
     }
@@ -399,7 +400,7 @@ namespace lfs::io {
                     ++stats_.cold_path_misses;
                 }
             } catch (const std::exception& e) {
-                LOG_ERROR("[PipelinedImageLoader] Prefetch error {}: {}", request.path.string(), e.what());
+                LOG_ERROR("[PipelinedImageLoader] Prefetch error {}: {}", lfs::core::path_to_utf8(request.path), e.what());
                 in_flight_.fetch_sub(1, std::memory_order_acq_rel);
             }
         }
@@ -446,7 +447,7 @@ namespace lfs::io {
                         auto tensor = nvcodec.load_image_from_memory_gpu(jpeg_data, 1, 0, nullptr);
 
                         if (!tensor.is_valid() || tensor.numel() == 0) {
-                            LOG_WARN("[PipelinedImageLoader] GPU decode returned invalid tensor for {}", batch[i].path.string());
+                            LOG_WARN("[PipelinedImageLoader] GPU decode returned invalid tensor for {}", lfs::core::path_to_utf8(batch[i].path));
                             throw std::runtime_error("Invalid tensor");
                         }
 
@@ -564,7 +565,7 @@ namespace lfs::io {
                 ++stats_.total_images_loaded;
 
             } catch (const std::exception& e) {
-                LOG_ERROR("[PipelinedImageLoader] Cold process error {}: {}", item.path.string(), e.what());
+                LOG_ERROR("[PipelinedImageLoader] Cold process error {}: {}", lfs::core::path_to_utf8(item.path), e.what());
                 in_flight_.fetch_sub(1, std::memory_order_acq_rel);
             }
         }

@@ -9,6 +9,7 @@
 #include "core/events.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/splat_data_export.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
@@ -135,7 +136,7 @@ namespace lfs::training {
         if (masks_found == 0) {
             return std::unexpected(std::format(
                 "Mask mode enabled but no masks found in {}/masks/",
-                params_.dataset.data_path.string()));
+                lfs::core::path_to_utf8(params_.dataset.data_path)));
         }
 
         LOG_INFO("Found {} masks{}", masks_found, opt.invert_masks ? " (inverted)" : "");
@@ -580,7 +581,7 @@ namespace lfs::training {
             if (result) {
                 auto checkpoint_path = params_.dataset.output_path / "checkpoints" /
                                        std::format("checkpoint_{}.resume", iter);
-                LOG_INFO("Checkpoint saved to {}", checkpoint_path.string());
+                LOG_INFO("Checkpoint saved to {}", lfs::core::path_to_utf8(checkpoint_path));
             } else {
                 LOG_ERROR("Failed to save checkpoint: {}", result.error());
             }
@@ -1313,7 +1314,7 @@ namespace lfs::training {
             LOG_WARN("Failed to save checkpoint: {}", ckpt_result.error());
         }
 
-        LOG_DEBUG("PLY save initiated: {} (sync={})", save_path.string(), join_threads);
+        LOG_DEBUG("PLY save initiated: {} (sync={})", lfs::core::path_to_utf8(save_path), join_threads);
     }
 
     std::expected<void, std::string> Trainer::save_checkpoint(int iteration) {
