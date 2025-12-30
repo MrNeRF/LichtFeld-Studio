@@ -467,7 +467,7 @@ namespace lfs::vis::gui::panels {
         if (ImGui::TreeNode(LOC(Training::Section::SAVE_STEPS))) {
             if (can_edit) {
                 static int new_step = 1000;
-                ImGui::InputInt(LOC(TrainingPanel::NEW_STEP), &new_step, 100, 1000);
+                ImGui::InputInt("##new_step", &new_step, 100, 1000);
                 ImGui::SameLine();
                 if (ImGui::Button(LOC(Training::Button::ADD))) {
                     if (new_step > 0 && std::find(opt_params.save_steps.begin(),
