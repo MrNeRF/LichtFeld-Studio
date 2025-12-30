@@ -19,13 +19,29 @@ namespace lfs::training {
         const BilateralGrid* bilateral_grid) {
 
         try {
+            // Validate input path
+            if (path.empty()) {
+                return std::unexpected("Cannot save checkpoint: output path is empty");
+            }
+
             const auto checkpoint_dir = path / "checkpoints";
-            std::filesystem::create_directories(checkpoint_dir);
+            LOG_INFO("Checkpoint save: output_path='{}', checkpoint_dir='{}'",
+                     lfs::core::path_to_utf8(path), lfs::core::path_to_utf8(checkpoint_dir));
+
+            // Create checkpoint directory with error checking
+            std::error_code ec;
+            std::filesystem::create_directories(checkpoint_dir, ec);
+            if (ec) {
+                return std::unexpected("Failed to create checkpoint directory '" +
+                                       lfs::core::path_to_utf8(checkpoint_dir) + "': " + ec.message());
+            }
+
             const auto checkpoint_path = checkpoint_dir / ("checkpoint_" + std::to_string(iteration) + ".resume");
+            LOG_INFO("Checkpoint file path: '{}'", lfs::core::path_to_utf8(checkpoint_path));
 
             std::ofstream file;
             if (!lfs::core::open_file_for_write(checkpoint_path, std::ios::binary, file)) {
-                return std::unexpected("Failed to open: " + lfs::core::path_to_utf8(checkpoint_path));
+                return std::unexpected("Failed to open checkpoint file: " + lfs::core::path_to_utf8(checkpoint_path));
             }
 
             const auto& model = strategy.get_model();
