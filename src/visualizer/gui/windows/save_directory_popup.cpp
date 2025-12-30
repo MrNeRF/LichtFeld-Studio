@@ -122,7 +122,8 @@ namespace lfs::vis::gui {
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, t.button_hovered());
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, t.button_active());
             if (ImGui::Button(LOC(Common::BROWSE))) {
-                std::filesystem::path start_dir(output_path_buffer_.c_str());
+                // Use utf8_to_path for proper Unicode handling
+                std::filesystem::path start_dir = lfs::core::utf8_to_path(output_path_buffer_);
                 if (!std::filesystem::exists(start_dir)) {
                     start_dir = dataset_path_;
                 }
