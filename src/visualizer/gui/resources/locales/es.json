@@ -490,6 +490,9 @@
     "loss": "Pérdida:",
     "gaussians_count": "%s Gaussianos",
     "exporting": "Exportando %s...",
+    "importing": "Importando %s...",
+    "import_complete": "Importación completada: %zu imágenes, %zu puntos",
+    "import_failed": "Importación fallida: %s",
     "num_splats": "núm. Splats: %d",
     "status_label": "Estado: %s"
   },

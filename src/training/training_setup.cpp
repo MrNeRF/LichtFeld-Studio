@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "training_setup.hpp"
+#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
@@ -44,14 +45,20 @@ namespace lfs::training {
         // 1. Create loader
         auto data_loader = lfs::io::Loader::create();
 
-        // 2. Set up load options
+        // 2. Set up load options with progress callback that emits events
+        const auto& data_path = params.dataset.data_path;
         lfs::io::LoadOptions load_options{
             .resize_factor = params.dataset.resize_factor,
             .max_width = params.dataset.max_width,
             .images_folder = params.dataset.images,
             .validate_only = false,
-            .progress = [](float percentage, const std::string& message) {
+            .progress = [&data_path](float percentage, const std::string& message) {
                 LOG_DEBUG("[{:5.1f}%] {}", percentage, message);
+                lfs::core::events::state::DatasetLoadProgress{
+                    .path = data_path,
+                    .progress = percentage,
+                    .step = message}
+                    .emit();
             }};
 
         // 3. Load the dataset
@@ -421,6 +428,137 @@ namespace lfs::training {
             return std::unexpected(result.error().format());
         }
         return {};
+    }
+
+    std::expected<void, std::string> applyLoadResultToScene(
+        const lfs::core::param::TrainingParameters& params,
+        lfs::vis::Scene& scene,
+        lfs::io::LoadResult&& load_result) {
+
+        return std::visit([&](auto&& data) -> std::expected<void, std::string> {
+            using T = std::decay_t<decltype(data)>;
+
+            if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::SplatData>>) {
+                auto model = std::make_unique<lfs::core::SplatData>(std::move(*data));
+                scene.addSplat("loaded_model", std::move(model));
+                scene.setTrainingModelNode("loaded_model");
+                return {};
+
+            } else if constexpr (std::is_same_v<T, lfs::io::LoadedScene>) {
+                scene.setTrainCameras(data.cameras);
+                scene.setInitialPointCloud(data.point_cloud);
+                scene.setSceneCenter(load_result.scene_center);
+
+                std::string dataset_name = lfs::core::path_to_utf8(params.dataset.data_path.filename());
+                if (dataset_name.empty()) {
+                    dataset_name = lfs::core::path_to_utf8(params.dataset.data_path.parent_path().filename());
+                }
+                if (dataset_name.empty()) {
+                    dataset_name = "Dataset";
+                }
+
+                const auto dataset_id = scene.addDataset(dataset_name);
+
+                // Handle --init file
+                if (params.init_path.has_value()) {
+                    const std::filesystem::path init_file(params.init_path.value());
+                    const auto ext = init_file.extension().string();
+
+                    if (ext == ".ply" && !lfs::io::is_gaussian_splat_ply(init_file)) {
+                        auto pc_result = lfs::io::load_ply_point_cloud(init_file);
+                        if (!pc_result) {
+                            return std::unexpected(std::format("Failed to load '{}': {}",
+                                                               params.init_path.value(), pc_result.error()));
+                        }
+
+                        auto splat_result = lfs::core::init_model_from_pointcloud(
+                            params, load_result.scene_center, *pc_result, static_cast<int>(pc_result->size()));
+                        if (!splat_result) {
+                            return std::unexpected(std::format("Init failed: {}", splat_result.error()));
+                        }
+
+                        auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
+                        LOG_INFO("Init {} gaussians from {} (sh={})",
+                                 model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
+                        scene.addSplat("Model", std::move(model), dataset_id);
+                        scene.setTrainingModelNode("Model");
+                    } else {
+                        auto loader = lfs::io::Loader::create();
+                        auto init_result = loader->load(params.init_path.value());
+                        if (!init_result) {
+                            return std::unexpected(std::format("Failed to load '{}': {}",
+                                                               params.init_path.value(), init_result.error().format()));
+                        }
+
+                        try {
+                            auto splat_data = std::move(*std::get<std::shared_ptr<lfs::core::SplatData>>(init_result->data));
+                            auto model = std::make_unique<lfs::core::SplatData>(std::move(splat_data));
+
+                            const int target_sh = params.optimization.sh_degree;
+                            if (target_sh >= 0 && target_sh < model->get_max_sh_degree()) {
+                                truncateSHDegree(*model, target_sh);
+                            }
+
+                            LOG_INFO("Loaded {} gaussians from {} (sh={})",
+                                     model->size(), lfs::core::path_to_utf8(init_file.filename()), model->get_max_sh_degree());
+                            scene.addSplat("Model", std::move(model), dataset_id);
+                            scene.setTrainingModelNode("Model");
+                        } catch (const std::bad_variant_access&) {
+                            return std::unexpected(std::format("'{}': invalid SplatData", params.init_path.value()));
+                        }
+                    }
+                } else if (data.point_cloud && data.point_cloud->size() > 0) {
+                    scene.addPointCloud("PointCloud", data.point_cloud, dataset_id);
+                }
+
+                // Build camera hierarchy
+                const auto& cameras = data.cameras->get_cameras();
+                const bool enable_eval = params.optimization.enable_eval;
+                const int test_every = params.dataset.test_every;
+
+                size_t train_count = 0, val_count = 0, mask_count = 0;
+                for (size_t i = 0; i < cameras.size(); ++i) {
+                    const bool is_val = enable_eval && (i % test_every) == 0;
+                    is_val ? ++val_count : ++train_count;
+                    if (cameras[i]->has_mask()) ++mask_count;
+                }
+
+                const auto cameras_group_id = scene.addGroup("Cameras", dataset_id);
+                const auto train_cameras_id = scene.addCameraGroup(
+                    std::format("Training ({})", train_count), cameras_group_id, train_count);
+
+                for (size_t i = 0; i < cameras.size(); ++i) {
+                    if (!enable_eval || (i % test_every) != 0) {
+                        scene.addCamera(cameras[i]->image_name(), train_cameras_id,
+                                        static_cast<int>(i), cameras[i]->uid(),
+                                        lfs::core::path_to_utf8(cameras[i]->image_path()),
+                                        lfs::core::path_to_utf8(cameras[i]->mask_path()));
+                    }
+                }
+
+                if (enable_eval && val_count > 0) {
+                    const auto val_cameras_id = scene.addCameraGroup(
+                        std::format("Validation ({})", val_count), cameras_group_id, val_count);
+                    for (size_t i = 0; i < cameras.size(); ++i) {
+                        if ((i % test_every) == 0) {
+                            scene.addCamera(cameras[i]->image_name(), val_cameras_id,
+                                            static_cast<int>(i), cameras[i]->uid(),
+                                            lfs::core::path_to_utf8(cameras[i]->image_path()),
+                                            lfs::core::path_to_utf8(cameras[i]->mask_path()));
+                        }
+                    }
+                }
+
+                LOG_INFO("Dataset '{}': {} train{} cameras{}",
+                         dataset_name, train_count,
+                         enable_eval ? std::format(" + {} val", val_count) : "",
+                         mask_count > 0 ? std::format(" ({} masked)", mask_count) : "");
+                return {};
+
+            } else {
+                return std::unexpected("Unknown data type from loader");
+            }
+        }, load_result.data);
     }
 
 } // namespace lfs::training

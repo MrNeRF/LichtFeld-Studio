@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/parameters.hpp"
+#include "io/loader.hpp"
 #include <expected>
 #include <string>
 
@@ -61,4 +62,10 @@ namespace lfs::training {
      */
     std::expected<void, std::string> validateDatasetPath(
         const lfs::core::param::TrainingParameters& params);
+
+    /// Apply pre-loaded data to scene (for async loading)
+    std::expected<void, std::string> applyLoadResultToScene(
+        const lfs::core::param::TrainingParameters& params,
+        lfs::vis::Scene& scene,
+        lfs::io::LoadResult&& load_result);
 } // namespace lfs::training

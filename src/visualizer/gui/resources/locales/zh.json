@@ -490,6 +490,9 @@
     "loss": "损失：",
     "gaussians_count": "%s高斯",
     "exporting": "导出%s...",
+    "importing": "导入%s...",
+    "import_complete": "导入完成：%zu 张图像，%zu 个点",
+    "import_failed": "导入失败：%s",
     "num_splats": "Splat数量：%d",
     "status_label": "状态：%s"
   },

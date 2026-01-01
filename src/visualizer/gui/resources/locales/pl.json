@@ -490,6 +490,9 @@
     "loss": "Strata:",
     "gaussians_count": "%s Gaussowskich",
     "exporting": "Eksportowanie %s...",
+    "importing": "Importowanie %s...",
+    "import_complete": "Import zakończony: %zu obrazów, %zu punktów",
+    "import_failed": "Import nieudany: %s",
     "num_splats": "liczba Splatów: %d",
     "status_label": "Status: %s"
   },

@@ -1006,9 +1006,77 @@ namespace lfs::vis {
         }
     }
 
+    std::expected<void, std::string> SceneManager::applyLoadedDataset(
+        const std::filesystem::path& path,
+        const lfs::core::param::TrainingParameters& params,
+        lfs::io::LoadResult&& load_result) {
+        LOG_TIMER("SceneManager::applyLoadedDataset");
+
+        try {
+            if (services().trainerOrNull()) {
+                services().trainerOrNull()->clearTrainer();
+            }
+            clear();
+
+            auto dataset_params = params;
+            dataset_params.dataset.data_path = path;
+            cached_params_ = dataset_params;
+
+            auto apply_result = lfs::training::applyLoadResultToScene(dataset_params, scene_, std::move(load_result));
+            if (!apply_result) {
+                return std::unexpected(apply_result.error());
+            }
+
+            if (const auto* pc_node = scene_.getNode("PointCloud");
+                pc_node && pc_node->type == NodeType::POINTCLOUD) {
+                (void)scene_.getOrCreateCropBoxForSplat(pc_node->id);
+            }
+
+            auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
+            trainer->setParams(dataset_params);
+
+            if (!services().trainerOrNull()) {
+                return std::unexpected("No trainer manager");
+            }
+            services().trainerOrNull()->setScene(&scene_);
+            services().trainerOrNull()->setTrainer(std::move(trainer));
+
+            {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                content_type_ = ContentType::Dataset;
+                dataset_path_ = path;
+            }
+
+            const auto* training_model = scene_.getTrainingModel();
+            const size_t num_gaussians = training_model ? training_model->size() : 0;
+
+            state::SceneLoaded{
+                .scene = nullptr,
+                .path = path,
+                .type = state::SceneLoaded::Type::Dataset,
+                .num_gaussians = num_gaussians}
+                .emit();
+
+            emitSceneChanged();
+
+            if (num_gaussians > 0 && services().trainerOrNull() && services().trainerOrNull()->getTrainer()) {
+                ui::PointCloudModeChanged{.enabled = true, .voxel_size = 0.03f}.emit();
+            }
+
+            return {};
+
+        } catch (const std::exception& e) {
+            LOG_ERROR("applyLoadedDataset failed: {}", e.what());
+            return std::unexpected(e.what());
+        }
+    }
+
     void SceneManager::loadDataset(const std::filesystem::path& path,
                                    const lfs::core::param::TrainingParameters& params) {
         LOG_TIMER("SceneManager::loadDataset");
+
+        // Emit start event for progress tracking
+        state::DatasetLoadStarted{.path = path}.emit();
 
         try {
             LOG_INFO("Loading dataset: {}", lfs::core::path_to_utf8(path));

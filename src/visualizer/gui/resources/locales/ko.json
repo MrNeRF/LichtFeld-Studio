@@ -490,6 +490,9 @@
     "loss": "손실:",
     "gaussians_count": "%s 가우시안",
     "exporting": "%s 내보내는 중...",
+    "importing": "%s 가져오는 중...",
+    "import_complete": "가져오기 완료: %zu 이미지, %zu 포인트",
+    "import_failed": "가져오기 실패: %s",
     "num_splats": "스플랫 수: %d",
     "status_label": "상태: %s"
   },

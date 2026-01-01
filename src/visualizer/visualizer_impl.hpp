@@ -106,6 +106,10 @@ namespace lfs::vis {
             return input_controller_.get();
         }
 
+        DataLoadingService* getDataLoader() {
+            return data_loader_.get();
+        }
+
         EditorContext& getEditorContext() { return editor_context_; }
         const EditorContext& getEditorContext() const { return editor_context_; }
 
