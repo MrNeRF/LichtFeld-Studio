@@ -493,6 +493,8 @@
     "importing": "%s 가져오는 중...",
     "import_complete": "가져오기 완료: %zu 이미지, %zu 포인트",
     "import_failed": "가져오기 실패: %s",
+    "import_complete_title": "가져오기 완료",
+    "import_failed_title": "가져오기 실패",
     "num_splats": "스플랫 수: %d",
     "status_label": "상태: %s"
   },

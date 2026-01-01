@@ -547,6 +547,8 @@ namespace lichtfeld::Strings {
         inline constexpr const char* IMPORTING = "progress.importing";
         inline constexpr const char* IMPORT_COMPLETE = "progress.import_complete";
         inline constexpr const char* IMPORT_FAILED = "progress.import_failed";
+        inline constexpr const char* IMPORT_COMPLETE_TITLE = "progress.import_complete_title";
+        inline constexpr const char* IMPORT_FAILED_TITLE = "progress.import_failed_title";
         inline constexpr const char* NUM_SPLATS = "progress.num_splats";
         inline constexpr const char* STATUS_LABEL = "progress.status_label";
     } // namespace Progress

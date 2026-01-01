@@ -493,6 +493,8 @@
     "importing": "Importazione %s...",
     "import_complete": "Importazione completata: %zu immagini, %zu punti",
     "import_failed": "Importazione fallita: %s",
+    "import_complete_title": "Importazione Completata",
+    "import_failed_title": "Importazione Fallita",
     "num_splats": "num Splat: %d",
     "status_label": "Stato: %s"
   },

@@ -493,6 +493,8 @@
     "importing": "Importeren %s...",
     "import_complete": "Import voltooid: %zu afbeeldingen, %zu punten",
     "import_failed": "Import mislukt: %s",
+    "import_complete_title": "Import Voltooid",
+    "import_failed_title": "Import Mislukt",
     "num_splats": "aantal Splats: %d",
     "status_label": "Status: %s"
   },
