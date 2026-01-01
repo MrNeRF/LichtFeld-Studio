@@ -37,8 +37,8 @@ namespace lfs::core {
                     return std::unexpected(std::format("Configuration file does not exist: {}", path_to_utf8(path)));
                 }
 
-                std::ifstream file(path);
-                if (!file.is_open()) {
+                std::ifstream file;
+                if (!open_file_for_read(path, file)) {
                     return std::unexpected(std::format("Could not open configuration file: {}", path_to_utf8(path)));
                 }
 

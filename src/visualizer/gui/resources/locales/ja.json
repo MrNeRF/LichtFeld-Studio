@@ -43,10 +43,11 @@
     "title": "クイックスタートガイド",
     "description": "データセットの準備方法とLichtFeld Studioの使い方を学びましょう:",
     "wiki_section": "Wiki & よくある質問",
-    "video_latest": "最新チュートリアル",
+    "video_latest": "LichtFeld v0.3.0 機能概要",
     "video_reality_scan": "Reality Scanデータセット",
     "video_colmap": "COLMAPチュートリアル",
     "video_lichtfeld": "LichtFeldチュートリアル",
+    "video_masks": "マスクチュートリアル",
     "loading": "読み込み中..."
   },
 
@@ -493,6 +494,8 @@
     "importing": "%s をインポート中...",
     "import_complete": "インポート完了: %zu 画像, %zu ポイント",
     "import_failed": "インポート失敗: %s",
+    "import_complete_title": "インポート完了",
+    "import_failed_title": "インポート失敗",
     "num_splats": "スプラット数: %d",
     "status_label": "ステータス: %s"
   },

@@ -130,8 +130,10 @@ namespace lfs::io {
         }
 
         LOG_DEBUG("Reading transforms from: {}", lfs::core::path_to_utf8(transformsFile));
-        // Pass path object directly for proper Unicode handling on Windows
-        std::ifstream trans_file{transformsFile};
+        std::ifstream trans_file;
+        if (!lfs::core::open_file_for_read(transformsFile, trans_file)) {
+            throw std::runtime_error("Failed to open: " + lfs::core::path_to_utf8(transformsFile));
+        }
 
         std::filesystem::path dir_path = transformsFile.parent_path();
 
@@ -320,8 +322,14 @@ namespace lfs::io {
             std::filesystem::is_regular_file(dir_path / "test.txt")) {
             LOG_DEBUG("Found train.txt and test.txt files, loading image splits");
 
-            std::ifstream train_file(dir_path / "train.txt");
-            std::ifstream val_file(dir_path / "test.txt");
+            std::ifstream train_file;
+            std::ifstream val_file;
+            if (!lfs::core::open_file_for_read(dir_path / "train.txt", train_file)) {
+                LOG_WARN("Failed to open train.txt");
+            }
+            if (!lfs::core::open_file_for_read(dir_path / "test.txt", val_file)) {
+                LOG_WARN("Failed to open test.txt");
+            }
 
             std::vector<std::string> train_images;
             std::vector<std::string> val_images;
@@ -372,8 +380,8 @@ namespace lfs::io {
 
         try {
             // Open the PLY file
-            std::ifstream ss(filepath, std::ios::binary);
-            if (!ss) {
+            std::ifstream ss;
+            if (!lfs::core::open_file_for_read(filepath, std::ios::binary, ss)) {
                 throw std::runtime_error(std::format("Failed to open PLY file: {}", lfs::core::path_to_utf8(filepath)));
             }
 

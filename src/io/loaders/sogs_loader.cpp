@@ -48,8 +48,8 @@ namespace lfs::io {
             // Check if it's a .sog bundle
             if (path.extension() == ".sog" && std::filesystem::is_regular_file(path)) {
                 // Basic validation - check if it's a valid archive
-                std::ifstream file(path, std::ios::binary);
-                if (file) {
+                std::ifstream file;
+                if (lfs::core::open_file_for_read(path, std::ios::binary, file)) {
                     // Check for ZIP/archive header (PK)
                     char header[2];
                     file.read(header, 2);

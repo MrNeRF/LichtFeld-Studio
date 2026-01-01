@@ -2763,7 +2763,9 @@ namespace lfs::vis::gui {
             if (show_completion && !is_active) {
                 constexpr ImVec4 GREEN(0.4f, 0.9f, 0.4f, 1.0f);
                 constexpr ImVec4 RED(1.0f, 0.4f, 0.4f, 1.0f);
-                ImGui::TextColored(success ? GREEN : RED, success ? "Import Complete" : "Import Failed");
+                ImGui::TextColored(success ? GREEN : RED,
+                                   success ? LOC(lichtfeld::Strings::Progress::IMPORT_COMPLETE_TITLE)
+                                           : LOC(lichtfeld::Strings::Progress::IMPORT_FAILED_TITLE));
             } else {
                 const char* type = dataset_type.empty() ? "dataset" : dataset_type.c_str();
                 ImGui::Text(LOC(lichtfeld::Strings::Progress::IMPORTING), type);

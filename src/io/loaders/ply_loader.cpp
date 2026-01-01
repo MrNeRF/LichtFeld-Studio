@@ -48,8 +48,8 @@ namespace lfs::io {
         if (options.validate_only) {
             LOG_DEBUG("Validation only mode for PLY: {}", lfs::core::path_to_utf8(path));
             // Basic validation - check if it's a PLY file
-            std::ifstream file(path, std::ios::binary);
-            if (!file) {
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(path, std::ios::binary, file)) {
                 return make_error(ErrorCode::PERMISSION_DENIED,
                                   "Cannot open file for reading", path);
             }

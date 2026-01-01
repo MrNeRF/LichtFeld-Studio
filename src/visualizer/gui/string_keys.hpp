@@ -61,6 +61,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* VIDEO_REALITY_SCAN = "getting_started.video_reality_scan";
         inline constexpr const char* VIDEO_COLMAP = "getting_started.video_colmap";
         inline constexpr const char* VIDEO_LICHTFELD = "getting_started.video_lichtfeld";
+        inline constexpr const char* VIDEO_MASKS = "getting_started.video_masks";
         inline constexpr const char* LOADING = "getting_started.loading";
     } // namespace GettingStarted
 
@@ -547,6 +548,8 @@ namespace lichtfeld::Strings {
         inline constexpr const char* IMPORTING = "progress.importing";
         inline constexpr const char* IMPORT_COMPLETE = "progress.import_complete";
         inline constexpr const char* IMPORT_FAILED = "progress.import_failed";
+        inline constexpr const char* IMPORT_COMPLETE_TITLE = "progress.import_complete_title";
+        inline constexpr const char* IMPORT_FAILED_TITLE = "progress.import_failed_title";
         inline constexpr const char* NUM_SPLATS = "progress.num_splats";
         inline constexpr const char* STATUS_LABEL = "progress.status_label";
     } // namespace Progress

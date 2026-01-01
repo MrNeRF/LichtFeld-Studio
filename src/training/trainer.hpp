@@ -200,6 +200,9 @@ namespace lfs::training {
         std::unique_ptr<TrainingProgress> progress_;
         size_t train_dataset_size_ = 0;
 
+        // Pre-loaded mask from pipelined dataloader (used in train_step)
+        lfs::core::Tensor pipelined_mask_;
+
         // Bilateral grid for appearance modeling (optional)
         std::unique_ptr<BilateralGrid> bilateral_grid_;
 

@@ -26,12 +26,46 @@
 #include <string>
 #include <sys/stat.h>
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <windows.h>
+#endif
+
 namespace nvimgcodec {
+
+    namespace {
+#ifdef _WIN32
+        // Helper to convert UTF-8 string to wide string
+        std::wstring utf8_to_wstring(const std::string& utf8_str) {
+            if (utf8_str.empty())
+                return {};
+            const int size_needed = MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(),
+                                                        static_cast<int>(utf8_str.size()),
+                                                        nullptr, 0);
+            if (size_needed <= 0)
+                return {};
+            std::wstring wstr(size_needed, 0);
+            const int converted = MultiByteToWideChar(CP_UTF8, 0, utf8_str.c_str(),
+                                                      static_cast<int>(utf8_str.size()),
+                                                      &wstr[0], size_needed);
+            if (converted <= 0)
+                return {};
+            wstr.resize(converted);
+            return wstr;
+        }
+#endif
+    } // namespace
 
     StdFileIoStream::StdFileIoStream(const std::string& path, bool to_write)
         : FileIoStream(path),
           path_(path) {
+#ifdef _WIN32
+        const auto wpath = utf8_to_wstring(path_);
+        fp_ = _wfopen(wpath.c_str(), to_write ? L"wb" : L"rb");
+#else
         fp_ = std::fopen(path_.c_str(), to_write ? "wb" : "rb");
+#endif
         if (fp_ == nullptr)
             throw std::runtime_error("Could not open file " + path + ": " + std::strerror(errno));
     }
@@ -74,10 +108,18 @@ namespace nvimgcodec {
     }
 
     size_t StdFileIoStream::size() const {
+#ifdef _WIN32
+        struct _stat64 sb;
+        const auto wpath = utf8_to_wstring(path_);
+        if (_wstat64(wpath.c_str(), &sb) == -1) {
+            throw std::runtime_error("Unable to stat file " + path_ + ": " + std::strerror(errno));
+        }
+#else
         struct stat sb;
         if (stat(path_.c_str(), &sb) == -1) {
             throw std::runtime_error("Unable to stat file " + path_ + ": " + std::strerror(errno));
         }
+#endif
         return sb.st_size;
     }
 
@@ -86,13 +128,18 @@ namespace nvimgcodec {
             nvtx3::scoped_range marker{"file read"};
             std::lock_guard<std::mutex> lock(mutex_);
             if (buffer_data_.load() == nullptr) {
-                std::ifstream file(path_, std::ios::binary);
-                assert(file.is_open()); // we know it can be opened
-                auto file_size = this->size();
+                std::ifstream file;
+#ifdef _WIN32
+                const auto wpath = utf8_to_wstring(path_);
+                file.open(wpath, std::ios::binary);
+#else
+                file.open(path_, std::ios::binary);
+#endif
+                assert(file.is_open());
+                const auto file_size = this->size();
                 buffer_.resize(file_size);
                 if (!file.read(reinterpret_cast<char*>(buffer_.data()), file_size)) {
                     throw std::runtime_error("Error reading file: " + path_);
-                    ;
                 }
                 buffer_data_.store(buffer_.data());
             }

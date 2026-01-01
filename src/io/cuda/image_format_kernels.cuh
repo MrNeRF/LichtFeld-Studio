@@ -17,4 +17,27 @@ namespace lfs::io::cuda {
         size_t channels,
         cudaStream_t stream = nullptr);
 
+    // Grayscale uint8 [H,W] -> float32 [H,W] normalized [0,1]
+    void launch_uint8_hw_to_float32_hw(
+        const uint8_t* input,
+        float* output,
+        size_t height,
+        size_t width,
+        cudaStream_t stream = nullptr);
+
+    // In-place mask inversion: mask = 1.0 - mask
+    void launch_mask_invert(
+        float* data,
+        size_t height,
+        size_t width,
+        cudaStream_t stream = nullptr);
+
+    // In-place mask thresholding: if mask >= threshold, set to 1.0
+    void launch_mask_threshold(
+        float* data,
+        size_t height,
+        size_t width,
+        float threshold,
+        cudaStream_t stream = nullptr);
+
 } // namespace lfs::io::cuda

@@ -43,10 +43,11 @@
     "title": "GUIDA RAPIDA",
     "description": "Impara a preparare i dataset e iniziare con LichtFeld Studio:",
     "wiki_section": "WIKI & FAQ",
-    "video_latest": "Ultimo Tutorial",
+    "video_latest": "LichtFeld v0.3.0 Panoramica Funzionalità",
     "video_reality_scan": "Dataset Reality Scan",
     "video_colmap": "Tutorial COLMAP",
     "video_lichtfeld": "Tutorial LichtFeld",
+    "video_masks": "Tutorial Maschere",
     "loading": "Caricamento..."
   },
 
@@ -493,6 +494,8 @@
     "importing": "Importazione %s...",
     "import_complete": "Importazione completata: %zu immagini, %zu punti",
     "import_failed": "Importazione fallita: %s",
+    "import_complete_title": "Importazione Completata",
+    "import_failed_title": "Importazione Fallita",
     "num_splats": "num Splat: %d",
     "status_label": "Stato: %s"
   },

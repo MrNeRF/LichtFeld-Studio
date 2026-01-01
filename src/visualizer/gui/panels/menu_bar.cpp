@@ -10,6 +10,7 @@
 #include "core/training_snapshot.hpp"
 #include "gui/dpi_scale.hpp"
 #ifdef WIN32
+#include <shellapi.h>
 #include <winsock2.h>
 #endif
 #include "gui/localization_manager.hpp"
@@ -313,8 +314,12 @@ namespace lfs::vis::gui {
             ImGui::Spacing();
             ImGui::Spacing();
 
+            // Row 1: Feature overview and Masks tutorial
             renderVideoCard(LOC(GettingStarted::VIDEO_LATEST), "zWIzBHRc-60", "https://www.youtube.com/watch?v=zWIzBHRc-60");
             ImGui::SameLine(0.0f, VIDEO_SPACING);
+            renderVideoCard(LOC(GettingStarted::VIDEO_MASKS), "956qR8N3Xk4", "https://www.youtube.com/watch?v=956qR8N3Xk4");
+
+            // Row 2: Dataset tutorials
             renderVideoCard(LOC(GettingStarted::VIDEO_REALITY_SCAN), "JWmkhTlbDvg", "https://www.youtube.com/watch?v=JWmkhTlbDvg");
             ImGui::SameLine(0.0f, VIDEO_SPACING);
             renderVideoCard(LOC(GettingStarted::VIDEO_COLMAP), "-3TBbukYN00", "https://www.youtube.com/watch?v=-3TBbukYN00");

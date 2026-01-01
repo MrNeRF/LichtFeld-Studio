@@ -43,10 +43,11 @@
     "title": "GUIDE DE DÉMARRAGE RAPIDE",
     "description": "Apprenez à préparer les datasets et à démarrer avec LichtFeld Studio :",
     "wiki_section": "WIKI & FAQ",
-    "video_latest": "Dernier Tutoriel",
+    "video_latest": "LichtFeld v0.3.0 Aperçu des Fonctionnalités",
     "video_reality_scan": "Dataset Reality Scan",
     "video_colmap": "Tutoriel COLMAP",
     "video_lichtfeld": "Tutoriel LichtFeld",
+    "video_masks": "Tutoriel Masques",
     "loading": "Chargement..."
   },
 
@@ -493,6 +494,8 @@
     "importing": "Import de %s...",
     "import_complete": "Import terminé : %zu images, %zu points",
     "import_failed": "Échec de l'import : %s",
+    "import_complete_title": "Import Terminé",
+    "import_failed_title": "Import Échoué",
     "num_splats": "Nombre de Splats : %d",
     "status_label": "Statut : %s"
   },

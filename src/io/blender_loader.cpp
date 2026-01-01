@@ -65,8 +65,8 @@ namespace lfs::io {
         if (options.validate_only) {
             LOG_DEBUG("Validation only mode for Blender/NeRF: {}", lfs::core::path_to_utf8(transforms_file));
             // Check if the transforms file is valid JSON
-            std::ifstream file(transforms_file);
-            if (!file) {
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(transforms_file, file)) {
                 LOG_ERROR("Cannot open transforms file: {}", lfs::core::path_to_utf8(transforms_file));
                 throw std::runtime_error("Cannot open transforms file");
             }
