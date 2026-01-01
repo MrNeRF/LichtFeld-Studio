@@ -2073,7 +2073,10 @@ namespace lfs::core {
 
     void Tensor::dump_diagnostic(const std::string& filename) const {
         std::ofstream file;
-        lfs::core::open_file_for_write(lfs::core::utf8_to_path(filename), file);
+        if (!lfs::core::open_file_for_write(lfs::core::utf8_to_path(filename), file)) {
+            LOG_ERROR("Failed to open diagnostic dump file: {}", filename);
+            return;
+        }
         file << "=== Tensor Diagnostic Dump ===\n";
         file << std::format("Info: {}\n", str());
         file << std::format("Memory address: {}\n", data_);

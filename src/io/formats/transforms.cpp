@@ -131,7 +131,9 @@ namespace lfs::io {
 
         LOG_DEBUG("Reading transforms from: {}", lfs::core::path_to_utf8(transformsFile));
         std::ifstream trans_file;
-        lfs::core::open_file_for_read(transformsFile, trans_file);
+        if (!lfs::core::open_file_for_read(transformsFile, trans_file)) {
+            throw std::runtime_error("Failed to open: " + lfs::core::path_to_utf8(transformsFile));
+        }
 
         std::filesystem::path dir_path = transformsFile.parent_path();
 
@@ -322,8 +324,12 @@ namespace lfs::io {
 
             std::ifstream train_file;
             std::ifstream val_file;
-            lfs::core::open_file_for_read(dir_path / "train.txt", train_file);
-            lfs::core::open_file_for_read(dir_path / "test.txt", val_file);
+            if (!lfs::core::open_file_for_read(dir_path / "train.txt", train_file)) {
+                LOG_WARN("Failed to open train.txt");
+            }
+            if (!lfs::core::open_file_for_read(dir_path / "test.txt", val_file)) {
+                LOG_WARN("Failed to open test.txt");
+            }
 
             std::vector<std::string> train_images;
             std::vector<std::string> val_images;
