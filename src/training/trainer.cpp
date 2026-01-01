@@ -1123,7 +1123,7 @@ namespace lfs::training {
         ready_to_start_ = true; // Skip GUI wait for now
 
         is_running_ = true; // Now we can start
-        LOG_INFO("Starting training loop with {} workers", params_.optimization.num_workers);
+        LOG_INFO("Starting training loop");
         // initializing image loader
         auto& cache_loader = lfs::io::CacheLoader::getInstance(params_.dataset.loading_params.use_cpu_memory, params_.dataset.loading_params.use_fs_cache);
         cache_loader.reset_cache();
@@ -1139,7 +1139,6 @@ namespace lfs::training {
         try {
             // Start from current_iteration_ (allows resume from checkpoint)
             int iter = current_iteration_.load() > 0 ? current_iteration_.load() + 1 : 1;
-            const int num_workers = params_.optimization.num_workers;
             const RenderMode render_mode = RenderMode::RGB;
 
             if (progress_) {
@@ -1153,8 +1152,7 @@ namespace lfs::training {
             pipelined_config.jpeg_batch_size = 8;
             pipelined_config.prefetch_count = 8;
             pipelined_config.output_queue_size = 4;
-            const size_t worker_threads = std::clamp(static_cast<size_t>(num_workers), size_t{2}, size_t{4});
-            pipelined_config.io_threads = worker_threads;
+            pipelined_config.io_threads = 2;
 
             // Non-JPEG images (PNG, WebP) need CPU decoding - use more threads until cache warms
             constexpr float NON_JPEG_THRESHOLD = 0.1f;
@@ -1167,8 +1165,6 @@ namespace lfs::training {
                 pipelined_config.cold_process_threads = cold_threads;
                 pipelined_config.prefetch_count = COLD_PREFETCH_COUNT;
                 LOG_INFO("{:.0f}% non-JPEG images, using {} cold threads", non_jpeg_ratio * 100.0f, cold_threads);
-            } else {
-                pipelined_config.cold_process_threads = worker_threads;
             }
             auto train_dataloader = create_infinite_pipelined_dataloader(train_dataset_, pipelined_config);
 

@@ -98,7 +98,6 @@ namespace lfs::core {
                     {"init_opacity", defaults.init_opacity, "Initial opacity value for new Gaussians"},
                     {"init_scaling", defaults.init_scaling, "Initial scaling value for new Gaussians"},
                     {"sh_degree", defaults.sh_degree, "Spherical harmonics degree"},
-                    {"num_workers", defaults.num_workers, "Number of image loader threads"},
                     {"max_cap", defaults.max_cap, "Maximum number of Gaussians for MCMC strategy"},
                     {"strategy", defaults.strategy, "Optimization strategy: mcmc, default"},
                     {"enable_eval", defaults.enable_eval, "Enable evaluation during training"},
@@ -231,7 +230,6 @@ namespace lfs::core {
             opt_json["scale_reg"] = scale_reg;
             opt_json["init_opacity"] = init_opacity;
             opt_json["init_scaling"] = init_scaling;
-            opt_json["num_workers"] = num_workers;
             opt_json["max_cap"] = max_cap;
             opt_json["eval_steps"] = eval_steps;
             opt_json["save_steps"] = save_steps;
@@ -305,9 +303,6 @@ namespace lfs::core {
             }
             if (json.contains("init_scaling")) {
                 params.init_scaling = json["init_scaling"];
-            }
-            if (json.contains("num_workers")) {
-                params.num_workers = json["num_workers"];
             }
             if (json.contains("max_cap")) {
                 params.max_cap = json["max_cap"];

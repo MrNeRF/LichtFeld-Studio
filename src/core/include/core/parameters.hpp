@@ -40,7 +40,6 @@ namespace lfs::core {
             float scale_reg = 0.01f;
             float init_opacity = 0.5f;
             float init_scaling = 0.1f;
-            int num_workers = 2;
             int max_cap = 1000000;
             std::vector<size_t> eval_steps = {7'000, 30'000}; // Steps to evaluate the model
             std::vector<size_t> save_steps = {7'000, 30'000}; // Steps to save the model

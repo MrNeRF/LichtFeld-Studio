@@ -545,7 +545,6 @@
     "max_gaussians": "Max Gaussians:",
     "sh_degree": "SH Grad:",
     "tile_mode": "Kachel-Modus:",
-    "num_workers": "Anzahl Worker:",
     "steps_scaler": "Schritte-Skalierer:",
     "bilateral_grid": "Bilaterales Gitter:",
     "mask_mode": "Masken-Modus:",

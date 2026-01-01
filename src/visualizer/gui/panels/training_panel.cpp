@@ -1160,21 +1160,6 @@ namespace lfs::vis::gui::panels {
                 ImGui::Text("%d", opt_params.tile_mode);
             }
 
-            // Num Workers
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("%s", LOC(TrainingParams::NUM_WORKERS));
-            ImGui::TableNextColumn();
-            if (can_edit) {
-                ImGui::PushItemWidth(-1);
-                if (ImGui::InputInt("##num_workers", &opt_params.num_workers, 1, 4)) {
-                    opt_params.num_workers = std::clamp(opt_params.num_workers, 1, 64);
-                }
-                ImGui::PopItemWidth();
-            } else {
-                ImGui::Text("%d", opt_params.num_workers);
-            }
-
             // Steps Scaler
             ImGui::TableNextRow();
             ImGui::TableNextColumn();

@@ -46,7 +46,6 @@ namespace {
             params.optimization.strategy = strategy_;
             params.optimization.sh_degree = sh_degree_;
             params.optimization.headless = true;
-            params.optimization.num_workers = 2;
             params.optimization.max_cap = 100000;
             params.optimization.refine_every = 100;
             params.optimization.start_refine = 500;

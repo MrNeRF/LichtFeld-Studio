@@ -599,7 +599,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* MAX_GAUSSIANS = "training_params.max_gaussians";
         inline constexpr const char* SH_DEGREE = "training_params.sh_degree";
         inline constexpr const char* TILE_MODE = "training_params.tile_mode";
-        inline constexpr const char* NUM_WORKERS = "training_params.num_workers";
         inline constexpr const char* STEPS_SCALER = "training_params.steps_scaler";
         inline constexpr const char* BILATERAL_GRID = "training_params.bilateral_grid";
         inline constexpr const char* MASK_MODE = "training_params.mask_mode";
