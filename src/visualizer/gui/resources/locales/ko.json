@@ -43,10 +43,11 @@
     "title": "빠른 시작 가이드",
     "description": "데이터셋 준비 방법과 LichtFeld Studio 사용법을 배워보세요:",
     "wiki_section": "위키 & 자주 묻는 질문",
-    "video_latest": "최신 튜토리얼",
+    "video_latest": "LichtFeld v0.3.0 기능 개요",
     "video_reality_scan": "Reality Scan 데이터셋",
     "video_colmap": "COLMAP 튜토리얼",
     "video_lichtfeld": "LichtFeld 튜토리얼",
+    "video_masks": "마스크 튜토리얼",
     "loading": "로딩 중..."
   },
 

@@ -43,10 +43,11 @@
     "title": "GUIDE DE DÉMARRAGE RAPIDE",
     "description": "Apprenez à préparer les datasets et à démarrer avec LichtFeld Studio :",
     "wiki_section": "WIKI & FAQ",
-    "video_latest": "Dernier Tutoriel",
+    "video_latest": "LichtFeld v0.3.0 Aperçu des Fonctionnalités",
     "video_reality_scan": "Dataset Reality Scan",
     "video_colmap": "Tutoriel COLMAP",
     "video_lichtfeld": "Tutoriel LichtFeld",
+    "video_masks": "Tutoriel Masques",
     "loading": "Chargement..."
   },
 

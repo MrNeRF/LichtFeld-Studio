@@ -61,6 +61,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* VIDEO_REALITY_SCAN = "getting_started.video_reality_scan";
         inline constexpr const char* VIDEO_COLMAP = "getting_started.video_colmap";
         inline constexpr const char* VIDEO_LICHTFELD = "getting_started.video_lichtfeld";
+        inline constexpr const char* VIDEO_MASKS = "getting_started.video_masks";
         inline constexpr const char* LOADING = "getting_started.loading";
     } // namespace GettingStarted
 

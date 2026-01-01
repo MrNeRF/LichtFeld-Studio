@@ -43,10 +43,11 @@
     "title": "SCHNELLSTARTANLEITUNG",
     "description": "Erfahren Sie, wie Sie Datensätze vorbereiten und mit LichtFeld Studio beginnen:",
     "wiki_section": "WIKI & FAQ",
-    "video_latest": "Neuestes Tutorial",
+    "video_latest": "LichtFeld v0.3.0 Funktionsübersicht",
     "video_reality_scan": "Reality Scan Datensatz",
     "video_colmap": "COLMAP Tutorial",
     "video_lichtfeld": "LichtFeld Tutorial",
+    "video_masks": "Masken Tutorial",
     "loading": "Laden..."
   },
 

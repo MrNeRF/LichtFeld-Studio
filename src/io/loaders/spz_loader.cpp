@@ -40,8 +40,8 @@ namespace lfs::io {
             LOG_DEBUG("Validation only mode for SPZ: {}", lfs::core::path_to_utf8(path));
 
             // Check for gzip magic bytes
-            std::ifstream file(path, std::ios::binary);
-            if (!file) {
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(path, std::ios::binary, file)) {
                 return make_error(ErrorCode::READ_FAILURE,
                                   "Cannot open SPZ file", path);
             }

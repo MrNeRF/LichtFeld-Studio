@@ -43,10 +43,11 @@
     "title": "SNELSTARTGIDS",
     "description": "Leer hoe je datasets voorbereidt en aan de slag gaat met LichtFeld Studio:",
     "wiki_section": "WIKI & FAQ",
-    "video_latest": "Nieuwste Tutorial",
+    "video_latest": "LichtFeld v0.3.0 Functie Overzicht",
     "video_reality_scan": "Reality Scan Dataset",
     "video_colmap": "COLMAP Tutorial",
     "video_lichtfeld": "LichtFeld Tutorial",
+    "video_masks": "Maskers Tutorial",
     "loading": "Laden..."
   },
 

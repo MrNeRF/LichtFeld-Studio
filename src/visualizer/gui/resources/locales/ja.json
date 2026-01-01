@@ -43,10 +43,11 @@
     "title": "クイックスタートガイド",
     "description": "データセットの準備方法とLichtFeld Studioの使い方を学びましょう:",
     "wiki_section": "Wiki & よくある質問",
-    "video_latest": "最新チュートリアル",
+    "video_latest": "LichtFeld v0.3.0 機能概要",
     "video_reality_scan": "Reality Scanデータセット",
     "video_colmap": "COLMAPチュートリアル",
     "video_lichtfeld": "LichtFeldチュートリアル",
+    "video_masks": "マスクチュートリアル",
     "loading": "読み込み中..."
   },
 

@@ -43,10 +43,11 @@
     "title": "PRZEWODNIK SZYBKIEGO STARTU",
     "description": "Dowiedz się, jak przygotować zbiory danych i rozpocząć pracę z LichtFeld Studio:",
     "wiki_section": "WIKI & FAQ",
-    "video_latest": "Najnowszy Samouczek",
+    "video_latest": "LichtFeld v0.3.0 Przegląd Funkcji",
     "video_reality_scan": "Zbiór Danych Reality Scan",
     "video_colmap": "Samouczek COLMAP",
     "video_lichtfeld": "Samouczek LichtFeld",
+    "video_masks": "Samouczek Masek",
     "loading": "Ładowanie..."
   },
 

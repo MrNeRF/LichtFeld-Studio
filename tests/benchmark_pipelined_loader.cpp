@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "io/pipelined_image_loader.hpp"
 #include <chrono>
@@ -8,6 +9,7 @@
 #include <gtest/gtest.h>
 #include <iomanip>
 #include <numeric>
+#include <set>
 #include <vector>
 
 using namespace lfs::io;
@@ -146,10 +148,6 @@ namespace {
     }
 
 } // anonymous namespace
-
-// =============================================================================
-// Basic Throughput Tests
-// =============================================================================
 
 TEST(PipelinedLoaderBenchmark, BerlinDataset_ColdCache) {
     auto files = get_image_files(BERLIN_PATH);
@@ -310,10 +308,6 @@ TEST(PipelinedLoaderBenchmark, Botanic2Dataset_WarmCache_FullRes) {
                   << ", cold: " << (stats2.cold_path_misses - stats1.cold_path_misses) << ")\n";
     }
 }
-
-// =============================================================================
-// Configuration Tuning Tests
-// =============================================================================
 
 TEST(PipelinedLoaderBenchmark, BatchSizeScaling) {
     auto files = get_image_files(BERLIN_PATH);
@@ -1290,4 +1284,1010 @@ TEST(PipelinedLoaderBenchmark, DecodeTimeBreakdown) {
         }
         std::cout << "\n";
     }
+}
+
+// =============================================================================
+// Mask Loading Tests
+// =============================================================================
+
+namespace {
+    // Dante dataset with masks
+    const std::filesystem::path DANTE_MASKS_PATH = std::filesystem::path("/media/paja/T7/dante_masks");
+
+    // Helper: Get image files from dante dataset
+    std::vector<std::filesystem::path> get_dante_images() {
+        return get_image_files(DANTE_MASKS_PATH / "images");
+    }
+
+    // Helper: Get corresponding mask path for an image
+    std::filesystem::path get_mask_path(const std::filesystem::path& image_path) {
+        // Masks are in masks/ folder with pattern: imagename.JPG.mask.png
+        auto mask_name = image_path.filename().string() + ".mask.png";
+        // Handle case sensitivity
+        std::string upper_mask_name = image_path.stem().string();
+        std::transform(upper_mask_name.begin(), upper_mask_name.end(), upper_mask_name.begin(), ::toupper);
+        upper_mask_name += ".JPG.mask.png";
+
+        auto mask_path = DANTE_MASKS_PATH / "masks" / upper_mask_name;
+        if (std::filesystem::exists(mask_path)) {
+            return mask_path;
+        }
+        // Try lowercase
+        mask_path = DANTE_MASKS_PATH / "masks" / mask_name;
+        if (std::filesystem::exists(mask_path)) {
+            return mask_path;
+        }
+        return {};
+    }
+} // namespace
+
+TEST(PipelinedLoaderMask, BasicMaskLoading) {
+    auto files = get_dante_images();
+    if (files.empty()) {
+        GTEST_SKIP() << "Dante masks dataset not available at " << DANTE_MASKS_PATH;
+    }
+
+    // Find first image with a corresponding mask
+    std::filesystem::path image_path, mask_path;
+    for (const auto& f : files) {
+        auto mp = get_mask_path(f);
+        if (!mp.empty()) {
+            image_path = f;
+            mask_path = mp;
+            break;
+        }
+    }
+
+    if (mask_path.empty()) {
+        GTEST_SKIP() << "No matching masks found for images";
+    }
+
+    std::cout << "\n=== Basic Mask Loading Test ===\n";
+    std::cout << "Image: " << image_path.filename() << "\n";
+    std::cout << "Mask:  " << mask_path.filename() << "\n";
+
+    PipelinedLoaderConfig config;
+    config.io_threads = 2;
+    config.cold_process_threads = 2;
+
+    PipelinedImageLoader loader(config);
+
+    // Create request with mask
+    ImageRequest request;
+    request.sequence_id = 0;
+    request.path = image_path;
+    request.params.resize_factor = 1;
+    request.params.max_width = 0;
+    request.mask_path = mask_path;
+    request.mask_params.invert = false;
+    request.mask_params.threshold = 0.0f;
+
+    loader.prefetch({request});
+    auto ready = loader.get();
+
+    // Verify image
+    ASSERT_TRUE(ready.tensor.is_valid()) << "Image tensor should be valid";
+    EXPECT_EQ(ready.tensor.device(), lfs::core::Device::CUDA) << "Image should be on GPU";
+    EXPECT_EQ(ready.tensor.dtype(), lfs::core::DataType::Float32) << "Image should be float32";
+
+    auto img_shape = ready.tensor.shape();
+    EXPECT_EQ(img_shape.rank(), 3) << "Image should be [C,H,W]";
+    EXPECT_EQ(img_shape[0], 3) << "Image should have 3 channels";
+
+    std::cout << "Image: [" << img_shape[0] << ", " << img_shape[1] << ", " << img_shape[2] << "]\n";
+
+    // Verify mask
+    ASSERT_TRUE(ready.mask.has_value()) << "Mask should be present";
+    ASSERT_TRUE(ready.mask->is_valid()) << "Mask tensor should be valid";
+    EXPECT_EQ(ready.mask->device(), lfs::core::Device::CUDA) << "Mask should be on GPU";
+    EXPECT_EQ(ready.mask->dtype(), lfs::core::DataType::Float32) << "Mask should be float32";
+
+    auto mask_shape = ready.mask->shape();
+    EXPECT_EQ(mask_shape.rank(), 2) << "Mask should be [H,W]";
+
+    std::cout << "Mask:  [" << mask_shape[0] << ", " << mask_shape[1] << "]\n";
+
+    // Verify mask values are normalized [0,1]
+    auto mask_cpu = ready.mask->cpu();
+    auto accessor = mask_cpu.accessor<float, 2>();
+    float min_val = 1.0f, max_val = 0.0f;
+    for (size_t y = 0; y < std::min<size_t>(10, mask_shape[0]); ++y) {
+        for (size_t x = 0; x < std::min<size_t>(10, mask_shape[1]); ++x) {
+            float val = accessor(y, x);
+            min_val = std::min(min_val, val);
+            max_val = std::max(max_val, val);
+        }
+    }
+
+    std::cout << "Mask value range: [" << min_val << ", " << max_val << "]\n";
+    EXPECT_GE(min_val, 0.0f) << "Mask values should be >= 0";
+    EXPECT_LE(max_val, 1.0f) << "Mask values should be <= 1";
+}
+
+TEST(PipelinedLoaderMask, MaskResizeFactor) {
+    auto files = get_dante_images();
+    if (files.empty()) {
+        GTEST_SKIP() << "Dante masks dataset not available";
+    }
+
+    std::filesystem::path image_path, mask_path;
+    for (const auto& f : files) {
+        auto mp = get_mask_path(f);
+        if (!mp.empty()) {
+            image_path = f;
+            mask_path = mp;
+            break;
+        }
+    }
+
+    if (mask_path.empty()) {
+        GTEST_SKIP() << "No matching masks found";
+    }
+
+    std::cout << "\n=== Mask Resize Factor Test ===\n";
+
+    PipelinedLoaderConfig config;
+    config.io_threads = 2;
+    config.cold_process_threads = 2;
+
+    std::vector<int> resize_factors = {1, 2, 4};
+
+    // Store original dimensions
+    int orig_img_h = 0, orig_img_w = 0;
+    int orig_mask_h = 0, orig_mask_w = 0;
+
+    for (int rf : resize_factors) {
+        PipelinedImageLoader loader(config);
+
+        ImageRequest request;
+        request.sequence_id = 0;
+        request.path = image_path;
+        request.params.resize_factor = rf;
+        request.params.max_width = 0;
+        request.mask_path = mask_path;
+        request.mask_params.invert = false;
+        request.mask_params.threshold = 0.0f;
+
+        loader.prefetch({request});
+        auto ready = loader.get();
+
+        ASSERT_TRUE(ready.tensor.is_valid()) << "Image should be valid for rf=" << rf;
+        ASSERT_TRUE(ready.mask.has_value()) << "Mask should be present for rf=" << rf;
+        ASSERT_TRUE(ready.mask->is_valid()) << "Mask should be valid for rf=" << rf;
+
+        auto img_shape = ready.tensor.shape();
+        auto mask_shape = ready.mask->shape();
+
+        int img_h = img_shape[1];
+        int img_w = img_shape[2];
+        int mask_h = mask_shape[0];
+        int mask_w = mask_shape[1];
+
+        if (rf == 1) {
+            orig_img_h = img_h;
+            orig_img_w = img_w;
+            orig_mask_h = mask_h;
+            orig_mask_w = mask_w;
+        }
+
+        std::cout << "  resize_factor=" << rf << ": image=" << img_w << "x" << img_h
+                  << ", mask=" << mask_w << "x" << mask_h << "\n";
+
+        // Verify dimensions are approximately scaled
+        if (rf > 1) {
+            int expected_img_h = orig_img_h / rf;
+            int expected_img_w = orig_img_w / rf;
+            int expected_mask_h = orig_mask_h / rf;
+            int expected_mask_w = orig_mask_w / rf;
+
+            EXPECT_NEAR(img_h, expected_img_h, 2) << "Image height mismatch for rf=" << rf;
+            EXPECT_NEAR(img_w, expected_img_w, 2) << "Image width mismatch for rf=" << rf;
+            EXPECT_NEAR(mask_h, expected_mask_h, 2) << "Mask height mismatch for rf=" << rf;
+            EXPECT_NEAR(mask_w, expected_mask_w, 2) << "Mask width mismatch for rf=" << rf;
+        }
+    }
+}
+
+TEST(PipelinedLoaderMask, MaskMaxWidth) {
+    auto files = get_dante_images();
+    if (files.empty()) {
+        GTEST_SKIP() << "Dante masks dataset not available";
+    }
+
+    std::filesystem::path image_path, mask_path;
+    for (const auto& f : files) {
+        auto mp = get_mask_path(f);
+        if (!mp.empty()) {
+            image_path = f;
+            mask_path = mp;
+            break;
+        }
+    }
+
+    if (mask_path.empty()) {
+        GTEST_SKIP() << "No matching masks found";
+    }
+
+    std::cout << "\n=== Mask Max Width Test ===\n";
+
+    PipelinedLoaderConfig config;
+    config.io_threads = 2;
+    config.cold_process_threads = 2;
+
+    std::vector<int> max_widths = {1000, 500, 300};
+
+    for (int mw : max_widths) {
+        PipelinedImageLoader loader(config);
+
+        ImageRequest request;
+        request.sequence_id = 0;
+        request.path = image_path;
+        request.params.resize_factor = 1;
+        request.params.max_width = mw;
+        request.mask_path = mask_path;
+        request.mask_params.invert = false;
+        request.mask_params.threshold = 0.0f;
+
+        loader.prefetch({request});
+        auto ready = loader.get();
+
+        ASSERT_TRUE(ready.tensor.is_valid()) << "Image should be valid for mw=" << mw;
+        ASSERT_TRUE(ready.mask.has_value()) << "Mask should be present for mw=" << mw;
+        ASSERT_TRUE(ready.mask->is_valid()) << "Mask should be valid for mw=" << mw;
+
+        auto img_shape = ready.tensor.shape();
+        auto mask_shape = ready.mask->shape();
+
+        int img_h = img_shape[1];
+        int img_w = img_shape[2];
+        int mask_h = mask_shape[0];
+        int mask_w = mask_shape[1];
+
+        std::cout << "  max_width=" << mw << ": image=" << img_w << "x" << img_h
+                  << ", mask=" << mask_w << "x" << mask_h << "\n";
+
+        // Verify both dimensions are <= max_width
+        EXPECT_LE(img_w, mw) << "Image width exceeds max_width=" << mw;
+        EXPECT_LE(img_h, mw) << "Image height exceeds max_width=" << mw;
+        EXPECT_LE(mask_w, mw) << "Mask width exceeds max_width=" << mw;
+        EXPECT_LE(mask_h, mw) << "Mask height exceeds max_width=" << mw;
+
+        // At least one dimension should be close to max_width
+        int img_larger = std::max(img_w, img_h);
+        int mask_larger = std::max(mask_w, mask_h);
+        EXPECT_GE(img_larger, mw - 10) << "Image too small for max_width=" << mw;
+        EXPECT_GE(mask_larger, mw - 10) << "Mask too small for max_width=" << mw;
+    }
+}
+
+TEST(PipelinedLoaderMask, MaskInvert) {
+    auto files = get_dante_images();
+    if (files.empty()) {
+        GTEST_SKIP() << "Dante masks dataset not available";
+    }
+
+    std::filesystem::path image_path, mask_path;
+    for (const auto& f : files) {
+        auto mp = get_mask_path(f);
+        if (!mp.empty()) {
+            image_path = f;
+            mask_path = mp;
+            break;
+        }
+    }
+
+    if (mask_path.empty()) {
+        GTEST_SKIP() << "No matching masks found";
+    }
+
+    std::cout << "\n=== Mask Invert Test ===\n";
+
+    PipelinedLoaderConfig config;
+    config.io_threads = 2;
+    config.cold_process_threads = 2;
+
+    // Load without invert
+    std::vector<float> normal_values;
+    {
+        PipelinedImageLoader loader(config);
+
+        ImageRequest request;
+        request.sequence_id = 0;
+        request.path = image_path;
+        request.params.resize_factor = 4; // Smaller for faster test
+        request.params.max_width = 0;
+        request.mask_path = mask_path;
+        request.mask_params.invert = false;
+        request.mask_params.threshold = 0.0f;
+
+        loader.prefetch({request});
+        auto ready = loader.get();
+
+        ASSERT_TRUE(ready.mask.has_value());
+        auto mask_cpu = ready.mask->cpu();
+        auto accessor = mask_cpu.accessor<float, 2>();
+
+        // Sample some values
+        for (size_t y = 0; y < 5; ++y) {
+            for (size_t x = 0; x < 5; ++x) {
+                normal_values.push_back(accessor(y, x));
+            }
+        }
+    }
+
+    // Load with invert
+    std::vector<float> inverted_values;
+    {
+        PipelinedImageLoader loader(config);
+
+        ImageRequest request;
+        request.sequence_id = 1; // Different sequence_id to avoid cache
+        request.path = image_path;
+        request.params.resize_factor = 4;
+        request.params.max_width = 0;
+        request.mask_path = mask_path;
+        request.mask_params.invert = true;
+        request.mask_params.threshold = 0.0f;
+
+        loader.prefetch({request});
+        auto ready = loader.get();
+
+        ASSERT_TRUE(ready.mask.has_value());
+        auto mask_cpu = ready.mask->cpu();
+        auto accessor = mask_cpu.accessor<float, 2>();
+
+        for (size_t y = 0; y < 5; ++y) {
+            for (size_t x = 0; x < 5; ++x) {
+                inverted_values.push_back(accessor(y, x));
+            }
+        }
+    }
+
+    // Verify inversion: inverted = 1.0 - normal
+    std::cout << "  Sample values (normal vs inverted):\n";
+    bool all_inverted = true;
+    for (size_t i = 0; i < std::min(normal_values.size(), size_t(5)); ++i) {
+        float expected = 1.0f - normal_values[i];
+        float actual = inverted_values[i];
+        std::cout << "    " << normal_values[i] << " -> " << actual
+                  << " (expected " << expected << ")\n";
+        if (std::abs(expected - actual) > 0.01f) {
+            all_inverted = false;
+        }
+    }
+
+    EXPECT_TRUE(all_inverted) << "Mask inversion not working correctly";
+}
+
+TEST(PipelinedLoaderMask, MaskThreshold) {
+    auto files = get_dante_images();
+    if (files.empty()) {
+        GTEST_SKIP() << "Dante masks dataset not available";
+    }
+
+    std::filesystem::path image_path, mask_path;
+    for (const auto& f : files) {
+        auto mp = get_mask_path(f);
+        if (!mp.empty()) {
+            image_path = f;
+            mask_path = mp;
+            break;
+        }
+    }
+
+    if (mask_path.empty()) {
+        GTEST_SKIP() << "No matching masks found";
+    }
+
+    std::cout << "\n=== Mask Threshold Test ===\n";
+
+    PipelinedLoaderConfig config;
+    config.io_threads = 2;
+    config.cold_process_threads = 2;
+
+    float threshold = 0.5f;
+
+    PipelinedImageLoader loader(config);
+
+    ImageRequest request;
+    request.sequence_id = 0;
+    request.path = image_path;
+    request.params.resize_factor = 4;
+    request.params.max_width = 0;
+    request.mask_path = mask_path;
+    request.mask_params.invert = false;
+    request.mask_params.threshold = threshold;
+
+    loader.prefetch({request});
+    auto ready = loader.get();
+
+    ASSERT_TRUE(ready.mask.has_value());
+    auto mask_cpu = ready.mask->cpu();
+    auto accessor = mask_cpu.accessor<float, 2>();
+
+    auto shape = ready.mask->shape();
+    size_t total = 0;
+    size_t ones = 0;
+    size_t zeros_or_low = 0;
+
+    for (size_t y = 0; y < shape[0]; ++y) {
+        for (size_t x = 0; x < shape[1]; ++x) {
+            float val = accessor(y, x);
+            ++total;
+            if (val == 1.0f) {
+                ++ones;
+            } else if (val < threshold) {
+                ++zeros_or_low;
+            }
+        }
+    }
+
+    std::cout << "  Threshold: " << threshold << "\n";
+    std::cout << "  Total pixels: " << total << "\n";
+    std::cout << "  Pixels = 1.0: " << ones << " (" << (ones * 100.0 / total) << "%)\n";
+    std::cout << "  Pixels < threshold: " << zeros_or_low << " (" << (zeros_or_low * 100.0 / total) << "%)\n";
+
+    // All values should be either 1.0 (if >= threshold) or unchanged (if < threshold)
+    // So we should have ones + zeros_or_low == total (no values between threshold and 1.0)
+    EXPECT_EQ(ones + zeros_or_low, total) << "Threshold not applied correctly";
+}
+
+TEST(PipelinedLoaderMask, MaskCacheEffectiveness) {
+    auto files = get_dante_images();
+    if (files.empty()) {
+        GTEST_SKIP() << "Dante masks dataset not available";
+    }
+
+    // Collect image-mask pairs
+    std::vector<std::pair<std::filesystem::path, std::filesystem::path>> pairs;
+    for (const auto& f : files) {
+        auto mp = get_mask_path(f);
+        if (!mp.empty()) {
+            pairs.emplace_back(f, mp);
+            if (pairs.size() >= 20)
+                break;
+        }
+    }
+
+    if (pairs.size() < 5) {
+        GTEST_SKIP() << "Not enough image-mask pairs found";
+    }
+
+    std::cout << "\n=== Mask Cache Effectiveness Test ===\n";
+    std::cout << "Testing with " << pairs.size() << " image-mask pairs\n";
+
+    PipelinedLoaderConfig config;
+    config.io_threads = 2;
+    config.cold_process_threads = 2;
+    config.prefetch_count = 16;
+
+    PipelinedImageLoader loader(config);
+
+    // Pass 1: Cold cache
+    auto start1 = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < pairs.size(); ++i) {
+        ImageRequest request;
+        request.sequence_id = i;
+        request.path = pairs[i].first;
+        request.params.resize_factor = 2;
+        request.params.max_width = 0;
+        request.mask_path = pairs[i].second;
+        request.mask_params.invert = false;
+        request.mask_params.threshold = 0.0f;
+
+        loader.prefetch({request});
+    }
+
+    for (size_t i = 0; i < pairs.size(); ++i) {
+        auto ready = loader.get();
+        ASSERT_TRUE(ready.tensor.is_valid());
+        ASSERT_TRUE(ready.mask.has_value() && ready.mask->is_valid());
+    }
+    auto end1 = std::chrono::high_resolution_clock::now();
+    double time1 = std::chrono::duration<double, std::milli>(end1 - start1).count();
+
+    auto stats1 = loader.get_stats();
+    std::cout << "  Pass 1 (cold): " << format_time(time1)
+              << ", throughput: " << format_throughput((pairs.size() / time1) * 1000)
+              << ", masks loaded: " << stats1.masks_loaded
+              << ", mask cache hits: " << stats1.mask_cache_hits << "\n";
+
+    // Pass 2: Warm cache
+    auto start2 = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < pairs.size(); ++i) {
+        ImageRequest request;
+        request.sequence_id = i + 1000; // Different sequence IDs
+        request.path = pairs[i].first;
+        request.params.resize_factor = 2;
+        request.params.max_width = 0;
+        request.mask_path = pairs[i].second;
+        request.mask_params.invert = false;
+        request.mask_params.threshold = 0.0f;
+
+        loader.prefetch({request});
+    }
+
+    for (size_t i = 0; i < pairs.size(); ++i) {
+        auto ready = loader.get();
+        ASSERT_TRUE(ready.tensor.is_valid());
+        ASSERT_TRUE(ready.mask.has_value() && ready.mask->is_valid());
+    }
+    auto end2 = std::chrono::high_resolution_clock::now();
+    double time2 = std::chrono::duration<double, std::milli>(end2 - start2).count();
+
+    auto stats2 = loader.get_stats();
+    size_t new_mask_hits = stats2.mask_cache_hits - stats1.mask_cache_hits;
+
+    std::cout << "  Pass 2 (warm): " << format_time(time2)
+              << ", throughput: " << format_throughput((pairs.size() / time2) * 1000)
+              << ", new mask cache hits: " << new_mask_hits << "\n";
+
+    // Warm cache should be faster
+    EXPECT_LT(time2, time1) << "Warm cache should be faster than cold";
+    EXPECT_GE(new_mask_hits, pairs.size() - 2) << "Most masks should hit cache on pass 2";
+}
+
+TEST(PipelinedLoaderMask, ImageWithoutMask) {
+    auto files = get_dante_images();
+    if (files.empty()) {
+        GTEST_SKIP() << "Dante masks dataset not available";
+    }
+
+    std::cout << "\n=== Image Without Mask Test ===\n";
+
+    PipelinedLoaderConfig config;
+    config.io_threads = 2;
+    config.cold_process_threads = 2;
+
+    PipelinedImageLoader loader(config);
+
+    // Request without mask
+    ImageRequest request;
+    request.sequence_id = 0;
+    request.path = files[0];
+    request.params.resize_factor = 2;
+    request.params.max_width = 0;
+    // mask_path is not set (std::nullopt)
+
+    loader.prefetch({request});
+    auto ready = loader.get();
+
+    ASSERT_TRUE(ready.tensor.is_valid()) << "Image should be valid";
+    EXPECT_FALSE(ready.mask.has_value()) << "Mask should NOT be present when not requested";
+
+    std::cout << "  Image loaded successfully without mask ✓\n";
+}
+
+TEST(PipelinedLoaderMask, MultipleImagesWithMasks) {
+    auto files = get_dante_images();
+    if (files.empty()) {
+        GTEST_SKIP() << "Dante masks dataset not available";
+    }
+
+    // Collect image-mask pairs
+    std::vector<std::pair<std::filesystem::path, std::filesystem::path>> pairs;
+    for (const auto& f : files) {
+        auto mp = get_mask_path(f);
+        if (!mp.empty()) {
+            pairs.emplace_back(f, mp);
+            if (pairs.size() >= 10)
+                break;
+        }
+    }
+
+    if (pairs.size() < 3) {
+        GTEST_SKIP() << "Not enough image-mask pairs found";
+    }
+
+    std::cout << "\n=== Multiple Images With Masks Test ===\n";
+    std::cout << "Testing paired delivery for " << pairs.size() << " pairs\n";
+
+    PipelinedLoaderConfig config;
+    config.io_threads = 2;
+    config.cold_process_threads = 2;
+    config.prefetch_count = 8;
+
+    PipelinedImageLoader loader(config);
+
+    // Prefetch all
+    for (size_t i = 0; i < pairs.size(); ++i) {
+        ImageRequest request;
+        request.sequence_id = i;
+        request.path = pairs[i].first;
+        request.params.resize_factor = 4;
+        request.params.max_width = 0;
+        request.mask_path = pairs[i].second;
+        request.mask_params.invert = false;
+        request.mask_params.threshold = 0.0f;
+
+        loader.prefetch({request});
+    }
+
+    // Retrieve all and verify pairing
+    std::set<size_t> received_ids;
+    for (size_t i = 0; i < pairs.size(); ++i) {
+        auto ready = loader.get();
+
+        ASSERT_TRUE(ready.tensor.is_valid()) << "Image " << i << " should be valid";
+        ASSERT_TRUE(ready.mask.has_value()) << "Mask " << i << " should be present";
+        ASSERT_TRUE(ready.mask->is_valid()) << "Mask " << i << " should be valid";
+
+        received_ids.insert(ready.sequence_id);
+
+        auto img_shape = ready.tensor.shape();
+        auto mask_shape = ready.mask->shape();
+
+        // Verify image and mask have compatible dimensions
+        // Image is [C,H,W], mask is [H,W]
+        EXPECT_EQ(img_shape[1], mask_shape[0]) << "Height mismatch for seq " << ready.sequence_id;
+        EXPECT_EQ(img_shape[2], mask_shape[1]) << "Width mismatch for seq " << ready.sequence_id;
+    }
+
+    // Verify all sequence IDs were received
+    EXPECT_EQ(received_ids.size(), pairs.size()) << "Should receive all unique sequence IDs";
+
+    std::cout << "  All " << pairs.size() << " image-mask pairs delivered correctly ✓\n";
+}
+
+TEST(PipelinedLoaderMask, MaskDimensionsMatchImage) {
+    auto files = get_dante_images();
+    if (files.empty()) {
+        GTEST_SKIP() << "Dante masks dataset not available";
+    }
+
+    std::filesystem::path image_path, mask_path;
+    for (const auto& f : files) {
+        auto mp = get_mask_path(f);
+        if (!mp.empty()) {
+            image_path = f;
+            mask_path = mp;
+            break;
+        }
+    }
+
+    if (mask_path.empty()) {
+        GTEST_SKIP() << "No matching masks found";
+    }
+
+    std::cout << "\n=== Mask Dimensions Match Image Test ===\n";
+
+    PipelinedLoaderConfig config;
+    config.io_threads = 2;
+    config.cold_process_threads = 2;
+
+    // Test with various resize factors and max_width values
+    struct TestCase {
+        int resize_factor;
+        int max_width;
+    };
+
+    std::vector<TestCase> cases = {
+        {1, 0},
+        {2, 0},
+        {4, 0},
+        {1, 800},
+        {1, 400},
+        {2, 600},
+    };
+
+    for (const auto& tc : cases) {
+        PipelinedImageLoader loader(config);
+
+        ImageRequest request;
+        request.sequence_id = 0;
+        request.path = image_path;
+        request.params.resize_factor = tc.resize_factor;
+        request.params.max_width = tc.max_width;
+        request.mask_path = mask_path;
+        request.mask_params.invert = false;
+        request.mask_params.threshold = 0.0f;
+
+        loader.prefetch({request});
+        auto ready = loader.get();
+
+        ASSERT_TRUE(ready.tensor.is_valid());
+        ASSERT_TRUE(ready.mask.has_value() && ready.mask->is_valid());
+
+        auto img_shape = ready.tensor.shape();
+        auto mask_shape = ready.mask->shape();
+
+        int img_h = img_shape[1];
+        int img_w = img_shape[2];
+        int mask_h = mask_shape[0];
+        int mask_w = mask_shape[1];
+
+        std::cout << "  rf=" << tc.resize_factor << " mw=" << tc.max_width
+                  << ": image=" << img_w << "x" << img_h
+                  << ", mask=" << mask_w << "x" << mask_h;
+
+        // Allow small differences due to rounding in resize operations
+        bool height_match = std::abs(img_h - mask_h) <= 2;
+        bool width_match = std::abs(img_w - mask_w) <= 2;
+
+        if (height_match && width_match) {
+            std::cout << " ✓\n";
+        } else {
+            std::cout << " ✗ (mismatch!)\n";
+        }
+
+        EXPECT_TRUE(height_match) << "Height mismatch for rf=" << tc.resize_factor << " mw=" << tc.max_width;
+        EXPECT_TRUE(width_match) << "Width mismatch for rf=" << tc.resize_factor << " mw=" << tc.max_width;
+    }
+}
+
+// =============================================================================
+// WOW_DD Dataset Benchmark (Large Images with Mixed Masks)
+// =============================================================================
+
+namespace {
+    const std::filesystem::path WOW_DD_PATH = get_test_data_root() / "wow/WOW_DD";
+
+    std::vector<std::filesystem::path> get_wow_dd_images() {
+        auto dir = WOW_DD_PATH / "images";
+        return get_image_files(dir);
+    }
+
+    std::filesystem::path get_wow_dd_mask_path(const std::filesystem::path& img_path) {
+        // WOW_DD mask naming: masks/WOW_DD_0.png for images/WOW_DD_0.png
+        auto mask_dir = WOW_DD_PATH / "masks";
+        auto mask_path = mask_dir / img_path.filename();
+        if (std::filesystem::exists(mask_path)) {
+            return mask_path;
+        }
+        return {};
+    }
+} // namespace
+
+TEST(PipelinedLoaderBenchmark, WOW_DD_LargeDataset) {
+    auto files = get_wow_dd_images();
+    if (files.empty()) {
+        GTEST_SKIP() << "WOW_DD dataset not available at " << WOW_DD_PATH;
+    }
+
+    std::cout << "\n";
+    std::cout << "╔════════════════════════════════════════════════════════════════╗\n";
+    std::cout << "║          WOW_DD Large Dataset Benchmark                        ║\n";
+    std::cout << "╚════════════════════════════════════════════════════════════════╝\n\n";
+
+    // Count images with masks
+    size_t with_mask = 0, without_mask = 0;
+    std::vector<std::pair<std::filesystem::path, std::optional<std::filesystem::path>>> all_pairs;
+    for (const auto& f : files) {
+        auto mp = get_wow_dd_mask_path(f);
+        if (!mp.empty()) {
+            all_pairs.emplace_back(f, mp);
+            ++with_mask;
+        } else {
+            all_pairs.emplace_back(f, std::nullopt);
+            ++without_mask;
+        }
+    }
+
+    std::cout << "Dataset: " << WOW_DD_PATH << "\n";
+    std::cout << "  Total images:      " << files.size() << "\n";
+    std::cout << "  With masks:        " << with_mask << "\n";
+    std::cout << "  Without masks:     " << without_mask << "\n";
+
+    // Check first image dimensions
+    if (!files.empty()) {
+        auto [data, w, h, c] = lfs::core::load_image(files[0], 1, 0);
+        if (data) {
+            std::cout << "  Original size:     " << w << "x" << h << " ("
+                      << std::fixed << std::setprecision(1) << (w * h / 1000000.0) << " MP)\n";
+            lfs::core::free_image(data);
+        }
+    }
+
+    // Determine auto max_width based on GPU memory (similar to what the app does)
+    int max_width = 1600; // Reasonable default for large images
+    std::cout << "  Using max_width:   " << max_width << "\n\n";
+
+    PipelinedLoaderConfig config;
+    config.io_threads = 2;
+    config.cold_process_threads = 4; // More threads for large images
+    config.prefetch_count = 32;
+    config.jpeg_batch_size = 8;
+    config.max_cache_bytes = 2ULL * 1024 * 1024 * 1024; // 2GB cache
+
+    std::cout << "Config:\n";
+    std::cout << "  IO threads:        " << config.io_threads << "\n";
+    std::cout << "  Cold threads:      " << config.cold_process_threads << "\n";
+    std::cout << "  Prefetch count:    " << config.prefetch_count << "\n";
+    std::cout << "  Cache size:        " << (config.max_cache_bytes / (1024 * 1024)) << " MB\n\n";
+
+    // =========================================================================
+    // Benchmark 1: Full dataset cold pass (with max_width)
+    // =========================================================================
+    std::cout << "═══════════════════════════════════════════════════════════════════\n";
+    std::cout << "Benchmark 1: Cold Pass (all " << all_pairs.size() << " images)\n";
+    std::cout << "═══════════════════════════════════════════════════════════════════\n";
+
+    PipelinedImageLoader loader(config);
+
+    auto start_cold = std::chrono::high_resolution_clock::now();
+
+    // Prefetch all
+    for (size_t i = 0; i < all_pairs.size(); ++i) {
+        ImageRequest req;
+        req.sequence_id = i;
+        req.path = all_pairs[i].first;
+        req.params.resize_factor = 1;
+        req.params.max_width = max_width;
+        if (all_pairs[i].second) {
+            req.mask_path = *all_pairs[i].second;
+            req.mask_params.invert = false;
+            req.mask_params.threshold = 0.0f;
+        }
+        loader.prefetch({req});
+    }
+
+    // Consume all
+    size_t received_masks = 0;
+    for (size_t i = 0; i < all_pairs.size(); ++i) {
+        auto ready = loader.get();
+        ASSERT_TRUE(ready.tensor.is_valid()) << "Image " << i << " invalid";
+        if (ready.mask && ready.mask->is_valid()) {
+            ++received_masks;
+        }
+    }
+
+    auto end_cold = std::chrono::high_resolution_clock::now();
+    double cold_time = std::chrono::duration<double, std::milli>(end_cold - start_cold).count();
+    auto stats_cold = loader.get_stats();
+
+    std::cout << "  Total time:        " << format_time(cold_time) << "\n";
+    std::cout << "  Throughput:        " << format_throughput((all_pairs.size() / cold_time) * 1000) << "\n";
+    std::cout << "  Images loaded:     " << stats_cold.total_images_loaded << "\n";
+    std::cout << "  Masks loaded:      " << stats_cold.masks_loaded << " (received: " << received_masks << ")\n";
+    std::cout << "  Hot path hits:     " << stats_cold.hot_path_hits << "\n";
+    std::cout << "  Cold path misses:  " << stats_cold.cold_path_misses << "\n";
+    std::cout << "  Mask cache hits:   " << stats_cold.mask_cache_hits << "\n";
+    std::cout << "  GPU batch decodes: " << stats_cold.gpu_batch_decodes << "\n\n";
+
+    // =========================================================================
+    // Benchmark 2: Warm cache pass
+    // =========================================================================
+    std::cout << "═══════════════════════════════════════════════════════════════════\n";
+    std::cout << "Benchmark 2: Warm Pass (cached)\n";
+    std::cout << "═══════════════════════════════════════════════════════════════════\n";
+
+    auto start_warm = std::chrono::high_resolution_clock::now();
+
+    // Prefetch all again
+    for (size_t i = 0; i < all_pairs.size(); ++i) {
+        ImageRequest req;
+        req.sequence_id = i + 10000; // Different seq IDs
+        req.path = all_pairs[i].first;
+        req.params.resize_factor = 1;
+        req.params.max_width = max_width;
+        if (all_pairs[i].second) {
+            req.mask_path = *all_pairs[i].second;
+            req.mask_params.invert = false;
+            req.mask_params.threshold = 0.0f;
+        }
+        loader.prefetch({req});
+    }
+
+    // Consume all
+    for (size_t i = 0; i < all_pairs.size(); ++i) {
+        auto ready = loader.get();
+        ASSERT_TRUE(ready.tensor.is_valid());
+    }
+
+    auto end_warm = std::chrono::high_resolution_clock::now();
+    double warm_time = std::chrono::duration<double, std::milli>(end_warm - start_warm).count();
+    auto stats_warm = loader.get_stats();
+
+    size_t new_hot_hits = stats_warm.hot_path_hits - stats_cold.hot_path_hits;
+    size_t new_mask_hits = stats_warm.mask_cache_hits - stats_cold.mask_cache_hits;
+    size_t new_gpu_batches = stats_warm.gpu_batch_decodes - stats_cold.gpu_batch_decodes;
+
+    std::cout << "  Total time:        " << format_time(warm_time) << "\n";
+    std::cout << "  Throughput:        " << format_throughput((all_pairs.size() / warm_time) * 1000) << "\n";
+    std::cout << "  New hot path hits: " << new_hot_hits << "\n";
+    std::cout << "  New mask hits:     " << new_mask_hits << "\n";
+    std::cout << "  GPU batch decodes: " << new_gpu_batches << "\n";
+    std::cout << "  Speedup vs cold:   " << std::fixed << std::setprecision(1)
+              << (cold_time / warm_time) << "x\n\n";
+
+    // =========================================================================
+    // Summary
+    // =========================================================================
+    std::cout << "═══════════════════════════════════════════════════════════════════\n";
+    std::cout << "Summary\n";
+    std::cout << "═══════════════════════════════════════════════════════════════════\n";
+    std::cout << "  Cold throughput:   " << format_throughput((all_pairs.size() / cold_time) * 1000) << "\n";
+    std::cout << "  Warm throughput:   " << format_throughput((all_pairs.size() / warm_time) * 1000) << "\n";
+    std::cout << "  Cache hit rate:    " << std::fixed << std::setprecision(1)
+              << (100.0 * new_hot_hits / all_pairs.size()) << "%\n";
+    if (with_mask > 0) {
+        std::cout << "  Mask hit rate:     " << std::fixed << std::setprecision(1)
+                  << (100.0 * new_mask_hits / with_mask) << "%\n";
+    }
+
+    // Assertions
+    EXPECT_GT(stats_cold.total_images_loaded, 0);
+    EXPECT_LT(warm_time, cold_time) << "Warm pass should be faster";
+    EXPECT_GE(new_hot_hits, all_pairs.size() * 0.9) << "Should have >90% cache hit rate";
+}
+
+TEST(PipelinedLoaderBenchmark, WOW_DD_ThroughputScaling) {
+    auto files = get_wow_dd_images();
+    if (files.size() < 50) {
+        GTEST_SKIP() << "Need at least 50 images for scaling test";
+    }
+
+    std::cout << "\n";
+    std::cout << "╔════════════════════════════════════════════════════════════════╗\n";
+    std::cout << "║          WOW_DD Throughput Scaling Benchmark                   ║\n";
+    std::cout << "╚════════════════════════════════════════════════════════════════╝\n\n";
+
+    // Test different max_width values
+    std::vector<int> max_widths = {800, 1200, 1600, 2400};
+    const size_t test_count = std::min(size_t(100), files.size());
+
+    std::cout << "Testing throughput at different max_width values (" << test_count << " images)\n\n";
+    std::cout << std::setw(12) << "max_width"
+              << std::setw(15) << "cold (img/s)"
+              << std::setw(15) << "warm (img/s)"
+              << std::setw(12) << "speedup"
+              << std::setw(15) << "output size" << "\n";
+    std::cout << std::string(69, '-') << "\n";
+
+    for (int mw : max_widths) {
+        PipelinedLoaderConfig config;
+        config.io_threads = 2;
+        config.cold_process_threads = 4;
+        config.prefetch_count = 32;
+
+        PipelinedImageLoader loader(config);
+
+        // Cold pass
+        auto start_cold = std::chrono::high_resolution_clock::now();
+        for (size_t i = 0; i < test_count; ++i) {
+            ImageRequest req;
+            req.sequence_id = i;
+            req.path = files[i];
+            req.params.resize_factor = 1;
+            req.params.max_width = mw;
+            loader.prefetch({req});
+        }
+        int out_w = 0, out_h = 0;
+        for (size_t i = 0; i < test_count; ++i) {
+            auto ready = loader.get();
+            if (i == 0 && ready.tensor.is_valid()) {
+                out_h = ready.tensor.shape()[1];
+                out_w = ready.tensor.shape()[2];
+            }
+        }
+        auto end_cold = std::chrono::high_resolution_clock::now();
+        double cold_ms = std::chrono::duration<double, std::milli>(end_cold - start_cold).count();
+
+        // Warm pass
+        auto start_warm = std::chrono::high_resolution_clock::now();
+        for (size_t i = 0; i < test_count; ++i) {
+            ImageRequest req;
+            req.sequence_id = i + 10000;
+            req.path = files[i];
+            req.params.resize_factor = 1;
+            req.params.max_width = mw;
+            loader.prefetch({req});
+        }
+        for (size_t i = 0; i < test_count; ++i) {
+            loader.get();
+        }
+        auto end_warm = std::chrono::high_resolution_clock::now();
+        double warm_ms = std::chrono::duration<double, std::milli>(end_warm - start_warm).count();
+
+        double cold_throughput = (test_count / cold_ms) * 1000;
+        double warm_throughput = (test_count / warm_ms) * 1000;
+        double speedup = cold_ms / warm_ms;
+
+        std::cout << std::setw(12) << mw
+                  << std::setw(15) << std::fixed << std::setprecision(1) << cold_throughput
+                  << std::setw(15) << std::fixed << std::setprecision(1) << warm_throughput
+                  << std::setw(12) << std::fixed << std::setprecision(1) << speedup << "x"
+                  << std::setw(8) << out_w << "x" << out_h << "\n";
+    }
+    std::cout << "\n";
 }
