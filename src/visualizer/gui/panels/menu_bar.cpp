@@ -11,6 +11,7 @@
 #include "gui/dpi_scale.hpp"
 #ifdef WIN32
 #include <winsock2.h>
+#include <shellapi.h>
 #endif
 #include "gui/localization_manager.hpp"
 #include "gui/string_keys.hpp"
