@@ -598,8 +598,8 @@ namespace lfs::io {
                 return std::unexpected("Missing meta.json");
             }
 
-            std::ifstream meta_file(meta_path);
-            if (!meta_file) {
+            std::ifstream meta_file;
+            if (!lfs::core::open_file_for_read(meta_path, meta_file)) {
                 return std::unexpected("Failed to open meta.json");
             }
 
@@ -629,8 +629,8 @@ namespace lfs::io {
                 }
 
                 // Read file
-                std::ifstream file(file_path, std::ios::binary);
-                if (!file) {
+                std::ifstream file;
+                if (!lfs::core::open_file_for_read(file_path, std::ios::binary, file)) {
                     LOG_ERROR("Failed to open: {}", lfs::core::path_to_utf8(file_path));
                     return false;
                 }

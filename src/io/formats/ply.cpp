@@ -721,7 +721,11 @@ namespace lfs::io {
             }
 
             std::filebuf fb;
+#ifdef _WIN32
+            fb.open(output_path.wstring(), std::ios::out | std::ios::binary);
+#else
             fb.open(output_path, std::ios::out | std::ios::binary);
+#endif
             std::ostream out_stream(&fb);
             ply.write(out_stream, true);
         }
@@ -877,8 +881,8 @@ namespace lfs::io {
         if (!std::filesystem::exists(filepath))
             return false;
 
-        std::ifstream file(filepath, std::ios::binary);
-        if (!file)
+        std::ifstream file;
+        if (!lfs::core::open_file_for_read(filepath, std::ios::binary, file))
             return false;
 
         std::string line;
@@ -907,8 +911,8 @@ namespace lfs::io {
         }
 
         try {
-            std::ifstream file(filepath, std::ios::binary);
-            if (!file) {
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(filepath, std::ios::binary, file)) {
                 return std::unexpected(std::format("Cannot open: {}", lfs::core::path_to_utf8(filepath)));
             }
 

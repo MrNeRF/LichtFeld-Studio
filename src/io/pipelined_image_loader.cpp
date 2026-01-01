@@ -247,8 +247,8 @@ namespace lfs::io {
     }
 
     std::vector<uint8_t> PipelinedImageLoader::read_file(const std::filesystem::path& path) const {
-        std::ifstream file(path, std::ios::binary | std::ios::ate);
-        if (!file)
+        std::ifstream file;
+        if (!lfs::core::open_file_for_read(path, std::ios::binary | std::ios::ate, file))
             throw std::runtime_error("Failed to open: " + lfs::core::path_to_utf8(path));
 
         const auto size = file.tellg();

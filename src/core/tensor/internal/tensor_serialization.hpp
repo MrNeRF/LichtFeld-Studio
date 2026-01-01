@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/path_utils.hpp"
 #include "tensor_impl.hpp"
 #include <fstream>
 
@@ -86,16 +87,16 @@ namespace lfs::core {
     }
 
     inline void save_tensor(const Tensor& tensor, const std::string& filename) {
-        std::ofstream file(filename, std::ios::binary);
-        if (!file) {
+        std::ofstream file;
+        if (!open_file_for_write(utf8_to_path(filename), std::ios::binary, file)) {
             throw std::runtime_error("Failed to open file: " + filename);
         }
         file << tensor;
     }
 
     inline Tensor load_tensor(const std::string& filename) {
-        std::ifstream file(filename, std::ios::binary);
-        if (!file) {
+        std::ifstream file;
+        if (!open_file_for_read(utf8_to_path(filename), std::ios::binary, file)) {
             throw std::runtime_error("Failed to open file: " + filename);
         }
         Tensor tensor;

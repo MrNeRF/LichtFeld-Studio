@@ -3181,4 +3181,256 @@ TEST_F(UnicodePathTest, NativeStringSizeAfterUtf8ToPath) {
     EXPECT_GT(with_subdir.native().size(), converted.native().size())
         << "Path append didn't increase native size - embedded null issue";
 }
+
+// Test 57: PLY export using std::filebuf (ply.cpp fix)
+TEST_F(UnicodePathTest, PlyExportFilebuf) {
+    const auto output_dir = test_root_ / "PLY出力_ply_export_PLY输出";
+    fs::create_directories(output_dir);
+
+    const std::vector<std::pair<std::string, std::string>> TEST_CASES = {
+        {"Japanese", "日本語モデル_japanese_model.ply"},
+        {"Chinese", "中文模型_chinese_model.ply"},
+        {"Korean", "한국어모델_korean_model.ply"},
+        {"Mixed", "混合_ミックス_혼합_mixed.ply"},
+    };
+
+    const std::string PLY_HEADER =
+        "ply\nformat binary_little_endian 1.0\nelement vertex 3\n"
+        "property float x\nproperty float y\nproperty float z\nend_header\n";
+    const std::vector<float> VERTICES = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+
+    for (const auto& [name, filename] : TEST_CASES) {
+        SCOPED_TRACE(name);
+        const auto ply_path = output_dir / filename;
+
+        std::filebuf fb;
+#ifdef _WIN32
+        fb.open(ply_path.wstring(), std::ios::out | std::ios::binary);
+#else
+        fb.open(ply_path, std::ios::out | std::ios::binary);
+#endif
+        ASSERT_TRUE(fb.is_open()) << path_to_utf8(ply_path);
+        std::ostream out(&fb);
+        out << PLY_HEADER;
+        out.write(reinterpret_cast<const char*>(VERTICES.data()), VERTICES.size() * sizeof(float));
+        fb.close();
+
+        EXPECT_TRUE(fs::exists(ply_path));
+        EXPECT_GT(fs::file_size(ply_path), PLY_HEADER.size());
+
+        std::ifstream in;
+        ASSERT_TRUE(open_file_for_read(ply_path, std::ios::binary, in));
+        const std::string content{std::istreambuf_iterator<char>(in), {}};
+        EXPECT_EQ(content.find("ply"), 0u);
+        EXPECT_NE(content.find("element vertex 3"), std::string::npos);
+    }
+}
+
+// Test 58: Image loader binary read (pipelined_image_loader.cpp fix)
+TEST_F(UnicodePathTest, ImageLoaderBinaryRead) {
+    const auto images_dir = test_root_ / "画像_images_图片_이미지";
+    fs::create_directories(images_dir);
+
+    // Minimal JPEG: SOI + APP0 + EOI
+    const std::vector<uint8_t> JPEG_DATA = {
+        0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00,
+        0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9};
+
+    const std::vector<std::pair<std::string, std::string>> TEST_CASES = {
+        {"Japanese_Path", "日本語フォルダ/frame_00001.jpg"},
+        {"Chinese_Path", "中文文件夹/frame_00002.jpg"},
+        {"Korean_Path", "한국어폴더/frame_00003.jpg"},
+        {"Unicode_Filename", "images/日本語_フレーム_frame.jpg"},
+        {"Mixed_Deep", "データセット_dataset/train/日本語シーン/image_001.jpg"},
+    };
+
+    for (const auto& [name, filename] : TEST_CASES) {
+        SCOPED_TRACE(name);
+        const auto image_path = images_dir / filename;
+        fs::create_directories(image_path.parent_path());
+
+        std::ofstream out;
+        ASSERT_TRUE(open_file_for_write(image_path, std::ios::binary, out));
+        out.write(reinterpret_cast<const char*>(JPEG_DATA.data()), JPEG_DATA.size());
+        out.close();
+
+        std::ifstream in;
+        ASSERT_TRUE(open_file_for_read(image_path, std::ios::binary | std::ios::ate, in));
+        const auto size = in.tellg();
+        in.seekg(0, std::ios::beg);
+        std::vector<uint8_t> buffer(size);
+        in.read(reinterpret_cast<char*>(buffer.data()), size);
+
+        EXPECT_EQ(buffer.size(), JPEG_DATA.size());
+        EXPECT_EQ(buffer[0], 0xFF);
+        EXPECT_EQ(buffer[1], 0xD8);
+    }
+}
+
+// Test 59: COLMAP binary file reading (colmap.cpp fix)
+TEST_F(UnicodePathTest, ColmapBinaryRead) {
+    const auto colmap_dir = test_root_ / "COLMAP_データ_数据_데이터";
+
+    // Minimal COLMAP cameras.bin header
+    const std::vector<uint8_t> CAMERAS_BIN = {
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+    const std::vector<std::pair<std::string, std::string>> TEST_CASES = {
+        {"Japanese_Project", "日本語プロジェクト"},
+        {"Chinese_Scene", "中文场景"},
+        {"Korean_Dataset", "한국어데이터셋"},
+    };
+
+    for (const auto& [name, subdir] : TEST_CASES) {
+        SCOPED_TRACE(name);
+        const auto project_dir = colmap_dir / subdir / "sparse" / "0";
+        fs::create_directories(project_dir);
+        const auto cameras_path = project_dir / "cameras.bin";
+
+        std::ofstream out;
+        ASSERT_TRUE(open_file_for_write(cameras_path, std::ios::binary, out));
+        out.write(reinterpret_cast<const char*>(CAMERAS_BIN.data()), CAMERAS_BIN.size());
+        out.close();
+
+        std::ifstream in;
+        ASSERT_TRUE(open_file_for_read(cameras_path, std::ios::binary | std::ios::ate, in));
+        const auto sz = static_cast<std::streamsize>(in.tellg());
+        std::vector<char> buf(static_cast<size_t>(sz));
+        in.seekg(0, std::ios::beg);
+        in.read(buf.data(), sz);
+        EXPECT_EQ(buf.size(), CAMERAS_BIN.size());
+    }
+}
+
+// Test 60: Transforms JSON reading (transforms.cpp fix)
+TEST_F(UnicodePathTest, TransformsJsonRead) {
+    const auto dataset_dir = test_root_ / "NeRF_データセット_数据集_데이터셋";
+    fs::create_directories(dataset_dir);
+
+    const std::string TRANSFORMS_JSON = R"({"camera_angle_x":0.69,"frames":[{"file_path":"./images/f.jpg"}]})";
+
+    const std::vector<std::pair<std::string, std::string>> TEST_CASES = {
+        {"Japanese_NeRF", "日本語シーン_scene"},
+        {"Chinese_NeRF", "中文场景_scene"},
+        {"Korean_NeRF", "한국어장면_scene"},
+    };
+
+    for (const auto& [name, subdir] : TEST_CASES) {
+        SCOPED_TRACE(name);
+        const auto scene_dir = dataset_dir / subdir;
+        fs::create_directories(scene_dir);
+        const auto transforms_path = scene_dir / "transforms.json";
+
+        std::ofstream out;
+        ASSERT_TRUE(open_file_for_write(transforms_path, out));
+        out << TRANSFORMS_JSON;
+        out.close();
+
+        std::ifstream in;
+        ASSERT_TRUE(open_file_for_read(transforms_path, in));
+        const std::string content{std::istreambuf_iterator<char>(in), {}};
+        EXPECT_NE(content.find("camera_angle_x"), std::string::npos);
+        EXPECT_NE(content.find("frames"), std::string::npos);
+    }
+}
+
+// Test 61: Tensor dump diagnostic (tensor.cpp fix)
+TEST_F(UnicodePathTest, TensorDumpDiagnostic) {
+    const auto debug_dir = test_root_ / "デバッグ_debug_调试_디버그";
+    fs::create_directories(debug_dir);
+
+    const std::vector<std::pair<std::string, std::string>> TEST_CASES = {
+        {"Japanese", "テンソル_tensor_dump.txt"},
+        {"Chinese", "张量_tensor_dump.txt"},
+        {"Korean", "텐서_tensor_dump.txt"},
+        {"Mixed", "デバッグ_调试_디버그_dump.txt"},
+    };
+
+    for (const auto& [name, filename] : TEST_CASES) {
+        SCOPED_TRACE(name);
+        const auto dump_path = debug_dir / filename;
+        const std::string dump_path_utf8 = path_to_utf8(dump_path);
+
+        // Simulates tensor.cpp::dump_diagnostic() which takes UTF-8 string
+        std::ofstream out;
+        ASSERT_TRUE(open_file_for_write(utf8_to_path(dump_path_utf8), out));
+        out << "=== Tensor Diagnostic Dump ===\nInfo: [3,256,256] float32\n";
+        out.close();
+
+        EXPECT_TRUE(fs::exists(dump_path));
+
+        std::ifstream in;
+        ASSERT_TRUE(open_file_for_read(dump_path, in));
+        const std::string content{std::istreambuf_iterator<char>(in), {}};
+        EXPECT_NE(content.find("Tensor Diagnostic Dump"), std::string::npos);
+    }
+}
+
+// Test 62: Fast rasterizer crash dump (fast_rasterizer.cpp fix)
+TEST_F(UnicodePathTest, RasterizerCrashDump) {
+    const auto crash_dir = test_root_ / "クラッシュダンプ_crash_dump_崩溃转储";
+    fs::create_directories(crash_dir);
+
+    const std::vector<std::pair<std::string, std::string>> TEST_CASES = {
+        {"Japanese_CWD", "日本語_作業ディレクトリ"},
+        {"Chinese_CWD", "中文_工作目录"},
+        {"Korean_CWD", "한국어_작업디렉토리"},
+    };
+
+    for (const auto& [name, subdir] : TEST_CASES) {
+        SCOPED_TRACE(name);
+        const auto dump_dir = crash_dir / subdir / "crash_dump_20250101_120000";
+        fs::create_directories(dump_dir);
+        const auto params_path = dump_dir / "params.json";
+
+        std::ofstream out;
+        ASSERT_TRUE(open_file_for_write(params_path, out));
+        out << R"({"error":"CUDA error","n_primitives":1000000})";
+        out.close();
+
+        EXPECT_TRUE(fs::exists(params_path));
+
+        std::ifstream in;
+        ASSERT_TRUE(open_file_for_read(params_path, in));
+        const std::string content{std::istreambuf_iterator<char>(in), {}};
+        EXPECT_NE(content.find("n_primitives"), std::string::npos);
+        EXPECT_NE(content.find("1000000"), std::string::npos);
+    }
+}
+
+// Test 63: Blender/NeRF loader validation (blender_loader.cpp fix)
+TEST_F(UnicodePathTest, BlenderLoaderValidation) {
+    const auto nerf_dir = test_root_ / "Blender_NeRF_データ";
+    fs::create_directories(nerf_dir);
+
+    const std::string TRANSFORMS_JSON = R"({"camera_angle_x":0.85,"frames":[{"file_path":"./r_0"}]})";
+
+    const std::vector<std::pair<std::string, std::string>> TEST_CASES = {
+        {"Japanese_Blender", "日本語Blender_プロジェクト"},
+        {"Chinese_Blender", "中文Blender_项目"},
+        {"Korean_Blender", "한국어Blender_프로젝트"},
+    };
+
+    for (const auto& [name, project_name] : TEST_CASES) {
+        SCOPED_TRACE(name);
+        const auto project_dir = nerf_dir / project_name;
+        fs::create_directories(project_dir);
+        const auto transforms_path = project_dir / "transforms_train.json";
+
+        std::ofstream out;
+        ASSERT_TRUE(open_file_for_write(transforms_path, out));
+        out << TRANSFORMS_JSON;
+        out.close();
+
+        std::ifstream in;
+        ASSERT_TRUE(open_file_for_read(transforms_path, in));
+        const std::string content{std::istreambuf_iterator<char>(in), {}};
+        EXPECT_NE(content.find("frames"), std::string::npos);
+        EXPECT_NE(content.find("["), std::string::npos);
+    }
+}
+
 #endif // LFS_HAS_FULL_LIBRARY

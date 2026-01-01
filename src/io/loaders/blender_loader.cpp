@@ -98,7 +98,7 @@ namespace lfs::io {
         } else if (path.extension() == ".json") {
             // Direct path to transforms file
             transforms_file = path;
-            LOG_DEBUG("Using direct transforms file: {}", transforms_file.string());
+            LOG_DEBUG("Using direct transforms file: {}", lfs::core::path_to_utf8(transforms_file));
         } else {
             return make_error(ErrorCode::UNSUPPORTED_FORMAT,
                               "Path must be a directory or a JSON file", path);
@@ -106,10 +106,10 @@ namespace lfs::io {
 
         // Validation only mode
         if (options.validate_only) {
-            LOG_DEBUG("Validation only mode for Blender/NeRF: {}", transforms_file.string());
+            LOG_DEBUG("Validation only mode for Blender/NeRF: {}", lfs::core::path_to_utf8(transforms_file));
             // Check if the transforms file is valid JSON
-            std::ifstream file(transforms_file);
-            if (!file) {
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(transforms_file, file)) {
                 return make_error(ErrorCode::PERMISSION_DENIED,
                                   "Cannot open transforms file for reading", transforms_file);
             }
@@ -151,7 +151,7 @@ namespace lfs::io {
         }
 
         try {
-            LOG_INFO("Loading Blender/NeRF dataset from: {}", transforms_file.string());
+            LOG_INFO("Loading Blender/NeRF dataset from: {}", lfs::core::path_to_utf8(transforms_file));
 
             // Read transforms and create cameras
             auto [camera_infos, scene_center, train_val_split] = read_transforms_cameras_and_images(transforms_file);
@@ -183,7 +183,7 @@ namespace lfs::io {
                         if (img_w != mask_w || img_h != mask_h) {
                             return make_error(ErrorCode::MASK_SIZE_MISMATCH,
                                               std::format("Mask '{}' is {}x{} but image '{}' is {}x{}",
-                                                          mask_path.filename().string(), mask_w, mask_h,
+                                                          lfs::core::path_to_utf8(mask_path.filename()), mask_w, mask_h,
                                                           info._image_name, img_w, img_h),
                                               mask_path);
                         }

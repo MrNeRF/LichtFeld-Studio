@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor_trace.hpp"
 #include "internal/tensor_broadcast.hpp"
 #include "internal/tensor_impl.hpp"
@@ -2071,7 +2072,8 @@ namespace lfs::core {
     }
 
     void Tensor::dump_diagnostic(const std::string& filename) const {
-        std::ofstream file(filename);
+        std::ofstream file;
+        lfs::core::open_file_for_write(lfs::core::utf8_to_path(filename), file);
         file << "=== Tensor Diagnostic Dump ===\n";
         file << std::format("Info: {}\n", str());
         file << std::format("Memory address: {}\n", data_);
