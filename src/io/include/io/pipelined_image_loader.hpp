@@ -56,7 +56,7 @@ namespace lfs::io {
      */
     struct MaskParams {
         bool invert = false;       // Invert mask values (1.0 - mask)
-        float threshold = 0.0f;    // If > 0, values >= threshold become 1.0
+        float threshold = 0.0f;    // Binary threshold: >= threshold → 1.0, else → 0.0
     };
 
     struct ImageRequest {

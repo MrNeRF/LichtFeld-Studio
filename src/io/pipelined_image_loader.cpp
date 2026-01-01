@@ -599,7 +599,9 @@ namespace lfs::io {
                             if (batch[i].mask_params.threshold > 0) {
                                 cuda::launch_mask_threshold(mask_ptr, H, W, batch[i].mask_params.threshold, nullptr);
                             }
-                            cudaDeviceSynchronize();
+                            if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
+                                throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
+                            }
 
                             try_complete_pair(batch[i].sequence_id, std::nullopt, std::move(mask_tensor), nullptr);
 
@@ -721,10 +723,10 @@ namespace lfs::io {
                                 lfs::core::TensorShape({H, W}),
                                 lfs::core::Device::CPU, lfs::core::DataType::Float32);
 
-                            const float* src = reinterpret_cast<const float*>(temp_cpu.data_ptr());
-                            float* dst = reinterpret_cast<float*>(mask_cpu.data_ptr());
+                            const float* const src = reinterpret_cast<const float*>(temp_cpu.data_ptr());
+                            float* const dst = reinterpret_cast<float*>(mask_cpu.data_ptr());
                             const size_t plane_size = H * W;
-                            const size_t channels_to_avg = std::min(C, size_t(3));
+                            const size_t channels_to_avg = std::min(C, size_t(3)); // RGB only, exclude alpha
 
                             for (size_t i = 0; i < plane_size; ++i) {
                                 float sum = 0.0f;
@@ -737,7 +739,9 @@ namespace lfs::io {
                             mask_tensor = mask_cpu.to(lfs::core::Device::CUDA);
                         }
 
-                        cudaDeviceSynchronize();
+                        if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
+                            throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
+                        }
                         gpu_uint8 = lfs::core::Tensor();
                     }
 
@@ -751,7 +755,9 @@ namespace lfs::io {
                     if (item.mask_params.threshold > 0) {
                         cuda::launch_mask_threshold(mask_ptr, H, W, item.mask_params.threshold, nullptr);
                     }
-                    cudaDeviceSynchronize();
+                    if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
+                        throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
+                    }
 
                     if (is_nvcodec_available()) {
                         try {
@@ -805,7 +811,9 @@ namespace lfs::io {
                             reinterpret_cast<float*>(decoded.data_ptr()),
                             H, W, C, nullptr);
 
-                        cudaDeviceSynchronize();
+                        if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
+                            throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
+                        }
                         gpu_uint8 = lfs::core::Tensor();
                     }
 

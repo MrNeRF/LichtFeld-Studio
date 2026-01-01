@@ -699,7 +699,12 @@ namespace lfs::io {
             }
         }
 
-        cudaDeviceSynchronize();
+        if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
+            if (saved_context) {
+                cuCtxSetCurrent(saved_context);
+            }
+            throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
+        }
         uint8_tensor = Tensor();
 
         if (saved_context) {

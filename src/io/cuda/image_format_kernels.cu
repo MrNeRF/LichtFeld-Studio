@@ -104,9 +104,7 @@ namespace lfs::io::cuda {
         if (idx >= total)
             return;
 
-        if (data[idx] >= threshold) {
-            data[idx] = 1.0f;
-        }
+        data[idx] = (data[idx] >= threshold) ? 1.0f : 0.0f;
     }
 
     void launch_mask_threshold(
