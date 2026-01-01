@@ -847,12 +847,18 @@ namespace lfs::training {
 
                 const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None && cam->has_mask();
                 if (use_mask) {
-                    // Load mask (cached after first load)
-                    auto mask = cam->load_and_get_mask(
-                        params_.dataset.resize_factor,
-                        params_.dataset.max_width,
-                        params_.optimization.invert_masks,
-                        params_.optimization.mask_threshold);
+                    // Use pipelined mask if available, otherwise load from camera (fallback for validation, etc.)
+                    lfs::core::Tensor mask;
+                    if (pipelined_mask_.is_valid() && pipelined_mask_.numel() > 0) {
+                        mask = pipelined_mask_;
+                    } else {
+                        // Fallback: load mask from camera (cached after first load)
+                        mask = cam->load_and_get_mask(
+                            params_.dataset.resize_factor,
+                            params_.dataset.max_width,
+                            params_.optimization.invert_masks,
+                            params_.optimization.mask_threshold);
+                    }
 
                     // Extract mask tile if tiling
                     lfs::core::Tensor mask_tile = mask;
@@ -1170,7 +1176,19 @@ namespace lfs::training {
             } else {
                 pipelined_config.cold_process_threads = worker_threads;
             }
-            auto train_dataloader = create_infinite_pipelined_dataloader(train_dataset_, pipelined_config);
+
+            // Configure mask loading if masks are enabled
+            PipelinedMaskConfig mask_pipeline_config;
+            if (params_.optimization.mask_mode != lfs::core::param::MaskMode::None) {
+                mask_pipeline_config.load_masks = true;
+                mask_pipeline_config.invert_masks = params_.optimization.invert_masks;
+                mask_pipeline_config.mask_threshold = params_.optimization.mask_threshold;
+                LOG_INFO("Mask loading enabled in pipeline (invert={}, threshold={})",
+                         mask_pipeline_config.invert_masks, mask_pipeline_config.mask_threshold);
+            }
+
+            auto train_dataloader = create_infinite_pipelined_dataloader(
+                train_dataset_, pipelined_config, mask_pipeline_config);
 
             LOG_DEBUG("Starting training iterations");
             while (iter <= params_.optimization.iterations) {
@@ -1188,6 +1206,9 @@ namespace lfs::training {
                 auto& example = *example_opt;
                 lfs::core::Camera* cam = example.data.camera;
                 lfs::core::Tensor gt_image = std::move(example.data.image);
+
+                // Store pipelined mask for use in train_step
+                pipelined_mask_ = example.mask.has_value() ? std::move(*example.mask) : lfs::core::Tensor();
 
                 auto step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
                 if (!step_result) {

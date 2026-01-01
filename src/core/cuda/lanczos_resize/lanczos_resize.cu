@@ -106,32 +106,79 @@ namespace lfs::core {
             uint32_t coef_offset_step_y = (uint32_t)(kernel_size * scale_h * 2 + 1 + 0.5f);
             uint32_t coef_offset_step_x = (uint32_t)(kernel_size * scale_w * 2 + 1 + 0.5f);
 
-            // Accumulate for each channel
             float accumulator[CHANNELS] = {0.0f};
 
             for (int y = LU.y; y < RD.y; y++) {
-                float kernel_value_y = pre_coef_y[pix.y * coef_offset_step_y + y - LU.y];
+                const float kernel_value_y = pre_coef_y[pix.y * coef_offset_step_y + y - LU.y];
                 for (int x = LU.x; x < RD.x; x++) {
-                    // Input is [H, W, C] format - row-major with interleaved channels
-                    uint32_t input_pix_id = input_w * y + x;
-                    float kernel_value_x = pre_coef_x[pix.x * coef_offset_step_x + x - LU.x];
-                    float kernel_value = kernel_value_y * kernel_value_x;
+                    const uint32_t input_pix_id = input_w * y + x;
+                    const float kernel_value_x = pre_coef_x[pix.x * coef_offset_step_x + x - LU.x];
+                    const float kernel_value = kernel_value_y * kernel_value_x;
 
                     for (int ch = 0; ch < CHANNELS; ch++) {
-                        // Read from [H, W, C] input
-                        float pixel_value = (float)input[input_pix_id * 3 + ch] / 255.0f; // Normalize to [0, 1]
+                        const float pixel_value = (float)input[input_pix_id * 3 + ch] / 255.0f;
                         accumulator[ch] += pixel_value * kernel_value;
                     }
                 }
             }
 
-            // Write to [C, H, W] output
             const int H_out = output_h;
             const int W_out = output_w;
             for (int ch = 0; ch < CHANNELS; ch++) {
-                // [C, H, W] layout: ch * (H * W) + y * W + x
                 output[ch * (H_out * W_out) + pix.y * W_out + pix.x] = accumulator[ch];
             }
+        }
+
+        __global__ void __launch_bounds__(BLOCK_X* BLOCK_Y)
+            LanczosResampleGrayscaleCUDA(
+                const int input_h, const int input_w,
+                const int output_h, const int output_w,
+                const int kernel_size,
+                const float* __restrict__ pre_coef_x,
+                const float* __restrict__ pre_coef_y,
+                const uint8_t* __restrict__ input, // [H, W] uint8
+                float* __restrict__ output         // [H, W] float32
+            ) {
+            const auto block = cg::this_thread_block();
+            const uint32_t thread_idx_x = block.thread_index().x;
+            const uint32_t thread_idx_y = block.thread_index().y;
+            const uint2 pix = {
+                block.group_index().x * BLOCK_X + thread_idx_x,
+                block.group_index().y * BLOCK_Y + thread_idx_y};
+            const float2 pixf = {(float)pix.x, (float)pix.y};
+            float scale_h = 1.0f * input_h / output_h, scale_w = 1.0f * input_w / output_w;
+
+            const bool inside = (pix.x < output_w && pix.y < output_h);
+
+            if (!inside)
+                return;
+
+            const float2 center = {(pixf.x + 0.5f) * scale_w, (pixf.y + 0.5f) * scale_h};
+
+            const int2 LU = {
+                max((int)(center.x - kernel_size * scale_w + 0.5f), 0),
+                max((int)(center.y - kernel_size * scale_h + 0.5f), 0)};
+            const int2 RD = {
+                min((int)(center.x + kernel_size * scale_w + 0.5f), input_w),
+                min((int)(center.y + kernel_size * scale_h + 0.5f), input_h)};
+
+            const uint32_t coef_offset_step_y = (uint32_t)(kernel_size * scale_h * 2 + 1 + 0.5f);
+            const uint32_t coef_offset_step_x = (uint32_t)(kernel_size * scale_w * 2 + 1 + 0.5f);
+
+            float accumulator = 0.0f;
+
+            for (int y = LU.y; y < RD.y; y++) {
+                const float kernel_value_y = pre_coef_y[pix.y * coef_offset_step_y + y - LU.y];
+                for (int x = LU.x; x < RD.x; x++) {
+                    const uint32_t input_pix_id = input_w * y + x;
+                    const float kernel_value_x = pre_coef_x[pix.x * coef_offset_step_x + x - LU.x];
+                    const float kernel_value = kernel_value_y * kernel_value_x;
+                    const float pixel_value = (float)input[input_pix_id] / 255.0f;
+                    accumulator += pixel_value * kernel_value;
+                }
+            }
+
+            output[pix.y * output_w + pix.x] = accumulator;
         }
 
     } // namespace detail
@@ -143,7 +190,6 @@ namespace lfs::core {
         int kernel_size,
         cudaStream_t cuda_stream) {
 
-        // Validate input
         if (!input.is_valid() || input.device() != Device::CUDA) {
             LOG_ERROR("lanczos_resize: Input must be a valid CUDA tensor");
             return Tensor();
@@ -159,7 +205,6 @@ namespace lfs::core {
             return Tensor();
         }
 
-        // Get input dimensions [H, W, C]
         const int input_h = static_cast<int>(input.size(0));
         const int input_w = static_cast<int>(input.size(1));
         const int channels = static_cast<int>(input.size(2));
@@ -169,33 +214,27 @@ namespace lfs::core {
             return Tensor();
         }
 
-        // Create output tensor in [C, H, W] format (float32)
         auto output = Tensor::empty(
             TensorShape({static_cast<size_t>(channels), static_cast<size_t>(output_h), static_cast<size_t>(output_w)}),
             Device::CUDA,
             DataType::Float32);
 
-        // Zero-initialize output
         cudaMemsetAsync(output.data_ptr(), 0, output.bytes(), cuda_stream);
 
-        // Calculate coefficient buffer sizes
         const uint32_t offset_step_x = (uint32_t)(kernel_size * (1.0 * input_w / output_w) * 2 + 1 + 0.5f);
         const uint32_t offset_step_y = (uint32_t)(kernel_size * (1.0 * input_h / output_h) * 2 + 1 + 0.5f);
 
-        // Allocate coefficient buffers
         float* coef_x;
         float* coef_y;
         cudaMalloc(&coef_x, sizeof(float) * output_w * offset_step_x);
         cudaMalloc(&coef_y, sizeof(float) * output_h * offset_step_y);
 
-        // Pre-compute coefficients for X and Y dimensions
         detail::PreComputeCoef<<<(output_w + BLOCK_X * BLOCK_Y - 1) / (BLOCK_X * BLOCK_Y), BLOCK_X * BLOCK_Y, 0, cuda_stream>>>(
             input_w, output_w, kernel_size, coef_x);
 
         detail::PreComputeCoef<<<(output_h + BLOCK_X * BLOCK_Y - 1) / (BLOCK_X * BLOCK_Y), BLOCK_X * BLOCK_Y, 0, cuda_stream>>>(
             input_h, output_h, kernel_size, coef_y);
 
-        // Launch Lanczos resampling kernel
         const dim3 tile_grid((output_w + BLOCK_X - 1) / BLOCK_X, (output_h + BLOCK_Y - 1) / BLOCK_Y);
         const dim3 block(BLOCK_X, BLOCK_Y, 1);
 
@@ -208,7 +247,70 @@ namespace lfs::core {
             input.ptr<uint8_t>(),
             output.ptr<float>());
 
-        // Clean up coefficient buffers
+        cudaFree(coef_x);
+        cudaFree(coef_y);
+
+        return output;
+    }
+
+    Tensor lanczos_resize_grayscale(
+        const Tensor& input,
+        int output_h,
+        int output_w,
+        int kernel_size,
+        cudaStream_t cuda_stream) {
+
+        if (!input.is_valid() || input.device() != Device::CUDA) {
+            LOG_ERROR("lanczos_resize_grayscale: Input must be a valid CUDA tensor");
+            return Tensor();
+        }
+
+        if (input.dtype() != DataType::UInt8) {
+            LOG_ERROR("lanczos_resize_grayscale: Input must be UInt8 dtype");
+            return Tensor();
+        }
+
+        if (input.ndim() != 2) {
+            LOG_ERROR("lanczos_resize_grayscale: Input must be 2D tensor [H, W]");
+            return Tensor();
+        }
+
+        const int input_h = static_cast<int>(input.size(0));
+        const int input_w = static_cast<int>(input.size(1));
+
+        auto output = Tensor::empty(
+            TensorShape({static_cast<size_t>(output_h), static_cast<size_t>(output_w)}),
+            Device::CUDA,
+            DataType::Float32);
+
+        cudaMemsetAsync(output.data_ptr(), 0, output.bytes(), cuda_stream);
+
+        const uint32_t offset_step_x = (uint32_t)(kernel_size * (1.0 * input_w / output_w) * 2 + 1 + 0.5f);
+        const uint32_t offset_step_y = (uint32_t)(kernel_size * (1.0 * input_h / output_h) * 2 + 1 + 0.5f);
+
+        float* coef_x;
+        float* coef_y;
+        cudaMalloc(&coef_x, sizeof(float) * output_w * offset_step_x);
+        cudaMalloc(&coef_y, sizeof(float) * output_h * offset_step_y);
+
+        detail::PreComputeCoef<<<(output_w + BLOCK_X * BLOCK_Y - 1) / (BLOCK_X * BLOCK_Y), BLOCK_X * BLOCK_Y, 0, cuda_stream>>>(
+            input_w, output_w, kernel_size, coef_x);
+
+        detail::PreComputeCoef<<<(output_h + BLOCK_X * BLOCK_Y - 1) / (BLOCK_X * BLOCK_Y), BLOCK_X * BLOCK_Y, 0, cuda_stream>>>(
+            input_h, output_h, kernel_size, coef_y);
+
+        const dim3 tile_grid((output_w + BLOCK_X - 1) / BLOCK_X, (output_h + BLOCK_Y - 1) / BLOCK_Y);
+        const dim3 block(BLOCK_X, BLOCK_Y, 1);
+
+        detail::LanczosResampleGrayscaleCUDA<<<tile_grid, block, 0, cuda_stream>>>(
+            input_h, input_w,
+            output_h, output_w,
+            kernel_size,
+            coef_x,
+            coef_y,
+            input.ptr<uint8_t>(),
+            output.ptr<float>());
+
         cudaFree(coef_x);
         cudaFree(coef_y);
 
