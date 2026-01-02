@@ -855,10 +855,8 @@ namespace lfs::core {
                     }
                 }
 
-                // Calculate input strides
-                auto input_strides = input->shape_.strides();
+                const auto& input_strides = input->strides_;
 
-                // Calculate output shape and strides
                 std::vector<size_t> out_shape_vec;
                 for (size_t i = 0; i < input->shape_.rank(); ++i) {
                     if (!is_reduced_dim[i]) {
@@ -1006,10 +1004,8 @@ namespace lfs::core {
                 }
             }
 
-            // Calculate input strides
-            auto input_strides = input->shape_.strides();
+            const auto& input_strides = input->strides_;
 
-            // Calculate output strides
             std::vector<size_t> out_shape_vec;
             for (size_t i = 0; i < input->shape_.rank(); ++i) {
                 if (!is_reduced_dim[i]) {
