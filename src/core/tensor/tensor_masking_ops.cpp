@@ -1139,8 +1139,10 @@ namespace lfs::core {
                 for (size_t i = 0; i < row_idx.numel(); ++i) {
                     int r = row_ptr[i];
                     int c = col_ptr[i];
-                    if (r < 0) r += shape_[0];
-                    if (c < 0) c += shape_[1];
+                    if (r < 0)
+                        r += shape_[0];
+                    if (c < 0)
+                        c += shape_[1];
                     if (r >= 0 && r < static_cast<int>(shape_[0]) &&
                         c >= 0 && c < static_cast<int>(shape_[1])) {
                         data_ptr[r * strides_[0] + c * strides_[1]] = val_ptr[i];

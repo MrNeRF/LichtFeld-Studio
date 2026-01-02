@@ -347,7 +347,8 @@ namespace lfs::core {
                         new_shape.data(), pad_before.data(),
                         shape_.rank(), numel(), nullptr);
                 } else if (device_ == Device::CPU && dtype_ == DataType::Float32) {
-                    if (!is_contiguous()) return contiguous().movement(op, args);
+                    if (!is_contiguous())
+                        return contiguous().movement(op, args);
 
                     const float* src = ptr<float>();
                     float* dst = result.ptr<float>();

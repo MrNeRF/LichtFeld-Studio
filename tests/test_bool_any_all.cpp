@@ -8,8 +8,8 @@
 
 #include "core/tensor.hpp"
 #include <gtest/gtest.h>
-#include <torch/torch.h>
 #include <random>
+#include <torch/torch.h>
 
 using namespace lfs::core;
 
@@ -25,7 +25,8 @@ protected:
     // Helper to create random bool tensor
     Tensor random_bool_tensor(std::vector<size_t> shape, float true_probability = 0.5f) {
         size_t numel = 1;
-        for (auto s : shape) numel *= s;
+        for (auto s : shape)
+            numel *= s;
 
         std::vector<unsigned char> data(numel);
         std::uniform_real_distribution<float> dist(0.0f, 1.0f);
@@ -164,62 +165,62 @@ TEST_F(BoolAnyAllTest, All_FullReduction_OneFalse) {
 TEST_F(BoolAnyAllTest, Any_Dim0_2D) {
     // Create a 3x4 tensor with specific pattern
     auto lfs_tensor = Tensor::zeros({3, 4}, Device::CPU, DataType::Bool);
-    lfs_tensor.set_bool({0, 1}, true);  // Column 1 has at least one true
-    lfs_tensor.set_bool({2, 3}, true);  // Column 3 has at least one true
+    lfs_tensor.set_bool({0, 1}, true); // Column 1 has at least one true
+    lfs_tensor.set_bool({2, 3}, true); // Column 3 has at least one true
 
     auto torch_tensor = torch::zeros({3, 4}, torch::kBool);
     torch_tensor.index_put_({0, 1}, true);
     torch_tensor.index_put_({2, 3}, true);
 
-    auto lfs_result = lfs_tensor.any(0);       // Reduce along rows -> [4]
-    auto torch_result = torch_tensor.any(0);   // Should give [false, true, false, true]
+    auto lfs_result = lfs_tensor.any(0);     // Reduce along rows -> [4]
+    auto torch_result = torch_tensor.any(0); // Should give [false, true, false, true]
 
     compare_bool_tensors(lfs_result, torch_result, "any(dim=0) 2D");
 }
 
 TEST_F(BoolAnyAllTest, Any_Dim1_2D) {
     auto lfs_tensor = Tensor::zeros({3, 4}, Device::CPU, DataType::Bool);
-    lfs_tensor.set_bool({0, 2}, true);  // Row 0 has at least one true
-    lfs_tensor.set_bool({1, 0}, true);  // Row 1 has at least one true
+    lfs_tensor.set_bool({0, 2}, true); // Row 0 has at least one true
+    lfs_tensor.set_bool({1, 0}, true); // Row 1 has at least one true
     // Row 2 has no true values
 
     auto torch_tensor = torch::zeros({3, 4}, torch::kBool);
     torch_tensor.index_put_({0, 2}, true);
     torch_tensor.index_put_({1, 0}, true);
 
-    auto lfs_result = lfs_tensor.any(1);       // Reduce along columns -> [3]
-    auto torch_result = torch_tensor.any(1);   // Should give [true, true, false]
+    auto lfs_result = lfs_tensor.any(1);     // Reduce along columns -> [3]
+    auto torch_result = torch_tensor.any(1); // Should give [true, true, false]
 
     compare_bool_tensors(lfs_result, torch_result, "any(dim=1) 2D");
 }
 
 TEST_F(BoolAnyAllTest, All_Dim0_2D) {
     auto lfs_tensor = Tensor::ones({3, 4}, Device::CPU, DataType::Bool);
-    lfs_tensor.set_bool({1, 0}, false);  // Column 0 has a false
-    lfs_tensor.set_bool({0, 2}, false);  // Column 2 has a false
+    lfs_tensor.set_bool({1, 0}, false); // Column 0 has a false
+    lfs_tensor.set_bool({0, 2}, false); // Column 2 has a false
 
     auto torch_tensor = torch::ones({3, 4}, torch::kBool);
     torch_tensor.index_put_({1, 0}, false);
     torch_tensor.index_put_({0, 2}, false);
 
-    auto lfs_result = lfs_tensor.all(0);       // Reduce along rows -> [4]
-    auto torch_result = torch_tensor.all(0);   // Should give [false, true, false, true]
+    auto lfs_result = lfs_tensor.all(0);     // Reduce along rows -> [4]
+    auto torch_result = torch_tensor.all(0); // Should give [false, true, false, true]
 
     compare_bool_tensors(lfs_result, torch_result, "all(dim=0) 2D");
 }
 
 TEST_F(BoolAnyAllTest, All_Dim1_2D) {
     auto lfs_tensor = Tensor::ones({3, 4}, Device::CPU, DataType::Bool);
-    lfs_tensor.set_bool({0, 1}, false);  // Row 0 has a false
+    lfs_tensor.set_bool({0, 1}, false); // Row 0 has a false
     // Row 1 all true
-    lfs_tensor.set_bool({2, 3}, false);  // Row 2 has a false
+    lfs_tensor.set_bool({2, 3}, false); // Row 2 has a false
 
     auto torch_tensor = torch::ones({3, 4}, torch::kBool);
     torch_tensor.index_put_({0, 1}, false);
     torch_tensor.index_put_({2, 3}, false);
 
-    auto lfs_result = lfs_tensor.all(1);       // Reduce along columns -> [3]
-    auto torch_result = torch_tensor.all(1);   // Should give [false, true, false]
+    auto lfs_result = lfs_tensor.all(1);     // Reduce along columns -> [3]
+    auto torch_result = torch_tensor.all(1); // Should give [false, true, false]
 
     compare_bool_tensors(lfs_result, torch_result, "all(dim=1) 2D");
 }
@@ -233,7 +234,7 @@ TEST_F(BoolAnyAllTest, Any_Dim0_3D) {
     torch_tensor.index_put_({0, 1, 2}, true);
     torch_tensor.index_put_({1, 0, 3}, true);
 
-    auto lfs_result = lfs_tensor.any(0);       // -> [3, 4]
+    auto lfs_result = lfs_tensor.any(0); // -> [3, 4]
     auto torch_result = torch_tensor.any(0);
 
     compare_bool_tensors(lfs_result, torch_result, "any(dim=0) 3D");
@@ -248,7 +249,7 @@ TEST_F(BoolAnyAllTest, Any_Dim1_3D) {
     torch_tensor.index_put_({0, 1, 2}, true);
     torch_tensor.index_put_({1, 2, 0}, true);
 
-    auto lfs_result = lfs_tensor.any(1);       // -> [2, 4]
+    auto lfs_result = lfs_tensor.any(1); // -> [2, 4]
     auto torch_result = torch_tensor.any(1);
 
     compare_bool_tensors(lfs_result, torch_result, "any(dim=1) 3D");
@@ -263,7 +264,7 @@ TEST_F(BoolAnyAllTest, Any_Dim2_3D) {
     torch_tensor.index_put_({0, 0, 1}, true);
     torch_tensor.index_put_({1, 2, 3}, true);
 
-    auto lfs_result = lfs_tensor.any(2);       // -> [2, 3]
+    auto lfs_result = lfs_tensor.any(2); // -> [2, 3]
     auto torch_result = torch_tensor.any(2);
 
     compare_bool_tensors(lfs_result, torch_result, "any(dim=2) 3D");
@@ -278,7 +279,7 @@ TEST_F(BoolAnyAllTest, All_Dim2_3D) {
     torch_tensor.index_put_({0, 1, 2}, false);
     torch_tensor.index_put_({1, 0, 0}, false);
 
-    auto lfs_result = lfs_tensor.all(2);       // -> [2, 3]
+    auto lfs_result = lfs_tensor.all(2); // -> [2, 3]
     auto torch_result = torch_tensor.all(2);
 
     compare_bool_tensors(lfs_result, torch_result, "all(dim=2) 3D");
@@ -295,7 +296,7 @@ TEST_F(BoolAnyAllTest, Any_Dim0_Keepdim) {
     torch_tensor.index_put_({0, 1}, true);
     torch_tensor.index_put_({2, 3}, true);
 
-    auto lfs_result = lfs_tensor.any(0, true);       // -> [1, 4]
+    auto lfs_result = lfs_tensor.any(0, true); // -> [1, 4]
     auto torch_result = torch_tensor.any(0, true);
 
     compare_bool_tensors(lfs_result, torch_result, "any(dim=0, keepdim=true)");
@@ -311,7 +312,7 @@ TEST_F(BoolAnyAllTest, All_Dim1_Keepdim) {
     auto torch_tensor = torch::ones({3, 4}, torch::kBool);
     torch_tensor.index_put_({1, 2}, false);
 
-    auto lfs_result = lfs_tensor.all(1, true);       // -> [3, 1]
+    auto lfs_result = lfs_tensor.all(1, true); // -> [3, 1]
     auto torch_result = torch_tensor.all(1, true);
 
     compare_bool_tensors(lfs_result, torch_result, "all(dim=1, keepdim=true)");
@@ -339,7 +340,7 @@ TEST_F(BoolAnyAllTest, Any_Random_FullReduction) {
 
 TEST_F(BoolAnyAllTest, All_Random_FullReduction) {
     for (int trial = 0; trial < 10; ++trial) {
-        auto lfs_tensor = random_bool_tensor({5, 6, 7}, 0.9f);  // High probability to test all()
+        auto lfs_tensor = random_bool_tensor({5, 6, 7}, 0.9f); // High probability to test all()
         auto torch_tensor = lfs_to_torch_bool(lfs_tensor);
 
         auto lfs_result = lfs_tensor.all();
@@ -430,7 +431,7 @@ TEST_F(BoolAnyAllTest, Any_NonContiguousSlice) {
     auto base = Tensor::zeros({4, 4}, Device::CPU, DataType::Bool);
     base.set_bool({2, 2}, true);
 
-    auto slice = base.slice(0, 0, 3).slice(1, 0, 3);  // 3x3 slice
+    auto slice = base.slice(0, 0, 3).slice(1, 0, 3); // 3x3 slice
     ASSERT_FALSE(slice.is_contiguous());
 
     auto torch_base = torch::zeros({4, 4}, torch::kBool);
@@ -448,7 +449,7 @@ TEST_F(BoolAnyAllTest, All_NonContiguousSlice) {
     auto base = Tensor::ones({4, 4}, Device::CPU, DataType::Bool);
     base.set_bool({1, 1}, false);
 
-    auto slice = base.slice(0, 0, 3).slice(1, 0, 3);  // 3x3 slice
+    auto slice = base.slice(0, 0, 3).slice(1, 0, 3); // 3x3 slice
     ASSERT_FALSE(slice.is_contiguous());
 
     auto torch_base = torch::ones({4, 4}, torch::kBool);
@@ -467,7 +468,7 @@ TEST_F(BoolAnyAllTest, Any_NonContiguousSlice_AxisReduction) {
     base.set_bool({0, 1}, true);
     base.set_bool({2, 0}, true);
 
-    auto slice = base.slice(0, 0, 3).slice(1, 0, 3);  // 3x3 slice
+    auto slice = base.slice(0, 0, 3).slice(1, 0, 3); // 3x3 slice
     ASSERT_FALSE(slice.is_contiguous());
 
     auto torch_base = torch::zeros({4, 4}, torch::kBool);
@@ -537,4 +538,3 @@ TEST_F(BoolAnyAllTest, CUDA_All_AxisReduction) {
         compare_bool_tensors(lfs_result, torch_result, "CUDA all(dim=" + std::to_string(dim) + ")");
     }
 }
-

@@ -1822,7 +1822,8 @@ namespace lfs::core {
             return values;
         }
 
-        if (!is_contiguous_) return contiguous().debug_values(max_values);
+        if (!is_contiguous_)
+            return contiguous().debug_values(max_values);
 
         size_t n = std::min(max_values, numel());
         values.resize(n);

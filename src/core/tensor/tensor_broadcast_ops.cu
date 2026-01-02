@@ -32,7 +32,8 @@ namespace lfs::core::tensor_ops {
     __global__ void broadcast_strided_kernel(const T* __restrict__ src, T* __restrict__ dst,
                                              const BroadcastStridedParams params) {
         const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= params.dst_elements) return;
+        if (idx >= params.dst_elements)
+            return;
 
         size_t remaining = idx;
         size_t src_idx = 0;
@@ -57,7 +58,8 @@ namespace lfs::core::tensor_ops {
                                        const size_t* dst_shape,
                                        const size_t src_rank, const size_t dst_rank,
                                        const size_t dst_elements, cudaStream_t stream) {
-        if (dst_elements == 0) return;
+        if (dst_elements == 0)
+            return;
         if (src_rank > MAX_RANK || dst_rank > MAX_RANK) {
             LOG_ERROR("Broadcast strided: rank exceeds {}", MAX_RANK);
             return;
@@ -116,7 +118,8 @@ namespace lfs::core::tensor_ops {
     __global__ void pad_kernel(const float* __restrict__ src, float* __restrict__ dst,
                                const PadParams params) {
         const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= params.src_elements) return;
+        if (idx >= params.src_elements)
+            return;
 
         size_t coords[MAX_RANK];
         size_t remaining = idx;
@@ -139,7 +142,8 @@ namespace lfs::core::tensor_ops {
                     const size_t* src_shape, const size_t* src_strides,
                     const size_t* dst_shape, const size_t* pad_before,
                     const size_t rank, const size_t src_elements, cudaStream_t stream) {
-        if (src_elements == 0) return;
+        if (src_elements == 0)
+            return;
         if (rank > MAX_RANK) {
             LOG_ERROR("Pad: rank exceeds {}", MAX_RANK);
             return;

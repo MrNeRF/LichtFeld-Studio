@@ -856,7 +856,6 @@ namespace lfs::core {
                 }
 
                 const auto& input_strides = input->strides_;
-
                 std::vector<size_t> out_shape_vec;
                 for (size_t i = 0; i < input->shape_.rank(); ++i) {
                     if (!is_reduced_dim[i]) {

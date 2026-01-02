@@ -76,7 +76,8 @@ namespace lfs::core {
                 return Tensor();
             }
         } else {
-            if (!src.is_contiguous()) return broadcast_to(src.contiguous(), target);
+            if (!src.is_contiguous())
+                return broadcast_to(src.contiguous(), target);
             if (src.dtype() == DataType::Bool) {
                 const unsigned char* src_data = src.ptr<unsigned char>();
                 unsigned char* dst_data = result.ptr<unsigned char>();

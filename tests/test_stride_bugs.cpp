@@ -65,22 +65,22 @@ TEST_F(StrideBugTest, GetBool_NonContiguousSlice) {
     auto bool_tensor = Tensor::zeros({4, 4}, Device::CPU, DataType::Bool);
 
     // Set specific elements in the original tensor
-    bool_tensor.set_bool({0, 0}, true);  // Linear idx 0
-    bool_tensor.set_bool({1, 0}, true);  // Linear idx 4
-    bool_tensor.set_bool({1, 1}, true);  // Linear idx 5
-    bool_tensor.set_bool({2, 2}, true);  // Linear idx 10
+    bool_tensor.set_bool({0, 0}, true); // Linear idx 0
+    bool_tensor.set_bool({1, 0}, true); // Linear idx 4
+    bool_tensor.set_bool({1, 1}, true); // Linear idx 5
+    bool_tensor.set_bool({2, 2}, true); // Linear idx 10
 
     // Create a 3x3 slice
     auto slice = bool_tensor.slice(0, 0, 3).slice(1, 0, 3);
     ASSERT_FALSE(slice.is_contiguous());
 
     // Verify get_bool returns correct values on slice
-    EXPECT_TRUE(slice.get_bool({0, 0}));   // Maps to [0][0]
-    EXPECT_TRUE(slice.get_bool({1, 0}));   // Maps to [1][0]
-    EXPECT_TRUE(slice.get_bool({1, 1}));   // Maps to [1][1]
-    EXPECT_TRUE(slice.get_bool({2, 2}));   // Maps to [2][2]
-    EXPECT_FALSE(slice.get_bool({0, 1}));  // Maps to [0][1]
-    EXPECT_FALSE(slice.get_bool({2, 0}));  // Maps to [2][0]
+    EXPECT_TRUE(slice.get_bool({0, 0}));  // Maps to [0][0]
+    EXPECT_TRUE(slice.get_bool({1, 0}));  // Maps to [1][0]
+    EXPECT_TRUE(slice.get_bool({1, 1}));  // Maps to [1][1]
+    EXPECT_TRUE(slice.get_bool({2, 2}));  // Maps to [2][2]
+    EXPECT_FALSE(slice.get_bool({0, 1})); // Maps to [0][1]
+    EXPECT_FALSE(slice.get_bool({2, 0})); // Maps to [2][0]
 }
 
 // ============= index_put_ Tests =============
@@ -119,8 +119,7 @@ TEST_F(StrideBugTest, Nonzero_NonContiguousSlice) {
         1, 0, 0, 0,
         0, 2, 0, 0,
         0, 0, 3, 0,
-        0, 0, 0, 4
-    };
+        0, 0, 0, 4};
     auto tensor = Tensor::from_vector(data, {4, 4}, Device::CPU);
 
     // Create 3x3 slice - should contain:
@@ -357,15 +356,15 @@ TEST_F(StrideBugTest, Pad_NonContiguousInput) {
     EXPECT_FLOAT_EQ(static_cast<float>(result[4][4]), 0.0f);
 
     // Original data should be at [1:4, 1:4]
-    EXPECT_FLOAT_EQ(static_cast<float>(result[1][1]), 1.0f);   // slice[0][0]
-    EXPECT_FLOAT_EQ(static_cast<float>(result[1][2]), 2.0f);   // slice[0][1]
-    EXPECT_FLOAT_EQ(static_cast<float>(result[1][3]), 3.0f);   // slice[0][2]
-    EXPECT_FLOAT_EQ(static_cast<float>(result[2][1]), 5.0f);   // slice[1][0]
-    EXPECT_FLOAT_EQ(static_cast<float>(result[2][2]), 6.0f);   // slice[1][1]
-    EXPECT_FLOAT_EQ(static_cast<float>(result[2][3]), 7.0f);   // slice[1][2]
-    EXPECT_FLOAT_EQ(static_cast<float>(result[3][1]), 9.0f);   // slice[2][0]
-    EXPECT_FLOAT_EQ(static_cast<float>(result[3][2]), 10.0f);  // slice[2][1]
-    EXPECT_FLOAT_EQ(static_cast<float>(result[3][3]), 11.0f);  // slice[2][2]
+    EXPECT_FLOAT_EQ(static_cast<float>(result[1][1]), 1.0f);  // slice[0][0]
+    EXPECT_FLOAT_EQ(static_cast<float>(result[1][2]), 2.0f);  // slice[0][1]
+    EXPECT_FLOAT_EQ(static_cast<float>(result[1][3]), 3.0f);  // slice[0][2]
+    EXPECT_FLOAT_EQ(static_cast<float>(result[2][1]), 5.0f);  // slice[1][0]
+    EXPECT_FLOAT_EQ(static_cast<float>(result[2][2]), 6.0f);  // slice[1][1]
+    EXPECT_FLOAT_EQ(static_cast<float>(result[2][3]), 7.0f);  // slice[1][2]
+    EXPECT_FLOAT_EQ(static_cast<float>(result[3][1]), 9.0f);  // slice[2][0]
+    EXPECT_FLOAT_EQ(static_cast<float>(result[3][2]), 10.0f); // slice[2][1]
+    EXPECT_FLOAT_EQ(static_cast<float>(result[3][3]), 11.0f); // slice[2][2]
 }
 
 TEST_F(StrideBugTest, CalculateOffset_NonContiguousSlice) {
@@ -384,7 +383,7 @@ TEST_F(StrideBugTest, CalculateOffset_NonContiguousSlice) {
 
     // Verify sum to ensure calculate_offset is used correctly in operations
     auto sum = sub_slice.sum();
-    EXPECT_FLOAT_EQ(sum.item(), 1.0f + 2.0f + 5.0f + 6.0f);  // 14.0f
+    EXPECT_FLOAT_EQ(sum.item(), 1.0f + 2.0f + 5.0f + 6.0f); // 14.0f
 }
 
 TEST_F(StrideBugTest, CUDA_BroadcastTo_NonContiguousSource) {
@@ -433,8 +432,7 @@ TEST_F(StrideBugTest, CUDA_Pad_NonContiguousInput) {
     EXPECT_FLOAT_EQ(static_cast<float>(result[4][4]), 0.0f);
 
     // Check original data is in the right place
-    EXPECT_FLOAT_EQ(static_cast<float>(result[1][1]), 1.0f);   // slice[0][0]
-    EXPECT_FLOAT_EQ(static_cast<float>(result[2][2]), 6.0f);   // slice[1][1]
-    EXPECT_FLOAT_EQ(static_cast<float>(result[3][3]), 11.0f);  // slice[2][2]
+    EXPECT_FLOAT_EQ(static_cast<float>(result[1][1]), 1.0f);  // slice[0][0]
+    EXPECT_FLOAT_EQ(static_cast<float>(result[2][2]), 6.0f);  // slice[1][1]
+    EXPECT_FLOAT_EQ(static_cast<float>(result[3][3]), 11.0f); // slice[2][2]
 }
-

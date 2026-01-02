@@ -188,10 +188,10 @@ TEST_F(SliceMMBugTest, SliceColumn_3x1_From_4x4) {
 TEST_F(SliceMMBugTest, MMThenSlice_TransformsPattern) {
     // Create a sample world-to-camera matrix
     std::vector<float> w2c_data = {
-        0.866f, 0.0f, -0.5f, 1.0f,     // Row 0
-        0.0f, 1.0f, 0.0f, 2.0f,        // Row 1
-        0.5f, 0.0f, 0.866f, 3.0f,      // Row 2
-        0.0f, 0.0f, 0.0f, 1.0f         // Row 3
+        0.866f, 0.0f, -0.5f, 1.0f, // Row 0
+        0.0f, 1.0f, 0.0f, 2.0f,    // Row 1
+        0.5f, 0.0f, 0.866f, 3.0f,  // Row 2
+        0.0f, 0.0f, 0.0f, 1.0f     // Row 3
     };
 
     auto custom_w2c = Tensor::from_vector(w2c_data, {4, 4}, Device::CPU);
@@ -323,7 +323,7 @@ TEST_F(SliceMMBugTest, StorageOffsetCorrectness) {
     EXPECT_FLOAT_EQ(direct_access, 7.0f); // Row 1, Col 2 = 5 + 2 + 1 = 7
 
     // Get element [1][2] via slice
-    auto row_slice = tensor.slice(0, 1, 2); // Get row 1
+    auto row_slice = tensor.slice(0, 1, 2);     // Get row 1
     auto elem_slice = row_slice.slice(1, 2, 3); // Get column 2
     float slice_access = elem_slice.contiguous()[0][0];
 
@@ -350,8 +350,8 @@ TEST_F(SliceMMBugTest, NonContiguousMM) {
     auto torch_eye = torch::eye(4);
 
     // Create non-contiguous view via slice (taking rows 0-2)
-    auto custom_slice = tensor.slice(0, 0, 3);  // 3x4, non-contiguous
-    auto torch_slice = torch_t.slice(0, 0, 3);  // 3x4
+    auto custom_slice = tensor.slice(0, 0, 3); // 3x4, non-contiguous
+    auto torch_slice = torch_t.slice(0, 0, 3); // 3x4
 
     LOG_INFO("Custom slice is_contiguous: {}", custom_slice.is_contiguous());
     LOG_INFO("Custom slice strides: [{}, {}]", custom_slice.stride(0), custom_slice.stride(1));
@@ -434,8 +434,7 @@ TEST_F(SliceMMBugTest, ExactTransformsPattern) {
         0.9848f, -0.0312f, 0.1710f, -0.5f,
         0.0f, 0.9848f, 0.1736f, 1.2f,
         -0.1736f, -0.1710f, 0.9698f, 3.5f,
-        0.0f, 0.0f, 0.0f, 1.0f
-    };
+        0.0f, 0.0f, 0.0f, 1.0f};
 
     auto custom_w2c = Tensor::from_vector(w2c_data, {4, 4}, Device::CPU);
     auto torch_w2c = torch::tensor(w2c_data).reshape({4, 4});
@@ -529,8 +528,7 @@ TEST_F(SliceMMBugTest, TransposeVsNoTranspose_Comment_Code_Mismatch) {
         0.9848f, -0.0312f, 0.1710f, -0.5f,
         0.0f, 0.9848f, 0.1736f, 1.2f,
         -0.1736f, -0.1710f, 0.9698f, 3.5f,
-        0.0f, 0.0f, 0.0f, 1.0f
-    };
+        0.0f, 0.0f, 0.0f, 1.0f};
 
     auto tensor_w2c = Tensor::from_vector(w2c_data, {4, 4}, Device::CPU);
 
@@ -576,7 +574,7 @@ TEST_F(SliceMMBugTest, DirectElementAccess_NonContiguousSlice) {
     auto tensor = Tensor::from_vector(data, {4, 4}, Device::CPU);
 
     // Create a non-contiguous slice
-    auto slice = tensor.slice(0, 0, 3).slice(1, 0, 3);  // 3x3 from 4x4
+    auto slice = tensor.slice(0, 0, 3).slice(1, 0, 3); // 3x3 from 4x4
 
     EXPECT_FALSE(slice.is_contiguous()) << "Slice should be non-contiguous";
 
@@ -589,8 +587,7 @@ TEST_F(SliceMMBugTest, DirectElementAccess_NonContiguousSlice) {
     float expected[3][3] = {
         {1, 2, 3},
         {5, 6, 7},
-        {9, 10, 11}
-    };
+        {9, 10, 11}};
 
     for (int i = 0; i < 3; i++) {
         for (int j = 0; j < 3; j++) {
@@ -639,8 +636,8 @@ TEST_F(SliceMMBugTest, SqueezeNonContiguous1D) {
     auto torch_t = torch::tensor(data).reshape({4, 4});
 
     // Get column 2, rows 1-3: should be [7, 11, 15] (indices 6, 10, 14 in flat array)
-    auto custom_col = tensor.slice(0, 1, 4).slice(1, 2, 3);  // 3x1
-    auto torch_col = torch_t.slice(0, 1, 4).slice(1, 2, 3);  // 3x1
+    auto custom_col = tensor.slice(0, 1, 4).slice(1, 2, 3); // 3x1
+    auto torch_col = torch_t.slice(0, 1, 4).slice(1, 2, 3); // 3x1
 
     LOG_INFO("Custom col shape: {}x{}", custom_col.shape()[0], custom_col.shape()[1]);
     LOG_INFO("Custom col storage_offset: {}", custom_col.storage_offset());

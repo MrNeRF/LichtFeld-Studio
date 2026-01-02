@@ -57,7 +57,8 @@ namespace lfs::core {
             const size_t s0, const size_t s1, const size_t s2,
             const size_t n) {
             const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n) return;
+            if (idx >= n)
+                return;
             const size_t i2 = idx % d2;
             const size_t tmp = idx / d2;
             const size_t i1 = tmp % d1;
@@ -72,7 +73,8 @@ namespace lfs::core {
             const size_t s0, const size_t s1, const size_t s2, const size_t s3,
             const size_t n) {
             const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n) return;
+            if (idx >= n)
+                return;
             const size_t i3 = idx % d3;
             size_t tmp = idx / d3;
             const size_t i2 = tmp % d2;
@@ -205,7 +207,8 @@ namespace lfs::core {
             const size_t d0, const size_t d1, const size_t s0, const size_t s1,
             const size_t n) {
             const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n) return;
+            if (idx >= n)
+                return;
             const size_t i1 = idx % d1;
             const size_t i0 = idx / d1;
             output[idx] = input[i0 * s0 + i1 * s1];
@@ -218,7 +221,8 @@ namespace lfs::core {
             const size_t s0, const size_t s1, const size_t s2,
             const size_t n) {
             const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n) return;
+            if (idx >= n)
+                return;
             const size_t i2 = idx % d2;
             const size_t tmp = idx / d2;
             const size_t i1 = tmp % d1;
@@ -233,7 +237,8 @@ namespace lfs::core {
             const size_t s0, const size_t s1, const size_t s2, const size_t s3,
             const size_t n) {
             const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n) return;
+            if (idx >= n)
+                return;
             const size_t i3 = idx % d3;
             size_t tmp = idx / d3;
             const size_t i2 = tmp % d2;
@@ -249,7 +254,8 @@ namespace lfs::core {
             const size_t* __restrict__ shape, const size_t* __restrict__ strides,
             const size_t rank, const size_t n) {
             const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n) return;
+            if (idx >= n)
+                return;
 
             size_t tmp = idx;
             size_t input_offset = 0;
