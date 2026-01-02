@@ -3174,7 +3174,8 @@ namespace lfs::vis::gui {
 
         // Don't dismiss if interacting with language combo or any popup/modal
         const bool any_popup_open = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-        if (!any_popup_open && !modal_open && !drag_drop_hovering_ && (mouse_action || key_action)) {
+        const bool any_item_active = ImGui::IsAnyItemActive();
+        if (!any_popup_open && !any_item_active && !modal_open && !drag_drop_hovering_ && (mouse_action || key_action)) {
             show_startup_overlay_ = false;
         }
     }
