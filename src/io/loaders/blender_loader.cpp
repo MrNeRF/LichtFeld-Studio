@@ -236,6 +236,7 @@ namespace lfs::io {
                         pointcloud_path = base_path / lfs::core::utf8_to_path(json["ply_file_path"].get<std::string>());
                     }
                 } catch (...) {
+                    // Ignore parse errors - will fallback to default pointcloud.ply
                 }
             }
             if (pointcloud_path.empty() || !std::filesystem::exists(pointcloud_path)) {

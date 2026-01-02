@@ -31,6 +31,7 @@
 namespace lfs::vis {
 
     namespace {
+        // Voxel size for point cloud rendering (in scene units)
         constexpr float DEFAULT_VOXEL_SIZE = 0.03f;
     }
 
