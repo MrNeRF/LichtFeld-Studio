@@ -531,8 +531,6 @@ namespace spz {
     }
 
     PackedGaussians deserializePackedGaussians(std::istream& in) {
-        constexpr int32_t maxPointsToRead = 10000000;
-
         PackedGaussiansHeader header;
         in.read(reinterpret_cast<char*>(&header), sizeof(header));
         if (!in || header.magic != PackedGaussiansHeader().magic) {
@@ -541,10 +539,6 @@ namespace spz {
         }
         if (header.version < 1 || header.version > 3) {
             SpzLog("[SPZ ERROR] deserializePackedGaussians: version not supported: %d", header.version);
-            return {};
-        }
-        if (header.numPoints > maxPointsToRead) {
-            SpzLog("[SPZ ERROR] deserializePackedGaussians: Too many points: %d", header.numPoints);
             return {};
         }
         if (header.shDegree > 3) {

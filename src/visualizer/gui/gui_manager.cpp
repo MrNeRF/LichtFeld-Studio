@@ -26,11 +26,13 @@
 #include "gui/utils/windows_utils.hpp"
 #include "gui/windows/file_browser.hpp"
 #include "io/exporter.hpp"
+#include "io/loader.hpp"
 
 #include "input/input_controller.hpp"
 #include "internal/resource_paths.hpp"
 #include "tools/align_tool.hpp"
 
+#include "core/data_loading_service.hpp"
 #include "core/events.hpp"
 #include "core/parameters.hpp"
 #include "core/services.hpp"
@@ -62,8 +64,17 @@ namespace lfs::vis::gui {
     using ToolType = lfs::vis::ToolType;
     using ExportFormat = lfs::core::ExportFormat;
 
-    // Gizmo axis/plane visibility threshold (near-zero to always show)
+    // Gizmo axis/plane visibility threshold
     constexpr float GIZMO_AXIS_LIMIT = 0.0001f;
+
+    // Returns display name for dataset type
+    [[nodiscard]] const char* getDatasetTypeName(const std::filesystem::path& path) {
+        switch (lfs::io::Loader::getDatasetType(path)) {
+        case lfs::io::DatasetType::COLMAP: return "COLMAP";
+        case lfs::io::DatasetType::Transforms: return "NeRF/Blender";
+        default: return "Dataset";
+        }
+    }
 
     // Truncate SH to target degree. shN has (d+1)²-1 coefficients for degree d.
     void truncateSHDegree(lfs::core::SplatData& splat, const int target_degree) {
@@ -309,6 +320,7 @@ namespace lfs::vis::gui {
             const auto regular_path = lfs::vis::getAssetPath("fonts/" + t.fonts.regular_path);
             const auto bold_path = lfs::vis::getAssetPath("fonts/" + t.fonts.bold_path);
             const auto japanese_path = lfs::vis::getAssetPath("fonts/NotoSansJP-Regular.ttf");
+            const auto korean_path = lfs::vis::getAssetPath("fonts/NotoSansKR-Regular.ttf");
 
             // Helper to check if font file is valid
             const auto is_font_valid = [](const std::filesystem::path& path) -> bool {
@@ -316,8 +328,8 @@ namespace lfs::vis::gui {
                 return std::filesystem::exists(path) && std::filesystem::file_size(path) >= MIN_FONT_FILE_SIZE;
             };
 
-            // Load font with optional Japanese glyph merging
-            const auto load_font_with_japanese =
+            // Load font with optional CJK glyph merging (Japanese + Korean)
+            const auto load_font_with_cjk =
                 [&](const std::filesystem::path& path, const float size) -> ImFont* {
                 if (!is_font_valid(path)) {
                     LOG_WARN("Font file invalid: {}", lfs::core::path_to_utf8(path));
@@ -339,14 +351,23 @@ namespace lfs::vis::gui {
                                                  io.Fonts->GetGlyphRangesJapanese());
                 }
 
+                // Merge Korean glyphs if available
+                if (is_font_valid(korean_path)) {
+                    ImFontConfig config;
+                    config.MergeMode = true;
+                    const std::string korean_path_utf8 = lfs::core::path_to_utf8(korean_path);
+                    io.Fonts->AddFontFromFileTTF(korean_path_utf8.c_str(), size, &config,
+                                                 io.Fonts->GetGlyphRangesKorean());
+                }
+
                 return font;
             };
 
-            font_regular_ = load_font_with_japanese(regular_path, t.fonts.base_size * xscale);
-            font_bold_ = load_font_with_japanese(bold_path, t.fonts.base_size * xscale);
-            font_heading_ = load_font_with_japanese(bold_path, t.fonts.heading_size * xscale);
-            font_small_ = load_font_with_japanese(regular_path, t.fonts.small_size * xscale);
-            font_section_ = load_font_with_japanese(bold_path, t.fonts.section_size * xscale);
+            font_regular_ = load_font_with_cjk(regular_path, t.fonts.base_size * xscale);
+            font_bold_ = load_font_with_cjk(bold_path, t.fonts.base_size * xscale);
+            font_heading_ = load_font_with_cjk(bold_path, t.fonts.heading_size * xscale);
+            font_small_ = load_font_with_cjk(regular_path, t.fonts.small_size * xscale);
+            font_section_ = load_font_with_cjk(bold_path, t.fonts.section_size * xscale);
 
             const bool all_loaded = font_regular_ && font_bold_ && font_heading_ && font_small_ && font_section_;
             if (!all_loaded) {
@@ -366,6 +387,9 @@ namespace lfs::vis::gui {
                 LOG_INFO("Loaded fonts: {} and {}", t.fonts.regular_path, t.fonts.bold_path);
                 if (is_font_valid(japanese_path)) {
                     LOG_INFO("Japanese font support enabled");
+                }
+                if (is_font_valid(korean_path)) {
+                    LOG_INFO("Korean font support enabled");
                 }
             }
         } catch (const std::exception& e) {
@@ -473,6 +497,9 @@ namespace lfs::vis::gui {
         bool mouse_in_viewport = isPositionInViewport(mouse_pos.x, mouse_pos.y);
 
         ImGui::NewFrame();
+
+        // Check for async import completion (must happen on main thread)
+        checkAsyncImportCompletion();
 
         // Hot-reload themes (check once per second)
         {
@@ -1032,6 +1059,9 @@ namespace lfs::vis::gui {
 
         // Render export progress overlay (blocking overlay on top of everything)
         renderExportOverlay();
+
+        // Render import progress overlay
+        renderImportOverlay();
 
         // Render empty state welcome screen when no content loaded
         renderEmptyStateOverlay();
@@ -1797,6 +1827,60 @@ namespace lfs::vis::gui {
                 wm->toggleFullscreen();
             }
         });
+
+        // Async dataset import
+        cmd::LoadFile::when([this](const auto& cmd) {
+            if (!cmd.is_dataset) {
+                return;
+            }
+            const auto* const data_loader = viewer_->getDataLoader();
+            if (!data_loader) {
+                LOG_ERROR("No data loader service");
+                return;
+            }
+            startAsyncImport(cmd.path, data_loader->getParameters());
+        });
+
+        // Fallback sync import progress handlers
+        state::DatasetLoadStarted::when([this](const auto& e) {
+            if (import_state_.active.load()) {
+                return;
+            }
+            const std::lock_guard lock(import_state_.mutex);
+            import_state_.active.store(true);
+            import_state_.progress.store(0.0f);
+            import_state_.path = e.path;
+            import_state_.stage = "Initializing...";
+            import_state_.error.clear();
+            import_state_.num_images = 0;
+            import_state_.num_points = 0;
+            import_state_.success = false;
+            import_state_.dataset_type = getDatasetTypeName(e.path);
+        });
+
+        state::DatasetLoadProgress::when([this](const auto& e) {
+            import_state_.progress.store(e.progress / 100.0f);
+            const std::lock_guard lock(import_state_.mutex);
+            import_state_.stage = e.step;
+        });
+
+        state::DatasetLoadCompleted::when([this](const auto& e) {
+            if (import_state_.show_completion.load()) {
+                return;
+            }
+            {
+                const std::lock_guard lock(import_state_.mutex);
+                import_state_.success = e.success;
+                import_state_.num_images = e.num_images;
+                import_state_.num_points = e.num_points;
+                import_state_.completion_time = std::chrono::steady_clock::now();
+                import_state_.error = e.error.value_or("");
+                import_state_.stage = e.success ? "Complete" : "Failed";
+                import_state_.progress.store(1.0f);
+            }
+            import_state_.active.store(false);
+            import_state_.show_completion.store(true);
+        });
     }
 
     void GuiManager::setSelectionSubMode(panels::SelectionSubMode mode) {
@@ -2377,6 +2461,164 @@ namespace lfs::vis::gui {
         }
     }
 
+    void GuiManager::startAsyncImport(const std::filesystem::path& path,
+                                      const lfs::core::param::TrainingParameters& params) {
+        if (import_state_.active.load()) {
+            LOG_WARN("Import already in progress");
+            return;
+        }
+
+        import_state_.active.store(true);
+        import_state_.load_complete.store(false);
+        import_state_.show_completion.store(false);
+        import_state_.progress.store(0.0f);
+        {
+            const std::lock_guard lock(import_state_.mutex);
+            import_state_.path = path;
+            import_state_.stage = "Initializing...";
+            import_state_.error.clear();
+            import_state_.num_images = 0;
+            import_state_.num_points = 0;
+            import_state_.success = false;
+            import_state_.load_result.reset();
+            import_state_.params = params;
+            import_state_.dataset_type = getDatasetTypeName(path);
+        }
+
+        LOG_INFO("Async import: {}", lfs::core::path_to_utf8(path));
+
+        import_state_.thread = std::make_unique<std::jthread>(
+            [this, path](const std::stop_token stop_token) {
+                lfs::core::param::TrainingParameters local_params;
+                {
+                    const std::lock_guard lock(import_state_.mutex);
+                    local_params = import_state_.params;
+                }
+
+                const lfs::io::LoadOptions load_options{
+                    .resize_factor = local_params.dataset.resize_factor,
+                    .max_width = local_params.dataset.max_width,
+                    .images_folder = local_params.dataset.images,
+                    .validate_only = false,
+                    .progress = [this, &stop_token](const float pct, const std::string& msg) {
+                        if (stop_token.stop_requested())
+                            return;
+                        import_state_.progress.store(pct / 100.0f);
+                        const std::lock_guard lock(import_state_.mutex);
+                        import_state_.stage = msg;
+                    }};
+
+                auto loader = lfs::io::Loader::create();
+                auto result = loader->load(path, load_options);
+
+                if (stop_token.stop_requested()) {
+                    import_state_.active.store(false);
+                    return;
+                }
+
+                const std::lock_guard lock(import_state_.mutex);
+                if (result) {
+                    import_state_.load_result = std::move(*result);
+                    import_state_.success = true;
+                    import_state_.stage = "Applying...";
+                    std::visit([this](const auto& data) {
+                        using T = std::decay_t<decltype(data)>;
+                        if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::SplatData>>) {
+                            import_state_.num_points = data->size();
+                            import_state_.num_images = 0;
+                        } else if constexpr (std::is_same_v<T, lfs::io::LoadedScene>) {
+                            import_state_.num_images = data.cameras ? data.cameras->size() : 0;
+                            import_state_.num_points = data.point_cloud ? data.point_cloud->size() : 0;
+                        }
+                    },
+                               import_state_.load_result->data);
+                } else {
+                    import_state_.success = false;
+                    import_state_.error = result.error().format();
+                    import_state_.stage = "Failed";
+                    LOG_ERROR("Import failed: {}", import_state_.error);
+                }
+                import_state_.progress.store(1.0f);
+                import_state_.load_complete.store(true);
+            });
+    }
+
+    void GuiManager::checkAsyncImportCompletion() {
+        if (!import_state_.load_complete.load()) {
+            return;
+        }
+        import_state_.load_complete.store(false);
+
+        bool success;
+        {
+            const std::lock_guard lock(import_state_.mutex);
+            success = import_state_.success;
+        }
+
+        if (success) {
+            applyLoadedDataToScene();
+        } else {
+            import_state_.active.store(false);
+            import_state_.show_completion.store(true);
+            const std::lock_guard lock(import_state_.mutex);
+            import_state_.completion_time = std::chrono::steady_clock::now();
+        }
+
+        if (import_state_.thread && import_state_.thread->joinable()) {
+            import_state_.thread->join();
+            import_state_.thread.reset();
+        }
+    }
+
+    void GuiManager::applyLoadedDataToScene() {
+        auto* const scene_manager = viewer_->getSceneManager();
+        if (!scene_manager) {
+            LOG_ERROR("No scene manager");
+            import_state_.active.store(false);
+            return;
+        }
+
+        std::optional<lfs::io::LoadResult> load_result;
+        lfs::core::param::TrainingParameters params;
+        std::filesystem::path path;
+        {
+            const std::lock_guard lock(import_state_.mutex);
+            load_result = std::move(import_state_.load_result);
+            params = import_state_.params;
+            path = import_state_.path;
+            import_state_.load_result.reset();
+        }
+
+        if (!load_result) {
+            LOG_ERROR("No load result");
+            import_state_.active.store(false);
+            return;
+        }
+
+        const auto result = scene_manager->applyLoadedDataset(path, params, std::move(*load_result));
+
+        {
+            const std::lock_guard lock(import_state_.mutex);
+            import_state_.completion_time = std::chrono::steady_clock::now();
+            import_state_.success = result.has_value();
+            import_state_.stage = result ? "Complete" : "Failed";
+            if (!result) {
+                import_state_.error = result.error();
+            }
+        }
+
+        import_state_.active.store(false);
+        import_state_.show_completion.store(true);
+
+        lfs::core::events::state::DatasetLoadCompleted{
+            .path = path,
+            .success = import_state_.success,
+            .error = import_state_.success ? std::nullopt : std::optional<std::string>(import_state_.error),
+            .num_images = import_state_.num_images,
+            .num_points = import_state_.num_points}
+            .emit();
+    }
+
     void GuiManager::renderExportOverlay() {
         if (!export_state_.active.load()) {
             if (export_state_.thread && export_state_.thread->joinable()) {
@@ -2393,10 +2635,10 @@ namespace lfs::vis::gui {
         const float BUTTON_HEIGHT = 30.0f * scale;
         const float PROGRESS_BAR_HEIGHT = 20.0f * scale;
 
-        const ImGuiViewport* const viewport = ImGui::GetMainViewport();
+        // Center in 3D viewport, not the main window
         const ImVec2 overlay_pos(
-            viewport->WorkPos.x + (viewport->WorkSize.x - OVERLAY_WIDTH) * 0.5f,
-            viewport->WorkPos.y + (viewport->WorkSize.y - OVERLAY_HEIGHT) * 0.5f);
+            viewport_pos_.x + (viewport_size_.x - OVERLAY_WIDTH) * 0.5f,
+            viewport_pos_.y + (viewport_size_.y - OVERLAY_HEIGHT) * 0.5f);
 
         ImGui::SetNextWindowPos(overlay_pos, ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(OVERLAY_WIDTH, 0), ImGuiCond_Always);
@@ -2453,12 +2695,134 @@ namespace lfs::vis::gui {
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor();
 
+        // Dim viewport background during export
         ImDrawList* const draw_list = ImGui::GetBackgroundDrawList();
         draw_list->AddRectFilled(
-            viewport->WorkPos,
-            ImVec2(viewport->WorkPos.x + viewport->WorkSize.x,
-                   viewport->WorkPos.y + viewport->WorkSize.y),
+            viewport_pos_,
+            ImVec2(viewport_pos_.x + viewport_size_.x,
+                   viewport_pos_.y + viewport_size_.y),
             IM_COL32(0, 0, 0, 100));
+    }
+
+    void GuiManager::renderImportOverlay() {
+        const bool is_active = import_state_.active.load();
+        const bool show_completion = import_state_.show_completion.load();
+
+        // Auto-hide completion after 2 seconds
+        if (show_completion && !is_active) {
+            std::chrono::steady_clock::time_point completion_time;
+            {
+                const std::lock_guard lock(import_state_.mutex);
+                completion_time = import_state_.completion_time;
+            }
+            if (std::chrono::steady_clock::now() - completion_time > std::chrono::seconds(2)) {
+                import_state_.show_completion.store(false);
+                return;
+            }
+        }
+
+        if (!is_active && !show_completion) {
+            return;
+        }
+
+        const float scale = getDpiScale();
+        const float overlay_width = 400.0f * scale;
+        const float progress_bar_height = 20.0f * scale;
+        const float btn_width = 80.0f * scale;
+        const float btn_height = 28.0f * scale;
+
+        const ImVec2 overlay_pos(
+            viewport_pos_.x + (viewport_size_.x - overlay_width) * 0.5f,
+            viewport_pos_.y + viewport_size_.y * 0.4f);
+
+        ImGui::SetNextWindowPos(overlay_pos, ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(overlay_width, 0), ImGuiCond_Always);
+
+        constexpr ImGuiWindowFlags OVERLAY_FLAGS = ImGuiWindowFlags_NoTitleBar |
+                                                   ImGuiWindowFlags_NoResize |
+                                                   ImGuiWindowFlags_NoMove |
+                                                   ImGuiWindowFlags_NoScrollbar |
+                                                   ImGuiWindowFlags_NoCollapse |
+                                                   ImGuiWindowFlags_AlwaysAutoResize;
+
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.1f, 0.1f, 0.1f, 0.95f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f * scale);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f * scale, 15.0f * scale));
+
+        if (ImGui::Begin("##ImportProgress", nullptr, OVERLAY_FLAGS)) {
+            std::string dataset_type, stage, path_str, error;
+            size_t num_images = 0, num_points = 0;
+            bool success = false;
+            {
+                const std::lock_guard lock(import_state_.mutex);
+                dataset_type = import_state_.dataset_type;
+                stage = import_state_.stage;
+                path_str = lfs::core::path_to_utf8(import_state_.path.filename());
+                num_images = import_state_.num_images;
+                num_points = import_state_.num_points;
+                success = import_state_.success;
+                error = import_state_.error;
+            }
+
+            // Title
+            ImGui::PushFont(ImGui::GetIO().Fonts->Fonts[0]);
+            if (show_completion && !is_active) {
+                constexpr ImVec4 GREEN(0.4f, 0.9f, 0.4f, 1.0f);
+                constexpr ImVec4 RED(1.0f, 0.4f, 0.4f, 1.0f);
+                ImGui::TextColored(success ? GREEN : RED,
+                                   success ? LOC(lichtfeld::Strings::Progress::IMPORT_COMPLETE_TITLE)
+                                           : LOC(lichtfeld::Strings::Progress::IMPORT_FAILED_TITLE));
+            } else {
+                const char* type = dataset_type.empty() ? "dataset" : dataset_type.c_str();
+                ImGui::Text(LOC(lichtfeld::Strings::Progress::IMPORTING), type);
+            }
+            ImGui::PopFont();
+
+            ImGui::Spacing();
+            if (!path_str.empty()) {
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", path_str.c_str());
+            }
+            ImGui::Spacing();
+
+            const float progress = import_state_.progress.load();
+            ImGui::ProgressBar(progress, ImVec2(-1, progress_bar_height), "");
+
+            if (is_active) {
+                ImGui::Text("%.0f%%", progress * 100.0f);
+                ImGui::SameLine();
+                ImGui::TextUnformatted(stage.c_str());
+            }
+
+            if (show_completion && (num_images > 0 || num_points > 0)) {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(0.5f, 0.8f, 0.5f, 1.0f),
+                                   "%zu images, %zu points", num_images, num_points);
+            }
+
+            if (!error.empty()) {
+                ImGui::Spacing();
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", error.c_str());
+            }
+
+            if (show_completion && !is_active) {
+                ImGui::Spacing();
+                ImGui::SetCursorPosX((overlay_width - btn_width) * 0.5f - ImGui::GetStyle().WindowPadding.x);
+                if (ImGui::Button(LOC(lichtfeld::Strings::Common::OK), ImVec2(btn_width, btn_height))) {
+                    import_state_.show_completion.store(false);
+                }
+            }
+            ImGui::End();
+        }
+
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
+
+        if (is_active) {
+            ImGui::GetBackgroundDrawList()->AddRectFilled(
+                viewport_pos_,
+                ImVec2(viewport_pos_.x + viewport_size_.x, viewport_pos_.y + viewport_size_.y),
+                IM_COL32(0, 0, 0, 100));
+        }
     }
 
     void GuiManager::renderEmptyStateOverlay() {

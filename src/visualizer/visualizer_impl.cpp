@@ -168,10 +168,14 @@ namespace lfs::vis {
                 LOG_ERROR("Cannot reset: empty path");
                 return;
             }
-            // Preserve output_path and sync GUI params before reset
+            // Preserve user-modified params
             if (auto* const param_mgr = services().paramsOrNull(); param_mgr && param_mgr->ensureLoaded()) {
-                const auto& prev = data_loader_->getParameters();
-                data_loader_->setParameters(param_mgr->createForDataset(path, prev.dataset.output_path));
+                auto params = param_mgr->createForDataset(path, {});
+                if (trainer_manager_) {
+                    params.dataset = trainer_manager_->getEditableDatasetParams();
+                    params.dataset.data_path = path;
+                }
+                data_loader_->setParameters(params);
             }
             LOG_DEBUG("Resetting: reloading {}", lfs::core::path_to_utf8(path));
             if (const auto result = data_loader_->loadDataset(path); !result) {

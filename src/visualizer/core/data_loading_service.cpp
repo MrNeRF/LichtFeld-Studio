@@ -36,8 +36,7 @@ namespace lfs::vis {
 
     void DataLoadingService::handleLoadFileCommand(const bool is_dataset, const std::filesystem::path& path) {
         if (is_dataset) {
-            loadDataset(path);
-            return;
+            return; // Handled async by GuiManager
         }
 
         // Checkpoint files get special handling - redirect to training resume flow

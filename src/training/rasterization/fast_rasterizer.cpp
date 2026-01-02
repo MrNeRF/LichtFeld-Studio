@@ -4,6 +4,7 @@
 
 #include "fast_rasterizer.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "training/kernels/grad_alpha.hpp"
 #include <chrono>
@@ -100,7 +101,7 @@ namespace lfs::training {
         // Log absolute path for easier debugging
         auto abs_path = std::filesystem::absolute(dump_dir);
 
-        LOG_ERROR("Rasterizer crash! Dumping data to: {}", abs_path.string());
+        LOG_ERROR("Rasterizer crash! Dumping data to: {}", lfs::core::path_to_utf8(abs_path));
         LOG_ERROR("Error: {}", error_msg);
 
         try {
@@ -134,8 +135,8 @@ namespace lfs::training {
             // - fx, fy, cx, cy: Camera intrinsics
             // - near_plane, far_plane: Clipping planes
             // - *_shape: Shape of each tensor for verification
-            std::ofstream params_file(dump_dir + "/params.json");
-            if (params_file) {
+            std::ofstream params_file;
+            if (lfs::core::open_file_for_write(std::filesystem::path(dump_dir) / "params.json", params_file)) {
                 params_file << "{\n";
                 params_file << "  \"error\": \"" << error_msg << "\",\n";
                 params_file << "  \"n_primitives\": " << n_primitives << ",\n";
@@ -176,7 +177,7 @@ namespace lfs::training {
                 params_file << "}\n";
             }
 
-            LOG_ERROR("Crash dump complete: {}", abs_path.string());
+            LOG_ERROR("Crash dump complete: {}", lfs::core::path_to_utf8(abs_path));
         } catch (const std::exception& dump_error) {
             LOG_ERROR("Failed to create crash dump: {}", dump_error.what());
         }

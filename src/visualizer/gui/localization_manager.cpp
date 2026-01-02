@@ -1,6 +1,7 @@
 #include "localization_manager.hpp"
 
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -38,7 +39,7 @@ namespace lichtfeld {
             const std::string lang_code = entry.path().stem().string();
             std::unordered_map<std::string, std::string> test_strings;
 
-            if (!parseLocaleFile(entry.path().string(), test_strings))
+            if (!parseLocaleFile(lfs::core::path_to_utf8(entry.path()), test_strings))
                 continue;
 
             available_languages_.push_back(lang_code);
@@ -130,8 +131,8 @@ namespace lichtfeld {
 
     bool LocalizationManager::parseLocaleFile(const std::string& filepath,
                                               std::unordered_map<std::string, std::string>& strings) const {
-        std::ifstream file(filepath);
-        if (!file.is_open()) {
+        std::ifstream file;
+        if (!lfs::core::open_file_for_read(lfs::core::utf8_to_path(filepath), file)) {
             LOG_ERROR("Failed to open locale file: {}", filepath);
             return false;
         }

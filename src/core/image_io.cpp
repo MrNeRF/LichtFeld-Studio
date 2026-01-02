@@ -338,18 +338,34 @@ namespace lfs::core {
                 }
             }
 
-            if (res_div == 2 || res_div == 4 || res_div == 8) {
-                const int nw = std::max(1, w / res_div);
-                const int nh = std::max(1, h / res_div);
+            // Calculate target dimensions after res_div
+            int nw = (res_div == 2 || res_div == 4 || res_div == 8) ? std::max(1, w / res_div) : w;
+            int nh = (res_div == 2 || res_div == 4 || res_div == 8) ? std::max(1, h / res_div) : h;
+
+            // Apply max_width if needed
+            int scale_w = nw;
+            int scale_h = nh;
+            if (max_width > 0 && (nw > max_width || nh > max_width)) {
+                if (nw > nh) {
+                    scale_h = std::max(1, max_width * nh / nw);
+                    scale_w = std::max(1, max_width);
+                } else {
+                    scale_w = std::max(1, max_width * nw / nh);
+                    scale_h = std::max(1, max_width);
+                }
+            }
+
+            // Resize if dimensions changed
+            if (scale_w != w || scale_h != h) {
                 unsigned char* out = nullptr;
                 try {
-                    out = downscale_resample_direct(base, w, h, nw, nh, nthreads);
+                    out = downscale_resample_direct(base, w, h, scale_w, scale_h, nthreads);
                 } catch (...) {
                     std::free(base);
                     throw;
                 }
                 std::free(base);
-                return {out, nw, nh, 3};
+                return {out, scale_w, scale_h, 3};
             }
 
             return {base, w, h, 3};

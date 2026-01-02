@@ -51,15 +51,27 @@ namespace lfs::io {
         std::chrono::milliseconds output_wait_timeout{config::DEFAULT_OUTPUT_TIMEOUT_MS};
     };
 
+    /**
+     * @brief Parameters for mask processing
+     */
+    struct MaskParams {
+        bool invert = false;    // Invert mask values (1.0 - mask)
+        float threshold = 0.0f; // Binary threshold: >= threshold → 1.0, else → 0.0
+    };
+
     struct ImageRequest {
         size_t sequence_id;
         std::filesystem::path path;
         LoadParams params;
+        // Optional mask to load alongside the image
+        std::optional<std::filesystem::path> mask_path;
+        MaskParams mask_params;
     };
 
     struct ReadyImage {
         size_t sequence_id;
-        lfs::core::Tensor tensor;
+        lfs::core::Tensor tensor;              // Image tensor [C,H,W], float32
+        std::optional<lfs::core::Tensor> mask; // Optional mask [H,W], float32
         cudaStream_t stream = nullptr;
     };
 
@@ -78,6 +90,10 @@ namespace lfs::io {
             double cold_process_time_ms = 0;
             size_t total_bytes_read = 0;
             size_t total_decode_calls = 0;
+            // Mask loading stats
+            size_t masks_loaded = 0;
+            size_t mask_cache_hits = 0;
+            size_t mask_cache_misses = 0;
         };
 
         explicit PipelinedImageLoader(PipelinedLoaderConfig config = {});
@@ -111,6 +127,17 @@ namespace lfs::io {
             bool is_cache_hit = false;
             bool is_original_jpeg = false;
             bool needs_processing = false;
+            // Mask-specific fields
+            bool is_mask = false;   // True if this item is a mask (not an image)
+            MaskParams mask_params; // Invert/threshold params (only used if is_mask)
+        };
+
+        // Pairing buffer: wait for both image and mask before output
+        struct PendingPair {
+            std::optional<lfs::core::Tensor> image;
+            std::optional<lfs::core::Tensor> mask;
+            cudaStream_t stream = nullptr;
+            bool mask_expected = false; // True if a mask was requested for this sequence_id
         };
 
         template <typename T>
@@ -196,6 +223,17 @@ namespace lfs::io {
         void put_in_jpeg_cache(const std::string& cache_key, std::vector<uint8_t>&& data);
         void evict_jpeg_cache_if_needed(size_t required_bytes);
 
+        // Mask-specific helpers
+        std::string make_mask_cache_key(
+            const std::filesystem::path& path,
+            const LoadParams& params,
+            const MaskParams& mask_params) const;
+        void try_complete_pair(
+            size_t sequence_id,
+            std::optional<lfs::core::Tensor> image,
+            std::optional<lfs::core::Tensor> mask,
+            cudaStream_t stream);
+
         PipelinedLoaderConfig config_;
         std::atomic<bool> running_{false};
         std::vector<std::thread> io_threads_;
@@ -223,6 +261,10 @@ namespace lfs::io {
         mutable std::mutex stats_mutex_;
         CacheStats stats_;
         std::atomic<size_t> in_flight_{0};
+
+        // Pairing buffer for image+mask delivery
+        std::unordered_map<size_t, PendingPair> pending_pairs_;
+        mutable std::mutex pending_pairs_mutex_;
     };
 
 } // namespace lfs::io

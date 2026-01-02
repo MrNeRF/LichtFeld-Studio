@@ -46,4 +46,78 @@ namespace lfs::io::cuda {
             input, output, height, width, channels);
     }
 
+    __global__ void uint8_hw_to_float32_hw_kernel(
+        const uint8_t* __restrict__ input,
+        float* __restrict__ output,
+        const size_t total) {
+
+        const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= total)
+            return;
+
+        output[idx] = static_cast<float>(input[idx]) * NORMALIZE_SCALE;
+    }
+
+    void launch_uint8_hw_to_float32_hw(
+        const uint8_t* input,
+        float* output,
+        const size_t height,
+        const size_t width,
+        cudaStream_t stream) {
+
+        const size_t total = height * width;
+        const int num_blocks = static_cast<int>((total + BLOCK_SIZE - 1) / BLOCK_SIZE);
+
+        uint8_hw_to_float32_hw_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
+            input, output, total);
+    }
+
+    __global__ void mask_invert_kernel(
+        float* __restrict__ data,
+        const size_t total) {
+
+        const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= total)
+            return;
+
+        data[idx] = 1.0f - data[idx];
+    }
+
+    void launch_mask_invert(
+        float* data,
+        const size_t height,
+        const size_t width,
+        cudaStream_t stream) {
+
+        const size_t total = height * width;
+        const int num_blocks = static_cast<int>((total + BLOCK_SIZE - 1) / BLOCK_SIZE);
+
+        mask_invert_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(data, total);
+    }
+
+    __global__ void mask_threshold_kernel(
+        float* __restrict__ data,
+        const size_t total,
+        const float threshold) {
+
+        const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= total)
+            return;
+
+        data[idx] = (data[idx] >= threshold) ? 1.0f : 0.0f;
+    }
+
+    void launch_mask_threshold(
+        float* data,
+        const size_t height,
+        const size_t width,
+        const float threshold,
+        cudaStream_t stream) {
+
+        const size_t total = height * width;
+        const int num_blocks = static_cast<int>((total + BLOCK_SIZE - 1) / BLOCK_SIZE);
+
+        mask_threshold_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(data, total, threshold);
+    }
+
 } // namespace lfs::io::cuda

@@ -43,10 +43,11 @@
     "title": "GUÍA DE INICIO RÁPIDO",
     "description": "Aprenda a preparar datasets y comenzar con LichtFeld Studio:",
     "wiki_section": "WIKI & PREGUNTAS FRECUENTES",
-    "video_latest": "Último Tutorial",
+    "video_latest": "LichtFeld v0.3.0 Resumen de Funciones",
     "video_reality_scan": "Dataset Reality Scan",
     "video_colmap": "Tutorial COLMAP",
     "video_lichtfeld": "Tutorial LichtFeld",
+    "video_masks": "Tutorial de Máscaras",
     "loading": "Cargando..."
   },
 
@@ -490,6 +491,11 @@
     "loss": "Pérdida:",
     "gaussians_count": "%s Gaussianos",
     "exporting": "Exportando %s...",
+    "importing": "Importando %s...",
+    "import_complete": "Importación completada: %zu imágenes, %zu puntos",
+    "import_failed": "Importación fallida: %s",
+    "import_complete_title": "Importación Completada",
+    "import_failed_title": "Importación Fallida",
     "num_splats": "núm. Splats: %d",
     "status_label": "Estado: %s"
   },
@@ -542,7 +548,6 @@
     "max_gaussians": "Max Gaussians:",
     "sh_degree": "SH Degree:",
     "tile_mode": "Tile Mode:",
-    "num_workers": "Num Workers:",
     "steps_scaler": "Steps Scaler:",
     "bilateral_grid": "Bilateral Grid:",
     "mask_mode": "Mask Mode:",

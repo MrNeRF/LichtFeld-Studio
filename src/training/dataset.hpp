@@ -24,10 +24,6 @@
 
 namespace lfs::training {
 
-    // ============================================================================
-    // Thread-Safe Queue (MPMC)
-    // ============================================================================
-
     /// A basic locked, blocking MPMC queue.
     /// Every push/pop is guarded by a mutex. Condition variable is used
     /// to communicate insertion of new elements for waiting threads.
@@ -81,10 +77,6 @@ namespace lfs::training {
         mutable std::mutex mutex_;
         std::condition_variable cv_;
     };
-
-    // ============================================================================
-    // Random Sampler
-    // ============================================================================
 
     /// Random sampler that shuffles indices once and iterates through them
     class RandomSampler {
@@ -150,10 +142,6 @@ namespace lfs::training {
         }
     };
 
-    // ============================================================================
-    // Dataset
-    // ============================================================================
-
     /// Camera with loaded image
     struct CameraWithImage {
         lfs::core::Camera* camera;
@@ -163,7 +151,8 @@ namespace lfs::training {
     /// Dataset example type
     struct CameraExample {
         CameraWithImage data;
-        lfs::core::Tensor target; // Empty tensor, not used
+        lfs::core::Tensor target;              // Empty tensor, not used
+        std::optional<lfs::core::Tensor> mask; // Optional mask [H,W], float32
     };
 
     /// Camera dataset configuration
@@ -301,10 +290,6 @@ namespace lfs::training {
         Split split_;
         std::vector<size_t> indices_;
     };
-
-    // ============================================================================
-    // DataLoader
-    // ============================================================================
 
     /// Options for configuring DataLoader
     struct DataLoaderOptions {
@@ -515,6 +500,13 @@ namespace lfs::training {
         bool shutdown_;
     };
 
+    /// Configuration for mask loading in PipelinedDataLoader
+    struct PipelinedMaskConfig {
+        bool load_masks = false;     // Whether to load masks alongside images
+        bool invert_masks = false;   // Invert mask values (1.0 - mask)
+        float mask_threshold = 0.0f; // If > 0, values >= threshold become 1.0
+    };
+
     // Pipelined DataLoader with GPU batch JPEG decoding
     template <typename Sampler>
     class PipelinedDataLoader {
@@ -523,10 +515,12 @@ namespace lfs::training {
 
         PipelinedDataLoader(std::shared_ptr<CameraDataset> dataset,
                             Sampler sampler,
-                            lfs::io::PipelinedLoaderConfig config = {})
+                            lfs::io::PipelinedLoaderConfig config = {},
+                            PipelinedMaskConfig mask_config = {})
             : dataset_(dataset),
               sampler_(std::move(sampler)),
               config_(config),
+              mask_config_(mask_config),
               loader_(std::make_unique<lfs::io::PipelinedImageLoader>(config)),
               shutdown_(false) {
 
@@ -560,9 +554,17 @@ namespace lfs::training {
                 const auto shape = ready.tensor.shape();
                 cam->set_image_dimensions(static_cast<int>(shape[2]), static_cast<int>(shape[1]));
 
-                return CameraExample{
+                CameraExample example{
                     CameraWithImage{cam.get(), std::move(ready.tensor)},
-                    lfs::core::Tensor()};
+                    lfs::core::Tensor(),
+                    std::nullopt};
+
+                // Attach mask if present
+                if (ready.mask && ready.mask->is_valid()) {
+                    example.mask = std::move(*ready.mask);
+                }
+
+                return example;
             } catch (const std::exception& e) {
                 LOG_ERROR("[PipelinedDataLoader] Error: {}", e.what());
                 return std::nullopt;
@@ -598,16 +600,27 @@ namespace lfs::training {
                 const size_t seq_id = next_sequence_id_++;
                 sequence_to_camera_[seq_id] = camera_idx;
 
-                lfs::io::LoadParams params;
-                params.resize_factor = dataset_->get_resize_factor();
-                params.max_width = dataset_->get_max_width();
-                loader_->prefetch(seq_id, cam->image_path(), params);
+                lfs::io::ImageRequest request;
+                request.sequence_id = seq_id;
+                request.path = cam->image_path();
+                request.params.resize_factor = dataset_->get_resize_factor();
+                request.params.max_width = dataset_->get_max_width();
+
+                // Add mask if configured and camera has one
+                if (mask_config_.load_masks && cam->has_mask()) {
+                    request.mask_path = cam->mask_path();
+                    request.mask_params.invert = mask_config_.invert_masks;
+                    request.mask_params.threshold = mask_config_.mask_threshold;
+                }
+
+                loader_->prefetch({request});
             }
         }
 
         std::shared_ptr<CameraDataset> dataset_;
         Sampler sampler_;
         lfs::io::PipelinedLoaderConfig config_;
+        PipelinedMaskConfig mask_config_;
         std::unique_ptr<lfs::io::PipelinedImageLoader> loader_;
 
         std::unordered_map<size_t, size_t> sequence_to_camera_;
@@ -635,15 +648,17 @@ namespace lfs::training {
 
     template <typename SamplerType = RandomSampler>
     inline auto create_pipelined_dataloader(std::shared_ptr<CameraDataset> dataset,
-                                            lfs::io::PipelinedLoaderConfig config = {}) {
+                                            lfs::io::PipelinedLoaderConfig config = {},
+                                            PipelinedMaskConfig mask_config = {}) {
         const size_t dataset_size = dataset->size();
         return std::make_unique<PipelinedDataLoader<SamplerType>>(
-            dataset, SamplerType(dataset_size), config);
+            dataset, SamplerType(dataset_size), config, mask_config);
     }
 
     inline auto create_infinite_pipelined_dataloader(std::shared_ptr<CameraDataset> dataset,
-                                                     lfs::io::PipelinedLoaderConfig config = {}) {
-        return create_pipelined_dataloader<InfiniteRandomSampler>(dataset, config);
+                                                     lfs::io::PipelinedLoaderConfig config = {},
+                                                     PipelinedMaskConfig mask_config = {}) {
+        return create_pipelined_dataloader<InfiniteRandomSampler>(dataset, config, mask_config);
     }
 
 } // namespace lfs::training

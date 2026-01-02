@@ -43,10 +43,11 @@
     "title": "快速入门指南",
     "description": "学习如何准备数据集并开始使用LichtFeld Studio：",
     "wiki_section": "维基 & 常见问题",
-    "video_latest": "最新教程",
+    "video_latest": "LichtFeld v0.3.0 功能概览",
     "video_reality_scan": "Reality Scan数据集",
     "video_colmap": "COLMAP教程",
     "video_lichtfeld": "LichtFeld教程",
+    "video_masks": "蒙版教程",
     "loading": "加载中..."
   },
 
@@ -490,6 +491,11 @@
     "loss": "损失：",
     "gaussians_count": "%s高斯",
     "exporting": "导出%s...",
+    "importing": "导入%s...",
+    "import_complete": "导入完成：%zu 张图像，%zu 个点",
+    "import_failed": "导入失败：%s",
+    "import_complete_title": "导入完成",
+    "import_failed_title": "导入失败",
     "num_splats": "Splat数量：%d",
     "status_label": "状态：%s"
   },
@@ -542,7 +548,6 @@
     "max_gaussians": "Max Gaussians:",
     "sh_degree": "SH Degree:",
     "tile_mode": "Tile Mode:",
-    "num_workers": "Num Workers:",
     "steps_scaler": "Steps Scaler:",
     "bilateral_grid": "Bilateral Grid:",
     "mask_mode": "Mask Mode:",

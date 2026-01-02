@@ -161,8 +161,8 @@ namespace lfs::io {
     static std::unique_ptr<std::vector<char>>
     read_binary(const std::filesystem::path& p) {
         LOG_TRACE("Reading binary file: {}", lfs::core::path_to_utf8(p));
-        std::ifstream f(p, std::ios::binary | std::ios::ate);
-        if (!f) {
+        std::ifstream f;
+        if (!lfs::core::open_file_for_read(p, std::ios::binary | std::ios::ate, f)) {
             LOG_ERROR("Failed to open binary file: {}", lfs::core::path_to_utf8(p));
             throw std::runtime_error("Failed to open " + lfs::core::path_to_utf8(p));
         }
@@ -415,8 +415,8 @@ namespace lfs::io {
     // -----------------------------------------------------------------------------
     std::vector<std::string> read_text_file(const std::filesystem::path& file_path) {
         LOG_TRACE("Reading text file: {}", lfs::core::path_to_utf8(file_path));
-        std::ifstream file(file_path);
-        if (!file.is_open()) {
+        std::ifstream file;
+        if (!lfs::core::open_file_for_read(file_path, file)) {
             LOG_ERROR("Failed to open text file: {}", lfs::core::path_to_utf8(file_path));
             throw std::runtime_error("Failed to open " + lfs::core::path_to_utf8(file_path));
         }

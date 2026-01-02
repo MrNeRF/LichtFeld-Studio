@@ -607,8 +607,8 @@ namespace lfs::io {
         }
 
         if (!from_cache) {
-            std::ifstream file(path, std::ios::binary | std::ios::ate);
-            if (!file) {
+            std::ifstream file;
+            if (!lfs::core::open_file_for_read(path, std::ios::binary | std::ios::ate, file)) {
                 throw std::runtime_error("Failed to open: " + lfs::core::path_to_utf8(path));
             }
             const auto size = file.tellg();

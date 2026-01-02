@@ -43,10 +43,11 @@
     "title": "SNELSTARTGIDS",
     "description": "Leer hoe je datasets voorbereidt en aan de slag gaat met LichtFeld Studio:",
     "wiki_section": "WIKI & FAQ",
-    "video_latest": "Nieuwste Tutorial",
+    "video_latest": "LichtFeld v0.3.0 Functie Overzicht",
     "video_reality_scan": "Reality Scan Dataset",
     "video_colmap": "COLMAP Tutorial",
     "video_lichtfeld": "LichtFeld Tutorial",
+    "video_masks": "Maskers Tutorial",
     "loading": "Laden..."
   },
 
@@ -490,6 +491,11 @@
     "loss": "Verlies:",
     "gaussians_count": "%s Gaussians",
     "exporting": "Exporteren %s...",
+    "importing": "Importeren %s...",
+    "import_complete": "Import voltooid: %zu afbeeldingen, %zu punten",
+    "import_failed": "Import mislukt: %s",
+    "import_complete_title": "Import Voltooid",
+    "import_failed_title": "Import Mislukt",
     "num_splats": "aantal Splats: %d",
     "status_label": "Status: %s"
   },
@@ -542,7 +548,6 @@
     "max_gaussians": "Max Gaussians:",
     "sh_degree": "SH Degree:",
     "tile_mode": "Tile Mode:",
-    "num_workers": "Num Workers:",
     "steps_scaler": "Steps Scaler:",
     "bilateral_grid": "Bilateral Grid:",
     "mask_mode": "Mask Mode:",

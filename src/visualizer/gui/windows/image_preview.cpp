@@ -50,8 +50,8 @@ namespace lfs::vis::gui {
         if (ext != ".jpg" && ext != ".jpeg")
             return result;
 
-        std::ifstream file(path, std::ios::binary);
-        if (!file)
+        std::ifstream file;
+        if (!lfs::core::open_file_for_read(path, std::ios::binary, file))
             return result;
 
         uint8_t buf[2];

@@ -118,8 +118,8 @@ namespace lfs::io {
         }
 
         // Verify magic number
-        std::ifstream file(path, std::ios::binary);
-        if (!file) {
+        std::ifstream file;
+        if (!lfs::core::open_file_for_read(path, std::ios::binary, file)) {
             return false;
         }
 

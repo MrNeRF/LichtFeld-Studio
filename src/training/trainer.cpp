@@ -847,12 +847,18 @@ namespace lfs::training {
 
                 const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None && cam->has_mask();
                 if (use_mask) {
-                    // Load mask (cached after first load)
-                    auto mask = cam->load_and_get_mask(
-                        params_.dataset.resize_factor,
-                        params_.dataset.max_width,
-                        params_.optimization.invert_masks,
-                        params_.optimization.mask_threshold);
+                    // Use pipelined mask if available, otherwise load from camera (fallback for validation, etc.)
+                    lfs::core::Tensor mask;
+                    if (pipelined_mask_.is_valid() && pipelined_mask_.numel() > 0) {
+                        mask = pipelined_mask_;
+                    } else {
+                        // Fallback: load mask from camera (cached after first load)
+                        mask = cam->load_and_get_mask(
+                            params_.dataset.resize_factor,
+                            params_.dataset.max_width,
+                            params_.optimization.invert_masks,
+                            params_.optimization.mask_threshold);
+                    }
 
                     // Extract mask tile if tiling
                     lfs::core::Tensor mask_tile = mask;
@@ -1123,7 +1129,7 @@ namespace lfs::training {
         ready_to_start_ = true; // Skip GUI wait for now
 
         is_running_ = true; // Now we can start
-        LOG_INFO("Starting training loop with {} workers", params_.optimization.num_workers);
+        LOG_INFO("Starting training loop");
         // initializing image loader
         auto& cache_loader = lfs::io::CacheLoader::getInstance(params_.dataset.loading_params.use_cpu_memory, params_.dataset.loading_params.use_fs_cache);
         cache_loader.reset_cache();
@@ -1139,7 +1145,6 @@ namespace lfs::training {
         try {
             // Start from current_iteration_ (allows resume from checkpoint)
             int iter = current_iteration_.load() > 0 ? current_iteration_.load() + 1 : 1;
-            const int num_workers = params_.optimization.num_workers;
             const RenderMode render_mode = RenderMode::RGB;
 
             if (progress_) {
@@ -1153,8 +1158,7 @@ namespace lfs::training {
             pipelined_config.jpeg_batch_size = 8;
             pipelined_config.prefetch_count = 8;
             pipelined_config.output_queue_size = 4;
-            const size_t worker_threads = std::clamp(static_cast<size_t>(num_workers), size_t{2}, size_t{4});
-            pipelined_config.io_threads = worker_threads;
+            pipelined_config.io_threads = 2;
 
             // Non-JPEG images (PNG, WebP) need CPU decoding - use more threads until cache warms
             constexpr float NON_JPEG_THRESHOLD = 0.1f;
@@ -1167,10 +1171,20 @@ namespace lfs::training {
                 pipelined_config.cold_process_threads = cold_threads;
                 pipelined_config.prefetch_count = COLD_PREFETCH_COUNT;
                 LOG_INFO("{:.0f}% non-JPEG images, using {} cold threads", non_jpeg_ratio * 100.0f, cold_threads);
-            } else {
-                pipelined_config.cold_process_threads = worker_threads;
             }
-            auto train_dataloader = create_infinite_pipelined_dataloader(train_dataset_, pipelined_config);
+
+            // Configure mask loading if masks are enabled
+            PipelinedMaskConfig mask_pipeline_config;
+            if (params_.optimization.mask_mode != lfs::core::param::MaskMode::None) {
+                mask_pipeline_config.load_masks = true;
+                mask_pipeline_config.invert_masks = params_.optimization.invert_masks;
+                mask_pipeline_config.mask_threshold = params_.optimization.mask_threshold;
+                LOG_INFO("Mask loading enabled in pipeline (invert={}, threshold={})",
+                         mask_pipeline_config.invert_masks, mask_pipeline_config.mask_threshold);
+            }
+
+            auto train_dataloader = create_infinite_pipelined_dataloader(
+                train_dataset_, pipelined_config, mask_pipeline_config);
 
             LOG_DEBUG("Starting training iterations");
             while (iter <= params_.optimization.iterations) {
@@ -1188,6 +1202,9 @@ namespace lfs::training {
                 auto& example = *example_opt;
                 lfs::core::Camera* cam = example.data.camera;
                 lfs::core::Tensor gt_image = std::move(example.data.image);
+
+                // Store pipelined mask for use in train_step
+                pipelined_mask_ = example.mask.has_value() ? std::move(*example.mask) : lfs::core::Tensor();
 
                 auto step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
                 if (!step_result) {
