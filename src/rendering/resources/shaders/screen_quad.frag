@@ -7,7 +7,8 @@ uniform float near_plane = 0.1;
 uniform float far_plane = 100000.0;
 uniform bool has_depth = false;
 uniform bool orthographic = false;
-uniform bool depth_is_ndc = false;  // True if depth is already NDC (OpenGL), skip conversion
+uniform bool depth_is_ndc = false;
+uniform vec2 texcoord_scale = vec2(1.0, 1.0);  // Scale UV for over-allocated textures
 out vec4 FragColor;
 
 // Convert view-space depth to NDC depth (0 to 1 range for OpenGL)
@@ -33,7 +34,7 @@ float viewDepthToNDC(float z_view) {
 
 void main()
 {
-    vec2 uv = vec2(TexCoord.x, 1.0 - TexCoord.y);
+    vec2 uv = vec2(TexCoord.x * texcoord_scale.x, (1.0 - TexCoord.y) * texcoord_scale.y);
     FragColor = texture(screenTexture, uv);
 
     if (has_depth) {

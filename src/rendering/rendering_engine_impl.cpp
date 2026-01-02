@@ -399,7 +399,9 @@ namespace lfs::rendering {
             return upload_result;
         }
 
-        glViewport(viewport_pos.x, viewport_pos.y, viewport_size.x, viewport_size.y);
+        // Note: glViewport should be set by the caller to the DISPLAY size
+        // The viewport_size here is the IMAGE size for upload validation
+        // The fullscreen quad will stretch the texture to fill whatever viewport is set
 
         return screen_renderer_->render(quad_shader_);
     }

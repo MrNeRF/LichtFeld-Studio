@@ -16,12 +16,17 @@
 #include "scene/scene_manager.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include <cuda_runtime.h>
 #include <glad/glad.h>
 #include <shared_mutex>
 #include <stdexcept>
 
 namespace lfs::vis {
+
+    namespace {
+        constexpr int GPU_ALIGNMENT = 16;  // 16-pixel alignment for GPU texture efficiency
+    }
 
     using namespace lfs::core::events;
 
@@ -303,7 +308,7 @@ namespace lfs::vis {
             LOG_DEBUG("Window resized, clearing render cache");
             markDirty();
             cached_result_ = {};
-            last_render_size_ = glm::ivec2(0, 0);
+            last_viewport_size_ = glm::ivec2(0, 0);
             render_texture_valid_ = false;
             gt_texture_cache_.clear();
         });
@@ -515,40 +520,43 @@ namespace lfs::vis {
             return;
         }
 
-        glm::ivec2 render_size = context.viewport.windowSize;
+        glm::ivec2 viewport_size = context.viewport.windowSize;
         if (context.viewport_region) {
-            render_size = glm::ivec2(
+            viewport_size = glm::ivec2(
                 static_cast<int>(context.viewport_region->width),
                 static_cast<int>(context.viewport_region->height));
         }
 
-        // For GT comparison mode, get the actual camera dimensions
+        glm::ivec2 render_size = viewport_size;
+
+        // GT comparison mode: use actual camera dimensions
         if (settings_.split_view_mode == SplitViewMode::GTComparison && current_camera_id_ >= 0) {
-            auto* trainer_manager = scene_manager->getTrainerManager();
-            if (trainer_manager && trainer_manager->hasTrainer()) {
-                auto cam = trainer_manager->getCamById(current_camera_id_);
-                if (cam) {
-                    // Use the GT camera's image dimensions for rendering
-                    render_size.x = cam->image_width();
-                    render_size.y = cam->image_height();
-                    LOG_TRACE("Using GT camera dimensions for rendering: {}x{}", render_size.x, render_size.y);
+            if (auto* trainer_manager = scene_manager->getTrainerManager()) {
+                if (trainer_manager->hasTrainer()) {
+                    if (auto cam = trainer_manager->getCamById(current_camera_id_)) {
+                        render_size.x = cam->image_width();
+                        render_size.y = cam->image_height();
+                    }
                 }
             }
         }
 
-        // Resize texture if needed
+        const glm::ivec2 alloc_size(
+            ((render_size.x + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT,
+            ((render_size.y + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT);
+
         static glm::ivec2 texture_size{0, 0};
-        if (render_size != texture_size) {
+        if (alloc_size != texture_size) {
             glBindTexture(GL_TEXTURE_2D, cached_render_texture_);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, render_size.x, render_size.y,
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, alloc_size.x, alloc_size.y,
                          0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-            texture_size = render_size;
-            LOG_DEBUG("Resized cached render texture to {}x{}", render_size.x, render_size.y);
+            LOG_DEBUG("Render texture resize: {}x{} -> {}x{}", texture_size.x, texture_size.y, alloc_size.x, alloc_size.y);
+            texture_size = alloc_size;
         }
 
-        // Create framebuffer for offscreen rendering
         static GLuint render_fbo = 0;
         static GLuint render_depth_rbo = 0;
+        static glm::ivec2 depth_buffer_size{0, 0};
 
         if (render_fbo == 0) {
             glGenFramebuffers(1, &render_fbo);
@@ -561,15 +569,17 @@ namespace lfs::vis {
         glBindFramebuffer(GL_FRAMEBUFFER, render_fbo);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, cached_render_texture_, 0);
 
-        // Update depth buffer size if needed
-        glBindRenderbuffer(GL_RENDERBUFFER, render_depth_rbo);
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, render_size.x, render_size.y);
+        if (alloc_size != depth_buffer_size) {
+            glBindRenderbuffer(GL_RENDERBUFFER, render_depth_rbo);
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, alloc_size.x, alloc_size.y);
+            LOG_DEBUG("Depth buffer resize: {}x{}", alloc_size.x, alloc_size.y);
+            depth_buffer_size = alloc_size;
+        }
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, render_depth_rbo);
 
-        // Check framebuffer completeness
-        GLenum fb_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        const GLenum fb_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
         if (fb_status != GL_FRAMEBUFFER_COMPLETE) {
-            LOG_ERROR("Framebuffer incomplete: 0x{:x}", fb_status);
+            LOG_ERROR("FBO incomplete: 0x{:x}", fb_status);
             glBindFramebuffer(GL_FRAMEBUFFER, current_fbo);
             render_texture_valid_ = false;
             return;
@@ -672,7 +682,18 @@ namespace lfs::vis {
                 .transform = settings_.depth_filter_transform.inv().toMat4()};
         }
 
+        // Lock only during CUDA rasterization to minimize training blocking
+        std::optional<std::shared_lock<std::shared_mutex>> render_lock;
+        if (const auto* tm = scene_manager ? scene_manager->getTrainerManager() : nullptr) {
+            if (const auto* trainer = tm->getTrainer()) {
+                render_lock.emplace(trainer->getRenderMutex());
+            }
+        }
+
         const auto render_result = engine_->renderGaussians(*model, request);
+
+        render_lock.reset();
+
         if (render_result) {
             cached_result_ = *render_result;
 
@@ -687,6 +708,9 @@ namespace lfs::vis {
                 }
             }
 
+            // Store the actual size at which this result was rendered
+            cached_result_size_ = render_size;
+
             // For GT comparison, present to the bound FBO to fill cached_render_texture_
             if (settings_.split_view_mode == SplitViewMode::GTComparison) {
                 const auto present_result = engine_->presentToScreen(cached_result_, glm::ivec2(0), render_size);
@@ -697,6 +721,7 @@ namespace lfs::vis {
         } else {
             LOG_ERROR("Failed to render gaussians: {}", render_result.error());
             render_texture_valid_ = false;
+            cached_result_size_ = {0, 0};
         }
 
         // Restore framebuffer
@@ -736,25 +761,19 @@ namespace lfs::vis {
             return;
         }
 
-        if (current_size != last_render_size_) {
-            LOG_DEBUG("Viewport resize: {}x{} -> {}x{}", last_render_size_.x, last_render_size_.y,
+        // Track viewport size changes
+        if (current_size != last_viewport_size_) {
+            LOG_DEBUG("Viewport resize: {}x{} -> {}x{}", last_viewport_size_.x, last_viewport_size_.y,
                       current_size.x, current_size.y);
             needs_render_ = true;
-            last_render_size_ = current_size;
+            last_viewport_size_ = current_size;
         }
 
         const lfs::core::SplatData* const model = scene_manager ? scene_manager->getModelForRendering() : nullptr;
         const size_t model_ptr = reinterpret_cast<size_t>(model);
 
-        // Lock model during render to prevent tensor replacement
-        std::shared_lock<std::shared_mutex> render_lock;
-        if (const auto* tm = scene_manager ? scene_manager->getTrainerManager() : nullptr) {
-            if (const auto* trainer = tm->getTrainer()) {
-                render_lock = std::shared_lock{trainer->getRenderMutex()};
-            }
-        }
+        // Render mutex acquired in renderToTexture() during CUDA rasterization only
 
-        // Detect model switch
         if (model_ptr != last_model_ptr_) {
             LOG_DEBUG("Model ptr changed: {} -> {}, size={}", last_model_ptr_, model_ptr, model ? model->size() : 0);
             needs_render_ = true;
@@ -811,18 +830,24 @@ namespace lfs::vis {
 
         if (should_render || !model) {
             doFullRender(context, scene_manager, model);
-        } else if (cached_result_.image) {
+        } else if (cached_result_.image && cached_result_size_.x > 0 && cached_result_size_.y > 0) {
+            // Use cached result - display at current viewport size (upscaling if needed)
             glm::ivec2 viewport_pos(0, 0);
-            const glm::ivec2 render_size = current_size;
+            glm::ivec2 display_size = current_size;
 
             if (context.viewport_region) {
                 const int gl_y = context.viewport.frameBufferSize.y - static_cast<int>(context.viewport_region->y) - static_cast<int>(context.viewport_region->height);
                 viewport_pos = glm::ivec2(static_cast<int>(context.viewport_region->x), gl_y);
+                display_size = glm::ivec2(static_cast<int>(context.viewport_region->width),
+                                          static_cast<int>(context.viewport_region->height));
             }
 
+            // Set viewport to DISPLAY size, texture will be upscaled to fill
+            glViewport(viewport_pos.x, viewport_pos.y, display_size.x, display_size.y);
             glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            engine_->presentToScreen(cached_result_, viewport_pos, render_size);
+            // Pass IMAGE size for upload validation
+            engine_->presentToScreen(cached_result_, viewport_pos, cached_result_size_);
             renderOverlays(context);
         }
 
@@ -861,10 +886,17 @@ namespace lfs::vis {
                 }
             }
 
+            std::optional<std::shared_lock<std::shared_mutex>> render_lock;
+            if (const auto* tm = scene_manager ? scene_manager->getTrainerManager() : nullptr) {
+                if (const auto* trainer = tm->getTrainer()) {
+                    render_lock.emplace(trainer->getRenderMutex());
+                }
+            }
+
             auto result = engine_->renderSplitView(*split_request);
+            render_lock.reset();
+
             if (result) {
-                // Split view already composites to screen, no need to present again
-                // Just store a dummy result to prevent re-rendering every frame
                 cached_result_ = *result;
             } else {
                 LOG_ERROR("Failed to render split view: {}", result.error());
@@ -884,7 +916,7 @@ namespace lfs::vis {
         if (model && model->size() > 0) {
             renderToTexture(context, scene_manager, model);
 
-            if (render_texture_valid_) {
+            if (render_texture_valid_ && cached_result_size_.x > 0 && cached_result_size_.y > 0) {
                 glm::ivec2 viewport_pos(0, 0);
                 if (context.viewport_region) {
                     const int gl_y = context.viewport.frameBufferSize.y - static_cast<int>(context.viewport_region->y) - static_cast<int>(context.viewport_region->height);
@@ -899,7 +931,7 @@ namespace lfs::vis {
                 const auto present_result = engine_->presentToScreen(
                     cached_result_,
                     viewport_pos,
-                    render_size);
+                    cached_result_size_);
                 if (!present_result) {
                     LOG_ERROR("Failed to present render result: {}", present_result.error());
                 }
@@ -1033,6 +1065,12 @@ namespace lfs::vis {
                 if (render_result) {
                     cached_result_ = *render_result;
 
+                    glm::ivec2 actual_image_size(0, 0);
+                    if (cached_result_.image) {
+                        const auto& img = *cached_result_.image;
+                        actual_image_size = glm::ivec2(img.size(2), img.size(1));  // [C, H, W] -> (W, H)
+                    }
+
                     glm::ivec2 viewport_pos(0, 0);
                     if (context.viewport_region) {
                         const int gl_y = context.viewport.frameBufferSize.y - static_cast<int>(context.viewport_region->y) - static_cast<int>(context.viewport_region->height);
@@ -1044,9 +1082,9 @@ namespace lfs::vis {
                                  settings_.background_color.b, 1.0f);
                     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-                    const auto present_result = engine_->presentToScreen(cached_result_, viewport_pos, render_size);
+                    const auto present_result = engine_->presentToScreen(cached_result_, viewport_pos, actual_image_size);
                     if (!present_result) {
-                        LOG_ERROR("Failed to present point cloud render result: {}", present_result.error());
+                        LOG_ERROR("Failed to present point cloud: {}", present_result.error());
                     }
                 } else {
                     LOG_ERROR("Failed to render point cloud: {}", render_result.error());

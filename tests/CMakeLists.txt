@@ -180,6 +180,7 @@ set(OPTIONAL_TEST_FILES
     test_checkpoint_resume.cpp
     test_nan_inf_gpu_check.cpp
     test_mcmc_nan_fix.cpp
+    test_vram_resize.cpp
 )
 
 foreach(TEST_FILE ${OPTIONAL_TEST_FILES})

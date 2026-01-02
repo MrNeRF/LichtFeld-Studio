@@ -108,6 +108,10 @@ namespace lfs::rendering {
             return result;
         }
 
+        // Set texture coordinate scale for over-allocated textures
+        glm::vec2 texcoord_scale = getTexcoordScale();
+        shader.set("texcoord_scale", texcoord_scale);
+
         // Bind depth texture and set depth parameters
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, getDepthTextureID());
@@ -176,6 +180,15 @@ namespace lfs::rendering {
 #else
         return false;
 #endif
+    }
+
+    glm::vec2 ScreenQuadRenderer::getTexcoordScale() const {
+#ifdef CUDA_GL_INTEROP_ENABLED
+        if (auto interop_fb = std::dynamic_pointer_cast<InteropFrameBuffer>(framebuffer)) {
+            return glm::vec2(interop_fb->getTexcoordScaleX(), interop_fb->getTexcoordScaleY());
+        }
+#endif
+        return glm::vec2(1.0f, 1.0f);
     }
 
     Result<void> ScreenQuadRenderer::uploadDepth(const float* depth_data, int width, int height) {

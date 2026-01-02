@@ -13,6 +13,10 @@
 
 namespace lfs::rendering {
 
+    namespace {
+        constexpr int GPU_ALIGNMENT = 16;  // 16-pixel alignment for GPU texture efficiency
+    }
+
     RenderingPipeline::RenderingPipeline()
         : background_(Tensor::zeros({3}, lfs::core::Device::CUDA, lfs::core::DataType::Float32)) {
         point_cloud_renderer_ = std::make_unique<PointCloudRenderer>();
@@ -342,60 +346,45 @@ namespace lfs::rendering {
         RenderResult result;
 
 #ifdef CUDA_GL_INTEROP_ENABLED
-        // Try CUDA-GL interop path for direct FBO→CUDA texture readback
         if (use_fbo_interop_) {
             LOG_TIMER_TRACE("CUDA-GL FBO interop readback");
 
-            // Initialize interop texture if needed or if FBO size changed
-            bool should_init = persistent_color_texture_ != 0 &&
-                               (!fbo_interop_texture_ ||
-                                fbo_interop_last_width_ != persistent_fbo_width_ ||
-                                fbo_interop_last_height_ != persistent_fbo_height_);
+            const bool fbo_changed = fbo_interop_last_width_ != persistent_fbo_width_ ||
+                                     fbo_interop_last_height_ != persistent_fbo_height_;
+            const bool dims_mismatch = fbo_interop_texture_ &&
+                                       (fbo_interop_texture_->getWidth() != width ||
+                                        fbo_interop_texture_->getHeight() != height);
+            const bool should_init = persistent_color_texture_ != 0 &&
+                                     (!fbo_interop_texture_ || fbo_changed || dims_mismatch);
 
             if (should_init) {
-                if (fbo_interop_texture_) {
-                    LOG_TRACE("Reinitializing CUDA-GL FBO interop texture due to size change: {}x{} -> {}x{}",
-                              fbo_interop_last_width_, fbo_interop_last_height_,
-                              persistent_fbo_width_, persistent_fbo_height_);
-                    fbo_interop_texture_.reset();
-                } else {
-                    LOG_TRACE("Initializing CUDA-GL FBO interop texture: {}x{}", width, height);
-                }
-
+                fbo_interop_texture_.reset();
                 fbo_interop_texture_.emplace();
                 if (auto init_result = fbo_interop_texture_->initForReading(
                         persistent_color_texture_, width, height);
                     !init_result) {
-                    LOG_TRACE("Failed to initialize FBO interop: {}", init_result.error());
+                    LOG_TRACE("FBO interop init failed: {}", init_result.error());
                     fbo_interop_texture_.reset();
-                } else {
-                    LOG_TRACE("FBO interop initialized successfully");
                 }
-
-                // Update tracked size even if init failed to avoid retry loops
                 fbo_interop_last_width_ = persistent_fbo_width_;
                 fbo_interop_last_height_ = persistent_fbo_height_;
             }
 
             if (use_fbo_interop_ && fbo_interop_texture_) {
-                // Read texture directly to CUDA tensor [H, W, 3]
                 Tensor image_hwc;
                 if (auto read_result = fbo_interop_texture_->readToTensor(image_hwc); read_result) {
-                    // Convert to CHW format
                     result.image = image_hwc.permute({2, 0, 1}).contiguous();
                     result.valid = true;
                     result.external_depth_texture = persistent_depth_texture_;
                     result.depth_is_ndc = true;
-                    LOG_TRACE("Read FBO via CUDA-GL interop");
                 } else {
-                    LOG_TRACE("Failed to read FBO via interop: {}", read_result.error());
+                    LOG_TRACE("FBO interop read failed: {}", read_result.error());
                     fbo_interop_texture_.reset();
-                    result.valid = false; // Force PBO fallback
+                    result.valid = false;
                 }
             }
         }
 
-        // Fallback to PBO path if interop failed, not initialized, or is disabled
         if (!result.valid)
 #endif
         {
@@ -550,33 +539,26 @@ namespace lfs::rendering {
         RenderResult result;
 
 #ifdef CUDA_GL_INTEROP_ENABLED
-        // Try CUDA-GL interop path for direct FBO→CUDA texture readback
         if (use_fbo_interop_) {
             LOG_TIMER_TRACE("CUDA-GL FBO interop readback");
 
-            bool should_init = persistent_color_texture_ != 0 &&
-                               (!fbo_interop_texture_ ||
-                                fbo_interop_last_width_ != persistent_fbo_width_ ||
-                                fbo_interop_last_height_ != persistent_fbo_height_);
+            const bool fbo_changed = fbo_interop_last_width_ != persistent_fbo_width_ ||
+                                     fbo_interop_last_height_ != persistent_fbo_height_;
+            const bool dims_mismatch = fbo_interop_texture_ &&
+                                       (fbo_interop_texture_->getWidth() != width ||
+                                        fbo_interop_texture_->getHeight() != height);
+            const bool should_init = persistent_color_texture_ != 0 &&
+                                     (!fbo_interop_texture_ || fbo_changed || dims_mismatch);
 
             if (should_init) {
-                if (fbo_interop_texture_) {
-                    LOG_TRACE("Reinitializing CUDA-GL FBO interop texture due to size change");
-                    fbo_interop_texture_.reset();
-                } else {
-                    LOG_TRACE("Initializing CUDA-GL FBO interop texture: {}x{}", width, height);
-                }
-
+                fbo_interop_texture_.reset();
                 fbo_interop_texture_.emplace();
                 if (auto init_result = fbo_interop_texture_->initForReading(
                         persistent_color_texture_, width, height);
                     !init_result) {
-                    LOG_TRACE("Failed to initialize FBO interop: {}", init_result.error());
+                    LOG_TRACE("FBO interop init failed: {}", init_result.error());
                     fbo_interop_texture_.reset();
-                } else {
-                    LOG_TRACE("FBO interop initialized successfully");
                 }
-
                 fbo_interop_last_width_ = persistent_fbo_width_;
                 fbo_interop_last_height_ = persistent_fbo_height_;
             }
@@ -588,9 +570,8 @@ namespace lfs::rendering {
                     result.valid = true;
                     result.external_depth_texture = persistent_depth_texture_;
                     result.depth_is_ndc = true;
-                    LOG_TRACE("Read FBO via CUDA-GL interop");
                 } else {
-                    LOG_TRACE("Failed to read FBO via interop: {}", read_result.error());
+                    LOG_TRACE("FBO interop read failed: {}", read_result.error());
                     fbo_interop_texture_.reset();
                     result.valid = false;
                 }
@@ -683,9 +664,7 @@ namespace lfs::rendering {
             return std::unexpected("Invalid render result");
         }
 
-        // Try direct CUDA upload if available
         if (renderer.isInteropEnabled() && result.image.device() == lfs::core::Device::CUDA) {
-            LOG_TRACE("Using CUDA interop for screen upload");
             const auto image_hwc = result.image.permute({1, 2, 0}).contiguous();
 
             if (image_hwc.size(0) == static_cast<size_t>(viewport_size.y) &&
@@ -697,10 +676,11 @@ namespace lfs::rendering {
                 applyDepthParams(result, renderer, viewport_size);
                 return {};
             }
+            LOG_WARN("Dimension mismatch: image {}x{}, expected {}x{}",
+                     image_hwc.size(1), image_hwc.size(0), viewport_size.x, viewport_size.y);
         }
 
         // CPU fallback
-        LOG_TRACE("Using CPU copy for screen upload");
         const auto image = (result.image * 255.0f)
                                .cpu()
                                .to(lfs::core::DataType::UInt8)
@@ -710,7 +690,8 @@ namespace lfs::rendering {
         if (image.size(0) != static_cast<size_t>(viewport_size.y) ||
             image.size(1) != static_cast<size_t>(viewport_size.x) ||
             !image.ptr<unsigned char>()) {
-            LOG_ERROR("Image dimensions mismatch or invalid data");
+            LOG_ERROR("CPU upload dimension mismatch: {}x{} vs {}x{}",
+                      image.size(1), image.size(0), viewport_size.x, viewport_size.y);
             return std::unexpected("Image dimensions mismatch or invalid data");
         }
 
@@ -784,27 +765,21 @@ namespace lfs::rendering {
     }
 
     void RenderingPipeline::ensureFBOSize(int width, int height) {
-        // Check if we need to create or resize the FBO
-        if (persistent_fbo_ != 0 && persistent_fbo_width_ == width && persistent_fbo_height_ == height) {
+        const int alloc_width = ((width + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT;
+        const int alloc_height = ((height + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT;
+
+        if (persistent_fbo_ != 0 && alloc_width == persistent_fbo_width_ && alloc_height == persistent_fbo_height_) {
             glBindFramebuffer(GL_FRAMEBUFFER, persistent_fbo_);
             return;
         }
 
-        // Need to create or resize - cleanup old resources first
+        LOG_DEBUG("FBO resize: {}x{} -> {}x{}", persistent_fbo_width_, persistent_fbo_height_, alloc_width, alloc_height);
+
         if (persistent_fbo_ != 0) {
-            LOG_DEBUG("Resizing persistent FBO from {}x{} to {}x{}",
-                      persistent_fbo_width_, persistent_fbo_height_, width, height);
-
 #ifdef CUDA_GL_INTEROP_ENABLED
-            // Clean up CUDA interop before deleting OpenGL texture to prevent ID reuse issues
-            if (fbo_interop_texture_) {
-                fbo_interop_texture_.reset();
-            }
+            fbo_interop_texture_.reset();
 #endif
-
             cleanupFBO();
-        } else {
-            LOG_DEBUG("Creating persistent FBO with size {}x{}", width, height);
         }
 
         // Create new FBO
@@ -815,45 +790,37 @@ namespace lfs::rendering {
         }
         glBindFramebuffer(GL_FRAMEBUFFER, persistent_fbo_);
 
-        // Create color texture
         glGenTextures(1, &persistent_color_texture_);
         glBindTexture(GL_TEXTURE_2D, persistent_color_texture_);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, width, height, 0, GL_RGB, GL_FLOAT, nullptr);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, alloc_width, alloc_height, 0, GL_RGB, GL_FLOAT, nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                                persistent_color_texture_, 0);
 
-        // Create depth texture
         glGenTextures(1, &persistent_depth_texture_);
         glBindTexture(GL_TEXTURE_2D, persistent_depth_texture_);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, width, height,
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, alloc_width, alloc_height,
                      0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
                                persistent_depth_texture_, 0);
 
-        // Verify framebuffer is complete
-        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
         if (status != GL_FRAMEBUFFER_COMPLETE) {
-            LOG_ERROR("Persistent framebuffer not complete: 0x{:x}", status);
+            LOG_ERROR("FBO incomplete: 0x{:x}", status);
             cleanupFBO();
             return;
         }
 
-        // Unbind texture to avoid conflicts with CUDA interop registration
         glBindTexture(GL_TEXTURE_2D, 0);
-
-        // Ensure all OpenGL commands are completed before CUDA interop registration
         glFinish();
 
-        // Update size tracking
-        persistent_fbo_width_ = width;
-        persistent_fbo_height_ = height;
+        persistent_fbo_width_ = alloc_width;
+        persistent_fbo_height_ = alloc_height;
 
-        LOG_TRACE("Persistent FBO created successfully: {}x{}, color_tex={}, depth_tex={}",
-                  width, height, persistent_color_texture_, persistent_depth_texture_);
+        LOG_DEBUG("FBO allocated: {}x{}", alloc_width, alloc_height);
     }
 
     void RenderingPipeline::cleanupFBO() {
@@ -874,34 +841,35 @@ namespace lfs::rendering {
     }
 
     void RenderingPipeline::ensurePBOSize(int width, int height) {
-        // Check if we need to create or resize the PBOs
-        if (pbo_[0] != 0 && pbo_width_ == width && pbo_height_ == height) {
-            // PBOs already exist with correct size
+        static int allocated_pbo_width = 0;
+        static int allocated_pbo_height = 0;
+
+        const int alloc_width = ((width + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT;
+        const int alloc_height = ((height + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT;
+
+        if (pbo_[0] != 0 && alloc_width == allocated_pbo_width && alloc_height == allocated_pbo_height) {
+            pbo_width_ = width;
+            pbo_height_ = height;
             return;
         }
 
-        // Need to create or resize - cleanup old resources first
+        LOG_DEBUG("PBO resize: {}x{} -> {}x{}", allocated_pbo_width, allocated_pbo_height, alloc_width, alloc_height);
+
         if (pbo_[0] != 0) {
-            LOG_DEBUG("Resizing PBOs from {}x{} to {}x{}",
-                      pbo_width_, pbo_height_, width, height);
             cleanupPBO();
-        } else {
-            LOG_DEBUG("Creating PBOs with size {}x{}", width, height);
         }
 
-        // Calculate buffer size (RGB floats)
-        size_t buffer_size = width * height * 3 * sizeof(float);
+        const size_t buffer_size = static_cast<size_t>(alloc_width) * alloc_height * 3 * sizeof(float);
 
-        // Create two PBOs for double-buffering
         glGenBuffers(2, pbo_);
         for (int i = 0; i < 2; i++) {
             glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_[i]);
-            // GL_STREAM_READ: data written by OpenGL, read by application once
-            glBufferData(GL_PIXEL_PACK_BUFFER, buffer_size, nullptr, GL_STREAM_READ);
+            glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(buffer_size), nullptr, GL_STREAM_READ);
         }
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 
-        // Update size tracking
+        allocated_pbo_width = alloc_width;
+        allocated_pbo_height = alloc_height;
         pbo_width_ = width;
         pbo_height_ = height;
         pbo_index_ = 0;

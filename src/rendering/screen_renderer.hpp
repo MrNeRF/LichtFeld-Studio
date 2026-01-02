@@ -9,6 +9,7 @@
 #include "gl_resources.hpp"
 #include "shader.hpp"
 #include "shader_manager.hpp"
+#include <glm/vec2.hpp>
 #include <memory>
 
 namespace lfs::rendering {
@@ -51,6 +52,9 @@ namespace lfs::rendering {
         const DepthParams& getDepthParams() const { return depth_params_; }
 
         bool isInteropEnabled() const;
+
+        // Get texture coordinate scale for over-allocated textures
+        glm::vec2 getTexcoordScale() const;
 
     protected:
         virtual GLuint getTextureID() const;

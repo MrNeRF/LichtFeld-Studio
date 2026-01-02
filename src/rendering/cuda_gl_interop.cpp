@@ -12,6 +12,7 @@
 
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "cuda_gl_interop.hpp"
 #include <format>
 
@@ -21,6 +22,10 @@
 #endif
 
 namespace lfs::rendering {
+
+    namespace {
+        constexpr int GPU_ALIGNMENT = 16;  // 16-pixel alignment for GPU texture efficiency
+    }
 
     // Implementation for CudaGraphicsResourceDeleter
     void CudaGraphicsResourceDeleter::operator()(void* resource) const {
@@ -70,12 +75,31 @@ namespace lfs::rendering {
     }
 
     Result<void> CudaGLInteropTextureImpl<false>::resize(int new_width, int new_height) {
-        if (width_ != new_width || height_ != new_height) {
-            LOG_TRACE("Resizing non-interop texture from {}x{} to {}x{}",
-                      width_, height_, new_width, new_height);
-            return init(new_width, new_height);
+        const int alloc_width = ((new_width + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT;
+        const int alloc_height = ((new_height + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT;
+
+        // Reuse if allocation already matches exactly
+        if (texture_id_ != 0 && alloc_width == allocated_width_ && alloc_height == allocated_height_) {
+            if (width_ != new_width || height_ != new_height) {
+                width_ = new_width;
+                height_ = new_height;
+            }
+            return {};
         }
-        return {};
+
+        LOG_TRACE("Resize non-interop texture: {}x{} -> {}x{}",
+                  allocated_width_, allocated_height_, alloc_width, alloc_height);
+
+        lfs::core::CudaMemoryPool::instance().trim_cached_memory();
+
+        auto result = init(alloc_width, alloc_height);
+        if (result) {
+            allocated_width_ = alloc_width;
+            allocated_height_ = alloc_height;
+            width_ = new_width;
+            height_ = new_height;
+        }
+        return result;
     }
 
     Result<void> CudaGLInteropTextureImpl<false>::updateFromTensor(const Tensor& image) {
@@ -116,8 +140,8 @@ namespace lfs::rendering {
 
         width_ = width;
         height_ = height;
+        external_texture_ = false;
 
-        // Create OpenGL texture
         glGenTextures(1, &texture_id_);
         glBindTexture(GL_TEXTURE_2D, texture_id_);
 
@@ -172,6 +196,7 @@ namespace lfs::rendering {
         width_ = width;
         height_ = height;
         is_depth_format_ = true;
+        external_texture_ = false;
 
         glGenTextures(1, &texture_id_);
         glBindTexture(GL_TEXTURE_2D, texture_id_);
@@ -265,14 +290,14 @@ namespace lfs::rendering {
 
     Result<void> CudaGLInteropTextureImpl<true>::initForReading(GLuint texture_id, int width, int height) {
         LOG_TIMER_TRACE("CudaGLInteropTextureImpl<true>::initForReading");
-        LOG_DEBUG("Initializing CUDA-GL interop for reading texture {}: {}x{}", texture_id, width, height);
+        LOG_DEBUG("Init interop for reading texture {}: {}x{}", texture_id, width, height);
 
-        // Clean up any existing resources
         cleanup();
 
         texture_id_ = texture_id;
         width_ = width;
         height_ = height;
+        external_texture_ = true;  // Externally owned texture
 
         // Clear any previous CUDA errors
         cudaGetLastError();
@@ -372,12 +397,31 @@ namespace lfs::rendering {
     }
 
     Result<void> CudaGLInteropTextureImpl<true>::resize(int new_width, int new_height) {
-        if (width_ != new_width || height_ != new_height) {
-            LOG_DEBUG("Resizing CUDA-GL interop texture from {}x{} to {}x{}",
-                      width_, height_, new_width, new_height);
-            return init(new_width, new_height);
+        const int alloc_width = ((new_width + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT;
+        const int alloc_height = ((new_height + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT;
+
+        // Reuse if allocation already matches exactly
+        if (is_registered_ && alloc_width == allocated_width_ && alloc_height == allocated_height_) {
+            if (width_ != new_width || height_ != new_height) {
+                width_ = new_width;
+                height_ = new_height;
+            }
+            return {};
         }
-        return {};
+
+        LOG_TRACE("Resize interop texture: {}x{} -> {}x{}",
+                  allocated_width_, allocated_height_, alloc_width, alloc_height);
+
+        lfs::core::CudaMemoryPool::instance().trim_cached_memory();
+
+        auto result = init(alloc_width, alloc_height);
+        if (result) {
+            allocated_width_ = alloc_width;
+            allocated_height_ = alloc_height;
+            width_ = new_width;
+            height_ = new_height;
+        }
+        return result;
     }
 
     Result<void> CudaGLInteropTextureImpl<true>::updateFromTensor(const Tensor& image) {
@@ -406,7 +450,7 @@ namespace lfs::rendering {
         const int w = image.size(1);
         const int c = image.size(2);
 
-        LOG_TRACE("Updating from tensor: {}x{}x{}", h, w, c);
+        LOG_TRACE("updateFromTensor: {}x{}x{}, texture {}x{}", h, w, c, width_, height_);
 
         // Resize if needed
         if (auto result = resize(w, h); !result) {
@@ -483,14 +527,14 @@ namespace lfs::rendering {
     }
 
     void CudaGLInteropTextureImpl<true>::cleanup() {
-        LOG_TRACE("Cleaning up CUDA-GL interop texture");
         cuda_resource_.reset();
         is_registered_ = false;
 
-        if (texture_id_ != 0) {
+        if (texture_id_ != 0 && !external_texture_) {
             glDeleteTextures(1, &texture_id_);
-            texture_id_ = 0;
         }
+        texture_id_ = 0;
+        external_texture_ = false;
     }
 #endif // CUDA_GL_INTEROP_ENABLED
 
