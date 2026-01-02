@@ -1014,7 +1014,7 @@ namespace lfs::vis {
             } else if (ext == ".json") {
                 if (lfs::io::Loader::isDatasetPath(filepath)) {
                     dataset_path = filepath;
-                }else {
+                } else {
                     cmd::LoadConfigFile{.path = filepath}.emit();
                     LOG_INFO("Loading config via drag-and-drop: {}", lfs::core::path_to_utf8(filepath.filename()));
                     return;
