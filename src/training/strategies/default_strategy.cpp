@@ -312,10 +312,10 @@ namespace lfs::training {
 
         if (shN.is_valid() && has_shN_coefficients(_splat_data->shN())) {
             const auto& shN_shape = _splat_data->shN().shape();
-            const auto n = static_cast<size_t>(slots_to_fill);
+            const auto n = static_cast<int>(slots_to_fill);
             const auto shN_slice = (shN_shape.rank() == 3)
-                ? shN.slice(0, 0, slots_to_fill).reshape({n, shN_shape[1], shN_shape[2]})
-                : shN.slice(0, 0, slots_to_fill).reshape({n, shN_shape[1]});
+                ? shN.slice(0, 0, slots_to_fill).reshape({n, static_cast<int>(shN_shape[1]), static_cast<int>(shN_shape[2])})
+                : shN.slice(0, 0, slots_to_fill).reshape({n, static_cast<int>(shN_shape[1])});
             _splat_data->shN().index_put_(target_indices, shN_slice);
         }
 
