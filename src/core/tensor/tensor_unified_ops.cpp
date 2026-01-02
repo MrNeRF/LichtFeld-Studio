@@ -816,6 +816,144 @@ namespace lfs::core {
                 return result;
             }
 
+            // Handle Bool dtype for Any/All operations
+            if (input->dtype_ == DataType::Bool && (op == ReduceOp::Any || op == ReduceOp::All)) {
+                const unsigned char* src = static_cast<const unsigned char*>(input->data_ptr());
+                unsigned char* dst = static_cast<unsigned char*>(result.data_ptr());
+
+                // Full reduction to scalar
+                if (axes.size() == input->shape_.rank()) {
+                    if (op == ReduceOp::Any) {
+                        bool any_true = false;
+                        for (size_t i = 0; i < input->numel(); ++i) {
+                            if (src[i]) {
+                                any_true = true;
+                                break;
+                            }
+                        }
+                        dst[0] = any_true ? 1 : 0;
+                    } else { // ReduceOp::All
+                        bool all_true = true;
+                        for (size_t i = 0; i < input->numel(); ++i) {
+                            if (!src[i]) {
+                                all_true = false;
+                                break;
+                            }
+                        }
+                        dst[0] = all_true ? 1 : 0;
+                    }
+                    return result;
+                }
+
+                // Axis-specific reduction for Bool
+                // Build mask of which dimensions are reduced
+                std::vector<bool> is_reduced_dim(input->shape_.rank(), false);
+                for (int ax : axes) {
+                    int resolved = input->resolve_dim(ax);
+                    if (resolved >= 0 && resolved < static_cast<int>(input->shape_.rank())) {
+                        is_reduced_dim[resolved] = true;
+                    }
+                }
+
+                // Calculate input strides
+                auto input_strides = input->shape_.strides();
+
+                // Calculate output shape and strides
+                std::vector<size_t> out_shape_vec;
+                for (size_t i = 0; i < input->shape_.rank(); ++i) {
+                    if (!is_reduced_dim[i]) {
+                        out_shape_vec.push_back(input->shape_[i]);
+                    }
+                }
+
+                std::vector<size_t> output_strides;
+                if (!out_shape_vec.empty()) {
+                    output_strides.resize(out_shape_vec.size());
+                    output_strides.back() = 1;
+                    for (int i = static_cast<int>(out_shape_vec.size()) - 2; i >= 0; --i) {
+                        output_strides[i] = output_strides[i + 1] * out_shape_vec[i + 1];
+                    }
+                }
+
+                size_t output_elements = result.numel();
+
+                // Calculate how many elements to reduce per output element
+                size_t reduce_count = 1;
+                std::vector<size_t> reduced_dims;
+                for (size_t i = 0; i < input->shape_.rank(); ++i) {
+                    if (is_reduced_dim[i]) {
+                        reduced_dims.push_back(i);
+                        reduce_count *= input->shape_[i];
+                    }
+                }
+
+                // Perform reduction
+                for (size_t out_idx = 0; out_idx < output_elements; ++out_idx) {
+                    // Convert output linear index to coordinates in output space
+                    std::vector<size_t> out_coords;
+                    if (!out_shape_vec.empty()) {
+                        out_coords.resize(out_shape_vec.size());
+                        size_t temp = out_idx;
+                        for (size_t i = 0; i < out_shape_vec.size(); ++i) {
+                            out_coords[i] = temp / output_strides[i];
+                            temp %= output_strides[i];
+                        }
+                    }
+
+                    // Map output coords back to base input coords
+                    std::vector<size_t> base_input_coords(input->shape_.rank());
+                    size_t out_coord_idx = 0;
+                    for (size_t i = 0; i < input->shape_.rank(); ++i) {
+                        if (!is_reduced_dim[i]) {
+                            base_input_coords[i] = out_coords[out_coord_idx++];
+                        } else {
+                            base_input_coords[i] = 0;
+                        }
+                    }
+
+                    // Initialize result with identity value
+                    bool result_val = (op == ReduceOp::All); // All starts true, Any starts false
+
+                    // Iterate through all combinations of reduced dimensions
+                    for (size_t r = 0; r < reduce_count; ++r) {
+                        // Compute coordinates in the reduced dimensions
+                        size_t temp_r = r;
+                        std::vector<size_t> full_input_coords = base_input_coords;
+
+                        // Fill in reduced dimensions - work backwards for row-major order
+                        for (int rd_idx = static_cast<int>(reduced_dims.size()) - 1; rd_idx >= 0; --rd_idx) {
+                            size_t dim = reduced_dims[rd_idx];
+                            full_input_coords[dim] = temp_r % input->shape_[dim];
+                            temp_r /= input->shape_[dim];
+                        }
+
+                        // Calculate linear input index
+                        size_t in_idx = 0;
+                        for (size_t i = 0; i < input->shape_.rank(); ++i) {
+                            in_idx += full_input_coords[i] * input_strides[i];
+                        }
+
+                        // Apply reduction operation
+                        bool val = src[in_idx] != 0;
+                        if (op == ReduceOp::Any) {
+                            if (val) {
+                                result_val = true;
+                                break; // Short-circuit: found a true value
+                            }
+                        } else { // ReduceOp::All
+                            if (!val) {
+                                result_val = false;
+                                break; // Short-circuit: found a false value
+                            }
+                        }
+                    }
+
+                    dst[out_idx] = result_val ? 1 : 0;
+                }
+
+                return result;
+            }
+
             // Float32 implementation
             const float* src = static_cast<const float*>(input->data_ptr());
             float* dst = static_cast<float*>(result.data_ptr());

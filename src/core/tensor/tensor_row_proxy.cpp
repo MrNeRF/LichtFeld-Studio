@@ -26,9 +26,11 @@ namespace lfs::core {
                 std::to_string(tensor_->shape()[1]));
         }
 
+        // Use actual strides for proper indexing on non-contiguous tensors
+        size_t linear_idx = row_index_ * tensor_->stride(0) + col_index * tensor_->stride(1);
+
         if (tensor_->device() != Device::CPU) {
             thread_local static float cuda_read_value = 0.0f;
-            size_t linear_idx = row_index_ * tensor_->shape()[1] + col_index;
 
             cudaError_t err = cudaMemcpy(
                 &cuda_read_value,
@@ -44,7 +46,7 @@ namespace lfs::core {
             return cuda_read_value;
         }
 
-        return tensor_->at({row_index_, col_index});
+        return tensor_->ptr<float>()[linear_idx];
     }
 
     float TensorRowProxy::operator[](size_t col_index) const {
@@ -63,7 +65,8 @@ namespace lfs::core {
                 std::to_string(tensor_->shape()[1]));
         }
 
-        size_t linear_idx = row_index_ * tensor_->shape()[1] + col_index;
+        // Use actual strides for proper indexing on non-contiguous tensors
+        size_t linear_idx = row_index_ * tensor_->stride(0) + col_index * tensor_->stride(1);
 
         if (tensor_->device() == Device::CUDA) {
             float value = 0.0f;
@@ -108,11 +111,14 @@ namespace lfs::core {
                 " out of bounds for size " + std::to_string(tensor_->numel()));
         }
 
+        // Use stride for proper indexing on non-contiguous 1D tensors
+        size_t linear_idx = row_index_ * tensor_->stride(0);
+
         if (tensor_->device() == Device::CUDA) {
             float value = 0.0f;
             cudaError_t err = cudaMemcpy(
                 &value,
-                tensor_->ptr<float>() + row_index_,
+                tensor_->ptr<float>() + linear_idx,
                 sizeof(float),
                 cudaMemcpyDeviceToHost);
             if (err != cudaSuccess) {
@@ -121,7 +127,7 @@ namespace lfs::core {
             }
             return value;
         } else {
-            return tensor_->ptr<float>()[row_index_];
+            return tensor_->ptr<float>()[linear_idx];
         }
     }
 
@@ -269,14 +275,17 @@ namespace lfs::core {
 
             float val = other.item();
 
+            // Use stride for proper indexing on non-contiguous 1D tensors
+            size_t linear_idx = row_index_ * tensor_->stride(0);
+
             if (tensor_->device() == Device::CUDA) {
                 cudaMemcpy(
-                    tensor_->ptr<float>() + row_index_,
+                    tensor_->ptr<float>() + linear_idx,
                     &val,
                     sizeof(float),
                     cudaMemcpyHostToDevice);
             } else {
-                tensor_->ptr<float>()[row_index_] = val;
+                tensor_->ptr<float>()[linear_idx] = val;
             }
         }
         return *this;
@@ -299,14 +308,17 @@ namespace lfs::core {
                 std::to_string(tensor_->numel()));
         }
 
+        // Use stride for proper indexing on non-contiguous 1D tensors
+        size_t linear_idx = row_index_ * tensor_->stride(0);
+
         if (tensor_->device() == Device::CUDA) {
             cudaMemcpy(
-                tensor_->ptr<float>() + row_index_,
+                tensor_->ptr<float>() + linear_idx,
                 &value,
                 sizeof(float),
                 cudaMemcpyHostToDevice);
         } else {
-            tensor_->ptr<float>()[row_index_] = value;
+            tensor_->ptr<float>()[linear_idx] = value;
         }
         return *this;
     }

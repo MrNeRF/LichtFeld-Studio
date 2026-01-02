@@ -91,6 +91,7 @@ set(OPTIONAL_TEST_FILES
     test_tensor_advanced.cpp
     test_tensor_stress.cpp
     test_tensor_matrix.cpp
+    test_slice_mm_bug.cpp
     test_tensor_random.cpp
     test_tensor_broadcast.cpp
     test_tensor_masking.cpp
@@ -181,6 +182,8 @@ set(OPTIONAL_TEST_FILES
     test_nan_inf_gpu_check.cpp
     test_mcmc_nan_fix.cpp
     test_vram_resize.cpp
+    test_stride_bugs.cpp
+    test_bool_any_all.cpp
 )
 
 foreach(TEST_FILE ${OPTIONAL_TEST_FILES})

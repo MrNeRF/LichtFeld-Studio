@@ -385,31 +385,24 @@ namespace lfs::core {
         }
 
         if (device_ == Device::CUDA) {
-            // Launch strided copy kernel for CUDA tensors
             const char* src_base = static_cast<const char*>(data_) + storage_offset_ * dtype_size(dtype_);
+            const size_t rank = shape_.rank();
 
-            // Allocate device memory for shape and strides
-            size_t* d_shape;
-            size_t* d_strides;
-            cudaMalloc(&d_shape, shape_.rank() * sizeof(size_t));
-            cudaMalloc(&d_strides, shape_.rank() * sizeof(size_t));
-
-            cudaMemcpy(d_shape, shape_.dims().data(), shape_.rank() * sizeof(size_t), cudaMemcpyHostToDevice);
-            cudaMemcpy(d_strides, strides_.data(), shape_.rank() * sizeof(size_t), cudaMemcpyHostToDevice);
-
-            tensor_ops::launch_strided_copy(
-                src_base,
-                result.data_,
-                d_shape,
-                d_strides,
-                shape_.rank(),
-                numel(),
-                dtype_,
-                nullptr);
-
-            // No sync needed - cudaFree is implicitly synchronizing
-            cudaFree(d_shape);
-            cudaFree(d_strides);
+            if (rank >= 2 && rank <= 4) {
+                tensor_ops::launch_strided_copy_immediate(
+                    src_base, result.data_, shape_.dims(), strides_, numel(), dtype_, nullptr);
+            } else {
+                size_t* d_shape = nullptr;
+                size_t* d_strides = nullptr;
+                cudaMalloc(&d_shape, rank * sizeof(size_t));
+                cudaMalloc(&d_strides, rank * sizeof(size_t));
+                cudaMemcpy(d_shape, shape_.dims().data(), rank * sizeof(size_t), cudaMemcpyHostToDevice);
+                cudaMemcpy(d_strides, strides_.data(), rank * sizeof(size_t), cudaMemcpyHostToDevice);
+                tensor_ops::launch_strided_copy(
+                    src_base, result.data_, d_shape, d_strides, rank, numel(), dtype_, nullptr);
+                cudaFree(d_shape);
+                cudaFree(d_strides);
+            }
         } else {
             // CPU strided copy - optimized for common cases with SIMD + multi-threading
             const char* src_base = static_cast<const char*>(data_) + storage_offset_ * dtype_size(dtype_);
@@ -1361,26 +1354,22 @@ namespace lfs::core {
         // Strided destination, contiguous source (CUDA)
         if (!dst_contig && src_contig && device_ == Device::CUDA && other.device_ == Device::CUDA) {
             const size_t rank = ndim();
-            if (rank == 2) {
-                const size_t shape_arr[2] = {static_cast<size_t>(size(0)), static_cast<size_t>(size(1))};
-                const size_t strides_arr[2] = {strides_[0], strides_[1]};
-                tensor_ops::launch_strided_scatter(
-                    other.data_ptr(), data_ptr(), shape_arr, strides_arr, rank, numel(), dtype_, nullptr);
-            } else {
-                std::vector<size_t> shape_vec(rank);
-                for (size_t i = 0; i < rank; ++i)
-                    shape_vec[i] = static_cast<size_t>(size(i));
+            std::vector<size_t> shape_vec(rank);
+            for (size_t i = 0; i < rank; ++i)
+                shape_vec[i] = static_cast<size_t>(size(i));
 
+            if (rank >= 2 && rank <= 4) {
+                tensor_ops::launch_strided_scatter_immediate(
+                    other.data_ptr(), data_ptr(), shape_vec, strides_, numel(), dtype_, nullptr);
+            } else {
                 size_t* d_shape = nullptr;
                 size_t* d_strides = nullptr;
                 CHECK_CUDA(cudaMalloc(&d_shape, rank * sizeof(size_t)));
                 CHECK_CUDA(cudaMalloc(&d_strides, rank * sizeof(size_t)));
                 CHECK_CUDA(cudaMemcpy(d_shape, shape_vec.data(), rank * sizeof(size_t), cudaMemcpyHostToDevice));
                 CHECK_CUDA(cudaMemcpy(d_strides, strides_.data(), rank * sizeof(size_t), cudaMemcpyHostToDevice));
-
                 tensor_ops::launch_strided_scatter(
                     other.data_ptr(), data_ptr(), d_shape, d_strides, rank, numel(), dtype_, nullptr);
-
                 CHECK_CUDA(cudaFree(d_shape));
                 CHECK_CUDA(cudaFree(d_strides));
             }
@@ -1832,6 +1821,8 @@ namespace lfs::core {
         if (!is_valid() || dtype_ != DataType::Float32 || numel() == 0) {
             return values;
         }
+
+        if (!is_contiguous_) return contiguous().debug_values(max_values);
 
         size_t n = std::min(max_values, numel());
         values.resize(n);

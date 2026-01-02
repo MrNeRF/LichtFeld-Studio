@@ -15,11 +15,160 @@
 
 namespace lfs::core::tensor_ops {
 
-    // Note: run_with_thrust_policy is now in include/core/tensor_generic_ops.cuh
+    constexpr int MAX_RANK = 8;
+    constexpr int BLOCK_SIZE = 256;
 
-    // ============================================================================
-    // BROADCASTING INDEX FUNCTOR (for single-array broadcast)
-    // ============================================================================
+    // Strided broadcast kernel params (passed by value, no device alloc)
+    struct BroadcastStridedParams {
+        size_t src_shape[MAX_RANK];
+        size_t src_strides[MAX_RANK];
+        size_t dst_strides[MAX_RANK];
+        int src_rank;
+        int dst_rank;
+        size_t dst_elements;
+    };
+
+    template <typename T>
+    __global__ void broadcast_strided_kernel(const T* __restrict__ src, T* __restrict__ dst,
+                                             const BroadcastStridedParams params) {
+        const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= params.dst_elements) return;
+
+        size_t remaining = idx;
+        size_t src_idx = 0;
+        const int offset = params.dst_rank - params.src_rank;
+
+        for (int i = 0; i < params.dst_rank; ++i) {
+            const size_t coord = remaining / params.dst_strides[i];
+            remaining %= params.dst_strides[i];
+
+            if (i >= offset) {
+                const int src_dim = i - offset;
+                const size_t src_coord = (params.src_shape[src_dim] == 1) ? 0 : coord;
+                src_idx += src_coord * params.src_strides[src_dim];
+            }
+        }
+        dst[idx] = src[src_idx];
+    }
+
+    template <typename T>
+    void launch_broadcast_strided_impl(const T* src, T* dst,
+                                       const size_t* src_shape, const size_t* src_strides,
+                                       const size_t* dst_shape,
+                                       const size_t src_rank, const size_t dst_rank,
+                                       const size_t dst_elements, cudaStream_t stream) {
+        if (dst_elements == 0) return;
+        if (src_rank > MAX_RANK || dst_rank > MAX_RANK) {
+            LOG_ERROR("Broadcast strided: rank exceeds {}", MAX_RANK);
+            return;
+        }
+
+        BroadcastStridedParams params{};
+        params.src_rank = static_cast<int>(src_rank);
+        params.dst_rank = static_cast<int>(dst_rank);
+        params.dst_elements = dst_elements;
+
+        for (size_t i = 0; i < src_rank; ++i) {
+            params.src_shape[i] = src_shape[i];
+            params.src_strides[i] = src_strides[i];
+        }
+
+        if (dst_rank > 0) {
+            params.dst_strides[dst_rank - 1] = 1;
+            for (int i = static_cast<int>(dst_rank) - 2; i >= 0; --i) {
+                params.dst_strides[i] = params.dst_strides[i + 1] * dst_shape[i + 1];
+            }
+        }
+
+        const int num_blocks = (dst_elements + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        broadcast_strided_kernel<T><<<num_blocks, BLOCK_SIZE, 0, stream>>>(src, dst, params);
+    }
+
+    void launch_broadcast_strided(const float* src, float* dst,
+                                  const size_t* src_shape, const size_t* src_strides,
+                                  const size_t* dst_shape,
+                                  const size_t src_rank, const size_t dst_rank,
+                                  const size_t dst_elements, cudaStream_t stream) {
+        launch_broadcast_strided_impl(src, dst, src_shape, src_strides, dst_shape,
+                                      src_rank, dst_rank, dst_elements, stream);
+    }
+
+    void launch_broadcast_strided_bool(const unsigned char* src, unsigned char* dst,
+                                       const size_t* src_shape, const size_t* src_strides,
+                                       const size_t* dst_shape,
+                                       const size_t src_rank, const size_t dst_rank,
+                                       const size_t dst_elements, cudaStream_t stream) {
+        launch_broadcast_strided_impl(src, dst, src_shape, src_strides, dst_shape,
+                                      src_rank, dst_rank, dst_elements, stream);
+    }
+
+    // Pad kernel params (passed by value, no device alloc)
+    struct PadParams {
+        size_t src_shape[MAX_RANK];
+        size_t src_strides[MAX_RANK];
+        size_t dst_strides[MAX_RANK];
+        size_t pad_before[MAX_RANK];
+        size_t contiguous_strides[MAX_RANK];
+        int rank;
+        size_t src_elements;
+    };
+
+    __global__ void pad_kernel(const float* __restrict__ src, float* __restrict__ dst,
+                               const PadParams params) {
+        const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+        if (idx >= params.src_elements) return;
+
+        size_t coords[MAX_RANK];
+        size_t remaining = idx;
+
+        for (int i = 0; i < params.rank; ++i) {
+            coords[i] = remaining / params.contiguous_strides[i];
+            remaining %= params.contiguous_strides[i];
+        }
+
+        size_t src_offset = 0;
+        size_t dst_offset = 0;
+        for (int i = 0; i < params.rank; ++i) {
+            src_offset += coords[i] * params.src_strides[i];
+            dst_offset += (coords[i] + params.pad_before[i]) * params.dst_strides[i];
+        }
+        dst[dst_offset] = src[src_offset];
+    }
+
+    void launch_pad(const float* src, float* dst,
+                    const size_t* src_shape, const size_t* src_strides,
+                    const size_t* dst_shape, const size_t* pad_before,
+                    const size_t rank, const size_t src_elements, cudaStream_t stream) {
+        if (src_elements == 0) return;
+        if (rank > MAX_RANK) {
+            LOG_ERROR("Pad: rank exceeds {}", MAX_RANK);
+            return;
+        }
+
+        PadParams params{};
+        params.rank = static_cast<int>(rank);
+        params.src_elements = src_elements;
+
+        for (size_t i = 0; i < rank; ++i) {
+            params.src_shape[i] = src_shape[i];
+            params.src_strides[i] = src_strides[i];
+            params.pad_before[i] = pad_before[i];
+        }
+
+        if (rank > 0) {
+            params.contiguous_strides[rank - 1] = 1;
+            params.dst_strides[rank - 1] = 1;
+            for (int i = static_cast<int>(rank) - 2; i >= 0; --i) {
+                params.contiguous_strides[i] = params.contiguous_strides[i + 1] * src_shape[i + 1];
+                params.dst_strides[i] = params.dst_strides[i + 1] * dst_shape[i + 1];
+            }
+        }
+
+        const int num_blocks = (src_elements + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        pad_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(src, dst, params);
+    }
+
+    // Broadcasting index functor
 
     template <int MaxRank = 8>
     struct broadcast_index_functor {

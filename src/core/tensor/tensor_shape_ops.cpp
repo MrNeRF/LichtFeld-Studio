@@ -283,13 +283,10 @@ namespace lfs::core {
     }
 
     size_t Tensor::calculate_offset(const std::vector<size_t>& indices) const {
-        auto strides = shape_.strides();
-
         size_t offset = 0;
         for (size_t i = 0; i < indices.size(); ++i) {
-            offset += indices[i] * strides[i];
+            offset += indices[i] * strides_[i];
         }
-
         return offset;
     }
 

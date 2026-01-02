@@ -340,12 +340,19 @@ namespace lfs::core {
 
                 auto result = zeros(TensorShape(new_shape), device_, dtype_);
 
-                if (device_ == Device::CPU && dtype_ == DataType::Float32) {
+                if (device_ == Device::CUDA && dtype_ == DataType::Float32) {
+                    tensor_ops::launch_pad(
+                        ptr<float>(), result.ptr<float>(),
+                        shape_.dims().data(), strides_.data(),
+                        new_shape.data(), pad_before.data(),
+                        shape_.rank(), numel(), nullptr);
+                } else if (device_ == Device::CPU && dtype_ == DataType::Float32) {
+                    if (!is_contiguous()) return contiguous().movement(op, args);
+
                     const float* src = ptr<float>();
                     float* dst = result.ptr<float>();
-
-                    auto src_strides = shape_.strides();
-                    auto dst_strides = result.shape().strides();
+                    const auto src_strides = shape_.strides();
+                    const auto dst_strides = result.shape().strides();
 
                     for (size_t i = 0; i < numel(); ++i) {
                         std::vector<size_t> coords(shape_.rank());
@@ -354,16 +361,14 @@ namespace lfs::core {
                             coords[d] = temp / src_strides[d];
                             temp %= src_strides[d];
                         }
-
                         size_t dst_idx = 0;
                         for (size_t d = 0; d < shape_.rank(); ++d) {
                             dst_idx += (coords[d] + pad_before[d]) * dst_strides[d];
                         }
-
                         dst[dst_idx] = src[i];
                     }
                 } else {
-                    LOG_WARN("Pad not fully implemented for CUDA");
+                    LOG_WARN("Pad: unsupported dtype/device");
                 }
 
                 return result;

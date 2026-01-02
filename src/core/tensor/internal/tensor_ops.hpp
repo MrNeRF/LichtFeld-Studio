@@ -110,6 +110,25 @@ namespace lfs::core::tensor_ops {
                                size_t src_rank, size_t dst_rank,
                                size_t dst_elements, cudaStream_t stream);
 
+    // Strided broadcast (handles non-contiguous source)
+    void launch_broadcast_strided(const float* src, float* dst,
+                                  const size_t* src_shape, const size_t* src_strides,
+                                  const size_t* dst_shape,
+                                  size_t src_rank, size_t dst_rank,
+                                  size_t dst_elements, cudaStream_t stream);
+
+    void launch_broadcast_strided_bool(const unsigned char* src, unsigned char* dst,
+                                       const size_t* src_shape, const size_t* src_strides,
+                                       const size_t* dst_shape,
+                                       size_t src_rank, size_t dst_rank,
+                                       size_t dst_elements, cudaStream_t stream);
+
+    // Padding (handles non-contiguous input)
+    void launch_pad(const float* src, float* dst,
+                    const size_t* src_shape, const size_t* src_strides,
+                    const size_t* dst_shape, const size_t* pad_before,
+                    size_t rank, size_t src_elements, cudaStream_t stream);
+
     // ============= Broadcasting Binary Operations - UNIFIED INTERFACE =============
 
     // Forward declare operation functors
@@ -366,16 +385,18 @@ namespace lfs::core::tensor_ops {
     void launch_cat_middle_dim(void* output, const std::vector<Tensor>& tensors, size_t outer_size, size_t inner_size,
                                int resolved_dim, size_t element_size, cudaStream_t stream);
 
-    // ============= Strided Tensor Operations =============
+    // Strided copy: read strided → write contiguous
     void launch_strided_copy(
-        const void* input,
-        void* output,
-        const size_t* shape,
-        const size_t* strides,
-        size_t rank,
-        size_t total_elements,
-        DataType dtype,
-        cudaStream_t stream = nullptr);
+        const void* input, void* output,
+        const size_t* shape, const size_t* strides,
+        size_t rank, size_t total_elements,
+        DataType dtype, cudaStream_t stream = nullptr);
+
+    // Optimized for rank 2-4 (no device allocations)
+    void launch_strided_copy_immediate(
+        const void* input, void* output,
+        const std::vector<size_t>& shape, const std::vector<size_t>& strides,
+        size_t total_elements, DataType dtype, cudaStream_t stream = nullptr);
 
     // Fused strided upload: reads from pinned HOST memory with strides,
     // writes contiguously to GPU memory. Eliminates CPU materialization!
@@ -389,17 +410,18 @@ namespace lfs::core::tensor_ops {
         DataType dtype,
         cudaStream_t stream = nullptr);
 
-    // Strided scatter: reads contiguous, writes to strided destination
-    // Used by copy_() when destination is a non-contiguous view (e.g., column slice)
+    // Strided scatter: read contiguous → write strided
     void launch_strided_scatter(
-        const void* input,       // Contiguous source
-        void* output,            // Strided destination
-        const size_t* d_shape,   // Shape of the tensor
-        const size_t* d_strides, // Destination strides
-        size_t rank,
-        size_t total_elements,
-        DataType dtype,
-        cudaStream_t stream = nullptr);
+        const void* input, void* output,
+        const size_t* d_shape, const size_t* d_strides,
+        size_t rank, size_t total_elements,
+        DataType dtype, cudaStream_t stream = nullptr);
+
+    // Optimized for rank 2-4 (no device allocations)
+    void launch_strided_scatter_immediate(
+        const void* input, void* output,
+        const std::vector<size_t>& shape, const std::vector<size_t>& strides,
+        size_t total_elements, DataType dtype, cudaStream_t stream = nullptr);
 
     // Fused int32→float32 strided scatter (avoids intermediate allocation)
     void launch_strided_scatter_int32_to_float32(

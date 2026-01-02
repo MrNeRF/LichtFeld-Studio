@@ -43,28 +43,40 @@ namespace lfs::core {
 
         auto result = Tensor::empty(target, src.device(), src.dtype());
 
-        // Dispatch based on device and dtype
         if (src.device() == Device::CUDA) {
+            const auto& src_strides = src.strides();
+            const bool strided = !src.is_contiguous();
+
             if (src.dtype() == DataType::Bool) {
-                tensor_ops::launch_broadcast_bool(
-                    src.ptr<unsigned char>(), result.ptr<unsigned char>(),
-                    src_dims.data(), target_dims.data(),
-                    src_dims.size(), target_dims.size(),
-                    result.numel(), 0);
-                // No sync - returns tensor
+                if (strided) {
+                    tensor_ops::launch_broadcast_strided_bool(
+                        src.ptr<unsigned char>(), result.ptr<unsigned char>(),
+                        src_dims.data(), src_strides.data(), target_dims.data(),
+                        src_dims.size(), target_dims.size(), result.numel(), 0);
+                } else {
+                    tensor_ops::launch_broadcast_bool(
+                        src.ptr<unsigned char>(), result.ptr<unsigned char>(),
+                        src_dims.data(), target_dims.data(),
+                        src_dims.size(), target_dims.size(), result.numel(), 0);
+                }
             } else if (src.dtype() == DataType::Float32) {
-                tensor_ops::launch_broadcast(
-                    src.ptr<float>(), result.ptr<float>(),
-                    src_dims.data(), target_dims.data(),
-                    src_dims.size(), target_dims.size(),
-                    result.numel(), 0);
-                // No sync - returns tensor
+                if (strided) {
+                    tensor_ops::launch_broadcast_strided(
+                        src.ptr<float>(), result.ptr<float>(),
+                        src_dims.data(), src_strides.data(), target_dims.data(),
+                        src_dims.size(), target_dims.size(), result.numel(), 0);
+                } else {
+                    tensor_ops::launch_broadcast(
+                        src.ptr<float>(), result.ptr<float>(),
+                        src_dims.data(), target_dims.data(),
+                        src_dims.size(), target_dims.size(), result.numel(), 0);
+                }
             } else {
-                LOG_ERROR("Unsupported dtype for CUDA broadcasting: {}", dtype_name(src.dtype()));
+                LOG_ERROR("Unsupported dtype for CUDA broadcast: {}", dtype_name(src.dtype()));
                 return Tensor();
             }
         } else {
-            // CPU fallback using the index helper
+            if (!src.is_contiguous()) return broadcast_to(src.contiguous(), target);
             if (src.dtype() == DataType::Bool) {
                 const unsigned char* src_data = src.ptr<unsigned char>();
                 unsigned char* dst_data = result.ptr<unsigned char>();

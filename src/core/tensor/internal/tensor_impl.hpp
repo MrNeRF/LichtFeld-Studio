@@ -1298,11 +1298,21 @@ namespace lfs::core {
             return reduce(ReduceOp::Any, args);
         }
 
+        Tensor any(int dim, bool keepdim = false) const {
+            std::vector<int> axes = {dim};
+            return any(std::span<const int>(axes), keepdim);
+        }
+
         Tensor all(std::span<const int> axes = {}, bool keepdim = false) const {
             ReduceArgs args;
             args.axes = std::vector<int>(axes.begin(), axes.end());
             args.keepdim = keepdim;
             return reduce(ReduceOp::All, args);
+        }
+
+        Tensor all(int dim, bool keepdim = false) const {
+            std::vector<int> axes = {dim};
+            return all(std::span<const int>(axes), keepdim);
         }
 
         Tensor std(std::span<const int> axes = {}, bool keepdim = false, bool unbiased = true) const {

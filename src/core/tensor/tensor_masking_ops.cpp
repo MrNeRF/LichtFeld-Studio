@@ -259,6 +259,11 @@ namespace lfs::core {
         if (!is_valid() || !indices.is_valid())
             return {};
 
+        // Ensure we have contiguous data for correct memory access
+        if (!is_contiguous()) {
+            return contiguous().gather(dim, indices, mode);
+        }
+
         dim = resolve_dim(dim);
         if (dim < 0 || dim >= static_cast<int>(shape_.rank()))
             return {};
@@ -1117,11 +1122,10 @@ namespace lfs::core {
 
                     if (r >= 0 && r < static_cast<int>(shape_[0]) &&
                         c >= 0 && c < static_cast<int>(shape_[1])) {
-                        data_ptr[r * shape_[1] + c] = val_ptr[i];
+                        data_ptr[r * strides_[0] + c * strides_[1]] = val_ptr[i];
                     }
                 }
 
-                // Copy data back to GPU preserving this tensor's capacity
                 auto result = cpu_tensor.to(device_);
                 const size_t bytes = numel() * dtype_size(dtype_);
                 CHECK_CUDA(cudaMemcpyAsync(data_, result.ptr<void>(), bytes, cudaMemcpyDeviceToDevice, stream_));
@@ -1135,15 +1139,11 @@ namespace lfs::core {
                 for (size_t i = 0; i < row_idx.numel(); ++i) {
                     int r = row_ptr[i];
                     int c = col_ptr[i];
-
-                    if (r < 0)
-                        r += shape_[0];
-                    if (c < 0)
-                        c += shape_[1];
-
+                    if (r < 0) r += shape_[0];
+                    if (c < 0) c += shape_[1];
                     if (r >= 0 && r < static_cast<int>(shape_[0]) &&
                         c >= 0 && c < static_cast<int>(shape_[1])) {
-                        data_ptr[r * shape_[1] + c] = val_ptr[i];
+                        data_ptr[r * strides_[0] + c * strides_[1]] = val_ptr[i];
                     }
                 }
             }
@@ -1158,6 +1158,11 @@ namespace lfs::core {
     size_t Tensor::count_nonzero() const {
         if (!is_valid() || numel() == 0) {
             return 0;
+        }
+
+        // Ensure we have contiguous data for correct linear iteration
+        if (!is_contiguous()) {
+            return contiguous().count_nonzero();
         }
 
         if (device_ == Device::CUDA) {
@@ -1211,6 +1216,11 @@ namespace lfs::core {
         if (!is_valid()) {
             LOG_ERROR("nonzero() on invalid tensor");
             return {};
+        }
+
+        // Ensure we have contiguous data for correct linear iteration
+        if (!is_contiguous()) {
+            return contiguous().nonzero();
         }
 
         if (numel() == 0) {
@@ -1396,7 +1406,8 @@ namespace lfs::core {
         std::vector<size_t> idx_vec(indices);
 
         size_t linear_idx = 0;
-        auto strides = shape_.strides();
+        // Use actual strides_ member, not shape_.strides() which assumes contiguous layout
+        // This is critical for non-contiguous tensors (e.g., sliced views)
 
         for (size_t i = 0; i < idx_vec.size(); ++i) {
             if (idx_vec[i] >= shape_[i]) {
@@ -1404,7 +1415,7 @@ namespace lfs::core {
                           idx_vec[i], i, shape_[i]);
                 return dummy;
             }
-            linear_idx += idx_vec[i] * strides[i];
+            linear_idx += idx_vec[i] * strides_[i];
         }
 
         if (device_ == Device::CUDA) {
@@ -1423,7 +1434,8 @@ namespace lfs::core {
         std::vector<size_t> idx_vec(indices);
 
         size_t linear_idx = 0;
-        auto strides = shape_.strides();
+        // Use actual strides_ member, not shape_.strides() which assumes contiguous layout
+        // This is critical for non-contiguous tensors (e.g., sliced views)
 
         for (size_t i = 0; i < idx_vec.size(); ++i) {
             if (idx_vec[i] >= shape_[i]) {
@@ -1431,7 +1443,7 @@ namespace lfs::core {
                           idx_vec[i], i, shape_[i]);
                 return 0;
             }
-            linear_idx += idx_vec[i] * strides[i];
+            linear_idx += idx_vec[i] * strides_[i];
         }
 
         if (device_ == Device::CUDA) {
@@ -1489,12 +1501,12 @@ namespace lfs::core {
         if (dtype_ != DataType::Bool)
             return;
 
-        auto strides = shape_.strides();
+        // Use actual strides_ member, not shape_.strides() which assumes contiguous layout
         std::vector<size_t> idx_vec(indices);
 
         size_t idx = 0;
         for (size_t i = 0; i < idx_vec.size(); ++i) {
-            idx += idx_vec[i] * strides[i];
+            idx += idx_vec[i] * strides_[i];
         }
 
         unsigned char val = value ? 1 : 0;
@@ -1509,12 +1521,12 @@ namespace lfs::core {
         if (dtype_ != DataType::Bool)
             return false;
 
-        auto strides = shape_.strides();
+        // Use actual strides_ member, not shape_.strides() which assumes contiguous layout
         std::vector<size_t> idx_vec(indices);
 
         size_t idx = 0;
         for (size_t i = 0; i < idx_vec.size(); ++i) {
-            idx += idx_vec[i] * strides[i];
+            idx += idx_vec[i] * strides_[i];
         }
 
         if (device_ == Device::CUDA) {
@@ -1539,9 +1551,7 @@ namespace lfs::core {
             return;
         }
 
-        // Calculate linear index from multi-dimensional indices
-        auto strides = shape_.strides();
-
+        // Use actual strides_ member, not shape_.strides() which assumes contiguous layout
         size_t linear_idx = 0;
         for (size_t i = 0; i < indices.size(); ++i) {
             if (indices[i] >= shape_[i]) {
@@ -1549,7 +1559,7 @@ namespace lfs::core {
                           indices[i], i, shape_[i]);
                 return;
             }
-            linear_idx += indices[i] * strides[i];
+            linear_idx += indices[i] * strides_[i];
         }
 
         unsigned char val = value ? 1 : 0;
@@ -1579,9 +1589,7 @@ namespace lfs::core {
             return false;
         }
 
-        // Calculate linear index from multi-dimensional indices
-        auto strides = shape_.strides();
-
+        // Use actual strides_ member, not shape_.strides() which assumes contiguous layout
         size_t linear_idx = 0;
         for (size_t i = 0; i < indices.size(); ++i) {
             if (indices[i] >= shape_[i]) {
@@ -1589,7 +1597,7 @@ namespace lfs::core {
                           indices[i], i, shape_[i]);
                 return false;
             }
-            linear_idx += indices[i] * strides[i];
+            linear_idx += indices[i] * strides_[i];
         }
 
         if (device_ == Device::CUDA) {

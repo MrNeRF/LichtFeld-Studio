@@ -50,6 +50,38 @@ namespace lfs::core {
             output[i0 * s0 + i1 * s1] = input[idx];
         }
 
+        template <typename T>
+        __global__ void strided_scatter_kernel_rank3(
+            const T* __restrict__ input, T* __restrict__ output,
+            const size_t d0, const size_t d1, const size_t d2,
+            const size_t s0, const size_t s1, const size_t s2,
+            const size_t n) {
+            const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= n) return;
+            const size_t i2 = idx % d2;
+            const size_t tmp = idx / d2;
+            const size_t i1 = tmp % d1;
+            const size_t i0 = tmp / d1;
+            output[i0 * s0 + i1 * s1 + i2 * s2] = input[idx];
+        }
+
+        template <typename T>
+        __global__ void strided_scatter_kernel_rank4(
+            const T* __restrict__ input, T* __restrict__ output,
+            const size_t d0, const size_t d1, const size_t d2, const size_t d3,
+            const size_t s0, const size_t s1, const size_t s2, const size_t s3,
+            const size_t n) {
+            const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= n) return;
+            const size_t i3 = idx % d3;
+            size_t tmp = idx / d3;
+            const size_t i2 = tmp % d2;
+            tmp /= d2;
+            const size_t i1 = tmp % d1;
+            const size_t i0 = tmp / d1;
+            output[i0 * s0 + i1 * s1 + i2 * s2 + i3 * s3] = input[idx];
+        }
+
         // Fused int32→float32 rank-2
         __global__ void strided_scatter_int32_to_float32_rank2(
             const int32_t* __restrict__ input,
@@ -119,31 +151,161 @@ namespace lfs::core {
 #undef LAUNCH_GENERIC
         }
 
-        // ============= STRIDED COPY (read strided) =============
+        void launch_strided_scatter_immediate(
+            const void* input, void* output,
+            const std::vector<size_t>& shape, const std::vector<size_t>& strides,
+            const size_t n, const DataType dtype, cudaStream_t stream) {
+            const int blocks = (n + SCATTER_BLOCK_SIZE - 1) / SCATTER_BLOCK_SIZE;
+            const size_t rank = shape.size();
+
+#define LAUNCH_SCATTER2(T) strided_scatter_kernel_rank2<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
+    static_cast<const T*>(input), static_cast<T*>(output), shape[0], shape[1], strides[0], strides[1], n)
+#define LAUNCH_SCATTER3(T) strided_scatter_kernel_rank3<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
+    static_cast<const T*>(input), static_cast<T*>(output), shape[0], shape[1], shape[2], strides[0], strides[1], strides[2], n)
+#define LAUNCH_SCATTER4(T) strided_scatter_kernel_rank4<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
+    static_cast<const T*>(input), static_cast<T*>(output), shape[0], shape[1], shape[2], shape[3], strides[0], strides[1], strides[2], strides[3], n)
+
+            if (rank == 2) {
+                switch (dtype) {
+                case DataType::Float32: LAUNCH_SCATTER2(float); break;
+                case DataType::Int32: LAUNCH_SCATTER2(int32_t); break;
+                case DataType::Int64: LAUNCH_SCATTER2(int64_t); break;
+                case DataType::UInt8: LAUNCH_SCATTER2(uint8_t); break;
+                case DataType::Bool: LAUNCH_SCATTER2(bool); break;
+                default: break;
+                }
+            } else if (rank == 3) {
+                switch (dtype) {
+                case DataType::Float32: LAUNCH_SCATTER3(float); break;
+                case DataType::Int32: LAUNCH_SCATTER3(int32_t); break;
+                case DataType::Int64: LAUNCH_SCATTER3(int64_t); break;
+                case DataType::UInt8: LAUNCH_SCATTER3(uint8_t); break;
+                case DataType::Bool: LAUNCH_SCATTER3(bool); break;
+                default: break;
+                }
+            } else if (rank == 4) {
+                switch (dtype) {
+                case DataType::Float32: LAUNCH_SCATTER4(float); break;
+                case DataType::Int32: LAUNCH_SCATTER4(int32_t); break;
+                case DataType::Int64: LAUNCH_SCATTER4(int64_t); break;
+                case DataType::UInt8: LAUNCH_SCATTER4(uint8_t); break;
+                case DataType::Bool: LAUNCH_SCATTER4(bool); break;
+                default: break;
+                }
+            }
+#undef LAUNCH_SCATTER2
+#undef LAUNCH_SCATTER3
+#undef LAUNCH_SCATTER4
+        }
+
+        // Strided copy kernels (read strided → write contiguous)
+        template <typename T>
+        __global__ void strided_copy_kernel_rank2(
+            const T* __restrict__ input, T* __restrict__ output,
+            const size_t d0, const size_t d1, const size_t s0, const size_t s1,
+            const size_t n) {
+            const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= n) return;
+            const size_t i1 = idx % d1;
+            const size_t i0 = idx / d1;
+            output[idx] = input[i0 * s0 + i1 * s1];
+        }
+
+        template <typename T>
+        __global__ void strided_copy_kernel_rank3(
+            const T* __restrict__ input, T* __restrict__ output,
+            const size_t d0, const size_t d1, const size_t d2,
+            const size_t s0, const size_t s1, const size_t s2,
+            const size_t n) {
+            const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= n) return;
+            const size_t i2 = idx % d2;
+            const size_t tmp = idx / d2;
+            const size_t i1 = tmp % d1;
+            const size_t i0 = tmp / d1;
+            output[idx] = input[i0 * s0 + i1 * s1 + i2 * s2];
+        }
+
+        template <typename T>
+        __global__ void strided_copy_kernel_rank4(
+            const T* __restrict__ input, T* __restrict__ output,
+            const size_t d0, const size_t d1, const size_t d2, const size_t d3,
+            const size_t s0, const size_t s1, const size_t s2, const size_t s3,
+            const size_t n) {
+            const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= n) return;
+            const size_t i3 = idx % d3;
+            size_t tmp = idx / d3;
+            const size_t i2 = tmp % d2;
+            tmp /= d2;
+            const size_t i1 = tmp % d1;
+            const size_t i0 = tmp / d1;
+            output[idx] = input[i0 * s0 + i1 * s1 + i2 * s2 + i3 * s3];
+        }
+
         template <typename T>
         __global__ void strided_copy_kernel(
-            const T* __restrict__ input,
-            T* __restrict__ output,
-            const size_t* __restrict__ shape,
-            const size_t* __restrict__ strides,
-            size_t rank,
-            size_t total_elements) {
-            size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= total_elements)
-                return;
+            const T* __restrict__ input, T* __restrict__ output,
+            const size_t* __restrict__ shape, const size_t* __restrict__ strides,
+            const size_t rank, const size_t n) {
+            const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+            if (idx >= n) return;
 
-            // Convert flat output index to multi-dimensional coordinates
             size_t tmp = idx;
             size_t input_offset = 0;
-
             for (int d = rank - 1; d >= 0; --d) {
-                size_t coord = tmp % shape[d];
+                const size_t coord = tmp % shape[d];
                 tmp /= shape[d];
                 input_offset += coord * strides[d];
             }
-
-            // Copy element from strided input to contiguous output
             output[idx] = input[input_offset];
+        }
+
+        void launch_strided_copy_immediate(
+            const void* input, void* output,
+            const std::vector<size_t>& shape, const std::vector<size_t>& strides,
+            const size_t n, const DataType dtype, cudaStream_t stream) {
+            const int num_blocks = (n + SCATTER_BLOCK_SIZE - 1) / SCATTER_BLOCK_SIZE;
+            const size_t rank = shape.size();
+
+#define LAUNCH_COPY2(T) strided_copy_kernel_rank2<<<num_blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
+    static_cast<const T*>(input), static_cast<T*>(output), shape[0], shape[1], strides[0], strides[1], n)
+#define LAUNCH_COPY3(T) strided_copy_kernel_rank3<<<num_blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
+    static_cast<const T*>(input), static_cast<T*>(output), shape[0], shape[1], shape[2], strides[0], strides[1], strides[2], n)
+#define LAUNCH_COPY4(T) strided_copy_kernel_rank4<<<num_blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
+    static_cast<const T*>(input), static_cast<T*>(output), shape[0], shape[1], shape[2], shape[3], strides[0], strides[1], strides[2], strides[3], n)
+
+            if (rank == 2) {
+                switch (dtype) {
+                case DataType::Float32: LAUNCH_COPY2(float); break;
+                case DataType::Int32: LAUNCH_COPY2(int32_t); break;
+                case DataType::Int64: LAUNCH_COPY2(int64_t); break;
+                case DataType::UInt8: LAUNCH_COPY2(uint8_t); break;
+                case DataType::Bool: LAUNCH_COPY2(bool); break;
+                default: break;
+                }
+            } else if (rank == 3) {
+                switch (dtype) {
+                case DataType::Float32: LAUNCH_COPY3(float); break;
+                case DataType::Int32: LAUNCH_COPY3(int32_t); break;
+                case DataType::Int64: LAUNCH_COPY3(int64_t); break;
+                case DataType::UInt8: LAUNCH_COPY3(uint8_t); break;
+                case DataType::Bool: LAUNCH_COPY3(bool); break;
+                default: break;
+                }
+            } else if (rank == 4) {
+                switch (dtype) {
+                case DataType::Float32: LAUNCH_COPY4(float); break;
+                case DataType::Int32: LAUNCH_COPY4(int32_t); break;
+                case DataType::Int64: LAUNCH_COPY4(int64_t); break;
+                case DataType::UInt8: LAUNCH_COPY4(uint8_t); break;
+                case DataType::Bool: LAUNCH_COPY4(bool); break;
+                default: break;
+                }
+            }
+#undef LAUNCH_COPY2
+#undef LAUNCH_COPY3
+#undef LAUNCH_COPY4
         }
 
         void launch_strided_copy(
