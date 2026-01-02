@@ -161,25 +161,38 @@ namespace lfs::io {
                 options.progress(60.0f, "Loading point cloud...");
             }
 
-            // Try to load point cloud from PLY file, fallback to random generation
-            std::filesystem::path pointcloud_path = transforms_file.parent_path() / "pointcloud.ply";
-            std::shared_ptr<PointCloud> point_cloud;
+            // Load point cloud: check ply_file_path in transforms.json, fallback to pointcloud.ply
+            std::filesystem::path pointcloud_path;
             std::vector<std::string> warnings;
+            const auto base_path = transforms_file.parent_path();
 
-            LOG_DEBUG("Looking for point cloud at: {}", lfs::core::path_to_utf8(pointcloud_path));
+            // Check ply_file_path in transforms.json (nerfstudio format)
+            if (std::ifstream trans_file; lfs::core::open_file_for_read(transforms_file, trans_file)) {
+                try {
+                    const auto transforms = nlohmann::json::parse(trans_file, nullptr, true, true);
+                    if (transforms.contains("ply_file_path")) {
+                        const std::string ply_rel = transforms["ply_file_path"];
+                        pointcloud_path = base_path / lfs::core::utf8_to_path(ply_rel);
+                    }
+                } catch (...) {}
+            }
 
+            // Fallback to pointcloud.ply
+            if (pointcloud_path.empty() || !std::filesystem::exists(pointcloud_path)) {
+                pointcloud_path = base_path / "pointcloud.ply";
+            }
+
+            std::shared_ptr<PointCloud> point_cloud;
             if (std::filesystem::exists(pointcloud_path)) {
-                LOG_DEBUG("Loading point cloud from PLY file");
                 auto loaded_pc = load_simple_ply_point_cloud(pointcloud_path);
                 point_cloud = std::make_shared<PointCloud>(std::move(loaded_pc));
-                LOG_INFO("Loaded point cloud with {} points from pointcloud.ply", point_cloud->size());
+                LOG_INFO("Loaded {} points from {}", point_cloud->size(),
+                         lfs::core::path_to_utf8(pointcloud_path.filename()));
             } else {
-                LOG_WARN("No pointcloud.ply found in dataset directory: {}", lfs::core::path_to_utf8(transforms_file.parent_path()));
-                LOG_DEBUG("Generating random point cloud for initialization");
                 auto random_pc = generate_random_point_cloud();
                 point_cloud = std::make_shared<PointCloud>(std::move(random_pc));
-                LOG_INFO("Generated random point cloud with {} points", point_cloud->size());
-                warnings.push_back("Using random point cloud initialization (pointcloud.ply not found)");
+                LOG_WARN("No PLY found, generated {} random points", point_cloud->size());
+                warnings.push_back("Using random point cloud (no PLY file found)");
             }
 
             if (options.progress) {

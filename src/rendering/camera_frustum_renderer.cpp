@@ -21,6 +21,7 @@ namespace lfs::rendering {
         constexpr int PICKING_SAMPLE_SIZE = 3;
         constexpr int NVCODEC_DECODER_POOL_SIZE = 4;
         constexpr int INITIAL_TEXTURE_ARRAY_CAPACITY = 256;
+        constexpr float EQUIRECTANGULAR_DISPLAY_FOV = 1.0472f; // 60 degrees
 
         const glm::mat4 GL_TO_COLMAP = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, -1.0f));
     } // namespace
@@ -231,7 +232,9 @@ namespace lfs::rendering {
             camera_positions_.push_back(cam_pos);
 
             const float aspect = static_cast<float>(cam->image_width()) / static_cast<float>(cam->image_height());
-            const float fov_y = lfs::core::focal2fov(cam->focal_y(), cam->image_height());
+            const bool is_equirect = cam->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
+            const float fov_y = is_equirect ? EQUIRECTANGULAR_DISPLAY_FOV
+                                            : lfs::core::focal2fov(cam->focal_y(), cam->image_height());
             const float half_height = std::tan(fov_y * 0.5f);
             const float half_width = half_height * aspect;
 

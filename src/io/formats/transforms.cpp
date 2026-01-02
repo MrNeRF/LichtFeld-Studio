@@ -26,13 +26,11 @@ namespace lfs::io {
     using lfs::core::PointCloud;
     using lfs::core::Tensor;
 
-    // Constants for random point cloud generation
     constexpr int DEFAULT_NUM_INIT_GAUSSIAN = 10000;
     constexpr uint64_t DEFAULT_RANDOM_SEED = 8128;
+    constexpr float EQUIRECTANGULAR_DUMMY_FOCAL = 20.0f;
 
-    // Use std::numbers::pi instead of a custom PI constant.
-
-    // Helper function to convert Tensor to glm::mat4
+    // Helper: Tensor to glm::mat4
     glm::mat4 tensor_to_mat4(const Tensor& t) {
         glm::mat4 mat;
         const float* data = t.ptr<float>();
@@ -167,6 +165,20 @@ namespace lfs::io {
 
         float fl_x = -1, fl_y = -1;
         auto camera_model = lfs::core::CameraModelType::PINHOLE;
+
+        // Parse explicit camera_model field (nerfstudio format)
+        if (transforms.contains("camera_model")) {
+            const std::string model_str = transforms["camera_model"];
+            if (model_str == "EQUIRECTANGULAR") {
+                camera_model = lfs::core::CameraModelType::EQUIRECTANGULAR;
+            } else if (model_str == "FISHEYE" || model_str == "OPENCV_FISHEYE") {
+                camera_model = lfs::core::CameraModelType::FISHEYE;
+            } else if (model_str != "PINHOLE") {
+                LOG_WARN("Unknown camera_model '{}', defaulting to PINHOLE", model_str);
+            }
+            LOG_DEBUG("Camera model: {}", model_str);
+        }
+
         if (transforms.contains("fl_x")) {
             fl_x = float(transforms["fl_x"]);
         } else if (transforms.contains("camera_angle_x")) {
@@ -178,21 +190,30 @@ namespace lfs::io {
         } else if (transforms.contains("camera_angle_y")) {
             fl_y = fov_rad_to_focal_length(h, float(transforms["camera_angle_y"]));
         } else {
-            // OmniBlender no intrinsics
-            if (!transforms.contains("fl_x") && !transforms.contains("camera_angle_x") &&
-                !transforms.contains("fl_y") && !transforms.contains("camera_angle_y")) {
-                LOG_WARN("No camera intrinsics found, assuming equirectangular");
-                fl_x = 20.0;
-                fl_y = 20.0;
-                camera_model = lfs::core::CameraModelType::EQUIRECTANGULAR;
+            const bool no_intrinsics = !transforms.contains("fl_x") && !transforms.contains("camera_angle_x") &&
+                                       !transforms.contains("fl_y") && !transforms.contains("camera_angle_y");
+            if (no_intrinsics) {
+                // Auto-detect equirectangular if not explicitly set
+                if (camera_model != lfs::core::CameraModelType::EQUIRECTANGULAR) {
+                    LOG_WARN("No camera intrinsics found, assuming equirectangular");
+                    camera_model = lfs::core::CameraModelType::EQUIRECTANGULAR;
+                }
+                fl_x = fl_y = EQUIRECTANGULAR_DUMMY_FOCAL;
             } else {
-                // we should be  here in this scope only for blender - if w!=h then we must throw exception
+                // Blender format: square images use same focal for x/y
                 if (w != h) {
-                    LOG_ERROR("No camera_angle_y but w!=h: {}!={}", w, h);
-                    throw std::runtime_error("no camera_angle_y expected w!=h");
+                    throw std::runtime_error("No camera_angle_y but w!=h");
                 }
                 fl_y = fl_x;
             }
+        }
+
+        // Equirectangular needs dummy focal lengths if not set
+        if (camera_model == lfs::core::CameraModelType::EQUIRECTANGULAR) {
+            if (fl_x < 0)
+                fl_x = EQUIRECTANGULAR_DUMMY_FOCAL;
+            if (fl_y < 0)
+                fl_y = EQUIRECTANGULAR_DUMMY_FOCAL;
         }
 
         float cx = -1, cy = -1;
@@ -299,12 +320,10 @@ namespace lfs::io {
                 if (is_distorted) {
                     camdata._radial_distortion = Tensor::from_vector({k1, k2, k3}, {3}, Device::CPU);
                     camdata._tangential_distortion = Tensor::from_vector({p1, p2}, {2}, Device::CPU);
+                } else {
+                    camdata._radial_distortion = Tensor::empty({0}, Device::CPU);
+                    camdata._tangential_distortion = Tensor::empty({0}, Device::CPU);
                 }
-                else {
-                    camdata._radial_distortion = Tensor::empty({0}, Device::CPU);;
-                    camdata._tangential_distortion = Tensor::empty({0}, Device::CPU);;
-                }
-
 
                 camdata._focal_x = fl_x;
                 camdata._focal_y = fl_y;
@@ -312,7 +331,7 @@ namespace lfs::io {
                 camdata._center_x = cx;
                 camdata._center_y = cy;
 
-                camdata._camera_model_type = lfs::core::CameraModelType::PINHOLE;
+                camdata._camera_model_type = camera_model;
                 camdata._camera_ID = counter++;
 
                 camerasdata.push_back(camdata);
