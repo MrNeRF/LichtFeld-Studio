@@ -332,6 +332,7 @@ namespace {
         AdamConfig config;
         config.lr = 0.1f;
         AdamOptimizer optimizer(splat_data, config);
+        optimizer.allocate_gradients();
 
         double gamma = 0.95;
         ExponentialLR scheduler(optimizer, gamma);
@@ -361,6 +362,7 @@ namespace {
         AdamConfig config;
         config.lr = 0.01f;
         AdamOptimizer optimizer(splat_data, config);
+        optimizer.allocate_gradients();
 
         double gamma = 0.98;
         int warmup_steps = 5;
