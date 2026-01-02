@@ -1060,12 +1060,13 @@ namespace lfs::training {
                     LOG_INFO("{}", metrics.to_string());
                 }
 
-                // Save model at specified steps
+                // Save checkpoint (not PLY) at specified steps
                 for (size_t save_step : params_.optimization.save_steps) {
                     if (iter == static_cast<int>(save_step) && iter != params_.optimization.iterations) {
-                        const bool join_threads = (iter == params_.optimization.save_steps.back());
-                        auto save_path = params_.dataset.output_path;
-                        save_ply(save_path, iter, /*join=*/join_threads);
+                        auto result = save_checkpoint(iter);
+                        if (!result) {
+                            LOG_WARN("Failed to save checkpoint at iteration {}: {}", iter, result.error());
+                        }
                     }
                 }
 
