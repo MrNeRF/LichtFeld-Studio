@@ -24,7 +24,7 @@ namespace lfs::core {
         struct OptimizationParameters {
             size_t iterations = 30'000;
             size_t sh_degree_interval = 1'000;
-            float means_lr = 0.00016f;
+            float means_lr = 0.000016f;
             float shs_lr = 0.0025f;
             float opacity_lr = 0.05f;
             float scaling_lr = 0.005f;
@@ -79,7 +79,7 @@ namespace lfs::core {
             size_t pause_refine_after_reset = 0;
             bool revised_opacity = false;
             bool gut = false;
-            float steps_scaler = 0.f; // If < 0, step size scaling is disabled
+            float steps_scaler = 1.f;
 
             // Random initialization parameters
             bool random = false;        // Use random initialization instead of SfM
@@ -99,6 +99,10 @@ namespace lfs::core {
 
             nlohmann::json to_json() const;
             static OptimizationParameters from_json(const nlohmann::json& j);
+
+            // Factory methods for strategy presets
+            static OptimizationParameters mcmc_defaults();
+            static OptimizationParameters default_strategy_defaults();
         };
 
         struct LoadingParams {
@@ -170,9 +174,5 @@ namespace lfs::core {
             const TrainingParameters& params,
             const std::filesystem::path& output_path);
 
-        std::expected<LoadingParams, std::string> read_loading_params_from_json(const std::filesystem::path& path);
-
-        // Find parameter file by searching up from executable directory
-        std::filesystem::path get_parameter_file_path(const std::string& filename);
     } // namespace param
 } // namespace lfs::core

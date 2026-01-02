@@ -3,11 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/parameters.hpp"
-#include "core/executable_path.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include <chrono>
-#include <ctime>
 #include <expected>
 #include <filesystem>
 #include <format>
@@ -15,31 +13,18 @@
 #include <iomanip>
 #include <nlohmann/json.hpp>
 #include <sstream>
-#include <string>
-#include <variant>
-#include <vector>
-
-#ifdef _WIN32
-#include <Windows.h>
-#endif
 
 namespace lfs::core {
     namespace param {
         namespace {
-
-            /**
-             * @brief Read and parse a JSON configuration file
-             * @param path Path to the JSON file
-             * @return Expected JSON object or error message
-             */
             std::expected<nlohmann::json, std::string> read_json_file(const std::filesystem::path& path) {
                 if (!std::filesystem::exists(path)) {
-                    return std::unexpected(std::format("Configuration file does not exist: {}", path_to_utf8(path)));
+                    return std::unexpected(std::format("Config file not found: {}", path_to_utf8(path)));
                 }
 
                 std::ifstream file;
                 if (!open_file_for_read(path, file)) {
-                    return std::unexpected(std::format("Could not open configuration file: {}", path_to_utf8(path)));
+                    return std::unexpected(std::format("Cannot open config: {}", path_to_utf8(path)));
                 }
 
                 try {
@@ -47,166 +32,8 @@ namespace lfs::core {
                     buffer << file.rdbuf();
                     return nlohmann::json::parse(buffer.str());
                 } catch (const nlohmann::json::parse_error& e) {
-                    return std::unexpected(std::format("JSON parsing error in {}: {}", path_to_utf8(path), e.what()));
+                    return std::unexpected(std::format("JSON parse error in {}: {}", path_to_utf8(path), e.what()));
                 }
-            }
-
-            /**
-             * @brief Verify optimization parameters between JSON and struct defaults
-             *
-             * This function performs a comprehensive verification of optimization parameters:
-             * 1. Checks if all struct parameters exist in JSON
-             * 2. Verifies values match between JSON and struct defaults
-             * 3. Identifies unknown parameters in JSON (with warnings)
-             * 4. Provides detailed error reporting
-             *
-             * @param defaults The default parameters from the struct
-             * @param json The JSON configuration to verify
-             * @param strict If true, unknown parameters are treated as errors
-             * @return bool True if verification passed, false otherwise
-             */
-            bool verify_optimization_parameters(const OptimizationParameters& defaults,
-                                                const nlohmann::json& json,
-                                                bool strict = false) {
-                bool all_match = true;
-                std::vector<std::string> missing_in_json;
-                std::vector<std::string> unknown_params;
-                std::vector<std::string> mismatched_values;
-
-                // Define all expected parameters and their types
-                struct ParamInfo {
-                    std::string name;
-                    std::variant<int, size_t, float, int64_t, std::string, bool> value;
-                    std::string description; // Added for better documentation
-                };
-
-                const std::vector<ParamInfo> expected_params = {
-                    {"iterations", defaults.iterations, "Total number of training iterations"},
-                    {"means_lr", defaults.means_lr, "Initial learning rate for position updates"},
-                    {"shs_lr", defaults.shs_lr, "Learning rate for spherical harmonics updates"},
-                    {"opacity_lr", defaults.opacity_lr, "Learning rate for opacity updates"},
-                    {"scaling_lr", defaults.scaling_lr, "Learning rate for scaling updates"},
-                    {"rotation_lr", defaults.rotation_lr, "Learning rate for rotation updates"},
-                    {"lambda_dssim", defaults.lambda_dssim, "DSSIM loss weight"},
-                    {"min_opacity", defaults.min_opacity, "Minimum opacity threshold"},
-                    {"refine_every", defaults.refine_every, "Interval between densification steps"},
-                    {"start_refine", defaults.start_refine, "Starting iteration for densification"},
-                    {"stop_refine", defaults.stop_refine, "Ending iteration for densification"},
-                    {"grad_threshold", defaults.grad_threshold, "Gradient threshold for densification"},
-                    {"opacity_reg", defaults.opacity_reg, "Opacity L1 regularization weight"},
-                    {"scale_reg", defaults.scale_reg, "Scale L1 regularization weight"},
-                    {"init_opacity", defaults.init_opacity, "Initial opacity value for new Gaussians"},
-                    {"init_scaling", defaults.init_scaling, "Initial scaling value for new Gaussians"},
-                    {"sh_degree", defaults.sh_degree, "Spherical harmonics degree"},
-                    {"max_cap", defaults.max_cap, "Maximum number of Gaussians for MCMC strategy"},
-                    {"strategy", defaults.strategy, "Optimization strategy: mcmc, default"},
-                    {"enable_eval", defaults.enable_eval, "Enable evaluation during training"},
-                    {"enable_save_eval_images", defaults.enable_save_eval_images, "Save images during evaluation"},
-                    {"use_bilateral_grid", defaults.use_bilateral_grid, "Enable bilateral grid for appearance modeling"},
-                    {"bilateral_grid_X", defaults.bilateral_grid_X, "Bilateral grid X dimension"},
-                    {"bilateral_grid_Y", defaults.bilateral_grid_Y, "Bilateral grid Y dimension"},
-                    {"bilateral_grid_W", defaults.bilateral_grid_W, "Bilateral grid W dimension"},
-                    {"bilateral_grid_lr", defaults.bilateral_grid_lr, "Learning rate for bilateral grid"},
-                    {"tv_loss_weight", defaults.tv_loss_weight, "Weight for total variation loss"},
-                    {"prune_opacity", defaults.prune_opacity, "Opacity pruning threshold"},
-                    {"grow_scale3d", defaults.grow_scale3d, "3D scale threshold for duplication"},
-                    {"grow_scale2d", defaults.grow_scale2d, "2D scale threshold for splitting"},
-                    {"prune_scale3d", defaults.prune_scale3d, "3D scale threshold for pruning"},
-                    {"prune_scale2d", defaults.prune_scale2d, "2D scale threshold for pruning"},
-                    {"reset_every", defaults.reset_every, "Reset opacity every this many iterations"},
-                    {"pause_refine_after_reset", defaults.pause_refine_after_reset, "Pause refinement after reset for N iterations"},
-                    {"revised_opacity", defaults.revised_opacity, "Use revised opacity heuristic"},
-                    {"steps_scaler", defaults.steps_scaler, "Scales the training steps and values"},
-                    {"sh_degree_interval", defaults.sh_degree_interval, "Interval for increasing SH degree"},
-                    {"random", defaults.random, "Use random initialization instead of SfM"},
-                    {"init_num_pts", defaults.init_num_pts, "Number of random initialization points"},
-                    {"init_extent", defaults.init_extent, "Extent of random initialization"},
-                    {"tile_mode", defaults.tile_mode, "Tile mode for memory-efficient training (1=1 tile, 2=2 tiles, 4=4 tiles)"},
-                    {"enable_sparsity", defaults.enable_sparsity, "Enable sparsity optimization"},
-                    {"sparsify_steps", defaults.sparsify_steps, "Number of steps for sparsification"},
-                    {"init_rho", defaults.init_rho, "Initial ADMM penalty parameter"},
-                    {"prune_ratio", defaults.prune_ratio, "Final pruning ratio for sparsity"},
-                    {"bg_modulation", defaults.bg_modulation, "Enable sinusoidal background modulation"},
-                    {"gut", defaults.gut, "Enable GUT mode"},
-                    {"mask_mode", std::string("none"), "Mask mode: none, segment, ignore, alpha_consistent"},
-                    {"invert_masks", defaults.invert_masks, "Invert mask values"},
-                    {"mask_opacity_penalty_weight", defaults.mask_opacity_penalty_weight, "Opacity penalty weight for segment mode"},
-                    {"mask_opacity_penalty_power", defaults.mask_opacity_penalty_power, "Penalty falloff power"},
-                    {"mask_threshold", defaults.mask_threshold, "Mask threshold value"}};
-
-                // Check all expected parameters
-                for (const auto& param : expected_params) {
-                    if (!json.contains(param.name)) {
-                        // Skip eval_steps and save_steps as they are handled separately
-                        if (param.name != "eval_steps" && param.name != "save_steps") {
-                            missing_in_json.push_back(param.name);
-                            all_match = false;
-                        }
-                        continue;
-                    }
-
-                    // Compare values based on type
-                    std::visit([&](const auto& default_val) {
-                        using T = std::decay_t<decltype(default_val)>;
-                        try {
-                            if (json[param.name].get<T>() != default_val) {
-                                mismatched_values.push_back(param.name);
-                                all_match = false;
-                            }
-                        } catch (...) {
-                            // Type mismatch
-                            mismatched_values.push_back(param.name + " (type mismatch)");
-                            all_match = false;
-                        }
-                    },
-                               param.value);
-                }
-
-                // Check for any unknown parameters in JSON
-                for (const auto& [key, value] : json.items()) {
-                    bool found = false;
-                    for (const auto& param : expected_params) {
-                        if (key == param.name) {
-                            found = true;
-                            break;
-                        }
-                    }
-                    if (key == "eval_steps" || key == "save_steps") {
-                        found = true;
-                    }
-                    if (!found) {
-                        unknown_params.push_back(key);
-                        if (strict) {
-                            all_match = false;
-                        }
-                    }
-                }
-
-                // Log mismatches
-                if (!mismatched_values.empty()) {
-                    for (const auto& param : mismatched_values) {
-                        for (const auto& p : expected_params) {
-                            if (p.name == param) {
-                                std::string default_val;
-                                std::visit([&](const auto& val) {
-                                    default_val = std::format("{}", val);
-                                },
-                                           p.value);
-                                LOG_DEBUG("Parameter mismatch: {} (JSON={}, default={})",
-                                          param, json[param].dump(), default_val);
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if (!unknown_params.empty()) {
-                    for (const auto& param : unknown_params) {
-                        LOG_DEBUG("Unknown parameter in JSON: {}", param);
-                    }
-                }
-
-                return all_match;
             }
         } // namespace
 
@@ -273,6 +100,23 @@ namespace lfs::core {
             opt_json["mask_threshold"] = mask_threshold;
 
             return opt_json;
+        }
+
+        OptimizationParameters OptimizationParameters::mcmc_defaults() {
+            return {};
+        }
+
+        OptimizationParameters OptimizationParameters::default_strategy_defaults() {
+            auto p = OptimizationParameters{};
+            p.strategy = "default";
+            p.opacity_lr = 0.025f;
+            p.stop_refine = 15'000;
+            p.opacity_reg = 0.0f;
+            p.scale_reg = 0.0f;
+            p.init_opacity = 0.1f;
+            p.max_cap = 6'000'000;
+            p.tv_loss_weight = 5.0f;
+            return p;
         }
 
         OptimizationParameters OptimizationParameters::from_json(const nlohmann::json& json) {
@@ -448,78 +292,50 @@ namespace lfs::core {
             return params;
         }
 
-        /**
-         * @brief Read optimization parameters from JSON file
-         * @param[in] json file to load
-         * @return Expected OptimizationParameters or error message
-         */
         std::expected<OptimizationParameters, std::string> read_optim_params_from_json(const std::filesystem::path& path) {
             auto json_result = read_json_file(path);
-
             if (!json_result) {
                 return std::unexpected(json_result.error());
             }
 
             const auto& json = *json_result;
-
-            // Extract optimization sub-object if present (supports both flat and nested formats)
+            // Support both flat and nested {"optimization": {...}} formats
             const auto& opt_json = json.contains("optimization") ? json["optimization"] : json;
-
-            OptimizationParameters defaults;
-            verify_optimization_parameters(defaults, opt_json);
 
             try {
                 return OptimizationParameters::from_json(opt_json);
             } catch (const std::exception& e) {
-                return std::unexpected(std::format("Error parsing optimization parameters: {}", e.what()));
+                return std::unexpected(std::format("Parse error: {}", e.what()));
             }
         }
 
-        /**
-         * @brief Save full training parameters (dataset + optimization) to JSON
-         * @param params The full training parameters
-         * @param output_path Path to the output directory
-         * @return Expected void or error message
-         */
         std::expected<void, std::string> save_training_parameters_to_json(
             const TrainingParameters& params,
             const std::filesystem::path& output_path) {
-
             try {
                 nlohmann::json json;
-
-                // Dataset configuration
                 json["dataset"] = params.dataset.to_json();
+                json["optimization"] = params.optimization.to_json();
 
-                // Optimization configuration
-                nlohmann::json opt_json = params.optimization.to_json();
-
-                json["optimization"] = opt_json;
-
-                // Add timestamp
-                auto now = std::chrono::system_clock::now();
-                auto time_t = std::chrono::system_clock::to_time_t(now);
+                const auto now = std::chrono::system_clock::now();
+                const auto time_t = std::chrono::system_clock::to_time_t(now);
                 std::stringstream ss;
                 ss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S");
                 json["timestamp"] = ss.str();
 
-                // Use path directly if .json, otherwise append default filename
                 const std::filesystem::path filepath = (output_path.extension() == ".json")
                                                            ? output_path
                                                            : output_path / "training_config.json";
                 std::ofstream file;
                 if (!open_file_for_write(filepath, file)) {
-                    return std::unexpected(std::format("Could not open file for writing: {}", path_to_utf8(filepath)));
+                    return std::unexpected(std::format("Cannot write: {}", path_to_utf8(filepath)));
                 }
 
                 file << json.dump(4);
-                file.close();
-
-                LOG_INFO("Saved training config to: {}", path_to_utf8(filepath));
+                LOG_INFO("Saved config: {}", path_to_utf8(filepath));
                 return {};
-
             } catch (const std::exception& e) {
-                return std::unexpected(std::format("Error saving training parameters: {}", e.what()));
+                return std::unexpected(std::format("Save error: {}", e.what()));
             }
         }
 
@@ -598,50 +414,6 @@ namespace lfs::core {
             }
 
             return dataset;
-        }
-
-        std::expected<LoadingParams, std::string> read_loading_params_from_json(const std::filesystem::path& path) {
-            auto json_result = read_json_file(path);
-
-            if (!json_result) {
-                return std::unexpected(json_result.error());
-            }
-            LoadingParams loading_params;
-            try {
-                loading_params = LoadingParams::from_json(*json_result);
-            } catch (const std::exception& e) {
-                return std::unexpected(std::format("Error reading loading parameters: {}", e.what()));
-            }
-            return loading_params;
-        }
-
-        std::filesystem::path get_parameter_file_path(const std::string& filename) {
-            static constexpr const char* PARAM_DIR = "parameter";
-
-            // Primary: Use runtime-detected resource directory
-            auto runtime_path = lfs::core::getResourceBaseDir() / PARAM_DIR / filename;
-            if (std::filesystem::exists(runtime_path)) {
-                return runtime_path;
-            }
-
-            // Fallback: Search up from executable directory
-#ifdef _WIN32
-            wchar_t exe_buf[MAX_PATH];
-            GetModuleFileNameW(nullptr, exe_buf, MAX_PATH);
-            auto search_dir = std::filesystem::path(exe_buf).parent_path();
-#else
-            auto search_dir = std::filesystem::canonical("/proc/self/exe").parent_path();
-#endif
-            while (!search_dir.empty()) {
-                if (const auto path = search_dir / PARAM_DIR / filename; std::filesystem::exists(path)) {
-                    return path;
-                }
-                const auto parent = search_dir.parent_path();
-                if (parent == search_dir)
-                    break;
-                search_dir = parent;
-            }
-            return runtime_path; // Return runtime path even if not found (for error message)
         }
 
     } // namespace param

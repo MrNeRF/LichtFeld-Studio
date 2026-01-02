@@ -505,54 +505,41 @@ std::expected<std::unique_ptr<lfs::core::param::TrainingParameters>, std::string
 lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
 
     auto params = std::make_unique<lfs::core::param::TrainingParameters>();
-
-    // Parse command line arguments
     auto parse_result = parse_arguments(convert_args(argc, argv), *params);
-
-    std::string strategy = params->optimization.strategy; // empty when config files is used and not passed as command line argument
-    std::string config_file = params->optimization.config_file;
-    std::filesystem::path config_file_to_read = config_file != ""
-                                                    ? lfs::core::utf8_to_path(config_file)
-                                                    : lfs::core::param::get_parameter_file_path(params->optimization.strategy + "_optimization_params.json");
+    const std::string& strategy = params->optimization.strategy;
+    const std::string& config_file = params->optimization.config_file;
 
     if (!parse_result) {
         return std::unexpected(parse_result.error());
     }
 
-    auto [result, apply_overrides] = *parse_result;
-
-    // Handle help case
+    const auto [result, apply_overrides] = *parse_result;
     if (result == ParseResult::Help) {
         std::exit(0);
     }
 
-    auto opt_params_result = lfs::core::param::read_optim_params_from_json(config_file_to_read);
-    if (!opt_params_result) {
-        return std::unexpected(std::format("Failed to load optimization parameters: {}",
-                                           opt_params_result.error()));
-    }
-    params->optimization = *opt_params_result;
+    // Load from --config or use hardcoded defaults
+    if (!config_file.empty()) {
+        const auto opt_result = lfs::core::param::read_optim_params_from_json(lfs::core::utf8_to_path(config_file));
+        if (!opt_result) {
+            return std::unexpected(std::format("Config load failed: {}", opt_result.error()));
+        }
+        params->optimization = *opt_result;
 
-    std::filesystem::path config_file_loading = lfs::core::param::get_parameter_file_path("loading_params.json");
-    auto loading_result = lfs::core::param::read_loading_params_from_json(config_file_loading);
-    if (!loading_result) {
-        return std::unexpected(std::format("Failed to load loading parameters: {}",
-                                           loading_result.error()));
-    }
-    params->dataset.loading_params = *loading_result;
-
-    // if a config file was used and strategy was also passed as command line argument, ensure they match
-    if (config_file != "" && strategy != "" && strategy != params->optimization.strategy) {
-        LOG_ERROR("Conflict between strategy in config file and --strategy on command line");
-        return std::unexpected(std::format("Conflict between strategy in config file and --strategy on command line"));
+        if (!strategy.empty() && strategy != params->optimization.strategy) {
+            return std::unexpected("--strategy conflicts with config file");
+        }
+    } else {
+        params->optimization = (strategy == "default")
+                                   ? lfs::core::param::OptimizationParameters::default_strategy_defaults()
+                                   : lfs::core::param::OptimizationParameters::mcmc_defaults();
     }
 
-    // Apply command line overrides
+    params->dataset.loading_params = lfs::core::param::LoadingParams{};
+
     if (apply_overrides) {
         apply_overrides();
     }
-
-    // Apply step scaling
     apply_step_scaling(*params);
 
     return params;
