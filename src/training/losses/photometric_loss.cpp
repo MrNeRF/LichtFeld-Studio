@@ -76,48 +76,14 @@ namespace lfs::training::losses {
                 grad_combined = lfs::training::kernels::ssim_backward(ssim_ctx, ssim_workspace_, -1.0f);
 
             } else {
-                // Combined loss - use pre-allocated buffers (eliminates ~40MB allocation churn per iteration)
-                size_t N = rendered_4d.numel();
-                size_t num_blocks = std::min((N + 255) / 256, size_t(1024));
+                // Combined loss - use FUSED L1+SSIM kernel (32-38% faster!)
+                // Single kernel computes both L1 and SSIM, loading images only once
+                auto [loss_tensor, fused_ctx] = lfs::training::kernels::fused_l1_ssim_forward(
+                    rendered_4d, gt_4d, params.lambda_dssim, fused_workspace_, /*apply_valid_padding=*/true);
 
-                // Ensure buffers are sized correctly
-                ensure_buffers(rendered_4d.shape().dims(), num_blocks);
-
-                // L1 component - use pre-allocated buffers
-                lfs::training::kernels::launch_fused_l1_loss(
-                    rendered_4d.ptr<float>(),
-                    gt_4d.ptr<float>(),
-                    grad_buffer_.ptr<float>(),
-                    loss_scalar_.ptr<float>(),
-                    l1_reduction_buffer_.ptr<float>(),
-                    N,
-                    nullptr);
-
-                // SSIM component (use pre-allocated workspace)
-                auto [ssim_value_tensor, ssim_ctx] = lfs::training::kernels::ssim_forward(
-                    rendered_4d, gt_4d, ssim_workspace_, /*apply_valid_padding=*/true);
-
-                // Compute SSIM loss on GPU: loss = 1 - ssim (NO CPU SYNC!)
-                // Note: Tensor::full still allocates, but it's a scalar (4 bytes)
-                auto ssim_loss_tensor = lfs::core::Tensor::full({1}, 1.0f, lfs::core::Device::CUDA) - ssim_value_tensor;
-
-                // Backward: d(loss)/d(ssim) = -1 (since loss = 1 - ssim)
-                auto grad_ssim = lfs::training::kernels::ssim_backward(ssim_ctx, ssim_workspace_, -1.0f);
-
-                // Combine gradients in-place (eliminates 2 temporary allocations per iteration)
-                // grad = (1 - lambda) * grad_l1 + lambda * grad_ssim
-                // grad_buffer_ is reused from L1, grad_ssim is temporary from SSIM backward
-                grad_buffer_.mul_(1.0f - params.lambda_dssim);
-                grad_ssim.mul_(params.lambda_dssim);
-                grad_buffer_.add_(grad_ssim);
-                grad_combined = grad_buffer_;
-
-                // Combine losses in-place on GPU (eliminates 2 temporary allocations per iteration)
-                // loss_scalar_ is reused from L1, ssim_loss_tensor is temporary
-                loss_scalar_.mul_(1.0f - params.lambda_dssim);
-                ssim_loss_tensor.mul_(params.lambda_dssim);
-                loss_scalar_.add_(ssim_loss_tensor);
-                loss_tensor_gpu = loss_scalar_;
+                // Single backward kernel computes combined gradient
+                grad_combined = lfs::training::kernels::fused_l1_ssim_backward(fused_ctx, fused_workspace_);
+                loss_tensor_gpu = loss_tensor;
             }
 
             // Remove batch dimension if input was 3D

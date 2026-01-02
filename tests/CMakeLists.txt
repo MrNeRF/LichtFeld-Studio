@@ -184,6 +184,7 @@ set(OPTIONAL_TEST_FILES
     test_vram_resize.cpp
     test_stride_bugs.cpp
     test_bool_any_all.cpp
+    test_fused_l1_ssim.cpp
 )
 
 foreach(TEST_FILE ${OPTIONAL_TEST_FILES})
