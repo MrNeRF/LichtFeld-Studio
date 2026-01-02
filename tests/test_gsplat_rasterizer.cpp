@@ -73,12 +73,8 @@ protected:
 TEST_F(GsplatRasterizerTest, ForwardPassBasic) {
     // Just test that forward pass doesn't crash
     auto result = gsplat_rasterize_forward(
-        *camera_,
-        *splat_data_,
-        bg_color_,
-        1.0f,  // scaling_modifier
-        false, // antialiased
-        GsplatRenderMode::RGB);
+        *camera_, *splat_data_, bg_color_,
+        0, 0, 0, 0, 1.0f, false, GsplatRenderMode::RGB);
 
     ASSERT_TRUE(result.has_value()) << "Forward pass failed: " << result.error();
 

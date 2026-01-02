@@ -770,10 +770,12 @@ namespace lfs::training {
                 std::optional<GsplatRasterizeContext> gsplat_ctx;
 
                 if (params_.optimization.gut) {
-                    // GUT mode: use gsplat rasterizer (no tiling support yet)
+                    const int tw = (num_tiles > 1) ? tile_width : 0;
+                    const int th = (num_tiles > 1) ? tile_height : 0;
                     auto rasterize_result = gsplat_rasterize_forward(
                         *cam, strategy_->get_model(), bg,
-                        1.0f, false, GsplatRenderMode::RGB, true /* use_gut */);
+                        tile_x_offset, tile_y_offset, tw, th,
+                        1.0f, false, GsplatRenderMode::RGB, true);
 
                     if (!rasterize_result) {
                         nvtxRangePop(); // rasterize_forward

@@ -88,14 +88,23 @@ namespace lfs::training {
 
         // Memory arena frame ID (for releasing arena memory in backward)
         uint64_t frame_id = 0;
+
+        // Tile-based training (0 = full image)
+        int render_tile_x_offset = 0;
+        int render_tile_y_offset = 0;
+        int render_tile_width = 0;
+        int render_tile_height = 0;
     };
 
-    // Explicit forward pass - returns render output and context for backward
-    // use_gut: force Gaussian Unscented Transform even for PINHOLE cameras
+    // Forward pass with optional tiling (tile_width/height=0 = full image)
     std::expected<std::pair<RenderOutput, GsplatRasterizeContext>, std::string> gsplat_rasterize_forward(
         lfs::core::Camera& viewpoint_camera,
         lfs::core::SplatData& gaussian_model,
         lfs::core::Tensor& bg_color,
+        int tile_x_offset = 0,
+        int tile_y_offset = 0,
+        int tile_width = 0,
+        int tile_height = 0,
         float scaling_modifier = 1.0f,
         bool antialiased = false,
         GsplatRenderMode render_mode = GsplatRenderMode::RGB,
@@ -118,8 +127,9 @@ namespace lfs::training {
         bool antialiased = false,
         GsplatRenderMode render_mode = GsplatRenderMode::RGB,
         bool use_gut = false) {
-        auto result = gsplat_rasterize_forward(viewpoint_camera, gaussian_model, bg_color,
-                                               scaling_modifier, antialiased, render_mode, use_gut);
+        auto result = gsplat_rasterize_forward(
+            viewpoint_camera, gaussian_model, bg_color, 0, 0, 0, 0,
+            scaling_modifier, antialiased, render_mode, use_gut);
         if (!result) {
             throw std::runtime_error(result.error());
         }

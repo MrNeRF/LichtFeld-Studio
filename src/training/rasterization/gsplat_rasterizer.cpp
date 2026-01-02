@@ -15,6 +15,10 @@ namespace lfs::training {
         core::Camera& viewpoint_camera,
         core::SplatData& gaussian_model,
         core::Tensor& bg_color,
+        int tile_x_offset,
+        int tile_y_offset,
+        int tile_width,
+        int tile_height,
         float scaling_modifier,
         bool antialiased,
         GsplatRenderMode render_mode,
@@ -25,13 +29,27 @@ namespace lfs::training {
         uint64_t frame_id = arena.begin_frame();
         auto arena_allocator = arena.get_allocator(frame_id);
 
-        // Get camera parameters
-        const uint32_t image_height = static_cast<uint32_t>(viewpoint_camera.image_height());
-        const uint32_t image_width = static_cast<uint32_t>(viewpoint_camera.image_width());
+        // Full image dimensions
+        const uint32_t full_image_height = static_cast<uint32_t>(viewpoint_camera.image_height());
+        const uint32_t full_image_width = static_cast<uint32_t>(viewpoint_camera.image_width());
 
-        // Get raw pointers for camera matrices
+        // Render dimensions (0 = full image)
+        const uint32_t image_width = (tile_width > 0) ? static_cast<uint32_t>(tile_width) : full_image_width;
+        const uint32_t image_height = (tile_height > 0) ? static_cast<uint32_t>(tile_height) : full_image_height;
+
         const float* viewmat_ptr = viewpoint_camera.world_view_transform_ptr();
-        auto K_tensor = viewpoint_camera.K().contiguous();
+
+        // Adjust K matrix principal point (cx, cy) for tile offset
+        core::Tensor K_tensor;
+        if (tile_x_offset != 0 || tile_y_offset != 0) {
+            auto K_cpu = viewpoint_camera.K().cpu().contiguous();
+            auto K_acc = K_cpu.accessor<float, 3>();
+            K_acc(0, 0, 2) -= static_cast<float>(tile_x_offset);
+            K_acc(0, 1, 2) -= static_cast<float>(tile_y_offset);
+            K_tensor = K_cpu.to(core::Device::CUDA).contiguous();
+        } else {
+            K_tensor = viewpoint_camera.K().contiguous();
+        }
         const float* K_ptr = K_tensor.ptr<float>();
 
         // Get Gaussian parameters (activated) - ensure contiguous
@@ -125,8 +143,8 @@ namespace lfs::training {
                                : 0; // SH coefficients
         const uint32_t H = image_height;
         const uint32_t W = image_width;
-        const uint32_t tile_height = (H + tile_size - 1) / tile_size;
-        const uint32_t tile_width = (W + tile_size - 1) / tile_size;
+        const uint32_t num_tiles_y = (H + tile_size - 1) / tile_size;
+        const uint32_t num_tiles_x = (W + tile_size - 1) / tile_size;
 
         // Determine channels based on render mode
         uint32_t channels = 3;
@@ -149,7 +167,7 @@ namespace lfs::training {
         const size_t conics_size = align(C * N * 3 * sizeof(float));
         const size_t compensations_size = calc_compensations ? align(C * N * sizeof(float)) : 0;
         const size_t tiles_per_gauss_size = align(C * N * sizeof(int32_t));
-        const size_t tile_offsets_size = align(C * tile_height * tile_width * sizeof(int32_t));
+        const size_t tile_offsets_size = align(C * num_tiles_y * num_tiles_x * sizeof(int32_t));
         const size_t colors_size = align(C * N * channels * sizeof(float));
         const size_t render_colors_size = align(C * H * W * channels * sizeof(float));
         const size_t render_alphas_size = align(C * H * W * sizeof(float));
@@ -348,8 +366,8 @@ namespace lfs::training {
         ctx.image_width = image_width;
         ctx.image_height = image_height;
         ctx.tile_size = tile_size;
-        ctx.tile_width = tile_width;
-        ctx.tile_height = tile_height;
+        ctx.tile_width = num_tiles_x;
+        ctx.tile_height = num_tiles_y;
         ctx.eps2d = eps2d;
         ctx.near_plane = near_plane;
         ctx.far_plane = far_plane;
@@ -359,6 +377,10 @@ namespace lfs::training {
         ctx.render_mode = render_mode;
         ctx.camera_model = camera_model;
         ctx.frame_id = frame_id;
+        ctx.render_tile_x_offset = tile_x_offset;
+        ctx.render_tile_y_offset = tile_y_offset;
+        ctx.render_tile_width = tile_width;
+        ctx.render_tile_height = tile_height;
 
         return std::pair{render_output, ctx};
     }
