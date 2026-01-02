@@ -149,6 +149,8 @@ namespace lfs::rendering {
         int pbo_index_ = 0;
         int pbo_width_ = 0;
         int pbo_height_ = 0;
+        int allocated_pbo_width_ = 0;
+        int allocated_pbo_height_ = 0;
 
 #ifdef CUDA_GL_INTEROP_ENABLED
         // CUDA-GL interop for direct FBO→CUDA texture readback (eliminates CPU round-trip)

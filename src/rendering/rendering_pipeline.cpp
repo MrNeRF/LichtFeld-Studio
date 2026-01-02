@@ -841,19 +841,16 @@ namespace lfs::rendering {
     }
 
     void RenderingPipeline::ensurePBOSize(int width, int height) {
-        static int allocated_pbo_width = 0;
-        static int allocated_pbo_height = 0;
-
         const int alloc_width = ((width + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT;
         const int alloc_height = ((height + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT;
 
-        if (pbo_[0] != 0 && alloc_width == allocated_pbo_width && alloc_height == allocated_pbo_height) {
+        if (pbo_[0] != 0 && alloc_width == allocated_pbo_width_ && alloc_height == allocated_pbo_height_) {
             pbo_width_ = width;
             pbo_height_ = height;
             return;
         }
 
-        LOG_DEBUG("PBO resize: {}x{} -> {}x{}", allocated_pbo_width, allocated_pbo_height, alloc_width, alloc_height);
+        LOG_DEBUG("PBO resize: {}x{} -> {}x{}", allocated_pbo_width_, allocated_pbo_height_, alloc_width, alloc_height);
 
         if (pbo_[0] != 0) {
             cleanupPBO();
@@ -868,8 +865,8 @@ namespace lfs::rendering {
         }
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 
-        allocated_pbo_width = alloc_width;
-        allocated_pbo_height = alloc_height;
+        allocated_pbo_width_ = alloc_width;
+        allocated_pbo_height_ = alloc_height;
         pbo_width_ = width;
         pbo_height_ = height;
         pbo_index_ = 0;
@@ -883,6 +880,8 @@ namespace lfs::rendering {
         }
         pbo_width_ = 0;
         pbo_height_ = 0;
+        allocated_pbo_width_ = 0;
+        allocated_pbo_height_ = 0;
         pbo_index_ = 0;
     }
 

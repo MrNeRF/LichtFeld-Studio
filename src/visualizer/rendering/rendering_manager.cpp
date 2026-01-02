@@ -840,10 +840,9 @@ namespace lfs::vis {
                 viewport_pos = glm::ivec2(static_cast<int>(context.viewport_region->x), gl_y);
                 display_size = glm::ivec2(static_cast<int>(context.viewport_region->width),
                                           static_cast<int>(context.viewport_region->height));
+            } else {
+                glViewport(viewport_pos.x, viewport_pos.y, display_size.x, display_size.y);
             }
-
-            // Set viewport to DISPLAY size, texture will be upscaled to fill
-            glViewport(viewport_pos.x, viewport_pos.y, display_size.x, display_size.y);
             glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             // Pass IMAGE size for upload validation
