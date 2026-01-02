@@ -3159,7 +3159,7 @@ namespace lfs::vis::gui {
         ImGui::PopStyleColor(9);
         ImGui::PopStyleVar(5);
 
-        // Dismiss on user interaction (but not when interacting with overlay)
+        // Dismiss on user interaction (but not when interacting with language combo or modals)
         const auto& io = ImGui::GetIO();
         const bool modal_open = (save_directory_popup_ && save_directory_popup_->isOpen()) ||
                                 (exit_confirmation_popup_ && exit_confirmation_popup_->isOpen());
@@ -3172,9 +3172,9 @@ namespace lfs::vis::gui {
                                 ImGui::IsKeyPressed(ImGuiKey_Space) ||
                                 ImGui::IsKeyPressed(ImGuiKey_Enter);
 
-        // Don't dismiss if interacting with overlay or its popup
+        // Don't dismiss if interacting with language combo or any popup/modal
         const bool any_popup_open = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-        if (!overlay_hovered && !any_popup_open && !modal_open && !drag_drop_hovering_ && (mouse_action || key_action)) {
+        if (!any_popup_open && !modal_open && !drag_drop_hovering_ && (mouse_action || key_action)) {
             show_startup_overlay_ = false;
         }
     }
