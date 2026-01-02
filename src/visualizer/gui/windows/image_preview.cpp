@@ -846,11 +846,18 @@ namespace lfs::vis::gui {
 
         const float scale = getDpiScale();
         const float INFO_PANEL_WIDTH = 260.0f * scale;
+        const float PANEL_MARGIN = 8.0f * scale;
+
+        // Reserve space for info panel if visible
+        const float available_width = show_info_panel_ 
+            ? content_size.x - INFO_PANEL_WIDTH - PANEL_MARGIN * 2.0f
+            : content_size.x;
 
         const auto [display_width, display_height] = calculateDisplaySize(
-            static_cast<int>(content_size.x), static_cast<int>(content_size.y));
+            static_cast<int>(available_width), static_cast<int>(content_size.y));
 
-        const float x_offset = (content_size.x - display_width) * 0.5f + pan_x_;
+        // Center image in available space (excluding info panel if visible)
+        const float x_offset = (available_width - display_width) * 0.5f + pan_x_;
         const float y_offset = (content_size.y - display_height) * 0.5f + pan_y_;
         const float base_cursor_y = ImGui::GetCursorPosY();
 
@@ -875,7 +882,6 @@ namespace lfs::vis::gui {
 
         // Floating info panel
         if (show_info_panel_ && current_texture_) {
-            const float PANEL_MARGIN = 8.0f * scale;
             const float MAX_PANEL_HEIGHT = 400.0f * scale;
             const float panel_height = std::min(content_size.y - 2.0f * PANEL_MARGIN, MAX_PANEL_HEIGHT);
             ImGui::SetCursorPos(ImVec2(content_size.x - INFO_PANEL_WIDTH - PANEL_MARGIN, base_cursor_y + PANEL_MARGIN));
