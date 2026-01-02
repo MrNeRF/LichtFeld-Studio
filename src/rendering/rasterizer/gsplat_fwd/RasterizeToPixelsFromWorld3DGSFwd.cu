@@ -15,6 +15,10 @@ namespace gsplat_fwd {
 
     namespace cg = cooperative_groups;
 
+    namespace {
+        constexpr float FAR_DEPTH = 1e10f;
+    }
+
     ////////////////////////////////////////////////////////////////
     // Forward Kernel
     ////////////////////////////////////////////////////////////////
@@ -32,6 +36,7 @@ namespace gsplat_fwd {
         const scalar_t* __restrict__ opacities,   // [C, N] or [nnz]
         const scalar_t* __restrict__ backgrounds, // [C, CDIM]
         const bool* __restrict__ masks,           // [C, tile_height, tile_width]
+        const scalar_t* __restrict__ depths,      // [C, N] per-gaussian depths
         const uint32_t image_width,
         const uint32_t image_height,
         const uint32_t tile_size,
@@ -53,7 +58,8 @@ namespace gsplat_fwd {
         const int32_t* __restrict__ flatten_ids,  // [n_isects]
         scalar_t* __restrict__ render_colors,     // [C, image_height, image_width, CDIM]
         scalar_t* __restrict__ render_alphas,     // [C, image_height, image_width, 1]
-        int32_t* __restrict__ last_ids            // [C, image_height, image_width]
+        int32_t* __restrict__ last_ids,           // [C, image_height, image_width]
+        scalar_t* __restrict__ median_depths      // [C, image_height, image_width]
     ) {
         // each thread draws one pixel, but also timeshares caching gaussians in a
         // shared tile
@@ -69,6 +75,12 @@ namespace gsplat_fwd {
         render_colors += cid * image_height * image_width * CDIM;
         render_alphas += cid * image_height * image_width;
         last_ids += cid * image_height * image_width;
+        if (median_depths != nullptr) {
+            median_depths += cid * image_height * image_width;
+        }
+        if (depths != nullptr) {
+            depths += cid * N;
+        }
         if (backgrounds != nullptr) {
             backgrounds += cid * CDIM;
         }
@@ -191,13 +203,9 @@ namespace gsplat_fwd {
         mat3* iscl_rot_batch =
             reinterpret_cast<mat3*>(&xyz_opacity_batch[block_size]); // [block_size]
 
-        // current visibility left to render
-        // transmittance is gonna be used in the backward pass which requires a high
-        // numerical precision so we use double for it. However double make bwd 1.5x
-        // slower so we stick with float for now.
         float T = 1.0f;
-        // index of most recent gaussian to write to this thread's pixel
         uint32_t cur_idx = 0;
+        float median_depth = FAR_DEPTH;
 
         // collect and process batches of gaussians
         // each thread loads one gaussian at a time before rasterizing its
@@ -279,16 +287,16 @@ namespace gsplat_fwd {
                 }
                 cur_idx = batch_start + t;
 
+                // Median depth: record when transmittance crosses 0.5
+                if (depths != nullptr && T > 0.5f && next_T <= 0.5f) {
+                    median_depth = depths[g];
+                }
+
                 T = next_T;
             }
         }
 
         if (inside) {
-            // Here T is the transmittance AFTER the last gaussian in this pixel.
-            // We (should) store double precision as T would be used in backward
-            // pass and it can be very small and causing large diff in gradients
-            // with float32. However, double precision makes the backward pass 1.5x
-            // slower so we stick with float for now.
             render_alphas[pix_id] = 1.0f - T;
 #pragma unroll
             for (uint32_t k = 0; k < CDIM; ++k) {
@@ -296,8 +304,10 @@ namespace gsplat_fwd {
                     backgrounds == nullptr ? pix_out[k]
                                            : (pix_out[k] + T * backgrounds[k]);
             }
-            // index in bin of last gaussian in this pixel
             last_ids[pix_id] = static_cast<int32_t>(cur_idx);
+            if (median_depths != nullptr) {
+                median_depths[pix_id] = median_depth;
+            }
         }
     }
 
@@ -314,6 +324,7 @@ namespace gsplat_fwd {
         const float* opacities,
         const float* backgrounds,
         const bool* masks,
+        const float* depths,
         uint32_t C,
         uint32_t N,
         uint32_t n_isects,
@@ -334,6 +345,7 @@ namespace gsplat_fwd {
         float* renders,
         float* alphas,
         int32_t* last_ids,
+        float* median_depths,
         cudaStream_t stream) {
         const bool packed = false; // Only support non-packed for now
         const uint32_t tile_width = (image_width + tile_size - 1) / tile_size;
@@ -382,6 +394,7 @@ namespace gsplat_fwd {
                 opacities,
                 backgrounds,
                 masks,
+                depths,
                 image_width,
                 image_height,
                 tile_size,
@@ -400,7 +413,8 @@ namespace gsplat_fwd {
                 flatten_ids,
                 renders,
                 alphas,
-                last_ids);
+                last_ids,
+                median_depths);
     }
 
     ////////////////////////////////////////////////////////////////
@@ -416,6 +430,7 @@ namespace gsplat_fwd {
         const float* opacities,                                                \
         const float* backgrounds,                                              \
         const bool* masks,                                                     \
+        const float* depths,                                                   \
         uint32_t C,                                                            \
         uint32_t N,                                                            \
         uint32_t n_isects,                                                     \
@@ -436,6 +451,7 @@ namespace gsplat_fwd {
         float* renders,                                                        \
         float* alphas,                                                         \
         int32_t* last_ids,                                                     \
+        float* median_depths,                                                  \
         cudaStream_t stream);
 
     __INS__(1)

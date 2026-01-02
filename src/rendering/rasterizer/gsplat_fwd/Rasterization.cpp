@@ -26,6 +26,7 @@ namespace gsplat_fwd {
         const float* opacities,
         const float* backgrounds,
         const bool* masks,
+        const float* depths,
         uint32_t C,
         uint32_t N,
         uint32_t n_isects,
@@ -47,6 +48,7 @@ namespace gsplat_fwd {
         float* renders,
         float* alphas,
         int32_t* last_ids,
+        float* median_depths,
         cudaStream_t stream) {
         GSPLAT_CHECK_CUDA_PTR(means, "means");
         GSPLAT_CHECK_CUDA_PTR(quats, "quats");
@@ -61,13 +63,13 @@ namespace gsplat_fwd {
     case CDIM:                                                       \
         launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM>( \
             means, quats, scales, colors, opacities,                 \
-            backgrounds, masks, C, N, n_isects,                      \
+            backgrounds, masks, depths, C, N, n_isects,              \
             image_width, image_height, tile_size,                    \
             viewmats0, viewmats1, Ks, camera_model,                  \
             ut_params, rs_type,                                      \
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,     \
             tile_offsets, flatten_ids,                               \
-            renders, alphas, last_ids, stream);                      \
+            renders, alphas, last_ids, median_depths, stream);       \
         break;
 
         switch (channels) {
@@ -197,7 +199,7 @@ namespace gsplat_fwd {
         // Step 4: Rasterize to pixels
         rasterize_to_pixels_from_world_3dgs_fwd(
             means, quats, scaled_scales, result.colors, opacities,
-            backgrounds, masks,
+            backgrounds, masks, result.depths,
             C, N, result.n_isects, channels,
             image_width, image_height, tile_size,
             viewmats0, viewmats1, Ks, camera_model,
@@ -205,7 +207,7 @@ namespace gsplat_fwd {
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,
             result.tile_offsets, result.flatten_ids,
             result.render_colors, result.render_alphas, result.last_ids,
-            stream);
+            result.median_depths, stream);
     }
 
 } // namespace gsplat_fwd

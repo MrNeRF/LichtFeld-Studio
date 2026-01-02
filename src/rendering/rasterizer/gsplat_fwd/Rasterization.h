@@ -25,6 +25,7 @@ namespace gsplat_fwd {
         const float* opacities,
         const float* backgrounds,
         const bool* masks,
+        const float* depths,
         uint32_t C,
         uint32_t N,
         uint32_t n_isects,
@@ -45,6 +46,7 @@ namespace gsplat_fwd {
         float* renders,
         float* alphas,
         int32_t* last_ids,
+        float* median_depths,
         cudaStream_t stream = nullptr);
 
 } // namespace gsplat_fwd

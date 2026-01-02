@@ -72,10 +72,12 @@ namespace lfs::rendering {
         const size_t render_colors_size = align(NUM_CAMERAS * H * W * CHANNELS * sizeof(float));
         const size_t render_alphas_size = align(NUM_CAMERAS * H * W * sizeof(float));
         const size_t last_ids_size = align(NUM_CAMERAS * H * W * sizeof(int32_t));
+        const size_t median_depths_size = align(NUM_CAMERAS * H * W * sizeof(float));
 
         const size_t total_size = radii_size + means2d_size + depths_size + dirs_size +
                                   conics_size + tiles_per_gauss_size + tile_offsets_size +
-                                  colors_size + render_colors_size + render_alphas_size + last_ids_size;
+                                  colors_size + render_colors_size + render_alphas_size + last_ids_size +
+                                  median_depths_size;
 
         char* blob = arena_allocator(total_size);
         char* ptr = blob;
@@ -101,6 +103,8 @@ namespace lfs::rendering {
         auto* const render_alphas_ptr = reinterpret_cast<float*>(ptr);
         ptr += render_alphas_size;
         auto* const last_ids_ptr = reinterpret_cast<int32_t*>(ptr);
+        ptr += last_ids_size;
+        auto* const median_depths_ptr = reinterpret_cast<float*>(ptr);
 
         gsplat_fwd::RasterizeWithSHResult result{
             .render_colors = render_colors_ptr,
@@ -114,6 +118,7 @@ namespace lfs::rendering {
             .tiles_per_gauss = tiles_per_gauss_ptr,
             .tile_offsets = tile_offsets_ptr,
             .last_ids = last_ids_ptr,
+            .median_depths = (render_depth_out != nullptr) ? median_depths_ptr : nullptr,
             .compensations = nullptr,
             .isect_ids = nullptr,
             .flatten_ids = nullptr,
@@ -139,6 +144,10 @@ namespace lfs::rendering {
         const size_t alpha_bytes = H * W * sizeof(float);
         cudaMemcpyAsync(render_colors_out, render_colors_ptr, color_bytes, cudaMemcpyDeviceToDevice, stream);
         cudaMemcpyAsync(render_alphas_out, render_alphas_ptr, alpha_bytes, cudaMemcpyDeviceToDevice, stream);
+
+        if (render_depth_out != nullptr) {
+            cudaMemcpyAsync(render_depth_out, median_depths_ptr, alpha_bytes, cudaMemcpyDeviceToDevice, stream);
+        }
 
         // Free intersection buffers allocated by gsplat
         if (result.isect_ids)

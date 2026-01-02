@@ -134,6 +134,7 @@ namespace gsplat_fwd {
         const float* opacities,   // [C, N]
         const float* backgrounds, // [C, channels] (can be nullptr)
         const bool* masks,        // [C, tile_height, tile_width] (can be nullptr)
+        const float* depths,      // [C, N] per-gaussian depths (can be nullptr)
         // dimensions
         uint32_t C,
         uint32_t N,
@@ -156,9 +157,10 @@ namespace gsplat_fwd {
         const int32_t* tile_offsets, // [C, tile_height, tile_width]
         const int32_t* flatten_ids,  // [n_isects]
         // outputs (pre-allocated)
-        float* renders,    // [C, image_height, image_width, channels]
-        float* alphas,     // [C, image_height, image_width, 1]
-        int32_t* last_ids, // [C, image_height, image_width]
+        float* renders,       // [C, image_height, image_width, channels]
+        float* alphas,        // [C, image_height, image_width, 1]
+        int32_t* last_ids,    // [C, image_height, image_width]
+        float* median_depths, // [C, image_height, image_width] (can be nullptr)
         cudaStream_t stream = nullptr);
 
     //=========================================================================
@@ -178,6 +180,7 @@ namespace gsplat_fwd {
         int32_t* tiles_per_gauss; // [C, N]
         int32_t* tile_offsets;    // [C, tile_height, tile_width]
         int32_t* last_ids;        // [C, H, W]
+        float* median_depths;     // [C, H, W] optional (can be nullptr)
         float* compensations;     // [C, N] optional (can be nullptr)
         // These are allocated internally - caller must free with cudaFree:
         int64_t* isect_ids;   // [n_isects]
