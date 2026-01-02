@@ -30,6 +30,10 @@
 
 namespace lfs::vis {
 
+    namespace {
+        constexpr float DEFAULT_VOXEL_SIZE = 0.03f;
+    }
+
     using namespace lfs::core::events;
 
     SceneManager::SceneManager() {
@@ -1049,6 +1053,8 @@ namespace lfs::vis {
 
             const auto* training_model = scene_.getTrainingModel();
             const size_t num_gaussians = training_model ? training_model->size() : 0;
+            const auto* point_cloud = scene_.getVisiblePointCloud();
+            const size_t num_points = point_cloud ? point_cloud->size() : 0;
 
             state::SceneLoaded{
                 .scene = nullptr,
@@ -1059,8 +1065,8 @@ namespace lfs::vis {
 
             emitSceneChanged();
 
-            if (num_gaussians > 0 && services().trainerOrNull() && services().trainerOrNull()->getTrainer()) {
-                ui::PointCloudModeChanged{.enabled = true, .voxel_size = 0.03f}.emit();
+            if ((num_gaussians > 0 || num_points > 0) && services().trainerOrNull() && services().trainerOrNull()->getTrainer()) {
+                ui::PointCloudModeChanged{.enabled = true, .voxel_size = DEFAULT_VOXEL_SIZE}.emit();
             }
 
             return {};
@@ -1150,10 +1156,12 @@ namespace lfs::vis {
             // Get info from scene
             const auto* training_model = scene_.getTrainingModel();
             const size_t num_gaussians = training_model ? training_model->size() : 0;
+            const auto* point_cloud = scene_.getVisiblePointCloud();
+            const size_t num_points = point_cloud ? point_cloud->size() : 0;
             const size_t num_cameras = scene_.getTrainCameras() ? scene_.getTrainCameras()->size() : 0;
 
-            LOG_INFO("Dataset loaded successfully - {} images, {} initial gaussians",
-                     num_cameras, num_gaussians);
+            LOG_INFO("Dataset loaded successfully - {} images, {} initial points/gaussians",
+                     num_cameras, num_gaussians > 0 ? num_gaussians : num_points);
 
             state::SceneLoaded{
                 .scene = nullptr,
@@ -1167,19 +1175,15 @@ namespace lfs::vis {
                 .success = true,
                 .error = std::nullopt,
                 .num_images = num_cameras,
-                .num_points = num_gaussians}
+                .num_points = num_gaussians > 0 ? num_gaussians : num_points}
                 .emit();
 
             emitSceneChanged();
 
             // Switch to point cloud rendering mode by default for datasets
-            // Re-enabled with debug logging to investigate dimension mismatch
-            if (num_gaussians > 0 && services().trainerOrNull() && services().trainerOrNull()->getTrainer()) {
-                ui::PointCloudModeChanged{
-                    .enabled = true,
-                    .voxel_size = 0.03f}
-                    .emit();
-                LOG_INFO("Switched to point cloud rendering mode for dataset ({} gaussians)", num_gaussians);
+            if ((num_gaussians > 0 || num_points > 0) && services().trainerOrNull() && services().trainerOrNull()->getTrainer()) {
+                ui::PointCloudModeChanged{.enabled = true, .voxel_size = DEFAULT_VOXEL_SIZE}.emit();
+                LOG_INFO("Switched to point cloud mode ({} points)", num_gaussians > 0 ? num_gaussians : num_points);
             }
 
         } catch (const std::exception& e) {
@@ -1313,7 +1317,7 @@ namespace lfs::vis {
 
             emitSceneChanged();
 
-            ui::PointCloudModeChanged{.enabled = false, .voxel_size = 0.03f}.emit();
+            ui::PointCloudModeChanged{.enabled = false, .voxel_size = DEFAULT_VOXEL_SIZE}.emit();
             selectNode(MODEL_NAME);
             ui::FocusTrainingPanel{}.emit();
 

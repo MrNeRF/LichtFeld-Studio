@@ -514,7 +514,9 @@ namespace lfs::io {
             }
 
             LOG_INFO("Successfully loaded PLY point cloud with {} points", vertex_count);
-            return PointCloud(positions, color_tensor);
+
+            // Move to CUDA for GPU rendering
+            return PointCloud(positions.cuda(), color_tensor.cuda());
 
         } catch (const std::exception& e) {
             throw std::runtime_error(std::format("Failed to load PLY file {}: {}", lfs::core::path_to_utf8(filepath), e.what()));
