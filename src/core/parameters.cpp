@@ -305,7 +305,7 @@ namespace lfs::core {
             try {
                 return OptimizationParameters::from_json(opt_json);
             } catch (const std::exception& e) {
-                return std::unexpected(std::format("Parse error: {}", e.what()));
+                return std::unexpected(std::format("Error parsing optimization parameters: {}", e.what()));
             }
         }
 
@@ -335,7 +335,7 @@ namespace lfs::core {
                 LOG_INFO("Saved config: {}", path_to_utf8(filepath));
                 return {};
             } catch (const std::exception& e) {
-                return std::unexpected(std::format("Save error: {}", e.what()));
+                return std::unexpected(std::format("Error saving training parameters: {}", e.what()));
             }
         }
 
