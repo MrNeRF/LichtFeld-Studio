@@ -273,12 +273,18 @@ namespace gsplat_fwd {
                 }
 
                 const float next_T = T * (1.0f - alpha);
-                if (next_T <= 1e-4f) { // this pixel is done: exclusive
+                const int32_t g = id_batch[t];
+
+                // Median depth: check before early exit to catch high-opacity cases
+                if (depths != nullptr && T > 0.5f && next_T <= 0.5f) {
+                    median_depth = depths[g];
+                }
+
+                if (next_T <= 1e-4f) {
                     done = true;
                     break;
                 }
 
-                int32_t g = id_batch[t];
                 const float vis = alpha * T;
                 const float* c_ptr = colors + g * CDIM;
 #pragma unroll
@@ -286,12 +292,6 @@ namespace gsplat_fwd {
                     pix_out[k] += c_ptr[k] * vis;
                 }
                 cur_idx = batch_start + t;
-
-                // Median depth: record when transmittance crosses 0.5
-                if (depths != nullptr && T > 0.5f && next_T <= 0.5f) {
-                    median_depth = depths[g];
-                }
-
                 T = next_T;
             }
         }
