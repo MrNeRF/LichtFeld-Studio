@@ -267,6 +267,7 @@ include(GoogleTest)
 gtest_discover_tests(lichtfeld_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     PROPERTIES TIMEOUT 30
+    DISCOVERY_MODE PRE_TEST
 )
 
 # Custom target to run tests with output
@@ -288,6 +289,25 @@ if(WIN32)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TORCH_DLL}"
             "$<TARGET_FILE_DIR:lichtfeld_tests>")
     endforeach()
+    if(TARGET nvimgcodec)
+        add_dependencies(lichtfeld_tests nvimgcodec)
+        add_custom_command(TARGET lichtfeld_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:nvimgcodec>"
+                "$<TARGET_FILE_DIR:lichtfeld_tests>"
+            COMMENT "Copying nvImageCodec library for tests"
+        )
+    endif()
+    if(TARGET nvjpeg_ext)
+        add_dependencies(lichtfeld_tests nvjpeg_ext)
+        add_custom_command(TARGET lichtfeld_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:lichtfeld_tests>/extensions"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:nvjpeg_ext>"
+                "$<TARGET_FILE_DIR:lichtfeld_tests>/extensions/"
+            COMMENT "Copying nvjpeg extension for tests"
+        )
+    endif()
 endif()
 
 message(STATUS "Tests configured with ${CMAKE_BUILD_TYPE} build type")
