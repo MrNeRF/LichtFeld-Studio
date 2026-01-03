@@ -16,34 +16,35 @@ namespace lfs::vis::gui {
     using namespace lichtfeld::Strings;
 
     namespace {
-        // Base dimensions (scaled by DPI factor at runtime)
-        constexpr float BASE_POPUP_WIDTH = 500.0f;
-        constexpr float BASE_POPUP_HEIGHT = 260.0f;
-        constexpr float BASE_INPUT_WIDTH = 340.0f;
-        constexpr float BASE_MAX_PATH_WIDTH = 380.0f;
-
+        constexpr float BASE_POPUP_WIDTH = 560.0f;
+        constexpr float BASE_POPUP_HEIGHT = 360.0f;
+        constexpr float BASE_INPUT_WIDTH = 380.0f;
+        constexpr float BASE_MAX_PATH_WIDTH = 420.0f;
         constexpr float POPUP_ALPHA = 0.98f;
         constexpr float BORDER_SIZE = 2.0f;
         constexpr ImVec2 BASE_WINDOW_PADDING = {20.0f, 16.0f};
         constexpr ImVec2 BASE_BUTTON_SIZE = {100.0f, 0.0f};
-
-        constexpr ImGuiWindowFlags POPUP_FLAGS = ImGuiWindowFlags_NoCollapse |
-                                                 ImGuiWindowFlags_NoDocking |
-                                                 ImGuiWindowFlags_NoResize |
-                                                 ImGuiWindowFlags_NoScrollbar |
-                                                 ImGuiWindowFlags_NoScrollWithMouse;
         constexpr size_t PATH_BUFFER_SIZE = 1024;
         constexpr float DARKEN_TITLE = 0.1f;
         constexpr float DARKEN_TITLE_ACTIVE = 0.05f;
         constexpr float DARKEN_SUCCESS_BUTTON = 0.3f;
         constexpr float DARKEN_SUCCESS_HOVER = 0.15f;
         constexpr float DARKEN_SUCCESS_ACTIVE = 0.2f;
+
+        constexpr ImGuiWindowFlags POPUP_FLAGS = ImGuiWindowFlags_NoCollapse |
+                                                 ImGuiWindowFlags_NoDocking |
+                                                 ImGuiWindowFlags_NoResize |
+                                                 ImGuiWindowFlags_NoScrollbar |
+                                                 ImGuiWindowFlags_NoScrollWithMouse;
     } // namespace
 
     void SaveDirectoryPopup::show(const std::filesystem::path& dataset_path) {
-        dataset_path_ = dataset_path;
+        dataset_info_ = lfs::io::detect_dataset_info(dataset_path);
         output_path_buffer_ = lfs::core::path_to_utf8(deriveDefaultOutputPath(dataset_path));
         output_path_buffer_.resize(PATH_BUFFER_SIZE);
+        init_path_buffer_.clear();
+        init_path_buffer_.resize(PATH_BUFFER_SIZE);
+        use_custom_init_ = false;
         should_open_ = true;
     }
 
@@ -51,8 +52,20 @@ namespace lfs::vis::gui {
         return dataset_path / "output";
     }
 
+    void SaveDirectoryPopup::renderPathRow(const char* label, const std::string& path, const float max_width) {
+        const auto& t = theme();
+        ImGui::TextColored(t.palette.text_dim, "%s", label);
+        ImGui::SameLine();
+
+        const bool is_clipped = ImGui::CalcTextSize(path.c_str()).x > max_width;
+        ImGui::TextUnformatted(path.c_str());
+        if (is_clipped && ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", path.c_str());
+        }
+    }
+
     void SaveDirectoryPopup::render(const ImVec2& viewport_pos, const ImVec2& viewport_size) {
-        const char* popup_title = LOC(SaveDirPopup::TITLE);
+        const char* popup_title = LOC(LoadDatasetPopup::TITLE);
 
         if (should_open_) {
             ImGui::OpenPopup(popup_title);
@@ -69,8 +82,8 @@ namespace lfs::vis::gui {
         const ImVec4 title_bg = darken(t.palette.surface, DARKEN_TITLE);
         const ImVec4 title_bg_active = darken(t.palette.surface, DARKEN_TITLE_ACTIVE);
         const ImVec4 frame_bg = darken(t.palette.surface, DARKEN_TITLE);
+        const float max_path_width = BASE_MAX_PATH_WIDTH * scale;
 
-        // Center in viewport if provided
         const ImVec2 center = (viewport_size.x > 0 && viewport_size.y > 0)
                                   ? ImVec2{viewport_pos.x + viewport_size.x * 0.5f, viewport_pos.y + viewport_size.y * 0.5f}
                                   : ImGui::GetMainViewport()->GetCenter();
@@ -95,24 +108,52 @@ namespace lfs::vis::gui {
             ImGui::SameLine();
             ImGui::TextColored(t.palette.text_dim, "|");
             ImGui::SameLine();
-            ImGui::TextUnformatted(LOC(SaveDirPopup::CONFIGURE_OUTPUT));
+            ImGui::TextUnformatted(LOC(LoadDatasetPopup::CONFIGURE_PATHS));
 
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
 
-            ImGui::TextColored(t.palette.text_dim, "%s", LOC(SaveDirPopup::DATASET_LABEL));
+            const std::string images_str = lfs::core::path_to_utf8(dataset_info_.images_path);
+            renderPathRow(LOC(LoadDatasetPopup::IMAGES_DIR), images_str, max_path_width);
             ImGui::SameLine();
-            const std::string dataset_str = lfs::core::path_to_utf8(dataset_path_);
-            const bool is_clipped = ImGui::CalcTextSize(dataset_str.c_str()).x > BASE_MAX_PATH_WIDTH * scale;
-            ImGui::TextUnformatted(dataset_str.c_str());
-            if (is_clipped && ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("%s", dataset_str.c_str());
+            ImGui::TextColored(t.palette.text_dim, "(%d images)", dataset_info_.image_count);
+
+            const std::string sparse_str = lfs::core::path_to_utf8(dataset_info_.sparse_path);
+            renderPathRow(LOC(LoadDatasetPopup::SPARSE_DIR), sparse_str, max_path_width);
+
+            if (dataset_info_.has_masks) {
+                const std::string masks_str = lfs::core::path_to_utf8(dataset_info_.masks_path);
+                renderPathRow(LOC(LoadDatasetPopup::MASKS_DIR), masks_str, max_path_width);
+                ImGui::SameLine();
+                ImGui::TextColored(t.palette.text_dim, "(%d masks)", dataset_info_.mask_count);
             }
 
             ImGui::Spacing();
 
-            ImGui::TextColored(t.palette.text_dim, "%s", LOC(SaveDirPopup::OUTPUT_DIR));
+            ImGui::Checkbox("Custom init file (replaces points3D)", &use_custom_init_);
+            if (use_custom_init_) {
+                ImGui::SetNextItemWidth(BASE_INPUT_WIDTH * scale);
+                ImGui::InputText("##init_path", init_path_buffer_.data(), PATH_BUFFER_SIZE);
+                ImGui::SameLine();
+
+                ImGui::PushStyleColor(ImGuiCol_Button, t.button_normal());
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, t.button_hovered());
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, t.button_active());
+                if (ImGui::Button((std::string(LOC(Common::BROWSE)) + "##init").c_str())) {
+                    if (const auto selected = OpenPlyFileDialogNative(dataset_info_.base_path); !selected.empty()) {
+                        init_path_buffer_ = lfs::core::path_to_utf8(selected);
+                        init_path_buffer_.resize(PATH_BUFFER_SIZE);
+                    }
+                }
+                ImGui::PopStyleColor(3);
+            }
+
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            ImGui::TextColored(t.palette.text_dim, "%s", LOC(LoadDatasetPopup::OUTPUT_DIR));
             ImGui::SetNextItemWidth(BASE_INPUT_WIDTH * scale);
             ImGui::InputText("##output_path", output_path_buffer_.data(), PATH_BUFFER_SIZE);
 
@@ -121,13 +162,12 @@ namespace lfs::vis::gui {
             ImGui::PushStyleColor(ImGuiCol_Button, t.button_normal());
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, t.button_hovered());
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, t.button_active());
-            if (ImGui::Button(LOC(Common::BROWSE))) {
-                // Use utf8_to_path for proper Unicode handling
+            if (ImGui::Button((std::string(LOC(Common::BROWSE)) + "##output").c_str())) {
                 std::filesystem::path start_dir = lfs::core::utf8_to_path(output_path_buffer_);
                 if (!std::filesystem::exists(start_dir)) {
-                    start_dir = dataset_path_;
+                    start_dir = dataset_info_.base_path;
                 }
-                if (const auto selected = SelectFolderDialog(LOC(SaveDirPopup::TITLE), start_dir); !selected.empty()) {
+                if (const auto selected = SelectFolderDialog(LOC(LoadDatasetPopup::TITLE), start_dir); !selected.empty()) {
                     output_path_buffer_ = lfs::core::path_to_utf8(selected);
                     output_path_buffer_.resize(PATH_BUFFER_SIZE);
                 }
@@ -135,13 +175,11 @@ namespace lfs::vis::gui {
             ImGui::PopStyleColor(3);
 
             ImGui::Spacing();
-            ImGui::Spacing();
 
-            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 25.0f);
-            ImGui::TextColored(t.palette.text_dim, "%s", LOC(SaveDirPopup::HELP_TEXT));
+            ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28.0f);
+            ImGui::TextColored(t.palette.text_dim, "%s", LOC(LoadDatasetPopup::HELP_TEXT));
             ImGui::PopTextWrapPos();
 
-            ImGui::Spacing();
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
@@ -164,7 +202,13 @@ namespace lfs::vis::gui {
             if (ImGui::Button(LOC(Common::LOAD), button_size) || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
                 popup_open_ = false;
                 if (on_confirm_) {
-                    on_confirm_(dataset_path_, lfs::core::utf8_to_path(output_path_buffer_));
+                    DatasetLoadParams params;
+                    params.dataset_path = dataset_info_.base_path;
+                    params.output_path = lfs::core::utf8_to_path(output_path_buffer_);
+                    if (use_custom_init_ && !init_path_buffer_.empty() && init_path_buffer_[0] != '\0') {
+                        params.init_path = lfs::core::utf8_to_path(init_path_buffer_);
+                    }
+                    on_confirm_(params);
                 }
                 ImGui::CloseCurrentPopup();
             }

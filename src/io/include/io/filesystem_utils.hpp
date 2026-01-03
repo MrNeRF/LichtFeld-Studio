@@ -87,4 +87,65 @@ namespace lfs::io {
         return filename.substr(0, last_dot);
     }
 
+    struct DatasetInfo {
+        fs::path base_path;
+        fs::path images_path;
+        fs::path sparse_path;
+        fs::path masks_path;
+        bool has_masks = false;
+        int image_count = 0;
+        int mask_count = 0;
+    };
+
+    inline DatasetInfo detect_dataset_info(const fs::path& base_path) {
+        static constexpr const char* const IMAGE_FOLDERS[] = {"images", "images_4", "images_2", "images_8", "input", "rgb"};
+        static constexpr const char* const MASK_FOLDERS[] = {"masks", "mask", "dynamic_masks"};
+
+        DatasetInfo info;
+        info.base_path = base_path;
+
+        for (const auto* name : IMAGE_FOLDERS) {
+            if (safe_is_directory(base_path / name)) {
+                info.images_path = base_path / name;
+                break;
+            }
+        }
+        if (info.images_path.empty()) {
+            info.images_path = base_path / "images";
+        }
+
+        if (safe_is_directory(info.images_path)) {
+            std::error_code ec;
+            for (const auto& entry : fs::directory_iterator(info.images_path, ec)) {
+                if (!ec && entry.is_regular_file() && is_image_file(entry.path())) {
+                    ++info.image_count;
+                }
+            }
+        }
+
+        if (safe_is_directory(base_path / "sparse" / "0")) {
+            info.sparse_path = base_path / "sparse" / "0";
+        } else if (safe_is_directory(base_path / "sparse")) {
+            info.sparse_path = base_path / "sparse";
+        } else {
+            info.sparse_path = base_path / "sparse" / "0";
+        }
+
+        for (const auto* name : MASK_FOLDERS) {
+            if (safe_is_directory(base_path / name)) {
+                info.masks_path = base_path / name;
+                info.has_masks = true;
+                std::error_code ec;
+                for (const auto& entry : fs::directory_iterator(info.masks_path, ec)) {
+                    if (!ec && entry.is_regular_file() && is_image_file(entry.path())) {
+                        ++info.mask_count;
+                    }
+                }
+                break;
+            }
+        }
+
+        return info;
+    }
+
 } // namespace lfs::io

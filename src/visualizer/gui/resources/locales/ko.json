@@ -456,12 +456,23 @@
     "exit": "종료"
   },
 
-  "save_dir_popup": {
-    "title": "출력 디렉터리 선택",
-    "configure_output": "출력 위치 구성",
-    "dataset_label": "데이터셋:",
-    "output_dir": "출력 디렉터리:",
-    "help_text": "학습 체크포인트, 로그 및 내보낸 모델이 이 디렉터리에 저장됩니다."
+  "load_dataset_popup": {
+    "title": "데이터셋 불러오기",
+    "configure_paths": "데이터셋 경로 구성",
+    "images_dir": "이미지: ",
+    "sparse_dir": "Sparse: ",
+    "masks_dir": "마스크: ",
+    "output_dir": "출력:   ",
+    "help_text": "체크포인트, 로그 및 내보낸 모델이 출력 디렉터리에 저장됩니다."
+  },
+
+  "notification": {
+    "cannot_open": "열 수 없음",
+    "dropped_not_recognized": "드롭된",
+    "directory": "폴더",
+    "file": "파일",
+    "items": "항목",
+    "and_more": "... 외"
   },
 
   "export_dialog": {

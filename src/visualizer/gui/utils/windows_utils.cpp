@@ -480,7 +480,7 @@ namespace lfs::vis::gui {
 #endif
     }
 
-    std::filesystem::path OpenPlyFileDialogNative() {
+    std::filesystem::path OpenPlyFileDialogNative(const std::filesystem::path& startDir) {
 #ifdef _WIN32
         PWSTR filePath = nullptr;
         COMDLG_FILTERSPEC rgSpec[] = {{L"Point Cloud", L"*.ply;*.sog;*.spz"}};
@@ -491,10 +491,15 @@ namespace lfs::vis::gui {
         }
         return {};
 #else
+        std::string startPath = ".";
+        if (!startDir.empty() && std::filesystem::exists(startDir)) {
+            startPath = "'" + startDir.string() + "'";
+        }
         const std::string primary = "zenity --file-selection "
+                                    "--filename=" + startPath + "/ "
                                     "--file-filter='Point Cloud|*.ply *.sog *.spz' "
                                     "--title='Open Point Cloud' 2>/dev/null";
-        const std::string fallback = "kdialog --getopenfilename . 'Point Cloud (*.ply *.sog *.spz)' 2>/dev/null";
+        const std::string fallback = "kdialog --getopenfilename " + startPath + " 'Point Cloud (*.ply *.sog *.spz)' 2>/dev/null";
 
         const std::string result = runDialogCommand(primary, fallback);
         return result.empty() ? std::filesystem::path{} : std::filesystem::path(result);

@@ -456,12 +456,23 @@
     "exit": "Exit"
   },
 
-  "save_dir_popup": {
-    "title": "Select Output Directory",
-    "configure_output": "Configure output location",
-    "dataset_label": "Dataset:",
-    "output_dir": "Output Directory:",
-    "help_text": "Training checkpoints, logs, and exported models will be saved to this directory."
+  "load_dataset_popup": {
+    "title": "Load Dataset",
+    "configure_paths": "Configure dataset paths",
+    "images_dir": "Images:  ",
+    "sparse_dir": "Sparse:  ",
+    "masks_dir": "Masks:   ",
+    "output_dir": "Output:  ",
+    "help_text": "Training checkpoints, logs, and exported models will be saved to the output directory."
+  },
+
+  "notification": {
+    "cannot_open": "Cannot Open",
+    "dropped_not_recognized": "The dropped",
+    "directory": "directory",
+    "file": "file",
+    "items": "items",
+    "and_more": "... and"
   },
 
   "export_dialog": {

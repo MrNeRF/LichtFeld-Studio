@@ -6,6 +6,7 @@
 
 #include <deque>
 #include <functional>
+#include <imgui.h>
 #include <string>
 
 namespace lfs::vis::gui {
@@ -19,7 +20,7 @@ namespace lfs::vis::gui {
 
         NotificationPopup();
 
-        void render();
+        void render(const ImVec2& viewport_pos = {0, 0}, const ImVec2& viewport_size = {0, 0});
         void show(Type type, const std::string& title, const std::string& message,
                   Callback on_close = nullptr);
 

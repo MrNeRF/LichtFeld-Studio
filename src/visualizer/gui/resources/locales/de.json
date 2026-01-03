@@ -456,12 +456,23 @@
     "exit": "Beenden"
   },
 
-  "save_dir_popup": {
-    "title": "Ausgabeverzeichnis auswählen",
-    "configure_output": "Ausgabeort konfigurieren",
-    "dataset_label": "Datensatz:",
-    "output_dir": "Ausgabeverzeichnis:",
-    "help_text": "Trainings-Checkpoints, Logs und exportierte Modelle werden in diesem Verzeichnis gespeichert."
+  "load_dataset_popup": {
+    "title": "Datensatz laden",
+    "configure_paths": "Datensatz-Pfade konfigurieren",
+    "images_dir": "Bilder:  ",
+    "sparse_dir": "Sparse:  ",
+    "masks_dir": "Masken:  ",
+    "output_dir": "Ausgabe: ",
+    "help_text": "Trainings-Checkpoints, Logs und exportierte Modelle werden im Ausgabeverzeichnis gespeichert."
+  },
+
+  "notification": {
+    "cannot_open": "Kann nicht öffnen",
+    "dropped_not_recognized": "Das abgelegte",
+    "directory": "Verzeichnis",
+    "file": "Datei",
+    "items": "Elemente",
+    "and_more": "... und"
   },
 
   "export_dialog": {

@@ -398,16 +398,18 @@ namespace lfs::vis::gui {
             font_regular_ = font_bold_ = font_heading_ = font_small_ = font_section_ = fallback;
         }
 
-        save_directory_popup_->setOnConfirm([this](const std::filesystem::path& dataset_path,
-                                                   const std::filesystem::path& output_path) {
+        save_directory_popup_->setOnConfirm([this](const DatasetLoadParams& load_params) {
             if (const auto result = services().params().ensureLoaded(); !result) {
                 LOG_ERROR("Failed to load parameter files: {}", result.error());
                 return;
             }
             services().params().resetToDefaults();
-            const auto params = services().params().createForDataset(dataset_path, output_path);
+            auto params = services().params().createForDataset(load_params.dataset_path, load_params.output_path);
+            if (load_params.init_path) {
+                params.init_path = lfs::core::path_to_utf8(*load_params.init_path);
+            }
             viewer_->setParameters(params);
-            lfs::core::events::cmd::LoadFile{.path = dataset_path, .is_dataset = true}.emit();
+            lfs::core::events::cmd::LoadFile{.path = load_params.dataset_path, .is_dataset = true}.emit();
         });
 
         setFileSelectedCallback([this](const std::filesystem::path& path, const bool is_dataset) {
@@ -1074,7 +1076,7 @@ namespace lfs::vis::gui {
         }
 
         if (notification_popup_)
-            notification_popup_->render();
+            notification_popup_->render(viewport_pos_, viewport_size_);
         if (exit_confirmation_popup_)
             exit_confirmation_popup_->render();
 

@@ -139,6 +139,7 @@ namespace lfs::core {
                   size_t num_images;
                   size_t num_points;);
             EVENT(ConfigLoadFailed, std::filesystem::path path; std::string error;);
+            EVENT(FileDropFailed, std::vector<std::string> files; std::string error;);
 
             // Evaluation
             EVENT(EvaluationStarted, int iteration; size_t num_images;);
