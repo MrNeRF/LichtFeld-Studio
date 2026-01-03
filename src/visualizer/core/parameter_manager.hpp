@@ -53,11 +53,11 @@ namespace lfs::vis {
 
         // Session defaults (immutable after startup)
         lfs::core::param::OptimizationParameters mcmc_session_;
-        lfs::core::param::OptimizationParameters default_session_;
+        lfs::core::param::OptimizationParameters adc_session_;
 
         // Current params (user-editable)
         lfs::core::param::OptimizationParameters mcmc_current_;
-        lfs::core::param::OptimizationParameters default_current_;
+        lfs::core::param::OptimizationParameters adc_current_;
 
         // Dataset config (CLI overrides JSON defaults)
         lfs::core::param::DatasetConfig dataset_config_;
