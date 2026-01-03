@@ -57,12 +57,11 @@ namespace lfs::vis::gui {
             return;
         }
 
-        stored_dataset_path_ = params_result->dataset.data_path;
+        stored_dataset_path_ = lfs::core::path_to_utf8(params_result->dataset.data_path);
         dataset_path_buffer_ = stored_dataset_path_;
         dataset_path_buffer_.resize(PATH_BUFFER_SIZE);
 
-        // Use actual stored output path from checkpoint
-        output_path_buffer_ = params_result->dataset.output_path;
+        output_path_buffer_ = lfs::core::path_to_utf8(params_result->dataset.output_path);
         output_path_buffer_.resize(PATH_BUFFER_SIZE);
 
         // Check if stored dataset path is valid

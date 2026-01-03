@@ -4,6 +4,7 @@
 
 #include "notification_popup.hpp"
 #include "core/events.hpp"
+#include "core/path_utils.hpp"
 #include "gui/dpi_scale.hpp"
 #include "gui/localization_manager.hpp"
 #include "gui/string_keys.hpp"
@@ -61,7 +62,7 @@ namespace lfs::vis::gui {
 
         state::ConfigLoadFailed::when([this](const auto& e) {
             show(Type::FAILURE, "Invalid Config File",
-                 std::format("Could not load '{}':\n\n{}", e.path.filename().string(), e.error));
+                 std::format("Could not load '{}':\n\n{}", lfs::core::path_to_utf8(e.path.filename()), e.error));
         });
 
         state::FileDropFailed::when([this](const auto& e) {
@@ -77,7 +78,7 @@ namespace lfs::vis::gui {
             for (size_t i = 0; i < display_count; ++i) {
                 const std::filesystem::path p(e.files[i]);
                 const bool is_dir = std::filesystem::is_directory(p);
-                file_list += std::format("  - {} ({})\n", p.filename().string(),
+                file_list += std::format("  - {} ({})\n", lfs::core::path_to_utf8(p.filename()),
                                          is_dir ? LOC(Notif::DIRECTORY) : LOC(Notif::FILE));
             }
             if (count > MAX_DISPLAY) {
