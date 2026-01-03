@@ -20,7 +20,7 @@
 #include "optimizer/adam_optimizer.hpp"
 #include "rasterization/fast_rasterizer.hpp"
 #include "rasterization/gsplat_rasterizer.hpp"
-#include "strategies/default_strategy.hpp"
+#include "strategies/adc.hpp"
 #include "strategies/mcmc.hpp"
 #include "visualizer/scene/scene.hpp"
 
@@ -411,8 +411,8 @@ namespace lfs::training {
                     strategy_ = std::make_unique<MCMC>(*model);
                     LOG_DEBUG("Created MCMC strategy from Scene model");
                 } else {
-                    strategy_ = std::make_unique<DefaultStrategy>(*model);
-                    LOG_DEBUG("Created default strategy from Scene model");
+                    strategy_ = std::make_unique<ADC>(*model);
+                    LOG_DEBUG("Created ADC strategy from Scene model");
                 }
             }
 

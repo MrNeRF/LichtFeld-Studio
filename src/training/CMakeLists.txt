@@ -76,7 +76,7 @@ set(TRAINING_NEW_SOURCES
     losses/regularization.cpp
     losses/photometric_loss.cpp
     strategies/strategy_utils.cpp
-    strategies/default_strategy.cpp
+    strategies/adc.cpp
     strategies/mcmc.cpp
     rasterization/fast_rasterizer.cpp
     rasterization/gsplat_rasterizer.cpp

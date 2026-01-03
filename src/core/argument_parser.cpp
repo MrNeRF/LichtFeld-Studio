@@ -29,7 +29,7 @@ namespace {
         Help
     };
 
-    const std::set<std::string> VALID_STRATEGIES = {"mcmc", "default"};
+    const std::set<std::string> VALID_STRATEGIES = {"mcmc", "adc"};
 
     void scale_steps_vector(std::vector<size_t>& steps, float scaler) {
         std::set<size_t> unique_steps;
@@ -101,7 +101,7 @@ namespace {
             ::args::ValueFlag<int> sh_degree_interval(parser, "sh_degree_interval", "SH degree interval", {"sh-degree-interval"});
             ::args::ValueFlag<int> sh_degree(parser, "sh_degree", "Max SH degree [0-3]", {"sh-degree"});
             ::args::ValueFlag<float> min_opacity(parser, "min_opacity", "Minimum opacity threshold", {"min-opacity"});
-            ::args::ValueFlag<std::string> strategy(parser, "strategy", "Optimization strategy: mcmc, default", {"strategy"});
+            ::args::ValueFlag<std::string> strategy(parser, "strategy", "Optimization strategy: mcmc, adc", {"strategy"});
             ::args::ValueFlag<int> init_num_pts(parser, "init_num_pts", "Number of random initialization points", {"init-num-pts"});
             ::args::ValueFlag<float> init_extent(parser, "init_extent", "Extent of random initialization", {"init-extent"});
             ::args::ValueFlagList<std::string> timelapse_images(parser, "timelapse_images", "Image filenames to render timelapse images for", {"timelapse-images"});
@@ -335,7 +335,7 @@ namespace {
                 const auto strat = ::args::get(strategy);
                 if (VALID_STRATEGIES.find(strat) == VALID_STRATEGIES.end()) {
                     return std::unexpected(std::format(
-                        "ERROR: Invalid optimization strategy '{}'. Valid strategies are: mcmc, default",
+                        "ERROR: Invalid optimization strategy '{}'. Valid strategies are: mcmc, adc",
                         strat));
                 }
 

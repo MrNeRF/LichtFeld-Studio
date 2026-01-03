@@ -1079,7 +1079,6 @@ namespace lfs::vis::gui::panels {
             if (can_edit) {
                 ImGui::PushItemWidth(-1);
                 static constexpr const char* const STRATEGY_LABELS[] = {"MCMC", "ADC"};
-                LOG_INFO("opt_params.strategy: {}", opt_params.strategy);
                 int current_strategy = (opt_params.strategy == "mcmc") ? 0 : 1;
                 if (ImGui::Combo("##strategy", &current_strategy, STRATEGY_LABELS, 2)) {
                     const auto new_strategy = (current_strategy == 0) ? "mcmc" : "adc";
