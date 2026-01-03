@@ -641,5 +641,18 @@
     "y": "Y:",
     "z": "Z:",
     "u": "U:"
+  },
+
+  "resume_checkpoint_popup": {
+    "title": "Riprendi Checkpoint",
+    "checkpoint": "CHECKPOINT",
+    "configure_paths": "Configura i percorsi prima del caricamento",
+    "file": "File:",
+    "stored_path": "Percorso Salvato:",
+    "not_found": "(non trovato)",
+    "dataset_path": "Percorso Dataset:",
+    "invalid": "(non valido)",
+    "output_path": "Percorso Output:",
+    "help_text": "Il percorso del dataset salvato nel checkpoint potrebbe essere cambiato. Aggiornalo se necessario."
   }
 }

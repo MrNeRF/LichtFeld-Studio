@@ -641,5 +641,18 @@
     "y": "Y:",
     "z": "Z:",
     "u": "U:"
+  },
+
+  "resume_checkpoint_popup": {
+    "title": "Checkpoint Hervatten",
+    "checkpoint": "CHECKPOINT",
+    "configure_paths": "Paden configureren voor het laden",
+    "file": "Bestand:",
+    "stored_path": "Opgeslagen Pad:",
+    "not_found": "(niet gevonden)",
+    "dataset_path": "Dataset Pad:",
+    "invalid": "(ongeldig)",
+    "output_path": "Uitvoer Pad:",
+    "help_text": "Het dataset pad opgeslagen in de checkpoint is mogelijk gewijzigd. Werk het bij indien nodig."
   }
 }

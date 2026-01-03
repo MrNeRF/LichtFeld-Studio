@@ -641,5 +641,18 @@
     "y": "Y:",
     "z": "Z:",
     "u": "U:"
+  },
+
+  "resume_checkpoint_popup": {
+    "title": "Wznów Checkpoint",
+    "checkpoint": "CHECKPOINT",
+    "configure_paths": "Skonfiguruj ścieżki przed wczytaniem",
+    "file": "Plik:",
+    "stored_path": "Zapisana Ścieżka:",
+    "not_found": "(nie znaleziono)",
+    "dataset_path": "Ścieżka Zbioru Danych:",
+    "invalid": "(nieprawidłowa)",
+    "output_path": "Ścieżka Wyjściowa:",
+    "help_text": "Ścieżka zbioru danych zapisana w checkpoint mogła się zmienić. Zaktualizuj ją w razie potrzeby."
   }
 }

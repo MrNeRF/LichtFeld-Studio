@@ -1008,8 +1008,7 @@ namespace lfs::vis {
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
             if (ext == ".resume") {
-                cmd::LoadCheckpointForTraining{.path = filepath}.emit();
-                LOG_INFO("Loading checkpoint via drag-and-drop: {}", lfs::core::path_to_utf8(filepath.filename()));
+                cmd::ShowResumeCheckpointPopup{.checkpoint_path = filepath}.emit();
                 return;
             } else if (ext == ".json") {
                 if (lfs::io::Loader::isDatasetPath(filepath)) {

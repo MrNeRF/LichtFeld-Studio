@@ -641,5 +641,18 @@
     "y": "Y:",
     "z": "Z:",
     "u": "U:"
+  },
+
+  "resume_checkpoint_popup": {
+    "title": "Reanudar Checkpoint",
+    "checkpoint": "CHECKPOINT",
+    "configure_paths": "Configurar rutas antes de cargar",
+    "file": "Archivo:",
+    "stored_path": "Ruta Almacenada:",
+    "not_found": "(no encontrado)",
+    "dataset_path": "Ruta del Dataset:",
+    "invalid": "(inválido)",
+    "output_path": "Ruta de Salida:",
+    "help_text": "La ruta del dataset almacenada en el checkpoint puede haber cambiado. Actualícela si es necesario."
   }
 }

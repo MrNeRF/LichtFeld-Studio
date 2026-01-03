@@ -641,5 +641,18 @@
     "y": "Y:",
     "z": "Z:",
     "u": "U:"
+  },
+
+  "resume_checkpoint_popup": {
+    "title": "チェックポイントを再開",
+    "checkpoint": "チェックポイント",
+    "configure_paths": "読み込み前にパスを設定",
+    "file": "ファイル:",
+    "stored_path": "保存されたパス:",
+    "not_found": "(見つかりません)",
+    "dataset_path": "データセットパス:",
+    "invalid": "(無効)",
+    "output_path": "出力パス:",
+    "help_text": "チェックポイントに保存されたデータセットパスが変更されている可能性があります。必要に応じて更新してください。"
   }
 }

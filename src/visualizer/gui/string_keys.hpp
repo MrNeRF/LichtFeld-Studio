@@ -529,6 +529,18 @@ namespace lichtfeld::Strings {
         inline constexpr const char* AND_MORE = "notification.and_more";
     } // namespace Notification
 
+    namespace ResumeCheckpointPopup_ {
+        inline constexpr const char* TITLE = "resume_checkpoint_popup.title";
+        inline constexpr const char* CHECKPOINT = "resume_checkpoint_popup.checkpoint";
+        inline constexpr const char* CONFIGURE_PATHS = "resume_checkpoint_popup.configure_paths";
+        inline constexpr const char* FILE = "resume_checkpoint_popup.file";
+        inline constexpr const char* STORED_PATH = "resume_checkpoint_popup.stored_path";
+        inline constexpr const char* NOT_FOUND = "resume_checkpoint_popup.not_found";
+        inline constexpr const char* DATASET_PATH = "resume_checkpoint_popup.dataset_path";
+        inline constexpr const char* INVALID = "resume_checkpoint_popup.invalid";
+        inline constexpr const char* HELP_TEXT = "resume_checkpoint_popup.help_text";
+    } // namespace ResumeCheckpointPopup_
+
     namespace ExportDialog {
         inline constexpr const char* FORMAT = "export_dialog.format";
         inline constexpr const char* MODELS = "export_dialog.models";

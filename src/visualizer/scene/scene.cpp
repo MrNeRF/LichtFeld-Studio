@@ -402,7 +402,7 @@ namespace lfs::vis {
             return;
         }
 
-        // Calculate totals and find max SH degree
+        // Cache model sizes upfront to avoid race condition with training thread
         struct ModelStats {
             size_t total_gaussians = 0;
             int max_sh_degree = 0;
@@ -410,34 +410,37 @@ namespace lfs::vis {
             bool has_shN = false;
         };
 
-        auto stats = std::accumulate(
-            visible_nodes.begin(), visible_nodes.end(), ModelStats{},
-            [](ModelStats acc, const Node* node) {
-                const auto* model = node->model.get();
-                acc.total_gaussians += model->size();
+        std::vector<size_t> cached_sizes;
+        cached_sizes.reserve(visible_nodes.size());
+        ModelStats stats{};
 
-                int sh_degree = 0;
-                const auto& shN_tensor = model->shN_raw();
-                if (shN_tensor.is_valid() && shN_tensor.ndim() >= 2 && shN_tensor.size(1) > 0) {
-                    int shN_coeffs = static_cast<int>(shN_tensor.size(1));
-                    sh_degree = static_cast<int>(std::round(std::sqrt(shN_coeffs + 1))) - 1;
-                    sh_degree = std::clamp(sh_degree, 0, 3);
-                }
+        for (const auto* node : visible_nodes) {
+            const auto* model = node->model.get();
+            const size_t node_size = model->size();
+            cached_sizes.push_back(node_size);
+            stats.total_gaussians += node_size;
 
-                acc.max_sh_degree = std::max(acc.max_sh_degree, sh_degree);
-                acc.total_scene_scale += model->get_scene_scale();
-                acc.has_shN = acc.has_shN || (shN_tensor.numel() > 0 && shN_tensor.size(1) > 0);
-                return acc;
-            });
+            const auto& shN_tensor = model->shN_raw();
+            if (shN_tensor.is_valid() && shN_tensor.ndim() >= 2 && shN_tensor.size(1) > 0) {
+                const int shN_coeffs = static_cast<int>(shN_tensor.size(1));
+                const int sh_degree = std::clamp(
+                    static_cast<int>(std::round(std::sqrt(shN_coeffs + 1))) - 1, 0, 3);
+                stats.max_sh_degree = std::max(stats.max_sh_degree, sh_degree);
+            }
 
-        lfs::core::Device device = visible_nodes[0]->model->means_raw().device();
+            stats.total_scene_scale += model->get_scene_scale();
+            stats.has_shN = stats.has_shN || (shN_tensor.numel() > 0 && shN_tensor.size(1) > 0);
+        }
 
-        int sh0_coeffs = 1;
-        int shN_coeffs = (stats.max_sh_degree > 0) ? ((stats.max_sh_degree + 1) * (stats.max_sh_degree + 1) - 1) : 0;
+        const lfs::core::Device device = visible_nodes[0]->model->means_raw().device();
+        constexpr int SH0_COEFFS = 1;
+        const int shN_coeffs = (stats.max_sh_degree > 0)
+                                   ? ((stats.max_sh_degree + 1) * (stats.max_sh_degree + 1) - 1)
+                                   : 0;
 
         using lfs::core::Tensor;
         Tensor means = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 3}, device);
-        Tensor sh0 = Tensor::empty({static_cast<size_t>(stats.total_gaussians), static_cast<size_t>(sh0_coeffs), 3}, device);
+        Tensor sh0 = Tensor::empty({static_cast<size_t>(stats.total_gaussians), static_cast<size_t>(SH0_COEFFS), 3}, device);
         Tensor shN = (shN_coeffs > 0) ? Tensor::zeros({static_cast<size_t>(stats.total_gaussians), static_cast<size_t>(shN_coeffs), 3}, device) : Tensor::empty({static_cast<size_t>(stats.total_gaussians), 0, 3}, device);
         Tensor opacity = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 1}, device);
         Tensor scaling = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 3}, device);
@@ -453,14 +456,13 @@ namespace lfs::vis {
         std::vector<int> transform_indices_data(stats.total_gaussians);
 
         size_t offset = 0;
-        int node_index = 0;
-        for (const Node* node : visible_nodes) {
-            const auto* model = node->model.get();
-            const auto size = model->size();
+        for (size_t i = 0; i < visible_nodes.size(); ++i) {
+            const auto* model = visible_nodes[i]->model.get();
+            const size_t size = cached_sizes[i];
 
             std::fill(transform_indices_data.begin() + offset,
                       transform_indices_data.begin() + offset + size,
-                      node_index);
+                      static_cast<int>(i));
 
             means.slice(0, offset, offset + size) = model->means_raw();
             scaling.slice(0, offset, offset + size) = model->scaling_raw();
@@ -470,9 +472,11 @@ namespace lfs::vis {
 
             if (shN_coeffs > 0) {
                 const auto& model_shN = model->shN_raw();
-                int model_shN_coeffs = (model_shN.is_valid() && model_shN.ndim() >= 2) ? static_cast<int>(model_shN.size(1)) : 0;
+                const int model_shN_coeffs = (model_shN.is_valid() && model_shN.ndim() >= 2)
+                                                 ? static_cast<int>(model_shN.size(1))
+                                                 : 0;
                 if (model_shN_coeffs > 0) {
-                    int coeffs_to_copy = std::min(model_shN_coeffs, shN_coeffs);
+                    const int coeffs_to_copy = std::min(model_shN_coeffs, shN_coeffs);
                     shN.slice(0, offset, offset + size).slice(1, 0, coeffs_to_copy) =
                         model_shN.slice(1, 0, coeffs_to_copy);
                 }
@@ -483,7 +487,6 @@ namespace lfs::vis {
             }
 
             offset += size;
-            node_index++;
         }
 
         cached_transform_indices_ = std::make_shared<Tensor>(
