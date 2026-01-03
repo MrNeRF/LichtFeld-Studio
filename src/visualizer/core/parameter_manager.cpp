@@ -13,7 +13,7 @@ namespace lfs::vis {
 
         mcmc_session_ = lfs::core::param::OptimizationParameters::mcmc_defaults();
         mcmc_current_ = mcmc_session_;
-        default_session_ = lfs::core::param::OptimizationParameters::default_strategy_defaults();
+        default_session_ = lfs::core::param::OptimizationParameters::adc_defaults();
         default_current_ = default_session_;
         dataset_config_.loading_params = lfs::core::param::LoadingParams{};
 
@@ -102,7 +102,7 @@ namespace lfs::vis {
     }
 
     void ParameterManager::setActiveStrategy(const std::string_view strategy) {
-        if (strategy == "mcmc" || strategy == "default") {
+        if (strategy == "mcmc" || strategy == "adc") {
             active_strategy_ = std::string(strategy);
         }
     }

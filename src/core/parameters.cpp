@@ -106,9 +106,9 @@ namespace lfs::core {
             return {};
         }
 
-        OptimizationParameters OptimizationParameters::default_strategy_defaults() {
+        OptimizationParameters OptimizationParameters::adc_defaults() {
             auto p = OptimizationParameters{};
-            p.strategy = "default";
+            p.strategy = "adc";
             p.opacity_lr = 0.025f;
             p.stop_refine = 15'000;
             p.opacity_reg = 0.0f;

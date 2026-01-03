@@ -530,8 +530,8 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
             return std::unexpected("--strategy conflicts with config file");
         }
     } else {
-        params->optimization = (strategy == "default")
-                                   ? lfs::core::param::OptimizationParameters::default_strategy_defaults()
+        params->optimization = (strategy == "adc")
+                                   ? lfs::core::param::OptimizationParameters::adc_defaults()
                                    : lfs::core::param::OptimizationParameters::mcmc_defaults();
     }
 

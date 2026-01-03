@@ -18,7 +18,7 @@
   "init_opacity": 0.1,
   "init_scaling": 1.0,
   "max_cap": 6000000,
-  "strategy": "default",
+  "strategy": "adc",
   "eval_steps": [7000, 30000],
   "save_steps": [7000, 30000],
   "enable_eval": false,
