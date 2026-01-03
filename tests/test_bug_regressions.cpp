@@ -16,7 +16,7 @@ TEST(BinarySearchBug, Step1_CreateSplatData) {
     cudaSetDevice(0);
 
     try {
-        int n = 10000;
+        size_t n = 10000;
         auto rotation = Tensor::zeros({n, 4}, Device::CUDA);
         rotation.slice(1, 0, 1).fill_(1.0f);
 
@@ -50,7 +50,7 @@ TEST(BinarySearchBug, Step2_CreateStrategy) {
     cudaSetDevice(0);
 
     try {
-        int n = 10000;
+        size_t n = 10000;
         auto rotation = Tensor::zeros({n, 4}, Device::CUDA);
         rotation.slice(1, 0, 1).fill_(1.0f);
 
@@ -87,7 +87,7 @@ TEST(BinarySearchBug, Step3_InitializeStrategy) {
     cudaSetDevice(0);
 
     try {
-        int n = 10000;
+        size_t n = 10000;
         auto rotation = Tensor::zeros({n, 4}, Device::CUDA);
         rotation.slice(1, 0, 1).fill_(1.0f);
 
@@ -137,7 +137,7 @@ TEST(BinarySearchBug, Step4_CallPostBackward) {
     cudaSetDevice(0);
 
     try {
-        int n = 10000;
+        size_t n = 10000;
         auto rotation = Tensor::zeros({n, 4}, Device::CUDA);
         rotation.slice(1, 0, 1).fill_(1.0f);
 
@@ -150,8 +150,8 @@ TEST(BinarySearchBug, Step4_CallPostBackward) {
                                    Tensor::randn({n, 1}, Device::CUDA),
                                    1.0f);
 
-        splat._densification_info = Tensor::ones({2, static_cast<size_t>(n)}, Device::CUDA);
-        auto numer = Tensor::ones({static_cast<size_t>(n)}, Device::CUDA) * 10.0f;
+        splat._densification_info = Tensor::ones({2, n}, Device::CUDA);
+        auto numer = Tensor::ones({n}, Device::CUDA) * 10.0f;
         splat._densification_info[1] = numer;
 
         lfs::training::DefaultStrategy strat(splat);
@@ -172,8 +172,8 @@ TEST(BinarySearchBug, Step4_CallPostBackward) {
         strat.initialize(params);
 
         // Re-initialize densification info
-        strat.get_model()._densification_info = Tensor::ones({2, static_cast<size_t>(n)}, Device::CUDA);
-        auto numer2 = Tensor::ones({static_cast<size_t>(n)}, Device::CUDA) * 10.0f;
+        strat.get_model()._densification_info = Tensor::ones({2, n}, Device::CUDA);
+        auto numer2 = Tensor::ones({n}, Device::CUDA) * 10.0f;
         strat.get_model()._densification_info[1] = numer2;
 
         lfs::training::RenderOutput render_output;
@@ -373,10 +373,10 @@ TEST(TensorIndexSelectBug, FindBreakingPoint) {
 
     std::vector<int> sizes = {10000, 20000, 30000, 40000, 50000, 60000, 70000, 80000, 90000, 100000};
 
-    for (int size : sizes) {
+    for (size_t size : sizes) {
         std::cout << "  Testing size " << size << "..." << std::endl;
 
-        auto data = Tensor::randn({static_cast<size_t>(size), 4}, Device::CUDA);
+        auto data = Tensor::randn({size, 4}, Device::CUDA);
 
         // Select ~99.88% of elements (same ratio as the bug)
         int num_select = static_cast<int>(size * 0.9988);

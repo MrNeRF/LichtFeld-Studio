@@ -28,13 +28,13 @@ protected:
     }
 
     // Helper to create a simple binary mask
-    Tensor create_binary_mask(int H, int W, float object_ratio = 0.5f) {
+    Tensor create_binary_mask(size_t H, size_t W, float object_ratio = 0.5f) {
         auto mask = Tensor::zeros({H, W}, Device::CUDA);
         // Create a rectangular object region in the center
-        int obj_h = static_cast<int>(H * std::sqrt(object_ratio));
-        int obj_w = static_cast<int>(W * std::sqrt(object_ratio));
-        int start_h = (H - obj_h) / 2;
-        int start_w = (W - obj_w) / 2;
+        size_t obj_h = static_cast<size_t>(H * std::sqrt(object_ratio));
+        size_t obj_w = static_cast<size_t>(W * std::sqrt(object_ratio));
+        size_t start_h = (H - obj_h) / 2;
+        size_t start_w = (W - obj_w) / 2;
 
         // Fill center with 1.0 (object)
         auto ones = Tensor::ones({obj_h, obj_w}, Device::CUDA);
@@ -42,26 +42,26 @@ protected:
         auto mask_view = mask.slice(0, start_h, start_h + obj_h);
         // Note: We need to set values - for simplicity create full mask
         mask = Tensor::zeros({H, W}, Device::CUDA);
-        for (int h = start_h; h < start_h + obj_h; ++h) {
-            for (int w = start_w; w < start_w + obj_w; ++w) {
+        for (size_t h = start_h; h < start_h + obj_h; ++h) {
+            for (size_t w = start_w; w < start_w + obj_w; ++w) {
                 // This is inefficient but works for tests
             }
         }
         // Alternative: create mask on CPU and transfer
         std::vector<float> mask_data(H * W, 0.0f);
-        for (int h = start_h; h < start_h + obj_h; ++h) {
-            for (int w = start_w; w < start_w + obj_w; ++w) {
+        for (size_t h = start_h; h < start_h + obj_h; ++h) {
+            for (size_t w = start_w; w < start_w + obj_w; ++w) {
                 mask_data[h * W + w] = 1.0f;
             }
         }
-        return Tensor::from_vector(mask_data, {static_cast<size_t>(H), static_cast<size_t>(W)}, Device::CUDA);
+        return Tensor::from_vector(mask_data, {H, W}, Device::CUDA);
     }
 
     // Helper to create soft mask with gradient values
-    Tensor create_soft_mask(int H, int W) {
+    Tensor create_soft_mask(size_t H, size_t W) {
         std::vector<float> mask_data(H * W);
-        for (int h = 0; h < H; ++h) {
-            for (int w = 0; w < W; ++w) {
+        for (size_t h = 0; h < H; ++h) {
+            for (size_t w = 0; w < W; ++w) {
                 // Radial gradient from center
                 float dy = (h - H / 2.0f) / (H / 2.0f);
                 float dx = (w - W / 2.0f) / (W / 2.0f);
@@ -69,14 +69,14 @@ protected:
                 mask_data[h * W + w] = std::max(0.0f, 1.0f - dist);
             }
         }
-        return Tensor::from_vector(mask_data, {static_cast<size_t>(H), static_cast<size_t>(W)}, Device::CUDA);
+        return Tensor::from_vector(mask_data, {H, W}, Device::CUDA);
     }
 };
 
 // Test opacity penalty formula: mean(alpha * (1-mask)^power) * weight
 TEST_F(MaskLossTest, OpacityPenaltyFormula) {
-    constexpr int H = 64;
-    constexpr int W = 64;
+    constexpr size_t H = 64;
+    constexpr size_t W = 64;
     constexpr float WEIGHT = 10.0f;
     constexpr float POWER = 2.0f;
 
@@ -107,8 +107,8 @@ TEST_F(MaskLossTest, OpacityPenaltyFormula) {
 
 // Test that penalty is zero when mask covers everything
 TEST_F(MaskLossTest, OpacityPenaltyZeroForFullMask) {
-    constexpr int H = 32;
-    constexpr int W = 32;
+    constexpr size_t H = 32;
+    constexpr size_t W = 32;
     constexpr float WEIGHT = 100.0f;
 
     auto alpha = Tensor::full({H, W}, 1.0f, Device::CUDA);
@@ -125,8 +125,8 @@ TEST_F(MaskLossTest, OpacityPenaltyZeroForFullMask) {
 
 // Test that penalty increases with alpha in background
 TEST_F(MaskLossTest, OpacityPenaltyIncreasesWithBackgroundAlpha) {
-    constexpr int H = 32;
-    constexpr int W = 32;
+    constexpr size_t H = 32;
+    constexpr size_t W = 32;
     constexpr float WEIGHT = 1.0f;
     constexpr float POWER = 2.0f;
 
@@ -149,8 +149,8 @@ TEST_F(MaskLossTest, OpacityPenaltyIncreasesWithBackgroundAlpha) {
 
 // Test power falloff behavior
 TEST_F(MaskLossTest, PowerFalloffBehavior) {
-    constexpr int H = 32;
-    constexpr int W = 32;
+    constexpr size_t H = 32;
+    constexpr size_t W = 32;
 
     auto soft_mask = create_soft_mask(H, W);
     auto alpha = Tensor::full({H, W}, 1.0f, Device::CUDA);
@@ -177,8 +177,8 @@ TEST_F(MaskLossTest, PowerFalloffBehavior) {
 // Test masked L1 loss computation
 TEST_F(MaskLossTest, MaskedL1Loss) {
     constexpr int C = 3;
-    constexpr int H = 32;
-    constexpr int W = 32;
+    constexpr size_t H = 32;
+    constexpr size_t W = 32;
     constexpr float EPSILON = 1e-8f;
 
     // Create rendered and GT images
@@ -202,8 +202,8 @@ TEST_F(MaskLossTest, MaskedL1Loss) {
 // Test that masked L1 only considers object regions
 TEST_F(MaskLossTest, MaskedL1IgnoresBackgroundDifference) {
     constexpr int C = 3;
-    constexpr int H = 32;
-    constexpr int W = 32;
+    constexpr size_t H = 32;
+    constexpr size_t W = 32;
     constexpr float EPSILON = 1e-8f;
 
     // Create identical images
@@ -228,8 +228,8 @@ TEST_F(MaskLossTest, MaskedL1IgnoresBackgroundDifference) {
 // Test gradient computation for masked L1
 TEST_F(MaskLossTest, MaskedL1Gradient) {
     constexpr int C = 3;
-    constexpr int H = 16;
-    constexpr int W = 16;
+    constexpr size_t H = 16;
+    constexpr size_t W = 16;
     constexpr float EPSILON = 1e-8f;
 
     auto rendered = Tensor::rand({C, H, W}, Device::CUDA);
@@ -253,8 +253,8 @@ TEST_F(MaskLossTest, MaskedL1Gradient) {
 
 // Test mask threshold application
 TEST_F(MaskLossTest, MaskThresholdApplication) {
-    constexpr int H = 32;
-    constexpr int W = 32;
+    constexpr size_t H = 32;
+    constexpr size_t W = 32;
     constexpr float THRESHOLD = 0.5f;
 
     // Create soft mask with values from 0 to 1
@@ -301,8 +301,8 @@ TEST_F(MaskLossTest, MaskOptimizationParameters) {
 // Integration test: Full segment mode loss
 TEST_F(MaskLossTest, SegmentModeLossIntegration) {
     constexpr int C = 3;
-    constexpr int H = 64;
-    constexpr int W = 64;
+    constexpr size_t H = 64;
+    constexpr size_t W = 64;
     constexpr float EPSILON = 1e-8f;
     constexpr float WEIGHT = 1.0f;
     constexpr float POWER = 2.0f;
@@ -342,8 +342,8 @@ TEST_F(MaskLossTest, SegmentModeLossIntegration) {
 
 // Test AlphaConsistent mode alpha loss
 TEST_F(MaskLossTest, AlphaConsistentLoss) {
-    constexpr int H = 32;
-    constexpr int W = 32;
+    constexpr size_t H = 32;
+    constexpr size_t W = 32;
     constexpr float ALPHA_WEIGHT = 10.0f;
 
     auto alpha = Tensor::rand({H, W}, Device::CUDA);
@@ -360,8 +360,8 @@ TEST_F(MaskLossTest, AlphaConsistentLoss) {
 // Test SSIM map forward function returns per-pixel SSIM
 TEST_F(MaskLossTest, SSIMMapForward) {
     constexpr int C = 3;
-    constexpr int H = 64;
-    constexpr int W = 64;
+    constexpr size_t H = 64;
+    constexpr size_t W = 64;
 
     auto img1 = Tensor::rand({1, C, H, W}, Device::CUDA);
     auto img2 = Tensor::rand({1, C, H, W}, Device::CUDA);
@@ -388,8 +388,8 @@ TEST_F(MaskLossTest, SSIMMapForward) {
 // Test SSIM map with identical images gives SSIM = 1
 TEST_F(MaskLossTest, SSIMMapIdenticalImages) {
     constexpr int C = 3;
-    constexpr int H = 32;
-    constexpr int W = 32;
+    constexpr size_t H = 32;
+    constexpr size_t W = 32;
 
     auto img = Tensor::rand({1, C, H, W}, Device::CUDA);
 
@@ -403,8 +403,8 @@ TEST_F(MaskLossTest, SSIMMapIdenticalImages) {
 // Test masked SSIM computation (like legacy fused_ssim_map + masking)
 TEST_F(MaskLossTest, MaskedSSIMComputation) {
     constexpr int C = 3;
-    constexpr int H = 64;
-    constexpr int W = 64;
+    constexpr size_t H = 64;
+    constexpr size_t W = 64;
     constexpr float EPSILON = 1e-8f;
 
     auto rendered = Tensor::rand({1, C, H, W}, Device::CUDA);
@@ -439,8 +439,8 @@ TEST_F(MaskLossTest, MaskedSSIMComputation) {
 // Test that masked SSIM focuses only on object regions
 TEST_F(MaskLossTest, MaskedSSIMIgnoresBackground) {
     constexpr int C = 3;
-    constexpr int H = 32;
-    constexpr int W = 32;
+    constexpr size_t H = 32;
+    constexpr size_t W = 32;
     constexpr float EPSILON = 1e-8f;
 
     // Create identical images in object region, different in background
@@ -466,8 +466,8 @@ TEST_F(MaskLossTest, MaskedSSIMIgnoresBackground) {
 // Test full masked loss computation (L1 + SSIM)
 TEST_F(MaskLossTest, FullMaskedLossComputation) {
     constexpr int C = 3;
-    constexpr int H = 64;
-    constexpr int W = 64;
+    constexpr size_t H = 64;
+    constexpr size_t W = 64;
     constexpr float EPSILON = 1e-8f;
     constexpr float LAMBDA_DSSIM = 0.2f;
 

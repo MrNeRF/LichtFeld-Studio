@@ -89,7 +89,7 @@ TEST_F(VRAMResizeTest, ResizePatternGrowShrink) {
     vram_history.push_back(initial_used);
 
     // Simulate growing window - allocate progressively larger tensors
-    std::vector<std::pair<int, int>> sizes = {
+    std::vector<std::pair<size_t, size_t>> sizes = {
         {720, 1280},  // 720p
         {1080, 1920}, // 1080p
         {1440, 2560}, // 1440p
@@ -150,8 +150,8 @@ TEST_F(VRAMResizeTest, TensorReuseVsReallocation) {
 
     // Simulate bad pattern: allocate new tensors every frame without reusing
     for (int i = 0; i < 10; ++i) {
-        int h = 1080 + (i * 10); // Slightly different size each time
-        int w = 1920 + (i * 10);
+        size_t h = 1080 + (i * 10); // Slightly different size each time
+        size_t w = 1920 + (i * 10);
 
         Tensor image = Tensor::zeros({3, h, w}, Device::CUDA, DataType::Float32);
         Tensor depth = Tensor::zeros({1, h, w}, Device::CUDA, DataType::Float32);
@@ -175,8 +175,8 @@ TEST_F(VRAMResizeTest, TensorReuseVsReallocation) {
     size_t peak_reuse = reset_used;
 
     // Pre-allocate with over-allocation
-    int max_h = 1080 + 100;
-    int max_w = 1920 + 100;
+    size_t max_h = 1080 + 100;
+    size_t max_w = 1920 + 100;
     Tensor reused_image = Tensor::zeros({3, max_h, max_w}, Device::CUDA, DataType::Float32);
     Tensor reused_depth = Tensor::zeros({1, max_h, max_w}, Device::CUDA, DataType::Float32);
 
@@ -186,8 +186,8 @@ TEST_F(VRAMResizeTest, TensorReuseVsReallocation) {
 
     // Simulate using smaller regions (reusing same memory)
     for (int i = 0; i < 10; ++i) {
-        int h = 1080 + (i * 10);
-        int w = 1920 + (i * 10);
+        size_t h = 1080 + (i * 10);
+        size_t w = 1920 + (i * 10);
 
         // Just use a view/slice of the pre-allocated tensors
         // In real code, we'd render to a subregion
@@ -211,7 +211,7 @@ TEST_F(VRAMResizeTest, MemoryPerResolution) {
 
     struct Resolution {
         const char* name;
-        int width, height;
+        size_t width, height;
     };
 
     std::vector<Resolution> resolutions = {

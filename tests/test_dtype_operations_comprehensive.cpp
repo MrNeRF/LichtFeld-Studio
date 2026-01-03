@@ -110,7 +110,7 @@ TEST(ComparisonBugTests, LargeTensorComparison) {
 TEST(ComparisonBugTests, PruneZScenario) {
     std::cout << "\n=== Test 7: Exact prune_z scenario ===" << std::endl;
 
-    int n = 100;
+    size_t n = 100;
     float prune_ratio = 0.6f;
     int prune_count = static_cast<int>(n * prune_ratio);
 
