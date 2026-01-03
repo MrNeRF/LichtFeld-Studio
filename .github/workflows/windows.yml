@@ -51,16 +51,18 @@ jobs:
         id: cache-libtorch
         uses: actions/cache@v4
         with:
-          path: external/release/libtorch
-          key: libtorch-2.7.0-cu128-${{ runner.os }}
+          path: external/${{ matrix.build_type == 'Debug' && 'debug' || 'release' }}/libtorch
+          key: libtorch-2.7.0-cu128-${{ matrix.build_type }}-${{ runner.os }}
 
       - name: Download LibTorch 2.7.0 (CUDA 12.8 build)
         if: steps.cache-libtorch.outputs.cache-hit != 'true'
         run: |
-          mkdir external\release
+          $folder = if ("${{ matrix.build_type }}" -eq "Debug") { "debug" } else { "release" }
+          $zip = if ("${{ matrix.build_type }}" -eq "Debug") { "libtorch-win-shared-with-deps-debug-2.7.0%2Bcu128.zip" } else { "libtorch-win-shared-with-deps-2.7.0%2Bcu128.zip" }
+          mkdir "external\$folder" -Force
           cd ..
-          Invoke-WebRequest -Uri https://download.pytorch.org/libtorch/cu128/libtorch-win-shared-with-deps-2.7.0%2Bcu128.zip -OutFile libtorch.zip -Verbose
-          Expand-Archive libtorch.zip -DestinationPath $env:GITHUB_WORKSPACE\external\release
+          Invoke-WebRequest -Uri "https://download.pytorch.org/libtorch/cu128/$zip" -OutFile libtorch.zip -Verbose
+          Expand-Archive libtorch.zip -DestinationPath "$env:GITHUB_WORKSPACE\external\$folder"
 
       - name: Cache vcpkg
         uses: actions/cache@v4
