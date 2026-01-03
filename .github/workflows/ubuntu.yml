@@ -68,6 +68,21 @@ jobs:
           set(VCPKG_MAX_CONCURRENCY 2)
           EOF
 
+      - name: Cache LibTorch
+        id: cache-libtorch
+        uses: actions/cache@v4
+        with:
+          path: external/libtorch
+          key: libtorch-2.7.0-cu128-${{ runner.os }}
+
+      - name: Download LibTorch 2.7.0 (CUDA 12.8 build)
+        if: steps.cache-libtorch.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p external
+          cd ..
+          curl -L https://download.pytorch.org/libtorch/cu128/libtorch-cxx11-abi-shared-with-deps-2.7.0%2Bcu128.zip -o libtorch.zip
+          unzip libtorch.zip -d $GITHUB_WORKSPACE/external
+
       - name: Cache ccache
         uses: actions/cache@v4
         with:
@@ -87,6 +102,7 @@ jobs:
           cmake -B build -S . -G Ninja \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
             -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc
+            -DBUILD_TESTS=ON
 
       - name: Build
         run: cmake --build build -j 2
