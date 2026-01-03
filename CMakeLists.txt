@@ -252,6 +252,13 @@ if(ENABLE_CUDA_GL_INTEROP)
         #include <windows.h>
         #endif
         #include <cuda_runtime.h>
+
+        // On ARM machines, you must include the gl headers before including cuda_gl_interop.h
+        // Please refer to /usr/local/cuda/include/cuda_gl_interop.h
+        #if defined(__arm__) || defined(__aarch64__)
+        #include <GL/gl.h>
+        #endif
+
         #include <cuda_gl_interop.h>
         int main() {
             cudaGraphicsResource_t resource;
