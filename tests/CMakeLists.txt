@@ -308,6 +308,16 @@ if(WIN32)
             COMMENT "Copying nvjpeg extension for tests"
         )
     endif()
+    if(TARGET nvjpeg2k_ext)
+        add_dependencies(lichtfeld_tests nvjpeg2k_ext)
+        add_custom_command(TARGET lichtfeld_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:lichtfeld_tests>/extensions"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:nvjpeg2k_ext>"
+                "$<TARGET_FILE_DIR:lichtfeld_tests>/extensions/"
+            COMMENT "Copying nvjpeg2k extension for tests"
+        )
+    endif()
 endif()
 
 message(STATUS "Tests configured with ${CMAKE_BUILD_TYPE} build type")
