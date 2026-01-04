@@ -452,11 +452,8 @@ namespace {
         }
     }
 
-    // ------------------------------------------
     // Fused L1+SSIM Forward Kernel
-    // Computes: loss = (1-ssim_weight)*|img1-img2| + ssim_weight*(1-SSIM)
-    // in a SINGLE kernel pass, loading images only once!
-    // ------------------------------------------
+    // loss = (1-ssim_weight)*|img1-img2| + ssim_weight*(1-SSIM)
     __global__ void fusedL1SSIMForwardCUDA(
         float ssim_weight,
         int H,
@@ -510,7 +507,7 @@ namespace {
             }
             block.sync();
 
-            // Compute L1 loss immediately from shared memory (FREE - data already loaded!)
+            // L1 loss from shared memory
             float l1_loss = fabsf(
                 sTile[block.thread_index().y + HALO][block.thread_index().x + HALO][0] -
                 sTile[block.thread_index().y + HALO][block.thread_index().x + HALO][1]);
@@ -660,10 +657,7 @@ namespace {
         }
     }
 
-    // ------------------------------------------
     // Fused L1+SSIM Backward Kernel
-    // Computes combined gradient in ONE kernel
-    // ------------------------------------------
     __global__ void fusedL1SSIMBackwardCUDA(
         float ssim_weight,
         int H,
@@ -812,9 +806,7 @@ namespace {
         }
     }
 
-    // ------------------------------------------
     // Masked Fused L1+SSIM Forward Kernel
-    // ------------------------------------------
     __global__ void maskedFusedL1SSIMForwardCUDA(
         float ssim_weight,
         int H,
@@ -1023,9 +1015,7 @@ namespace {
         }
     }
 
-    // ------------------------------------------
     // Masked Fused L1+SSIM Backward Kernel
-    // ------------------------------------------
     __global__ void maskedFusedL1SSIMBackwardCUDA(
         float ssim_weight,
         float inv_mask_sum,  // 1.0 / mask_sum for normalization
@@ -1384,7 +1374,7 @@ namespace lfs::training::kernels {
         return dL_dimg1;
     }
 
-    // Optimized version with pre-allocated workspace (eliminates allocation churn)
+    // Version with pre-allocated workspace
     std::pair<lfs::core::Tensor, SSIMContext> ssim_forward(
         const lfs::core::Tensor& img1_input,
         const lfs::core::Tensor& img2_input,

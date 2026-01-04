@@ -209,7 +209,6 @@ namespace lfs::training {
 
         std::unique_ptr<ISparsityOptimizer> sparsity_optimizer_;
 
-        // Pre-allocated workspace for masked fused L1+SSIM (32-38% faster)
         lfs::training::kernels::MaskedFusedL1SSIMWorkspace masked_fused_workspace_;
 
         // Metrics evaluator - handles all evaluation logic

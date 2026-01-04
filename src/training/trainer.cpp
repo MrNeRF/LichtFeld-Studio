@@ -199,7 +199,7 @@ namespace lfs::training {
             }
 
         } else if (mode == param::MaskMode::AlphaConsistent) {
-            // Standard photometric loss (uses fused kernel internally)
+            // Standard photometric loss
             lfs::training::losses::PhotometricLoss photo_loss_fn;
             const lfs::training::losses::PhotometricLoss::Params params{.lambda_dssim = opt_params.lambda_dssim};
             auto result = photo_loss_fn.forward(rendered, gt_image, params);

@@ -11,7 +11,7 @@ namespace lfs::training::kernels {
 
     inline constexpr float SSIM_EPSILON = 1e-8f;
 
-    // Pre-allocated workspace for SSIM computation (eliminates 120GB allocation churn)
+    // Pre-allocated workspace for SSIM computation
     struct SSIMWorkspace {
         // Forward pass buffers
         lfs::core::Tensor ssim_map;      // [N, C, H, W]
@@ -68,7 +68,7 @@ namespace lfs::training::kernels {
         const lfs::core::Tensor& img2,
         bool apply_valid_padding = true);
 
-    // Optimized version with pre-allocated workspace (eliminates allocation churn)
+    // Version with pre-allocated workspace
     std::pair<lfs::core::Tensor, SSIMContext> ssim_forward(
         const lfs::core::Tensor& img1,
         const lfs::core::Tensor& img2,
@@ -155,8 +155,7 @@ namespace lfs::training::kernels {
         bool apply_valid_padding;
     };
 
-    // Fused L1+SSIM forward: computes loss = (1-w)*L1 + w*(1-SSIM) in ONE kernel
-    // Returns: (loss_scalar_tensor, context_for_backward)
+    // Fused L1+SSIM forward: loss = (1-w)*L1 + w*(1-SSIM)
     std::pair<lfs::core::Tensor, FusedL1SSIMContext> fused_l1_ssim_forward(
         const lfs::core::Tensor& img1,
         const lfs::core::Tensor& img2,
@@ -164,7 +163,7 @@ namespace lfs::training::kernels {
         FusedL1SSIMWorkspace& workspace,
         bool apply_valid_padding = true);
 
-    // Fused L1+SSIM backward: computes combined gradient in ONE kernel
+    // Fused L1+SSIM backward
     lfs::core::Tensor fused_l1_ssim_backward(
         const FusedL1SSIMContext& ctx,
         FusedL1SSIMWorkspace& workspace);
