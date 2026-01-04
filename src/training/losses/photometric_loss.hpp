@@ -45,7 +45,7 @@ namespace lfs::training::losses {
         // Pre-allocated SSIM workspace (eliminates 120GB allocation churn)
         lfs::training::kernels::SSIMWorkspace ssim_workspace_;
 
-        // Pre-allocated FUSED L1+SSIM workspace (32-38% faster than separate kernels)
+        // Pre-allocated fused L1+SSIM workspace
         lfs::training::kernels::FusedL1SSIMWorkspace fused_workspace_;
 
         // Pre-allocated buffers for loss computation (eliminates ~35GB allocation churn)

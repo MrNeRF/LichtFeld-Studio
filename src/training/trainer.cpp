@@ -161,14 +161,14 @@ namespace lfs::training {
 
         if (mode == param::MaskMode::Segment || mode == param::MaskMode::Ignore) {
             if (opt_params.lambda_dssim > 0.0f) {
-                // Use FUSED masked L1+SSIM kernel (32-38% faster!)
+                // Use FUSED masked L1+SSIM kernel
                 auto [loss_tensor, ctx] = lfs::training::kernels::masked_fused_l1_ssim_forward(
                     rendered, gt_image, mask_2d, opt_params.lambda_dssim, masked_fused_workspace_);
 
                 grad = lfs::training::kernels::masked_fused_l1_ssim_backward(ctx, masked_fused_workspace_);
                 loss = loss_tensor;
 
-                // Handle 3D output from 4D kernel
+                // Squeeze gradient to match input dimensions (loss is scalar, no adjustment needed)
                 if (grad.ndim() == 4 && rendered.ndim() == 3) {
                     grad = grad.squeeze(0);
                 }

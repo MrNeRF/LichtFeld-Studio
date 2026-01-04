@@ -1533,7 +1533,7 @@ namespace lfs::training::kernels {
     }
 
     // ============================================================================
-    // Fused L1+SSIM Implementation (32-38% faster than separate kernels)
+    // Fused L1+SSIM Implementation
     // ============================================================================
 
     std::pair<lfs::core::Tensor, FusedL1SSIMContext> fused_l1_ssim_forward(
@@ -1660,7 +1660,6 @@ namespace lfs::training::kernels {
 
         constexpr float C1 = 0.01f * 0.01f;
         constexpr float C2 = 0.03f * 0.03f;
-        constexpr float EPSILON = 1e-8f;
 
         auto img1 = img1_input.contiguous();
         auto img2 = img2_input.contiguous();
@@ -1693,7 +1692,7 @@ namespace lfs::training::kernels {
         // Compute masked mean: sum(loss_map) / (mask_sum * C)
         // Note: loss_map already has mask applied per-pixel
         const float loss_sum = workspace.loss_map.sum().item<float>();
-        const float mask_sum = mask_2d.sum().item<float>() * static_cast<float>(C) + EPSILON;
+        const float mask_sum = mask_2d.sum().item<float>() * static_cast<float>(C) + SSIM_EPSILON;
         const float loss_value = loss_sum / mask_sum;
 
         auto loss_scalar = lfs::core::Tensor::full({1}, loss_value, lfs::core::Device::CUDA);

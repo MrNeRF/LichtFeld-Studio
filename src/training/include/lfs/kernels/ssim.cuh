@@ -9,6 +9,8 @@
 
 namespace lfs::training::kernels {
 
+    inline constexpr float SSIM_EPSILON = 1e-8f;
+
     // Pre-allocated workspace for SSIM computation (eliminates 120GB allocation churn)
     struct SSIMWorkspace {
         // Forward pass buffers
@@ -103,7 +105,7 @@ namespace lfs::training::kernels {
         const lfs::core::Tensor& dL_dmap); // [N, C, H, W] per-pixel gradient
 
     // ============================================================================
-    // Fused L1+SSIM Loss (32-38% faster than separate kernels)
+    // Fused L1+SSIM Loss
     // ============================================================================
 
     // Workspace for fused L1+SSIM (extends SSIMWorkspace)

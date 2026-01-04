@@ -4,7 +4,7 @@
 
 /**
  * @file test_fused_l1_ssim.cpp
- * @brief Tests for fused L1+SSIM loss kernel (32-38% faster than separate kernels)
+ * @brief Tests for fused L1+SSIM loss kernel
  *
  * Verifies correctness by comparing fused kernel output against reference
  * implementations that compute L1 and SSIM separately.
@@ -309,7 +309,7 @@ protected:
     std::pair<float, Tensor> compute_reference_masked_loss(
         const Tensor& img1, const Tensor& img2, const Tensor& mask, float ssim_weight) {
 
-        constexpr float EPSILON = 1e-8f;
+        constexpr float EPSILON = lfs::training::kernels::SSIM_EPSILON;
 
         auto img1_4d = img1.ndim() == 3 ? img1.unsqueeze(0) : img1;
         auto img2_4d = img2.ndim() == 3 ? img2.unsqueeze(0) : img2;
@@ -394,6 +394,15 @@ TEST_F(MaskedFusedL1SSIMTest, BackwardBasic) {
     float grad_max = grad.abs().max().item<float>();
     EXPECT_FALSE(std::isnan(grad_max));
     EXPECT_FALSE(std::isinf(grad_max));
+
+    auto [ref_loss, ref_grad] = compute_reference_masked_loss(img1, img2, mask, ssim_weight);
+
+    auto diff = (grad - ref_grad).abs();
+    float max_diff = diff.max().item<float>();
+    float mean_diff = diff.mean().item<float>();
+
+    EXPECT_LT(max_diff, 1e-2f) << "Max gradient difference: " << max_diff;
+    EXPECT_LT(mean_diff, 1e-4f) << "Mean gradient difference: " << mean_diff;
 }
 
 TEST_F(MaskedFusedL1SSIMTest, FullMaskMatchesReference) {
@@ -546,6 +555,5 @@ TEST_F(FusedL1SSIMTest, DISABLED_PerformanceBenchmark) {
     std::cout << "Separate kernels time: " << separate_time / iterations << " ms/iter\n";
     std::cout << "Speedup: " << speedup << "x\n";
 
-    // Expect at least 20% speedup
     EXPECT_GT(speedup, 1.2f);
 }
