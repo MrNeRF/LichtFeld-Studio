@@ -432,24 +432,16 @@ namespace lfs::core {
             return;
         }
 
-        // Prepare all to HWC float on CPU
+        // Convert all images to HWC float on CPU
         std::vector<lfs::core::Tensor> xs;
         xs.reserve(images.size());
         for (size_t idx = 0; idx < images.size(); ++idx) {
-            auto img = images[idx];
-            LOG_INFO("save_image: Input image {} shape before conversion: [{}, {}, {}]",
-                     idx, img.shape()[0], img.shape()[1], img.shape()[2]);
-
-            img = img.clone().to(lfs::core::Device::CPU).to(lfs::core::DataType::Float32);
+            auto img = images[idx].clone().to(lfs::core::Device::CPU).to(lfs::core::DataType::Float32);
             if (img.ndim() == 4)
                 img = img.squeeze(0);
             if (img.ndim() == 3 && img.shape()[0] <= 4)
                 img = img.permute({1, 2, 0});
-            img = img.contiguous();
-
-            LOG_INFO("save_image: Image {} shape after conversion to HWC: [{}, {}, {}]",
-                     idx, img.shape()[0], img.shape()[1], img.shape()[2]);
-            xs.push_back(img);
+            xs.push_back(img.contiguous());
         }
 
         // Separator (white)
@@ -463,25 +455,12 @@ namespace lfs::core {
 
         // Concatenate
         lfs::core::Tensor combo = xs[0];
-        LOG_INFO("save_image: Starting combo shape: [{}, {}, {}]",
-                 combo.shape()[0], combo.shape()[1], combo.shape()[2]);
-
         for (size_t i = 1; i < xs.size(); ++i) {
-            LOG_INFO("save_image: Concatenating image {} (shape [{}, {}, {}]) along axis {}",
-                     i, xs[i].shape()[0], xs[i].shape()[1], xs[i].shape()[2], horizontal ? 1 : 0);
-
             combo = (separator_width > 0)
                         ? lfs::core::Tensor::cat({combo, sep, xs[i]}, horizontal ? 1 : 0)
                         : lfs::core::Tensor::cat({combo, xs[i]}, horizontal ? 1 : 0);
-
-            LOG_INFO("save_image: After concatenation, combo shape: [{}, {}, {}]",
-                     combo.shape()[0], combo.shape()[1], combo.shape()[2]);
         }
 
-        LOG_INFO("save_image: Final combo shape before saving: [{}, {}, {}]",
-                 combo.shape()[0], combo.shape()[1], combo.shape()[2]);
-
-        // Save
         lfs::core::save_image(path, combo);
     }
 
