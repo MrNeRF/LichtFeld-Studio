@@ -483,7 +483,7 @@ namespace fast_lfs::rasterization {
         }
 
         cudaFree(buffer);
-        cudaDeviceSynchronize();
+        // Note: cudaFree is synchronous, no need for cudaDeviceSynchronize
     }
 
 } // namespace fast_lfs::rasterization

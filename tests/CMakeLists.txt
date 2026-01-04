@@ -66,13 +66,38 @@ endif()
 find_package(Torch REQUIRED)
 message(STATUS "Tests: LibTorch ${Torch_VERSION} found for tensor comparison tests")
 
-# Test sources
-set(TEST_SOURCES
-    test_main.cpp       # Custom main with pinned memory pre-warming
+# =============================================================================
+# Separate test sources into regular tests and benchmarks
+# =============================================================================
+
+# Benchmark sources (performance measurement focused)
+set(BENCHMARK_FILES
+    benchmark_background_blend.cpp
+    benchmark_default_strategy.cpp
+    benchmark_grad_alpha_layout.cpp
+    benchmark_pipelined_loader.cpp
+    benchmark_slice_assignment.cpp
+    benchmark_strided_tensors.cpp
+    benchmark_scheduler.cpp
+    benchmark_losses.cpp
+    # profile_adam_optimizer.cpp  # Disabled - missing header
+    test_tensor_benchmark.cpp
+    test_memory_pool_benchmark.cpp
+    test_broadcast_benchmark.cpp
+    test_reduction_benchmark.cpp
+    test_fusion_benchmark.cpp
+    test_gather_benchmark.cpp
+    test_zip_gather_benchmark.cpp
+    test_transform_iterator_benchmark.cpp
+    test_cub_reduction_benchmark.cpp
+    test_scalar_reduction_benchmark.cpp
+    test_permute_upload_benchmark.cpp
+    test_isolation.cpp
+    test_allocator_benchmark.cpp
 )
 
-# Check if test files exist and add them
-set(OPTIONAL_TEST_FILES
+# Regular test sources (unit tests, integration tests)
+set(TEST_FILES
     test_loss_gradients.cpp
     test_regularization_comparison.cpp
     test_gut_rasterizer_gradients.cpp
@@ -84,6 +109,7 @@ set(OPTIONAL_TEST_FILES
     test_tensor_ops.cpp
     test_tensor_memory.cpp
     test_tensor_reduction.cpp
+    test_isolation.cpp
     test_tensor_views.cpp
     test_tensor_math.cpp
     test_tensor_utils.cpp
@@ -117,34 +143,16 @@ set(OPTIONAL_TEST_FILES
     test_mcmc.cpp
     test_mcmc_add_new_gs_comparison.cpp
     test_mcmc_relocate_optimizer_state_bug.cpp
-    test_tensor_benchmark.cpp
-    test_memory_pool_benchmark.cpp
-    test_broadcast_benchmark.cpp
-    test_reduction_benchmark.cpp
     test_expression_templates.cpp
-    test_fusion_benchmark.cpp
-    test_gather_benchmark.cpp
-    test_zip_gather_benchmark.cpp
-    test_transform_iterator_benchmark.cpp
-    test_cub_reduction_benchmark.cpp
-    benchmark_strided_tensors.cpp
-    benchmark_grad_alpha_layout.cpp
-    benchmark_background_blend.cpp
-    test_scalar_reduction_benchmark.cpp
-    test_permute_upload_benchmark.cpp
     test_lfs_adam_optimizer.cpp
     test_lfs_scheduler.cpp
-    benchmark_scheduler.cpp
     test_lfs_losses.cpp
-    benchmark_losses.cpp
     test_mcmc_kernels.cpp
     test_tensor_bool.cpp
     test_dataloader_lfs.cpp
     test_bilateral_grid.cpp
     test_sparsity_debug.cpp
     test_default_strategy.cpp
-    benchmark_default_strategy.cpp
-    benchmark_pipelined_loader.cpp
     test_dtype_operations_comprehensive.cpp
     test_tensor_bugs.cpp
     test_densification_performance.cpp
@@ -184,14 +192,36 @@ set(OPTIONAL_TEST_FILES
     test_vram_resize.cpp
     test_stride_bugs.cpp
     test_bool_any_all.cpp
+    test_add_new_gs_tensor_ops.cpp
+    test_cpu_dtype_conversions.cpp
+    test_cpu_large_tensor_bugs.cpp
+    test_curand_buffer_overflow.cpp
+    test_default_strategy_comparison.cpp
+    # test_export_comparison.cpp  # Standalone tool with its own main()
+    test_gradient_accumulation.cpp
+    test_image_resize_parallel.cpp
+    # test_mcmc_histogram_optimization.cpp  # Disabled - references removed function
+    test_tensor_cat_bug.cpp
+    test_tensor_slicing_safety.cpp
+    test_tensor_struct_init.cpp
+    test_torch_conversion.cpp
+    test_fastgs_kernels.cpp
+    test_fastgs_fuzz.cpp
 )
 
-foreach(TEST_FILE ${OPTIONAL_TEST_FILES})
+# Build test sources list
+set(TEST_SOURCES test_main.cpp)
+foreach(TEST_FILE ${TEST_FILES})
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${TEST_FILE}")
         list(APPEND TEST_SOURCES ${TEST_FILE})
-        message(STATUS "Found test file: ${TEST_FILE}")
-    else()
-        message(STATUS "Test file not found (skipping): ${TEST_FILE}")
+    endif()
+endforeach()
+
+# Build benchmark sources list
+set(BENCHMARK_SOURCES test_main.cpp)
+foreach(BENCH_FILE ${BENCHMARK_FILES})
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${BENCH_FILE}")
+        list(APPEND BENCHMARK_SOURCES ${BENCH_FILE})
     endif()
 endforeach()
 
@@ -262,65 +292,150 @@ target_compile_options(lichtfeld_tests PRIVATE
     $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
 )
 
-# Enable testing
+# =============================================================================
+# Benchmark executable
+# =============================================================================
+add_executable(lichtfeld_benchmarks ${BENCHMARK_SOURCES})
+
+set_target_properties(lichtfeld_benchmarks PROPERTIES
+    CUDA_ARCHITECTURES "${LichtFeld-Studio_CUDA_ARCH}"
+    CUDA_SEPARABLE_COMPILATION ON
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
+    CXX_STANDARD 23
+    CXX_STANDARD_REQUIRED ON
+)
+
+target_include_directories(lichtfeld_benchmarks PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/include
+    ${CMAKE_SOURCE_DIR}/tests
+    ${CMAKE_SOURCE_DIR}/src/training
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/external/spz
+    ${CUDAToolkit_INCLUDE_DIRS}
+    ${OPENGL_INCLUDE_DIRS}
+)
+
+target_compile_definitions(lichtfeld_benchmarks PRIVATE
+    TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/data"
+    PROJECT_ROOT_PATH="${CMAKE_SOURCE_DIR}"
+)
+
+target_link_libraries(lichtfeld_benchmarks PRIVATE
+    lfs_visualizer
+    lfs_rendering
+    lfs_training
+    lfs_core
+    lfs_geometry
+    lfs_io
+    lfs_tensor
+    fastlfs_backend
+    spz_lib
+    GTest::gtest
+    ${TORCH_LIBRARIES}
+    ${OPENGL_LIBRARIES}
+    OpenImageIO::OpenImageIO
+    CUDA::cudart
+    CUDA::curand
+    CUDA::cupti
+    spdlog::spdlog
+)
+
+target_compile_options(lichtfeld_benchmarks PRIVATE
+    $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-G -lineinfo>
+    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer>
+    $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG>
+)
+
+# =============================================================================
+# CTest registration
+# =============================================================================
 include(GoogleTest)
+
+# Register unit tests with CTest
 gtest_discover_tests(lichtfeld_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     PROPERTIES TIMEOUT 30
     DISCOVERY_MODE PRE_TEST
 )
 
-# Custom target to run tests with output
+# Register benchmarks with CTest (longer timeout for benchmarks)
+gtest_discover_tests(lichtfeld_benchmarks
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    PROPERTIES TIMEOUT 300
+    DISCOVERY_MODE PRE_TEST
+    TEST_PREFIX "benchmark."
+)
+
+# Custom targets for convenience
 add_custom_target(run_tests
-    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -V
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -V -R "^(?!benchmark\\.)"
     DEPENDS lichtfeld_tests
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-    COMMENT "Running all tests with verbose output"
+    COMMENT "Running unit tests (excluding benchmarks)"
+)
+
+add_custom_target(run_benchmarks
+    COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure -V -R "^benchmark\\."
+    DEPENDS lichtfeld_benchmarks
+    WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+    COMMENT "Running benchmarks"
 )
 
 # Platform-specific settings
 if(WIN32)
     # Copy Torch DLLs for testing on Windows
     file(GLOB TORCH_DLLS "${Torch_DIR}/../../../lib/*.dll")
-    foreach(TORCH_DLL ${TORCH_DLLS})
-        add_custom_command(
-            TARGET lichtfeld_tests
-            POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TORCH_DLL}"
-            "$<TARGET_FILE_DIR:lichtfeld_tests>")
+    foreach(TEST_TARGET lichtfeld_tests lichtfeld_benchmarks)
+        foreach(TORCH_DLL ${TORCH_DLLS})
+            add_custom_command(
+                TARGET ${TEST_TARGET}
+                POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different "${TORCH_DLL}"
+                "$<TARGET_FILE_DIR:${TEST_TARGET}>")
+        endforeach()
+        if(TARGET nvimgcodec)
+            add_dependencies(${TEST_TARGET} nvimgcodec)
+            add_custom_command(TARGET ${TEST_TARGET} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:nvimgcodec>"
+                    "$<TARGET_FILE_DIR:${TEST_TARGET}>"
+                COMMENT "Copying nvImageCodec library for ${TEST_TARGET}"
+            )
+        endif()
+        if(TARGET nvjpeg_ext)
+            add_dependencies(${TEST_TARGET} nvjpeg_ext)
+            add_custom_command(TARGET ${TEST_TARGET} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${TEST_TARGET}>/extensions"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:nvjpeg_ext>"
+                    "$<TARGET_FILE_DIR:${TEST_TARGET}>/extensions/"
+                COMMENT "Copying nvjpeg extension for ${TEST_TARGET}"
+            )
+        endif()
+        if(TARGET nvjpeg2k_ext)
+            add_dependencies(${TEST_TARGET} nvjpeg2k_ext)
+            add_custom_command(TARGET ${TEST_TARGET} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:${TEST_TARGET}>/extensions"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "$<TARGET_FILE:nvjpeg2k_ext>"
+                    "$<TARGET_FILE_DIR:${TEST_TARGET}>/extensions/"
+                COMMENT "Copying nvjpeg2k extension for ${TEST_TARGET}"
+            )
+        endif()
     endforeach()
-    if(TARGET nvimgcodec)
-        add_dependencies(lichtfeld_tests nvimgcodec)
-        add_custom_command(TARGET lichtfeld_tests POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "$<TARGET_FILE:nvimgcodec>"
-                "$<TARGET_FILE_DIR:lichtfeld_tests>"
-            COMMENT "Copying nvImageCodec library for tests"
-        )
-    endif()
-    if(TARGET nvjpeg_ext)
-        add_dependencies(lichtfeld_tests nvjpeg_ext)
-        add_custom_command(TARGET lichtfeld_tests POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:lichtfeld_tests>/extensions"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "$<TARGET_FILE:nvjpeg_ext>"
-                "$<TARGET_FILE_DIR:lichtfeld_tests>/extensions/"
-            COMMENT "Copying nvjpeg extension for tests"
-        )
-    endif()
-    if(TARGET nvjpeg2k_ext)
-        add_dependencies(lichtfeld_tests nvjpeg2k_ext)
-        add_custom_command(TARGET lichtfeld_tests POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:lichtfeld_tests>/extensions"
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "$<TARGET_FILE:nvjpeg2k_ext>"
-                "$<TARGET_FILE_DIR:lichtfeld_tests>/extensions/"
-            COMMENT "Copying nvjpeg2k extension for tests"
-        )
-    endif()
 endif()
 
+# Status messages
+list(LENGTH TEST_SOURCES TEST_COUNT)
+list(LENGTH BENCHMARK_SOURCES BENCH_COUNT)
+math(EXPR TEST_COUNT "${TEST_COUNT} - 1")  # Subtract test_main.cpp
+math(EXPR BENCH_COUNT "${BENCH_COUNT} - 1")  # Subtract test_main.cpp
+
 message(STATUS "Tests configured with ${CMAKE_BUILD_TYPE} build type")
-message(STATUS "  Test sources found: ${TEST_SOURCES}")
-message(STATUS "  Build with: ninja lichtfeld_tests")
-message(STATUS "  Run with: ninja run_tests or ctest --output-on-failure")
+message(STATUS "  Unit tests: ${TEST_COUNT} files -> lichtfeld_tests")
+message(STATUS "  Benchmarks: ${BENCH_COUNT} files -> lichtfeld_benchmarks")
+message(STATUS "  Build tests: ninja lichtfeld_tests")
+message(STATUS "  Build benchmarks: ninja lichtfeld_benchmarks")
+message(STATUS "  Run tests: ninja run_tests")
+message(STATUS "  Run benchmarks: ninja run_benchmarks")
