@@ -1,10 +1,13 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later
  *
- * Optimized dot product and norm operations using warp-parallel patterns from calm.
- * Key optimization: float2 vectorized loads (2x memory bandwidth) + warp reductions (5-10x faster).
+ * Optimized scalar reduction kernels using two-stage grid-stride patterns.
+ * - float4 vectorized loads for memory bandwidth
+ * - Warp-level reductions via block_reduce_sum/min/max
+ * - GPU-aware grid sizing for full SM utilization
  */
 
+#include "internal/gpu_config.hpp"
 #include "internal/tensor_ops.hpp"
 #include "internal/warp_reduce.cuh"
 #include <cfloat>
@@ -12,325 +15,319 @@
 
 namespace lfs::core::tensor_ops {
 
-    // ============================================================================
-    // DOT PRODUCT - Single Block Pattern (from calm's rmsnorm)
-    // ============================================================================
+// Functors for templated reductions
+struct identity_op { __device__ float operator()(float x) const { return x; } };
+struct abs_op { __device__ float operator()(float x) const { return fabsf(x); } };
+struct square_op { __device__ float operator()(float x) const { return x * x; } };
+struct max_op { __device__ float operator()(float a, float b) const { return fmaxf(a, b); } };
+struct min_op { __device__ float operator()(float a, float b) const { return fminf(a, b); } };
 
-    /**
-     * Optimized dot product kernel using calm's single-block pattern.
-     *
-     * Pattern (from calm/src/helpers.cuh matmul_warppar):
-     * - Single block with 256 threads (8 warps)
-     * - Each thread processes float2 elements with blockSize*2 stride
-     * - Block reduction at end (warp + shared memory)
-     * - Thread 0 writes result directly (NO atomicAdd!)
-     *
-     * Expected speedup: 5-10x over cuBLAS for small-medium vectors
-     */
-    __global__ void dot_product_block_kernel(const float* a, const float* b, float* result, int n) {
-        int tid = threadIdx.x;
-        int blockSize = blockDim.x;
-        float partial_sum = 0.0f;
-
-        // Grid-stride loop with float2 loads (8-byte aligned, safe without 16-byte guarantee)
-        // Pattern from calm: for (int j = lane * 2; j < n; j += warpSize * 2)
-        for (int i = tid * 2; i < n; i += blockSize * 2) {
-            if (i + 1 < n) {
-                // Load 2 floats at once (8 bytes)
-                float2 aa = *(float2*)&a[i];
-                float2 bb = *(float2*)&b[i];
-                partial_sum += aa.x * bb.x + aa.y * bb.y;
-            } else if (i < n) {
-                // Handle odd-length arrays
-                partial_sum += a[i] * b[i];
-            }
-        }
-
-        // Block reduction (warp reduce + shared memory transpose + warp reduce)
-        // This is from calm's blockreduce_sum pattern
-        partial_sum = lfs::core::warp_ops::block_reduce_sum(partial_sum);
-
-        // Only thread 0 writes final result
-        if (tid == 0) {
-            *result = partial_sum;
-        }
+// Stage 2: aggregate partial results (reused by all reductions)
+__global__ void reduce_partials_sum(const float* __restrict__ partials, float* __restrict__ result, int n) {
+    float sum = 0.0f;
+    for (int i = threadIdx.x; i < n; i += blockDim.x) {
+        sum += partials[i];
     }
+    sum = warp_ops::block_reduce_sum(sum);
+    if (threadIdx.x == 0) *result = sum;
+}
 
-    void launch_dot_product(const float* a, const float* b, float* result, size_t n, cudaStream_t stream) {
-        // Single block with 256 threads (8 warps)
-        // This is similar to calm's kernel launches
-        dot_product_block_kernel<<<1, 256, 0, stream>>>(a, b, result, static_cast<int>(n));
+__global__ void reduce_partials_max(const float* __restrict__ partials, float* __restrict__ result, int n) {
+    float val = -FLT_MAX;
+    for (int i = threadIdx.x; i < n; i += blockDim.x) {
+        val = fmaxf(val, partials[i]);
     }
+    val = warp_ops::block_reduce_max(val);
+    if (threadIdx.x == 0) *result = val;
+}
 
-    // ============================================================================
-    // L2 NORM - Single Block Pattern
-    // ============================================================================
+__global__ void reduce_partials_min(const float* __restrict__ partials, float* __restrict__ result, int n) {
+    float val = FLT_MAX;
+    for (int i = threadIdx.x; i < n; i += blockDim.x) {
+        val = fminf(val, partials[i]);
+    }
+    val = warp_ops::block_reduce_min(val);
+    if (threadIdx.x == 0) *result = val;
+}
 
-    /**
-     * Optimized L2 norm kernel using calm's single-block pattern.
-     * Same pattern as dot product but computes sqrt(sum(x^2)).
-     */
-    __global__ void l2_norm_block_kernel(const float* data, float* result, int n) {
-        int tid = threadIdx.x;
-        int blockSize = blockDim.x;
-        float sum_sq = 0.0f;
+// Helper kernels for in-place operations
+__global__ void sqrt_inplace(float* r) { *r = sqrtf(*r); }
+__global__ void div_inplace(float* r, float inv_n) { *r *= inv_n; }
 
-        // Vectorized loads with float2
-        for (int i = tid * 2; i < n; i += blockSize * 2) {
-            if (i + 1 < n) {
-                float2 vals = *(float2*)&data[i];
-                sum_sq += vals.x * vals.x + vals.y * vals.y;
-            } else if (i < n) {
-                float val = data[i];
-                sum_sq += val * val;
-            }
-        }
+// ============================================================================
+// DOT PRODUCT
+// ============================================================================
 
-        // Block reduction
-        sum_sq = lfs::core::warp_ops::block_reduce_sum(sum_sq);
+__global__ void dot_stage1(const float* __restrict__ a, const float* __restrict__ b,
+                           float* __restrict__ partials, size_t n) {
+    const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t stride = blockDim.x * gridDim.x;
+    float sum = 0.0f;
 
-        // Thread 0 computes sqrt and writes result
-        if (tid == 0) {
-            *result = sqrtf(sum_sq);
+    for (size_t i = tid * 4; i < n; i += stride * 4) {
+        if (i + 3 < n) {
+            float4 aa = reinterpret_cast<const float4*>(a)[i / 4];
+            float4 bb = reinterpret_cast<const float4*>(b)[i / 4];
+            sum += aa.x * bb.x + aa.y * bb.y + aa.z * bb.z + aa.w * bb.w;
+        } else {
+            for (size_t j = i; j < n; ++j) sum += a[j] * b[j];
         }
     }
 
-    void launch_l2_norm(const float* data, float* result, size_t n, cudaStream_t stream) {
-        l2_norm_block_kernel<<<1, 256, 0, stream>>>(data, result, static_cast<int>(n));
-    }
+    sum = warp_ops::block_reduce_sum(sum);
+    if (threadIdx.x == 0) partials[blockIdx.x] = sum;
+}
 
-    // ============================================================================
-    // L1 NORM - Single Block Pattern
-    // ============================================================================
-
-    /**
-     * Optimized L1 norm kernel using calm's single-block pattern.
-     * Computes sum(|x|).
-     */
-    __global__ void l1_norm_block_kernel(const float* data, float* result, int n) {
-        int tid = threadIdx.x;
-        int blockSize = blockDim.x;
-        float sum_abs = 0.0f;
-
-        // Vectorized loads with float2
-        for (int i = tid * 2; i < n; i += blockSize * 2) {
-            if (i + 1 < n) {
-                float2 vals = *(float2*)&data[i];
-                sum_abs += fabsf(vals.x) + fabsf(vals.y);
-            } else if (i < n) {
-                sum_abs += fabsf(data[i]);
-            }
-        }
-
-        // Block reduction
-        sum_abs = lfs::core::warp_ops::block_reduce_sum(sum_abs);
-
-        // Thread 0 writes result
-        if (tid == 0) {
-            *result = sum_abs;
+__global__ void dot_small(const float* __restrict__ a, const float* __restrict__ b,
+                          float* __restrict__ result, int n) {
+    float sum = 0.0f;
+    for (int i = threadIdx.x * 4; i < n; i += blockDim.x * 4) {
+        if (i + 3 < n) {
+            float4 aa = reinterpret_cast<const float4*>(a)[i / 4];
+            float4 bb = reinterpret_cast<const float4*>(b)[i / 4];
+            sum += aa.x * bb.x + aa.y * bb.y + aa.z * bb.z + aa.w * bb.w;
+        } else {
+            for (int j = i; j < n && j < i + 4; ++j) sum += a[j] * b[j];
         }
     }
+    sum = warp_ops::block_reduce_sum(sum);
+    if (threadIdx.x == 0) *result = sum;
+}
 
-    void launch_l1_norm(const float* data, float* result, size_t n, cudaStream_t stream) {
-        l1_norm_block_kernel<<<1, 256, 0, stream>>>(data, result, static_cast<int>(n));
+void launch_dot_product(const float* a, const float* b, float* result, size_t n, cudaStream_t stream) {
+    if (n == 0) { cudaMemsetAsync(result, 0, sizeof(float), stream); return; }
+
+    constexpr int BLOCK = 256;
+    if (n < 100000) {
+        dot_small<<<1, BLOCK, 0, stream>>>(a, b, result, static_cast<int>(n));
+        return;
     }
 
-    // ============================================================================
-    // SUM SCALAR - Single Block Pattern
-    // ============================================================================
+    const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
+    float* partials = nullptr;
+    cudaMallocAsync(&partials, grid * sizeof(float), stream);
+    dot_stage1<<<grid, BLOCK, 0, stream>>>(a, b, partials, n);
+    reduce_partials_sum<<<1, BLOCK, 0, stream>>>(partials, result, grid);
+    cudaFreeAsync(partials, stream);
+}
 
-    /**
-     * Optimized sum reduction kernel using calm's single-block pattern.
-     * Computes sum of all elements.
-     */
-    __global__ void sum_block_kernel(const float* data, float* result, int n) {
-        int tid = threadIdx.x;
-        int blockSize = blockDim.x;
-        float sum = 0.0f;
+// ============================================================================
+// UNARY REDUCTIONS (sum, l1_norm, l2_norm)
+// ============================================================================
 
-        // Vectorized loads with float2
-        for (int i = tid * 2; i < n; i += blockSize * 2) {
-            if (i + 1 < n) {
-                float2 vals = *(float2*)&data[i];
-                sum += vals.x + vals.y;
-            } else if (i < n) {
-                sum += data[i];
-            }
-        }
+template <typename Op>
+__global__ void unary_stage1(const float* __restrict__ data, float* __restrict__ partials, size_t n, Op op) {
+    const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t stride = blockDim.x * gridDim.x;
+    float sum = 0.0f;
 
-        // Block reduction
-        sum = lfs::core::warp_ops::block_reduce_sum(sum);
-
-        // Thread 0 writes result
-        if (tid == 0) {
-            *result = sum;
+    for (size_t i = tid * 4; i < n; i += stride * 4) {
+        if (i + 3 < n) {
+            float4 v = reinterpret_cast<const float4*>(data)[i / 4];
+            sum += op(v.x) + op(v.y) + op(v.z) + op(v.w);
+        } else {
+            for (size_t j = i; j < n; ++j) sum += op(data[j]);
         }
     }
 
-    void launch_sum_scalar(const float* data, float* result, size_t n, cudaStream_t stream) {
-        sum_block_kernel<<<1, 256, 0, stream>>>(data, result, static_cast<int>(n));
-    }
+    sum = warp_ops::block_reduce_sum(sum);
+    if (threadIdx.x == 0) partials[blockIdx.x] = sum;
+}
 
-    // ============================================================================
-    // MEAN SCALAR - Single Block Pattern
-    // ============================================================================
-
-    /**
-     * Optimized mean reduction kernel using calm's single-block pattern.
-     * Computes mean = sum / n.
-     */
-    __global__ void mean_block_kernel(const float* data, float* result, int n) {
-        int tid = threadIdx.x;
-        int blockSize = blockDim.x;
-        float sum = 0.0f;
-
-        // Vectorized loads with float2
-        for (int i = tid * 2; i < n; i += blockSize * 2) {
-            if (i + 1 < n) {
-                float2 vals = *(float2*)&data[i];
-                sum += vals.x + vals.y;
-            } else if (i < n) {
-                sum += data[i];
-            }
-        }
-
-        // Block reduction
-        sum = lfs::core::warp_ops::block_reduce_sum(sum);
-
-        // Thread 0 computes mean and writes result
-        if (tid == 0) {
-            *result = sum / static_cast<float>(n);
+template <typename Op>
+__global__ void unary_small(const float* __restrict__ data, float* __restrict__ result, int n, Op op) {
+    float sum = 0.0f;
+    for (int i = threadIdx.x * 4; i < n; i += blockDim.x * 4) {
+        if (i + 3 < n) {
+            float4 v = reinterpret_cast<const float4*>(data)[i / 4];
+            sum += op(v.x) + op(v.y) + op(v.z) + op(v.w);
+        } else {
+            for (int j = i; j < n && j < i + 4; ++j) sum += op(data[j]);
         }
     }
+    sum = warp_ops::block_reduce_sum(sum);
+    if (threadIdx.x == 0) *result = sum;
+}
 
-    void launch_mean_scalar(const float* data, float* result, size_t n, cudaStream_t stream) {
-        mean_block_kernel<<<1, 256, 0, stream>>>(data, result, static_cast<int>(n));
+void launch_sum_scalar(const float* data, float* result, size_t n, cudaStream_t stream) {
+    if (n == 0) { cudaMemsetAsync(result, 0, sizeof(float), stream); return; }
+
+    constexpr int BLOCK = 256;
+    if (n < 100000) {
+        unary_small<<<1, BLOCK, 0, stream>>>(data, result, static_cast<int>(n), identity_op{});
+        return;
     }
 
-    // ============================================================================
-    // MIN/MAX SCALAR - Single Block Pattern
-    // ============================================================================
+    const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
+    float* partials = nullptr;
+    cudaMallocAsync(&partials, grid * sizeof(float), stream);
+    unary_stage1<<<grid, BLOCK, 0, stream>>>(data, partials, n, identity_op{});
+    reduce_partials_sum<<<1, BLOCK, 0, stream>>>(partials, result, grid);
+    cudaFreeAsync(partials, stream);
+}
 
-    /**
-     * Optimized max reduction kernel using calm's single-block pattern.
-     */
-    __global__ void max_block_kernel(const float* data, float* result, int n) {
-        int tid = threadIdx.x;
-        int blockSize = blockDim.x;
-        float max_val = -FLT_MAX;
+void launch_mean_scalar(const float* data, float* result, size_t n, cudaStream_t stream) {
+    if (n == 0) { cudaMemsetAsync(result, 0, sizeof(float), stream); return; }
+    launch_sum_scalar(data, result, n, stream);
+    div_inplace<<<1, 1, 0, stream>>>(result, 1.0f / static_cast<float>(n));
+}
 
-        // Vectorized loads with float2
-        for (int i = tid * 2; i < n; i += blockSize * 2) {
-            if (i + 1 < n) {
-                float2 vals = *(float2*)&data[i];
-                max_val = fmaxf(max_val, fmaxf(vals.x, vals.y));
-            } else if (i < n) {
-                max_val = fmaxf(max_val, data[i]);
-            }
-        }
+void launch_l1_norm(const float* data, float* result, size_t n, cudaStream_t stream) {
+    if (n == 0) { cudaMemsetAsync(result, 0, sizeof(float), stream); return; }
 
-        // Block reduction using max
-        max_val = lfs::core::warp_ops::block_reduce_max(max_val);
-
-        // Thread 0 writes result
-        if (tid == 0) {
-            *result = max_val;
-        }
+    constexpr int BLOCK = 256;
+    if (n < 100000) {
+        unary_small<<<1, BLOCK, 0, stream>>>(data, result, static_cast<int>(n), abs_op{});
+        return;
     }
 
-    void launch_max_scalar(const float* data, float* result, size_t n, cudaStream_t stream) {
-        max_block_kernel<<<1, 256, 0, stream>>>(data, result, static_cast<int>(n));
+    const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
+    float* partials = nullptr;
+    cudaMallocAsync(&partials, grid * sizeof(float), stream);
+    unary_stage1<<<grid, BLOCK, 0, stream>>>(data, partials, n, abs_op{});
+    reduce_partials_sum<<<1, BLOCK, 0, stream>>>(partials, result, grid);
+    cudaFreeAsync(partials, stream);
+}
+
+void launch_l2_norm(const float* data, float* result, size_t n, cudaStream_t stream) {
+    if (n == 0) { cudaMemsetAsync(result, 0, sizeof(float), stream); return; }
+
+    constexpr int BLOCK = 256;
+    if (n < 100000) {
+        unary_small<<<1, BLOCK, 0, stream>>>(data, result, static_cast<int>(n), square_op{});
+        sqrt_inplace<<<1, 1, 0, stream>>>(result);
+        return;
     }
 
-    /**
-     * Optimized min reduction kernel using calm's single-block pattern.
-     */
-    __global__ void min_block_kernel(const float* data, float* result, int n) {
-        int tid = threadIdx.x;
-        int blockSize = blockDim.x;
-        float min_val = FLT_MAX;
+    const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
+    float* partials = nullptr;
+    cudaMallocAsync(&partials, grid * sizeof(float), stream);
+    unary_stage1<<<grid, BLOCK, 0, stream>>>(data, partials, n, square_op{});
+    reduce_partials_sum<<<1, BLOCK, 0, stream>>>(partials, result, grid);
+    sqrt_inplace<<<1, 1, 0, stream>>>(result);
+    cudaFreeAsync(partials, stream);
+}
 
-        // Vectorized loads with float2
-        for (int i = tid * 2; i < n; i += blockSize * 2) {
-            if (i + 1 < n) {
-                float2 vals = *(float2*)&data[i];
-                min_val = fminf(min_val, fminf(vals.x, vals.y));
-            } else if (i < n) {
-                min_val = fminf(min_val, data[i]);
-            }
-        }
+// ============================================================================
+// MIN/MAX REDUCTIONS
+// ============================================================================
 
-        // Block reduction using min
-        min_val = lfs::core::warp_ops::block_reduce_min(min_val);
+template <typename Op>
+__global__ void minmax_stage1(const float* __restrict__ data, float* __restrict__ partials,
+                              size_t n, float init, Op op) {
+    const size_t tid = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t stride = blockDim.x * gridDim.x;
+    float val = init;
 
-        // Thread 0 writes result
-        if (tid == 0) {
-            *result = min_val;
+    for (size_t i = tid * 4; i < n; i += stride * 4) {
+        if (i + 3 < n) {
+            float4 v = reinterpret_cast<const float4*>(data)[i / 4];
+            val = op(val, op(op(v.x, v.y), op(v.z, v.w)));
+        } else {
+            for (size_t j = i; j < n; ++j) val = op(val, data[j]);
         }
     }
 
-    void launch_min_scalar(const float* data, float* result, size_t n, cudaStream_t stream) {
-        min_block_kernel<<<1, 256, 0, stream>>>(data, result, static_cast<int>(n));
-    }
+    if (init == -FLT_MAX) val = warp_ops::block_reduce_max(val);
+    else val = warp_ops::block_reduce_min(val);
 
-    // ============================================================================
-    // COUNT NONZERO - Single Block Pattern
-    // ============================================================================
+    if (threadIdx.x == 0) partials[blockIdx.x] = val;
+}
 
-    /**
-     * Optimized count nonzero kernel using calm's single-block pattern.
-     * Counts number of non-zero elements (works for both float and bool).
-     */
-    __global__ void count_nonzero_float_kernel(const float* data, size_t* result, int n) {
-        int tid = threadIdx.x;
-        int blockSize = blockDim.x;
-        float count = 0.0f; // Use float for warp reduction, convert to size_t at end
-
-        // Vectorized loads with float2
-        for (int i = tid * 2; i < n; i += blockSize * 2) {
-            if (i + 1 < n) {
-                float2 vals = *(float2*)&data[i];
-                count += (vals.x != 0.0f) ? 1.0f : 0.0f;
-                count += (vals.y != 0.0f) ? 1.0f : 0.0f;
-            } else if (i < n) {
-                count += (data[i] != 0.0f) ? 1.0f : 0.0f;
-            }
-        }
-
-        // Block reduction
-        count = lfs::core::warp_ops::block_reduce_sum(count);
-
-        // Thread 0 writes result
-        if (tid == 0) {
-            *result = static_cast<size_t>(count);
+template <typename Op>
+__global__ void minmax_small(const float* __restrict__ data, float* __restrict__ result,
+                             int n, float init, Op op) {
+    float val = init;
+    for (int i = threadIdx.x * 4; i < n; i += blockDim.x * 4) {
+        if (i + 3 < n) {
+            float4 v = reinterpret_cast<const float4*>(data)[i / 4];
+            val = op(val, op(op(v.x, v.y), op(v.z, v.w)));
+        } else {
+            for (int j = i; j < n && j < i + 4; ++j) val = op(val, data[j]);
         }
     }
 
-    __global__ void count_nonzero_bool_kernel(const unsigned char* data, size_t* result, int n) {
-        int tid = threadIdx.x;
-        int blockSize = blockDim.x;
-        float count = 0.0f; // Use float for warp reduction
+    if (init == -FLT_MAX) val = warp_ops::block_reduce_max(val);
+    else val = warp_ops::block_reduce_min(val);
 
-        // Process elements (no vectorization for bool - single byte)
-        for (int i = tid; i < n; i += blockSize) {
-            count += (data[i] != 0) ? 1.0f : 0.0f;
+    if (threadIdx.x == 0) *result = val;
+}
+
+void launch_max_scalar(const float* data, float* result, size_t n, cudaStream_t stream) {
+    if (n == 0) {
+        float v = -FLT_MAX;
+        cudaMemcpyAsync(result, &v, sizeof(float), cudaMemcpyHostToDevice, stream);
+        return;
+    }
+
+    constexpr int BLOCK = 256;
+    if (n < 100000) {
+        minmax_small<<<1, BLOCK, 0, stream>>>(data, result, static_cast<int>(n), -FLT_MAX, max_op{});
+        return;
+    }
+
+    const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
+    float* partials = nullptr;
+    cudaMallocAsync(&partials, grid * sizeof(float), stream);
+    minmax_stage1<<<grid, BLOCK, 0, stream>>>(data, partials, n, -FLT_MAX, max_op{});
+    reduce_partials_max<<<1, BLOCK, 0, stream>>>(partials, result, grid);
+    cudaFreeAsync(partials, stream);
+}
+
+void launch_min_scalar(const float* data, float* result, size_t n, cudaStream_t stream) {
+    if (n == 0) {
+        float v = FLT_MAX;
+        cudaMemcpyAsync(result, &v, sizeof(float), cudaMemcpyHostToDevice, stream);
+        return;
+    }
+
+    constexpr int BLOCK = 256;
+    if (n < 100000) {
+        minmax_small<<<1, BLOCK, 0, stream>>>(data, result, static_cast<int>(n), FLT_MAX, min_op{});
+        return;
+    }
+
+    const int grid = GPUConfig::get().optimal_grid_size(BLOCK);
+    float* partials = nullptr;
+    cudaMallocAsync(&partials, grid * sizeof(float), stream);
+    minmax_stage1<<<grid, BLOCK, 0, stream>>>(data, partials, n, FLT_MAX, min_op{});
+    reduce_partials_min<<<1, BLOCK, 0, stream>>>(partials, result, grid);
+    cudaFreeAsync(partials, stream);
+}
+
+// ============================================================================
+// COUNT NONZERO
+// ============================================================================
+
+__global__ void count_nonzero_float(const float* data, size_t* result, int n) {
+    float count = 0.0f;
+    for (int i = threadIdx.x * 2; i < n; i += blockDim.x * 2) {
+        if (i + 1 < n) {
+            float2 v = *(float2*)&data[i];
+            count += (v.x != 0.0f) + (v.y != 0.0f);
+        } else if (i < n) {
+            count += (data[i] != 0.0f);
         }
-
-        // Block reduction
-        count = lfs::core::warp_ops::block_reduce_sum(count);
-
-        // Thread 0 writes result
-        if (tid == 0) {
-            *result = static_cast<size_t>(count);
-        }
     }
+    count = warp_ops::block_reduce_sum(count);
+    if (threadIdx.x == 0) *result = static_cast<size_t>(count);
+}
 
-    void launch_count_nonzero_scalar_float(const float* data, size_t* result, size_t n, cudaStream_t stream) {
-        count_nonzero_float_kernel<<<1, 256, 0, stream>>>(data, result, static_cast<int>(n));
+__global__ void count_nonzero_bool(const unsigned char* data, size_t* result, int n) {
+    float count = 0.0f;
+    for (int i = threadIdx.x; i < n; i += blockDim.x) {
+        count += (data[i] != 0);
     }
+    count = warp_ops::block_reduce_sum(count);
+    if (threadIdx.x == 0) *result = static_cast<size_t>(count);
+}
 
-    void launch_count_nonzero_scalar_bool(const unsigned char* data, size_t* result, size_t n, cudaStream_t stream) {
-        count_nonzero_bool_kernel<<<1, 256, 0, stream>>>(data, result, static_cast<int>(n));
-    }
+void launch_count_nonzero_scalar_float(const float* data, size_t* result, size_t n, cudaStream_t stream) {
+    count_nonzero_float<<<1, 256, 0, stream>>>(data, result, static_cast<int>(n));
+}
+
+void launch_count_nonzero_scalar_bool(const unsigned char* data, size_t* result, size_t n, cudaStream_t stream) {
+    count_nonzero_bool<<<1, 256, 0, stream>>>(data, result, static_cast<int>(n));
+}
 
 } // namespace lfs::core::tensor_ops

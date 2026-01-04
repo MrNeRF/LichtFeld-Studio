@@ -101,13 +101,15 @@ namespace lfs::core::tensor_ops {
 
 #ifdef __CUDACC__ // Only compile CUDA kernels with nvcc
 
-    // Scalar broadcast kernel - Simple version without float4 (safer)
+    // Scalar broadcast: (M×N) op scalar, vectorized with float4
     template <typename BinaryOp>
     __global__ void broadcast_scalar_kernel_float(
         const float* a, const float* b, float* c,
         size_t a_size, size_t b_size, size_t c_elements,
         BinaryOp op) {
-        const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+        const size_t idx_vec = blockIdx.x * blockDim.x + threadIdx.x;
+        const size_t idx = idx_vec * 4;
+
         if (idx >= c_elements)
             return;
 
@@ -115,16 +117,39 @@ namespace lfs::core::tensor_ops {
         const float* array = (a_size == 1) ? b : a;
         const bool a_is_scalar = (a_size == 1);
 
-        c[idx] = a_is_scalar ? op(scalar_val, array[idx]) : op(array[idx], scalar_val);
+        bool array_aligned = (reinterpret_cast<uintptr_t>(&array[idx]) % 16) == 0;
+        bool out_aligned = (reinterpret_cast<uintptr_t>(&c[idx]) % 16) == 0;
+
+        if (array_aligned && out_aligned && idx + 3 < c_elements) {
+            float4 array_vals = *reinterpret_cast<const float4*>(&array[idx]);
+
+            float4 result;
+            if (a_is_scalar) {
+                result.x = op(scalar_val, array_vals.x);
+                result.y = op(scalar_val, array_vals.y);
+                result.z = op(scalar_val, array_vals.z);
+                result.w = op(scalar_val, array_vals.w);
+            } else {
+                result.x = op(array_vals.x, scalar_val);
+                result.y = op(array_vals.y, scalar_val);
+                result.z = op(array_vals.z, scalar_val);
+                result.w = op(array_vals.w, scalar_val);
+            }
+
+            *reinterpret_cast<float4*>(&c[idx]) = result;
+        } else if (idx < c_elements) {
+            for (size_t i = idx; i < c_elements && i < idx + 4; ++i) {
+                c[i] = a_is_scalar ? op(scalar_val, array[i]) : op(array[i], scalar_val);
+            }
+        }
     }
 
-    // Row broadcast kernel - VECTORIZED with float4 (2-4x faster!)
+    // Row broadcast: (M×N) op (1×N), vectorized with float4
     template <typename BinaryOp>
     __global__ void broadcast_row_kernel_float(
         const float* a, const float* b, float* c,
         size_t M, size_t N, bool a_is_row,
         BinaryOp op) {
-        // CRITICAL FIX: Handle 3D grids for M > 65535
         const size_t row = blockIdx.z * gridDim.y + blockIdx.y;
         if (row >= M)
             return;
@@ -136,12 +161,10 @@ namespace lfs::core::tensor_ops {
         const float* broadcast_row = a_is_row ? a : b;
         const size_t row_offset = row * N;
 
-        // Check alignment for float4 vectorization
         bool rows_aligned = (reinterpret_cast<uintptr_t>(&broadcast_row[0]) % 16) == 0;
         bool data_aligned = (reinterpret_cast<uintptr_t>(&row_data[row_offset]) % 16) == 0;
         bool out_aligned = (reinterpret_cast<uintptr_t>(&c[row_offset]) % 16) == 0;
 
-        // Vectorized path: Load 4 floats in one transaction
         if (rows_aligned && data_aligned && out_aligned && col + 3 < N) {
             float4 broadcast_vals = reinterpret_cast<const float4*>(broadcast_row)[col_vec];
             float4 data_vals = reinterpret_cast<const float4*>(&row_data[row_offset])[col_vec];
@@ -160,9 +183,7 @@ namespace lfs::core::tensor_ops {
             }
 
             reinterpret_cast<float4*>(&c[row_offset])[col_vec] = result;
-        }
-        // Scalar fallback for unaligned data or remainder
-        else if (col < N) {
+        } else if (col < N) {
             for (size_t i = col; i < N && i < col + 4; ++i) {
                 const size_t idx = row_offset + i;
                 c[idx] = a_is_row ? op(broadcast_row[i], row_data[idx]) : op(row_data[idx], broadcast_row[i]);
@@ -170,15 +191,12 @@ namespace lfs::core::tensor_ops {
         }
     }
 
-    // Row broadcast COMPARISON kernel - VECTORIZED (float->unsigned char)
-    // Optimized for comparison operations: <, >, ==, !=
-    // Uses float4 loads for inputs, uchar4 stores for outputs
+    // Row broadcast comparison: (M×N) op (1×N) -> bool, vectorized
     template <typename BinaryOp>
     __global__ void broadcast_row_comparison_kernel(
         const float* a, const float* b, unsigned char* c,
         size_t M, size_t N, bool a_is_row,
         BinaryOp op) {
-        // CRITICAL FIX: Handle 3D grids for M > 65535
         const size_t row = blockIdx.z * gridDim.y + blockIdx.y;
         if (row >= M)
             return;
@@ -190,18 +208,14 @@ namespace lfs::core::tensor_ops {
         const float* broadcast_row = a_is_row ? a : b;
         const size_t row_offset = row * N;
 
-        // Check alignment: float4 for inputs (16 bytes), uchar4 for output (4 bytes)
         bool rows_aligned = (reinterpret_cast<uintptr_t>(&broadcast_row[0]) % 16) == 0;
         bool data_aligned = (reinterpret_cast<uintptr_t>(&row_data[row_offset]) % 16) == 0;
         bool out_aligned = (reinterpret_cast<uintptr_t>(&c[row_offset]) % 4) == 0;
 
-        // Vectorized path: Load 4 floats, store 4 bytes
         if (rows_aligned && data_aligned && out_aligned && col + 3 < N) {
-            // Load 4 floats from each input (16 bytes)
             float4 broadcast_vals = reinterpret_cast<const float4*>(broadcast_row)[col_vec];
             float4 data_vals = reinterpret_cast<const float4*>(&row_data[row_offset])[col_vec];
 
-            // Apply comparison to all 4 values (returns unsigned char)
             uchar4 result;
             if (a_is_row) {
                 result.x = op(broadcast_vals.x, data_vals.x);
@@ -215,11 +229,8 @@ namespace lfs::core::tensor_ops {
                 result.w = op(data_vals.w, broadcast_vals.w);
             }
 
-            // Store 4 bytes in one transaction
             reinterpret_cast<uchar4*>(&c[row_offset])[col_vec] = result;
-        }
-        // Scalar fallback for unaligned data or remainder
-        else if (col < N) {
+        } else if (col < N) {
             for (size_t i = col; i < N && i < col + 4; ++i) {
                 const size_t idx = row_offset + i;
                 c[idx] = a_is_row ? op(broadcast_row[i], row_data[idx]) : op(row_data[idx], broadcast_row[i]);
@@ -227,29 +238,53 @@ namespace lfs::core::tensor_ops {
         }
     }
 
-    // Column broadcast kernel - Simple version without float4
+    // Column broadcast: (M×N) op (M×1), vectorized with float4
     template <typename BinaryOp>
     __global__ void broadcast_column_kernel_float(
         const float* a, const float* b, float* c,
         size_t M, size_t N, bool a_is_col,
         BinaryOp op) {
-        // CRITICAL FIX: Handle 3D grids for M > 65535
         const size_t row = blockIdx.z * gridDim.y + blockIdx.y;
-        const size_t col = blockIdx.x * blockDim.x + threadIdx.x;
-
-        if (row >= M || col >= N)
+        if (row >= M)
             return;
 
-        const size_t idx = row * N + col;
-        const float* row_data = a_is_col ? b : a;
-        const float col_val = a_is_col ? a[row] : b[row];
+        const size_t col_vec = blockIdx.x * blockDim.x + threadIdx.x;
+        const size_t col = col_vec * 4;
 
-        c[idx] = a_is_col ? op(col_val, row_data[idx]) : op(row_data[idx], col_val);
+        const float* row_data = a_is_col ? b : a;
+        const float* col_data = a_is_col ? a : b;
+        const float col_val = col_data[row];
+        const size_t row_offset = row * N;
+
+        bool data_aligned = (reinterpret_cast<uintptr_t>(&row_data[row_offset]) % 16) == 0;
+        bool out_aligned = (reinterpret_cast<uintptr_t>(&c[row_offset]) % 16) == 0;
+
+        if (data_aligned && out_aligned && col + 3 < N) {
+            float4 data_vals = reinterpret_cast<const float4*>(&row_data[row_offset])[col_vec];
+
+            float4 result;
+            if (a_is_col) {
+                result.x = op(col_val, data_vals.x);
+                result.y = op(col_val, data_vals.y);
+                result.z = op(col_val, data_vals.z);
+                result.w = op(col_val, data_vals.w);
+            } else {
+                result.x = op(data_vals.x, col_val);
+                result.y = op(data_vals.y, col_val);
+                result.z = op(data_vals.z, col_val);
+                result.w = op(data_vals.w, col_val);
+            }
+
+            reinterpret_cast<float4*>(&c[row_offset])[col_vec] = result;
+        } else if (col < N) {
+            for (size_t i = col; i < N && i < col + 4; ++i) {
+                const size_t idx = row_offset + i;
+                c[idx] = a_is_col ? op(col_val, row_data[idx]) : op(row_data[idx], col_val);
+            }
+        }
     }
 
-    // Channel3D broadcast kernel - HIGHLY OPTIMIZED for neural rendering
-    // Pattern: (H×W×C) op (1×1×C) - extremely common in neural rendering!
-    // Uses float4 for RGBA (C=4), manual unrolling for RGB (C=3)
+    // Channel3D broadcast: (H×W×C) op (1×1×C), vectorized
     template <typename BinaryOp>
     __global__ void broadcast_channel3d_kernel_float(
         const float* a, const float* b, float* c,
@@ -827,14 +862,16 @@ namespace lfs::core::tensor_ops {
 
             switch (pattern) {
             case BroadcastPattern::Scalar: {
-                // Scalar broadcast: (M×N) op scalar
+                // Scalar broadcast: (M×N) op scalar - VECTORIZED (4 elements per thread)
                 size_t a_size = 1, b_size = 1;
                 for (size_t i = 0; i < a_rank; ++i)
                     a_size *= a_shape[i];
                 for (size_t i = 0; i < b_rank; ++i)
                     b_size *= b_shape[i];
 
-                const int grid_size = (c_elements + block_size - 1) / block_size;
+                // Each thread processes 4 elements, so divide by 4
+                const int num_vecs = (c_elements + 3) / 4;
+                const int grid_size = (num_vecs + block_size - 1) / block_size;
 
 #ifdef __CUDACC__
                 broadcast_scalar_kernel_float<<<grid_size, block_size, 0, stream>>>(
@@ -878,14 +915,16 @@ namespace lfs::core::tensor_ops {
             }
 
             case BroadcastPattern::Column: {
-                // Column broadcast: (M×N) op (M×1)
+                // Column broadcast: (M×N) op (M×1) - VECTORIZED (4 cols per thread)
                 const size_t M = c_shape[0];
                 const size_t N = c_shape[1];
                 const bool a_is_col = (a_shape[1] == 1);
 
                 // CRITICAL FIX: Handle M > 65535 by using 3D grid
+                // Each thread processes 4 columns, so divide by 4
                 const int max_grid_dim = 65535; // CUDA Y/Z dimension limit
-                const int grid_x = (N + block_size - 1) / block_size;
+                const int num_col_vecs = (N + 3) / 4;
+                const int grid_x = (num_col_vecs + block_size - 1) / block_size;
 
                 dim3 grid;
                 if (M <= max_grid_dim) {
@@ -1011,9 +1050,10 @@ namespace lfs::core::tensor_ops {
         std::vector<int> b_vec(b_shape, b_shape + b_rank);
         std::vector<int> c_vec(c_shape, c_shape + c_rank);
 
-        cudaMemcpy(d_a_shape, a_vec.data(), a_rank * sizeof(int), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_b_shape, b_vec.data(), b_rank * sizeof(int), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_c_shape, c_vec.data(), c_rank * sizeof(int), cudaMemcpyHostToDevice);
+        // Use async memcpy to avoid synchronization overhead
+        cudaMemcpyAsync(d_a_shape, a_vec.data(), a_rank * sizeof(int), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(d_b_shape, b_vec.data(), b_rank * sizeof(int), cudaMemcpyHostToDevice, stream);
+        cudaMemcpyAsync(d_c_shape, c_vec.data(), c_rank * sizeof(int), cudaMemcpyHostToDevice, stream);
 
         const int grid_size = (c_elements + block_size - 1) / block_size;
 

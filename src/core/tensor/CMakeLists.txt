@@ -44,6 +44,7 @@ set(LFS_TENSOR_CUDA_SOURCES
     tensor_masking_ops.cu   # CUDA kernels for masking/indexing
     tensor_random_ops.cu    # CUDA kernels for random ops
     tensor_strided_ops.cu   # CUDA kernels for strided tensor operations
+    tensor_dot_optimized.cu # Optimized dot product and scalar reduction kernels
 )
 
 # Create CUDA library for tensor operations (C++20)

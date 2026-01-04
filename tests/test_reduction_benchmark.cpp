@@ -107,27 +107,40 @@ TEST_F(ReductionBenchmarkTest, SumReductionSingleDim) {
         // Create tensors
         auto tensor_custom = Tensor::rand(TensorShape(custom_shape), Device::CUDA);
         auto tensor_torch = torch::rand(shape, torch::kCUDA);
+        cudaDeviceSynchronize();
+
+        // WARMUP - Critical for accurate measurements!
+        for (int i = 0; i < 20; ++i) {
+            auto result = tensor_custom.sum({dim}, false);
+        }
+        cudaDeviceSynchronize();
 
         double total_custom = 0.0;
         double total_torch = 0.0;
 
-        // Benchmark
-        for (int i = 0; i < iterations; ++i) {
-            // Custom
-            {
-                Timer timer;
-                auto result = tensor_custom.sum({dim}, false);
-                cudaDeviceSynchronize();
-                total_custom += timer.elapsed_ms();
-            }
+        // Benchmark - Run all of our iterations FIRST, then PyTorch
+        // This avoids interference between memory allocators
 
-            // PyTorch
-            {
-                Timer timer;
-                auto result = tensor_torch.sum(dim, false);
-                cudaDeviceSynchronize();
-                total_torch += timer.elapsed_ms();
-            }
+        // Custom (all iterations first)
+        for (int i = 0; i < iterations; ++i) {
+            Timer timer;
+            auto result = tensor_custom.sum({dim}, false);
+            cudaDeviceSynchronize();
+            total_custom += timer.elapsed_ms();
+        }
+
+        // Warmup PyTorch
+        for (int i = 0; i < 20; ++i) {
+            auto result = tensor_torch.sum(dim, false);
+        }
+        cudaDeviceSynchronize();
+
+        // PyTorch (all iterations after)
+        for (int i = 0; i < iterations; ++i) {
+            Timer timer;
+            auto result = tensor_torch.sum(dim, false);
+            cudaDeviceSynchronize();
+            total_torch += timer.elapsed_ms();
         }
 
         BenchmarkResult result{
@@ -157,24 +170,37 @@ TEST_F(ReductionBenchmarkTest, MeanReduction) {
 
         auto tensor_custom = Tensor::rand(TensorShape(custom_shape), Device::CUDA);
         auto tensor_torch = torch::rand(shape, torch::kCUDA);
+        cudaDeviceSynchronize();
+
+        // Warmup
+        for (int i = 0; i < 20; ++i) {
+            auto result = tensor_custom.mean({dim}, false);
+        }
+        cudaDeviceSynchronize();
 
         double total_custom = 0.0;
         double total_torch = 0.0;
 
+        // Custom iterations first
         for (int i = 0; i < iterations; ++i) {
-            {
-                Timer timer;
-                auto result = tensor_custom.mean({dim}, false);
-                cudaDeviceSynchronize();
-                total_custom += timer.elapsed_ms();
-            }
+            Timer timer;
+            auto result = tensor_custom.mean({dim}, false);
+            cudaDeviceSynchronize();
+            total_custom += timer.elapsed_ms();
+        }
 
-            {
-                Timer timer;
-                auto result = tensor_torch.mean(dim, false);
-                cudaDeviceSynchronize();
-                total_torch += timer.elapsed_ms();
-            }
+        // Warmup PyTorch
+        for (int i = 0; i < 20; ++i) {
+            auto result = tensor_torch.mean(dim, false);
+        }
+        cudaDeviceSynchronize();
+
+        // PyTorch iterations
+        for (int i = 0; i < iterations; ++i) {
+            Timer timer;
+            auto result = tensor_torch.mean(dim, false);
+            cudaDeviceSynchronize();
+            total_torch += timer.elapsed_ms();
         }
 
         BenchmarkResult result{
@@ -204,42 +230,55 @@ TEST_F(ReductionBenchmarkTest, MinMaxReduction) {
 
         auto tensor_custom = Tensor::rand(TensorShape(custom_shape), Device::CUDA);
         auto tensor_torch = torch::rand(shape, torch::kCUDA);
+        cudaDeviceSynchronize();
+
+        bool is_min = name.find("Min") != std::string::npos;
+
+        // Warmup
+        for (int i = 0; i < 20; ++i) {
+            if (is_min) {
+                auto result = tensor_custom.min({dim}, false);
+            } else {
+                auto result = tensor_custom.max({dim}, false);
+            }
+        }
+        cudaDeviceSynchronize();
 
         double total_custom = 0.0;
         double total_torch = 0.0;
 
-        bool is_min = name.find("Min") != std::string::npos;
-
+        // Custom iterations first
         for (int i = 0; i < iterations; ++i) {
+            Timer timer;
             if (is_min) {
-                {
-                    Timer timer;
-                    auto result = tensor_custom.min({dim}, false);
-                    cudaDeviceSynchronize();
-                    total_custom += timer.elapsed_ms();
-                }
-
-                {
-                    Timer timer;
-                    auto result = std::get<0>(tensor_torch.min(dim, false));
-                    cudaDeviceSynchronize();
-                    total_torch += timer.elapsed_ms();
-                }
+                auto result = tensor_custom.min({dim}, false);
             } else {
-                {
-                    Timer timer;
-                    auto result = tensor_custom.max({dim}, false);
-                    cudaDeviceSynchronize();
-                    total_custom += timer.elapsed_ms();
-                }
-
-                {
-                    Timer timer;
-                    auto result = std::get<0>(tensor_torch.max(dim, false));
-                    cudaDeviceSynchronize();
-                    total_torch += timer.elapsed_ms();
-                }
+                auto result = tensor_custom.max({dim}, false);
             }
+            cudaDeviceSynchronize();
+            total_custom += timer.elapsed_ms();
+        }
+
+        // Warmup PyTorch
+        for (int i = 0; i < 20; ++i) {
+            if (is_min) {
+                auto result = std::get<0>(tensor_torch.min(dim, false));
+            } else {
+                auto result = std::get<0>(tensor_torch.max(dim, false));
+            }
+        }
+        cudaDeviceSynchronize();
+
+        // PyTorch iterations
+        for (int i = 0; i < iterations; ++i) {
+            Timer timer;
+            if (is_min) {
+                auto result = std::get<0>(tensor_torch.min(dim, false));
+            } else {
+                auto result = std::get<0>(tensor_torch.max(dim, false));
+            }
+            cudaDeviceSynchronize();
+            total_torch += timer.elapsed_ms();
         }
 
         BenchmarkResult result{
@@ -265,29 +304,43 @@ TEST_F(ReductionBenchmarkTest, ChainedReductions) {
 
     auto tensor_custom = Tensor::rand({static_cast<size_t>(H), static_cast<size_t>(W), static_cast<size_t>(C)}, Device::CUDA);
     auto tensor_torch = torch::rand({H, W, C}, torch::kCUDA);
+    cudaDeviceSynchronize();
+
+    // Warmup
+    for (int i = 0; i < 20; ++i) {
+        auto sum_hw = tensor_custom.sum({0, 1}, false);
+        auto mean_c = sum_hw.mean({0}, false);
+    }
+    cudaDeviceSynchronize();
 
     double total_custom = 0.0;
     double total_torch = 0.0;
 
+    // Custom iterations first
     for (int i = 0; i < iterations; ++i) {
-        // Custom - multiple reductions
-        {
-            Timer timer;
-            auto sum_hw = tensor_custom.sum({0, 1}, false); // Sum over H, W
-            auto mean_c = sum_hw.mean({0}, false);          // Mean over C
-            cudaDeviceSynchronize();
-            total_custom += timer.elapsed_ms();
-        }
+        Timer timer;
+        auto sum_hw = tensor_custom.sum({0, 1}, false); // Sum over H, W
+        auto mean_c = sum_hw.mean({0}, false);          // Mean over C
+        cudaDeviceSynchronize();
+        total_custom += timer.elapsed_ms();
+    }
 
-        // PyTorch - same operations
-        {
-            Timer timer;
-            std::vector<int64_t> dims = {0, 1};
-            auto sum_hw = tensor_torch.sum(c10::IntArrayRef(dims), false);
-            auto mean_c = sum_hw.mean(0, false);
-            cudaDeviceSynchronize();
-            total_torch += timer.elapsed_ms();
-        }
+    // Warmup PyTorch
+    for (int i = 0; i < 20; ++i) {
+        std::vector<int64_t> dims = {0, 1};
+        auto sum_hw = tensor_torch.sum(c10::IntArrayRef(dims), false);
+        auto mean_c = sum_hw.mean(0, false);
+    }
+    cudaDeviceSynchronize();
+
+    // PyTorch iterations
+    for (int i = 0; i < iterations; ++i) {
+        Timer timer;
+        std::vector<int64_t> dims = {0, 1};
+        auto sum_hw = tensor_torch.sum(c10::IntArrayRef(dims), false);
+        auto mean_c = sum_hw.mean(0, false);
+        cudaDeviceSynchronize();
+        total_torch += timer.elapsed_ms();
     }
 
     BenchmarkResult result{
@@ -329,24 +382,37 @@ TEST_F(ReductionBenchmarkTest, VariableSizeTempStorage) {
 
         auto tensor_custom = Tensor::rand(TensorShape(custom_shape), Device::CUDA);
         auto tensor_torch = torch::rand(shape, torch::kCUDA);
+        cudaDeviceSynchronize();
+
+        // Warmup
+        for (int i = 0; i < 20; ++i) {
+            auto result = tensor_custom.sum({0}, false);
+        }
+        cudaDeviceSynchronize();
 
         double total_custom = 0.0;
         double total_torch = 0.0;
 
+        // Custom iterations first
         for (int i = 0; i < iterations; ++i) {
-            {
-                Timer timer;
-                auto result = tensor_custom.sum({0}, false);
-                cudaDeviceSynchronize();
-                total_custom += timer.elapsed_ms();
-            }
+            Timer timer;
+            auto result = tensor_custom.sum({0}, false);
+            cudaDeviceSynchronize();
+            total_custom += timer.elapsed_ms();
+        }
 
-            {
-                Timer timer;
-                auto result = tensor_torch.sum(0, false);
-                cudaDeviceSynchronize();
-                total_torch += timer.elapsed_ms();
-            }
+        // Warmup PyTorch
+        for (int i = 0; i < 20; ++i) {
+            auto result = tensor_torch.sum(0, false);
+        }
+        cudaDeviceSynchronize();
+
+        // PyTorch iterations
+        for (int i = 0; i < iterations; ++i) {
+            Timer timer;
+            auto result = tensor_torch.sum(0, false);
+            cudaDeviceSynchronize();
+            total_torch += timer.elapsed_ms();
         }
 
         BenchmarkResult result{
