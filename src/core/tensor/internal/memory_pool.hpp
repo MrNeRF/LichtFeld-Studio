@@ -5,8 +5,8 @@
 
 #include "allocation_profiler.hpp"
 #include "core/logger.hpp"
-#include "gpu_slab_allocator.hpp"
 #include "deferred_free_queue.hpp"
+#include "gpu_slab_allocator.hpp"
 #include "size_bucketed_pool.hpp"
 #include <cuda_runtime.h>
 #include <memory>
@@ -15,48 +15,15 @@
 
 namespace lfs::core {
 
-    // Allocation strategy thresholds
-    static constexpr size_t SLAB_ALLOC_THRESHOLD = 256 * 1024;           // 256 KB - slab allocator
-    static constexpr size_t BUCKET_ALLOC_THRESHOLD = 16ULL * 1024 * 1024 * 1024;  // 16 GB - size bucketed
+    static constexpr size_t SLAB_ALLOC_THRESHOLD = 256 * 1024;
+    static constexpr size_t BUCKET_ALLOC_THRESHOLD = 16ULL * 1024 * 1024 * 1024;
 
-    /**
-     * @brief Allocation method used for a pointer
-     */
-    enum class AllocMethod : uint8_t {
-        Slab,     // From GPUSlabAllocator (lock-free, ~50ns)
-        Bucketed, // From SizeBucketedPool (cached, ~100ns for hits)
-        Async,    // From cudaMallocAsync (CUDA pool, ~500ns)
-        Direct    // From cudaMalloc (for failures/fallback)
-    };
+    enum class AllocMethod : uint8_t { Slab,
+                                       Bucketed,
+                                       Async,
+                                       Direct };
 
-    /**
-     * @brief High-performance CUDA memory pool with multi-tier allocation
-     *
-     * ALLOCATION STRATEGY (4 tiers):
-     *   Tier 1: Slab allocator (≤256KB) - ~50ns, lock-free free lists
-     *   Tier 2: Size-bucketed pool (256KB-16GB) - ~100ns cache hit, reduces fragmentation
-     *   Tier 3: cudaMallocAsync (fallback) - ~500ns, CUDA managed
-     *   Tier 4: Direct cudaMalloc (failures) - last resort
-     *
-     * SIZE BUCKETING (Tier 2):
-     *   Rounds allocations to bucket boundaries to maximize reuse:
-     *   - 256KB-1MB: 256KB buckets (max 25% waste)
-     *   - 1MB-16MB: 1MB buckets
-     *   - 16MB-256MB: 16MB buckets
-     *   - 256MB-1GB: 64MB buckets
-     *   - 1GB-8GB: 256MB buckets
-     *   - >8GB: 1GB buckets
-     *
-     * Example: (20M, 3, 15) tensor = 3.6GB
-     *   - Without bucketing: 3.6GB unique allocation, fragments memory
-     *   - With bucketing: rounds to 3.75GB bucket, reuses cached memory
-     *
-     * PERFORMANCE:
-     *   - Small tensors: 50ns (slab)
-     *   - Large tensor cache hit: 100ns (bucketed pool)
-     *   - Large tensor cache miss: 500ns (cudaMallocAsync with rounding)
-     *   - Fragmentation: Nearly eliminated for repeated workloads
-     */
+    // Multi-tier CUDA memory pool: slab (≤256KB), bucketed (≤16GB), cudaMallocAsync.
     class CudaMemoryPool {
     public:
         static CudaMemoryPool& instance() {
@@ -64,17 +31,12 @@ namespace lfs::core {
             return pool;
         }
 
-        /**
-         * @brief Allocate memory from the pool
-         */
         void* allocate(size_t bytes, cudaStream_t stream = nullptr) {
-            if (bytes == 0) {
+            if (bytes == 0)
                 return nullptr;
-            }
 
             void* ptr = nullptr;
 
-            // TIER 1: Slab allocator for small allocations (≤256KB)
             if (bytes <= SLAB_ALLOC_THRESHOLD && slab_enabled_) {
                 ptr = GPUSlabAllocator::instance().allocate(bytes);
                 if (ptr) {
@@ -89,23 +51,19 @@ namespace lfs::core {
                 }
             }
 
-            // TIER 2: Size-bucketed pool for medium/large allocations
             if (bytes <= BUCKET_ALLOC_THRESHOLD) {
-                // Try cache first (instant reuse)
                 ptr = SizeBucketedPool::instance().try_allocate_cached(bytes);
                 if (ptr) {
                     stats_.bucket_cache_hits.fetch_add(1, std::memory_order_relaxed);
                     stats_.bucket_bytes.fetch_add(bytes, std::memory_order_relaxed);
                     track_allocation(ptr, bytes, AllocMethod::Bucketed);
-
                     if constexpr (ENABLE_ALLOCATION_PROFILING) {
                         AllocationProfiler::instance().record_allocation(bytes, 3);
                     }
                     return ptr;
                 }
 
-                // Cache miss - allocate with bucketed size
-                size_t bucket_size = SizeBucketedPool::get_bucket_size(bytes);
+                const size_t bucket_size = SizeBucketedPool::get_bucket_size(bytes);
 
 #if CUDART_VERSION >= 12080
                 cudaError_t err = cudaMallocAsync(&ptr, bucket_size, stream);
@@ -113,20 +71,16 @@ namespace lfs::core {
                     stats_.bucket_allocs.fetch_add(1, std::memory_order_relaxed);
                     stats_.bucket_bytes.fetch_add(bytes, std::memory_order_relaxed);
                     stats_.bucket_waste.fetch_add(bucket_size - bytes, std::memory_order_relaxed);
-
-                    // Track with ORIGINAL size for proper deallocation routing
                     track_allocation(ptr, bytes, AllocMethod::Bucketed);
-
                     if constexpr (ENABLE_ALLOCATION_PROFILING) {
                         AllocationProfiler::instance().record_allocation(bytes, 3);
                     }
-
-                    // Process deferred frees periodically
                     if ((stats_.bucket_allocs.load(std::memory_order_relaxed) +
-                         stats_.async_allocs.load(std::memory_order_relaxed)) % 100 == 0) {
+                         stats_.async_allocs.load(std::memory_order_relaxed)) %
+                            100 ==
+                        0) {
                         DeferredFreeQueue::instance().process();
                     }
-
                     log_stats_periodically();
                     return ptr;
                 }
@@ -134,14 +88,12 @@ namespace lfs::core {
 #endif
             }
 
-            // TIER 3: Direct cudaMallocAsync without bucketing
 #if CUDART_VERSION >= 12080
             {
                 cudaError_t err = cudaMallocAsync(&ptr, bytes, stream);
                 if (err == cudaSuccess) {
                     stats_.async_allocs.fetch_add(1, std::memory_order_relaxed);
                     stats_.async_bytes.fetch_add(bytes, std::memory_order_relaxed);
-
                     if constexpr (ENABLE_ALLOCATION_PROFILING) {
                         AllocationProfiler::instance().record_allocation(bytes, 3);
                     }
@@ -150,15 +102,12 @@ namespace lfs::core {
             }
 #endif
 
-            // TIER 4: Direct cudaMalloc (fallback)
             return allocate_direct(bytes);
         }
 
-        /**
-         * @brief Deallocate memory back to the pool
-         */
         void deallocate(void* ptr, cudaStream_t stream = nullptr) {
-            if (!ptr) return;
+            if (!ptr)
+                return;
 
             if constexpr (ENABLE_ALLOCATION_PROFILING) {
                 AllocationProfiler::instance().record_deallocation(ptr);
@@ -170,27 +119,21 @@ namespace lfs::core {
                 untrack_allocation(ptr);
 
                 switch (method) {
-                    case AllocMethod::Slab:
-                        GPUSlabAllocator::instance().deallocate(ptr, size);
-                        return;
-
-                    case AllocMethod::Bucketed:
-                        // Cache for reuse instead of freeing
-                        SizeBucketedPool::instance().cache_free(ptr, size);
-                        return;
-
-                    case AllocMethod::Direct:
-                        cudaFree(ptr);
-                        direct_alloc_count_.fetch_sub(1, std::memory_order_release);
-                        return;
-
-                    case AllocMethod::Async:
-                        // Fall through to async free
-                        break;
+                case AllocMethod::Slab:
+                    GPUSlabAllocator::instance().deallocate(ptr, size);
+                    return;
+                case AllocMethod::Bucketed:
+                    SizeBucketedPool::instance().cache_free(ptr, size);
+                    return;
+                case AllocMethod::Direct:
+                    cudaFree(ptr);
+                    direct_alloc_count_.fetch_sub(1, std::memory_order_release);
+                    return;
+                case AllocMethod::Async:
+                    break;
                 }
             }
 
-            // Async allocation - use cudaFreeAsync
 #if CUDART_VERSION >= 12080
             cudaFreeAsync(ptr, stream);
 #else
@@ -198,11 +141,9 @@ namespace lfs::core {
 #endif
         }
 
-        /**
-         * @brief Deallocate with known size (faster path)
-         */
         void deallocate(void* ptr, size_t bytes, cudaStream_t stream = nullptr) {
-            if (!ptr) return;
+            if (!ptr)
+                return;
 
             if constexpr (ENABLE_ALLOCATION_PROFILING) {
                 AllocationProfiler::instance().record_deallocation(ptr);

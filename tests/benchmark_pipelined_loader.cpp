@@ -2231,7 +2231,8 @@ TEST(PipelinedLoaderBenchmark, WOW_DD_ThroughputScaling) {
               << std::setw(15) << "cold (img/s)"
               << std::setw(15) << "warm (img/s)"
               << std::setw(12) << "speedup"
-              << std::setw(15) << "output size" << "\n";
+              << std::setw(15) << "output size"
+              << "\n";
     std::cout << std::string(69, '-') << "\n";
 
     for (int mw : max_widths) {

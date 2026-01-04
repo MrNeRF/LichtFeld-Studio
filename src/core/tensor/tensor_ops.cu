@@ -17,6 +17,7 @@
 #include <limits>
 
 // Thrust headers
+#include <mutex>
 #include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
@@ -31,7 +32,6 @@
 #include <thrust/sort.h>
 #include <thrust/transform.h>
 #include <thrust/tuple.h>
-#include <mutex>
 #include <unordered_map>
 
 // CUDA error checking macro
@@ -58,9 +58,11 @@ namespace lfs::core::tensor_ops {
 
         void* get(size_t bytes, cudaStream_t) {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (bytes <= capacity_ && buffer_) return buffer_;
-            if (buffer_) cudaFree(buffer_);
-            size_t alloc_size = std::max(((bytes + 1024*1024 - 1) / (1024*1024)) * (1024*1024), size_t(4 * 1024 * 1024));
+            if (bytes <= capacity_ && buffer_)
+                return buffer_;
+            if (buffer_)
+                cudaFree(buffer_);
+            size_t alloc_size = std::max(((bytes + 1024 * 1024 - 1) / (1024 * 1024)) * (1024 * 1024), size_t(4 * 1024 * 1024));
             if (cudaMalloc(&buffer_, alloc_size) != cudaSuccess) {
                 buffer_ = nullptr;
                 capacity_ = 0;
@@ -70,7 +72,10 @@ namespace lfs::core::tensor_ops {
             return buffer_;
         }
 
-        ~CubTempStoragePool() { if (buffer_) cudaFree(buffer_); }
+        ~CubTempStoragePool() {
+            if (buffer_)
+                cudaFree(buffer_);
+        }
 
     private:
         CubTempStoragePool() = default;
@@ -92,7 +97,8 @@ namespace lfs::core::tensor_ops {
         }
 
         float reduce_sum(const float* data, size_t n, cudaStream_t stream) {
-            if (n == 0) return 0.0f;
+            if (n == 0)
+                return 0.0f;
             size_t temp_bytes = temp_capacity_;
             cub::DeviceReduce::Sum(temp_storage_, temp_bytes, data, d_scalar_, n, stream);
             cudaMemcpy(h_scalar_, d_scalar_, sizeof(float), cudaMemcpyDeviceToHost);
@@ -104,7 +110,8 @@ namespace lfs::core::tensor_ops {
         }
 
         float reduce_max(const float* data, size_t n, cudaStream_t stream) {
-            if (n == 0) return -std::numeric_limits<float>::infinity();
+            if (n == 0)
+                return -std::numeric_limits<float>::infinity();
             size_t temp_bytes = temp_capacity_;
             cub::DeviceReduce::Max(temp_storage_, temp_bytes, data, d_scalar_, n, stream);
             cudaMemcpy(h_scalar_, d_scalar_, sizeof(float), cudaMemcpyDeviceToHost);
@@ -112,7 +119,8 @@ namespace lfs::core::tensor_ops {
         }
 
         float reduce_min(const float* data, size_t n, cudaStream_t stream) {
-            if (n == 0) return std::numeric_limits<float>::infinity();
+            if (n == 0)
+                return std::numeric_limits<float>::infinity();
             size_t temp_bytes = temp_capacity_;
             cub::DeviceReduce::Min(temp_storage_, temp_bytes, data, d_scalar_, n, stream);
             cudaMemcpy(h_scalar_, d_scalar_, sizeof(float), cudaMemcpyDeviceToHost);
@@ -120,9 +128,12 @@ namespace lfs::core::tensor_ops {
         }
 
         ~ScalarReductionCache() {
-            if (d_scalar_) cudaFree(d_scalar_);
-            if (h_scalar_) cudaFreeHost(h_scalar_);
-            if (temp_storage_) cudaFree(temp_storage_);
+            if (d_scalar_)
+                cudaFree(d_scalar_);
+            if (h_scalar_)
+                cudaFreeHost(h_scalar_);
+            if (temp_storage_)
+                cudaFree(temp_storage_);
         }
 
     private:

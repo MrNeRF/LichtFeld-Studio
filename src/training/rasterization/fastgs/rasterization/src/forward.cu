@@ -58,7 +58,7 @@ std::tuple<int, int, int, int, int> fast_lfs::rasterization::forward(
             memset_stream_initialized = true;
         }
         cudaMemsetAsync(per_tile_buffers.instance_ranges, 0, sizeof(uint2) * n_tiles, memset_stream);
-        cudaEventRecord(memset_event, memset_stream);  // Record event when memset completes
+        cudaEventRecord(memset_event, memset_stream); // Record event when memset completes
     } else {
         cudaMemset(per_tile_buffers.instance_ranges, 0, sizeof(uint2) * n_tiles);
     }
@@ -164,7 +164,7 @@ std::tuple<int, int, int, int, int> fast_lfs::rasterization::forward(
 
     // Wait for memset to complete (GPU-side wait, doesn't block CPU)
     if constexpr (!config::debug) {
-        cudaStreamWaitEvent(nullptr, memset_event, 0);  // Default stream waits for memset
+        cudaStreamWaitEvent(nullptr, memset_event, 0); // Default stream waits for memset
     }
 
     // Extract instance ranges

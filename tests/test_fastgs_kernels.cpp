@@ -18,9 +18,9 @@ using namespace lfs::training;
 using namespace lfs::core;
 
 namespace {
-constexpr const char* GARDEN_PATH = "data/garden";
-constexpr int W = 640, H = 480;
-constexpr float FX = 500.0f, FY = 500.0f;
+    constexpr const char* GARDEN_PATH = "data/garden";
+    constexpr int W = 640, H = 480;
+    constexpr float FX = 500.0f, FY = 500.0f;
 } // namespace
 
 class FastGSKernelTest : public ::testing::Test {
@@ -304,11 +304,13 @@ TEST_F(FastGSKernelTest, TiledRendering_Consistency) {
 
 // Performance
 TEST_F(FastGSKernelTest, Performance_Forward) {
-    for (int i = 0; i < 3; ++i) forward();
+    for (int i = 0; i < 3; ++i)
+        forward();
     cudaDeviceSynchronize();
 
     auto t0 = std::chrono::high_resolution_clock::now();
-    for (int i = 0; i < 10; ++i) forward();
+    for (int i = 0; i < 10; ++i)
+        forward();
     cudaDeviceSynchronize();
     auto t1 = std::chrono::high_resolution_clock::now();
 
@@ -348,12 +350,13 @@ TEST_F(FastGSKernelTest, Performance_Backward) {
 
 namespace {
 
-torch::Tensor to_torch(const Tensor& t) {
-    auto cpu = t.to(Device::CPU);
-    std::vector<int64_t> shape;
-    for (size_t i = 0; i < t.ndim(); ++i) shape.push_back(t.shape()[i]);
-    return torch::from_blob(cpu.ptr<float>(), shape, torch::kFloat32).clone().to(torch::kCUDA);
-}
+    torch::Tensor to_torch(const Tensor& t) {
+        auto cpu = t.to(Device::CPU);
+        std::vector<int64_t> shape;
+        for (size_t i = 0; i < t.ndim(); ++i)
+            shape.push_back(t.shape()[i]);
+        return torch::from_blob(cpu.ptr<float>(), shape, torch::kFloat32).clone().to(torch::kCUDA);
+    }
 
 } // namespace
 
@@ -366,7 +369,8 @@ protected:
         std::uniform_real_distribution<float> pos(-2, 2);
 
         std::vector<float> means_data(n_ * 3);
-        for (size_t i = 0; i < n_ * 3; ++i) means_data[i] = pos(gen);
+        for (size_t i = 0; i < n_ * 3; ++i)
+            means_data[i] = pos(gen);
         means_ = Tensor::from_blob(means_data.data(), {n_, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
 
         sh0_ = Tensor::randn({n_, 1, 3}, Device::CUDA).mul(0.3f);
@@ -393,19 +397,20 @@ protected:
                        const Tensor& opacity, const Tensor& sh0) {
         auto splat = std::make_unique<SplatData>(0, means, sh0, shN_, scaling, rotation, opacity, 1.0f);
         auto r = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);
-        if (!r) return 0.0f;
+        if (!r)
+            return 0.0f;
         return r->first.image.pow(2.0f).sum().item<float>();
     }
 
     Tensor numerical_grad(ParamType param, float eps = 1e-3f) {
         Tensor orig;
         switch (param) {
-            case ParamType::Means: orig = means_.clone(); break;
-            case ParamType::Scaling: orig = scaling_.clone(); break;
-            case ParamType::Rotation: orig = rotation_.clone(); break;
-            case ParamType::Opacity: orig = opacity_.clone(); break;
-            case ParamType::Sh0: orig = sh0_.clone(); break;
-            default: return {};
+        case ParamType::Means: orig = means_.clone(); break;
+        case ParamType::Scaling: orig = scaling_.clone(); break;
+        case ParamType::Rotation: orig = rotation_.clone(); break;
+        case ParamType::Opacity: orig = opacity_.clone(); break;
+        case ParamType::Sh0: orig = sh0_.clone(); break;
+        default: return {};
         }
 
         Tensor grad = Tensor::zeros_like(orig);
@@ -435,19 +440,20 @@ protected:
 
     void set_param(ParamType param, const Tensor& val) {
         switch (param) {
-            case ParamType::Means: means_ = val; break;
-            case ParamType::Scaling: scaling_ = val; break;
-            case ParamType::Rotation: rotation_ = val; break;
-            case ParamType::Opacity: opacity_ = val; break;
-            case ParamType::Sh0: sh0_ = val; break;
-            default: break;
+        case ParamType::Means: means_ = val; break;
+        case ParamType::Scaling: scaling_ = val; break;
+        case ParamType::Rotation: rotation_ = val; break;
+        case ParamType::Opacity: opacity_ = val; break;
+        case ParamType::Sh0: sh0_ = val; break;
+        default: break;
         }
     }
 
     Tensor analytical_grad(ParamType param) {
         auto splat = std::make_unique<SplatData>(0, means_, sh0_, shN_, scaling_, rotation_, opacity_, 1.0f);
         auto r = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);
-        if (!r) return {};
+        if (!r)
+            return {};
 
         AdamConfig cfg{.lr = 0.001f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
         auto opt = std::make_unique<AdamOptimizer>(*splat, cfg);
@@ -466,25 +472,25 @@ protected:
 };
 
 namespace {
-void print_grad_stats(const char* name, const Tensor& num, const Tensor& ana) {
-    auto n_cpu = num.to(Device::CPU);
-    auto a_cpu = ana.to(Device::CPU);
-    float* n = n_cpu.ptr<float>();
-    float* a = a_cpu.ptr<float>();
+    void print_grad_stats(const char* name, const Tensor& num, const Tensor& ana) {
+        auto n_cpu = num.to(Device::CPU);
+        auto a_cpu = ana.to(Device::CPU);
+        float* n = n_cpu.ptr<float>();
+        float* a = a_cpu.ptr<float>();
 
-    float max_err = 0, sum_err = 0, num_norm = 0, ana_norm = 0, dot = 0;
-    for (size_t i = 0; i < num.numel(); ++i) {
-        max_err = std::max(max_err, std::abs(n[i] - a[i]));
-        sum_err += std::abs(n[i] - a[i]);
-        num_norm += n[i] * n[i];
-        ana_norm += a[i] * a[i];
-        dot += n[i] * a[i];
+        float max_err = 0, sum_err = 0, num_norm = 0, ana_norm = 0, dot = 0;
+        for (size_t i = 0; i < num.numel(); ++i) {
+            max_err = std::max(max_err, std::abs(n[i] - a[i]));
+            sum_err += std::abs(n[i] - a[i]);
+            num_norm += n[i] * n[i];
+            ana_norm += a[i] * a[i];
+            dot += n[i] * a[i];
+        }
+        float cos_sim = dot / (std::sqrt(num_norm) * std::sqrt(ana_norm) + 1e-8f);
+        printf("  %-10s num_norm=%.4f ana_norm=%.4f max_err=%.5f mean_err=%.5f cos_sim=%.4f\n",
+               name, std::sqrt(num_norm), std::sqrt(ana_norm), max_err, sum_err / num.numel(), cos_sim);
     }
-    float cos_sim = dot / (std::sqrt(num_norm) * std::sqrt(ana_norm) + 1e-8f);
-    printf("  %-10s num_norm=%.4f ana_norm=%.4f max_err=%.5f mean_err=%.5f cos_sim=%.4f\n",
-           name, std::sqrt(num_norm), std::sqrt(ana_norm), max_err, sum_err / num.numel(), cos_sim);
-}
-}
+} // namespace
 
 TEST_F(FastGSGradientTest, Numerical_Means) {
     auto num = numerical_grad(ParamType::Means);
@@ -501,7 +507,8 @@ TEST_F(FastGSGradientTest, Numerical_Means) {
     for (size_t i = 0; i < num.numel(); ++i) {
         float err = std::abs(n_ptr[i] - a_ptr[i]);
         float rel = err / (std::abs(n_ptr[i]) + 1e-6f);
-        if (rel > 0.2f && err > 1e-3f) ++mismatches;
+        if (rel > 0.2f && err > 1e-3f)
+            ++mismatches;
     }
     EXPECT_LT(mismatches, static_cast<int>(num.numel() * 0.15f));
 }
@@ -532,7 +539,8 @@ TEST_F(FastGSGradientTest, Numerical_Opacity) {
     for (size_t i = 0; i < num.numel(); ++i) {
         float err = std::abs(n_ptr[i] - a_ptr[i]);
         float rel = err / (std::abs(n_ptr[i]) + 1e-6f);
-        if (rel > 0.1f && err > 1e-4f) ++mismatches;
+        if (rel > 0.1f && err > 1e-4f)
+            ++mismatches;
     }
     EXPECT_LT(mismatches, static_cast<int>(num.numel() * 0.1f));
 }

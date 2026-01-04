@@ -275,7 +275,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const uint* tile_max_n_contributions,
         const uint* tile_n_contributions,
         const uint* bucket_tile_index,
-        const ushort4* bucket_checkpoint_half,  // Half-precision: color.rgb + transmittance as 4× fp16 (50% memory reduction)
+        const ushort4* bucket_checkpoint_half, // Half-precision: color.rgb + transmittance as 4× fp16 (50% memory reduction)
         float2* grad_mean2d,
         float* grad_conic,
         float* grad_raw_opacity,

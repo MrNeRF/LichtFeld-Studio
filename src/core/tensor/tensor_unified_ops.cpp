@@ -630,11 +630,12 @@ namespace lfs::core {
         if (args.axes.size() == 1 && device_ == Device::CUDA && shape_.rank() == 2 &&
             dtype_ == DataType::Float32 && is_contiguous_) {
             int dim = args.axes[0];
-            if (dim < 0) dim += 2;
+            if (dim < 0)
+                dim += 2;
             if (dim == 0 && (op == ReduceOp::Sum || op == ReduceOp::Mean ||
                              op == ReduceOp::Max || op == ReduceOp::Min)) {
-                size_t M = shape_[0];  // rows (reduction dim)
-                size_t N = shape_[1];  // cols (output size)
+                size_t M = shape_[0]; // rows (reduction dim)
+                size_t N = shape_[1]; // cols (output size)
 
                 std::vector<size_t> out_shape = args.keepdim ? std::vector<size_t>{1, N} : std::vector<size_t>{N};
                 auto result = Tensor::empty(TensorShape(out_shape), device_, dtype_);
@@ -656,7 +657,8 @@ namespace lfs::core {
         // Threshold: Only use this optimization when inner_size >= 256 (strided access hurts)
         if (args.axes.size() == 1 && device_ == Device::CUDA && shape_.rank() >= 2) {
             int dim = args.axes[0];
-            if (dim < 0) dim += static_cast<int>(shape_.rank());
+            if (dim < 0)
+                dim += static_cast<int>(shape_.rank());
 
             if (dim >= 0 && dim < static_cast<int>(shape_.rank()) - 1) {
                 // Calculate inner_size (product of dims after the reduction dim)
@@ -677,7 +679,7 @@ namespace lfs::core {
                             perm.push_back(static_cast<int>(i));
                         }
                     }
-                    perm.push_back(dim);  // dim goes to the last position
+                    perm.push_back(dim); // dim goes to the last position
 
                     LOG_DEBUG("[REDUCE TRANSPOSE] dim={}, inner_size={}, perm=[{}], shape=[{}]",
                               dim, inner_size,
@@ -696,7 +698,7 @@ namespace lfs::core {
 
                     // Now reduce along the LAST dimension (which is contiguous)
                     ReduceArgs new_args = args;
-                    new_args.axes = {static_cast<int>(transposed.shape().rank()) - 1};  // Use transposed.shape()!
+                    new_args.axes = {static_cast<int>(transposed.shape().rank()) - 1}; // Use transposed.shape()!
 
                     return transposed.reduce(op, new_args);
                 }

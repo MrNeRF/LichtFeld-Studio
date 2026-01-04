@@ -5,9 +5,9 @@
 #include "core/tensor.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include <chrono>
-#include <iostream>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
+#include <iostream>
 #include <torch/torch.h>
 
 using namespace lfs::core;
@@ -80,7 +80,7 @@ TEST(IsolationTest, ReductionDim0Timing) {
 
     // Warmup
     for (int i = 0; i < 20; i++) {
-        auto result = tensor.sum({0}, false);  // Reduce along dim 0
+        auto result = tensor.sum({0}, false); // Reduce along dim 0
     }
     cudaDeviceSynchronize();
 
@@ -88,7 +88,7 @@ TEST(IsolationTest, ReductionDim0Timing) {
     double total_us = 0.0;
     for (int i = 0; i < iterations; i++) {
         auto start = std::chrono::high_resolution_clock::now();
-        auto result = tensor.sum({0}, false);  // Reduce along dim 0
+        auto result = tensor.sum({0}, false); // Reduce along dim 0
         cudaDeviceSynchronize();
         auto end = std::chrono::high_resolution_clock::now();
         total_us += std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
@@ -135,7 +135,9 @@ TEST(IsolationTest, PermuteContiguousDebug) {
     std::cout << "Shape: [" << t.shape()[0] << ", " << t.shape()[1] << ", " << t.shape()[2] << "]" << std::endl;
     std::cout << "Strides: [" << t.strides()[0] << ", " << t.strides()[1] << ", " << t.strides()[2] << "]" << std::endl;
     auto v1 = t.to_vector();
-    float sum1 = 0; for (auto x : v1) sum1 += x;
+    float sum1 = 0;
+    for (auto x : v1)
+        sum1 += x;
     std::cout << "Sum of all values: " << sum1 << " (expected: 100000)" << std::endl;
 
     // Step 2: Permute (zero-copy view)
@@ -148,7 +150,9 @@ TEST(IsolationTest, PermuteContiguousDebug) {
     std::cout << "Strides: [" << permuted.strides()[0] << ", " << permuted.strides()[1] << ", " << permuted.strides()[2] << "]" << std::endl;
     std::cout << "is_contiguous: " << (permuted.is_contiguous() ? "true" : "false") << std::endl;
     auto v2 = permuted.to_vector();
-    float sum2 = 0; for (auto x : v2) sum2 += x;
+    float sum2 = 0;
+    for (auto x : v2)
+        sum2 += x;
     std::cout << "Sum of all values: " << sum2 << " (expected: 100000)" << std::endl;
 
     // Step 3: Contiguous (actual data copy)
@@ -160,7 +164,9 @@ TEST(IsolationTest, PermuteContiguousDebug) {
     std::cout << "Strides: [" << contig.strides()[0] << ", " << contig.strides()[1] << ", " << contig.strides()[2] << "]" << std::endl;
     std::cout << "is_contiguous: " << (contig.is_contiguous() ? "true" : "false") << std::endl;
     auto v3 = contig.to_vector();
-    float sum3 = 0; for (auto x : v3) sum3 += x;
+    float sum3 = 0;
+    for (auto x : v3)
+        sum3 += x;
     std::cout << "Sum of all values: " << sum3 << " (expected: 100000)" << std::endl;
     std::cout << "numel: " << contig.numel() << std::endl;
 
@@ -176,7 +182,9 @@ TEST(IsolationTest, PermuteContiguousDebug) {
         std::cout << v4[i] << " ";
     }
     std::cout << std::endl;
-    float sum4 = 0; for (auto x : v4) sum4 += x;
+    float sum4 = 0;
+    for (auto x : v4)
+        sum4 += x;
     std::cout << "Sum of all output values: " << sum4 << " (expected: 100000)" << std::endl;
 
     EXPECT_NEAR(v4[0], 100.0f, 0.1f);
@@ -233,4 +241,3 @@ TEST(IsolationTest, ReductionTiming) {
     cudaEventElapsedTime(&ms, start_event, stop_event);
     std::cout << "Sum dim=1 (1024x1024, GPU time): " << (ms / iterations * 1000) << " us/iter" << std::endl;
 }
-

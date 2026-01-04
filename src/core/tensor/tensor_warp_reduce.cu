@@ -406,7 +406,8 @@ namespace lfs::core::tensor_ops {
             }
             size_t rem_start = num_float4s * 4;
             for (size_t i = rem_start + lane; i < segment_size; i += 32) {
-                if (i < segment_size) sum += segment_start[i];
+                if (i < segment_size)
+                    sum += segment_start[i];
             }
 
             sum = warp_ops::warp_reduce_sum(sum);
@@ -445,7 +446,8 @@ namespace lfs::core::tensor_ops {
             }
             size_t rem_start = num_float4s * 4;
             for (size_t i = rem_start + lane; i < segment_size; i += 32) {
-                if (i < segment_size) val = fmaxf(val, segment_start[i]);
+                if (i < segment_size)
+                    val = fmaxf(val, segment_start[i]);
             }
 
             val = warp_ops::warp_reduce_max(val);
@@ -484,7 +486,8 @@ namespace lfs::core::tensor_ops {
             }
             size_t rem_start = num_float4s * 4;
             for (size_t i = rem_start + lane; i < segment_size; i += 32) {
-                if (i < segment_size) val = fminf(val, segment_start[i]);
+                if (i < segment_size)
+                    val = fminf(val, segment_start[i]);
             }
 
             val = warp_ops::warp_reduce_min(val);
@@ -1120,7 +1123,7 @@ namespace lfs::core::tensor_ops {
         // MEDIUM segments (32-2048 elements): Use warp-per-segment kernel
         // Each warp processes one segment using only warp shuffles (NO __syncthreads__!)
         if (segment_size <= 2048) {
-            constexpr int BLOCK_SIZE = 256;          // 8 warps per block
+            constexpr int BLOCK_SIZE = 256; // 8 warps per block
             constexpr int WARPS_PER_BLOCK = BLOCK_SIZE / 32;
             // Use optimal grid size for GPU occupancy with grid-stride loop
             int min_blocks = (num_segments + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK;
@@ -1360,7 +1363,8 @@ namespace lfs::core::tensor_ops {
         const float* __restrict__ input, float* __restrict__ output,
         size_t M, size_t N) {
         const size_t col = blockIdx.x * blockDim.x + threadIdx.x;
-        if (col >= N) return;
+        if (col >= N)
+            return;
 
         const size_t rows_per_block = (M + gridDim.y - 1) / gridDim.y;
         const size_t row_start = blockIdx.y * rows_per_block;
@@ -1387,7 +1391,8 @@ namespace lfs::core::tensor_ops {
         const float* __restrict__ input, float* __restrict__ output,
         size_t M, size_t N) {
         const size_t col = blockIdx.x * blockDim.x + threadIdx.x;
-        if (col >= N) return;
+        if (col >= N)
+            return;
 
         const size_t rows_per_block = (M + gridDim.y - 1) / gridDim.y;
         const size_t row_start = blockIdx.y * rows_per_block;
@@ -1414,7 +1419,8 @@ namespace lfs::core::tensor_ops {
         const float* __restrict__ input, float* __restrict__ output,
         size_t M, size_t N) {
         const size_t col = blockIdx.x * blockDim.x + threadIdx.x;
-        if (col >= N) return;
+        if (col >= N)
+            return;
 
         const size_t rows_per_block = (M + gridDim.y - 1) / gridDim.y;
         const size_t row_start = blockIdx.y * rows_per_block;
@@ -1447,26 +1453,27 @@ namespace lfs::core::tensor_ops {
         switch (op) {
         case ReduceOp::Sum:
         case ReduceOp::Mean:
-            if (grid_y > 1) cudaMemsetAsync(output, 0, N * sizeof(float), stream);
+            if (grid_y > 1)
+                cudaMemsetAsync(output, 0, N * sizeof(float), stream);
             column_reduce_sum_kernel<<<grid, BLOCK, 0, stream>>>(input, output, M, N);
             if (op == ReduceOp::Mean) {
                 float inv_M = 1.0f / static_cast<float>(M);
                 thrust::transform(thrust::cuda::par.on(stream),
-                    thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N),
-                    thrust::device_ptr<float>(output), [inv_M] __device__(float x) { return x * inv_M; });
+                                  thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N),
+                                  thrust::device_ptr<float>(output), [inv_M] __device__(float x) { return x * inv_M; });
             }
             break;
         case ReduceOp::Max:
             if (grid_y > 1) {
                 thrust::fill(thrust::cuda::par.on(stream),
-                    thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N), -FLT_MAX);
+                             thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N), -FLT_MAX);
             }
             column_reduce_max_kernel<<<grid, BLOCK, 0, stream>>>(input, output, M, N);
             break;
         case ReduceOp::Min:
             if (grid_y > 1) {
                 thrust::fill(thrust::cuda::par.on(stream),
-                    thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N), FLT_MAX);
+                             thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N), FLT_MAX);
             }
             column_reduce_min_kernel<<<grid, BLOCK, 0, stream>>>(input, output, M, N);
             break;
@@ -1489,7 +1496,7 @@ namespace lfs::core::tensor_ops {
         // SCALAR REDUCTIONS: Always use CUB DeviceReduce (much faster!)
         // Benchmarks show CUB is 3-7x faster than our warp kernels for scalar reductions.
         if (num_segments == 1) {
-            return false;  // Use CUB path in tensor_ops.cu
+            return false; // Use CUB path in tensor_ops.cu
         }
 
         // SEGMENTED REDUCTIONS: Use warp kernels for small-medium tensors

@@ -369,7 +369,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         uint* tile_max_n_contributions,
         uint* tile_n_contributions,
         uint* bucket_tile_index,
-        ushort4* bucket_checkpoint_half,  // Half-precision: color.rgb + transmittance as 4× fp16 (50% memory reduction)
+        ushort4* bucket_checkpoint_half, // Half-precision: color.rgb + transmittance as 4× fp16 (50% memory reduction)
         const uint width,
         const uint height,
         const uint grid_width) {

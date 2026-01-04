@@ -2,14 +2,14 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
 #include "core/tensor/internal/gpu_slab_allocator.hpp"
+#include "core/tensor/internal/memory_pool.hpp"
 #include "core/tensor/internal/size_bucketed_pool.hpp"
-#include <gtest/gtest.h>
 #include <chrono>
-#include <vector>
-#include <iostream>
 #include <cuda_runtime.h>
+#include <gtest/gtest.h>
+#include <iostream>
+#include <vector>
 
 using namespace lfs::core;
 
@@ -68,7 +68,7 @@ TEST_F(AllocatorBenchmarkTest, TensorCreationThroughput) {
         auto start = std::chrono::high_resolution_clock::now();
 
         for (int i = 0; i < iterations; i++) {
-            auto t = Tensor::empty({64, 64}, Device::CUDA);  // 16 KB
+            auto t = Tensor::empty({64, 64}, Device::CUDA); // 16 KB
         }
         cudaDeviceSynchronize();
 
@@ -83,7 +83,7 @@ TEST_F(AllocatorBenchmarkTest, TensorCreationThroughput) {
         auto start = std::chrono::high_resolution_clock::now();
 
         for (int i = 0; i < iterations; i++) {
-            auto t = Tensor::empty({512, 512}, Device::CUDA);  // 1 MB
+            auto t = Tensor::empty({512, 512}, Device::CUDA); // 1 MB
         }
         cudaDeviceSynchronize();
 
@@ -98,7 +98,7 @@ TEST_F(AllocatorBenchmarkTest, TensorCreationThroughput) {
         auto start = std::chrono::high_resolution_clock::now();
 
         for (int i = 0; i < iterations; i++) {
-            auto t = Tensor::empty({2048, 2048}, Device::CUDA);  // 16 MB
+            auto t = Tensor::empty({2048, 2048}, Device::CUDA); // 16 MB
         }
         cudaDeviceSynchronize();
 
@@ -145,7 +145,7 @@ TEST_F(AllocatorBenchmarkTest, SlabAllocatorStats) {
 TEST_F(AllocatorBenchmarkTest, CompareWithCudaMalloc) {
     // Direct comparison with raw cudaMalloc
     const int iterations = 1000;
-    const size_t alloc_size = 16384;  // 16 KB
+    const size_t alloc_size = 16384; // 16 KB
 
     std::cout << "\n=== Direct cudaMalloc Comparison (16 KB) ===\n";
 
@@ -212,7 +212,7 @@ TEST_F(AllocatorBenchmarkTest, LargeTensorBucketing) {
     std::cout << "\n=== Large Tensor Size Bucketing ===\n";
 
     // Simulate (20M, 3, 15) float tensor = 3.6 GB
-    const size_t tensor_size = 20000000ULL * 3 * 15 * sizeof(float);  // ~3.6 GB
+    const size_t tensor_size = 20000000ULL * 3 * 15 * sizeof(float); // ~3.6 GB
     std::cout << "  Tensor size: " << (tensor_size / (1024.0 * 1024.0 * 1024.0)) << " GB\n";
 
     // Check bucket size
@@ -249,11 +249,11 @@ TEST_F(AllocatorBenchmarkTest, BucketCacheHitRate) {
     const int iterations = 100;
     // Simulate common tensor sizes in training
     const size_t sizes[] = {
-        1024 * 1024,           // 1 MB (features)
-        4 * 1024 * 1024,       // 4 MB (gradients)
-        16 * 1024 * 1024,      // 16 MB (activations)
-        64 * 1024 * 1024,      // 64 MB (large batch)
-        256 * 1024 * 1024,     // 256 MB (image tensors)
+        1024 * 1024,       // 1 MB (features)
+        4 * 1024 * 1024,   // 4 MB (gradients)
+        16 * 1024 * 1024,  // 16 MB (activations)
+        64 * 1024 * 1024,  // 64 MB (large batch)
+        256 * 1024 * 1024, // 256 MB (image tensors)
     };
 
     // First pass: allocate and free (populate cache)
@@ -276,7 +276,7 @@ TEST_F(AllocatorBenchmarkTest, BucketCacheHitRate) {
 
     auto end = std::chrono::high_resolution_clock::now();
     double us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() /
-                (double)(iterations * 5);  // 5 sizes per iteration
+                (double)(iterations * 5); // 5 sizes per iteration
     std::cout << "  Average alloc+free time: " << us << " us\n";
 
     // Print cache stats

@@ -1200,7 +1200,7 @@ TEST_F(UnicodePathTest, DirectoryIterationWithPathToUtf8) {
         "中文测试_chinese_test", // Chinese
         "العربية_arabic_test",   // Arabic (RTL)
         "עברית_hebrew_test",     // Hebrew (RTL)
-        "emoji_😀_🎉_🚀_test"    // Emoji
+        "emoji_😀_🎉_🚀_test"       // Emoji
     };
 
     std::map<std::string, fs::path> created_paths;
@@ -1300,7 +1300,7 @@ TEST_F(UnicodePathTest, AstralPlaneCharacters) {
     fs::create_directories(test_dir);
 
     std::vector<std::string> astral_names = {
-        "emoji_face_😀😁😂🤣",                     // Emoji faces
+        "emoji_face_😀😁😂🤣",                         // Emoji faces
         "emoji_flags_🇯🇵🇰🇷🇨🇳",                      // Flag emoji (ZWJ sequences)
         "emoji_complex_👨‍👩‍👧‍👦", // Family emoji (ZWJ sequence)
         "rare_cjk_𠀀𠀁𠀂",                         // CJK Extension B characters
@@ -1520,7 +1520,7 @@ TEST_F(UnicodePathTest, SingleUnicodeCharacterPaths) {
         "Ä",  // Latin with diacritic
         "α",  // Greek
         "Я",  // Cyrillic
-        "😀", // Emoji
+        "😀",  // Emoji
     };
 
     for (const auto& ch : single_chars) {
@@ -1952,18 +1952,18 @@ TEST_F(UnicodePathTest, LoggingSafety_PathToUtf8NeverThrows) {
 
     // Create paths with characters that may not be representable in Windows code pages
     std::vector<std::string> problematic_names = {
-        "日本語_Japanese_日本語",            // Japanese
-        "中文_Chinese_中文",                 // Chinese Simplified
-        "繁體中文_TraditionalChinese",       // Chinese Traditional
-        "한국어_Korean_한국어",              // Korean
-        "ไทย_Thai_ไทย",                      // Thai
-        "العربية_Arabic_العربية",            // Arabic
-        "עברית_Hebrew_עברית",                // Hebrew
-        "Ελληνικά_Greek_Ελληνικά",           // Greek
-        "Кириллица_Cyrillic_Кириллица",      // Cyrillic
-        "emoji_😀_🎉_🚀_emoji",              // Emoji
-        "mathematical_𝔸𝔹ℂ_symbols",          // Mathematical symbols
-        "music_𝄞𝄢𝄪_notes",                   // Musical notation
+        "日本語_Japanese_日本語",           // Japanese
+        "中文_Chinese_中文",                // Chinese Simplified
+        "繁體中文_TraditionalChinese",      // Chinese Traditional
+        "한국어_Korean_한국어",             // Korean
+        "ไทย_Thai_ไทย",                     // Thai
+        "العربية_Arabic_العربية",           // Arabic
+        "עברית_Hebrew_עברית",               // Hebrew
+        "Ελληνικά_Greek_Ελληνικά",          // Greek
+        "Кириллица_Cyrillic_Кириллица",     // Cyrillic
+        "emoji_😀_🎉_🚀_emoji",                // Emoji
+        "mathematical_𝔸𝔹ℂ_symbols",         // Mathematical symbols
+        "music_𝄞𝄢𝄪_notes",                  // Musical notation
         "mixed_日本語_한국어_中文_emoji_😀", // Maximum mixing
     };
 

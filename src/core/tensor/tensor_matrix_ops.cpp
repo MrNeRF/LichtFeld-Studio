@@ -240,13 +240,13 @@ namespace lfs::core {
 
         // GPU: Use optimized CUDA kernel
         if (device_ == Device::CUDA) {
-            auto result = empty({}, Device::CUDA, dtype_);  // Scalar on GPU
+            auto result = empty({}, Device::CUDA, dtype_); // Scalar on GPU
             tensor_ops::launch_dot_product(
                 a.ptr<float>(),
                 b.ptr<float>(),
                 result.ptr<float>(),
                 n,
-                nullptr  // default stream
+                nullptr // default stream
             );
             return result;
         }
