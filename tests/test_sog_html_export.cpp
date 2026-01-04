@@ -52,7 +52,7 @@ namespace {
         archive* a = archive_read_new();
         archive_read_support_format_zip(a);
 
-        if (archive_read_open_filename(a, path.c_str(), 10240) != ARCHIVE_OK) {
+        if (archive_read_open_filename(a, path.string().c_str(), 10240) != ARCHIVE_OK) {
             archive_read_free(a);
             return files;
         }

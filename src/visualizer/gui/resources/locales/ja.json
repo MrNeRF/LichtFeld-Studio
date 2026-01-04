@@ -456,12 +456,23 @@
     "exit": "終了"
   },
 
-  "save_dir_popup": {
-    "title": "出力ディレクトリを選択",
-    "configure_output": "出力場所を設定",
-    "dataset_label": "データセット:",
-    "output_dir": "出力ディレクトリ:",
-    "help_text": "トレーニングのチェックポイント、ログ、エクスポートされたモデルはこのディレクトリに保存されます。"
+  "load_dataset_popup": {
+    "title": "データセットを読み込む",
+    "configure_paths": "データセットのパスを設定",
+    "images_dir": "画像:   ",
+    "sparse_dir": "Sparse: ",
+    "masks_dir": "マスク: ",
+    "output_dir": "出力:   ",
+    "help_text": "チェックポイント、ログ、エクスポートされたモデルは出力ディレクトリに保存されます。"
+  },
+
+  "notification": {
+    "cannot_open": "開けません",
+    "dropped_not_recognized": "ドロップされた",
+    "directory": "フォルダ",
+    "file": "ファイル",
+    "items": "項目",
+    "and_more": "... 他"
   },
 
   "export_dialog": {
@@ -630,5 +641,18 @@
     "y": "Y:",
     "z": "Z:",
     "u": "U:"
+  },
+
+  "resume_checkpoint_popup": {
+    "title": "チェックポイントを再開",
+    "checkpoint": "チェックポイント",
+    "configure_paths": "読み込み前にパスを設定",
+    "file": "ファイル:",
+    "stored_path": "保存されたパス:",
+    "not_found": "(見つかりません)",
+    "dataset_path": "データセットパス:",
+    "invalid": "(無効)",
+    "output_path": "出力パス:",
+    "help_text": "チェックポイントに保存されたデータセットパスが変更されている可能性があります。必要に応じて更新してください。"
   }
 }

@@ -118,7 +118,8 @@ namespace lfs::training {
 
                 // Load from --init file
                 if (params.init_path.has_value()) {
-                    const std::filesystem::path init_file(params.init_path.value());
+                    // Use utf8_to_path for proper Unicode handling on Windows
+                    const std::filesystem::path init_file = lfs::core::utf8_to_path(params.init_path.value());
                     const auto ext = init_file.extension().string();
 
                     // Point cloud PLY: initialize Gaussians from xyz+colors
@@ -126,7 +127,7 @@ namespace lfs::training {
                         auto pc_result = lfs::io::load_ply_point_cloud(init_file);
                         if (!pc_result) {
                             return std::unexpected(std::format("Failed to load '{}': {}",
-                                                               params.init_path.value(), pc_result.error()));
+                                                               lfs::core::path_to_utf8(init_file), pc_result.error()));
                         }
 
                         // Use scene_center from loader (camera centroid) for correct scene_scale
@@ -145,11 +146,11 @@ namespace lfs::training {
                     } else {
                         // Gaussian splat file
                         auto loader = lfs::io::Loader::create();
-                        auto load_result = loader->load(params.init_path.value());
+                        auto load_result = loader->load(init_file);
 
                         if (!load_result) {
                             return std::unexpected(std::format("Failed to load '{}': {}",
-                                                               params.init_path.value(), load_result.error().format()));
+                                                               lfs::core::path_to_utf8(init_file), load_result.error().format()));
                         }
 
                         try {
@@ -167,7 +168,7 @@ namespace lfs::training {
                             scene.addSplat("Model", std::move(model), dataset_id);
                             scene.setTrainingModelNode("Model");
                         } catch (const std::bad_variant_access&) {
-                            return std::unexpected(std::format("'{}': invalid SplatData", params.init_path.value()));
+                            return std::unexpected(std::format("'{}': invalid SplatData", lfs::core::path_to_utf8(init_file)));
                         }
                     }
                 } else {
@@ -461,14 +462,15 @@ namespace lfs::training {
 
                 // Handle --init file
                 if (params.init_path.has_value()) {
-                    const std::filesystem::path init_file(params.init_path.value());
+                    // Use utf8_to_path for proper Unicode handling on Windows
+                    const std::filesystem::path init_file = lfs::core::utf8_to_path(params.init_path.value());
                     const auto ext = init_file.extension().string();
 
                     if (ext == ".ply" && !lfs::io::is_gaussian_splat_ply(init_file)) {
                         auto pc_result = lfs::io::load_ply_point_cloud(init_file);
                         if (!pc_result) {
                             return std::unexpected(std::format("Failed to load '{}': {}",
-                                                               params.init_path.value(), pc_result.error()));
+                                                               lfs::core::path_to_utf8(init_file), pc_result.error()));
                         }
 
                         auto splat_result = lfs::core::init_model_from_pointcloud(
@@ -484,10 +486,10 @@ namespace lfs::training {
                         scene.setTrainingModelNode("Model");
                     } else {
                         auto loader = lfs::io::Loader::create();
-                        auto init_result = loader->load(params.init_path.value());
+                        auto init_result = loader->load(init_file);
                         if (!init_result) {
                             return std::unexpected(std::format("Failed to load '{}': {}",
-                                                               params.init_path.value(), init_result.error().format()));
+                                                               lfs::core::path_to_utf8(init_file), init_result.error().format()));
                         }
 
                         try {
@@ -504,7 +506,7 @@ namespace lfs::training {
                             scene.addSplat("Model", std::move(model), dataset_id);
                             scene.setTrainingModelNode("Model");
                         } catch (const std::bad_variant_access&) {
-                            return std::unexpected(std::format("'{}': invalid SplatData", params.init_path.value()));
+                            return std::unexpected(std::format("'{}': invalid SplatData", lfs::core::path_to_utf8(init_file)));
                         }
                     }
                 } else if (data.point_cloud && data.point_cloud->size() > 0) {

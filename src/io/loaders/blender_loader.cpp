@@ -224,16 +224,36 @@ namespace lfs::io {
                 std::move(cameras), dataset_config, lfs::training::CameraDataset::Split::ALL);
 
             if (options.progress) {
-                options.progress(60.0f, "Generating initialization point cloud...");
+                options.progress(60.0f, "Loading point cloud...");
             }
 
-            // Generate random point cloud for initialization
-            // Note: Blender/NeRF datasets don't typically include sparse point clouds
-            // If a pointcloud.ply exists, users should load it separately via the PLY loader
-            LOG_DEBUG("Generating random point cloud for initialization");
-            auto random_pc = generate_random_point_cloud();
-            auto point_cloud = std::make_shared<PointCloud>(std::move(random_pc));
-            LOG_INFO("Generated random point cloud with {} points", point_cloud->size());
+            // Check ply_file_path in transforms.json (nerfstudio format), fallback to pointcloud.ply
+            std::filesystem::path pointcloud_path;
+            if (std::ifstream file; lfs::core::open_file_for_read(transforms_file, file)) {
+                try {
+                    if (const auto json = nlohmann::json::parse(file, nullptr, true, true);
+                        json.contains("ply_file_path")) {
+                        pointcloud_path = base_path / lfs::core::utf8_to_path(json["ply_file_path"].get<std::string>());
+                    }
+                } catch (...) {
+                    // Ignore parse errors - will fallback to default pointcloud.ply
+                }
+            }
+            if (pointcloud_path.empty() || !std::filesystem::exists(pointcloud_path)) {
+                pointcloud_path = base_path / "pointcloud.ply";
+            }
+
+            std::shared_ptr<PointCloud> point_cloud;
+            std::vector<std::string> warnings;
+            if (std::filesystem::exists(pointcloud_path)) {
+                point_cloud = std::make_shared<PointCloud>(load_simple_ply_point_cloud(pointcloud_path));
+                LOG_INFO("Loaded {} points from {}", point_cloud->size(),
+                         lfs::core::path_to_utf8(pointcloud_path.filename()));
+            } else {
+                point_cloud = std::make_shared<PointCloud>(generate_random_point_cloud());
+                LOG_WARN("No PLY found, using {} random points", point_cloud->size());
+                warnings.emplace_back("No point cloud file found, using random initialization");
+            }
 
             if (options.progress) {
                 options.progress(100.0f, "Blender/NeRF loading complete");
@@ -257,7 +277,7 @@ namespace lfs::io {
                 .scene_center = scene_center,
                 .loader_used = name(),
                 .load_time = load_time,
-                .warnings = {"Using random point cloud initialization"}};
+                .warnings = std::move(warnings)};
 
             LOG_INFO("Blender/NeRF dataset loaded successfully in {}ms", load_time.count());
             LOG_INFO("  - {} cameras", num_cameras);

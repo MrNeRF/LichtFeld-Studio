@@ -676,7 +676,7 @@ namespace lfs::io {
                 g_save_futures.end());
         }
 
-        void write_ply_binary(const PointCloud& pc, const std::filesystem::path& output_path) {
+        Result<void> write_ply_binary(const PointCloud& pc, const std::filesystem::path& output_path) {
             std::vector<Tensor> tensors;
             tensors.push_back(pc.means.cpu().contiguous());
 
@@ -726,8 +726,17 @@ namespace lfs::io {
 #else
             fb.open(output_path, std::ios::out | std::ios::binary);
 #endif
+            if (!fb.is_open()) {
+                return make_error(ErrorCode::WRITE_FAILURE, "Cannot open file", output_path);
+            }
+
             std::ostream out_stream(&fb);
             ply.write(out_stream, true);
+
+            if (!out_stream.good()) {
+                return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
+            }
+            return {};
         }
 
     } // anonymous namespace
@@ -851,27 +860,16 @@ namespace lfs::io {
 
         if (options.async) {
             cleanup_finished_saves();
-            std::lock_guard lock(g_save_mutex);
+            const std::lock_guard lock(g_save_mutex);
             g_save_futures.emplace_back(
                 std::async(std::launch::async, [pc = point_cloud, path = options.output_path]() {
-                    try {
-                        write_ply_binary(pc, path);
-                        LOG_INFO("PLY saved: {}", lfs::core::path_to_utf8(path));
-                    } catch (const std::exception& e) {
-                        // Log error - async saves report via logs
-                        LOG_ERROR("Async PLY save failed for '{}': {}", lfs::core::path_to_utf8(path), e.what());
+                    if (const auto result = write_ply_binary(pc, path); !result) {
+                        LOG_ERROR("PLY save failed: {}", result.error().format());
                     }
                 }));
-            // Note: Async save errors are logged but not returned
-            // The disk space check above prevents most failures
         } else {
-            try {
-                write_ply_binary(point_cloud, options.output_path);
-                LOG_INFO("PLY saved: {}", lfs::core::path_to_utf8(options.output_path));
-            } catch (const std::exception& e) {
-                return make_error(ErrorCode::WRITE_FAILURE,
-                                  std::format("Failed to write PLY: {}", e.what()),
-                                  options.output_path);
+            if (const auto result = write_ply_binary(point_cloud, options.output_path); !result) {
+                return std::unexpected(result.error());
             }
         }
         return {};

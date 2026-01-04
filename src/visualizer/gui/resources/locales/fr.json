@@ -456,12 +456,23 @@
     "exit": "Quitter"
   },
 
-  "save_dir_popup": {
-    "title": "Sélectionner le Répertoire de Sortie",
-    "configure_output": "Configurer l'emplacement de sortie",
-    "dataset_label": "Dataset :",
-    "output_dir": "Répertoire de Sortie :",
-    "help_text": "Les points de contrôle d'entraînement, les logs et les modèles exportés seront sauvegardés dans ce répertoire."
+  "load_dataset_popup": {
+    "title": "Charger Dataset",
+    "configure_paths": "Configurer les chemins du dataset",
+    "images_dir": "Images : ",
+    "sparse_dir": "Sparse : ",
+    "masks_dir": "Masques :",
+    "output_dir": "Sortie : ",
+    "help_text": "Les checkpoints, logs et modèles exportés seront sauvegardés dans le répertoire de sortie."
+  },
+
+  "notification": {
+    "cannot_open": "Impossible d'ouvrir",
+    "dropped_not_recognized": "L'élément déposé",
+    "directory": "répertoire",
+    "file": "fichier",
+    "items": "éléments",
+    "and_more": "... et"
   },
 
   "export_dialog": {
@@ -630,5 +641,18 @@
     "y": "Y :",
     "z": "Z :",
     "u": "U :"
+  },
+
+  "resume_checkpoint_popup": {
+    "title": "Reprendre le Checkpoint",
+    "checkpoint": "CHECKPOINT",
+    "configure_paths": "Configurer les chemins avant le chargement",
+    "file": "Fichier :",
+    "stored_path": "Chemin Stocké :",
+    "not_found": "(non trouvé)",
+    "dataset_path": "Chemin du Dataset :",
+    "invalid": "(invalide)",
+    "output_path": "Chemin de Sortie :",
+    "help_text": "Le chemin du dataset stocké dans le checkpoint a peut-être changé. Mettez-le à jour si nécessaire."
   }
 }

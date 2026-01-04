@@ -49,13 +49,16 @@ std::tuple<int, int, int, int, int> fast_lfs::rasterization::forward(
 
     // Initialize tile instance ranges
     static cudaStream_t memset_stream = 0;
+    static cudaEvent_t memset_event = 0;
     if constexpr (!config::debug) {
         static bool memset_stream_initialized = false;
         if (!memset_stream_initialized) {
             cudaStreamCreate(&memset_stream);
+            cudaEventCreate(&memset_event);
             memset_stream_initialized = true;
         }
         cudaMemsetAsync(per_tile_buffers.instance_ranges, 0, sizeof(uint2) * n_tiles, memset_stream);
+        cudaEventRecord(memset_event, memset_stream); // Record event when memset completes
     } else {
         cudaMemset(per_tile_buffers.instance_ranges, 0, sizeof(uint2) * n_tiles);
     }
@@ -159,9 +162,9 @@ std::tuple<int, int, int, int, int> fast_lfs::rasterization::forward(
         n_instances);
     CHECK_CUDA(config::debug, "cub::DeviceRadixSort::SortPairs (Tile)")
 
-    // Synchronize memset stream if needed
+    // Wait for memset to complete (GPU-side wait, doesn't block CPU)
     if constexpr (!config::debug) {
-        cudaStreamSynchronize(memset_stream);
+        cudaStreamWaitEvent(nullptr, memset_event, 0); // Default stream waits for memset
     }
 
     // Extract instance ranges
@@ -211,7 +214,7 @@ std::tuple<int, int, int, int, int> fast_lfs::rasterization::forward(
         per_tile_buffers.max_n_contributions,
         per_tile_buffers.n_contributions,
         per_bucket_buffers.tile_index,
-        per_bucket_buffers.color_transmittance,
+        per_bucket_buffers.checkpoint_half,
         width,
         height,
         grid.x);

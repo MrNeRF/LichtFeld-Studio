@@ -49,7 +49,7 @@ namespace lfs::core {
             bool headless = false;                            // Disable visualization during training
             bool no_splash = false;                           // Skip splash screen on startup
             bool no_interop = false;                          // Disable CUDA-GL interop (use CPU fallback)
-            std::string strategy = "mcmc";                    // Optimization strategy: mcmc, default.
+            std::string strategy = "mcmc";                    // Optimization strategy: mcmc, adc.
 
             // Mask parameters
             MaskMode mask_mode = MaskMode::None;      // Attention mask mode
@@ -69,7 +69,7 @@ namespace lfs::core {
             float bilateral_grid_lr = 2e-3f;
             float tv_loss_weight = 10.f;
 
-            // Default strategy specific parameters
+            // adc strategy specific parameters
             float prune_opacity = 0.005f;
             float grow_scale3d = 0.01f;
             float grow_scale2d = 0.05f;
@@ -102,7 +102,7 @@ namespace lfs::core {
 
             // Factory methods for strategy presets
             static OptimizationParameters mcmc_defaults();
-            static OptimizationParameters default_strategy_defaults();
+            static OptimizationParameters adc_defaults();
         };
 
         struct LoadingParams {

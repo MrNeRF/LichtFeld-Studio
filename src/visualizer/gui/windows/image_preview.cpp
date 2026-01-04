@@ -849,9 +849,9 @@ namespace lfs::vis::gui {
         const float PANEL_MARGIN = 8.0f * scale;
 
         // Reserve space for info panel if visible
-        const float available_width = show_info_panel_ 
-            ? content_size.x - INFO_PANEL_WIDTH - PANEL_MARGIN * 2.0f
-            : content_size.x;
+        const float available_width = show_info_panel_
+                                          ? content_size.x - INFO_PANEL_WIDTH - PANEL_MARGIN * 2.0f
+                                          : content_size.x;
 
         const auto [display_width, display_height] = calculateDisplaySize(
             static_cast<int>(available_width), static_cast<int>(content_size.y));

@@ -30,7 +30,7 @@ namespace lfs::vis {
 
         // Listen for checkpoint load for training commands
         cmd::LoadCheckpointForTraining::when([this](const auto& cmd) {
-            handleLoadCheckpointForTrainingCommand(cmd.path);
+            handleLoadCheckpointForTrainingCommand(cmd.checkpoint_path, cmd.dataset_path, cmd.output_path);
         });
     }
 
@@ -41,7 +41,7 @@ namespace lfs::vis {
 
         // Checkpoint files get special handling - redirect to training resume flow
         if (isCheckpointFile(path)) {
-            handleLoadCheckpointForTrainingCommand(path);
+            handleLoadCheckpointForTrainingCommand(path, {}, {});
             return;
         }
 
@@ -54,9 +54,12 @@ namespace lfs::vis {
         scene_manager_->addSplatFile(path, name);
     }
 
-    void DataLoadingService::handleLoadCheckpointForTrainingCommand(const std::filesystem::path& path) {
-        LOG_INFO("Loading checkpoint for training: {}", lfs::core::path_to_utf8(path));
-        loadCheckpointForTraining(path);
+    void DataLoadingService::handleLoadCheckpointForTrainingCommand(
+        const std::filesystem::path& checkpoint_path,
+        const std::filesystem::path& dataset_path,
+        const std::filesystem::path& output_path) {
+        LOG_INFO("Loading checkpoint for training: {}", lfs::core::path_to_utf8(checkpoint_path));
+        loadCheckpointForTraining(checkpoint_path, dataset_path, output_path);
     }
 
     bool DataLoadingService::isSOGFile(const std::filesystem::path& path) const {
@@ -259,12 +262,21 @@ namespace lfs::vis {
         }
     }
 
-    std::expected<void, std::string> DataLoadingService::loadCheckpointForTraining(const std::filesystem::path& path) {
+    std::expected<void, std::string> DataLoadingService::loadCheckpointForTraining(
+        const std::filesystem::path& checkpoint_path,
+        const std::filesystem::path& dataset_path,
+        const std::filesystem::path& output_path) {
         LOG_TIMER("LoadCheckpointForTraining");
         try {
-            // Pass empty params; checkpoint contains all required params (dataset path, optimization, etc.)
+            // Override dataset/output paths if provided by user
             lfs::core::param::TrainingParameters params;
-            scene_manager_->loadCheckpointForTraining(path, params);
+            if (!dataset_path.empty()) {
+                params.dataset.data_path = dataset_path;
+            }
+            if (!output_path.empty()) {
+                params.dataset.output_path = output_path;
+            }
+            scene_manager_->loadCheckpointForTraining(checkpoint_path, params);
             return {};
         } catch (const std::exception& e) {
             const std::string error = std::format("Checkpoint load failed: {}", e.what());

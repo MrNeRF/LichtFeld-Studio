@@ -2,7 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "default_strategy.hpp"
+#include "adc.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
@@ -28,9 +28,9 @@ namespace lfs::training {
         }
     } // anonymous namespace
 
-    DefaultStrategy::DefaultStrategy(lfs::core::SplatData& splat_data) : _splat_data(&splat_data) {}
+    ADC::ADC(lfs::core::SplatData& splat_data) : _splat_data(&splat_data) {}
 
-    void DefaultStrategy::initialize(const lfs::core::param::OptimizationParameters& optimParams) {
+    void ADC::initialize(const lfs::core::param::OptimizationParameters& optimParams) {
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(optimParams);
 
         initialize_gaussians(*_splat_data, _params->max_cap);
@@ -50,14 +50,14 @@ namespace lfs::training {
         _free_mask = lfs::core::Tensor::zeros_bool({capacity}, _splat_data->means().device());
     }
 
-    bool DefaultStrategy::is_refining(int iter) const {
+    bool ADC::is_refining(int iter) const {
         return (iter < _params->stop_refine &&
                 iter > _params->start_refine &&
                 iter % _params->refine_every == 0 &&
                 iter % _params->reset_every >= _params->pause_refine_after_reset);
     }
 
-    void DefaultStrategy::remove_gaussians(const lfs::core::Tensor& mask) {
+    void ADC::remove_gaussians(const lfs::core::Tensor& mask) {
         int mask_sum = mask.to(lfs::core::DataType::Int32).sum().template item<int>();
 
         if (mask_sum == 0) {
@@ -69,7 +69,7 @@ namespace lfs::training {
         remove(mask);
     }
 
-    void DefaultStrategy::duplicate(const lfs::core::Tensor& is_duplicated) {
+    void ADC::duplicate(const lfs::core::Tensor& is_duplicated) {
         const lfs::core::Tensor sampled_idxs = is_duplicated.nonzero().squeeze(-1);
         const int64_t num_duplicated = sampled_idxs.shape()[0];
 
@@ -110,7 +110,7 @@ namespace lfs::training {
         }
     }
 
-    void DefaultStrategy::split(const lfs::core::Tensor& is_split) {
+    void ADC::split(const lfs::core::Tensor& is_split) {
         const lfs::core::Tensor split_idxs = is_split.nonzero().squeeze(-1);
         const int64_t num_split = split_idxs.shape()[0];
 
@@ -272,7 +272,7 @@ namespace lfs::training {
         LOG_DEBUG("split(): done, {} filled free slots, {} appended", num_filled, remaining);
     }
 
-    std::pair<lfs::core::Tensor, int64_t> DefaultStrategy::fill_free_slots_with_data(
+    std::pair<lfs::core::Tensor, int64_t> ADC::fill_free_slots_with_data(
         const lfs::core::Tensor& positions,
         const lfs::core::Tensor& rotations,
         const lfs::core::Tensor& scales,
@@ -312,7 +312,10 @@ namespace lfs::training {
 
         if (shN.is_valid() && has_shN_coefficients(_splat_data->shN())) {
             const auto& shN_shape = _splat_data->shN().shape();
-            auto shN_slice = shN.slice(0, 0, slots_to_fill).reshape(lfs::core::TensorShape({static_cast<size_t>(slots_to_fill), shN_shape[1], shN_shape[2]}));
+            const auto n = static_cast<int>(slots_to_fill);
+            const auto shN_slice = (shN_shape.rank() == 3)
+                                       ? shN.slice(0, 0, slots_to_fill).reshape({n, static_cast<int>(shN_shape[1]), static_cast<int>(shN_shape[2])})
+                                       : shN.slice(0, 0, slots_to_fill).reshape({n, static_cast<int>(shN_shape[1])});
             _splat_data->shN().index_put_(target_indices, shN_slice);
         }
 
@@ -353,7 +356,7 @@ namespace lfs::training {
         return {target_indices, count - slots_to_fill};
     }
 
-    void DefaultStrategy::grow_gs(int iter) {
+    void ADC::grow_gs(int iter) {
         lfs::core::Tensor numer = _splat_data->_densification_info[1];
         lfs::core::Tensor denom = _splat_data->_densification_info[0];
         const lfs::core::Tensor grads = numer / denom.clamp_min(1.0f);
@@ -434,7 +437,7 @@ namespace lfs::training {
         }
     }
 
-    void DefaultStrategy::remove(const lfs::core::Tensor& is_prune) {
+    void ADC::remove(const lfs::core::Tensor& is_prune) {
         // Soft deletion: mark slots as free instead of resizing tensors
         // This avoids expensive tensor reallocations during training
         const lfs::core::Tensor prune_indices = is_prune.nonzero().squeeze(-1);
@@ -489,7 +492,7 @@ namespace lfs::training {
         LOG_DEBUG("remove(): soft-deleted {} Gaussians (marked as free, rotation & gradients zeroed)", num_pruned);
     }
 
-    void DefaultStrategy::prune_gs(int iter) {
+    void ADC::prune_gs(int iter) {
         // Check for low opacity
         lfs::core::Tensor is_prune = _splat_data->get_opacity() < _params->prune_opacity;
 
@@ -517,7 +520,7 @@ namespace lfs::training {
         }
     }
 
-    void DefaultStrategy::reset_opacity() {
+    void ADC::reset_opacity() {
         const float threshold = 2.0f * _params->prune_opacity;
         const float logit_threshold = std::log(threshold / (1.0f - threshold));
 
@@ -531,7 +534,7 @@ namespace lfs::training {
         }
     }
 
-    void DefaultStrategy::post_backward(int iter, RenderOutput& render_output) {
+    void ADC::post_backward(int iter, RenderOutput& render_output) {
         // Increment SH degree every 1000 iterations
         if (iter % _params->sh_degree_interval == 0) {
             _splat_data->increment_sh_degree();
@@ -566,7 +569,7 @@ namespace lfs::training {
         }
     }
 
-    void DefaultStrategy::step(int iter) {
+    void ADC::step(int iter) {
         if (iter < _params->iterations) {
             _optimizer->step(iter);
             _optimizer->zero_grad(iter);
@@ -581,7 +584,7 @@ namespace lfs::training {
         constexpr uint32_t DEFAULT_VERSION = 2;        // v2 adds free_mask serialization
     } // namespace
 
-    void DefaultStrategy::serialize(std::ostream& os) const {
+    void ADC::serialize(std::ostream& os) const {
         os.write(reinterpret_cast<const char*>(&DEFAULT_MAGIC), sizeof(DEFAULT_MAGIC));
         os.write(reinterpret_cast<const char*>(&DEFAULT_VERSION), sizeof(DEFAULT_VERSION));
 
@@ -615,19 +618,19 @@ namespace lfs::training {
             os.write(reinterpret_cast<const char*>(&has_free_mask), sizeof(has_free_mask));
         }
 
-        LOG_DEBUG("Serialized DefaultStrategy");
+        LOG_DEBUG("Serialized AdcStrategy");
     }
 
-    void DefaultStrategy::deserialize(std::istream& is) {
+    void ADC::deserialize(std::istream& is) {
         uint32_t magic, version;
         is.read(reinterpret_cast<char*>(&magic), sizeof(magic));
         is.read(reinterpret_cast<char*>(&version), sizeof(version));
 
         if (magic != DEFAULT_MAGIC) {
-            throw std::runtime_error("Invalid DefaultStrategy checkpoint: wrong magic");
+            throw std::runtime_error("Invalid AdcStrategy checkpoint: wrong magic");
         }
         if (version > DEFAULT_VERSION) {
-            throw std::runtime_error("Unsupported DefaultStrategy checkpoint version: " + std::to_string(version));
+            throw std::runtime_error("Unsupported AdcStrategy checkpoint version: " + std::to_string(version));
         }
 
         // Deserialize optimizer state
@@ -657,17 +660,17 @@ namespace lfs::training {
             }
         }
 
-        LOG_DEBUG("Deserialized DefaultStrategy (version {})", version);
+        LOG_DEBUG("Deserialized AdcStrategy (version {})", version);
     }
 
-    void DefaultStrategy::reserve_optimizer_capacity(size_t capacity) {
+    void ADC::reserve_optimizer_capacity(size_t capacity) {
         if (_optimizer) {
             _optimizer->reserve_capacity(capacity);
             LOG_INFO("Reserved optimizer capacity for {} Gaussians", capacity);
         }
     }
 
-    size_t DefaultStrategy::active_count() const {
+    size_t ADC::active_count() const {
         if (!_free_mask.is_valid()) {
             return static_cast<size_t>(_splat_data->size());
         }
@@ -682,7 +685,7 @@ namespace lfs::training {
         return current_size - free_count_val;
     }
 
-    size_t DefaultStrategy::free_count() const {
+    size_t ADC::free_count() const {
         if (!_free_mask.is_valid()) {
             return 0;
         }
@@ -695,7 +698,7 @@ namespace lfs::training {
         return static_cast<size_t>(active_region.sum_scalar());
     }
 
-    lfs::core::Tensor DefaultStrategy::get_active_indices() const {
+    lfs::core::Tensor ADC::get_active_indices() const {
         const size_t current_size = static_cast<size_t>(_splat_data->size());
         if (current_size == 0) {
             return lfs::core::Tensor();
@@ -714,7 +717,7 @@ namespace lfs::training {
         return is_active.nonzero().squeeze(-1);
     }
 
-    void DefaultStrategy::mark_as_free(const lfs::core::Tensor& indices) {
+    void ADC::mark_as_free(const lfs::core::Tensor& indices) {
         if (!_free_mask.is_valid() || indices.numel() == 0) {
             return;
         }
@@ -723,7 +726,7 @@ namespace lfs::training {
         _free_mask.index_put_(indices, true_vals);
     }
 
-    std::pair<lfs::core::Tensor, int64_t> DefaultStrategy::fill_free_slots(
+    std::pair<lfs::core::Tensor, int64_t> ADC::fill_free_slots(
         const lfs::core::Tensor& source_indices, int64_t count) {
 
         if (!_free_mask.is_valid() || count == 0) {

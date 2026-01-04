@@ -52,9 +52,10 @@ namespace lfs::core {
             EVENT(SwitchToLatestCheckpoint, );
             EVENT(SaveCheckpoint, std::optional<int> iteration;);
             EVENT(LoadFile, std::filesystem::path path; bool is_dataset;);
-            EVENT(LoadCheckpointForTraining, std::filesystem::path path;);
+            EVENT(LoadCheckpointForTraining, std::filesystem::path checkpoint_path; std::filesystem::path dataset_path; std::filesystem::path output_path;);
             EVENT(LoadConfigFile, std::filesystem::path path;);
             EVENT(ShowDatasetLoadPopup, std::filesystem::path dataset_path;);
+            EVENT(ShowResumeCheckpointPopup, std::filesystem::path checkpoint_path;);
             EVENT(ClearScene, );
             EVENT(SwitchToEditMode, ); // Keep trained model, discard dataset
             EVENT(ResetCamera, );
@@ -139,6 +140,7 @@ namespace lfs::core {
                   size_t num_images;
                   size_t num_points;);
             EVENT(ConfigLoadFailed, std::filesystem::path path; std::string error;);
+            EVENT(FileDropFailed, std::vector<std::string> files; std::string error;);
 
             // Evaluation
             EVENT(EvaluationStarted, int iteration; size_t num_images;);

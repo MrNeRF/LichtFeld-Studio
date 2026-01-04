@@ -17,6 +17,7 @@
 #include <limits>
 
 // Thrust headers
+#include <mutex>
 #include <thrust/device_ptr.h>
 #include <thrust/device_vector.h>
 #include <thrust/execution_policy.h>
@@ -31,6 +32,7 @@
 #include <thrust/sort.h>
 #include <thrust/transform.h>
 #include <thrust/tuple.h>
+#include <unordered_map>
 
 // CUDA error checking macro
 #define CHECK_CUDA(call)                              \
@@ -45,6 +47,121 @@
     } while (0)
 
 namespace lfs::core::tensor_ops {
+
+    // Pooled CUB temp storage - grows as needed, never shrinks
+    class CubTempStoragePool {
+    public:
+        static CubTempStoragePool& instance() {
+            static CubTempStoragePool pool;
+            return pool;
+        }
+
+        void* get(size_t bytes, cudaStream_t) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (bytes <= capacity_ && buffer_)
+                return buffer_;
+            if (buffer_)
+                cudaFree(buffer_);
+            size_t alloc_size = std::max(((bytes + 1024 * 1024 - 1) / (1024 * 1024)) * (1024 * 1024), size_t(4 * 1024 * 1024));
+            if (cudaMalloc(&buffer_, alloc_size) != cudaSuccess) {
+                buffer_ = nullptr;
+                capacity_ = 0;
+                return nullptr;
+            }
+            capacity_ = alloc_size;
+            return buffer_;
+        }
+
+        ~CubTempStoragePool() {
+            if (buffer_)
+                cudaFree(buffer_);
+        }
+
+    private:
+        CubTempStoragePool() = default;
+        void* buffer_ = nullptr;
+        size_t capacity_ = 0;
+        std::mutex mutex_;
+    };
+
+    inline void* get_cub_temp_storage(size_t bytes, cudaStream_t stream) {
+        return CubTempStoragePool::instance().get(bytes, stream);
+    }
+
+    // Pre-allocated buffers for scalar reductions with pinned host memory
+    class ScalarReductionCache {
+    public:
+        static ScalarReductionCache& instance() {
+            static ScalarReductionCache cache;
+            return cache;
+        }
+
+        float reduce_sum(const float* data, size_t n, cudaStream_t stream) {
+            if (n == 0)
+                return 0.0f;
+            size_t temp_bytes = temp_capacity_;
+            cub::DeviceReduce::Sum(temp_storage_, temp_bytes, data, d_scalar_, n, stream);
+            cudaMemcpy(h_scalar_, d_scalar_, sizeof(float), cudaMemcpyDeviceToHost);
+            return *h_scalar_;
+        }
+
+        float reduce_mean(const float* data, size_t n, cudaStream_t stream) {
+            return n ? reduce_sum(data, n, stream) / static_cast<float>(n) : 0.0f;
+        }
+
+        float reduce_max(const float* data, size_t n, cudaStream_t stream) {
+            if (n == 0)
+                return -std::numeric_limits<float>::infinity();
+            size_t temp_bytes = temp_capacity_;
+            cub::DeviceReduce::Max(temp_storage_, temp_bytes, data, d_scalar_, n, stream);
+            cudaMemcpy(h_scalar_, d_scalar_, sizeof(float), cudaMemcpyDeviceToHost);
+            return *h_scalar_;
+        }
+
+        float reduce_min(const float* data, size_t n, cudaStream_t stream) {
+            if (n == 0)
+                return std::numeric_limits<float>::infinity();
+            size_t temp_bytes = temp_capacity_;
+            cub::DeviceReduce::Min(temp_storage_, temp_bytes, data, d_scalar_, n, stream);
+            cudaMemcpy(h_scalar_, d_scalar_, sizeof(float), cudaMemcpyDeviceToHost);
+            return *h_scalar_;
+        }
+
+        ~ScalarReductionCache() {
+            if (d_scalar_)
+                cudaFree(d_scalar_);
+            if (h_scalar_)
+                cudaFreeHost(h_scalar_);
+            if (temp_storage_)
+                cudaFree(temp_storage_);
+        }
+
+    private:
+        ScalarReductionCache() {
+            cudaMalloc(&d_scalar_, sizeof(float));
+            cudaMallocHost(&h_scalar_, sizeof(float));
+            temp_capacity_ = 32 * 1024 * 1024;
+            cudaMalloc(&temp_storage_, temp_capacity_);
+        }
+
+        float* d_scalar_ = nullptr;
+        float* h_scalar_ = nullptr;
+        void* temp_storage_ = nullptr;
+        size_t temp_capacity_ = 0;
+    };
+
+    float direct_sum_scalar(const float* data, size_t n, cudaStream_t stream) {
+        return ScalarReductionCache::instance().reduce_sum(data, n, stream);
+    }
+    float direct_mean_scalar(const float* data, size_t n, cudaStream_t stream) {
+        return ScalarReductionCache::instance().reduce_mean(data, n, stream);
+    }
+    float direct_max_scalar(const float* data, size_t n, cudaStream_t stream) {
+        return ScalarReductionCache::instance().reduce_max(data, n, stream);
+    }
+    float direct_min_scalar(const float* data, size_t n, cudaStream_t stream) {
+        return ScalarReductionCache::instance().reduce_min(data, n, stream);
+    }
 
     // ============= GENERIC OPERATIONS - NOW IN HEADER =============
     // Template implementations moved to include/core/tensor_generic_ops.cuh for:
@@ -582,26 +699,21 @@ namespace lfs::core::tensor_ops {
                 return;
             }
 
-            // SLOW PATH: Use CUB for very large tensors
-            // Determine temp storage requirements
+            // CUB DeviceReduce with pooled temp storage (no allocation overhead!)
             void* d_temp_storage = nullptr;
             size_t temp_storage_bytes = 0;
 
             switch (op) {
             case ReduceOp::Sum:
-                // Two-phase CUB pattern: 1) Query temp storage size, 2) Perform reduction
                 cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream);
+                d_temp_storage = get_cub_temp_storage(temp_storage_bytes, stream);
                 cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                cudaFreeAsync(d_temp_storage, stream);
                 break;
             case ReduceOp::Mean: {
-                // Sum then divide by count
                 cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream);
+                d_temp_storage = get_cub_temp_storage(temp_storage_bytes, stream);
                 cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                cudaFreeAsync(d_temp_storage, stream);
-                // Divide result by n
+                // Divide by n using a simple kernel (faster than Thrust for single value)
                 auto out_ptr = thrust::device_pointer_cast(d_out);
                 run_with_thrust_policy(stream, [&](auto policy) {
                     thrust::transform(policy, out_ptr, out_ptr + 1, out_ptr,
@@ -611,29 +723,25 @@ namespace lfs::core::tensor_ops {
             }
             case ReduceOp::Max:
                 cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream);
+                d_temp_storage = get_cub_temp_storage(temp_storage_bytes, stream);
                 cub::DeviceReduce::Max(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                cudaFreeAsync(d_temp_storage, stream);
                 break;
             case ReduceOp::Min:
                 cub::DeviceReduce::Min(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                cudaMallocAsync(&d_temp_storage, temp_storage_bytes, stream);
+                d_temp_storage = get_cub_temp_storage(temp_storage_bytes, stream);
                 cub::DeviceReduce::Min(d_temp_storage, temp_storage_bytes, d_in, d_out, n, stream);
-                cudaFreeAsync(d_temp_storage, stream);
                 break;
-            case ReduceOp::Prod:
-                // CUB doesn't have built-in Prod, use Thrust for this rare operation
-                {
-                    float result = 0.0f;
-                    run_with_thrust_policy(stream, [&](auto policy) {
-                        result = thrust::reduce(policy, input_ptr, input_ptr + n, 1.0f, ops::mul_op{});
-                    });
-                    init_scalar_gpu(static_cast<float*>(output), result, stream); // GPU init instead of CPU→GPU upload!
-                }
+            case ReduceOp::Prod: {
+                float result = 0.0f;
+                run_with_thrust_policy(stream, [&](auto policy) {
+                    result = thrust::reduce(policy, input_ptr, input_ptr + n, 1.0f, ops::mul_op{});
+                });
+                init_scalar_gpu(static_cast<float*>(output), result, stream);
                 break;
-            default: {
-                init_scalar_gpu(static_cast<float*>(output), 0.0f, stream); // GPU init instead of CPU→GPU upload!
-            } break;
+            }
+            default:
+                init_scalar_gpu(static_cast<float*>(output), 0.0f, stream);
+                break;
             }
             return;
         }
@@ -658,46 +766,37 @@ namespace lfs::core::tensor_ops {
             if (inner_size == 1) {
                 // Contiguous segments - use vectorized warp reduction
                 if (should_use_warp_reduce(n, outer_size)) {
+                    LOG_DEBUG("[REDUCE] Using warp segmented reduce: outer={} reduce={} inner=1", outer_size, reduce_size);
+                    // Note: For Mean, the fused kernel already divides by reduce_size
                     launch_warp_segmented_reduce(input_f, output_f, outer_size, reduce_size, op, stream);
-
-                    // Handle mean: divide by reduce_size
-                    if (op == ReduceOp::Mean) {
-                        auto out_ptr = thrust::device_pointer_cast(output_f);
-                        run_with_thrust_policy(stream, [&](auto policy) {
-                            thrust::transform(policy, out_ptr, out_ptr + outer_size, out_ptr,
-                                              DivideByFunctor(static_cast<float>(reduce_size)));
-                        });
-                    }
                     return;
+                } else {
+                    LOG_DEBUG("[REDUCE] Fallback to CUB: outer={} reduce={} inner=1", outer_size, reduce_size);
                 }
             } else {
-                // Strided segments - use warp reduction when compute-bound (large reduce_size)
-                // CUB has overhead from segmented reduce setup, so warp reduction is often better
+                // Strided segments - strided memory access is slow on GPU
+                // For inner_size >= 256, the strided access pattern is too slow.
+                // Only use warp strided kernel for small inner_size where cache helps.
                 //
-                // Memory access pattern: Each thread accesses with stride=inner_size*4 bytes
-                // - Small inner_size (≤ 512): Good cache locality (≤ 2KB stride)
-                // - Medium inner_size (512-2048): If reduce_size is large (≥ 512), compute-bound!
-                // - Large inner_size (> 2048): CUB's optimized segmented reduce is better
-                bool good_stride = (inner_size <= 512) ||
-                                   (inner_size <= 2048 && reduce_size >= 512);
-                bool use_strided_warp = good_stride && should_use_warp_reduce(n, output_size);
+                // Benchmark: inner_size=1024, reduce_size=1024
+                //   - Strided warp kernel: ~125 us (bad coalescing!)
+                //   - CUB segmented: ~15 us (better memory access)
+                //
+                // For inner_size < 256, strided warp can still be competitive due to
+                // cache locality (stride < 1KB) and low overhead.
+                bool small_inner_stride = inner_size < 256;
+                bool use_strided_warp = small_inner_stride && should_use_warp_reduce(n, output_size);
 
                 if (use_strided_warp) {
+                    LOG_DEBUG("[REDUCE] Using warp STRIDED reduce: outer={} reduce={} inner={}", outer_size, reduce_size, inner_size);
+                    // Note: For Mean, the fused kernel already divides by reduce_size
                     launch_warp_strided_reduce(input_f, output_f, outer_size, reduce_size, inner_size, op, stream);
-
-                    // Handle mean: divide by reduce_size
-                    if (op == ReduceOp::Mean) {
-                        auto out_ptr = thrust::device_pointer_cast(output_f);
-                        run_with_thrust_policy(stream, [&](auto policy) {
-                            thrust::transform(policy, out_ptr, out_ptr + output_size, out_ptr,
-                                              DivideByFunctor(static_cast<float>(reduce_size)));
-                        });
-                    }
                     return;
                 }
             }
 
             // SLOW PATH: Use CUB/Thrust for very large tensors
+            LOG_DEBUG("[REDUCE] Using SLOW PATH (CUB/Thrust): outer={} reduce={} inner={}", outer_size, reduce_size, inner_size);
             float init_val = 0.0f;
 
             switch (op) {

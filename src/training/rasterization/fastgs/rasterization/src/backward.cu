@@ -81,7 +81,7 @@ void fast_lfs::rasterization::backward(
         per_tile_buffers.max_n_contributions,
         per_tile_buffers.n_contributions,
         per_bucket_buffers.tile_index,
-        per_bucket_buffers.color_transmittance,
+        per_bucket_buffers.checkpoint_half, // Half-precision: color.rgb + transmittance (50% memory reduction)
         grad_mean2d_helper,
         grad_conic_helper,
         grad_opacities_raw,

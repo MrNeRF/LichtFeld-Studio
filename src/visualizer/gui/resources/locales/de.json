@@ -456,12 +456,23 @@
     "exit": "Beenden"
   },
 
-  "save_dir_popup": {
-    "title": "Ausgabeverzeichnis auswählen",
-    "configure_output": "Ausgabeort konfigurieren",
-    "dataset_label": "Datensatz:",
-    "output_dir": "Ausgabeverzeichnis:",
-    "help_text": "Trainings-Checkpoints, Logs und exportierte Modelle werden in diesem Verzeichnis gespeichert."
+  "load_dataset_popup": {
+    "title": "Datensatz laden",
+    "configure_paths": "Datensatz-Pfade konfigurieren",
+    "images_dir": "Bilder:  ",
+    "sparse_dir": "Sparse:  ",
+    "masks_dir": "Masken:  ",
+    "output_dir": "Ausgabe: ",
+    "help_text": "Trainings-Checkpoints, Logs und exportierte Modelle werden im Ausgabeverzeichnis gespeichert."
+  },
+
+  "notification": {
+    "cannot_open": "Kann nicht öffnen",
+    "dropped_not_recognized": "Das abgelegte",
+    "directory": "Verzeichnis",
+    "file": "Datei",
+    "items": "Elemente",
+    "and_more": "... und"
   },
 
   "export_dialog": {
@@ -630,5 +641,18 @@
     "y": "Y:",
     "z": "Z:",
     "u": "U:"
+  },
+
+  "resume_checkpoint_popup": {
+    "title": "Checkpoint Fortsetzen",
+    "checkpoint": "CHECKPOINT",
+    "configure_paths": "Pfade vor dem Laden konfigurieren",
+    "file": "Datei:",
+    "stored_path": "Gespeicherter Pfad:",
+    "not_found": "(nicht gefunden)",
+    "dataset_path": "Datensatz-Pfad:",
+    "invalid": "(ungültig)",
+    "output_path": "Ausgabe-Pfad:",
+    "help_text": "Der im Checkpoint gespeicherte Datensatz-Pfad hat sich möglicherweise geändert. Aktualisieren Sie ihn bei Bedarf."
   }
 }

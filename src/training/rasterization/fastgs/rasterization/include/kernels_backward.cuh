@@ -275,7 +275,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const uint* tile_max_n_contributions,
         const uint* tile_n_contributions,
         const uint* bucket_tile_index,
-        const float4* bucket_color_transmittance,
+        const ushort4* bucket_checkpoint_half, // Half-precision: color.rgb + transmittance as 4× fp16 (50% memory reduction)
         float2* grad_mean2d,
         float* grad_conic,
         float* grad_raw_opacity,
@@ -349,7 +349,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         float3 grad_color_pixel;
         float grad_alpha_common;
 
-        bucket_color_transmittance += bucket_idx * config::block_size_blend;
+        // Pointer to this bucket's checkpoint data (half-precision color + transmittance)
+        bucket_checkpoint_half += bucket_idx * config::block_size_blend;
         __shared__ uint collected_last_contributor[32];
         __shared__ float4 collected_color_pixel_after_transmittance[32];
         __shared__ float4 collected_grad_info_pixel[32];
@@ -359,21 +360,29 @@ namespace fast_lfs::rasterization::kernels::backward {
         for (int i = 0; i < config::block_size_blend + 31; ++i) {
             if (i % 32 == 0) {
                 const uint local_idx = i + lane_idx;
-                const float4 color_transmittance = bucket_color_transmittance[local_idx];
+                // Load color + transmittance from half-precision checkpoint (50% memory reduction, no recomputation)
+                // Use __ushort_as_half to properly interpret the bit pattern
+                const ushort4 checkpoint_half = bucket_checkpoint_half[local_idx];
+                const float3 checkpoint_color = make_float3(
+                    __half2float(__ushort_as_half(checkpoint_half.x)),
+                    __half2float(__ushort_as_half(checkpoint_half.y)),
+                    __half2float(__ushort_as_half(checkpoint_half.z)));
+                const float checkpoint_transmittance = __half2float(__ushort_as_half(checkpoint_half.w));
                 const uint2 pixel_coords = {start_pixel_coords.x + local_idx % config::tile_width, start_pixel_coords.y + local_idx / config::tile_width};
                 const uint pixel_idx = width * pixel_coords.y + pixel_coords.x;
+                const bool pixel_in_bounds = pixel_coords.x < width && pixel_coords.y < height;
                 // final values from forward pass before background blend and the respective gradients
                 float3 color_pixel = {0.0f, 0.0f, 0.0f};
-                float3 grad_color_pixel = {0.0f, 0.0f, 0.0f};
+                float3 grad_color_pixel_local = {0.0f, 0.0f, 0.0f};
                 float alpha_pixel = 0.0f;
                 float grad_alpha_pixel = 0.0f;
                 uint last_contrib_val = 0;
-                if (pixel_coords.x < width && pixel_coords.y < height) {
+                if (pixel_in_bounds) {
                     color_pixel = make_float3(
                         image[pixel_idx],
                         image[n_pixels + pixel_idx],
                         image[2 * n_pixels + pixel_idx]);
-                    grad_color_pixel = make_float3(
+                    grad_color_pixel_local = make_float3(
                         grad_image[pixel_idx],
                         grad_image[n_pixels + pixel_idx],
                         grad_image[2 * n_pixels + pixel_idx]);
@@ -381,11 +390,12 @@ namespace fast_lfs::rasterization::kernels::backward {
                     grad_alpha_pixel = grad_alpha_map[pixel_idx];
                     last_contrib_val = tile_n_contributions[pixel_idx];
                 }
+                // color_pixel_after = final_color - checkpoint_color
                 collected_color_pixel_after_transmittance[lane_idx] = make_float4(
-                    color_pixel - make_float3(color_transmittance),
-                    color_transmittance.w);
+                    color_pixel - checkpoint_color,
+                    checkpoint_transmittance);
                 collected_grad_info_pixel[lane_idx] = make_float4(
-                    grad_color_pixel,
+                    grad_color_pixel_local,
                     grad_alpha_pixel * (1.0f - alpha_pixel));
                 collected_last_contributor[lane_idx] = last_contrib_val;
                 __syncwarp();

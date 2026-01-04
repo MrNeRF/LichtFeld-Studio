@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/splat_data_export.hpp"
+#include "core/path_utils.hpp"
 #include "core/sogs.hpp"
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
@@ -21,7 +22,7 @@ namespace lfs::core {
 
         const fs::path output_path = stem.empty()
                                          ? root / ("splat_" + std::to_string(iteration) + ".ply")
-                                         : root / (stem + ".ply");
+                                         : root / utf8_to_path(stem + ".ply"); // UTF-8 stem -> path
 
         const lfs::io::PlySaveOptions options{
             .output_path = output_path,

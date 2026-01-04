@@ -177,7 +177,7 @@ namespace lfs::training {
                 strategy.reserve_optimizer_capacity(max_cap);
             }
 
-            // Load params from checkpoint, preserving CLI path overrides
+            // Load params from checkpoint, preserving CLI overrides
             if (header.params_json_size > 0) {
                 file.seekg(static_cast<std::streamoff>(header.params_json_offset));
                 std::string params_str(header.params_json_size, '\0');
@@ -185,6 +185,7 @@ namespace lfs::training {
 
                 const auto cli_data_path = params.dataset.data_path;
                 const auto cli_output_path = params.dataset.output_path;
+                const auto cli_iterations = params.optimization.iterations;
 
                 const auto params_json = nlohmann::json::parse(params_str);
                 if (params_json.contains("optimization")) {
@@ -200,6 +201,8 @@ namespace lfs::training {
                     params.dataset.data_path = cli_data_path;
                 if (!cli_output_path.empty())
                     params.dataset.output_path = cli_output_path;
+                if (cli_iterations > 0)
+                    params.optimization.iterations = cli_iterations;
             }
 
             LOG_INFO("Checkpoint loaded: {} ({} Gaussians, iter {})",

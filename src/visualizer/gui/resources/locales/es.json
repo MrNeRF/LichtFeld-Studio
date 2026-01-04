@@ -456,12 +456,23 @@
     "exit": "Salir"
   },
 
-  "save_dir_popup": {
-    "title": "Seleccionar Directorio de Salida",
-    "configure_output": "Configurar ubicación de salida",
-    "dataset_label": "Dataset:",
-    "output_dir": "Directorio de Salida:",
-    "help_text": "Los puntos de control de entrenamiento, logs y modelos exportados se guardarán en este directorio."
+  "load_dataset_popup": {
+    "title": "Cargar Dataset",
+    "configure_paths": "Configurar rutas del dataset",
+    "images_dir": "Imágenes:",
+    "sparse_dir": "Sparse:  ",
+    "masks_dir": "Máscaras:",
+    "output_dir": "Salida:  ",
+    "help_text": "Los checkpoints, logs y modelos exportados se guardarán en el directorio de salida."
+  },
+
+  "notification": {
+    "cannot_open": "No se puede abrir",
+    "dropped_not_recognized": "El elemento soltado",
+    "directory": "directorio",
+    "file": "archivo",
+    "items": "elementos",
+    "and_more": "... y"
   },
 
   "export_dialog": {
@@ -630,5 +641,18 @@
     "y": "Y:",
     "z": "Z:",
     "u": "U:"
+  },
+
+  "resume_checkpoint_popup": {
+    "title": "Reanudar Checkpoint",
+    "checkpoint": "CHECKPOINT",
+    "configure_paths": "Configurar rutas antes de cargar",
+    "file": "Archivo:",
+    "stored_path": "Ruta Almacenada:",
+    "not_found": "(no encontrado)",
+    "dataset_path": "Ruta del Dataset:",
+    "invalid": "(inválido)",
+    "output_path": "Ruta de Salida:",
+    "help_text": "La ruta del dataset almacenada en el checkpoint puede haber cambiado. Actualícela si es necesario."
   }
 }

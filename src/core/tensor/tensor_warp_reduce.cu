@@ -18,8 +18,12 @@
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
 #include "internal/warp_reduce.cuh"
+#include <cfloat>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
+#include <thrust/device_ptr.h>
+#include <thrust/execution_policy.h>
+#include <thrust/transform.h>
 
 namespace lfs::core::tensor_ops {
 
@@ -320,6 +324,181 @@ namespace lfs::core::tensor_ops {
     // ============= SEGMENTED REDUCTION KERNELS (CONTIGUOUS) =============
 
     /**
+     * @brief FAST kernel for MEDIUM segments (32-2048 elements)
+     *
+     * Each WARP processes one segment entirely using warp shuffle reductions.
+     * NO block synchronization needed!
+     *
+     * OPTIMIZATION: COALESCED float4 loads - all lanes read consecutive memory.
+     * For segment_size=1024: 32 lanes * 4 floats = 128 floats per iteration, 8 iterations.
+     */
+    __global__ void warp_medium_segment_reduce_sum_kernel(
+        const float* __restrict__ input,
+        float* __restrict__ output,
+        size_t num_segments,
+        size_t segment_size) {
+        const int warp_id = threadIdx.x / 32;
+        const int lane = threadIdx.x % 32;
+        const int warps_per_block = blockDim.x / 32;
+
+        for (size_t seg_idx = blockIdx.x * warps_per_block + warp_id;
+             seg_idx < num_segments;
+             seg_idx += gridDim.x * warps_per_block) {
+            const float* segment_start = input + seg_idx * segment_size;
+
+            float sum = 0.0f;
+
+            // COALESCED vectorized loads: All 32 lanes read consecutive float4s
+            // Iteration 0: lanes read float4[0..31] = floats[0..127]
+            // Iteration 1: lanes read float4[32..63] = floats[128..255]
+            // etc.
+            const size_t num_float4s = segment_size / 4;
+            for (size_t base = 0; base < num_float4s; base += 32) {
+                size_t idx = base + lane;
+                if (idx < num_float4s) {
+                    float4 v = reinterpret_cast<const float4*>(segment_start)[idx];
+                    sum += v.x + v.y + v.z + v.w;
+                }
+            }
+
+            // Handle remainder (segment_size not divisible by 4)
+            // rem_start = number of floats already processed by vectorized loop
+            size_t rem_start = num_float4s * 4;
+            for (size_t i = rem_start + lane; i < segment_size; i += 32) {
+                sum += segment_start[i];
+            }
+
+            // Warp shuffle reduction
+            sum = warp_ops::warp_reduce_sum(sum);
+
+            if (lane == 0) {
+                output[seg_idx] = sum;
+            }
+        }
+    }
+
+    /**
+     * @brief FAST kernel for MEDIUM segments - MEAN variant with coalesced loads
+     */
+    __global__ void warp_medium_segment_reduce_mean_kernel(
+        const float* __restrict__ input,
+        float* __restrict__ output,
+        size_t num_segments,
+        size_t segment_size) {
+        const int warp_id = threadIdx.x / 32;
+        const int lane = threadIdx.x % 32;
+        const int warps_per_block = blockDim.x / 32;
+        const float inv_size = 1.0f / static_cast<float>(segment_size);
+
+        for (size_t seg_idx = blockIdx.x * warps_per_block + warp_id;
+             seg_idx < num_segments;
+             seg_idx += gridDim.x * warps_per_block) {
+            const float* segment_start = input + seg_idx * segment_size;
+
+            float sum = 0.0f;
+            const size_t num_float4s = segment_size / 4;
+            for (size_t base = 0; base < num_float4s; base += 32) {
+                size_t idx = base + lane;
+                if (idx < num_float4s) {
+                    float4 v = reinterpret_cast<const float4*>(segment_start)[idx];
+                    sum += v.x + v.y + v.z + v.w;
+                }
+            }
+            size_t rem_start = num_float4s * 4;
+            for (size_t i = rem_start + lane; i < segment_size; i += 32) {
+                if (i < segment_size)
+                    sum += segment_start[i];
+            }
+
+            sum = warp_ops::warp_reduce_sum(sum);
+
+            if (lane == 0) {
+                output[seg_idx] = sum * inv_size;
+            }
+        }
+    }
+
+    /**
+     * @brief FAST kernel for MEDIUM segments - MAX variant with coalesced loads
+     */
+    __global__ void warp_medium_segment_reduce_max_kernel(
+        const float* __restrict__ input,
+        float* __restrict__ output,
+        size_t num_segments,
+        size_t segment_size) {
+        const int warp_id = threadIdx.x / 32;
+        const int lane = threadIdx.x % 32;
+        const int warps_per_block = blockDim.x / 32;
+
+        for (size_t seg_idx = blockIdx.x * warps_per_block + warp_id;
+             seg_idx < num_segments;
+             seg_idx += gridDim.x * warps_per_block) {
+            const float* segment_start = input + seg_idx * segment_size;
+
+            float val = -INFINITY;
+            const size_t num_float4s = segment_size / 4;
+            for (size_t base = 0; base < num_float4s; base += 32) {
+                size_t idx = base + lane;
+                if (idx < num_float4s) {
+                    float4 v = reinterpret_cast<const float4*>(segment_start)[idx];
+                    val = fmaxf(val, fmaxf(fmaxf(v.x, v.y), fmaxf(v.z, v.w)));
+                }
+            }
+            size_t rem_start = num_float4s * 4;
+            for (size_t i = rem_start + lane; i < segment_size; i += 32) {
+                if (i < segment_size)
+                    val = fmaxf(val, segment_start[i]);
+            }
+
+            val = warp_ops::warp_reduce_max(val);
+
+            if (lane == 0) {
+                output[seg_idx] = val;
+            }
+        }
+    }
+
+    /**
+     * @brief FAST kernel for MEDIUM segments - MIN variant with coalesced loads
+     */
+    __global__ void warp_medium_segment_reduce_min_kernel(
+        const float* __restrict__ input,
+        float* __restrict__ output,
+        size_t num_segments,
+        size_t segment_size) {
+        const int warp_id = threadIdx.x / 32;
+        const int lane = threadIdx.x % 32;
+        const int warps_per_block = blockDim.x / 32;
+
+        for (size_t seg_idx = blockIdx.x * warps_per_block + warp_id;
+             seg_idx < num_segments;
+             seg_idx += gridDim.x * warps_per_block) {
+            const float* segment_start = input + seg_idx * segment_size;
+
+            float val = INFINITY;
+            const size_t num_float4s = segment_size / 4;
+            for (size_t base = 0; base < num_float4s; base += 32) {
+                size_t idx = base + lane;
+                if (idx < num_float4s) {
+                    float4 v = reinterpret_cast<const float4*>(segment_start)[idx];
+                    val = fminf(val, fminf(fminf(v.x, v.y), fminf(v.z, v.w)));
+                }
+            }
+            size_t rem_start = num_float4s * 4;
+            for (size_t i = rem_start + lane; i < segment_size; i += 32) {
+                if (i < segment_size)
+                    val = fminf(val, segment_start[i]);
+            }
+
+            val = warp_ops::warp_reduce_min(val);
+
+            if (lane == 0) {
+                output[seg_idx] = val;
+            }
+        }
+    }
+
+    /**
      * @brief SPECIALIZED kernel for TINY segments (< 32 elements)
      *
      * For very small segments, using a whole block per segment is wasteful.
@@ -375,6 +554,48 @@ namespace lfs::core::tensor_ops {
             if (threadIdx.x == 0) {
                 output[seg_idx] = result;
             }
+        }
+    }
+
+    /**
+     * @brief FUSED mean kernel - avoids separate division kernel
+     */
+    __global__ void warp_segmented_reduce_mean_kernel(
+        const float* __restrict__ input,
+        float* __restrict__ output,
+        size_t num_segments,
+        size_t segment_size) {
+        const float inv_size = 1.0f / static_cast<float>(segment_size);
+        for (size_t seg_idx = blockIdx.x; seg_idx < num_segments; seg_idx += gridDim.x) {
+            const float* segment_start = input + seg_idx * segment_size;
+            float result = warp_ops::vectorized_segment_reduce_sum(segment_start, segment_size);
+
+            if (threadIdx.x == 0) {
+                output[seg_idx] = result * inv_size;
+            }
+        }
+    }
+
+    /**
+     * @brief FUSED mean kernel for tiny segments - avoids separate division
+     */
+    __global__ void warp_tiny_segment_reduce_mean_kernel(
+        const float* __restrict__ input,
+        float* __restrict__ output,
+        size_t num_segments,
+        size_t segment_size) {
+        size_t global_tid = blockIdx.x * blockDim.x + threadIdx.x;
+        size_t stride = blockDim.x * gridDim.x;
+        const float inv_size = 1.0f / static_cast<float>(segment_size);
+
+        for (size_t seg_idx = global_tid; seg_idx < num_segments; seg_idx += stride) {
+            const float* segment_start = input + seg_idx * segment_size;
+            float sum = 0.0f;
+#pragma unroll 8
+            for (size_t i = 0; i < segment_size; ++i) {
+                sum += segment_start[i];
+            }
+            output[seg_idx] = sum * inv_size;
         }
     }
 
@@ -593,6 +814,59 @@ namespace lfs::core::tensor_ops {
             }
 
             output[out_idx] = max_val;
+        }
+    }
+
+    /**
+     * @brief FUSED strided mean reduction - avoids separate division kernel
+     *
+     * OPTIMIZATION: 8× unrolling + fused division (no separate Thrust transform!)
+     */
+    __global__ void warp_strided_reduce_mean_kernel(
+        const float* __restrict__ input,
+        float* __restrict__ output,
+        size_t outer_size,
+        size_t reduce_size,
+        size_t inner_size) {
+        size_t output_elements = outer_size * inner_size;
+        size_t stride = blockDim.x * gridDim.x;
+        const float inv_size = 1.0f / static_cast<float>(reduce_size);
+
+        for (size_t out_idx = blockIdx.x * blockDim.x + threadIdx.x;
+             out_idx < output_elements;
+             out_idx += stride) {
+            size_t outer_idx = out_idx / inner_size;
+            size_t inner_idx = out_idx % inner_size;
+
+            float sum = 0.0f;
+            size_t base_idx = outer_idx * reduce_size * inner_size + inner_idx;
+
+            // OPTIMIZATION: Unroll 8× for better ILP
+            size_t r = 0;
+            if (reduce_size >= 8) {
+#pragma unroll 2
+                for (; r + 7 < reduce_size; r += 8) {
+                    float v0 = input[base_idx + (r + 0) * inner_size];
+                    float v1 = input[base_idx + (r + 1) * inner_size];
+                    float v2 = input[base_idx + (r + 2) * inner_size];
+                    float v3 = input[base_idx + (r + 3) * inner_size];
+                    float v4 = input[base_idx + (r + 4) * inner_size];
+                    float v5 = input[base_idx + (r + 5) * inner_size];
+                    float v6 = input[base_idx + (r + 6) * inner_size];
+                    float v7 = input[base_idx + (r + 7) * inner_size];
+
+                    sum += v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7;
+                }
+            }
+
+// Handle remainder
+#pragma unroll 4
+            for (; r < reduce_size; ++r) {
+                sum += input[base_idx + r * inner_size];
+            }
+
+            // FUSED: Division happens here, no separate kernel!
+            output[out_idx] = sum * inv_size;
         }
     }
 
@@ -824,8 +1098,12 @@ namespace lfs::core::tensor_ops {
 
             switch (op) {
             case ReduceOp::Sum:
-            case ReduceOp::Mean:
                 warp_tiny_segment_reduce_sum_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
+                    input, output, num_segments, segment_size);
+                break;
+            case ReduceOp::Mean:
+                // FUSED: Division happens in kernel, no separate transform needed
+                warp_tiny_segment_reduce_mean_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                     input, output, num_segments, segment_size);
                 break;
             case ReduceOp::Max:
@@ -842,15 +1120,53 @@ namespace lfs::core::tensor_ops {
             return;
         }
 
-        // Standard case: Medium segments (32-500K elements)
-        // Use grid-stride loop: Each block processes multiple segments
+        // MEDIUM segments (32-2048 elements): Use warp-per-segment kernel
+        // Each warp processes one segment using only warp shuffles (NO __syncthreads__!)
+        if (segment_size <= 2048) {
+            constexpr int BLOCK_SIZE = 256; // 8 warps per block
+            constexpr int WARPS_PER_BLOCK = BLOCK_SIZE / 32;
+            // Use optimal grid size for GPU occupancy with grid-stride loop
+            int min_blocks = (num_segments + WARPS_PER_BLOCK - 1) / WARPS_PER_BLOCK;
+            const auto& gpu = GPUConfig::get();
+            int grid_size = std::max(min_blocks, gpu.optimal_grid_size(BLOCK_SIZE));
+            LOG_DEBUG("[REDUCE] Medium kernel: segments={} segment_size={} grid={}", num_segments, segment_size, grid_size);
+
+            switch (op) {
+            case ReduceOp::Sum:
+                warp_medium_segment_reduce_sum_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
+                    input, output, num_segments, segment_size);
+                break;
+            case ReduceOp::Mean:
+                warp_medium_segment_reduce_mean_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
+                    input, output, num_segments, segment_size);
+                break;
+            case ReduceOp::Max:
+                warp_medium_segment_reduce_max_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
+                    input, output, num_segments, segment_size);
+                break;
+            case ReduceOp::Min:
+                warp_medium_segment_reduce_min_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
+                    input, output, num_segments, segment_size);
+                break;
+            default:
+                break;
+            }
+            return;
+        }
+
+        // LARGE segments (> 2048 elements): Use block-level reduction
+        // Each block processes one segment with shared memory reduction
         constexpr int BLOCK_SIZE = 256;
         int grid_size = num_segments; // One block per segment (or less if very many)
 
         switch (op) {
         case ReduceOp::Sum:
-        case ReduceOp::Mean: // Mean handled as sum, then divided by caller
             warp_segmented_reduce_sum_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
+                input, output, num_segments, segment_size);
+            break;
+        case ReduceOp::Mean:
+            // FUSED: Division happens in kernel, no separate transform needed
+            warp_segmented_reduce_mean_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, num_segments, segment_size);
             break;
         case ReduceOp::Max:
@@ -900,8 +1216,12 @@ namespace lfs::core::tensor_ops {
 
         switch (op) {
         case ReduceOp::Sum:
-        case ReduceOp::Mean: // Mean handled as sum, then divided by caller
             warp_strided_reduce_sum_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
+                input, output, outer_size, reduce_size, inner_size);
+            break;
+        case ReduceOp::Mean:
+            // FUSED: Division happens in kernel, no separate transform needed
+            warp_strided_reduce_mean_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, outer_size, reduce_size, inner_size);
             break;
         case ReduceOp::Max:
@@ -1036,6 +1356,132 @@ namespace lfs::core::tensor_ops {
         }
     }
 
+    // Column reduction for 2D matrices [M, N] -> [N]
+    // Uses 2D grid: X for columns, Y for row partitioning with atomic accumulation
+
+    __global__ void column_reduce_sum_kernel(
+        const float* __restrict__ input, float* __restrict__ output,
+        size_t M, size_t N) {
+        const size_t col = blockIdx.x * blockDim.x + threadIdx.x;
+        if (col >= N)
+            return;
+
+        const size_t rows_per_block = (M + gridDim.y - 1) / gridDim.y;
+        const size_t row_start = blockIdx.y * rows_per_block;
+        const size_t row_end = min(row_start + rows_per_block, M);
+
+        float sum = 0.0f;
+        size_t row = row_start;
+        for (; row + 3 < row_end; row += 4) {
+            sum += input[row * N + col] + input[(row + 1) * N + col] +
+                   input[(row + 2) * N + col] + input[(row + 3) * N + col];
+        }
+        for (; row < row_end; row++) {
+            sum += input[row * N + col];
+        }
+
+        if (gridDim.y == 1) {
+            output[col] = sum;
+        } else {
+            atomicAdd(&output[col], sum);
+        }
+    }
+
+    __global__ void column_reduce_max_kernel(
+        const float* __restrict__ input, float* __restrict__ output,
+        size_t M, size_t N) {
+        const size_t col = blockIdx.x * blockDim.x + threadIdx.x;
+        if (col >= N)
+            return;
+
+        const size_t rows_per_block = (M + gridDim.y - 1) / gridDim.y;
+        const size_t row_start = blockIdx.y * rows_per_block;
+        const size_t row_end = min(row_start + rows_per_block, M);
+
+        float val = -FLT_MAX;
+        for (size_t row = row_start; row < row_end; row++) {
+            val = fmaxf(val, input[row * N + col]);
+        }
+
+        if (gridDim.y == 1) {
+            output[col] = val;
+        } else {
+            int* out_int = reinterpret_cast<int*>(output + col);
+            int old = *out_int, assumed;
+            do {
+                assumed = old;
+                old = atomicCAS(out_int, assumed, __float_as_int(fmaxf(__int_as_float(assumed), val)));
+            } while (assumed != old);
+        }
+    }
+
+    __global__ void column_reduce_min_kernel(
+        const float* __restrict__ input, float* __restrict__ output,
+        size_t M, size_t N) {
+        const size_t col = blockIdx.x * blockDim.x + threadIdx.x;
+        if (col >= N)
+            return;
+
+        const size_t rows_per_block = (M + gridDim.y - 1) / gridDim.y;
+        const size_t row_start = blockIdx.y * rows_per_block;
+        const size_t row_end = min(row_start + rows_per_block, M);
+
+        float val = FLT_MAX;
+        for (size_t row = row_start; row < row_end; row++) {
+            val = fminf(val, input[row * N + col]);
+        }
+
+        if (gridDim.y == 1) {
+            output[col] = val;
+        } else {
+            int* out_int = reinterpret_cast<int*>(output + col);
+            int old = *out_int, assumed;
+            do {
+                assumed = old;
+                old = atomicCAS(out_int, assumed, __float_as_int(fminf(__int_as_float(assumed), val)));
+            } while (assumed != old);
+        }
+    }
+
+    void launch_column_reduce(const float* input, float* output,
+                              size_t M, size_t N, ReduceOp op, cudaStream_t stream) {
+        constexpr int BLOCK = 256;
+        int grid_x = (N + BLOCK - 1) / BLOCK;
+        int grid_y = (M > 512) ? min((int)((M + 127) / 128), 8) : 1;
+        dim3 grid(grid_x, grid_y);
+
+        switch (op) {
+        case ReduceOp::Sum:
+        case ReduceOp::Mean:
+            if (grid_y > 1)
+                cudaMemsetAsync(output, 0, N * sizeof(float), stream);
+            column_reduce_sum_kernel<<<grid, BLOCK, 0, stream>>>(input, output, M, N);
+            if (op == ReduceOp::Mean) {
+                float inv_M = 1.0f / static_cast<float>(M);
+                thrust::transform(thrust::cuda::par.on(stream),
+                                  thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N),
+                                  thrust::device_ptr<float>(output), [inv_M] __device__(float x) { return x * inv_M; });
+            }
+            break;
+        case ReduceOp::Max:
+            if (grid_y > 1) {
+                thrust::fill(thrust::cuda::par.on(stream),
+                             thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N), -FLT_MAX);
+            }
+            column_reduce_max_kernel<<<grid, BLOCK, 0, stream>>>(input, output, M, N);
+            break;
+        case ReduceOp::Min:
+            if (grid_y > 1) {
+                thrust::fill(thrust::cuda::par.on(stream),
+                             thrust::device_ptr<float>(output), thrust::device_ptr<float>(output + N), FLT_MAX);
+            }
+            column_reduce_min_kernel<<<grid, BLOCK, 0, stream>>>(input, output, M, N);
+            break;
+        default:
+            break;
+        }
+    }
+
     /**
      * @brief Determine if warp-level reduction should be used
      *
@@ -1047,31 +1493,24 @@ namespace lfs::core::tensor_ops {
      * For strided reductions or very large tensors, CUB is still better.
      */
     bool should_use_warp_reduce(size_t n, size_t num_segments) {
-        // Use warp reduce for full reductions on small-medium tensors
-        if (num_segments == 1 && n < 10000000) {
-            return true;
+        // SCALAR REDUCTIONS: Always use CUB DeviceReduce (much faster!)
+        // Benchmarks show CUB is 3-7x faster than our warp kernels for scalar reductions.
+        if (num_segments == 1) {
+            return false; // Use CUB path in tensor_ops.cu
         }
 
-        // Use warp reduce for segmented reductions with:
-        // - Reasonable segment sizes (< 100K elements)
-        // - Reasonable number of segments (< 1M)
-        // - Total tensor size under 10M elements
+        // SEGMENTED REDUCTIONS: Use warp kernels for small-medium tensors
+        // Our warp kernels are competitive for segmented reductions with good locality.
         size_t segment_size = n / num_segments;
 
-        // TUNED HEURISTIC based on extensive benchmarking:
-        // - Small/medium tensors (< 10M elements): Warp reduce wins (8× unrolling + low overhead)
-        // - Large tensors (>= 10M elements): Fall back to CUB/Thrust
-        //
-        // Key insight: Our 8× unrolled strided kernel is competitive up to ~10M elements.
-        // Even though memory access is strided, the unrolling and low overhead make it
-        // competitive with the Thrust fallback (which has poor performance).
-        //
-        // For [1024, 1024] dim0: n=1M, num_segments=1024, segment_size=1024
-        // - This should use warp strided kernel (much faster than Thrust!)
+        // Use warp reduce when:
+        // - Reasonable segment sizes (< 100K elements per segment)
+        // - Reasonable number of segments (< 1M segments)
+        // - Total tensor size under 10M elements
         bool use_warp = num_segments > 1 &&
-                        num_segments < 1000000 && // < 1M segments
-                        segment_size < 1000000 && // < 1M per segment
-                        n < 10000000;             // < 10M elements total
+                        num_segments < 1000000 &&
+                        segment_size < 100000 &&
+                        n < 10000000;
 
         return use_warp;
     }

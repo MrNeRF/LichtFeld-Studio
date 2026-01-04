@@ -90,6 +90,18 @@ namespace lfs::core::tensor_ops {
 
     bool should_use_warp_reduce(size_t n, size_t num_segments);
 
+    // ============= Column Reduction (dim=0 for 2D matrices) =============
+    // Faster than transpose+contiguous+reduce for column sums
+    void launch_column_reduce(const float* input, float* output,
+                              size_t M, size_t N, ReduceOp op, cudaStream_t stream);
+
+    // ============= Direct Scalar Reductions (Fast Path) =============
+    // These bypass tensor allocation and use cached pinned memory for ~5-10x speedup
+    float direct_sum_scalar(const float* data, size_t n, cudaStream_t stream);
+    float direct_mean_scalar(const float* data, size_t n, cudaStream_t stream);
+    float direct_max_scalar(const float* data, size_t n, cudaStream_t stream);
+    float direct_min_scalar(const float* data, size_t n, cudaStream_t stream);
+
     // ============= Load Operations =============
     void launch_load_op(void* output, const size_t* shape, size_t rank,
                         LoadOp op, const void* args,

@@ -13,18 +13,18 @@ namespace lfs::training {
     // Forward declarations
     struct RenderOutput;
 
-    /// Default densification-based optimization strategy. SplatData owned by Scene.
-    class DefaultStrategy : public IStrategy {
+    /// ADC densification-based optimization strategy. SplatData owned by Scene.
+    class ADC : public IStrategy {
     public:
-        DefaultStrategy() = delete;
+        ADC() = delete;
         /// SplatData must be owned by Scene
-        explicit DefaultStrategy(lfs::core::SplatData& splat_data);
+        explicit ADC(lfs::core::SplatData& splat_data);
 
         // Prevent copy/move
-        DefaultStrategy(const DefaultStrategy&) = delete;
-        DefaultStrategy& operator=(const DefaultStrategy&) = delete;
-        DefaultStrategy(DefaultStrategy&&) = delete;
-        DefaultStrategy& operator=(DefaultStrategy&&) = delete;
+        ADC(const ADC&) = delete;
+        ADC& operator=(const ADC&) = delete;
+        ADC(ADC&&) = delete;
+        ADC& operator=(ADC&&) = delete;
 
         // IStrategy interface implementation
         void initialize(const lfs::core::param::OptimizationParameters& optimParams) override;
@@ -49,7 +49,7 @@ namespace lfs::training {
         // Serialization for checkpoints
         void serialize(std::ostream& os) const override;
         void deserialize(std::istream& is) override;
-        const char* strategy_type() const override { return "default"; }
+        const char* strategy_type() const override { return "adc"; }
 
         // Reserve optimizer capacity for future growth (e.g., after checkpoint load)
         void reserve_optimizer_capacity(size_t capacity) override;

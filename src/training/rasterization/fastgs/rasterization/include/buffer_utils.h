@@ -8,6 +8,7 @@
 #include "rasterization_config.h"
 #include <cstdint>
 #include <cub/cub.cuh>
+#include <cuda_fp16.h>
 
 namespace fast_lfs::rasterization {
 
@@ -138,14 +139,15 @@ namespace fast_lfs::rasterization {
 
     struct PerBucketBuffers {
         uint* tile_index;
-        float4* color_transmittance;
+        ushort4* checkpoint_half; // Half-precision: color.rgb + transmittance as 4× fp16 (8 bytes vs 16 bytes = 50% savings)
 
         static PerBucketBuffers from_blob(char*& blob, int n_buckets) {
             PerBucketBuffers buffers;
             // tile_index: only needs n_buckets elements (one per bucket)
-            // color_transmittance: needs n_buckets * block_size_blend elements (one per thread per bucket)
+            // checkpoint_half: ushort4 stores 4 half values (color.r, color.g, color.b, transmittance)
+            // Memory: 8 bytes/pixel vs 16 bytes/pixel (float4) = 50% savings, no recomputation needed
             obtain(blob, buffers.tile_index, n_buckets, 128);
-            obtain(blob, buffers.color_transmittance, n_buckets * config::block_size_blend, 128);
+            obtain(blob, buffers.checkpoint_half, n_buckets * config::block_size_blend, 128);
             return buffers;
         }
     };

@@ -18,6 +18,7 @@
 #include "windows/exit_confirmation_popup.hpp"
 #include "windows/export_dialog.hpp"
 #include "windows/notification_popup.hpp"
+#include "windows/resume_checkpoint_popup.hpp"
 #include "windows/save_directory_popup.hpp"
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
@@ -116,6 +117,7 @@ namespace lfs::vis {
             std::unique_ptr<ExportDialog> export_dialog_;
             std::unique_ptr<NotificationPopup> notification_popup_;
             std::unique_ptr<SaveDirectoryPopup> save_directory_popup_;
+            std::unique_ptr<ResumeCheckpointPopup> resume_checkpoint_popup_;
             std::unique_ptr<ExitConfirmationPopup> exit_confirmation_popup_;
 
             // UI state only

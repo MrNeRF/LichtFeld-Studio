@@ -369,7 +369,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         uint* tile_max_n_contributions,
         uint* tile_n_contributions,
         uint* bucket_tile_index,
-        float4* bucket_color_transmittance,
+        ushort4* bucket_checkpoint_half, // Half-precision: color.rgb + transmittance as 4× fp16 (50% memory reduction)
         const uint width,
         const uint height,
         const uint grid_width) {
@@ -417,8 +417,13 @@ namespace fast_lfs::rasterization::kernels::forward {
             const int current_batch_size = min(config::block_size_blend, n_points_remaining);
             for (int j = 0; !done && j < current_batch_size; ++j) {
                 if (j % 32 == 0) {
-                    const float4 current_color_transmittance = make_float4(color_pixel, transmittance);
-                    bucket_color_transmittance[bucket_offset * config::block_size_blend + thread_rank] = current_color_transmittance;
+                    // Store color + transmittance as half-precision (50% memory reduction, no recomputation)
+                    // Use __half_as_ushort to properly preserve the bit pattern
+                    bucket_checkpoint_half[bucket_offset * config::block_size_blend + thread_rank] = make_ushort4(
+                        __half_as_ushort(__float2half_rn(color_pixel.x)),
+                        __half_as_ushort(__float2half_rn(color_pixel.y)),
+                        __half_as_ushort(__float2half_rn(color_pixel.z)),
+                        __half_as_ushort(__float2half_rn(transmittance)));
                     bucket_offset++;
                 }
                 n_possible_contributions++;

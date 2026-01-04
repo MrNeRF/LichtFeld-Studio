@@ -148,7 +148,7 @@ namespace lfs::core {
                 } else if (device_ == Device::CUDA && other.device_ == Device::CPU) {
                     CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyHostToDevice, stream_));
                 } else if (device_ == Device::CPU && other.device_ == Device::CUDA) {
-                    // GPU→CPU requires sync before copy
+                    // GPU→CPU requires sync before copy to ensure data is ready
                     if (other.stream_) {
                         cudaStreamSynchronize(other.stream_);
                     } else {
@@ -158,18 +158,8 @@ namespace lfs::core {
                 } else {
                     std::memcpy(dst_ptr, src_ptr, bytes());
                 }
-
-                // Synchronize to ensure copy completes before we return
-                // (maintains blocking semantics for safety)
-                if (device_ == Device::CUDA || other.device_ == Device::CUDA) {
-                    if (stream_) {
-                        cudaStreamSynchronize(stream_);
-                    } else if (other.stream_) {
-                        cudaStreamSynchronize(other.stream_);
-                    } else {
-                        cudaDeviceSynchronize();
-                    }
-                }
+                // No sync after copy - operations are async like LibTorch
+                // User can sync explicitly if needed via cudaDeviceSynchronize()
             }
 
             if (profiling_enabled_) {
@@ -257,7 +247,7 @@ namespace lfs::core {
                     } else if (device_ == Device::CUDA && other.device_ == Device::CPU) {
                         CHECK_CUDA(cudaMemcpyAsync(dst_ptr, src_ptr, bytes(), cudaMemcpyHostToDevice, stream_));
                     } else if (device_ == Device::CPU && other.device_ == Device::CUDA) {
-                        // GPU→CPU requires sync before copy
+                        // GPU→CPU requires sync before copy to ensure data is ready
                         if (other.stream_) {
                             cudaStreamSynchronize(other.stream_);
                         } else {
@@ -267,18 +257,7 @@ namespace lfs::core {
                     } else {
                         std::memcpy(dst_ptr, src_ptr, bytes());
                     }
-
-                    // Synchronize to ensure copy completes before we return
-                    // (maintains blocking semantics for safety)
-                    if (device_ == Device::CUDA || other.device_ == Device::CUDA) {
-                        if (stream_) {
-                            cudaStreamSynchronize(stream_);
-                        } else if (other.stream_) {
-                            cudaStreamSynchronize(other.stream_);
-                        } else {
-                            cudaDeviceSynchronize();
-                        }
-                    }
+                    // No sync after copy - operations are async like LibTorch
                 }
 
                 if (profiling_enabled_) {

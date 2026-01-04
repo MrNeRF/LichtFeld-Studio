@@ -456,12 +456,23 @@
     "exit": "Zakończ"
   },
 
-  "save_dir_popup": {
-    "title": "Wybierz Katalog Wyjściowy",
-    "configure_output": "Skonfiguruj lokalizację wyjściową",
-    "dataset_label": "Zbiór Danych:",
-    "output_dir": "Katalog Wyjściowy:",
-    "help_text": "Punkty kontrolne treningu, logi i wyeksportowane modele zostaną zapisane w tym katalogu."
+  "load_dataset_popup": {
+    "title": "Wczytaj Zbiór Danych",
+    "configure_paths": "Skonfiguruj ścieżki zbioru danych",
+    "images_dir": "Obrazy:  ",
+    "sparse_dir": "Sparse:  ",
+    "masks_dir": "Maski:   ",
+    "output_dir": "Wyjście: ",
+    "help_text": "Punkty kontrolne, logi i wyeksportowane modele zostaną zapisane w katalogu wyjściowym."
+  },
+
+  "notification": {
+    "cannot_open": "Nie można otworzyć",
+    "dropped_not_recognized": "Upuszczony",
+    "directory": "katalog",
+    "file": "plik",
+    "items": "elementy",
+    "and_more": "... i"
   },
 
   "export_dialog": {
@@ -630,5 +641,18 @@
     "y": "Y:",
     "z": "Z:",
     "u": "U:"
+  },
+
+  "resume_checkpoint_popup": {
+    "title": "Wznów Checkpoint",
+    "checkpoint": "CHECKPOINT",
+    "configure_paths": "Skonfiguruj ścieżki przed wczytaniem",
+    "file": "Plik:",
+    "stored_path": "Zapisana Ścieżka:",
+    "not_found": "(nie znaleziono)",
+    "dataset_path": "Ścieżka Zbioru Danych:",
+    "invalid": "(nieprawidłowa)",
+    "output_path": "Ścieżka Wyjściowa:",
+    "help_text": "Ścieżka zbioru danych zapisana w checkpoint mogła się zmienić. Zaktualizuj ją w razie potrzeby."
   }
 }

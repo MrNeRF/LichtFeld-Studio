@@ -1365,19 +1365,38 @@ namespace lfs::core {
 
         Tensor cumsum(int dim = 0) const;
 
-        // Scalar reduce operations
+        // Scalar reduce operations - use direct CUB path for CUDA Float32 contiguous tensors
         float sum_scalar() const {
-            // Bool reduction is now properly handled by launch_reduce_op_bool()
-            // It returns Int64 for Bool dtype (PyTorch behavior)
+            if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
+                return tensor_ops::direct_sum_scalar(ptr<float>(), numel(), nullptr);
+            }
             auto result = sum();
             if (dtype_ == DataType::Bool) {
                 return static_cast<float>(result.item<int64_t>());
             }
             return result.item<float>();
         }
-        float mean_scalar() const { return mean().item(); }
-        float min_scalar() const { return min().item(); }
-        float max_scalar() const { return max().item(); }
+
+        float mean_scalar() const {
+            if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
+                return tensor_ops::direct_mean_scalar(ptr<float>(), numel(), nullptr);
+            }
+            return mean().item();
+        }
+
+        float min_scalar() const {
+            if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
+                return tensor_ops::direct_min_scalar(ptr<float>(), numel(), nullptr);
+            }
+            return min().item();
+        }
+
+        float max_scalar() const {
+            if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
+                return tensor_ops::direct_max_scalar(ptr<float>(), numel(), nullptr);
+            }
+            return max().item();
+        }
         float std_scalar(bool unbiased = true) const { return std({}, false, unbiased).item(); }
         float var_scalar(bool unbiased = true) const { return var({}, false, unbiased).item(); }
         std::pair<float, float> minmax() const { return {min_scalar(), max_scalar()}; }

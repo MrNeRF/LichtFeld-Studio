@@ -1008,8 +1008,7 @@ namespace lfs::vis {
             std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
             if (ext == ".resume") {
-                cmd::LoadCheckpointForTraining{.path = filepath}.emit();
-                LOG_INFO("Loading checkpoint via drag-and-drop: {}", lfs::core::path_to_utf8(filepath.filename()));
+                cmd::ShowResumeCheckpointPopup{.checkpoint_path = filepath}.emit();
                 return;
             } else if (ext == ".json") {
                 if (lfs::io::Loader::isDatasetPath(filepath)) {
@@ -1055,13 +1054,10 @@ namespace lfs::vis {
             cmd::ShowDatasetLoadPopup{.dataset_path = *dataset_path}.emit();
         }
 
-        // Warn about unrecognized files
         if (!unrecognized_files.empty() && splat_files.empty() && !dataset_path) {
-            LOG_WARN("Dropped {} file(s) with unrecognized format:", unrecognized_files.size());
-            for (const auto& f : unrecognized_files) {
-                LOG_WARN("  - {}", f);
-            }
-            LOG_WARN("Supported formats: .ply, .sog, .spz, .json, .resume, or dataset directories");
+            static constexpr auto SUPPORTED_FORMATS = "Supported formats: .ply, .sog, .spz, .json, .resume, or dataset directories";
+            LOG_DEBUG("Dropped {} unrecognized file(s)", unrecognized_files.size());
+            state::FileDropFailed{.files = unrecognized_files, .error = SUPPORTED_FORMATS}.emit();
         }
     }
 

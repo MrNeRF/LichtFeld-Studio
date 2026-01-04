@@ -456,12 +456,23 @@
     "exit": "Esci"
   },
 
-  "save_dir_popup": {
-    "title": "Seleziona Cartella di Output",
-    "configure_output": "Configura posizione di output",
-    "dataset_label": "Dataset:",
-    "output_dir": "Cartella di Output:",
-    "help_text": "I checkpoint di addestramento, i log e i modelli esportati saranno salvati in questa cartella."
+  "load_dataset_popup": {
+    "title": "Carica Dataset",
+    "configure_paths": "Configura percorsi dataset",
+    "images_dir": "Immagini:",
+    "sparse_dir": "Sparse:  ",
+    "masks_dir": "Maschere:",
+    "output_dir": "Output:  ",
+    "help_text": "I checkpoint, i log e i modelli esportati saranno salvati nella cartella di output."
+  },
+
+  "notification": {
+    "cannot_open": "Impossibile aprire",
+    "dropped_not_recognized": "L'elemento trascinato",
+    "directory": "cartella",
+    "file": "file",
+    "items": "elementi",
+    "and_more": "... e"
   },
 
   "export_dialog": {
@@ -630,5 +641,18 @@
     "y": "Y:",
     "z": "Z:",
     "u": "U:"
+  },
+
+  "resume_checkpoint_popup": {
+    "title": "Riprendi Checkpoint",
+    "checkpoint": "CHECKPOINT",
+    "configure_paths": "Configura i percorsi prima del caricamento",
+    "file": "File:",
+    "stored_path": "Percorso Salvato:",
+    "not_found": "(non trovato)",
+    "dataset_path": "Percorso Dataset:",
+    "invalid": "(non valido)",
+    "output_path": "Percorso Output:",
+    "help_text": "Il percorso del dataset salvato nel checkpoint potrebbe essere cambiato. Aggiornalo se necessario."
   }
 }

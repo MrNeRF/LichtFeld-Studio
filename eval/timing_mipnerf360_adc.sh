@@ -33,7 +33,7 @@ do
         --images images_${DATA_FACTOR} \
         --iter 30000 \
         --headless \
-		--config eval/default_optimization_params.json
+		--config eval/adc_optimization_params.json
 
     # End timer for this scene
     scene_end=$(date +%s)

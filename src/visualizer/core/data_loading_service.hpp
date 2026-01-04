@@ -30,14 +30,20 @@ namespace lfs::vis {
         std::expected<void, std::string> loadSOG(const std::filesystem::path& path);
         std::expected<void, std::string> loadSplatFile(const std::filesystem::path& path);
         std::expected<void, std::string> loadDataset(const std::filesystem::path& path);
-        std::expected<void, std::string> loadCheckpointForTraining(const std::filesystem::path& path);
+        std::expected<void, std::string> loadCheckpointForTraining(
+            const std::filesystem::path& checkpoint_path,
+            const std::filesystem::path& dataset_path = {},
+            const std::filesystem::path& output_path = {});
         void addSplatFileToScene(const std::filesystem::path& path);
         void clearScene();
 
     private:
         void setupEventHandlers();
         void handleLoadFileCommand(bool is_dataset, const std::filesystem::path& path);
-        void handleLoadCheckpointForTrainingCommand(const std::filesystem::path& path);
+        void handleLoadCheckpointForTrainingCommand(
+            const std::filesystem::path& checkpoint_path,
+            const std::filesystem::path& dataset_path,
+            const std::filesystem::path& output_path);
         void addPLYToScene(const std::filesystem::path& path);
         void addSOGToScene(const std::filesystem::path& path);
 

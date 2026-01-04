@@ -4,6 +4,7 @@
 #include "core/logger.hpp"
 #include "core/tensor_trace.hpp"
 #include "internal/tensor_impl.hpp"
+#include "internal/tensor_ops.hpp"
 
 namespace lfs::core {
 
@@ -233,15 +234,24 @@ namespace lfs::core {
             return Tensor();
         }
 
-        // GPU: transfer to CPU, compute, transfer back
-        if (device_ == Device::CUDA) {
-            return cpu().contiguous().dot(other.cpu().contiguous()).cuda();
-        }
-
         const Tensor& a = is_contiguous() ? *this : contiguous();
         const Tensor& b = other.is_contiguous() ? other : other.contiguous();
         const size_t n = a.shape_[0];
 
+        // GPU: Use optimized CUDA kernel
+        if (device_ == Device::CUDA) {
+            auto result = empty({}, Device::CUDA, dtype_); // Scalar on GPU
+            tensor_ops::launch_dot_product(
+                a.ptr<float>(),
+                b.ptr<float>(),
+                result.ptr<float>(),
+                n,
+                nullptr // default stream
+            );
+            return result;
+        }
+
+        // CPU: Simple loop
         float sum = 0.0f;
         for (size_t i = 0; i < n; ++i) {
             sum += a.ptr<float>()[i] * b.ptr<float>()[i];

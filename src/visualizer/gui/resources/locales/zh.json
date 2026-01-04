@@ -203,7 +203,7 @@
     "move_to_root": "根目录",
     "images": "图像 ({})：",
     "no_images": "未加载图像。",
-    "use_file_browser": "使用"打开文件浏览器"加载数据集。",
+    "use_file_browser": "使用'打开文件浏览器'加载数据集。",
     "move_node": "移动：%s",
     "models": "模型 ({})",
     "filter": "过滤器...",
@@ -456,12 +456,23 @@
     "exit": "退出"
   },
 
-  "save_dir_popup": {
-    "title": "选择输出目录",
-    "configure_output": "配置输出位置",
-    "dataset_label": "数据集：",
-    "output_dir": "输出目录：",
-    "help_text": "训练检查点、日志和导出的模型将保存到此目录。"
+  "load_dataset_popup": {
+    "title": "加载数据集",
+    "configure_paths": "配置数据集路径",
+    "images_dir": "图像：  ",
+    "sparse_dir": "Sparse：",
+    "masks_dir": "掩码：  ",
+    "output_dir": "输出：  ",
+    "help_text": "检查点、日志和导出的模型将保存到输出目录。"
+  },
+
+  "notification": {
+    "cannot_open": "无法打开",
+    "dropped_not_recognized": "拖放的",
+    "directory": "文件夹",
+    "file": "文件",
+    "items": "项目",
+    "and_more": "... 和"
   },
 
   "export_dialog": {
@@ -630,5 +641,18 @@
     "y": "Y：",
     "z": "Z：",
     "u": "U："
+  },
+
+  "resume_checkpoint_popup": {
+    "title": "恢复检查点",
+    "checkpoint": "检查点",
+    "configure_paths": "加载前配置路径",
+    "file": "文件：",
+    "stored_path": "存储路径：",
+    "not_found": "（未找到）",
+    "dataset_path": "数据集路径：",
+    "invalid": "（无效）",
+    "output_path": "输出路径：",
+    "help_text": "检查点中存储的数据集路径可能已更改。如需要请更新。"
   }
 }

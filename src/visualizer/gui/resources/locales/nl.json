@@ -456,12 +456,23 @@
     "exit": "Afsluiten"
   },
 
-  "save_dir_popup": {
-    "title": "Selecteer Output Map",
-    "configure_output": "Configureer output locatie",
-    "dataset_label": "Dataset:",
-    "output_dir": "Output Map:",
-    "help_text": "Training controlepunten, logs en geëxporteerde modellen worden opgeslagen in deze map."
+  "load_dataset_popup": {
+    "title": "Dataset Laden",
+    "configure_paths": "Dataset paden configureren",
+    "images_dir": "Afbeeldingen:",
+    "sparse_dir": "Sparse:      ",
+    "masks_dir": "Maskers:     ",
+    "output_dir": "Output:      ",
+    "help_text": "Checkpoints, logs en geëxporteerde modellen worden opgeslagen in de output map."
+  },
+
+  "notification": {
+    "cannot_open": "Kan niet openen",
+    "dropped_not_recognized": "Het gesleepte",
+    "directory": "map",
+    "file": "bestand",
+    "items": "items",
+    "and_more": "... en"
   },
 
   "export_dialog": {
@@ -630,5 +641,18 @@
     "y": "Y:",
     "z": "Z:",
     "u": "U:"
+  },
+
+  "resume_checkpoint_popup": {
+    "title": "Checkpoint Hervatten",
+    "checkpoint": "CHECKPOINT",
+    "configure_paths": "Paden configureren voor het laden",
+    "file": "Bestand:",
+    "stored_path": "Opgeslagen Pad:",
+    "not_found": "(niet gevonden)",
+    "dataset_path": "Dataset Pad:",
+    "invalid": "(ongeldig)",
+    "output_path": "Uitvoer Pad:",
+    "help_text": "Het dataset pad opgeslagen in de checkpoint is mogelijk gewijzigd. Werk het bij indien nodig."
   }
 }
