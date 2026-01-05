@@ -977,11 +977,6 @@ namespace lfs::vis::gui::panels {
                     if (ImGui::InputInt("##sparsify_steps", &opt_params.sparsify_steps, 1000, 5000)) {
                         opt_params.sparsify_steps = std::max(1, opt_params.sparsify_steps);
                         const int delta = opt_params.sparsify_steps - prev;
-                        if (delta > 0) {
-                            opt_params.iterations += static_cast<size_t>(delta);
-                        } else if (opt_params.iterations > static_cast<size_t>(-delta)) {
-                            opt_params.iterations -= static_cast<size_t>(-delta);
-                        }
                     }
                     ImGui::PopItemWidth();
                 } else {
@@ -1281,12 +1276,6 @@ namespace lfs::vis::gui::panels {
             ImGui::TableNextColumn();
             if (can_edit) {
                 if (ImGui::Checkbox("##enable_sparsity", &opt_params.enable_sparsity)) {
-                    const auto steps = static_cast<size_t>(opt_params.sparsify_steps);
-                    if (opt_params.enable_sparsity) {
-                        opt_params.iterations += steps;
-                    } else if (opt_params.iterations > steps) {
-                        opt_params.iterations -= steps;
-                    }
                 }
             } else {
                 ImGui::Text("%s", opt_params.enable_sparsity ? "Enabled" : "Disabled");
