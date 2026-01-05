@@ -5,7 +5,7 @@
     "file": "Archivo",
     "file.new_project": "Nuevo Proyecto",
     "file.import_dataset": "Importar Dataset",
-    "file.import_ply": "Importar PLY",
+    "file.import_ply": "Importar PLY, SOG, SPZ",
     "file.import_checkpoint": "Importar Punto de Control",
     "file.import_config": "Importar Configuración",
     "file.export": "Exportar...",

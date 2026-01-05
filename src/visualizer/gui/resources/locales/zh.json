@@ -5,7 +5,7 @@
     "file": "文件",
     "file.new_project": "新建项目",
     "file.import_dataset": "导入数据集",
-    "file.import_ply": "导入PLY",
+    "file.import_ply": "导入PLY, SOG, SPZ",
     "file.import_checkpoint": "导入检查点",
     "file.import_config": "导入配置",
     "file.export": "导出...",
