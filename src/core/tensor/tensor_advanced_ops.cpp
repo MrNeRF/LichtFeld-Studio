@@ -44,10 +44,11 @@ namespace lfs::core {
 
         auto other_same_device = (other.device() == device_) ? other.clone() : other.to(device_);
         auto result = empty({N, M}, device_, dtype_);
+        result.set_stream(stream_); // Propagate stream
 
         if (device_ == Device::CUDA) {
             tensor_ops::launch_cdist(ptr<float>(), other_same_device.ptr<float>(),
-                                     result.ptr<float>(), N, M, D, p, 0);
+                                     result.ptr<float>(), N, M, D, p, stream_);
             // No sync - returns tensor
         } else {
             const float* a_data = ptr<float>();
@@ -509,13 +510,15 @@ namespace lfs::core {
         // Create output tensors on same device
         auto sorted = clone();
         auto indices = Tensor::empty(shape_, device_, DataType::Int64);
+        sorted.set_stream(stream_);  // Propagate stream
+        indices.set_stream(stream_); // Propagate stream
 
         // 1D case - optimized path
         if (ndim() == 1 && dim == 0) {
             if (device_ == Device::CUDA) {
                 tensor_ops::launch_sort_1d(sorted.ptr<float>(),
                                            reinterpret_cast<int64_t*>(indices.data_ptr()),
-                                           numel(), descending, 0);
+                                           numel(), descending, stream_);
                 // No sync - returns tensors
             } else {
                 // CPU fallback
@@ -559,7 +562,7 @@ namespace lfs::core {
             tensor_ops::launch_sort_2d(sorted.ptr<float>(),
                                        reinterpret_cast<int64_t*>(indices.data_ptr()),
                                        outer_size, dim_size, inner_size,
-                                       dim, descending, 0);
+                                       dim, descending, stream_);
             // No sync - returns tensors
         } else {
             // CPU implementation

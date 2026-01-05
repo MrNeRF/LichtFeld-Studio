@@ -56,11 +56,12 @@ namespace lfs::core {
         }
 
         auto result = empty({output_size}, device_, dtype_);
+        result.set_stream(stream_); // Propagate stream
 
         if (device_ == Device::CUDA) {
             // Use CUDA kernel
             tensor_ops::launch_masked_select(ptr<float>(), mask.ptr<unsigned char>(),
-                                             result.ptr<float>(), numel(), output_size, 0);
+                                             result.ptr<float>(), numel(), output_size, stream_);
             // No sync - tensor operation
         } else {
             // CPU implementation - FIXED to respect mask
@@ -107,7 +108,7 @@ namespace lfs::core {
 
         if (device_ == Device::CUDA) {
             tensor_ops::launch_masked_fill(ptr<float>(), mask.ptr<unsigned char>(),
-                                           value, numel(), 0);
+                                           value, numel(), stream_);
             // No sync - tensor operation
         } else {
             float* data = ptr<float>();
@@ -160,6 +161,7 @@ namespace lfs::core {
         auto dims = shape_.dims();
         dims[dim] = indices.numel();
         auto result = zeros(TensorShape(dims), device_, dtype_);
+        result.set_stream(stream_); // Propagate stream
 
         auto indices_same_device = ensure_same_device(indices);
 
@@ -272,6 +274,7 @@ namespace lfs::core {
             std::vector<size_t> out_dims = shape_.dims();
             out_dims[dim] = indices.numel();
             auto result = zeros(TensorShape(out_dims), device_, dtype_);
+            result.set_stream(stream_); // Propagate stream
 
             auto indices_same_device = ensure_same_device(indices);
 
@@ -358,13 +361,14 @@ namespace lfs::core {
         }
 
         auto result = zeros(indices.shape(), device_, dtype_);
+        result.set_stream(stream_); // Propagate stream
         auto indices_same_device = ensure_same_device(indices);
 
         if (device_ == Device::CUDA) {
             tensor_ops::launch_gather(ptr<float>(), indices_same_device.ptr<int>(),
                                       result.ptr<float>(), shape_.dims().data(),
                                       indices.shape().dims().data(), shape_.rank(), dim,
-                                      result.numel(), static_cast<int>(mode), 0);
+                                      result.numel(), static_cast<int>(mode), stream_);
             // No sync - tensor operation
         } else {
             const float* src = ptr<float>();
@@ -418,11 +422,12 @@ namespace lfs::core {
         auto indices_same_device = ensure_same_device(indices);
         auto flat = flatten();
         auto result = empty(indices_same_device.shape(), device_, dtype_);
+        result.set_stream(stream_); // Propagate stream
 
         // DEBUG: Log device and CUDA state
         if (device_ == Device::CUDA) {
             tensor_ops::launch_take(flat.ptr<float>(), indices_same_device.ptr<int>(),
-                                    result.ptr<float>(), flat.numel(), indices_same_device.numel(), 0);
+                                    result.ptr<float>(), flat.numel(), indices_same_device.numel(), stream_);
             // No sync - tensor operation
         } else {
             const float* src = flat.ptr<float>();
@@ -479,7 +484,7 @@ namespace lfs::core {
                 tensor_ops::launch_scatter(dst, indices, src_data,
                                            shape_.dims().data(), src.shape().dims().data(),
                                            shape_.rank(), dim, src.numel(),
-                                           static_cast<int>(mode), 0);
+                                           static_cast<int>(mode), stream_);
                 // No sync - tensor operation
             } else {
                 for (size_t i = 0; i < idx.numel(); ++i) {
@@ -530,7 +535,7 @@ namespace lfs::core {
                                        src_same_device.ptr<float>(), shape_.dims().data(),
                                        src.shape().dims().data(),
                                        shape_.rank(), dim, src.numel(),
-                                       static_cast<int>(mode), 0);
+                                       static_cast<int>(mode), stream_);
             // No sync - tensor operation
         } else {
             size_t outer = 1;
@@ -631,7 +636,7 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {
             tensor_ops::launch_index_copy(ptr<float>(), idx_same_device.ptr<int>(),
                                           src_same_device.ptr<float>(), shape_.dims().data(),
-                                          shape_.rank(), dim, idx.numel(), 0);
+                                          shape_.rank(), dim, idx.numel(), stream_);
             // No sync - tensor operation
         } else {
             size_t outer = 1, inner = 1;
@@ -700,11 +705,11 @@ namespace lfs::core {
                 if (dtype_ == DataType::Float32) {
                     tensor_ops::launch_index_add<float>(ptr<float>(), idx_int32.ptr<int>(),
                                                         src_same_device.ptr<float>(), shape_.dims().data(),
-                                                        shape_.rank(), dim, idx.numel(), 0);
+                                                        shape_.rank(), dim, idx.numel(), stream_);
                 } else if (dtype_ == DataType::Int32) {
                     tensor_ops::launch_index_add<int>(ptr<int>(), idx_int32.ptr<int>(),
                                                       src_same_device.ptr<int>(), shape_.dims().data(),
-                                                      shape_.rank(), dim, idx.numel(), 0);
+                                                      shape_.rank(), dim, idx.numel(), stream_);
                 } else {
                     LOG_ERROR("index_add_ only supports Float32 and Int32 types, got {}", static_cast<int>(dtype_));
                     return *this;
@@ -794,11 +799,11 @@ namespace lfs::core {
             if (dtype_ == DataType::Float32) {
                 tensor_ops::launch_index_add<float>(ptr<float>(), idx_int32.ptr<int>(),
                                                     src_same_device.ptr<float>(), shape_.dims().data(),
-                                                    shape_.rank(), dim, idx.numel(), 0);
+                                                    shape_.rank(), dim, idx.numel(), stream_);
             } else if (dtype_ == DataType::Int32) {
                 tensor_ops::launch_index_add<int>(ptr<int>(), idx_int32.ptr<int>(),
                                                   src_same_device.ptr<int>(), shape_.dims().data(),
-                                                  shape_.rank(), dim, idx.numel(), 0);
+                                                  shape_.rank(), dim, idx.numel(), stream_);
             } else {
                 LOG_ERROR("index_add_ only supports Float32 and Int32 types, got {}", static_cast<int>(dtype_));
                 return *this;
@@ -1632,7 +1637,7 @@ namespace lfs::core {
         if (tensor_->device() == Device::CUDA) {
             tensor_ops::launch_masked_scatter(const_cast<Tensor*>(tensor_)->ptr<float>(),
                                               mask_.ptr<unsigned char>(), other.ptr<float>(),
-                                              tensor_->numel(), other.numel(), 0);
+                                              tensor_->numel(), other.numel(), tensor_->stream());
             // No sync - tensor operation
         } else {
             float* data = const_cast<Tensor*>(tensor_)->ptr<float>();

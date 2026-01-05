@@ -31,12 +31,8 @@ namespace lfs::core {
             std::lock_guard<std::mutex> lock(mutex_);
             auto it = thread_streams_.find(tid);
             if (it != thread_streams_.end()) {
-                printf("[getCurrentStream] Thread %p returning stream %p\n",
-                       static_cast<void*>(&tid), static_cast<void*>(it->second));
                 return it->second;
             }
-            printf("[getCurrentStream] Thread %p returning nullptr (default stream)\n",
-                   static_cast<void*>(&tid));
             return nullptr; // Default stream
         }
 

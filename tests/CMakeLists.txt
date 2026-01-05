@@ -134,6 +134,7 @@ set(TEST_FILES
     test_kmeans.cpp
     test_critical_fixes.cpp
     test_cuda_device_state.cpp
+    test_cuda_streams.cpp
     test_tensor_ops_comparison.cpp
     test_sort_minimal.cpp
     test_tensor_debug.cpp
@@ -198,6 +199,7 @@ set(TEST_FILES
     test_cpu_large_tensor_bugs.cpp
     test_curand_buffer_overflow.cpp
     test_adc_comparison.cpp
+    # test_export_comparison.cpp  # Standalone tool with its own main()
     test_gradient_accumulation.cpp
     test_image_resize_parallel.cpp
     test_tensor_cat_bug.cpp
