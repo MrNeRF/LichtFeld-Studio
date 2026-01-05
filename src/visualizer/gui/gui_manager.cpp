@@ -957,7 +957,7 @@ namespace lfs::vis::gui {
             const auto& t = theme();
             const float r = t.viewport.corner_radius;
             if (r > 0.0f) {
-                auto* const dl = ImGui::GetForegroundDrawList();
+                auto* const dl = ImGui::GetBackgroundDrawList();
                 const ImU32 bg = toU32(t.palette.background);
                 const float x1 = viewport_pos_.x, y1 = viewport_pos_.y;
                 const float x2 = x1 + viewport_size_.x, y2 = y1 + viewport_size_.y;

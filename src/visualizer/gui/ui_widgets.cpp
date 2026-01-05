@@ -237,7 +237,7 @@ namespace lfs::vis::gui::widgets {
         constexpr float EDGE_SCALE = 0.5f;
         constexpr ImU32 CLEAR_COLOR = IM_COL32(0, 0, 0, 0);
 
-        auto* const draw_list = ImGui::GetForegroundDrawList();
+        auto* const draw_list = ImGui::GetBackgroundDrawList();
         const float edge_mult = (1.0f - t.vignette.radius) * EDGE_SCALE * (1.0f + t.vignette.softness);
         const float edge_w = size.x * edge_mult;
         const float edge_h = size.y * edge_mult;
