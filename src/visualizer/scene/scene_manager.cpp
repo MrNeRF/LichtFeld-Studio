@@ -1301,6 +1301,9 @@ namespace lfs::vis {
                 dataset_path_ = checkpoint_params.dataset.data_path;
             }
 
+            // when loading checkpoint with sparsity enabled, adjust total iterations
+            checkpoint_params.optimization.iterations = checkpoint_params.optimization.enable_sparsity ? checkpoint_params.optimization.iterations - checkpoint_params.optimization.sparsify_steps : checkpoint_params.optimization.iterations;
+
             // Update current params from checkpoint (session params remain unchanged)
             if (auto* param_mgr = services().paramsOrNull()) {
                 param_mgr->setCurrentParams(checkpoint_params.optimization);
