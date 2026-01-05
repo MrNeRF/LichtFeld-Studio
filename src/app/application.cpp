@@ -4,6 +4,7 @@
 
 #include "app/application.hpp"
 #include "app/splash_screen.hpp"
+#include "core/cuda_version.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
@@ -24,12 +25,15 @@ namespace lfs::app {
 
     namespace {
 
+        bool checkCudaDriverVersion();
+
         int runHeadless(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
             if (params->dataset.data_path.empty()) {
                 LOG_ERROR("Headless mode requires --data-path");
                 return 1;
             }
 
+            checkCudaDriverVersion();
             LOG_INFO("Starting headless training...");
 
             vis::Scene scene;
@@ -61,7 +65,24 @@ namespace lfs::app {
             return 0;
         }
 
+        bool checkCudaDriverVersion() {
+            const auto info = lfs::core::check_cuda_version();
+            if (info.query_failed) {
+                LOG_WARN("Failed to query CUDA driver version");
+                return true;
+            }
+
+            LOG_INFO("CUDA driver version: {}.{}", info.major, info.minor);
+            if (!info.supported) {
+                LOG_WARN("CUDA {}.{} unsupported. Requires 12.8+ (driver 570+)", info.major, info.minor);
+                return false;
+            }
+            return true;
+        }
+
         void warmupCuda() {
+            checkCudaDriverVersion();
+
             cudaDeviceProp prop;
             if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess) {
                 LOG_INFO("GPU: {} (SM {}.{}, {} MB)", prop.name, prop.major, prop.minor,

@@ -18,6 +18,7 @@ set(CORE_SOURCES
         argument_parser.cpp
         camera.cpp
         converter.cpp
+        cuda_version.cpp
         image_io.cpp
         logger.cpp
         parameters.cpp

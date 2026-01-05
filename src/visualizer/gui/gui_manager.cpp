@@ -9,6 +9,7 @@
 
 #include "gui/gui_manager.hpp"
 #include "command/command_history.hpp"
+#include "core/cuda_version.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -127,6 +128,22 @@ namespace lfs::vis::gui {
         viewport_has_focus_ = false;
 
         setupEventHandlers();
+        checkCudaVersionAndNotify();
+    }
+
+    void GuiManager::checkCudaVersionAndNotify() {
+        using namespace lfs::core;
+        const auto info = check_cuda_version();
+        if (!info.query_failed && !info.supported) {
+            constexpr int MIN_MAJOR = MIN_CUDA_VERSION / 1000;
+            constexpr int MIN_MINOR = (MIN_CUDA_VERSION % 1000) / 10;
+            events::state::CudaVersionUnsupported{
+                .major = info.major,
+                .minor = info.minor,
+                .min_major = MIN_MAJOR,
+                .min_minor = MIN_MINOR}
+                .emit();
+        }
     }
 
     GuiManager::~GuiManager() {

@@ -163,6 +163,9 @@ namespace lfs::core {
                   size_t ram_total;
                   float ram_percent;);
             EVENT(FrameRendered, float render_ms; float fps; int num_gaussians;);
+
+            // CUDA version check
+            EVENT(CudaVersionUnsupported, int major; int minor; int min_major; int min_minor;);
         } // namespace state
 
         // ============================================================================
@@ -213,7 +216,7 @@ namespace lfs::core {
             EVENT(TrainingReadyToStart, );
             EVENT(WindowFocusLost, );
         } // namespace internal
-    } // namespace events
+    }     // namespace events
 
     // ============================================================================
     // Convenience functions

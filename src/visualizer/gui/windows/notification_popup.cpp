@@ -60,6 +60,15 @@ namespace lfs::vis::gui {
             }
         });
 
+        state::CudaVersionUnsupported::when([this](const auto& e) {
+            show(Type::WARNING, "Unsupported CUDA Driver",
+                 std::format("Your CUDA driver version ({}.{}) is not supported.\n\n"
+                             "LichtFeld Studio requires CUDA {}.{} or later\n"
+                             "(NVIDIA driver 570+).\n\n"
+                             "Please update your NVIDIA driver for full functionality.",
+                             e.major, e.minor, e.min_major, e.min_minor));
+        });
+
         state::ConfigLoadFailed::when([this](const auto& e) {
             show(Type::FAILURE, "Invalid Config File",
                  std::format("Could not load '{}':\n\n{}", lfs::core::path_to_utf8(e.path.filename()), e.error));

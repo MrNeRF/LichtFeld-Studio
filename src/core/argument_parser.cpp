@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <args.hxx>
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <expected>
 #include <filesystem>
@@ -34,7 +35,7 @@ namespace {
     void scale_steps_vector(std::vector<size_t>& steps, float scaler) {
         std::set<size_t> unique_steps;
         for (const auto& step : steps) {
-            size_t scaled = static_cast<size_t>(static_cast<float>(step) * scaler);
+            size_t scaled = static_cast<size_t>(std::lround(static_cast<float>(step) * scaler));
             if (scaled > 0) {
                 unique_steps.insert(scaled);
             }
@@ -483,12 +484,15 @@ namespace {
         if (scaler > 0) {
             LOG_INFO("Scaling training steps by factor: {}", scaler);
 
-            opt.iterations *= scaler;
-            opt.start_refine *= scaler;
-            opt.reset_every *= scaler;
-            opt.stop_refine *= scaler;
-            opt.refine_every *= scaler;
-            opt.sh_degree_interval *= scaler;
+            const auto scale = [scaler](const size_t v) {
+                return static_cast<size_t>(std::lround(static_cast<float>(v) * scaler));
+            };
+            opt.iterations = scale(opt.iterations);
+            opt.start_refine = scale(opt.start_refine);
+            opt.reset_every = scale(opt.reset_every);
+            opt.stop_refine = scale(opt.stop_refine);
+            opt.refine_every = scale(opt.refine_every);
+            opt.sh_degree_interval = scale(opt.sh_degree_interval);
 
             scale_steps_vector(opt.eval_steps, scaler);
             scale_steps_vector(opt.save_steps, scaler);

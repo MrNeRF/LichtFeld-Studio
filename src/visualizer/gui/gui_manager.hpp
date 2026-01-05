@@ -103,6 +103,7 @@ namespace lfs::vis {
 
         private:
             void setupEventHandlers();
+            void checkCudaVersionAndNotify();
             void applyDefaultStyle();
             void updateViewportRegion();
             void updateViewportFocus();

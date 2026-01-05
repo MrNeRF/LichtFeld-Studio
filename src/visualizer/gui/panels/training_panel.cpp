@@ -18,6 +18,7 @@
 #include "visualizer_impl.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <deque>
 #include <filesystem>
@@ -38,7 +39,7 @@ namespace lfs::vis::gui::panels {
         void scale_steps_vector(std::vector<size_t>& steps, const float scaler) {
             std::set<size_t> unique;
             for (const auto s : steps) {
-                if (const auto scaled = static_cast<size_t>(static_cast<float>(s) * scaler); scaled > 0) {
+                if (const auto scaled = static_cast<size_t>(std::lround(static_cast<float>(s) * scaler)); scaled > 0) {
                     unique.insert(scaled);
                 }
             }
@@ -49,7 +50,7 @@ namespace lfs::vis::gui::panels {
             if (scaler <= 0.0f)
                 return;
             const auto scale = [scaler](const size_t v) {
-                return static_cast<size_t>(static_cast<float>(v) * scaler);
+                return static_cast<size_t>(std::lround(static_cast<float>(v) * scaler));
             };
             opt.iterations = scale(opt.iterations);
             opt.start_refine = scale(opt.start_refine);
