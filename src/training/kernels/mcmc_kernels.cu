@@ -939,18 +939,25 @@ namespace lfs::training::mcmc {
         reduce_opacities_kernel<<<blocks, threads, shared_mem_size, cuda_stream>>>(
             opacities, alive_indices, n_alive, d_partial_sums, N);
 
-        // Final reduction on CPU (small array)
-        std::vector<float> h_partial_sums(blocks);
-        cudaMemcpyAsync(h_partial_sums.data(), d_partial_sums, blocks * sizeof(float), cudaMemcpyDeviceToHost, cuda_stream);
-        cudaStreamSynchronize(cuda_stream); // Wait for copy to complete
+        // Final reduction using CUB (stays on GPU, no CPU sync needed)
+        float* d_prob_sum = nullptr;
+        cudaMallocAsync(&d_prob_sum, sizeof(float), cuda_stream);
 
+        void* d_reduce_temp = nullptr;
+        size_t reduce_temp_bytes = 0;
+        cub::DeviceReduce::Sum(d_reduce_temp, reduce_temp_bytes, d_partial_sums, d_prob_sum, blocks, cuda_stream);
+        cudaMallocAsync(&d_reduce_temp, reduce_temp_bytes, cuda_stream);
+        cub::DeviceReduce::Sum(d_reduce_temp, reduce_temp_bytes, d_partial_sums, d_prob_sum, blocks, cuda_stream);
+        cudaFreeAsync(d_reduce_temp, cuda_stream);
+
+        // Copy result to host (need the value for branching and kernel launch)
         float prob_sum = 0.0f;
-        for (int i = 0; i < blocks; ++i) {
-            prob_sum += h_partial_sums[i];
-        }
+        cudaMemcpyAsync(&prob_sum, d_prob_sum, sizeof(float), cudaMemcpyDeviceToHost, cuda_stream);
+        cudaStreamSynchronize(cuda_stream); // Need sync to read prob_sum for branching
 
-        // Free temp buffer
+        // Free temp buffers
         cudaFreeAsync(d_partial_sums, cuda_stream);
+        cudaFreeAsync(d_prob_sum, cuda_stream);
 
         if (prob_sum <= 0.0f) {
             // All zero probabilities - just sample uniformly
@@ -1112,18 +1119,25 @@ namespace lfs::training::mcmc {
         reduce_all_opacities_kernel<<<blocks, threads, shared_mem_size, cuda_stream>>>(
             opacities, N, d_partial_sums);
 
-        // Final reduction on CPU (small array)
-        std::vector<float> h_partial_sums(blocks);
-        cudaMemcpyAsync(h_partial_sums.data(), d_partial_sums, blocks * sizeof(float), cudaMemcpyDeviceToHost, cuda_stream);
-        cudaStreamSynchronize(cuda_stream); // Wait for copy to complete
+        // Final reduction using CUB (stays on GPU, reduces data transfer)
+        float* d_prob_sum = nullptr;
+        cudaMallocAsync(&d_prob_sum, sizeof(float), cuda_stream);
 
+        void* d_reduce_temp = nullptr;
+        size_t reduce_temp_bytes = 0;
+        cub::DeviceReduce::Sum(d_reduce_temp, reduce_temp_bytes, d_partial_sums, d_prob_sum, blocks, cuda_stream);
+        cudaMallocAsync(&d_reduce_temp, reduce_temp_bytes, cuda_stream);
+        cub::DeviceReduce::Sum(d_reduce_temp, reduce_temp_bytes, d_partial_sums, d_prob_sum, blocks, cuda_stream);
+        cudaFreeAsync(d_reduce_temp, cuda_stream);
+
+        // Copy single result to host (need the value for branching)
         float prob_sum = 0.0f;
-        for (int i = 0; i < blocks; ++i) {
-            prob_sum += h_partial_sums[i];
-        }
+        cudaMemcpyAsync(&prob_sum, d_prob_sum, sizeof(float), cudaMemcpyDeviceToHost, cuda_stream);
+        cudaStreamSynchronize(cuda_stream); // Need sync to read prob_sum for branching
 
-        // Free temp buffer
+        // Free temp buffers
         cudaFreeAsync(d_partial_sums, cuda_stream);
+        cudaFreeAsync(d_prob_sum, cuda_stream);
 
         if (prob_sum <= 0.0f) {
             // All zero probabilities - return zeros
