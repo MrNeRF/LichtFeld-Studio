@@ -1206,12 +1206,11 @@ namespace lfs::core {
         // Account for storage offset
         void* dest = static_cast<char*>(data_) + storage_offset_ * dtype_size(dtype_);
 
-        // Handle CUDA tensors - use GPU kernel directly (much faster than CPU→GPU memcpy)
+        // CUDA: use GPU kernel directly (avoids CPU temp array + memcpy)
         if (device_ == Device::CUDA) {
             const size_t n = numel();
-            // Treat as 1D contiguous for fill (stride=1)
-            std::vector<size_t> shape_1d = {n};
-            std::vector<size_t> strides_1d = {1};
+            const std::vector<size_t> shape_1d = {n};
+            const std::vector<size_t> strides_1d = {1};
 
             if (dtype_ == DataType::Float32) {
                 tensor_ops::launch_fill_strided<float>(
@@ -1220,27 +1219,26 @@ namespace lfs::core {
                 tensor_ops::launch_fill_strided<int>(
                     static_cast<int*>(dest), static_cast<int>(value), shape_1d, strides_1d, 0, n, stream_);
             } else if (dtype_ == DataType::Bool) {
+                const auto bool_val = static_cast<unsigned char>(value != 0.0f);
                 tensor_ops::launch_fill_strided<unsigned char>(
-                    static_cast<unsigned char*>(dest), (value != 0.0f) ? (unsigned char)1 : (unsigned char)0,
-                    shape_1d, strides_1d, 0, n, stream_);
+                    static_cast<unsigned char*>(dest), bool_val, shape_1d, strides_1d, 0, n, stream_);
             }
-            // Only sync if no stream (maintains original behavior)
             if (!stream_) {
                 CHECK_CUDA(cudaDeviceSynchronize());
             }
             return *this;
         }
 
-        // CPU tensors: use std::fill
+        // CPU: use std::fill
+        const size_t n = numel();
         if (dtype_ == DataType::Bool) {
-            unsigned char* data = static_cast<unsigned char*>(dest);
-            std::fill(data, data + numel(), (value != 0.0f) ? (unsigned char)1 : (unsigned char)0);
+            const auto bool_val = static_cast<unsigned char>(value != 0.0f);
+            std::fill(static_cast<unsigned char*>(dest), static_cast<unsigned char*>(dest) + n, bool_val);
         } else if (dtype_ == DataType::Int32) {
-            int* data = static_cast<int*>(dest);
-            std::fill(data, data + numel(), static_cast<int>(value));
+            const auto int_val = static_cast<int>(value);
+            std::fill(static_cast<int*>(dest), static_cast<int*>(dest) + n, int_val);
         } else {
-            float* data = static_cast<float*>(dest);
-            std::fill(data, data + numel(), value);
+            std::fill(static_cast<float*>(dest), static_cast<float*>(dest) + n, value);
         }
 
         return *this;

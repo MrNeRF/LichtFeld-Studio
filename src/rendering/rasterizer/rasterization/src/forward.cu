@@ -513,7 +513,7 @@ void lfs::rendering::forward(
     CHECK_CUDA(config::debug, "cub::DeviceRadixSort::SortPairs (Tile)")
 
     if constexpr (!config::debug)
-        cudaStreamWaitEvent(nullptr, memset_event, 0); // GPU-side sync - default stream waits
+        cudaStreamWaitEvent(nullptr, memset_event, 0); // GPU-side sync
 
     if (n_instances > 0) {
         kernels::forward::extract_instance_ranges_cu<<<div_round_up(n_instances, config::block_size_extract_instance_ranges), config::block_size_extract_instance_ranges>>>(

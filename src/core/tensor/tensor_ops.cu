@@ -96,12 +96,14 @@ namespace lfs::core::tensor_ops {
             return cache;
         }
 
+        // Async copy + stream sync avoids blocking other streams
         float reduce_sum(const float* data, size_t n, cudaStream_t stream) {
             if (n == 0)
                 return 0.0f;
             size_t temp_bytes = temp_capacity_;
             cub::DeviceReduce::Sum(temp_storage_, temp_bytes, data, d_scalar_, n, stream);
-            cudaMemcpy(h_scalar_, d_scalar_, sizeof(float), cudaMemcpyDeviceToHost);
+            cudaMemcpyAsync(h_scalar_, d_scalar_, sizeof(float), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
             return *h_scalar_;
         }
 
@@ -114,7 +116,8 @@ namespace lfs::core::tensor_ops {
                 return -std::numeric_limits<float>::infinity();
             size_t temp_bytes = temp_capacity_;
             cub::DeviceReduce::Max(temp_storage_, temp_bytes, data, d_scalar_, n, stream);
-            cudaMemcpy(h_scalar_, d_scalar_, sizeof(float), cudaMemcpyDeviceToHost);
+            cudaMemcpyAsync(h_scalar_, d_scalar_, sizeof(float), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
             return *h_scalar_;
         }
 
@@ -123,7 +126,8 @@ namespace lfs::core::tensor_ops {
                 return std::numeric_limits<float>::infinity();
             size_t temp_bytes = temp_capacity_;
             cub::DeviceReduce::Min(temp_storage_, temp_bytes, data, d_scalar_, n, stream);
-            cudaMemcpy(h_scalar_, d_scalar_, sizeof(float), cudaMemcpyDeviceToHost);
+            cudaMemcpyAsync(h_scalar_, d_scalar_, sizeof(float), cudaMemcpyDeviceToHost, stream);
+            cudaStreamSynchronize(stream);
             return *h_scalar_;
         }
 
@@ -1327,12 +1331,14 @@ namespace lfs::core::tensor_ops {
     template <typename T>
     __global__ void fill_kernel(T* __restrict__ out, const size_t n, const T val) {
         const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-        if (i < n) out[i] = val;
+        if (i < n)
+            out[i] = val;
     }
 
     template <typename T>
     void launch_fill(T* out, const size_t n, const T val, cudaStream_t stream) {
-        if (n == 0) return;
+        if (n == 0)
+            return;
         constexpr int BLOCK = 256;
         const int grid = static_cast<int>((n + BLOCK - 1) / BLOCK);
         fill_kernel<<<grid, BLOCK, 0, stream>>>(out, n, val);
@@ -1347,12 +1353,14 @@ namespace lfs::core::tensor_ops {
     template <typename T>
     __global__ void arange_kernel(T* __restrict__ out, const size_t n, const T start, const T step) {
         const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
-        if (i < n) out[i] = start + static_cast<T>(i) * step;
+        if (i < n)
+            out[i] = start + static_cast<T>(i) * step;
     }
 
     template <typename T>
     void launch_arange(T* out, const size_t n, const T start, const T step, cudaStream_t stream) {
-        if (n == 0) return;
+        if (n == 0)
+            return;
         constexpr int BLOCK = 256;
         const int grid = static_cast<int>((n + BLOCK - 1) / BLOCK);
         arange_kernel<<<grid, BLOCK, 0, stream>>>(out, n, start, step);

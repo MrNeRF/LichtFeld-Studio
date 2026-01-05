@@ -105,6 +105,7 @@ std::tuple<int, int, int, int, int> fast_lfs::rasterization::forward(
         mip_filter);
     CHECK_CUDA(config::debug, "preprocess")
 
+    // Required syncs for CUB sort and kernel launch params
     int n_visible_primitives;
     cudaMemcpy(&n_visible_primitives, per_primitive_buffers.n_visible_primitives, sizeof(uint), cudaMemcpyDeviceToHost);
     int n_instances;
