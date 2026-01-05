@@ -5,7 +5,7 @@
 #include "core/parameters.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
-#include "training/strategies/default_strategy.hpp"
+#include "training/strategies/adc.hpp"
 #include <gtest/gtest.h>
 
 using namespace lfs::training;
@@ -36,9 +36,9 @@ static SplatData create_test_splat_data(int n_gaussians = 100) {
     return SplatData(3, means, sh0, shN, scaling, rotation, opacity, 1.0f);
 }
 
-TEST(DefaultStrategyTest, Initialization) {
+TEST(ADCTest, Initialization) {
     auto splat_data = create_test_splat_data(50);
-    DefaultStrategy strategy(splat_data);
+    ADC strategy(splat_data);
 
     param::OptimizationParameters opt_params;
     opt_params.iterations = 100;
@@ -50,9 +50,9 @@ TEST(DefaultStrategyTest, Initialization) {
     EXPECT_TRUE(strategy.get_optimizer().get_grad(lfs::training::ParamType::Means).is_valid());
 }
 
-TEST(DefaultStrategyTest, IsRefining) {
+TEST(ADCTest, IsRefining) {
     auto splat_data = create_test_splat_data(50);
-    DefaultStrategy strategy(splat_data);
+    ADC strategy(splat_data);
 
     param::OptimizationParameters opt_params;
     opt_params.start_refine = 500;
@@ -79,9 +79,9 @@ TEST(DefaultStrategyTest, IsRefining) {
     EXPECT_TRUE(strategy.is_refining(3500));
 }
 
-TEST(DefaultStrategyTest, DuplicateGaussians_AddsCorrectly) {
+TEST(ADCTest, DuplicateGaussians_AddsCorrectly) {
     auto splat_data = create_test_splat_data(10);
-    DefaultStrategy strategy(splat_data);
+    ADC strategy(splat_data);
 
     param::OptimizationParameters opt_params;
     opt_params.iterations = 100;
@@ -104,9 +104,9 @@ TEST(DefaultStrategyTest, DuplicateGaussians_AddsCorrectly) {
     EXPECT_EQ(strategy.get_model().size(), initial_size);
 }
 
-TEST(DefaultStrategyTest, SplitGaussians_WithQuaternions) {
+TEST(ADCTest, SplitGaussians_WithQuaternions) {
     auto splat_data = create_test_splat_data(5);
-    DefaultStrategy strategy(splat_data);
+    ADC strategy(splat_data);
 
     param::OptimizationParameters opt_params;
     opt_params.iterations = 100;
@@ -122,9 +122,9 @@ TEST(DefaultStrategyTest, SplitGaussians_WithQuaternions) {
     EXPECT_EQ(quats.shape()[1], 4);
 }
 
-TEST(DefaultStrategyTest, GrowGaussians_HighGradientSmall) {
+TEST(ADCTest, GrowGaussians_HighGradientSmall) {
     auto splat_data = create_test_splat_data(20);
-    DefaultStrategy strategy(splat_data);
+    ADC strategy(splat_data);
 
     param::OptimizationParameters opt_params;
     opt_params.iterations = 10000;
@@ -153,7 +153,7 @@ TEST(DefaultStrategyTest, GrowGaussians_HighGradientSmall) {
     EXPECT_EQ(size_before, 20);
 }
 
-TEST(DefaultStrategyTest, PruneGaussians_LowOpacity) {
+TEST(ADCTest, PruneGaussians_LowOpacity) {
     auto splat_data = create_test_splat_data(30);
 
     // Set some opacities very low
@@ -163,7 +163,7 @@ TEST(DefaultStrategyTest, PruneGaussians_LowOpacity) {
     }
     splat_data.opacity_raw() = Tensor::from_vector(opacity_data, TensorShape({30, 1}), Device::CUDA);
 
-    DefaultStrategy strategy(splat_data);
+    ADC strategy(splat_data);
 
     param::OptimizationParameters opt_params;
     opt_params.iterations = 100;
@@ -175,14 +175,14 @@ TEST(DefaultStrategyTest, PruneGaussians_LowOpacity) {
     EXPECT_EQ(opacity.shape()[0], 30);
 }
 
-TEST(DefaultStrategyTest, ResetOpacity_ClampsValues) {
+TEST(ADCTest, ResetOpacity_ClampsValues) {
     auto splat_data = create_test_splat_data(20);
 
     // Set some opacities very high
     std::vector<float> opacity_data(20, 3.0f); // High opacity (logit space)
     splat_data.opacity_raw() = Tensor::from_vector(opacity_data, TensorShape({20, 1}), Device::CUDA);
 
-    DefaultStrategy strategy(splat_data);
+    ADC strategy(splat_data);
 
     param::OptimizationParameters opt_params;
     opt_params.iterations = 100;
@@ -196,9 +196,9 @@ TEST(DefaultStrategyTest, ResetOpacity_ClampsValues) {
     EXPECT_GT(max_opacity_before, 0.9f);
 }
 
-TEST(DefaultStrategyTest, RemoveGaussians) {
+TEST(ADCTest, RemoveGaussians) {
     auto splat_data = create_test_splat_data(50);
-    DefaultStrategy strategy(splat_data);
+    ADC strategy(splat_data);
 
     param::OptimizationParameters opt_params;
     opt_params.iterations = 100;
@@ -223,9 +223,9 @@ TEST(DefaultStrategyTest, RemoveGaussians) {
     EXPECT_EQ(strategy.free_count(), 10);       // 10 free slots
 }
 
-TEST(DefaultStrategyTest, FullTrainingLoop_ShortRun) {
+TEST(ADCTest, FullTrainingLoop_ShortRun) {
     auto splat_data = create_test_splat_data(30);
-    DefaultStrategy strategy(splat_data);
+    ADC strategy(splat_data);
 
     param::OptimizationParameters opt_params;
     opt_params.iterations = 50;
@@ -258,9 +258,9 @@ TEST(DefaultStrategyTest, FullTrainingLoop_ShortRun) {
     EXPECT_LE(strategy.get_model().size(), 100); // Shouldn't grow too much
 }
 
-TEST(DefaultStrategyTest, EdgeCase_NoRefinement) {
+TEST(ADCTest, EdgeCase_NoRefinement) {
     auto splat_data = create_test_splat_data(25);
-    DefaultStrategy strategy(splat_data);
+    ADC strategy(splat_data);
 
     param::OptimizationParameters opt_params;
     opt_params.iterations = 100;
@@ -282,14 +282,14 @@ TEST(DefaultStrategyTest, EdgeCase_NoRefinement) {
     EXPECT_EQ(strategy.get_model().size(), 25);
 }
 
-TEST(DefaultStrategyTest, EdgeCase_AllGaussiansLowOpacity) {
+TEST(ADCTest, EdgeCase_AllGaussiansLowOpacity) {
     auto splat_data = create_test_splat_data(20);
 
     // Set all opacities very low
     std::vector<float> opacity_data(20, -10.0f);
     splat_data.opacity_raw() = Tensor::from_vector(opacity_data, TensorShape({20, 1}), Device::CUDA);
 
-    DefaultStrategy strategy(splat_data);
+    ADC strategy(splat_data);
 
     param::OptimizationParameters opt_params;
     opt_params.iterations = 100;
@@ -299,11 +299,11 @@ TEST(DefaultStrategyTest, EdgeCase_AllGaussiansLowOpacity) {
     EXPECT_EQ(strategy.get_model().size(), 20);
 }
 
-TEST(DefaultStrategyTest, EdgeCase_HighSHDegree) {
+TEST(ADCTest, EdgeCase_HighSHDegree) {
     auto splat_data = create_test_splat_data(15);
     // SH degree is already 3, which is max in the test setup
 
-    DefaultStrategy strategy(splat_data);
+    ADC strategy(splat_data);
 
     param::OptimizationParameters opt_params;
     opt_params.iterations = 100;
@@ -321,9 +321,9 @@ TEST(DefaultStrategyTest, EdgeCase_HighSHDegree) {
     EXPECT_LE(strategy.get_model().get_max_sh_degree(), 3);
 }
 
-TEST(DefaultStrategyStressTest, LongTrainingLoop_200Iterations) {
+TEST(ADCStressTest, LongTrainingLoop_200Iterations) {
     auto splat_data = create_test_splat_data(50);
-    DefaultStrategy strategy(splat_data);
+    ADC strategy(splat_data);
 
     param::OptimizationParameters opt_params;
     opt_params.iterations = 200;
@@ -374,9 +374,9 @@ TEST(DefaultStrategyStressTest, LongTrainingLoop_200Iterations) {
     EXPECT_LT(strategy.get_model().size(), 1000); // Allow for moderate growth during stress test
 }
 
-TEST(DefaultStrategyStressTest, ZeroGradients_NoCorruption) {
+TEST(ADCStressTest, ZeroGradients_NoCorruption) {
     auto splat_data = create_test_splat_data(30);
-    DefaultStrategy strategy(splat_data);
+    ADC strategy(splat_data);
 
     param::OptimizationParameters opt_params;
     opt_params.iterations = 100;
@@ -406,9 +406,9 @@ TEST(DefaultStrategyStressTest, ZeroGradients_NoCorruption) {
     EXPECT_EQ(means.device(), Device::CUDA);
 }
 
-TEST(DefaultStrategyStressTest, VeryLargeModel_1kGaussians) {
+TEST(ADCStressTest, VeryLargeModel_1kGaussians) {
     auto splat_data = create_test_splat_data(1000);
-    DefaultStrategy strategy(splat_data);
+    ADC strategy(splat_data);
 
     param::OptimizationParameters opt_params;
     opt_params.iterations = 50;
