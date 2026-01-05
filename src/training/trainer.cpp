@@ -1198,8 +1198,22 @@ namespace lfs::training {
                 lfs::core::Camera* cam = example.data.camera;
                 lfs::core::Tensor gt_image = std::move(example.data.image);
 
+                // Sync the image loading stream before using the tensor
+                // This enables async overlap: image N+1 loads while we train on image N
+                if (cudaStream_t img_stream = gt_image.stream(); img_stream != nullptr) {
+                    cudaStreamSynchronize(img_stream);
+                }
+
                 // Store pipelined mask for use in train_step
                 pipelined_mask_ = example.mask.has_value() ? std::move(*example.mask) : lfs::core::Tensor();
+
+                // Sync mask stream if different from image stream
+                if (pipelined_mask_.is_valid()) {
+                    if (cudaStream_t mask_stream = pipelined_mask_.stream();
+                        mask_stream != nullptr && mask_stream != gt_image.stream()) {
+                        cudaStreamSynchronize(mask_stream);
+                    }
+                }
 
                 auto step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
                 if (!step_result) {

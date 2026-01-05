@@ -699,12 +699,9 @@ namespace lfs::io {
             }
         }
 
-        if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
-            if (saved_context) {
-                cuCtxSetCurrent(saved_context);
-            }
-            throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
-        }
+        // No sync here - let the caller sync when needed via the stream
+        // This enables async overlap with training
+        output_tensor.set_stream(static_cast<cudaStream_t>(cuda_stream));
         uint8_tensor = Tensor();
 
         if (saved_context) {
@@ -872,12 +869,13 @@ namespace lfs::io {
             cuda::launch_uint8_hwc_to_float32_chw(
                 reinterpret_cast<const uint8_t*>(uint8_tensors[i].data_ptr()),
                 reinterpret_cast<float*>(output.data_ptr()),
-                H, W, C, nullptr);
+                H, W, C, static_cast<cudaStream_t>(cuda_stream));
 
+            output.set_stream(static_cast<cudaStream_t>(cuda_stream));
             results.push_back(std::move(output));
         }
 
-        cudaDeviceSynchronize();
+        // No sync here - let the caller sync when needed via the stream
         uint8_tensors.clear();
 
         if (saved_context) {
@@ -1036,12 +1034,13 @@ namespace lfs::io {
             cuda::launch_uint8_hwc_to_float32_chw(
                 reinterpret_cast<const uint8_t*>(uint8_tensors[i].data_ptr()),
                 reinterpret_cast<float*>(output.data_ptr()),
-                H, W, C, nullptr);
+                H, W, C, static_cast<cudaStream_t>(cuda_stream));
 
+            output.set_stream(static_cast<cudaStream_t>(cuda_stream));
             results.push_back(std::move(output));
         }
 
-        cudaDeviceSynchronize();
+        // No sync here - let the caller sync when needed via the stream
         uint8_tensors.clear();
 
         if (saved_context) {
