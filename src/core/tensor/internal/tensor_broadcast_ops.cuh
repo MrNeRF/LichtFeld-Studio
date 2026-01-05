@@ -1050,10 +1050,10 @@ namespace lfs::core::tensor_ops {
         std::vector<int> b_vec(b_shape, b_shape + b_rank);
         std::vector<int> c_vec(c_shape, c_shape + c_rank);
 
-        // Use async memcpy to avoid synchronization overhead
-        cudaMemcpyAsync(d_a_shape, a_vec.data(), a_rank * sizeof(int), cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_b_shape, b_vec.data(), b_rank * sizeof(int), cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_c_shape, c_vec.data(), c_rank * sizeof(int), cudaMemcpyHostToDevice, stream);
+        // Sync copy required - local vectors, small arrays (rank <= 8)
+        cudaMemcpy(d_a_shape, a_vec.data(), a_rank * sizeof(int), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_b_shape, b_vec.data(), b_rank * sizeof(int), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_c_shape, c_vec.data(), c_rank * sizeof(int), cudaMemcpyHostToDevice);
 
         const int grid_size = (c_elements + block_size - 1) / block_size;
 

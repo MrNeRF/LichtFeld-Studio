@@ -187,26 +187,25 @@ namespace lfs::core {
                     if (value == 0.0f) {
                         cudaMemsetAsync(result.data_, 0, result.bytes(), stream);
                     } else {
-                        // Create Float16 values on CPU, then copy to GPU
-                        std::vector<__half> temp(result.numel(), __float2half(value));
-                        cudaMemcpyAsync(result.data_, temp.data(), result.bytes(), cudaMemcpyHostToDevice, stream);
+                        tensor_ops::launch_fill(static_cast<__half*>(result.data_),
+                                                result.numel(), __float2half(value), stream);
                     }
                 } else if (result.dtype_ == DataType::Bool) {
-                    unsigned char fill_val = (value != 0.0f) ? 1 : 0;
+                    const unsigned char fill_val = (value != 0.0f) ? 1 : 0;
                     cudaMemsetAsync(result.data_, fill_val, result.bytes(), stream);
                 } else if (result.dtype_ == DataType::Int32) {
                     if (value == 0.0f) {
                         cudaMemsetAsync(result.data_, 0, result.bytes(), stream);
                     } else {
-                        std::vector<int> temp(result.numel(), static_cast<int>(value));
-                        cudaMemcpyAsync(result.data_, temp.data(), result.bytes(), cudaMemcpyHostToDevice, stream);
+                        tensor_ops::launch_fill(static_cast<int*>(result.data_),
+                                                result.numel(), static_cast<int>(value), stream);
                     }
                 } else if (result.dtype_ == DataType::Int64) {
                     if (value == 0.0f) {
                         cudaMemsetAsync(result.data_, 0, result.bytes(), stream);
                     } else {
-                        std::vector<int64_t> temp(result.numel(), static_cast<int64_t>(value));
-                        cudaMemcpyAsync(result.data_, temp.data(), result.bytes(), cudaMemcpyHostToDevice, stream);
+                        tensor_ops::launch_fill(static_cast<int64_t*>(result.data_),
+                                                result.numel(), static_cast<int64_t>(value), stream);
                     }
                 } else if (result.dtype_ == DataType::UInt8) {
                     const uint8_t fill_val = static_cast<uint8_t>(std::clamp(value, 0.0f, 255.0f));
@@ -281,17 +280,12 @@ namespace lfs::core {
                     dtype_name(result.dtype_));
 
                 if (result.dtype_ == DataType::Float32) {
-                    std::vector<float> data(count);
-                    for (size_t i = 0; i < count; ++i) {
-                        data[i] = start + i * step;
-                    }
-                    cudaMemcpyAsync(result.data_, data.data(), bytes, cudaMemcpyHostToDevice, current_stream);
+                    tensor_ops::launch_arange(static_cast<float*>(result.data_),
+                                              count, start, step, current_stream);
                 } else if (result.dtype_ == DataType::Int32) {
-                    std::vector<int> data(count);
-                    for (size_t i = 0; i < count; ++i) {
-                        data[i] = static_cast<int>(start + i * step);
-                    }
-                    cudaMemcpyAsync(result.data_, data.data(), bytes, cudaMemcpyHostToDevice, current_stream);
+                    tensor_ops::launch_arange(static_cast<int*>(result.data_),
+                                              count, static_cast<int>(start),
+                                              static_cast<int>(step), current_stream);
                 }
             } else {
                 // Use pinned memory for CPU tensors
@@ -827,14 +821,12 @@ namespace lfs::core {
             }
 
             if (input->device_ == Device::CUDA) {
-                cudaStream_t stream = result.stream_;
                 if (out_dtype == DataType::Float32) {
-                    std::vector<float> temp(result.numel(), identity_value);
-                    cudaMemcpyAsync(result.data_ptr(), temp.data(),
-                                    result.bytes(), cudaMemcpyHostToDevice, stream);
+                    tensor_ops::launch_fill(static_cast<float*>(result.data_ptr()),
+                                            result.numel(), identity_value, result.stream_);
                 } else if (out_dtype == DataType::Bool) {
-                    unsigned char bool_val = (identity_value != 0.0f) ? 1 : 0;
-                    cudaMemsetAsync(result.data_ptr(), bool_val, result.bytes(), stream);
+                    const unsigned char bool_val = (identity_value != 0.0f) ? 1 : 0;
+                    cudaMemsetAsync(result.data_ptr(), bool_val, result.bytes(), result.stream_);
                 }
             } else {
                 if (out_dtype == DataType::Float32) {

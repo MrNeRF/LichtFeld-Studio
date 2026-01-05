@@ -1322,6 +1322,45 @@ namespace lfs::core::tensor_ops {
         }
     }
 
+    // ============= FILL / ARANGE (GPU-native) =============
+
+    template <typename T>
+    __global__ void fill_kernel(T* __restrict__ out, const size_t n, const T val) {
+        const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i < n) out[i] = val;
+    }
+
+    template <typename T>
+    void launch_fill(T* out, const size_t n, const T val, cudaStream_t stream) {
+        if (n == 0) return;
+        constexpr int BLOCK = 256;
+        const int grid = static_cast<int>((n + BLOCK - 1) / BLOCK);
+        fill_kernel<<<grid, BLOCK, 0, stream>>>(out, n, val);
+    }
+
+    template void launch_fill<float>(float*, size_t, float, cudaStream_t);
+    template void launch_fill<int>(int*, size_t, int, cudaStream_t);
+    template void launch_fill<int64_t>(int64_t*, size_t, int64_t, cudaStream_t);
+    template void launch_fill<__half>(__half*, size_t, __half, cudaStream_t);
+    template void launch_fill<unsigned char>(unsigned char*, size_t, unsigned char, cudaStream_t);
+
+    template <typename T>
+    __global__ void arange_kernel(T* __restrict__ out, const size_t n, const T start, const T step) {
+        const size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i < n) out[i] = start + static_cast<T>(i) * step;
+    }
+
+    template <typename T>
+    void launch_arange(T* out, const size_t n, const T start, const T step, cudaStream_t stream) {
+        if (n == 0) return;
+        constexpr int BLOCK = 256;
+        const int grid = static_cast<int>((n + BLOCK - 1) / BLOCK);
+        arange_kernel<<<grid, BLOCK, 0, stream>>>(out, n, start, step);
+    }
+
+    template void launch_arange<float>(float*, size_t, float, float, cudaStream_t);
+    template void launch_arange<int>(int*, size_t, int, int, cudaStream_t);
+
     // ============= OPTIMIZED CUMULATIVE SUM =============
 
     template <typename T>
@@ -1914,34 +1953,25 @@ namespace lfs::core::tensor_ops {
             h_input_sizes[i] = tensors[i].shape()[tensors[i].shape().rank() - 1];
         }
 
-        cudaMemcpyAsync(const_cast<float**>(d_input_ptrs), h_input_ptrs.data(),
-                        num_tensors * sizeof(float*), cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_input_sizes, h_input_sizes.data(),
-                        num_tensors * sizeof(size_t), cudaMemcpyHostToDevice, stream);
+        // Sync copy required - local vectors
+        cudaMemcpy(const_cast<float**>(d_input_ptrs), h_input_ptrs.data(),
+                   num_tensors * sizeof(float*), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_input_sizes, h_input_sizes.data(),
+                   num_tensors * sizeof(size_t), cudaMemcpyHostToDevice);
 
-        int block_size = 256;
-        size_t num_blocks = (num_rows + block_size - 1) / block_size;
-        const size_t max_blocks_x = 65535; // Safe limit for all CUDA devices
+        constexpr int BLOCK = 256;
+        constexpr size_t MAX_GRID_X = 65535;
+        const size_t grid_size = (num_rows + BLOCK - 1) / BLOCK;
 
-        // Use 2D grid for large arrays to avoid exceeding grid dimension limits
-        if (num_blocks <= max_blocks_x) {
-            cat_last_dim_kernel_vectorized<<<num_blocks, block_size, 0, stream>>>(
-                static_cast<float*>(output),
-                d_input_ptrs,
-                d_input_sizes,
-                num_tensors,
-                num_rows,
-                row_size);
+        if (grid_size <= MAX_GRID_X) {
+            cat_last_dim_kernel_vectorized<<<grid_size, BLOCK, 0, stream>>>(
+                static_cast<float*>(output), d_input_ptrs, d_input_sizes,
+                num_tensors, num_rows, row_size);
         } else {
-            dim3 grid(std::min(num_blocks, max_blocks_x),
-                      (num_blocks + max_blocks_x - 1) / max_blocks_x);
-            cat_last_dim_kernel_vectorized<<<grid, block_size, 0, stream>>>(
-                static_cast<float*>(output),
-                d_input_ptrs,
-                d_input_sizes,
-                num_tensors,
-                num_rows,
-                row_size);
+            const dim3 grid(std::min(grid_size, MAX_GRID_X), (grid_size + MAX_GRID_X - 1) / MAX_GRID_X);
+            cat_last_dim_kernel_vectorized<<<grid, BLOCK, 0, stream>>>(
+                static_cast<float*>(output), d_input_ptrs, d_input_sizes,
+                num_tensors, num_rows, row_size);
         }
 
         // Return metadata arrays to memory pool (instant, cached for reuse)
@@ -2024,39 +2054,28 @@ namespace lfs::core::tensor_ops {
             h_input_sizes[i] = tensors[i].shape()[resolved_dim];
         }
 
-        cudaMemcpyAsync(const_cast<float**>(d_input_ptrs), h_input_ptrs.data(),
-                        num_tensors * sizeof(float*), cudaMemcpyHostToDevice, stream);
-        cudaMemcpyAsync(d_input_sizes, h_input_sizes.data(),
-                        num_tensors * sizeof(size_t), cudaMemcpyHostToDevice, stream);
+        // Sync copy required - local vectors
+        cudaMemcpy(const_cast<float**>(d_input_ptrs), h_input_ptrs.data(),
+                   num_tensors * sizeof(float*), cudaMemcpyHostToDevice);
+        cudaMemcpy(d_input_sizes, h_input_sizes.data(),
+                   num_tensors * sizeof(size_t), cudaMemcpyHostToDevice);
 
-        int block_size = 256;
-        size_t num_blocks = (total_elements + block_size - 1) / block_size;
-        const size_t max_blocks_x = 65535; // Safe limit for all CUDA devices
+        constexpr int BLOCK = 256;
+        constexpr size_t MAX_GRID_X = 65535;
+        const size_t grid_size = (total_elements + BLOCK - 1) / BLOCK;
 
-        // Use 2D grid for large arrays to avoid exceeding grid dimension limits
-        if (num_blocks <= max_blocks_x) {
-            cat_middle_dim_kernel<<<num_blocks, block_size, 0, stream>>>(
-                static_cast<float*>(output),
-                d_input_ptrs,
-                d_input_sizes,
-                num_tensors,
-                outer_size,
-                inner_size,
-                total_dim_size);
+        if (grid_size <= MAX_GRID_X) {
+            cat_middle_dim_kernel<<<grid_size, BLOCK, 0, stream>>>(
+                static_cast<float*>(output), d_input_ptrs, d_input_sizes,
+                num_tensors, outer_size, inner_size, total_dim_size);
         } else {
-            dim3 grid(std::min(num_blocks, max_blocks_x),
-                      (num_blocks + max_blocks_x - 1) / max_blocks_x);
-            cat_middle_dim_kernel<<<grid, block_size, 0, stream>>>(
-                static_cast<float*>(output),
-                d_input_ptrs,
-                d_input_sizes,
-                num_tensors,
-                outer_size,
-                inner_size,
-                total_dim_size);
+            const dim3 grid(std::min(grid_size, MAX_GRID_X), (grid_size + MAX_GRID_X - 1) / MAX_GRID_X);
+            cat_middle_dim_kernel<<<grid, BLOCK, 0, stream>>>(
+                static_cast<float*>(output), d_input_ptrs, d_input_sizes,
+                num_tensors, outer_size, inner_size, total_dim_size);
         }
 
-        // Return metadata arrays to memory pool
+        // Return to memory pool
         CudaMemoryPool::instance().deallocate(const_cast<float**>(d_input_ptrs), stream);
         CudaMemoryPool::instance().deallocate(d_input_sizes, stream);
     }

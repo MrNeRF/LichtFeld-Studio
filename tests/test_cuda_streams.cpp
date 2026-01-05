@@ -489,3 +489,71 @@ TEST_F(CUDAStreamsTest, StreamPoolNoContention) {
     EXPECT_LT(duration.count(), 10000)
         << "Stream pool acquisition too slow: " << duration.count() << "us for 10000 calls";
 }
+
+// ============================================================================
+// Regression: GPU-native fill/arange (async race conditions)
+// ============================================================================
+
+TEST_F(CUDAStreamsTest, TensorConstantFillInt32Correctness) {
+    constexpr int TEST_VALUE = 42;
+    constexpr size_t SIZE = 10000;
+
+    const auto tensor = Tensor::full({SIZE}, static_cast<float>(TEST_VALUE), Device::CUDA, DataType::Int32);
+    ASSERT_TRUE(tensor.is_valid());
+    ASSERT_EQ(tensor.numel(), SIZE);
+
+    const auto cpu_tensor = tensor.to(Device::CPU);
+    const int* data = cpu_tensor.ptr<int>();
+    for (size_t i = 0; i < SIZE; ++i) {
+        EXPECT_EQ(data[i], TEST_VALUE) << "Mismatch at index " << i;
+    }
+}
+
+TEST_F(CUDAStreamsTest, TensorConstantFillInt64Correctness) {
+    constexpr int64_t TEST_VALUE = 123456789LL;
+    constexpr size_t SIZE = 10000;
+
+    const auto tensor = Tensor::full({SIZE}, static_cast<float>(TEST_VALUE), Device::CUDA, DataType::Int64);
+    ASSERT_TRUE(tensor.is_valid());
+    ASSERT_EQ(tensor.numel(), SIZE);
+
+    const auto cpu_tensor = tensor.to(Device::CPU);
+    const int64_t* data = cpu_tensor.ptr<int64_t>();
+    for (size_t i = 0; i < SIZE; ++i) {
+        EXPECT_EQ(data[i], static_cast<int64_t>(static_cast<float>(TEST_VALUE))) << "Mismatch at index " << i;
+    }
+}
+
+TEST_F(CUDAStreamsTest, TensorArangeCorrectnessFloat32) {
+    constexpr float START = 0.0f, END = 1000.0f, STEP = 1.0f;
+
+    const auto tensor = Tensor::arange(START, END, STEP);
+    ASSERT_TRUE(tensor.is_valid());
+    ASSERT_EQ(tensor.numel(), static_cast<size_t>(END - START));
+
+    const auto cpu_tensor = tensor.to(Device::CPU);
+    const float* data = cpu_tensor.ptr<float>();
+    for (size_t i = 0; i < tensor.numel(); ++i) {
+        const float expected = START + i * STEP;
+        EXPECT_FLOAT_EQ(data[i], expected) << "Mismatch at index " << i;
+    }
+}
+
+TEST_F(CUDAStreamsTest, TensorConstantFillStressTest) {
+    // Stress test for async race conditions
+    constexpr int ITERATIONS = 100;
+    constexpr size_t SIZE = 5000;
+
+    for (int iter = 0; iter < ITERATIONS; ++iter) {
+        const int test_value = iter * 7 + 13;
+        const auto tensor = Tensor::full({SIZE}, static_cast<float>(test_value), Device::CUDA, DataType::Int32);
+        const auto cpu_tensor = tensor.to(Device::CPU);
+        const int* data = cpu_tensor.ptr<int>();
+
+        for (size_t i = 0; i < SIZE; ++i) {
+            if (data[i] != test_value) {
+                FAIL() << "Iter " << iter << " idx " << i << ": got " << data[i] << " expected " << test_value;
+            }
+        }
+    }
+}

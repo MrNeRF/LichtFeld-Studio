@@ -107,6 +107,12 @@ namespace lfs::core::tensor_ops {
                         LoadOp op, const void* args,
                         DataType dtype, cudaStream_t stream);
 
+    // ============= Fill / Arange (GPU-native) =============
+    template <typename T>
+    void launch_fill(T* output, size_t n, T value, cudaStream_t stream);
+    template <typename T>
+    void launch_arange(T* output, size_t n, T start, T step, cudaStream_t stream);
+
     // Unified Type Conversion Template
     template <typename SrcT, typename DstT>
     void launch_convert_type(const SrcT* src, DstT* dst, size_t n, cudaStream_t stream);

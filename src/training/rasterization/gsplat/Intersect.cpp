@@ -78,11 +78,10 @@ namespace gsplat_lfs {
             return result;
         }
 
-        // Allocate cumsum on GPU
         int64_t* d_cum_tiles;
         cudaMalloc(&d_cum_tiles, n_elements * sizeof(int64_t));
-        cudaMemcpyAsync(d_cum_tiles, h_cum_tiles,
-                        n_elements * sizeof(int64_t), cudaMemcpyHostToDevice, stream);
+        // Sync copy required - h_cum_tiles deleted after return
+        cudaMemcpy(d_cum_tiles, h_cum_tiles, n_elements * sizeof(int64_t), cudaMemcpyHostToDevice);
 
         // Allocate outputs
         cudaMalloc(&result.isect_ids, n_isects * sizeof(int64_t));

@@ -198,6 +198,7 @@ namespace lfs::training {
 
         lfs::core::Tensor background_{};
         lfs::core::Tensor bg_mix_buffer_;
+        float* bg_rgb_pinned_ = nullptr; // Pinned host buffer for async copy
         std::unique_ptr<TrainingProgress> progress_;
         size_t train_dataset_size_ = 0;
 

@@ -529,6 +529,12 @@ namespace lfs::training {
         sparsity_optimizer_.reset();
         evaluator_.reset();
         progress_.reset();
+
+        // Free pinned buffer
+        if (bg_rgb_pinned_ != nullptr) {
+            cudaFreeHost(bg_rgb_pinned_);
+            bg_rgb_pinned_ = nullptr;
+        }
         train_dataset_.reset();
         val_dataset_.reset();
 
@@ -631,21 +637,24 @@ namespace lfs::training {
             return background_;
         }
 
-        // Sine-based RGB with prime periods for color diversity
+        // Lazy allocate pinned + GPU buffer
+        if (bg_rgb_pinned_ == nullptr)
+            cudaHostAlloc(&bg_rgb_pinned_, 3 * sizeof(float), cudaHostAllocDefault);
+        if (bg_mix_buffer_.is_empty())
+            bg_mix_buffer_ = lfs::core::Tensor::empty({3}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+
+        // Sine-based RGB with prime periods
         const float pr = TWO_PI * static_cast<float>(iter % BG_PERIOD_R) / BG_PERIOD_R;
         const float pg = TWO_PI * static_cast<float>(iter % BG_PERIOD_G) / BG_PERIOD_G;
         const float pb = TWO_PI * static_cast<float>(iter % BG_PERIOD_B) / BG_PERIOD_B;
 
-        const float result[3] = {
-            std::clamp(0.5f * (1.0f + std::sin(pr)) * w, CLAMP_EPS, 1.0f - CLAMP_EPS),
-            std::clamp(0.5f * (1.0f + std::sin(pg + PHASE_OFFSET_G)) * w, CLAMP_EPS, 1.0f - CLAMP_EPS),
-            std::clamp(0.5f * (1.0f + std::sin(pb + PHASE_OFFSET_B)) * w, CLAMP_EPS, 1.0f - CLAMP_EPS)};
+        bg_rgb_pinned_[0] = std::clamp(0.5f * (1.0f + std::sin(pr)) * w, CLAMP_EPS, 1.0f - CLAMP_EPS);
+        bg_rgb_pinned_[1] = std::clamp(0.5f * (1.0f + std::sin(pg + PHASE_OFFSET_G)) * w, CLAMP_EPS, 1.0f - CLAMP_EPS);
+        bg_rgb_pinned_[2] = std::clamp(0.5f * (1.0f + std::sin(pb + PHASE_OFFSET_B)) * w, CLAMP_EPS, 1.0f - CLAMP_EPS);
 
-        if (bg_mix_buffer_.is_empty()) {
-            bg_mix_buffer_ = lfs::core::Tensor::empty({3}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-        }
-
-        cudaMemcpyAsync(bg_mix_buffer_.ptr<float>(), result, sizeof(result), cudaMemcpyHostToDevice, nullptr);
+        // Async copy from persistent pinned buffer
+        cudaMemcpyAsync(bg_mix_buffer_.ptr<float>(), bg_rgb_pinned_, 3 * sizeof(float),
+                        cudaMemcpyHostToDevice, bg_mix_buffer_.stream());
         return bg_mix_buffer_;
     }
 
