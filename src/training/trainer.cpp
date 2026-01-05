@@ -306,6 +306,9 @@ namespace lfs::training {
 
         cudaStreamCreateWithFlags(&callback_stream_, cudaStreamNonBlocking);
 
+        // Create reusable event for GPU-side sync (avoids CPU blocking)
+        cudaEventCreateWithFlags(&img_sync_event_, cudaEventDisableTiming);
+
         LOG_DEBUG("Trainer constructed with {} cameras", base_dataset_->get_cameras().size());
     }
 
@@ -320,6 +323,9 @@ namespace lfs::training {
         }
 
         cudaStreamCreateWithFlags(&callback_stream_, cudaStreamNonBlocking);
+
+        // Create reusable event for GPU-side sync (avoids CPU blocking)
+        cudaEventCreateWithFlags(&img_sync_event_, cudaEventDisableTiming);
 
         // Datasets will be created in initialize() from Scene cameras
         if (!scene.getTrainCameras()) {
@@ -521,6 +527,12 @@ namespace lfs::training {
             callback_stream_ = nullptr;
         }
         callback_busy_ = false;
+
+        // Destroy GPU sync event
+        if (img_sync_event_) {
+            cudaEventDestroy(img_sync_event_);
+            img_sync_event_ = nullptr;
+        }
 
         cudaDeviceSynchronize();
 
@@ -1207,19 +1219,22 @@ namespace lfs::training {
                 lfs::core::Camera* cam = example.data.camera;
                 lfs::core::Tensor gt_image = std::move(example.data.image);
 
-                // Sync the image loading stream before using the tensor
+                // GPU-side sync: make default stream wait for image loading stream
+                // This avoids CPU blocking - the GPU handles synchronization
                 if (cudaStream_t img_stream = gt_image.stream(); img_stream != nullptr) {
-                    cudaStreamSynchronize(img_stream);
+                    cudaEventRecord(img_sync_event_, img_stream);
+                    cudaStreamWaitEvent(nullptr, img_sync_event_, 0); // default stream waits
                 }
 
                 // Store pipelined mask for use in train_step
                 pipelined_mask_ = example.mask.has_value() ? std::move(*example.mask) : lfs::core::Tensor();
 
-                // Sync mask stream if different from image stream
+                // GPU-side sync for mask stream if different from image stream
                 if (pipelined_mask_.is_valid()) {
                     if (cudaStream_t mask_stream = pipelined_mask_.stream();
                         mask_stream != nullptr && mask_stream != gt_image.stream()) {
-                        cudaStreamSynchronize(mask_stream);
+                        cudaEventRecord(img_sync_event_, mask_stream);
+                        cudaStreamWaitEvent(nullptr, img_sync_event_, 0);
                     }
                 }
 

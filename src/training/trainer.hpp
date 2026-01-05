@@ -240,5 +240,8 @@ namespace lfs::training {
         std::function<void()> callback_;
         std::atomic<bool> callback_busy_{false};
         cudaStream_t callback_stream_ = nullptr;
+
+        // GPU-side synchronization event (reusable, avoids CPU blocking)
+        cudaEvent_t img_sync_event_ = nullptr;
     };
 } // namespace lfs::training
