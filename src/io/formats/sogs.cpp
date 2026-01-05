@@ -498,7 +498,13 @@ namespace lfs::io {
             }
 
             // Calculate SH degree
-            int sh_degree = meta.shN.has_value() ? meta.shN->bands : 0;
+            int sh_degree = 0;
+            if (meta.shN.has_value()) {
+                const auto& sh_meta = meta.shN.value();
+                sh_degree = sh_meta.bands > 0 ? sh_meta.bands : (sh_meta.coeffs == 3 ? 1 : sh_meta.coeffs == 8 ? 2
+                                                                                       : sh_meta.coeffs == 15  ? 3
+                                                                                                               : 0);
+            }
 
             // Create SplatData
             SplatData splat_data(
