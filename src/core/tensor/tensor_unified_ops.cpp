@@ -65,7 +65,6 @@ namespace lfs::core {
     Tensor Tensor::load(LoadOp op, const LoadArgs& args) {
         Tensor result;
 
-        // Get current thread's stream for async execution
         cudaStream_t current_stream = getCurrentCUDAStream();
 
         switch (op) {
@@ -76,7 +75,7 @@ namespace lfs::core {
             result.is_contiguous_ = true;
             result.device_ = args.device;
             result.dtype_ = args.dtype;
-            result.stream_ = current_stream; // Use thread's current stream
+            result.stream_ = current_stream;
             result.id_ = next_id_++;
 
             size_t bytes = result.shape_.elements() * dtype_size(result.dtype_);
@@ -256,7 +255,7 @@ namespace lfs::core {
             result.is_contiguous_ = true;
             result.device_ = args.device;
             result.dtype_ = args.dtype;
-            result.stream_ = current_stream; // Use thread's current stream
+            result.stream_ = current_stream;
             result.id_ = next_id_++;
 
             size_t bytes = count * dtype_size(result.dtype_);
@@ -394,7 +393,6 @@ namespace lfs::core {
                 if (result.dtype_ == DataType::Int32) {
                     tensor_ops::launch_randint(result.ptr<int>(), result.numel(), low, high,
                                                RandomGenerator::instance().get_next_cuda_seed(), stream);
-                    // No sync - tensor operation
                 } else if (result.dtype_ == DataType::Float32) {
                     int* temp_buffer = static_cast<int*>(
                         CudaMemoryPool::instance().allocate(result.numel() * sizeof(int), stream));
@@ -405,8 +403,6 @@ namespace lfs::core {
 
                         tensor_ops::launch_convert_type<int, float>(temp_buffer, result.ptr<float>(),
                                                                     result.numel(), stream);
-                        // No sync - tensor operation
-
                         CudaMemoryPool::instance().deallocate(temp_buffer, stream);
                     } else {
                         LOG_ERROR("Failed to allocate temp buffer from memory pool");
@@ -421,8 +417,6 @@ namespace lfs::core {
 
                         tensor_ops::launch_convert_type<int, uint8_t>(temp_buffer, result.ptr<uint8_t>(),
                                                                       result.numel(), stream);
-                        // No sync - tensor operation
-
                         CudaMemoryPool::instance().deallocate(temp_buffer, stream);
                     } else {
                         LOG_ERROR("Failed to allocate temp buffer from memory pool");
@@ -462,7 +456,6 @@ namespace lfs::core {
             if (result.device_ == Device::CUDA) {
                 tensor_ops::launch_bernoulli(result.ptr<float>(), result.numel(), p,
                                              RandomGenerator::instance().get_next_cuda_seed(), result.stream_);
-                // No sync - tensor operation
             } else {
                 auto& gen = *static_cast<std::mt19937_64*>(
                     RandomGenerator::instance().get_generator(Device::CPU));
@@ -495,7 +488,6 @@ namespace lfs::core {
                 tensor_ops::launch_multinomial(weights->ptr<float>(), result.ptr<int64_t>(),
                                                n, num_samples, replacement,
                                                RandomGenerator::instance().get_next_cuda_seed(), result.stream_);
-                // No sync - tensor operation
             } else {
                 auto weights_data = weights->to_vector();
 
@@ -556,7 +548,6 @@ namespace lfs::core {
 
             if (result.device_ == Device::CUDA) {
                 tensor_ops::launch_eye(result.ptr<float>(), m, n, result.stream_);
-                // No sync - tensor operation
             } else {
                 float* data = result.ptr<float>();
                 for (size_t i = 0; i < min_dim; ++i) {
@@ -1291,7 +1282,6 @@ namespace lfs::core {
                 result.shape().rank(),
                 result.numel(),
                 0);
-            // No sync - tensor operation
         } else {
             // CPU implementation of where operation
             const unsigned char* cond = static_cast<const unsigned char*>(a_broadcast.data_ptr());
@@ -1700,7 +1690,6 @@ namespace lfs::core {
                     row_size,
                     element_size,
                     nullptr);
-                // No sync - tensor operation
             } else {
                 // CPU: Simple memcpy per row
                 size_t result_offset = 0;
@@ -1743,7 +1732,6 @@ namespace lfs::core {
                 resolved_dim,
                 element_size,
                 nullptr);
-            // No sync - tensor operation
         } else {
             // CPU fallback
             for (size_t outer = 0; outer < outer_size; ++outer) {

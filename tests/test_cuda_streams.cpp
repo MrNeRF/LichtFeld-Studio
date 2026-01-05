@@ -1,16 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-/**
- * Comprehensive tests for CUDA stream support in the tensor library.
- *
- * Tests cover:
- * - CUDAStreamPool: round-robin stream acquisition, high-priority streams
- * - CUDAEvent: recording, synchronization, cross-stream dependencies
- * - CUDAStreamContext: thread-local stream management
- * - Tensor operations: stream propagation, async execution
- * - PooledStreamGuard: RAII stream management
- */
+// Tests for CUDA stream pool, events, context, and tensor stream propagation
 
 #include "core/tensor.hpp"
 #include "core/tensor/internal/cuda_stream_context.hpp"
@@ -27,17 +18,12 @@ using namespace lfs::core;
 class CUDAStreamsTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Ensure CUDA is available
         int device_count = 0;
         cudaError_t err = cudaGetDeviceCount(&device_count);
         ASSERT_EQ(err, cudaSuccess) << "CUDA not available";
         ASSERT_GT(device_count, 0) << "No CUDA devices found";
-
-        // Reset to default device
         cudaSetDevice(0);
         cudaDeviceSynchronize();
-
-        // Seed for reproducibility
         Tensor::manual_seed(42);
     }
 
@@ -46,14 +32,10 @@ protected:
     }
 };
 
-// ============================================================================
-// CUDAStreamPool Tests
-// ============================================================================
+// === CUDAStreamPool ===
 
 TEST_F(CUDAStreamsTest, StreamPoolInitialization) {
     auto& pool = CUDAStreamPool::instance();
-
-    // Pool should be initialized
     EXPECT_TRUE(pool.is_initialized());
     EXPECT_EQ(pool.size(), CUDAStreamPool::DEFAULT_POOL_SIZE);
     EXPECT_EQ(pool.high_priority_size(), CUDAStreamPool::HIGH_PRIORITY_POOL_SIZE);
@@ -61,61 +43,37 @@ TEST_F(CUDAStreamsTest, StreamPoolInitialization) {
 
 TEST_F(CUDAStreamsTest, StreamPoolAcquire) {
     auto& pool = CUDAStreamPool::instance();
-
-    // Acquire streams and verify they're non-null
     cudaStream_t s1 = pool.acquire();
     cudaStream_t s2 = pool.acquire();
-
     EXPECT_NE(s1, nullptr);
     EXPECT_NE(s2, nullptr);
 
-    // After pool size acquisitions, should wrap around
+    // Verify round-robin wraps around
     std::vector<cudaStream_t> streams;
-    for (size_t i = 0; i < pool.size(); ++i) {
+    for (size_t i = 0; i < pool.size(); ++i)
         streams.push_back(pool.acquire());
-    }
-
-    // Next acquisition should give us the first stream again (round-robin)
     cudaStream_t wrapped = pool.acquire();
-    bool found = false;
-    for (const auto& s : streams) {
-        if (s == wrapped) {
-            found = true;
-            break;
-        }
-    }
-    EXPECT_TRUE(found) << "Round-robin should wrap around to existing streams";
+    bool found = std::find(streams.begin(), streams.end(), wrapped) != streams.end();
+    EXPECT_TRUE(found) << "Round-robin should wrap";
 }
 
 TEST_F(CUDAStreamsTest, StreamPoolHighPriority) {
     auto& pool = CUDAStreamPool::instance();
-
     cudaStream_t hp = pool.acquire_high_priority();
     EXPECT_NE(hp, nullptr);
-
-    // High priority streams should be different from regular streams
-    cudaStream_t regular = pool.get(0);
-    EXPECT_NE(hp, regular);
+    EXPECT_NE(hp, pool.get(0)); // Different from regular
 }
 
 TEST_F(CUDAStreamsTest, StreamPoolSynchronizeAll) {
     auto& pool = CUDAStreamPool::instance();
-
-    // Launch work on multiple streams
     auto t1 = Tensor::randn({1000, 1000}, Device::CUDA);
     auto t2 = Tensor::randn({1000, 1000}, Device::CUDA);
-
-    // Synchronize all should complete without error
     pool.synchronize_all();
-
-    // Verify tensors are valid
     EXPECT_TRUE(t1.is_valid());
     EXPECT_TRUE(t2.is_valid());
 }
 
-// ============================================================================
-// CUDAEvent Tests
-// ============================================================================
+// === CUDAEvent ===
 
 TEST_F(CUDAStreamsTest, EventCreation) {
     CUDAEvent event;
@@ -206,9 +164,7 @@ TEST_F(CUDAStreamsTest, EventMoveSemantics) {
     EXPECT_FALSE(event2.valid());
 }
 
-// ============================================================================
-// CUDAStreamContext Tests
-// ============================================================================
+// === CUDAStreamContext ===
 
 TEST_F(CUDAStreamsTest, StreamContextDefault) {
     // Default stream should be nullptr
@@ -269,9 +225,7 @@ TEST_F(CUDAStreamsTest, PooledStreamGuardHighPriority) {
     }
 }
 
-// ============================================================================
-// Tensor Stream Propagation Tests
-// ============================================================================
+// === Tensor Stream Propagation ===
 
 TEST_F(CUDAStreamsTest, TensorInheritsThreadStream) {
     cudaStream_t stream;
@@ -321,9 +275,7 @@ TEST_F(CUDAStreamsTest, TensorSetStream) {
     cudaStreamDestroy(stream);
 }
 
-// ============================================================================
-// Concurrent Stream Tests
-// ============================================================================
+// === Concurrent Streams ===
 
 TEST_F(CUDAStreamsTest, ConcurrentMultiStreamOps) {
     auto& pool = CUDAStreamPool::instance();
@@ -391,9 +343,7 @@ TEST_F(CUDAStreamsTest, ThreadLocalStreamIsolation) {
     }
 }
 
-// ============================================================================
-// Memory Pool Stream Integration
-// ============================================================================
+// === Memory Pool Integration ===
 
 TEST_F(CUDAStreamsTest, StreamAwareAllocation) {
     auto& pool = CUDAStreamPool::instance();
@@ -414,9 +364,7 @@ TEST_F(CUDAStreamsTest, StreamAwareAllocation) {
     cudaStreamSynchronize(stream);
 }
 
-// ============================================================================
-// Backward Compatibility Tests
-// ============================================================================
+// === Backward Compatibility ===
 
 TEST_F(CUDAStreamsTest, DefaultStreamCompatibility) {
     // Operations without explicit stream should work on default stream
@@ -467,9 +415,7 @@ TEST_F(CUDAStreamsTest, MixedStreamOperations) {
     cudaDeviceSynchronize();
 }
 
-// ============================================================================
-// Performance Sanity Tests
-// ============================================================================
+// === Performance ===
 
 TEST_F(CUDAStreamsTest, StreamPoolNoContention) {
     // Verify that acquiring streams is fast (no blocking)
@@ -490,9 +436,7 @@ TEST_F(CUDAStreamsTest, StreamPoolNoContention) {
         << "Stream pool acquisition too slow: " << duration.count() << "us for 10000 calls";
 }
 
-// ============================================================================
-// Regression: GPU-native fill/arange (async race conditions)
-// ============================================================================
+// === Regression: GPU-native fill/arange ===
 
 TEST_F(CUDAStreamsTest, TensorConstantFillInt32Correctness) {
     constexpr int TEST_VALUE = 42;

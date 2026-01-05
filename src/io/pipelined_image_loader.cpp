@@ -353,20 +353,16 @@ namespace lfs::io {
         const bool mask_ready = !pair.mask_expected || mask_has_value;
 
         if (image_ready && mask_ready) {
-            // Determine output stream (prefer image stream)
             cudaStream_t output_stream = pair.image_stream;
 
-            // If mask was loaded on a different stream, synchronize it to the output stream
+            // Sync mask stream to output stream if different
             if (mask_has_value && pair.mask_stream && pair.mask_stream != output_stream) {
-                // Record event on mask stream and make output stream wait for it
                 lfs::core::CUDAEvent mask_done;
                 mask_done.record(pair.mask_stream);
-                if (output_stream) {
+                if (output_stream)
                     mask_done.wait(output_stream);
-                } else {
-                    // If output_stream is default stream, just sync the mask stream
+                else
                     mask_done.synchronize();
-                }
             }
 
             output_queue_.push({sequence_id,
@@ -613,7 +609,6 @@ namespace lfs::io {
                             if (batch[i].mask_params.threshold > 0) {
                                 cuda::launch_mask_threshold(mask_ptr, H, W, batch[i].mask_params.threshold, decode_stream);
                             }
-                            // No sync here - pass stream to output for async completion
                             mask_tensor.set_stream(decode_stream);
                             try_complete_pair(batch[i].sequence_id, std::nullopt, std::move(mask_tensor), decode_stream);
 
@@ -714,6 +709,7 @@ namespace lfs::io {
                             lfs::core::Device::CPU, lfs::core::DataType::UInt8);
 
                         auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA, cold_stream);
+                        cudaStreamSynchronize(cold_stream); // Must sync before freeing source
                         lfs::core::free_image(img_data);
 
                         mask_tensor = lfs::core::Tensor::zeros(
@@ -737,8 +733,7 @@ namespace lfs::io {
                                 reinterpret_cast<float*>(temp_chw.data_ptr()),
                                 H, W, C, cold_stream);
 
-                            // Multi-channel mask needs CPU averaging - sync before CPU work
-                            cudaStreamSynchronize(cold_stream);
+                            cudaStreamSynchronize(cold_stream); // CPU averaging needs sync
 
                             auto temp_cpu = temp_chw.to(lfs::core::Device::CPU);
                             auto mask_cpu = lfs::core::Tensor::zeros(
@@ -774,12 +769,10 @@ namespace lfs::io {
                     if (item.mask_params.threshold > 0) {
                         cuda::launch_mask_threshold(mask_ptr, H, W, item.mask_params.threshold, cold_stream);
                     }
-                    // No sync here - let the consumer sync when needed
 
                     if (is_nvcodec_available()) {
                         try {
-                            // Encode needs sync since it reads back data
-                            cudaStreamSynchronize(cold_stream);
+                            cudaStreamSynchronize(cold_stream); // Encode reads data
                             auto jpeg_bytes = nvcodec.encode_grayscale_to_jpeg(
                                 mask_tensor, config_.cache_jpeg_quality, cold_stream);
                             put_in_jpeg_cache(item.cache_key,
@@ -820,6 +813,7 @@ namespace lfs::io {
                             lfs::core::Device::CPU, lfs::core::DataType::UInt8);
 
                         auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA, cold_stream);
+                        cudaStreamSynchronize(cold_stream); // Must sync before freeing source
                         lfs::core::free_image(img_data);
 
                         decoded = lfs::core::Tensor::zeros(
@@ -832,14 +826,12 @@ namespace lfs::io {
                             reinterpret_cast<float*>(decoded.data_ptr()),
                             H, W, C, cold_stream);
 
-                        // No sync here - let the consumer sync when needed
                         gpu_uint8 = lfs::core::Tensor();
                     }
 
                     if (is_nvcodec_available()) {
                         try {
-                            // Encode needs sync since it reads back data
-                            cudaStreamSynchronize(cold_stream);
+                            cudaStreamSynchronize(cold_stream); // Encode reads data
                             auto jpeg_bytes = nvcodec.encode_to_jpeg(
                                 decoded, config_.cache_jpeg_quality, cold_stream);
                             put_in_jpeg_cache(item.cache_key,

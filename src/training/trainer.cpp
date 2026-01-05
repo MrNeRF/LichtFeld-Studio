@@ -1208,7 +1208,6 @@ namespace lfs::training {
                 lfs::core::Tensor gt_image = std::move(example.data.image);
 
                 // Sync the image loading stream before using the tensor
-                // This enables async overlap: image N+1 loads while we train on image N
                 if (cudaStream_t img_stream = gt_image.stream(); img_stream != nullptr) {
                     cudaStreamSynchronize(img_stream);
                 }

@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/tensor.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "cuda/image_format_kernels.cuh"
 
 #include <algorithm>
@@ -519,6 +520,9 @@ namespace lfs::io {
         void* cuda_stream,
         DecodeFormat format) {
 
+        // Ensure tensor allocations happen on the same stream as decode operations
+        lfs::core::CUDAStreamGuard stream_guard(static_cast<cudaStream_t>(cuda_stream));
+
         const bool is_grayscale = (format == DecodeFormat::Grayscale);
         const int num_channels = is_grayscale ? 1 : 3;
 
@@ -699,8 +703,6 @@ namespace lfs::io {
             }
         }
 
-        // No sync here - let the caller sync when needed via the stream
-        // This enables async overlap with training
         output_tensor.set_stream(static_cast<cudaStream_t>(cuda_stream));
         uint8_tensor = Tensor();
 
@@ -728,6 +730,9 @@ namespace lfs::io {
         void* cuda_stream) {
 
         using namespace lfs::core;
+
+        // Ensure tensor allocations happen on the same stream as decode operations
+        CUDAStreamGuard stream_guard(static_cast<cudaStream_t>(cuda_stream));
 
         if (jpeg_blobs.empty()) {
             return {};
@@ -875,13 +880,11 @@ namespace lfs::io {
             results.push_back(std::move(output));
         }
 
-        // No sync here - let the caller sync when needed via the stream
         uint8_tensors.clear();
 
         if (saved_context) {
             cuCtxSetCurrent(saved_context);
         }
-
         LOG_DEBUG("[NvCodecImageLoader] Batch decode complete: {}", batch_size);
         return results;
     }
@@ -891,6 +894,9 @@ namespace lfs::io {
         void* cuda_stream) {
 
         using namespace lfs::core;
+
+        // Ensure tensor allocations happen on the same stream as decode operations
+        CUDAStreamGuard stream_guard(static_cast<cudaStream_t>(cuda_stream));
 
         if (jpeg_spans.empty()) {
             return {};
@@ -1040,7 +1046,6 @@ namespace lfs::io {
             results.push_back(std::move(output));
         }
 
-        // No sync here - let the caller sync when needed via the stream
         uint8_tensors.clear();
 
         if (saved_context) {

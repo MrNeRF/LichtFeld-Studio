@@ -795,7 +795,6 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {                                                                                                       \
             tensor_ops::launch_convert_type<FROM_TYPE, TO_TYPE>(                                                                             \
                 ptr<FROM_TYPE>(), result.ptr<TO_TYPE>(), numel(), stream_);                                                                  \
-            /* No sync - tensor-to-tensor operation */                                                                                       \
             return result;                                                                                                                   \
         }                                                                                                                                    \
         /* CPU fallback */                                                                                                                   \
@@ -818,7 +817,7 @@ namespace lfs::core {
         // Bool <-> Float32 (manual - can't use launch_convert_type due to uint8_t conflict)
         if (dtype_ == DataType::Bool && dtype == DataType::Float32) {
             auto result = empty(shape_, device_, DataType::Float32);
-            result.set_stream(stream_); // Propagate stream
+            result.set_stream(stream_);
             if (numel() == 0)
                 return result;
 
@@ -826,7 +825,6 @@ namespace lfs::core {
                 // Use generic conversion (unsigned char -> float)
                 tensor_ops::launch_convert_type<unsigned char, float>(
                     ptr<unsigned char>(), result.ptr<float>(), numel(), stream_);
-                // No sync - tensor-to-tensor GPU operation
             } else {
                 const unsigned char* src = ptr<unsigned char>();
                 float* dst = result.ptr<float>();
@@ -868,7 +866,7 @@ namespace lfs::core {
         // DEBUG: Add logging for Float32->Int32 conversion
         if (dtype_ == DataType::Float32 && dtype == DataType::Int32) {
             auto result = empty(shape_, device_, DataType::Int32);
-            result.set_stream(stream_); // Propagate stream
+            result.set_stream(stream_);
             if (numel() == 0)
                 return result;
 
@@ -882,7 +880,6 @@ namespace lfs::core {
             if (device_ == Device::CUDA) {
                 tensor_ops::launch_convert_type<float, int>(
                     ptr<float>(), result.ptr<int>(), numel(), stream_);
-                // No sync - tensor-to-tensor GPU operation
             } else {
                 const float* src = ptr<float>();
                 int* dst = result.ptr<int>();
@@ -945,7 +942,7 @@ namespace lfs::core {
 
         if (dtype_ == DataType::Bool && dtype == DataType::Int32) {
             auto result = empty(shape_, device_, DataType::Int32);
-            result.set_stream(stream_); // Propagate stream
+            result.set_stream(stream_);
             if (numel() == 0)
                 return result;
 
@@ -953,7 +950,6 @@ namespace lfs::core {
                 // Use generic conversion (unsigned char -> int)
                 tensor_ops::launch_convert_type<unsigned char, int>(
                     ptr<unsigned char>(), result.ptr<int>(), numel(), stream_);
-                // No sync - tensor-to-tensor GPU operation
             } else {
                 const unsigned char* src = ptr<unsigned char>();
                 int* dst = result.ptr<int>();
@@ -967,7 +963,7 @@ namespace lfs::core {
         // Bool -> Int64
         if (dtype_ == DataType::Bool && dtype == DataType::Int64) {
             auto result = empty(shape_, device_, DataType::Int64);
-            result.set_stream(stream_); // Propagate stream
+            result.set_stream(stream_);
             if (numel() == 0)
                 return result;
 
@@ -975,7 +971,6 @@ namespace lfs::core {
                 // Use generic conversion (unsigned char -> int64_t)
                 tensor_ops::launch_convert_type<unsigned char, int64_t>(
                     ptr<unsigned char>(), result.ptr<int64_t>(), numel(), stream_);
-                // No sync - tensor-to-tensor GPU operation
             } else {
                 const unsigned char* src = ptr<unsigned char>();
                 int64_t* dst = result.ptr<int64_t>();
@@ -1021,7 +1016,7 @@ namespace lfs::core {
         // Bool -> Float16
         if (dtype_ == DataType::Bool && dtype == DataType::Float16) {
             auto result = empty(shape_, device_, DataType::Float16);
-            result.set_stream(stream_); // Propagate stream
+            result.set_stream(stream_);
             if (numel() == 0)
                 return result;
 
@@ -1029,7 +1024,6 @@ namespace lfs::core {
                 // Use generic conversion (unsigned char -> __half)
                 tensor_ops::launch_convert_type<unsigned char, __half>(
                     ptr<unsigned char>(), result.ptr<__half>(), numel(), stream_);
-                // No sync - tensor-to-tensor GPU operation
             } else {
                 const unsigned char* src = ptr<unsigned char>();
                 __half* dst = result.ptr<__half>();
@@ -1080,7 +1074,7 @@ namespace lfs::core {
         // Without sync, item<int>() may read before conversion completes, getting garbage
         if (dtype_ == DataType::Int64 && dtype == DataType::Int32) {
             auto result = empty(shape_, device_, DataType::Int32);
-            result.set_stream(stream_); // Propagate stream
+            result.set_stream(stream_);
             if (numel() == 0)
                 return result;
 

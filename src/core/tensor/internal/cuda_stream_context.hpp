@@ -10,14 +10,7 @@
 
 namespace lfs::core {
 
-    /**
-     * Thread-local current CUDA stream management (PyTorch-style)
-     *
-     * This follows PyTorch's approach where each thread has its own "current stream"
-     * that is used by default for all CUDA operations. This allows DataLoader workers
-     * to each have their own stream without passing streams explicitly through every
-     * operation.
-     */
+    /** Thread-local CUDA stream management. Each thread has its own "current stream". */
     class CUDAStreamContext {
     public:
         static CUDAStreamContext& instance() {
@@ -25,7 +18,6 @@ namespace lfs::core {
             return inst;
         }
 
-        // Get the current stream for this thread (default: nullptr = stream 0)
         cudaStream_t getCurrentStream() {
             std::thread::id tid = std::this_thread::get_id();
             std::lock_guard<std::mutex> lock(mutex_);
@@ -33,10 +25,9 @@ namespace lfs::core {
             if (it != thread_streams_.end()) {
                 return it->second;
             }
-            return nullptr; // Default stream
+            return nullptr;
         }
 
-        // Set the current stream for this thread
         void setCurrentStream(cudaStream_t stream) {
             std::thread::id tid = std::this_thread::get_id();
             std::lock_guard<std::mutex> lock(mutex_);
@@ -53,22 +44,7 @@ namespace lfs::core {
         std::unordered_map<std::thread::id, cudaStream_t> thread_streams_;
     };
 
-    /**
-     * RAII guard for temporarily setting the current CUDA stream
-     * (PyTorch's CUDAStreamGuard pattern)
-     *
-     * Usage in DataLoader worker:
-     *   cudaStream_t worker_stream;
-     *   cudaStreamCreate(&worker_stream);
-     *   {
-     *       CUDAStreamGuard guard(worker_stream);
-     *       // All tensor operations in this scope use worker_stream
-     *       auto image = load_image();
-     *       image = image.to(Device::CUDA);  // Uses worker_stream!
-     *       image = preprocess(image);        // Uses worker_stream!
-     *   }
-     *   // Stream restored to previous value
-     */
+    /** RAII guard: sets current stream on construction, restores previous on destruction. */
     class CUDAStreamGuard {
     public:
         explicit CUDAStreamGuard(cudaStream_t stream)
@@ -80,7 +56,6 @@ namespace lfs::core {
             CUDAStreamContext::instance().setCurrentStream(prev_stream_);
         }
 
-        // Delete copy/move
         CUDAStreamGuard(const CUDAStreamGuard&) = delete;
         CUDAStreamGuard& operator=(const CUDAStreamGuard&) = delete;
         CUDAStreamGuard(CUDAStreamGuard&&) = delete;
@@ -90,7 +65,6 @@ namespace lfs::core {
         cudaStream_t prev_stream_;
     };
 
-    // Helper function to get current stream (like PyTorch's getCurrentCUDAStream)
     inline cudaStream_t getCurrentCUDAStream() {
         return CUDAStreamContext::instance().getCurrentStream();
     }

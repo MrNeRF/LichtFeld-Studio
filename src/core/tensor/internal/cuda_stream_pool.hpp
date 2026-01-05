@@ -11,23 +11,9 @@
 
 namespace lfs::core {
 
-    /**
-     * RAII wrapper for CUDA events with automatic lifecycle management.
-     *
-     * CUDAEvent provides a convenient interface for synchronization between streams
-     * without blocking the CPU. Key use cases:
-     *   - Cross-stream dependencies: stream B waits for work on stream A
-     *   - Async memory operations: ensure data is ready before use
-     *   - Timing (when enabled): measure kernel execution time
-     *
-     * Design:
-     *   - Events are created with cudaEventDisableTiming by default for best performance
-     *   - Move-only semantics prevent accidental double-destroy
-     *   - Thread-safe for concurrent record/wait from different threads
-     */
+    /** RAII wrapper for CUDA events. Move-only, timing disabled by default. */
     class CUDAEvent {
     public:
-        // Create an event (disabled timing for performance)
         explicit CUDAEvent(bool enable_timing = false) {
             unsigned int flags = enable_timing ? cudaEventDefault : cudaEventDisableTiming;
             cudaError_t err = cudaEventCreateWithFlags(&event_, flags);
@@ -43,7 +29,6 @@ namespace lfs::core {
             }
         }
 
-        // Move-only semantics
         CUDAEvent(CUDAEvent&& other) noexcept : event_(other.event_) {
             other.event_ = nullptr;
         }
@@ -62,7 +47,6 @@ namespace lfs::core {
         CUDAEvent(const CUDAEvent&) = delete;
         CUDAEvent& operator=(const CUDAEvent&) = delete;
 
-        // Record this event on a stream (marks a point in the stream's execution)
         bool record(cudaStream_t stream = nullptr) {
             if (!event_)
                 return false;
@@ -74,7 +58,6 @@ namespace lfs::core {
             return true;
         }
 
-        // Block CPU until this event completes
         bool synchronize() const {
             if (!event_)
                 return false;
@@ -82,7 +65,6 @@ namespace lfs::core {
             return err == cudaSuccess;
         }
 
-        // Make a stream wait for this event (non-blocking for CPU)
         bool wait(cudaStream_t stream) const {
             if (!event_)
                 return false;
@@ -94,7 +76,6 @@ namespace lfs::core {
             return true;
         }
 
-        // Query if event has completed (non-blocking)
         bool is_complete() const {
             if (!event_)
                 return true;
@@ -102,7 +83,6 @@ namespace lfs::core {
             return err == cudaSuccess;
         }
 
-        // Get elapsed time between this event and another (requires timing enabled)
         float elapsed_ms(const CUDAEvent& start) const {
             if (!event_ || !start.event_)
                 return 0.0f;
@@ -115,35 +95,14 @@ namespace lfs::core {
             return ms;
         }
 
-        // Check if event is valid
         bool valid() const { return event_ != nullptr; }
-
-        // Get raw handle (for interop with existing CUDA code)
         cudaEvent_t get() const { return event_; }
 
     private:
         cudaEvent_t event_ = nullptr;
     };
 
-    /**
-     * Pool of CUDA streams for parallel execution.
-     *
-     * Provides a fixed pool of non-blocking streams that can be acquired
-     * round-robin for parallel work. Key design points:
-     *
-     *   - Non-blocking streams (cudaStreamNonBlocking): don't synchronize with default stream
-     *   - Fixed pool size: avoid stream creation overhead at runtime
-     *   - Round-robin acquisition: simple load balancing without contention
-     *   - Thread-safe: atomic counter for acquisition
-     *
-     * Usage:
-     *   // Get a stream for parallel work
-     *   cudaStream_t s = CUDAStreamPool::instance().acquire();
-     *   kernel<<<grid, block, 0, s>>>(...);
-     *
-     *   // For critical operations, use high priority
-     *   cudaStream_t s = CUDAStreamPool::instance().acquire_high_priority();
-     */
+    /** Fixed pool of non-blocking CUDA streams with round-robin acquisition. Thread-safe. */
     class CUDAStreamPool {
     public:
         static constexpr size_t DEFAULT_POOL_SIZE = 8;
@@ -154,7 +113,6 @@ namespace lfs::core {
             return pool;
         }
 
-        // Acquire a stream (round-robin, non-blocking)
         cudaStream_t acquire() {
             if (streams_.empty())
                 return nullptr;
@@ -162,7 +120,6 @@ namespace lfs::core {
             return streams_[idx];
         }
 
-        // Acquire a high-priority stream (for latency-critical operations)
         cudaStream_t acquire_high_priority() {
             if (high_priority_streams_.empty())
                 return acquire();
@@ -171,18 +128,15 @@ namespace lfs::core {
             return high_priority_streams_[idx];
         }
 
-        // Get pool size
         size_t size() const { return streams_.size(); }
         size_t high_priority_size() const { return high_priority_streams_.size(); }
 
-        // Get a specific stream by index (for deterministic usage)
         cudaStream_t get(size_t index) const {
             if (index >= streams_.size())
                 return nullptr;
             return streams_[index];
         }
 
-        // Synchronize all streams in the pool
         void synchronize_all() {
             for (cudaStream_t stream : streams_) {
                 cudaStreamSynchronize(stream);
@@ -192,7 +146,6 @@ namespace lfs::core {
             }
         }
 
-        // Check if pool is initialized
         bool is_initialized() const { return !streams_.empty(); }
 
         CUDAStreamPool(const CUDAStreamPool&) = delete;
@@ -208,14 +161,12 @@ namespace lfs::core {
         }
 
         void initialize() {
-            // Check CUDA device availability
             int device_count = 0;
             if (cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0) {
                 LOG_WARN("No CUDA devices available, stream pool disabled");
                 return;
             }
 
-            // Create regular priority streams (non-blocking)
             streams_.reserve(DEFAULT_POOL_SIZE);
             for (size_t i = 0; i < DEFAULT_POOL_SIZE; ++i) {
                 cudaStream_t stream;
@@ -227,7 +178,6 @@ namespace lfs::core {
                 }
             }
 
-            // Create high priority streams
             int least_priority, greatest_priority;
             cudaDeviceGetStreamPriorityRange(&least_priority, &greatest_priority);
 
@@ -265,21 +215,12 @@ namespace lfs::core {
         std::atomic<size_t> next_high_priority_{0};
     };
 
-    /**
-     * RAII guard that acquires a stream from the pool and sets it as the current thread's stream.
-     *
-     * Usage:
-     *   {
-     *       PooledStreamGuard guard;  // Acquires stream, sets as current
-     *       auto t = Tensor::randn({1000, 1000}, Device::CUDA);  // Uses pooled stream
-     *   }  // Stream restored to previous
-     */
+    /** RAII guard: acquires pooled stream, sets as thread's current, restores on destruction. */
     class PooledStreamGuard {
     public:
         explicit PooledStreamGuard(bool high_priority = false);
         ~PooledStreamGuard();
 
-        // Get the acquired stream
         cudaStream_t stream() const { return stream_; }
 
         PooledStreamGuard(const PooledStreamGuard&) = delete;
