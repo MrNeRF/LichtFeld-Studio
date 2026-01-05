@@ -368,7 +368,7 @@ namespace lfs::vis::gui {
                     config.MergeMode = true;
                     const std::string simplified_chinese_path_utf8 = lfs::core::path_to_utf8(simplified_chinese_path);
                     io.Fonts->AddFontFromFileTTF(simplified_chinese_path_utf8.c_str(), size, &config,
-                                                 io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+                                                 io.Fonts->GetGlyphRangesChineseFull());
                 }
 
                 return font;
