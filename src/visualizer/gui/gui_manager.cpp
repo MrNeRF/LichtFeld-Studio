@@ -322,6 +322,7 @@ namespace lfs::vis::gui {
             const auto bold_path = lfs::vis::getAssetPath("fonts/" + t.fonts.bold_path);
             const auto japanese_path = lfs::vis::getAssetPath("fonts/NotoSansJP-Regular.ttf");
             const auto korean_path = lfs::vis::getAssetPath("fonts/NotoSansKR-Regular.ttf");
+            const auto simplified_chinese_path = lfs::vis::getAssetPath("fonts/NotoSansSC-Regular.ttf");
 
             // Helper to check if font file is valid
             const auto is_font_valid = [](const std::filesystem::path& path) -> bool {
@@ -361,6 +362,15 @@ namespace lfs::vis::gui {
                                                  io.Fonts->GetGlyphRangesKorean());
                 }
 
+                // Merge Simplified Chinese glyphs if available
+                if (is_font_valid(simplified_chinese_path)) {
+                    ImFontConfig config;
+                    config.MergeMode = true;
+                    const std::string simplified_chinese_path_utf8 = lfs::core::path_to_utf8(simplified_chinese_path);
+                    io.Fonts->AddFontFromFileTTF(simplified_chinese_path_utf8.c_str(), size, &config,
+                                                 io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+                }
+
                 return font;
             };
 
@@ -391,6 +401,9 @@ namespace lfs::vis::gui {
                 }
                 if (is_font_valid(korean_path)) {
                     LOG_INFO("Korean font support enabled");
+                }
+                if (is_font_valid(simplified_chinese_path)) {
+                    LOG_INFO("Simplified Chinese font support enabled");
                 }
             }
         } catch (const std::exception& e) {
