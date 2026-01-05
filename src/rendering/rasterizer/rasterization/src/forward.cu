@@ -352,13 +352,16 @@ void lfs::rendering::forward(
     PerTileBuffers per_tile_buffers = PerTileBuffers::from_blob(per_tile_buffers_blob, n_tiles);
 
     static cudaStream_t memset_stream = 0;
+    static cudaEvent_t memset_event = 0;
     if constexpr (!config::debug) {
         static bool memset_stream_initialized = false;
         if (!memset_stream_initialized) {
             cudaStreamCreate(&memset_stream);
+            cudaEventCreateWithFlags(&memset_event, cudaEventDisableTiming);
             memset_stream_initialized = true;
         }
         cudaMemsetAsync(per_tile_buffers.instance_ranges, 0, sizeof(uint2) * n_tiles, memset_stream);
+        cudaEventRecord(memset_event, memset_stream);
     } else
         cudaMemset(per_tile_buffers.instance_ranges, 0, sizeof(uint2) * n_tiles);
 
@@ -510,7 +513,7 @@ void lfs::rendering::forward(
     CHECK_CUDA(config::debug, "cub::DeviceRadixSort::SortPairs (Tile)")
 
     if constexpr (!config::debug)
-        cudaStreamSynchronize(memset_stream);
+        cudaStreamWaitEvent(nullptr, memset_event, 0); // GPU-side sync - default stream waits
 
     if (n_instances > 0) {
         kernels::forward::extract_instance_ranges_cu<<<div_round_up(n_instances, config::block_size_extract_instance_ranges), config::block_size_extract_instance_ranges>>>(

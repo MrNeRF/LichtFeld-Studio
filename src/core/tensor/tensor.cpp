@@ -1206,36 +1206,38 @@ namespace lfs::core {
         // Account for storage offset
         void* dest = static_cast<char*>(data_) + storage_offset_ * dtype_size(dtype_);
 
-        // Handle Bool dtype
-        if (dtype_ == DataType::Bool) {
-            unsigned char bool_val = (value != 0.0f) ? 1 : 0;
-            if (device_ == Device::CUDA) {
-                std::vector<unsigned char> temp(numel(), bool_val);
-                CHECK_CUDA(cudaMemcpy(dest, temp.data(), bytes(), cudaMemcpyHostToDevice));
-            } else {
-                unsigned char* data = static_cast<unsigned char*>(dest);
-                std::fill(data, data + numel(), bool_val);
-            }
-            return *this;
-        }
-
-        // Handle Int32 dtype
-        if (dtype_ == DataType::Int32) {
-            int int_val = static_cast<int>(value);
-            if (device_ == Device::CUDA) {
-                std::vector<int> temp(numel(), int_val);
-                CHECK_CUDA(cudaMemcpy(dest, temp.data(), bytes(), cudaMemcpyHostToDevice));
-            } else {
-                int* data = static_cast<int*>(dest);
-                std::fill(data, data + numel(), int_val);
-            }
-            return *this;
-        }
-
-        // Handle Float32 dtype (original code)
+        // Handle CUDA tensors - use GPU kernel directly (much faster than CPU→GPU memcpy)
         if (device_ == Device::CUDA) {
-            std::vector<float> temp(numel(), value);
-            CHECK_CUDA(cudaMemcpy(dest, temp.data(), bytes(), cudaMemcpyHostToDevice));
+            const size_t n = numel();
+            // Treat as 1D contiguous for fill (stride=1)
+            std::vector<size_t> shape_1d = {n};
+            std::vector<size_t> strides_1d = {1};
+
+            if (dtype_ == DataType::Float32) {
+                tensor_ops::launch_fill_strided<float>(
+                    static_cast<float*>(dest), value, shape_1d, strides_1d, 0, n, stream_);
+            } else if (dtype_ == DataType::Int32) {
+                tensor_ops::launch_fill_strided<int>(
+                    static_cast<int*>(dest), static_cast<int>(value), shape_1d, strides_1d, 0, n, stream_);
+            } else if (dtype_ == DataType::Bool) {
+                tensor_ops::launch_fill_strided<unsigned char>(
+                    static_cast<unsigned char*>(dest), (value != 0.0f) ? (unsigned char)1 : (unsigned char)0,
+                    shape_1d, strides_1d, 0, n, stream_);
+            }
+            // Only sync if no stream (maintains original behavior)
+            if (!stream_) {
+                CHECK_CUDA(cudaDeviceSynchronize());
+            }
+            return *this;
+        }
+
+        // CPU tensors: use std::fill
+        if (dtype_ == DataType::Bool) {
+            unsigned char* data = static_cast<unsigned char*>(dest);
+            std::fill(data, data + numel(), (value != 0.0f) ? (unsigned char)1 : (unsigned char)0);
+        } else if (dtype_ == DataType::Int32) {
+            int* data = static_cast<int*>(dest);
+            std::fill(data, data + numel(), static_cast<int>(value));
         } else {
             float* data = static_cast<float*>(dest);
             std::fill(data, data + numel(), value);
