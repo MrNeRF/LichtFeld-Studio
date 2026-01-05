@@ -239,6 +239,24 @@ namespace lfs::vis {
                 file_type = state::SceneLoaded::Type::SPZ;
             }
 
+            // Auto-set SH degree to match the loaded model
+            if (load_result) {
+                if (auto* splat_data = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&load_result->data)) {
+                    if (*splat_data) {
+                        const int model_sh_degree = (*splat_data)->get_max_sh_degree();
+                        LOG_INFO("Setting UI SH degree to {} (model's max degree)", model_sh_degree);
+                        ui::RenderSettingsChanged{
+                            .sh_degree = model_sh_degree,
+                            .fov = std::nullopt,
+                            .scaling_modifier = std::nullopt,
+                            .antialiasing = std::nullopt,
+                            .background_color = std::nullopt,
+                            .equirectangular = std::nullopt}
+                            .emit();
+                    }
+                }
+            }
+
             // Emit events
             state::SceneLoaded{
                 .scene = nullptr,
@@ -327,7 +345,19 @@ namespace lfs::vis {
             }
 
             const size_t gaussian_count = (*splat_data)->size();
+            const int model_sh_degree = (*splat_data)->get_max_sh_degree();
             scene_.addNode(name, std::make_unique<lfs::core::SplatData>(std::move(**splat_data)));
+            
+            // Auto-set UI SH degree to match the loaded model if higher than current
+            LOG_INFO("Model '{}' has SH degree {}, updating UI if necessary", name, model_sh_degree);
+            ui::RenderSettingsChanged{
+                .sh_degree = model_sh_degree,
+                .fov = std::nullopt,
+                .scaling_modifier = std::nullopt,
+                .antialiasing = std::nullopt,
+                .background_color = std::nullopt,
+                .equirectangular = std::nullopt}
+                .emit();
 
             // Create cropbox as child of this splat
             if (const auto* splat_node = scene_.getNode(name)) {

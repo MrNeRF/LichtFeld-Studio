@@ -271,6 +271,10 @@ namespace lfs::io {
                                                                                            : sh_meta.coeffs == 15  ? 3
                                                                                                                    : 0);
                 shN_dim1 = SH_COEFFS[sh_degree];
+                LOG_INFO("SH metadata found: bands={}, coeffs={}, calculated degree={}, shN_dim1={}",
+                         sh_meta.bands, sh_meta.coeffs, sh_degree, shN_dim1);
+            } else {
+                LOG_INFO("No shN metadata in SOG file");
             }
 
             std::vector<float> host_sh0(num_splats * sh0_dim1 * sh0_dim2);
@@ -418,6 +422,9 @@ namespace lfs::io {
                 auto it_centroids = images.find("shN_centroids.webp");
                 auto it_labels = images.find("shN_labels.webp");
 
+                LOG_INFO("Attempting to decode SH data: centroids found={}, labels found={}",
+                         it_centroids != images.end(), it_labels != images.end());
+
                 if (it_centroids != images.end() && it_labels != images.end()) {
                     const auto& centroids_img = it_centroids->second;
                     const auto& labels_img = it_labels->second;
@@ -430,8 +437,8 @@ namespace lfs::io {
                     int num_coeffs = SH_COEFFS[sh_degree];
                     int palette_size = sh_meta.palette_size > 0 ? sh_meta.palette_size : centroids_img.size() / (64 * num_coeffs * 4);
 
-                    LOG_DEBUG("Decoding SH: degree={}, coeffs={}, palette_size={}",
-                              sh_degree, num_coeffs, palette_size);
+                    LOG_INFO("Decoding SH: degree={}, coeffs={}, palette_size={}",
+                             sh_degree, num_coeffs, palette_size);
 
                     // Decode centroids from texture
                     std::vector<std::vector<float>> centroids(palette_size);
