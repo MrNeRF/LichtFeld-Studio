@@ -219,7 +219,9 @@ namespace lfs::io {
                     sh_data.files = shN.at("files").get<std::vector<std::string>>();
 
                     // Optional fields
-                    if (shN.contains("palette_size")) {
+                    if (shN.contains("count")) {
+                        sh_data.palette_size = shN["count"].get<int>();
+                    } else if (shN.contains("palette_size")) {
                         sh_data.palette_size = shN["palette_size"].get<int>();
                     }
                     if (shN.contains("bands")) {
