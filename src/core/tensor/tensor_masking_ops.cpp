@@ -1185,8 +1185,12 @@ namespace lfs::core {
                 tensor_ops::launch_count_nonzero_float(ptr<float>(), d_count, numel(), stream_);
             }
 
-            // API BOUNDARY: Sync before reading result from GPU
-            cudaDeviceSynchronize();
+            // API BOUNDARY: Sync before reading result from GPU - use stream sync if available
+            if (stream_) {
+                cudaStreamSynchronize(stream_);
+            } else {
+                cudaDeviceSynchronize();
+            }
             CHECK_CUDA(cudaMemcpy(&count, d_count, sizeof(size_t), cudaMemcpyDeviceToHost));
             CHECK_CUDA(cudaFree(d_count));
 

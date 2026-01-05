@@ -737,7 +737,8 @@ namespace lfs::core {
             }
             */
 
-            cudaStream_t transfer_stream = stream ? stream : 0;
+            // Use provided stream, or tensor's stream, or default stream
+            cudaStream_t transfer_stream = stream ? stream : (stream_ ? stream_ : 0);
             CHECK_CUDA(cudaMemcpyAsync(t.data_, src, bytes(), cudaMemcpyHostToDevice, transfer_stream));
 
             // CRITICAL: Update source tensor's stream so deallocator knows which stream used this memory
@@ -746,23 +747,34 @@ namespace lfs::core {
                 const_cast<Tensor*>(this)->stream_ = stream;
             }
 
-            // If stream is provided, caller is responsible for sync
+            // If no stream provided, sync - but use stream sync if tensor has a stream
             if (!stream) {
-                CHECK_CUDA(cudaDeviceSynchronize()); // Ensure transfer completes before returning
+                if (stream_) {
+                    cudaStreamSynchronize(stream_);
+                } else {
+                    CHECK_CUDA(cudaDeviceSynchronize());
+                }
             }
         } else if (device_ == Device::CUDA && device == Device::CPU) {
-            // API BOUNDARY: Sync before GPU→CPU transfer
+            // API BOUNDARY: Sync before GPU→CPU transfer - use stream sync when possible
             if (stream) {
                 cudaStreamSynchronize(stream);
+            } else if (stream_) {
+                cudaStreamSynchronize(stream_);
             } else {
                 cudaDeviceSynchronize();
             }
             // Async transfer for GPU→CPU as well (destination is pinned)
-            cudaStream_t transfer_stream = stream ? stream : 0;
+            cudaStream_t transfer_stream = stream ? stream : (stream_ ? stream_ : 0);
             CHECK_CUDA(cudaMemcpyAsync(t.data_, src, bytes(), cudaMemcpyDeviceToHost, transfer_stream));
 
+            // Sync after transfer - but use stream sync if available
             if (!stream) {
-                CHECK_CUDA(cudaDeviceSynchronize()); // Ensure transfer completes before returning
+                if (stream_) {
+                    cudaStreamSynchronize(stream_);
+                } else {
+                    CHECK_CUDA(cudaDeviceSynchronize());
+                }
             }
         }
 
@@ -1143,20 +1155,23 @@ namespace lfs::core {
             // For CUDA non-contiguous tensors: use CUDA kernel that respects strides
             if (device_ == Device::CUDA) {
                 // Use CUDA kernel for strided fill (much faster than element-by-element cudaMemcpy)
+                // Use tensor's stream if available for async operation
                 if (dtype_ == DataType::Float32) {
                     tensor_ops::launch_fill_strided<float>(
-                        static_cast<float*>(data_), value, shape_.dims(), strides_, storage_offset_, n, nullptr);
+                        static_cast<float*>(data_), value, shape_.dims(), strides_, storage_offset_, n, stream_);
                 } else if (dtype_ == DataType::Int32) {
                     int int_val = static_cast<int>(value);
                     tensor_ops::launch_fill_strided<int>(
-                        static_cast<int*>(data_), int_val, shape_.dims(), strides_, storage_offset_, n, nullptr);
+                        static_cast<int*>(data_), int_val, shape_.dims(), strides_, storage_offset_, n, stream_);
                 } else if (dtype_ == DataType::Bool) {
                     unsigned char bool_val = (value != 0.0f) ? 1 : 0;
                     tensor_ops::launch_fill_strided<unsigned char>(
-                        static_cast<unsigned char*>(data_), bool_val, shape_.dims(), strides_, storage_offset_, n, nullptr);
+                        static_cast<unsigned char*>(data_), bool_val, shape_.dims(), strides_, storage_offset_, n, stream_);
                 }
-                // Sync for the no-stream overload (maintains original behavior)
-                CHECK_CUDA(cudaDeviceSynchronize());
+                // Only sync if no stream (maintains original behavior for non-stream tensors)
+                if (!stream_) {
+                    CHECK_CUDA(cudaDeviceSynchronize());
+                }
                 return *this;
             }
 
@@ -1729,10 +1744,13 @@ namespace lfs::core {
         const char* data_ptr = static_cast<const char*>(data_) + storage_offset_ * dtype_size(dtype_);
         float value = 0.0f;
 
-        // Sync before reading from GPU
+        // Sync before reading from GPU - use stream sync if available (much faster!)
         if (device_ == Device::CUDA) {
-            // API BOUNDARY: Sync before reading value from GPU
-            cudaDeviceSynchronize();
+            if (stream_) {
+                cudaStreamSynchronize(stream_);
+            } else {
+                cudaDeviceSynchronize();
+            }
         }
 
         // Handle different dtypes
@@ -1809,8 +1827,12 @@ namespace lfs::core {
         values.resize(n);
 
         if (device_ == Device::CUDA) {
-            // API BOUNDARY: Sync before reading from GPU
-            cudaDeviceSynchronize();
+            // Sync before reading from GPU - use stream sync if available
+            if (stream_) {
+                cudaStreamSynchronize(stream_);
+            } else {
+                cudaDeviceSynchronize();
+            }
             CHECK_CUDA(cudaMemcpy(values.data(), data_, n * sizeof(float),
                                   cudaMemcpyDeviceToHost));
         } else {
@@ -1874,8 +1896,12 @@ namespace lfs::core {
         const void* src = data_ptr();
 
         if (device_ == Device::CUDA) {
-            // API BOUNDARY: Sync before reading from GPU
-            cudaDeviceSynchronize();
+            // Sync before reading from GPU - use stream sync if available
+            if (stream_) {
+                cudaStreamSynchronize(stream_);
+            } else {
+                cudaDeviceSynchronize();
+            }
             CHECK_CUDA(cudaMemcpy(result.data(), src, bytes(), cudaMemcpyDeviceToHost));
         } else {
             std::memcpy(result.data(), src, bytes());

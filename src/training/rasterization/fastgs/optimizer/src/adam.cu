@@ -33,12 +33,13 @@ void fast_lfs::optimizer::adam_step(
     const float beta2,
     const float eps,
     const float bias_correction1_rcp,
-    const float bias_correction2_sqrt_rcp) {
+    const float bias_correction2_sqrt_rcp,
+    cudaStream_t stream) {
 
     // IMPORTANT: Use the SAME kernel as legacy (adam_step_cu), NOT the vectorized version!
     // The vectorized kernel (adam_step_vectorized_cu) has different floating-point rounding
     // behavior which causes divergence from legacy implementation.
-    kernels::adam::adam_step_cu<<<div_round_up(n_elements, config::block_size_adam_step), config::block_size_adam_step>>>(
+    kernels::adam::adam_step_cu<<<div_round_up(n_elements, config::block_size_adam_step), config::block_size_adam_step, 0, stream>>>(
         param,
         exp_avg,
         exp_avg_sq,

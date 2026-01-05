@@ -87,6 +87,10 @@ namespace lfs::core {
             uint64_t generation = 0;
             int device = -1;
 
+            // Frame synchronization event (replaces cudaDeviceSynchronize)
+            cudaEvent_t frame_event = nullptr;
+            bool event_recorded = false;
+
             // Statistics
             std::atomic<size_t> peak_usage{0};
             std::atomic<size_t> peak_usage_period{0};
