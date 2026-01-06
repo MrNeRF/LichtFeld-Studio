@@ -3,6 +3,7 @@
 
 #include "bilateral_grid.hpp"
 #include "core/logger.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include <cmath>
 #include <stdexcept>
@@ -34,7 +35,7 @@ namespace lfs::training {
 
         // Initialize identity transform directly on GPU
         kernels::launch_bilateral_grid_init_identity(
-            grids_.ptr<float>(), num_images, grid_L, grid_H, grid_W, nullptr);
+            grids_.ptr<float>(), num_images, grid_L, grid_H, grid_W, lfs::core::getCurrentCUDAStream());
 
         exp_avg_ = lfs::core::Tensor::zeros(grids_.shape(), lfs::core::Device::CUDA);
         exp_avg_sq_ = lfs::core::Tensor::zeros(grids_.shape(), lfs::core::Device::CUDA);
@@ -67,7 +68,7 @@ namespace lfs::training {
             auto output = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
             kernels::launch_bilateral_grid_slice_forward_chw(
                 grid_ptr, rgb.ptr<float>(), output.ptr<float>(),
-                grid_guidance_, grid_height_, grid_width_, h, w, nullptr);
+                grid_guidance_, grid_height_, grid_width_, h, w, lfs::core::getCurrentCUDAStream());
             return output;
         }
 
@@ -77,7 +78,7 @@ namespace lfs::training {
         auto output = lfs::core::Tensor::empty({shape[0], shape[1], 3}, lfs::core::Device::CUDA);
         kernels::launch_bilateral_grid_slice_forward(
             grid_ptr, rgb_cont.ptr<float>(), output.ptr<float>(),
-            grid_guidance_, grid_height_, grid_width_, h, w, nullptr);
+            grid_guidance_, grid_height_, grid_width_, h, w, lfs::core::getCurrentCUDAStream());
         return output;
     }
 
@@ -99,14 +100,14 @@ namespace lfs::training {
             const int w = static_cast<int>(shape[2]);
             auto grad_rgb = lfs::core::Tensor::empty({3, shape[1], shape[2]}, lfs::core::Device::CUDA);
 
-            cudaMemsetAsync(grad_buffer_.ptr<float>(), 0, grid_slice_size * sizeof(float), nullptr);
+            cudaMemsetAsync(grad_buffer_.ptr<float>(), 0, grid_slice_size * sizeof(float), lfs::core::getCurrentCUDAStream());
             kernels::launch_bilateral_grid_slice_backward_chw(
                 grid_ptr, rgb.ptr<float>(), grad_output.ptr<float>(),
                 grad_buffer_.ptr<float>(), grad_rgb.ptr<float>(),
-                grid_guidance_, grid_height_, grid_width_, h, w, nullptr);
+                grid_guidance_, grid_height_, grid_width_, h, w, lfs::core::getCurrentCUDAStream());
             kernels::launch_bilateral_grid_accumulate_grad(
                 grad_grid_ptr, grad_buffer_.ptr<float>(),
-                static_cast<int>(grid_slice_size), nullptr);
+                static_cast<int>(grid_slice_size), lfs::core::getCurrentCUDAStream());
             return grad_rgb;
         }
 
@@ -119,7 +120,7 @@ namespace lfs::training {
         kernels::launch_bilateral_grid_slice_backward(
             grid_ptr, rgb_cont.ptr<float>(), grad_cont.ptr<float>(),
             grad_grid_ptr, grad_rgb.ptr<float>(),
-            grid_guidance_, grid_height_, grid_width_, h, w, nullptr);
+            grid_guidance_, grid_height_, grid_width_, h, w, lfs::core::getCurrentCUDAStream());
         return grad_rgb;
     }
 
@@ -127,14 +128,14 @@ namespace lfs::training {
         auto tv_device = lfs::core::Tensor::zeros({1}, lfs::core::Device::CUDA);
         kernels::launch_bilateral_grid_tv_forward(
             grids_.ptr<float>(), tv_device.ptr<float>(), tv_temp_buffer_.ptr<float>(),
-            num_images_, grid_guidance_, grid_height_, grid_width_, nullptr);
+            num_images_, grid_guidance_, grid_height_, grid_width_, lfs::core::getCurrentCUDAStream());
         return tv_device;
     }
 
     void BilateralGrid::tv_backward(float tv_weight) {
         kernels::launch_bilateral_grid_tv_backward(
             grids_.ptr<float>(), tv_weight, accumulated_grads_.ptr<float>(),
-            num_images_, grid_guidance_, grid_height_, grid_width_, nullptr);
+            num_images_, grid_guidance_, grid_height_, grid_width_, lfs::core::getCurrentCUDAStream());
     }
 
     void BilateralGrid::optimizer_step() {
@@ -146,12 +147,12 @@ namespace lfs::training {
             accumulated_grads_.ptr<float>(), static_cast<int>(grids_.numel()),
             static_cast<float>(current_lr_),
             static_cast<float>(config_.beta1), static_cast<float>(config_.beta2),
-            bc1_rcp, bc2_sqrt_rcp, static_cast<float>(config_.eps), nullptr);
+            bc1_rcp, bc2_sqrt_rcp, static_cast<float>(config_.eps), lfs::core::getCurrentCUDAStream());
     }
 
     void BilateralGrid::zero_grad() {
         cudaMemsetAsync(accumulated_grads_.ptr<float>(), 0,
-                        accumulated_grads_.numel() * sizeof(float), nullptr);
+                        accumulated_grads_.numel() * sizeof(float), lfs::core::getCurrentCUDAStream());
     }
 
     void BilateralGrid::scheduler_step() {

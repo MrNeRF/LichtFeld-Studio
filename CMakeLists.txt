@@ -148,7 +148,7 @@ if(NVIDIA_SMI)
     string(REGEX REPLACE "\n.*" "" DETECTED_COMPUTE_CAP "${DETECTED_COMPUTE_CAP}")
 
     message(STATUS "Detected GPU compute capability: ${DETECTED_COMPUTE_CAP}")
-    set(LichtFeld-Studio_CUDA_ARCH "native")
+    string(REPLACE "." "" LichtFeld-Studio_CUDA_ARCH "${DETECTED_COMPUTE_CAP}")
 else()
     message(WARNING "nvidia-smi not found! We are likely in CI, default to 8.6.")
     set(DETECTED_COMPUTE_CAP 8.6)

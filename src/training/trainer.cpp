@@ -12,6 +12,7 @@
 #include "core/path_utils.hpp"
 #include "core/splat_data_export.hpp"
 #include "core/splat_data_transform.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/filesystem_utils.hpp"

@@ -4,6 +4,7 @@
 
 #include "lfs/kernels/ssim.cuh"
 #include "lfs/kernels/ssim_reduction.cuh"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include <algorithm>
 #include <cooperative_groups.h>
 #include <cuda_runtime.h>
@@ -1323,12 +1324,10 @@ namespace lfs::training::kernels {
         auto dL_dmap = lfs::core::Tensor::zeros(ctx.img1.shape(), lfs::core::Device::CUDA);
 
         if (ctx.apply_valid_padding && ctx.original_h > 10 && ctx.original_w > 10) {
-            // Fill cropped region with gradient (use stream-aware version to avoid sync)
             auto cropped_view = dL_dmap.slice(2, 5, ctx.original_h - 5).slice(3, 5, ctx.original_w - 5);
-            cropped_view.fill_(grad_per_pixel, nullptr); // stream-aware version, no sync
+            cropped_view.fill_(grad_per_pixel, lfs::core::getCurrentCUDAStream());
         } else {
-            // No cropping - fill entire map (use stream-aware version to avoid sync)
-            dL_dmap.fill_(grad_per_pixel, nullptr);
+            dL_dmap.fill_(grad_per_pixel, lfs::core::getCurrentCUDAStream());
         }
 
         // Allocate output gradient
@@ -1497,9 +1496,9 @@ namespace lfs::training::kernels {
 
         if (ctx.apply_valid_padding && ctx.original_h > 10 && ctx.original_w > 10) {
             auto cropped_view = workspace.dL_dmap.slice(2, 5, ctx.original_h - 5).slice(3, 5, ctx.original_w - 5);
-            cropped_view.fill_(grad_per_pixel, nullptr); // stream-aware version, no sync
+            cropped_view.fill_(grad_per_pixel, lfs::core::getCurrentCUDAStream());
         } else {
-            workspace.dL_dmap.fill_(grad_per_pixel, nullptr);
+            workspace.dL_dmap.fill_(grad_per_pixel, lfs::core::getCurrentCUDAStream());
         }
 
         // Use pre-allocated output buffer
@@ -1621,9 +1620,9 @@ namespace lfs::training::kernels {
         auto dL_dmap = lfs::core::Tensor::zeros(ctx.img1.shape(), lfs::core::Device::CUDA);
         if (ctx.apply_valid_padding && ctx.H > 10 && ctx.W > 10) {
             auto cropped = dL_dmap.slice(2, 5, ctx.H - 5).slice(3, 5, ctx.W - 5);
-            cropped.fill_(grad_per_pixel, nullptr);
+            cropped.fill_(grad_per_pixel, lfs::core::getCurrentCUDAStream());
         } else {
-            dL_dmap.fill_(grad_per_pixel, nullptr);
+            dL_dmap.fill_(grad_per_pixel, lfs::core::getCurrentCUDAStream());
         }
 
         workspace.grad_img.zero_();

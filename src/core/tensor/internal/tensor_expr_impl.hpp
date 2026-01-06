@@ -6,6 +6,7 @@
 // This file contains template method implementations that require the full Tensor definition
 // It should be included at the END of tensor.hpp, after Tensor class is fully defined
 
+#include "cuda_stream_context.hpp"
 #include "tensor_expr.hpp"
 #include "tensor_functors.hpp" // For ops::compose
 #include <cuda_fp16.h>
@@ -47,7 +48,7 @@ namespace lfs::core {
                         tensor_ops::launch_unary_op_generic(
                             input_tensor.template ptr<int>(),
                             result.template ptr<int>(),
-                            result.numel(), op, nullptr);
+                            result.numel(), op, getCurrentCUDAStream());
                     } else {
                         // CPU fallback
                         const int* in_ptr = input_tensor.template ptr<int>();
@@ -63,7 +64,7 @@ namespace lfs::core {
                         tensor_ops::launch_unary_op_generic(
                             input_tensor.template ptr<float>(),
                             result.template ptr<float>(),
-                            result.numel(), op, nullptr);
+                            result.numel(), op, getCurrentCUDAStream());
                     } else {
                         // CPU fallback: apply operation element-wise
                         const float* in_ptr = input_tensor.template ptr<float>();
@@ -98,7 +99,7 @@ namespace lfs::core {
                         tensor_ops::launch_unary_op_generic(
                             input_tensor.template ptr<unsigned char>(),
                             result.template ptr<unsigned char>(),
-                            result.numel(), op, nullptr);
+                            result.numel(), op, getCurrentCUDAStream());
                     } else {
                         // CPU fallback
                         const unsigned char* in_ptr = input_tensor.template ptr<unsigned char>();
@@ -114,7 +115,7 @@ namespace lfs::core {
                         tensor_ops::launch_unary_op_generic(
                             input_tensor.template ptr<uint8_t>(),
                             result.template ptr<unsigned char>(),
-                            result.numel(), op, nullptr);
+                            result.numel(), op, getCurrentCUDAStream());
                     } else {
                         const uint8_t* in_ptr = input_tensor.template ptr<uint8_t>();
                         unsigned char* out_ptr = result.template ptr<unsigned char>();
@@ -129,7 +130,7 @@ namespace lfs::core {
                         tensor_ops::launch_unary_op_generic(
                             input_tensor.template ptr<int>(),
                             result.template ptr<unsigned char>(),
-                            result.numel(), op, nullptr);
+                            result.numel(), op, getCurrentCUDAStream());
                     } else {
                         const int* in_ptr = input_tensor.template ptr<int>();
                         unsigned char* out_ptr = result.template ptr<unsigned char>();
@@ -144,7 +145,7 @@ namespace lfs::core {
                         tensor_ops::launch_unary_op_generic(
                             input_tensor.template ptr<float>(),
                             result.template ptr<unsigned char>(),
-                            result.numel(), op, nullptr);
+                            result.numel(), op, getCurrentCUDAStream());
                     } else {
                         // CPU fallback
                         const float* in_ptr = input_tensor.template ptr<float>();
@@ -192,7 +193,7 @@ namespace lfs::core {
             tensor_ops::launch_unary_op_generic(
                 base.template ptr<float>(),
                 result.template ptr<float>(),
-                result.numel(), fused_op, nullptr);
+                result.numel(), fused_op, getCurrentCUDAStream());
         } else {
             // CPU fallback: apply fused operation element-wise
             const float* in_ptr = base.template ptr<float>();
@@ -241,13 +242,13 @@ namespace lfs::core {
                                 right_tensor.shape().dims().data(),
                                 shape.dims().data(),
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         } else {
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<__half>(),
                                 right_tensor.template ptr<__half>(),
                                 result.template ptr<__half>(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         }
                     } else {
                         // CPU fallback
@@ -293,13 +294,13 @@ namespace lfs::core {
                                 right_tensor.shape().dims().data(),
                                 shape.dims().data(),
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         } else {
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<int64_t>(),
                                 right_tensor.template ptr<int64_t>(),
                                 result.template ptr<int64_t>(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         }
                     } else {
                         // CPU fallback
@@ -341,13 +342,13 @@ namespace lfs::core {
                                 right_tensor.shape().dims().data(),
                                 shape.dims().data(),
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         } else {
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<uint8_t>(),
                                 right_tensor.template ptr<uint8_t>(),
                                 result.template ptr<uint8_t>(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         }
                     } else {
                         // CPU fallback
@@ -389,13 +390,13 @@ namespace lfs::core {
                                 right_tensor.shape().dims().data(),
                                 shape.dims().data(),
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         } else {
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<int>(),
                                 right_tensor.template ptr<int>(),
                                 result.template ptr<int>(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         }
                     } else {
                         // CPU fallback
@@ -438,14 +439,14 @@ namespace lfs::core {
                                 right_tensor.shape().dims().data(),
                                 shape.dims().data(),
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         } else {
                             // Element-wise binary operation (no broadcasting)
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<float>(),
                                 right_tensor.template ptr<float>(),
                                 result.template ptr<float>(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         }
                     } else {
                         // CPU fallback: apply operation element-wise
@@ -513,13 +514,13 @@ namespace lfs::core {
                                 right_tensor.shape().dims().data(),
                                 shape.dims().data(),
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         } else {
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<unsigned char>(),
                                 right_tensor.template ptr<unsigned char>(),
                                 result.template ptr<unsigned char>(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         }
                     } else {
                         // CPU fallback
@@ -561,13 +562,13 @@ namespace lfs::core {
                                 right_tensor.shape().dims().data(),
                                 shape.dims().data(),
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         } else {
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<__half>(),
                                 right_tensor.template ptr<__half>(),
                                 result.template ptr<unsigned char>(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         }
                     } else {
                         // CPU fallback
@@ -613,13 +614,13 @@ namespace lfs::core {
                                 right_tensor.shape().dims().data(),
                                 shape.dims().data(),
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         } else {
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<int64_t>(),
                                 right_tensor.template ptr<int64_t>(),
                                 result.template ptr<unsigned char>(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         }
                     } else {
                         // CPU fallback
@@ -661,13 +662,13 @@ namespace lfs::core {
                                 right_tensor.shape().dims().data(),
                                 shape.dims().data(),
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         } else {
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<int>(),
                                 right_tensor.template ptr<int>(),
                                 result.template ptr<unsigned char>(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         }
                     } else {
                         // CPU fallback
@@ -709,13 +710,13 @@ namespace lfs::core {
                                 right_tensor.shape().dims().data(),
                                 shape.dims().data(),
                                 left_tensor.shape().rank(), right_tensor.shape().rank(), shape.rank(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         } else {
                             tensor_ops::launch_binary_op_generic(
                                 left_tensor.template ptr<float>(),
                                 right_tensor.template ptr<float>(),
                                 result.template ptr<unsigned char>(),
-                                result.numel(), op, nullptr);
+                                result.numel(), op, getCurrentCUDAStream());
                         }
                     } else {
                         // CPU fallback
@@ -772,7 +773,7 @@ namespace lfs::core {
             tensor_ops::launch_unary_op_generic(
                 input_tensor.template ptr<float>(),
                 result.template ptr<float>(),
-                result.numel(), op_, nullptr);
+                result.numel(), op_, getCurrentCUDAStream());
         } else {
             // CPU fallback: apply scalar operation element-wise
             const float* in_ptr = input_tensor.template ptr<float>();
@@ -834,7 +835,7 @@ namespace lfs::core {
                 flat_input.numel(),
                 indices_tensor.numel(),
                 op_,
-                nullptr);
+                getCurrentCUDAStream());
         } else {
             // CPU fallback: gather then apply operation
             const float* src = flat_input.template ptr<float>();

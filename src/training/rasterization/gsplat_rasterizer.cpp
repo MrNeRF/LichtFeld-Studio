@@ -5,6 +5,7 @@
 #include "gsplat_rasterizer.hpp"
 #include "core/cuda/memory_arena.hpp"
 #include "core/logger.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "gsplat/Ops.h"
 #include "training/kernels/grad_alpha.hpp"
 #include <spdlog/spdlog.h>
@@ -453,11 +454,11 @@ namespace lfs::training {
         auto* v_sh_coeffs_ptr = reinterpret_cast<float*>(bwd_ptr);
 
         // Zero the gradient buffers
-        cudaMemsetAsync(v_means_ptr, 0, N * 3 * sizeof(float), nullptr);
-        cudaMemsetAsync(v_quats_ptr, 0, N * 4 * sizeof(float), nullptr);
-        cudaMemsetAsync(v_scales_ptr, 0, N * 3 * sizeof(float), nullptr);
-        cudaMemsetAsync(v_opacities_ptr, 0, N * sizeof(float), nullptr);
-        cudaMemsetAsync(v_sh_coeffs_ptr, 0, N * K * 3 * sizeof(float), nullptr);
+        cudaMemsetAsync(v_means_ptr, 0, N * 3 * sizeof(float), lfs::core::getCurrentCUDAStream());
+        cudaMemsetAsync(v_quats_ptr, 0, N * 4 * sizeof(float), lfs::core::getCurrentCUDAStream());
+        cudaMemsetAsync(v_scales_ptr, 0, N * 3 * sizeof(float), lfs::core::getCurrentCUDAStream());
+        cudaMemsetAsync(v_opacities_ptr, 0, N * sizeof(float), lfs::core::getCurrentCUDAStream());
+        cudaMemsetAsync(v_sh_coeffs_ptr, 0, N * K * 3 * sizeof(float), lfs::core::getCurrentCUDAStream());
 
         // Prepare grad_render_colors [1, H, W, channels] - permute from CHW to HWC using custom kernel
         // This avoids memory pool allocation from tensor permute().contiguous()
@@ -469,7 +470,7 @@ namespace lfs::training {
                 static_cast<int>(channels), static_cast<int>(H), static_cast<int>(W),
                 nullptr);
         } else {
-            cudaMemsetAsync(v_render_colors_ptr, 0, H * W * channels * sizeof(float), nullptr);
+            cudaMemsetAsync(v_render_colors_ptr, 0, H * W * channels * sizeof(float), lfs::core::getCurrentCUDAStream());
         }
 
         // Prepare grad_render_alphas [H, W] - squeeze from [1, H, W] using custom kernel
@@ -482,7 +483,7 @@ namespace lfs::training {
                 static_cast<int>(H), static_cast<int>(W),
                 nullptr);
         } else {
-            cudaMemsetAsync(v_render_alphas_ptr, 0, H * W * sizeof(float), nullptr);
+            cudaMemsetAsync(v_render_alphas_ptr, 0, H * W * sizeof(float), lfs::core::getCurrentCUDAStream());
         }
 
         UnscentedTransformParameters ut_params;
@@ -556,13 +557,13 @@ namespace lfs::training {
 
         // Scales: exp(raw) -> v_scales_raw = v_scales * exp(raw_scales) = v_scales * scales
         // In-place: v_scales_ptr *= scales
-        kernels::launch_exp_backward(v_scales_ptr, ctx.scales.ptr<float>(), N, nullptr);
+        kernels::launch_exp_backward(v_scales_ptr, ctx.scales.ptr<float>(), N, lfs::core::getCurrentCUDAStream());
 
         GSPLAT_DEBUG_SYNC("AFTER exp_backward");
 
         // Opacities: sigmoid(raw) -> v_opacities_raw = v_opacities * sigmoid * (1 - sigmoid)
         // In-place: v_opacities_ptr *= sigmoid * (1 - sigmoid)
-        kernels::launch_sigmoid_backward(v_opacities_ptr, ctx.opacities.ptr<float>(), N, nullptr);
+        kernels::launch_sigmoid_backward(v_opacities_ptr, ctx.opacities.ptr<float>(), N, lfs::core::getCurrentCUDAStream());
 
         GSPLAT_DEBUG_SYNC("AFTER sigmoid_backward");
 

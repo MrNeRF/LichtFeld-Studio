@@ -5,6 +5,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/cuda_stream_pool.hpp"
 #include "cuda/image_format_kernels.cuh"
 #include "io/nvcodec_image_loader.hpp"

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "internal/cuda_stream_context.hpp"
 #include "internal/tensor_broadcast.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
@@ -345,7 +346,7 @@ namespace lfs::core {
                         ptr<float>(), result.ptr<float>(),
                         shape_.dims().data(), strides_.data(),
                         new_shape.data(), pad_before.data(),
-                        shape_.rank(), numel(), nullptr);
+                        shape_.rank(), numel(), getCurrentCUDAStream());
                 } else if (device_ == Device::CPU && dtype_ == DataType::Float32) {
                     if (!is_contiguous())
                         return contiguous().movement(op, args);

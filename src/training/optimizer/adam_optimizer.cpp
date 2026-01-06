@@ -5,6 +5,7 @@
 #include "adam_optimizer.hpp"
 #include "adam_api.h" // fast_lfs::optimizer::adam_step_raw
 #include "core/logger.hpp"
+#include "core/tensor/internal/cuda_stream_context.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include <cmath>
 #include <cuda_runtime.h>
@@ -87,7 +88,7 @@ namespace lfs::training {
         for (auto& [_, state] : states_) {
             if (state.grad.is_valid() && state.grad.numel() > 0) {
                 const size_t bytes = state.size * (state.grad.numel() / state.grad.shape()[0]) * sizeof(float);
-                CHECK_CUDA(cudaMemsetAsync(state.grad.ptr<float>(), 0, bytes, nullptr));
+                CHECK_CUDA(cudaMemsetAsync(state.grad.ptr<float>(), 0, bytes, lfs::core::getCurrentCUDAStream()));
             }
         }
     }
@@ -314,8 +315,8 @@ namespace lfs::training {
         const size_t row_size = param.numel() / shape[0];
         if (state.size > 0 && state.exp_avg.numel() > 0) {
             const size_t old_bytes = state.size * row_size * sizeof(float);
-            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg.ptr<float>(), state.exp_avg.ptr<float>(), old_bytes, cudaMemcpyDeviceToDevice, nullptr));
-            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg_sq.ptr<float>(), state.exp_avg_sq.ptr<float>(), old_bytes, cudaMemcpyDeviceToDevice, nullptr));
+            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg.ptr<float>(), state.exp_avg.ptr<float>(), old_bytes, cudaMemcpyDeviceToDevice, lfs::core::getCurrentCUDAStream()));
+            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg_sq.ptr<float>(), state.exp_avg_sq.ptr<float>(), old_bytes, cudaMemcpyDeviceToDevice, lfs::core::getCurrentCUDAStream()));
         }
 
         // Gather new rows using GPU-native index_select (single GPU operation)
@@ -327,10 +328,10 @@ namespace lfs::training {
         const size_t dst_offset = state.size * row_size * sizeof(float);
         CHECK_CUDA(cudaMemcpyAsync(
             reinterpret_cast<char*>(new_exp_avg.ptr<float>()) + dst_offset,
-            gathered_avg.ptr<float>(), gathered_bytes, cudaMemcpyDeviceToDevice, nullptr));
+            gathered_avg.ptr<float>(), gathered_bytes, cudaMemcpyDeviceToDevice, lfs::core::getCurrentCUDAStream()));
         CHECK_CUDA(cudaMemcpyAsync(
             reinterpret_cast<char*>(new_exp_avg_sq.ptr<float>()) + dst_offset,
-            gathered_sq.ptr<float>(), gathered_bytes, cudaMemcpyDeviceToDevice, nullptr));
+            gathered_sq.ptr<float>(), gathered_bytes, cudaMemcpyDeviceToDevice, lfs::core::getCurrentCUDAStream()));
 
         state.exp_avg = std::move(new_exp_avg);
         state.exp_avg_sq = std::move(new_exp_avg_sq);
@@ -398,15 +399,15 @@ namespace lfs::training {
 
         if (state.size > 0 && state.exp_avg.numel() > 0) {
             const size_t old_bytes = state.exp_avg.numel() * sizeof(float);
-            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg.ptr<float>(), state.exp_avg.ptr<float>(), old_bytes, cudaMemcpyDeviceToDevice, nullptr));
-            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg_sq.ptr<float>(), state.exp_avg_sq.ptr<float>(), old_bytes, cudaMemcpyDeviceToDevice, nullptr));
+            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg.ptr<float>(), state.exp_avg.ptr<float>(), old_bytes, cudaMemcpyDeviceToDevice, lfs::core::getCurrentCUDAStream()));
+            CHECK_CUDA(cudaMemcpyAsync(new_exp_avg_sq.ptr<float>(), state.exp_avg_sq.ptr<float>(), old_bytes, cudaMemcpyDeviceToDevice, lfs::core::getCurrentCUDAStream()));
         }
 
         const size_t row_size = param.numel() / shape[0];
         const size_t offset = state.exp_avg.numel() * sizeof(float);
         const size_t new_bytes = n_new * row_size * sizeof(float);
-        CHECK_CUDA(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg.ptr<float>()) + offset, 0, new_bytes, nullptr));
-        CHECK_CUDA(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg_sq.ptr<float>()) + offset, 0, new_bytes, nullptr));
+        CHECK_CUDA(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg.ptr<float>()) + offset, 0, new_bytes, lfs::core::getCurrentCUDAStream()));
+        CHECK_CUDA(cudaMemsetAsync(reinterpret_cast<char*>(new_exp_avg_sq.ptr<float>()) + offset, 0, new_bytes, lfs::core::getCurrentCUDAStream()));
 
         state.exp_avg = std::move(new_exp_avg);
         state.exp_avg_sq = std::move(new_exp_avg_sq);

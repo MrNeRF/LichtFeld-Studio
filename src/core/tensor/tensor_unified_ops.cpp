@@ -1689,7 +1689,7 @@ namespace lfs::core {
                     num_rows,
                     row_size,
                     element_size,
-                    nullptr);
+                    getCurrentCUDAStream());
             } else {
                 // CPU: Simple memcpy per row
                 size_t result_offset = 0;
@@ -1731,7 +1731,7 @@ namespace lfs::core {
                 inner_size,
                 resolved_dim,
                 element_size,
-                nullptr);
+                getCurrentCUDAStream());
         } else {
             // CPU fallback
             for (size_t outer = 0; outer < outer_size; ++outer) {
