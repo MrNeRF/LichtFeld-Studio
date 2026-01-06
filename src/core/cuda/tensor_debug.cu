@@ -70,8 +70,8 @@ namespace lfs::core::debug {
 
             unsigned int local_nan = 0;
             unsigned int local_inf = 0;
-            float local_min = INFINITY;
-            float local_max = -INFINITY;
+            float local_min = CUDA_INFINITY;
+            float local_max = -CUDA_INFINITY;
             float local_sum = 0.0f;
 
             for (size_t i = idx; i < n; i += stride) {
@@ -109,8 +109,8 @@ namespace lfs::core::debug {
                 const int num_warps = BLOCK_SIZE / WARP_SIZE;
                 local_nan = lane_id < num_warps ? s_nan_count[lane_id] : 0;
                 local_inf = lane_id < num_warps ? s_inf_count[lane_id] : 0;
-                local_min = lane_id < num_warps ? s_min[lane_id] : INFINITY;
-                local_max = lane_id < num_warps ? s_max[lane_id] : -INFINITY;
+                local_min = lane_id < num_warps ? s_min[lane_id] : CUDA_INFINITY;
+                local_max = lane_id < num_warps ? s_max[lane_id] : -CUDA_INFINITY;
                 local_sum = lane_id < num_warps ? s_sum[lane_id] : 0.0f;
 
                 local_nan = warp_reduce_sum_uint(local_nan);
@@ -155,7 +155,7 @@ namespace lfs::core::debug {
         ValidationResult* d_result;
         cudaMalloc(&d_result, sizeof(ValidationResult));
 
-        ValidationResult init = {0, 0, INFINITY, -INFINITY, 0.0f};
+        ValidationResult init = {0, 0, CUDA_INFINITY, -CUDA_INFINITY, 0.0f};
         cudaMemcpy(d_result, &init, sizeof(ValidationResult), cudaMemcpyHostToDevice);
 
         // Launch kernel
