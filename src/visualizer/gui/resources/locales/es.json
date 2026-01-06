@@ -654,5 +654,21 @@
     "invalid": "(inválido)",
     "output_path": "Ruta de Salida:",
     "help_text": "La ruta del dataset almacenada en el checkpoint puede haber cambiado. Actualícela si es necesario."
+  },
+
+  "disk_space_dialog": {
+    "title": "Espacio en Disco Insuficiente",
+    "error_label": "Error",
+    "checkpoint_save_failed": "Error al Guardar Checkpoint (Iteración",
+    "export_failed": "Error en Exportación",
+    "insufficient_space_prefix": "No hay suficiente espacio en disco para guardar el archivo:",
+    "location_label": "Ubicación:",
+    "required_label": "Requerido:",
+    "available_label": "Disponible:",
+    "instruction": "Por favor libere espacio en disco o elija una ubicación diferente.",
+    "cancel": "Cancelar",
+    "change_location": "Cambiar Ubicación",
+    "retry": "Reintentar",
+    "select_output_location": "Seleccionar Ubicación de Salida"
   }
 }

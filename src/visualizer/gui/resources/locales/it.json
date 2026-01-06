@@ -653,6 +653,22 @@
     "dataset_path": "Percorso Dataset:",
     "invalid": "(non valido)",
     "output_path": "Percorso Output:",
-    "help_text": "Il percorso del dataset salvato nel checkpoint potrebbe essere cambiato. Aggiornalo se necessario."
+    "help_text": "Il percorso del dataset memorizzato nel checkpoint potrebbe essere cambiato. Aggiornalo se necessario."
+  },
+
+  "disk_space_dialog": {
+    "title": "Spazio su Disco Insufficiente",
+    "error_label": "Errore",
+    "checkpoint_save_failed": "Salvataggio Checkpoint Fallito (Iterazione",
+    "export_failed": "Esportazione Fallita",
+    "insufficient_space_prefix": "Spazio su disco insufficiente per salvare il file:",
+    "location_label": "Posizione:",
+    "required_label": "Richiesto:",
+    "available_label": "Disponibile:",
+    "instruction": "Si prega di liberare spazio su disco o scegliere una posizione diversa.",
+    "cancel": "Annulla",
+    "change_location": "Cambia Posizione",
+    "retry": "Riprova",
+    "select_output_location": "Seleziona Posizione di Output"
   }
 }

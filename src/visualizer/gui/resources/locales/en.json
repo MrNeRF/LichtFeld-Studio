@@ -654,5 +654,21 @@
     "invalid": "(invalid)",
     "output_path": "Output Path:",
     "help_text": "The dataset path stored in the checkpoint may have changed. Update it if needed."
+  },
+
+  "disk_space_dialog": {
+    "title": "Insufficient Disk Space",
+    "error_label": "Error",
+    "checkpoint_save_failed": "Checkpoint Save Failed (Iteration",
+    "export_failed": "Export Failed",
+    "insufficient_space_prefix": "Not enough disk space to save the file:",
+    "location_label": "Location:",
+    "required_label": "Required:",
+    "available_label": "Available:",
+    "instruction": "Please free up disk space or choose a different location.",
+    "cancel": "Cancel",
+    "change_location": "Change Location",
+    "retry": "Retry",
+    "select_output_location": "Select Output Location"
   }
 }

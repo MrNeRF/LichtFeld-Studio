@@ -654,5 +654,21 @@
     "invalid": "(無効)",
     "output_path": "出力パス:",
     "help_text": "チェックポイントに保存されたデータセットパスが変更されている可能性があります。必要に応じて更新してください。"
+  },
+
+  "disk_space_dialog": {
+    "title": "ディスク容量不足",
+    "error_label": "エラー",
+    "checkpoint_save_failed": "チェックポイント保存失敗（反復",
+    "export_failed": "エクスポート失敗",
+    "insufficient_space_prefix": "ファイルを保存するためのディスク容量が不足しています：",
+    "location_label": "場所：",
+    "required_label": "必要：",
+    "available_label": "利用可能：",
+    "instruction": "ディスク容量を解放するか、別の場所を選択してください。",
+    "cancel": "キャンセル",
+    "change_location": "場所を変更",
+    "retry": "再試行",
+    "select_output_location": "出力場所を選択"
   }
 }
