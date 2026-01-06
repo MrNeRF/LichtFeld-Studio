@@ -666,6 +666,7 @@
     "required_label": "Wymagane:",
     "available_label": "Dostępne:",
     "instruction": "Zwolnij miejsce na dysku lub wybierz inną lokalizację.",
+    "export_retry_instruction": "Aby spróbować ponownie: zwolnij miejsce lub użyj Plik > Eksportuj, aby zapisać w innej lokalizacji.",
     "cancel": "Anuluj",
     "change_location": "Zmień Lokalizację",
     "retry": "Ponów",

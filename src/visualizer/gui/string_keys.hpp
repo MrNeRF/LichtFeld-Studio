@@ -719,6 +719,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* REQUIRED_LABEL = "disk_space_dialog.required_label";
         inline constexpr const char* AVAILABLE_LABEL = "disk_space_dialog.available_label";
         inline constexpr const char* INSTRUCTION = "disk_space_dialog.instruction";
+        inline constexpr const char* EXPORT_RETRY_INSTRUCTION = "disk_space_dialog.export_retry_instruction";
         inline constexpr const char* CANCEL = "disk_space_dialog.cancel";
         inline constexpr const char* CHANGE_LOCATION = "disk_space_dialog.change_location";
         inline constexpr const char* RETRY = "disk_space_dialog.retry";

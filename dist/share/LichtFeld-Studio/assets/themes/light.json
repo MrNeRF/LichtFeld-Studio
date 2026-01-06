@@ -1,0 +1,147 @@
+{
+  "name": "Light",
+  "_description": "Light theme for LichtFeld Studio",
+
+  "palette": {
+    "_info": "Colors are [R, G, B, A] with values 0.0-1.0",
+
+    "background":     [0.82, 0.82, 0.84, 1.0],
+    "_background":    "Main window background",
+
+    "surface":        [0.88, 0.88, 0.90, 1.0],
+    "_surface":       "Panel backgrounds, buttons",
+
+    "surface_bright": [0.92, 0.92, 0.94, 1.0],
+    "_surface_bright": "Hovered buttons, highlighted areas",
+
+    "primary":        [0.20, 0.50, 0.90, 1.0],
+    "_primary":       "Main accent color (selection, active items) - Blue",
+
+    "primary_dim":    [0.30, 0.55, 0.85, 1.0],
+    "_primary_dim":   "Dimmed accent for less emphasis",
+
+    "secondary":      [0.50, 0.30, 0.70, 1.0],
+    "_secondary":     "Secondary accent - Purple",
+
+    "text":           [0.10, 0.10, 0.12, 1.0],
+    "_text":          "Main text color - Dark",
+
+    "text_dim":       [0.40, 0.40, 0.45, 1.0],
+    "_text_dim":      "Disabled/secondary text - Gray",
+
+    "border":         [0.68, 0.68, 0.72, 1.0],
+    "_border":        "Panel borders, separators",
+
+    "success":        [0.15, 0.60, 0.15, 1.0],
+    "_success":       "Success indicators - Green",
+
+    "warning":        [0.85, 0.50, 0.10, 1.0],
+    "_warning":       "Warnings, brush tool, progress - Orange",
+
+    "error":          [0.80, 0.20, 0.20, 1.0],
+    "_error":         "Errors, delete actions - Red",
+
+    "info":           [0.15, 0.50, 0.85, 1.0],
+    "_info":          "Info messages, links - Blue",
+
+    "row_even":       [0.00, 0.00, 0.00, 0.04],
+    "_row_even":      "Scene graph even row tint",
+
+    "row_odd":        [0.00, 0.00, 0.00, 0.10],
+    "_row_odd":       "Scene graph odd row tint"
+  },
+
+  "sizes": {
+    "_info": "UI element sizes in pixels",
+
+    "window_rounding": 6.0,
+    "frame_rounding": 2.0,
+    "popup_rounding": 4.0,
+    "scrollbar_rounding": 4.0,
+    "grab_rounding": 2.0,
+    "tab_rounding": 4.0,
+
+    "border_size": 0.0,
+    "child_border_size": 1.0,
+    "popup_border_size": 1.0,
+
+    "window_padding": [6.0, 6.0],
+    "frame_padding": [4.0, 3.0],
+    "item_spacing": [8.0, 4.0],
+    "item_inner_spacing": [4.0, 4.0],
+
+    "indent_spacing": 21.0,
+    "scrollbar_size": 14.0,
+    "grab_min_size": 10.0,
+
+    "toolbar_button_size": 24.0,
+    "toolbar_padding": 6.0,
+    "toolbar_spacing": 4.0
+  },
+
+  "fonts": {
+    "regular_path": "Inter-Regular.ttf",
+    "bold_path": "Inter-SemiBold.ttf",
+    "base_size": 14.0,
+    "small_size": 12.0,
+    "large_size": 16.0,
+    "heading_size": 18.0,
+    "section_size": 13.0
+  },
+
+  "menu": {
+    "_info": "Menu bar styling - values are relative adjustments",
+
+    "bg_lighten": 0.03,
+    "_bg_lighten": "How much to lighten menu bar background from surface",
+
+    "hover_lighten": 0.04,
+    "_hover_lighten": "How much to lighten on hover",
+
+    "active_alpha": 0.40,
+    "_active_alpha": "Alpha for active/selected menu items",
+
+    "popup_lighten": 0.02,
+    "_popup_lighten": "How much to lighten popup background",
+
+    "popup_rounding": 6.0,
+    "_popup_rounding": "Popup corner radius",
+
+    "popup_border_size": 1.0,
+    "_popup_border_size": "Popup border thickness",
+
+    "border_alpha": 0.5,
+    "_border_alpha": "Border transparency",
+
+    "bottom_border_darken": 0.06,
+    "_bottom_border_darken": "Bottom shadow line intensity",
+
+    "frame_padding": [12.0, 8.0],
+    "item_spacing": [12.0, 6.0],
+    "popup_padding": [8.0, 8.0]
+  },
+
+  "viewport": {
+    "_info": "Viewport border styling",
+
+    "corner_radius": 8.0,
+    "_corner_radius": "Bevel radius for viewport corners",
+
+    "border_size": 2.0,
+    "_border_size": "Border thickness in pixels",
+
+    "border_alpha": 0.35,
+    "_border_alpha": "Border transparency (0-1)",
+
+    "border_darken": 0.12,
+    "_border_darken": "How much to darken border from background"
+  },
+
+  "button": {
+    "_info": "Colored button tint values (blend factor with accent color)",
+
+    "tint_normal": 0.18,
+    "tint_hover": 0.28,
+    "tint_active": 0.38
+  }
+}

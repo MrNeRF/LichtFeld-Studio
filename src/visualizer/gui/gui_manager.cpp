@@ -1926,15 +1926,15 @@ namespace lfs::vis::gui {
 
                     disk_space_error_dialog_->show(info, on_retry, on_change_location, on_cancel);
                 } else {
-                    // Export error - show dialog but don't allow retry (exports are one-time actions)
+                    // Export error - inform user they need to re-export
+                    // (SplatData is non-copyable, so we can't retry automatically)
                     auto on_retry = []() {
-                        // No-op for exports - user would need to manually trigger export again
+                        // No-op - user needs to manually re-export
                     };
 
-                    auto on_change_location = [export_path = e.path](const std::filesystem::path& new_path) {
-                        // For exports, changing location means the user needs to manually re-export
-                        LOG_INFO("To retry export at new location {}, please use File > Export again",
-                                lfs::core::path_to_utf8(new_path));
+                    auto on_change_location = [](const std::filesystem::path& new_path) {
+                        // Show message that user should free space or select different location
+                        LOG_INFO("Please free up disk space or use File > Export to export to a different location");
                     };
 
                     auto on_cancel = []() {

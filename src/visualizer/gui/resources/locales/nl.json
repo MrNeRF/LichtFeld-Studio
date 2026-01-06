@@ -666,6 +666,7 @@
     "required_label": "Vereist:",
     "available_label": "Beschikbaar:",
     "instruction": "Maak schijfruimte vrij of kies een andere locatie.",
+    "export_retry_instruction": "Om opnieuw te proberen: maak ruimte vrij of gebruik Bestand > Exporteren om op te slaan naar een andere locatie.",
     "cancel": "Annuleren",
     "change_location": "Locatie Wijzigen",
     "retry": "Opnieuw Proberen",

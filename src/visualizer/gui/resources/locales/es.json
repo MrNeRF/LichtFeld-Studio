@@ -666,6 +666,7 @@
     "required_label": "Requerido:",
     "available_label": "Disponible:",
     "instruction": "Por favor libere espacio en disco o elija una ubicación diferente.",
+    "export_retry_instruction": "Para reintentar: libere espacio o use Archivo > Exportar para guardar en una ubicación diferente.",
     "cancel": "Cancelar",
     "change_location": "Cambiar Ubicación",
     "retry": "Reintentar",

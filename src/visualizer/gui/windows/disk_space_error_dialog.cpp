@@ -137,47 +137,69 @@ namespace lfs::vis::gui {
 
             // Instructions
             ImGui::TextColored(t.palette.warning, LOC(DiskSpaceDialog::INSTRUCTION));
+            
+            // For exports, add additional instruction to use File > Export again
+            if (!info_.is_checkpoint) {
+                ImGui::Spacing();
+                ImGui::TextWrapped(LOC(DiskSpaceDialog::EXPORT_RETRY_INSTRUCTION));
+            }
 
             ImGui::Dummy({0.0f, 8.0f * scale});
 
             // Buttons
             const float button_width = BASE_BUTTON_WIDTH * scale;
             const float button_spacing = BASE_BUTTON_SPACING * scale;
-            const float total_width = button_width * 3.0f + button_spacing * 2.0f;
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - total_width) * 0.5f);
+            
+            if (info_.is_checkpoint) {
+                // For checkpoints: show all three buttons
+                const float total_width = button_width * 3.0f + button_spacing * 2.0f;
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - total_width) * 0.5f);
 
-            // Cancel button
-            if (widgets::ColoredButton(LOC(DiskSpaceDialog::CANCEL), widgets::ButtonStyle::Secondary, {button_width, 0}) ||
-                ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-                open_ = false;
-                if (on_cancel_)
-                    on_cancel_();
-                ImGui::CloseCurrentPopup();
-            }
-
-            ImGui::SameLine(0.0f, button_spacing);
-
-            // Change Location button
-            if (widgets::ColoredButton(LOC(DiskSpaceDialog::CHANGE_LOCATION), widgets::ButtonStyle::Warning, {button_width, 0})) {
-                // Open folder selection dialog
-                std::filesystem::path new_location = SelectFolderDialog(LOC(DiskSpaceDialog::SELECT_OUTPUT_LOCATION), info_.path.parent_path());
-                if (!new_location.empty()) {
+                // Cancel button
+                if (widgets::ColoredButton(LOC(DiskSpaceDialog::CANCEL), widgets::ButtonStyle::Secondary, {button_width, 0}) ||
+                    ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                     open_ = false;
-                    if (on_change_location_)
-                        on_change_location_(new_location);
+                    if (on_cancel_)
+                        on_cancel_();
                     ImGui::CloseCurrentPopup();
                 }
-            }
 
-            ImGui::SameLine(0.0f, button_spacing);
+                ImGui::SameLine(0.0f, button_spacing);
 
-            // Retry button
-            if (widgets::ColoredButton(LOC(DiskSpaceDialog::RETRY), widgets::ButtonStyle::Primary, {button_width, 0}) ||
-                ImGui::IsKeyPressed(ImGuiKey_Enter)) {
-                open_ = false;
-                if (on_retry_)
-                    on_retry_();
-                ImGui::CloseCurrentPopup();
+                // Change Location button
+                if (widgets::ColoredButton(LOC(DiskSpaceDialog::CHANGE_LOCATION), widgets::ButtonStyle::Warning, {button_width, 0})) {
+                    // Open folder selection dialog
+                    std::filesystem::path new_location = SelectFolderDialog(LOC(DiskSpaceDialog::SELECT_OUTPUT_LOCATION), info_.path.parent_path());
+                    if (!new_location.empty()) {
+                        open_ = false;
+                        if (on_change_location_)
+                            on_change_location_(new_location);
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+
+                ImGui::SameLine(0.0f, button_spacing);
+
+                // Retry button
+                if (widgets::ColoredButton(LOC(DiskSpaceDialog::RETRY), widgets::ButtonStyle::Primary, {button_width, 0}) ||
+                    ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+                    open_ = false;
+                    if (on_retry_)
+                        on_retry_();
+                    ImGui::CloseCurrentPopup();
+                }
+            } else {
+                // For exports: show only OK button (centered)
+                const float ok_button_width = 120.0f * scale;
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - ok_button_width) * 0.5f);
+                
+                if (widgets::ColoredButton("OK", widgets::ButtonStyle::Primary, {ok_button_width, 0}) ||
+                    ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+                    open_ = false;
+                    if (on_cancel_)
+                        on_cancel_();
+                    ImGui::CloseCurrentPopup();
+                }
             }
 
             ImGui::EndPopup();

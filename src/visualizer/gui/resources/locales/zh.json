@@ -666,6 +666,7 @@
     "required_label": "所需：",
     "available_label": "可用：",
     "instruction": "请释放磁盘空间或选择不同的位置。",
+    "export_retry_instruction": "要重试：释放空间或使用文件 > 导出保存到不同的位置。",
     "cancel": "取消",
     "change_location": "更改位置",
     "retry": "重试",

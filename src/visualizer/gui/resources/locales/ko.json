@@ -666,6 +666,7 @@
     "required_label": "필요:",
     "available_label": "사용 가능:",
     "instruction": "디스크 공간을 확보하거나 다른 위치를 선택하세요.",
+    "export_retry_instruction": "다시 시도하려면: 공간을 확보하거나 파일 > 내보내기를 사용하여 다른 위치에 저장하세요.",
     "cancel": "취소",
     "change_location": "위치 변경",
     "retry": "다시 시도",

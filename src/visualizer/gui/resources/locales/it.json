@@ -666,6 +666,7 @@
     "required_label": "Richiesto:",
     "available_label": "Disponibile:",
     "instruction": "Si prega di liberare spazio su disco o scegliere una posizione diversa.",
+    "export_retry_instruction": "Per riprovare: liberare spazio o utilizzare File > Esporta per salvare in una posizione diversa.",
     "cancel": "Annulla",
     "change_location": "Cambia Posizione",
     "retry": "Riprova",

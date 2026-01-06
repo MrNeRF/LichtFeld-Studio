@@ -666,6 +666,7 @@
     "required_label": "Erforderlich:",
     "available_label": "Verfügbar:",
     "instruction": "Bitte geben Sie Speicherplatz frei oder wählen Sie einen anderen Speicherort.",
+    "export_retry_instruction": "Zum Wiederholen: Speicherplatz freigeben oder Datei > Export verwenden, um an einem anderen Speicherort zu speichern.",
     "cancel": "Abbrechen",
     "change_location": "Speicherort ändern",
     "retry": "Wiederholen",

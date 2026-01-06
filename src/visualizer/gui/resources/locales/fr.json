@@ -666,6 +666,7 @@
     "required_label": "Requis :",
     "available_label": "Disponible :",
     "instruction": "Veuillez libérer de l'espace disque ou choisir un emplacement différent.",
+    "export_retry_instruction": "Pour réessayer : libérez de l'espace ou utilisez Fichier > Exporter pour enregistrer à un emplacement différent.",
     "cancel": "Annuler",
     "change_location": "Changer l'Emplacement",
     "retry": "Réessayer",

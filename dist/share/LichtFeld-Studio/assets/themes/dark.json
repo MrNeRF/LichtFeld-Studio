@@ -1,0 +1,170 @@
+{
+  "name": "Dark",
+  "_description": "Default dark theme for LichtFeld Studio",
+
+  "palette": {
+    "_info": "Colors are [R, G, B, A] with values 0.0-1.0",
+
+    "background":     [0.12, 0.11, 0.11, 1.0],
+    "_background":    "Main window background - warm dark gray",
+
+    "surface":        [0.16, 0.15, 0.15, 1.0],
+    "_surface":       "Panel backgrounds, buttons - warm gray",
+
+    "surface_bright": [0.24, 0.22, 0.21, 1.0],
+    "_surface_bright": "Hovered buttons, highlighted areas - warm light gray",
+
+    "primary":        [0.30, 0.62, 1.00, 1.0],
+    "_primary":       "Main accent color (selection, active items) - Bright blue",
+
+    "primary_dim":    [0.22, 0.50, 0.82, 1.0],
+    "_primary_dim":   "Dimmed accent for less emphasis",
+
+    "secondary":      [0.65, 0.42, 0.85, 1.0],
+    "_secondary":     "Secondary accent - Purple",
+
+    "text":           [0.96, 0.94, 0.92, 1.0],
+    "_text":          "Main text color - Warm white",
+
+    "text_dim":       [0.55, 0.53, 0.50, 1.0],
+    "_text_dim":      "Disabled/secondary text - Warm gray",
+
+    "border":         [0.28, 0.26, 0.25, 1.0],
+    "_border":        "Panel borders, separators - Warm dark",
+
+    "success":        [0.25, 0.82, 0.32, 1.0],
+    "_success":       "Success indicators - Green",
+
+    "warning":        [1.00, 0.62, 0.22, 1.0],
+    "_warning":       "Warnings, brush tool, progress - Orange",
+
+    "error":          [0.92, 0.32, 0.28, 1.0],
+    "_error":         "Errors, delete actions - Red",
+
+    "info":           [0.30, 0.62, 1.00, 1.0],
+    "_info":          "Info messages, links - Blue",
+
+    "row_even":       [1.00, 1.00, 1.00, 0.04],
+    "_row_even":      "Scene graph even row tint",
+
+    "row_odd":        [0.00, 0.00, 0.00, 0.15],
+    "_row_odd":       "Scene graph odd row tint"
+  },
+
+  "sizes": {
+    "_info": "UI element sizes in pixels",
+
+    "window_rounding": 6.0,
+    "frame_rounding": 3.0,
+    "popup_rounding": 6.0,
+    "scrollbar_rounding": 6.0,
+    "grab_rounding": 3.0,
+    "tab_rounding": 4.0,
+
+    "border_size": 0.0,
+    "child_border_size": 1.0,
+    "popup_border_size": 1.0,
+
+    "window_padding": [8.0, 8.0],
+    "frame_padding": [6.0, 4.0],
+    "item_spacing": [8.0, 5.0],
+    "item_inner_spacing": [4.0, 4.0],
+
+    "indent_spacing": 21.0,
+    "scrollbar_size": 12.0,
+    "grab_min_size": 10.0,
+
+    "toolbar_button_size": 24.0,
+    "toolbar_padding": 6.0,
+    "toolbar_spacing": 4.0
+  },
+
+  "fonts": {
+    "regular_path": "Inter-Regular.ttf",
+    "bold_path": "Inter-SemiBold.ttf",
+    "base_size": 14.0,
+    "small_size": 12.0,
+    "large_size": 16.0,
+    "heading_size": 18.0,
+    "section_size": 13.0
+  },
+
+  "menu": {
+    "_info": "Menu bar styling - values are relative adjustments",
+
+    "bg_lighten": 0.03,
+    "_bg_lighten": "How much to lighten menu bar background from surface",
+
+    "hover_lighten": 0.10,
+    "_hover_lighten": "How much to lighten on hover",
+
+    "active_alpha": 0.45,
+    "_active_alpha": "Alpha for active/selected menu items",
+
+    "popup_lighten": 0.02,
+    "_popup_lighten": "How much to lighten popup background",
+
+    "popup_rounding": 6.0,
+    "_popup_rounding": "Popup corner radius",
+
+    "popup_border_size": 1.0,
+    "_popup_border_size": "Popup border thickness",
+
+    "border_alpha": 0.5,
+    "_border_alpha": "Border transparency",
+
+    "bottom_border_darken": 0.06,
+    "_bottom_border_darken": "Bottom shadow line intensity",
+
+    "frame_padding": [12.0, 8.0],
+    "item_spacing": [12.0, 6.0],
+    "popup_padding": [8.0, 8.0]
+  },
+
+  "viewport": {
+    "_info": "Viewport border styling",
+
+    "corner_radius": 8.0,
+    "_corner_radius": "Bevel radius for viewport corners",
+
+    "border_size": 2.0,
+    "_border_size": "Border thickness in pixels",
+
+    "border_alpha": 0.35,
+    "_border_alpha": "Border transparency (0-1)",
+
+    "border_darken": 0.12,
+    "_border_darken": "How much to darken border from background"
+  },
+
+  "shadows": {
+    "_info": "Shadow settings for floating panels",
+
+    "enabled": true,
+    "offset": [3.0, 3.0],
+    "blur": 12.0,
+    "alpha": 0.65
+  },
+
+  "vignette": {
+    "_info": "Subtle darkening at viewport edges",
+
+    "enabled": true,
+    "intensity": 0.25,
+    "_intensity": "How dark the edges get (0-1)",
+
+    "radius": 0.75,
+    "_radius": "Where vignette starts (0=center, 1=edge)",
+
+    "softness": 0.45,
+    "_softness": "How gradual the falloff is"
+  },
+
+  "button": {
+    "_info": "Colored button tint values (blend factor with accent color)",
+
+    "tint_normal": 0.55,
+    "tint_hover": 0.65,
+    "tint_active": 0.75
+  }
+}
