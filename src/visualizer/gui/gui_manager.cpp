@@ -1874,11 +1874,11 @@ namespace lfs::vis::gui {
             if (!e.is_disk_space_error) {
                 // For non-disk-space errors, just show a notification
                 if (notification_popup_) {
-                    notification_popup_->show(
-                        NotificationPopup::Type::FAILURE,
-                        "Checkpoint Save Failed",
-                        std::format("Failed to save checkpoint at iteration {}:\n\n{}",
-                                    e.iteration, e.error));
+                    const std::string title = e.is_checkpoint ? "Checkpoint Save Failed" : "Export Failed";
+                    const std::string msg = e.is_checkpoint
+                        ? std::format("Failed to save checkpoint at iteration {}:\n\n{}", e.iteration, e.error)
+                        : std::format("Failed to export:\n\n{}", e.error);
+                    notification_popup_->show(NotificationPopup::Type::FAILURE, title, msg);
                 }
                 return;
             }
@@ -1891,39 +1891,58 @@ namespace lfs::vis::gui {
                     .required_bytes = e.required_bytes,
                     .available_bytes = e.available_bytes,
                     .iteration = e.iteration,
-                    .is_checkpoint = true};
+                    .is_checkpoint = e.is_checkpoint};
 
-                // On retry: attempt to save checkpoint again at the same location
-                auto on_retry = [this, iteration = e.iteration]() {
-                    if (auto* tm = viewer_->getTrainerManager()) {
-                        tm->requestSaveCheckpoint();
-                    }
-                };
-
-                // On change location: update output path and retry
-                auto on_change_location = [this, iteration = e.iteration](const std::filesystem::path& new_path) {
-                    if (auto* tm = viewer_->getTrainerManager()) {
-                        auto* trainer = tm->getTrainer();
-                        if (trainer) {
-                            // Get current trainer parameters
-                            auto params = trainer->getParams();
-                            // Update only the output path
-                            params.dataset.output_path = new_path;
-                            // Set the updated parameters back to the trainer
-                            trainer->setParams(params);
-                            LOG_INFO("Updated checkpoint output path to: {}", lfs::core::path_to_utf8(new_path));
+                if (e.is_checkpoint) {
+                    // On retry: attempt to save checkpoint again at the same location
+                    auto on_retry = [this, iteration = e.iteration]() {
+                        if (auto* tm = viewer_->getTrainerManager()) {
+                            tm->requestSaveCheckpoint();
                         }
-                        // Request save with new location
-                        tm->requestSaveCheckpoint();
-                    }
-                };
+                    };
 
-                // On cancel: just log and continue training
-                auto on_cancel = []() {
-                    LOG_WARN("Checkpoint save cancelled by user");
-                };
+                    // On change location: update output path and retry
+                    auto on_change_location = [this, iteration = e.iteration](const std::filesystem::path& new_path) {
+                        if (auto* tm = viewer_->getTrainerManager()) {
+                            auto* trainer = tm->getTrainer();
+                            if (trainer) {
+                                // Get current trainer parameters
+                                auto params = trainer->getParams();
+                                // Update only the output path
+                                params.dataset.output_path = new_path;
+                                // Set the updated parameters back to the trainer
+                                trainer->setParams(params);
+                                LOG_INFO("Updated checkpoint output path to: {}", lfs::core::path_to_utf8(new_path));
+                            }
+                            // Request save with new location
+                            tm->requestSaveCheckpoint();
+                        }
+                    };
 
-                disk_space_error_dialog_->show(info, on_retry, on_change_location, on_cancel);
+                    // On cancel: just log and continue training
+                    auto on_cancel = []() {
+                        LOG_WARN("Checkpoint save cancelled by user");
+                    };
+
+                    disk_space_error_dialog_->show(info, on_retry, on_change_location, on_cancel);
+                } else {
+                    // Export error - show dialog but don't allow retry (exports are one-time actions)
+                    auto on_retry = []() {
+                        // No-op for exports - user would need to manually trigger export again
+                    };
+
+                    auto on_change_location = [export_path = e.path](const std::filesystem::path& new_path) {
+                        // For exports, changing location means the user needs to manually re-export
+                        LOG_INFO("To retry export at new location {}, please use File > Export again",
+                                lfs::core::path_to_utf8(new_path));
+                    };
+
+                    auto on_cancel = []() {
+                        LOG_INFO("Export cancelled by user");
+                    };
+
+                    disk_space_error_dialog_->show(info, on_retry, on_change_location, on_cancel);
+                }
             }
         });
 
@@ -2501,9 +2520,29 @@ namespace lfs::vis::gui {
                 switch (format) {
                 case ExportFormat::PLY: {
                     update_progress(0.1f, "Writing PLY");
-                    lfs::core::save_ply(*splat_data, path.parent_path(), 0, true, lfs::core::path_to_utf8(path.stem()));
-                    success = true;
-                    update_progress(1.0f, "Complete");
+                    const lfs::io::PlySaveOptions options{
+                        .output_path = path,
+                        .binary = true,
+                        .async = false};
+                    if (auto result = lfs::io::save_ply(*splat_data, options); result) {
+                        success = true;
+                        update_progress(1.0f, "Complete");
+                    } else {
+                        error_msg = result.error().message;
+                        // Check if this is a disk space error
+                        if (result.error().code == lfs::io::ErrorCode::INSUFFICIENT_DISK_SPACE) {
+                            // Emit event for disk space error dialog
+                            lfs::core::events::state::CheckpointSaveFailed{
+                                .iteration = 0,
+                                .path = path,
+                                .error = result.error().message,
+                                .required_bytes = result.error().required_bytes,
+                                .available_bytes = result.error().available_bytes,
+                                .is_disk_space_error = true,
+                                .is_checkpoint = false}
+                                .emit();
+                        }
+                    }
                     break;
                 }
                 case ExportFormat::SOG: {

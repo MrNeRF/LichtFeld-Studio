@@ -653,6 +653,22 @@
     "dataset_path": "数据集路径：",
     "invalid": "（无效）",
     "output_path": "输出路径：",
-    "help_text": "检查点中存储的数据集路径可能已更改。如需要请更新。"
+    "help_text": "在检查点中保存的数据集路径可能已更改。如果需要，请更新它。"
+  },
+
+  "disk_space_dialog": {
+    "title": "磁盘空间不足",
+    "error_label": "错误",
+    "checkpoint_save_failed": "检查点保存失败（迭代",
+    "export_failed": "导出失败",
+    "insufficient_space_prefix": "磁盘空间不足无法保存文件：",
+    "location_label": "位置：",
+    "required_label": "所需：",
+    "available_label": "可用：",
+    "instruction": "请释放磁盘空间或选择不同的位置。",
+    "cancel": "取消",
+    "change_location": "更改位置",
+    "retry": "重试",
+    "select_output_location": "选择输出位置"
   }
 }

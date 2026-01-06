@@ -653,6 +653,22 @@
     "dataset_path": "Dataset Pad:",
     "invalid": "(ongeldig)",
     "output_path": "Uitvoer Pad:",
-    "help_text": "Het dataset pad opgeslagen in de checkpoint is mogelijk gewijzigd. Werk het bij indien nodig."
+    "help_text": "Het dataset-pad dat in het checkpoint is opgeslagen, is mogelijk gewijzigd. Werk het indien nodig bij."
+  },
+
+  "disk_space_dialog": {
+    "title": "Onvoldoende Schijfruimte",
+    "error_label": "Fout",
+    "checkpoint_save_failed": "Checkpoint Opslaan Mislukt (Iteratie",
+    "export_failed": "Export Mislukt",
+    "insufficient_space_prefix": "Niet genoeg schijfruimte om het bestand op te slaan:",
+    "location_label": "Locatie:",
+    "required_label": "Vereist:",
+    "available_label": "Beschikbaar:",
+    "instruction": "Maak schijfruimte vrij of kies een andere locatie.",
+    "cancel": "Annuleren",
+    "change_location": "Locatie Wijzigen",
+    "retry": "Opnieuw Proberen",
+    "select_output_location": "Selecteer Uitvoerlocatie"
   }
 }

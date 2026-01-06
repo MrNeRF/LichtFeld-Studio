@@ -653,6 +653,22 @@
     "dataset_path": "Ścieżka Zbioru Danych:",
     "invalid": "(nieprawidłowa)",
     "output_path": "Ścieżka Wyjściowa:",
-    "help_text": "Ścieżka zbioru danych zapisana w checkpoint mogła się zmienić. Zaktualizuj ją w razie potrzeby."
+    "help_text": "Ścieżka datasetu zapisana w punkcie kontrolnym mogła się zmienić. Zaktualizuj ją w razie potrzeby."
+  },
+
+  "disk_space_dialog": {
+    "title": "Niewystarczające Miejsce na Dysku",
+    "error_label": "Błąd",
+    "checkpoint_save_failed": "Błąd Zapisu Punktu Kontrolnego (Iteracja",
+    "export_failed": "Błąd Eksportu",
+    "insufficient_space_prefix": "Za mało miejsca na dysku, aby zapisać plik:",
+    "location_label": "Lokalizacja:",
+    "required_label": "Wymagane:",
+    "available_label": "Dostępne:",
+    "instruction": "Zwolnij miejsce na dysku lub wybierz inną lokalizację.",
+    "cancel": "Anuluj",
+    "change_location": "Zmień Lokalizację",
+    "retry": "Ponów",
+    "select_output_location": "Wybierz Lokalizację Wyjściową"
   }
 }

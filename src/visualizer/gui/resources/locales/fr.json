@@ -654,5 +654,21 @@
     "invalid": "(invalide)",
     "output_path": "Chemin de Sortie :",
     "help_text": "Le chemin du dataset stocké dans le checkpoint a peut-être changé. Mettez-le à jour si nécessaire."
+  },
+
+  "disk_space_dialog": {
+    "title": "Espace Disque Insuffisant",
+    "error_label": "Erreur",
+    "checkpoint_save_failed": "Échec de la Sauvegarde du Checkpoint (Itération",
+    "export_failed": "Échec de l'Exportation",
+    "insufficient_space_prefix": "Pas assez d'espace disque pour enregistrer le fichier :",
+    "location_label": "Emplacement :",
+    "required_label": "Requis :",
+    "available_label": "Disponible :",
+    "instruction": "Veuillez libérer de l'espace disque ou choisir un emplacement différent.",
+    "cancel": "Annuler",
+    "change_location": "Changer l'Emplacement",
+    "retry": "Réessayer",
+    "select_output_location": "Sélectionner l'Emplacement de Sortie"
   }
 }

@@ -5,6 +5,8 @@
 #include "disk_space_error_dialog.hpp"
 #include "core/path_utils.hpp"
 #include "gui/dpi_scale.hpp"
+#include "gui/localization_manager.hpp"
+#include "gui/string_keys.hpp"
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/windows_utils.hpp"
 #include "theme/theme.hpp"
@@ -12,6 +14,8 @@
 #include <imgui.h>
 
 namespace lfs::vis::gui {
+
+    using namespace lichtfeld::Strings;
 
     namespace {
         // Base dimensions (scaled by DPI factor at runtime)
@@ -59,7 +63,7 @@ namespace lfs::vis::gui {
     }
 
     void DiskSpaceErrorDialog::render() {
-        const char* popup_title = "Insufficient Disk Space";
+        const char* popup_title = LOC(DiskSpaceDialog::TITLE);
 
         if (pending_open_) {
             ImGui::OpenPopup(popup_title);
@@ -92,14 +96,14 @@ namespace lfs::vis::gui {
 
         if (ImGui::BeginPopupModal(popup_title, nullptr, POPUP_FLAGS)) {
             // Error icon and title
-            ImGui::TextColored(t.palette.error, "Error");
+            ImGui::TextColored(t.palette.error, LOC(DiskSpaceDialog::ERROR_LABEL));
             ImGui::SameLine();
             ImGui::TextColored(t.palette.text_dim, "|");
             ImGui::SameLine();
             if (info_.is_checkpoint) {
-                ImGui::Text("Checkpoint Save Failed (Iteration %d)", info_.iteration);
+                ImGui::Text("%s %d)", LOC(DiskSpaceDialog::CHECKPOINT_SAVE_FAILED), info_.iteration);
             } else {
-                ImGui::TextUnformatted("Export Failed");
+                ImGui::TextUnformatted(LOC(DiskSpaceDialog::EXPORT_FAILED));
             }
 
             ImGui::Spacing();
@@ -107,22 +111,22 @@ namespace lfs::vis::gui {
             ImGui::Spacing();
 
             // Error message
-            ImGui::TextWrapped("Not enough disk space to save the file:");
+            ImGui::TextWrapped(LOC(DiskSpaceDialog::INSUFFICIENT_SPACE_PREFIX));
             ImGui::Spacing();
 
             // Location
-            ImGui::TextColored(t.palette.text_dim, "Location:");
+            ImGui::TextColored(t.palette.text_dim, LOC(DiskSpaceDialog::LOCATION_LABEL));
             ImGui::SameLine();
             ImGui::TextWrapped("%s", lfs::core::path_to_utf8(info_.path.parent_path()).c_str());
 
             // Space required vs available
             ImGui::Spacing();
-            ImGui::TextColored(t.palette.text_dim, "Required:");
+            ImGui::TextColored(t.palette.text_dim, LOC(DiskSpaceDialog::REQUIRED_LABEL));
             ImGui::SameLine();
             ImGui::Text("%s", formatBytes(info_.required_bytes).c_str());
 
             if (info_.available_bytes > 0) {
-                ImGui::TextColored(t.palette.text_dim, "Available:");
+                ImGui::TextColored(t.palette.text_dim, LOC(DiskSpaceDialog::AVAILABLE_LABEL));
                 ImGui::SameLine();
                 ImGui::TextColored(t.palette.error, "%s", formatBytes(info_.available_bytes).c_str());
             }
@@ -132,7 +136,7 @@ namespace lfs::vis::gui {
             ImGui::Spacing();
 
             // Instructions
-            ImGui::TextColored(t.palette.warning, "Please free up disk space or choose a different location.");
+            ImGui::TextColored(t.palette.warning, LOC(DiskSpaceDialog::INSTRUCTION));
 
             ImGui::Dummy({0.0f, 8.0f * scale});
 
@@ -143,7 +147,7 @@ namespace lfs::vis::gui {
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (ImGui::GetContentRegionAvail().x - total_width) * 0.5f);
 
             // Cancel button
-            if (widgets::ColoredButton("Cancel", widgets::ButtonStyle::Secondary, {button_width, 0}) ||
+            if (widgets::ColoredButton(LOC(DiskSpaceDialog::CANCEL), widgets::ButtonStyle::Secondary, {button_width, 0}) ||
                 ImGui::IsKeyPressed(ImGuiKey_Escape)) {
                 open_ = false;
                 if (on_cancel_)
@@ -154,9 +158,9 @@ namespace lfs::vis::gui {
             ImGui::SameLine(0.0f, button_spacing);
 
             // Change Location button
-            if (widgets::ColoredButton("Change Location", widgets::ButtonStyle::Warning, {button_width, 0})) {
+            if (widgets::ColoredButton(LOC(DiskSpaceDialog::CHANGE_LOCATION), widgets::ButtonStyle::Warning, {button_width, 0})) {
                 // Open folder selection dialog
-                std::filesystem::path new_location = SelectFolderDialog("Select Output Location", info_.path.parent_path());
+                std::filesystem::path new_location = SelectFolderDialog(LOC(DiskSpaceDialog::SELECT_OUTPUT_LOCATION), info_.path.parent_path());
                 if (!new_location.empty()) {
                     open_ = false;
                     if (on_change_location_)
@@ -168,7 +172,7 @@ namespace lfs::vis::gui {
             ImGui::SameLine(0.0f, button_spacing);
 
             // Retry button
-            if (widgets::ColoredButton("Retry", widgets::ButtonStyle::Primary, {button_width, 0}) ||
+            if (widgets::ColoredButton(LOC(DiskSpaceDialog::RETRY), widgets::ButtonStyle::Primary, {button_width, 0}) ||
                 ImGui::IsKeyPressed(ImGuiKey_Enter)) {
                 open_ = false;
                 if (on_retry_)

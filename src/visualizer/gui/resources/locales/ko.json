@@ -654,5 +654,21 @@
     "invalid": "(유효하지 않음)",
     "output_path": "출력 경로:",
     "help_text": "체크포인트에 저장된 데이터셋 경로가 변경되었을 수 있습니다. 필요한 경우 업데이트하세요."
+  },
+
+  "disk_space_dialog": {
+    "title": "디스크 공간 부족",
+    "error_label": "오류",
+    "checkpoint_save_failed": "체크포인트 저장 실패 (반복",
+    "export_failed": "내보내기 실패",
+    "insufficient_space_prefix": "파일을 저장할 디스크 공간이 부족합니다:",
+    "location_label": "위치:",
+    "required_label": "필요:",
+    "available_label": "사용 가능:",
+    "instruction": "디스크 공간을 확보하거나 다른 위치를 선택하세요.",
+    "cancel": "취소",
+    "change_location": "위치 변경",
+    "retry": "다시 시도",
+    "select_output_location": "출력 위치 선택"
   }
 }

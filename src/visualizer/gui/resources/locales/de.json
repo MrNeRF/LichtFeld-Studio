@@ -654,5 +654,21 @@
     "invalid": "(ungültig)",
     "output_path": "Ausgabe-Pfad:",
     "help_text": "Der im Checkpoint gespeicherte Datensatz-Pfad hat sich möglicherweise geändert. Aktualisieren Sie ihn bei Bedarf."
+  },
+
+  "disk_space_dialog": {
+    "title": "Unzureichender Speicherplatz",
+    "error_label": "Fehler",
+    "checkpoint_save_failed": "Checkpoint-Speicherung fehlgeschlagen (Iteration",
+    "export_failed": "Export fehlgeschlagen",
+    "insufficient_space_prefix": "Nicht genügend Speicherplatz zum Speichern der Datei:",
+    "location_label": "Speicherort:",
+    "required_label": "Erforderlich:",
+    "available_label": "Verfügbar:",
+    "instruction": "Bitte geben Sie Speicherplatz frei oder wählen Sie einen anderen Speicherort.",
+    "cancel": "Abbrechen",
+    "change_location": "Speicherort ändern",
+    "retry": "Wiederholen",
+    "select_output_location": "Ausgabeort auswählen"
   }
 }

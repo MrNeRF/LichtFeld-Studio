@@ -82,6 +82,8 @@ namespace lfs::io {
         ErrorCode code;
         std::string message;
         std::filesystem::path path;
+        size_t required_bytes = 0;
+        size_t available_bytes = 0;
 
         Error(ErrorCode c, std::string msg)
             : code(c),
@@ -91,6 +93,13 @@ namespace lfs::io {
             : code(c),
               message(std::move(msg)),
               path(std::move(p)) {}
+
+        Error(ErrorCode c, std::string msg, std::filesystem::path p, size_t req, size_t avail)
+            : code(c),
+              message(std::move(msg)),
+              path(std::move(p)),
+              required_bytes(req),
+              available_bytes(avail) {}
 
         [[nodiscard]] std::string format() const {
             if (path.empty()) {
@@ -173,11 +182,14 @@ namespace lfs::io {
 
         if (space_info.available < required_with_margin) {
             constexpr double MB = 1024.0 * 1024.0;
-            return make_error(ErrorCode::INSUFFICIENT_DISK_SPACE,
-                              std::format("Need {:.1f} MB but only {:.1f} MB available",
-                                          static_cast<double>(required_with_margin) / MB,
-                                          static_cast<double>(space_info.available) / MB),
-                              check_path);
+            return std::unexpected(Error{
+                ErrorCode::INSUFFICIENT_DISK_SPACE,
+                std::format("Need {:.1f} MB but only {:.1f} MB available",
+                            static_cast<double>(required_with_margin) / MB,
+                            static_cast<double>(space_info.available) / MB),
+                check_path,
+                required_with_margin,
+                static_cast<size_t>(space_info.available)});
         }
 
         return space_info.available;
