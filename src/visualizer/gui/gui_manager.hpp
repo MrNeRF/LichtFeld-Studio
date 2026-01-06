@@ -15,6 +15,7 @@
 #include "gui/ui_context.hpp"
 #include "gui/utils/drag_drop_native.hpp"
 #include "io/loader.hpp"
+#include "windows/disk_space_error_dialog.hpp"
 #include "windows/exit_confirmation_popup.hpp"
 #include "windows/export_dialog.hpp"
 #include "windows/notification_popup.hpp"
@@ -120,6 +121,7 @@ namespace lfs::vis {
             std::unique_ptr<SaveDirectoryPopup> save_directory_popup_;
             std::unique_ptr<ResumeCheckpointPopup> resume_checkpoint_popup_;
             std::unique_ptr<ExitConfirmationPopup> exit_confirmation_popup_;
+            std::unique_ptr<DiskSpaceErrorDialog> disk_space_error_dialog_;
 
             // UI state only
             std::unordered_map<std::string, bool> window_states_;

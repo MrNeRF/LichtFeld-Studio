@@ -3,8 +3,10 @@
 
 #include "checkpoint.hpp"
 #include "components/bilateral_grid.hpp"
+#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "io/error.hpp"
 #include "strategies/istrategy.hpp"
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -36,12 +38,40 @@ namespace lfs::training {
 
             const auto checkpoint_path = checkpoint_dir / ("checkpoint_" + std::to_string(iteration) + ".resume");
 
+            // Estimate checkpoint size
+            const auto& model = strategy.get_model();
+            const size_t num_gaussians = model.size();
+            // Rough estimate: header + model data + strategy state + bilateral grid (if present) + params JSON
+            // Each Gaussian ~= 62 floats (position, rotation, scale, opacity, SH coefficients)
+            constexpr size_t BYTES_PER_GAUSSIAN = 62 * sizeof(float);
+            const size_t estimated_size = sizeof(CheckpointHeader) +
+                                          num_gaussians * BYTES_PER_GAUSSIAN +
+                                          1024 * 100; // Extra for strategy state, bilateral grid, JSON
+
+            // Check disk space with 10% safety margin
+            if (auto space_check = lfs::io::check_disk_space(checkpoint_path, estimated_size, 1.1f);
+                !space_check) {
+                const auto& error = space_check.error();
+                const bool is_disk_space = error.is(lfs::io::ErrorCode::INSUFFICIENT_DISK_SPACE);
+                
+                // Emit event for GUI to handle
+                lfs::core::events::state::CheckpointSaveFailed{
+                    .iteration = iteration,
+                    .path = checkpoint_path,
+                    .error = error.format(),
+                    .required_bytes = estimated_size,
+                    .available_bytes = is_disk_space ? 0 : estimated_size, // 0 signals disk space issue
+                    .is_disk_space_error = is_disk_space}
+                    .emit();
+                
+                return std::unexpected(error.format());
+            }
+
             std::ofstream file;
             if (!lfs::core::open_file_for_write(checkpoint_path, std::ios::binary, file)) {
                 return std::unexpected("Failed to open checkpoint file: " + lfs::core::path_to_utf8(checkpoint_path));
             }
 
-            const auto& model = strategy.get_model();
             CheckpointHeader header{};
             header.iteration = iteration;
             header.num_gaussians = static_cast<uint32_t>(model.size());

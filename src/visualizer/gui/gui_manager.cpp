@@ -112,6 +112,7 @@ namespace lfs::vis::gui {
         save_directory_popup_ = std::make_unique<SaveDirectoryPopup>();
         resume_checkpoint_popup_ = std::make_unique<ResumeCheckpointPopup>();
         exit_confirmation_popup_ = std::make_unique<ExitConfirmationPopup>();
+        disk_space_error_dialog_ = std::make_unique<DiskSpaceErrorDialog>();
 
         // Initialize window states
         window_states_["file_browser"] = false;
@@ -1115,6 +1116,8 @@ namespace lfs::vis::gui {
             notification_popup_->render(viewport_pos_, viewport_size_);
         if (exit_confirmation_popup_)
             exit_confirmation_popup_->render();
+        if (disk_space_error_dialog_)
+            disk_space_error_dialog_->render();
 
         // End frame
         ImGui::Render();
@@ -1863,6 +1866,64 @@ namespace lfs::vis::gui {
         ui::ToggleFullscreen::when([this](const auto&) {
             if (auto* wm = viewer_->getWindowManager()) {
                 wm->toggleFullscreen();
+            }
+        });
+
+        // Handle checkpoint save failures due to disk space
+        state::CheckpointSaveFailed::when([this](const auto& e) {
+            if (!e.is_disk_space_error) {
+                // For non-disk-space errors, just show a notification
+                if (notification_popup_) {
+                    notification_popup_->show(
+                        NotificationPopup::Type::FAILURE,
+                        "Checkpoint Save Failed",
+                        std::format("Failed to save checkpoint at iteration {}:\n\n{}",
+                                    e.iteration, e.error));
+                }
+                return;
+            }
+
+            // For disk space errors, show the interactive dialog
+            if (disk_space_error_dialog_) {
+                DiskSpaceErrorDialog::ErrorInfo info{
+                    .path = e.path,
+                    .error_message = e.error,
+                    .required_bytes = e.required_bytes,
+                    .available_bytes = e.available_bytes,
+                    .iteration = e.iteration,
+                    .is_checkpoint = true};
+
+                // On retry: attempt to save checkpoint again at the same location
+                auto on_retry = [this, iteration = e.iteration]() {
+                    if (auto* tm = viewer_->getTrainerManager()) {
+                        tm->requestSaveCheckpoint();
+                    }
+                };
+
+                // On change location: update output path and retry
+                auto on_change_location = [this, iteration = e.iteration](const std::filesystem::path& new_path) {
+                    if (auto* tm = viewer_->getTrainerManager()) {
+                        auto* trainer = tm->getTrainer();
+                        if (trainer) {
+                            // Get current trainer parameters
+                            auto params = trainer->getParams();
+                            // Update only the output path
+                            params.dataset.output_path = new_path;
+                            // Set the updated parameters back to the trainer
+                            trainer->setParams(params);
+                            LOG_INFO("Updated checkpoint output path to: {}", lfs::core::path_to_utf8(new_path));
+                        }
+                        // Request save with new location
+                        tm->requestSaveCheckpoint();
+                    }
+                };
+
+                // On cancel: just log and continue training
+                auto on_cancel = []() {
+                    LOG_WARN("Checkpoint save cancelled by user");
+                };
+
+                disk_space_error_dialog_->show(info, on_retry, on_change_location, on_cancel);
             }
         });
 
