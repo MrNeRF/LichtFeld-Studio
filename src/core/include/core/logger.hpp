@@ -156,8 +156,8 @@ namespace lfs::core {
 #define LOG_CRITICAL(...) \
     ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Critical, std::source_location::current(), __VA_ARGS__)
 
-#define LOG_TIMER(name)       ::lfs::core::ScopedTimer _timer##__LINE__(name)
-#define LOG_TIMER_TRACE(name) ::lfs::core::ScopedTimer _timer##__LINE__(name, ::lfs::core::LogLevel::Trace)
-#define LOG_TIMER_DEBUG(name) ::lfs::core::ScopedTimer _timer##__LINE__(name, ::lfs::core::LogLevel::Debug)
+#define LOG_TIMER(name)       ::lfs::core::ScopedTimer _timer##__COUNTER__(name)
+#define LOG_TIMER_TRACE(name) ::lfs::core::ScopedTimer _timer##__COUNTER__(name, ::lfs::core::LogLevel::Trace)
+#define LOG_TIMER_DEBUG(name) ::lfs::core::ScopedTimer _timer##__COUNTER__(name, ::lfs::core::LogLevel::Debug)
 
 // Memory logging: use LOG_DEBUG("[MEM] ...") and filter with --log-filter "*MEM*"
