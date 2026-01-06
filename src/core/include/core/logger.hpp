@@ -56,6 +56,14 @@ namespace lfs::core {
         void set_level(LogLevel level);
         void flush();
 
+        // Runtime string logging - no format args, works for both CUDA and non-CUDA
+        // Use this when you need to log a dynamically constructed string
+        void log_internal(LogLevel level, const std::source_location& loc, const std::string& msg) {
+            if (static_cast<uint8_t>(level) < global_level_.load(std::memory_order_relaxed))
+                return;
+            log(level, loc, msg);
+        }
+
         // Template wrapper for formatting (header-only for convenience)
         // PERF: Fast-path check BEFORE expensive std::format() call.
         // If the log level is below the global threshold, skip formatting entirely.

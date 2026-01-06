@@ -9,8 +9,10 @@
 #include "gpu_slab_allocator.hpp"
 #include "size_bucketed_pool.hpp"
 #include <cuda_runtime.h>
+#include <iomanip>
 #include <memory>
 #include <mutex>
+#include <sstream>
 #include <unordered_map>
 
 namespace lfs::core {
@@ -84,7 +86,7 @@ namespace lfs::core {
                     log_stats_periodically();
                     return ptr;
                 }
-                LOG_WARN("cudaMallocAsync failed for bucket {}: {}", bucket_size, cudaGetErrorString(err));
+                LOG_WARN("cudaMallocAsync failed for bucket " + std::to_string(bucket_size) + ": " + cudaGetErrorString(err));
 #endif
             }
 
@@ -206,30 +208,30 @@ namespace lfs::core {
             int device;
             cudaError_t err = cudaGetDevice(&device);
             if (err != cudaSuccess) {
-                LOG_ERROR("cudaGetDevice failed: {}", cudaGetErrorString(err));
+                LOG_ERROR(std::string("cudaGetDevice failed: ") + cudaGetErrorString(err));
                 return;
             }
 
             cudaMemPool_t pool;
             err = cudaDeviceGetDefaultMemPool(&pool, device);
             if (err != cudaSuccess) {
-                LOG_ERROR("cudaDeviceGetDefaultMemPool failed: {}", cudaGetErrorString(err));
+                LOG_ERROR(std::string("cudaDeviceGetDefaultMemPool failed: ") + cudaGetErrorString(err));
                 return;
             }
 
             uint64_t threshold = UINT64_MAX;
             cudaMemPoolSetAttribute(pool, cudaMemPoolAttrReleaseThreshold, &threshold);
 
-            LOG_INFO("CUDA memory pool configured for device {} (CUDA {})", device, CUDART_VERSION);
+            LOG_DEBUG("CUDA memory pool configured for device " + std::to_string(device) + " (CUDA " + std::to_string(CUDART_VERSION) + ")");
 #else
             LOG_WARN("CUDA memory pooling not available (requires CUDA >= 12.8)");
 #endif
 
             slab_enabled_ = GPUSlabAllocator::instance().is_enabled();
             if (slab_enabled_) {
-                LOG_INFO("Slab allocator enabled (≤256KB)");
+                LOG_DEBUG("Slab allocator enabled (≤256KB)");
             }
-            LOG_INFO("Size-bucketed pool enabled (256KB-16GB, reduces fragmentation)");
+            LOG_DEBUG("Size-bucketed pool enabled (256KB-16GB, reduces fragmentation)");
         }
 
         std::string get_stats() const {
@@ -289,7 +291,7 @@ namespace lfs::core {
         }
 
         void print_stats() const {
-            LOG_INFO("{}", get_stats());
+            LOG_DEBUG(get_stats());
             GPUSlabAllocator::instance().print_stats();
             SizeBucketedPool::instance().print_stats();
         }
@@ -330,7 +332,7 @@ namespace lfs::core {
 
             cudaError_t err = cudaMalloc(&ptr, bytes);
             if (err != cudaSuccess) {
-                LOG_WARN("[MEM] cudaMalloc failed: {}, trimming...", cudaGetErrorString(err));
+                LOG_WARN(std::string("[MEM] cudaMalloc failed: ") + cudaGetErrorString(err) + ", trimming...");
                 cudaDeviceSynchronize();
                 SizeBucketedPool::instance().trim_cache();
 #if CUDART_VERSION >= 12080
@@ -342,7 +344,7 @@ namespace lfs::core {
 #endif
                 err = cudaMalloc(&ptr, bytes);
                 if (err != cudaSuccess) {
-                    LOG_ERROR("[MEM] cudaMalloc retry failed: {}", cudaGetErrorString(err));
+                    LOG_ERROR(std::string("[MEM] cudaMalloc retry failed: ") + cudaGetErrorString(err));
                     return nullptr;
                 }
             }
@@ -399,10 +401,14 @@ namespace lfs::core {
                 cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &pool_reserved);
 
                 constexpr double GB = 1024.0 * 1024.0 * 1024.0;
-                LOG_DEBUG("[MEM] Slab:{} Bucket:{} (hits:{}) Async:{} | Pool:{:.2f}/{:.2f}GB",
-                          stats_.slab_allocs.load(), stats_.bucket_allocs.load(),
-                          stats_.bucket_cache_hits.load(), stats_.async_allocs.load(),
-                          pool_used / GB, pool_reserved / GB);
+                std::ostringstream oss;
+                oss << "[MEM] Slab:" << stats_.slab_allocs.load()
+                    << " Bucket:" << stats_.bucket_allocs.load()
+                    << " (hits:" << stats_.bucket_cache_hits.load() << ")"
+                    << " Async:" << stats_.async_allocs.load()
+                    << " | Pool:" << std::fixed << std::setprecision(2)
+                    << (pool_used / GB) << "/" << (pool_reserved / GB) << "GB";
+                LOG_DEBUG(oss.str());
 #endif
             }
         }

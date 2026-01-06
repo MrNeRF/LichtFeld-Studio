@@ -353,7 +353,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         if (tile_idx >= n_tiles)
             return;
         const uint2 instance_range = tile_instance_ranges[tile_idx];
-        const uint n_buckets = div_round_up(instance_range.y - instance_range.x, 32u);
+        const uint n_buckets = div_round_up(instance_range.y - instance_range.x, static_cast<uint>(config::checkpoint_interval));
         tile_n_buckets[tile_idx] = n_buckets;
     }
 
@@ -369,7 +369,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         uint* tile_max_n_contributions,
         uint* tile_n_contributions,
         uint* bucket_tile_index,
-        ushort4* bucket_checkpoint_half, // Half-precision: color.rgb + transmittance as 4× fp16 (50% memory reduction)
+        uint* bucket_checkpoint_uint8, // Compressed: color.rgb + transmittance as 4× uint8 (75% memory reduction vs float4)
         const uint width,
         const uint height,
         const uint grid_width) {
@@ -386,7 +386,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         const int n_points_total = tile_range.y - tile_range.x;
 
         uint bucket_offset = tile_idx == 0 ? 0 : tile_bucket_offsets[tile_idx - 1];
-        const int n_buckets = div_round_up(n_points_total, 32); // re-computing is faster than reading from tile_n_buckets
+        const int n_buckets = div_round_up(n_points_total, config::checkpoint_interval); // re-computing is faster than reading from tile_n_buckets
         for (int n_buckets_remaining = n_buckets, current_bucket_idx = thread_rank; n_buckets_remaining > 0; n_buckets_remaining -= config::block_size_blend, current_bucket_idx += config::block_size_blend) {
             if (current_bucket_idx < n_buckets)
                 bucket_tile_index[bucket_offset + current_bucket_idx] = tile_idx;
@@ -416,14 +416,16 @@ namespace fast_lfs::rasterization::kernels::forward {
             block.sync();
             const int current_batch_size = min(config::block_size_blend, n_points_remaining);
             for (int j = 0; !done && j < current_batch_size; ++j) {
-                if (j % 32 == 0) {
-                    // Store color + transmittance as half-precision (50% memory reduction, no recomputation)
-                    // Use __half_as_ushort to properly preserve the bit pattern
-                    bucket_checkpoint_half[bucket_offset * config::block_size_blend + thread_rank] = make_ushort4(
-                        __half_as_ushort(__float2half_rn(color_pixel.x)),
-                        __half_as_ushort(__float2half_rn(color_pixel.y)),
-                        __half_as_ushort(__float2half_rn(color_pixel.z)),
-                        __half_as_ushort(__float2half_rn(transmittance)));
+                if (j % config::checkpoint_interval == 0) {
+                    // Store color + transmittance as 4× uint8 packed into uint32 (75% memory reduction vs float4)
+                    // Colors use [0, 4] range to support HDR (values >4 saturate, but rare in practice)
+                    // Transmittance uses [0, 1] range (always bounded by construction)
+                    constexpr float color_scale = 255.0f / 4.0f; // [0, 4] → [0, 255]
+                    const uint r = min(static_cast<uint>(fmaxf(color_pixel.x, 0.0f) * color_scale + 0.5f), 255u);
+                    const uint g = min(static_cast<uint>(fmaxf(color_pixel.y, 0.0f) * color_scale + 0.5f), 255u);
+                    const uint b = min(static_cast<uint>(fmaxf(color_pixel.z, 0.0f) * color_scale + 0.5f), 255u);
+                    const uint t = static_cast<uint>(transmittance * 255.0f + 0.5f); // transmittance always in [0,1]
+                    bucket_checkpoint_uint8[bucket_offset * config::block_size_blend + thread_rank] = (r) | (g << 8) | (b << 16) | (t << 24);
                     bucket_offset++;
                 }
                 n_possible_contributions++;

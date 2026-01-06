@@ -275,7 +275,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const uint* tile_max_n_contributions,
         const uint* tile_n_contributions,
         const uint* bucket_tile_index,
-        const ushort4* bucket_checkpoint_half, // Half-precision: color.rgb + transmittance as 4× fp16 (50% memory reduction)
+        const uint* bucket_checkpoint_uint8, // Compressed: color.rgb + transmittance as 4× uint8 (75% memory reduction vs float4)
         float2* grad_mean2d,
         float* grad_conic,
         float* grad_raw_opacity,
@@ -349,8 +349,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         float3 grad_color_pixel;
         float grad_alpha_common;
 
-        // Pointer to this bucket's checkpoint data (half-precision color + transmittance)
-        bucket_checkpoint_half += bucket_idx * config::block_size_blend;
+        // Pointer to this bucket's checkpoint data (uint8 packed color + transmittance)
+        bucket_checkpoint_uint8 += bucket_idx * config::block_size_blend;
         __shared__ uint collected_last_contributor[32];
         __shared__ float4 collected_color_pixel_after_transmittance[32];
         __shared__ float4 collected_grad_info_pixel[32];
@@ -360,14 +360,17 @@ namespace fast_lfs::rasterization::kernels::backward {
         for (int i = 0; i < config::block_size_blend + 31; ++i) {
             if (i % 32 == 0) {
                 const uint local_idx = i + lane_idx;
-                // Load color + transmittance from half-precision checkpoint (50% memory reduction, no recomputation)
-                // Use __ushort_as_half to properly interpret the bit pattern
-                const ushort4 checkpoint_half = bucket_checkpoint_half[local_idx];
+                // Load color + transmittance from uint8-packed checkpoint (75% memory reduction vs float4)
+                // Unpack uint32 → 4× uint8 → floats
+                // Colors use [0, 4] range, transmittance uses [0, 1] range
+                const uint packed = bucket_checkpoint_uint8[local_idx];
+                constexpr float color_inv_scale = 4.0f / 255.0f; // [0, 255] → [0, 4]
+                constexpr float trans_inv_scale = 1.0f / 255.0f; // [0, 255] → [0, 1]
                 const float3 checkpoint_color = make_float3(
-                    __half2float(__ushort_as_half(checkpoint_half.x)),
-                    __half2float(__ushort_as_half(checkpoint_half.y)),
-                    __half2float(__ushort_as_half(checkpoint_half.z)));
-                const float checkpoint_transmittance = __half2float(__ushort_as_half(checkpoint_half.w));
+                    static_cast<float>(packed & 0xFF) * color_inv_scale,
+                    static_cast<float>((packed >> 8) & 0xFF) * color_inv_scale,
+                    static_cast<float>((packed >> 16) & 0xFF) * color_inv_scale);
+                const float checkpoint_transmittance = static_cast<float>((packed >> 24) & 0xFF) * trans_inv_scale;
                 const uint2 pixel_coords = {start_pixel_coords.x + local_idx % config::tile_width, start_pixel_coords.y + local_idx / config::tile_width};
                 const uint pixel_idx = width * pixel_coords.y + pixel_coords.x;
                 const bool pixel_in_bounds = pixel_coords.x < width && pixel_coords.y < height;

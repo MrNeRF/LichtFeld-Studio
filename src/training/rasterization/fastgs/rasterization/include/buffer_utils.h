@@ -112,6 +112,51 @@ namespace fast_lfs::rasterization {
         }
     };
 
+    // ========================================================================
+    // Lazy Double Buffer Pattern - Reduces VRAM by ~67% for PerInstanceBuffers
+    // ========================================================================
+    // Only primitive_indices survives to backward pass. Keys and alternate
+    // buffers are only needed during sorting, so we allocate them temporarily
+    // and free them via arena watermark restore after sorting completes.
+    // ========================================================================
+
+    // Permanent storage - survives until backward pass (4 bytes/instance)
+    struct PerInstanceBuffersPermanent {
+        uint* primitive_indices;  // Single buffer - sorted result ends up here
+
+        static PerInstanceBuffersPermanent from_blob(char*& blob, int n_instances) {
+            PerInstanceBuffersPermanent buffers;
+            obtain(blob, buffers.primitive_indices, n_instances, 128);
+            return buffers;
+        }
+    };
+
+    // Temporary storage for sorting - freed after sort via watermark restore (~8 bytes/instance)
+    struct PerInstanceSortTemporary {
+        ushort* keys_current;
+        ushort* keys_alternate;
+        uint* primitive_indices_alternate;
+        char* cub_workspace;
+        size_t cub_workspace_size;
+
+        static PerInstanceSortTemporary from_blob(char*& blob, int n_instances) {
+            PerInstanceSortTemporary buffers;
+            obtain(blob, buffers.keys_current, n_instances, 128);
+            obtain(blob, buffers.keys_alternate, n_instances, 128);
+            obtain(blob, buffers.primitive_indices_alternate, n_instances, 128);
+
+            // Calculate CUB workspace size
+            cub::DoubleBuffer<ushort> keys;
+            cub::DoubleBuffer<uint> indices;
+            cub::DeviceRadixSort::SortPairs(
+                nullptr, buffers.cub_workspace_size,
+                keys, indices,
+                n_instances);
+            obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
+            return buffers;
+        }
+    };
+
     struct PerTileBuffers {
         size_t cub_workspace_size;
         char* cub_workspace;
@@ -139,15 +184,16 @@ namespace fast_lfs::rasterization {
 
     struct PerBucketBuffers {
         uint* tile_index;
-        ushort4* checkpoint_half; // Half-precision: color.rgb + transmittance as 4× fp16 (8 bytes vs 16 bytes = 50% savings)
+        uint* checkpoint_uint8; // Compressed: color.rgb + transmittance as 4× uint8 packed into uint32 (4 bytes vs 8 = 50% savings)
 
         static PerBucketBuffers from_blob(char*& blob, int n_buckets) {
             PerBucketBuffers buffers;
             // tile_index: only needs n_buckets elements (one per bucket)
-            // checkpoint_half: ushort4 stores 4 half values (color.r, color.g, color.b, transmittance)
-            // Memory: 8 bytes/pixel vs 16 bytes/pixel (float4) = 50% savings, no recomputation needed
+            // checkpoint_uint8: uint32 stores 4× uint8 (color.r, color.g, color.b, transmittance)
+            // Memory: 4 bytes/pixel vs 8 bytes/pixel (ushort4) = 50% savings, no recomputation needed
+            // Colors use [0, 4] range for HDR support, transmittance uses [0, 1] range
             obtain(blob, buffers.tile_index, n_buckets, 128);
-            obtain(blob, buffers.checkpoint_half, n_buckets * config::block_size_blend, 128);
+            obtain(blob, buffers.checkpoint_uint8, n_buckets * config::block_size_blend, 128);
             return buffers;
         }
     };

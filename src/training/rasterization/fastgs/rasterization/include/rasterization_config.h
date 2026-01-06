@@ -31,8 +31,7 @@ namespace fast_lfs::rasterization::config {
     DEF int n_sequential_threshold = 4;
     // checkpoint interval for gradient computation (how often to save intermediate blending state)
     // higher values = less memory, more recomputation in backward pass
-    // 32: baseline (2.6 GB), 64: 1.3 GB, 128: 650 MB, 256: 325 MB
-    // NOTE: Currently only 32 is supported. Larger values require redesigning bucket/checkpoint separation.
+    // 32: baseline, 64: 50% less memory but requires recomputation in backward
     DEF int checkpoint_interval = 32;
 } // namespace fast_lfs::rasterization::config
 

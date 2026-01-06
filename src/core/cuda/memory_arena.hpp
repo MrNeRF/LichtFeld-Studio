@@ -134,6 +134,11 @@ namespace lfs::core {
         void cleanup_frames(int keep_recent = 3);
         void emergency_cleanup();
 
+        // Watermark API for lazy double buffer pattern
+        // Allows temporary allocations to be "freed" by resetting offset
+        size_t get_watermark() const;                    // Returns current allocation offset
+        void restore_watermark(size_t watermark);        // Resets offset to watermark (frees allocations after it)
+
         Statistics get_statistics() const;
         MemoryInfo get_memory_info() const;
         void dump_statistics() const;

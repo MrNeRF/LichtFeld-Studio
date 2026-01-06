@@ -579,3 +579,239 @@ TEST_F(FastGSGradientTest, GradientDirection) {
 
     EXPECT_LT(loss_after, loss_before);
 }
+
+// =============================================================================
+// Test for checkpoint_interval > 32 (sub-bucket gradient correctness)
+// This tests the case where a single bucket contains more than 32 gaussians
+// =============================================================================
+
+class FastGSMultiBucketGradientTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        // Create 128 gaussians concentrated in a SINGLE 16x16 tile
+        // This ensures many gaussians (>64) end up in the same tile, triggering
+        // multiple sub-buckets per bucket when checkpoint_interval=64
+        n_ = 128;
+        std::mt19937 gen(456);
+        // Very small spread - all gaussians within ~1 pixel of each other
+        std::uniform_real_distribution<float> tiny_offset(-0.01f, 0.01f);
+
+        // All gaussians at exactly (0, 0, 0) with tiny perturbations
+        // With camera at z=5, focal=100, this projects to pixel ~(32, 32) center of 64x64 image
+        std::vector<float> means_data(n_ * 3);
+        for (size_t i = 0; i < n_; ++i) {
+            means_data[i * 3] = tiny_offset(gen);      // x: tiny spread
+            means_data[i * 3 + 1] = tiny_offset(gen);  // y: tiny spread
+            means_data[i * 3 + 2] = tiny_offset(gen);  // z: tiny spread
+        }
+        means_ = Tensor::from_blob(means_data.data(), {n_, 3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+
+        sh0_ = Tensor::randn({n_, 1, 3}, Device::CUDA).mul(0.3f);
+        shN_ = Tensor::zeros({n_, 0, 3}, Device::CUDA);
+        // Very small gaussians so they all project to the same tile (scale exp(-5) ≈ 0.007)
+        scaling_ = Tensor::full({n_, 3}, -5.0f, Device::CUDA);
+        rotation_ = Tensor::zeros({n_, 4}, Device::CUDA);
+        rotation_.slice(1, 0, 1).fill_(1.0f);  // Identity rotation (w=1, x=y=z=0)
+        opacity_ = Tensor::randn({n_}, Device::CUDA);
+
+        // Camera looking at origin from z=5
+        auto R = Tensor::eye(3, Device::CUDA);
+        std::vector<float> t_data{0, 0, 5};
+        auto T = Tensor::from_blob(t_data.data(), {3}, Device::CPU, DataType::Float32).to(Device::CUDA);
+        // 64x64 image, focal length 100 -> gaussians at (0,0) project to center (32,32)
+        // which is in tile (32/16, 32/16) = tile (2, 2)
+        camera_ = std::make_unique<Camera>(R, T, 100.0f, 100.0f, 32.0f, 32.0f,
+                                           Tensor(), Tensor(), CameraModelType::PINHOLE,
+                                           "test", "", std::filesystem::path{}, 64, 64, 0);
+        bg_ = Tensor::zeros({3}, Device::CUDA);
+    }
+
+    void TearDown() override {
+        GlobalArenaManager::instance().get_arena().emergency_cleanup();
+    }
+
+    float compute_loss(const Tensor& means, const Tensor& scaling, const Tensor& rotation,
+                       const Tensor& opacity, const Tensor& sh0) {
+        auto splat = std::make_unique<SplatData>(0, means, sh0, shN_, scaling, rotation, opacity, 1.0f);
+        auto r = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);
+        if (!r)
+            return 0.0f;
+        return r->first.image.pow(2.0f).sum().item<float>();
+    }
+
+    Tensor numerical_grad(ParamType param, float eps = 1e-3f) {
+        Tensor orig;
+        switch (param) {
+        case ParamType::Means: orig = means_.clone(); break;
+        case ParamType::Scaling: orig = scaling_.clone(); break;
+        case ParamType::Opacity: orig = opacity_.clone(); break;
+        case ParamType::Sh0: orig = sh0_.clone(); break;
+        default: return {};
+        }
+
+        Tensor grad = Tensor::zeros_like(orig);
+        auto orig_cpu = orig.to(Device::CPU);
+        auto grad_cpu = grad.to(Device::CPU);
+        float* o_ptr = orig_cpu.ptr<float>();
+        float* g_ptr = grad_cpu.ptr<float>();
+
+        for (size_t i = 0; i < orig.numel(); ++i) {
+            auto perturbed = orig_cpu.clone();
+            perturbed.ptr<float>()[i] += eps;
+            set_param(param, perturbed.to(Device::CUDA));
+            float loss_plus = compute_loss(means_, scaling_, rotation_, opacity_, sh0_);
+
+            perturbed.ptr<float>()[i] = o_ptr[i] - eps;
+            set_param(param, perturbed.to(Device::CUDA));
+            float loss_minus = compute_loss(means_, scaling_, rotation_, opacity_, sh0_);
+
+            g_ptr[i] = (loss_plus - loss_minus) / (2.0f * eps);
+        }
+
+        set_param(param, orig);
+        return grad_cpu.to(Device::CUDA);
+    }
+
+    void set_param(ParamType param, const Tensor& val) {
+        switch (param) {
+        case ParamType::Means: means_ = val; break;
+        case ParamType::Scaling: scaling_ = val; break;
+        case ParamType::Opacity: opacity_ = val; break;
+        case ParamType::Sh0: sh0_ = val; break;
+        default: break;
+        }
+    }
+
+    Tensor analytical_grad(ParamType param) {
+        auto splat = std::make_unique<SplatData>(0, means_, sh0_, shN_, scaling_, rotation_, opacity_, 1.0f);
+        auto r = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);
+        if (!r)
+            return {};
+
+        AdamConfig cfg{.lr = 0.001f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
+        auto opt = std::make_unique<AdamOptimizer>(*splat, cfg);
+        opt->allocate_gradients();
+        opt->zero_grad(0);
+
+        auto grad_out = r->first.image.mul(2.0f);
+        fast_rasterize_backward(r->second, grad_out, *splat, *opt, {});
+
+        return opt->get_grad(param).clone();
+    }
+
+    size_t n_;
+    Tensor means_, sh0_, shN_, scaling_, rotation_, opacity_, bg_;
+    std::unique_ptr<Camera> camera_;
+};
+
+TEST_F(FastGSMultiBucketGradientTest, VerifyBucketCount) {
+    // Verify we actually have multiple sub-buckets (>64 instances per tile)
+    auto splat = std::make_unique<SplatData>(0, means_, sh0_, shN_, scaling_, rotation_, opacity_, 1.0f);
+    auto r = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);
+    ASSERT_TRUE(r.has_value());
+
+    // With 128 gaussians concentrated in single tile, we should have:
+    // - ~128 visible (all in front of camera)
+    // - ~128 instances (each gaussian in 1 tile)
+    // - 2 buckets (128/64 = 2 with checkpoint_interval=64)
+    printf("  n_visible=%d, n_instances=%d, n_buckets=%d\n",
+           r->second.forward_ctx.n_visible_primitives,
+           r->second.forward_ctx.n_instances,
+           r->second.forward_ctx.n_buckets);
+
+    // Expect at least 100 visible (most should be visible since they're in front of camera)
+    EXPECT_GT(r->second.forward_ctx.n_visible_primitives, 100);
+    // Expect at least 2 buckets (which means sub_bucket > 0 will be triggered)
+    // With 128 instances in 1-2 tiles and checkpoint_interval=64, we need >= 2 buckets
+    EXPECT_GE(r->second.forward_ctx.n_buckets, 2) << "Need at least 2 buckets to test sub-bucket logic";
+}
+
+TEST_F(FastGSMultiBucketGradientTest, Numerical_Means_MultiBucket) {
+    auto num = numerical_grad(ParamType::Means);
+    auto ana = analytical_grad(ParamType::Means);
+    ASSERT_TRUE(num.is_valid() && ana.is_valid());
+
+    auto n_cpu = num.to(Device::CPU);
+    auto a_cpu = ana.to(Device::CPU);
+    float* n = n_cpu.ptr<float>();
+    float* a = a_cpu.ptr<float>();
+
+    float max_err = 0, sum_err = 0, num_norm = 0, ana_norm = 0, dot = 0;
+    for (size_t i = 0; i < num.numel(); ++i) {
+        max_err = std::max(max_err, std::abs(n[i] - a[i]));
+        sum_err += std::abs(n[i] - a[i]);
+        num_norm += n[i] * n[i];
+        ana_norm += a[i] * a[i];
+        dot += n[i] * a[i];
+    }
+    float cos_sim = dot / (std::sqrt(num_norm) * std::sqrt(ana_norm) + 1e-8f);
+    printf("  MultiBucket Means: num_norm=%.4f ana_norm=%.4f max_err=%.5f mean_err=%.5f cos_sim=%.4f\n",
+           std::sqrt(num_norm), std::sqrt(ana_norm), max_err, sum_err / num.numel(), cos_sim);
+
+    // Cosine similarity should be very high (>0.99) for correct gradients
+    EXPECT_GT(cos_sim, 0.95f) << "Gradient direction mismatch - possible sub-bucket bug";
+
+    // Mean error should be reasonable
+    float mean_err = sum_err / num.numel();
+    EXPECT_LT(mean_err, 1.0f) << "Mean gradient error too high";
+}
+
+TEST_F(FastGSMultiBucketGradientTest, Numerical_Opacity_MultiBucket) {
+    auto num = numerical_grad(ParamType::Opacity);
+    auto ana = analytical_grad(ParamType::Opacity);
+    ASSERT_TRUE(num.is_valid() && ana.is_valid());
+
+    auto n_cpu = num.to(Device::CPU);
+    auto a_cpu = ana.to(Device::CPU);
+    float* n = n_cpu.ptr<float>();
+    float* a = a_cpu.ptr<float>();
+
+    float max_err = 0, sum_err = 0, num_norm = 0, ana_norm = 0, dot = 0;
+    for (size_t i = 0; i < num.numel(); ++i) {
+        max_err = std::max(max_err, std::abs(n[i] - a[i]));
+        sum_err += std::abs(n[i] - a[i]);
+        num_norm += n[i] * n[i];
+        ana_norm += a[i] * a[i];
+        dot += n[i] * a[i];
+    }
+    float cos_sim = dot / (std::sqrt(num_norm) * std::sqrt(ana_norm) + 1e-8f);
+    printf("  MultiBucket Opacity: num_norm=%.4f ana_norm=%.4f max_err=%.5f mean_err=%.5f cos_sim=%.4f\n",
+           std::sqrt(num_norm), std::sqrt(ana_norm), max_err, sum_err / num.numel(), cos_sim);
+
+    EXPECT_GT(cos_sim, 0.95f) << "Gradient direction mismatch - possible sub-bucket bug";
+}
+
+TEST_F(FastGSMultiBucketGradientTest, GradientDescent_MultiBucket) {
+    // Verify gradient descent actually reduces loss with many gaussians per tile
+    auto splat = std::make_unique<SplatData>(0, means_, sh0_, shN_, scaling_, rotation_, opacity_, 1.0f);
+    auto r = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);
+    ASSERT_TRUE(r.has_value());
+
+    float loss_before = r->first.image.pow(2.0f).sum().item<float>();
+    printf("  Loss before: %.4f\n", loss_before);
+
+    AdamConfig cfg{.lr = 0.01f, .beta1 = 0.9, .beta2 = 0.999, .eps = 1e-15};
+    auto opt = std::make_unique<AdamOptimizer>(*splat, cfg);
+    opt->allocate_gradients();
+
+    // Do several gradient descent steps
+    for (int step = 0; step < 10; ++step) {
+        r = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);
+        ASSERT_TRUE(r.has_value());
+
+        opt->zero_grad(0);
+        auto grad_out = r->first.image.mul(2.0f);
+        fast_rasterize_backward(r->second, grad_out, *splat, *opt, {});
+        opt->step(step + 1);
+    }
+
+    r = fast_rasterize_forward(*camera_, *splat, bg_, 0, 0, 0, 0, false);
+    ASSERT_TRUE(r.has_value());
+    float loss_after = r->first.image.pow(2.0f).sum().item<float>();
+    printf("  Loss after 10 steps: %.4f (reduction: %.2f%%)\n",
+           loss_after, (loss_before - loss_after) / loss_before * 100.0f);
+
+    EXPECT_LT(loss_after, loss_before) << "Gradient descent should reduce loss";
+    // Expect at least 10% reduction with 10 steps
+    EXPECT_LT(loss_after, loss_before * 0.9f) << "Loss reduction too small - gradients may be wrong";
+}
