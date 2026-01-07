@@ -96,6 +96,9 @@ namespace lfs::training {
         // Checkpoint methods
         std::expected<void, std::string> save_checkpoint(int iteration);
         std::expected<int, std::string> load_checkpoint(const std::filesystem::path& checkpoint_path);
+        
+        // Save final PLY and checkpoint (for retry after training completes)
+        void save_final_ply_and_checkpoint(int iteration);
 
         // Orderly shutdown - GPU sync, wait for async saves, release resources. Idempotent.
         void shutdown();

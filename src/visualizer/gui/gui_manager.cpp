@@ -1112,12 +1112,16 @@ namespace lfs::vis::gui {
             resume_checkpoint_popup_->render(viewport_pos_, viewport_size_);
         }
 
-        if (notification_popup_)
-            notification_popup_->render(viewport_pos_, viewport_size_);
-        if (exit_confirmation_popup_)
-            exit_confirmation_popup_->render();
+        // Render disk space dialog first (higher priority)
         if (disk_space_error_dialog_)
             disk_space_error_dialog_->render();
+        
+        // Don't show notification popup if disk space dialog is open
+        if (notification_popup_ && !disk_space_error_dialog_->isOpen())
+            notification_popup_->render(viewport_pos_, viewport_size_);
+        
+        if (exit_confirmation_popup_)
+            exit_confirmation_popup_->render();
 
         // End frame
         ImGui::Render();
@@ -1897,7 +1901,17 @@ namespace lfs::vis::gui {
                     // On retry: attempt to save checkpoint again at the same location
                     auto on_retry = [this, iteration = e.iteration]() {
                         if (auto* tm = viewer_->getTrainerManager()) {
-                            tm->requestSaveCheckpoint();
+                            // If training is complete, directly save; otherwise request save
+                            if (tm->isFinished() || !tm->isTrainingActive()) {
+                                // Training complete - directly save PLY and checkpoint
+                                if (auto* trainer = tm->getTrainer()) {
+                                    LOG_INFO("Retrying final save at iteration {}...", iteration);
+                                    trainer->save_final_ply_and_checkpoint(iteration);
+                                }
+                            } else {
+                                // Training active - use async request
+                                tm->requestSaveCheckpoint();
+                            }
                         }
                     };
 
@@ -1913,9 +1927,17 @@ namespace lfs::vis::gui {
                                 // Set the updated parameters back to the trainer
                                 trainer->setParams(params);
                                 LOG_INFO("Updated checkpoint output path to: {}", lfs::core::path_to_utf8(new_path));
+                                
+                                // Retry with new location
+                                if (tm->isFinished() || !tm->isTrainingActive()) {
+                                    // Training complete - directly save PLY and checkpoint
+                                    LOG_INFO("Retrying final save at new location: {}", lfs::core::path_to_utf8(new_path));
+                                    trainer->save_final_ply_and_checkpoint(iteration);
+                                } else {
+                                    // Training active - use async request
+                                    tm->requestSaveCheckpoint();
+                                }
                             }
-                            // Request save with new location
-                            tm->requestSaveCheckpoint();
                         }
                     };
 

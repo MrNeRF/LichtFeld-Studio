@@ -1365,6 +1365,11 @@ namespace lfs::training {
             bilateral_grid_.get());
     }
 
+    void Trainer::save_final_ply_and_checkpoint(int iteration) {
+        // This is called to retry final save after training completes
+        save_ply(params_.dataset.output_path, iteration, /*join=*/true);
+    }
+
     std::expected<int, std::string> Trainer::load_checkpoint(const std::filesystem::path& checkpoint_path) {
         if (!strategy_) {
             return std::unexpected("Cannot load checkpoint: no strategy initialized");
