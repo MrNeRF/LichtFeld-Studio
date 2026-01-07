@@ -1937,9 +1937,9 @@ namespace lfs::vis::gui {
                     LOG_INFO("Re-export manually using File > Export to: {}", lfs::core::path_to_utf8(new_path));
                 };
 
-                    auto on_cancel = []() {
-                        LOG_INFO("Export cancelled by user");
-                    };
+                auto on_cancel = []() {
+                    LOG_INFO("Export cancelled by user");
+                };
 
                 disk_space_error_dialog_->show(info, on_retry, on_change_location, on_cancel);
             }

@@ -25,7 +25,7 @@ namespace lfs::vis::gui {
             std::string error_message;
             size_t required_bytes;
             size_t available_bytes;
-            int iteration;  // For checkpoint saves
+            int iteration; // For checkpoint saves
             bool is_checkpoint;
         };
 
