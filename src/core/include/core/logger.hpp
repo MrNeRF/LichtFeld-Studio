@@ -156,8 +156,12 @@ namespace lfs::core {
 #define LOG_CRITICAL(...) \
     ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Critical, std::source_location::current(), __VA_ARGS__)
 
-#define LOG_TIMER(name)       ::lfs::core::ScopedTimer _timer##__COUNTER__(name)
-#define LOG_TIMER_TRACE(name) ::lfs::core::ScopedTimer _timer##__COUNTER__(name, ::lfs::core::LogLevel::Trace)
-#define LOG_TIMER_DEBUG(name) ::lfs::core::ScopedTimer _timer##__COUNTER__(name, ::lfs::core::LogLevel::Debug)
+// Helper macros to force expansion of __COUNTER__ before concatenation
+#define _LOG_TIMER_CONCAT_IMPL(x, y)  x##y
+#define _LOG_TIMER_MACRO_CONCAT(x, y) _LOG_TIMER_CONCAT_IMPL(x, y)
+
+#define LOG_TIMER(name)       ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name)
+#define LOG_TIMER_TRACE(name) ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name, ::lfs::core::LogLevel::Trace)
+#define LOG_TIMER_DEBUG(name) ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name, ::lfs::core::LogLevel::Debug)
 
 // Memory logging: use LOG_DEBUG("[MEM] ...") and filter with --log-filter "*MEM*"
