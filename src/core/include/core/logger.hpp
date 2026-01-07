@@ -79,14 +79,24 @@ namespace lfs::core {
 
             // CUDA: use snprintf
             char buffer[1024];
-            const int written = std::snprintf(buffer, sizeof(buffer), fmt, std::forward<Args>(args)...);
+
+            // Helper lambda to avoid problems with -Wformat-security warnings
+            auto safe_snprintf = [&](char* buf, size_t size) {
+                if constexpr (sizeof...(Args) == 0) {
+                    return std::snprintf(buf, size, "%s", fmt);
+                } else {
+                    return std::snprintf(buf, size, fmt, std::forward<Args>(args)...);
+                }
+            };
+
+            const int written = safe_snprintf(buffer, sizeof(buffer));
             if (written < 0)
                 return;
 
             std::string msg;
             if (static_cast<size_t>(written) >= sizeof(buffer)) {
                 msg.resize(static_cast<size_t>(written) + 1);
-                std::snprintf(msg.data(), msg.size(), fmt, std::forward<Args>(args)...);
+                safe_snprintf(msg.data(), msg.size());
                 msg.resize(static_cast<size_t>(written));
             } else {
                 msg.assign(buffer, static_cast<size_t>(written));
