@@ -22,6 +22,7 @@ namespace lfs::core {
 // Only include in CUDA compilation units - C++ files will link to .cu implementations
 #ifdef __CUDACC__
 #include "tensor_generic_ops.cuh"
+#include <cfloat>
 #define CUDA_INFINITY FLT_MAX
 #else
 // Forward declaration for C++ files - implementation in tensor_ops.cu
