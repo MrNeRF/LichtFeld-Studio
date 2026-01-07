@@ -501,11 +501,11 @@ namespace lfs::rendering {
                             glm::mat4 jModel = glm::translate(glm::mat4(1), jLabelPos) *
                                                glm::scale(glm::mat4(1), glm::vec3(sphereRadius * jScaleFactor));
                             glm::mat4 jMvp = proj * view * jModel;
-                            s->set("uMVP", jMvp);
-                            s->set("uModel", glm::mat4(1.0f));
-                            s->set("uColor", AXIS_COLORS[jdx]);
-                            s->set("uAlpha", 1.0f);
-                            s->set("uUseLighting", 0);
+                            (void)s->set("uMVP", jMvp);
+                            (void)s->set("uModel", glm::mat4(1.0f));
+                            (void)s->set("uColor", AXIS_COLORS[jdx]);
+                            (void)s->set("uAlpha", 1.0f);
+                            (void)s->set("uUseLighting", 0);
                             glDrawArrays(GL_TRIANGLES, sphere_vertex_start_, sphere_vertex_count_);
                         }
                     }

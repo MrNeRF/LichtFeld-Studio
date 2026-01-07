@@ -110,17 +110,17 @@ namespace lfs::rendering {
 
         // Set texture coordinate scale for over-allocated textures
         glm::vec2 texcoord_scale = getTexcoordScale();
-        shader.set("texcoord_scale", texcoord_scale);
+        (void)shader.set("texcoord_scale", texcoord_scale);
 
         // Bind depth texture and set depth parameters
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, getDepthTextureID());
-        shader.set("depthTexture", 1); // Ignore error - optional uniform
-        shader.set("has_depth", depth_params_.has_depth);
-        shader.set("near_plane", depth_params_.near_plane);
-        shader.set("far_plane", depth_params_.far_plane);
-        shader.set("orthographic", depth_params_.orthographic);
-        shader.set("depth_is_ndc", depth_params_.depth_is_ndc);
+        (void)shader.set("depthTexture", 1); // Ignore error - optional uniform
+        (void)shader.set("has_depth", depth_params_.has_depth);
+        (void)shader.set("near_plane", depth_params_.near_plane);
+        (void)shader.set("far_plane", depth_params_.far_plane);
+        (void)shader.set("orthographic", depth_params_.orthographic);
+        (void)shader.set("depth_is_ndc", depth_params_.depth_is_ndc);
 
         // Enable depth writing when we have depth data
         GLboolean prev_depth_mask;

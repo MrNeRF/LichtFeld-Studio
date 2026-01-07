@@ -30,7 +30,7 @@ namespace lfs::rendering {
         createCubeGeometry();
 
         if (isInitialized()) {
-            setupVertexData();
+            (void)setupVertexData();
         }
     }
 

@@ -110,7 +110,7 @@ namespace lfs::rendering {
             }
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, texture_id);
-            shader->set("texture0", 0);
+            (void)shader->set("texture0", 0);
         } else {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, texture_id);
@@ -120,7 +120,7 @@ namespace lfs::rendering {
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
         if (shader) {
-            shader->unbind();
+            (void)shader->unbind();
         }
 
         glDisable(GL_BLEND);

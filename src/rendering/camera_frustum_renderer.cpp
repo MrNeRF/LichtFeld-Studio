@@ -347,9 +347,9 @@ namespace lfs::rendering {
             }
 
             const glm::mat4 view_proj = projection * view;
-            shader->set("viewProj", view_proj);
-            shader->set("viewPos", view_position);
-            shader->set("pickingMode", false);
+            (void)shader->set("viewProj", view_proj);
+            (void)shader->set("viewPos", view_position);
+            (void)shader->set("pickingMode", false);
 
             int visible_highlight_index = -1;
             for (size_t i = 0; i < visible_indices.size(); ++i) {
@@ -358,7 +358,7 @@ namespace lfs::rendering {
                     break;
                 }
             }
-            shader->set("highlightIndex", visible_highlight_index);
+            (void)shader->set("highlightIndex", visible_highlight_index);
 
             {
                 VAOBinder vao_bind(vao_);
@@ -396,8 +396,8 @@ namespace lfs::rendering {
                 glEnable(GL_BLEND);
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-                shader->set("showImages", show_images_ && thumbnail_array_capacity_ > 0);
-                shader->set("imageOpacity", image_opacity_);
+                (void)shader->set("showImages", show_images_ && thumbnail_array_capacity_ > 0);
+                (void)shader->set("imageOpacity", image_opacity_);
 
                 // Set texture IDs for all visible instances (layer index + 1, 0 = no texture)
                 if (show_images_) {
@@ -415,7 +415,7 @@ namespace lfs::rendering {
                     if (thumbnail_array_capacity_ > 0) {
                         glActiveTexture(GL_TEXTURE0);
                         glBindTexture(GL_TEXTURE_2D_ARRAY, thumbnail_array_);
-                        shader->set("cameraTextures", 0);
+                        (void)shader->set("cameraTextures", 0);
                     }
                 }
 
@@ -434,7 +434,7 @@ namespace lfs::rendering {
                         upload_buffer(GL_ARRAY_BUFFER, std::span(visible_instances), GL_DYNAMIC_DRAW);
                     }
                     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
-                    shader->set("showImages", false);
+                    (void)shader->set("showImages", false);
                 }
 
                 glLineWidth(WIREFRAME_WIDTH);
@@ -510,10 +510,10 @@ namespace lfs::rendering {
             const glm::mat4 view_proj = projection * view;
             const glm::vec3 view_pos = glm::vec3(glm::inverse(view)[3]);
 
-            shader->set("viewProj", view_proj);
-            shader->set("viewPos", view_pos);
-            shader->set("pickingMode", true);
-            shader->set("minimumPickDistance", scale * 2.0f);
+            (void)shader->set("viewProj", view_proj);
+            (void)shader->set("viewPos", view_pos);
+            (void)shader->set("pickingMode", true);
+            (void)shader->set("minimumPickDistance", scale * 2.0f);
 
             VAOBinder vao_bind(vao_);
 

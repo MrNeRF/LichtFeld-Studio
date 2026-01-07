@@ -35,7 +35,7 @@ namespace lfs::rendering {
         createAxesGeometry();
 
         if (isInitialized()) {
-            setupVertexData();
+            (void)setupVertexData();
         }
     }
 
@@ -46,7 +46,7 @@ namespace lfs::rendering {
             createAxesGeometry();
 
             if (isInitialized()) {
-                setupVertexData();
+                (void)setupVertexData();
             }
         } else {
             LOG_WARN("Invalid axis index: {}", axis);
