@@ -38,10 +38,9 @@ namespace lfs::training {
 
             const auto checkpoint_path = checkpoint_dir / ("checkpoint_" + std::to_string(iteration) + ".resume");
 
-            // Estimate checkpoint size from actual model
             const auto& model = strategy.get_model();
 
-            // Calculate actual model tensor sizes (matches SplatData::serialize)
+            // Model tensors
             size_t model_bytes = 0;
             model_bytes += model.means().bytes();
             model_bytes += model.sh0().bytes();
@@ -58,16 +57,15 @@ namespace lfs::training {
                 model_bytes += model._densification_info.bytes();
             }
 
-            // Adam optimizer stores exp_avg + exp_avg_sq for each param (2x model size)
+            // Optimizer: 2x model (Adam m & v)
             const size_t optimizer_bytes = model_bytes * 2;
 
-            // Bilateral grid: grids + exp_avg + exp_avg_sq (3x grid tensor size)
+            // Bilateral grid: 3x (grids + Adam state)
             size_t bilateral_grid_bytes = 0;
             if (bilateral_grid) {
                 bilateral_grid_bytes = bilateral_grid->grids().bytes() * 3;
             }
 
-            // Small overhead for header, JSON params, magic numbers
             constexpr size_t OVERHEAD_BYTES = 64 * 1024;
 
             const size_t estimated_size = sizeof(CheckpointHeader) +
@@ -76,13 +74,11 @@ namespace lfs::training {
                                           bilateral_grid_bytes +
                                           OVERHEAD_BYTES;
 
-            // Check disk space with 10% safety margin
             if (auto space_check = lfs::io::check_disk_space(checkpoint_path, estimated_size, 1.1f);
                 !space_check) {
                 const auto& error = space_check.error();
                 const bool is_disk_space = error.is(lfs::io::ErrorCode::INSUFFICIENT_DISK_SPACE);
 
-                // Emit event for GUI to handle
                 lfs::core::events::state::DiskSpaceSaveFailed{
                     .iteration = iteration,
                     .path = checkpoint_path,

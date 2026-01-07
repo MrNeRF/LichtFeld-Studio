@@ -20,7 +20,7 @@ namespace lfs::vis::gui {
     namespace {
         // Base dimensions (scaled by DPI factor at runtime)
         constexpr float BASE_POPUP_WIDTH = 480.0f;
-        constexpr float BASE_POPUP_HEIGHT = 280.0f; // Increased to accommodate export retry instruction
+        constexpr float BASE_POPUP_HEIGHT = 280.0f;
         constexpr float BASE_BUTTON_WIDTH = 120.0f;
         constexpr float BASE_BUTTON_SPACING = 12.0f;
         constexpr float POPUP_ALPHA = 0.98f;
@@ -33,7 +33,7 @@ namespace lfs::vis::gui {
                                                  ImGuiWindowFlags_NoResize |
                                                  ImGuiWindowFlags_NoScrollbar;
 
-        std::string formatBytes(size_t bytes) {
+        [[nodiscard]] std::string formatBytes(const size_t bytes) {
             constexpr double KB = 1024.0;
             constexpr double MB = KB * 1024.0;
             constexpr double GB = MB * 1024.0;
@@ -52,9 +52,9 @@ namespace lfs::vis::gui {
     } // namespace
 
     void DiskSpaceErrorDialog::show(const ErrorInfo& info,
-                                     RetryCallback on_retry,
-                                     ChangeLocationCallback on_change_location,
-                                     CancelCallback on_cancel) {
+                                    RetryCallback on_retry,
+                                    ChangeLocationCallback on_change_location,
+                                    CancelCallback on_cancel) {
         info_ = info;
         on_retry_ = std::move(on_retry);
         on_change_location_ = std::move(on_change_location);

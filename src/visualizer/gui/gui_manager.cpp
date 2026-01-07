@@ -1112,11 +1112,9 @@ namespace lfs::vis::gui {
             resume_checkpoint_popup_->render(viewport_pos_, viewport_size_);
         }
 
-        // Render disk space dialog first (higher priority)
         if (disk_space_error_dialog_)
             disk_space_error_dialog_->render();
 
-        // Don't show notification popup if disk space dialog is open
         if (notification_popup_ && !disk_space_error_dialog_->isOpen())
             notification_popup_->render(viewport_pos_, viewport_size_);
 
@@ -1873,10 +1871,8 @@ namespace lfs::vis::gui {
             }
         });
 
-        // Handle save failures due to disk space
         state::DiskSpaceSaveFailed::when([this](const auto& e) {
             if (!e.is_disk_space_error) {
-                // For non-disk-space errors, just show a notification
                 if (notification_popup_) {
                     const std::string title = e.is_checkpoint ? "Checkpoint Save Failed" : "Export Failed";
                     const std::string msg = e.is_checkpoint
@@ -1887,84 +1883,65 @@ namespace lfs::vis::gui {
                 return;
             }
 
-            // For disk space errors, show the interactive dialog
-            if (disk_space_error_dialog_) {
-                DiskSpaceErrorDialog::ErrorInfo info{
-                    .path = e.path,
-                    .error_message = e.error,
-                    .required_bytes = e.required_bytes,
-                    .available_bytes = e.available_bytes,
-                    .iteration = e.iteration,
-                    .is_checkpoint = e.is_checkpoint};
+            if (!disk_space_error_dialog_)
+                return;
 
-                if (e.is_checkpoint) {
-                    // On retry: attempt to save checkpoint again at the same location
-                    auto on_retry = [this, iteration = e.iteration]() {
-                        if (auto* tm = viewer_->getTrainerManager()) {
-                            // If training is complete, directly save; otherwise request save
+            const DiskSpaceErrorDialog::ErrorInfo info{
+                .path = e.path,
+                .error_message = e.error,
+                .required_bytes = e.required_bytes,
+                .available_bytes = e.available_bytes,
+                .iteration = e.iteration,
+                .is_checkpoint = e.is_checkpoint};
+
+            if (e.is_checkpoint) {
+                auto on_retry = [this, iteration = e.iteration]() {
+                    if (auto* tm = viewer_->getTrainerManager()) {
+                        if (tm->isFinished() || !tm->isTrainingActive()) {
+                            if (auto* trainer = tm->getTrainer()) {
+                                LOG_INFO("Retrying save at iteration {}", iteration);
+                                trainer->save_final_ply_and_checkpoint(iteration);
+                            }
+                        } else {
+                            tm->requestSaveCheckpoint();
+                        }
+                    }
+                };
+
+                auto on_change_location = [this, iteration = e.iteration](const std::filesystem::path& new_path) {
+                    if (auto* tm = viewer_->getTrainerManager()) {
+                        if (auto* trainer = tm->getTrainer()) {
+                            auto params = trainer->getParams();
+                            params.dataset.output_path = new_path;
+                            trainer->setParams(params);
+                            LOG_INFO("Output path changed to: {}", lfs::core::path_to_utf8(new_path));
+
                             if (tm->isFinished() || !tm->isTrainingActive()) {
-                                // Training complete - directly save PLY and checkpoint
-                                if (auto* trainer = tm->getTrainer()) {
-                                    LOG_INFO("Retrying final save at iteration {}...", iteration);
-                                    trainer->save_final_ply_and_checkpoint(iteration);
-                                }
+                                trainer->save_final_ply_and_checkpoint(iteration);
                             } else {
-                                // Training active - use async request
                                 tm->requestSaveCheckpoint();
                             }
                         }
-                    };
+                    }
+                };
 
-                    // On change location: update output path and retry
-                    auto on_change_location = [this, iteration = e.iteration](const std::filesystem::path& new_path) {
-                        if (auto* tm = viewer_->getTrainerManager()) {
-                            auto* trainer = tm->getTrainer();
-                            if (trainer) {
-                                // Get current trainer parameters
-                                auto params = trainer->getParams();
-                                // Update only the output path
-                                params.dataset.output_path = new_path;
-                                // Set the updated parameters back to the trainer
-                                trainer->setParams(params);
-                                LOG_INFO("Updated checkpoint output path to: {}", lfs::core::path_to_utf8(new_path));
+                auto on_cancel = []() {
+                    LOG_WARN("Checkpoint save cancelled by user");
+                };
 
-                                // Retry with new location
-                                if (tm->isFinished() || !tm->isTrainingActive()) {
-                                    // Training complete - directly save PLY and checkpoint
-                                    LOG_INFO("Retrying final save at new location: {}", lfs::core::path_to_utf8(new_path));
-                                    trainer->save_final_ply_and_checkpoint(iteration);
-                                } else {
-                                    // Training active - use async request
-                                    tm->requestSaveCheckpoint();
-                                }
-                            }
-                        }
-                    };
+                disk_space_error_dialog_->show(info, on_retry, on_change_location, on_cancel);
+            } else {
+                auto on_retry = []() {};
 
-                    // On cancel: just log and continue training
-                    auto on_cancel = []() {
-                        LOG_WARN("Checkpoint save cancelled by user");
-                    };
-
-                    disk_space_error_dialog_->show(info, on_retry, on_change_location, on_cancel);
-                } else {
-                    // Export error - show dialog but don't allow retry (exports are one-time actions)
-                    auto on_retry = []() {
-                        // No-op for exports - user would need to manually trigger export again
-                    };
-
-                    auto on_change_location = [export_path = e.path](const std::filesystem::path& new_path) {
-                        // For exports, changing location means the user needs to manually re-export
-                        LOG_INFO("To retry export at new location {}, please use File > Export again",
-                                 lfs::core::path_to_utf8(new_path));
-                    };
+                auto on_change_location = [](const std::filesystem::path& new_path) {
+                    LOG_INFO("Re-export manually using File > Export to: {}", lfs::core::path_to_utf8(new_path));
+                };
 
                     auto on_cancel = []() {
                         LOG_INFO("Export cancelled by user");
                     };
 
-                    disk_space_error_dialog_->show(info, on_retry, on_change_location, on_cancel);
-                }
+                disk_space_error_dialog_->show(info, on_retry, on_change_location, on_cancel);
             }
         });
 
