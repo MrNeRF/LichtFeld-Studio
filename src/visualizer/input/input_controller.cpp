@@ -225,11 +225,11 @@ namespace lfs::vis {
             auto time_since_last = std::chrono::duration<double>(now - last_click_time_).count();
             double dist = glm::length(glm::dvec2(x, y) - last_click_pos_);
 
-            constexpr double DOUBLE_CLICK_TIME = 0.5;
-            constexpr double DOUBLE_CLICK_DISTANCE = 10.0;
+            constexpr double MOUSE_DOUBLE_CLICK_TIME = 0.5;
+            constexpr double MOUSE_DOUBLE_CLICK_DISTANCE = 10.0;
 
-            bool is_double_click = (time_since_last < DOUBLE_CLICK_TIME &&
-                                    dist < DOUBLE_CLICK_DISTANCE);
+            bool is_double_click = (time_since_last < MOUSE_DOUBLE_CLICK_TIME &&
+                                    dist < MOUSE_DOUBLE_CLICK_DISTANCE);
 
             // If we have a hovered camera, check for double-click
             if (hovered_camera_id_ >= 0) {

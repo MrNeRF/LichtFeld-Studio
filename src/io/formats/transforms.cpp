@@ -332,7 +332,7 @@ namespace lfs::io {
                 camdata._center_y = cy;
 
                 camdata._camera_model_type = camera_model;
-                camdata._camera_ID = counter++;
+                camdata._camera_ID = static_cast<uint32_t>(counter++);
 
                 camerasdata.push_back(camdata);
                 LOG_TRACE("Processed frame {}: {}", frameInd, camdata._image_name);

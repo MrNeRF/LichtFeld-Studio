@@ -59,7 +59,7 @@ namespace lfs::vis {
         const std::filesystem::path& dataset_path,
         const std::filesystem::path& output_path) {
         LOG_INFO("Loading checkpoint for training: {}", lfs::core::path_to_utf8(checkpoint_path));
-        loadCheckpointForTraining(checkpoint_path, dataset_path, output_path);
+        (void)loadCheckpointForTraining(checkpoint_path, dataset_path, output_path);
     }
 
     bool DataLoadingService::isSOGFile(const std::filesystem::path& path) const {
