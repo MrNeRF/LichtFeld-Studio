@@ -14,6 +14,7 @@
 #include "core/splat_data_transform.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/cache_image_loader.hpp"
+#include "io/exporter.hpp"
 #include "io/filesystem_utils.hpp"
 #include "lfs/kernels/ssim.cuh"
 #include "losses/losses.hpp"
@@ -566,14 +567,17 @@ namespace lfs::training {
             LOG_INFO("Training resumed at iteration {}", iter);
         }
 
-        // Handle save request - save a real checkpoint (not just PLY)
+        // Handle save request - save both PLY and checkpoint
         if (save_requested_.exchange(false)) {
-            LOG_INFO("Saving checkpoint at iteration {}...", iter);
+            LOG_INFO("Saving checkpoint and PLY at iteration {}...", iter);
+            // Save PLY first (with disk space checking)
+            save_ply(params_.dataset.output_path, iter, /*join=*/false);
+            // Then save checkpoint (.resume file)
             auto result = save_checkpoint(iter);
             if (result) {
                 auto checkpoint_path = params_.dataset.output_path / "checkpoints" /
                                        std::format("checkpoint_{}.resume", iter);
-                LOG_INFO("Checkpoint saved to {}", lfs::core::path_to_utf8(checkpoint_path));
+                LOG_INFO("Checkpoint and PLY saved to {}", lfs::core::path_to_utf8(params_.dataset.output_path));
             } else {
                 LOG_ERROR("Failed to save checkpoint: {}", result.error());
             }
@@ -1316,8 +1320,30 @@ namespace lfs::training {
     }
 
     void Trainer::save_ply(const std::filesystem::path& save_path, int iter_num, bool join_threads) {
-        // Save PLY format - join_threads controls sync vs async
-        lfs::core::save_ply(strategy_->get_model(), save_path, iter_num, join_threads);
+        // Save PLY format with disk space checking
+        const lfs::io::PlySaveOptions ply_options{
+            .output_path = save_path / ("splat_" + std::to_string(iter_num) + ".ply"),
+            .binary = true,
+            .async = !join_threads};
+        
+        auto ply_result = lfs::io::save_ply(strategy_->get_model(), ply_options);
+        if (!ply_result) {
+            // Check if this is a disk space error
+            if (ply_result.error().code == lfs::io::ErrorCode::INSUFFICIENT_DISK_SPACE) {
+                // Emit event for disk space error dialog
+                lfs::core::events::state::CheckpointSaveFailed{
+                    .iteration = iter_num,
+                    .path = ply_options.output_path,
+                    .error = ply_result.error().message,
+                    .required_bytes = ply_result.error().required_bytes,
+                    .available_bytes = ply_result.error().available_bytes,
+                    .is_disk_space_error = true,
+                    .is_checkpoint = true}
+                    .emit();
+            }
+            LOG_WARN("Failed to save PLY: {}", ply_result.error().message);
+            return; // Don't save checkpoint if PLY failed
+        }
 
         // Save checkpoint alongside PLY for training resumption
         auto ckpt_result = lfs::training::save_checkpoint(

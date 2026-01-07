@@ -20,7 +20,7 @@ namespace lfs::vis::gui {
     namespace {
         // Base dimensions (scaled by DPI factor at runtime)
         constexpr float BASE_POPUP_WIDTH = 480.0f;
-        constexpr float BASE_POPUP_HEIGHT = 240.0f;
+        constexpr float BASE_POPUP_HEIGHT = 280.0f; // Increased to accommodate export retry instruction
         constexpr float BASE_BUTTON_WIDTH = 120.0f;
         constexpr float BASE_BUTTON_SPACING = 12.0f;
         constexpr float POPUP_ALPHA = 0.98f;
