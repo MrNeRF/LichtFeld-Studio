@@ -27,6 +27,10 @@ namespace gsplat_lfs {
         const scalar_t* __restrict__ Ks,        // [C, 3, 3]
         const uint32_t image_width,
         const uint32_t image_height,
+        const uint32_t full_image_width,
+        const uint32_t full_image_height,
+        const int32_t tile_x_offset,
+        const int32_t tile_y_offset,
         const float eps2d,
         const float near_plane,
         const float far_plane,
@@ -129,12 +133,17 @@ namespace gsplat_lfs {
                 world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
                     camera_model, rs_params, ut_params, mean, scale, quat);
         } else if (camera_model_type == CameraModelType::EQUIRECTANGULAR) {
+            // For equirectangular, use FULL image resolution for angle->pixel mapping
+            // Then subtract tile offset to get tile-local coordinates
             EquirectangularCameraModel::Parameters cm_params = {};
-            cm_params.resolution = {image_width, image_height};
+            cm_params.resolution = {full_image_width, full_image_height};
             EquirectangularCameraModel camera_model(cm_params);
             image_gaussian_return =
                 world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
                     camera_model, rs_params, ut_params, mean, scale, quat);
+            // Apply tile offset to convert from full image coords to tile-local coords
+            image_gaussian_return.mean.x -= static_cast<float>(tile_x_offset);
+            image_gaussian_return.mean.y -= static_cast<float>(tile_y_offset);
         } else if (camera_model_type == CameraModelType::THIN_PRISM_FISHEYE) {
             ThinPrismFisheyeCameraModel<>::Parameters cm_params = {};
             cm_params.resolution = {image_width, image_height};
@@ -239,6 +248,10 @@ namespace gsplat_lfs {
         uint32_t C,
         uint32_t image_width,
         uint32_t image_height,
+        uint32_t full_image_width,
+        uint32_t full_image_height,
+        int32_t tile_x_offset,
+        int32_t tile_y_offset,
         float eps2d,
         float near_plane,
         float far_plane,
@@ -280,6 +293,10 @@ namespace gsplat_lfs {
                 Ks,
                 image_width,
                 image_height,
+                full_image_width,
+                full_image_height,
+                tile_x_offset,
+                tile_y_offset,
                 eps2d,
                 near_plane,
                 far_plane,

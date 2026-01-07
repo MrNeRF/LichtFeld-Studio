@@ -243,6 +243,10 @@ namespace lfs::training {
             K,
             image_width,
             image_height,
+            full_image_width,
+            full_image_height,
+            tile_x_offset,
+            tile_y_offset,
             tile_size,
             viewmat_ptr,
             nullptr, // viewmats1 (rolling shutter)
@@ -381,6 +385,8 @@ namespace lfs::training {
         ctx.render_tile_y_offset = tile_y_offset;
         ctx.render_tile_width = tile_width;
         ctx.render_tile_height = tile_height;
+        ctx.full_image_width = full_image_width;
+        ctx.full_image_height = full_image_height;
 
         return std::pair{render_output, ctx};
     }
@@ -500,6 +506,10 @@ namespace lfs::training {
             K,
             ctx.image_width,
             ctx.image_height,
+            ctx.full_image_width,
+            ctx.full_image_height,
+            ctx.render_tile_x_offset,
+            ctx.render_tile_y_offset,
             ctx.tile_size,
             ctx.viewmat_ptr,
             nullptr, // viewmats1

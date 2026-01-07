@@ -34,6 +34,10 @@ namespace gsplat_lfs {
         const bool* __restrict__ masks,           // [C, tile_height, tile_width]
         const uint32_t image_width,
         const uint32_t image_height,
+        const uint32_t full_image_width,
+        const uint32_t full_image_height,
+        const int32_t tile_x_offset,
+        const int32_t tile_y_offset,
         const uint32_t tile_size,
         const uint32_t tile_width,
         const uint32_t tile_height,
@@ -129,11 +133,16 @@ namespace gsplat_lfs {
             OpenCVFisheyeCameraModel camera_model(cm_params);
             ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
         } else if (camera_model_type == CameraModelType::EQUIRECTANGULAR) {
+            // For equirectangular, use FULL image resolution and add tile offset
+            // to pixel coords to get correct angular mapping
             EquirectangularCameraModel::Parameters cm_params = {};
-            cm_params.resolution = {image_width, image_height};
+            cm_params.resolution = {full_image_width, full_image_height};
             cm_params.shutter_type = rs_type;
             EquirectangularCameraModel camera_model(cm_params);
-            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px, py), rs_params);
+            // Add tile offset to convert tile-local coords to full image coords
+            float px_full = px + static_cast<float>(tile_x_offset);
+            float py_full = py + static_cast<float>(tile_y_offset);
+            ray = camera_model.image_point_to_world_ray_shutter_pose(vec2(px_full, py_full), rs_params);
         } else if (camera_model_type == CameraModelType::THIN_PRISM_FISHEYE) {
             ThinPrismFisheyeCameraModel<>::Parameters cm_params = {};
             cm_params.resolution = {image_width, image_height};
@@ -319,6 +328,10 @@ namespace gsplat_lfs {
         uint32_t n_isects,
         uint32_t image_width,
         uint32_t image_height,
+        uint32_t full_image_width,
+        uint32_t full_image_height,
+        int32_t tile_x_offset,
+        int32_t tile_y_offset,
         uint32_t tile_size,
         const float* viewmats0,
         const float* viewmats1,
@@ -384,6 +397,10 @@ namespace gsplat_lfs {
                 masks,
                 image_width,
                 image_height,
+                full_image_width,
+                full_image_height,
+                tile_x_offset,
+                tile_y_offset,
                 tile_size,
                 tile_width,
                 tile_height,
@@ -421,6 +438,10 @@ namespace gsplat_lfs {
         uint32_t n_isects,                                                     \
         uint32_t image_width,                                                  \
         uint32_t image_height,                                                 \
+        uint32_t full_image_width,                                             \
+        uint32_t full_image_height,                                            \
+        int32_t tile_x_offset,                                                 \
+        int32_t tile_y_offset,                                                 \
         uint32_t tile_size,                                                    \
         const float* viewmats0,                                                \
         const float* viewmats1,                                                \

@@ -30,6 +30,10 @@ namespace gsplat_lfs {
         uint32_t n_isects,
         uint32_t image_width,
         uint32_t image_height,
+        uint32_t full_image_width,
+        uint32_t full_image_height,
+        int32_t tile_x_offset,
+        int32_t tile_y_offset,
         uint32_t tile_size,
         // camera
         const float* viewmats0, // [C, 4, 4]
@@ -70,6 +74,10 @@ namespace gsplat_lfs {
         uint32_t n_isects,
         uint32_t image_width,
         uint32_t image_height,
+        uint32_t full_image_width,
+        uint32_t full_image_height,
+        int32_t tile_x_offset,
+        int32_t tile_y_offset,
         uint32_t tile_size,
         // camera
         const float* viewmats0, // [C, 4, 4]
