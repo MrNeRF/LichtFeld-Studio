@@ -162,6 +162,10 @@ namespace lfs::rendering {
         bool show_dividers = true;
         glm::vec4 divider_color{1.0f, 0.85f, 0.0f, 1.0f};
         bool show_labels = true;
+
+        // Texcoord scale for over-allocated textures
+        glm::vec2 left_texcoord_scale{1.0f, 1.0f};
+        glm::vec2 right_texcoord_scale{1.0f, 1.0f};
     };
 
     enum class GridPlane {

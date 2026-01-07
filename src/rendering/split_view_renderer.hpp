@@ -49,6 +49,8 @@ namespace lfs::rendering {
             GLuint left_texture,
             GLuint right_texture,
             float split_position,
+            const glm::vec2& left_texcoord_scale,
+            const glm::vec2& right_texcoord_scale,
             const glm::vec4& divider_color,
             int viewport_width);
 

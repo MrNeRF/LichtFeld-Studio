@@ -585,7 +585,6 @@ namespace lfs::vis {
             return;
         }
 
-        // Render model to texture
         glViewport(0, 0, render_size.x, render_size.y);
         glClearColor(settings_.background_color.r, settings_.background_color.g, settings_.background_color.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -724,7 +723,6 @@ namespace lfs::vis {
             cached_result_size_ = {0, 0};
         }
 
-        // Restore framebuffer
         glBindFramebuffer(GL_FRAMEBUFFER, current_fbo);
     }
 
@@ -1181,6 +1179,15 @@ namespace lfs::vis {
 
             LOG_TRACE("Creating GT comparison split view for camera {}", current_camera_id_);
 
+            // Compute texcoord scale for GPU-aligned texture
+            const glm::ivec2 cam_size(cam->image_width(), cam->image_height());
+            const glm::ivec2 aligned_size(
+                ((cam_size.x + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT,
+                ((cam_size.y + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT);
+            const glm::vec2 texcoord_scale(
+                static_cast<float>(cam_size.x) / static_cast<float>(aligned_size.x),
+                static_cast<float>(cam_size.y) / static_cast<float>(aligned_size.y));
+
             return lfs::rendering::SplitViewRequest{
                 .panels = {
                     {.content_type = lfs::rendering::PanelContentType::Image2D,
@@ -1209,7 +1216,8 @@ namespace lfs::vis {
                 .ring_width = settings_.ring_width,
                 .show_dividers = true,
                 .divider_color = glm::vec4(1.0f, 0.85f, 0.0f, 1.0f),
-                .show_labels = true};
+                .show_labels = true,
+                .right_texcoord_scale = texcoord_scale};
         }
 
         // Handle PLY comparison mode

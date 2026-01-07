@@ -9,32 +9,20 @@ uniform float splitPosition;
 uniform bool showDivider;
 uniform vec4 dividerColor;
 uniform float dividerWidth;
+uniform vec2 leftTexcoordScale;
+uniform vec2 rightTexcoordScale;
 
 void main() {
     vec2 uv = TexCoord;
-    
-    // Sample BOTH textures at the SAME coordinates
-    // This ensures they're perfectly aligned
-    vec4 leftColor = texture(leftTexture, uv);
-    vec4 rightColor = texture(rightTexture, uv);
-    
-    // Choose which color to use based on split position
-    vec4 color;
-    if (uv.x < splitPosition) {
-        // Show left texture on the left side
-        color = leftColor;
-    } else {
-        // Show right texture on the right side
-        color = rightColor;
+
+    vec4 leftColor = texture(leftTexture, uv * leftTexcoordScale);
+    vec4 rightColor = texture(rightTexture, uv * rightTexcoordScale);
+
+    vec4 color = (uv.x < splitPosition) ? leftColor : rightColor;
+
+    if (showDivider && abs(uv.x - splitPosition) < dividerWidth * 0.5) {
+        color = dividerColor;
     }
-    
-    // Draw divider if enabled
-    if (showDivider) {
-        float halfWidth = dividerWidth * 0.5;
-        if (abs(uv.x - splitPosition) < halfWidth) {
-            color = dividerColor;
-        }
-    }
-    
+
     FragColor = color;
 }
