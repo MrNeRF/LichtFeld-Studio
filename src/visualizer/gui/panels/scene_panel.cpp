@@ -367,12 +367,12 @@ namespace lfs::vis::gui {
             if (m_selectionFlashIntensity > 0.0f) {
                 const ImVec4 base = ImGui::ColorConvertU32ToFloat4(SELECTION_COLOR_BASE);
                 const ImVec4 flash = ImGui::ColorConvertU32ToFloat4(SELECTION_COLOR_FLASH);
-                const float ft = 1.0f - m_selectionFlashIntensity;
+                const float invFlash = 1.0f - m_selectionFlashIntensity;
                 row_color = ImGui::ColorConvertFloat4ToU32(ImVec4(
-                    flash.x + (base.x - flash.x) * ft,
-                    flash.y + (base.y - flash.y) * ft,
-                    flash.z + (base.z - flash.z) * ft,
-                    flash.w + (base.w - flash.w) * ft));
+                    flash.x + (base.x - flash.x) * invFlash,
+                    flash.y + (base.y - flash.y) * invFlash,
+                    flash.z + (base.z - flash.z) * invFlash,
+                    flash.w + (base.w - flash.w) * invFlash));
             } else {
                 row_color = SELECTION_COLOR_BASE;
             }
