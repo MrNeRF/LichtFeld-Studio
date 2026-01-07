@@ -367,6 +367,16 @@ namespace lfs::vis::gui::panels {
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("%s", LOC(Tooltip::MIP_FILTER));
         }
+
+        // Render Scale (VRAM optimization)
+        ImGui::Separator();
+        if (widgets::SliderWithReset("Render Scale##renderscale", &settings.render_scale, 0.25f, 1.0f, 1.0f)) {
+            settings_changed = true;
+            render_manager->updateSettings(settings);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Viewer resolution scale (lower = less VRAM, slightly lower quality).\nDoes not affect training resolution.");
+        }
     }
 
     void DrawSelectionGroups(const UIContext& ctx) {

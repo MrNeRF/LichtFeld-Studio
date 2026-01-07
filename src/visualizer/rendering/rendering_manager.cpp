@@ -527,7 +527,11 @@ namespace lfs::vis {
                 static_cast<int>(context.viewport_region->height));
         }
 
-        glm::ivec2 render_size = viewport_size;
+        // Apply render scale to reduce VRAM usage (clamped 0.25-1.0)
+        const float scale = std::clamp(settings_.render_scale, 0.25f, 1.0f);
+        glm::ivec2 render_size = glm::ivec2(
+            static_cast<int>(viewport_size.x * scale),
+            static_cast<int>(viewport_size.y * scale));
 
         // GT comparison mode: use actual camera dimensions
         if (settings_.split_view_mode == SplitViewMode::GTComparison && current_camera_id_ >= 0) {
