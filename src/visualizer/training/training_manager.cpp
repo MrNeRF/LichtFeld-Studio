@@ -368,7 +368,7 @@ namespace lfs::vis {
     int TrainerManager::getTotalIterations() const {
         if (!trainer_)
             return 0;
-        return trainer_->getParams().optimization.iterations;
+        return static_cast<int>(trainer_->getParams().optimization.iterations);
     }
 
     int TrainerManager::getNumSplats() const {

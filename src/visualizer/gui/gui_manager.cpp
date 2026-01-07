@@ -873,13 +873,13 @@ namespace lfs::vis::gui {
             // Handle reset cropbox request from toolbar
             if (gizmo_toolbar_state_.reset_cropbox_requested) {
                 gizmo_toolbar_state_.reset_cropbox_requested = false;
-                auto* const scene_manager = ctx.viewer->getSceneManager();
+                auto* const viewer_scene_manager = ctx.viewer->getSceneManager();
                 auto* const render_manager = ctx.viewer->getRenderingManager();
-                if (scene_manager && render_manager) {
-                    const NodeId cropbox_id = scene_manager->getSelectedNodeCropBoxId();
+                if (viewer_scene_manager && render_manager) {
+                    const NodeId cropbox_id = viewer_scene_manager->getSelectedNodeCropBoxId();
                     if (cropbox_id != NULL_NODE) {
-                        auto* node = scene_manager->getScene().getMutableNode(
-                            scene_manager->getScene().getNodeById(cropbox_id)->name);
+                        auto* node = viewer_scene_manager->getScene().getMutableNode(
+                            viewer_scene_manager->getScene().getNodeById(cropbox_id)->name);
                         if (node && node->cropbox) {
                             // Capture state before reset
                             const command::CropBoxState old_state{
@@ -894,7 +894,7 @@ namespace lfs::vis::gui {
                             node->cropbox->inverse = false;
                             node->local_transform = glm::mat4(1.0f);
                             node->transform_dirty = true;
-                            scene_manager->getScene().invalidateCache();
+                            viewer_scene_manager->getScene().invalidateCache();
 
                             // Capture state after reset
                             const command::CropBoxState new_state{
@@ -905,7 +905,7 @@ namespace lfs::vis::gui {
 
                             // Create undo command
                             auto cmd = std::make_unique<command::CropBoxCommand>(
-                                scene_manager, node->name, old_state, new_state);
+                                viewer_scene_manager, node->name, old_state, new_state);
                             viewer_->getCommandHistory().execute(std::move(cmd));
 
                             auto settings = render_manager->getSettings();
@@ -1078,7 +1078,7 @@ namespace lfs::vis::gui {
                         }
                     }
 
-                    engine->renderViewportGizmo(viewport.getRotationMatrix(), vp_pos, vp_size);
+                    (void)engine->renderViewportGizmo(viewport.getRotationMatrix(), vp_pos, vp_size);
 
                     // Drag feedback overlay
                     if (viewport_gizmo_dragging_) {
@@ -1493,8 +1493,8 @@ namespace lfs::vis::gui {
                 ImGui::SameLine();
                 if (rm->getSettings().split_view_mode == SplitViewMode::GTComparison) {
                     const int cam_id = rm->getCurrentCameraId();
-                    auto* trainer_mgr = sm ? sm->getTrainerManager() : nullptr;
-                    auto cam = trainer_mgr ? trainer_mgr->getCamById(cam_id) : nullptr;
+                    auto* sm_trainer_mgr = sm ? sm->getTrainerManager() : nullptr;
+                    auto cam = sm_trainer_mgr ? sm_trainer_mgr->getCamById(cam_id) : nullptr;
 
                     if (cam) {
                         // Image filename and extension
@@ -2417,10 +2417,10 @@ namespace lfs::vis::gui {
                 const glm::vec3 new_gizmo_pos_world = glm::vec3(gizmo_matrix[3]);
 
                 // Convert world position to parent space
-                const auto& scene = scene_manager->getScene();
-                const auto* node = scene.getNode(*selected_names.begin());
+                const auto& sm_scene = scene_manager->getScene();
+                const auto* node = sm_scene.getNode(*selected_names.begin());
                 const glm::mat4 parent_world_inv = (node && node->parent_id != NULL_NODE)
-                                                       ? glm::inverse(scene.getWorldTransform(node->parent_id))
+                                                       ? glm::inverse(sm_scene.getWorldTransform(node->parent_id))
                                                        : glm::mat4(1.0f);
                 const glm::vec3 new_gizmo_pos = glm::vec3(parent_world_inv * glm::vec4(new_gizmo_pos_world, 1.0f));
 

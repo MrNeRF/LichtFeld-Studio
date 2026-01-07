@@ -29,7 +29,7 @@ namespace lfs::core {
             .binary = true,
             .async = !join_threads};
 
-        lfs::io::save_ply(splat_data, options);
+        (void)lfs::io::save_ply(splat_data, options);
     }
 
     std::filesystem::path save_sog(const SplatData& splat_data,
@@ -48,7 +48,7 @@ namespace lfs::core {
             .iterations = kmeans_iterations,
             .output_path = sog_out_path};
 
-        write_sog(splat_data, options);
+        (void)write_sog(splat_data, options);
         return sog_out_path;
     }
 
