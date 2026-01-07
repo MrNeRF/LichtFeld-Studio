@@ -7,6 +7,7 @@
 #include "core/sogs.hpp"
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
+#include "core/logger.hpp"
 
 #include <filesystem>
 
@@ -29,7 +30,10 @@ namespace lfs::core {
             .binary = true,
             .async = !join_threads};
 
-        (void)lfs::io::save_ply(splat_data, options);
+        if(auto result = lfs::io::save_ply(splat_data, options); !result) {
+            LOG_ERROR("Failed to save PLY to {}: {}", 
+                      path_to_utf8(output_path), result.error().message);
+        }
     }
 
     std::filesystem::path save_sog(const SplatData& splat_data,
@@ -48,7 +52,10 @@ namespace lfs::core {
             .iterations = kmeans_iterations,
             .output_path = sog_out_path};
 
-        (void)write_sog(splat_data, options);
+        if (auto result = write_sog(splat_data, options); !result) {
+            LOG_ERROR("Failed to save SOG to {}: {}", 
+                      path_to_utf8(sog_out_path), result.error());
+        }
         return sog_out_path;
     }
 

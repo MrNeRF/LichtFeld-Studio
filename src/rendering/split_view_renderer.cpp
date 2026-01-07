@@ -110,7 +110,10 @@ namespace lfs::rendering {
             }
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, texture_id);
-            (void)shader->set("texture0", 0);
+            if (auto result = shader->set("texture0", 0); !result) {
+                LOG_TRACE("Failed to set texture0: {}", result.error());
+            }
+
         } else {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, texture_id);
@@ -120,7 +123,9 @@ namespace lfs::rendering {
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
         if (shader) {
-            (void)shader->unbind();
+            if (auto result = split_shader_.unbind(); !result) {
+                LOG_TRACE("Failed to unbind shader: {}", result.error());
+            }
         }
 
         glDisable(GL_BLEND);
@@ -431,7 +436,9 @@ namespace lfs::rendering {
         VAOBinder vao_bind(quad_vao_);
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
-        split_shader_.unbind();
+        if (auto result = split_shader_.unbind(); !result) {
+            LOG_TRACE("Failed to unbind shader: {}", result.error());
+        }
         glDisable(GL_BLEND);
         glEnable(GL_DEPTH_TEST);
 

@@ -347,9 +347,17 @@ namespace lfs::rendering {
             }
 
             const glm::mat4 view_proj = projection * view;
-            (void)shader->set("viewProj", view_proj);
-            (void)shader->set("viewPos", view_position);
-            (void)shader->set("pickingMode", false);
+            if (auto result = shader->set("viewProj", view_proj); !result) {
+                LOG_ERROR("Failed to set viewProj uniform: {}", result.error());
+            }
+            
+            if (auto result = shader->set("viewPos", view_position); !result) {
+                LOG_ERROR("Failed to set viewPos uniform: {}", result.error());
+            }
+            
+            if (auto result = shader->set("pickingMode", false); !result) {
+                LOG_ERROR("Failed to set pickingMode uniform: {}", result.error());
+            }
 
             int visible_highlight_index = -1;
             for (size_t i = 0; i < visible_indices.size(); ++i) {
@@ -358,7 +366,10 @@ namespace lfs::rendering {
                     break;
                 }
             }
-            (void)shader->set("highlightIndex", visible_highlight_index);
+            
+            if (auto result = shader->set("highlightIndex", visible_highlight_index); !result) {
+                LOG_ERROR("Failed to set highlightIndex uniform: {}", result.error());
+            }
 
             {
                 VAOBinder vao_bind(vao_);
@@ -395,9 +406,14 @@ namespace lfs::rendering {
                 glDepthMask(GL_TRUE);
                 glEnable(GL_BLEND);
                 glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-                (void)shader->set("showImages", show_images_ && thumbnail_array_capacity_ > 0);
-                (void)shader->set("imageOpacity", image_opacity_);
+                
+                if (auto result = shader->set("showImages", show_images_ && thumbnail_array_capacity_ > 0); !result) {
+                    LOG_ERROR("Failed to set showImages uniform: {}", result.error());
+                }
+                
+                if (auto result = shader->set("imageOpacity", image_opacity_); !result) {
+                    LOG_ERROR("Failed to set imageOpacity uniform: {}", result.error());
+                }
 
                 // Set texture IDs for all visible instances (layer index + 1, 0 = no texture)
                 if (show_images_) {
@@ -414,8 +430,10 @@ namespace lfs::rendering {
                     // Bind texture array
                     if (thumbnail_array_capacity_ > 0) {
                         glActiveTexture(GL_TEXTURE0);
-                        glBindTexture(GL_TEXTURE_2D_ARRAY, thumbnail_array_);
-                        (void)shader->set("cameraTextures", 0);
+                        glBindTexture(GL_TEXTURE_2D_ARRAY, thumbnail_array_);                        
+                        if (auto result = shader->set("cameraTextures", 0); !result) {
+                            LOG_ERROR("Failed to set cameraTextures uniform: {}", result.error());
+                        }
                     }
                 }
 
@@ -433,8 +451,10 @@ namespace lfs::rendering {
                         BufferBinder<GL_ARRAY_BUFFER> instance_bind(instance_vbo_);
                         upload_buffer(GL_ARRAY_BUFFER, std::span(visible_instances), GL_DYNAMIC_DRAW);
                     }
-                    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
-                    (void)shader->set("showImages", false);
+                    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);                    
+                    if (auto result = shader->set("showImages", false); !result) {
+                        LOG_ERROR("Failed to set showImages uniform: {}", result.error());
+                    }
                 }
 
                 glLineWidth(WIREFRAME_WIDTH);
@@ -509,11 +529,22 @@ namespace lfs::rendering {
 
             const glm::mat4 view_proj = projection * view;
             const glm::vec3 view_pos = glm::vec3(glm::inverse(view)[3]);
-
-            (void)shader->set("viewProj", view_proj);
-            (void)shader->set("viewPos", view_pos);
-            (void)shader->set("pickingMode", true);
-            (void)shader->set("minimumPickDistance", scale * 2.0f);
+                        
+            if (auto result = shader->set("viewProj", view_proj); !result) {
+                LOG_ERROR("Failed to set viewProj uniform: {}", result.error());
+            }
+            
+            if (auto result = shader->set("viewPos", view_pos); !result) {
+                LOG_ERROR("Failed to set viewPos uniform: {}", result.error());
+            }
+            
+            if (auto result = shader->set("pickingMode", true); !result) {
+                LOG_ERROR("Failed to set pickingMode uniform: {}", result.error());
+            }
+            
+            if (auto result = shader->set("minimumPickDistance", scale * 2.0f); !result) {
+                LOG_ERROR("Failed to set minimumPickDistance uniform: {}", result.error());
+            }
 
             VAOBinder vao_bind(vao_);
 
