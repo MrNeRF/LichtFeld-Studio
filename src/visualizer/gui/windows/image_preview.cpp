@@ -128,7 +128,7 @@ namespace lfs::vis::gui {
                         const uint16_t tag = read16(entry_offset);
                         const uint16_t type = read16(entry_offset + 2);
                         const uint32_t count = read32(entry_offset + 4);
-                        uint32_t value_offset = entry_offset + 8;
+                        uint32_t value_offset = static_cast<uint32_t>(entry_offset + 8);
 
                         size_t data_size = count;
                         if (type == 3)
