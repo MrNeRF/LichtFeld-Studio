@@ -369,7 +369,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         uint* tile_max_n_contributions,
         uint* tile_n_contributions,
         uint* bucket_tile_index,
-        uint* bucket_checkpoint_uint8, // Compressed: color.rgb + transmittance as 4× uint8 (75% memory reduction vs float4)
+        uint* bucket_checkpoint_uint8,
         const uint width,
         const uint height,
         const uint grid_width) {
@@ -417,15 +417,13 @@ namespace fast_lfs::rasterization::kernels::forward {
             const int current_batch_size = min(config::block_size_blend, n_points_remaining);
             for (int j = 0; !done && j < current_batch_size; ++j) {
                 if (j % config::checkpoint_interval == 0) {
-                    // Store color + transmittance as 4× uint8 packed into uint32 (75% memory reduction vs float4)
-                    // Colors use [0, 4] range to support HDR (values >4 saturate, but rare in practice)
-                    // Transmittance uses [0, 1] range (always bounded by construction)
-                    constexpr float color_scale = 255.0f / 4.0f; // [0, 4] → [0, 255]
-                    const uint r = min(static_cast<uint>(fmaxf(color_pixel.x, 0.0f) * color_scale + 0.5f), 255u);
-                    const uint g = min(static_cast<uint>(fmaxf(color_pixel.y, 0.0f) * color_scale + 0.5f), 255u);
-                    const uint b = min(static_cast<uint>(fmaxf(color_pixel.z, 0.0f) * color_scale + 0.5f), 255u);
-                    const uint t = static_cast<uint>(transmittance * 255.0f + 0.5f); // transmittance always in [0,1]
-                    bucket_checkpoint_uint8[bucket_offset * config::block_size_blend + thread_rank] = (r) | (g << 8) | (b << 16) | (t << 24);
+                    // Pack color [0,4] + transmittance [0,1] into uint32
+                    constexpr float COLOR_SCALE = 255.0f / 4.0f;
+                    const uint r = min(static_cast<uint>(fmaxf(color_pixel.x, 0.0f) * COLOR_SCALE + 0.5f), 255u);
+                    const uint g = min(static_cast<uint>(fmaxf(color_pixel.y, 0.0f) * COLOR_SCALE + 0.5f), 255u);
+                    const uint b = min(static_cast<uint>(fmaxf(color_pixel.z, 0.0f) * COLOR_SCALE + 0.5f), 255u);
+                    const uint t = static_cast<uint>(transmittance * 255.0f + 0.5f);
+                    bucket_checkpoint_uint8[bucket_offset * config::block_size_blend + thread_rank] = r | (g << 8) | (b << 16) | (t << 24);
                     bucket_offset++;
                 }
                 n_possible_contributions++;

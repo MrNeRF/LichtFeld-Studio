@@ -1037,39 +1037,4 @@ namespace lfs::core {
         }
     }
 
-    size_t RasterizerMemoryArena::get_watermark() const {
-        int device;
-        cudaError_t err = cudaGetDevice(&device);
-        if (err != cudaSuccess) {
-            LOG_ERROR("[ARENA] get_watermark: cudaGetDevice failed");
-            return 0;
-        }
-
-        std::lock_guard<std::mutex> lock(arena_mutex_);
-        auto it = device_arenas_.find(device);
-        if (it != device_arenas_.end() && it->second) {
-            return it->second->offset.load(std::memory_order_acquire);
-        }
-        LOG_ERROR("[ARENA] get_watermark: device %d not found", device);
-        return 0;
-    }
-
-    void RasterizerMemoryArena::restore_watermark(size_t watermark) {
-        int device;
-        cudaError_t err = cudaGetDevice(&device);
-        if (err != cudaSuccess) {
-            LOG_ERROR("[ARENA] restore_watermark: cudaGetDevice failed");
-            return;
-        }
-
-        std::lock_guard<std::mutex> lock(arena_mutex_);
-        auto it = device_arenas_.find(device);
-        if (it != device_arenas_.end() && it->second) {
-            size_t current = it->second->offset.load(std::memory_order_acquire);
-            if (watermark <= current) {
-                it->second->offset.store(watermark, std::memory_order_release);
-            }
-        }
-    }
-
 } // namespace lfs::core

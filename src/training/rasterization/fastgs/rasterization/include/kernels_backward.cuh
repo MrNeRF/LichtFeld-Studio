@@ -275,7 +275,7 @@ namespace fast_lfs::rasterization::kernels::backward {
         const uint* tile_max_n_contributions,
         const uint* tile_n_contributions,
         const uint* bucket_tile_index,
-        const uint* bucket_checkpoint_uint8, // Compressed: color.rgb + transmittance as 4× uint8 (75% memory reduction vs float4)
+        const uint* bucket_checkpoint_uint8,
         float2* grad_mean2d,
         float* grad_conic,
         float* grad_raw_opacity,
@@ -349,28 +349,24 @@ namespace fast_lfs::rasterization::kernels::backward {
         float3 grad_color_pixel;
         float grad_alpha_common;
 
-        // Pointer to this bucket's checkpoint data (uint8 packed color + transmittance)
         bucket_checkpoint_uint8 += bucket_idx * config::block_size_blend;
         __shared__ uint collected_last_contributor[32];
         __shared__ float4 collected_color_pixel_after_transmittance[32];
         __shared__ float4 collected_grad_info_pixel[32];
 
-// iterate over all pixels in the tile
 #pragma unroll
         for (int i = 0; i < config::block_size_blend + 31; ++i) {
             if (i % 32 == 0) {
                 const uint local_idx = i + lane_idx;
-                // Load color + transmittance from uint8-packed checkpoint (75% memory reduction vs float4)
-                // Unpack uint32 → 4× uint8 → floats
-                // Colors use [0, 4] range, transmittance uses [0, 1] range
+                // Unpack uint32 checkpoint to color [0,4] + transmittance [0,1]
                 const uint packed = bucket_checkpoint_uint8[local_idx];
-                constexpr float color_inv_scale = 4.0f / 255.0f; // [0, 255] → [0, 4]
-                constexpr float trans_inv_scale = 1.0f / 255.0f; // [0, 255] → [0, 1]
+                constexpr float COLOR_INV_SCALE = 4.0f / 255.0f;
+                constexpr float TRANS_INV_SCALE = 1.0f / 255.0f;
                 const float3 checkpoint_color = make_float3(
-                    static_cast<float>(packed & 0xFF) * color_inv_scale,
-                    static_cast<float>((packed >> 8) & 0xFF) * color_inv_scale,
-                    static_cast<float>((packed >> 16) & 0xFF) * color_inv_scale);
-                const float checkpoint_transmittance = static_cast<float>((packed >> 24) & 0xFF) * trans_inv_scale;
+                    static_cast<float>(packed & 0xFF) * COLOR_INV_SCALE,
+                    static_cast<float>((packed >> 8) & 0xFF) * COLOR_INV_SCALE,
+                    static_cast<float>((packed >> 16) & 0xFF) * COLOR_INV_SCALE);
+                const float checkpoint_transmittance = static_cast<float>((packed >> 24) & 0xFF) * TRANS_INV_SCALE;
                 const uint2 pixel_coords = {start_pixel_coords.x + local_idx % config::tile_width, start_pixel_coords.y + local_idx / config::tile_width};
                 const uint pixel_idx = width * pixel_coords.y + pixel_coords.x;
                 const bool pixel_in_bounds = pixel_coords.x < width && pixel_coords.y < height;
