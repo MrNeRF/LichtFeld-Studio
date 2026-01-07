@@ -25,6 +25,7 @@ using namespace lichtfeld::Strings;
 #include <imgui.h>
 
 #include <cstdlib>
+#include <cfloat>
 
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include <httplib.h>

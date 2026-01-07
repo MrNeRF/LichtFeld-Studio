@@ -50,6 +50,7 @@
 
 #include <GLFW/glfw3.h>
 #include <algorithm>
+#include <cfloat>
 #include <chrono>
 #include <cmath>
 #include <cstdarg>
