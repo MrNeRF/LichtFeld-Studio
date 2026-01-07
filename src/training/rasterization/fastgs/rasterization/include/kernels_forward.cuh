@@ -410,19 +410,18 @@ namespace fast_lfs::rasterization::kernels::forward {
                 const uint primitive_idx = instance_primitive_indices[current_fetch_idx];
                 collected_mean2d[thread_rank] = primitive_mean2d[primitive_idx];
                 collected_conic_opacity[thread_rank] = primitive_conic_opacity[primitive_idx];
-                const float3 color = fmaxf(primitive_color[primitive_idx], 0.0f);
+                const float3 color = fminf(fmaxf(primitive_color[primitive_idx], 0.0f), config::max_checkpoint_color);
                 collected_color[thread_rank] = color;
             }
             block.sync();
             const int current_batch_size = min(config::block_size_blend, n_points_remaining);
             for (int j = 0; !done && j < current_batch_size; ++j) {
                 if (j % config::checkpoint_interval == 0) {
-                    // Pack color [0,4] + transmittance [0,1] into uint32
-                    constexpr float COLOR_SCALE = 255.0f / 4.0f;
-                    const uint r = min(static_cast<uint>(fmaxf(color_pixel.x, 0.0f) * COLOR_SCALE + 0.5f), 255u);
-                    const uint g = min(static_cast<uint>(fmaxf(color_pixel.y, 0.0f) * COLOR_SCALE + 0.5f), 255u);
-                    const uint b = min(static_cast<uint>(fmaxf(color_pixel.z, 0.0f) * COLOR_SCALE + 0.5f), 255u);
-                    const uint t = static_cast<uint>(transmittance * 255.0f + 0.5f);
+                    constexpr float COLOR_SCALE = 255.0f / config::max_checkpoint_color;
+                    const uint r = static_cast<uint>(color_pixel.x * COLOR_SCALE + 0.5f);
+                    const uint g = static_cast<uint>(color_pixel.y * COLOR_SCALE + 0.5f);
+                    const uint b = static_cast<uint>(color_pixel.z * COLOR_SCALE + 0.5f);
+                    const uint t = min(static_cast<uint>(fmaxf(transmittance, 0.0f) * 255.0f + 0.5f), 255u);
                     bucket_checkpoint_uint8[bucket_offset * config::block_size_blend + thread_rank] = r | (g << 8) | (b << 16) | (t << 24);
                     bucket_offset++;
                 }

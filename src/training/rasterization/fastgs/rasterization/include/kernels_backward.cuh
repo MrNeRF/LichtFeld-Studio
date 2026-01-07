@@ -321,12 +321,12 @@ namespace fast_lfs::rasterization::kernels::backward {
             compensated_opacity = conic_opacity.w;
             original_opacity = mip_filter ? __frcp_rn(1.0f + __expf(-raw_opacities[primitive_idx])) : compensated_opacity;
             const float3 color_unclamped = primitive_color[primitive_idx];
-            color = fmaxf(color_unclamped, 0.0f);
-            if (color_unclamped.x >= 0.0f)
+            color = fminf(fmaxf(color_unclamped, 0.0f), config::max_checkpoint_color);
+            if (color_unclamped.x >= 0.0f && color_unclamped.x <= config::max_checkpoint_color)
                 color_grad_factor.x = 1.0f;
-            if (color_unclamped.y >= 0.0f)
+            if (color_unclamped.y >= 0.0f && color_unclamped.y <= config::max_checkpoint_color)
                 color_grad_factor.y = 1.0f;
-            if (color_unclamped.z >= 0.0f)
+            if (color_unclamped.z >= 0.0f && color_unclamped.z <= config::max_checkpoint_color)
                 color_grad_factor.z = 1.0f;
         }
 
@@ -358,9 +358,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         for (int i = 0; i < config::block_size_blend + 31; ++i) {
             if (i % 32 == 0) {
                 const uint local_idx = i + lane_idx;
-                // Unpack uint32 checkpoint to color [0,4] + transmittance [0,1]
                 const uint packed = bucket_checkpoint_uint8[local_idx];
-                constexpr float COLOR_INV_SCALE = 4.0f / 255.0f;
+                constexpr float COLOR_INV_SCALE = config::max_checkpoint_color / 255.0f;
                 constexpr float TRANS_INV_SCALE = 1.0f / 255.0f;
                 const float3 checkpoint_color = make_float3(
                     static_cast<float>(packed & 0xFF) * COLOR_INV_SCALE,

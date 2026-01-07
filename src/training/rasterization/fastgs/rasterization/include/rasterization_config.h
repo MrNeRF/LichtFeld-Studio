@@ -17,7 +17,8 @@ namespace fast_lfs::rasterization::config {
     DEF float min_alpha_threshold = 1.0f / min_alpha_threshold_rcp; // 0.00392156862
     DEF float max_fragment_alpha = 0.999f;                          // 0.99f in original 3dgs
     DEF float transmittance_threshold = 1e-4f;
-    DEF float max_raw_scale = 20.0f; // exp(40) ≈ 2.35e17, safe margin before overflow
+    DEF float max_raw_scale = 20.0f;       // exp(40) ≈ 2.35e17, safe margin before overflow
+    DEF float max_checkpoint_color = 4.0f; // max color for uint8 checkpoint packing (SH output typically < 2.0)
     // block size constants
     DEF int block_size_preprocess = 128;
     DEF int block_size_preprocess_backward = 128;
