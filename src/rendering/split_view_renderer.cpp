@@ -424,19 +424,43 @@ namespace lfs::rendering {
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, left_texture);
-        split_shader_.set("leftTexture", 0);
+        if (auto r = split_shader_.set("leftTexture", 0); !r) {
+            LOG_ERROR("Failed to set leftTexture uniform: {}", r.error());
+            return r;
+        }
 
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, right_texture);
-        split_shader_.set("rightTexture", 1);
+        if (auto r = split_shader_.set("rightTexture", 1); !r) {
+            LOG_ERROR("Failed to set rightTexture uniform: {}", r.error());
+            return r;
+        }
 
-        split_shader_.set("splitPosition", split_position);
-        split_shader_.set("showDivider", 1.0f);
-        split_shader_.set("dividerColor", divider_color);
-        split_shader_.set("dividerWidth", DIVIDER_WIDTH_PX / static_cast<float>(viewport_width));
+        if (auto r = split_shader_.set("splitPosition", split_position); !r) {
+            LOG_ERROR("Failed to set splitPosition uniform: {}", r.error());
+            return r;
+        }
+        if (auto r = split_shader_.set("showDivider", 1.0f); !r) {
+            LOG_ERROR("Failed to set showDivider uniform: {}", r.error());
+            return r;
+        }
+        if (auto r = split_shader_.set("dividerColor", divider_color); !r) {
+            LOG_ERROR("Failed to set dividerColor uniform: {}", r.error());
+            return r;
+        }
+        if (auto r = split_shader_.set("dividerWidth", DIVIDER_WIDTH_PX / static_cast<float>(viewport_width)); !r) {
+            LOG_ERROR("Failed to set dividerWidth uniform: {}", r.error());
+            return r;
+        }
 
-        split_shader_.set("leftTexcoordScale", left_texcoord_scale);
-        split_shader_.set("rightTexcoordScale", right_texcoord_scale);
+        if (auto r = split_shader_.set("leftTexcoordScale", left_texcoord_scale); !r) {
+            LOG_ERROR("Failed to set leftTexcoordScale uniform: {}", r.error());
+            return r;
+        }
+        if (auto r = split_shader_.set("rightTexcoordScale", right_texcoord_scale); !r) {
+            LOG_ERROR("Failed to set rightTexcoordScale uniform: {}", r.error());
+            return r;
+        }
 
         VAOBinder vao_bind(quad_vao_);
         glDrawArrays(GL_TRIANGLES, 0, 6);
