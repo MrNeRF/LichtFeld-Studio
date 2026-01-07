@@ -155,7 +155,7 @@ namespace lfs::core {
 
             // System state
             EVENT(CheckpointSaved, int iteration; std::filesystem::path path;);
-            EVENT(CheckpointSaveFailed,
+            EVENT(DiskSpaceSaveFailed,
                   int iteration;
                   std::filesystem::path path;
                   std::string error;
@@ -224,7 +224,7 @@ namespace lfs::core {
             EVENT(TrainingReadyToStart, );
             EVENT(WindowFocusLost, );
         } // namespace internal
-    } // namespace events
+    }     // namespace events
 
     // ============================================================================
     // Convenience functions

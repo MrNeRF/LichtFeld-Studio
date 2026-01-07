@@ -1115,11 +1115,11 @@ namespace lfs::vis::gui {
         // Render disk space dialog first (higher priority)
         if (disk_space_error_dialog_)
             disk_space_error_dialog_->render();
-        
+
         // Don't show notification popup if disk space dialog is open
         if (notification_popup_ && !disk_space_error_dialog_->isOpen())
             notification_popup_->render(viewport_pos_, viewport_size_);
-        
+
         if (exit_confirmation_popup_)
             exit_confirmation_popup_->render();
 
@@ -1873,15 +1873,15 @@ namespace lfs::vis::gui {
             }
         });
 
-        // Handle checkpoint save failures due to disk space
-        state::CheckpointSaveFailed::when([this](const auto& e) {
+        // Handle save failures due to disk space
+        state::DiskSpaceSaveFailed::when([this](const auto& e) {
             if (!e.is_disk_space_error) {
                 // For non-disk-space errors, just show a notification
                 if (notification_popup_) {
                     const std::string title = e.is_checkpoint ? "Checkpoint Save Failed" : "Export Failed";
                     const std::string msg = e.is_checkpoint
-                        ? std::format("Failed to save checkpoint at iteration {}:\n\n{}", e.iteration, e.error)
-                        : std::format("Failed to export:\n\n{}", e.error);
+                                                ? std::format("Failed to save checkpoint at iteration {}:\n\n{}", e.iteration, e.error)
+                                                : std::format("Failed to export:\n\n{}", e.error);
                     notification_popup_->show(NotificationPopup::Type::FAILURE, title, msg);
                 }
                 return;
@@ -1927,7 +1927,7 @@ namespace lfs::vis::gui {
                                 // Set the updated parameters back to the trainer
                                 trainer->setParams(params);
                                 LOG_INFO("Updated checkpoint output path to: {}", lfs::core::path_to_utf8(new_path));
-                                
+
                                 // Retry with new location
                                 if (tm->isFinished() || !tm->isTrainingActive()) {
                                     // Training complete - directly save PLY and checkpoint
@@ -1956,7 +1956,7 @@ namespace lfs::vis::gui {
                     auto on_change_location = [export_path = e.path](const std::filesystem::path& new_path) {
                         // For exports, changing location means the user needs to manually re-export
                         LOG_INFO("To retry export at new location {}, please use File > Export again",
-                                lfs::core::path_to_utf8(new_path));
+                                 lfs::core::path_to_utf8(new_path));
                     };
 
                     auto on_cancel = []() {
@@ -2554,7 +2554,7 @@ namespace lfs::vis::gui {
                         // Check if this is a disk space error
                         if (result.error().code == lfs::io::ErrorCode::INSUFFICIENT_DISK_SPACE) {
                             // Emit event for disk space error dialog
-                            lfs::core::events::state::CheckpointSaveFailed{
+                            lfs::core::events::state::DiskSpaceSaveFailed{
                                 .iteration = 0,
                                 .path = path,
                                 .error = result.error().message,

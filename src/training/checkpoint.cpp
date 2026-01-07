@@ -38,32 +38,60 @@ namespace lfs::training {
 
             const auto checkpoint_path = checkpoint_dir / ("checkpoint_" + std::to_string(iteration) + ".resume");
 
-            // Estimate checkpoint size
+            // Estimate checkpoint size from actual model
             const auto& model = strategy.get_model();
-            const size_t num_gaussians = model.size();
-            // Rough estimate: header + model data + strategy state + bilateral grid (if present) + params JSON
-            // Each Gaussian ~= 62 floats (position, rotation, scale, opacity, SH coefficients)
-            constexpr size_t BYTES_PER_GAUSSIAN = 62 * sizeof(float);
+
+            // Calculate actual model tensor sizes (matches SplatData::serialize)
+            size_t model_bytes = 0;
+            model_bytes += model.means().bytes();
+            model_bytes += model.sh0().bytes();
+            model_bytes += model.scaling_raw().bytes();
+            model_bytes += model.rotation_raw().bytes();
+            model_bytes += model.opacity_raw().bytes();
+            if (model.shN().is_valid()) {
+                model_bytes += model.shN().bytes();
+            }
+            if (model.deleted().is_valid()) {
+                model_bytes += model.deleted().bytes();
+            }
+            if (model._densification_info.is_valid()) {
+                model_bytes += model._densification_info.bytes();
+            }
+
+            // Adam optimizer stores exp_avg + exp_avg_sq for each param (2x model size)
+            const size_t optimizer_bytes = model_bytes * 2;
+
+            // Bilateral grid: grids + exp_avg + exp_avg_sq (3x grid tensor size)
+            size_t bilateral_grid_bytes = 0;
+            if (bilateral_grid) {
+                bilateral_grid_bytes = bilateral_grid->grids().bytes() * 3;
+            }
+
+            // Small overhead for header, JSON params, magic numbers
+            constexpr size_t OVERHEAD_BYTES = 64 * 1024;
+
             const size_t estimated_size = sizeof(CheckpointHeader) +
-                                          num_gaussians * BYTES_PER_GAUSSIAN +
-                                          1024 * 100; // Extra for strategy state, bilateral grid, JSON
+                                          model_bytes +
+                                          optimizer_bytes +
+                                          bilateral_grid_bytes +
+                                          OVERHEAD_BYTES;
 
             // Check disk space with 10% safety margin
             if (auto space_check = lfs::io::check_disk_space(checkpoint_path, estimated_size, 1.1f);
                 !space_check) {
                 const auto& error = space_check.error();
                 const bool is_disk_space = error.is(lfs::io::ErrorCode::INSUFFICIENT_DISK_SPACE);
-                
+
                 // Emit event for GUI to handle
-                lfs::core::events::state::CheckpointSaveFailed{
+                lfs::core::events::state::DiskSpaceSaveFailed{
                     .iteration = iteration,
                     .path = checkpoint_path,
                     .error = error.format(),
                     .required_bytes = estimated_size,
-                    .available_bytes = is_disk_space ? 0 : estimated_size, // 0 signals disk space issue
+                    .available_bytes = error.available_bytes,
                     .is_disk_space_error = is_disk_space}
                     .emit();
-                
+
                 return std::unexpected(error.format());
             }
 

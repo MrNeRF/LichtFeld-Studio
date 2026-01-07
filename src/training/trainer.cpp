@@ -1325,20 +1325,20 @@ namespace lfs::training {
             .output_path = save_path / ("splat_" + std::to_string(iter_num) + ".ply"),
             .binary = true,
             .async = !join_threads};
-        
+
         auto ply_result = lfs::io::save_ply(strategy_->get_model(), ply_options);
         if (!ply_result) {
             // Check if this is a disk space error
             if (ply_result.error().code == lfs::io::ErrorCode::INSUFFICIENT_DISK_SPACE) {
                 // Emit event for disk space error dialog
-                lfs::core::events::state::CheckpointSaveFailed{
+                lfs::core::events::state::DiskSpaceSaveFailed{
                     .iteration = iter_num,
                     .path = ply_options.output_path,
                     .error = ply_result.error().message,
                     .required_bytes = ply_result.error().required_bytes,
                     .available_bytes = ply_result.error().available_bytes,
                     .is_disk_space_error = true,
-                    .is_checkpoint = true}
+                    .is_checkpoint = false}
                     .emit();
             }
             LOG_WARN("Failed to save PLY: {}", ply_result.error().message);
