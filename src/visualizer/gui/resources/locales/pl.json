@@ -331,6 +331,7 @@
     "equirectangular": "Równokątne",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "Filtr Mip",
+    "render_scale": "Render Scale",
     "selection_colors": "Kolory Zaznaczenia",
     "committed": "Zatwierdzony",
     "preview": "Podgląd",
@@ -441,6 +442,7 @@
   "tooltip": {
     "gut_mode": "Włącz dla kamer rybie oko, zniekształconych lub równokątnych.\nWymagane do wyświetlania PLY wytrenowanych z flagą --gut.",
     "mip_filter": "Włącz filtr mip-splatting, aby zmniejszyć artefakty aliasingu.\nKompensuje nieprzezroczystość dla Gaussowskich mniejszych niż piksel.",
+    "render_scale": "Skala rozdzielczości widoku (niższa = mniej VRAM).\nNie wpływa na rozdzielczość treningu.",
     "point_cloud_forced": "Tryb chmury punktów jest wymuszony przed rozpoczęciem treningu",
     "desaturate_unselected": "Przyciemnij niezaznaczone PLY, gdy jeden lub więcej jest zaznaczonych",
     "locked": "Zablokowany: inne grupy nie mogą nadpisać",

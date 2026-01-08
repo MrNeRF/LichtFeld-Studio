@@ -331,6 +331,7 @@
     "equirectangular": "正距円筒図法",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "ミップフィルター",
+    "render_scale": "Render Scale",
     "selection_colors": "選択色",
     "committed": "確定済み",
     "preview": "プレビュー",
@@ -441,6 +442,7 @@
   "tooltip": {
     "gut_mode": "魚眼、歪み補正、またはエクイレクタンギュラーカメラに有効。\n--gutフラグでトレーニングされたPLYの表示に必要です。",
     "mip_filter": "ミップスプラッティングフィルターを有効にしてエイリアシングを軽減。\n1ピクセルより小さいガウシアンの不透明度を補正します。",
+    "render_scale": "ビューアの解像度スケール（低い = VRAM使用量削減）。\nトレーニング解像度には影響しません。",
     "point_cloud_forced": "トレーニング開始前はポイントクラウドモードが強制されます",
     "desaturate_unselected": "1つ以上が選択されている場合、未選択のPLYを暗くする",
     "locked": "ロック済み: 他のグループで上書きできません",

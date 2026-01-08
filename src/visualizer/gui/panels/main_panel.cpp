@@ -370,12 +370,12 @@ namespace lfs::vis::gui::panels {
 
         // Render Scale (VRAM optimization)
         ImGui::Separator();
-        if (widgets::SliderWithReset("Render Scale##renderscale", &settings.render_scale, 0.25f, 1.0f, 1.0f)) {
+        if (widgets::SliderWithReset(LOC(MainPanel::RENDER_SCALE), &settings.render_scale, 0.25f, 1.0f, 1.0f)) {
             settings_changed = true;
             render_manager->updateSettings(settings);
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Viewer resolution scale (lower = less VRAM, slightly lower quality).\nDoes not affect training resolution.");
+            ImGui::SetTooltip("%s", LOC(Tooltip::RENDER_SCALE));
         }
     }
 

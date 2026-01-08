@@ -331,6 +331,7 @@
     "equirectangular": "Équirectangulaire",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "Filtre Mip",
+    "render_scale": "Render Scale",
     "selection_colors": "Couleurs de Sélection",
     "committed": "Validé",
     "preview": "Aperçu",
@@ -441,6 +442,7 @@
   "tooltip": {
     "gut_mode": "Activer pour les caméras fisheye, déformées ou équirectangulaires.\nNécessaire pour visualiser les PLY entraînés avec le flag --gut.",
     "mip_filter": "Activer le filtre mip-splatting pour réduire les artefacts d'aliasing.\nCompense l'opacité des Gaussiens plus petits qu'un pixel.",
+    "render_scale": "Échelle de résolution du viewer (inférieur = moins de VRAM).\nN'affecte pas la résolution d'entraînement.",
     "point_cloud_forced": "Le mode nuage de points est forcé avant le début de l'entraînement",
     "desaturate_unselected": "Assombrir les PLY non sélectionnés lorsqu'un ou plusieurs sont sélectionnés",
     "locked": "Verrouillé : les autres groupes ne peuvent pas écraser",

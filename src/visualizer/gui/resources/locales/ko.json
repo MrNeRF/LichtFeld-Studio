@@ -331,6 +331,7 @@
     "equirectangular": "정거원통도법",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "밉 필터",
+    "render_scale": "Render Scale",
     "selection_colors": "선택 색상",
     "committed": "커밋됨",
     "preview": "미리보기",
@@ -441,6 +442,7 @@
   "tooltip": {
     "gut_mode": "어안, 왜곡 또는 정거원통 카메라에 활성화.\n--gut 플래그로 학습된 PLY를 보는 데 필요합니다.",
     "mip_filter": "밉 스플래팅 필터를 활성화하여 앨리어싱 아티팩트 감소.\n픽셀보다 작은 가우시안의 불투명도를 보정합니다.",
+    "render_scale": "뷰어 해상도 스케일 (낮을수록 = VRAM 감소).\n학습 해상도에는 영향을 주지 않습니다.",
     "point_cloud_forced": "학습 시작 전에 포인트 클라우드 모드가 강제됨",
     "desaturate_unselected": "하나 이상 선택되었을 때 선택되지 않은 PLY 어둡게 하기",
     "locked": "잠김: 다른 그룹이 덮어쓸 수 없음",

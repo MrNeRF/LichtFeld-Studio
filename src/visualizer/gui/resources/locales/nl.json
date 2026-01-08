@@ -331,6 +331,7 @@
     "equirectangular": "Equirectangulair",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "Mip Filter",
+    "render_scale": "Render Scale",
     "selection_colors": "Selectie Kleuren",
     "committed": "Toegewezen",
     "preview": "Voorbeeld",
@@ -441,6 +442,7 @@
   "tooltip": {
     "gut_mode": "Schakel in voor fisheye, vervormde of equirectangulaire camera's.\\nVereist voor het bekijken van PLY's getraind met --gut vlag.",
     "mip_filter": "Schakel mip-splatting filter in om aliasing artefacten te verminderen.\\nCompenseert dekking voor Gaussians kleiner dan een pixel.",
+    "render_scale": "Viewer resolutieschaal (lager = minder VRAM).\\nHeeft geen invloed op trainingsresolutie.",
     "point_cloud_forced": "Puntenwolk modus wordt gedwongen voordat training start",
     "desaturate_unselected": "Dim niet-geselecteerde PLY's wanneer een of meer geselecteerd zijn",
     "locked": "Vergrendeld: andere groepen kunnen niet overschrijven",

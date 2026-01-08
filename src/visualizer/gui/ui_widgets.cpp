@@ -3,13 +3,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/ui_widgets.hpp"
+#include "core/image_io.hpp"
 #include "gui/dpi_scale.hpp"
 #include "gui/localization_manager.hpp"
 #include "gui/string_keys.hpp"
+#include "internal/resource_paths.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer_impl.hpp"
+#include <GL/glew.h>
 #include <cstdarg>
 #include <imgui.h>
 
@@ -17,14 +20,60 @@ namespace lfs::vis::gui::widgets {
 
     using namespace lfs::core::events;
 
+    namespace {
+        struct WidgetIcons {
+            unsigned int reset = 0;
+            bool initialized = false;
+        };
+
+        WidgetIcons g_icons;
+
+        void ensureIconsLoaded() {
+            if (g_icons.initialized)
+                return;
+
+            try {
+                const auto path = lfs::vis::getAssetPath("icon/reset.png");
+                const auto [data, width, height, channels] = lfs::core::load_image_with_alpha(path);
+
+                glGenTextures(1, &g_icons.reset);
+                glBindTexture(GL_TEXTURE_2D, g_icons.reset);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
+            } catch (...) {
+                g_icons.reset = 0;
+            }
+
+            g_icons.initialized = true;
+        }
+    } // namespace
+
     bool SliderWithReset(const char* label, float* v, float min, float max, float reset_value) {
+        ensureIconsLoaded();
+
         bool changed = ImGui::SliderFloat(label, v, min, max);
 
         ImGui::SameLine();
         ImGui::PushID(label);
-        if (ImGui::Button(LOC(lichtfeld::Strings::Common::RESET))) {
-            *v = reset_value;
-            changed = true;
+
+        const float btn_size = ImGui::GetFrameHeight();
+        const ImVec2 icon_size(btn_size - 4, btn_size - 4);
+
+        if (g_icons.reset) {
+            if (ImGui::ImageButton("##reset", static_cast<ImTextureID>(g_icons.reset), icon_size)) {
+                *v = reset_value;
+                changed = true;
+            }
+        } else {
+            if (ImGui::Button("R", ImVec2(btn_size, btn_size))) {
+                *v = reset_value;
+                changed = true;
+            }
+        }
+
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", LOC(lichtfeld::Strings::Common::RESET));
         }
         ImGui::PopID();
 
@@ -32,13 +81,30 @@ namespace lfs::vis::gui::widgets {
     }
 
     bool DragFloat3WithReset(const char* label, float* v, float speed, float reset_value) {
+        ensureIconsLoaded();
+
         bool changed = ImGui::DragFloat3(label, v, speed);
 
         ImGui::SameLine();
         ImGui::PushID(label);
-        if (ImGui::Button(LOC(lichtfeld::Strings::Common::RESET))) {
-            v[0] = v[1] = v[2] = reset_value;
-            changed = true;
+
+        const float btn_size = ImGui::GetFrameHeight();
+        const ImVec2 icon_size(btn_size - 4, btn_size - 4);
+
+        if (g_icons.reset) {
+            if (ImGui::ImageButton("##reset", static_cast<ImTextureID>(g_icons.reset), icon_size)) {
+                v[0] = v[1] = v[2] = reset_value;
+                changed = true;
+            }
+        } else {
+            if (ImGui::Button("R", ImVec2(btn_size, btn_size))) {
+                v[0] = v[1] = v[2] = reset_value;
+                changed = true;
+            }
+        }
+
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", LOC(lichtfeld::Strings::Common::RESET));
         }
         ImGui::PopID();
 

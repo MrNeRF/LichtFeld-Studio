@@ -331,6 +331,7 @@
     "equirectangular": "等距柱状投影",
     "gut_mode": "GUT（3DGUT）",
     "mip_filter": "Mip滤波器",
+    "render_scale": "Render Scale",
     "selection_colors": "选择颜色",
     "committed": "已提交",
     "preview": "预览",
@@ -441,6 +442,7 @@
   "tooltip": {
     "gut_mode": "为鱼眼、畸变或等距柱状相机启用。\n查看使用--gut标志训练的PLY时需要。",
     "mip_filter": "启用mip-splatting滤波器以减少锯齿伪影。\n补偿小于一个像素的高斯不透明度。",
+    "render_scale": "查看器分辨率比例（越低 = 越少VRAM）。\n不影响训练分辨率。",
     "point_cloud_forced": "训练开始前强制点云模式",
     "desaturate_unselected": "当选择一个或多个PLY时，使未选择的PLY变暗",
     "locked": "已锁定：其他组无法覆盖",

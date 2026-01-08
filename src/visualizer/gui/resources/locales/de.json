@@ -331,6 +331,7 @@
     "equirectangular": "Equirektangular",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "Mip Filter",
+    "render_scale": "Render Scale",
     "selection_colors": "Auswahlfarben",
     "committed": "Bestätigt",
     "preview": "Vorschau",
@@ -441,6 +442,7 @@
   "tooltip": {
     "gut_mode": "Für Fisheye-, verzerrte oder equirektangulare Kameras aktivieren.\nErforderlich zum Anzeigen von PLYs, die mit --gut Flag trainiert wurden.",
     "mip_filter": "Mip-Splatting Filter aktivieren um Aliasing-Artefakte zu reduzieren.\nKompensiert Opazität für Gaussians kleiner als ein Pixel.",
+    "render_scale": "Viewer-Auflösungsskala (niedriger = weniger VRAM).\nBeeinflusst nicht die Trainingsauflösung.",
     "point_cloud_forced": "Punktwolken-Modus wird vor Trainingsstart erzwungen",
     "desaturate_unselected": "Nicht ausgewählte PLYs abdunkeln wenn mindestens eine ausgewählt ist",
     "locked": "Gesperrt: andere Gruppen können nicht überschreiben",

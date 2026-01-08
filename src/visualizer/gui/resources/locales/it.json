@@ -331,6 +331,7 @@
     "equirectangular": "Equirettangolare",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "Filtro Mip",
+    "render_scale": "Render Scale",
     "selection_colors": "Colori di Selezione",
     "committed": "Confermato",
     "preview": "Anteprima",
@@ -441,6 +442,7 @@
   "tooltip": {
     "gut_mode": "Abilita per fotocamere fisheye, distorte o equirettangolari.\nNecessario per visualizzare PLY addestrati con flag --gut.",
     "mip_filter": "Abilita il filtro mip-splatting per ridurre gli artefatti di aliasing.\nCompensa l'opacità per i Gaussiani più piccoli di un pixel.",
+    "render_scale": "Scala risoluzione viewer (inferiore = meno VRAM).\nNon influisce sulla risoluzione di addestramento.",
     "point_cloud_forced": "La modalità nuvola di punti è forzata prima dell'inizio dell'addestramento",
     "desaturate_unselected": "Scurisci i PLY non selezionati quando uno o più sono selezionati",
     "locked": "Bloccato: altri gruppi non possono sovrascrivere",

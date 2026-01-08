@@ -331,6 +331,7 @@
     "equirectangular": "Equirectangular",
     "gut_mode": "GUT (3DGUT)",
     "mip_filter": "Mip Filter",
+    "render_scale": "Render Scale",
     "selection_colors": "Selection Colors",
     "committed": "Committed",
     "preview": "Preview",
@@ -441,6 +442,7 @@
   "tooltip": {
     "gut_mode": "Enable for fisheye, distorted, or equirectangular cameras.\nRequired for viewing PLYs trained with --gut flag.",
     "mip_filter": "Enable mip-splatting filter to reduce aliasing artifacts.\nCompensates opacity for Gaussians smaller than a pixel.",
+    "render_scale": "Viewer resolution scale (lower = less VRAM).\nDoes not affect training resolution.",
     "point_cloud_forced": "Point cloud mode is forced on before training starts",
     "desaturate_unselected": "Dim unselected PLYs when one or more are selected",
     "locked": "Locked: other groups cannot overwrite",
