@@ -370,7 +370,7 @@ namespace lfs::vis::tools {
         const auto mode = rm ? rm->getSelectionMode() : lfs::rendering::SelectionMode::Centers;
 
         // Depth filter adjustment
-        if (depth_filter_enabled_ && mode != lfs::rendering::SelectionMode::Rings) {
+        if (depth_filter_enabled_) {
             if (input_bindings_) {
                 const auto action = input_bindings_->getActionForScroll(input::ToolMode::SELECTION, mods);
                 const float scale = (y_offset > 0) ? ADJUST_FACTOR : (1.0f / ADJUST_FACTOR);
@@ -425,7 +425,7 @@ namespace lfs::vis::tools {
         const auto sel_mode = rm ? rm->getSelectionMode() : lfs::rendering::SelectionMode::Centers;
 
         // Ctrl+F toggles depth filter
-        if (key == GLFW_KEY_F && (mods & GLFW_MOD_CONTROL) && sel_mode != lfs::rendering::SelectionMode::Rings) {
+        if (key == GLFW_KEY_F && (mods & GLFW_MOD_CONTROL)) {
             if (depth_filter_enabled_) {
                 disableDepthFilter(ctx);
             } else {
