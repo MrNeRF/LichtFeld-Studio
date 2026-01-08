@@ -187,6 +187,9 @@ namespace lfs::vis::gui::panels {
                 } else {
                     ImGui::Text("%d", dataset_params.resize_factor);
                 }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::RESIZE_FACTOR));
+                }
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
@@ -203,6 +206,9 @@ namespace lfs::vis::gui::panels {
                 } else {
                     ImGui::Text("%d", dataset_params.max_width);
                 }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::MAX_WIDTH));
+                }
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
@@ -215,6 +221,9 @@ namespace lfs::vis::gui::panels {
                 } else {
                     ImGui::Text("%s", dataset_params.loading_params.use_cpu_memory ? LOC(Training::Status::ENABLED) : LOC(Training::Status::DISABLED));
                 }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::CPU_CACHE));
+                }
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
@@ -226,6 +235,9 @@ namespace lfs::vis::gui::panels {
                     }
                 } else {
                     ImGui::Text("%s", dataset_params.loading_params.use_fs_cache ? LOC(Training::Status::ENABLED) : LOC(Training::Status::DISABLED));
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::FS_CACHE));
                 }
 
                 if (opt_params.enable_eval) {
@@ -243,6 +255,9 @@ namespace lfs::vis::gui::panels {
                         ImGui::PopItemWidth();
                     } else {
                         ImGui::Text("%d", dataset_params.test_every);
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s", LOC(Training::Tooltip::TEST_EVERY));
                     }
                 }
 
@@ -371,6 +386,9 @@ namespace lfs::vis::gui::panels {
                 } else {
                     ImGui::Text("%zu", opt_params.refine_every);
                 }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::REFINE_EVERY));
+                }
 
                 // Start Refine
                 ImGui::TableNextRow();
@@ -388,6 +406,9 @@ namespace lfs::vis::gui::panels {
                     ImGui::PopItemWidth();
                 } else {
                     ImGui::Text("%zu", opt_params.start_refine);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::START_REFINE));
                 }
 
                 // Stop Refine
@@ -407,6 +428,9 @@ namespace lfs::vis::gui::panels {
                 } else {
                     ImGui::Text("%zu", opt_params.stop_refine);
                 }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::STOP_REFINE));
+                }
 
                 // Gradient Threshold
                 ImGui::TableNextRow();
@@ -419,6 +443,9 @@ namespace lfs::vis::gui::panels {
                     ImGui::PopItemWidth();
                 } else {
                     ImGui::Text("%.6f", opt_params.grad_threshold);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::GRADIENT_THR));
                 }
 
                 // Reset Every
@@ -440,6 +467,9 @@ namespace lfs::vis::gui::panels {
                 } else {
                     ImGui::Text("%s", LOC(TrainingParams::DISABLED));
                 }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::RESET_EVERY));
+                }
 
                 // SH Degree Interval
                 ImGui::TableNextRow();
@@ -457,6 +487,9 @@ namespace lfs::vis::gui::panels {
                     ImGui::PopItemWidth();
                 } else {
                     ImGui::Text("%zu", opt_params.sh_degree_interval);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::SH_UPGRADE_EVERY));
                 }
 
                 ImGui::EndTable();
@@ -737,6 +770,9 @@ namespace lfs::vis::gui::panels {
                 } else {
                     ImGui::Text("%.2f", opt_params.lambda_dssim);
                 }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::LAMBDA_DSSIM));
+                }
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
@@ -748,6 +784,9 @@ namespace lfs::vis::gui::panels {
                     ImGui::PopItemWidth();
                 } else {
                     ImGui::Text("%.4f", opt_params.opacity_reg);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::OPACITY_REG));
                 }
 
                 ImGui::TableNextRow();
@@ -761,6 +800,9 @@ namespace lfs::vis::gui::panels {
                 } else {
                     ImGui::Text("%.4f", opt_params.scale_reg);
                 }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::SCALE_REG));
+                }
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
@@ -772,6 +814,9 @@ namespace lfs::vis::gui::panels {
                     ImGui::PopItemWidth();
                 } else {
                     ImGui::Text("%.1f", opt_params.tv_loss_weight);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::TV_LOSS_WEIGHT));
                 }
 
                 ImGui::EndTable();
@@ -796,6 +841,9 @@ namespace lfs::vis::gui::panels {
                 } else {
                     ImGui::Text("%.2f", opt_params.init_opacity);
                 }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::INIT_OPACITY));
+                }
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
@@ -808,6 +856,9 @@ namespace lfs::vis::gui::panels {
                 } else {
                     ImGui::Text("%.3f", opt_params.init_scaling);
                 }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::INIT_SCALING));
+                }
 
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
@@ -817,6 +868,9 @@ namespace lfs::vis::gui::panels {
                     ImGui::Checkbox("##random", &opt_params.random);
                 } else {
                     ImGui::Text("%s", opt_params.random ? "Yes" : "No");
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::RANDOM_INIT));
                 }
 
                 if (opt_params.random) {
@@ -833,6 +887,9 @@ namespace lfs::vis::gui::panels {
                     } else {
                         ImGui::Text("%d", opt_params.init_num_pts);
                     }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s", LOC(Training::Tooltip::NUM_POINTS));
+                    }
 
                     ImGui::TableNextRow();
                     ImGui::TableNextColumn();
@@ -846,6 +903,9 @@ namespace lfs::vis::gui::panels {
                         ImGui::PopItemWidth();
                     } else {
                         ImGui::Text("%.1f", opt_params.init_extent);
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s", LOC(Training::Tooltip::EXTENT));
                     }
                 }
 
@@ -1086,6 +1146,9 @@ namespace lfs::vis::gui::panels {
             } else {
                 ImGui::Text("%s", opt_params.strategy == "mcmc" ? "MCMC" : "ADC");
             }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::STRATEGY));
+            }
 
             // Iterations
             ImGui::TableNextRow();
@@ -1104,6 +1167,9 @@ namespace lfs::vis::gui::panels {
             } else {
                 ImGui::Text("%zu", opt_params.iterations);
             }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::ITERATIONS));
+            }
 
             // Max Gaussians
             ImGui::TableNextRow();
@@ -1119,6 +1185,9 @@ namespace lfs::vis::gui::panels {
             } else {
                 ImGui::Text("%d", opt_params.max_cap);
             }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::MAX_GAUSSIANS));
+            }
 
             // SH Degree
             ImGui::TableNextRow();
@@ -1132,6 +1201,9 @@ namespace lfs::vis::gui::panels {
                 ImGui::PopItemWidth();
             } else {
                 ImGui::Text("%d", opt_params.sh_degree);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::SH_DEGREE));
             }
 
             // Tile Mode
@@ -1155,6 +1227,9 @@ namespace lfs::vis::gui::panels {
             } else {
                 ImGui::Text("%d", opt_params.tile_mode);
             }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::TILE_MODE));
+            }
 
             // Steps Scaler
             ImGui::TableNextRow();
@@ -1175,6 +1250,9 @@ namespace lfs::vis::gui::panels {
             } else {
                 ImGui::Text("%.2f", opt_params.steps_scaler);
             }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::STEPS_SCALER));
+            }
 
             // Bilateral Grid Enable
             ImGui::TableNextRow();
@@ -1185,6 +1263,9 @@ namespace lfs::vis::gui::panels {
                 ImGui::Checkbox("##use_bilateral_grid", &opt_params.use_bilateral_grid);
             } else {
                 ImGui::Text("%s", opt_params.use_bilateral_grid ? "Enabled" : "Disabled");
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::BILATERAL_GRID));
             }
 
             // Mask Mode
@@ -1207,6 +1288,9 @@ namespace lfs::vis::gui::panels {
                     ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "(no masks)");
                 }
             }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::MASK_MODE));
+            }
 
             if (opt_params.mask_mode != lfs::core::param::MaskMode::None && has_masks) {
                 ImGui::TableNextRow();
@@ -1219,7 +1303,7 @@ namespace lfs::vis::gui::panels {
                     ImGui::Text("%s", opt_params.invert_masks ? "Yes" : "No");
                 }
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("Swap object/background in masks");
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::INVERT_MASKS));
                 }
             }
 
@@ -1281,6 +1365,9 @@ namespace lfs::vis::gui::panels {
             } else {
                 ImGui::Text("%s", opt_params.enable_sparsity ? "Enabled" : "Disabled");
             }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::SPARSITY));
+            }
 
             // GUT
             ImGui::TableNextRow();
@@ -1291,6 +1378,9 @@ namespace lfs::vis::gui::panels {
                 ImGui::Checkbox("##gut", &opt_params.gut);
             } else {
                 ImGui::Text("%s", opt_params.gut ? "Enabled" : "Disabled");
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::GUT));
             }
 
             // Mip Filter (anti-aliasing)
@@ -1317,6 +1407,9 @@ namespace lfs::vis::gui::panels {
             } else {
                 ImGui::Text("%s", opt_params.bg_modulation ? "Enabled" : "Disabled");
             }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::BG_MODULATION));
+            }
 
             // Evaluation
             ImGui::TableNextRow();
@@ -1327,6 +1420,9 @@ namespace lfs::vis::gui::panels {
                 ImGui::Checkbox("##enable_eval", &opt_params.enable_eval);
             } else {
                 ImGui::Text("%s", opt_params.enable_eval ? "Enabled" : "Disabled");
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::EVALUATION));
             }
         }
         ImGui::EndTable();
