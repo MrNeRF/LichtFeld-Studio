@@ -819,6 +819,10 @@ namespace lfs::vis {
 
         glViewport(0, 0, context.viewport.frameBufferSize.x, context.viewport.frameBufferSize.y);
 
+        // Clear full framebuffer first to avoid artifacts in gaps between UI elements
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
         // Set viewport region with scissor clipping (Y flipped for OpenGL)
         if (context.viewport_region) {
             const GLint x = static_cast<GLint>(context.viewport_region->x);
