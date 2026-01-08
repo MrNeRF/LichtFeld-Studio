@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/pipelined_image_loader.hpp"
+#include "core/cuda/lanczos_resize/lanczos_resize.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -9,6 +10,7 @@
 #include "io/nvcodec_image_loader.hpp"
 
 #include <cuda_runtime.h>
+#include <stb_image.h>
 
 #include <algorithm>
 #include <fstream>
@@ -81,6 +83,12 @@ namespace lfs::io {
             static bool available = false;
             std::call_once(flag, [] { available = NvCodecImageLoader::is_available(); });
             return available;
+        }
+
+        std::tuple<uint8_t*, int, int> load_grayscale_stb(const std::filesystem::path& path) {
+            int w, h, c;
+            uint8_t* const data = stbi_load(lfs::core::path_to_utf8(path).c_str(), &w, &h, &c, 1);
+            return {data, w, h};
         }
 
     } // namespace
@@ -662,7 +670,7 @@ namespace lfs::io {
                     lfs::core::Tensor mask_tensor;
                     bool used_gpu = false;
 
-                    if (is_nvcodec_available() && item.is_original_jpeg) {
+                    if (is_nvcodec_available()) {
                         try {
                             mask_tensor = nvcodec.load_image_gpu(
                                 item.path, item.params.resize_factor, item.params.max_width,
@@ -673,67 +681,43 @@ namespace lfs::io {
                     }
 
                     if (!used_gpu) {
-                        auto [img_data, width, height, channels] = lfs::core::load_image(
-                            item.path, item.params.resize_factor, item.params.max_width);
-
-                        if (!img_data)
+                        const auto [gray_data, src_w, src_h] = load_grayscale_stb(item.path);
+                        if (!gray_data)
                             throw std::runtime_error("Failed to decode mask");
 
-                        const size_t H = static_cast<size_t>(height);
-                        const size_t W = static_cast<size_t>(width);
-                        const size_t C = static_cast<size_t>(channels);
-
-                        auto cpu_tensor = lfs::core::Tensor::from_blob(
-                            img_data, lfs::core::TensorShape({H, W, C}),
-                            lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-
-                        auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
-                        lfs::core::free_image(img_data);
-
-                        mask_tensor = lfs::core::Tensor::zeros(
-                            lfs::core::TensorShape({H, W}),
-                            lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-
-                        if (C == 1) {
-                            cuda::launch_uint8_hw_to_float32_hw(
-                                reinterpret_cast<const uint8_t*>(gpu_uint8.data_ptr()),
-                                reinterpret_cast<float*>(mask_tensor.data_ptr()),
-                                H, W, nullptr);
-                        } else {
-                            auto temp_chw = lfs::core::Tensor::zeros(
-                                lfs::core::TensorShape({C, H, W}),
-                                lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-
-                            cuda::launch_uint8_hwc_to_float32_chw(
-                                reinterpret_cast<const uint8_t*>(gpu_uint8.data_ptr()),
-                                reinterpret_cast<float*>(temp_chw.data_ptr()),
-                                H, W, C, nullptr);
-
-                            auto temp_cpu = temp_chw.to(lfs::core::Device::CPU);
-                            auto mask_cpu = lfs::core::Tensor::zeros(
-                                lfs::core::TensorShape({H, W}),
-                                lfs::core::Device::CPU, lfs::core::DataType::Float32);
-
-                            const float* const src = reinterpret_cast<const float*>(temp_cpu.data_ptr());
-                            float* const dst = reinterpret_cast<float*>(mask_cpu.data_ptr());
-                            const size_t plane_size = H * W;
-                            const size_t channels_to_avg = std::min(C, size_t(3)); // RGB only, exclude alpha
-
-                            for (size_t i = 0; i < plane_size; ++i) {
-                                float sum = 0.0f;
-                                for (size_t c = 0; c < channels_to_avg; ++c) {
-                                    sum += src[c * plane_size + i];
-                                }
-                                dst[i] = sum / static_cast<float>(channels_to_avg);
+                        int target_w = src_w;
+                        int target_h = src_h;
+                        if (item.params.resize_factor > 1) {
+                            target_w /= item.params.resize_factor;
+                            target_h /= item.params.resize_factor;
+                        }
+                        const int max_w = item.params.max_width;
+                        if (max_w > 0 && (target_w > max_w || target_h > max_w)) {
+                            if (target_w > target_h) {
+                                target_h = std::max(1, max_w * target_h / target_w);
+                                target_w = max_w;
+                            } else {
+                                target_w = std::max(1, max_w * target_w / target_h);
+                                target_h = max_w;
                             }
-
-                            mask_tensor = mask_cpu.to(lfs::core::Device::CUDA);
                         }
 
-                        if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
-                            throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
+                        const auto cpu_tensor = lfs::core::Tensor::from_blob(
+                            gray_data, lfs::core::TensorShape({static_cast<size_t>(src_h), static_cast<size_t>(src_w)}),
+                            lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+                        const auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
+                        stbi_image_free(gray_data);
+
+                        if (target_w != src_w || target_h != src_h) {
+                            mask_tensor = lfs::core::lanczos_resize_grayscale(gpu_uint8, target_h, target_w, 2, nullptr);
+                        } else {
+                            mask_tensor = lfs::core::Tensor::zeros(
+                                lfs::core::TensorShape({static_cast<size_t>(target_h), static_cast<size_t>(target_w)}),
+                                lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                            cuda::launch_uint8_hw_to_float32_hw(
+                                gpu_uint8.ptr<uint8_t>(), mask_tensor.ptr<float>(), target_h, target_w, nullptr);
                         }
-                        gpu_uint8 = lfs::core::Tensor();
+                        cudaDeviceSynchronize();
                     }
 
                     const size_t H = mask_tensor.shape()[0];

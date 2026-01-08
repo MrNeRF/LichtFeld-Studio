@@ -106,6 +106,7 @@ add_library(lfs_io STATIC
         nvcodec_image_loader.hpp
         nvcodec_image_loader.cpp
         pipelined_image_loader.cpp
+        stb_image_impl.cpp
 )
 
 # Set include directories

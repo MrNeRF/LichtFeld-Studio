@@ -486,27 +486,20 @@ namespace lfs::io {
 
         LOG_DEBUG("NvCodecImageLoader: Loading {}", lfs::core::path_to_utf8(path));
 
-        // Read file into memory first
-        auto file_data = read_file(path);
+        const auto file_data = read_file(path);
 
-        // Check magic bytes to determine actual format (not extension - files can be mislabeled)
-        // PNG magic: 0x89 0x50 0x4E 0x47 (‰PNG)
-        // WebP magic: RIFF....WEBP
-        // JPEG magic: 0xFF 0xD8 0xFF
-        if (file_data.size() >= 8) {
-            // Check for PNG magic
-            if (file_data[0] == 0x89 && file_data[1] == 0x50 &&
-                file_data[2] == 0x4E && file_data[3] == 0x47) {
-                throw std::runtime_error("PNG format detected (by magic bytes) - use CPU fallback");
-            }
-            // Check for WebP magic (RIFF....WEBP)
-            if (file_data[0] == 'R' && file_data[1] == 'I' &&
-                file_data[2] == 'F' && file_data[3] == 'F' &&
-                file_data.size() >= 12 &&
-                file_data[8] == 'W' && file_data[9] == 'E' &&
-                file_data[10] == 'B' && file_data[11] == 'P') {
-                throw std::runtime_error("WebP format detected (by magic bytes) - use CPU fallback");
-            }
+        // PNG magic: 0x89 'P' 'N' 'G', WebP magic: 'RIFF'....'WEBP'
+        if (file_data.size() >= 4 &&
+            file_data[0] == 0x89 && file_data[1] == 0x50 &&
+            file_data[2] == 0x4E && file_data[3] == 0x47) {
+            throw std::runtime_error("PNG not supported by nvImageCodec");
+        }
+        if (file_data.size() >= 12 &&
+            file_data[0] == 'R' && file_data[1] == 'I' &&
+            file_data[2] == 'F' && file_data[3] == 'F' &&
+            file_data[8] == 'W' && file_data[9] == 'E' &&
+            file_data[10] == 'B' && file_data[11] == 'P') {
+            throw std::runtime_error("WebP not supported by nvImageCodec");
         }
 
         return load_image_from_memory_gpu(file_data, resize_factor, max_width, cuda_stream, format);
