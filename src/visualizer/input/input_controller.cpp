@@ -206,8 +206,8 @@ namespace lfs::vis {
         float split_pos = services().renderingOrNull()->getSettings().split_position;
         float split_x = viewport_bounds_.x + viewport_bounds_.width * split_pos;
 
-        // Increase the hit area to 10 pixels for easier grabbing
-        return std::abs(x - split_x) < 10.0;
+        // Hit area matches the visual handle width (24 pixels wide, so 12 on each side)
+        return std::abs(x - split_x) < 12.0;
     }
 
     // Core handlers
@@ -338,7 +338,47 @@ namespace lfs::vis {
                 const glm::vec3 new_pivot = unprojectScreenPoint(x, y);
                 const float current_distance = glm::length(viewport_.camera.getPivot() - viewport_.camera.t);
                 const glm::vec3 forward = glm::normalize(viewport_.camera.R * glm::vec3(0, 0, 1));
-                viewport_.camera.t = new_pivot - forward * current_distance;
+
+                glm::vec3 camera_offset(0.0f);
+
+                // In split view mode, offset camera so pivot appears at panel center
+                if (services().renderingOrNull()) {
+                    const auto& settings = services().renderingOrNull()->getSettings();
+                    if (settings.split_view_mode != SplitViewMode::Disabled) {
+                        const float split_pos = settings.split_position;
+                        const float local_x = static_cast<float>(x) - viewport_bounds_.x;
+                        const float viewport_width = viewport_bounds_.width;
+                        const float viewport_height = viewport_bounds_.height;
+                        const float normalized_x = local_x / viewport_width;
+
+                        // Determine which panel was clicked and its center
+                        float panel_center_x;
+                        if (normalized_x < split_pos) {
+                            // Left panel: center is at split_pos / 2
+                            panel_center_x = split_pos * viewport_width / 2.0f;
+                        } else {
+                            // Right panel: center is at (split_pos + 1) / 2
+                            panel_center_x = (split_pos + 1.0f) * viewport_width / 2.0f;
+                        }
+
+                        // Offset from viewport center to panel center (in pixels)
+                        const float viewport_center_x = viewport_width / 2.0f;
+                        const float dx = panel_center_x - viewport_center_x;
+
+                        // Convert screen offset to camera offset
+                        const float fov_y = glm::radians(services().renderingOrNull()->getFovDegrees());
+                        const float aspect = viewport_width / viewport_height;
+                        const float fov_x = 2.0f * std::atan(std::tan(fov_y / 2.0f) * aspect);
+                        const float fx = viewport_width / (2.0f * std::tan(fov_x / 2.0f));
+
+                        // Shift camera opposite to desired screen shift
+                        const float shift = -dx * current_distance / fx;
+                        const glm::vec3 right = glm::normalize(viewport_.camera.R * glm::vec3(1, 0, 0));
+                        camera_offset = right * shift;
+                    }
+                }
+
+                viewport_.camera.t = new_pivot - forward * current_distance + camera_offset;
                 viewport_.camera.setPivot(new_pivot);
                 publishCameraMove();
                 break;
@@ -1322,21 +1362,18 @@ namespace lfs::vis {
 
     glm::vec3 InputController::unprojectScreenPoint(double x, double y, float fallback_distance) const {
         if (!services().renderingOrNull()) {
-            glm::vec3 forward = viewport_.camera.R * glm::vec3(0, 0, 1);
+            const glm::vec3 forward = viewport_.camera.R * glm::vec3(0, 0, 1);
             return viewport_.camera.t + forward * fallback_distance;
         }
 
-        // Convert window coordinates to viewport-local coordinates
         const float local_x = static_cast<float>(x) - viewport_bounds_.x;
         const float local_y = static_cast<float>(y) - viewport_bounds_.y;
 
-        // Try to get depth from rendering manager using viewport-local coordinates
         const float depth = services().renderingOrNull()->getDepthAtPixel(
             static_cast<int>(local_x), static_cast<int>(local_y));
 
-        // If no valid depth, use fallback distance along view direction
         if (depth < 0.0f) {
-            glm::vec3 forward = viewport_.camera.R * glm::vec3(0, 0, 1);
+            const glm::vec3 forward = viewport_.camera.R * glm::vec3(0, 0, 1);
             return viewport_.camera.t + forward * fallback_distance;
         }
 

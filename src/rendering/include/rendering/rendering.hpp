@@ -109,6 +109,7 @@ namespace lfs::rendering {
     struct RenderResult {
         std::shared_ptr<lfs::core::Tensor> image;
         std::shared_ptr<lfs::core::Tensor> depth;
+        std::shared_ptr<lfs::core::Tensor> depth_right;      // For split view: depth from right panel
         std::shared_ptr<lfs::core::Tensor> screen_positions; // Optional: screen positions [N, 2] for brush tool
         bool valid = false;
         // Depth conversion parameters (needed for proper depth buffer writing)
@@ -117,6 +118,7 @@ namespace lfs::rendering {
         float near_plane = DEFAULT_NEAR_PLANE;
         float far_plane = DEFAULT_FAR_PLANE;
         bool orthographic = false;
+        float split_position = -1.0f; // For split view: normalized split position (-1 = not split view)
     };
 
     // Split view support
