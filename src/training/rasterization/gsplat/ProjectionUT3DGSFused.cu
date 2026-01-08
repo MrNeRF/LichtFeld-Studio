@@ -27,10 +27,6 @@ namespace gsplat_lfs {
         const scalar_t* __restrict__ Ks,        // [C, 3, 3]
         const uint32_t image_width,
         const uint32_t image_height,
-        const uint32_t full_image_width,
-        const uint32_t full_image_height,
-        const int32_t tile_x_offset,
-        const int32_t tile_y_offset,
         const float eps2d,
         const float near_plane,
         const float far_plane,
@@ -133,17 +129,31 @@ namespace gsplat_lfs {
                 world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
                     camera_model, rs_params, ut_params, mean, scale, quat);
         } else if (camera_model_type == CameraModelType::EQUIRECTANGULAR) {
-            // For equirectangular, use FULL image resolution for angle->pixel mapping
-            // Then subtract tile offset to get tile-local coordinates
+            // For equirectangular cameras in tile mode, the K matrix encodes tile information:
+            //   K[0][0] (focal_length.x) = full_image_width
+            //   K[1][1] (focal_length.y) = full_image_height
+            //   K[0][2] (principal_point.x) = tile_x_offset
+            //   K[1][2] (principal_point.y) = tile_y_offset
+            // This avoids changing all function interfaces for a camera-specific fix.
+            // For non-tiled rendering, full_image_width/height == image_width/height and offsets are 0.
+            const uint32_t full_image_width = static_cast<uint32_t>(focal_length.x);
+            const uint32_t full_image_height = static_cast<uint32_t>(focal_length.y);
+            const float tile_x_offset = principal_point.x;
+            const float tile_y_offset = principal_point.y;
+
+            assert(full_image_width >= image_width && "full_image_width must be >= image_width");
+            assert(full_image_height >= image_height && "full_image_height must be >= image_height");
+
             EquirectangularCameraModel::Parameters cm_params = {};
             cm_params.resolution = {full_image_width, full_image_height};
             EquirectangularCameraModel camera_model(cm_params);
             image_gaussian_return =
                 world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
                     camera_model, rs_params, ut_params, mean, scale, quat);
-            // Apply tile offset to convert from full image coords to tile-local coords
-            image_gaussian_return.mean.x -= static_cast<float>(tile_x_offset);
-            image_gaussian_return.mean.y -= static_cast<float>(tile_y_offset);
+
+            // Convert from full image coordinates to tile-local coordinates
+            image_gaussian_return.mean.x -= tile_x_offset;
+            image_gaussian_return.mean.y -= tile_y_offset;
         } else if (camera_model_type == CameraModelType::THIN_PRISM_FISHEYE) {
             ThinPrismFisheyeCameraModel<>::Parameters cm_params = {};
             cm_params.resolution = {image_width, image_height};
@@ -248,10 +258,6 @@ namespace gsplat_lfs {
         uint32_t C,
         uint32_t image_width,
         uint32_t image_height,
-        uint32_t full_image_width,
-        uint32_t full_image_height,
-        int32_t tile_x_offset,
-        int32_t tile_y_offset,
         float eps2d,
         float near_plane,
         float far_plane,
@@ -293,10 +299,6 @@ namespace gsplat_lfs {
                 Ks,
                 image_width,
                 image_height,
-                full_image_width,
-                full_image_height,
-                tile_x_offset,
-                tile_y_offset,
                 eps2d,
                 near_plane,
                 far_plane,

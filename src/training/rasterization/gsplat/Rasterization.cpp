@@ -30,10 +30,6 @@ namespace gsplat_lfs {
         uint32_t channels,
         uint32_t image_width,
         uint32_t image_height,
-        uint32_t full_image_width,
-        uint32_t full_image_height,
-        int32_t tile_x_offset,
-        int32_t tile_y_offset,
         uint32_t tile_size,
         const float* viewmats0,
         const float* viewmats1,
@@ -64,9 +60,7 @@ namespace gsplat_lfs {
         launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel<CDIM>( \
             means, quats, scales, colors, opacities,                 \
             backgrounds, masks, C, N, n_isects,                      \
-            image_width, image_height,                               \
-            full_image_width, full_image_height,                     \
-            tile_x_offset, tile_y_offset, tile_size,                 \
+            image_width, image_height, tile_size,                    \
             viewmats0, viewmats1, Ks, camera_model,                  \
             ut_params, rs_type,                                      \
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,     \
@@ -119,10 +113,6 @@ namespace gsplat_lfs {
         uint32_t channels,
         uint32_t image_width,
         uint32_t image_height,
-        uint32_t full_image_width,
-        uint32_t full_image_height,
-        int32_t tile_x_offset,
-        int32_t tile_y_offset,
         uint32_t tile_size,
         const float* viewmats0,
         const float* viewmats1,
@@ -166,9 +156,7 @@ namespace gsplat_lfs {
         launch_rasterize_to_pixels_from_world_3dgs_bwd_kernel<CDIM>(    \
             means, quats, scales, colors, opacities,                    \
             backgrounds, masks, C, N, n_isects,                         \
-            image_width, image_height,                                  \
-            full_image_width, full_image_height,                        \
-            tile_x_offset, tile_y_offset, tile_size,                    \
+            image_width, image_height, tile_size,                       \
             viewmats0, viewmats1, Ks, camera_model,                     \
             ut_params, rs_type,                                         \
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,        \
@@ -223,10 +211,6 @@ namespace gsplat_lfs {
         uint32_t K,
         uint32_t image_width,
         uint32_t image_height,
-        uint32_t full_image_width,
-        uint32_t full_image_height,
-        int32_t tile_x_offset,
-        int32_t tile_y_offset,
         uint32_t tile_size,
         const float* viewmats0,
         const float* viewmats1,
@@ -272,8 +256,6 @@ namespace gsplat_lfs {
             means, quats, scaled_scales, opacities,
             viewmats0, viewmats1, Ks,
             N, C, image_width, image_height,
-            full_image_width, full_image_height,
-            tile_x_offset, tile_y_offset,
             eps2d, near_plane, far_plane, radius_clip,
             calc_compensations, camera_model,
             ut_params, rs_type,
@@ -313,9 +295,7 @@ namespace gsplat_lfs {
             means, quats, scaled_scales, result.colors, opacities,
             backgrounds, masks,
             C, N, result.n_isects, channels,
-            image_width, image_height,
-            full_image_width, full_image_height,
-            tile_x_offset, tile_y_offset, tile_size,
+            image_width, image_height, tile_size,
             viewmats0, viewmats1, Ks, camera_model,
             ut_params, rs_type,
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,
@@ -342,10 +322,6 @@ namespace gsplat_lfs {
         uint32_t K,
         uint32_t image_width,
         uint32_t image_height,
-        uint32_t full_image_width,
-        uint32_t full_image_height,
-        int32_t tile_x_offset,
-        int32_t tile_y_offset,
         uint32_t tile_size,
         const float* viewmats0,
         const float* viewmats1,
@@ -399,9 +375,7 @@ namespace gsplat_lfs {
             means, quats, scales, colors, opacities,
             backgrounds, masks,
             C, N, n_isects, channels,
-            image_width, image_height,
-            full_image_width, full_image_height,
-            tile_x_offset, tile_y_offset, tile_size,
+            image_width, image_height, tile_size,
             viewmats0, viewmats1, Ks, camera_model,
             ut_params, rs_type,
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,

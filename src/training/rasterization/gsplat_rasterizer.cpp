@@ -50,7 +50,6 @@ namespace lfs::training {
         } else {
             K_tensor = viewpoint_camera.K().contiguous();
         }
-        const float* K_ptr = K_tensor.ptr<float>();
 
         // Get Gaussian parameters (activated) - ensure contiguous
         auto means = gaussian_model.get_means().contiguous();
@@ -88,6 +87,24 @@ namespace lfs::training {
         // Convert from lfs::core::CameraModelType (enum class) to global CameraModelType (plain enum) for CUDA kernels
         const ::CameraModelType camera_model = static_cast<::CameraModelType>(
             static_cast<int>(viewpoint_camera.camera_model_type()));
+
+        // For equirectangular cameras in tile mode, encode tile info in K matrix.
+        // The CUDA kernels read these values as:
+        //   K[0][0] (focal_length.x) = full_image_width
+        //   K[1][1] (focal_length.y) = full_image_height
+        //   K[0][2] (principal_point.x) = tile_x_offset
+        //   K[1][2] (principal_point.y) = tile_y_offset
+        // This avoids changing all function interfaces for a camera-specific fix.
+        if (camera_model == CameraModelType::EQUIRECTANGULAR) {
+            auto K_cpu = viewpoint_camera.K().cpu().contiguous();
+            auto K_acc = K_cpu.accessor<float, 3>();
+            K_acc(0, 0, 0) = static_cast<float>(full_image_width);
+            K_acc(0, 1, 1) = static_cast<float>(full_image_height);
+            K_acc(0, 0, 2) = static_cast<float>(tile_x_offset);
+            K_acc(0, 1, 2) = static_cast<float>(tile_y_offset);
+            K_tensor = K_cpu.to(core::Device::CUDA).contiguous();
+        }
+        const float* K_ptr = K_tensor.ptr<float>();
 
         // Distortion coefficients
         const core::Tensor radial_dist = viewpoint_camera.radial_distortion();
@@ -243,10 +260,6 @@ namespace lfs::training {
             K,
             image_width,
             image_height,
-            full_image_width,
-            full_image_height,
-            tile_x_offset,
-            tile_y_offset,
             tile_size,
             viewmat_ptr,
             nullptr, // viewmats1 (rolling shutter)
@@ -385,8 +398,6 @@ namespace lfs::training {
         ctx.render_tile_y_offset = tile_y_offset;
         ctx.render_tile_width = tile_width;
         ctx.render_tile_height = tile_height;
-        ctx.full_image_width = full_image_width;
-        ctx.full_image_height = full_image_height;
 
         return std::pair{render_output, ctx};
     }
@@ -506,10 +517,6 @@ namespace lfs::training {
             K,
             ctx.image_width,
             ctx.image_height,
-            ctx.full_image_width,
-            ctx.full_image_height,
-            ctx.render_tile_x_offset,
-            ctx.render_tile_y_offset,
             ctx.tile_size,
             ctx.viewmat_ptr,
             nullptr, // viewmats1

@@ -94,8 +94,6 @@ namespace lfs::training {
         int render_tile_y_offset = 0;
         int render_tile_width = 0;
         int render_tile_height = 0;
-        uint32_t full_image_width = 0;
-        uint32_t full_image_height = 0;
     };
 
     // Forward pass with optional tiling (tile_width/height=0 = full image)
