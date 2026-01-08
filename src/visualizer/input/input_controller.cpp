@@ -349,6 +349,9 @@ namespace lfs::vis {
                         const float local_x = static_cast<float>(x) - viewport_bounds_.x;
                         const float viewport_width = viewport_bounds_.width;
                         const float viewport_height = viewport_bounds_.height;
+                        if (viewport_width <= 0.0f || viewport_height <= 0.0f) {
+                            break;
+                        }
                         const float normalized_x = local_x / viewport_width;
 
                         // Determine which panel was clicked and its center

@@ -1503,6 +1503,10 @@ namespace lfs::vis {
         const int viewport_width = cached_result_size_.x;
         const int viewport_height = cached_result_size_.y;
 
+        if (viewport_width <= 0 || viewport_height <= 0) {
+            return -1.0f;
+        }
+
         if (cached_result_.split_position > 0.0f && cached_result_.depth && cached_result_.depth->is_valid()) {
             const float normalized_x = static_cast<float>(x) / static_cast<float>(viewport_width);
 

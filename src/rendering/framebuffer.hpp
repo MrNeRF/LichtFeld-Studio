@@ -23,10 +23,10 @@ namespace lfs::rendering {
     class FrameBuffer {
 
     private:
-        GLuint fbo;
-        GLuint texture;           // color texture
-        GLuint depthTexture;      // depth texture (for CUDA depth storage)
-        GLuint depthRenderbuffer; // depth renderbuffer (for actual depth testing)
+        GLuint fbo = 0;
+        GLuint texture = 0;           // color texture
+        GLuint depthTexture = 0;      // depth texture (for CUDA depth storage)
+        GLuint depthRenderbuffer = 0; // depth renderbuffer (for actual depth testing)
 
     protected: // Changed from private to protected so derived classes can access
         int width = 1;
