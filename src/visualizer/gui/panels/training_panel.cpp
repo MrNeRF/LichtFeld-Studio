@@ -310,6 +310,9 @@ namespace lfs::vis::gui::panels {
                 } else {
                     ImGui::Text("%.6f", opt_params.means_lr);
                 }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::LR_POSITION));
+                }
 
                 // SH Coeff LR
                 ImGui::TableNextRow();
@@ -322,6 +325,9 @@ namespace lfs::vis::gui::panels {
                     ImGui::PopItemWidth();
                 } else {
                     ImGui::Text("%.4f", opt_params.shs_lr);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::LR_SH_COEFF));
                 }
 
                 // Opacity LR
@@ -336,6 +342,9 @@ namespace lfs::vis::gui::panels {
                 } else {
                     ImGui::Text("%.4f", opt_params.opacity_lr);
                 }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::LR_OPACITY));
+                }
 
                 // Scaling LR
                 ImGui::TableNextRow();
@@ -349,6 +358,9 @@ namespace lfs::vis::gui::panels {
                 } else {
                     ImGui::Text("%.4f", opt_params.scaling_lr);
                 }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::LR_SCALING));
+                }
 
                 // Rotation LR
                 ImGui::TableNextRow();
@@ -361,6 +373,9 @@ namespace lfs::vis::gui::panels {
                     ImGui::PopItemWidth();
                 } else {
                     ImGui::Text("%.4f", opt_params.rotation_lr);
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::LR_ROTATION));
                 }
 
                 // Refinement section
@@ -498,10 +513,17 @@ namespace lfs::vis::gui::panels {
         }
 
         // Save Steps
-        if (ImGui::TreeNode(LOC(Training::Section::SAVE_STEPS))) {
+        bool save_steps_open = ImGui::TreeNode(LOC(Training::Section::SAVE_STEPS));
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", LOC(Training::Tooltip::SAVE_STEPS));
+        }
+        if (save_steps_open) {
             if (can_edit) {
                 static int new_step = 1000;
                 ImGui::InputInt("##new_step", &new_step, 100, 1000);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::SAVE_STEP_INPUT));
+                }
                 ImGui::SameLine();
                 if (ImGui::Button(LOC(Training::Button::ADD))) {
                     if (new_step > 0 && std::find(opt_params.save_steps.begin(),
@@ -510,6 +532,9 @@ namespace lfs::vis::gui::panels {
                         opt_params.save_steps.push_back(new_step);
                         std::sort(opt_params.save_steps.begin(), opt_params.save_steps.end());
                     }
+                }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::SAVE_STEP_ADD));
                 }
 
                 ImGui::Separator();
@@ -529,6 +554,9 @@ namespace lfs::vis::gui::panels {
                     ImGui::SameLine();
                     if (ImGui::Button(LOC(Training::Button::REMOVE))) {
                         opt_params.save_steps.erase(opt_params.save_steps.begin() + i);
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::SetTooltip("%s", LOC(Training::Tooltip::SAVE_STEP_REMOVE));
                     }
 
                     ImGui::PopID();
@@ -1531,13 +1559,22 @@ namespace lfs::vis::gui::panels {
             if (ColoredButton(label, ButtonStyle::Success, FULL_WIDTH)) {
                 lfs::core::events::cmd::StartTraining{}.emit();
             }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", current_iteration > 0 ? LOC(Training::Tooltip::BTN_RESUME) : LOC(Training::Tooltip::BTN_START));
+            }
             if (current_iteration > 0) {
                 if (ColoredButton(LOC(TrainingPanel::RESET), ButtonStyle::Secondary, FULL_WIDTH)) {
                     lfs::core::events::cmd::ResetTraining{}.emit();
                 }
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("%s", LOC(Training::Tooltip::BTN_RESET));
+                }
             }
             if (ColoredButton(LOC(TrainingPanel::CLEAR), ButtonStyle::Error, FULL_WIDTH)) {
                 lfs::core::events::cmd::ClearScene{}.emit();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::BTN_CLEAR));
             }
             break;
         }
@@ -1546,17 +1583,29 @@ namespace lfs::vis::gui::panels {
             if (ColoredButton(LOC(TrainingPanel::PAUSE), ButtonStyle::Warning, FULL_WIDTH)) {
                 lfs::core::events::cmd::PauseTraining{}.emit();
             }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::BTN_PAUSE));
+            }
             break;
 
         case TrainerManager::State::Paused:
             if (ColoredButton(LOC(TrainingPanel::RESUME), ButtonStyle::Success, FULL_WIDTH)) {
                 lfs::core::events::cmd::ResumeTraining{}.emit();
             }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::BTN_RESUME));
+            }
             if (ColoredButton(LOC(TrainingPanel::RESET), ButtonStyle::Secondary, FULL_WIDTH)) {
                 lfs::core::events::cmd::ResetTraining{}.emit();
             }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::BTN_RESET));
+            }
             if (ColoredButton(LOC(TrainingPanel::STOP), ButtonStyle::Error, FULL_WIDTH)) {
                 lfs::core::events::cmd::StopTraining{}.emit();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::BTN_STOP));
             }
             break;
 
@@ -1590,9 +1639,15 @@ namespace lfs::vis::gui::panels {
             if (ColoredButton(LOC(TrainingPanel::RESET), ButtonStyle::Secondary, FULL_WIDTH)) {
                 lfs::core::events::cmd::ResetTraining{}.emit();
             }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::BTN_RESET));
+            }
 
             if (ColoredButton(LOC(TrainingPanel::CLEAR), ButtonStyle::Error, FULL_WIDTH)) {
                 lfs::core::events::cmd::ClearScene{}.emit();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::BTN_CLEAR));
             }
 
             break;
@@ -1610,6 +1665,9 @@ namespace lfs::vis::gui::panels {
                 lfs::core::events::cmd::SaveCheckpoint{}.emit();
                 state.save_in_progress = true;
                 state.save_start_time = std::chrono::steady_clock::now();
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("%s", LOC(Training::Tooltip::BTN_SAVE_CHECKPOINT));
             }
         }
 

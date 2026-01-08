@@ -269,10 +269,10 @@ namespace lfs::vis::gui::panels {
                 .voxel_size = settings.voxel_size}
                 .emit();
         }
-        ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
             ImGui::SetTooltip("%s", force_point_cloud ? LOC(Tooltip::POINT_CLOUD_FORCED) : LOC(Tooltip::POINT_CLOUD_MODE));
         }
+        ImGui::EndDisabled();
 
         if (settings.point_cloud_mode || force_point_cloud) {
             ImGui::Indent();
@@ -288,7 +288,11 @@ namespace lfs::vis::gui::panels {
 
         // Selection Colors
         ImGui::Separator();
-        if (ImGui::CollapsingHeader(LOC(MainPanel::SELECTION_COLORS))) {
+        bool selection_colors_open = ImGui::CollapsingHeader(LOC(MainPanel::SELECTION_COLORS));
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%s", LOC(Tooltip::SELECTION_COLORS));
+        }
+        if (selection_colors_open) {
             ImGui::Indent();
 
             auto color_edit = [&](const char* label, glm::vec3& color) {
@@ -323,7 +327,7 @@ namespace lfs::vis::gui::panels {
         ImGui::Separator();
 
         float fov = settings.fov;
-        if (widgets::SliderWithReset(LOC(MainPanel::FOV), &fov, 45.0f, 120.0f, 75.0f)) {
+        if (widgets::SliderWithReset(LOC(MainPanel::FOV), &fov, 45.0f, 120.0f, 75.0f, LOC(Tooltip::FOV))) {
             render_manager->setFov(fov);
 
             ui::RenderSettingsChanged{
@@ -333,9 +337,6 @@ namespace lfs::vis::gui::panels {
                 .background_color = std::nullopt,
                 .equirectangular = std::nullopt}
                 .emit();
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", LOC(Tooltip::FOV));
         }
 
         // SH DEGREE selection
@@ -394,12 +395,10 @@ namespace lfs::vis::gui::panels {
 
         // Render Scale (VRAM optimization)
         ImGui::Separator();
-        if (widgets::SliderWithReset(LOC(MainPanel::RENDER_SCALE), &settings.render_scale, 0.25f, 1.0f, 1.0f)) {
+        if (widgets::SliderWithReset(LOC(MainPanel::RENDER_SCALE), &settings.render_scale, 0.25f, 1.0f, 1.0f,
+                                     LOC(Tooltip::RENDER_SCALE))) {
             settings_changed = true;
             render_manager->updateSettings(settings);
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", LOC(Tooltip::RENDER_SCALE));
         }
     }
 

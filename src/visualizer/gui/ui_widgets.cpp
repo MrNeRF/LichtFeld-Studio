@@ -49,10 +49,12 @@ namespace lfs::vis::gui::widgets {
         }
     } // namespace
 
-    bool SliderWithReset(const char* label, float* v, float min, float max, float reset_value) {
+    bool SliderWithReset(const char* label, float* v, float min, float max, float reset_value,
+                         const char* tooltip) {
         ensureIconsLoaded();
 
         bool changed = ImGui::SliderFloat(label, v, min, max);
+        bool slider_hovered = ImGui::IsItemHovered();
 
         ImGui::SameLine();
         ImGui::PushID(label);
@@ -76,14 +78,20 @@ namespace lfs::vis::gui::widgets {
             ImGui::SetTooltip("%s", LOC(lichtfeld::Strings::Common::RESET));
         }
         ImGui::PopID();
+
+        if (tooltip && slider_hovered) {
+            ImGui::SetTooltip("%s", tooltip);
+        }
 
         return changed;
     }
 
-    bool DragFloat3WithReset(const char* label, float* v, float speed, float reset_value) {
+    bool DragFloat3WithReset(const char* label, float* v, float speed, float reset_value,
+                             const char* tooltip) {
         ensureIconsLoaded();
 
         bool changed = ImGui::DragFloat3(label, v, speed);
+        bool drag_hovered = ImGui::IsItemHovered();
 
         ImGui::SameLine();
         ImGui::PushID(label);
@@ -107,6 +115,10 @@ namespace lfs::vis::gui::widgets {
             ImGui::SetTooltip("%s", LOC(lichtfeld::Strings::Common::RESET));
         }
         ImGui::PopID();
+
+        if (tooltip && drag_hovered) {
+            ImGui::SetTooltip("%s", tooltip);
+        }
 
         return changed;
     }

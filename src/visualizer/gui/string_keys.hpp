@@ -39,7 +39,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* GETTING_STARTED = "menu.help.getting_started";
             inline constexpr const char* ABOUT = "menu.help.about";
         } // namespace Help
-    } // namespace Menu
+    }     // namespace Menu
 
     namespace Window {
         inline constexpr const char* GETTING_STARTED = "window.getting_started";
@@ -98,7 +98,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* ENABLED = "about.interop.enabled";
             inline constexpr const char* DISABLED = "about.interop.disabled";
         } // namespace Interop
-    } // namespace About
+    }     // namespace About
 
     namespace Training {
         namespace Section {
@@ -249,6 +249,22 @@ namespace lichtfeld::Strings {
             inline constexpr const char* CPU_CACHE = "training.tooltip.cpu_cache";
             inline constexpr const char* FS_CACHE = "training.tooltip.fs_cache";
             inline constexpr const char* TEST_EVERY = "training.tooltip.test_every";
+            inline constexpr const char* SAVE_STEPS = "training.tooltip.save_steps";
+            inline constexpr const char* LR_POSITION = "training.tooltip.lr_position";
+            inline constexpr const char* LR_SH_COEFF = "training.tooltip.lr_sh_coeff";
+            inline constexpr const char* LR_OPACITY = "training.tooltip.lr_opacity";
+            inline constexpr const char* LR_SCALING = "training.tooltip.lr_scaling";
+            inline constexpr const char* LR_ROTATION = "training.tooltip.lr_rotation";
+            inline constexpr const char* BTN_START = "training.tooltip.btn_start";
+            inline constexpr const char* BTN_RESUME = "training.tooltip.btn_resume";
+            inline constexpr const char* BTN_PAUSE = "training.tooltip.btn_pause";
+            inline constexpr const char* BTN_STOP = "training.tooltip.btn_stop";
+            inline constexpr const char* BTN_RESET = "training.tooltip.btn_reset";
+            inline constexpr const char* BTN_CLEAR = "training.tooltip.btn_clear";
+            inline constexpr const char* BTN_SAVE_CHECKPOINT = "training.tooltip.btn_save_checkpoint";
+            inline constexpr const char* SAVE_STEP_INPUT = "training.tooltip.save_step_input";
+            inline constexpr const char* SAVE_STEP_ADD = "training.tooltip.save_step_add";
+            inline constexpr const char* SAVE_STEP_REMOVE = "training.tooltip.save_step_remove";
         } // namespace Tooltip
 
         namespace Status {
@@ -270,7 +286,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* ADD = "training.button.add";
             inline constexpr const char* REMOVE = "training.button.remove";
         } // namespace Button
-    } // namespace Training
+    }     // namespace Training
 
     namespace Scene {
         inline constexpr const char* ADD_PLY = "scene.add_ply";
@@ -544,6 +560,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* GRID = "tooltip.grid";
         inline constexpr const char* CAMERA_FRUSTUMS = "tooltip.camera_frustums";
         inline constexpr const char* POINT_CLOUD_MODE = "tooltip.point_cloud_mode";
+        inline constexpr const char* SELECTION_COLORS = "tooltip.selection_colors";
     } // namespace Tooltip
 
     namespace ExitPopup {
