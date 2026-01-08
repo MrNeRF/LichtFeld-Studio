@@ -605,6 +605,87 @@ namespace lfs::core {
             printf("\n");
         }
 
+        void print_active_allocations(int limit = 50) {
+            if constexpr (!ENABLE_ALLOCATION_PROFILING) {
+                return;
+            }
+
+            std::lock_guard<std::mutex> lock(mutex_);
+
+            if (active_allocations_.empty()) {
+                printf("\n========== ACTIVE ALLOCATIONS: NONE ==========\n");
+                return;
+            }
+
+            struct ActiveGroup {
+                std::string shape;
+                std::string dtype;
+                std::string origin;
+                size_t count = 0;
+                size_t total_bytes = 0;
+                int oldest_iteration = INT_MAX;
+                int newest_iteration = -1;
+            };
+
+            std::map<std::string, ActiveGroup> groups;
+            size_t total_active_bytes = 0;
+
+            for (const auto& [ptr, meta] : active_allocations_) {
+                std::string key = meta.shape_str() + "|" + meta.dtype + "|" + meta.location;
+                auto& g = groups[key];
+                if (g.count == 0) {
+                    g.shape = meta.shape_str();
+                    g.dtype = meta.dtype;
+                    g.origin = meta.location;
+                }
+                g.count++;
+                g.total_bytes += meta.bytes;
+                total_active_bytes += meta.bytes;
+                if (meta.alloc_iteration >= 0) {
+                    g.oldest_iteration = std::min(g.oldest_iteration, meta.alloc_iteration);
+                    g.newest_iteration = std::max(g.newest_iteration, meta.alloc_iteration);
+                }
+            }
+
+            std::vector<ActiveGroup> sorted;
+            for (const auto& [k, g] : groups)
+                sorted.push_back(g);
+            std::sort(sorted.begin(), sorted.end(),
+                      [](const auto& a, const auto& b) { return a.total_bytes > b.total_bytes; });
+
+            printf("\n========== ACTIVE ALLOCATIONS (TOP %d) ==========\n", limit);
+            printf("Total active: %zu allocations, %.2f GB\n\n",
+                   active_allocations_.size(), total_active_bytes / (1024.0 * 1024.0 * 1024.0));
+
+            printf("%-25s | %-10s | %10s | %6s | %8s | %s\n",
+                   "Shape", "DType", "Size (MB)", "Count", "Iter Age", "Origin");
+            printf("%s\n", std::string(130, '-').c_str());
+
+            int current_iter = current_iteration_.load();
+            int count = 0;
+            for (const auto& g : sorted) {
+                if (count++ >= limit)
+                    break;
+                double mb = g.total_bytes / (1024.0 * 1024.0);
+                int age = (g.oldest_iteration >= 0 && g.oldest_iteration != INT_MAX && current_iter > 0)
+                              ? current_iter - g.oldest_iteration
+                              : -1;
+
+                std::string short_origin = g.origin;
+                size_t arrow_pos = short_origin.find(" <- ");
+                if (arrow_pos != std::string::npos) {
+                    short_origin = short_origin.substr(0, arrow_pos);
+                }
+                if (short_origin.length() > 50) {
+                    short_origin = short_origin.substr(0, 47) + "...";
+                }
+
+                printf("%-25s | %-10s | %10.2f | %6zu | %8d | %s\n",
+                       g.shape.c_str(), g.dtype.c_str(), mb, g.count, age, short_origin.c_str());
+            }
+            printf("\n");
+        }
+
         void reset() {
             std::lock_guard<std::mutex> lock(mutex_);
             sites_.clear();

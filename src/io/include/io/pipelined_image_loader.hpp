@@ -94,6 +94,13 @@ namespace lfs::io {
             size_t masks_loaded = 0;
             size_t mask_cache_hits = 0;
             size_t mask_cache_misses = 0;
+            // Pending pairs (for leak detection)
+            size_t pending_pairs_count = 0;
+            // Queue sizes (for monitoring pipeline state)
+            size_t prefetch_queue_size = 0;
+            size_t hot_queue_size = 0;
+            size_t cold_queue_size = 0;
+            size_t output_queue_size = 0;
         };
 
         explicit PipelinedImageLoader(PipelinedLoaderConfig config = {});

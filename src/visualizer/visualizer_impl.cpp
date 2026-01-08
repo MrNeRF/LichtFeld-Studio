@@ -421,8 +421,8 @@ namespace lfs::vis {
             // Dirty or active input (WASD/orbit/pan): poll for smooth interaction
             window_manager_->pollEvents();
         } else if (is_training) {
-            // Training: short wait for UI responsiveness
-            constexpr double TRAINING_WAIT_SEC = 0.016; // ~60 Hz
+            // Training: longer wait to reduce GPU load and memory fragmentation
+            constexpr double TRAINING_WAIT_SEC = 0.1; // ~10 Hz
             window_manager_->waitEvents(TRAINING_WAIT_SEC);
         } else {
             // Idle: long wait to minimize CPU usage (VSync still applies on wake)

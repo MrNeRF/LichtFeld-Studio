@@ -352,8 +352,8 @@ namespace lfs::rendering {
             const bool fbo_changed = fbo_interop_last_width_ != persistent_fbo_width_ ||
                                      fbo_interop_last_height_ != persistent_fbo_height_;
             const bool dims_mismatch = fbo_interop_texture_ &&
-                                       (fbo_interop_texture_->getWidth() != width ||
-                                        fbo_interop_texture_->getHeight() != height);
+                                       (fbo_interop_texture_->getWidth() != persistent_fbo_width_ ||
+                                        fbo_interop_texture_->getHeight() != persistent_fbo_height_);
             const bool should_init = persistent_color_texture_ != 0 &&
                                      (!fbo_interop_texture_ || fbo_changed || dims_mismatch);
 
@@ -361,7 +361,7 @@ namespace lfs::rendering {
                 fbo_interop_texture_.reset();
                 fbo_interop_texture_.emplace();
                 if (auto init_result = fbo_interop_texture_->initForReading(
-                        persistent_color_texture_, width, height);
+                        persistent_color_texture_, persistent_fbo_width_, persistent_fbo_height_);
                     !init_result) {
                     LOG_TRACE("FBO interop init failed: {}", init_result.error());
                     fbo_interop_texture_.reset();
@@ -545,8 +545,8 @@ namespace lfs::rendering {
             const bool fbo_changed = fbo_interop_last_width_ != persistent_fbo_width_ ||
                                      fbo_interop_last_height_ != persistent_fbo_height_;
             const bool dims_mismatch = fbo_interop_texture_ &&
-                                       (fbo_interop_texture_->getWidth() != width ||
-                                        fbo_interop_texture_->getHeight() != height);
+                                       (fbo_interop_texture_->getWidth() != persistent_fbo_width_ ||
+                                        fbo_interop_texture_->getHeight() != persistent_fbo_height_);
             const bool should_init = persistent_color_texture_ != 0 &&
                                      (!fbo_interop_texture_ || fbo_changed || dims_mismatch);
 
@@ -554,7 +554,7 @@ namespace lfs::rendering {
                 fbo_interop_texture_.reset();
                 fbo_interop_texture_.emplace();
                 if (auto init_result = fbo_interop_texture_->initForReading(
-                        persistent_color_texture_, width, height);
+                        persistent_color_texture_, persistent_fbo_width_, persistent_fbo_height_);
                     !init_result) {
                     LOG_TRACE("FBO interop init failed: {}", init_result.error());
                     fbo_interop_texture_.reset();

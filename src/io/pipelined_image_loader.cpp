@@ -213,6 +213,10 @@ namespace lfs::io {
         hot_queue_.clear();
         cold_queue_.clear();
         output_queue_.clear();
+        {
+            std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
+            pending_pairs_.clear();
+        }
         in_flight_ = 0;
     }
 
@@ -221,6 +225,14 @@ namespace lfs::io {
         CacheStats s = stats_;
         s.jpeg_cache_entries = jpeg_cache_.size();
         s.jpeg_cache_bytes = jpeg_cache_bytes_.load();
+        {
+            std::lock_guard<std::mutex> pairs_lock(pending_pairs_mutex_);
+            s.pending_pairs_count = pending_pairs_.size();
+        }
+        s.prefetch_queue_size = prefetch_queue_.size();
+        s.hot_queue_size = hot_queue_.size();
+        s.cold_queue_size = cold_queue_.size();
+        s.output_queue_size = output_queue_.size();
         return s;
     }
 
@@ -373,12 +385,23 @@ namespace lfs::io {
     }
 
     void PipelinedImageLoader::prefetch_thread_func() {
+        static std::atomic<size_t> prefetch_count{0};
+
         while (running_) {
             ImageRequest request;
             try {
                 request = prefetch_queue_.pop();
             } catch (const std::runtime_error&) {
                 break;
+            }
+
+            if (++prefetch_count % 500 == 0) {
+                std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
+                LOG_INFO("[ImageLoader] prefetch={} in_flight={} pending_pairs={} "
+                         "prefetch_q={} hot_q={} cold_q={} output_q={}",
+                         prefetch_count.load(), in_flight_.load(), pending_pairs_.size(),
+                         prefetch_queue_.size(), hot_queue_.size(),
+                         cold_queue_.size(), output_queue_.size());
             }
 
             {
@@ -466,7 +489,13 @@ namespace lfs::io {
                 }
             } catch (const std::exception& e) {
                 LOG_ERROR("[PipelinedImageLoader] Prefetch error {}: {}", lfs::core::path_to_utf8(request.path), e.what());
+                // Clean up pending_pairs_ entry to prevent memory leak
+                {
+                    std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
+                    pending_pairs_.erase(request.sequence_id);
+                }
                 in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+                continue; // Skip mask processing if image failed
             }
 
             if (request.mask_path) {
@@ -530,10 +559,16 @@ namespace lfs::io {
                 } catch (const std::exception& e) {
                     LOG_WARN("[PipelinedImageLoader] Mask prefetch error {}: {} - continuing without mask",
                              lfs::core::path_to_utf8(*request.mask_path), e.what());
-                    // Mark mask as no longer expected so image can still be delivered
                     std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
                     if (auto it = pending_pairs_.find(request.sequence_id); it != pending_pairs_.end()) {
                         it->second.mask_expected = false;
+                        if (it->second.image.has_value()) {
+                            output_queue_.push({request.sequence_id,
+                                                std::move(*it->second.image),
+                                                std::nullopt,
+                                                it->second.stream});
+                            pending_pairs_.erase(it);
+                        }
                     }
                 }
             }
@@ -623,7 +658,21 @@ namespace lfs::io {
                             try {
                                 item.raw_bytes = read_file(item.path);
                             } catch (...) {
-                                in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+                                // Clean up pending_pairs_ to prevent memory leak
+                                std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
+                                if (item.is_mask) {
+                                    if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
+                                        it->second.mask_expected = false;
+                                        if (it->second.image.has_value()) {
+                                            output_queue_.push({item.sequence_id, std::move(*it->second.image),
+                                                                std::nullopt, it->second.stream});
+                                            pending_pairs_.erase(it);
+                                        }
+                                    }
+                                } else {
+                                    pending_pairs_.erase(item.sequence_id);
+                                    in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+                                }
                                 continue;
                             }
                         }
@@ -644,7 +693,21 @@ namespace lfs::io {
                         try {
                             item.raw_bytes = read_file(item.path);
                         } catch (...) {
-                            in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+                            // Clean up pending_pairs_ to prevent memory leak
+                            std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
+                            if (item.is_mask) {
+                                if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
+                                    it->second.mask_expected = false;
+                                    if (it->second.image.has_value()) {
+                                        output_queue_.push({item.sequence_id, std::move(*it->second.image),
+                                                            std::nullopt, it->second.stream});
+                                        pending_pairs_.erase(it);
+                                    }
+                                }
+                            } else {
+                                pending_pairs_.erase(item.sequence_id);
+                                in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+                            }
                             continue;
                         }
                     }
@@ -825,6 +888,11 @@ namespace lfs::io {
                 } else {
                     LOG_ERROR("[PipelinedImageLoader] Cold process error {}: {}",
                               lfs::core::path_to_utf8(item.path), e.what());
+                    // Clean up pending_pairs_ to prevent memory leak
+                    {
+                        std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
+                        pending_pairs_.erase(item.sequence_id);
+                    }
                     in_flight_.fetch_sub(1, std::memory_order_acq_rel);
                 }
             }

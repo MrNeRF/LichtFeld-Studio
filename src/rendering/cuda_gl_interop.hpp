@@ -90,6 +90,11 @@ namespace lfs::rendering {
         bool is_depth_format_ = false;  // True if R32F, false if RGBA8
         bool external_texture_ = false; // True if texture is externally owned (don't delete)
 
+        // Cached tensors for format conversion (avoid per-frame allocations)
+        mutable Tensor cached_alpha_;
+        mutable Tensor cached_rgba_;
+        mutable Tensor cached_uint8_;
+
     public:
         CudaGLInteropTextureImpl();
         ~CudaGLInteropTextureImpl();

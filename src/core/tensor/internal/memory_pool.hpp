@@ -388,6 +388,8 @@ namespace lfs::core {
             if (++log_counter % 2000 == 0) {
                 if constexpr (ENABLE_ALLOCATION_PROFILING) {
                     AllocationProfiler::instance().print_top_allocators(30);
+                    AllocationProfiler::instance().print_active_allocations(30);
+                    AllocationProfiler::instance().print_tensor_allocations(30);
                 }
 
 #if CUDART_VERSION >= 12080

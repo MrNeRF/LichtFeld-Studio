@@ -531,7 +531,7 @@ namespace lfs::vis {
     }
 
     std::vector<glm::mat4> Scene::getVisibleNodeTransforms() const {
-        rebuildCacheIfNeeded();
+        rebuildTransformCacheIfNeeded();
         return cached_transforms_;
     }
 
@@ -1680,8 +1680,16 @@ namespace lfs::vis {
     lfs::core::SplatData* Scene::getTrainingModel() {
         if (training_model_node_.empty())
             return nullptr;
-        auto* node = getMutableNode(training_model_node_);
-        if (!node || !isNodeEffectivelyVisible(node->id))
+        // Direct lookup without cache invalidation - training model access
+        // shouldn't trigger visualization cache rebuild
+        auto it = std::find_if(nodes_.begin(), nodes_.end(),
+                               [this](const std::unique_ptr<Node>& node) {
+                                   return node->name == training_model_node_;
+                               });
+        if (it == nodes_.end())
+            return nullptr;
+        Node* node = it->get();
+        if (!isNodeEffectivelyVisible(node->id))
             return nullptr;
         return node->model.get();
     }

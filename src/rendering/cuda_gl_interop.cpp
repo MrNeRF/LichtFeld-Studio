@@ -486,24 +486,44 @@ namespace lfs::rendering {
                                                cudaGetErrorString(err)));
         }
 
-        // Convert to RGBA uint8 if needed
-        Tensor rgba_image;
-        if (c == 3) {
-            LOG_TIMER_TRACE("CudaGLInteropTextureImpl<true>::channels");
-            // Add alpha channel
-            rgba_image = Tensor::cat({image, Tensor::ones({static_cast<size_t>(h), static_cast<size_t>(w), 1},
-                                                          image.device(), image.dtype())},
-                                     2);
-            LOG_TRACE("Added alpha channel to image");
-        } else {
-            rgba_image = image;
+        // Convert to RGBA uint8 using cached tensors to avoid per-frame allocations
+        const bool need_alpha = (c == 3);
+        const size_t sh = static_cast<size_t>(h);
+        const size_t sw = static_cast<size_t>(w);
+
+        // Ensure cached RGBA buffer has correct size
+        if (!cached_rgba_.is_valid() ||
+            cached_rgba_.size(0) != sh ||
+            cached_rgba_.size(1) != sw ||
+            cached_rgba_.device() != image.device()) {
+            cached_rgba_ = Tensor::empty({sh, sw, 4}, image.device(), image.dtype());
         }
 
-        // Ensure proper format (uint8)
-        if (rgba_image.dtype() != lfs::core::DataType::UInt8) {
-            LOG_TIMER_TRACE("Converted image to uint8");
-            rgba_image = (rgba_image.clamp(0.0f, 1.0f) * 255.0f).to(lfs::core::DataType::UInt8);
+        // Ensure cached uint8 buffer has correct size
+        if (!cached_uint8_.is_valid() ||
+            cached_uint8_.size(0) != sh ||
+            cached_uint8_.size(1) != sw) {
+            cached_uint8_ = Tensor::empty({sh, sw, 4}, image.device(), lfs::core::DataType::UInt8);
         }
+
+        // Build RGBA: copy RGB channels and set alpha
+        if (need_alpha) {
+            LOG_TIMER_TRACE("CudaGLInteropTextureImpl<true>::channels");
+            // Copy RGB into first 3 channels of cached RGBA
+            cached_rgba_.slice(2, 0, 3).copy_(image);
+            // Set alpha channel to 1.0
+            cached_rgba_.slice(2, 3, 4).fill_(1.0f);
+        } else {
+            cached_rgba_.copy_(image);
+        }
+
+        // Convert to uint8: clamp, scale, and convert in-place to cached buffer
+        if (cached_rgba_.dtype() != lfs::core::DataType::UInt8) {
+            LOG_TIMER_TRACE("Converted image to uint8");
+            cached_uint8_.copy_((cached_rgba_.clamp(0.0f, 1.0f) * 255.0f).to(lfs::core::DataType::UInt8));
+        }
+
+        const Tensor& rgba_image = cached_uint8_;
 
         // Copy to CUDA array
         err = cudaMemcpy2DToArray(
