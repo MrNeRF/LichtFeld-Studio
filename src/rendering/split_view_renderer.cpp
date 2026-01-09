@@ -420,14 +420,37 @@ namespace lfs::rendering {
             return r;
         }
 
-        split_shader_.set("splitPosition", split_position);
-        split_shader_.set("showDivider", true);
-        split_shader_.set("dividerColor", divider_color);
-        split_shader_.set("dividerWidth", DIVIDER_WIDTH_PX / static_cast<float>(viewport_width));
-        split_shader_.set("leftTexcoordScale", left_texcoord_scale);
-        split_shader_.set("rightTexcoordScale", right_texcoord_scale);
-        split_shader_.set("flipLeftY", flip_left_y);
-        split_shader_.set("flipRightY", flip_right_y);
+        if (auto result = split_shader_.set("splitPosition", split_position); !result) {
+            LOG_TRACE("Uniform 'splitPosition' not found in shader: {}", result.error());
+        }
+        
+        if (auto result = split_shader_.set("showDivider", true); !result) {
+            LOG_TRACE("Uniform 'showDivider' not found in shader: {}", result.error());
+        }
+
+        if (auto result = split_shader_.set("dividerColor", divider_color); !result) {
+            LOG_TRACE("Uniform 'dividerColor' not found in shader: {}", result.error());
+        }
+        
+        if (auto result = split_shader_.set("dividerWidth", DIVIDER_WIDTH_PX / static_cast<float>(viewport_width)); !result) {
+            LOG_TRACE("Uniform 'dividerWidth' not found in shader: {}", result.error());
+        }
+        
+        if (auto result = split_shader_.set("leftTexcoordScale", left_texcoord_scale); !result) {
+            LOG_TRACE("Uniform 'leftTexcoordScale' not found in shader: {}", result.error());
+        }
+        
+        if (auto result = split_shader_.set("rightTexcoordScale", right_texcoord_scale); !result) {
+            LOG_TRACE("Uniform 'rightTexcoordScale' not found in shader: {}", result.error());
+        }
+        
+        if (auto result = split_shader_.set("flipLeftY", flip_left_y); !result) {
+            LOG_TRACE("Uniform 'flipLeftY' not found in shader: {}", result.error());
+        }
+        
+        if (auto result = split_shader_.set("flipRightY", flip_right_y); !result) {
+            LOG_TRACE("Uniform 'flipRightY' not found in shader: {}", result.error());
+        }        
 
         GLint viewport[4];
         glGetIntegerv(GL_VIEWPORT, viewport);

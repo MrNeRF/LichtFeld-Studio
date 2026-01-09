@@ -1085,7 +1085,7 @@ namespace lfs::io {
         auto scales = splat_data.scaling_raw().cpu();
         const auto* scales_ptr = scales.ptr<float>();
 
-        auto scale_result = cluster1d(scales_ptr, num_rows, 3, options.kmeans_iterations);
+        auto scale_result = cluster1d(scales_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations);
 
         std::vector<uint8_t> scales_data(width * height * CHANNELS, 0);
         for (int64_t i = 0; i < num_rows; ++i) {
@@ -1109,7 +1109,7 @@ namespace lfs::io {
         auto sh0 = splat_data.sh0_raw().cpu();
         const auto* sh0_ptr = sh0.ptr<float>();
 
-        auto color_result = cluster1d(sh0_ptr, num_rows, 3, options.kmeans_iterations);
+        auto color_result = cluster1d(sh0_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations);
 
         auto opacity = splat_data.opacity_raw().cpu();
         const auto* opacity_ptr = opacity.ptr<float>();
@@ -1164,7 +1164,7 @@ namespace lfs::io {
 
             auto sh_centroids_cpu = sh_centroids.cpu();
             const auto* sh_centroids_ptr = static_cast<const float*>(sh_centroids_cpu.data_ptr());
-            const int actual_palette_size = sh_centroids.size(0);
+            const int actual_palette_size = static_cast<int>(sh_centroids.size(0));
 
             auto codebook_result = cluster1d(sh_centroids_ptr, actual_palette_size, sh_dims, options.kmeans_iterations);
 

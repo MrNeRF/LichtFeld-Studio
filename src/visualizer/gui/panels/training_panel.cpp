@@ -1065,7 +1065,6 @@ namespace lfs::vis::gui::panels {
                     const int prev = opt_params.sparsify_steps;
                     if (ImGui::InputInt("##sparsify_steps", &opt_params.sparsify_steps, 1000, 5000)) {
                         opt_params.sparsify_steps = std::max(1, opt_params.sparsify_steps);
-                        const int delta = opt_params.sparsify_steps - prev;
                     }
                     ImGui::PopItemWidth();
                 } else {

@@ -118,8 +118,9 @@ namespace lfs::rendering {
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, getDepthTextureID());
 
-        auto result = shader.set("depthTexture", 1); // optional uniform
-        (void)result; // Explicitly ignore result
+        if (auto result = shader.set("depthTexture", 1); !result) {
+            LOG_TRACE("Uniform 'depthTexture' not set: {}", result.error());
+        }
 
         if (auto result = shader.set("has_depth", depth_params_.has_depth); !result) {
             LOG_TRACE("Uniform 'has_depth' not set: {}", result.error());

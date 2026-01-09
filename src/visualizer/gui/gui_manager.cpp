@@ -1028,7 +1028,7 @@ namespace lfs::vis::gui {
                     engine->setViewportGizmoHover(hovered_axis);
 
                     if (!ImGui::GetIO().WantCaptureMouse) {
-                        const glm::vec2 mouse_pos(mouse.x, mouse.y);
+                        const glm::vec2 capture_mouse_pos(mouse.x, mouse.y);
                         const float time = static_cast<float>(ImGui::GetTime());
 
                         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mouse_in_gizmo) {
@@ -1054,7 +1054,7 @@ namespace lfs::vis::gui {
                             } else {
                                 // Drag to orbit
                                 viewport_gizmo_dragging_ = true;
-                                viewport.camera.startRotateAroundCenter(mouse_pos, time);
+                                viewport.camera.startRotateAroundCenter(capture_mouse_pos, time);
                                 if (GLFWwindow* const window = glfwGetCurrentContext()) {
                                     glfwGetCursorPos(window, &gizmo_drag_start_cursor_.x, &gizmo_drag_start_cursor_.y);
                                     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -1064,7 +1064,7 @@ namespace lfs::vis::gui {
 
                         if (viewport_gizmo_dragging_) {
                             if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                                viewport.camera.updateRotateAroundCenter(mouse_pos, time);
+                                viewport.camera.updateRotateAroundCenter(capture_mouse_pos, time);
                                 rendering_manager->markDirty();
                             } else {
                                 viewport.camera.endRotateAroundCenter();
@@ -1079,7 +1079,9 @@ namespace lfs::vis::gui {
                         }
                     }
 
-                    (void)engine->renderViewportGizmo(viewport.getRotationMatrix(), vp_pos, vp_size);
+                    if (auto result = engine->renderViewportGizmo(viewport.getRotationMatrix(), vp_pos, vp_size); !result) {
+                        LOG_WARN("Failed to render viewport gizmo: {}", result.error());
+                    }
 
                     // Drag feedback overlay
                     if (viewport_gizmo_dragging_) {
