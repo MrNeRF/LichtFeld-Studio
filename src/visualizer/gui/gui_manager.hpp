@@ -270,8 +270,10 @@ namespace lfs::vis {
 
             // Startup overlay state
             bool show_startup_overlay_ = true;
-            unsigned int startup_logo_texture_ = 0;
-            unsigned int startup_core11_texture_ = 0;
+            unsigned int startup_logo_light_texture_ = 0;
+            unsigned int startup_logo_dark_texture_ = 0;
+            unsigned int startup_core11_light_texture_ = 0;
+            unsigned int startup_core11_dark_texture_ = 0;
             int startup_logo_width_ = 0, startup_logo_height_ = 0;
             int startup_core11_width_ = 0, startup_core11_height_ = 0;
             void startAsyncExport(lfs::core::ExportFormat format,

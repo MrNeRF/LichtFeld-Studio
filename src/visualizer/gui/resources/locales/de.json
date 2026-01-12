@@ -143,6 +143,7 @@
     "tooltip.penalty_weight": "Gewicht für Opazitätsstrafe in Hintergrundbereichen",
     "tooltip.penalty_power": "Strafabfall: 1=linear, 2=quadratisch, >2=sanfter",
     "tooltip.mask_threshold": "Werte >= Schwellenwert werden 1.0 (Objekt)",
+    "tooltip.mask_mode": "Verwendung von Aufmerksamkeitsmasken: segmentieren, Hintergrund ignorieren oder alpha-konsistent",
     "tooltip.mip_filter": "Anti-Aliasing Filter für Training (Mip-Splatting)",
     "tooltip.keep_model": "Trainiertes Modell behalten, Datensatz verwerfen",
     "tooltip.strategy": "Densifikationsstrategie (default/mcmc)",

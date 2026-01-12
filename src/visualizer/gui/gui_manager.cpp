@@ -487,9 +487,13 @@ namespace lfs::vis::gui {
             }
         };
         loadOverlayTexture(lfs::vis::getAssetPath("lichtfeld-splash-logo.png"),
-                           startup_logo_texture_, startup_logo_width_, startup_logo_height_);
+                           startup_logo_light_texture_, startup_logo_width_, startup_logo_height_);
+        loadOverlayTexture(lfs::vis::getAssetPath("lichtfeld-splash-logo-dark.png"),
+                           startup_logo_dark_texture_, startup_logo_width_, startup_logo_height_);
         loadOverlayTexture(lfs::vis::getAssetPath("core11-logo.png"),
-                           startup_core11_texture_, startup_core11_width_, startup_core11_height_);
+                           startup_core11_light_texture_, startup_core11_width_, startup_core11_height_);
+        loadOverlayTexture(lfs::vis::getAssetPath("core11-logo-dark.png"),
+                           startup_core11_dark_texture_, startup_core11_width_, startup_core11_height_);
 
         if (!drag_drop_.init(viewer_->getWindow())) {
             LOG_WARN("Native drag-drop initialization failed, falling back to GLFW");
@@ -508,10 +512,14 @@ namespace lfs::vis::gui {
         drag_drop_.shutdown();
         panels::ShutdownGizmoToolbar(gizmo_toolbar_state_);
 
-        if (startup_logo_texture_)
-            glDeleteTextures(1, &startup_logo_texture_);
-        if (startup_core11_texture_)
-            glDeleteTextures(1, &startup_core11_texture_);
+        if (startup_logo_light_texture_)
+            glDeleteTextures(1, &startup_logo_light_texture_);
+        if (startup_logo_dark_texture_)
+            glDeleteTextures(1, &startup_logo_dark_texture_);
+        if (startup_core11_light_texture_)
+            glDeleteTextures(1, &startup_core11_light_texture_);
+        if (startup_core11_dark_texture_)
+            glDeleteTextures(1, &startup_core11_dark_texture_);
 
         if (ImGui::GetCurrentContext()) {
             ImGui_ImplOpenGL3_Shutdown();
@@ -1087,7 +1095,7 @@ namespace lfs::vis::gui {
                         constexpr float OVERLAY_RADIUS = VIEWPORT_GIZMO_SIZE * 0.46f; // Match gizmo content + 2px
                         ImGui::GetBackgroundDrawList()->AddCircleFilled(
                             ImVec2(center_x, center_y), OVERLAY_RADIUS,
-                            IM_COL32(180, 180, 180, 51), 32);
+                            toU32WithAlpha(theme().overlay.text_dim, 0.2f), 32);
                     }
                 }
             }
@@ -2060,8 +2068,9 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::applyDefaultStyle() {
-        // Initialize theme system and apply to ImGui
-        setTheme(darkTheme());
+        // Initialize theme system using saved preference
+        const bool is_dark = loadThemePreference();
+        setTheme(is_dark ? darkTheme() : lightTheme());
     }
 
     void GuiManager::showWindow(const std::string& name, bool show) {
@@ -2985,11 +2994,12 @@ namespace lfs::vis::gui {
         constexpr float BORDER_THICKNESS = 2.0f;
         constexpr float ICON_SIZE = 48.0f;
         constexpr float ANIM_SPEED = 30.0f;
-        constexpr ImU32 BORDER_COLOR = IM_COL32(100, 140, 180, 80);
-        constexpr ImU32 ICON_COLOR = IM_COL32(120, 160, 200, 120);
-        constexpr ImU32 TITLE_COLOR = IM_COL32(180, 200, 220, 200);
-        constexpr ImU32 SUBTITLE_COLOR = IM_COL32(140, 160, 180, 150);
-        constexpr ImU32 HINT_COLOR = IM_COL32(100, 120, 140, 120);
+        const auto& t = theme();
+        const ImU32 BORDER_COLOR = t.overlay_border_u32();
+        const ImU32 ICON_COLOR = t.overlay_icon_u32();
+        const ImU32 TITLE_COLOR = t.overlay_text_u32();
+        const ImU32 SUBTITLE_COLOR = t.overlay_hint_u32();
+        const ImU32 HINT_COLOR = toU32WithAlpha(t.overlay.text_dim, 0.5f);
 
         ImDrawList* const draw_list = ImGui::GetBackgroundDrawList();
         const float center_x = viewport_pos_.x + viewport_size_.x * 0.5f;
@@ -3082,11 +3092,12 @@ namespace lfs::vis::gui {
         constexpr float PULSE_SPEED = 3.0f;
         constexpr float BOUNCE_SPEED = 4.0f;
         constexpr float BOUNCE_AMOUNT = 5.0f;
-        constexpr ImU32 OVERLAY_COLOR = IM_COL32(20, 60, 100, 180);
-        constexpr ImU32 FILL_COLOR = IM_COL32(30, 80, 140, 60);
-        constexpr ImU32 ICON_COLOR = IM_COL32(255, 255, 255, 230);
-        constexpr ImU32 TITLE_COLOR = IM_COL32(255, 255, 255, 255);
-        constexpr ImU32 SUBTITLE_COLOR = IM_COL32(200, 220, 240, 200);
+        const auto& t = theme();
+        const ImU32 OVERLAY_COLOR = toU32WithAlpha(t.palette.primary_dim, 0.7f);
+        const ImU32 FILL_COLOR = toU32WithAlpha(t.palette.primary, 0.23f);
+        const ImU32 ICON_COLOR = t.overlay_text_u32();
+        const ImU32 TITLE_COLOR = t.overlay_text_u32();
+        const ImU32 SUBTITLE_COLOR = t.overlay_hint_u32();
 
         const ImGuiViewport* const vp = ImGui::GetMainViewport();
         ImDrawList* const draw_list = ImGui::GetForegroundDrawList();
@@ -3102,14 +3113,14 @@ namespace lfs::vis::gui {
         draw_list->AddRectFilled(vp->WorkPos, win_max, OVERLAY_COLOR);
 
         // Glow effect
-        const ImU32 glow_color = IM_COL32(80, 160, 255, static_cast<uint8_t>(40.0f * pulse));
+        const ImU32 glow_color = toU32WithAlpha(t.palette.primary, 0.16f * pulse);
         for (float i = GLOW_MAX; i > 0.0f; i -= 2.0f) {
             draw_list->AddRect({zone_min.x - i, zone_min.y - i}, {zone_max.x + i, zone_max.y + i},
                                glow_color, CORNER_RADIUS + i, 0, 2.0f);
         }
 
-        const uint8_t border_alpha = static_cast<uint8_t>(180.0f + 75.0f * pulse);
-        draw_list->AddRect(zone_min, zone_max, IM_COL32(100, 180, 255, border_alpha), CORNER_RADIUS, 0, 3.0f);
+        const float border_alpha = 0.7f + 0.3f * pulse;
+        draw_list->AddRect(zone_min, zone_max, toU32WithAlpha(t.palette.primary, border_alpha), CORNER_RADIUS, 0, 3.0f);
         draw_list->AddRectFilled(zone_min, zone_max, FILL_COLOR, CORNER_RADIUS);
 
         // Animated arrow
@@ -3167,10 +3178,11 @@ namespace lfs::vis::gui {
         static constexpr float GAP_LANG_HINT = 12.0f;
         static constexpr float LANG_COMBO_WIDTH = 140.0f;
 
-        // Theme colors
         const auto& t = theme();
+        const bool is_dark_theme = (t.name == "Dark");
+        const unsigned int logo_texture = is_dark_theme ? startup_logo_light_texture_ : startup_logo_dark_texture_;
+        const unsigned int core11_texture = is_dark_theme ? startup_core11_light_texture_ : startup_core11_dark_texture_;
 
-        // Logo dimensions
         const float main_logo_w = static_cast<float>(startup_logo_width_) * MAIN_LOGO_SCALE;
         const float main_logo_h = static_cast<float>(startup_logo_height_) * MAIN_LOGO_SCALE;
         const float core11_w = static_cast<float>(startup_core11_width_) * CORE11_LOGO_SCALE;
@@ -3232,9 +3244,9 @@ namespace lfs::vis::gui {
             float y = window_pos.y + PADDING_Y;
 
             // Main logo
-            if (startup_logo_texture_ && startup_logo_width_ > 0) {
+            if (logo_texture && startup_logo_width_ > 0) {
                 const float x = window_center_x - main_logo_w * 0.5f;
-                draw_list->AddImage(static_cast<ImTextureID>(startup_logo_texture_),
+                draw_list->AddImage(static_cast<ImTextureID>(logo_texture),
                                     {x, y}, {x + main_logo_w, y + main_logo_h});
                 y += main_logo_h + GAP_LOGO_TEXT;
             }
@@ -3247,9 +3259,9 @@ namespace lfs::vis::gui {
             y += supported_size.y + GAP_TEXT_CORE11;
 
             // Core11 logo
-            if (startup_core11_texture_ && startup_core11_width_ > 0) {
+            if (core11_texture && startup_core11_width_ > 0) {
                 const float x = window_center_x - core11_w * 0.5f;
-                draw_list->AddImage(static_cast<ImTextureID>(startup_core11_texture_),
+                draw_list->AddImage(static_cast<ImTextureID>(core11_texture),
                                     {x, y}, {x + core11_w, y + core11_h});
                 y += core11_h + GAP_CORE11_HINT;
             }

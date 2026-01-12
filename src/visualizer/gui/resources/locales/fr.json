@@ -143,6 +143,7 @@
     "tooltip.penalty_weight": "Poids de pénalité d'opacité dans les zones d'arrière-plan",
     "tooltip.penalty_power": "Décroissance de pénalité : 1=linéaire, 2=quadratique, >2=plus douce",
     "tooltip.mask_threshold": "Les valeurs >= seuil deviennent 1.0 (objet)",
+    "tooltip.mask_mode": "Utilisation des masques d'attention : segmenter, ignorer l'arrière-plan ou alpha-consistent",
     "tooltip.mip_filter": "Filtre anti-aliasing pour l'entraînement (mip-splatting)",
     "tooltip.keep_model": "Conserver le modèle entraîné, supprimer le dataset",
     "tooltip.strategy": "Stratégie de densification (default/mcmc)",

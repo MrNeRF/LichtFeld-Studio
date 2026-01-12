@@ -143,6 +143,7 @@
     "tooltip.penalty_weight": "배경 영역의 불투명도 페널티 가중치",
     "tooltip.penalty_power": "페널티 감소: 1=선형, 2=이차, >2=완만",
     "tooltip.mask_threshold": "임계값 이상의 값은 1.0(객체)이 됨",
+    "tooltip.mask_mode": "어텐션 마스크 사용 방법: 세그먼트, 배경 무시 또는 알파 일관성",
     "tooltip.mip_filter": "학습을 위한 안티앨리어싱 필터 (밉 스플래팅)",
     "tooltip.keep_model": "학습된 모델 유지, 데이터셋 폐기",
     "tooltip.strategy": "밀도화 전략 (default/mcmc)",

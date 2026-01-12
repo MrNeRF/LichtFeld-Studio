@@ -19,6 +19,9 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <thread>
 
 namespace lfs::app {
@@ -36,9 +39,48 @@ namespace lfs::app {
         constexpr float SPINNER_G = 0.7f;
         constexpr float SPINNER_B = 1.0f;
 
-        constexpr float BG_R = 0.11f;
-        constexpr float BG_G = 0.11f;
-        constexpr float BG_B = 0.14f;
+        constexpr float BG_DARK_R = 0.11f;
+        constexpr float BG_DARK_G = 0.11f;
+        constexpr float BG_DARK_B = 0.14f;
+        constexpr float BG_LIGHT_R = 0.92f;
+        constexpr float BG_LIGHT_G = 0.92f;
+        constexpr float BG_LIGHT_B = 0.94f;
+
+        bool loadThemePreference() {
+            try {
+                std::filesystem::path config_dir;
+#ifdef _WIN32
+                const char* path = std::getenv("APPDATA");
+                if (path) {
+                    config_dir = std::filesystem::path(path) / "LichtFeldStudio";
+                } else {
+                    return true;
+                }
+#else
+                const char* xdg = std::getenv("XDG_CONFIG_HOME");
+                if (xdg) {
+                    config_dir = std::filesystem::path(xdg) / "LichtFeldStudio";
+                } else {
+                    const char* home = std::getenv("HOME");
+                    if (home) {
+                        config_dir = std::filesystem::path(home) / ".config" / "LichtFeldStudio";
+                    } else {
+                        return true;
+                    }
+                }
+#endif
+                const auto pref_path = config_dir / "theme_preference";
+                if (std::filesystem::exists(pref_path)) {
+                    std::ifstream file(pref_path);
+                    std::string pref;
+                    if (file >> pref) {
+                        return pref != "light";
+                    }
+                }
+            } catch (...) {
+            }
+            return true;
+        }
 
         constexpr float LOGO_Y = 0.70f;
         constexpr float TEXT_Y = 0.35f;
@@ -316,11 +358,17 @@ void main() {
         const GLuint textured_program = createProgram(TEXTURED_VS, TEXTURED_FS);
         SpinnerData spinner = createSpinner();
 
+        const bool is_dark = loadThemePreference();
         const auto assets_dir = core::getAssetsDir();
-        ImageData logo = loadImage(assets_dir / "lichtfeld-splash-logo.png");
-        ImageData loading_text = loadImage(assets_dir / "lichtfeld-splash-loading.png");
+        const std::string logo_file = is_dark ? "lichtfeld-splash-logo.png" : "lichtfeld-splash-logo-dark.png";
+        const std::string loading_file = is_dark ? "lichtfeld-splash-loading.png" : "lichtfeld-splash-loading-dark.png";
+        ImageData logo = loadImage(assets_dir / logo_file);
+        ImageData loading_text = loadImage(assets_dir / loading_file);
 
-        glClearColor(BG_R, BG_G, BG_B, 1.0f);
+        const float bg_r = is_dark ? BG_DARK_R : BG_LIGHT_R;
+        const float bg_g = is_dark ? BG_DARK_G : BG_LIGHT_G;
+        const float bg_b = is_dark ? BG_DARK_B : BG_LIGHT_B;
+        glClearColor(bg_r, bg_g, bg_b, 1.0f);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 

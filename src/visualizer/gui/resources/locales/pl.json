@@ -143,6 +143,7 @@
     "tooltip.penalty_weight": "Waga kary nieprzezroczystości w obszarach tła",
     "tooltip.penalty_power": "Spadek kary: 1=liniowy, 2=kwadratowy, >2=łagodniejszy",
     "tooltip.mask_threshold": "Wartości >= progu stają się 1.0 (obiekt)",
+    "tooltip.mask_mode": "Jak używać masek uwagi: segmentuj, ignoruj tło lub alpha-spójne",
     "tooltip.mip_filter": "Filtr antyaliasingu dla treningu (mip-splatting)",
     "tooltip.keep_model": "Zachowaj wytrenowany model, odrzuć zbiór danych",
     "tooltip.strategy": "Strategia zagęszczania (default/mcmc)",
