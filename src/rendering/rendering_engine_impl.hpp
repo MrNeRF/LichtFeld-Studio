@@ -57,7 +57,8 @@ namespace lfs::rendering {
         Result<void> renderCoordinateAxes(
             const ViewportData& viewport,
             float size,
-            const std::array<bool, 3>& visible) override;
+            const std::array<bool, 3>& visible,
+            bool equirectangular = false) override;
 
         Result<void> renderPivot(
             const ViewportData& viewport,
@@ -90,7 +91,8 @@ namespace lfs::rendering {
             float scale,
             const glm::vec3& train_color,
             const glm::vec3& eval_color,
-            const glm::mat4& scene_transform = glm::mat4(1.0f)) override;
+            const glm::mat4& scene_transform = glm::mat4(1.0f),
+            bool equirectangular_view = false) override;
 
         Result<void> renderCameraFrustumsWithHighlight(
             const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
@@ -99,7 +101,8 @@ namespace lfs::rendering {
             const glm::vec3& train_color,
             const glm::vec3& eval_color,
             int highlight_index,
-            const glm::mat4& scene_transform = glm::mat4(1.0f)) override;
+            const glm::mat4& scene_transform = glm::mat4(1.0f),
+            bool equirectangular_view = false) override;
 
         Result<int> pickCameraFrustum(
             const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,

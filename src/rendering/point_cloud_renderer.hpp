@@ -29,23 +29,23 @@ namespace lfs::rendering {
 
         Result<void> initialize();
 
-        // Render point cloud from SplatData (extracts RGB from SH)
         Result<void> render(const lfs::core::SplatData& splat_data,
                             const glm::mat4& view,
                             const glm::mat4& projection,
                             float voxel_size,
                             const glm::vec3& background_color,
                             const std::vector<glm::mat4>& model_transforms = {},
-                            const std::shared_ptr<lfs::core::Tensor>& transform_indices = nullptr);
+                            const std::shared_ptr<lfs::core::Tensor>& transform_indices = nullptr,
+                            bool equirectangular = false);
 
-        // Render raw point cloud (uses colors directly)
         Result<void> render(const lfs::core::PointCloud& point_cloud,
                             const glm::mat4& view,
                             const glm::mat4& projection,
                             float voxel_size,
                             const glm::vec3& background_color,
                             const std::vector<glm::mat4>& model_transforms = {},
-                            const std::shared_ptr<lfs::core::Tensor>& transform_indices = nullptr);
+                            const std::shared_ptr<lfs::core::Tensor>& transform_indices = nullptr,
+                            bool equirectangular = false);
 
         // Check if initialized
         bool isInitialized() const { return initialized_; }
@@ -62,7 +62,8 @@ namespace lfs::rendering {
                                     float voxel_size,
                                     const glm::vec3& background_color,
                                     const std::vector<glm::mat4>& model_transforms,
-                                    const std::shared_ptr<lfs::core::Tensor>& transform_indices);
+                                    const std::shared_ptr<lfs::core::Tensor>& transform_indices,
+                                    bool equirectangular);
 
         // OpenGL resources using RAII
         VAO cube_vao_;

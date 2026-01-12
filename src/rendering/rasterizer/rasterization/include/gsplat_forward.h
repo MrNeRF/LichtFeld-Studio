@@ -12,7 +12,8 @@ namespace lfs::rendering {
     enum class GutCameraModel : int {
         PINHOLE = 0,
         ORTHO = 1,
-        FISHEYE = 2
+        FISHEYE = 2,
+        EQUIRECTANGULAR = 3
     };
 
     enum class GutRenderMode : int {

@@ -49,13 +49,25 @@ namespace lfs::rendering {
     }
 
     Result<void> CameraFrustumRenderer::init() {
-        auto shader_result = load_shader("camera_frustum", "camera_frustum.vert", "camera_frustum.frag", false);
+        auto shader_result = load_shader_with_geometry("camera_frustum", "camera_frustum.vert",
+                                                       "camera_frustum.geom", "camera_frustum.frag", false);
         if (!shader_result) {
             return std::unexpected(shader_result.error().what());
         }
         shader_ = std::move(*shader_result);
 
+        auto lines_shader_result = load_shader_with_geometry("camera_frustum_lines", "camera_frustum.vert",
+                                                             "camera_frustum_lines.geom", "camera_frustum.frag", false);
+        if (!lines_shader_result) {
+            return std::unexpected(lines_shader_result.error().what());
+        }
+        shader_lines_ = std::move(*lines_shader_result);
+
         if (auto result = createGeometry(); !result) {
+            return result;
+        }
+
+        if (auto result = createSphereGeometry(); !result) {
             return result;
         }
 
@@ -129,6 +141,96 @@ namespace lfs::rendering {
         vao_ = builder.build();
 
         BufferBinder<GL_ELEMENT_ARRAY_BUFFER> edge_bind(edge_ebo_);
+        upload_buffer(GL_ELEMENT_ARRAY_BUFFER, std::span(edge_indices), GL_STATIC_DRAW);
+
+        return {};
+    }
+
+    Result<void> CameraFrustumRenderer::createSphereGeometry() {
+        constexpr int LAT_SEGS = 16;
+        constexpr int LON_SEGS = 24;
+        constexpr float RADIUS = 0.5f;
+
+        std::vector<Vertex> vertices;
+        std::vector<unsigned int> face_indices;
+        std::vector<unsigned int> edge_indices;
+
+        for (int lat = 0; lat <= LAT_SEGS; ++lat) {
+            const float theta = static_cast<float>(lat) / LAT_SEGS * glm::pi<float>();
+            const float sin_t = std::sin(theta);
+            const float cos_t = std::cos(theta);
+
+            for (int lon = 0; lon <= LON_SEGS; ++lon) {
+                const float phi = static_cast<float>(lon) / LON_SEGS * 2.0f * glm::pi<float>();
+                const glm::vec3 pos(RADIUS * sin_t * std::sin(phi), RADIUS * cos_t, -RADIUS * sin_t * std::cos(phi));
+                const glm::vec2 uv(static_cast<float>(lon) / LON_SEGS, static_cast<float>(lat) / LAT_SEGS);
+                vertices.push_back({pos, uv});
+            }
+        }
+
+        vertices.push_back({{0.0f, 0.0f, 0.0f}, {0.5f, 0.5f}});
+        const unsigned int apex_idx = static_cast<unsigned int>(vertices.size() - 1);
+
+        for (int lat = 0; lat < LAT_SEGS; ++lat) {
+            for (int lon = 0; lon < LON_SEGS; ++lon) {
+                const unsigned int curr = lat * (LON_SEGS + 1) + lon;
+                const unsigned int next = curr + LON_SEGS + 1;
+                face_indices.insert(face_indices.end(), {curr, next, curr + 1, curr + 1, next, next + 1});
+            }
+        }
+
+        for (int lat = 0; lat <= LAT_SEGS; lat += 4) {
+            for (int lon = 0; lon < LON_SEGS; ++lon) {
+                const unsigned int curr = lat * (LON_SEGS + 1) + lon;
+                edge_indices.insert(edge_indices.end(), {curr, curr + 1});
+            }
+        }
+        for (int lon = 0; lon < LON_SEGS; lon += 4) {
+            for (int lat = 0; lat < LAT_SEGS; ++lat) {
+                const unsigned int curr = lat * (LON_SEGS + 1) + lon;
+                edge_indices.insert(edge_indices.end(), {curr, curr + LON_SEGS + 1});
+            }
+        }
+        for (int lon = 0; lon < LON_SEGS; lon += LON_SEGS / 4) {
+            const unsigned int eq_idx = (LAT_SEGS / 2) * (LON_SEGS + 1) + lon;
+            edge_indices.insert(edge_indices.end(), {apex_idx, eq_idx});
+        }
+
+        num_sphere_face_indices_ = face_indices.size();
+        num_sphere_edge_indices_ = edge_indices.size();
+
+        auto vao_result = create_vao();
+        if (!vao_result)
+            return std::unexpected(vao_result.error());
+
+        auto vbo_result = create_vbo();
+        if (!vbo_result)
+            return std::unexpected(vbo_result.error());
+        sphere_vbo_ = std::move(*vbo_result);
+
+        auto face_ebo_result = create_vbo();
+        if (!face_ebo_result)
+            return std::unexpected(face_ebo_result.error());
+        sphere_face_ebo_ = std::move(*face_ebo_result);
+
+        auto edge_ebo_result = create_vbo();
+        if (!edge_ebo_result)
+            return std::unexpected(edge_ebo_result.error());
+        sphere_edge_ebo_ = std::move(*edge_ebo_result);
+
+        VAOBuilder builder(std::move(*vao_result));
+        const std::span<const float> vertices_data(
+            reinterpret_cast<const float*>(vertices.data()),
+            vertices.size() * sizeof(Vertex) / sizeof(float));
+
+        builder.attachVBO(sphere_vbo_, vertices_data, GL_STATIC_DRAW)
+            .setAttribute({.index = 0, .size = 3, .type = GL_FLOAT, .stride = sizeof(Vertex), .offset = nullptr})
+            .setAttribute({.index = 1, .size = 2, .type = GL_FLOAT, .stride = sizeof(Vertex), .offset = reinterpret_cast<const void*>(offsetof(Vertex, uv))});
+
+        builder.attachEBO(sphere_face_ebo_, std::span(face_indices), GL_STATIC_DRAW);
+        sphere_vao_ = builder.build();
+
+        BufferBinder<GL_ELEMENT_ARRAY_BUFFER> edge_bind(sphere_edge_ebo_);
         upload_buffer(GL_ELEMENT_ARRAY_BUFFER, std::span(edge_indices), GL_STATIC_DRAW);
 
         return {};
@@ -261,7 +363,7 @@ namespace lfs::rendering {
                 }
             }
 
-            cached_instances_.push_back({model, color, alpha, 0, is_validation ? 1u : 0u, {0, 0}});
+            cached_instances_.push_back({model, color, alpha, 0, is_validation ? 1u : 0u, is_equirect ? 1u : 0u, 0});
             camera_ids_.push_back(cam->uid());
         }
 
@@ -304,7 +406,8 @@ namespace lfs::rendering {
         const float scale,
         const glm::vec3& train_color,
         const glm::vec3& eval_color,
-        const glm::mat4& scene_transform) {
+        const glm::mat4& scene_transform,
+        const bool equirectangular_view) {
 
         if (!initialized_ || cameras.empty())
             return {};
@@ -317,160 +420,176 @@ namespace lfs::rendering {
         if (cached_instances_.empty())
             return {};
 
-        std::vector<InstanceData> visible_instances;
-        std::vector<int> visible_indices;
-        std::vector<std::shared_ptr<const lfs::core::Camera>> visible_cameras;
-        visible_instances.reserve(cached_instances_.size());
-        visible_indices.reserve(cached_instances_.size());
-        visible_cameras.reserve(cached_instances_.size());
+        std::vector<InstanceData> frustum_instances;
+        std::vector<InstanceData> sphere_instances;
+        std::vector<int> frustum_indices;
+        std::vector<int> sphere_indices;
+        std::vector<std::shared_ptr<const lfs::core::Camera>> frustum_cameras;
+        std::vector<std::shared_ptr<const lfs::core::Camera>> sphere_cameras;
 
         for (size_t i = 0; i < cached_instances_.size(); ++i) {
             if (cached_instances_[i].alpha > MIN_RENDER_ALPHA) {
-                visible_instances.push_back(cached_instances_[i]);
-                visible_indices.push_back(static_cast<int>(i));
-                if (i < cameras.size()) {
-                    visible_cameras.push_back(cameras[i]);
+                if (cached_instances_[i].is_equirectangular) {
+                    sphere_instances.push_back(cached_instances_[i]);
+                    sphere_indices.push_back(static_cast<int>(i));
+                    if (i < cameras.size())
+                        sphere_cameras.push_back(cameras[i]);
+                } else {
+                    frustum_instances.push_back(cached_instances_[i]);
+                    frustum_indices.push_back(static_cast<int>(i));
+                    if (i < cameras.size())
+                        frustum_cameras.push_back(cameras[i]);
                 }
             }
         }
 
-        if (visible_instances.empty())
+        if (frustum_instances.empty() && sphere_instances.empty())
             return {};
 
         GLStateGuard state_guard;
         while (glGetError() != GL_NO_ERROR) {}
 
-        {
-            ShaderScope shader(shader_);
-            if (!shader.isBound()) {
-                return std::unexpected("Failed to bind camera frustum shader");
+        const auto setupInstanceAttributes = [this](std::vector<InstanceData>& instances) {
+            BufferBinder<GL_ARRAY_BUFFER> instance_bind(instance_vbo_);
+            upload_buffer(GL_ARRAY_BUFFER, std::span(instances), GL_DYNAMIC_DRAW);
+
+            for (int i = 0; i < 4; ++i) {
+                glEnableVertexAttribArray(2 + i);
+                glVertexAttribPointer(2 + i, 4, GL_FLOAT, GL_FALSE, sizeof(InstanceData),
+                                      reinterpret_cast<void*>(sizeof(glm::vec4) * i));
+                glVertexAttribDivisor(2 + i, 1);
             }
 
-            const glm::mat4 view_proj = projection * view;
-            if (auto result = shader->set("viewProj", view_proj); !result) {
-                LOG_ERROR("Failed to set viewProj uniform: {}", result.error());
+            glEnableVertexAttribArray(6);
+            glVertexAttribPointer(6, 4, GL_FLOAT, GL_FALSE, sizeof(InstanceData),
+                                  reinterpret_cast<void*>(offsetof(InstanceData, color)));
+            glVertexAttribDivisor(6, 1);
+
+            glEnableVertexAttribArray(7);
+            glVertexAttribIPointer(7, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
+                                   reinterpret_cast<void*>(offsetof(InstanceData, texture_id)));
+            glVertexAttribDivisor(7, 1);
+
+            glEnableVertexAttribArray(8);
+            glVertexAttribIPointer(8, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
+                                   reinterpret_cast<void*>(offsetof(InstanceData, is_validation)));
+            glVertexAttribDivisor(8, 1);
+
+            glEnableVertexAttribArray(9);
+            glVertexAttribIPointer(9, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
+                                   reinterpret_cast<void*>(offsetof(InstanceData, is_equirectangular)));
+            glVertexAttribDivisor(9, 1);
+        };
+
+        const auto cleanupInstanceAttributes = []() {
+            for (int i = 2; i <= 9; ++i) {
+                glDisableVertexAttribArray(i);
+                glVertexAttribDivisor(i, 0);
             }
+        };
 
-            if (auto result = shader->set("viewPos", view_position); !result) {
-                LOG_ERROR("Failed to set viewPos uniform: {}", result.error());
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LESS);
+        glDepthMask(GL_TRUE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        const glm::mat4 view_proj = projection * view;
+
+        const auto findHighlightIndex = [this](const std::vector<int>& indices) -> int {
+            for (size_t i = 0; i < indices.size(); ++i) {
+                if (indices[i] == highlighted_camera_)
+                    return static_cast<int>(i);
             }
+            return -1;
+        };
 
-            if (auto result = shader->set("pickingMode", false); !result) {
-                LOG_ERROR("Failed to set pickingMode uniform: {}", result.error());
-            }
+        const int frustum_highlight = findHighlightIndex(frustum_indices);
+        const int sphere_highlight = findHighlightIndex(sphere_indices);
 
-            int visible_highlight_index = -1;
-            for (size_t i = 0; i < visible_indices.size(); ++i) {
-                if (visible_indices[i] == highlighted_camera_) {
-                    visible_highlight_index = static_cast<int>(i);
-                    break;
-                }
-            }
-
-            if (auto result = shader->set("highlightIndex", visible_highlight_index); !result) {
-                LOG_ERROR("Failed to set highlightIndex uniform: {}", result.error());
-            }
-
-            {
-                VAOBinder vao_bind(vao_);
-
-                {
-                    BufferBinder<GL_ARRAY_BUFFER> instance_bind(instance_vbo_);
-                    upload_buffer(GL_ARRAY_BUFFER, std::span(visible_instances), GL_DYNAMIC_DRAW);
-
-                    for (int i = 0; i < 4; ++i) {
-                        glEnableVertexAttribArray(2 + i);
-                        glVertexAttribPointer(2 + i, 4, GL_FLOAT, GL_FALSE, sizeof(InstanceData),
-                                              reinterpret_cast<void*>(sizeof(glm::vec4) * i));
-                        glVertexAttribDivisor(2 + i, 1);
-                    }
-
-                    glEnableVertexAttribArray(6);
-                    glVertexAttribPointer(6, 4, GL_FLOAT, GL_FALSE, sizeof(InstanceData),
-                                          reinterpret_cast<void*>(offsetof(InstanceData, color)));
-                    glVertexAttribDivisor(6, 1);
-
-                    glEnableVertexAttribArray(7);
-                    glVertexAttribIPointer(7, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
-                                           reinterpret_cast<void*>(offsetof(InstanceData, texture_id)));
-                    glVertexAttribDivisor(7, 1);
-
-                    glEnableVertexAttribArray(8);
-                    glVertexAttribIPointer(8, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
-                                           reinterpret_cast<void*>(offsetof(InstanceData, is_validation)));
-                    glVertexAttribDivisor(8, 1);
-                }
-
-                glEnable(GL_DEPTH_TEST);
-                glDepthFunc(GL_LESS);
-                glDepthMask(GL_TRUE);
-                glEnable(GL_BLEND);
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-                if (auto result = shader->set("showImages", show_images_ && thumbnail_array_capacity_ > 0); !result) {
-                    LOG_ERROR("Failed to set showImages uniform: {}", result.error());
-                }
-
-                if (auto result = shader->set("imageOpacity", image_opacity_); !result) {
-                    LOG_ERROR("Failed to set imageOpacity uniform: {}", result.error());
-                }
-
-                // Set texture IDs for all visible instances (layer index + 1, 0 = no texture)
-                if (show_images_) {
-                    for (size_t i = 0; i < visible_instances.size() && i < visible_cameras.size(); ++i) {
-                        visible_instances[i].texture_id = getOrLoadThumbnail(*visible_cameras[i]);
-                    }
-
-                    // Re-upload instance data with texture IDs
-                    {
-                        BufferBinder<GL_ARRAY_BUFFER> instance_bind(instance_vbo_);
-                        upload_buffer(GL_ARRAY_BUFFER, std::span(visible_instances), GL_DYNAMIC_DRAW);
-                    }
-
-                    // Bind texture array
-                    if (thumbnail_array_capacity_ > 0) {
-                        glActiveTexture(GL_TEXTURE0);
-                        glBindTexture(GL_TEXTURE_2D_ARRAY, thumbnail_array_);
-                        if (auto result = shader->set("cameraTextures", 0); !result) {
-                            LOG_ERROR("Failed to set cameraTextures uniform: {}", result.error());
-                        }
-                    }
-                }
-
-                // Single batched draw for all textured frustum faces
-                if (show_images_ && thumbnail_array_capacity_ > 0) {
-                    BufferBinder<GL_ELEMENT_ARRAY_BUFFER> face_bind(face_ebo_);
-                    glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(visible_instances.size()));
-                }
-
-                // Reset texture IDs for wireframe pass
-                if (show_images_) {
-                    for (auto& inst : visible_instances)
-                        inst.texture_id = 0;
-                    {
-                        BufferBinder<GL_ARRAY_BUFFER> instance_bind(instance_vbo_);
-                        upload_buffer(GL_ARRAY_BUFFER, std::span(visible_instances), GL_DYNAMIC_DRAW);
-                    }
-                    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
-                    if (auto result = shader->set("showImages", false); !result) {
-                        LOG_ERROR("Failed to set showImages uniform: {}", result.error());
-                    }
-                }
-
-                glLineWidth(WIREFRAME_WIDTH);
-                {
-                    BufferBinder<GL_ELEMENT_ARRAY_BUFFER> edge_bind(edge_ebo_);
-                    glDrawElementsInstanced(GL_LINES, static_cast<GLsizei>(num_edge_indices_), GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(visible_instances.size()));
-                }
-
-                for (int i = 2; i <= 8; ++i) {
-                    glDisableVertexAttribArray(i);
-                    glVertexAttribDivisor(i, 0);
-                }
-            }
+        if (show_images_) {
+            for (size_t i = 0; i < frustum_instances.size() && i < frustum_cameras.size(); ++i)
+                frustum_instances[i].texture_id = getOrLoadThumbnail(*frustum_cameras[i]);
+            for (size_t i = 0; i < sphere_instances.size() && i < sphere_cameras.size(); ++i)
+                sphere_instances[i].texture_id = getOrLoadThumbnail(*sphere_cameras[i]);
         }
 
-        glFinish();
+        const bool render_textures = show_images_ && thumbnail_array_capacity_ > 0;
+
+        if (render_textures) {
+            ShaderScope shader(shader_);
+            if (!shader.isBound())
+                return std::unexpected("Failed to bind camera frustum shader");
+
+            shader->set("viewProj", view_proj);
+            shader->set("view", view);
+            shader->set("viewPos", view_position);
+            shader->set("pickingMode", false);
+            shader->set("equirectangularView", equirectangular_view);
+            shader->set("showImages", true);
+            shader->set("imageOpacity", image_opacity_);
+
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, thumbnail_array_);
+            shader->set("cameraTextures", 0);
+
+            if (!frustum_instances.empty()) {
+                shader->set("highlightIndex", frustum_highlight);
+                VAOBinder vao_bind(vao_);
+                setupInstanceAttributes(frustum_instances);
+                BufferBinder<GL_ELEMENT_ARRAY_BUFFER> face_bind(face_ebo_);
+                glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr,
+                                        static_cast<GLsizei>(frustum_instances.size()));
+                cleanupInstanceAttributes();
+            }
+
+            if (!sphere_instances.empty()) {
+                shader->set("highlightIndex", sphere_highlight);
+                VAOBinder vao_bind(sphere_vao_);
+                setupInstanceAttributes(sphere_instances);
+                BufferBinder<GL_ELEMENT_ARRAY_BUFFER> face_bind(sphere_face_ebo_);
+                glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(num_sphere_face_indices_),
+                                        GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(sphere_instances.size()));
+                cleanupInstanceAttributes();
+            }
+
+            glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+        }
+
+        {
+            ShaderScope shader(shader_lines_);
+            if (!shader.isBound())
+                return std::unexpected("Failed to bind camera frustum lines shader");
+
+            shader->set("viewProj", view_proj);
+            shader->set("view", view);
+            shader->set("viewPos", view_position);
+            shader->set("pickingMode", false);
+            shader->set("equirectangularView", equirectangular_view);
+            shader->set("showImages", false);
+
+            glLineWidth(WIREFRAME_WIDTH);
+
+            if (!frustum_instances.empty()) {
+                shader->set("highlightIndex", frustum_highlight);
+                VAOBinder vao_bind(vao_);
+                setupInstanceAttributes(frustum_instances);
+                BufferBinder<GL_ELEMENT_ARRAY_BUFFER> edge_bind(edge_ebo_);
+                glDrawElementsInstanced(GL_LINES, static_cast<GLsizei>(num_edge_indices_),
+                                        GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(frustum_instances.size()));
+                cleanupInstanceAttributes();
+            }
+
+            if (!sphere_instances.empty()) {
+                shader->set("highlightIndex", sphere_highlight);
+                VAOBinder vao_bind(sphere_vao_);
+                setupInstanceAttributes(sphere_instances);
+                BufferBinder<GL_ELEMENT_ARRAY_BUFFER> edge_bind(sphere_edge_ebo_);
+                glDrawElementsInstanced(GL_LINES, static_cast<GLsizei>(num_sphere_edge_indices_),
+                                        GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(sphere_instances.size()));
+                cleanupInstanceAttributes();
+            }
+        }
 
         return {};
     }
@@ -519,6 +638,56 @@ namespace lfs::rendering {
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+        // Separate frustum and sphere instances for picking
+        std::vector<InstanceData> frustum_pick;
+        std::vector<InstanceData> sphere_pick;
+        for (const auto& inst : cached_instances_) {
+            if (inst.is_equirectangular) {
+                sphere_pick.push_back(inst);
+            } else {
+                frustum_pick.push_back(inst);
+            }
+        }
+
+        const auto setupPickingAttributes = [this](std::vector<InstanceData>& instances) {
+            BufferBinder<GL_ARRAY_BUFFER> instance_bind(instance_vbo_);
+            upload_buffer(GL_ARRAY_BUFFER, std::span(instances), GL_DYNAMIC_DRAW);
+
+            for (int i = 0; i < 4; ++i) {
+                glEnableVertexAttribArray(2 + i);
+                glVertexAttribPointer(2 + i, 4, GL_FLOAT, GL_FALSE, sizeof(InstanceData),
+                                      reinterpret_cast<void*>(sizeof(glm::vec4) * i));
+                glVertexAttribDivisor(2 + i, 1);
+            }
+
+            glEnableVertexAttribArray(6);
+            glVertexAttribPointer(6, 4, GL_FLOAT, GL_FALSE, sizeof(InstanceData),
+                                  reinterpret_cast<void*>(offsetof(InstanceData, color)));
+            glVertexAttribDivisor(6, 1);
+
+            glEnableVertexAttribArray(7);
+            glVertexAttribIPointer(7, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
+                                   reinterpret_cast<void*>(offsetof(InstanceData, texture_id)));
+            glVertexAttribDivisor(7, 1);
+
+            glEnableVertexAttribArray(8);
+            glVertexAttribIPointer(8, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
+                                   reinterpret_cast<void*>(offsetof(InstanceData, is_validation)));
+            glVertexAttribDivisor(8, 1);
+
+            glEnableVertexAttribArray(9);
+            glVertexAttribIPointer(9, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
+                                   reinterpret_cast<void*>(offsetof(InstanceData, is_equirectangular)));
+            glVertexAttribDivisor(9, 1);
+        };
+
+        const auto cleanupPickingAttributes = []() {
+            for (int i = 2; i <= 9; ++i) {
+                glDisableVertexAttribArray(i);
+                glVertexAttribDivisor(i, 0);
+            }
+        };
+
         {
             ShaderScope shader(shader_);
             if (!shader.isBound()) {
@@ -530,64 +699,38 @@ namespace lfs::rendering {
             const glm::mat4 view_proj = projection * view;
             const glm::vec3 view_pos = glm::vec3(glm::inverse(view)[3]);
 
-            if (auto result = shader->set("viewProj", view_proj); !result) {
-                LOG_ERROR("Failed to set viewProj uniform: {}", result.error());
-            }
-
-            if (auto result = shader->set("viewPos", view_pos); !result) {
-                LOG_ERROR("Failed to set viewPos uniform: {}", result.error());
-            }
-
-            if (auto result = shader->set("pickingMode", true); !result) {
-                LOG_ERROR("Failed to set pickingMode uniform: {}", result.error());
-            }
-
-            if (auto result = shader->set("minimumPickDistance", scale * 2.0f); !result) {
-                LOG_ERROR("Failed to set minimumPickDistance uniform: {}", result.error());
-            }
-
-            VAOBinder vao_bind(vao_);
-
-            {
-                BufferBinder<GL_ARRAY_BUFFER> instance_bind(instance_vbo_);
-                upload_buffer(GL_ARRAY_BUFFER, std::span(cached_instances_), GL_DYNAMIC_DRAW);
-
-                for (int i = 0; i < 4; ++i) {
-                    glEnableVertexAttribArray(2 + i);
-                    glVertexAttribPointer(2 + i, 4, GL_FLOAT, GL_FALSE, sizeof(InstanceData),
-                                          reinterpret_cast<void*>(sizeof(glm::vec4) * i));
-                    glVertexAttribDivisor(2 + i, 1);
-                }
-
-                glEnableVertexAttribArray(6);
-                glVertexAttribPointer(6, 4, GL_FLOAT, GL_FALSE, sizeof(InstanceData),
-                                      reinterpret_cast<void*>(offsetof(InstanceData, color)));
-                glVertexAttribDivisor(6, 1);
-
-                glEnableVertexAttribArray(7);
-                glVertexAttribIPointer(7, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
-                                       reinterpret_cast<void*>(offsetof(InstanceData, texture_id)));
-                glVertexAttribDivisor(7, 1);
-
-                glEnableVertexAttribArray(8);
-                glVertexAttribIPointer(8, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
-                                       reinterpret_cast<void*>(offsetof(InstanceData, is_validation)));
-                glVertexAttribDivisor(8, 1);
-            }
+            shader->set("viewProj", view_proj);
+            shader->set("viewPos", view_pos);
+            shader->set("pickingMode", true);
+            shader->set("minimumPickDistance", scale * 2.0f);
 
             glEnable(GL_DEPTH_TEST);
             glDepthFunc(GL_LESS);
             glDepthMask(GL_TRUE);
             glDisable(GL_BLEND);
 
-            {
-                BufferBinder<GL_ELEMENT_ARRAY_BUFFER> face_bind(face_ebo_);
-                glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(num_face_indices_), GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(cached_instances_.size()));
+            // Draw frustums for picking
+            if (!frustum_pick.empty()) {
+                VAOBinder vao_bind(vao_);
+                setupPickingAttributes(frustum_pick);
+                {
+                    BufferBinder<GL_ELEMENT_ARRAY_BUFFER> face_bind(face_ebo_);
+                    glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(num_face_indices_),
+                                            GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(frustum_pick.size()));
+                }
+                cleanupPickingAttributes();
             }
 
-            for (int i = 2; i <= 8; ++i) {
-                glDisableVertexAttribArray(i);
-                glVertexAttribDivisor(i, 0);
+            // Draw spheres for picking
+            if (!sphere_pick.empty()) {
+                VAOBinder vao_bind(sphere_vao_);
+                setupPickingAttributes(sphere_pick);
+                {
+                    BufferBinder<GL_ELEMENT_ARRAY_BUFFER> face_bind(sphere_face_ebo_);
+                    glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(num_sphere_face_indices_),
+                                            GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(sphere_pick.size()));
+                }
+                cleanupPickingAttributes();
             }
         }
 

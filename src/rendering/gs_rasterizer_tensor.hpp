@@ -7,6 +7,7 @@
 #include "core/camera.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "rasterizer/rasterization/include/gsplat_forward.h"
 #include "rendering/render_constants.hpp"
 #include <tuple>
 
@@ -67,6 +68,7 @@ namespace lfs::rendering {
         const lfs::core::SplatData& model,
         const Tensor& bg_color,
         float scaling_modifier = 1.0f,
+        GutCameraModel camera_model = GutCameraModel::PINHOLE,
         const Tensor* transform_indices = nullptr,
         const std::vector<bool>& node_visibility_mask = {},
         const Tensor* visible_indices = nullptr,

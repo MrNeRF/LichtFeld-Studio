@@ -134,16 +134,16 @@ namespace lfs::rendering {
 
                 RenderResult result;
 
-                if (request.gut) {
-                    // Use local forward-only GUT rasterizer (no training module dependency)
+                if (request.gut || request.equirectangular) {
+                    const auto camera_model = request.equirectangular
+                                                  ? GutCameraModel::EQUIRECTANGULAR
+                                                  : GutCameraModel::PINHOLE;
                     if (request.visible_indices && request.visible_gaussian_count > 0) {
                         LOG_INFO("Using GUT rasterizer with visible_indices: {} gaussians", request.visible_gaussian_count);
-                    } else {
-                        LOG_INFO("Using GUT rasterizer (all gaussians)");
                     }
                     auto render_output = gut_rasterize_tensor(
                         cam, const_cast<lfs::core::SplatData&>(model), background_,
-                        request.scaling_modifier, transform_indices_ptr, request.node_visibility_mask,
+                        request.scaling_modifier, camera_model, transform_indices_ptr, request.node_visibility_mask,
                         request.visible_indices.get(), request.visible_gaussian_count);
                     result.image = std::move(render_output.image);
                     result.depth = std::move(render_output.depth);
@@ -198,24 +198,23 @@ namespace lfs::rendering {
             lfs::core::SplatData& mutable_model = const_cast<lfs::core::SplatData&>(model);
             RenderResult result;
 
-            if (request.gut) {
-                // Use local forward-only GUT rasterizer (no training module dependency)
+            if (request.gut || request.equirectangular) {
+                const auto camera_model = request.equirectangular
+                                              ? GutCameraModel::EQUIRECTANGULAR
+                                              : GutCameraModel::PINHOLE;
                 if (request.visible_indices && request.visible_gaussian_count > 0) {
                     LOG_INFO("Using GUT rasterizer with visible_indices: {} gaussians", request.visible_gaussian_count);
-                } else {
-                    LOG_INFO("Using GUT rasterizer (all gaussians)");
                 }
                 auto render_output = gut_rasterize_tensor(
-                    cam, mutable_model, background_,
-                    request.scaling_modifier, transform_indices_ptr, request.node_visibility_mask,
+                    cam, mutable_model, background_, request.scaling_modifier, camera_model,
+                    transform_indices_ptr, request.node_visibility_mask,
                     request.visible_indices.get(), request.visible_gaussian_count);
-                result.image = std::move(render_output.image);
-                result.depth = std::move(render_output.depth);
-                result.valid = true;
-                result.orthographic = request.orthographic;
-                result.far_plane = request.far_plane;
-                LOG_TRACE("Rasterization completed successfully");
-                return result;
+                return RenderResult{
+                    .image = std::move(render_output.image),
+                    .depth = std::move(render_output.depth),
+                    .valid = true,
+                    .far_plane = request.far_plane,
+                    .orthographic = request.orthographic};
             }
 
             // Use libtorch-free tensor-based rasterizer
@@ -353,7 +352,8 @@ namespace lfs::rendering {
             LOG_TIMER_TRACE("point_cloud_renderer_->render");
             if (auto result = point_cloud_renderer_->render(model, view, projection,
                                                             request.voxel_size, request.background_color,
-                                                            request.model_transforms, request.transform_indices);
+                                                            request.model_transforms, request.transform_indices,
+                                                            request.equirectangular);
                 !result) {
                 LOG_ERROR("Point cloud rendering failed: {}", result.error());
                 return std::unexpected(std::format("Point cloud rendering failed: {}", result.error()));
@@ -546,7 +546,8 @@ namespace lfs::rendering {
         {
             LOG_TIMER_TRACE("point_cloud_renderer_->render(PointCloud)");
             if (auto result = point_cloud_renderer_->render(point_cloud, view, projection,
-                                                            request.voxel_size, request.background_color);
+                                                            request.voxel_size, request.background_color,
+                                                            {}, nullptr, request.equirectangular);
                 !result) {
                 LOG_ERROR("Raw point cloud rendering failed: {}", result.error());
                 return std::unexpected(std::format("Raw point cloud rendering failed: {}", result.error()));

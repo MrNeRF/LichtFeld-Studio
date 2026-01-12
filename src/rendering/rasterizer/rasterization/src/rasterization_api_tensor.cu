@@ -717,7 +717,7 @@ namespace lfs::rendering {
         const int M = use_visibility_filter ? static_cast<int>(visible_count) : N_total;
 
         if (use_visibility_filter) {
-            LOG_INFO("forward_gut_tensor: kernel-level visibility filtering - {} of {} gaussians",
+            LOG_INFO("forward_gut_tensor: kernel-level visibility filtering - %d of %d gaussians",
                      M, N_total);
         }
         const size_t H = static_cast<size_t>(height);
