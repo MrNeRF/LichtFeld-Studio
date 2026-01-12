@@ -19,10 +19,12 @@ uniform bool equirectangularView = false;
 out vec3 FragPos;
 out vec4 vertexColor;
 out vec2 TexCoord;
-flat out int instanceID;
-flat out uint textureID;
-flat out uint isValidation;
-flat out uint isEquirectangular;
+out float ndcX;
+out int instanceID;
+out uint textureID;
+out uint isValidation;
+out uint isEquirectangular;
+out int equiView;
 
 void main() {
     instanceID = gl_InstanceID;
@@ -33,6 +35,8 @@ void main() {
     isValidation = aIsValidation;
     isEquirectangular = aIsEquirectangular;
     FragPos = vec3(worldPos);
+    equiView = equirectangularView ? 1 : 0;
+    ndcX = 0.0;
 
     if (equirectangularView) {
         vec4 viewPos4 = view * worldPos;
@@ -40,7 +44,8 @@ void main() {
         float theta = atan(dir.x, -dir.z);
         float phi = asin(clamp(dir.y, -1.0, 1.0));
         float depth = length(viewPos4.xyz);
-        gl_Position = vec4(theta / PI, -phi / (PI * 0.5), -1.0 / depth, 1.0);
+        ndcX = theta / PI;
+        gl_Position = vec4(ndcX, -phi / (PI * 0.5), -1.0 / depth, 1.0);
     } else {
         gl_Position = viewProj * worldPos;
     }

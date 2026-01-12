@@ -5,7 +5,7 @@
 #pragma once
 
 // clang-format off
-// CRITICAL: GLAD must be included before GLFW to avoid OpenGL header conflicts
+// GLAD must be included before GLFW
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 // clang-format on
@@ -129,11 +129,18 @@ namespace lfs::rendering {
     class Shader {
     public:
         Shader(const char* vshader_path, const char* fshader_path, bool create_buffer = true)
+            : Shader(vshader_path, fshader_path, nullptr, create_buffer) {}
+
+        Shader(const char* vshader_path, const char* fshader_path, const char* gshader_path, bool create_buffer)
             : vshader_path_(vshader_path),
-              fshader_path_(fshader_path) {
+              fshader_path_(fshader_path),
+              gshader_path_(gshader_path ? gshader_path : "") {
             LOG_TIMER_TRACE("Shader::Shader");
             LOG_DEBUG("Creating shader with vertex: {}", vshader_path);
             LOG_DEBUG("Creating shader with fragment: {}", fshader_path);
+            if (gshader_path && gshader_path[0] != '\0') {
+                LOG_DEBUG("Creating shader with geometry: {}", gshader_path);
+            }
 
             // Clear any existing GL errors before we start
             while (glGetError() != GL_NO_ERROR) {}
@@ -215,6 +222,34 @@ namespace lfs::rendering {
             CHECK_GL_ERROR("glCompileShader (fragment)");
             check_comp_status(fshader, "Fragment", fshader_path);
 
+            // Create and compile geometry shader (optional)
+            if (gshader_path && gshader_path[0] != '\0') {
+                std::string gshader_source = readShaderSourceFromFile(gshader_path);
+                if (gshader_source.empty()) {
+                    LOG_ERROR("Geometry shader source is empty for file: {}", gshader_path);
+                    glDeleteShader(vshader);
+                    glDeleteShader(fshader);
+                    throw std::runtime_error(std::format("ERROR: Geometry shader source is empty for file: {}", gshader_path));
+                }
+
+                gshader = glCreateShader(GL_GEOMETRY_SHADER);
+                if (gshader == 0) {
+                    GLenum err = glGetError();
+                    LOG_ERROR("Failed to create geometry shader object: {}", getGLErrorString(err));
+                    glDeleteShader(vshader);
+                    glDeleteShader(fshader);
+                    throw std::runtime_error(std::format("Failed to create geometry shader object: {}", getGLErrorString(err)));
+                }
+
+                const char* gshader_code = gshader_source.c_str();
+                glShaderSource(gshader, 1, &gshader_code, nullptr);
+                CHECK_GL_ERROR("glShaderSource (geometry)");
+
+                glCompileShader(gshader);
+                CHECK_GL_ERROR("glCompileShader (geometry)");
+                check_comp_status(gshader, "Geometry", gshader_path);
+            }
+
             // Create and link program
             program = glCreateProgram();
             if (program == 0) {
@@ -230,6 +265,11 @@ namespace lfs::rendering {
 
             glAttachShader(program, fshader);
             CHECK_GL_ERROR("glAttachShader (fragment)");
+
+            if (gshader != 0) {
+                glAttachShader(program, gshader);
+                CHECK_GL_ERROR("glAttachShader (geometry)");
+            }
 
             glLinkProgram(program);
             CHECK_GL_ERROR("glLinkProgram");
@@ -295,6 +335,10 @@ namespace lfs::rendering {
 
             glDetachShader(program, fshader);
             glDetachShader(program, vshader);
+            if (gshader != 0) {
+                glDetachShader(program, gshader);
+                glDeleteShader(gshader);
+            }
             glDeleteProgram(program);
             glDeleteShader(fshader);
             glDeleteShader(vshader);
@@ -585,8 +629,10 @@ namespace lfs::rendering {
         GLuint program;
         GLuint vshader;
         GLuint fshader;
+        GLuint gshader = 0;
         std::string vshader_path_;
         std::string fshader_path_;
+        std::string gshader_path_;
         std::map<std::string, GLint> uniforms;
         std::map<std::string, GLint> attributes;
         std::map<GLint, GLuint> attribute_buffers;

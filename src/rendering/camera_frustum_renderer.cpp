@@ -49,7 +49,8 @@ namespace lfs::rendering {
     }
 
     Result<void> CameraFrustumRenderer::init() {
-        auto shader_result = load_shader("camera_frustum", "camera_frustum.vert", "camera_frustum.frag", false);
+        auto shader_result = load_shader_with_geometry("camera_frustum", "camera_frustum.vert",
+                                                        "camera_frustum.geom", "camera_frustum.frag", false);
         if (!shader_result) {
             return std::unexpected(shader_result.error().what());
         }

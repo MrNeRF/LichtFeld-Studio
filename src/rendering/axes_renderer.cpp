@@ -71,8 +71,9 @@ namespace lfs::rendering {
         LOG_TIMER("RenderCoordinateAxes::init");
         LOG_INFO("Initializing coordinate axes renderer");
 
-        // Create shader for coordinate axes rendering
-        auto result = load_shader("coordinate_axes", "coordinate_axes.vert", "coordinate_axes.frag", false);
+        // Create shader for coordinate axes rendering (with geometry shader for equirectangular seam culling)
+        auto result = load_shader_with_geometry("coordinate_axes", "coordinate_axes.vert",
+                                                 "coordinate_axes.geom", "coordinate_axes.frag", false);
         if (!result) {
             LOG_ERROR("Failed to load coordinate axes shader: {}", result.error().what());
             return std::unexpected(result.error().what());

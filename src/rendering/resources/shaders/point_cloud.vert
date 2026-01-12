@@ -18,7 +18,8 @@ uniform int u_num_transforms;
 
 out vec3 v_color;
 out vec3 v_normal;
-out vec3 v_frag_pos;
+out float v_ndc_x;
+out int v_equirectangular;
 
 void main() {
     mat4 model = mat4(1.0);
@@ -32,17 +33,20 @@ void main() {
 
     vec4 view_pos = u_view * vec4(world_position, 1.0);
 
+    v_equirectangular = u_equirectangular ? 1 : 0;
+    v_ndc_x = 0.0;
+
     if (u_equirectangular) {
         vec3 dir = normalize(view_pos.xyz);
         float theta = atan(dir.x, -dir.z);
         float phi = asin(clamp(dir.y, -1.0, 1.0));
         float depth = length(view_pos.xyz);
-        gl_Position = vec4(theta / PI, -phi / (PI * 0.5), -1.0 / depth, 1.0);
+        v_ndc_x = theta / PI;
+        gl_Position = vec4(v_ndc_x, -phi / (PI * 0.5), -1.0 / depth, 1.0);
     } else {
         gl_Position = u_projection * view_pos;
     }
 
     v_color = a_instance_color;
     v_normal = normalize(mat3(model) * normalize(a_vertex_position));
-    v_frag_pos = view_pos.xyz;
 }

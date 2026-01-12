@@ -39,80 +39,55 @@ namespace lfs::rendering {
         Result<void> bind();
         Result<void> unbind();
 
-        // Delegate to existing shader with enhanced error tracking
         template <typename T>
         Result<void> set(std::string_view uniform, const T& value,
                          std::source_location loc = std::source_location::current()) {
             if (!shader_) {
-                LOG_ERROR("Attempting to set uniform '{}' on null shader '{}' at {}:{}",
-                          uniform, name_,
-                          std::filesystem::path(loc.file_name()).filename().string(),
-                          loc.line());
+                LOG_ERROR("Null shader '{}' when setting '{}'", name_, uniform);
                 return std::unexpected(std::format("Shader '{}' is not initialized", name_));
             }
 
             try {
-                LOG_TRACE("Setting uniform '{}' on shader '{}' (called from {}:{})",
-                          uniform, name_,
-                          std::filesystem::path(loc.file_name()).filename().string(),
-                          loc.line());
-
                 shader_->set_uniform(std::string(uniform), value);
                 return {};
             } catch (const std::exception& e) {
-                LOG_ERROR("Failed to set uniform '{}' on shader '{}': {} (at {}:{})",
-                          uniform, name_, e.what(),
-                          std::filesystem::path(loc.file_name()).filename().string(),
-                          loc.line());
-                return std::unexpected(std::format("Shader '{}': Failed to set uniform '{}': {}",
+                LOG_ERROR("Failed to set '{}' on shader '{}': {}", uniform, name_, e.what());
+                return std::unexpected(std::format("Shader '{}': Failed to set '{}': {}",
                                                    name_, uniform, e.what()));
             } catch (...) {
-                LOG_ERROR("Unknown exception setting uniform '{}' on shader '{}' (at {}:{})",
-                          uniform, name_,
-                          std::filesystem::path(loc.file_name()).filename().string(),
-                          loc.line());
-                return std::unexpected(std::format("Shader '{}': Unknown error setting uniform '{}'",
+                LOG_ERROR("Unknown exception setting '{}' on shader '{}'", uniform, name_);
+                return std::unexpected(std::format("Shader '{}': Unknown error setting '{}'",
                                                    name_, uniform));
             }
         }
 
-        // Template specialization for common types with better logging
         Result<void> setInt(std::string_view uniform, int value,
                             std::source_location loc = std::source_location::current()) {
-            LOG_TRACE("Setting int uniform '{}' = {} on shader '{}'", uniform, value, name_);
             return set(uniform, value, loc);
         }
 
         Result<void> setFloat(std::string_view uniform, float value,
                               std::source_location loc = std::source_location::current()) {
-            LOG_TRACE("Setting float uniform '{}' = {} on shader '{}'", uniform, value, name_);
             return set(uniform, value, loc);
         }
 
         Result<void> setVec2(std::string_view uniform, const glm::vec2& value,
                              std::source_location loc = std::source_location::current()) {
-            LOG_TRACE("Setting vec2 uniform '{}' = ({}, {}) on shader '{}'",
-                      uniform, value.x, value.y, name_);
             return set(uniform, value, loc);
         }
 
         Result<void> setVec3(std::string_view uniform, const glm::vec3& value,
                              std::source_location loc = std::source_location::current()) {
-            LOG_TRACE("Setting vec3 uniform '{}' = ({}, {}, {}) on shader '{}'",
-                      uniform, value.x, value.y, value.z, name_);
             return set(uniform, value, loc);
         }
 
         Result<void> setVec4(std::string_view uniform, const glm::vec4& value,
                              std::source_location loc = std::source_location::current()) {
-            LOG_TRACE("Setting vec4 uniform '{}' = ({}, {}, {}, {}) on shader '{}'",
-                      uniform, value.x, value.y, value.z, value.w, name_);
             return set(uniform, value, loc);
         }
 
         Result<void> setMat4(std::string_view uniform, const glm::mat4& value,
                              std::source_location loc = std::source_location::current()) {
-            LOG_TRACE("Setting mat4 uniform '{}' on shader '{}'", uniform, name_);
             return set(uniform, value, loc);
         }
 
@@ -142,13 +117,10 @@ namespace lfs::rendering {
         ShaderScope(const ShaderScope&) = delete;
         ShaderScope& operator=(const ShaderScope&) = delete;
 
-        // Move operations
         ShaderScope(ShaderScope&& other) noexcept
             : shader_(other.shader_),
               bound_(other.bound_) {
-            other.bound_ = false; // Prevent other from unbinding
-            LOG_TRACE("ShaderScope moved for shader '{}'",
-                      shader_ ? shader_->getName() : "<null>");
+            other.bound_ = false;
         }
 
         ShaderScope& operator=(ShaderScope&& other) = delete; // Prevent move assignment
@@ -163,6 +135,15 @@ namespace lfs::rendering {
     ShaderResult<ManagedShader> load_shader(
         std::string_view name,
         std::string_view vert_file,
+        std::string_view frag_file,
+        bool create_buffer = false,
+        std::source_location loc = std::source_location::current());
+
+    // Shader loader with geometry shader support
+    ShaderResult<ManagedShader> load_shader_with_geometry(
+        std::string_view name,
+        std::string_view vert_file,
+        std::string_view geom_file,
         std::string_view frag_file,
         bool create_buffer = false,
         std::source_location loc = std::source_location::current());
