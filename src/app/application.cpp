@@ -127,6 +127,9 @@ namespace lfs::app {
                         return 1;
                     }
                 }
+                if (params->view_paths.size() > 1) {
+                    viewer->consolidateModels();
+                }
             } else if (params->resume_checkpoint) {
                 LOG_INFO("Loading checkpoint: {}", lfs::core::path_to_utf8(*params->resume_checkpoint));
                 if (const auto result = viewer->loadCheckpointForTraining(*params->resume_checkpoint); !result) {

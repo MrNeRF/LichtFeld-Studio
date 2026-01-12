@@ -382,6 +382,10 @@ namespace lfs::vis {
         }
     }
 
+    size_t SceneManager::consolidateNodeModels() {
+        return scene_.consolidateNodeModels();
+    }
+
     void SceneManager::removePLY(const std::string& name, const bool keep_children) {
         const auto& training_name = scene_.getTrainingModelNodeName();
 

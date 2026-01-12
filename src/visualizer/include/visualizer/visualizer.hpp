@@ -38,7 +38,7 @@ namespace lfs::vis {
         virtual std::expected<void, std::string> addSplatFile(const std::filesystem::path& path) = 0;
         virtual std::expected<void, std::string> loadDataset(const std::filesystem::path& path) = 0;
         virtual std::expected<void, std::string> loadCheckpointForTraining(const std::filesystem::path& path) = 0;
-
+        virtual void consolidateModels() = 0;
         virtual void clearScene() = 0;
 
         virtual ~Visualizer() = default;

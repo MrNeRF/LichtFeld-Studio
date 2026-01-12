@@ -191,6 +191,7 @@ namespace lfs::vis {
 
         // Get combined model for rendering (transforms NOT baked, applied at render time)
         const lfs::core::SplatData* getCombinedModel() const;
+        size_t consolidateNodeModels();
 
         // Create merged model with transforms baked in (for saving)
         [[nodiscard]] std::unique_ptr<lfs::core::SplatData> createMergedModelWithTransforms() const;
@@ -320,6 +321,7 @@ namespace lfs::vis {
         mutable std::unique_ptr<lfs::core::SplatData> cached_combined_;
         mutable std::shared_ptr<lfs::core::Tensor> cached_transform_indices_;
         mutable bool model_cache_valid_ = false;
+        mutable const lfs::core::SplatData* single_node_model_ = nullptr;
 
         // Transform cache (rebuilt when transforms change, much cheaper)
         mutable std::vector<glm::mat4> cached_transforms_;

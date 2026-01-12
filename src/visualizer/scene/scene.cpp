@@ -312,7 +312,31 @@ namespace lfs::vis {
 
     const lfs::core::SplatData* Scene::getCombinedModel() const {
         rebuildCacheIfNeeded();
-        return cached_combined_.get();
+        return single_node_model_ ? single_node_model_ : cached_combined_.get();
+    }
+
+    size_t Scene::consolidateNodeModels() {
+        rebuildCacheIfNeeded();
+
+        if (single_node_model_ || !cached_combined_) {
+            return 0;
+        }
+
+        size_t consolidated = 0;
+        for (auto& node : nodes_) {
+            if (node->model && isNodeEffectivelyVisible(node->id)) {
+                node->model.reset();
+                ++consolidated;
+            }
+        }
+
+        if (consolidated > 0) {
+            constexpr size_t BYTES_PER_GAUSSIAN = 3 * 4 + 1 * 3 * 4 + 3 * 4 + 4 * 4 + 1 * 4;
+            const size_t saved_mb = getTotalGaussianCount() * BYTES_PER_GAUSSIAN / (1024 * 1024);
+            LOG_INFO("Consolidated {} nodes, saved ~{} MB VRAM", consolidated, saved_mb);
+        }
+
+        return consolidated;
     }
 
     const lfs::core::PointCloud* Scene::getVisiblePointCloud() const {
@@ -384,9 +408,10 @@ namespace lfs::vis {
         if (model_cache_valid_)
             return;
 
-        LOG_DEBUG("rebuildModelCacheIfNeeded - rebuilding combined model");
+        LOG_DEBUG("Rebuilding combined model cache");
 
-        // Collect visible nodes
+        single_node_model_ = nullptr;
+
         std::vector<const Node*> visible_nodes;
         for (const auto& node : nodes_) {
             if (node->model && isNodeEffectivelyVisible(node->id)) {
@@ -402,7 +427,22 @@ namespace lfs::vis {
             return;
         }
 
-        // Cache model sizes upfront to avoid race condition with training thread
+        if (visible_nodes.size() == 1) {
+            const auto* node = visible_nodes[0];
+            single_node_model_ = node->model.get();
+            cached_combined_.reset();
+
+            const size_t n = node->model->size();
+            cached_transform_indices_ = std::make_shared<lfs::core::Tensor>(
+                lfs::core::Tensor::zeros({n}, lfs::core::Device::CUDA, lfs::core::DataType::Int32));
+
+            LOG_DEBUG("Single node: {} ({} gaussians)", node->name, n);
+            model_cache_valid_ = true;
+            transform_cache_valid_ = false;
+            return;
+        }
+
+        // Cache model sizes to avoid race with training thread
         struct ModelStats {
             size_t total_gaussians = 0;
             int max_sh_degree = 0;
