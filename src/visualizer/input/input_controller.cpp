@@ -1179,14 +1179,16 @@ namespace lfs::vis {
                      center_x, center_y, cx_expected, cy_expected);
         }
 
-        // Set the FOV
+        const bool is_equirectangular =
+            cam_data->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
+
         ui::RenderSettingsChanged{
             .sh_degree = std::nullopt,
             .fov = fov_y_deg,
             .scaling_modifier = std::nullopt,
             .antialiasing = std::nullopt,
             .background_color = std::nullopt,
-            .equirectangular = std::nullopt}
+            .equirectangular = is_equirectangular}
             .emit();
 
         // Force immediate camera update

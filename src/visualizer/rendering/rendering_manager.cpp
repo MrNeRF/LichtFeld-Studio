@@ -30,9 +30,13 @@ namespace lfs::vis {
 
     using namespace lfs::core::events;
 
-    // GTTextureCache Implementation
     GTTextureCache::GTTextureCache() {
-        LOG_DEBUG("GTTextureCache created");
+        try {
+            constexpr lfs::io::NvCodecImageLoader::Options OPTS{.device_id = 0, .decoder_pool_size = 2};
+            nvcodec_loader_ = std::make_unique<lfs::io::NvCodecImageLoader>(OPTS);
+        } catch (...) {
+            nvcodec_loader_ = nullptr;
+        }
     }
 
     GTTextureCache::~GTTextureCache() {
@@ -55,14 +59,17 @@ namespace lfs::vis {
             return it->second.texture_id;
         }
 
-        const unsigned int texture_id = loadTexture(image_path);
-        if (texture_id == 0) {
-            return 0;
-        }
+        const auto ext = image_path.extension().string();
+        const bool is_jpeg = (ext == ".jpg" || ext == ".jpeg" || ext == ".JPG" || ext == ".JPEG");
 
-        if (texture_cache_.size() >= MAX_CACHE_SIZE) {
+        unsigned int texture_id = (nvcodec_loader_ && is_jpeg) ? loadTextureGPU(image_path) : 0;
+        if (texture_id == 0)
+            texture_id = loadTexture(image_path);
+        if (texture_id == 0)
+            return 0;
+
+        if (texture_cache_.size() >= MAX_CACHE_SIZE)
             evictOldest();
-        }
 
         texture_cache_[cam_id] = {texture_id, std::chrono::steady_clock::now()};
         return texture_id;
@@ -88,79 +95,105 @@ namespace lfs::vis {
     }
 
     unsigned int GTTextureCache::loadTexture(const std::filesystem::path& path) {
-        if (!std::filesystem::exists(path)) {
-            LOG_ERROR("GT image file does not exist: {}", lfs::core::path_to_utf8(path));
+        if (!std::filesystem::exists(path))
             return 0;
-        }
 
         try {
-            // Use image_io to load the image
             auto [data, width, height, channels] = lfs::core::load_image(path);
-
-            if (!data) {
-                LOG_ERROR("Failed to load image data: {}", lfs::core::path_to_utf8(path));
+            if (!data)
                 return 0;
+
+            int out_width = width;
+            int out_height = height;
+            int scale = 1;
+            while (out_width > MAX_TEXTURE_DIM || out_height > MAX_TEXTURE_DIM) {
+                out_width /= 2;
+                out_height /= 2;
+                scale *= 2;
             }
 
-            LOG_TRACE("Loaded GT image: {}x{} with {} channels", width, height, channels);
+            std::vector<unsigned char> final_data(out_width * out_height * channels);
+            const int scale_sq = scale * scale;
 
-            // FLIP vertically: OpenGL expects origin at bottom-left, images have origin at top-left
-            // This matches what the renderer produces
-            std::vector<unsigned char> flipped_data(width * height * channels);
-            size_t row_size = width * channels;
-            for (int y = 0; y < height; ++y) {
-                std::memcpy(
-                    flipped_data.data() + y * row_size,
-                    data + (height - 1 - y) * row_size,
-                    row_size);
+            if (scale > 1) {
+                for (int y = 0; y < out_height; ++y) {
+                    const int src_y = (out_height - 1 - y) * scale;
+                    for (int x = 0; x < out_width; ++x) {
+                        const int src_x = x * scale;
+                        for (int c = 0; c < channels; ++c) {
+                            int sum = 0;
+                            for (int sy = 0; sy < scale; ++sy)
+                                for (int sx = 0; sx < scale; ++sx)
+                                    sum += data[((src_y + sy) * width + src_x + sx) * channels + c];
+                            final_data[(y * out_width + x) * channels + c] =
+                                static_cast<unsigned char>(sum / scale_sq);
+                        }
+                    }
+                }
+            } else {
+                const size_t row_size = width * channels;
+                for (int y = 0; y < height; ++y)
+                    std::memcpy(final_data.data() + y * row_size,
+                                data + (height - 1 - y) * row_size, row_size);
             }
 
-            // Create OpenGL texture
+            lfs::core::free_image(data);
+
             unsigned int texture;
             glGenTextures(1, &texture);
             glBindTexture(GL_TEXTURE_2D, texture);
 
-            // Determine format based on channels
-            GLenum format = GL_RGB;
-            GLenum internal_format = GL_RGB8;
+            const GLenum format = (channels == 1) ? GL_RED : (channels == 4) ? GL_RGBA
+                                                                             : GL_RGB;
+            const GLenum internal = (channels == 1) ? GL_R8 : (channels == 4) ? GL_RGBA8
+                                                                              : GL_RGB8;
 
-            if (channels == 1) {
-                format = GL_RED;
-                internal_format = GL_R8;
-            } else if (channels == 2) {
-                format = GL_RG;
-                internal_format = GL_RG8;
-            } else if (channels == 3) {
-                format = GL_RGB;
-                internal_format = GL_RGB8;
-            } else if (channels == 4) {
-                format = GL_RGBA;
-                internal_format = GL_RGBA8;
-            }
-
-            // Upload flipped texture data
-            glTexImage2D(GL_TEXTURE_2D, 0, internal_format, width, height, 0,
-                         format, GL_UNSIGNED_BYTE, flipped_data.data());
-
-            // Set texture parameters
+            glTexImage2D(GL_TEXTURE_2D, 0, internal, out_width, out_height, 0,
+                         format, GL_UNSIGNED_BYTE, final_data.data());
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-            // Generate mipmaps for better quality when scaled
-            glGenerateMipmap(GL_TEXTURE_2D);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-
-            // Free image data
-            lfs::core::free_image(data);
-
-            LOG_DEBUG("Created GL texture {} for image: {} ({}x{})",
-                      texture, lfs::core::path_to_utf8(path.filename()), width, height);
             return texture;
+        } catch (...) {
+            return 0;
+        }
+    }
 
-        } catch (const std::exception& e) {
-            LOG_ERROR("Exception loading image {}: {}", lfs::core::path_to_utf8(path), e.what());
+    unsigned int GTTextureCache::loadTextureGPU(const std::filesystem::path& path) {
+        if (!nvcodec_loader_)
+            return 0;
+
+        try {
+            const auto tensor = nvcodec_loader_->load_image_gpu(path, 1, MAX_TEXTURE_DIM);
+            if (tensor.numel() == 0)
+                return 0;
+
+            const auto& shape = tensor.shape();
+            const int height = static_cast<int>(shape[1]);
+            const int width = static_cast<int>(shape[2]);
+
+            const auto hwc = tensor.permute({1, 2, 0}).contiguous();
+            const auto uint8_tensor = (hwc * 255.0f).clamp(0.0f, 255.0f).to(lfs::core::DataType::UInt8).cpu();
+
+            std::vector<unsigned char> flipped(width * height * 3);
+            const auto* src = uint8_tensor.ptr<unsigned char>();
+            const size_t row_size = width * 3;
+            for (int y = 0; y < height; ++y)
+                std::memcpy(flipped.data() + y * row_size, src + (height - 1 - y) * row_size, row_size);
+
+            unsigned int texture;
+            glGenTextures(1, &texture);
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, flipped.data());
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+            return texture;
+        } catch (...) {
             return 0;
         }
     }
@@ -224,30 +257,21 @@ namespace lfs::vis {
             markDirty();
         });
 
-        // Listen for GT comparison toggle (G key - for camera/GT comparison)
         cmd::ToggleGTComparison::when([this](const auto&) {
             std::lock_guard<std::mutex> lock(settings_mutex_);
 
-            // G key toggles between Disabled and GTComparison only
             if (settings_.split_view_mode == SplitViewMode::GTComparison) {
                 settings_.split_view_mode = SplitViewMode::Disabled;
-                LOG_INFO("GT comparison disabled");
+                settings_.equirectangular = pre_gt_equirectangular_;
+                ui::RenderSettingsChanged{.equirectangular = pre_gt_equirectangular_}.emit();
             } else {
-                // Check if we can actually do GT comparison
-                if (current_camera_id_ < 0) {
-                    LOG_WARN("Cannot enable GT comparison: no camera selected. Use arrow keys or click a camera to select one.");
-                    // Don't change the mode
+                if (current_camera_id_ < 0)
                     return;
-                }
-
-                // From Disabled or PLYComparison, go to GTComparison
+                pre_gt_equirectangular_ = settings_.equirectangular;
                 settings_.split_view_mode = SplitViewMode::GTComparison;
-                LOG_INFO("GT comparison enabled for camera {}", current_camera_id_);
             }
 
             markDirty();
-
-            // Emit UI event
             ui::GTComparisonModeChanged{
                 .enabled = (settings_.split_view_mode == SplitViewMode::GTComparison)}
                 .emit();
@@ -541,19 +565,20 @@ namespace lfs::vis {
                 static_cast<int>(context.viewport_region->height));
         }
 
-        // Apply render scale to reduce VRAM usage (clamped 0.25-1.0)
         const float scale = std::clamp(settings_.render_scale, 0.25f, 1.0f);
-        glm::ivec2 render_size = glm::ivec2(
+        glm::ivec2 render_size(
             static_cast<int>(viewport_size.x * scale),
             static_cast<int>(viewport_size.y * scale));
 
-        // GT comparison mode: use actual camera dimensions
         if (settings_.split_view_mode == SplitViewMode::GTComparison && current_camera_id_ >= 0) {
             if (auto* trainer_manager = scene_manager->getTrainerManager()) {
                 if (trainer_manager->hasTrainer()) {
-                    if (auto cam = trainer_manager->getCamById(current_camera_id_)) {
-                        render_size.x = cam->image_width();
-                        render_size.y = cam->image_height();
+                    if (const auto cam = trainer_manager->getCamById(current_camera_id_)) {
+                        const float aspect = static_cast<float>(cam->image_width()) / cam->image_height();
+                        const int max_dim = std::max(render_size.x, render_size.y);
+                        render_size = (aspect >= 1.0f)
+                                          ? glm::ivec2(max_dim, static_cast<int>(max_dim / aspect))
+                                          : glm::ivec2(static_cast<int>(max_dim * aspect), max_dim);
                     }
                 }
             }

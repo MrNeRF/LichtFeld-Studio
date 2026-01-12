@@ -6,6 +6,7 @@
 
 #include "framerate_controller.hpp"
 #include "internal/viewport.hpp"
+#include "io/nvcodec_image_loader.hpp"
 #include "rendering/rendering.hpp"
 #include <atomic>
 #include <chrono>
@@ -127,10 +128,13 @@ namespace lfs::vis {
         };
 
         std::unordered_map<int, CacheEntry> texture_cache_;
+        std::unique_ptr<lfs::io::NvCodecImageLoader> nvcodec_loader_;
         static constexpr size_t MAX_CACHE_SIZE = 20;
+        static constexpr int MAX_TEXTURE_DIM = 2048;
 
         void evictOldest();
         unsigned int loadTexture(const std::filesystem::path& path);
+        unsigned int loadTextureGPU(const std::filesystem::path& path);
     };
 
     class RenderingManager {
@@ -316,8 +320,8 @@ namespace lfs::vis {
         mutable std::mutex split_info_mutex_;
         SplitViewInfo current_split_info_;
 
-        // Current camera for GT comparison
         int current_camera_id_ = -1;
+        bool pre_gt_equirectangular_ = false;
 
         // Settings
         RenderSettings settings_;

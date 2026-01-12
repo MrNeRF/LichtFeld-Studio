@@ -7,6 +7,7 @@ in vec2 TexCoord;
 flat in int instanceID;
 flat in uint textureID;
 flat in uint isValidation;
+flat in uint isEquirectangular;
 
 // Output
 out vec4 FragColor;
@@ -14,8 +15,8 @@ out vec4 FragColor;
 // Uniforms
 uniform vec3 viewPos;
 uniform int highlightIndex = -1;
-uniform vec3 trainHighlightColor = vec3(1.0, 0.55, 0.0);   // Dark orange for training
-uniform vec3 valHighlightColor = vec3(0.9, 0.75, 0.0);     // Dark yellow for validation
+uniform vec3 trainHighlightColor = vec3(1.0, 0.55, 0.0); // Dark orange for training
+uniform vec3 valHighlightColor = vec3(0.9, 0.75, 0.0);   // Dark yellow for validation
 uniform bool pickingMode = false;
 uniform float minimumPickDistance = 0.5;
 uniform bool showImages = false;

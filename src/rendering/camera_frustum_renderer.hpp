@@ -71,7 +71,8 @@ namespace lfs::rendering {
             float alpha;
             uint32_t texture_id;
             uint32_t is_validation;
-            uint32_t padding[2]; // 16-byte alignment
+            uint32_t is_equirectangular;
+            uint32_t padding; // 16-byte alignment
         };
 
         struct ThumbnailRequest {
@@ -89,6 +90,7 @@ namespace lfs::rendering {
         };
 
         Result<void> createGeometry();
+        Result<void> createSphereGeometry();
         Result<void> createPickingFBO();
 
         void prepareInstances(const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
@@ -109,13 +111,21 @@ namespace lfs::rendering {
         void queueThumbnailLoad(const lfs::core::Camera& camera);
         void uploadReadyThumbnails();
 
-        // GL resources
+        // GL resources - frustum geometry
         ManagedShader shader_;
         VAO vao_;
         VBO vbo_;
         EBO face_ebo_;
         EBO edge_ebo_;
         VBO instance_vbo_;
+
+        // Sphere geometry for equirectangular cameras
+        VAO sphere_vao_;
+        VBO sphere_vbo_;
+        EBO sphere_face_ebo_;
+        EBO sphere_edge_ebo_;
+        size_t num_sphere_face_indices_ = 0;
+        size_t num_sphere_edge_indices_ = 0;
 
         // Picking
         FBO picking_fbo_;
