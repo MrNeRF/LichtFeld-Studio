@@ -501,11 +501,25 @@ namespace lfs::rendering {
                             glm::mat4 jModel = glm::translate(glm::mat4(1), jLabelPos) *
                                                glm::scale(glm::mat4(1), glm::vec3(sphereRadius * jScaleFactor));
                             glm::mat4 jMvp = proj * view * jModel;
-                            s->set("uMVP", jMvp);
-                            s->set("uModel", glm::mat4(1.0f));
-                            s->set("uColor", AXIS_COLORS[jdx]);
-                            s->set("uAlpha", 1.0f);
-                            s->set("uUseLighting", 0);
+                            if (auto result = s->set("uMVP", jMvp); !result) {
+                                LOG_WARN("Failed to set uMVP: {}", result.error());
+                            }
+
+                            if (auto result = s->set("uModel", glm::mat4(1.0f)); !result) {
+                                LOG_WARN("Failed to set uModel: {}", result.error());
+                            }
+
+                            if (auto result = s->set("uColor", AXIS_COLORS[jdx]); !result) {
+                                LOG_WARN("Failed to set uColor: {}", result.error());
+                            }
+
+                            if (auto result = s->set("uAlpha", 1.0f); !result) {
+                                LOG_WARN("Failed to set uAlpha: {}", result.error());
+                            }
+
+                            if (auto result = s->set("uUseLighting", 0); !result) {
+                                LOG_WARN("Failed to set uUseLighting: {}", result.error());
+                            }
                             glDrawArrays(GL_TRIANGLES, sphere_vertex_start_, sphere_vertex_count_);
                         }
                     }

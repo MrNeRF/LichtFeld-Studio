@@ -676,7 +676,10 @@ namespace lfs::rendering {
     void CudaGLInteropBufferImpl<true>::cleanup() {
         LOG_TRACE("Cleaning up CUDA-GL interop buffer");
         if (mapped_ptr_) {
-            unmapBuffer(); // Best effort
+            auto result = unmapBuffer(); // Best effort
+            if (!result) {
+                LOG_DEBUG("Failed to unmap buffer (non-critical): {}", result.error());
+            }
         }
         cuda_resource_.reset();
         is_registered_ = false;

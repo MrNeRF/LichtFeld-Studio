@@ -180,7 +180,7 @@ namespace spz {
             }
             std::sort(scaleSums.begin(), scaleSums.end());
             float median = scaleSums[scaleSums.size() / 2];
-            return (M_PI * 4 / 3) * exp(median);
+            return static_cast<float>((M_PI * 4 / 3) * exp(median));
         }
     };
 

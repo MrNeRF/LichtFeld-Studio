@@ -85,7 +85,6 @@ namespace lfs::core {
             const uint2 pix = {
                 block.group_index().x * BLOCK_X + thread_idx_x,
                 block.group_index().y * BLOCK_Y + thread_idx_y};
-            const uint32_t pix_id = output_w * pix.y + pix.x;
             const float2 pixf = {(float)pix.x, (float)pix.y};
             float scale_h = 1.0f * input_h / output_h, scale_w = 1.0f * input_w / output_w;
 

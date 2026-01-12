@@ -535,7 +535,6 @@ namespace lfs::vis::gui::panels {
 
         int current_iter = trainer_manager->getCurrentIteration();
         int total_iter = trainer_manager->getTotalIterations();
-        int num_splats = trainer_manager->getNumSplats();
 
         // Fix: Convert deque to vector
         std::deque<float> loss_deque = trainer_manager->getLossBuffer();

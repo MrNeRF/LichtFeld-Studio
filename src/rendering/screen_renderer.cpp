@@ -110,17 +110,37 @@ namespace lfs::rendering {
 
         // Set texture coordinate scale for over-allocated textures
         glm::vec2 texcoord_scale = getTexcoordScale();
-        shader.set("texcoord_scale", texcoord_scale);
+        if (auto result = shader.set("texcoord_scale", texcoord_scale); !result) {
+            LOG_TRACE("Uniform 'texcoord_scale' not found in shader: {}", result.error());
+        }
 
         // Bind depth texture and set depth parameters
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, getDepthTextureID());
-        shader.set("depthTexture", 1); // Ignore error - optional uniform
-        shader.set("has_depth", depth_params_.has_depth);
-        shader.set("near_plane", depth_params_.near_plane);
-        shader.set("far_plane", depth_params_.far_plane);
-        shader.set("orthographic", depth_params_.orthographic);
-        shader.set("depth_is_ndc", depth_params_.depth_is_ndc);
+
+        if (auto result = shader.set("depthTexture", 1); !result) {
+            LOG_TRACE("Uniform 'depthTexture' not set: {}", result.error());
+        }
+
+        if (auto result = shader.set("has_depth", depth_params_.has_depth); !result) {
+            LOG_TRACE("Uniform 'has_depth' not set: {}", result.error());
+        }
+
+        if (auto result = shader.set("near_plane", depth_params_.near_plane); !result) {
+            LOG_TRACE("Uniform 'near_plane' not set: {}", result.error());
+        }
+
+        if (auto result = shader.set("far_plane", depth_params_.far_plane); !result) {
+            LOG_TRACE("Uniform 'far_plane' not set: {}", result.error());
+        }
+
+        if (auto result = shader.set("orthographic", depth_params_.orthographic); !result) {
+            LOG_TRACE("Uniform 'orthographic' not set: {}", result.error());
+        }
+
+        if (auto result = shader.set("depth_is_ndc", depth_params_.depth_is_ndc); !result) {
+            LOG_TRACE("Uniform 'depth_is_ndc' not set: {}", result.error());
+        }
 
         // Enable depth writing when we have depth data
         GLboolean prev_depth_mask;

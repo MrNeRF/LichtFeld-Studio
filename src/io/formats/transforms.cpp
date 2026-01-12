@@ -54,7 +54,7 @@ namespace lfs::io {
     }
 
     float fov_deg_to_focal_length(int resolution, float fov_deg) {
-        return 0.5f * (float)resolution / tanf(0.5f * fov_deg * std::numbers::pi / 180.0f);
+        return 0.5f * (float)resolution / tanf(0.5f * fov_deg * static_cast<float>(std::numbers::pi) / 180.0f);
     }
 
     float fov_rad_to_focal_length(int resolution, float fov_rad) {
@@ -220,13 +220,13 @@ namespace lfs::io {
         if (transforms.contains("cx")) {
             cx = float(transforms["cx"]);
         } else {
-            cx = 0.5 * w;
+            cx = 0.5f * w;
         }
 
         if (transforms.contains("cy")) {
             cy = float(transforms["cy"]);
         } else {
-            cy = 0.5 * h;
+            cy = 0.5f * h;
         }
 
         float k1 = 0;
@@ -296,7 +296,7 @@ namespace lfs::io {
                 Tensor w2c = mat4_to_tensor(w2c_glm);
 
                 // fix so that the z direction will be the same (currently it is faceing downward)
-                Tensor fixMat = createYRotationMatrix(M_PI);
+                Tensor fixMat = createYRotationMatrix(static_cast<float>(M_PI));
                 w2c = w2c.mm(fixMat);
 
                 // Extract rotation matrix R (transposed due to 'glm' in CUDA code)
@@ -332,7 +332,7 @@ namespace lfs::io {
                 camdata._center_y = cy;
 
                 camdata._camera_model_type = camera_model;
-                camdata._camera_ID = counter++;
+                camdata._camera_ID = static_cast<uint32_t>(counter++);
 
                 camerasdata.push_back(camdata);
                 LOG_TRACE("Processed frame {}: {}", frameInd, camdata._image_name);

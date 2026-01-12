@@ -96,7 +96,11 @@ namespace lfs::vis {
 
             trainer_ = std::move(trainer);
             updateResourceTracking();
-            state_machine_.transitionTo(TrainingState::Ready);
+
+            if (!state_machine_.transitionTo(TrainingState::Ready)) {
+                LOG_WARN("Failed to transition to Ready");
+            }
+
             internal::TrainerReady{}.emit();
             LOG_DEBUG("Trainer ready");
         }
@@ -115,7 +119,11 @@ namespace lfs::vis {
             trainer_ = std::move(trainer);
             updateResourceTracking();
             // Checkpoint load goes to Paused
-            state_machine_.transitionTo(TrainingState::Paused);
+
+            if (!state_machine_.transitionTo(TrainingState::Paused)) {
+                LOG_WARN("Failed to transition to Paused");
+            }
+
             state::TrainingPaused{.iteration = checkpoint_iteration}.emit();
             LOG_DEBUG("Trainer paused from checkpoint (iteration {})", checkpoint_iteration);
         }
@@ -149,7 +157,10 @@ namespace lfs::vis {
 
         // Transition to Idle
         updateResourceTracking();
-        state_machine_.transitionTo(TrainingState::Idle);
+
+        if (!state_machine_.transitionTo(TrainingState::Idle)) {
+            LOG_WARN("Failed to transition to Idle");
+        }
 
         LOG_INFO("Trainer cleared");
     }
@@ -178,7 +189,10 @@ namespace lfs::vis {
                 if (auto result = lfs::training::initializeTrainingModel(params, *scene_); !result) {
                     LOG_ERROR("Failed to initialize model: {}", result.error());
                     last_error_ = result.error();
-                    state_machine_.transitionToFinished(FinishReason::Error);
+
+                    if (!state_machine_.transitionToFinished(FinishReason::Error)) {
+                        LOG_WARN("Failed to transition to Finished(Error)");
+                    }
                     return false;
                 }
             }
@@ -186,7 +200,10 @@ namespace lfs::vis {
             if (auto result = trainer_->initialize(params); !result) {
                 LOG_ERROR("Failed to initialize trainer: {}", result.error());
                 last_error_ = result.error();
-                state_machine_.transitionToFinished(FinishReason::Error);
+
+                if (!state_machine_.transitionToFinished(FinishReason::Error)) {
+                    LOG_WARN("Failed to transition to Finished(Error)");
+                }
                 return false;
             }
         }
@@ -197,7 +214,10 @@ namespace lfs::vis {
         }
 
         updateResourceTracking();
-        state_machine_.transitionTo(TrainingState::Running);
+
+        if (!state_machine_.transitionTo(TrainingState::Running)) {
+            LOG_WARN("Failed to transition to Running");
+        }
 
         training_start_time_ = std::chrono::steady_clock::now();
         accumulated_training_time_ = std::chrono::steady_clock::duration{0};
@@ -222,7 +242,10 @@ namespace lfs::vis {
         if (trainer_) {
             trainer_->request_pause();
             accumulated_training_time_ += std::chrono::steady_clock::now() - training_start_time_;
-            state_machine_.transitionTo(TrainingState::Paused);
+
+            if (!state_machine_.transitionTo(TrainingState::Paused)) {
+                LOG_WARN("Failed to transition to Paused");
+            }
 
             state::TrainingPaused{.iteration = getCurrentIteration()}.emit();
             LOG_INFO("Training paused at iteration {}", getCurrentIteration());
@@ -252,7 +275,11 @@ namespace lfs::vis {
 
         training_start_time_ = std::chrono::steady_clock::now();
         updateResourceTracking();
-        state_machine_.transitionTo(TrainingState::Running);
+
+        if (!state_machine_.transitionTo(TrainingState::Running)) {
+            LOG_WARN("Failed to transition to Running");
+        }
+
         state::TrainingResumed{.iteration = iter}.emit();
         LOG_INFO("Training resumed at iteration {}", iter);
     }
@@ -285,7 +312,10 @@ namespace lfs::vis {
 
         LOG_DEBUG("Requesting training stop");
         updateResourceTracking();
-        state_machine_.transitionTo(TrainingState::Stopping);
+
+        if (!state_machine_.transitionTo(TrainingState::Stopping)) {
+            LOG_WARN("Failed to transition to Stopping");
+        }
 
         if (trainer_) {
             trainer_->request_stop();
@@ -329,14 +359,21 @@ namespace lfs::vis {
 
             if (!scene_) {
                 LOG_ERROR("Cannot reset: no scene");
-                state_machine_.transitionToFinished(FinishReason::Error);
+
+                if (!state_machine_.transitionToFinished(FinishReason::Error)) {
+                    LOG_WARN("Failed to transition to Finished(Error)");
+                }
                 return false;
             }
             trainer_ = std::make_unique<lfs::training::Trainer>(*scene_);
         }
 
         loss_buffer_.clear();
-        state_machine_.transitionTo(TrainingState::Ready);
+
+        if (!state_machine_.transitionTo(TrainingState::Ready)) {
+            LOG_WARN("Failed to transition to Ready");
+        }
+
         LOG_DEBUG("Training reset complete");
         return true;
     }
@@ -368,7 +405,7 @@ namespace lfs::vis {
     int TrainerManager::getTotalIterations() const {
         if (!trainer_)
             return 0;
-        return trainer_->getParams().optimization.iterations;
+        return static_cast<int>(trainer_->getParams().optimization.iterations);
     }
 
     int TrainerManager::getNumSplats() const {
@@ -484,13 +521,18 @@ namespace lfs::vis {
 
         updateResourceTracking();
         if (!user_stopped) {
-            state_machine_.transitionTo(TrainingState::Stopping);
+            if (!state_machine_.transitionTo(TrainingState::Stopping)) {
+                LOG_WARN("Failed to transition to Stopping");
+            }
         }
 
         const FinishReason reason = !success       ? FinishReason::Error
                                     : user_stopped ? FinishReason::UserStopped
                                                    : FinishReason::Completed;
-        state_machine_.transitionToFinished(reason);
+
+        if (!state_machine_.transitionToFinished(reason)) {
+            LOG_WARN("Failed to transition to Finished");
+        }
 
         LOG_INFO("Training finished: iter={}, loss={:.6f}, time={:.1f}s",
                  final_iter, final_loss, elapsed);

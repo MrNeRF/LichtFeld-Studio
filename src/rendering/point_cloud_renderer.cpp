@@ -217,7 +217,9 @@ namespace lfs::rendering {
             if (use_interop_ && interop_buffer_) {
                 if (auto map_result = interop_buffer_->mapBuffer(); map_result) {
                     cudaMemcpy(*map_result, interleaved_cache_.data_ptr(), buffer_size, cudaMemcpyDeviceToDevice);
-                    interop_buffer_->unmapBuffer();
+                    if (auto result = interop_buffer_->unmapBuffer(); !result) {
+                        LOG_DEBUG("Failed to unmap buffer: {}", result.error());
+                    }
                 } else {
                     use_interop_ = false;
                     interop_buffer_.reset();
@@ -252,7 +254,9 @@ namespace lfs::rendering {
         if (auto result = s->set("u_num_transforms", num_transforms); !result)
             return result;
         for (int i = 0; i < num_transforms; ++i) {
-            s->set(std::format("u_model_transforms[{}]", i), model_transforms[i]);
+            if (auto result = s->set(std::format("u_model_transforms[{}]", i), model_transforms[i]); !result) {
+                LOG_ERROR("Failed to set u_model_transforms[{}] uniform: {}", i, result.error());
+            }
         }
 
         if (!cube_vao_ || cube_vao_.get() == 0)
