@@ -14,6 +14,7 @@
 #include "rendering/rasterizer/rasterization/include/rasterization_api_tensor.h"
 #include "rendering/rasterizer/rasterization/include/rasterization_config.h"
 #include "rendering/rendering.hpp"
+#include "rendering/rendering_pipeline.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
@@ -26,7 +27,16 @@ namespace lfs::vis {
 
     namespace {
         constexpr int GPU_ALIGNMENT = 16; // 16-pixel alignment for GPU texture efficiency
-    }
+
+        std::vector<lfs::rendering::GaussianRange> convertGaussianRanges(const std::vector<GaussianRange>& vis_ranges) {
+            std::vector<lfs::rendering::GaussianRange> result;
+            result.reserve(vis_ranges.size());
+            for (const auto& r : vis_ranges) {
+                result.push_back({r.offset, r.count});
+            }
+            return result;
+        }
+    } // namespace
 
     using namespace lfs::core::events;
 
@@ -653,6 +663,9 @@ namespace lfs::vis {
                                       ? std::move(scene_state.selected_node_mask)
                                       : std::vector<bool>{},
             .node_visibility_mask = std::move(scene_state.node_visibility_mask),
+            .visible_ranges = convertGaussianRanges(scene_state.visible_ranges),
+            .visible_gaussian_count = scene_state.visible_gaussian_count,
+            .visible_indices = scene_state.visible_indices,
             .desaturate_unselected = settings_.desaturate_unselected,
             .selection_flash_intensity = getSelectionFlashIntensity(),
             .hovered_depth_id = nullptr,

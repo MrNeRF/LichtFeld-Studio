@@ -47,7 +47,9 @@ namespace lfs::rendering {
         float selection_flash_intensity,
         bool orthographic,
         float ortho_scale,
-        bool mip_filter) {
+        bool mip_filter,
+        const Tensor* visible_indices,
+        size_t visible_count) {
 
         // Get camera parameters
         const float fx = viewpoint_camera.focal_x();
@@ -162,7 +164,9 @@ namespace lfs::rendering {
             selection_flash_intensity,
             orthographic,
             ortho_scale,
-            mip_filter);
+            mip_filter,
+            visible_indices,
+            visible_count);
 
         // Manually blend the background since the forward pass does not support it
         // bg_color is [3], need to make it [3, 1, 1]
@@ -190,7 +194,9 @@ namespace lfs::rendering {
         const Tensor& bg_color,
         const float scaling_modifier,
         const Tensor* transform_indices,
-        const std::vector<bool>& node_visibility_mask) {
+        const std::vector<bool>& node_visibility_mask,
+        const Tensor* visible_indices,
+        size_t visible_count) {
 
         const int width = camera.camera_width();
         const int height = camera.camera_height();
@@ -230,7 +236,8 @@ namespace lfs::rendering {
             sh_degree, width, height,
             GutCameraModel::PINHOLE,
             nullptr, nullptr, &bg_color,
-            transform_indices, node_visibility_mask);
+            transform_indices, node_visibility_mask,
+            visible_indices, visible_count);
 
         return {std::move(image), std::move(depth)};
     }

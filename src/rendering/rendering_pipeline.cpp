@@ -136,11 +136,15 @@ namespace lfs::rendering {
 
                 if (request.gut) {
                     // Use local forward-only GUT rasterizer (no training module dependency)
-                    LOG_TRACE("Using GUT rasterizer (sh_degree temporarily changed from {} to {})",
-                              original_sh_degree, request.sh_degree);
+                    if (request.visible_indices && request.visible_gaussian_count > 0) {
+                        LOG_INFO("Using GUT rasterizer with visible_indices: {} gaussians", request.visible_gaussian_count);
+                    } else {
+                        LOG_INFO("Using GUT rasterizer (all gaussians)");
+                    }
                     auto render_output = gut_rasterize_tensor(
                         cam, const_cast<lfs::core::SplatData&>(model), background_,
-                        request.scaling_modifier, transform_indices_ptr, request.node_visibility_mask);
+                        request.scaling_modifier, transform_indices_ptr, request.node_visibility_mask,
+                        request.visible_indices.get(), request.visible_gaussian_count);
                     result.image = std::move(render_output.image);
                     result.depth = std::move(render_output.depth);
                 } else {
@@ -170,7 +174,9 @@ namespace lfs::rendering {
                                                            request.selection_flash_intensity,
                                                            request.orthographic,
                                                            request.ortho_scale,
-                                                           request.mip_filter);
+                                                           request.mip_filter,
+                                                           request.visible_indices.get(),
+                                                           request.visible_gaussian_count);
                     result.image = std::move(image);
                     result.depth = std::move(depth);
                     if (request.output_screen_positions) {
@@ -194,10 +200,15 @@ namespace lfs::rendering {
 
             if (request.gut) {
                 // Use local forward-only GUT rasterizer (no training module dependency)
-                LOG_TRACE("Using GUT rasterizer");
+                if (request.visible_indices && request.visible_gaussian_count > 0) {
+                    LOG_INFO("Using GUT rasterizer with visible_indices: {} gaussians", request.visible_gaussian_count);
+                } else {
+                    LOG_INFO("Using GUT rasterizer (all gaussians)");
+                }
                 auto render_output = gut_rasterize_tensor(
                     cam, mutable_model, background_,
-                    request.scaling_modifier, transform_indices_ptr, request.node_visibility_mask);
+                    request.scaling_modifier, transform_indices_ptr, request.node_visibility_mask,
+                    request.visible_indices.get(), request.visible_gaussian_count);
                 result.image = std::move(render_output.image);
                 result.depth = std::move(render_output.depth);
                 result.valid = true;
@@ -208,7 +219,11 @@ namespace lfs::rendering {
             }
 
             // Use libtorch-free tensor-based rasterizer
-            LOG_TRACE("Using TENSOR_NATIVE backend (libtorch-free rasterizer)");
+            if (request.visible_indices && request.visible_gaussian_count > 0) {
+                LOG_INFO("Using FAST GS rasterizer with visible_indices: {} gaussians", request.visible_gaussian_count);
+            } else {
+                LOG_INFO("Using FAST GS rasterizer (all gaussians)");
+            }
             Tensor screen_positions;
             auto [image, depth] = rasterize_tensor(cam, mutable_model, background_,
                                                    request.show_rings, request.ring_width,
@@ -233,7 +248,9 @@ namespace lfs::rendering {
                                                    request.selection_flash_intensity,
                                                    request.orthographic,
                                                    request.ortho_scale,
-                                                   request.mip_filter);
+                                                   request.mip_filter,
+                                                   request.visible_indices.get(),
+                                                   request.visible_gaussian_count);
             result.image = std::move(image);
             result.depth = std::move(depth);
             if (request.output_screen_positions) {

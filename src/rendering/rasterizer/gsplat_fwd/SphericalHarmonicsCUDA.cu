@@ -517,14 +517,20 @@ namespace gsplat_fwd {
         const float* __restrict__ means,
         const float* __restrict__ viewmats,
         const uint32_t C,
-        const uint32_t N,
+        const uint32_t M,                        // Visible gaussians to process
+        const int* __restrict__ visible_indices, // [M] maps output idx → global gaussian idx
         float* __restrict__ dirs) {
         const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-        if (idx >= C * N)
+        if (idx >= C * M)
             return;
 
-        const uint32_t c = idx / N;
-        const uint32_t n = idx % N;
+        const uint32_t c = idx / M;
+        const uint32_t out_n = idx % M; // output gaussian index
+
+        // Map to global gaussian index if using visibility filtering
+        const uint32_t global_n = (visible_indices != nullptr)
+                                      ? static_cast<uint32_t>(visible_indices[out_n])
+                                      : out_n;
 
         const float* vm = viewmats + c * 16;
 
@@ -538,11 +544,13 @@ namespace gsplat_fwd {
         const float campos_y = -(R01 * tx + R11 * ty + R21 * tz);
         const float campos_z = -(R02 * tx + R12 * ty + R22 * tz);
 
-        const float mx = means[n * 3 + 0];
-        const float my = means[n * 3 + 1];
-        const float mz = means[n * 3 + 2];
+        // Read from global gaussian index
+        const float mx = means[global_n * 3 + 0];
+        const float my = means[global_n * 3 + 1];
+        const float mz = means[global_n * 3 + 2];
 
-        const uint32_t out_idx = (c * N + n) * 3;
+        // Write to compacted output
+        const uint32_t out_idx = (c * M + out_n) * 3;
         dirs[out_idx + 0] = mx - campos_x;
         dirs[out_idx + 1] = my - campos_y;
         dirs[out_idx + 2] = mz - campos_z;
@@ -552,17 +560,19 @@ namespace gsplat_fwd {
         const float* means,
         const float* viewmats,
         const uint32_t C,
-        const uint32_t N,
+        const uint32_t N_total,
+        const uint32_t M,
+        const int* visible_indices,
         float* dirs,
         cudaStream_t stream) {
-        if (C * N == 0)
+        if (C * M == 0)
             return;
 
         constexpr uint32_t BLOCK_SIZE = 256;
-        const uint32_t num_blocks = (C * N + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        const uint32_t num_blocks = (C * M + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
         compute_view_dirs_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
-            means, viewmats, C, N, dirs);
+            means, viewmats, C, M, visible_indices, dirs);
     }
 
 } // namespace gsplat_fwd

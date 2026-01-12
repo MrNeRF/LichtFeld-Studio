@@ -115,6 +115,8 @@ namespace lfs::rendering {
         float selection_flash_intensity = 0.0f,
         bool orthographic = false,
         float ortho_scale = 1.0f,
-        bool mip_filter = false);
+        bool mip_filter = false,
+        const int* visible_indices = nullptr,
+        int visible_count = 0);
 
 } // namespace lfs::rendering

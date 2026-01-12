@@ -45,6 +45,8 @@ namespace lfs::rendering {
         const int* transform_indices,
         const bool* node_visibility_mask,
         const int num_visibility_nodes,
+        const int* visible_indices,
+        const uint32_t visible_count,
         float* render_colors_out,
         float* render_alphas_out,
         float* render_depth_out,
@@ -63,15 +65,18 @@ namespace lfs::rendering {
         const uint32_t tile_width = (W + TILE_SIZE - 1) / TILE_SIZE;
         constexpr uint32_t CHANNELS = 3; // RGB only for viewer
 
-        // Calculate and allocate buffer sizes
-        const size_t radii_size = align(NUM_CAMERAS * N * 2 * sizeof(int32_t));
-        const size_t means2d_size = align(NUM_CAMERAS * N * 2 * sizeof(float));
-        const size_t depths_size = align(NUM_CAMERAS * N * sizeof(float));
-        const size_t dirs_size = align(NUM_CAMERAS * N * 3 * sizeof(float));
-        const size_t conics_size = align(NUM_CAMERAS * N * 3 * sizeof(float));
-        const size_t tiles_per_gauss_size = align(NUM_CAMERAS * N * sizeof(int32_t));
+        // M = number of gaussians to process (visible_count if filtering, else N)
+        const uint32_t M = (visible_count > 0 && visible_indices != nullptr) ? visible_count : N;
+
+        // Calculate and allocate buffer sizes using M (reduced when filtering)
+        const size_t radii_size = align(NUM_CAMERAS * M * 2 * sizeof(int32_t));
+        const size_t means2d_size = align(NUM_CAMERAS * M * 2 * sizeof(float));
+        const size_t depths_size = align(NUM_CAMERAS * M * sizeof(float));
+        const size_t dirs_size = align(NUM_CAMERAS * M * 3 * sizeof(float));
+        const size_t conics_size = align(NUM_CAMERAS * M * 3 * sizeof(float));
+        const size_t tiles_per_gauss_size = align(NUM_CAMERAS * M * sizeof(int32_t));
         const size_t tile_offsets_size = align(NUM_CAMERAS * tile_height * tile_width * sizeof(int32_t));
-        const size_t colors_size = align(NUM_CAMERAS * N * CHANNELS * sizeof(float));
+        const size_t colors_size = align(NUM_CAMERAS * M * CHANNELS * sizeof(float));
         const size_t render_colors_size = align(NUM_CAMERAS * H * W * CHANNELS * sizeof(float));
         const size_t render_alphas_size = align(NUM_CAMERAS * H * W * sizeof(float));
         const size_t last_ids_size = align(NUM_CAMERAS * H * W * sizeof(int32_t));
@@ -132,7 +137,7 @@ namespace lfs::rendering {
         gsplat_fwd::rasterize_from_world_with_sh_fwd(
             means, quats, scales, opacities, sh_coeffs, sh_degree,
             background, nullptr,
-            N, NUM_CAMERAS, K, image_width, image_height, TILE_SIZE,
+            N, M, NUM_CAMERAS, K, image_width, image_height, TILE_SIZE,
             viewmat, nullptr, K_intrinsics,
             static_cast<CameraModelType>(camera_model),
             EPS_2D, NEAR_PLANE, FAR_PLANE, RADIUS_CLIP,
@@ -141,6 +146,7 @@ namespace lfs::rendering {
             ut_params, ShutterType::GLOBAL,
             radial_coeffs, tangential_coeffs, nullptr,
             transform_indices, node_visibility_mask, num_visibility_nodes,
+            visible_indices,
             result, stream);
 
         // Copy outputs

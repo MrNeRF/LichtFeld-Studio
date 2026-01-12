@@ -63,6 +63,19 @@ namespace lfs::vis {
         bool locked = false; // If true, painting with other groups won't overwrite
     };
 
+    // Segment info for consolidated models (tracks per-node gaussian ranges)
+    struct ConsolidatedSegment {
+        uint32_t offset; // Start index in consolidated model
+        uint32_t count;  // Number of gaussians
+        NodeId node_id;  // For visibility lookup
+    };
+
+    // GPU-friendly range for visible segments
+    struct GaussianRange {
+        uint32_t offset;
+        uint32_t count;
+    };
+
     class Scene; // Forward declaration
 
     // Scene graph node with Observable properties
@@ -196,6 +209,13 @@ namespace lfs::vis {
         // Consolidation state
         [[nodiscard]] bool isConsolidated() const { return consolidated_; }
         [[nodiscard]] std::vector<bool> getNodeVisibilityMask() const;
+        [[nodiscard]] std::vector<GaussianRange> getVisibleGaussianRanges() const;
+        [[nodiscard]] size_t getVisibleGaussianCount() const;
+
+        // Get visible indices tensor for segment-based rendering
+        // Maps output index [0, visible_count) to global gaussian index
+        // Returns nullptr if all gaussians are visible (no mapping needed)
+        [[nodiscard]] std::shared_ptr<lfs::core::Tensor> getVisibleIndices() const;
 
         // Create merged model with transforms baked in (for saving)
         [[nodiscard]] std::unique_ptr<lfs::core::SplatData> createMergedModelWithTransforms() const;
@@ -332,6 +352,7 @@ namespace lfs::vis {
         mutable bool transform_cache_valid_ = false;
         mutable bool consolidated_ = false;
         mutable std::vector<NodeId> consolidated_node_ids_;
+        mutable std::vector<ConsolidatedSegment> consolidated_segments_;
 
         // Selection mask: UInt8 [N], value = group ID (0=unselected, 1-255=group ID)
         mutable std::shared_ptr<lfs::core::Tensor> selection_mask_;

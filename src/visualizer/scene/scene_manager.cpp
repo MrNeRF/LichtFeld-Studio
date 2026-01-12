@@ -1446,6 +1446,11 @@ namespace lfs::vis {
         // Get node visibility mask (for consolidated models)
         state.node_visibility_mask = scene_.getNodeVisibilityMask();
 
+        // Get visible gaussian ranges for efficient segment iteration
+        state.visible_ranges = scene_.getVisibleGaussianRanges();
+        state.visible_gaussian_count = scene_.getVisibleGaussianCount();
+        state.visible_indices = scene_.getVisibleIndices();
+
         // Get selection mask
         state.selection_mask = scene_.getSelectionMask();
         state.has_selection = scene_.hasSelection();

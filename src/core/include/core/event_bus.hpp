@@ -27,8 +27,8 @@ namespace lfs::core::event {
     // Event concept
     template <typename T>
     concept Event = requires {
-        typename T::event_id;
-    } && std::is_aggregate_v<T>;
+                        typename T::event_id;
+                    } && std::is_aggregate_v<T>;
 
     class Bus {
         template <typename T>

@@ -179,6 +179,8 @@ namespace lfs::rendering {
             .far_plane = request.far_plane,
             .selected_node_mask = request.selected_node_mask,
             .node_visibility_mask = request.node_visibility_mask,
+            .visible_gaussian_count = request.visible_gaussian_count,
+            .visible_indices = request.visible_indices,
             .desaturate_unselected = request.desaturate_unselected,
             .selection_flash_intensity = request.selection_flash_intensity,
             .orthographic = request.orthographic,

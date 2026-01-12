@@ -78,11 +78,13 @@ namespace gsplat_fwd {
     //=========================================================================
 
     void compute_view_dirs(
-        const float* means,    // [N, 3]
+        const float* means,    // [N_total, 3]
         const float* viewmats, // [C, 4, 4]
         uint32_t C,
-        uint32_t N,
-        float* dirs, // [C, N, 3] output
+        uint32_t N_total,           // Total gaussians in input arrays
+        uint32_t M,                 // Visible gaussians to process
+        const int* visible_indices, // [M] maps output idx → global gaussian idx, nullptr = all visible
+        float* dirs,                // [C, M, 3] output
         cudaStream_t stream = nullptr);
 
     //=========================================================================
@@ -91,14 +93,15 @@ namespace gsplat_fwd {
 
     void projection_ut_3dgs_fused(
         // inputs
-        const float* means,     // [N, 3]
-        const float* quats,     // [N, 4]
-        const float* scales,    // [N, 3]
-        const float* opacities, // [N] optional (can be nullptr)
+        const float* means,     // [N_total, 3]
+        const float* quats,     // [N_total, 4]
+        const float* scales,    // [N_total, 3]
+        const float* opacities, // [N_total] optional (can be nullptr)
         const float* viewmats0, // [C, 4, 4]
         const float* viewmats1, // [C, 4, 4] optional for rolling shutter
         const float* Ks,        // [C, 3, 3]
-        uint32_t N,
+        uint32_t N_total,       // Total gaussians in input arrays
+        uint32_t M,             // Visible gaussians to process (M <= N_total)
         uint32_t C,
         uint32_t image_width,
         uint32_t image_height,
@@ -113,15 +116,16 @@ namespace gsplat_fwd {
         const float* radial_coeffs,       // [C, 6/4] optional
         const float* tangential_coeffs,   // [C, 2] optional
         const float* thin_prism_coeffs,   // [C, 2] optional
-        const int* transform_indices,     // [N] optional
+        const int* transform_indices,     // [N_total] optional
         const bool* node_visibility_mask, // optional
         int num_visibility_nodes,
-        // outputs
-        int32_t* radii,       // [C, N, 2]
-        float* means2d,       // [C, N, 2]
-        float* depths,        // [C, N]
-        float* conics,        // [C, N, 3]
-        float* compensations, // [C, N] optional
+        const int* visible_indices, // [M] maps output idx → global gaussian idx, nullptr = all visible
+        // outputs (sized to [C, M, ...])
+        int32_t* radii,       // [C, M, 2]
+        float* means2d,       // [C, M, 2]
+        float* depths,        // [C, M]
+        float* conics,        // [C, M, 3]
+        float* compensations, // [C, M] optional
         cudaStream_t stream = nullptr);
 
     //=========================================================================
@@ -193,16 +197,17 @@ namespace gsplat_fwd {
 
     void rasterize_from_world_with_sh_fwd(
         // Gaussian parameters
-        const float* means,     // [N, 3]
-        const float* quats,     // [N, 4]
-        const float* scales,    // [N, 3]
-        const float* opacities, // [N]
-        const float* sh_coeffs, // [N, K, 3]
+        const float* means,     // [N_total, 3]
+        const float* quats,     // [N_total, 4]
+        const float* scales,    // [N_total, 3]
+        const float* opacities, // [N_total]
+        const float* sh_coeffs, // [N_total, K, 3]
         uint32_t sh_degree,
         const float* backgrounds, // [C, channels] optional
         const bool* masks,        // optional
         // dimensions
-        uint32_t N,
+        uint32_t N_total, // Total gaussians in input arrays
+        uint32_t M,       // Visible gaussians to process (M <= N_total)
         uint32_t C,
         uint32_t K, // number of SH coefficients
         uint32_t image_width,
@@ -227,9 +232,10 @@ namespace gsplat_fwd {
         const float* tangential_coeffs, // optional
         const float* thin_prism_coeffs, // optional
         // node visibility culling
-        const int* transform_indices,     // [N] optional (can be nullptr)
+        const int* transform_indices,     // [N_total] optional (can be nullptr)
         const bool* node_visibility_mask, // [num_visibility_nodes] optional (can be nullptr)
         int num_visibility_nodes,
+        const int* visible_indices, // [M] maps output idx → global gaussian idx, nullptr = all visible
         // outputs (result struct with pre-allocated buffers)
         RasterizeWithSHResult& result,
         cudaStream_t stream = nullptr);

@@ -60,6 +60,12 @@ namespace lfs::rendering {
         glm::mat4 transform{1.0f};
     };
 
+    // Gaussian index range for segment-based visibility filtering
+    struct GaussianRange {
+        uint32_t offset;
+        uint32_t count;
+    };
+
     struct RenderRequest {
         ViewportData viewport;
         float scaling_modifier = 1.0f;
@@ -97,7 +103,10 @@ namespace lfs::rendering {
         std::optional<BoundingBox> depth_filter;
         // Per-node selection mask: true = selected. Empty = no selection effects.
         std::vector<bool> selected_node_mask;
-        std::vector<bool> node_visibility_mask; // Per-node visibility for culling (consolidated models)
+        std::vector<bool> node_visibility_mask;             // Per-node visibility for culling (consolidated models)
+        std::vector<GaussianRange> visible_ranges;          // Visible (offset, count) pairs for segment iteration
+        size_t visible_gaussian_count = 0;                  // Total visible gaussians (0 = use all)
+        std::shared_ptr<lfs::core::Tensor> visible_indices; // Maps output idx to gaussian idx (nullptr = all visible)
         bool desaturate_unselected = false;
         float selection_flash_intensity = 0.0f;
         unsigned long long* hovered_depth_id = nullptr;

@@ -87,6 +87,7 @@ namespace lfs::vis {
             LOG_WARN("Adding node invalidates consolidation");
             consolidated_ = false;
             consolidated_node_ids_.clear();
+            consolidated_segments_.clear();
             cached_combined_.reset();
         }
 
@@ -271,6 +272,7 @@ namespace lfs::vis {
         transform_cache_valid_ = false;
         consolidated_ = false;
         consolidated_node_ids_.clear();
+        consolidated_segments_.clear();
 
         selection_mask_.reset();
         has_selection_ = false;
@@ -372,6 +374,89 @@ namespace lfs::vis {
         return mask;
     }
 
+    std::vector<GaussianRange> Scene::getVisibleGaussianRanges() const {
+        rebuildCacheIfNeeded();
+
+        if (consolidated_segments_.empty()) {
+            return {};
+        }
+
+        std::vector<GaussianRange> ranges;
+        ranges.reserve(consolidated_segments_.size());
+
+        for (const auto& seg : consolidated_segments_) {
+            if (const auto* node = getNodeById(seg.node_id); node && node->visible.get()) {
+                ranges.push_back({seg.offset, seg.count});
+            }
+        }
+        return ranges;
+    }
+
+    size_t Scene::getVisibleGaussianCount() const {
+        rebuildCacheIfNeeded();
+
+        if (consolidated_segments_.empty()) {
+            return getTotalGaussianCount();
+        }
+
+        size_t count = 0;
+        for (const auto& seg : consolidated_segments_) {
+            if (const auto* node = getNodeById(seg.node_id); node && node->visible.get()) {
+                count += seg.count;
+            }
+        }
+        return count;
+    }
+
+    std::shared_ptr<lfs::core::Tensor> Scene::getVisibleIndices() const {
+        rebuildCacheIfNeeded();
+
+        if (consolidated_segments_.empty()) {
+            LOG_INFO("getVisibleIndices: no consolidated segments");
+            return nullptr;
+        }
+
+        // Check if all segments are visible
+        bool all_visible = true;
+        size_t visible_count = 0;
+        size_t total_count = 0;
+        for (const auto& seg : consolidated_segments_) {
+            total_count += seg.count;
+            if (const auto* node = getNodeById(seg.node_id); node && node->visible.get()) {
+                visible_count += seg.count;
+            } else {
+                all_visible = false;
+            }
+        }
+
+        if (all_visible) {
+            LOG_INFO("getVisibleIndices: all {} gaussians visible, returning nullptr", total_count);
+            return nullptr;
+        }
+
+        if (visible_count == 0) {
+            LOG_INFO("getVisibleIndices: no visible gaussians");
+            return nullptr;
+        }
+
+        LOG_INFO("getVisibleIndices: {} of {} gaussians visible (filtering active)", visible_count, total_count);
+
+        // Build index mapping: output_idx -> global_gaussian_idx
+        std::vector<int32_t> indices;
+        indices.reserve(visible_count);
+
+        for (const auto& seg : consolidated_segments_) {
+            if (const auto* node = getNodeById(seg.node_id); node && node->visible.get()) {
+                for (uint32_t i = 0; i < seg.count; ++i) {
+                    indices.push_back(static_cast<int32_t>(seg.offset + i));
+                }
+            }
+        }
+
+        return std::make_shared<lfs::core::Tensor>(
+            lfs::core::Tensor::from_vector(indices, {indices.size()}, lfs::core::Device::CPU).cuda());
+    }
+
     const lfs::core::PointCloud* Scene::getVisiblePointCloud() const {
         for (const auto& node : nodes_) {
             if (node->type == NodeType::POINTCLOUD && isNodeEffectivelyVisible(node->id) && node->point_cloud) {
@@ -460,6 +545,7 @@ namespace lfs::vis {
         if (visible_nodes.empty()) {
             cached_combined_.reset();
             cached_transform_indices_.reset();
+            consolidated_segments_.clear();
             model_cache_valid_ = true;
             transform_cache_valid_ = false;
             return;
@@ -473,6 +559,10 @@ namespace lfs::vis {
             const size_t n = node->model->size();
             cached_transform_indices_ = std::make_shared<lfs::core::Tensor>(
                 lfs::core::Tensor::zeros({n}, lfs::core::Device::CUDA, lfs::core::DataType::Int32));
+
+            // Single segment for the one visible node
+            consolidated_segments_.clear();
+            consolidated_segments_.push_back({0, static_cast<uint32_t>(n), node->id});
 
             LOG_DEBUG("Single node: {} ({} gaussians)", node->name, n);
             model_cache_valid_ = true;
@@ -533,10 +623,19 @@ namespace lfs::vis {
 
         std::vector<int> transform_indices_data(stats.total_gaussians);
 
+        // Track segments for efficient visibility filtering
+        consolidated_segments_.clear();
+        consolidated_segments_.reserve(visible_nodes.size());
+
         size_t offset = 0;
         for (size_t i = 0; i < visible_nodes.size(); ++i) {
             const auto* model = visible_nodes[i]->model.get();
             const size_t size = cached_sizes[i];
+
+            // Record segment info
+            consolidated_segments_.push_back({static_cast<uint32_t>(offset),
+                                              static_cast<uint32_t>(size),
+                                              visible_nodes[i]->id});
 
             std::fill(transform_indices_data.begin() + offset,
                       transform_indices_data.begin() + offset + size,
@@ -1000,6 +1099,7 @@ namespace lfs::vis {
             LOG_WARN("Adding splat invalidates consolidation");
             consolidated_ = false;
             consolidated_node_ids_.clear();
+            consolidated_segments_.clear();
             cached_combined_.reset();
         }
 
