@@ -114,6 +114,7 @@ namespace lfs::rendering {
 
         // GL resources - frustum geometry
         ManagedShader shader_;
+        ManagedShader shader_lines_;
         VAO vao_;
         VBO vbo_;
         EBO face_ebo_;

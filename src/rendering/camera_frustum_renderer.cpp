@@ -50,11 +50,18 @@ namespace lfs::rendering {
 
     Result<void> CameraFrustumRenderer::init() {
         auto shader_result = load_shader_with_geometry("camera_frustum", "camera_frustum.vert",
-                                                        "camera_frustum.geom", "camera_frustum.frag", false);
+                                                       "camera_frustum.geom", "camera_frustum.frag", false);
         if (!shader_result) {
             return std::unexpected(shader_result.error().what());
         }
         shader_ = std::move(*shader_result);
+
+        auto lines_shader_result = load_shader_with_geometry("camera_frustum_lines", "camera_frustum.vert",
+                                                             "camera_frustum_lines.geom", "camera_frustum.frag", false);
+        if (!lines_shader_result) {
+            return std::unexpected(lines_shader_result.error().what());
+        }
+        shader_lines_ = std::move(*lines_shader_result);
 
         if (auto result = createGeometry(); !result) {
             return result;
@@ -481,130 +488,108 @@ namespace lfs::rendering {
             }
         };
 
-        {
-            ShaderScope shader(shader_);
-            if (!shader.isBound()) {
-                return std::unexpected("Failed to bind camera frustum shader");
-            }
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LESS);
+        glDepthMask(GL_TRUE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-            const glm::mat4 view_proj = projection * view;
+        const glm::mat4 view_proj = projection * view;
+
+        const auto findHighlightIndex = [this](const std::vector<int>& indices) -> int {
+            for (size_t i = 0; i < indices.size(); ++i) {
+                if (indices[i] == highlighted_camera_)
+                    return static_cast<int>(i);
+            }
+            return -1;
+        };
+
+        const int frustum_highlight = findHighlightIndex(frustum_indices);
+        const int sphere_highlight = findHighlightIndex(sphere_indices);
+
+        if (show_images_) {
+            for (size_t i = 0; i < frustum_instances.size() && i < frustum_cameras.size(); ++i)
+                frustum_instances[i].texture_id = getOrLoadThumbnail(*frustum_cameras[i]);
+            for (size_t i = 0; i < sphere_instances.size() && i < sphere_cameras.size(); ++i)
+                sphere_instances[i].texture_id = getOrLoadThumbnail(*sphere_cameras[i]);
+        }
+
+        const bool render_textures = show_images_ && thumbnail_array_capacity_ > 0;
+
+        if (render_textures) {
+            ShaderScope shader(shader_);
+            if (!shader.isBound())
+                return std::unexpected("Failed to bind camera frustum shader");
+
             shader->set("viewProj", view_proj);
             shader->set("view", view);
             shader->set("viewPos", view_position);
             shader->set("pickingMode", false);
             shader->set("equirectangularView", equirectangular_view);
-
-            glEnable(GL_DEPTH_TEST);
-            glDepthFunc(GL_LESS);
-            glDepthMask(GL_TRUE);
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-            shader->set("showImages", show_images_ && thumbnail_array_capacity_ > 0);
+            shader->set("showImages", true);
             shader->set("imageOpacity", image_opacity_);
 
-            if (show_images_ && thumbnail_array_capacity_ > 0) {
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D_ARRAY, thumbnail_array_);
-                shader->set("cameraTextures", 0);
-            }
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, thumbnail_array_);
+            shader->set("cameraTextures", 0);
 
             if (!frustum_instances.empty()) {
-                int frustum_highlight = -1;
-                for (size_t i = 0; i < frustum_indices.size(); ++i) {
-                    if (frustum_indices[i] == highlighted_camera_) {
-                        frustum_highlight = static_cast<int>(i);
-                        break;
-                    }
-                }
                 shader->set("highlightIndex", frustum_highlight);
-
-                if (show_images_) {
-                    for (size_t i = 0; i < frustum_instances.size() && i < frustum_cameras.size(); ++i) {
-                        frustum_instances[i].texture_id = getOrLoadThumbnail(*frustum_cameras[i]);
-                    }
-                }
-
-                {
-                    VAOBinder vao_bind(vao_);
-                    setupInstanceAttributes(frustum_instances);
-
-                    if (show_images_ && thumbnail_array_capacity_ > 0) {
-                        BufferBinder<GL_ELEMENT_ARRAY_BUFFER> face_bind(face_ebo_);
-                        glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr,
-                                                static_cast<GLsizei>(frustum_instances.size()));
-                    }
-
-                    if (show_images_) {
-                        for (auto& inst : frustum_instances)
-                            inst.texture_id = 0;
-                        setupInstanceAttributes(frustum_instances);
-                        shader->set("showImages", false);
-                    }
-
-                    glLineWidth(WIREFRAME_WIDTH);
-                    {
-                        BufferBinder<GL_ELEMENT_ARRAY_BUFFER> edge_bind(edge_ebo_);
-                        glDrawElementsInstanced(GL_LINES, static_cast<GLsizei>(num_edge_indices_),
-                                                GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(frustum_instances.size()));
-                    }
-
-                    cleanupInstanceAttributes();
-                }
+                VAOBinder vao_bind(vao_);
+                setupInstanceAttributes(frustum_instances);
+                BufferBinder<GL_ELEMENT_ARRAY_BUFFER> face_bind(face_ebo_);
+                glDrawElementsInstanced(GL_TRIANGLES, 6, GL_UNSIGNED_INT, nullptr,
+                                        static_cast<GLsizei>(frustum_instances.size()));
+                cleanupInstanceAttributes();
             }
 
             if (!sphere_instances.empty()) {
-                shader->set("showImages", show_images_ && thumbnail_array_capacity_ > 0);
-
-                int sphere_highlight = -1;
-                for (size_t i = 0; i < sphere_indices.size(); ++i) {
-                    if (sphere_indices[i] == highlighted_camera_) {
-                        sphere_highlight = static_cast<int>(i);
-                        break;
-                    }
-                }
                 shader->set("highlightIndex", sphere_highlight);
-
-                if (show_images_) {
-                    for (size_t i = 0; i < sphere_instances.size() && i < sphere_cameras.size(); ++i) {
-                        sphere_instances[i].texture_id = getOrLoadThumbnail(*sphere_cameras[i]);
-                    }
-                }
-
-                {
-                    VAOBinder vao_bind(sphere_vao_);
-                    setupInstanceAttributes(sphere_instances);
-
-                    if (show_images_ && thumbnail_array_capacity_ > 0) {
-                        BufferBinder<GL_ELEMENT_ARRAY_BUFFER> face_bind(sphere_face_ebo_);
-                        glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(num_sphere_face_indices_),
-                                                GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(sphere_instances.size()));
-                    }
-
-                    if (show_images_) {
-                        for (auto& inst : sphere_instances)
-                            inst.texture_id = 0;
-                        setupInstanceAttributes(sphere_instances);
-                        shader->set("showImages", false);
-                    }
-
-                    glLineWidth(WIREFRAME_WIDTH);
-                    {
-                        BufferBinder<GL_ELEMENT_ARRAY_BUFFER> edge_bind(sphere_edge_ebo_);
-                        glDrawElementsInstanced(GL_LINES, static_cast<GLsizei>(num_sphere_edge_indices_),
-                                                GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(sphere_instances.size()));
-                    }
-
-                    cleanupInstanceAttributes();
-                }
+                VAOBinder vao_bind(sphere_vao_);
+                setupInstanceAttributes(sphere_instances);
+                BufferBinder<GL_ELEMENT_ARRAY_BUFFER> face_bind(sphere_face_ebo_);
+                glDrawElementsInstanced(GL_TRIANGLES, static_cast<GLsizei>(num_sphere_face_indices_),
+                                        GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(sphere_instances.size()));
+                cleanupInstanceAttributes();
             }
 
-            if (show_images_) {
-                glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
-            }
+            glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
         }
 
-        glFinish();
+        {
+            ShaderScope shader(shader_lines_);
+            if (!shader.isBound())
+                return std::unexpected("Failed to bind camera frustum lines shader");
+
+            shader->set("viewProj", view_proj);
+            shader->set("view", view);
+            shader->set("viewPos", view_position);
+            shader->set("pickingMode", false);
+            shader->set("equirectangularView", equirectangular_view);
+            shader->set("showImages", false);
+
+            glLineWidth(WIREFRAME_WIDTH);
+
+            if (!frustum_instances.empty()) {
+                shader->set("highlightIndex", frustum_highlight);
+                VAOBinder vao_bind(vao_);
+                setupInstanceAttributes(frustum_instances);
+                BufferBinder<GL_ELEMENT_ARRAY_BUFFER> edge_bind(edge_ebo_);
+                glDrawElementsInstanced(GL_LINES, static_cast<GLsizei>(num_edge_indices_),
+                                        GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(frustum_instances.size()));
+                cleanupInstanceAttributes();
+            }
+
+            if (!sphere_instances.empty()) {
+                shader->set("highlightIndex", sphere_highlight);
+                VAOBinder vao_bind(sphere_vao_);
+                setupInstanceAttributes(sphere_instances);
+                BufferBinder<GL_ELEMENT_ARRAY_BUFFER> edge_bind(sphere_edge_ebo_);
+                glDrawElementsInstanced(GL_LINES, static_cast<GLsizei>(num_sphere_edge_indices_),
+                                        GL_UNSIGNED_INT, nullptr, static_cast<GLsizei>(sphere_instances.size()));
+                cleanupInstanceAttributes();
+            }
+        }
 
         return {};
     }
