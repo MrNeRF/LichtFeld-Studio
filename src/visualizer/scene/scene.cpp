@@ -41,7 +41,11 @@ namespace lfs::vis {
         });
         visible.setCallback([this] {
             if (scene_) {
-                scene_->invalidateCache();
+                if (scene_->isConsolidated()) {
+                    scene_->invalidateTransformCache();
+                } else {
+                    scene_->invalidateCache();
+                }
             }
         });
     }
@@ -77,6 +81,13 @@ namespace lfs::vis {
         if (name.empty()) {
             LOG_WARN("Cannot add node with empty name");
             return;
+        }
+
+        if (consolidated_) {
+            LOG_WARN("Adding node invalidates consolidation");
+            consolidated_ = false;
+            consolidated_node_ids_.clear();
+            cached_combined_.reset();
         }
 
         // Calculate gaussian count and centroid before moving
@@ -258,6 +269,8 @@ namespace lfs::vis {
         cached_transforms_.clear();
         model_cache_valid_ = false;
         transform_cache_valid_ = false;
+        consolidated_ = false;
+        consolidated_node_ids_.clear();
 
         selection_mask_.reset();
         has_selection_ = false;
@@ -322,21 +335,41 @@ namespace lfs::vis {
             return 0;
         }
 
+        consolidated_node_ids_.clear();
         size_t consolidated = 0;
         for (auto& node : nodes_) {
             if (node->model && isNodeEffectivelyVisible(node->id)) {
+                consolidated_node_ids_.push_back(node->id);
                 node->model.reset();
                 ++consolidated;
             }
         }
 
         if (consolidated > 0) {
+            consolidated_ = true;
             constexpr size_t BYTES_PER_GAUSSIAN = 3 * 4 + 1 * 3 * 4 + 3 * 4 + 4 * 4 + 1 * 4;
             const size_t saved_mb = getTotalGaussianCount() * BYTES_PER_GAUSSIAN / (1024 * 1024);
             LOG_INFO("Consolidated {} nodes, saved ~{} MB VRAM", consolidated, saved_mb);
         }
 
         return consolidated;
+    }
+
+    std::vector<bool> Scene::getNodeVisibilityMask() const {
+        if (!consolidated_ || consolidated_node_ids_.empty()) {
+            return {};
+        }
+
+        std::vector<bool> mask;
+        mask.reserve(consolidated_node_ids_.size());
+        for (const NodeId id : consolidated_node_ids_) {
+            if (const auto* node = getNodeById(id)) {
+                mask.push_back(node->visible.get());
+            } else {
+                mask.push_back(true);
+            }
+        }
+        return mask;
     }
 
     const lfs::core::PointCloud* Scene::getVisiblePointCloud() const {
@@ -407,6 +440,11 @@ namespace lfs::vis {
     void Scene::rebuildModelCacheIfNeeded() const {
         if (model_cache_valid_)
             return;
+
+        if (consolidated_ && cached_combined_) {
+            model_cache_valid_ = true;
+            return;
+        }
 
         LOG_DEBUG("Rebuilding combined model cache");
 
@@ -958,6 +996,13 @@ namespace lfs::vis {
     }
 
     NodeId Scene::addSplat(const std::string& name, std::unique_ptr<lfs::core::SplatData> model, const NodeId parent) {
+        if (consolidated_) {
+            LOG_WARN("Adding splat invalidates consolidation");
+            consolidated_ = false;
+            consolidated_node_ids_.clear();
+            cached_combined_.reset();
+        }
+
         const size_t gaussian_count = static_cast<size_t>(model->size());
         const glm::vec3 centroid = computeCentroid(model.get());
 

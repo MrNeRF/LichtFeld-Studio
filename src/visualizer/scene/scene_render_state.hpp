@@ -22,6 +22,7 @@ namespace lfs::vis {
         std::shared_ptr<lfs::core::Tensor> transform_indices; // Per-Gaussian index into model_transforms
         std::shared_ptr<lfs::core::Tensor> selection_mask;    // Per-Gaussian selection group ID
         std::vector<bool> selected_node_mask;                 // Per-node: true = selected, false = desaturate
+        std::vector<bool> node_visibility_mask;               // Per-node: true = visible, false = culled (for consolidated models)
         std::string selected_node_name;
         std::vector<Scene::RenderableCropBox> cropboxes;
         int selected_cropbox_index = -1;

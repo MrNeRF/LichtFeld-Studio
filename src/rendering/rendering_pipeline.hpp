@@ -77,6 +77,7 @@ namespace lfs::rendering {
             int highlight_gaussian_id = -1;
             float far_plane = DEFAULT_FAR_PLANE;
             std::vector<bool> selected_node_mask;
+            std::vector<bool> node_visibility_mask; // Per-node visibility for culling (consolidated models)
             bool desaturate_unselected = false;
             float selection_flash_intensity = 0.0f;
             bool orthographic = false;

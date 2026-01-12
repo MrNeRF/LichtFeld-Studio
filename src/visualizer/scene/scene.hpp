@@ -193,6 +193,10 @@ namespace lfs::vis {
         const lfs::core::SplatData* getCombinedModel() const;
         size_t consolidateNodeModels();
 
+        // Consolidation state
+        [[nodiscard]] bool isConsolidated() const { return consolidated_; }
+        [[nodiscard]] std::vector<bool> getNodeVisibilityMask() const;
+
         // Create merged model with transforms baked in (for saving)
         [[nodiscard]] std::unique_ptr<lfs::core::SplatData> createMergedModelWithTransforms() const;
 
@@ -326,6 +330,8 @@ namespace lfs::vis {
         // Transform cache (rebuilt when transforms change, much cheaper)
         mutable std::vector<glm::mat4> cached_transforms_;
         mutable bool transform_cache_valid_ = false;
+        mutable bool consolidated_ = false;
+        mutable std::vector<NodeId> consolidated_node_ids_;
 
         // Selection mask: UInt8 [N], value = group ID (0=unselected, 1-255=group ID)
         mutable std::shared_ptr<lfs::core::Tensor> selection_mask_;

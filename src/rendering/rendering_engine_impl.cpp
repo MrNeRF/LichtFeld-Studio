@@ -178,6 +178,7 @@ namespace lfs::rendering {
             .highlight_gaussian_id = request.highlight_gaussian_id,
             .far_plane = request.far_plane,
             .selected_node_mask = request.selected_node_mask,
+            .node_visibility_mask = request.node_visibility_mask,
             .desaturate_unselected = request.desaturate_unselected,
             .selection_flash_intensity = request.selection_flash_intensity,
             .orthographic = request.orthographic,

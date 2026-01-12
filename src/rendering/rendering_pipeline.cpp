@@ -140,7 +140,7 @@ namespace lfs::rendering {
                               original_sh_degree, request.sh_degree);
                     auto render_output = gut_rasterize_tensor(
                         cam, const_cast<lfs::core::SplatData&>(model), background_,
-                        request.scaling_modifier);
+                        request.scaling_modifier, transform_indices_ptr, request.node_visibility_mask);
                     result.image = std::move(render_output.image);
                     result.depth = std::move(render_output.depth);
                 } else {
@@ -166,6 +166,7 @@ namespace lfs::rendering {
                                                            request.far_plane,
                                                            request.selected_node_mask,
                                                            request.desaturate_unselected,
+                                                           request.node_visibility_mask,
                                                            request.selection_flash_intensity,
                                                            request.orthographic,
                                                            request.ortho_scale,
@@ -196,7 +197,7 @@ namespace lfs::rendering {
                 LOG_TRACE("Using GUT rasterizer");
                 auto render_output = gut_rasterize_tensor(
                     cam, mutable_model, background_,
-                    request.scaling_modifier);
+                    request.scaling_modifier, transform_indices_ptr, request.node_visibility_mask);
                 result.image = std::move(render_output.image);
                 result.depth = std::move(render_output.depth);
                 result.valid = true;
@@ -228,6 +229,7 @@ namespace lfs::rendering {
                                                    request.far_plane,
                                                    request.selected_node_mask,
                                                    request.desaturate_unselected,
+                                                   request.node_visibility_mask,
                                                    request.selection_flash_intensity,
                                                    request.orthographic,
                                                    request.ortho_scale,

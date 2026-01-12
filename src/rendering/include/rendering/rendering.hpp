@@ -97,6 +97,7 @@ namespace lfs::rendering {
         std::optional<BoundingBox> depth_filter;
         // Per-node selection mask: true = selected. Empty = no selection effects.
         std::vector<bool> selected_node_mask;
+        std::vector<bool> node_visibility_mask; // Per-node visibility for culling (consolidated models)
         bool desaturate_unselected = false;
         float selection_flash_intensity = 0.0f;
         unsigned long long* hovered_depth_id = nullptr;

@@ -43,6 +43,9 @@ namespace lfs::rendering {
         const float* background, // [3] or nullptr
         GutRenderMode render_mode,
         float scaling_modifier,
+        const int* transform_indices,     // [N] optional
+        const bool* node_visibility_mask, // optional
+        int num_visibility_nodes,
         float* render_colors_out, // [H, W, C]
         float* render_alphas_out, // [H, W]
         float* render_depth_out,  // [H, W] or nullptr

@@ -34,6 +34,23 @@ namespace lfs::rendering {
         }
     }
 
+    struct GpuBoolMask {
+        Tensor tensor;
+        const bool* ptr = nullptr;
+        int count = 0;
+
+        explicit GpuBoolMask(const std::vector<bool>& mask) : count(static_cast<int>(mask.size())) {
+            if (count > 0) {
+                std::vector<uint8_t> data(count);
+                std::transform(mask.begin(), mask.end(), data.begin(), [](const bool b) -> uint8_t { return b ? 1 : 0; });
+                tensor = Tensor::from_blob(data.data(), {static_cast<size_t>(count)},
+                                           lfs::core::Device::CPU, lfs::core::DataType::UInt8)
+                             .cuda();
+                ptr = reinterpret_cast<const bool*>(tensor.ptr<uint8_t>());
+            }
+        }
+    };
+
     std::tuple<Tensor, Tensor, Tensor>
     forward_wrapper_tensor(
         const Tensor& means,
@@ -82,6 +99,7 @@ namespace lfs::rendering {
         int highlight_gaussian_id,
         const std::vector<bool>& selected_node_mask,
         bool desaturate_unselected,
+        const std::vector<bool>& node_visibility_mask,
         float selection_flash_intensity,
         bool orthographic,
         float ortho_scale,
@@ -214,6 +232,8 @@ namespace lfs::rendering {
             selected_node_mask_ptr = reinterpret_cast<const bool*>(selected_node_mask_tensor.ptr<uint8_t>());
         }
 
+        const GpuBoolMask visibility_mask(node_visibility_mask);
+
         forward(
             per_primitive_buffers_func,
             per_tile_buffers_func,
@@ -271,6 +291,8 @@ namespace lfs::rendering {
             selected_node_mask_ptr,
             num_selected_nodes,
             desaturate_unselected,
+            visibility_mask.ptr,
+            visibility_mask.count,
             selection_flash_intensity,
             orthographic,
             ortho_scale,
@@ -660,7 +682,9 @@ namespace lfs::rendering {
         const GutCameraModel camera_model,
         const Tensor* radial_coeffs,
         const Tensor* tangential_coeffs,
-        const Tensor* background) {
+        const Tensor* background,
+        const Tensor* transform_indices,
+        const std::vector<bool>& node_visibility_mask) {
 
         constexpr float QUAT_NORM_EPS = 1e-8f;
 
@@ -703,6 +727,11 @@ namespace lfs::rendering {
         const float* const tangential_ptr = (tangential_coeffs && tangential_coeffs->is_valid()) ? tangential_coeffs->ptr<float>() : nullptr;
         const float* const bg_ptr = (background && background->is_valid()) ? background->ptr<float>() : nullptr;
 
+        const int* const transform_indices_ptr = (transform_indices && transform_indices->is_valid())
+                                                     ? transform_indices->ptr<int>()
+                                                     : nullptr;
+        const GpuBoolMask visibility_mask(node_visibility_mask);
+
         // Render buffers in HWC format (gsplat output format)
         Tensor render_hwc = Tensor::empty({H, W, 3}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
         Tensor alpha_hw = Tensor::empty({H, W}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
@@ -726,6 +755,9 @@ namespace lfs::rendering {
             bg_ptr,
             GutRenderMode::RGB,
             1.0f,
+            transform_indices_ptr,
+            visibility_mask.ptr,
+            visibility_mask.count,
             render_hwc.ptr<float>(),
             alpha_hw.ptr<float>(),
             depth.ptr<float>(),

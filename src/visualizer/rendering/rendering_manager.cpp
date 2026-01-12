@@ -652,6 +652,7 @@ namespace lfs::vis {
             .selected_node_mask = (settings_.desaturate_unselected || getSelectionFlashIntensity() > 0.0f)
                                       ? std::move(scene_state.selected_node_mask)
                                       : std::vector<bool>{},
+            .node_visibility_mask = std::move(scene_state.node_visibility_mask),
             .desaturate_unselected = settings_.desaturate_unselected,
             .selection_flash_intensity = getSelectionFlashIntensity(),
             .hovered_depth_id = nullptr,

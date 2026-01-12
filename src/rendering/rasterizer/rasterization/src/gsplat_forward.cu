@@ -42,6 +42,9 @@ namespace lfs::rendering {
         const float* background,
         const GutRenderMode render_mode,
         const float scaling_modifier,
+        const int* transform_indices,
+        const bool* node_visibility_mask,
+        const int num_visibility_nodes,
         float* render_colors_out,
         float* render_alphas_out,
         float* render_depth_out,
@@ -137,6 +140,7 @@ namespace lfs::rendering {
             static_cast<int>(render_mode),
             ut_params, ShutterType::GLOBAL,
             radial_coeffs, tangential_coeffs, nullptr,
+            transform_indices, node_visibility_mask, num_visibility_nodes,
             result, stream);
 
         // Copy outputs

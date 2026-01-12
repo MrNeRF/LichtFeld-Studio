@@ -134,6 +134,9 @@ namespace gsplat_fwd {
         const float* radial_coeffs,
         const float* tangential_coeffs,
         const float* thin_prism_coeffs,
+        const int* transform_indices,
+        const bool* node_visibility_mask,
+        int num_visibility_nodes,
         RasterizeWithSHResult& result,
         cudaStream_t stream) {
         GSPLAT_CHECK_CUDA_PTR(means, "means");
@@ -166,6 +169,7 @@ namespace gsplat_fwd {
             calc_compensations, camera_model,
             ut_params, rs_type,
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            transform_indices, node_visibility_mask, num_visibility_nodes,
             result.radii, result.means2d, result.depths, result.conics,
             result.compensations, stream);
 

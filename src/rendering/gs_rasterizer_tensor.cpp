@@ -43,6 +43,7 @@ namespace lfs::rendering {
         float far_plane,
         const std::vector<bool>& selected_node_mask,
         bool desaturate_unselected,
+        const std::vector<bool>& node_visibility_mask,
         float selection_flash_intensity,
         bool orthographic,
         float ortho_scale,
@@ -157,6 +158,7 @@ namespace lfs::rendering {
             highlight_gaussian_id,
             selected_node_mask,
             desaturate_unselected,
+            node_visibility_mask,
             selection_flash_intensity,
             orthographic,
             ortho_scale,
@@ -186,7 +188,9 @@ namespace lfs::rendering {
         const lfs::core::Camera& camera,
         const lfs::core::SplatData& model,
         const Tensor& bg_color,
-        const float scaling_modifier) {
+        const float scaling_modifier,
+        const Tensor* transform_indices,
+        const std::vector<bool>& node_visibility_mask) {
 
         const int width = camera.camera_width();
         const int height = camera.camera_height();
@@ -225,7 +229,8 @@ namespace lfs::rendering {
             w2c, K,
             sh_degree, width, height,
             GutCameraModel::PINHOLE,
-            nullptr, nullptr, &bg_color);
+            nullptr, nullptr, &bg_color,
+            transform_indices, node_visibility_mask);
 
         return {std::move(image), std::move(depth)};
     }

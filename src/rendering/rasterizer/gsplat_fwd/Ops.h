@@ -110,10 +110,13 @@ namespace gsplat_fwd {
         CameraModelType camera_model,
         const UnscentedTransformParameters& ut_params,
         ShutterType rs_type,
-        const float* radial_coeffs,     // [C, 6/4] optional
-        const float* tangential_coeffs, // [C, 2] optional
-        const float* thin_prism_coeffs, // [C, 2] optional
-        // outputs (pre-allocated)
+        const float* radial_coeffs,       // [C, 6/4] optional
+        const float* tangential_coeffs,   // [C, 2] optional
+        const float* thin_prism_coeffs,   // [C, 2] optional
+        const int* transform_indices,     // [N] optional
+        const bool* node_visibility_mask, // optional
+        int num_visibility_nodes,
+        // outputs
         int32_t* radii,       // [C, N, 2]
         float* means2d,       // [C, N, 2]
         float* depths,        // [C, N]
@@ -223,6 +226,10 @@ namespace gsplat_fwd {
         const float* radial_coeffs,     // optional
         const float* tangential_coeffs, // optional
         const float* thin_prism_coeffs, // optional
+        // node visibility culling
+        const int* transform_indices,     // [N] optional (can be nullptr)
+        const bool* node_visibility_mask, // [num_visibility_nodes] optional (can be nullptr)
+        int num_visibility_nodes,
         // outputs (result struct with pre-allocated buffers)
         RasterizeWithSHResult& result,
         cudaStream_t stream = nullptr);

@@ -339,6 +339,8 @@ void lfs::rendering::forward(
     const bool* selected_node_mask,
     int num_selected_nodes,
     bool desaturate_unselected,
+    const bool* node_visibility_mask,
+    int num_visibility_nodes,
     float selection_flash_intensity,
     bool orthographic,
     float ortho_scale,
@@ -437,6 +439,8 @@ void lfs::rendering::forward(
         selected_node_mask,
         num_selected_nodes,
         desaturate_unselected,
+        node_visibility_mask,
+        num_visibility_nodes,
         orthographic,
         ortho_scale,
         mip_filter);

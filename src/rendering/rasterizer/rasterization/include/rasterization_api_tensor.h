@@ -91,6 +91,7 @@ namespace lfs::rendering {
         int highlight_gaussian_id = -1,
         const std::vector<bool>& selected_node_mask = {},
         bool desaturate_unselected = false,
+        const std::vector<bool>& node_visibility_mask = {},
         float selection_flash_intensity = 0.0f,
         bool orthographic = false,
         float ortho_scale = 1.0f,
@@ -202,6 +203,8 @@ namespace lfs::rendering {
         GutCameraModel camera_model = GutCameraModel::PINHOLE,
         const Tensor* radial_coeffs = nullptr,
         const Tensor* tangential_coeffs = nullptr,
-        const Tensor* background = nullptr);
+        const Tensor* background = nullptr,
+        const Tensor* transform_indices = nullptr,
+        const std::vector<bool>& node_visibility_mask = {});
 
 } // namespace lfs::rendering

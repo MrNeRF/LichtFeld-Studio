@@ -1443,6 +1443,9 @@ namespace lfs::vis {
         state.transform_indices = scene_.getTransformIndices();
         state.visible_splat_count = state.model_transforms.size();
 
+        // Get node visibility mask (for consolidated models)
+        state.node_visibility_mask = scene_.getNodeVisibilityMask();
+
         // Get selection mask
         state.selection_mask = scene_.getSelectionMask();
         state.has_selection = scene_.hasSelection();

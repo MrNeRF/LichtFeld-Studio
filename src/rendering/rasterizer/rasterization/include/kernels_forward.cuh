@@ -82,6 +82,8 @@ namespace lfs::rendering::kernels::forward {
         const bool* selected_node_mask,
         const int num_selected_nodes,
         const bool desaturate_unselected,
+        const bool* node_visibility_mask,
+        const int num_visibility_nodes,
         const bool orthographic,
         const float ortho_scale,
         const bool mip_filter) {
@@ -95,6 +97,13 @@ namespace lfs::rendering::kernels::forward {
         // Soft deletion mask culling - skip deleted gaussians
         if (active && deleted_mask != nullptr && deleted_mask[primitive_idx]) {
             active = false;
+        }
+
+        if (active && node_visibility_mask != nullptr && transform_indices != nullptr && num_visibility_nodes > 0) {
+            const int node_idx = transform_indices[primitive_idx];
+            if (node_idx >= 0 && node_idx < num_visibility_nodes && !node_visibility_mask[node_idx]) {
+                active = false;
+            }
         }
 
         if (active)

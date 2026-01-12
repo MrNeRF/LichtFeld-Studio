@@ -38,6 +38,10 @@ namespace gsplat_fwd {
         const scalar_t* __restrict__ radial_coeffs,     // [C, 6] or [C, 4] optional
         const scalar_t* __restrict__ tangential_coeffs, // [C, 2] optional
         const scalar_t* __restrict__ thin_prism_coeffs, // [C, 2] optional
+        // node visibility culling
+        const int* __restrict__ transform_indices,     // [N] optional
+        const bool* __restrict__ node_visibility_mask, // [num_visibility_nodes] optional
+        const int num_visibility_nodes,
         // outputs
         int32_t* __restrict__ radii,         // [C, N, 2]
         scalar_t* __restrict__ means2d,      // [C, N, 2]
@@ -52,6 +56,15 @@ namespace gsplat_fwd {
         }
         const uint32_t cid = idx / N; // camera id
         const uint32_t gid = idx % N; // gaussian id
+
+        if (node_visibility_mask != nullptr && transform_indices != nullptr && num_visibility_nodes > 0) {
+            const int node_idx = transform_indices[gid];
+            if (node_idx >= 0 && node_idx < num_visibility_nodes && !node_visibility_mask[node_idx]) {
+                radii[idx * 2] = 0;
+                radii[idx * 2 + 1] = 0;
+                return;
+            }
+        }
 
         // shift pointers to the current gaussian
         const glm::fvec3 mean = glm::make_vec3(means + gid * 3);
@@ -250,6 +263,10 @@ namespace gsplat_fwd {
         const float* radial_coeffs,     // [C, 6] or [C, 4] optional (can be nullptr)
         const float* tangential_coeffs, // [C, 2] optional (can be nullptr)
         const float* thin_prism_coeffs, // [C, 2] optional (can be nullptr)
+        // node visibility culling
+        const int* transform_indices,     // [N] optional (can be nullptr)
+        const bool* node_visibility_mask, // [num_visibility_nodes] optional (can be nullptr)
+        int num_visibility_nodes,
         // outputs
         int32_t* radii,       // [C, N, 2]
         float* means2d,       // [C, N, 2]
@@ -290,6 +307,9 @@ namespace gsplat_fwd {
                 radial_coeffs,
                 tangential_coeffs,
                 thin_prism_coeffs,
+                transform_indices,
+                node_visibility_mask,
+                num_visibility_nodes,
                 radii,
                 means2d,
                 depths,

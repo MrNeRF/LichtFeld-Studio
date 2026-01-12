@@ -30,9 +30,12 @@ namespace gsplat_fwd {
         CameraModelType camera_model,
         const UnscentedTransformParameters& ut_params,
         ShutterType rs_type,
-        const float* radial_coeffs,     // optional
-        const float* tangential_coeffs, // optional
-        const float* thin_prism_coeffs, // optional
+        const float* radial_coeffs,       // optional
+        const float* tangential_coeffs,   // optional
+        const float* thin_prism_coeffs,   // optional
+        const int* transform_indices,     // [N] optional
+        const bool* node_visibility_mask, // optional
+        int num_visibility_nodes,
         // outputs
         int32_t* radii,       // [C, N, 2]
         float* means2d,       // [C, N, 2]
