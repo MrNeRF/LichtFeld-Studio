@@ -258,23 +258,31 @@ namespace lfs::vis {
         });
 
         cmd::ToggleGTComparison::when([this](const auto&) {
-            std::lock_guard<std::mutex> lock(settings_mutex_);
+            bool is_now_enabled = false;
+            std::optional<bool> restore_equirectangular;
 
-            if (settings_.split_view_mode == SplitViewMode::GTComparison) {
-                settings_.split_view_mode = SplitViewMode::Disabled;
-                settings_.equirectangular = pre_gt_equirectangular_;
-                ui::RenderSettingsChanged{.equirectangular = pre_gt_equirectangular_}.emit();
-            } else {
-                if (current_camera_id_ < 0)
-                    return;
-                pre_gt_equirectangular_ = settings_.equirectangular;
-                settings_.split_view_mode = SplitViewMode::GTComparison;
+            {
+                std::lock_guard<std::mutex> lock(settings_mutex_);
+
+                if (settings_.split_view_mode == SplitViewMode::GTComparison) {
+                    settings_.split_view_mode = SplitViewMode::Disabled;
+                    settings_.equirectangular = pre_gt_equirectangular_;
+                    restore_equirectangular = pre_gt_equirectangular_;
+                } else {
+                    if (current_camera_id_ < 0)
+                        return;
+                    pre_gt_equirectangular_ = settings_.equirectangular;
+                    settings_.split_view_mode = SplitViewMode::GTComparison;
+                    is_now_enabled = true;
+                }
+                markDirty();
             }
 
-            markDirty();
-            ui::GTComparisonModeChanged{
-                .enabled = (settings_.split_view_mode == SplitViewMode::GTComparison)}
-                .emit();
+            // Emit events outside the lock to avoid deadlock
+            if (restore_equirectangular) {
+                ui::RenderSettingsChanged{.equirectangular = *restore_equirectangular}.emit();
+            }
+            ui::GTComparisonModeChanged{.enabled = is_now_enabled}.emit();
         });
 
         // Listen for camera view changes
