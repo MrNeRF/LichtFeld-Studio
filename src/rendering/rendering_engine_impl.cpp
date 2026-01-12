@@ -158,6 +158,7 @@ namespace lfs::rendering {
             .point_cloud_mode = request.point_cloud_mode,
             .voxel_size = request.voxel_size,
             .gut = request.gut,
+            .equirectangular = request.equirectangular,
             .show_rings = request.show_rings,
             .ring_width = request.ring_width,
             .show_center_markers = request.show_center_markers,
@@ -619,6 +620,7 @@ namespace lfs::rendering {
             .point_cloud_mode = request.point_cloud_mode,
             .voxel_size = request.voxel_size,
             .gut = request.gut,
+            .equirectangular = request.equirectangular,
             .show_rings = request.show_rings,
             .ring_width = request.ring_width};
 

@@ -7,6 +7,7 @@
 #include "core/camera.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "rasterizer/rasterization/include/gsplat_forward.h"
 #include "rendering/render_constants.hpp"
 #include <tuple>
 
@@ -63,6 +64,7 @@ namespace lfs::rendering {
         const lfs::core::Camera& camera,
         const lfs::core::SplatData& model,
         const Tensor& bg_color,
-        float scaling_modifier = 1.0f);
+        float scaling_modifier = 1.0f,
+        GutCameraModel camera_model = GutCameraModel::PINHOLE);
 
 } // namespace lfs::rendering
