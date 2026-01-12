@@ -1192,9 +1192,8 @@ namespace lfs::vis {
         // Handle GT comparison mode
         if (settings_.split_view_mode == SplitViewMode::GTComparison) {
             if (current_camera_id_ < 0) {
-                // Log this only once per second to avoid spam
                 static auto last_log_time = std::chrono::steady_clock::now();
-                auto now = std::chrono::steady_clock::now();
+                const auto now = std::chrono::steady_clock::now();
                 if (now - last_log_time > std::chrono::seconds(1)) {
                     LOG_INFO("GT comparison enabled but no camera selected. Use arrow keys or click a camera to select one.");
                     last_log_time = now;
@@ -1202,66 +1201,56 @@ namespace lfs::vis {
                 return std::nullopt;
             }
 
-            // Get camera from trainer manager
-            auto* trainer_manager = scene_manager->getTrainerManager();
+            const auto* trainer_manager = scene_manager->getTrainerManager();
             if (!trainer_manager || !trainer_manager->hasTrainer()) {
                 LOG_WARN("GT comparison mode but no trainer available");
                 return std::nullopt;
             }
 
-            auto cam = trainer_manager->getCamById(current_camera_id_);
+            const auto cam = trainer_manager->getCamById(current_camera_id_);
             if (!cam) {
                 LOG_WARN("Camera {} not found", current_camera_id_);
-                current_camera_id_ = -1; // Reset invalid camera ID
+                current_camera_id_ = -1;
                 return std::nullopt;
             }
 
-            // Get GT texture
-            unsigned int gt_texture = gt_texture_cache_.getGTTexture(current_camera_id_, cam->image_path());
+            const GLuint gt_texture = gt_texture_cache_.getGTTexture(current_camera_id_, cam->image_path());
             if (gt_texture == 0) {
                 LOG_ERROR("Failed to get GT texture for camera {}", current_camera_id_);
                 return std::nullopt;
             }
 
-            // Make sure we have a valid render texture
             if (!render_texture_valid_) {
-                // Force a render to texture
-                const lfs::core::SplatData* model = scene_manager->getModelForRendering();
-                if (model) {
+                if (const auto* model = scene_manager->getModelForRendering())
                     renderToTexture(context, scene_manager, model);
-                }
             }
-
             if (!render_texture_valid_) {
                 LOG_ERROR("Failed to get cached render for GT comparison");
                 return std::nullopt;
             }
 
-            LOG_TRACE("Creating GT comparison split view for camera {}", current_camera_id_);
+            viewport_data.size = cached_result_size_;
 
-            // Compute texcoord scale for GPU-aligned texture
-            const glm::ivec2 cam_size(cam->image_width(), cam->image_height());
-            const glm::ivec2 aligned_size(
-                ((cam_size.x + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT,
-                ((cam_size.y + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT);
-            const glm::vec2 texcoord_scale(
-                static_cast<float>(cam_size.x) / static_cast<float>(aligned_size.x),
-                static_cast<float>(cam_size.y) / static_cast<float>(aligned_size.y));
+            // GT texture has no GPU alignment, render texture is GPU-aligned
+            constexpr glm::vec2 GT_TEXCOORD_SCALE(1.0f, 1.0f);
+            const glm::ivec2 render_alloc_size(
+                ((cached_result_size_.x + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT,
+                ((cached_result_size_.y + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT);
+            const glm::vec2 render_texcoord_scale(
+                static_cast<float>(cached_result_size_.x) / static_cast<float>(render_alloc_size.x),
+                static_cast<float>(cached_result_size_.y) / static_cast<float>(render_alloc_size.y));
 
             return lfs::rendering::SplitViewRequest{
-                .panels = {
-                    {.content_type = lfs::rendering::PanelContentType::Image2D,
-                     .model = nullptr,
-                     .texture_id = gt_texture,
-                     .label = "Ground Truth",
-                     .start_position = 0.0f,
-                     .end_position = settings_.split_position},
-                    {.content_type = lfs::rendering::PanelContentType::CachedRender,
-                     .model = nullptr,
-                     .texture_id = cached_render_texture_,
-                     .label = "Rendered",
-                     .start_position = settings_.split_position,
-                     .end_position = 1.0f}},
+                .panels = {{.content_type = lfs::rendering::PanelContentType::Image2D,
+                            .texture_id = gt_texture,
+                            .label = "Ground Truth",
+                            .start_position = 0.0f,
+                            .end_position = settings_.split_position},
+                           {.content_type = lfs::rendering::PanelContentType::CachedRender,
+                            .texture_id = cached_render_texture_,
+                            .label = "Rendered",
+                            .start_position = settings_.split_position,
+                            .end_position = 1.0f}},
                 .viewport = viewport_data,
                 .scaling_modifier = settings_.scaling_modifier,
                 .antialiasing = settings_.antialiasing,
@@ -1278,12 +1267,12 @@ namespace lfs::vis {
                 .show_dividers = true,
                 .divider_color = glm::vec4(1.0f, 0.85f, 0.0f, 1.0f),
                 .show_labels = true,
-                .right_texcoord_scale = texcoord_scale};
+                .left_texcoord_scale = GT_TEXCOORD_SCALE,
+                .right_texcoord_scale = render_texcoord_scale};
         }
 
-        // Handle PLY comparison mode
         if (settings_.split_view_mode == SplitViewMode::PLYComparison) {
-            auto visible_nodes = scene_manager->getScene().getVisibleNodes();
+            const auto visible_nodes = scene_manager->getScene().getVisibleNodes();
             if (visible_nodes.size() < 2) {
                 LOG_TRACE("PLY comparison needs at least 2 visible nodes, have {}", visible_nodes.size());
                 return std::nullopt;
