@@ -25,7 +25,8 @@ namespace lfs::vis::gui {
         constexpr ImVec2 BASE_WINDOW_PADDING = {20.0f, 16.0f};
         constexpr ImGuiWindowFlags POPUP_FLAGS = ImGuiWindowFlags_AlwaysAutoResize |
                                                  ImGuiWindowFlags_NoCollapse |
-                                                 ImGuiWindowFlags_NoDocking;
+                                                 ImGuiWindowFlags_NoDocking |
+                                                 ImGuiWindowFlags_NoSavedSettings;
     } // namespace
 
     using namespace lfs::core::events;

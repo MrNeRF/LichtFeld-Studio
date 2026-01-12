@@ -10,6 +10,7 @@
 #include "gui/dpi_scale.hpp"
 #include "gui/localization_manager.hpp"
 #include "gui/string_keys.hpp"
+#include "theme/theme.hpp"
 #include <algorithm>
 #include <cstring>
 #include <format>
@@ -779,7 +780,7 @@ namespace lfs::vis::gui {
             focus_on_next_frame_ = false;
         }
 
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.15f, 0.15f, 0.17f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, theme().palette.surface);
         if (!ImGui::Begin(title.c_str(), p_open, WINDOW_FLAGS)) {
             ImGui::PopStyleColor();
             ImGui::End();

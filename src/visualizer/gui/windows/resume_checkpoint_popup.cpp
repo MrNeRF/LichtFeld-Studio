@@ -37,7 +37,8 @@ namespace lfs::vis::gui {
                                                  ImGuiWindowFlags_NoDocking |
                                                  ImGuiWindowFlags_NoResize |
                                                  ImGuiWindowFlags_NoScrollbar |
-                                                 ImGuiWindowFlags_NoScrollWithMouse;
+                                                 ImGuiWindowFlags_NoScrollWithMouse |
+                                                 ImGuiWindowFlags_NoSavedSettings;
     } // namespace
 
     void ResumeCheckpointPopup::show(const std::filesystem::path& checkpoint_path) {

@@ -201,6 +201,18 @@ namespace lfs::vis {
         // Context menu helpers (pushes 6 colors, 3 style vars)
         void pushContextMenuStyle() const;
         static void popContextMenuStyle();
+
+        [[nodiscard]] bool isLightTheme() const {
+            constexpr float BRIGHTNESS_THRESHOLD = 0.5f;
+            const float brightness = (palette.background.x + palette.background.y + palette.background.z) / 3.0f;
+            return brightness > BRIGHTNESS_THRESHOLD;
+        }
+
+        [[nodiscard]] float frameDarkenAmount() const {
+            constexpr float LIGHT_DARKEN = 0.15f;
+            constexpr float DARK_DARKEN = 0.05f;
+            return isLightTheme() ? LIGHT_DARKEN : DARK_DARKEN;
+        }
     };
 
     // Global access

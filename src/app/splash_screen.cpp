@@ -5,6 +5,7 @@
 #include "app/splash_screen.hpp"
 #include "core/executable_path.hpp"
 #include "core/path_utils.hpp"
+#include "visualizer/theme/theme.hpp"
 
 // clang-format off
 #include <glad/glad.h>
@@ -45,42 +46,6 @@ namespace lfs::app {
         constexpr float BG_LIGHT_R = 0.92f;
         constexpr float BG_LIGHT_G = 0.92f;
         constexpr float BG_LIGHT_B = 0.94f;
-
-        bool loadThemePreference() {
-            try {
-                std::filesystem::path config_dir;
-#ifdef _WIN32
-                const char* path = std::getenv("APPDATA");
-                if (path) {
-                    config_dir = std::filesystem::path(path) / "LichtFeldStudio";
-                } else {
-                    return true;
-                }
-#else
-                const char* xdg = std::getenv("XDG_CONFIG_HOME");
-                if (xdg) {
-                    config_dir = std::filesystem::path(xdg) / "LichtFeldStudio";
-                } else {
-                    const char* home = std::getenv("HOME");
-                    if (home) {
-                        config_dir = std::filesystem::path(home) / ".config" / "LichtFeldStudio";
-                    } else {
-                        return true;
-                    }
-                }
-#endif
-                const auto pref_path = config_dir / "theme_preference";
-                if (std::filesystem::exists(pref_path)) {
-                    std::ifstream file(pref_path);
-                    std::string pref;
-                    if (file >> pref) {
-                        return pref != "light";
-                    }
-                }
-            } catch (...) {
-            }
-            return true;
-        }
 
         constexpr float LOGO_Y = 0.70f;
         constexpr float TEXT_Y = 0.35f;
@@ -358,7 +323,7 @@ void main() {
         const GLuint textured_program = createProgram(TEXTURED_VS, TEXTURED_FS);
         SpinnerData spinner = createSpinner();
 
-        const bool is_dark = loadThemePreference();
+        const bool is_dark = vis::loadThemePreference();
         const auto assets_dir = core::getAssetsDir();
         const std::string logo_file = is_dark ? "lichtfeld-splash-logo.png" : "lichtfeld-splash-logo-dark.png";
         const std::string loading_file = is_dark ? "lichtfeld-splash-loading.png" : "lichtfeld-splash-loading-dark.png";

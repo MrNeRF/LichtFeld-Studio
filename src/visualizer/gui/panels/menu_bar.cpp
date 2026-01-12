@@ -710,9 +710,8 @@ namespace lfs::vis::gui {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f * scale, 20.0f * scale));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f * scale, 10.0f * scale));
         const auto& t = theme();
-        const float bg_brightness = (t.palette.background.x + t.palette.background.y + t.palette.background.z) / 3.0f;
-        const bool is_light = bg_brightness > 0.5f;
-        const float frame_darken = is_light ? 0.12f : 0.05f;
+        const bool is_light = t.isLightTheme();
+        const float frame_darken = t.frameDarkenAmount();
         ImGui::PushStyleColor(ImGuiCol_WindowBg, withAlpha(t.palette.surface, 0.98f));
         ImGui::PushStyleColor(ImGuiCol_Text, t.palette.text);
         ImGui::PushStyleColor(ImGuiCol_TitleBg, t.palette.surface);

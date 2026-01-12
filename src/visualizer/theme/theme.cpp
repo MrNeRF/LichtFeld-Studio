@@ -233,9 +233,8 @@ namespace lfs::vis {
         colors[ImGuiCol_Border] = p.border;
         colors[ImGuiCol_BorderShadow] = ImVec4(0, 0, 0, 0);
 
-        const float bg_brightness = (p.background.x + p.background.y + p.background.z) / 3.0f;
-        const bool is_light = bg_brightness > 0.5f;
-        const float frame_darken = is_light ? 0.15f : 0.05f;
+        const bool is_light = g_current_theme.isLightTheme();
+        const float frame_darken = g_current_theme.frameDarkenAmount();
         colors[ImGuiCol_FrameBg] = darken(p.surface, frame_darken);
         colors[ImGuiCol_FrameBgHovered] = is_light ? darken(p.surface, 0.08f) : p.surface_bright;
         colors[ImGuiCol_FrameBgActive] = p.primary_dim;

@@ -35,7 +35,8 @@ namespace lfs::vis::gui {
                                                  ImGuiWindowFlags_NoDocking |
                                                  ImGuiWindowFlags_NoResize |
                                                  ImGuiWindowFlags_NoScrollbar |
-                                                 ImGuiWindowFlags_NoScrollWithMouse;
+                                                 ImGuiWindowFlags_NoScrollWithMouse |
+                                                 ImGuiWindowFlags_NoSavedSettings;
     } // namespace
 
     void SaveDirectoryPopup::show(const std::filesystem::path& dataset_path) {
