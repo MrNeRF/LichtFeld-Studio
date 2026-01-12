@@ -45,6 +45,7 @@ namespace gsplat_fwd {
         const float* thin_prism_coeffs,
         const int32_t* tile_offsets,
         const int32_t* flatten_ids,
+        const int32_t* visible_indices,
         float* renders,
         float* alphas,
         int32_t* last_ids,
@@ -68,7 +69,7 @@ namespace gsplat_fwd {
             viewmats0, viewmats1, Ks, camera_model,                  \
             ut_params, rs_type,                                      \
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,     \
-            tile_offsets, flatten_ids,                               \
+            tile_offsets, flatten_ids, visible_indices,              \
             renders, alphas, last_ids, median_depths, stream);       \
         break;
 
@@ -198,12 +199,14 @@ namespace gsplat_fwd {
             compute_view_dirs(means, viewmats0, C, N_total, M, visible_indices, result.dirs, stream);
 
             spherical_harmonics_fwd(
-                sh_degree, result.dirs, sh_coeffs, nullptr,
+                sh_degree, result.dirs, sh_coeffs, nullptr, visible_indices,
                 static_cast<int64_t>(C) * M, K,
                 result.colors, stream);
         }
 
-        // Step 4: Rasterize to pixels (M gaussians, compacted buffers)
+        // Step 4: Rasterize to pixels
+        // means/quats/scales/opacities are N_total-sized, accessed via visible_indices
+        // colors/depths are M-sized (computed for visible gaussians only)
         rasterize_to_pixels_from_world_3dgs_fwd(
             means, quats, scaled_scales, result.colors, opacities,
             backgrounds, masks, result.depths,
@@ -213,6 +216,7 @@ namespace gsplat_fwd {
             ut_params, rs_type,
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,
             result.tile_offsets, result.flatten_ids,
+            visible_indices,
             result.render_colors, result.render_alphas, result.last_ids,
             result.median_depths, stream);
     }

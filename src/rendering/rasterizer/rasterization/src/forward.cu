@@ -373,7 +373,7 @@ void lfs::rendering::forward(
                                         : n_primitives;
 
     if (visible_count > 0 && visible_indices != nullptr) {
-        LOG_INFO("forward: visibility filtering active - processing {} of {} gaussians", buffer_n_primitives, n_primitives);
+        LOG_INFO("forward: visibility filtering active - processing %d of %d gaussians", buffer_n_primitives, n_primitives);
     }
 
     char* per_primitive_buffers_blob = per_primitive_buffers_func(required<PerPrimitiveBuffers>(buffer_n_primitives));

@@ -368,17 +368,18 @@ namespace gsplat_fwd {
 
     template <typename scalar_t>
     __global__ void spherical_harmonics_fwd_kernel(
-        const uint32_t N,
+        const uint32_t M,
         const uint32_t K,
         const uint32_t degrees_to_use,
-        const vec3* __restrict__ dirs,       // [N, 3]
-        const scalar_t* __restrict__ coeffs, // [N, K, 3]
-        const bool* __restrict__ masks,      // [N]
-        scalar_t* __restrict__ colors        // [N, 3]
+        const vec3* __restrict__ dirs,               // [M, 3]
+        const scalar_t* __restrict__ coeffs,         // [N_total, K, 3] (N-sized)
+        const bool* __restrict__ masks,              // [M]
+        const int32_t* __restrict__ visible_indices, // [M] maps elem_id -> global_idx, nullptr = direct
+        scalar_t* __restrict__ colors                // [M, 3]
     ) {
-        // parallelize over N * 3
+        // parallelize over M * 3
         uint32_t idx = cg::this_grid().thread_rank();
-        if (idx >= N * 3) {
+        if (idx >= M * 3) {
             return;
         }
         uint32_t elem_id = idx / 3;
@@ -386,6 +387,12 @@ namespace gsplat_fwd {
         if (masks != nullptr && !masks[elem_id]) {
             return;
         }
+
+        // Map to global index for sh_coeffs access
+        const uint32_t global_id = (visible_indices != nullptr)
+                                       ? static_cast<uint32_t>(visible_indices[elem_id])
+                                       : elem_id;
+
         // Guard against nullptr dirs - only read when degree > 0 and dirs is valid
         // When dirs is nullptr, only SH0 (degree=0) can be evaluated
         vec3 dir = (degrees_to_use > 0 && dirs != nullptr) ? dirs[elem_id] : vec3{0.f, 0.f, 1.f};
@@ -393,23 +400,24 @@ namespace gsplat_fwd {
             dirs != nullptr ? degrees_to_use : 0u, // Only use higher SH degrees if dirs available
             c,
             dir,
-            coeffs + elem_id * K * 3,
+            coeffs + global_id * K * 3,
             colors + elem_id * 3);
     }
 
     void launch_spherical_harmonics_fwd_kernel(
         uint32_t degrees_to_use,
-        const float* dirs,      // [N, 3]
-        const float* coeffs,    // [N, K, 3]
-        const bool* masks,      // [N] optional (can be nullptr)
-        int64_t total_elements, // N
+        const float* dirs,              // [M, 3]
+        const float* coeffs,            // [N_total, K, 3] (N-sized when using visible_indices)
+        const bool* masks,              // [M] optional (can be nullptr)
+        const int32_t* visible_indices, // [M] maps elem_id -> global_idx, nullptr = direct
+        int64_t total_elements,         // M (visible gaussians)
         int32_t K,
-        float* colors, // [N, 3]
+        float* colors, // [M, 3]
         cudaStream_t stream) {
-        const uint32_t N = static_cast<uint32_t>(total_elements);
+        const uint32_t M = static_cast<uint32_t>(total_elements);
 
-        // parallelize over N * 3
-        int64_t n_elements = N * 3;
+        // parallelize over M * 3
+        int64_t n_elements = M * 3;
         dim3 threads(256);
         dim3 grid((n_elements + threads.x - 1) / threads.x);
         int64_t shmem_size = 0; // No shared memory used in this kernel
@@ -421,12 +429,13 @@ namespace gsplat_fwd {
 
         spherical_harmonics_fwd_kernel<float>
             <<<grid, threads, shmem_size, stream>>>(
-                N,
+                M,
                 static_cast<uint32_t>(K),
                 degrees_to_use,
                 reinterpret_cast<const vec3*>(dirs),
                 coeffs,
                 masks,
+                visible_indices,
                 colors);
     }
 

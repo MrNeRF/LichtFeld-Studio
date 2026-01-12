@@ -15,6 +15,7 @@ namespace gsplat_fwd {
         const float* dirs,
         const float* coeffs,
         const bool* masks,
+        const int32_t* visible_indices,
         int64_t total_elements,
         int32_t K,
         float* colors,
@@ -25,7 +26,7 @@ namespace gsplat_fwd {
 
         launch_spherical_harmonics_fwd_kernel(
             degrees_to_use,
-            dirs, coeffs, masks,
+            dirs, coeffs, masks, visible_indices,
             total_elements, K,
             colors, stream);
     }

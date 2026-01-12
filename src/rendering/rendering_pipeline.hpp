@@ -78,10 +78,7 @@ namespace lfs::rendering {
             int highlight_gaussian_id = -1;
             float far_plane = DEFAULT_FAR_PLANE;
             std::vector<bool> selected_node_mask;
-            std::vector<bool> node_visibility_mask;             // Per-node visibility for culling (consolidated models)
-            std::vector<GaussianRange> visible_ranges;          // Visible (offset, count) pairs for segment iteration
-            size_t visible_gaussian_count = 0;                  // Total visible gaussians (0 = use all)
-            std::shared_ptr<lfs::core::Tensor> visible_indices; // Maps output idx to gaussian idx (nullptr = all visible)
+            std::vector<bool> node_visibility_mask; // Per-node visibility for culling (consolidated models)
             bool desaturate_unselected = false;
             float selection_flash_intensity = 0.0f;
             bool orthographic = false;

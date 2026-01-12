@@ -104,10 +104,7 @@ namespace lfs::rendering {
         std::optional<BoundingBox> depth_filter;
         // Per-node selection mask: true = selected. Empty = no selection effects.
         std::vector<bool> selected_node_mask;
-        std::vector<bool> node_visibility_mask;             // Per-node visibility for culling (consolidated models)
-        std::vector<GaussianRange> visible_ranges;          // Visible (offset, count) pairs for segment iteration
-        size_t visible_gaussian_count = 0;                  // Total visible gaussians (0 = use all)
-        std::shared_ptr<lfs::core::Tensor> visible_indices; // Maps output idx to gaussian idx (nullptr = all visible)
+        std::vector<bool> node_visibility_mask; // Per-node visibility for culling (consolidated models)
         bool desaturate_unselected = false;
         float selection_flash_intensity = 0.0f;
         unsigned long long* hovered_depth_id = nullptr;

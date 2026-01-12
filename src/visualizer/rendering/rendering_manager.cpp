@@ -697,9 +697,6 @@ namespace lfs::vis {
                                       ? std::move(scene_state.selected_node_mask)
                                       : std::vector<bool>{},
             .node_visibility_mask = std::move(scene_state.node_visibility_mask),
-            .visible_ranges = convertGaussianRanges(scene_state.visible_ranges),
-            .visible_gaussian_count = scene_state.visible_gaussian_count,
-            .visible_indices = scene_state.visible_indices,
             .desaturate_unselected = settings_.desaturate_unselected,
             .selection_flash_intensity = getSelectionFlashIntensity(),
             .hovered_depth_id = nullptr,

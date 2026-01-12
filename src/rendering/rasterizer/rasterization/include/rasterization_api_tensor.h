@@ -95,9 +95,7 @@ namespace lfs::rendering {
         float selection_flash_intensity = 0.0f,
         bool orthographic = false,
         float ortho_scale = 1.0f,
-        bool mip_filter = false,
-        const Tensor* visible_indices = nullptr,
-        size_t visible_count = 0);
+        bool mip_filter = false);
 
     /**
      * @brief Select Gaussians within brush radius using GPU
@@ -207,8 +205,6 @@ namespace lfs::rendering {
         const Tensor* tangential_coeffs = nullptr,
         const Tensor* background = nullptr,
         const Tensor* transform_indices = nullptr,
-        const std::vector<bool>& node_visibility_mask = {},
-        const Tensor* visible_indices = nullptr,
-        size_t visible_count = 0);
+        const std::vector<bool>& node_visibility_mask = {});
 
 } // namespace lfs::rendering

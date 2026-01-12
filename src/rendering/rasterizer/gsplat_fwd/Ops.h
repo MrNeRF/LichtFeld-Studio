@@ -18,12 +18,13 @@ namespace gsplat_fwd {
 
     void spherical_harmonics_fwd(
         uint32_t degrees_to_use,
-        const float* dirs,      // [..., 3] flattened
-        const float* coeffs,    // [..., K, 3] flattened
-        const bool* masks,      // [...] optional (can be nullptr)
-        int64_t total_elements, // total batch size
-        int32_t K,              // number of SH coefficients
-        float* colors,          // [..., 3] output (pre-allocated)
+        const float* dirs,              // [M, 3] viewing directions
+        const float* coeffs,            // [N_total, K, 3] SH coefficients (N-sized when using visible_indices)
+        const bool* masks,              // [M] optional (can be nullptr)
+        const int32_t* visible_indices, // [M] maps elem_id -> global_idx, nullptr = direct
+        int64_t total_elements,         // M (visible gaussians)
+        int32_t K,                      // number of SH coefficients
+        float* colors,                  // [M, 3] output (pre-allocated)
         cudaStream_t stream = nullptr);
 
     //=========================================================================
@@ -133,15 +134,15 @@ namespace gsplat_fwd {
     //=========================================================================
 
     void rasterize_to_pixels_from_world_3dgs_fwd(
-        // Gaussian parameters
-        const float* means,       // [N, 3]
-        const float* quats,       // [N, 4]
-        const float* scales,      // [N, 3]
-        const float* colors,      // [C, N, channels]
-        const float* opacities,   // [C, N]
+        // Gaussian parameters (N_total-sized, use visible_indices for access)
+        const float* means,       // [N_total, 3]
+        const float* quats,       // [N_total, 4]
+        const float* scales,      // [N_total, 3]
+        const float* colors,      // [C, M, channels] (M-sized from SH)
+        const float* opacities,   // [N_total]
         const float* backgrounds, // [C, channels] (can be nullptr)
         const bool* masks,        // [C, tile_height, tile_width] (can be nullptr)
-        const float* depths,      // [C, N] per-gaussian depths (can be nullptr)
+        const float* depths,      // [C, M] per-gaussian depths (M-sized from projection)
         // dimensions
         uint32_t C,
         uint32_t N,
@@ -163,6 +164,8 @@ namespace gsplat_fwd {
         // intersections
         const int32_t* tile_offsets, // [C, tile_height, tile_width]
         const int32_t* flatten_ids,  // [n_isects]
+        // indirect indexing for visibility filtering
+        const int32_t* visible_indices, // [M] maps g -> global gaussian idx, nullptr = direct
         // outputs (pre-allocated)
         float* renders,       // [C, image_height, image_width, channels]
         float* alphas,        // [C, image_height, image_width, 1]

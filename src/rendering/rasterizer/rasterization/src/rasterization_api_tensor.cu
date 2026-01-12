@@ -11,6 +11,12 @@
 #include <stdexcept>
 #include <tuple>
 
+#include <thrust/copy.h>
+#include <thrust/count.h>
+#include <thrust/device_ptr.h>
+#include <thrust/execution_policy.h>
+#include <thrust/iterator/counting_iterator.h>
+
 namespace lfs::rendering {
 
     inline std::function<char*(size_t)> resize_function_wrapper_tensor(Tensor& t) {
@@ -48,6 +54,75 @@ namespace lfs::rendering {
                              .cuda();
                 ptr = reinterpret_cast<const bool*>(tensor.ptr<uint8_t>());
             }
+        }
+    };
+
+    struct VisibilityPredicate {
+        const int* transform_indices;
+        const bool* node_visibility_mask;
+        int num_nodes;
+
+        __host__ __device__ bool operator()(int gaussian_idx) const {
+            if (transform_indices == nullptr || node_visibility_mask == nullptr || num_nodes <= 0) {
+                return true;
+            }
+            const int node_idx = transform_indices[gaussian_idx];
+            if (node_idx < 0 || node_idx >= num_nodes) {
+                return true;
+            }
+            return node_visibility_mask[node_idx];
+        }
+    };
+
+    struct ComputedVisibleIndices {
+        Tensor tensor;
+        size_t count = 0;
+
+        static ComputedVisibleIndices compute(
+            int n_gaussians,
+            const Tensor* transform_indices,
+            const std::vector<bool>& node_visibility_mask_cpu,
+            const GpuBoolMask& node_visibility_mask_gpu,
+            cudaStream_t stream = nullptr) {
+
+            ComputedVisibleIndices result;
+
+            if (transform_indices == nullptr || !transform_indices->is_valid() ||
+                node_visibility_mask_gpu.ptr == nullptr || node_visibility_mask_gpu.count == 0) {
+                return result;
+            }
+
+            bool all_visible = true;
+            for (size_t i = 0; i < node_visibility_mask_cpu.size() && all_visible; ++i) {
+                if (!node_visibility_mask_cpu[i]) {
+                    all_visible = false;
+                }
+            }
+            if (all_visible) {
+                return result;
+            }
+
+            VisibilityPredicate predicate{
+                transform_indices->ptr<int>(),
+                node_visibility_mask_gpu.ptr,
+                node_visibility_mask_gpu.count};
+
+            result.tensor = Tensor::empty({static_cast<size_t>(n_gaussians)},
+                                          lfs::core::Device::CUDA, lfs::core::DataType::Int32);
+
+            thrust::counting_iterator<int> counting(0);
+            auto out_ptr = thrust::device_pointer_cast(result.tensor.ptr<int>());
+
+            auto end_it = thrust::copy_if(
+                thrust::cuda::par.on(stream),
+                counting, counting + n_gaussians, out_ptr, predicate);
+
+            result.count = static_cast<size_t>(end_it - out_ptr);
+
+            LOG_INFO("ComputedVisibleIndices: %d of %d gaussians visible",
+                     static_cast<int>(result.count), n_gaussians);
+
+            return result;
         }
     };
 
@@ -103,9 +178,7 @@ namespace lfs::rendering {
         float selection_flash_intensity,
         bool orthographic,
         float ortho_scale,
-        bool mip_filter,
-        const Tensor* visible_indices,
-        size_t visible_count) {
+        bool mip_filter) {
 
         check_tensor_input(config::debug, means, "means");
         check_tensor_input(config::debug, scales_raw, "scales_raw");
@@ -236,15 +309,13 @@ namespace lfs::rendering {
 
         const GpuBoolMask visibility_mask(node_visibility_mask);
 
-        // Prepare visible_indices pointer
-        const int* visible_indices_ptr = nullptr;
-        Tensor visible_indices_contig;
-        int actual_visible_count = 0;
-        if (visible_indices != nullptr && visible_indices->is_valid() && visible_count > 0) {
-            visible_indices_contig = visible_indices->is_contiguous() ? *visible_indices : visible_indices->contiguous();
-            visible_indices_ptr = visible_indices_contig.ptr<int>();
-            actual_visible_count = static_cast<int>(visible_count);
-        }
+        // Compute visible_indices from transform_indices + node_visibility_mask on GPU
+        auto computed_visible = ComputedVisibleIndices::compute(
+            n_primitives, transform_indices, node_visibility_mask, visibility_mask);
+        const int* visible_indices_ptr = computed_visible.count > 0
+                                             ? computed_visible.tensor.ptr<int>()
+                                             : nullptr;
+        const int actual_visible_count = static_cast<int>(computed_visible.count);
 
         forward(
             per_primitive_buffers_func,
@@ -698,9 +769,7 @@ namespace lfs::rendering {
         const Tensor* tangential_coeffs,
         const Tensor* background,
         const Tensor* transform_indices,
-        const std::vector<bool>& node_visibility_mask,
-        const Tensor* visible_indices,
-        const size_t visible_count) {
+        const std::vector<bool>& node_visibility_mask) {
 
         constexpr float QUAT_NORM_EPS = 1e-8f;
 
@@ -711,14 +780,17 @@ namespace lfs::rendering {
         check_tensor_input(config::debug, sh0, "sh0");
         check_tensor_input(config::debug, sh_rest, "sh_rest");
 
-        // Kernel-level indirect indexing: pass visible_indices to kernel, no tensor copying
-        const bool use_visibility_filter = (visible_indices != nullptr && visible_indices->is_valid() && visible_count > 0);
         const int N_total = static_cast<int>(means.size(0));
-        const int M = use_visibility_filter ? static_cast<int>(visible_count) : N_total;
+
+        // Compute visible_indices from transform_indices + node_visibility_mask on GPU
+        const GpuBoolMask visibility_mask(node_visibility_mask);
+        auto computed_visible = ComputedVisibleIndices::compute(
+            N_total, transform_indices, node_visibility_mask, visibility_mask);
+        const bool use_visibility_filter = computed_visible.count > 0;
+        const int M = use_visibility_filter ? static_cast<int>(computed_visible.count) : N_total;
 
         if (use_visibility_filter) {
-            LOG_INFO("forward_gut_tensor: kernel-level visibility filtering - %d of %d gaussians",
-                     M, N_total);
+            LOG_INFO("forward_gut_tensor: visibility filtering - %d of %d gaussians", M, N_total);
         }
         const size_t H = static_cast<size_t>(height);
         const size_t W = static_cast<size_t>(width);
@@ -729,39 +801,18 @@ namespace lfs::rendering {
         Tensor alpha = Tensor::empty({1, H, W}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
         Tensor depth = Tensor::empty({1, H, W}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
 
-        // For GUT path, we filter input tensors since rasterize kernel accesses them through compacted indices
-        // The projection kernel uses visible_indices for indirect indexing to reduce thread count
-        Tensor means_filtered, scales_raw_filtered, rotations_raw_filtered, opacities_raw_filtered;
-        Tensor sh0_filtered, sh_rest_filtered;
+        // Activate parameters on N-sized data (runs on all gaussians, but avoids expensive index_select copies)
+        const Tensor scales = scales_raw.exp();
+        const Tensor rotations = rotations_raw / rotations_raw.norm(2, -1, true).clamp_min(QUAT_NORM_EPS);
+        const Tensor opacities = opacities_raw.sigmoid().squeeze(-1);
 
-        if (use_visibility_filter) {
-            means_filtered = means.index_select(0, *visible_indices);
-            scales_raw_filtered = scales_raw.index_select(0, *visible_indices);
-            rotations_raw_filtered = rotations_raw.index_select(0, *visible_indices);
-            opacities_raw_filtered = opacities_raw.index_select(0, *visible_indices);
-            sh0_filtered = sh0.index_select(0, *visible_indices);
-            sh_rest_filtered = sh_rest.numel() > 0 ? sh_rest.index_select(0, *visible_indices) : sh_rest;
-        } else {
-            means_filtered = means;
-            scales_raw_filtered = scales_raw;
-            rotations_raw_filtered = rotations_raw;
-            opacities_raw_filtered = opacities_raw;
-            sh0_filtered = sh0;
-            sh_rest_filtered = sh_rest;
-        }
+        // Concatenate SH coefficients [N_total, K, 3] - N-sized, accessed via visible_indices in kernel
+        const Tensor sh_coeffs = (sh_rest.numel() > 0 && num_sh_coeffs > 1)
+                                     ? Tensor::cat({sh0, sh_rest}, 1).contiguous()
+                                     : sh0.contiguous();
 
-        // Activate parameters on filtered data
-        const Tensor scales = scales_raw_filtered.exp();
-        const Tensor rotations = rotations_raw_filtered / rotations_raw_filtered.norm(2, -1, true).clamp_min(QUAT_NORM_EPS);
-        const Tensor opacities = opacities_raw_filtered.sigmoid().squeeze(-1);
-
-        // Concatenate SH coefficients [M, K, 3]
-        const Tensor sh_coeffs = (sh_rest_filtered.numel() > 0 && num_sh_coeffs > 1)
-                                     ? Tensor::cat({sh0_filtered, sh_rest_filtered}, 1).contiguous()
-                                     : sh0_filtered.contiguous();
-
-        // Contiguous copies
-        const Tensor means_c = means_filtered.contiguous();
+        // Contiguous copies (N-sized)
+        const Tensor means_c = means.contiguous();
         const Tensor scales_c = scales.contiguous();
         const Tensor rotations_c = rotations.contiguous();
         const Tensor opacities_c = opacities.contiguous();
@@ -772,26 +823,20 @@ namespace lfs::rendering {
         const float* const tangential_ptr = (tangential_coeffs && tangential_coeffs->is_valid()) ? tangential_coeffs->ptr<float>() : nullptr;
         const float* const bg_ptr = (background && background->is_valid()) ? background->ptr<float>() : nullptr;
 
-        // Transform indices (filter if visibility filtering is active)
-        Tensor transform_indices_filtered;
-        const int* transform_indices_ptr = nullptr;
-        if (transform_indices && transform_indices->is_valid()) {
-            if (use_visibility_filter) {
-                transform_indices_filtered = transform_indices->index_select(0, *visible_indices);
-                transform_indices_ptr = transform_indices_filtered.ptr<int>();
-            } else {
-                transform_indices_ptr = transform_indices->ptr<int>();
-            }
-        }
+        // Transform indices (N-sized, not filtered)
+        const int* transform_indices_ptr = (transform_indices && transform_indices->is_valid())
+                                               ? transform_indices->ptr<int>()
+                                               : nullptr;
 
-        // Skip node_visibility_mask when using visible_indices (data already filtered)
-        const GpuBoolMask visibility_mask(use_visibility_filter ? std::vector<bool>{} : node_visibility_mask);
+        // visible_indices for kernel-level indirect indexing
+        const int* visible_indices_ptr = use_visibility_filter ? computed_visible.tensor.ptr<int>() : nullptr;
+        const uint32_t visible_count = use_visibility_filter ? static_cast<uint32_t>(computed_visible.count) : 0;
 
         // Render buffers in HWC format (gsplat output format)
         Tensor render_hwc = Tensor::empty({H, W, 3}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
         Tensor alpha_hw = Tensor::empty({H, W}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
 
-        // Data is pre-filtered, so pass M as gaussian count and nullptr for visible_indices
+        // Pass N-sized arrays with visible_indices for kernel-level indirect indexing
         gsplat_forward_gut(
             means_c.ptr<float>(),
             rotations_c.ptr<float>(),
@@ -799,7 +844,7 @@ namespace lfs::rendering {
             opacities_c.ptr<float>(),
             sh_coeffs.ptr<float>(),
             static_cast<uint32_t>(sh_degree),
-            static_cast<uint32_t>(M), // Use M since data is already filtered
+            static_cast<uint32_t>(N_total), // N_total - full array size
             static_cast<uint32_t>(num_sh_coeffs),
             static_cast<uint32_t>(width),
             static_cast<uint32_t>(height),
@@ -814,8 +859,8 @@ namespace lfs::rendering {
             transform_indices_ptr,
             visibility_mask.ptr,
             visibility_mask.count,
-            nullptr, // visible_indices - not needed, data already filtered
-            0,       // visible_count - 0 means use N (which is M)
+            visible_indices_ptr, // Kernel uses this for indirect indexing
+            visible_count,       // M (0 = use N)
             render_hwc.ptr<float>(),
             alpha_hw.ptr<float>(),
             depth.ptr<float>(),

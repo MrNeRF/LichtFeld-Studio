@@ -43,6 +43,7 @@ namespace gsplat_fwd {
         const float* thin_prism_coeffs,
         const int32_t* tile_offsets,
         const int32_t* flatten_ids,
+        const int32_t* visible_indices, // [M] maps g -> global gaussian idx, nullptr = direct
         float* renders,
         float* alphas,
         int32_t* last_ids,

@@ -138,13 +138,9 @@ namespace lfs::rendering {
                     const auto camera_model = request.equirectangular
                                                   ? GutCameraModel::EQUIRECTANGULAR
                                                   : GutCameraModel::PINHOLE;
-                    if (request.visible_indices && request.visible_gaussian_count > 0) {
-                        LOG_INFO("Using GUT rasterizer with visible_indices: {} gaussians", request.visible_gaussian_count);
-                    }
                     auto render_output = gut_rasterize_tensor(
                         cam, const_cast<lfs::core::SplatData&>(model), background_,
-                        request.scaling_modifier, camera_model, transform_indices_ptr, request.node_visibility_mask,
-                        request.visible_indices.get(), request.visible_gaussian_count);
+                        request.scaling_modifier, camera_model, transform_indices_ptr, request.node_visibility_mask);
                     result.image = std::move(render_output.image);
                     result.depth = std::move(render_output.depth);
                 } else {
@@ -174,9 +170,7 @@ namespace lfs::rendering {
                                                            request.selection_flash_intensity,
                                                            request.orthographic,
                                                            request.ortho_scale,
-                                                           request.mip_filter,
-                                                           request.visible_indices.get(),
-                                                           request.visible_gaussian_count);
+                                                           request.mip_filter);
                     result.image = std::move(image);
                     result.depth = std::move(depth);
                     if (request.output_screen_positions) {
@@ -202,13 +196,9 @@ namespace lfs::rendering {
                 const auto camera_model = request.equirectangular
                                               ? GutCameraModel::EQUIRECTANGULAR
                                               : GutCameraModel::PINHOLE;
-                if (request.visible_indices && request.visible_gaussian_count > 0) {
-                    LOG_INFO("Using GUT rasterizer with visible_indices: {} gaussians", request.visible_gaussian_count);
-                }
                 auto render_output = gut_rasterize_tensor(
                     cam, mutable_model, background_, request.scaling_modifier, camera_model,
-                    transform_indices_ptr, request.node_visibility_mask,
-                    request.visible_indices.get(), request.visible_gaussian_count);
+                    transform_indices_ptr, request.node_visibility_mask);
                 return RenderResult{
                     .image = std::move(render_output.image),
                     .depth = std::move(render_output.depth),
@@ -218,11 +208,6 @@ namespace lfs::rendering {
             }
 
             // Use libtorch-free tensor-based rasterizer
-            if (request.visible_indices && request.visible_gaussian_count > 0) {
-                LOG_INFO("Using FAST GS rasterizer with visible_indices: {} gaussians", request.visible_gaussian_count);
-            } else {
-                LOG_INFO("Using FAST GS rasterizer (all gaussians)");
-            }
             Tensor screen_positions;
             auto [image, depth] = rasterize_tensor(cam, mutable_model, background_,
                                                    request.show_rings, request.ring_width,
@@ -247,9 +232,7 @@ namespace lfs::rendering {
                                                    request.selection_flash_intensity,
                                                    request.orthographic,
                                                    request.ortho_scale,
-                                                   request.mip_filter,
-                                                   request.visible_indices.get(),
-                                                   request.visible_gaussian_count);
+                                                   request.mip_filter);
             result.image = std::move(image);
             result.depth = std::move(depth);
             if (request.output_screen_positions) {
