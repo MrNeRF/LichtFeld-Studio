@@ -20,11 +20,11 @@ out vec3 FragPos;
 out vec4 vertexColor;
 out vec2 TexCoord;
 out float ndcX;
-out int instanceID;
-out uint textureID;
-out uint isValidation;
-out uint isEquirectangular;
-out int equiView;
+flat out int instanceID;
+flat out uint textureID;
+flat out uint isValidation;
+flat out uint isEquirectangular;
+flat out int equiView;
 
 void main() {
     instanceID = gl_InstanceID;

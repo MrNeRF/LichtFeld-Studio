@@ -7,11 +7,11 @@ in vec3 FragPos[];
 in vec4 vertexColor[];
 in vec2 TexCoord[];
 in float ndcX[];
-in int instanceID[];
-in uint textureID[];
-in uint isValidation[];
-in uint isEquirectangular[];
-in int equiView[];
+flat in int instanceID[];
+flat in uint textureID[];
+flat in uint isValidation[];
+flat in uint isEquirectangular[];
+flat in int equiView[];
 
 out vec3 g_FragPos;
 out vec4 g_vertexColor;
