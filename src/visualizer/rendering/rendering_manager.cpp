@@ -1088,7 +1088,7 @@ namespace lfs::vis {
                     .point_cloud_mode = true,
                     .voxel_size = settings_.voxel_size,
                     .gut = false,
-                    .equirectangular = false,
+                    .equirectangular = settings_.equirectangular,
                     .show_rings = false,
                     .ring_width = 0.0f,
                     .show_center_markers = false,
@@ -1380,7 +1380,7 @@ namespace lfs::vis {
 
         // Coordinate axes
         if (settings_.show_coord_axes && engine_) {
-            auto axes_result = engine_->renderCoordinateAxes(viewport, settings_.axes_size, settings_.axes_visibility);
+            auto axes_result = engine_->renderCoordinateAxes(viewport, settings_.axes_size, settings_.axes_visibility, settings_.equirectangular);
             if (!axes_result) {
                 LOG_WARN("Failed to render coordinate axes: {}", axes_result.error());
             }
@@ -1467,7 +1467,8 @@ namespace lfs::vis {
                         settings_.train_camera_color,
                         settings_.eval_camera_color,
                         highlight_index,
-                        scene_transform);
+                        scene_transform,
+                        settings_.equirectangular);
 
                     if (!frustum_result) {
                         LOG_ERROR("Failed to render camera frustums: {}", frustum_result.error());
@@ -1510,9 +1511,8 @@ namespace lfs::vis {
             }
         }
 
-        // Grid (render last for proper wireframe compositing)
-        // Don't render grid in split view mode as it would render over the split line
-        if (settings_.show_grid && engine_ && settings_.split_view_mode == SplitViewMode::Disabled) {
+        // Grid - disabled in split view and equirectangular modes
+        if (settings_.show_grid && engine_ && settings_.split_view_mode == SplitViewMode::Disabled && !settings_.equirectangular) {
             if (const auto result = engine_->renderGrid(
                     viewport,
                     static_cast<lfs::rendering::GridPlane>(settings_.grid_plane),

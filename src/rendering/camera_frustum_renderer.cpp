@@ -398,7 +398,8 @@ namespace lfs::rendering {
         const float scale,
         const glm::vec3& train_color,
         const glm::vec3& eval_color,
-        const glm::mat4& scene_transform) {
+        const glm::mat4& scene_transform,
+        const bool equirectangular_view) {
 
         if (!initialized_ || cameras.empty())
             return {};
@@ -487,8 +488,10 @@ namespace lfs::rendering {
 
             const glm::mat4 view_proj = projection * view;
             shader->set("viewProj", view_proj);
+            shader->set("view", view);
             shader->set("viewPos", view_position);
             shader->set("pickingMode", false);
+            shader->set("equirectangularView", equirectangular_view);
 
             glEnable(GL_DEPTH_TEST);
             glDepthFunc(GL_LESS);

@@ -303,6 +303,7 @@ namespace lfs::rendering {
             .point_cloud_mode = true,
             .voxel_size = request.voxel_size,
             .gut = false,
+            .equirectangular = request.equirectangular,
             .show_rings = false,
             .ring_width = 0.0f,
             .show_center_markers = false,
@@ -452,7 +453,8 @@ namespace lfs::rendering {
     Result<void> RenderingEngineImpl::renderCoordinateAxes(
         const ViewportData& viewport,
         float size,
-        const std::array<bool, 3>& visible) {
+        const std::array<bool, 3>& visible,
+        bool equirectangular) {
 
         if (!isInitialized() || !axes_renderer_.isInitialized()) {
             LOG_ERROR("Axes renderer not initialized");
@@ -467,7 +469,7 @@ namespace lfs::rendering {
         auto view = createViewMatrix(viewport);
         auto proj = createProjectionMatrix(viewport);
 
-        return axes_renderer_.render(view, proj);
+        return axes_renderer_.render(view, proj, equirectangular);
     }
 
     Result<void> RenderingEngineImpl::renderPivot(
@@ -542,7 +544,8 @@ namespace lfs::rendering {
         float scale,
         const glm::vec3& train_color,
         const glm::vec3& eval_color,
-        const glm::mat4& scene_transform) {
+        const glm::mat4& scene_transform,
+        bool equirectangular_view) {
 
         if (!camera_frustum_renderer_.isInitialized()) {
             return {}; // Silent fail if not initialized
@@ -551,7 +554,7 @@ namespace lfs::rendering {
         auto view = createViewMatrix(viewport);
         auto proj = createProjectionMatrix(viewport);
 
-        return camera_frustum_renderer_.render(cameras, view, proj, scale, train_color, eval_color, scene_transform);
+        return camera_frustum_renderer_.render(cameras, view, proj, scale, train_color, eval_color, scene_transform, equirectangular_view);
     }
 
     Result<void> RenderingEngineImpl::renderCameraFrustumsWithHighlight(
@@ -561,7 +564,8 @@ namespace lfs::rendering {
         const glm::vec3& train_color,
         const glm::vec3& eval_color,
         int highlight_index,
-        const glm::mat4& scene_transform) {
+        const glm::mat4& scene_transform,
+        bool equirectangular_view) {
 
         if (!camera_frustum_renderer_.isInitialized()) {
             return {}; // Silent fail if not initialized
@@ -573,7 +577,7 @@ namespace lfs::rendering {
         auto view = createViewMatrix(viewport);
         auto proj = createProjectionMatrix(viewport);
 
-        return camera_frustum_renderer_.render(cameras, view, proj, scale, train_color, eval_color, scene_transform);
+        return camera_frustum_renderer_.render(cameras, view, proj, scale, train_color, eval_color, scene_transform, equirectangular_view);
     }
 
     Result<int> RenderingEngineImpl::pickCameraFrustum(

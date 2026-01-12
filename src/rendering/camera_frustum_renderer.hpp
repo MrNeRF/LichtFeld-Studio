@@ -35,7 +35,8 @@ namespace lfs::rendering {
                             float scale = 0.1f,
                             const glm::vec3& train_color = glm::vec3(0.0f, 1.0f, 0.0f),
                             const glm::vec3& eval_color = glm::vec3(1.0f, 0.0f, 0.0f),
-                            const glm::mat4& scene_transform = glm::mat4(1.0f));
+                            const glm::mat4& scene_transform = glm::mat4(1.0f),
+                            bool equirectangular_view = false);
 
         Result<int> pickCamera(const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
                                const glm::vec2& mouse_pos,

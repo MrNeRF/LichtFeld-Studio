@@ -118,49 +118,40 @@ namespace lfs::rendering {
     Result<void> PointCloudRenderer::render(const lfs::core::SplatData& splat_data,
                                             const glm::mat4& view,
                                             const glm::mat4& projection,
-                                            float voxel_size,
+                                            const float voxel_size,
                                             const glm::vec3& background_color,
                                             const std::vector<glm::mat4>& model_transforms,
-                                            const std::shared_ptr<lfs::core::Tensor>& transform_indices) {
-        if (splat_data.size() == 0) {
-            LOG_TRACE("No splat data to render");
+                                            const std::shared_ptr<lfs::core::Tensor>& transform_indices,
+                                            const bool equirectangular) {
+        if (splat_data.size() == 0)
             return {};
-        }
 
-        // Get positions and SH coefficients
-        Tensor positions = splat_data.get_means();
-        Tensor shs = splat_data.get_shs();
-
-        // Extract RGB colors from SH coefficients
-        Tensor colors = extractRGBFromSH(shs);
+        const Tensor positions = splat_data.get_means();
+        const Tensor shs = splat_data.get_shs();
+        const Tensor colors = extractRGBFromSH(shs);
 
         return renderInternal(positions, colors, view, projection, voxel_size, background_color,
-                              model_transforms, transform_indices);
+                              model_transforms, transform_indices, equirectangular);
     }
 
     Result<void> PointCloudRenderer::render(const lfs::core::PointCloud& point_cloud,
                                             const glm::mat4& view,
                                             const glm::mat4& projection,
-                                            float voxel_size,
+                                            const float voxel_size,
                                             const glm::vec3& background_color,
                                             const std::vector<glm::mat4>& model_transforms,
-                                            const std::shared_ptr<lfs::core::Tensor>& transform_indices) {
-        if (point_cloud.size() == 0) {
-            LOG_TRACE("No point cloud data to render");
+                                            const std::shared_ptr<lfs::core::Tensor>& transform_indices,
+                                            const bool equirectangular) {
+        if (point_cloud.size() == 0)
             return {};
-        }
 
-        // Use means and colors directly from point cloud
-        Tensor positions = point_cloud.means;
+        const Tensor positions = point_cloud.means;
         Tensor colors = point_cloud.colors;
-
-        // Normalize colors to [0,1] if they're uint8
-        if (colors.dtype() == lfs::core::DataType::UInt8) {
+        if (colors.dtype() == lfs::core::DataType::UInt8)
             colors = colors.to(lfs::core::DataType::Float32) / 255.0f;
-        }
 
         return renderInternal(positions, colors, view, projection, voxel_size, background_color,
-                              model_transforms, transform_indices);
+                              model_transforms, transform_indices, equirectangular);
     }
 
     Result<void> PointCloudRenderer::renderInternal(const Tensor& positions,
@@ -170,7 +161,8 @@ namespace lfs::rendering {
                                                     const float voxel_size,
                                                     const glm::vec3& background_color,
                                                     const std::vector<glm::mat4>& model_transforms,
-                                                    const std::shared_ptr<lfs::core::Tensor>& transform_indices) {
+                                                    const std::shared_ptr<lfs::core::Tensor>& transform_indices,
+                                                    const bool equirectangular) {
         if (!initialized_) {
             return std::unexpected("Renderer not initialized");
         }
@@ -247,6 +239,8 @@ namespace lfs::rendering {
         if (auto result = s->set("u_projection", projection); !result)
             return result;
         if (auto result = s->set("u_voxel_size", voxel_size); !result)
+            return result;
+        if (auto result = s->set("u_equirectangular", equirectangular); !result)
             return result;
 
         constexpr int MAX_TRANSFORMS = 64;

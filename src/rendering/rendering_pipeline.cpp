@@ -334,7 +334,8 @@ namespace lfs::rendering {
             LOG_TIMER_TRACE("point_cloud_renderer_->render");
             if (auto result = point_cloud_renderer_->render(model, view, projection,
                                                             request.voxel_size, request.background_color,
-                                                            request.model_transforms, request.transform_indices);
+                                                            request.model_transforms, request.transform_indices,
+                                                            request.equirectangular);
                 !result) {
                 LOG_ERROR("Point cloud rendering failed: {}", result.error());
                 return std::unexpected(std::format("Point cloud rendering failed: {}", result.error()));
@@ -527,7 +528,8 @@ namespace lfs::rendering {
         {
             LOG_TIMER_TRACE("point_cloud_renderer_->render(PointCloud)");
             if (auto result = point_cloud_renderer_->render(point_cloud, view, projection,
-                                                            request.voxel_size, request.background_color);
+                                                            request.voxel_size, request.background_color,
+                                                            {}, nullptr, request.equirectangular);
                 !result) {
                 LOG_ERROR("Raw point cloud rendering failed: {}", result.error());
                 return std::unexpected(std::format("Raw point cloud rendering failed: {}", result.error()));

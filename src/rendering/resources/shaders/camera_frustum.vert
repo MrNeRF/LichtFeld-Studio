@@ -9,8 +9,12 @@ layout(location = 8) in uint aIsValidation;
 layout(location = 9) in uint aIsEquirectangular;
 
 uniform mat4 viewProj;
+uniform mat4 view;
 uniform vec3 viewPos;
 uniform bool pickingMode = false;
+uniform bool equirectangularView = false;
+
+#define PI 3.14159265359
 
 out vec3 FragPos;
 out vec4 vertexColor;
@@ -29,7 +33,17 @@ void main() {
     isValidation = aIsValidation;
     isEquirectangular = aIsEquirectangular;
     FragPos = vec3(worldPos);
-    gl_Position = viewProj * worldPos;
+
+    if (equirectangularView) {
+        vec4 viewPos4 = view * worldPos;
+        vec3 dir = normalize(viewPos4.xyz);
+        float theta = atan(dir.x, -dir.z);
+        float phi = asin(clamp(dir.y, -1.0, 1.0));
+        float depth = length(viewPos4.xyz);
+        gl_Position = vec4(theta / PI, -phi / (PI * 0.5), -1.0 / depth, 1.0);
+    } else {
+        gl_Position = viewProj * worldPos;
+    }
 
     if (pickingMode) {
         int id = gl_InstanceID + 1;
