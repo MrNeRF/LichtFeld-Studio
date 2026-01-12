@@ -290,7 +290,7 @@ namespace lfs::core::cuda {
             int iterations) {
             const int n = data.shape()[0];
 
-            LOG_INFO("kmeans_gpu_bruteforce<%d>: n=%d, k=%d, iterations=%d", N_DIMS, n, k, iterations);
+            LOG_INFO("kmeans_gpu_bruteforce<{}>: n={}, k={}, iterations={}", N_DIMS, n, k, iterations);
 
             if (n <= k) {
                 auto centroids = data.clone();
@@ -661,7 +661,7 @@ namespace lfs::core::cuda {
             int iterations) {
             const int n = static_cast<int>(data.shape()[0]);
 
-            LOG_INFO("kmeans_hierarchical<%d>: n=%d, k=%d, iterations=%d", N_DIMS, n, k, iterations);
+            LOG_INFO("kmeans_hierarchical<{}>: n={}, k={}, iterations={}", N_DIMS, n, k, iterations);
 
             if (n <= k) {
                 auto centroids = data.clone();

@@ -118,10 +118,6 @@ namespace lfs::rendering {
                 counting, counting + n_gaussians, out_ptr, predicate);
 
             result.count = static_cast<size_t>(end_it - out_ptr);
-
-            LOG_INFO("ComputedVisibleIndices: %d of %d gaussians visible",
-                     static_cast<int>(result.count), n_gaussians);
-
             return result;
         }
     };
@@ -789,9 +785,6 @@ namespace lfs::rendering {
         const bool use_visibility_filter = computed_visible.count > 0;
         const int M = use_visibility_filter ? static_cast<int>(computed_visible.count) : N_total;
 
-        if (use_visibility_filter) {
-            LOG_INFO("forward_gut_tensor: visibility filtering - %d of %d gaussians", M, N_total);
-        }
         const size_t H = static_cast<size_t>(height);
         const size_t W = static_cast<size_t>(width);
         const int num_sh_coeffs = 1 + static_cast<int>(sh_rest.size(1));

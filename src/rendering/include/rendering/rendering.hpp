@@ -60,12 +60,6 @@ namespace lfs::rendering {
         glm::mat4 transform{1.0f};
     };
 
-    // Gaussian index range for segment-based visibility filtering
-    struct GaussianRange {
-        uint32_t offset;
-        uint32_t count;
-    };
-
     struct RenderRequest {
         ViewportData viewport;
         float scaling_modifier = 1.0f;

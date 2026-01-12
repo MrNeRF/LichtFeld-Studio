@@ -3,11 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "buffer_utils.h"
+#include "core/logger.hpp"
 #include "forward.h"
 #include "helper_math.h"
 #include "rasterization_config.h"
 #include "utils.h"
-#include "core/logger.hpp"
 #include <cub/cub.cuh>
 #include <functional>
 
@@ -371,10 +371,6 @@ void lfs::rendering::forward(
     const int buffer_n_primitives = (visible_count > 0 && visible_indices != nullptr)
                                         ? visible_count
                                         : n_primitives;
-
-    if (visible_count > 0 && visible_indices != nullptr) {
-        LOG_INFO("forward: visibility filtering active - processing %d of %d gaussians", buffer_n_primitives, n_primitives);
-    }
 
     char* per_primitive_buffers_blob = per_primitive_buffers_func(required<PerPrimitiveBuffers>(buffer_n_primitives));
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, buffer_n_primitives);

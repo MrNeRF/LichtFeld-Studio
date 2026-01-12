@@ -27,16 +27,7 @@ namespace lfs::vis {
 
     namespace {
         constexpr int GPU_ALIGNMENT = 16; // 16-pixel alignment for GPU texture efficiency
-
-        std::vector<lfs::rendering::GaussianRange> convertGaussianRanges(const std::vector<GaussianRange>& vis_ranges) {
-            std::vector<lfs::rendering::GaussianRange> result;
-            result.reserve(vis_ranges.size());
-            for (const auto& r : vis_ranges) {
-                result.push_back({r.offset, r.count});
-            }
-            return result;
-        }
-    } // namespace
+    }                                     // namespace
 
     using namespace lfs::core::events;
 
