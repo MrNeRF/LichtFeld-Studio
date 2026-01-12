@@ -2988,18 +2988,18 @@ namespace lfs::vis::gui {
         if (viewport_size_.x < 200.0f || viewport_size_.y < 200.0f)
             return;
 
-        constexpr float ZONE_PADDING = 120.0f;
-        constexpr float DASH_LENGTH = 12.0f;
-        constexpr float GAP_LENGTH = 8.0f;
-        constexpr float BORDER_THICKNESS = 2.0f;
-        constexpr float ICON_SIZE = 48.0f;
-        constexpr float ANIM_SPEED = 30.0f;
+        static constexpr float ZONE_PADDING = 120.0f;
+        static constexpr float DASH_LENGTH = 12.0f;
+        static constexpr float GAP_LENGTH = 8.0f;
+        static constexpr float BORDER_THICKNESS = 2.0f;
+        static constexpr float ICON_SIZE = 48.0f;
+        static constexpr float ANIM_SPEED = 30.0f;
         const auto& t = theme();
-        const ImU32 BORDER_COLOR = t.overlay_border_u32();
-        const ImU32 ICON_COLOR = t.overlay_icon_u32();
-        const ImU32 TITLE_COLOR = t.overlay_text_u32();
-        const ImU32 SUBTITLE_COLOR = t.overlay_hint_u32();
-        const ImU32 HINT_COLOR = toU32WithAlpha(t.overlay.text_dim, 0.5f);
+        const ImU32 border_color = t.overlay_border_u32();
+        const ImU32 icon_color = t.overlay_icon_u32();
+        const ImU32 title_color = t.overlay_text_u32();
+        const ImU32 subtitle_color = t.overlay_hint_u32();
+        const ImU32 hint_color = toU32WithAlpha(t.overlay.text_dim, 0.5f);
 
         ImDrawList* const draw_list = ImGui::GetBackgroundDrawList();
         const float center_x = viewport_pos_.x + viewport_size_.x * 0.5f;
@@ -3024,7 +3024,7 @@ namespace lfs::vis::gui {
                 if (d1 > d0) {
                     draw_list->AddLine(ImVec2(start.x + nx * d0, start.y + ny * d0),
                                        ImVec2(start.x + nx * d1, start.y + ny * d1),
-                                       BORDER_COLOR, BORDER_THICKNESS);
+                                       border_color, BORDER_THICKNESS);
                 }
             }
         };
@@ -3033,17 +3033,16 @@ namespace lfs::vis::gui {
         drawDashedLine(zone_max, {zone_min.x, zone_max.y});
         drawDashedLine({zone_min.x, zone_max.y}, zone_min);
 
-        // Folder icon
         const float icon_y = center_y - 50.0f;
         draw_list->AddRect({center_x - ICON_SIZE * 0.5f, icon_y - ICON_SIZE * 0.3f},
                            {center_x + ICON_SIZE * 0.5f, icon_y + ICON_SIZE * 0.4f},
-                           ICON_COLOR, 4.0f, 0, 2.0f);
+                           icon_color, 4.0f, 0, 2.0f);
         draw_list->AddLine({center_x - ICON_SIZE * 0.5f, icon_y - ICON_SIZE * 0.3f},
-                           {center_x - ICON_SIZE * 0.2f, icon_y - ICON_SIZE * 0.5f}, ICON_COLOR, 2.0f);
+                           {center_x - ICON_SIZE * 0.2f, icon_y - ICON_SIZE * 0.5f}, icon_color, 2.0f);
         draw_list->AddLine({center_x - ICON_SIZE * 0.2f, icon_y - ICON_SIZE * 0.5f},
-                           {center_x + ICON_SIZE * 0.1f, icon_y - ICON_SIZE * 0.5f}, ICON_COLOR, 2.0f);
+                           {center_x + ICON_SIZE * 0.1f, icon_y - ICON_SIZE * 0.5f}, icon_color, 2.0f);
         draw_list->AddLine({center_x + ICON_SIZE * 0.1f, icon_y - ICON_SIZE * 0.5f},
-                           {center_x + ICON_SIZE * 0.2f, icon_y - ICON_SIZE * 0.3f}, ICON_COLOR, 2.0f);
+                           {center_x + ICON_SIZE * 0.2f, icon_y - ICON_SIZE * 0.3f}, icon_color, 2.0f);
 
         // Text
         const auto calcTextSize = [this](const char* text, ImFont* font) {
@@ -3065,19 +3064,19 @@ namespace lfs::vis::gui {
 
         if (font_heading_)
             ImGui::PushFont(font_heading_);
-        draw_list->AddText({center_x - title_size.x * 0.5f, center_y + 10.0f}, TITLE_COLOR, title);
+        draw_list->AddText({center_x - title_size.x * 0.5f, center_y + 10.0f}, title_color, title);
         if (font_heading_)
             ImGui::PopFont();
 
         if (font_bold_)
             ImGui::PushFont(font_bold_);
-        draw_list->AddText({center_x - subtitle_size.x * 0.5f, center_y + 40.0f}, SUBTITLE_COLOR, subtitle);
+        draw_list->AddText({center_x - subtitle_size.x * 0.5f, center_y + 40.0f}, subtitle_color, subtitle);
         if (font_bold_)
             ImGui::PopFont();
 
         if (font_heading_)
             ImGui::PushFont(font_heading_);
-        draw_list->AddText({center_x - hint_size.x * 0.5f, center_y + 70.0f}, HINT_COLOR, hint);
+        draw_list->AddText({center_x - hint_size.x * 0.5f, center_y + 70.0f}, hint_color, hint);
         if (font_heading_)
             ImGui::PopFont();
     }
@@ -3086,18 +3085,18 @@ namespace lfs::vis::gui {
         if (!drag_drop_hovering_)
             return;
 
-        constexpr float INSET = 30.0f;
-        constexpr float CORNER_RADIUS = 16.0f;
-        constexpr float GLOW_MAX = 8.0f;
-        constexpr float PULSE_SPEED = 3.0f;
-        constexpr float BOUNCE_SPEED = 4.0f;
-        constexpr float BOUNCE_AMOUNT = 5.0f;
+        static constexpr float INSET = 30.0f;
+        static constexpr float CORNER_RADIUS = 16.0f;
+        static constexpr float GLOW_MAX = 8.0f;
+        static constexpr float PULSE_SPEED = 3.0f;
+        static constexpr float BOUNCE_SPEED = 4.0f;
+        static constexpr float BOUNCE_AMOUNT = 5.0f;
         const auto& t = theme();
-        const ImU32 OVERLAY_COLOR = toU32WithAlpha(t.palette.primary_dim, 0.7f);
-        const ImU32 FILL_COLOR = toU32WithAlpha(t.palette.primary, 0.23f);
-        const ImU32 ICON_COLOR = t.overlay_text_u32();
-        const ImU32 TITLE_COLOR = t.overlay_text_u32();
-        const ImU32 SUBTITLE_COLOR = t.overlay_hint_u32();
+        const ImU32 overlay_color = toU32WithAlpha(t.palette.primary_dim, 0.7f);
+        const ImU32 fill_color = toU32WithAlpha(t.palette.primary, 0.23f);
+        const ImU32 icon_color = t.overlay_text_u32();
+        const ImU32 title_color = t.overlay_text_u32();
+        const ImU32 subtitle_color = t.overlay_hint_u32();
 
         const ImGuiViewport* const vp = ImGui::GetMainViewport();
         ImDrawList* const draw_list = ImGui::GetForegroundDrawList();
@@ -3110,9 +3109,8 @@ namespace lfs::vis::gui {
         const float time = static_cast<float>(ImGui::GetTime());
         const float pulse = 0.5f + 0.5f * std::sin(time * PULSE_SPEED);
 
-        draw_list->AddRectFilled(vp->WorkPos, win_max, OVERLAY_COLOR);
+        draw_list->AddRectFilled(vp->WorkPos, win_max, overlay_color);
 
-        // Glow effect
         const ImU32 glow_color = toU32WithAlpha(t.palette.primary, 0.16f * pulse);
         for (float i = GLOW_MAX; i > 0.0f; i -= 2.0f) {
             draw_list->AddRect({zone_min.x - i, zone_min.y - i}, {zone_max.x + i, zone_max.y + i},
@@ -3121,13 +3119,12 @@ namespace lfs::vis::gui {
 
         const float border_alpha = 0.7f + 0.3f * pulse;
         draw_list->AddRect(zone_min, zone_max, toU32WithAlpha(t.palette.primary, border_alpha), CORNER_RADIUS, 0, 3.0f);
-        draw_list->AddRectFilled(zone_min, zone_max, FILL_COLOR, CORNER_RADIUS);
+        draw_list->AddRectFilled(zone_min, zone_max, fill_color, CORNER_RADIUS);
 
-        // Animated arrow
         const float arrow_y = center_y - 60.0f + BOUNCE_AMOUNT * std::sin(time * BOUNCE_SPEED);
         draw_list->AddTriangleFilled({center_x, arrow_y + 25.0f}, {center_x - 20.0f, arrow_y},
-                                     {center_x + 20.0f, arrow_y}, ICON_COLOR);
-        draw_list->AddRectFilled({center_x - 8.0f, arrow_y - 25.0f}, {center_x + 8.0f, arrow_y}, ICON_COLOR, 2.0f);
+                                     {center_x + 20.0f, arrow_y}, icon_color);
+        draw_list->AddRectFilled({center_x - 8.0f, arrow_y - 25.0f}, {center_x + 8.0f, arrow_y}, icon_color, 2.0f);
 
         // Text
         const auto calcTextSize = [this](const char* text, ImFont* font) {
@@ -3147,13 +3144,13 @@ namespace lfs::vis::gui {
 
         if (font_heading_)
             ImGui::PushFont(font_heading_);
-        draw_list->AddText({center_x - title_size.x * 0.5f, center_y + 5.0f}, TITLE_COLOR, title);
+        draw_list->AddText({center_x - title_size.x * 0.5f, center_y + 5.0f}, title_color, title);
         if (font_heading_)
             ImGui::PopFont();
 
         if (font_small_)
             ImGui::PushFont(font_small_);
-        draw_list->AddText({center_x - subtitle_size.x * 0.5f, center_y + 35.0f}, SUBTITLE_COLOR, subtitle);
+        draw_list->AddText({center_x - subtitle_size.x * 0.5f, center_y + 35.0f}, subtitle_color, subtitle);
         if (font_small_)
             ImGui::PopFont();
     }
@@ -3231,7 +3228,6 @@ namespace lfs::vis::gui {
         ImGui::SetNextWindowPos(overlay_pos);
         ImGui::SetNextWindowSize({overlay_width, overlay_height});
 
-        bool overlay_hovered = false;
         if (ImGui::Begin("##StartupOverlay", nullptr,
                          ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
@@ -3310,9 +3306,6 @@ namespace lfs::vis::gui {
                                toU32WithAlpha(t.palette.text_dim, 0.5f), click_hint);
             if (font_small_)
                 ImGui::PopFont();
-
-            overlay_hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
-                                                     ImGuiHoveredFlags_ChildWindows);
         }
         ImGui::End();
         ImGui::PopStyleColor(9);

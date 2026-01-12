@@ -43,6 +43,7 @@
     "title": "快速入门指南",
     "description": "学习如何准备数据集并开始使用LichtFeld Studio：",
     "wiki_section": "维基 & 常见问题",
+    "video_intro": "360度等距柱状投影图像训练",
     "video_latest": "LichtFeld v0.3.0 功能概览",
     "video_reality_scan": "Reality Scan数据集",
     "video_colmap": "COLMAP教程",

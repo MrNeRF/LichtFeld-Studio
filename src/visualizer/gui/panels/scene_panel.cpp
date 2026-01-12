@@ -352,22 +352,21 @@ namespace lfs::vis::gui {
         const float scale = getDpiScale();
         ImDrawList* const draw_list = ImGui::GetWindowDrawList();
 
-        const float ROW_PADDING = 2.0f * scale;
-        const ImU32 HIGHLIGHT_COLOR = thm.overlay_highlight_u32();
-        const ImU32 SELECTION_COLOR_BASE = thm.overlay_selection_u32();
-        const ImU32 SELECTION_COLOR_FLASH = thm.overlay_selection_flash_u32();
+        const float row_padding = 2.0f * scale;
+        const ImU32 highlight_color = thm.overlay_highlight_u32();
+        const ImU32 selection_base = thm.overlay_selection_u32();
+        const ImU32 selection_flash = thm.overlay_selection_flash_u32();
 
         const ImVec2 row_min = ImGui::GetCursorScreenPos();
         const float window_left = ImGui::GetWindowPos().x;
         const float window_right = window_left + ImGui::GetWindowWidth();
-        const float row_height = ImGui::GetTextLineHeight() + ROW_PADDING;
+        const float row_height = ImGui::GetTextLineHeight() + row_padding;
 
-        // Compute row color
         ImU32 row_color;
         if (is_selected) {
             if (m_selectionFlashIntensity > 0.0f) {
-                const ImVec4 base = ImGui::ColorConvertU32ToFloat4(SELECTION_COLOR_BASE);
-                const ImVec4 flash = ImGui::ColorConvertU32ToFloat4(SELECTION_COLOR_FLASH);
+                const ImVec4 base = ImGui::ColorConvertU32ToFloat4(selection_base);
+                const ImVec4 flash = ImGui::ColorConvertU32ToFloat4(selection_flash);
                 const float interp = 1.0f - m_selectionFlashIntensity;
                 row_color = ImGui::ColorConvertFloat4ToU32(ImVec4(
                     flash.x + (base.x - flash.x) * interp,
@@ -375,10 +374,10 @@ namespace lfs::vis::gui {
                     flash.z + (base.z - flash.z) * interp,
                     flash.w + (base.w - flash.w) * interp));
             } else {
-                row_color = SELECTION_COLOR_BASE;
+                row_color = selection_base;
             }
         } else if (is_highlighted_cam) {
-            row_color = HIGHLIGHT_COLOR;
+            row_color = highlight_color;
         } else {
             row_color = (m_rowIndex++ % 2 == 0) ? thm.row_even_u32() : thm.row_odd_u32();
         }

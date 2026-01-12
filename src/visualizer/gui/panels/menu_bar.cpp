@@ -316,7 +316,9 @@ namespace lfs::vis::gui {
             ImGui::Spacing();
             ImGui::Spacing();
 
-            // Row 1: Feature overview and Masks tutorial
+            // Row 1
+            renderVideoCard(LOC(GettingStarted::VIDEO_INTRO), "b1Olu_IU1sM", "https://www.youtube.com/watch?v=b1Olu_IU1sM");
+            ImGui::SameLine(0.0f, VIDEO_SPACING);
             renderVideoCard(LOC(GettingStarted::VIDEO_LATEST), "zWIzBHRc-60", "https://www.youtube.com/watch?v=zWIzBHRc-60");
             ImGui::SameLine(0.0f, VIDEO_SPACING);
             renderVideoCard(LOC(GettingStarted::VIDEO_MASKS), "956qR8N3Xk4", "https://www.youtube.com/watch?v=956qR8N3Xk4");

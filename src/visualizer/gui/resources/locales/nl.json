@@ -43,6 +43,7 @@
     "title": "SNELSTARTGIDS",
     "description": "Leer hoe je datasets voorbereidt en aan de slag gaat met LichtFeld Studio:",
     "wiki_section": "WIKI & FAQ",
+    "video_intro": "Training op 360 Equirectangulaire Afbeeldingen",
     "video_latest": "LichtFeld v0.3.0 Functie Overzicht",
     "video_reality_scan": "Reality Scan Dataset",
     "video_colmap": "COLMAP Tutorial",
