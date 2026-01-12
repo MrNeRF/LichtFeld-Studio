@@ -228,4 +228,25 @@ namespace gsplat_lfs {
         }
     }
 
+    void compute_cumsum_gpu(
+        const int32_t* input,
+        int64_t* output,
+        uint32_t n_elements,
+        cudaStream_t stream) {
+        if (n_elements == 0) {
+            return;
+        }
+
+        // Use CUB transform iterator for int32→int64 conversion during scan
+        cub::TransformInputIterator<int64_t, cub::CastOp<int64_t>, const int32_t*>
+            cast_iter(input, cub::CastOp<int64_t>());
+
+        CUB_WRAPPER_LFS(
+            cub::DeviceScan::InclusiveSum,
+            cast_iter,
+            output,
+            n_elements,
+            stream);
+    }
+
 } // namespace gsplat_lfs

@@ -51,4 +51,10 @@ namespace gsplat_lfs {
         int32_t* flatten_ids_sorted,
         cudaStream_t stream = nullptr);
 
+    void compute_cumsum_gpu(
+        const int32_t* input,
+        int64_t* output,
+        uint32_t n_elements,
+        cudaStream_t stream = nullptr);
+
 } // namespace gsplat_lfs
