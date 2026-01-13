@@ -523,7 +523,8 @@ namespace lfs::rendering {
             cached_uint8_.copy_((cached_rgba_.clamp(0.0f, 1.0f) * 255.0f).to(lfs::core::DataType::UInt8));
         }
 
-        const Tensor& rgba_image = cached_uint8_;
+        const Tensor& rgba_image =
+            (cached_rgba_.dtype() == lfs::core::DataType::UInt8) ? cached_rgba_ : cached_uint8_;
 
         // Copy to CUDA array
         err = cudaMemcpy2DToArray(
