@@ -2885,7 +2885,7 @@ namespace lfs::vis::gui {
         }
 
         const float scale = getDpiScale();
-        const float overlay_width = 400.0f * scale;
+        const float overlay_width = 600.0f * scale;
         const float progress_bar_height = 20.0f * scale;
         const float btn_width = 80.0f * scale;
         const float btn_height = 28.0f * scale;
@@ -2939,7 +2939,7 @@ namespace lfs::vis::gui {
 
             ImGui::Spacing();
             if (!path_str.empty()) {
-                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", path_str.c_str());
+                ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Path: %s", path_str.c_str());
             }
             ImGui::Spacing();
 
@@ -2960,7 +2960,22 @@ namespace lfs::vis::gui {
 
             if (!error.empty()) {
                 ImGui::Spacing();
-                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", error.c_str());
+                
+                // Remove path suffix from error message since it's already shown above as "Path: ..."
+                std::string display_error = error;
+                size_t path_pos = std::string::npos;
+                if (const size_t unix_path = display_error.rfind(": /"); unix_path != std::string::npos) {
+                    path_pos = unix_path;
+                } else if (const size_t win_path = display_error.rfind(": C:\\"); win_path != std::string::npos) {
+                    path_pos = win_path;
+                }
+                if (path_pos != std::string::npos) {
+                    display_error = display_error.substr(0, path_pos);
+                }
+                
+                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + overlay_width - ImGui::GetStyle().WindowPadding.x * 2.0f);
+                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%s", display_error.c_str());
+                ImGui::PopTextWrapPos();
             }
 
             if (show_completion && !is_active) {
