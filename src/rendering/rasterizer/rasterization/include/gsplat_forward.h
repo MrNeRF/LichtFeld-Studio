@@ -12,7 +12,8 @@ namespace lfs::rendering {
     enum class GutCameraModel : int {
         PINHOLE = 0,
         ORTHO = 1,
-        FISHEYE = 2
+        FISHEYE = 2,
+        EQUIRECTANGULAR = 3
     };
 
     enum class GutRenderMode : int {
@@ -43,9 +44,14 @@ namespace lfs::rendering {
         const float* background, // [3] or nullptr
         GutRenderMode render_mode,
         float scaling_modifier,
-        float* render_colors_out, // [H, W, C]
-        float* render_alphas_out, // [H, W]
-        float* render_depth_out,  // [H, W] or nullptr
+        const int* transform_indices,     // [N] optional
+        const bool* node_visibility_mask, // optional
+        int num_visibility_nodes,
+        const int* visible_indices, // [M] maps output idx to gaussian idx, nullptr = all visible
+        uint32_t visible_count,     // M = number of visible gaussians (0 = use N)
+        float* render_colors_out,   // [H, W, C]
+        float* render_alphas_out,   // [H, W]
+        float* render_depth_out,    // [H, W] or nullptr
         cudaStream_t stream = nullptr);
 
 } // namespace lfs::rendering

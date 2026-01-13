@@ -41,7 +41,11 @@ namespace lfs::vis {
         });
         visible.setCallback([this] {
             if (scene_) {
-                scene_->invalidateCache();
+                if (scene_->isConsolidated()) {
+                    scene_->invalidateTransformCache();
+                } else {
+                    scene_->invalidateCache();
+                }
             }
         });
     }
@@ -77,6 +81,13 @@ namespace lfs::vis {
         if (name.empty()) {
             LOG_WARN("Cannot add node with empty name");
             return;
+        }
+
+        if (consolidated_) {
+            LOG_DEBUG("Adding node invalidates consolidation");
+            consolidated_ = false;
+            consolidated_node_ids_.clear();
+            cached_combined_.reset();
         }
 
         // Calculate gaussian count and centroid before moving
@@ -258,6 +269,8 @@ namespace lfs::vis {
         cached_transforms_.clear();
         model_cache_valid_ = false;
         transform_cache_valid_ = false;
+        consolidated_ = false;
+        consolidated_node_ids_.clear();
 
         selection_mask_.reset();
         has_selection_ = false;
@@ -312,7 +325,51 @@ namespace lfs::vis {
 
     const lfs::core::SplatData* Scene::getCombinedModel() const {
         rebuildCacheIfNeeded();
-        return cached_combined_.get();
+        return single_node_model_ ? single_node_model_ : cached_combined_.get();
+    }
+
+    size_t Scene::consolidateNodeModels() {
+        rebuildCacheIfNeeded();
+
+        if (single_node_model_ || !cached_combined_) {
+            return 0;
+        }
+
+        consolidated_node_ids_.clear();
+        size_t consolidated = 0;
+        for (auto& node : nodes_) {
+            if (node->model && isNodeEffectivelyVisible(node->id)) {
+                consolidated_node_ids_.push_back(node->id);
+                node->model.reset();
+                ++consolidated;
+            }
+        }
+
+        if (consolidated > 0) {
+            consolidated_ = true;
+            constexpr size_t BYTES_PER_GAUSSIAN = 3 * 4 + 1 * 3 * 4 + 3 * 4 + 4 * 4 + 1 * 4;
+            const size_t saved_mb = getTotalGaussianCount() * BYTES_PER_GAUSSIAN / (1024 * 1024);
+            LOG_INFO("Consolidated {} nodes, saved ~{} MB VRAM", consolidated, saved_mb);
+        }
+
+        return consolidated;
+    }
+
+    std::vector<bool> Scene::getNodeVisibilityMask() const {
+        if (!consolidated_ || consolidated_node_ids_.empty()) {
+            return {};
+        }
+
+        std::vector<bool> mask;
+        mask.reserve(consolidated_node_ids_.size());
+        for (const NodeId id : consolidated_node_ids_) {
+            if (const auto* node = getNodeById(id)) {
+                mask.push_back(node->visible.get());
+            } else {
+                mask.push_back(true);
+            }
+        }
+        return mask;
     }
 
     const lfs::core::PointCloud* Scene::getVisiblePointCloud() const {
@@ -384,9 +441,15 @@ namespace lfs::vis {
         if (model_cache_valid_)
             return;
 
-        LOG_DEBUG("rebuildModelCacheIfNeeded - rebuilding combined model");
+        if (consolidated_ && cached_combined_) {
+            model_cache_valid_ = true;
+            return;
+        }
 
-        // Collect visible nodes
+        LOG_DEBUG("Rebuilding combined model cache");
+
+        single_node_model_ = nullptr;
+
         std::vector<const Node*> visible_nodes;
         for (const auto& node : nodes_) {
             if (node->model && isNodeEffectivelyVisible(node->id)) {
@@ -402,7 +465,22 @@ namespace lfs::vis {
             return;
         }
 
-        // Cache model sizes upfront to avoid race condition with training thread
+        if (visible_nodes.size() == 1) {
+            const auto* node = visible_nodes[0];
+            single_node_model_ = node->model.get();
+            cached_combined_.reset();
+
+            const size_t n = node->model->size();
+            cached_transform_indices_ = std::make_shared<lfs::core::Tensor>(
+                lfs::core::Tensor::zeros({n}, lfs::core::Device::CUDA, lfs::core::DataType::Int32));
+
+            LOG_DEBUG("Single node: {} ({} gaussians)", node->name, n);
+            model_cache_valid_ = true;
+            transform_cache_valid_ = false;
+            return;
+        }
+
+        // Cache model sizes to avoid race with training thread
         struct ModelStats {
             size_t total_gaussians = 0;
             int max_sh_degree = 0;
@@ -918,6 +996,13 @@ namespace lfs::vis {
     }
 
     NodeId Scene::addSplat(const std::string& name, std::unique_ptr<lfs::core::SplatData> model, const NodeId parent) {
+        if (consolidated_) {
+            LOG_DEBUG("Adding splat invalidates consolidation");
+            consolidated_ = false;
+            consolidated_node_ids_.clear();
+            cached_combined_.reset();
+        }
+
         const size_t gaussian_count = static_cast<size_t>(model->size());
         const glm::vec3 centroid = computeCentroid(model.get());
 
@@ -1259,17 +1344,34 @@ namespace lfs::vis {
         static const glm::mat4 IDENTITY{1.0f};
         if (splats.size() == 1 && splats[0].second == IDENTITY) {
             const auto* const src = splats[0].first;
-            auto result = std::make_unique<lfs::core::SplatData>(
-                src->get_max_sh_degree(),
-                src->means_raw().clone(),
-                src->sh0_raw().clone(),
-                src->shN_raw().is_valid() ? src->shN_raw().clone() : lfs::core::Tensor(),
-                src->scaling_raw().clone(),
-                src->rotation_raw().clone(),
-                src->opacity_raw().clone(),
-                src->get_scene_scale());
-            result->set_active_sh_degree(src->get_active_sh_degree());
-            return result;
+
+            // Filter out deleted splats if deletion mask exists
+            if (src->has_deleted_mask()) {
+                const auto keep_mask = src->deleted().logical_not();
+                auto result = std::make_unique<lfs::core::SplatData>(
+                    src->get_max_sh_degree(),
+                    src->means_raw().index_select(0, keep_mask),
+                    src->sh0_raw().index_select(0, keep_mask),
+                    src->shN_raw().is_valid() ? src->shN_raw().index_select(0, keep_mask) : lfs::core::Tensor(),
+                    src->scaling_raw().index_select(0, keep_mask),
+                    src->rotation_raw().index_select(0, keep_mask),
+                    src->opacity_raw().index_select(0, keep_mask),
+                    src->get_scene_scale());
+                result->set_active_sh_degree(src->get_active_sh_degree());
+                return result;
+            } else {
+                auto result = std::make_unique<lfs::core::SplatData>(
+                    src->get_max_sh_degree(),
+                    src->means_raw().clone(),
+                    src->sh0_raw().clone(),
+                    src->shN_raw().is_valid() ? src->shN_raw().clone() : lfs::core::Tensor(),
+                    src->scaling_raw().clone(),
+                    src->rotation_raw().clone(),
+                    src->opacity_raw().clone(),
+                    src->get_scene_scale());
+                result->set_active_sh_degree(src->get_active_sh_degree());
+                return result;
+            }
         }
 
         const int shN_coeffs = (max_sh > 0) ? ((max_sh + 1) * (max_sh + 1) - 1) : 0;
@@ -1285,14 +1387,33 @@ namespace lfs::vis {
         float total_scale = 0.0f;
 
         for (const auto& [model, world_transform] : splats) {
+            // Filter out deleted splats first
+            lfs::core::Tensor means, sh0, shN, scaling, rotation, opacity;
+            if (model->has_deleted_mask()) {
+                const auto keep_mask = model->deleted().logical_not();
+                means = model->means_raw().index_select(0, keep_mask);
+                sh0 = model->sh0_raw().index_select(0, keep_mask);
+                shN = model->shN_raw().is_valid() ? model->shN_raw().index_select(0, keep_mask) : lfs::core::Tensor();
+                scaling = model->scaling_raw().index_select(0, keep_mask);
+                rotation = model->rotation_raw().index_select(0, keep_mask);
+                opacity = model->opacity_raw().index_select(0, keep_mask);
+            } else {
+                means = model->means_raw().clone();
+                sh0 = model->sh0_raw().clone();
+                shN = model->shN_raw().is_valid() ? model->shN_raw().clone() : lfs::core::Tensor();
+                scaling = model->scaling_raw().clone();
+                rotation = model->rotation_raw().clone();
+                opacity = model->opacity_raw().clone();
+            }
+
             lfs::core::SplatData transformed(
                 model->get_max_sh_degree(),
-                model->means_raw().clone(),
-                model->sh0_raw().clone(),
-                model->shN_raw().is_valid() ? model->shN_raw().clone() : lfs::core::Tensor(),
-                model->scaling_raw().clone(),
-                model->rotation_raw().clone(),
-                model->opacity_raw().clone(),
+                std::move(means),
+                std::move(sh0),
+                std::move(shN),
+                std::move(scaling),
+                std::move(rotation),
+                std::move(opacity),
                 model->get_scene_scale());
 
             lfs::core::transform(transformed, world_transform);

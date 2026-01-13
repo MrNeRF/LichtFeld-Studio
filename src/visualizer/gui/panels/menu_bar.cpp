@@ -24,6 +24,7 @@ using namespace lichtfeld::Strings;
 #include <glad/glad.h>
 #include <imgui.h>
 
+#include <cfloat>
 #include <cstdlib>
 
 #define CPPHTTPLIB_OPENSSL_SUPPORT
@@ -224,9 +225,11 @@ namespace lfs::vis::gui {
                     const bool is_dark = (theme().name == "Dark");
                     if (ImGui::MenuItem(LOC(Menu::View::THEME_DARK), nullptr, is_dark)) {
                         setTheme(darkTheme());
+                        saveThemePreference(true);
                     }
                     if (ImGui::MenuItem(LOC(Menu::View::THEME_LIGHT), nullptr, !is_dark)) {
                         setTheme(lightTheme());
+                        saveThemePreference(false);
                     }
                     ImGui::EndMenu();
                 }
@@ -314,7 +317,9 @@ namespace lfs::vis::gui {
             ImGui::Spacing();
             ImGui::Spacing();
 
-            // Row 1: Feature overview and Masks tutorial
+            // Row 1
+            renderVideoCard(LOC(GettingStarted::VIDEO_INTRO), "b1Olu_IU1sM", "https://www.youtube.com/watch?v=b1Olu_IU1sM");
+            ImGui::SameLine(0.0f, VIDEO_SPACING);
             renderVideoCard(LOC(GettingStarted::VIDEO_LATEST), "zWIzBHRc-60", "https://www.youtube.com/watch?v=zWIzBHRc-60");
             ImGui::SameLine(0.0f, VIDEO_SPACING);
             renderVideoCard(LOC(GettingStarted::VIDEO_MASKS), "956qR8N3Xk4", "https://www.youtube.com/watch?v=956qR8N3Xk4");
@@ -565,42 +570,33 @@ namespace lfs::vis::gui {
     } // namespace
 
     void MenuBar::renderBindingRow(const input::Action action, const input::ToolMode mode) {
-        static constexpr ImVec4 COLOR_ACTION{0.9f, 0.9f, 0.9f, 1.0f};
-        static constexpr ImVec4 COLOR_BINDING{0.4f, 0.7f, 1.0f, 1.0f};
-        static constexpr ImVec4 COLOR_WAITING{1.0f, 0.8f, 0.2f, 1.0f};
-        static constexpr ImVec4 COLOR_REBIND{0.2f, 0.4f, 0.6f, 1.0f};
-        static constexpr ImVec4 COLOR_REBIND_HOVER{0.3f, 0.5f, 0.7f, 1.0f};
-        static constexpr ImVec4 COLOR_REBIND_ACTIVE{0.4f, 0.6f, 0.8f, 1.0f};
-        static constexpr ImVec4 COLOR_CANCEL{0.6f, 0.2f, 0.2f, 1.0f};
-        static constexpr ImVec4 COLOR_CANCEL_HOVER{0.7f, 0.3f, 0.3f, 1.0f};
-        static constexpr ImVec4 COLOR_CANCEL_ACTIVE{0.8f, 0.4f, 0.4f, 1.0f};
-
+        const auto& t = theme();
         const bool is_rebinding = rebinding_action_.has_value() &&
                                   *rebinding_action_ == action &&
                                   rebinding_mode_ == mode;
 
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        ImGui::TextColored(COLOR_ACTION, "%s", input::getActionName(action).c_str());
+        ImGui::TextColored(t.palette.text, "%s", input::getActionName(action).c_str());
 
         ImGui::TableNextColumn();
         if (is_rebinding) {
             if (waiting_for_double_click_) {
-                ImGui::TextColored(COLOR_WAITING, "%s", LOC(lichtfeld::Strings::InputSettings::CLICK_AGAIN_DOUBLE));
+                ImGui::TextColored(t.palette.warning, "%s", LOC(lichtfeld::Strings::InputSettings::CLICK_AGAIN_DOUBLE));
             } else {
-                ImGui::TextColored(COLOR_WAITING, "%s", LOC(lichtfeld::Strings::InputSettings::PRESS_KEY_OR_CLICK));
+                ImGui::TextColored(t.palette.warning, "%s", LOC(lichtfeld::Strings::InputSettings::PRESS_KEY_OR_CLICK));
             }
         } else {
             const std::string desc = input_bindings_->getTriggerDescription(action, mode);
-            ImGui::TextColored(COLOR_BINDING, "%s", desc.c_str());
+            ImGui::TextColored(t.palette.info, "%s", desc.c_str());
         }
 
         ImGui::TableNextColumn();
         const int unique_id = static_cast<int>(action) * 100 + static_cast<int>(mode);
         if (is_rebinding) {
-            ImGui::PushStyleColor(ImGuiCol_Button, COLOR_CANCEL);
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, COLOR_CANCEL_HOVER);
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, COLOR_CANCEL_ACTIVE);
+            ImGui::PushStyleColor(ImGuiCol_Button, withAlpha(t.palette.error, 0.8f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, t.palette.error);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, lighten(t.palette.error, 0.1f));
             char label[64];
             snprintf(label, sizeof(label), "%s##%d", LOC(lichtfeld::Strings::InputSettings::CANCEL), unique_id);
             if (ImGui::Button(label, ImVec2(-1, 0))) {
@@ -608,9 +604,9 @@ namespace lfs::vis::gui {
             }
             ImGui::PopStyleColor(3);
         } else {
-            ImGui::PushStyleColor(ImGuiCol_Button, COLOR_REBIND);
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, COLOR_REBIND_HOVER);
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, COLOR_REBIND_ACTIVE);
+            ImGui::PushStyleColor(ImGuiCol_Button, withAlpha(t.palette.info, 0.8f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, t.palette.info);
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, lighten(t.palette.info, 0.1f));
             char label[64];
             snprintf(label, sizeof(label), "%s##%d", LOC(lichtfeld::Strings::InputSettings::REBIND), unique_id);
             if (ImGui::Button(label, ImVec2(-1, 0))) {
@@ -715,20 +711,22 @@ namespace lfs::vis::gui {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f * scale, 20.0f * scale));
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8.0f * scale, 10.0f * scale));
         const auto& t = theme();
+        const bool is_light = t.isLightTheme();
+        const float frame_darken = t.frameDarkenAmount();
         ImGui::PushStyleColor(ImGuiCol_WindowBg, withAlpha(t.palette.surface, 0.98f));
         ImGui::PushStyleColor(ImGuiCol_Text, t.palette.text);
         ImGui::PushStyleColor(ImGuiCol_TitleBg, t.palette.surface);
         ImGui::PushStyleColor(ImGuiCol_TitleBgActive, t.palette.surface_bright);
         ImGui::PushStyleColor(ImGuiCol_Border, withAlpha(t.palette.info, 0.3f));
-        ImGui::PushStyleColor(ImGuiCol_FrameBg, darken(t.palette.surface, 0.05f));
-        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, t.palette.surface_bright);
-        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, lighten(t.palette.surface_bright, 0.05f));
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, withAlpha(darken(t.palette.surface, 0.1f), 0.98f));
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, darken(t.palette.surface, frame_darken));
+        ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, is_light ? darken(t.palette.surface, 0.06f) : t.palette.surface_bright);
+        ImGui::PushStyleColor(ImGuiCol_FrameBgActive, is_light ? darken(t.palette.surface, 0.08f) : lighten(t.palette.surface_bright, 0.05f));
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, withAlpha(darken(t.palette.surface, frame_darken), 0.98f));
         ImGui::PushStyleColor(ImGuiCol_Header, withAlpha(t.palette.info, 0.3f));
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, withAlpha(t.palette.info, 0.5f));
         ImGui::PushStyleColor(ImGuiCol_HeaderActive, withAlpha(t.palette.info, 0.7f));
-        ImGui::PushStyleColor(ImGuiCol_TableHeaderBg, t.palette.surface_bright);
-        ImGui::PushStyleColor(ImGuiCol_TableBorderStrong, lighten(t.palette.surface_bright, 0.15f));
+        ImGui::PushStyleColor(ImGuiCol_TableHeaderBg, is_light ? darken(t.palette.surface, 0.08f) : t.palette.surface_bright);
+        ImGui::PushStyleColor(ImGuiCol_TableBorderStrong, is_light ? darken(t.palette.surface, 0.15f) : lighten(t.palette.surface_bright, 0.15f));
 
         if (ImGui::Begin(LOC(Window::INPUT_SETTINGS), &show_input_settings_, WINDOW_FLAGS)) {
             if (fonts_.heading)
@@ -844,14 +842,14 @@ namespace lfs::vis::gui {
                     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 70.0f);
                     ImGui::TableHeadersRow();
 
-                    const ImU32 SECTION_BG_COLOR = toU32(withAlpha(t.palette.info, 0.2f));
-                    const ImVec4 SECTION_TEXT_COLOR = lighten(t.palette.info, 0.2f);
+                    const ImU32 section_bg = toU32(withAlpha(t.palette.info, is_light ? 0.15f : 0.2f));
+                    const ImVec4 section_text = is_light ? darken(t.palette.info, 0.1f) : lighten(t.palette.info, 0.2f);
 
-                    const auto renderSectionHeader = [SECTION_BG_COLOR, SECTION_TEXT_COLOR](const char* title) {
+                    const auto renderSectionHeader = [section_bg, section_text](const char* title) {
                         ImGui::TableNextRow();
                         ImGui::TableNextColumn();
-                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, SECTION_BG_COLOR);
-                        ImGui::TextColored(SECTION_TEXT_COLOR, "%s", title);
+                        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, section_bg);
+                        ImGui::TextColored(section_text, "%s", title);
                         ImGui::TableNextColumn();
                         ImGui::TableNextColumn();
                     };
@@ -954,16 +952,9 @@ namespace lfs::vis::gui {
             ImGui::Spacing();
 
             if (input_bindings_) {
-                const ImVec4 BTN_SAVE = darken(t.palette.success, 0.3f);
-                const ImVec4 BTN_SAVE_HOVER = darken(t.palette.success, 0.15f);
-                const ImVec4 BTN_SAVE_ACTIVE = darken(t.palette.success, 0.2f);
-                const ImVec4 BTN_RESET = darken(t.palette.error, 0.3f);
-                const ImVec4 BTN_RESET_HOVER = darken(t.palette.error, 0.15f);
-                const ImVec4 BTN_RESET_ACTIVE = darken(t.palette.error, 0.2f);
-
-                ImGui::PushStyleColor(ImGuiCol_Button, BTN_SAVE);
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, BTN_SAVE_HOVER);
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, BTN_SAVE_ACTIVE);
+                ImGui::PushStyleColor(ImGuiCol_Button, withAlpha(t.palette.success, 0.7f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, withAlpha(t.palette.success, 0.85f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, t.palette.success);
                 if (ImGui::Button(LOC(InputSettings::SAVE_CURRENT_PROFILE))) {
                     input_bindings_->saveProfile(input_bindings_->getCurrentProfileName());
                 }
@@ -971,9 +962,9 @@ namespace lfs::vis::gui {
 
                 ImGui::SameLine();
 
-                ImGui::PushStyleColor(ImGuiCol_Button, BTN_RESET);
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, BTN_RESET_HOVER);
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, BTN_RESET_ACTIVE);
+                ImGui::PushStyleColor(ImGuiCol_Button, withAlpha(t.palette.error, 0.7f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, withAlpha(t.palette.error, 0.85f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, t.palette.error);
                 if (ImGui::Button(LOC(InputSettings::RESET_TO_DEFAULT))) {
                     const auto config_dir = input::InputBindings::getConfigDir();
                     const auto saved_path = config_dir / "Default.json";
@@ -981,33 +972,24 @@ namespace lfs::vis::gui {
                         std::filesystem::remove(saved_path);
                     }
                     input_bindings_->loadProfile("Default");
-                    // Save hardcoded defaults to disk
                     input_bindings_->saveProfile("Default");
                 }
                 ImGui::PopStyleColor(3);
 
                 ImGui::Spacing();
 
-                const ImVec4 BTN_IO = darken(t.palette.secondary, 0.2f);
-                const ImVec4 BTN_IO_HOVER = darken(t.palette.secondary, 0.05f);
-                const ImVec4 BTN_IO_ACTIVE = darken(t.palette.secondary, 0.1f);
-
-                ImGui::PushStyleColor(ImGuiCol_Button, BTN_IO);
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, BTN_IO_HOVER);
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, BTN_IO_ACTIVE);
+                ImGui::PushStyleColor(ImGuiCol_Button, withAlpha(t.palette.secondary, 0.7f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, withAlpha(t.palette.secondary, 0.85f));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, t.palette.secondary);
                 if (ImGui::Button(LOC(InputSettings::EXPORT))) {
                     const auto path = SaveJsonFileDialog("input_bindings");
                     if (!path.empty()) {
                         input_bindings_->saveProfileToFile(path);
                     }
                 }
-                ImGui::PopStyleColor(3);
 
                 ImGui::SameLine();
 
-                ImGui::PushStyleColor(ImGuiCol_Button, BTN_IO);
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, BTN_IO_HOVER);
-                ImGui::PushStyleColor(ImGuiCol_ButtonActive, BTN_IO_ACTIVE);
                 if (ImGui::Button(LOC(InputSettings::IMPORT))) {
                     if (const auto path = OpenJsonFileDialog(); !path.empty() && std::filesystem::exists(path)) {
                         input_bindings_->loadProfileFromFile(path);

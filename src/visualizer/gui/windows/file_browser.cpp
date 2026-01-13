@@ -8,6 +8,7 @@
 #include "gui/localization_manager.hpp"
 #include "gui/string_keys.hpp"
 #include "io/loader.hpp"
+#include "theme/theme.hpp"
 #include <algorithm>
 #include <imgui.h>
 
@@ -26,8 +27,9 @@ namespace lfs::vis::gui {
         // Add NoDocking flag
         ImGuiWindowFlags window_flags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking;
 
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.1f, 0.1f, 0.15f, 0.95f));
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.9f, 0.9f, 1.0f));
+        const auto& t = theme();
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, withAlpha(t.palette.surface, 0.95f));
+        ImGui::PushStyleColor(ImGuiCol_Text, t.palette.text);
 
         if (!ImGui::Begin(LOC(lichtfeld::Strings::FileBrowser::TITLE), p_open, window_flags)) {
             ImGui::End();

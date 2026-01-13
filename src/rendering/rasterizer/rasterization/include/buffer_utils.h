@@ -49,6 +49,7 @@ namespace lfs::rendering {
         float* depth; // Camera-space depth of each Gaussian center
         bool* outside_crop;
         uint8_t* selection_status;
+        uint* global_idx; // Maps compacted index → original gaussian index (for transform_indices lookup)
         uint* n_visible_primitives;
         uint* n_instances;
 
@@ -73,6 +74,7 @@ namespace lfs::rendering {
             obtain(blob, buffers.depth, n_primitives, 128);
             obtain(blob, buffers.outside_crop, n_primitives, 128);
             obtain(blob, buffers.selection_status, n_primitives, 128);
+            obtain(blob, buffers.global_idx, n_primitives, 128);
             cub::DeviceScan::ExclusiveSum(
                 nullptr, buffers.cub_workspace_size,
                 buffers.offset, buffers.offset,

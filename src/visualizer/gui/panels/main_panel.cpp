@@ -144,7 +144,7 @@ namespace lfs::vis::gui::panels {
             settings_changed = true;
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", LOC(Tooltip::BACKGROUND));
+            widgets::SetThemedTooltip("%s", LOC(Tooltip::BACKGROUND));
         }
 
         // Coordinate Axes
@@ -153,7 +153,7 @@ namespace lfs::vis::gui::panels {
             settings_changed = true;
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", LOC(Tooltip::COORD_AXES));
+            widgets::SetThemedTooltip("%s", LOC(Tooltip::COORD_AXES));
         }
 
         if (settings.show_coord_axes) {
@@ -190,7 +190,7 @@ namespace lfs::vis::gui::panels {
             settings_changed = true;
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", LOC(Tooltip::PIVOT));
+            widgets::SetThemedTooltip("%s", LOC(Tooltip::PIVOT));
         }
 
         // Grid checkbox and settings
@@ -206,7 +206,7 @@ namespace lfs::vis::gui::panels {
                 .emit();
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", LOC(Tooltip::GRID));
+            widgets::SetThemedTooltip("%s", LOC(Tooltip::GRID));
         }
 
         // Show grid settings only when grid is enabled
@@ -247,7 +247,7 @@ namespace lfs::vis::gui::panels {
             settings_changed = true;
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", LOC(Tooltip::CAMERA_FRUSTUMS));
+            widgets::SetThemedTooltip("%s", LOC(Tooltip::CAMERA_FRUSTUMS));
         }
 
         if (settings.show_camera_frustums) {
@@ -270,7 +270,7 @@ namespace lfs::vis::gui::panels {
                 .emit();
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("%s", force_point_cloud ? LOC(Tooltip::POINT_CLOUD_FORCED) : LOC(Tooltip::POINT_CLOUD_MODE));
+            widgets::SetThemedTooltip("%s", force_point_cloud ? LOC(Tooltip::POINT_CLOUD_FORCED) : LOC(Tooltip::POINT_CLOUD_MODE));
         }
         ImGui::EndDisabled();
 
@@ -290,7 +290,7 @@ namespace lfs::vis::gui::panels {
         ImGui::Separator();
         bool selection_colors_open = ImGui::CollapsingHeader(LOC(MainPanel::SELECTION_COLORS));
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", LOC(Tooltip::SELECTION_COLORS));
+            widgets::SetThemedTooltip("%s", LOC(Tooltip::SELECTION_COLORS));
         }
         if (selection_colors_open) {
             ImGui::Indent();
@@ -316,7 +316,7 @@ namespace lfs::vis::gui::panels {
             settings_changed = true;
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", LOC(Tooltip::DESATURATE_UNSELECTED));
+            widgets::SetThemedTooltip("%s", LOC(Tooltip::DESATURATE_UNSELECTED));
         }
 
         // Apply settings changes if any
@@ -356,7 +356,7 @@ namespace lfs::vis::gui::panels {
                 .emit();
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", LOC(Tooltip::SH_DEGREE));
+            widgets::SetThemedTooltip("%s", LOC(Tooltip::SH_DEGREE));
         }
 
         if (ImGui::Checkbox(LOC(MainPanel::EQUIRECTANGULAR), &settings.equirectangular)) {
@@ -372,7 +372,7 @@ namespace lfs::vis::gui::panels {
                 .emit();
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", LOC(Tooltip::EQUIRECTANGULAR));
+            widgets::SetThemedTooltip("%s", LOC(Tooltip::EQUIRECTANGULAR));
         }
 
         // GUT (Gaussian Unscented Transform) for non-pinhole cameras
@@ -381,7 +381,7 @@ namespace lfs::vis::gui::panels {
             render_manager->updateSettings(settings);
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", LOC(Tooltip::GUT_MODE));
+            widgets::SetThemedTooltip("%s", LOC(Tooltip::GUT_MODE));
         }
 
         // Mip Filter (anti-aliasing for distant/small Gaussians)
@@ -390,7 +390,7 @@ namespace lfs::vis::gui::panels {
             render_manager->updateSettings(settings);
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("%s", LOC(Tooltip::MIP_FILTER));
+            widgets::SetThemedTooltip("%s", LOC(Tooltip::MIP_FILTER));
         }
 
         // Render Scale (VRAM optimization)
@@ -474,7 +474,7 @@ namespace lfs::vis::gui::panels {
                 ImGui::PopStyleColor(3);
 
                 if (ImGui::IsItemHovered()) {
-                    ImGui::SetTooltip("%s", is_locked ? LOC(Tooltip::LOCKED) : LOC(Tooltip::UNLOCKED));
+                    widgets::SetThemedTooltip("%s", is_locked ? LOC(Tooltip::LOCKED) : LOC(Tooltip::UNLOCKED));
                 }
                 ImGui::SameLine();
 
@@ -535,7 +535,6 @@ namespace lfs::vis::gui::panels {
 
         int current_iter = trainer_manager->getCurrentIteration();
         int total_iter = trainer_manager->getTotalIterations();
-        int num_splats = trainer_manager->getNumSplats();
 
         // Fix: Convert deque to vector
         std::deque<float> loss_deque = trainer_manager->getLossBuffer();

@@ -43,6 +43,7 @@ namespace lfs::rendering {
             bool point_cloud_mode = false;
             float voxel_size = 0.01f;
             bool gut = false;
+            bool equirectangular = false;
             bool show_rings = false;
             float ring_width = 0.01f;
             bool show_center_markers = false;
@@ -77,6 +78,7 @@ namespace lfs::rendering {
             int highlight_gaussian_id = -1;
             float far_plane = DEFAULT_FAR_PLANE;
             std::vector<bool> selected_node_mask;
+            std::vector<bool> node_visibility_mask; // Per-node visibility for culling (consolidated models)
             bool desaturate_unselected = false;
             float selection_flash_intensity = 0.0f;
             bool orthographic = false;

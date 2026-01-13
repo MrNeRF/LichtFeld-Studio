@@ -24,12 +24,12 @@ namespace lfs::vis {
         constexpr float TOOLBAR_BG_ALPHA = 0.9f;
         constexpr float SUBTOOLBAR_BG_ALPHA = 0.95f;
 
-        // Overlay constants
-        constexpr ImU32 OVERLAY_BG = IM_COL32(50, 50, 50, 180);
-        constexpr ImU32 OVERLAY_TEXT = IM_COL32(255, 255, 255, 255);
-        constexpr ImU32 OVERLAY_SHADOW = IM_COL32(0, 0, 0, 180);
-        constexpr ImU32 OVERLAY_HINT = IM_COL32(180, 180, 180, 200);
-        constexpr ImU32 PROGRESS_BG = IM_COL32(50, 50, 50, 180);
+        // Overlay alpha constants
+        constexpr float OVERLAY_BG_ALPHA = 0.9f;
+        constexpr float OVERLAY_HINT_ALPHA = 0.78f;
+        constexpr float OVERLAY_HIGHLIGHT_ALPHA = 0.7f;
+        constexpr float OVERLAY_SELECTION_ALPHA = 0.78f;
+        constexpr float OVERLAY_SELECTION_FLASH_ALPHA = 0.9f;
 
         // Theme state
         Theme g_current_theme;
@@ -136,12 +136,17 @@ namespace lfs::vis {
     ImU32 Theme::polygon_vertex_hover_u32() const { return toU32(lighten(palette.warning, 0.2f)); }
     ImU32 Theme::polygon_close_hint_u32() const { return toU32WithAlpha(palette.success, POLYGON_CLOSE_ALPHA); }
 
-    ImU32 Theme::overlay_background_u32() const { return OVERLAY_BG; }
-    ImU32 Theme::overlay_text_u32() const { return OVERLAY_TEXT; }
-    ImU32 Theme::overlay_shadow_u32() const { return OVERLAY_SHADOW; }
-    ImU32 Theme::overlay_hint_u32() const { return OVERLAY_HINT; }
+    ImU32 Theme::overlay_background_u32() const { return toU32WithAlpha(overlay.background, OVERLAY_BG_ALPHA); }
+    ImU32 Theme::overlay_text_u32() const { return toU32(overlay.text); }
+    ImU32 Theme::overlay_shadow_u32() const { return IM_COL32(0, 0, 0, 180); }
+    ImU32 Theme::overlay_hint_u32() const { return toU32WithAlpha(overlay.text_dim, OVERLAY_HINT_ALPHA); }
+    ImU32 Theme::overlay_border_u32() const { return toU32(overlay.border); }
+    ImU32 Theme::overlay_icon_u32() const { return toU32(overlay.icon); }
+    ImU32 Theme::overlay_highlight_u32() const { return toU32WithAlpha(overlay.highlight, OVERLAY_HIGHLIGHT_ALPHA); }
+    ImU32 Theme::overlay_selection_u32() const { return toU32WithAlpha(overlay.selection, OVERLAY_SELECTION_ALPHA); }
+    ImU32 Theme::overlay_selection_flash_u32() const { return toU32WithAlpha(overlay.selection_flash, OVERLAY_SELECTION_FLASH_ALPHA); }
 
-    ImU32 Theme::progress_bar_bg_u32() const { return PROGRESS_BG; }
+    ImU32 Theme::progress_bar_bg_u32() const { return toU32WithAlpha(overlay.background, OVERLAY_BG_ALPHA); }
     ImU32 Theme::progress_bar_fill_u32() const { return toU32WithAlpha(palette.warning, PROGRESS_FILL_ALPHA); }
     ImU32 Theme::progress_marker_u32() const { return toU32WithAlpha(palette.error, PROGRESS_MARKER_ALPHA); }
 
@@ -227,8 +232,11 @@ namespace lfs::vis {
         colors[ImGuiCol_PopupBg] = p.surface;
         colors[ImGuiCol_Border] = p.border;
         colors[ImGuiCol_BorderShadow] = ImVec4(0, 0, 0, 0);
-        colors[ImGuiCol_FrameBg] = darken(p.surface, 0.05f);
-        colors[ImGuiCol_FrameBgHovered] = p.surface_bright;
+
+        const bool is_light = g_current_theme.isLightTheme();
+        const float frame_darken = g_current_theme.frameDarkenAmount();
+        colors[ImGuiCol_FrameBg] = darken(p.surface, frame_darken);
+        colors[ImGuiCol_FrameBgHovered] = is_light ? darken(p.surface, 0.08f) : p.surface_bright;
         colors[ImGuiCol_FrameBgActive] = p.primary_dim;
         colors[ImGuiCol_TitleBg] = p.surface;
         colors[ImGuiCol_TitleBgActive] = p.surface;
@@ -273,6 +281,8 @@ namespace lfs::vis {
         colors[ImGuiCol_NavWindowingHighlight] = withAlpha(p.primary, 0.7f);
         colors[ImGuiCol_NavWindowingDimBg] = withAlpha(p.background, 0.2f);
         colors[ImGuiCol_ModalWindowDimBg] = withAlpha(p.background, 0.35f);
+
+        style.FrameBorderSize = is_light ? 1.0f : 0.0f;
     }
 
     namespace {
@@ -321,6 +331,16 @@ namespace lfs::vis {
             },
             .sizes = {},
             .fonts = {},
+            .overlay = {
+                .background = {0.95f, 0.95f, 0.96f, 1.0f},
+                .text = {0.1f, 0.1f, 0.12f, 1.0f},
+                .text_dim = {0.4f, 0.4f, 0.45f, 1.0f},
+                .border = {0.5f, 0.55f, 0.6f, 1.0f},
+                .icon = {0.3f, 0.4f, 0.5f, 1.0f},
+                .highlight = {0.7f, 0.8f, 0.9f, 1.0f},
+                .selection = {0.5f, 0.65f, 0.85f, 1.0f},
+                .selection_flash = {0.65f, 0.78f, 0.95f, 1.0f},
+            },
         };
 
         void loadThemesFromFiles() {
@@ -503,6 +523,21 @@ namespace lfs::vis {
             vignette["radius"] = t.vignette.radius;
             vignette["softness"] = t.vignette.softness;
 
+            auto& button = j["button"];
+            button["tint_normal"] = t.button.tint_normal;
+            button["tint_hover"] = t.button.tint_hover;
+            button["tint_active"] = t.button.tint_active;
+
+            auto& overlay = j["overlay"];
+            overlay["background"] = colorToJson(t.overlay.background);
+            overlay["text"] = colorToJson(t.overlay.text);
+            overlay["text_dim"] = colorToJson(t.overlay.text_dim);
+            overlay["border"] = colorToJson(t.overlay.border);
+            overlay["icon"] = colorToJson(t.overlay.icon);
+            overlay["highlight"] = colorToJson(t.overlay.highlight);
+            overlay["selection"] = colorToJson(t.overlay.selection);
+            overlay["selection_flash"] = colorToJson(t.overlay.selection_flash);
+
             std::ofstream file;
             if (!lfs::core::open_file_for_write(lfs::core::utf8_to_path(path), file))
                 return false;
@@ -658,10 +693,88 @@ namespace lfs::vis {
                 t.button.tint_active = b.value("tint_active", t.button.tint_active);
             }
 
+            if (j.contains("overlay")) {
+                const auto& o = j["overlay"];
+                if (o.contains("background"))
+                    t.overlay.background = colorFromJson(o["background"]);
+                if (o.contains("text"))
+                    t.overlay.text = colorFromJson(o["text"]);
+                if (o.contains("text_dim"))
+                    t.overlay.text_dim = colorFromJson(o["text_dim"]);
+                if (o.contains("border"))
+                    t.overlay.border = colorFromJson(o["border"]);
+                if (o.contains("icon"))
+                    t.overlay.icon = colorFromJson(o["icon"]);
+                if (o.contains("highlight"))
+                    t.overlay.highlight = colorFromJson(o["highlight"]);
+                if (o.contains("selection"))
+                    t.overlay.selection = colorFromJson(o["selection"]);
+                if (o.contains("selection_flash"))
+                    t.overlay.selection_flash = colorFromJson(o["selection_flash"]);
+            }
+
             return true;
         } catch (...) {
             return false;
         }
+    }
+
+    namespace {
+        std::filesystem::path getThemeConfigDir() {
+            std::filesystem::path config_dir;
+#ifdef _WIN32
+            const char* path = std::getenv("APPDATA");
+            if (path) {
+                config_dir = std::filesystem::path(path) / "LichtFeldStudio";
+            } else {
+                config_dir = std::filesystem::current_path() / "config";
+            }
+#else
+            const char* xdg = std::getenv("XDG_CONFIG_HOME");
+            if (xdg) {
+                config_dir = std::filesystem::path(xdg) / "LichtFeldStudio";
+            } else {
+                const char* home = std::getenv("HOME");
+                if (home) {
+                    config_dir = std::filesystem::path(home) / ".config" / "LichtFeldStudio";
+                } else {
+                    config_dir = std::filesystem::current_path() / "config";
+                }
+            }
+#endif
+            return config_dir;
+        }
+    } // namespace
+
+    void saveThemePreference(bool is_dark) {
+        try {
+            const auto config_dir = getThemeConfigDir();
+            std::filesystem::create_directories(config_dir);
+            const auto pref_path = config_dir / "theme_preference";
+            std::ofstream file(pref_path);
+            if (file) {
+                file << (is_dark ? "dark" : "light");
+            }
+        } catch (...) {
+            // Silently ignore - not critical
+        }
+    }
+
+    bool loadThemePreference() {
+        try {
+            const auto config_dir = getThemeConfigDir();
+            const auto pref_path = config_dir / "theme_preference";
+            if (std::filesystem::exists(pref_path)) {
+                std::ifstream file(pref_path);
+                std::string pref;
+                if (file >> pref) {
+                    return pref != "light";
+                }
+            }
+        } catch (...) {
+            // Silently ignore - not critical
+        }
+        return true; // Default to dark
     }
 
 } // namespace lfs::vis

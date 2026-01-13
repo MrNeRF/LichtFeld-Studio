@@ -10,6 +10,7 @@
 #include "gui/dpi_scale.hpp"
 #include "gui/localization_manager.hpp"
 #include "gui/string_keys.hpp"
+#include "theme/theme.hpp"
 #include <algorithm>
 #include <cstring>
 #include <format>
@@ -128,7 +129,7 @@ namespace lfs::vis::gui {
                         const uint16_t tag = read16(entry_offset);
                         const uint16_t type = read16(entry_offset + 2);
                         const uint32_t count = read32(entry_offset + 4);
-                        uint32_t value_offset = entry_offset + 8;
+                        uint32_t value_offset = static_cast<uint32_t>(entry_offset + 8);
 
                         size_t data_size = count;
                         if (type == 3)
@@ -779,7 +780,7 @@ namespace lfs::vis::gui {
             focus_on_next_frame_ = false;
         }
 
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.15f, 0.15f, 0.17f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, theme().palette.surface);
         if (!ImGui::Begin(title.c_str(), p_open, WINDOW_FLAGS)) {
             ImGui::PopStyleColor();
             ImGui::End();

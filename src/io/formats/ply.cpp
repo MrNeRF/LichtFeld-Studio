@@ -564,9 +564,6 @@ namespace lfs::io {
                 host_shN.resize(N * Bn * ply_constants::COLOR_CHANNELS);
                 extract_sh_coefficients_to_host(vertex_data, layout, layout.rest_offsets,
                                                 layout.rest_count, ply_constants::COLOR_CHANNELS, host_shN.data());
-            } else {
-                shN_dim1 = ply_constants::SH_DEGREE_3_REST_COEFFS;
-                host_shN.resize(N * ply_constants::SH_DEGREE_3_REST_COEFFS * ply_constants::COLOR_CHANNELS, 0.0f);
             }
 
             // Extract other properties
@@ -744,7 +741,36 @@ namespace lfs::io {
     PointCloud to_point_cloud(const SplatData& splat_data) {
         PointCloud pc;
 
-        pc.means = splat_data.means().cpu().contiguous();
+        // Filter out deleted splats if deletion mask exists
+        Tensor means, sh0, shN, opacity, scaling, rotation;
+
+        if (splat_data.has_deleted_mask()) {
+            // Create keep mask (inverse of deleted mask)
+            const auto keep_mask = splat_data.deleted().logical_not();
+
+            // Filter all tensors by keep mask
+            means = splat_data.means().index_select(0, keep_mask);
+            if (splat_data.sh0().is_valid())
+                sh0 = splat_data.sh0().index_select(0, keep_mask);
+            if (splat_data.shN().is_valid())
+                shN = splat_data.shN().index_select(0, keep_mask);
+            if (splat_data.opacity_raw().is_valid())
+                opacity = splat_data.opacity_raw().index_select(0, keep_mask);
+            if (splat_data.scaling_raw().is_valid())
+                scaling = splat_data.scaling_raw().index_select(0, keep_mask);
+            if (splat_data.rotation_raw().is_valid())
+                rotation = splat_data.get_rotation().index_select(0, keep_mask);
+        } else {
+            // No deletion mask, use original tensors
+            means = splat_data.means();
+            sh0 = splat_data.sh0();
+            shN = splat_data.shN();
+            opacity = splat_data.opacity_raw();
+            scaling = splat_data.scaling_raw();
+            rotation = splat_data.get_rotation();
+        }
+
+        pc.means = means.cpu().contiguous();
         pc.normals = Tensor::zeros_like(pc.means);
 
         auto process_sh = [](const Tensor& sh) -> Tensor {
@@ -758,17 +784,17 @@ namespace lfs::io {
             return sh_cpu;
         };
 
-        if (splat_data.sh0().is_valid())
-            pc.sh0 = process_sh(splat_data.sh0());
-        if (splat_data.shN().is_valid())
-            pc.shN = process_sh(splat_data.shN());
-        if (splat_data.opacity_raw().is_valid())
-            pc.opacity = splat_data.opacity_raw().cpu().contiguous();
-        if (splat_data.scaling_raw().is_valid())
-            pc.scaling = splat_data.scaling_raw().cpu().contiguous();
+        if (sh0.is_valid())
+            pc.sh0 = process_sh(sh0);
+        if (shN.is_valid())
+            pc.shN = process_sh(shN);
+        if (opacity.is_valid())
+            pc.opacity = opacity.cpu().contiguous();
+        if (scaling.is_valid())
+            pc.scaling = scaling.cpu().contiguous();
 
-        if (splat_data.rotation_raw().is_valid()) {
-            pc.rotation = splat_data.get_rotation().cpu().contiguous();
+        if (rotation.is_valid()) {
+            pc.rotation = rotation.cpu().contiguous();
         }
 
         pc.attribute_names = get_ply_attribute_names(splat_data);

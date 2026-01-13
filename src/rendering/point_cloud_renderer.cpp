@@ -20,8 +20,9 @@ namespace lfs::rendering {
 
         LOG_TIMER_TRACE("PointCloudRenderer::initialize");
 
-        // Create shader
-        auto result = load_shader("point_cloud", "point_cloud.vert", "point_cloud.frag", false);
+        // Create shader with geometry shader for equirectangular seam culling
+        auto result = load_shader_with_geometry("point_cloud", "point_cloud.vert",
+                                                "point_cloud.geom", "point_cloud.frag", false);
         if (!result) {
             LOG_ERROR("Failed to load point cloud shader: {}", result.error().what());
             return std::unexpected(result.error().what());
@@ -118,49 +119,40 @@ namespace lfs::rendering {
     Result<void> PointCloudRenderer::render(const lfs::core::SplatData& splat_data,
                                             const glm::mat4& view,
                                             const glm::mat4& projection,
-                                            float voxel_size,
+                                            const float voxel_size,
                                             const glm::vec3& background_color,
                                             const std::vector<glm::mat4>& model_transforms,
-                                            const std::shared_ptr<lfs::core::Tensor>& transform_indices) {
-        if (splat_data.size() == 0) {
-            LOG_TRACE("No splat data to render");
+                                            const std::shared_ptr<lfs::core::Tensor>& transform_indices,
+                                            const bool equirectangular) {
+        if (splat_data.size() == 0)
             return {};
-        }
 
-        // Get positions and SH coefficients
-        Tensor positions = splat_data.get_means();
-        Tensor shs = splat_data.get_shs();
-
-        // Extract RGB colors from SH coefficients
-        Tensor colors = extractRGBFromSH(shs);
+        const Tensor positions = splat_data.get_means();
+        const Tensor shs = splat_data.get_shs();
+        const Tensor colors = extractRGBFromSH(shs);
 
         return renderInternal(positions, colors, view, projection, voxel_size, background_color,
-                              model_transforms, transform_indices);
+                              model_transforms, transform_indices, equirectangular);
     }
 
     Result<void> PointCloudRenderer::render(const lfs::core::PointCloud& point_cloud,
                                             const glm::mat4& view,
                                             const glm::mat4& projection,
-                                            float voxel_size,
+                                            const float voxel_size,
                                             const glm::vec3& background_color,
                                             const std::vector<glm::mat4>& model_transforms,
-                                            const std::shared_ptr<lfs::core::Tensor>& transform_indices) {
-        if (point_cloud.size() == 0) {
-            LOG_TRACE("No point cloud data to render");
+                                            const std::shared_ptr<lfs::core::Tensor>& transform_indices,
+                                            const bool equirectangular) {
+        if (point_cloud.size() == 0)
             return {};
-        }
 
-        // Use means and colors directly from point cloud
-        Tensor positions = point_cloud.means;
+        const Tensor positions = point_cloud.means;
         Tensor colors = point_cloud.colors;
-
-        // Normalize colors to [0,1] if they're uint8
-        if (colors.dtype() == lfs::core::DataType::UInt8) {
+        if (colors.dtype() == lfs::core::DataType::UInt8)
             colors = colors.to(lfs::core::DataType::Float32) / 255.0f;
-        }
 
         return renderInternal(positions, colors, view, projection, voxel_size, background_color,
-                              model_transforms, transform_indices);
+                              model_transforms, transform_indices, equirectangular);
     }
 
     Result<void> PointCloudRenderer::renderInternal(const Tensor& positions,
@@ -170,7 +162,8 @@ namespace lfs::rendering {
                                                     const float voxel_size,
                                                     const glm::vec3& background_color,
                                                     const std::vector<glm::mat4>& model_transforms,
-                                                    const std::shared_ptr<lfs::core::Tensor>& transform_indices) {
+                                                    const std::shared_ptr<lfs::core::Tensor>& transform_indices,
+                                                    const bool equirectangular) {
         if (!initialized_) {
             return std::unexpected("Renderer not initialized");
         }
@@ -217,7 +210,9 @@ namespace lfs::rendering {
             if (use_interop_ && interop_buffer_) {
                 if (auto map_result = interop_buffer_->mapBuffer(); map_result) {
                     cudaMemcpy(*map_result, interleaved_cache_.data_ptr(), buffer_size, cudaMemcpyDeviceToDevice);
-                    interop_buffer_->unmapBuffer();
+                    if (auto result = interop_buffer_->unmapBuffer(); !result) {
+                        LOG_DEBUG("Failed to unmap buffer: {}", result.error());
+                    }
                 } else {
                     use_interop_ = false;
                     interop_buffer_.reset();
@@ -246,13 +241,17 @@ namespace lfs::rendering {
             return result;
         if (auto result = s->set("u_voxel_size", voxel_size); !result)
             return result;
+        if (auto result = s->set("u_equirectangular", equirectangular); !result)
+            return result;
 
         constexpr int MAX_TRANSFORMS = 64;
         const int num_transforms = static_cast<int>(std::min(model_transforms.size(), size_t(MAX_TRANSFORMS)));
         if (auto result = s->set("u_num_transforms", num_transforms); !result)
             return result;
         for (int i = 0; i < num_transforms; ++i) {
-            s->set(std::format("u_model_transforms[{}]", i), model_transforms[i]);
+            if (auto result = s->set(std::format("u_model_transforms[{}]", i), model_transforms[i]); !result) {
+                LOG_ERROR("Failed to set u_model_transforms[{}] uniform: {}", i, result.error());
+            }
         }
 
         if (!cube_vao_ || cube_vao_.get() == 0)

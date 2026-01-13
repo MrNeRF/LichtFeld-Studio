@@ -79,14 +79,24 @@ namespace lfs::core {
 
             // CUDA: use snprintf
             char buffer[1024];
-            const int written = std::snprintf(buffer, sizeof(buffer), fmt, std::forward<Args>(args)...);
+
+            // Helper lambda to avoid problems with -Wformat-security warnings
+            auto safe_snprintf = [&](char* buf, size_t size) {
+                if constexpr (sizeof...(Args) == 0) {
+                    return std::snprintf(buf, size, "%s", fmt);
+                } else {
+                    return std::snprintf(buf, size, fmt, std::forward<Args>(args)...);
+                }
+            };
+
+            const int written = safe_snprintf(buffer, sizeof(buffer));
             if (written < 0)
                 return;
 
             std::string msg;
             if (static_cast<size_t>(written) >= sizeof(buffer)) {
                 msg.resize(static_cast<size_t>(written) + 1);
-                std::snprintf(msg.data(), msg.size(), fmt, std::forward<Args>(args)...);
+                safe_snprintf(msg.data(), msg.size());
                 msg.resize(static_cast<size_t>(written));
             } else {
                 msg.assign(buffer, static_cast<size_t>(written));
@@ -156,8 +166,12 @@ namespace lfs::core {
 #define LOG_CRITICAL(...) \
     ::lfs::core::Logger::get().log_internal(::lfs::core::LogLevel::Critical, std::source_location::current(), __VA_ARGS__)
 
-#define LOG_TIMER(name)       ::lfs::core::ScopedTimer _timer##__LINE__(name)
-#define LOG_TIMER_TRACE(name) ::lfs::core::ScopedTimer _timer##__LINE__(name, ::lfs::core::LogLevel::Trace)
-#define LOG_TIMER_DEBUG(name) ::lfs::core::ScopedTimer _timer##__LINE__(name, ::lfs::core::LogLevel::Debug)
+// Helper macros to force expansion of __COUNTER__ before concatenation
+#define _LOG_TIMER_CONCAT_IMPL(x, y)  x##y
+#define _LOG_TIMER_MACRO_CONCAT(x, y) _LOG_TIMER_CONCAT_IMPL(x, y)
+
+#define LOG_TIMER(name)       ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name)
+#define LOG_TIMER_TRACE(name) ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name, ::lfs::core::LogLevel::Trace)
+#define LOG_TIMER_DEBUG(name) ::lfs::core::ScopedTimer _LOG_TIMER_MACRO_CONCAT(_timer_, __COUNTER__)(name, ::lfs::core::LogLevel::Debug)
 
 // Memory logging: use LOG_DEBUG("[MEM] ...") and filter with --log-filter "*MEM*"

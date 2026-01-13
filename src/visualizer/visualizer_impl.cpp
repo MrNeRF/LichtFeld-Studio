@@ -766,6 +766,10 @@ namespace lfs::vis {
         return data_loader_->loadCheckpointForTraining(path);
     }
 
+    void VisualizerImpl::consolidateModels() {
+        scene_manager_->consolidateNodeModels();
+    }
+
     void VisualizerImpl::clearScene() {
         data_loader_->clearScene();
     }

@@ -110,9 +110,13 @@ namespace lfs::rendering {
         const bool* selected_node_mask = nullptr,
         int num_selected_nodes = 0,
         bool desaturate_unselected = false,
+        const bool* node_visibility_mask = nullptr,
+        int num_visibility_nodes = 0,
         float selection_flash_intensity = 0.0f,
         bool orthographic = false,
         float ortho_scale = 1.0f,
-        bool mip_filter = false);
+        bool mip_filter = false,
+        const int* visible_indices = nullptr,
+        int visible_count = 0);
 
 } // namespace lfs::rendering

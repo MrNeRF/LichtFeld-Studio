@@ -93,9 +93,10 @@ namespace lfs::vis {
         resize_cursor_ = glfwCreateStandardCursor(GLFW_HRESIZE_CURSOR);
         hand_cursor_ = glfwCreateStandardCursor(GLFW_HAND_CURSOR);
 
-        // Cache movement key bindings and register for updates
         refreshMovementKeyCache();
         bindings_.setOnBindingsChanged([this]() { refreshMovementKeyCache(); });
+
+        ui::GTComparisonModeChanged::when([this](const auto& event) { gt_comparison_active_ = event.enabled; });
     }
 
     void InputController::refreshMovementKeyCache() {
@@ -225,11 +226,11 @@ namespace lfs::vis {
             auto time_since_last = std::chrono::duration<double>(now - last_click_time_).count();
             double dist = glm::length(glm::dvec2(x, y) - last_click_pos_);
 
-            constexpr double DOUBLE_CLICK_TIME = 0.5;
-            constexpr double DOUBLE_CLICK_DISTANCE = 10.0;
+            constexpr double MOUSE_DOUBLE_CLICK_TIME = 0.5;
+            constexpr double MOUSE_DOUBLE_CLICK_DISTANCE = 10.0;
 
-            bool is_double_click = (time_since_last < DOUBLE_CLICK_TIME &&
-                                    dist < DOUBLE_CLICK_DISTANCE);
+            bool is_double_click = (time_since_last < MOUSE_DOUBLE_CLICK_TIME &&
+                                    dist < MOUSE_DOUBLE_CLICK_DISTANCE);
 
             // If we have a hovered camera, check for double-click
             if (hovered_camera_id_ >= 0) {
@@ -1179,14 +1180,12 @@ namespace lfs::vis {
                      center_x, center_y, cx_expected, cy_expected);
         }
 
-        // Set the FOV
+        const bool is_equirectangular =
+            cam_data->camera_model_type() == lfs::core::CameraModelType::EQUIRECTANGULAR;
+
         ui::RenderSettingsChanged{
-            .sh_degree = std::nullopt,
-            .fov = fov_y_deg,
-            .scaling_modifier = std::nullopt,
-            .antialiasing = std::nullopt,
-            .background_color = std::nullopt,
-            .equirectangular = std::nullopt}
+            .fov = is_equirectangular ? std::nullopt : std::optional(fov_y_deg),
+            .equirectangular = is_equirectangular}
             .emit();
 
         // Force immediate camera update
@@ -1307,19 +1306,20 @@ namespace lfs::vis {
     }
 
     void InputController::onCameraMovementStart() {
+        const auto now = std::chrono::steady_clock::now();
         if (!camera_is_moving_) {
             camera_is_moving_ = true;
-            last_camera_movement_time_ = std::chrono::steady_clock::now();
+            last_camera_movement_time_ = now;
 
-            // Pause training f it's running
-            if (services().trainerOrNull() && services().trainerOrNull()->isRunning()) {
-                services().trainerOrNull()->pauseTrainingTemporary();
+            if (gt_comparison_active_)
+                cmd::ToggleGTComparison{}.emit();
+
+            if (auto* trainer = services().trainerOrNull(); trainer && trainer->isRunning()) {
+                trainer->pauseTrainingTemporary();
                 training_was_paused_by_camera_ = true;
-                LOG_INFO("Camera movement detected - pausing training temporarily");
             }
         } else {
-            // Update movement time
-            last_camera_movement_time_ = std::chrono::steady_clock::now();
+            last_camera_movement_time_ = now;
         }
     }
 

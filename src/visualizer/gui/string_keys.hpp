@@ -57,6 +57,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* TITLE = "getting_started.title";
         inline constexpr const char* DESCRIPTION = "getting_started.description";
         inline constexpr const char* WIKI_SECTION = "getting_started.wiki_section";
+        inline constexpr const char* VIDEO_INTRO = "getting_started.video_intro";
         inline constexpr const char* VIDEO_LATEST = "getting_started.video_latest";
         inline constexpr const char* VIDEO_REALITY_SCAN = "getting_started.video_reality_scan";
         inline constexpr const char* VIDEO_COLMAP = "getting_started.video_colmap";

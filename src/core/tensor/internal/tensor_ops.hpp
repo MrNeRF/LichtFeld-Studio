@@ -22,6 +22,8 @@ namespace lfs::core {
 // Only include in CUDA compilation units - C++ files will link to .cu implementations
 #ifdef __CUDACC__
 #include "tensor_generic_ops.cuh"
+#include <cfloat>
+#define CUDA_INFINITY FLT_MAX
 #else
 // Forward declaration for C++ files - implementation in tensor_ops.cu
 namespace lfs::core::tensor_ops {
@@ -37,6 +39,7 @@ namespace lfs::core::tensor_ops {
     void launch_scalar_op_generic(const T* data, T scalar, OutputT* result, size_t n,
                                   Op op, cudaStream_t stream = nullptr);
 } // namespace lfs::core::tensor_ops
+#define CUDA_INFINITY INFINITY
 #endif
 
 // ============= CPU Helpers (Generic, Header-Only) =============

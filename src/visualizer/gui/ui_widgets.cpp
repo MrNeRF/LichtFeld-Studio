@@ -47,6 +47,10 @@ namespace lfs::vis::gui::widgets {
 
             g_icons.initialized = true;
         }
+
+        ImVec4 getIconTint() {
+            return theme().isLightTheme() ? ImVec4{0.2f, 0.2f, 0.2f, 0.9f} : ImVec4{1.0f, 1.0f, 1.0f, 0.9f};
+        }
     } // namespace
 
     bool SliderWithReset(const char* label, float* v, float min, float max, float reset_value,
@@ -61,9 +65,11 @@ namespace lfs::vis::gui::widgets {
 
         const float btn_size = ImGui::GetFrameHeight();
         const ImVec2 icon_size(btn_size - 4, btn_size - 4);
+        const ImVec4 icon_tint = getIconTint();
 
         if (g_icons.reset) {
-            if (ImGui::ImageButton("##reset", static_cast<ImTextureID>(g_icons.reset), icon_size)) {
+            if (ImGui::ImageButton("##reset", static_cast<ImTextureID>(g_icons.reset), icon_size,
+                                   ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), icon_tint)) {
                 *v = reset_value;
                 changed = true;
             }
@@ -98,9 +104,11 @@ namespace lfs::vis::gui::widgets {
 
         const float btn_size = ImGui::GetFrameHeight();
         const ImVec2 icon_size(btn_size - 4, btn_size - 4);
+        const ImVec4 icon_tint = getIconTint();
 
         if (g_icons.reset) {
-            if (ImGui::ImageButton("##reset", static_cast<ImTextureID>(g_icons.reset), icon_size)) {
+            if (ImGui::ImageButton("##reset", static_cast<ImTextureID>(g_icons.reset), icon_size,
+                                   ImVec2(0, 0), ImVec2(1, 1), ImVec4(0, 0, 0, 0), icon_tint)) {
                 v[0] = v[1] = v[2] = reset_value;
                 changed = true;
             }
@@ -338,14 +346,8 @@ namespace lfs::vis::gui::widgets {
         constexpr float FALLBACK_PADDING = 8.0f;
 
         const auto& t = theme();
-
-        // Calculate background brightness to detect light themes
-        const float bg_brightness = (t.palette.background.x + t.palette.background.y + t.palette.background.z) / 3.0f;
-
-        // Use darker tint for light themes, lighter tint for dark themes
-        const ImVec4 TINT_NORMAL = bg_brightness > 0.5f
-                                       ? ImVec4{0.2f, 0.2f, 0.2f, 0.9f}  // Dark tint for light themes
-                                       : ImVec4{1.0f, 1.0f, 1.0f, 0.9f}; // Light tint for dark themes
+        const ImVec4 TINT_NORMAL =
+            t.isLightTheme() ? ImVec4{0.2f, 0.2f, 0.2f, 0.9f} : ImVec4{1.0f, 1.0f, 1.0f, 0.9f};
 
         // Make button backgrounds transparent so they blend with toolbar, except when selected
         const ImVec4 bg_normal = selected ? t.button_selected() : ImVec4{0, 0, 0, 0};
@@ -412,15 +414,10 @@ namespace lfs::vis::gui::widgets {
     void SetThemedTooltip(const char* fmt, ...) {
         const auto& t = theme();
 
-        // Calculate background brightness to detect light themes
-        const float bg_brightness = (t.palette.background.x + t.palette.background.y + t.palette.background.z) / 3.0f;
-        const bool is_light_theme = bg_brightness > 0.5f;
-
-        // Push both background and text colors for tooltips
-        if (is_light_theme) {
-            ImGui::PushStyleColor(ImGuiCol_PopupBg, withAlpha(t.palette.surface, 0.95f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4{0.2f, 0.2f, 0.2f, 1.0f});
-        }
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, withAlpha(t.palette.surface, 0.95f));
+        ImGui::PushStyleColor(ImGuiCol_Text, t.palette.text);
+        ImGui::PushStyleColor(ImGuiCol_Border, t.palette.border);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
 
         ImGui::BeginTooltip();
 
@@ -431,9 +428,8 @@ namespace lfs::vis::gui::widgets {
 
         ImGui::EndTooltip();
 
-        if (is_light_theme) {
-            ImGui::PopStyleColor(2);
-        }
+        ImGui::PopStyleVar(1);
+        ImGui::PopStyleColor(3);
     }
 
 } // namespace lfs::vis::gui::widgets

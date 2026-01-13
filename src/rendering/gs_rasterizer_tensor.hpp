@@ -7,6 +7,7 @@
 #include "core/camera.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "rasterizer/rasterization/include/gsplat_forward.h"
 #include "rendering/render_constants.hpp"
 #include <tuple>
 
@@ -48,6 +49,7 @@ namespace lfs::rendering {
         float far_plane = DEFAULT_FAR_PLANE,
         const std::vector<bool>& selected_node_mask = {},
         bool desaturate_unselected = false,
+        const std::vector<bool>& node_visibility_mask = {},
         float selection_flash_intensity = 0.0f,
         bool orthographic = false,
         float ortho_scale = 1.0f,
@@ -63,6 +65,9 @@ namespace lfs::rendering {
         const lfs::core::Camera& camera,
         const lfs::core::SplatData& model,
         const Tensor& bg_color,
-        float scaling_modifier = 1.0f);
+        float scaling_modifier = 1.0f,
+        GutCameraModel camera_model = GutCameraModel::PINHOLE,
+        const Tensor* transform_indices = nullptr,
+        const std::vector<bool>& node_visibility_mask = {});
 
 } // namespace lfs::rendering

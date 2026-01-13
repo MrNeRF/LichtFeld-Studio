@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "buffer_utils.h"
+#include "core/logger.hpp"
 #include "forward.h"
 #include "helper_math.h"
 #include "rasterization_config.h"
@@ -339,10 +340,14 @@ void lfs::rendering::forward(
     const bool* selected_node_mask,
     int num_selected_nodes,
     bool desaturate_unselected,
+    const bool* node_visibility_mask,
+    int num_visibility_nodes,
     float selection_flash_intensity,
     bool orthographic,
     float ortho_scale,
-    bool mip_filter) {
+    bool mip_filter,
+    const int* visible_indices,
+    int visible_count) {
 
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const dim3 block(config::tile_width, config::tile_height, 1);
@@ -362,8 +367,13 @@ void lfs::rendering::forward(
     } else
         cudaMemset(per_tile_buffers.instance_ranges, 0, sizeof(uint2) * n_tiles);
 
-    char* per_primitive_buffers_blob = per_primitive_buffers_func(required<PerPrimitiveBuffers>(n_primitives));
-    PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
+    // Use visible_count for buffer allocation if visibility filtering is active
+    const int buffer_n_primitives = (visible_count > 0 && visible_indices != nullptr)
+                                        ? visible_count
+                                        : n_primitives;
+
+    char* per_primitive_buffers_blob = per_primitive_buffers_func(required<PerPrimitiveBuffers>(buffer_n_primitives));
+    PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, buffer_n_primitives);
 
     cudaMemset(per_primitive_buffers.n_visible_primitives, 0, sizeof(uint));
     cudaMemset(per_primitive_buffers.n_instances, 0, sizeof(uint));
@@ -372,11 +382,11 @@ void lfs::rendering::forward(
     // Only visible Gaussians will have their mean2d updated by preprocess kernel
     if (screen_positions_out != nullptr) {
         constexpr int init_block = 256;
-        int init_grid = (n_primitives + init_block - 1) / init_block;
-        init_mean2d_kernel<<<init_grid, init_block>>>(per_primitive_buffers.mean2d, n_primitives);
+        int init_grid = (buffer_n_primitives + init_block - 1) / init_block;
+        init_mean2d_kernel<<<init_grid, init_block>>>(per_primitive_buffers.mean2d, buffer_n_primitives);
     }
 
-    kernels::forward::preprocess_cu<<<div_round_up(n_primitives, config::block_size_preprocess), config::block_size_preprocess>>>(
+    kernels::forward::preprocess_cu<<<div_round_up(buffer_n_primitives, config::block_size_preprocess), config::block_size_preprocess>>>(
         means,
         scales_raw,
         rotations_raw,
@@ -395,9 +405,11 @@ void lfs::rendering::forward(
         per_primitive_buffers.depth,
         per_primitive_buffers.outside_crop,
         per_primitive_buffers.selection_status,
+        per_primitive_buffers.global_idx,
         per_primitive_buffers.n_visible_primitives,
         per_primitive_buffers.n_instances,
-        n_primitives,
+        buffer_n_primitives,
+        visible_indices,
         grid.x,
         grid.y,
         active_sh_bases,
@@ -437,13 +449,17 @@ void lfs::rendering::forward(
         selected_node_mask,
         num_selected_nodes,
         desaturate_unselected,
+        node_visibility_mask,
+        num_visibility_nodes,
         orthographic,
         ortho_scale,
         mip_filter);
     CHECK_CUDA(config::debug, "preprocess")
 
     // Copy screen positions if requested (for brush tool selection)
-    if (screen_positions_out != nullptr) {
+    // Note: When visibility filtering is active, screen positions are written directly
+    // in the kernel using global_idx, so this copy is only needed without filtering
+    if (screen_positions_out != nullptr && visible_indices == nullptr) {
         cudaMemcpy(screen_positions_out, per_primitive_buffers.mean2d,
                    sizeof(float2) * n_primitives, cudaMemcpyDeviceToDevice);
 
@@ -452,8 +468,8 @@ void lfs::rendering::forward(
         const bool has_depth_filter = (depth_filter_transform != nullptr);
         if (crop_desaturate || has_depth_filter) {
             constexpr int BLOCK = 256;
-            const int grid = (n_primitives + BLOCK - 1) / BLOCK;
-            invalidate_outside_crop_kernel<<<grid, BLOCK>>>(
+            const int grid_size = (n_primitives + BLOCK - 1) / BLOCK;
+            invalidate_outside_crop_kernel<<<grid_size, BLOCK>>>(
                 screen_positions_out, per_primitive_buffers.outside_crop, n_primitives);
         }
     }
@@ -529,6 +545,7 @@ void lfs::rendering::forward(
         per_primitive_buffers.depth,
         per_primitive_buffers.outside_crop,
         per_primitive_buffers.selection_status,
+        per_primitive_buffers.global_idx,
         image,
         alpha,
         depth,

@@ -143,5 +143,44 @@
     "tint_normal": 0.18,
     "tint_hover": 0.28,
     "tint_active": 0.38
+  },
+
+  "context_menu": {
+    "_info": "Right-click context menu styling",
+
+    "rounding": 6.0,
+    "header_alpha": 0.4,
+    "header_hover_alpha": 0.6,
+    "header_active_alpha": 0.8,
+    "padding": [12.0, 8.0],
+    "item_spacing": [8.0, 6.0]
+  },
+
+  "overlay": {
+    "_info": "Overlay panel colors (help, empty state, drag-drop, progress)",
+
+    "background": [0.95, 0.95, 0.96, 1.0],
+    "_background": "Overlay panel background - light",
+
+    "text": [0.1, 0.1, 0.12, 1.0],
+    "_text": "Overlay text color - dark for light backgrounds",
+
+    "text_dim": [0.4, 0.4, 0.45, 1.0],
+    "_text_dim": "Subtle/hint text",
+
+    "border": [0.5, 0.55, 0.6, 1.0],
+    "_border": "Overlay borders",
+
+    "icon": [0.3, 0.4, 0.5, 1.0],
+    "_icon": "Icon tint color - dark for light backgrounds",
+
+    "highlight": [0.7, 0.8, 0.9, 1.0],
+    "_highlight": "Highlighted items",
+
+    "selection": [0.5, 0.65, 0.85, 1.0],
+    "_selection": "Selected items",
+
+    "selection_flash": [0.65, 0.78, 0.95, 1.0],
+    "_selection_flash": "Selection flash effect"
   }
 }

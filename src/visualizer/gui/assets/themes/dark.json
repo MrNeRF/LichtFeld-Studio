@@ -166,5 +166,33 @@
     "tint_normal": 0.55,
     "tint_hover": 0.65,
     "tint_active": 0.75
+  },
+
+  "overlay": {
+    "_info": "Overlay panel colors (help, empty state, drag-drop, progress)",
+
+    "background": [0.20, 0.20, 0.22, 1.0],
+    "_background": "Overlay panel background",
+
+    "text": [1.0, 1.0, 1.0, 1.0],
+    "_text": "Overlay text color",
+
+    "text_dim": [0.7, 0.7, 0.7, 1.0],
+    "_text_dim": "Subtle/hint text",
+
+    "border": [0.4, 0.55, 0.7, 1.0],
+    "_border": "Overlay borders",
+
+    "icon": [0.47, 0.63, 0.78, 1.0],
+    "_icon": "Icon tint color",
+
+    "highlight": [0.31, 0.47, 0.7, 1.0],
+    "_highlight": "Highlighted items",
+
+    "selection": [0.23, 0.39, 0.63, 1.0],
+    "_selection": "Selected items",
+
+    "selection_flash": [0.55, 0.7, 0.94, 1.0],
+    "_selection_flash": "Selection flash effect"
   }
 }

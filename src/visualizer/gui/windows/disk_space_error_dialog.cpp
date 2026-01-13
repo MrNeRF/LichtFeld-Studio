@@ -31,7 +31,8 @@ namespace lfs::vis::gui {
                                                  ImGuiWindowFlags_NoMove |
                                                  ImGuiWindowFlags_NoDocking |
                                                  ImGuiWindowFlags_NoResize |
-                                                 ImGuiWindowFlags_NoScrollbar;
+                                                 ImGuiWindowFlags_NoScrollbar |
+                                                 ImGuiWindowFlags_NoSavedSettings;
 
         [[nodiscard]] std::string formatBytes(const size_t bytes) {
             constexpr double KB = 1024.0;

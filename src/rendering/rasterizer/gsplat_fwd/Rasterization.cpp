@@ -45,6 +45,7 @@ namespace gsplat_fwd {
         const float* thin_prism_coeffs,
         const int32_t* tile_offsets,
         const int32_t* flatten_ids,
+        const int32_t* visible_indices,
         float* renders,
         float* alphas,
         int32_t* last_ids,
@@ -68,7 +69,7 @@ namespace gsplat_fwd {
             viewmats0, viewmats1, Ks, camera_model,                  \
             ut_params, rs_type,                                      \
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,     \
-            tile_offsets, flatten_ids,                               \
+            tile_offsets, flatten_ids, visible_indices,              \
             renders, alphas, last_ids, median_depths, stream);       \
         break;
 
@@ -112,7 +113,8 @@ namespace gsplat_fwd {
         uint32_t sh_degree,
         const float* backgrounds,
         const bool* masks,
-        uint32_t N,
+        uint32_t N_total,
+        uint32_t M,
         uint32_t C,
         uint32_t K,
         uint32_t image_width,
@@ -134,6 +136,10 @@ namespace gsplat_fwd {
         const float* radial_coeffs,
         const float* tangential_coeffs,
         const float* thin_prism_coeffs,
+        const int* transform_indices,
+        const bool* node_visibility_mask,
+        int num_visibility_nodes,
+        const int* visible_indices,
         RasterizeWithSHResult& result,
         cudaStream_t stream) {
         GSPLAT_CHECK_CUDA_PTR(means, "means");
@@ -157,23 +163,25 @@ namespace gsplat_fwd {
         // Use scales directly (scaling_modifier should be applied by caller if needed)
         const float* scaled_scales = scales;
 
-        // Step 1: Projection
+        // Step 1: Projection (uses indirect indexing via visible_indices)
         projection_ut_3dgs_fused(
             means, quats, scaled_scales, opacities,
             viewmats0, viewmats1, Ks,
-            N, C, image_width, image_height,
+            N_total, M, C, image_width, image_height,
             eps2d, near_plane, far_plane, radius_clip,
             calc_compensations, camera_model,
             ut_params, rs_type,
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,
+            transform_indices, node_visibility_mask, num_visibility_nodes,
+            visible_indices,
             result.radii, result.means2d, result.depths, result.conics,
             result.compensations, stream);
 
-        // Step 2: Tile intersection
+        // Step 2: Tile intersection (output buffers sized to M)
         auto isect_result = intersect_tile(
             result.means2d, result.radii, result.depths,
             nullptr, nullptr,
-            C, N, tile_size, tile_width, tile_height,
+            C, M, tile_size, tile_width, tile_height,
             true,
             result.tiles_per_gauss, stream);
 
@@ -186,26 +194,29 @@ namespace gsplat_fwd {
             C, tile_width, tile_height,
             result.tile_offsets, stream);
 
-        // Step 3: Compute viewing directions and evaluate SH
+        // Step 3: Compute viewing directions and evaluate SH (uses indirect indexing)
         if (render_mode == 0 || render_mode == 3 || render_mode == 4) {
-            compute_view_dirs(means, viewmats0, C, N, result.dirs, stream);
+            compute_view_dirs(means, viewmats0, C, N_total, M, visible_indices, result.dirs, stream);
 
             spherical_harmonics_fwd(
-                sh_degree, result.dirs, sh_coeffs, nullptr,
-                static_cast<int64_t>(C) * N, K,
+                sh_degree, result.dirs, sh_coeffs, nullptr, visible_indices,
+                static_cast<int64_t>(C) * M, K,
                 result.colors, stream);
         }
 
         // Step 4: Rasterize to pixels
+        // means/quats/scales/opacities are N_total-sized, accessed via visible_indices
+        // colors/depths are M-sized (computed for visible gaussians only)
         rasterize_to_pixels_from_world_3dgs_fwd(
             means, quats, scaled_scales, result.colors, opacities,
             backgrounds, masks, result.depths,
-            C, N, result.n_isects, channels,
+            C, M, result.n_isects, channels,
             image_width, image_height, tile_size,
             viewmats0, viewmats1, Ks, camera_model,
             ut_params, rs_type,
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,
             result.tile_offsets, result.flatten_ids,
+            visible_indices,
             result.render_colors, result.render_alphas, result.last_ids,
             result.median_depths, stream);
     }

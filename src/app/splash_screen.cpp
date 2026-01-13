@@ -5,6 +5,7 @@
 #include "app/splash_screen.hpp"
 #include "core/executable_path.hpp"
 #include "core/path_utils.hpp"
+#include "visualizer/theme/theme.hpp"
 
 // clang-format off
 #include <glad/glad.h>
@@ -19,6 +20,9 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <thread>
 
 namespace lfs::app {
@@ -36,9 +40,12 @@ namespace lfs::app {
         constexpr float SPINNER_G = 0.7f;
         constexpr float SPINNER_B = 1.0f;
 
-        constexpr float BG_R = 0.11f;
-        constexpr float BG_G = 0.11f;
-        constexpr float BG_B = 0.14f;
+        constexpr float BG_DARK_R = 0.11f;
+        constexpr float BG_DARK_G = 0.11f;
+        constexpr float BG_DARK_B = 0.14f;
+        constexpr float BG_LIGHT_R = 0.92f;
+        constexpr float BG_LIGHT_G = 0.92f;
+        constexpr float BG_LIGHT_B = 0.94f;
 
         constexpr float LOGO_Y = 0.70f;
         constexpr float TEXT_Y = 0.35f;
@@ -316,11 +323,17 @@ void main() {
         const GLuint textured_program = createProgram(TEXTURED_VS, TEXTURED_FS);
         SpinnerData spinner = createSpinner();
 
+        const bool is_dark = vis::loadThemePreference();
         const auto assets_dir = core::getAssetsDir();
-        ImageData logo = loadImage(assets_dir / "lichtfeld-splash-logo.png");
-        ImageData loading_text = loadImage(assets_dir / "lichtfeld-splash-loading.png");
+        const std::string logo_file = is_dark ? "lichtfeld-splash-logo.png" : "lichtfeld-splash-logo-dark.png";
+        const std::string loading_file = is_dark ? "lichtfeld-splash-loading.png" : "lichtfeld-splash-loading-dark.png";
+        ImageData logo = loadImage(assets_dir / logo_file);
+        ImageData loading_text = loadImage(assets_dir / loading_file);
 
-        glClearColor(BG_R, BG_G, BG_B, 1.0f);
+        const float bg_r = is_dark ? BG_DARK_R : BG_LIGHT_R;
+        const float bg_g = is_dark ? BG_DARK_G : BG_LIGHT_G;
+        const float bg_b = is_dark ? BG_DARK_B : BG_LIGHT_B;
+        glClearColor(bg_r, bg_g, bg_b, 1.0f);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 

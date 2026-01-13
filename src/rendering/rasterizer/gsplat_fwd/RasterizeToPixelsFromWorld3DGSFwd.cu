@@ -29,14 +29,14 @@ namespace gsplat_fwd {
         const uint32_t N,
         const uint32_t n_isects,
         const bool packed,
-        const vec3* __restrict__ means,           // [N, 3]
-        const vec4* __restrict__ quats,           // [N, 4]
-        const vec3* __restrict__ scales,          // [N, 3]
-        const scalar_t* __restrict__ colors,      // [C, N, CDIM] or [nnz, CDIM]
-        const scalar_t* __restrict__ opacities,   // [C, N] or [nnz]
+        const vec3* __restrict__ means,           // [N_total, 3] (N-sized, use visible_indices for access)
+        const vec4* __restrict__ quats,           // [N_total, 4] (N-sized, use visible_indices for access)
+        const vec3* __restrict__ scales,          // [N_total, 3] (N-sized, use visible_indices for access)
+        const scalar_t* __restrict__ colors,      // [C, M, CDIM] or [nnz, CDIM] (M-sized from SH)
+        const scalar_t* __restrict__ opacities,   // [N_total] (N-sized, use visible_indices for access)
         const scalar_t* __restrict__ backgrounds, // [C, CDIM]
         const bool* __restrict__ masks,           // [C, tile_height, tile_width]
-        const scalar_t* __restrict__ depths,      // [C, N] per-gaussian depths
+        const scalar_t* __restrict__ depths,      // [C, M] per-gaussian depths (M-sized from projection)
         const uint32_t image_width,
         const uint32_t image_height,
         const uint32_t tile_size,
@@ -56,10 +56,12 @@ namespace gsplat_fwd {
         // intersections
         const int32_t* __restrict__ tile_offsets, // [C, tile_height, tile_width]
         const int32_t* __restrict__ flatten_ids,  // [n_isects]
-        scalar_t* __restrict__ render_colors,     // [C, image_height, image_width, CDIM]
-        scalar_t* __restrict__ render_alphas,     // [C, image_height, image_width, 1]
-        int32_t* __restrict__ last_ids,           // [C, image_height, image_width]
-        scalar_t* __restrict__ median_depths      // [C, image_height, image_width]
+        // indirect indexing for visibility filtering
+        const int32_t* __restrict__ visible_indices, // [M] maps g -> global gaussian idx, nullptr = direct
+        scalar_t* __restrict__ render_colors,        // [C, image_height, image_width, CDIM]
+        scalar_t* __restrict__ render_alphas,        // [C, image_height, image_width, 1]
+        int32_t* __restrict__ last_ids,              // [C, image_height, image_width]
+        scalar_t* __restrict__ median_depths         // [C, image_height, image_width]
     ) {
         // each thread draws one pixel, but also timeshares caching gaussians in a
         // shared tile
@@ -225,15 +227,18 @@ namespace gsplat_fwd {
             uint32_t batch_start = range_start + block_size * b;
             uint32_t idx = batch_start + tr;
             if (idx < range_end) {
-                // TODO: only support 1 camera for now so it is ok to abuse the index.
-                int32_t g = flatten_ids[idx]; // flatten index in [C * N] or [nnz]
+                // g indexes into M-sized arrays (colors, depths)
+                int32_t g = flatten_ids[idx]; // flatten index in [0..M-1]
                 id_batch[tr] = g;
-                const vec3 xyz = means[g];
-                const float opac = opacities[g];
+
+                // global_g indexes into N-sized arrays (means, quats, scales, opacities)
+                const int32_t global_g = (visible_indices != nullptr) ? visible_indices[g] : g;
+                const vec3 xyz = means[global_g];
+                const float opac = opacities[global_g];
                 xyz_opacity_batch[tr] = {xyz.x, xyz.y, xyz.z, opac};
 
-                const vec4 quat = quats[g];
-                vec3 scale = scales[g];
+                const vec4 quat = quats[global_g];
+                vec3 scale = scales[global_g];
 
                 mat3 R = quat_to_rotmat(quat);
                 mat3 S = mat3(
@@ -342,6 +347,7 @@ namespace gsplat_fwd {
         const float* thin_prism_coeffs,
         const int32_t* tile_offsets,
         const int32_t* flatten_ids,
+        const int32_t* visible_indices,
         float* renders,
         float* alphas,
         int32_t* last_ids,
@@ -411,6 +417,7 @@ namespace gsplat_fwd {
                 thin_prism_coeffs,
                 tile_offsets,
                 flatten_ids,
+                visible_indices,
                 renders,
                 alphas,
                 last_ids,
@@ -448,6 +455,7 @@ namespace gsplat_fwd {
         const float* thin_prism_coeffs,                                        \
         const int32_t* tile_offsets,                                           \
         const int32_t* flatten_ids,                                            \
+        const int32_t* visible_indices,                                        \
         float* renders,                                                        \
         float* alphas,                                                         \
         int32_t* last_ids,                                                     \

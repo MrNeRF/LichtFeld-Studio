@@ -11,12 +11,13 @@ namespace gsplat_fwd {
 
     void launch_spherical_harmonics_fwd_kernel(
         uint32_t degrees_to_use,
-        const float* dirs,   // [..., 3]
-        const float* coeffs, // [..., K, 3]
-        const bool* masks,   // [...] optional
-        int64_t n_elements,
+        const float* dirs,              // [M, 3]
+        const float* coeffs,            // [N_total, K, 3] (N-sized when using visible_indices)
+        const bool* masks,              // [M] optional
+        const int32_t* visible_indices, // [M] maps elem_id -> global_idx, nullptr = direct
+        int64_t n_elements,             // M (visible gaussians)
         int32_t K,
-        float* colors, // [..., 3]
+        float* colors, // [M, 3]
         cudaStream_t stream = nullptr);
 
     void launch_spherical_harmonics_bwd_kernel(

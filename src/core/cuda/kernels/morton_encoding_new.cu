@@ -67,8 +67,8 @@ namespace lfs::core {
         float3 max_val;
 
         __host__ __device__
-        float3_minmax() : min_val{INFINITY, INFINITY, INFINITY},
-                          max_val{-INFINITY, -INFINITY, -INFINITY} {}
+        float3_minmax() : min_val{CUDA_INFINITY, CUDA_INFINITY, CUDA_INFINITY},
+                          max_val{-CUDA_INFINITY, -CUDA_INFINITY, -CUDA_INFINITY} {}
 
         __host__ __device__
         float3_minmax(float3 min_v, float3 max_v) : min_val(min_v),

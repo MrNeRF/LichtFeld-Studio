@@ -111,6 +111,17 @@ namespace lfs::vis {
         float tint_active = 0.35f;
     };
 
+    struct ThemeOverlay {
+        ImVec4 background = {0.20f, 0.20f, 0.22f, 1.0f};
+        ImVec4 text = {1.0f, 1.0f, 1.0f, 1.0f};
+        ImVec4 text_dim = {0.7f, 0.7f, 0.7f, 1.0f};
+        ImVec4 border = {0.4f, 0.55f, 0.7f, 1.0f};
+        ImVec4 icon = {0.47f, 0.63f, 0.78f, 1.0f};
+        ImVec4 highlight = {0.31f, 0.47f, 0.7f, 1.0f};
+        ImVec4 selection = {0.23f, 0.39f, 0.63f, 1.0f};
+        ImVec4 selection_flash = {0.55f, 0.7f, 0.94f, 1.0f};
+    };
+
     // Complete theme
     struct Theme {
         std::string name;
@@ -123,6 +134,7 @@ namespace lfs::vis {
         ThemeShadows shadows;
         ThemeVignette vignette;
         ThemeButton button;
+        ThemeOverlay overlay;
 
         // ImU32 accessors for ImDrawList
         [[nodiscard]] ImU32 primary_u32() const;
@@ -149,6 +161,11 @@ namespace lfs::vis {
         [[nodiscard]] ImU32 overlay_text_u32() const;
         [[nodiscard]] ImU32 overlay_shadow_u32() const;
         [[nodiscard]] ImU32 overlay_hint_u32() const;
+        [[nodiscard]] ImU32 overlay_border_u32() const;
+        [[nodiscard]] ImU32 overlay_icon_u32() const;
+        [[nodiscard]] ImU32 overlay_highlight_u32() const;
+        [[nodiscard]] ImU32 overlay_selection_u32() const;
+        [[nodiscard]] ImU32 overlay_selection_flash_u32() const;
 
         // Progress bar colors
         [[nodiscard]] ImU32 progress_bar_bg_u32() const;
@@ -184,6 +201,18 @@ namespace lfs::vis {
         // Context menu helpers (pushes 6 colors, 3 style vars)
         void pushContextMenuStyle() const;
         static void popContextMenuStyle();
+
+        [[nodiscard]] bool isLightTheme() const {
+            constexpr float BRIGHTNESS_THRESHOLD = 0.5f;
+            const float brightness = (palette.background.x + palette.background.y + palette.background.z) / 3.0f;
+            return brightness > BRIGHTNESS_THRESHOLD;
+        }
+
+        [[nodiscard]] float frameDarkenAmount() const {
+            constexpr float LIGHT_DARKEN = 0.15f;
+            constexpr float DARK_DARKEN = 0.05f;
+            return isLightTheme() ? LIGHT_DARKEN : DARK_DARKEN;
+        }
     };
 
     // Global access
@@ -199,6 +228,10 @@ namespace lfs::vis {
     // Persistence
     bool saveTheme(const Theme& t, const std::string& path);
     bool loadTheme(Theme& t, const std::string& path);
+
+    // Theme preference (for splash screen)
+    void saveThemePreference(bool is_dark);
+    [[nodiscard]] bool loadThemePreference(); // Returns true if dark theme
 
     // Color utilities
     [[nodiscard]] ImVec4 lighten(const ImVec4& color, float amount);

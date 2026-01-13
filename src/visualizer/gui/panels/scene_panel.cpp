@@ -13,6 +13,7 @@
 #include "gui/localization_manager.hpp"
 #include "gui/panels/scene_panel.hpp"
 #include "gui/string_keys.hpp"
+#include "gui/ui_widgets.hpp"
 #include "gui/utils/windows_utils.hpp"
 #include "gui/windows/image_preview.hpp"
 #include "internal/resource_paths.hpp"
@@ -68,7 +69,7 @@ namespace lfs::vis::gui {
 
         void showDisabledDeleteTooltip(const bool is_protected) {
             if (is_protected && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                ImGui::SetTooltip("%s", LOC(lichtfeld::Strings::Scene::CANNOT_DELETE_TRAINING));
+                widgets::SetThemedTooltip("%s", LOC(lichtfeld::Strings::Scene::CANNOT_DELETE_TRAINING));
             }
         }
     } // namespace
@@ -347,39 +348,38 @@ namespace lfs::vis::gui {
         const auto* parent_node = scene.getNodeById(node.parent_id);
         const bool parent_is_dataset = parent_node && parent_node->type == NodeType::DATASET;
 
-        const auto& t = theme();
+        const auto& thm = theme();
         const float scale = getDpiScale();
         ImDrawList* const draw_list = ImGui::GetWindowDrawList();
 
-        const float ROW_PADDING = 2.0f * scale;
-        constexpr ImU32 HIGHLIGHT_COLOR = IM_COL32(80, 120, 180, 180);
-        constexpr ImU32 SELECTION_COLOR_BASE = IM_COL32(60, 100, 160, 200);
-        constexpr ImU32 SELECTION_COLOR_FLASH = IM_COL32(140, 180, 240, 230);
+        const float row_padding = 2.0f * scale;
+        const ImU32 highlight_color = thm.overlay_highlight_u32();
+        const ImU32 selection_base = thm.overlay_selection_u32();
+        const ImU32 selection_flash = thm.overlay_selection_flash_u32();
 
         const ImVec2 row_min = ImGui::GetCursorScreenPos();
         const float window_left = ImGui::GetWindowPos().x;
         const float window_right = window_left + ImGui::GetWindowWidth();
-        const float row_height = ImGui::GetTextLineHeight() + ROW_PADDING;
+        const float row_height = ImGui::GetTextLineHeight() + row_padding;
 
-        // Compute row color
         ImU32 row_color;
         if (is_selected) {
             if (m_selectionFlashIntensity > 0.0f) {
-                const ImVec4 base = ImGui::ColorConvertU32ToFloat4(SELECTION_COLOR_BASE);
-                const ImVec4 flash = ImGui::ColorConvertU32ToFloat4(SELECTION_COLOR_FLASH);
-                const float t = 1.0f - m_selectionFlashIntensity;
+                const ImVec4 base = ImGui::ColorConvertU32ToFloat4(selection_base);
+                const ImVec4 flash = ImGui::ColorConvertU32ToFloat4(selection_flash);
+                const float interp = 1.0f - m_selectionFlashIntensity;
                 row_color = ImGui::ColorConvertFloat4ToU32(ImVec4(
-                    flash.x + (base.x - flash.x) * t,
-                    flash.y + (base.y - flash.y) * t,
-                    flash.z + (base.z - flash.z) * t,
-                    flash.w + (base.w - flash.w) * t));
+                    flash.x + (base.x - flash.x) * interp,
+                    flash.y + (base.y - flash.y) * interp,
+                    flash.z + (base.z - flash.z) * interp,
+                    flash.w + (base.w - flash.w) * interp));
             } else {
-                row_color = SELECTION_COLOR_BASE;
+                row_color = selection_base;
             }
         } else if (is_highlighted_cam) {
-            row_color = HIGHLIGHT_COLOR;
+            row_color = highlight_color;
         } else {
-            row_color = (m_rowIndex++ % 2 == 0) ? t.row_even_u32() : t.row_odd_u32();
+            row_color = (m_rowIndex++ % 2 == 0) ? thm.row_even_u32() : thm.row_odd_u32();
         }
 
         draw_list->AddRectFilled(
@@ -403,13 +403,13 @@ namespace lfs::vis::gui {
 
         // Button style for all icon buttons
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, withAlpha(t.palette.surface_bright, 0.5f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, withAlpha(t.palette.surface_bright, 0.7f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, withAlpha(thm.palette.surface_bright, 0.5f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, withAlpha(thm.palette.surface_bright, 0.7f));
 
         // [Grip] - drag indicator
         if (m_icons.grip) {
             const ImVec4 grip_tint = can_drag
-                                         ? withAlpha(t.palette.text_dim, 0.5f)
+                                         ? withAlpha(thm.palette.text_dim, 0.5f)
                                          : ImVec4(0, 0, 0, 0);
             ImGui::Image(static_cast<ImTextureID>(m_icons.grip), icon_sz, {0, 0}, {1, 1}, grip_tint, {0, 0, 0, 0});
             ImGui::SameLine(0.0f, ICON_SPACING);
@@ -429,11 +429,11 @@ namespace lfs::vis::gui {
         if (is_deletable && m_icons.trash) {
             const ImVec4 trash_tint = is_selected
                                           ? ImVec4(1.0f, 0.6f, 0.6f, 0.9f)
-                                          : withAlpha(t.palette.text_dim, 0.5f);
+                                          : withAlpha(thm.palette.text_dim, 0.5f);
             if (ImGui::ImageButton("##del", static_cast<ImTextureID>(m_icons.trash), icon_sz, {0, 0}, {1, 1}, {0, 0, 0, 0}, trash_tint))
                 cmd::RemovePLY{.name = node.name, .keep_children = false}.emit();
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s", LOC(lichtfeld::Strings::Scene::DELETE_NODE));
+                widgets::SetThemedTooltip("%s", LOC(lichtfeld::Strings::Scene::DELETE_NODE));
             ImGui::SameLine(0.0f, ICON_SPACING);
         }
 
@@ -680,8 +680,8 @@ namespace lfs::vis::gui {
                     cmd::DuplicateNode{.name = node.name}.emit();
 
                 if (ImGui::BeginMenu(LOC(lichtfeld::Strings::Scene::MOVE_TO))) {
-                    const auto* parent_node = scene.getNodeById(node.parent_id);
-                    if (parent_node) {
+                    const auto* scn_parent_node = scene.getNodeById(node.parent_id);
+                    if (scn_parent_node) {
                         if (ImGui::MenuItem(LOC(lichtfeld::Strings::Scene::MOVE_TO_ROOT))) {
                             cmd::ReparentNode{.node_name = node.name, .new_parent_name = ""}.emit();
                         }
@@ -690,14 +690,14 @@ namespace lfs::vis::gui {
                     bool found_group = false;
                     for (const auto* other : scene.getNodes()) {
                         if (other->type == NodeType::GROUP && other->name != node.name &&
-                            (parent_node == nullptr || other->name != parent_node->name)) {
+                            (scn_parent_node == nullptr || other->name != scn_parent_node->name)) {
                             found_group = true;
                             if (ImGui::MenuItem(other->name.c_str())) {
                                 cmd::ReparentNode{.node_name = node.name, .new_parent_name = other->name}.emit();
                             }
                         }
                     }
-                    if (!found_group && !parent_node) {
+                    if (!found_group && !scn_parent_node) {
                         ImGui::TextDisabled("%s", LOC(lichtfeld::Strings::Scene::NO_GROUPS_AVAILABLE));
                     }
                     ImGui::EndMenu();

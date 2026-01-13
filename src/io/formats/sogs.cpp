@@ -430,7 +430,7 @@ namespace lfs::io {
                                                                                                                        : 0);
 
                     int num_coeffs = SH_COEFFS[sh_degree];
-                    int palette_size = sh_meta.palette_size > 0 ? sh_meta.palette_size : centroids_img.size() / (64 * num_coeffs * 4);
+                    int palette_size = static_cast<int>(sh_meta.palette_size > 0 ? sh_meta.palette_size : centroids_img.size() / (64 * num_coeffs * 4));
 
                     LOG_DEBUG("Decoding SH: degree={}, coeffs={}, palette_size={}",
                               sh_degree, num_coeffs, palette_size);
@@ -1071,7 +1071,7 @@ namespace lfs::io {
             quats[ti * 4 + 0] = static_cast<uint8_t>(255.0f * (q[other_idx[0]] * 0.5f + 0.5f));
             quats[ti * 4 + 1] = static_cast<uint8_t>(255.0f * (q[other_idx[1]] * 0.5f + 0.5f));
             quats[ti * 4 + 2] = static_cast<uint8_t>(255.0f * (q[other_idx[2]] * 0.5f + 0.5f));
-            quats[ti * 4 + 3] = 252 + max_comp;
+            quats[ti * 4 + 3] = static_cast<uint8_t>(252 + max_comp);
         }
 
         if (auto result = write_webp("quats.webp", quats.data(), width, height); !result) {
@@ -1085,7 +1085,7 @@ namespace lfs::io {
         auto scales = splat_data.scaling_raw().cpu();
         const auto* scales_ptr = scales.ptr<float>();
 
-        auto scale_result = cluster1d(scales_ptr, num_rows, 3, options.kmeans_iterations);
+        auto scale_result = cluster1d(scales_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations);
 
         std::vector<uint8_t> scales_data(width * height * CHANNELS, 0);
         for (int64_t i = 0; i < num_rows; ++i) {
@@ -1109,7 +1109,7 @@ namespace lfs::io {
         auto sh0 = splat_data.sh0_raw().cpu();
         const auto* sh0_ptr = sh0.ptr<float>();
 
-        auto color_result = cluster1d(sh0_ptr, num_rows, 3, options.kmeans_iterations);
+        auto color_result = cluster1d(sh0_ptr, static_cast<int>(num_rows), 3, options.kmeans_iterations);
 
         auto opacity = splat_data.opacity_raw().cpu();
         const auto* opacity_ptr = opacity.ptr<float>();
@@ -1164,7 +1164,7 @@ namespace lfs::io {
 
             auto sh_centroids_cpu = sh_centroids.cpu();
             const auto* sh_centroids_ptr = static_cast<const float*>(sh_centroids_cpu.data_ptr());
-            const int actual_palette_size = sh_centroids.size(0);
+            const int actual_palette_size = static_cast<int>(sh_centroids.size(0));
 
             auto codebook_result = cluster1d(sh_centroids_ptr, actual_palette_size, sh_dims, options.kmeans_iterations);
 

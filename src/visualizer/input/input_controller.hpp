@@ -190,7 +190,8 @@ namespace lfs::vis {
         bool camera_is_moving_ = false;
         bool training_was_paused_by_camera_ = false;
         std::chrono::steady_clock::time_point last_camera_movement_time_;
-        static constexpr auto camera_movement_timeout_ = std::chrono::milliseconds(500); // Resume training 500ms after camera stops
+        static constexpr auto camera_movement_timeout_ = std::chrono::milliseconds(500);
+        bool gt_comparison_active_ = false;
 
         // Frame timing for WASD movement
         std::chrono::high_resolution_clock::time_point last_frame_time_;

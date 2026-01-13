@@ -35,7 +35,9 @@ namespace lfs::rendering {
         createAxesGeometry();
 
         if (isInitialized()) {
-            setupVertexData();
+            if (auto result = setupVertexData(); !result) {
+                LOG_ERROR("Failed to setup vertex data for coordinate axes: {}", result.error());
+            }
         }
     }
 
@@ -46,7 +48,9 @@ namespace lfs::rendering {
             createAxesGeometry();
 
             if (isInitialized()) {
-                setupVertexData();
+                if (auto result = setupVertexData(); !result) {
+                    LOG_ERROR("Failed to setup vertex data for coordinate axes: {}", result.error());
+                }
             }
         } else {
             LOG_WARN("Invalid axis index: {}", axis);
@@ -67,8 +71,9 @@ namespace lfs::rendering {
         LOG_TIMER("RenderCoordinateAxes::init");
         LOG_INFO("Initializing coordinate axes renderer");
 
-        // Create shader for coordinate axes rendering
-        auto result = load_shader("coordinate_axes", "coordinate_axes.vert", "coordinate_axes.frag", false);
+        // Create shader for coordinate axes rendering (with geometry shader for equirectangular seam culling)
+        auto result = load_shader_with_geometry("coordinate_axes", "coordinate_axes.vert",
+                                                "coordinate_axes.geom", "coordinate_axes.frag", false);
         if (!result) {
             LOG_ERROR("Failed to load coordinate axes shader: {}", result.error().what());
             return std::unexpected(result.error().what());
@@ -171,45 +176,32 @@ namespace lfs::rendering {
         return {};
     }
 
-    Result<void> RenderCoordinateAxes::render(const glm::mat4& view, const glm::mat4& projection) {
+    Result<void> RenderCoordinateAxes::render(const glm::mat4& view, const glm::mat4& projection, const bool equirectangular) {
         if (!initialized_ || !shader_.valid() || !vao_ || vertices_.empty())
-            return {}; // Nothing to render if not initialized or no visible axes
+            return {};
 
         LOG_TIMER_TRACE("RenderCoordinateAxes::render");
 
-        // Save depth test state
-        GLboolean depth_test_enabled = glIsEnabled(GL_DEPTH_TEST);
-
-        // Axes should be always visible on top of everything
+        const GLboolean depth_test_enabled = glIsEnabled(GL_DEPTH_TEST);
         glDisable(GL_DEPTH_TEST);
 
-        // Use GLLineGuard for line width management
         GLLineGuard line_guard(line_width_);
-
-        // Bind shader and setup uniforms
         ShaderScope s(shader_);
 
-        // Set uniforms (axes are in world space, so no model transform needed)
-        glm::mat4 mvp = projection * view;
-
-        LOG_TRACE("Rendering {} coordinate axes", vertices_.size() / 2);
-
+        const glm::mat4 mvp = projection * view;
         if (auto result = s->set("u_mvp", mvp); !result) {
-            // Restore state before returning
-            if (depth_test_enabled) {
+            if (depth_test_enabled)
                 glEnable(GL_DEPTH_TEST);
-            }
             return result;
         }
+        s->set("u_view", view);
+        s->set("u_equirectangular", equirectangular);
 
-        // Bind VAO and draw
         VAOBinder vao_bind(vao_);
         glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(vertices_.size()));
 
-        // Restore depth test state
-        if (depth_test_enabled) {
+        if (depth_test_enabled)
             glEnable(GL_DEPTH_TEST);
-        }
 
         return {};
     }

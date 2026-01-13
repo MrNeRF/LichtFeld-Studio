@@ -33,8 +33,7 @@ namespace lfs::rendering {
         void setAxisVisible(int axis, bool visible) override; // 0=X, 1=Y, 2=Z
         [[nodiscard]] bool isAxisVisible(int axis) const override;
 
-        // Render the coordinate axes - now returns Result
-        Result<void> render(const glm::mat4& view, const glm::mat4& projection);
+        Result<void> render(const glm::mat4& view, const glm::mat4& projection, bool equirectangular = false);
 
     private:
         void createAxesGeometry();

@@ -17,11 +17,12 @@ namespace gsplat_fwd {
     template <typename scalar_t>
     __global__ void projection_ut_3dgs_fused_kernel(
         const uint32_t C,
-        const uint32_t N,
-        const scalar_t* __restrict__ means,     // [N, 3]
-        const scalar_t* __restrict__ quats,     // [N, 4]
-        const scalar_t* __restrict__ scales,    // [N, 3]
-        const scalar_t* __restrict__ opacities, // [N] optional
+        const uint32_t N_total,                 // Total gaussians in input arrays
+        const uint32_t M,                       // Visible gaussians to process
+        const scalar_t* __restrict__ means,     // [N_total, 3]
+        const scalar_t* __restrict__ quats,     // [N_total, 4]
+        const scalar_t* __restrict__ scales,    // [N_total, 3]
+        const scalar_t* __restrict__ opacities, // [N_total] optional
         const scalar_t* __restrict__ viewmats0, // [C, 4, 4]
         const scalar_t* __restrict__ viewmats1, // [C, 4, 4] optional for rolling shutter
         const scalar_t* __restrict__ Ks,        // [C, 3, 3]
@@ -38,22 +39,44 @@ namespace gsplat_fwd {
         const scalar_t* __restrict__ radial_coeffs,     // [C, 6] or [C, 4] optional
         const scalar_t* __restrict__ tangential_coeffs, // [C, 2] optional
         const scalar_t* __restrict__ thin_prism_coeffs, // [C, 2] optional
-        // outputs
-        int32_t* __restrict__ radii,         // [C, N, 2]
-        scalar_t* __restrict__ means2d,      // [C, N, 2]
-        scalar_t* __restrict__ depths,       // [C, N]
-        scalar_t* __restrict__ conics,       // [C, N, 3]
-        scalar_t* __restrict__ compensations // [C, N] optional
+        // node visibility culling (used when visible_indices is null)
+        const int* __restrict__ transform_indices,     // [N_total] optional
+        const bool* __restrict__ node_visibility_mask, // [num_visibility_nodes] optional
+        const int num_visibility_nodes,
+        // indirect indexing
+        const int* __restrict__ visible_indices, // [M] maps output idx → global gaussian idx
+        // outputs (sized to [C, M, ...])
+        int32_t* __restrict__ radii,         // [C, M, 2]
+        scalar_t* __restrict__ means2d,      // [C, M, 2]
+        scalar_t* __restrict__ depths,       // [C, M]
+        scalar_t* __restrict__ conics,       // [C, M, 3]
+        scalar_t* __restrict__ compensations // [C, M] optional
     ) {
-        // parallelize over C * N.
+        // parallelize over C * M
         uint32_t idx = cg::this_grid().thread_rank();
-        if (idx >= C * N) {
+        if (idx >= C * M) {
             return;
         }
-        const uint32_t cid = idx / N; // camera id
-        const uint32_t gid = idx % N; // gaussian id
+        const uint32_t cid = idx / M;     // camera id
+        const uint32_t out_gid = idx % M; // output gaussian index (0..M-1)
 
-        // shift pointers to the current gaussian
+        // Map to global gaussian index if using visibility filtering
+        const uint32_t gid = (visible_indices != nullptr)
+                                 ? static_cast<uint32_t>(visible_indices[out_gid])
+                                 : out_gid;
+
+        // Node visibility check only when not using visible_indices (already pre-filtered)
+        if (visible_indices == nullptr && node_visibility_mask != nullptr &&
+            transform_indices != nullptr && num_visibility_nodes > 0) {
+            const int node_idx = transform_indices[gid];
+            if (node_idx >= 0 && node_idx < num_visibility_nodes && !node_visibility_mask[node_idx]) {
+                radii[idx * 2] = 0;
+                radii[idx * 2 + 1] = 0;
+                return;
+            }
+        }
+
+        // Read from global gaussian index
         const glm::fvec3 mean = glm::make_vec3(means + gid * 3);
         const glm::fvec3 scale = glm::make_vec3(scales + gid * 3);
         glm::fquat quat = glm::fquat{
@@ -228,14 +251,15 @@ namespace gsplat_fwd {
 
     void launch_projection_ut_3dgs_fused_kernel(
         // inputs
-        const float* means,     // [N, 3]
-        const float* quats,     // [N, 4]
-        const float* scales,    // [N, 3]
-        const float* opacities, // [N] optional (can be nullptr)
+        const float* means,     // [N_total, 3]
+        const float* quats,     // [N_total, 4]
+        const float* scales,    // [N_total, 3]
+        const float* opacities, // [N_total] optional (can be nullptr)
         const float* viewmats0, // [C, 4, 4]
         const float* viewmats1, // [C, 4, 4] optional for rolling shutter (can be nullptr)
         const float* Ks,        // [C, 3, 3]
-        uint32_t N,
+        uint32_t N_total,       // Total gaussians in input arrays
+        uint32_t M,             // Visible gaussians to process
         uint32_t C,
         uint32_t image_width,
         uint32_t image_height,
@@ -250,14 +274,19 @@ namespace gsplat_fwd {
         const float* radial_coeffs,     // [C, 6] or [C, 4] optional (can be nullptr)
         const float* tangential_coeffs, // [C, 2] optional (can be nullptr)
         const float* thin_prism_coeffs, // [C, 2] optional (can be nullptr)
-        // outputs
-        int32_t* radii,       // [C, N, 2]
-        float* means2d,       // [C, N, 2]
-        float* depths,        // [C, N]
-        float* conics,        // [C, N, 3]
-        float* compensations, // [C, N] optional (can be nullptr)
+        // node visibility culling
+        const int* transform_indices,     // [N_total] optional (can be nullptr)
+        const bool* node_visibility_mask, // [num_visibility_nodes] optional (can be nullptr)
+        int num_visibility_nodes,
+        const int* visible_indices, // [M] maps output idx → global gaussian idx (nullptr = all visible)
+        // outputs (sized to [C, M, ...])
+        int32_t* radii,       // [C, M, 2]
+        float* means2d,       // [C, M, 2]
+        float* depths,        // [C, M]
+        float* conics,        // [C, M, 3]
+        float* compensations, // [C, M] optional (can be nullptr)
         cudaStream_t stream) {
-        int64_t n_elements = C * N;
+        int64_t n_elements = C * M;
         dim3 threads(256);
         dim3 grid((n_elements + threads.x - 1) / threads.x);
         int64_t shmem_size = 0; // No shared memory used in this kernel
@@ -270,7 +299,8 @@ namespace gsplat_fwd {
         projection_ut_3dgs_fused_kernel<float>
             <<<grid, threads, shmem_size, stream>>>(
                 C,
-                N,
+                N_total,
+                M,
                 means,
                 quats,
                 scales,
@@ -290,6 +320,10 @@ namespace gsplat_fwd {
                 radial_coeffs,
                 tangential_coeffs,
                 thin_prism_coeffs,
+                transform_indices,
+                node_visibility_mask,
+                num_visibility_nodes,
+                visible_indices,
                 radii,
                 means2d,
                 depths,

@@ -32,7 +32,7 @@ namespace lfs::core {
                 if (tid >= n_points)
                     return;
 
-                float min_dist = INFINITY;
+                float min_dist = CUDA_INFINITY;
                 int min_idx = 0;
 
                 // For each centroid
@@ -70,7 +70,7 @@ namespace lfs::core {
                     return;
 
                 const float point = data[tid];
-                float min_dist = INFINITY;
+                float min_dist = CUDA_INFINITY;
                 int best = 0;
 
                 // Linear search (sorted centroids)
@@ -133,7 +133,7 @@ namespace lfs::core {
 
                 auto centroids = Tensor::zeros({static_cast<size_t>(k), static_cast<size_t>(d)},
                                                Device::CUDA, DataType::Float32);
-                auto distances = Tensor::full({static_cast<size_t>(n)}, INFINITY,
+                auto distances = Tensor::full({static_cast<size_t>(n)}, CUDA_INFINITY,
                                               Device::CUDA, DataType::Float32);
 
                 // Choose first centroid randomly

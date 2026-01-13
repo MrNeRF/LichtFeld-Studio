@@ -40,9 +40,11 @@ namespace lfs::rendering::kernels::forward {
         float* primitive_depth,
         bool* primitive_outside_crop,
         uint8_t* primitive_selection_status,
+        uint* primitive_global_idx,
         uint* n_visible_primitives,
         uint* n_instances,
         const uint n_primitives,
+        const int* visible_indices,
         const uint grid_width,
         const uint grid_height,
         const uint active_sh_bases,
@@ -82,6 +84,8 @@ namespace lfs::rendering::kernels::forward {
         const bool* selected_node_mask,
         const int num_selected_nodes,
         const bool desaturate_unselected,
+        const bool* node_visibility_mask,
+        const int num_visibility_nodes,
         const bool orthographic,
         const float ortho_scale,
         const bool mip_filter) {
@@ -92,22 +96,37 @@ namespace lfs::rendering::kernels::forward {
             primitive_idx = n_primitives - 1;
         }
 
-        // Soft deletion mask culling - skip deleted gaussians
-        if (active && deleted_mask != nullptr && deleted_mask[primitive_idx]) {
+        // Map to global gaussian index if using visibility filtering
+        const uint global_idx = (visible_indices != nullptr)
+                                    ? static_cast<uint>(visible_indices[primitive_idx])
+                                    : primitive_idx;
+
+        // Soft deletion mask culling - skip deleted gaussians (use global_idx for input)
+        if (active && deleted_mask != nullptr && deleted_mask[global_idx]) {
             active = false;
+        }
+
+        // Note: node_visibility_mask check is now redundant when using visible_indices
+        // (data is pre-filtered), but kept for backward compatibility when visible_indices is null
+        if (active && visible_indices == nullptr && node_visibility_mask != nullptr &&
+            transform_indices != nullptr && num_visibility_nodes > 0) {
+            const int node_idx = transform_indices[global_idx];
+            if (node_idx >= 0 && node_idx < num_visibility_nodes && !node_visibility_mask[node_idx]) {
+                active = false;
+            }
         }
 
         if (active)
             primitive_n_touched_tiles[primitive_idx] = 0;
 
-        float3 mean3d = means[primitive_idx];
+        float3 mean3d = means[global_idx];
 
         // Apply model transform
         mat3x3 model_rot = {1, 0, 0, 0, 1, 0, 0, 0, 1};
         bool has_transform = false;
         if (model_transforms != nullptr && num_transforms > 0) {
             const int transform_idx = transform_indices != nullptr
-                                          ? min(max(transform_indices[primitive_idx], 0), num_transforms - 1)
+                                          ? min(max(transform_indices[global_idx], 0), num_transforms - 1)
                                           : 0;
             const float* const m = model_transforms + transform_idx * 16;
             has_transform = m[0] != 1.0f || m[5] != 1.0f || m[10] != 1.0f ||
@@ -158,7 +177,7 @@ namespace lfs::rendering::kernels::forward {
 
         // Mark unselected nodes for desaturation
         if (active && desaturate_unselected && selected_node_mask != nullptr && num_selected_nodes > 0 && transform_indices != nullptr) {
-            const int node_idx = transform_indices[primitive_idx];
+            const int node_idx = transform_indices[global_idx];
             if (node_idx >= 0 && node_idx < num_selected_nodes && !selected_node_mask[node_idx]) {
                 outside_crop = true;
             }
@@ -175,15 +194,15 @@ namespace lfs::rendering::kernels::forward {
             return;
 
         // load opacity
-        const float raw_opacity = raw_opacities[primitive_idx];
+        const float raw_opacity = raw_opacities[global_idx];
         const float opacity = 1.0f / (1.0f + expf(-raw_opacity));
         if (opacity < config::min_alpha_threshold)
             active = false;
 
         // compute 3d covariance from raw scale and rotation
-        const float3 raw_scale = raw_scales[primitive_idx];
+        const float3 raw_scale = raw_scales[global_idx];
         const float3 variance = make_float3(expf(2.0f * raw_scale.x), expf(2.0f * raw_scale.y), expf(2.0f * raw_scale.z));
-        auto [qr, qx, qy, qz] = raw_rotations[primitive_idx];
+        auto [qr, qx, qy, qz] = raw_rotations[global_idx];
         const float qrr_raw = qr * qr, qxx_raw = qx * qx, qyy_raw = qy * qy, qzz_raw = qz * qz;
         const float q_norm_sq = qrr_raw + qxx_raw + qyy_raw + qzz_raw;
         if (q_norm_sq < 1e-8f)
@@ -308,7 +327,7 @@ namespace lfs::rendering::kernels::forward {
         float3 color = convert_sh_to_color(
             sh_coefficients_0, sh_coefficients_rest,
             mean3d, cam_position[0],
-            primitive_idx, active_sh_bases, total_bases_sh_rest);
+            global_idx, active_sh_bases, total_bases_sh_rest);
 
         // Brush hit test
         const bool selectable = !outside_crop;
@@ -320,8 +339,9 @@ namespace lfs::rendering::kernels::forward {
         }
 
         // Mark gaussians under brush for selection (add/remove determined by endStroke)
+        // Use global_idx since brush_selection_out is N-sized (original gaussian count)
         if (under_brush && brush_selection_out != nullptr && selectable) {
-            brush_selection_out[primitive_idx] = true;
+            brush_selection_out[global_idx] = true;
         }
 
         // Saturation preview
@@ -359,14 +379,14 @@ namespace lfs::rendering::kernels::forward {
             }
         }
 
-        // Encode selection status
+        // Encode selection status (use global_idx for N-sized input arrays)
         uint8_t sel_status = 0;
         if (!brush_saturation_mode) {
-            const uint8_t group_id = selection_mask ? selection_mask[primitive_idx] : 0;
+            const uint8_t group_id = selection_mask ? selection_mask[global_idx] : 0;
             const bool is_committed = group_id > 0;
-            const bool is_in_preview = brush_selection_out && brush_selection_out[primitive_idx];
+            const bool is_in_preview = brush_selection_out && brush_selection_out[global_idx];
             const bool is_ring_highlight = selection_mode_rings && selectable &&
-                                           highlight_gaussian_id == static_cast<int>(primitive_idx);
+                                           highlight_gaussian_id == static_cast<int>(global_idx);
 
             const bool is_preview = (is_in_preview && !is_committed && brush_add_mode) ||
                                     (is_in_preview && is_committed && !brush_add_mode) ||
@@ -381,6 +401,7 @@ namespace lfs::rendering::kernels::forward {
         primitive_depth[primitive_idx] = depth;
         primitive_outside_crop[primitive_idx] = outside_crop;
         primitive_selection_status[primitive_idx] = sel_status;
+        primitive_global_idx[primitive_idx] = global_idx;
 
         const uint offset = atomicAdd(n_visible_primitives, 1);
         const uint depth_key = __float_as_uint(depth);
@@ -547,6 +568,7 @@ namespace lfs::rendering::kernels::forward {
         const float* primitive_depth,
         const bool* primitive_outside_crop,
         const uint8_t* primitive_selection_status,
+        const uint* primitive_global_idx,
         float* image,
         float* alpha_map,
         float* depth_map,
@@ -578,7 +600,7 @@ namespace lfs::rendering::kernels::forward {
         __shared__ float collected_depth[config::block_size_blend];
         __shared__ bool collected_outside_crop[config::block_size_blend];
         __shared__ uint8_t collected_selection_status[config::block_size_blend];
-        __shared__ uint collected_primitive_idx[config::block_size_blend];
+        __shared__ uint collected_global_idx[config::block_size_blend];
         // initialize local storage
         float3 color_pixel = make_float3(0.0f);
         float depth_pixel = 1e10f; // Median depth (at 50% accumulated alpha)
@@ -597,7 +619,7 @@ namespace lfs::rendering::kernels::forward {
                 collected_depth[thread_rank] = primitive_depth[primitive_idx];
                 collected_outside_crop[thread_rank] = primitive_outside_crop[primitive_idx];
                 collected_selection_status[thread_rank] = primitive_selection_status[primitive_idx];
-                collected_primitive_idx[thread_rank] = primitive_idx;
+                collected_global_idx[thread_rank] = primitive_global_idx[primitive_idx];
             }
             block.sync();
             const int current_batch_size = min(config::block_size_blend, n_points_remaining);
@@ -667,9 +689,9 @@ namespace lfs::rendering::kernels::forward {
                     final_color = lerp(final_color, config::SELECTION_GROUP_COLORS[group_id], SELECTION_COMMITTED_BLEND);
                 }
 
-                // Selection flash highlight
+                // Selection flash highlight (use global_idx for N-sized transform_indices lookup)
                 if (selection_flash_intensity > 0.0f && selected_node_mask != nullptr && transform_indices != nullptr) {
-                    const int node_idx = transform_indices[collected_primitive_idx[j]];
+                    const int node_idx = transform_indices[collected_global_idx[j]];
                     if (node_idx >= 0 && node_idx < num_selected_nodes && selected_node_mask[node_idx]) {
                         constexpr float3 SELECTION_FLASH_COLOR = {1.0f, 0.95f, 0.6f};
                         final_color = lerp(final_color, SELECTION_FLASH_COLOR, selection_flash_intensity * 0.5f);
