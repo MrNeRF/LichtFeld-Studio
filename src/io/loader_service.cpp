@@ -37,8 +37,7 @@ namespace lfs::io {
         // Check if path exists first
         std::error_code ec;
         if (!std::filesystem::exists(path, ec)) {
-            return make_error(ErrorCode::PATH_NOT_FOUND,
-                              std::format("Path does not exist: {}", lfs::core::path_to_utf8(path)), path);
+            return make_error(ErrorCode::PATH_NOT_FOUND, "", path);
         }
 
         // Find appropriate loader

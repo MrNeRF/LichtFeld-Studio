@@ -102,10 +102,19 @@ namespace lfs::io {
               available_bytes(avail) {}
 
         [[nodiscard]] std::string format() const {
-            if (path.empty()) {
-                return std::format("[{}] {}", error_code_to_string(code), message);
+            const auto code_str = error_code_to_string(code);
+            const auto path_str = lfs::core::path_to_utf8(path);
+
+            if (message.empty() && path.empty()) {
+                return std::format("[{}]", code_str);
             }
-            return std::format("[{}] {}: {}", error_code_to_string(code), message, lfs::core::path_to_utf8(path));
+            if (message.empty()) {
+                return std::format("[{}] {}", code_str, path_str);
+            }
+            if (path.empty()) {
+                return std::format("[{}] {}", code_str, message);
+            }
+            return std::format("[{}] {}: {}", code_str, message, path_str);
         }
 
         [[nodiscard]] bool is(ErrorCode c) const { return code == c; }
