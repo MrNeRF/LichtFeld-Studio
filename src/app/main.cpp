@@ -6,6 +6,7 @@
 #include "core/argument_parser.hpp"
 #include "core/converter.hpp"
 #include "core/logger.hpp"
+#include "git_version.h"
 
 #include <print>
 
@@ -27,6 +28,7 @@ int main(int argc, char* argv[]) {
             return lfs::core::run_converter(mode.params);
         } else if constexpr (std::is_same_v<T, lfs::core::args::TrainingMode>) {
             LOG_INFO("LichtFeld Studio");
+            LOG_INFO("version {} | tag {}", GIT_TAGGED_VERSION, GIT_COMMIT_HASH_SHORT);
             lfs::app::Application app;
             return app.run(std::move(mode.params));
         }

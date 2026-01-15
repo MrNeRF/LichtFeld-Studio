@@ -48,6 +48,7 @@
 #include "visualizer_impl.hpp"
 #include <cuda_runtime.h>
 
+#include "git_version.h"
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <cfloat>
@@ -1551,8 +1552,9 @@ namespace lfs::vis::gui {
             const float mem_label_w = font->CalcTextSizeA(font->FontSize, FLT_MAX, 0.0f, "GPU ").x;
             const float fps_w = font->CalcTextSizeA(font->FontSize, FLT_MAX, 0.0f, fps_buf).x;
             const float fps_label_w = font->CalcTextSizeA(font->FontSize, FLT_MAX, 0.0f, " FPS").x;
+            const float version_label_w = font->CalcTextSizeA(font->FontSize, FLT_MAX, 0.0f, GIT_COMMIT_HASH_SHORT).x;
 
-            ImGui::SameLine(size.x - (mem_label_w + mem_val_w + SPACING + fps_w + fps_label_w) - PADDING * 2);
+            ImGui::SameLine(size.x - (version_label_w + SPACING + mem_label_w + mem_val_w + SPACING + fps_w + fps_label_w) - PADDING * 2);
 
             ImGui::TextColored(t.palette.text_dim, "GPU ");
             ImGui::SameLine(0.0f, 0.0f);
@@ -1571,6 +1573,10 @@ namespace lfs::vis::gui {
             ImGui::TextColored(t.palette.text_dim, " %s", LOC(lichtfeld::Strings::Status::FPS));
             if (ctx.fonts.bold)
                 ImGui::PopFont();
+
+            ImGui::SameLine(0.0f, SPACING);
+
+            ImGui::TextColored(t.palette.text_dim, GIT_COMMIT_HASH_SHORT);
 
             if (ctx.fonts.regular)
                 ImGui::PopFont();
