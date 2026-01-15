@@ -449,7 +449,7 @@ TEST_F(BackgroundImageTest, MultiSize_ResizeToMultipleDifferentSizes) {
 
 TEST_F(BackgroundImageTest, MultiSize_BlendWithDifferentSizes) {
     struct TestCase {
-        int h, w;
+        size_t h, w;
         float render_val, bg_val, alpha_val;
     };
 
@@ -464,7 +464,7 @@ TEST_F(BackgroundImageTest, MultiSize_BlendWithDifferentSizes) {
     for (const auto& tc : cases) {
         const auto render = createTestImage(3, tc.h, tc.w, tc.render_val);
         const auto bg = createTestImage(3, tc.h, tc.w, tc.bg_val);
-        const auto alpha = Tensor::full({static_cast<size_t>(tc.h), static_cast<size_t>(tc.w)},
+        const auto alpha = Tensor::full({tc.h, tc.w},
                                         tc.alpha_val, Device::CUDA);
         auto output = Tensor::empty({3, tc.h, tc.w}, Device::CUDA, DataType::Float32);
 
@@ -504,7 +504,7 @@ TEST_F(BackgroundImageTest, MultiSize_InterleavedSizeChanges) {
 
         const auto render = createTestImage(3, h, w, 0.3f);
         const auto alpha = Tensor::full({static_cast<size_t>(h), static_cast<size_t>(w)}, 0.6f, Device::CUDA);
-        auto output = Tensor::empty({3, h, w}, Device::CUDA, DataType::Float32);
+        auto output = Tensor::empty({3, static_cast<size_t>(h), static_cast<size_t>(w)}, Device::CUDA, DataType::Float32);
 
         lfs::training::kernels::launch_fused_background_blend_with_image(
             render.ptr<float>(), alpha.ptr<float>(), bg_resized.ptr<float>(),
