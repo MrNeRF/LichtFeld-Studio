@@ -425,26 +425,19 @@ endif()
 if(WIN32 AND BUILD_PYTHON_BINDINGS)
     get_filename_component(VCPKG_PYTHON_DIR "${Python_EXECUTABLE}" DIRECTORY)
 
-    # Find Python DLLs in both possible vcpkg locations
-    file(GLOB PYTHON_DLLS_TOOLS "${VCPKG_PYTHON_DIR}/python*.dll")
-    file(GLOB PYTHON_DLLS_BIN "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin/python*.dll")
-
-    set(ALL_PYTHON_DLLS ${PYTHON_DLLS_TOOLS} ${PYTHON_DLLS_BIN})
-    list(REMOVE_DUPLICATES ALL_PYTHON_DLLS)
-
-    if(ALL_PYTHON_DLLS)
-        foreach(DLL_FILE ${ALL_PYTHON_DLLS})
-            add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${DLL_FILE}"
-                    "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
-                COMMENT "Copying Python DLL: ${DLL_FILE}"
-            )
-        endforeach()
-        list(LENGTH ALL_PYTHON_DLLS NUM_PYTHON_DLLS)
-        message(STATUS "Post-build: Found ${NUM_PYTHON_DLLS} Python DLL(s) to copy")
-    else()
-        message(WARNING "No Python DLLs found for copying")
+    # Glob python*.dll - check both tools/python3/ and parent bin/ (vcpkg layout varies)
+    file(GLOB PYTHON_RUNTIME_DLLS
+        "${VCPKG_PYTHON_DIR}/python*.dll"
+        "${VCPKG_PYTHON_DIR}/../bin/python*.dll"
+    )
+    if(PYTHON_RUNTIME_DLLS)
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${PYTHON_RUNTIME_DLLS}
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>"
+            COMMENT "Copying Python DLLs to executable directory"
+        )
+        message(STATUS "Post-build: Python DLLs will be copied: ${PYTHON_RUNTIME_DLLS}")
     endif()
 endif()
 
