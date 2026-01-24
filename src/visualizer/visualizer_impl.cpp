@@ -164,6 +164,7 @@ namespace lfs::vis {
                 trainer_manager_->waitForCompletion();
             }
             const auto& path = scene_manager_->getDatasetPath();
+            const auto& init_path = data_loader_->getParameters().init_path;
             if (path.empty()) {
                 LOG_ERROR("Cannot reset: empty path");
                 return;
@@ -174,6 +175,7 @@ namespace lfs::vis {
                 if (trainer_manager_) {
                     params.dataset = trainer_manager_->getEditableDatasetParams();
                     params.dataset.data_path = path;
+                    params.init_path = init_path;
                 }
                 data_loader_->setParameters(params);
             }
