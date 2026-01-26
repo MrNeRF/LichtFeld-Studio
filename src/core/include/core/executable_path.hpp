@@ -109,10 +109,23 @@ namespace lfs::core {
                 "lichtfeld.pyd",
                 "lichtfeld.abi3.pyd",
                 "lichtfeld.cp312-win_amd64.pyd",
-                "lichtfeld.cp311-win_amd64.pyd"
+                "lichtfeld.cp311-win_amd64.pyd",
+                "lichtfeld.cpython-312-x86_64-linux-gnu.so",
+                "lichtfeld.cpython-311-x86_64-linux-gnu.so"
             }) {
                 if (std::filesystem::exists(dir / name)) {
                     return true;
+                }
+            }
+            // Also check for any lichtfeld.cpython-*.so pattern (Linux)
+            if (std::filesystem::exists(dir) && std::filesystem::is_directory(dir)) {
+                std::error_code ec;
+                for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+                    if (ec) break;
+                    const auto filename = entry.path().filename().string();
+                    if (filename.starts_with("lichtfeld.cpython-") && filename.ends_with(".so")) {
+                        return true;
+                    }
                 }
             }
             return false;

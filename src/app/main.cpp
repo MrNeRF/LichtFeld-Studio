@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#ifdef __linux__
+#include <cstdlib>
+#endif
+
 #include "app/application.hpp"
 #include "core/argument_parser.hpp"
 #include "core/converter.hpp"
@@ -36,6 +40,14 @@ namespace {
 } // namespace
 
 int main(int argc, char* argv[]) {
+#ifdef __linux__
+    // On hybrid GPU laptops (Intel/AMD + NVIDIA), ensure OpenGL uses the NVIDIA
+    // driver to match CUDA context. Without this, GLX may default to the integrated
+    // GPU causing context creation failures.
+    setenv("__GLX_VENDOR_LIBRARY_NAME", "nvidia", 0);  // 0 = don't overwrite if set
+    setenv("__NV_PRIME_RENDER_OFFLOAD", "1", 0);
+#endif
+
     auto result = lfs::core::args::parse_args(argc, argv);
     if (!result) {
         std::println(stderr, "Error: {}", result.error());
