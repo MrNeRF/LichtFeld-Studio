@@ -179,7 +179,7 @@ namespace {
         constexpr int NUM_WARMUP = 5;
         constexpr int NUM_ITERATIONS = 50;
 
-        std::vector<std::pair<int, int>> resolutions = {
+        std::vector<std::pair<size_t, size_t>> resolutions = {
             {270, 480},   // Quarter HD
             {540, 960},   // Half HD
             {1080, 1920}, // Full HD
@@ -195,7 +195,7 @@ namespace {
         lfs::training::PPISPController::preallocate_shared_buffers(1080, 1920);
 
         for (const auto& [h, w] : resolutions) {
-            auto torch_input = torch::randn({1, 3, h, w}, torch::kCUDA);
+            auto torch_input = torch::randn({1, 3, static_cast<int64_t>(h), static_cast<int64_t>(w)}, torch::kCUDA);
             auto torch_exposure = torch::ones({1, 1}, torch::kCUDA);
 
             auto our_input = lfs::core::Tensor::uniform({1, 3, h, w}, -1.0f, 1.0f, Device::CUDA);
