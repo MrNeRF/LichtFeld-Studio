@@ -11,6 +11,7 @@
 
 // Forward declarations
 struct GLFWwindow;
+struct GLFWmonitor;
 
 namespace lfs::vis {
 
@@ -47,16 +48,18 @@ namespace lfs::vis {
         bool isFullscreen() const { return is_fullscreen_; }
         void toggleFullscreen();
 
-        // Get the size of the monitor the window is currently on
         glm::ivec2 getCurrentMonitorSize() const;
-
-        // Center the window on the current monitor
         void centerWindow();
 
-        // Set the callback handler (typically the viewer instance)
         void setCallbackHandler(void* handler) { callback_handler_ = handler; }
 
     private:
+        struct MonitorInfo {
+            GLFWmonitor* monitor;
+            int x, y, width, height;
+        };
+        MonitorInfo findCurrentMonitor() const;
+
         GLFWwindow* window_ = nullptr;
         std::string title_;
         glm::ivec2 window_size_;

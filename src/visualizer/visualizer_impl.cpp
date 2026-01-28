@@ -214,45 +214,34 @@ namespace lfs::vis {
         });
 
         cmd::ResizeWindow::when([this](const auto& cmd) {
-            if (window_manager_) {
-                const int img_w = cmd.width;
-                const int img_h = cmd.height;
-                if (img_w <= 0 || img_h <= 0)
-                    return;
+            if (!window_manager_ || cmd.width <= 0 || cmd.height <= 0)
+                return;
 
-                const float aspect = static_cast<float>(img_w) / static_cast<float>(img_h);
-
-                // Calculate UI overhead (space taken by toolbars/panels)
-                int overhead_w = 0;
-                int overhead_h = 0;
-                if (gui_manager_) {
-                    const auto win_size = window_manager_->getWindowSize();
-                    const auto vp_size = gui_manager_->getViewportSize();
-                    overhead_w = std::max(0, win_size.x - static_cast<int>(vp_size.x));
-                    overhead_h = std::max(0, win_size.y - static_cast<int>(vp_size.y));
-                }
-
-                // Get current monitor bounds and leave a 10% safety margin
-                const glm::ivec2 mon_size = window_manager_->getCurrentMonitorSize();
-                const int max_vp_w = static_cast<int>(mon_size.x * 0.9f) - overhead_w;
-                const int max_vp_h = static_cast<int>(mon_size.y * 0.9f) - overhead_h;
-
-                // Determine target viewport size
-                int target_vp_w = img_w;
-                int target_vp_h = img_h;
-
-                // Scale down if it exceeds monitor bounds
-                if (target_vp_w > max_vp_w || target_vp_h > max_vp_h) {
-                    const float scale = std::min(static_cast<float>(max_vp_w) / target_vp_w,
-                                                 static_cast<float>(max_vp_h) / target_vp_h);
-                    target_vp_w = static_cast<int>(target_vp_w * scale);
-                    target_vp_h = static_cast<int>(target_vp_h * scale);
-                }
-
-                // Request window resize (viewport + overhead)
-                window_manager_->setWindowSize(target_vp_w + overhead_w, target_vp_h + overhead_h);
-                window_manager_->centerWindow();
+            int overhead_w = 0;
+            int overhead_h = 0;
+            if (gui_manager_) {
+                const auto win_size = window_manager_->getWindowSize();
+                const auto vp_size = gui_manager_->getViewportSize();
+                overhead_w = std::max(0, win_size.x - static_cast<int>(vp_size.x));
+                overhead_h = std::max(0, win_size.y - static_cast<int>(vp_size.y));
             }
+
+            constexpr float MONITOR_MARGIN = 0.9f;
+            const glm::ivec2 mon_size = window_manager_->getCurrentMonitorSize();
+            const int max_vp_w = static_cast<int>(mon_size.x * MONITOR_MARGIN) - overhead_w;
+            const int max_vp_h = static_cast<int>(mon_size.y * MONITOR_MARGIN) - overhead_h;
+
+            int target_w = cmd.width;
+            int target_h = cmd.height;
+            if (target_w > max_vp_w || target_h > max_vp_h) {
+                const float scale = std::min(static_cast<float>(max_vp_w) / target_w,
+                                             static_cast<float>(max_vp_h) / target_h);
+                target_w = static_cast<int>(target_w * scale);
+                target_h = static_cast<int>(target_h * scale);
+            }
+
+            window_manager_->setWindowSize(target_w + overhead_w, target_h + overhead_h);
+            window_manager_->centerWindow();
         });
 
         ui::PointCloudModeChanged::when([this](const auto&) {
