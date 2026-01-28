@@ -30,6 +30,7 @@ namespace lfs::vis {
 
         // Window operations
         void showWindow(); // Show window (call after initialization complete)
+        void setWindowSize(int width, int height);
         void updateWindowSize();
         void swapBuffers();
         void pollEvents();
@@ -45,6 +46,12 @@ namespace lfs::vis {
         glm::ivec2 getFramebufferSize() const { return framebuffer_size_; }
         bool isFullscreen() const { return is_fullscreen_; }
         void toggleFullscreen();
+
+        // Get the size of the monitor the window is currently on
+        glm::ivec2 getCurrentMonitorSize() const;
+
+        // Center the window on the current monitor
+        void centerWindow();
 
         // Set the callback handler (typically the viewer instance)
         void setCallbackHandler(void* handler) { callback_handler_ = handler; }

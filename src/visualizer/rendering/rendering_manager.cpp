@@ -7,6 +7,7 @@
 #include "core/image_io.hpp" // Use existing image_io utilities
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "geometry/euclidean_transform.hpp"
@@ -395,6 +396,17 @@ namespace lfs::vis {
                 ui::RenderSettingsChanged{.equirectangular = *restore_equirectangular}.emit();
             }
             ui::GTComparisonModeChanged{.enabled = is_now_enabled}.emit();
+
+            if (is_now_enabled) {
+                if (auto* const tm = services().trainerOrNull()) {
+                    if (const auto cam = tm->getCamById(current_camera_id_)) {
+                        const auto gt_info = gt_texture_cache_.getGTTexture(current_camera_id_, cam->image_path());
+                        if (gt_info.texture_id != 0) {
+                            cmd::ResizeWindow{.width = gt_info.width, .height = gt_info.height}.emit();
+                        }
+                    }
+                }
+            }
         });
 
         // Listen for camera view changes
@@ -406,6 +418,15 @@ namespace lfs::vis {
             if (settings_.split_view_mode == SplitViewMode::GTComparison && event.cam_id >= 0) {
                 LOG_INFO("Camera {} selected, GT comparison now active", event.cam_id);
                 markDirty();
+
+                if (auto* const tm = services().trainerOrNull()) {
+                    if (const auto cam = tm->getCamById(event.cam_id)) {
+                        const auto gt_info = gt_texture_cache_.getGTTexture(event.cam_id, cam->image_path());
+                        if (gt_info.texture_id != 0) {
+                            cmd::ResizeWindow{.width = gt_info.width, .height = gt_info.height}.emit();
+                        }
+                    }
+                }
             }
         });
 

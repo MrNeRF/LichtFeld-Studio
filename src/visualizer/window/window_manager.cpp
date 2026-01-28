@@ -113,6 +113,13 @@ namespace lfs::vis {
         }
     }
 
+    void WindowManager::setWindowSize(int width, int height) {
+        if (window_ && width > 0 && height > 0) {
+            glfwSetWindowSize(window_, width, height);
+            updateWindowSize();
+        }
+    }
+
     void WindowManager::updateWindowSize() {
         int winW, winH, fbW, fbH;
         glfwGetWindowSize(window_, &winW, &winH);
@@ -194,6 +201,82 @@ namespace lfs::vis {
 
         updateWindowSize();
         requestRedraw();
+    }
+
+    glm::ivec2 WindowManager::getCurrentMonitorSize() const {
+        if (!window_)
+            return {1280, 720};
+
+        // Get window position and size to find the center
+        int wx, wy, ww, wh;
+        glfwGetWindowPos(window_, &wx, &wy);
+        glfwGetWindowSize(window_, &ww, &wh);
+        const int cx = wx + ww / 2;
+        const int cy = wy + wh / 2;
+
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        int monitor_count = 0;
+        GLFWmonitor** const monitors = glfwGetMonitors(&monitor_count);
+
+        for (int i = 0; i < monitor_count; ++i) {
+            int mx = 0, my = 0;
+            glfwGetMonitorPos(monitors[i], &mx, &my);
+            const auto* const mode = glfwGetVideoMode(monitors[i]);
+            if (cx >= mx && cx < mx + mode->width && cy >= my && cy < my + mode->height) {
+                monitor = monitors[i];
+                break;
+            }
+        }
+
+        const auto* const mode = glfwGetVideoMode(monitor);
+        if (mode) {
+            return {mode->width, mode->height};
+        }
+        return {1280, 720};
+    }
+
+    void WindowManager::centerWindow() {
+        if (!window_)
+            return;
+
+        // Get current window size
+        int ww, wh;
+        glfwGetWindowSize(window_, &ww, &wh);
+
+        // Find the monitor the window is currently on
+        int wx, wy;
+        glfwGetWindowPos(window_, &wx, &wy);
+        const int cx = wx + ww / 2;
+        const int cy = wy + wh / 2;
+
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        int monitor_count = 0;
+        GLFWmonitor** const monitors = glfwGetMonitors(&monitor_count);
+
+        int mx = 0, my = 0, mw = 0, mh = 0;
+        for (int i = 0; i < monitor_count; ++i) {
+            int cur_mx, cur_my;
+            glfwGetMonitorPos(monitors[i], &cur_mx, &cur_my);
+            const auto* const mode = glfwGetVideoMode(monitors[i]);
+            if (cx >= cur_mx && cx < cur_mx + mode->width && cy >= cur_my && cy < cur_my + mode->height) {
+                monitor = monitors[i];
+                mx = cur_mx;
+                my = cur_my;
+                mw = mode->width;
+                mh = mode->height;
+                break;
+            }
+        }
+
+        if (mw == 0) {
+            const auto* const mode = glfwGetVideoMode(monitor);
+            glfwGetMonitorPos(monitor, &mx, &my);
+            mw = mode->width;
+            mh = mode->height;
+        }
+
+        // Center the window
+        glfwSetWindowPos(window_, mx + (mw - ww) / 2, my + (mh - wh) / 2);
     }
 
 } // namespace lfs::vis
