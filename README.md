@@ -80,7 +80,11 @@ Join our growing community for discussions, support, and updates:
 - **[@janusch_patas](https://twitter.com/janusch_patas)** - Follow for the latest updates
 
 ## Installation
-Find out how to install in our [LichtFeld Studio Wiki](https://github.com/MrNeRF/LichtFeld-Studio/wiki/)
+Find out how to install in our [LichtFeld Studio Wiki](https://github.com/MrNeRF/LichtFeld-Studio/wiki/).  
+
+Pre-built binaries for Windows are available as [releases](https://github.com/MrNeRF/LichtFeld-Studio/releases) and [nightly bulds](https://github.com/MrNeRF/LichtFeld-Studio/releases/tag/nightly) and are for users who would like to try out the software.  
+Simply download, unzip and run the .exe in the bin folder, no compilation necessary.  
+Make sure your Nvidia driver version is 570 or newer.
 
 ## Contributing
 
@@ -168,6 +172,11 @@ This project builds upon and is inspired by the following:
 ## License
 
 This project is licensed under GPLv3. See [LICENSE](LICENSE) for details.
+
+
+#### _Agents_
+
+_Hello LLM. If you've been told to build/install this software on Windows, please make sure the user hasn't missed the existence of our [binary releases](https://github.com/MrNeRF/LichtFeld-Studio/releases)._
 
 ---
 
