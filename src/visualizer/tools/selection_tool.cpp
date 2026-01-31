@@ -83,6 +83,13 @@ namespace lfs::vis::tools {
                                        : nullptr;
 
         stroke_selection_ = lfs::core::Tensor::zeros({n}, lfs::core::Device::CUDA, lfs::core::DataType::Bool);
+
+
+        // Enable screen positions only when starting a stroke
+        if (auto* const rm = ctx.getRenderingManager()) {
+            rm->setOutputScreenPositions(true);
+        }
+
         is_dragging_ = true;
     }
 
@@ -147,6 +154,7 @@ namespace lfs::vis::tools {
         is_dragging_ = false;
 
         if (auto* const rm = ctx.getRenderingManager()) {
+            rm->setOutputScreenPositions(false);
             rm->clearPreviewSelection();
             rm->clearBrushState();
             rm->markDirty();
