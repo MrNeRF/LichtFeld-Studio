@@ -123,6 +123,7 @@ namespace {
             // Optional flag arguments
             ::args::Flag enable_mip(parser, "enable_mip", "Enable mip filter (anti-aliasing)", {"enable-mip"});
             ::args::Flag use_bilateral_grid(parser, "bilateral_grid", "Enable bilateral grid filtering", {"bilateral-grid"});
+            ::args::Flag use_ppisp(parser, "ppisp", "Enable PPISP for per-camera appearance modeling", {"ppisp"});
             ::args::Flag ppisp_controller(parser, "ppisp_controller", "Enable PPISP controller for novel views", {"ppisp-controller"});
             ::args::Flag enable_eval(parser, "eval", "Enable evaluation during training", {"eval"});
             ::args::Flag headless(parser, "headless", "Disable visualization during training", {"headless"});
@@ -403,6 +404,7 @@ namespace {
                                         // Capture flag states
                                         enable_mip_flag = bool(enable_mip),
                                         use_bilateral_grid_flag = bool(use_bilateral_grid),
+                                        use_ppisp_flag = bool(use_ppisp),
                                         ppisp_controller_flag = bool(ppisp_controller),
                                         enable_eval_flag = bool(enable_eval),
                                         headless_flag = bool(headless),
@@ -456,7 +458,10 @@ namespace {
 
                 setFlag(enable_mip_flag, opt.mip_filter);
                 setFlag(use_bilateral_grid_flag, opt.use_bilateral_grid);
+                setFlag(use_ppisp_flag, opt.use_ppisp);
                 setFlag(ppisp_controller_flag, opt.ppisp_use_controller);
+                if (opt.ppisp_use_controller)
+                    opt.use_ppisp = true;
                 setFlag(enable_eval_flag, opt.enable_eval);
                 setFlag(headless_flag, opt.headless);
                 setFlag(auto_train_flag, opt.auto_train);
