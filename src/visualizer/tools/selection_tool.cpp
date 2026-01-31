@@ -83,7 +83,6 @@ namespace lfs::vis::tools {
                                        : nullptr;
 
         stroke_selection_ = lfs::core::Tensor::zeros({n}, lfs::core::Device::CUDA, lfs::core::DataType::Bool);
-
         is_dragging_ = true;
     }
 
