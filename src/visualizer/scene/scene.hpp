@@ -9,6 +9,7 @@
 #include "core/tensor.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller_pool.hpp"
+#include <cassert>
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>
@@ -296,7 +297,10 @@ namespace lfs::vis {
         void setValCameras(std::shared_ptr<lfs::training::CameraDataset> dataset);
         void setInitialPointCloud(std::shared_ptr<lfs::core::PointCloud> point_cloud);
         void setSceneCenter(lfs::core::Tensor scene_center);
-        void setSceneScale(float scale) { scene_scale_ = scale; }
+        void setSceneScale(float scale) {
+            assert(scale > 0.f);
+            scene_scale_ = scale;
+        }
 
         [[nodiscard]] std::shared_ptr<lfs::training::CameraDataset> getTrainCameras() const { return train_cameras_; }
         [[nodiscard]] std::shared_ptr<lfs::training::CameraDataset> getValCameras() const { return val_cameras_; }

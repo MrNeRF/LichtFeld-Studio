@@ -8,6 +8,7 @@
 #include "core/path_utils.hpp"
 #include "io/filesystem_utils.hpp"
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstring>
 #include <exception>
@@ -862,6 +863,7 @@ namespace lfs::io {
         const Tensor cam_pos_tensor = Tensor::from_vector(camera_positions, {images.size(), 3}, Device::CPU);
         const Tensor scene_center = cam_pos_tensor.mean({0}, false);
         const float scene_scale = cam_pos_tensor.sub(scene_center).norm(2.0f, {1}, false).max().item();
+        assert(scene_scale > 0.f);
 
         LOG_INFO("Loaded {} cameras, scene_scale={:.4f}", cameras.size(), scene_scale);
 

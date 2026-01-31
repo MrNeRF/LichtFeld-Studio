@@ -153,12 +153,11 @@ namespace lfs::core {
 
     // ========== Free function: Factory ==========
 
-    /// If scene_scale > 0, uses it directly; otherwise falls back to median point distance.
     std::expected<SplatData, std::string> init_model_from_pointcloud(
         const param::TrainingParameters& params,
         Tensor scene_center,
         const PointCloud& point_cloud,
-        int capacity = 0,
-        float scene_scale = 0.f);
+        float scene_scale,
+        int capacity = 0);
 
 } // namespace lfs::core

@@ -9,6 +9,7 @@
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "nanoflann.hpp"
 
+#include <cassert>
 #include <cmath>
 #include <expected>
 #include <format>
@@ -466,8 +467,10 @@ namespace lfs::core {
         const param::TrainingParameters& params,
         Tensor scene_center,
         const PointCloud& pcd,
-        int capacity,
-        float scene_scale) {
+        float scene_scale,
+        int capacity) {
+
+        assert(scene_scale > 0.f);
 
         try {
             LOG_DEBUG("=== init_model_from_pointcloud starting ===");
@@ -528,13 +531,6 @@ namespace lfs::core {
             }
 
             const auto scene_center_device = scene_center.to(positions.device());
-
-            if (scene_scale <= 0.f) {
-                const Tensor dists = positions.sub(scene_center_device).norm(2.0f, {1}, false);
-                const auto sorted_dists = dists.sort(0, false);
-                scene_scale = sorted_dists.first[dists.size(0) / 2].item();
-                LOG_INFO("Fallback scene_scale from median point distance: {:.4f}", scene_scale);
-            }
 
             // RGB to SH conversion (DC component)
             auto rgb_to_sh = [](const Tensor& rgb) {
