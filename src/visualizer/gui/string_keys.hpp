@@ -218,6 +218,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* STEPS_SCALER = "training.tooltip.steps_scaler";
             inline constexpr const char* BILATERAL_GRID = "training.tooltip.bilateral_grid";
             inline constexpr const char* MASK_MODE = "training.tooltip.mask_mode";
+            inline constexpr const char* USE_ALPHA_AS_MASK = "training.tooltip.use_alpha_as_mask";
             inline constexpr const char* SPARSITY = "training.tooltip.sparsity";
             inline constexpr const char* GUT = "training.tooltip.gut";
             inline constexpr const char* BG_MODULATION = "training.tooltip.bg_modulation";
@@ -739,6 +740,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* OPACITY_PENALTY_WEIGHT = "training_params.opacity_penalty_weight";
         inline constexpr const char* OPACITY_PENALTY_POWER = "training_params.opacity_penalty_power";
         inline constexpr const char* MASK_THRESHOLD = "training_params.mask_threshold";
+        inline constexpr const char* USE_ALPHA_AS_MASK = "training_params.use_alpha_as_mask";
         inline constexpr const char* SPARSITY = "training_params.sparsity";
         inline constexpr const char* GUT = "training_params.gut";
         inline constexpr const char* MIP_FILTER = "training_params.mip_filter";

@@ -226,6 +226,12 @@ namespace lfs::training {
             return {};
         }
 
+        const bool alpha_available = scene_ && scene_->imagesHaveAlpha();
+        if (opt.use_alpha_as_mask && alpha_available) {
+            LOG_INFO("Using alpha channel as mask source{}", opt.invert_masks ? " (inverted)" : "");
+            return {};
+        }
+
         size_t masks_found = 0;
         for (const auto& cam : train_dataset_->get_cameras()) {
             if (cam && cam->has_mask()) {
@@ -1175,7 +1181,8 @@ namespace lfs::training {
                 lfs::core::Tensor tile_grad;
                 lfs::core::Tensor tile_grad_alpha; // Gradient for alpha (from mask penalty)
 
-                const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None && cam->has_mask();
+                const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None &&
+                                    (cam->has_mask() || (params_.optimization.use_alpha_as_mask && scene_ && scene_->imagesHaveAlpha()));
                 if (use_mask) {
                     // Use pipelined mask if available, otherwise load from camera (fallback for validation, etc.)
                     lfs::core::Tensor mask;
@@ -1561,14 +1568,20 @@ namespace lfs::training {
                 LOG_INFO("{:.0f}% non-JPEG images, using {} cold threads", non_jpeg_ratio * 100.0f, cold_threads);
             }
 
-            // Configure mask loading if masks are enabled
+            const bool alpha_available = scene_ && scene_->imagesHaveAlpha();
             PipelinedMaskConfig mask_pipeline_config;
             if (params_.optimization.mask_mode != lfs::core::param::MaskMode::None) {
-                mask_pipeline_config.load_masks = true;
                 mask_pipeline_config.invert_masks = params_.optimization.invert_masks;
                 mask_pipeline_config.mask_threshold = params_.optimization.mask_threshold;
-                LOG_INFO("Mask loading enabled in pipeline (invert={}, threshold={})",
-                         mask_pipeline_config.invert_masks, mask_pipeline_config.mask_threshold);
+                if (params_.optimization.use_alpha_as_mask && alpha_available) {
+                    mask_pipeline_config.use_alpha_as_mask = true;
+                    LOG_INFO("Alpha-as-mask enabled (invert={}, threshold={})",
+                             mask_pipeline_config.invert_masks, mask_pipeline_config.mask_threshold);
+                } else {
+                    mask_pipeline_config.load_masks = true;
+                    LOG_INFO("Mask file loading enabled (invert={}, threshold={})",
+                             mask_pipeline_config.invert_masks, mask_pipeline_config.mask_threshold);
+                }
             }
 
             auto train_dataloader = create_infinite_pipelined_dataloader(

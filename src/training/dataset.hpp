@@ -502,9 +502,10 @@ namespace lfs::training {
 
     /// Configuration for mask loading in PipelinedDataLoader
     struct PipelinedMaskConfig {
-        bool load_masks = false;     // Whether to load masks alongside images
-        bool invert_masks = false;   // Invert mask values (1.0 - mask)
-        float mask_threshold = 0.0f; // If > 0, values >= threshold become 1.0
+        bool load_masks = false;          // Whether to load masks alongside images
+        bool invert_masks = false;        // Invert mask values (1.0 - mask)
+        float mask_threshold = 0.0f;      // If > 0, values >= threshold become 1.0
+        bool use_alpha_as_mask = false;   // Extract alpha channel from RGBA as mask
     };
 
     // Pipelined DataLoader with GPU batch JPEG decoding
@@ -606,8 +607,11 @@ namespace lfs::training {
                 request.params.resize_factor = dataset_->get_resize_factor();
                 request.params.max_width = dataset_->get_max_width();
 
-                // Add mask if configured and camera has one
-                if (mask_config_.load_masks && cam->has_mask()) {
+                if (mask_config_.use_alpha_as_mask) {
+                    request.extract_alpha_as_mask = true;
+                    request.alpha_mask_params.invert = mask_config_.invert_masks;
+                    request.alpha_mask_params.threshold = mask_config_.mask_threshold;
+                } else if (mask_config_.load_masks && cam->has_mask()) {
                     request.mask_path = cam->mask_path();
                     request.mask_params.invert = mask_config_.invert_masks;
                     request.mask_params.threshold = mask_config_.mask_threshold;

@@ -25,6 +25,15 @@ namespace lfs::io::cuda {
         size_t width,
         cudaStream_t stream = nullptr);
 
+    // Split uint8 RGBA [H,W,4] into float32 RGB [3,H,W] + float32 alpha [H,W], normalized [0,1]
+    void launch_uint8_rgba_split_to_float32_rgb_and_alpha(
+        const uint8_t* input,
+        float* rgb_output,
+        float* alpha_output,
+        size_t height,
+        size_t width,
+        cudaStream_t stream = nullptr);
+
     // In-place mask inversion: mask = 1.0 - mask
     void launch_mask_invert(
         float* data,

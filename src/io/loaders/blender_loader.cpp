@@ -213,6 +213,12 @@ namespace lfs::io {
                 }
             }
 
+            bool images_have_alpha = false;
+            if (!cameras.empty()) {
+                const auto [_, __, c] = lfs::core::get_image_info(cameras[0]->image_path());
+                images_have_alpha = (c == 4);
+            }
+
             // Create dataset configuration
             lfs::training::DatasetConfig dataset_config;
             dataset_config.resize_factor = options.resize_factor;
@@ -276,6 +282,7 @@ namespace lfs::io {
                     .point_cloud = std::move(point_cloud)},
                 .scene_center = scene_center,
                 .scene_scale = scene_scale,
+                .images_have_alpha = images_have_alpha,
                 .loader_used = name(),
                 .load_time = load_time,
                 .warnings = std::move(warnings)};

@@ -113,6 +113,7 @@ namespace lfs::core {
             opt_json["mask_opacity_penalty_weight"] = mask_opacity_penalty_weight;
             opt_json["mask_opacity_penalty_power"] = mask_opacity_penalty_power;
             opt_json["mask_threshold"] = mask_threshold;
+            opt_json["use_alpha_as_mask"] = use_alpha_as_mask;
 
             return opt_json;
         }
@@ -345,6 +346,9 @@ namespace lfs::core {
             }
             if (json.contains("mask_threshold")) {
                 params.mask_threshold = json["mask_threshold"];
+            }
+            if (json.contains("use_alpha_as_mask")) {
+                params.use_alpha_as_mask = json["use_alpha_as_mask"];
             }
 
             return params;

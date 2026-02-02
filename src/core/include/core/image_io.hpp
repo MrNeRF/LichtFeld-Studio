@@ -19,7 +19,7 @@ namespace lfs::core {
     std::tuple<int, int, int>
     get_image_info(std::filesystem::path p);
     std::tuple<unsigned char*, int, int, int>
-    load_image_with_alpha(std::filesystem::path p);
+    load_image_with_alpha(std::filesystem::path p, int res_div = -1, int max_width = 3840);
     std::tuple<unsigned char*, int, int, int>
     load_image_from_memory(const uint8_t* data, size_t size);
 

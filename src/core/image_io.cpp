@@ -32,28 +32,32 @@ namespace {
         });
     }
 
-    // Downscale (resample) to (nw, nh). Returns newly malloc’ed RGB buffer.
-    static inline unsigned char* downscale_resample_direct(const unsigned char* src_rgb,
-                                                           int w, int h, int nw, int nh,
-                                                           int nthreads /* 0=auto, 1=single */) {
-        // Allocate destination first
-        size_t outbytes = (size_t)nw * nh * 3;
+    static inline unsigned char* downscale_resample_nch(const unsigned char* src,
+                                                          int w, int h, int nw, int nh,
+                                                          int channels,
+                                                          int nthreads /* 0=auto, 1=single */) {
+        size_t outbytes = (size_t)nw * nh * channels;
         auto* out = static_cast<unsigned char*>(std::malloc(outbytes));
         if (!out)
             throw std::bad_alloc();
 
-        // Wrap src & dst without extra allocations/copies
-        OIIO::ImageBuf srcbuf(OIIO::ImageSpec(w, h, 3, OIIO::TypeDesc::UINT8),
-                              const_cast<unsigned char*>(src_rgb));
-        OIIO::ImageBuf dstbuf(OIIO::ImageSpec(nw, nh, 3, OIIO::TypeDesc::UINT8), out);
+        OIIO::ImageBuf srcbuf(OIIO::ImageSpec(w, h, channels, OIIO::TypeDesc::UINT8),
+                              const_cast<unsigned char*>(src));
+        OIIO::ImageBuf dstbuf(OIIO::ImageSpec(nw, nh, channels, OIIO::TypeDesc::UINT8), out);
 
-        OIIO::ROI roi(0, nw, 0, nh, 0, 1, 0, 3);
+        OIIO::ROI roi(0, nw, 0, nh, 0, 1, 0, channels);
         if (!OIIO::ImageBufAlgo::resample(dstbuf, srcbuf, /*interpolate=*/true, roi, nthreads)) {
             std::string err = dstbuf.geterror();
             std::free(out);
             throw std::runtime_error(std::string("Resample failed: ") + (err.empty() ? "unknown" : err));
         }
-        return out; // already filled
+        return out;
+    }
+
+    static inline unsigned char* downscale_resample_direct(const unsigned char* src_rgb,
+                                                           int w, int h, int nw, int nh,
+                                                           int nthreads /* 0=auto, 1=single */) {
+        return downscale_resample_nch(src_rgb, w, h, nw, nh, 3, nthreads);
     }
 
 } // namespace
@@ -77,7 +81,7 @@ namespace lfs::core {
     }
 
     std::tuple<unsigned char*, int, int, int>
-    load_image_with_alpha(std::filesystem::path p) {
+    load_image_with_alpha(std::filesystem::path p, int res_div, int max_width) {
         init_oiio();
 
         const std::string path_utf8 = lfs::core::path_to_utf8(p);
@@ -86,36 +90,56 @@ namespace lfs::core {
             throw std::runtime_error("Load failed: " + path_utf8 + " : " + OIIO::geterror());
 
         const OIIO::ImageSpec& spec = in->spec();
-        int w = spec.width, h = spec.height, file_c = spec.nchannels;
+        const int w = spec.width, h = spec.height, channels = spec.nchannels;
 
-        auto finish = [&](unsigned char* data, int W, int H, int C) {
-            in->close();
-            return std::make_tuple(data, W, H, C);
-        };
-
-        // Fast path: read 4 channels directly
-        if (file_c == 4) {
-            // allocate and read directly into final RGB buffer
-            auto* out = static_cast<unsigned char*>(std::malloc((size_t)w * h * 4));
-            if (!out) {
-                in->close();
-                throw std::bad_alloc();
-            }
-
-            if (!in->read_image(/*subimage*/ 0, /*miplevel*/ 0,
-                                /*chbegin*/ 0, /*chend*/ 4,
-                                OIIO::TypeDesc::UINT8, out)) {
-                std::string e = in->geterror();
-                std::free(out);
-                in->close();
-                throw std::runtime_error("Read failed: " + path_utf8 + (e.empty() ? "" : (" : " + e)));
-            }
-            return finish(out, w, h, 4);
-        } else {
-            LOG_ERROR("load_image_with_alpha: image does not contain alpha channel -  alpha channels found: {}", file_c);
+        if (channels != 4) {
+            LOG_ERROR("load_image_with_alpha: expected 4 channels, got {}", channels);
             in->close();
             return std::make_tuple(nullptr, 0, 0, 0);
         }
+
+        auto* out = static_cast<unsigned char*>(std::malloc((size_t)w * h * 4));
+        if (!out) {
+            in->close();
+            throw std::bad_alloc();
+        }
+
+        if (!in->read_image(0, 0, 0, 4, OIIO::TypeDesc::UINT8, out)) {
+            std::string e = in->geterror();
+            std::free(out);
+            in->close();
+            throw std::runtime_error("Read failed: " + path_utf8 + (e.empty() ? "" : (" : " + e)));
+        }
+        in->close();
+
+        int nw = w, nh = h;
+        if (res_div == 2 || res_div == 4 || res_div == 8) {
+            nw = std::max(1, w / res_div);
+            nh = std::max(1, h / res_div);
+        }
+        if (max_width > 0 && (nw > max_width || nh > max_width)) {
+            if (nw > nh) {
+                nh = std::max(1, max_width * nh / nw);
+                nw = max_width;
+            } else {
+                nw = std::max(1, max_width * nw / nh);
+                nh = max_width;
+            }
+        }
+
+        if (nw != w || nh != h) {
+            unsigned char* resized = nullptr;
+            try {
+                resized = downscale_resample_nch(out, w, h, nw, nh, 4, 0);
+            } catch (...) {
+                std::free(out);
+                throw;
+            }
+            std::free(out);
+            return {resized, nw, nh, 4};
+        }
+
+        return {out, w, h, 4};
     }
 
     std::tuple<unsigned char*, int, int, int>

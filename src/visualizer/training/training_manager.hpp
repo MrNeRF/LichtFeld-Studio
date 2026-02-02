@@ -49,6 +49,7 @@ namespace lfs::vis {
 
         // Link to scene for data access (Scene-based trainer mode)
         void setScene(Scene* scene) { scene_ = scene; }
+        [[nodiscard]] const Scene* getScene() const { return scene_; }
 
         // Training control
         bool startTraining();

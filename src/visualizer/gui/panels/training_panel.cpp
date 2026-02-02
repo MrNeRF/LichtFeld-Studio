@@ -1167,6 +1167,9 @@ namespace lfs::vis::gui::panels {
             }
         }
 
+        const auto* scene = trainer_manager->getScene();
+        const bool has_alpha = scene && scene->imagesHaveAlpha();
+
         ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 12.0f);
         if (ImGui::BeginTable("DatasetTable", 2, ImGuiTableFlags_SizingStretchProp)) {
             ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthFixed, 120.0f);
@@ -1346,7 +1349,7 @@ namespace lfs::vis::gui::panels {
             ImGui::Text("%s", LOC(TrainingParams::MASK_MODE));
             ImGui::TableNextColumn();
             static constexpr const char* const MASK_MODE_LABELS[] = {"None", "Segment", "Ignore", "Alpha Consistent"};
-            if (can_edit && has_masks) {
+            if (can_edit && (has_masks || has_alpha)) {
                 ImGui::PushItemWidth(-1);
                 int current_mask_mode = static_cast<int>(opt_params.mask_mode);
                 if (ImGui::Combo("##mask_mode", &current_mask_mode, MASK_MODE_LABELS, IM_ARRAYSIZE(MASK_MODE_LABELS))) {
@@ -1355,7 +1358,7 @@ namespace lfs::vis::gui::panels {
                 ImGui::PopItemWidth();
             } else {
                 ImGui::Text("%s", MASK_MODE_LABELS[static_cast<int>(opt_params.mask_mode)]);
-                if (!has_masks && can_edit) {
+                if (!has_masks && !has_alpha && can_edit) {
                     ImGui::SameLine();
                     ImGui::TextColored(ImVec4(0.5f, 0.5f, 0.5f, 1.0f), "(no masks)");
                 }
@@ -1364,7 +1367,22 @@ namespace lfs::vis::gui::panels {
                 widgets::SetThemedTooltip("%s", LOC(Training::Tooltip::MASK_MODE));
             }
 
-            if (opt_params.mask_mode != lfs::core::param::MaskMode::None && has_masks) {
+            if (opt_params.mask_mode != lfs::core::param::MaskMode::None && has_alpha) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("%s", LOC(TrainingParams::USE_ALPHA_AS_MASK));
+                ImGui::TableNextColumn();
+                if (can_edit) {
+                    ImGui::Checkbox("##use_alpha_as_mask", &opt_params.use_alpha_as_mask);
+                } else {
+                    ImGui::Text("%s", opt_params.use_alpha_as_mask ? "Yes" : "No");
+                }
+                if (ImGui::IsItemHovered()) {
+                    widgets::SetThemedTooltip("%s", LOC(Training::Tooltip::USE_ALPHA_AS_MASK));
+                }
+            }
+
+            if (opt_params.mask_mode != lfs::core::param::MaskMode::None && (has_masks || has_alpha)) {
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::Text("%s", LOC(TrainingParams::INVERT_MASKS));

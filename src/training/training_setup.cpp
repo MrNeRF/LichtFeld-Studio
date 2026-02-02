@@ -91,6 +91,7 @@ namespace lfs::training {
                 scene.setInitialPointCloud(data.point_cloud);
                 scene.setSceneCenter(load_result->scene_center);
                 scene.setSceneScale(load_result->scene_scale);
+                scene.setImagesHaveAlpha(load_result->images_have_alpha);
 
                 // Create dataset hierarchy:
                 // [Dataset] bicycle
@@ -451,6 +452,7 @@ namespace lfs::training {
                 scene.setInitialPointCloud(data.point_cloud);
                 scene.setSceneCenter(load_result.scene_center);
                 scene.setSceneScale(load_result.scene_scale);
+                scene.setImagesHaveAlpha(load_result.images_have_alpha);
 
                 std::string dataset_name = lfs::core::path_to_utf8(params.dataset.data_path.filename());
                 if (dataset_name.empty()) {

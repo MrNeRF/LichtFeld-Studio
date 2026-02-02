@@ -147,6 +147,7 @@ namespace {
                                                                                    {"ignore", lfs::core::param::MaskMode::Ignore},
                                                                                    {"alpha_consistent", lfs::core::param::MaskMode::AlphaConsistent}});
             ::args::Flag invert_masks(parser, "invert_masks", "Invert mask values (swap object/background)", {"invert-masks"});
+            ::args::Flag no_alpha_as_mask(parser, "no_alpha_as_mask", "Disable automatic alpha-as-mask for RGBA images", {"no-alpha-as-mask"});
 
             ::args::MapFlag<std::string, int> resize_factor(parser, "resize_factor",
                                                             "resize resolution by this factor. Options: auto, 1, 2, 4, 8 (default: auto)",
@@ -416,7 +417,8 @@ namespace {
                                         random_flag = bool(random),
                                         gut_flag = bool(gut),
                                         enable_sparsity_flag = bool(enable_sparsity),
-                                        invert_masks_flag = bool(invert_masks)]() {
+                                        invert_masks_flag = bool(invert_masks),
+                                        no_alpha_as_mask_flag = bool(no_alpha_as_mask)]() {
                 auto& opt = params.optimization;
                 auto& ds = params.dataset;
 
@@ -476,6 +478,8 @@ namespace {
                 // Mask parameters
                 setVal(mask_mode_val, opt.mask_mode);
                 setFlag(invert_masks_flag, opt.invert_masks);
+                if (no_alpha_as_mask_flag)
+                    opt.use_alpha_as_mask = false;
                 // Also propagate to dataset config for loading
                 ds.invert_masks = opt.invert_masks;
                 ds.mask_threshold = opt.mask_threshold;

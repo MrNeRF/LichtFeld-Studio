@@ -67,6 +67,7 @@ namespace lfs::core {
             float mask_threshold = 0.5f;              // Threshold: >= threshold → 1.0, < threshold → keep original
             float mask_opacity_penalty_weight = 1.0f; // Opacity penalty weight for segment mode
             float mask_opacity_penalty_power = 2.0f;  // Penalty falloff (1=linear, 2=quadratic)
+            bool use_alpha_as_mask = true;             // Auto-use alpha channel from RGBA images as mask
 
             // Mip filter (anti-aliasing)
             bool mip_filter = false;

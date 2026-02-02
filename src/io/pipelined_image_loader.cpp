@@ -242,13 +242,10 @@ namespace lfs::io {
 
     std::string PipelinedImageLoader::make_mask_cache_key(
         const std::filesystem::path& path,
-        const LoadParams& params,
-        const MaskParams& mask_params) const {
+        const LoadParams& params) const {
         return lfs::core::path_to_utf8(path) +
-               ":rf" + std::to_string(params.resize_factor) +
-               "_mw" + std::to_string(params.max_width) +
-               "_inv" + std::to_string(mask_params.invert ? 1 : 0) +
-               "_th" + std::to_string(static_cast<int>(mask_params.threshold * 100));
+               ":mask_rf" + std::to_string(params.resize_factor) +
+               "_mw" + std::to_string(params.max_width);
     }
 
     std::filesystem::path PipelinedImageLoader::get_fs_cache_path(const std::string& cache_key) const {
@@ -395,7 +392,52 @@ namespace lfs::io {
 
             {
                 std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
-                pending_pairs_[request.sequence_id].mask_expected = request.mask_path.has_value();
+                pending_pairs_[request.sequence_id].mask_expected =
+                    request.mask_path.has_value() || request.extract_alpha_as_mask;
+            }
+
+            if (request.extract_alpha_as_mask) {
+                const auto rgb_key = make_cache_key(request.path, request.params);
+                const auto alpha_key = make_mask_cache_key(request.path, request.params);
+                auto cached_rgb = get_from_jpeg_cache(rgb_key);
+                auto cached_alpha = get_from_jpeg_cache(alpha_key);
+
+                if (cached_rgb && cached_alpha) {
+                    PrefetchedImage img_item;
+                    img_item.sequence_id = request.sequence_id;
+                    img_item.path = request.path;
+                    img_item.cache_key = rgb_key;
+                    img_item.jpeg_data = cached_rgb;
+                    img_item.is_cache_hit = true;
+                    hot_queue_.push(std::move(img_item));
+
+                    PrefetchedImage mask_item;
+                    mask_item.sequence_id = request.sequence_id;
+                    mask_item.path = request.path;
+                    mask_item.cache_key = alpha_key;
+                    mask_item.jpeg_data = cached_alpha;
+                    mask_item.is_mask = true;
+                    mask_item.mask_params = request.alpha_mask_params;
+                    mask_item.is_cache_hit = true;
+                    hot_queue_.push(std::move(mask_item));
+
+                    std::lock_guard<std::mutex> lock(stats_mutex_);
+                    ++stats_.hot_path_hits;
+                } else {
+                    PrefetchedImage result;
+                    result.sequence_id = request.sequence_id;
+                    result.path = request.path;
+                    result.params = request.params;
+                    result.cache_key = rgb_key;
+                    result.alpha_as_mask = true;
+                    result.alpha_mask_params = request.alpha_mask_params;
+                    result.needs_processing = true;
+
+                    cold_queue_.push(std::move(result));
+                    std::lock_guard<std::mutex> lock(stats_mutex_);
+                    ++stats_.cold_path_misses;
+                }
+                continue;
             }
 
             PrefetchedImage result;
@@ -492,7 +534,7 @@ namespace lfs::io {
                 mask_result.sequence_id = request.sequence_id;
                 mask_result.path = *request.mask_path;
                 mask_result.params = request.params;
-                mask_result.cache_key = make_mask_cache_key(*request.mask_path, request.params, request.mask_params);
+                mask_result.cache_key = make_mask_cache_key(*request.mask_path, request.params);
                 mask_result.is_mask = true;
                 mask_result.mask_params = request.mask_params;
 
@@ -718,7 +760,65 @@ namespace lfs::io {
             try {
                 auto& nvcodec = get_nvcodec_loader();
 
-                if (item.is_mask) {
+                if (item.alpha_as_mask) {
+                    auto [img_data, width, height, channels] = lfs::core::load_image_with_alpha(
+                        item.path, item.params.resize_factor, item.params.max_width);
+
+                    if (!img_data || channels != 4)
+                        throw std::runtime_error("Failed to load RGBA image");
+
+                    const size_t H = static_cast<size_t>(height);
+                    const size_t W = static_cast<size_t>(width);
+
+                    auto cpu_tensor = lfs::core::Tensor::from_blob(
+                        img_data, lfs::core::TensorShape({H, W, 4}),
+                        lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+                    auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
+                    lfs::core::free_image(img_data);
+
+                    auto rgb = lfs::core::Tensor::zeros(
+                        lfs::core::TensorShape({3, H, W}),
+                        lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                    auto alpha = lfs::core::Tensor::zeros(
+                        lfs::core::TensorShape({H, W}),
+                        lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+
+                    cuda::launch_uint8_rgba_split_to_float32_rgb_and_alpha(
+                        gpu_uint8.ptr<uint8_t>(), rgb.ptr<float>(), alpha.ptr<float>(),
+                        H, W, nullptr);
+
+                    gpu_uint8 = lfs::core::Tensor();
+
+                    if (is_nvcodec_available()) {
+                        try {
+                            auto rgb_jpeg = nvcodec.encode_to_jpeg(rgb, config_.cache_jpeg_quality, nullptr);
+                            put_in_jpeg_cache(item.cache_key,
+                                              std::make_shared<std::vector<uint8_t>>(std::move(rgb_jpeg)));
+
+                            const auto alpha_key = make_mask_cache_key(item.path, item.params);
+                            auto alpha_jpeg = nvcodec.encode_grayscale_to_jpeg(
+                                alpha, config_.cache_jpeg_quality, nullptr);
+                            put_in_jpeg_cache(alpha_key,
+                                              std::make_shared<std::vector<uint8_t>>(std::move(alpha_jpeg)));
+                        } catch (const std::exception&) {
+                        }
+                    }
+
+                    float* const alpha_ptr = alpha.ptr<float>();
+                    if (item.alpha_mask_params.invert) {
+                        cuda::launch_mask_invert(alpha_ptr, H, W, nullptr);
+                    }
+                    if (item.alpha_mask_params.threshold > 0) {
+                        cuda::launch_mask_threshold(alpha_ptr, H, W, item.alpha_mask_params.threshold, nullptr);
+                    }
+
+                    if (const cudaError_t err = cudaStreamSynchronize(nullptr); err != cudaSuccess) {
+                        throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
+                    }
+
+                    try_complete_pair(item.sequence_id, std::move(rgb), std::move(alpha), nullptr);
+
+                } else if (item.is_mask) {
                     lfs::core::Tensor mask_tensor;
                     bool used_gpu = false;
 
@@ -769,22 +869,12 @@ namespace lfs::io {
                             cuda::launch_uint8_hw_to_float32_hw(
                                 gpu_uint8.ptr<uint8_t>(), mask_tensor.ptr<float>(), target_h, target_w, nullptr);
                         }
-                        cudaDeviceSynchronize();
+                        cudaStreamSynchronize(nullptr);
                     }
 
                     const size_t H = mask_tensor.shape()[0];
                     const size_t W = mask_tensor.shape()[1];
                     float* const mask_ptr = static_cast<float*>(mask_tensor.data_ptr());
-
-                    if (item.mask_params.invert) {
-                        cuda::launch_mask_invert(mask_ptr, H, W, nullptr);
-                    }
-                    if (item.mask_params.threshold > 0) {
-                        cuda::launch_mask_threshold(mask_ptr, H, W, item.mask_params.threshold, nullptr);
-                    }
-                    if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
-                        throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
-                    }
 
                     if (is_nvcodec_available()) {
                         try {
@@ -794,6 +884,16 @@ namespace lfs::io {
                                               std::make_shared<std::vector<uint8_t>>(std::move(jpeg_bytes)));
                         } catch (const std::exception&) {
                         }
+                    }
+
+                    if (item.mask_params.invert) {
+                        cuda::launch_mask_invert(mask_ptr, H, W, nullptr);
+                    }
+                    if (item.mask_params.threshold > 0) {
+                        cuda::launch_mask_threshold(mask_ptr, H, W, item.mask_params.threshold, nullptr);
+                    }
+                    if (const cudaError_t err = cudaStreamSynchronize(nullptr); err != cudaSuccess) {
+                        throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
                     }
 
                     try_complete_pair(item.sequence_id, std::nullopt, std::move(mask_tensor), nullptr);
@@ -858,7 +958,47 @@ namespace lfs::io {
                 }
 
             } catch (const std::exception& e) {
-                if (item.is_mask) {
+                if (item.alpha_as_mask) {
+                    LOG_WARN("[PipelinedImageLoader] Alpha-as-mask failed {}: {} - loading as RGB",
+                             lfs::core::path_to_utf8(item.path), e.what());
+                    try {
+                        auto [img_data, width, height, channels] = lfs::core::load_image(
+                            item.path, item.params.resize_factor, item.params.max_width);
+                        if (!img_data)
+                            throw std::runtime_error("RGB fallback also failed");
+
+                        const size_t H = static_cast<size_t>(height);
+                        const size_t W = static_cast<size_t>(width);
+                        const size_t C = static_cast<size_t>(channels);
+
+                        auto cpu_tensor = lfs::core::Tensor::from_blob(
+                            img_data, lfs::core::TensorShape({H, W, C}),
+                            lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+                        auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
+                        lfs::core::free_image(img_data);
+
+                        auto decoded = lfs::core::Tensor::zeros(
+                            lfs::core::TensorShape({C, H, W}),
+                            lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                        cuda::launch_uint8_hwc_to_float32_chw(
+                            gpu_uint8.ptr<uint8_t>(), decoded.ptr<float>(), H, W, C, nullptr);
+                        cudaStreamSynchronize(nullptr);
+
+                        {
+                            std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
+                            if (auto it = pending_pairs_.find(item.sequence_id); it != pending_pairs_.end()) {
+                                it->second.mask_expected = false;
+                            }
+                        }
+                        try_complete_pair(item.sequence_id, std::move(decoded), std::nullopt, nullptr);
+                    } catch (const std::exception& e2) {
+                        LOG_ERROR("[PipelinedImageLoader] RGB fallback also failed {}: {}",
+                                  lfs::core::path_to_utf8(item.path), e2.what());
+                        std::lock_guard<std::mutex> lock(pending_pairs_mutex_);
+                        pending_pairs_.erase(item.sequence_id);
+                        in_flight_.fetch_sub(1, std::memory_order_acq_rel);
+                    }
+                } else if (item.is_mask) {
                     LOG_WARN("[PipelinedImageLoader] Cold process mask error {}: {} - continuing without mask",
                              lfs::core::path_to_utf8(item.path), e.what());
                     // Mark mask as no longer expected so image can still be delivered

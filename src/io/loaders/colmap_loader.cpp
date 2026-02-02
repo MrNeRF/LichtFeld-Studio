@@ -4,6 +4,7 @@
 
 #include "io/loaders/colmap_loader.hpp"
 #include "core/camera.hpp"
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/point_cloud.hpp"
 #include "formats/colmap.hpp"
@@ -200,6 +201,12 @@ namespace lfs::io {
 
             LOG_DEBUG("Creating {} camera objects", cameras.size());
 
+            bool images_have_alpha = false;
+            if (!cameras.empty()) {
+                const auto [_, __, c] = lfs::core::get_image_info(cameras[0]->image_path());
+                images_have_alpha = (c == 4);
+            }
+
             // Create dataset configuration
             lfs::training::DatasetConfig dataset_config;
             dataset_config.resize_factor = options.resize_factor;
@@ -250,6 +257,7 @@ namespace lfs::io {
                     .point_cloud = std::move(point_cloud)},
                 .scene_center = scene_center,
                 .scene_scale = scene_scale,
+                .images_have_alpha = images_have_alpha,
                 .loader_used = name(),
                 .load_time = load_time,
                 .warnings = (has_points || has_points_text) ? std::vector<std::string>{} : std::vector<std::string>{"No sparse point cloud found - using random initialization"}};
