@@ -16,6 +16,7 @@ find_package(nanobind CONFIG REQUIRED)
 # when linked into both the main executable and the Python module
 add_library(lfs_python_runtime SHARED
     python_runtime.cpp
+    ../visualizer/gui/localization_manager.cpp
 )
 
 target_include_directories(lfs_python_runtime
@@ -28,6 +29,9 @@ target_include_directories(lfs_python_runtime
 target_link_libraries(lfs_python_runtime
     PUBLIC
         Python::Python
+        nlohmann_json::nlohmann_json
+        spdlog::spdlog
+        lfs_core
 )
 
 target_compile_definitions(lfs_python_runtime

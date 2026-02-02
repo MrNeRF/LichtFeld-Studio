@@ -29,7 +29,6 @@ add_library(lfs_visualizer STATIC
         gui/gizmo_transform.cpp
         gui/html_viewer_export.cpp
         gui/ui_widgets.cpp
-        gui/localization_manager.cpp
         gui/panels/windows_console_utils.cpp
         gui/panels/tools_panel.cpp
         gui/panels/python_console_panel.cpp

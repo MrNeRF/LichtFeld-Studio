@@ -5,10 +5,21 @@
 #include <unordered_map>
 #include <vector>
 
+// Export macro for cross-DLL visibility
+#ifdef _WIN32
+  #ifdef LFS_PYTHON_RUNTIME_EXPORTS
+    #define LFS_LOCALIZATION_API __declspec(dllexport)
+  #else
+    #define LFS_LOCALIZATION_API __declspec(dllimport)
+  #endif
+#else
+  #define LFS_LOCALIZATION_API __attribute__((visibility("default")))
+#endif
+
 namespace lichtfeld {
 
     // Manages GUI localization with runtime language switching
-    class LocalizationManager {
+    class LFS_LOCALIZATION_API LocalizationManager {
     public:
         static LocalizationManager& getInstance();
 
