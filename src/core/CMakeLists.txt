@@ -34,6 +34,7 @@ set(TENSOR_SOURCES
         tensor/tensor_nn_ops.cpp
         tensor/pinned_memory_allocator.cpp
         tensor/offset_allocator.cpp
+        tensor/tensor_exports.cu
 )
 
 # Core module sources
@@ -108,14 +109,20 @@ endif()
 # Compiler options
 if(MSVC)
     target_compile_options(lfs_core PRIVATE
-        $<$<CONFIG:Debug>:/Od /Z7>
-        $<$<CONFIG:Release>:/O2 /DNDEBUG>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:/Od /Z7>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:/O2 /DNDEBUG>
+        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-O0 -g -lineinfo --extended-lambda --expt-relaxed-constexpr -Xcompiler=/Od -Xcompiler=/Z7 -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS --diag-suppress=27>
+        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr -Xcompiler=/O2 -Xcompiler=/DNDEBUG -Xcompiler=/utf-8 -Xcompiler=/D_CRT_SECURE_NO_WARNINGS --diag-suppress=27>
     )
-    target_compile_definitions(lfs_core PRIVATE _USE_MATH_DEFINES NOMINMAX)
+    target_compile_definitions(lfs_core PRIVATE _USE_MATH_DEFINES NOMINMAX
+        $<$<COMPILE_LANGUAGE:CUDA>:FMT_UNICODE=0>
+    )
 else()
     target_compile_options(lfs_core PRIVATE
-        $<$<CONFIG:Debug>:-O0 -g -fno-omit-frame-pointer -DDEBUG>
-        $<$<CONFIG:Release>:-O3 -DNDEBUG -march=native>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Debug>>:-O0 -g -fno-omit-frame-pointer -DDEBUG>
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<CONFIG:Release>>:-O3 -DNDEBUG -march=native>
+        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Debug>>:-O0 -g -lineinfo --extended-lambda --expt-relaxed-constexpr>
+        $<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CONFIG:Release>>:-O3 -use_fast_math --extended-lambda --expt-relaxed-constexpr>
     )
 endif()
 
@@ -136,6 +143,11 @@ endif()
 set_target_properties(lfs_core PROPERTIES
     CXX_STANDARD 23
     CXX_STANDARD_REQUIRED ON
+    CUDA_STANDARD 20
+    CUDA_STANDARD_REQUIRED ON
+    CUDA_ARCHITECTURES "${LichtFeld-Studio_CUDA_ARCH}"
+    CUDA_SEPARABLE_COMPILATION OFF
+    CUDA_RESOLVE_DEVICE_SYMBOLS ON
     POSITION_INDEPENDENT_CODE ON
     EXPORT_COMPILE_COMMANDS ON
     CXX_VISIBILITY_PRESET hidden
