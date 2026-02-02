@@ -4,7 +4,6 @@
 
 #include "io/loaders/colmap_loader.hpp"
 #include "core/camera.hpp"
-#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/point_cloud.hpp"
 #include "formats/colmap.hpp"
@@ -12,6 +11,7 @@
 #include "io/filesystem_utils.hpp"
 #include "training/dataset.hpp"
 #include <algorithm>
+#include <stb_image.h>
 #include <cctype>
 #include <chrono>
 #include <filesystem>
@@ -203,8 +203,11 @@ namespace lfs::io {
 
             bool images_have_alpha = false;
             if (!cameras.empty()) {
-                const auto [_, __, c] = lfs::core::get_image_info(cameras[0]->image_path());
-                images_have_alpha = (c == 4);
+                int w, h, c;
+                const auto& img_path = cameras[0]->image_path();
+                if (stbi_info(lfs::core::path_to_utf8(img_path).c_str(), &w, &h, &c)) {
+                    images_have_alpha = (c == 4);
+                }
             }
 
             // Create dataset configuration
