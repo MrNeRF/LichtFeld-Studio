@@ -142,7 +142,7 @@
     "tooltip.penalty_power": "惩罚衰减：1=线性，2=二次，>2=更平缓",
     "tooltip.mask_threshold": "大于等于阈值的值变为1.0（对象）",
     "tooltip.mask_mode": "如何使用注意力掩码：分割、忽略背景或alpha一致",
-    "tooltip.use_alpha_as_mask": "Use alpha channel from RGBA images as mask source instead of separate mask files",
+    "tooltip.use_alpha_as_mask": "使用RGBA图像的Alpha通道作为遮罩来源，而非单独的遮罩文件",
     "tooltip.mip_filter": "用于训练的抗锯齿滤波器（mip-splatting）",
     "tooltip.keep_model": "保留训练模型，丢弃数据集",
     "tooltip.strategy": "密度化策略 (default/mcmc)",

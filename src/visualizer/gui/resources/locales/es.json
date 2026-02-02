@@ -142,7 +142,7 @@
     "tooltip.penalty_power": "Decaimiento de penalización: 1=lineal, 2=cuadrático, >2=más suave",
     "tooltip.mask_threshold": "Valores >= umbral se convierten en 1.0 (objeto)",
     "tooltip.mask_mode": "Cómo usar máscaras de atención: segmentar, ignorar fondo o alpha-consistente",
-    "tooltip.use_alpha_as_mask": "Use alpha channel from RGBA images as mask source instead of separate mask files",
+    "tooltip.use_alpha_as_mask": "Usar el canal alfa de imágenes RGBA como fuente de máscara en lugar de archivos de máscara separados",
     "tooltip.mip_filter": "Filtro antialiasing para entrenamiento (mip-splatting)",
     "tooltip.keep_model": "Mantener modelo entrenado, descartar dataset",
     "tooltip.strategy": "Estrategia de densificación (default/mcmc)",

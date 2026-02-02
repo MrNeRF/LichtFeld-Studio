@@ -142,7 +142,7 @@
     "tooltip.penalty_power": "Spadek kary: 1=liniowy, 2=kwadratowy, >2=łagodniejszy",
     "tooltip.mask_threshold": "Wartości >= progu stają się 1.0 (obiekt)",
     "tooltip.mask_mode": "Jak używać masek uwagi: segmentuj, ignoruj tło lub alpha-spójne",
-    "tooltip.use_alpha_as_mask": "Use alpha channel from RGBA images as mask source instead of separate mask files",
+    "tooltip.use_alpha_as_mask": "Użyj kanału alfa z obrazów RGBA jako źródła maski zamiast osobnych plików masek",
     "tooltip.mip_filter": "Filtr antyaliasingu dla treningu (mip-splatting)",
     "tooltip.keep_model": "Zachowaj wytrenowany model, odrzuć zbiór danych",
     "tooltip.strategy": "Strategia zagęszczania (default/mcmc)",

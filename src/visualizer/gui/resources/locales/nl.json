@@ -142,7 +142,7 @@
     "tooltip.penalty_power": "Straf afname: 1=lineair, 2=kwadratisch, >2=zachter",
     "tooltip.mask_threshold": "Waarden >= drempel worden 1.0 (object)",
     "tooltip.mask_mode": "Hoe attentiemaskers te gebruiken: segmenteren, achtergrond negeren of alpha-consistent",
-    "tooltip.use_alpha_as_mask": "Use alpha channel from RGBA images as mask source instead of separate mask files",
+    "tooltip.use_alpha_as_mask": "Gebruik het alfakanaal van RGBA-afbeeldingen als maskerbron in plaats van aparte maskerbestanden",
     "tooltip.mip_filter": "Anti-aliasing filter voor training (mip-splatting)",
     "tooltip.keep_model": "Behoud getraind model, verwijder dataset",
     "tooltip.strategy": "Verdichtingsstrategie (default/mcmc)",
