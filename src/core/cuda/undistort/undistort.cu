@@ -418,6 +418,35 @@ namespace lfs::core {
         return params;
     }
 
+    UndistortParams scale_undistort_params(
+        const UndistortParams& params, const int actual_src_width, const int actual_src_height) {
+
+        if (actual_src_width == params.src_width && actual_src_height == params.src_height)
+            return params;
+
+        assert(actual_src_width > 0 && actual_src_height > 0);
+
+        const float sx = static_cast<float>(actual_src_width) / static_cast<float>(params.src_width);
+        const float sy = static_cast<float>(actual_src_height) / static_cast<float>(params.src_height);
+
+        UndistortParams scaled = params;
+        scaled.src_fx = params.src_fx * sx;
+        scaled.src_fy = params.src_fy * sy;
+        scaled.src_cx = params.src_cx * sx;
+        scaled.src_cy = params.src_cy * sy;
+        scaled.src_width = actual_src_width;
+        scaled.src_height = actual_src_height;
+
+        scaled.dst_fx = params.dst_fx * sx;
+        scaled.dst_fy = params.dst_fy * sy;
+        scaled.dst_width = std::max(1, static_cast<int>(std::lroundf(params.dst_width * sx)));
+        scaled.dst_height = std::max(1, static_cast<int>(std::lroundf(params.dst_height * sy)));
+        scaled.dst_cx = scaled.dst_width * 0.5f;
+        scaled.dst_cy = scaled.dst_height * 0.5f;
+
+        return scaled;
+    }
+
     Tensor undistort_image(const Tensor& src, const UndistortParams& params, cudaStream_t stream) {
         assert(src.is_valid());
         assert(src.ndim() == 3);

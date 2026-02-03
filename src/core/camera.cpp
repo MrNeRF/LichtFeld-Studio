@@ -399,7 +399,11 @@ namespace lfs::core {
         }
 
         if (_undistort_prepared) {
-            mask = undistort_mask(mask, _undistort_params, _stream);
+            const auto scaled = scale_undistort_params(
+                _undistort_params,
+                static_cast<int>(mask.shape()[1]),
+                static_cast<int>(mask.shape()[0]));
+            mask = undistort_mask(mask, scaled, _stream);
         }
 
         _cached_mask = mask;

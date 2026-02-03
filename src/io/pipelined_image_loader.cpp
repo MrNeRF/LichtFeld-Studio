@@ -784,10 +784,6 @@ namespace lfs::io {
 
                     gpu_uint8 = lfs::core::Tensor();
 
-                    if (item.undistort) {
-                        rgb = lfs::core::undistort_image(rgb, *item.undistort, nullptr);
-                    }
-
                     float* const alpha_ptr = alpha.ptr<float>();
                     if (item.alpha_mask_params.invert) {
                         cuda::launch_mask_invert(alpha_ptr, H, W, nullptr);
@@ -795,8 +791,12 @@ namespace lfs::io {
                     if (item.alpha_mask_params.threshold > 0) {
                         cuda::launch_mask_threshold(alpha_ptr, H, W, item.alpha_mask_params.threshold, nullptr);
                     }
+
                     if (item.undistort) {
-                        alpha = lfs::core::undistort_mask(alpha, *item.undistort, nullptr);
+                        const auto scaled = lfs::core::scale_undistort_params(
+                            *item.undistort, static_cast<int>(W), static_cast<int>(H));
+                        rgb = lfs::core::undistort_image(rgb, scaled, nullptr);
+                        alpha = lfs::core::undistort_mask(alpha, scaled, nullptr);
                     }
 
                     if (is_nvcodec_available()) {
@@ -885,7 +885,10 @@ namespace lfs::io {
                         cuda::launch_mask_threshold(mask_ptr, H, W, item.mask_params.threshold, nullptr);
                     }
                     if (item.undistort) {
-                        mask_tensor = lfs::core::undistort_mask(mask_tensor, *item.undistort, nullptr);
+                        const auto scaled = lfs::core::scale_undistort_params(
+                            *item.undistort,
+                            static_cast<int>(W), static_cast<int>(H));
+                        mask_tensor = lfs::core::undistort_mask(mask_tensor, scaled, nullptr);
                     }
 
                     if (is_nvcodec_available()) {
@@ -951,7 +954,11 @@ namespace lfs::io {
                     }
 
                     if (item.undistort) {
-                        decoded = lfs::core::undistort_image(decoded, *item.undistort, nullptr);
+                        const auto scaled = lfs::core::scale_undistort_params(
+                            *item.undistort,
+                            static_cast<int>(decoded.shape()[2]),
+                            static_cast<int>(decoded.shape()[1]));
+                        decoded = lfs::core::undistort_image(decoded, scaled, nullptr);
                     }
 
                     if (is_nvcodec_available()) {
