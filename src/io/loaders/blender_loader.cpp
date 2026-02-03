@@ -154,7 +154,7 @@ namespace lfs::io {
             LOG_INFO("Loading Blender/NeRF dataset from: {}", lfs::core::path_to_utf8(transforms_file));
 
             // Read transforms and create cameras
-            auto [camera_infos, scene_center, scene_scale, train_val_split] = read_transforms_cameras_and_images(transforms_file);
+            auto [camera_infos, scene_center, train_val_split] = read_transforms_cameras_and_images(transforms_file);
 
             if (options.progress) {
                 options.progress(40.0f, std::format("Creating {} cameras...", camera_infos.size()));
@@ -284,7 +284,6 @@ namespace lfs::io {
                     .cameras = std::move(dataset),
                     .point_cloud = std::move(point_cloud)},
                 .scene_center = scene_center,
-                .scene_scale = scene_scale,
                 .images_have_alpha = images_have_alpha,
                 .loader_used = name(),
                 .load_time = load_time,

@@ -12,7 +12,7 @@
 
 namespace lfs::io {
 
-    std::tuple<std::vector<CameraData>, lfs::core::Tensor, float, std::optional<std::tuple<std::vector<std::string>, std::vector<std::string>>>> read_transforms_cameras_and_images(
+    std::tuple<std::vector<CameraData>, lfs::core::Tensor, std::optional<std::tuple<std::vector<std::string>, std::vector<std::string>>>> read_transforms_cameras_and_images(
         const std::filesystem::path& transPath);
 
     PointCloud generate_random_point_cloud();

@@ -9,7 +9,6 @@
 #include "core/tensor.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller_pool.hpp"
-#include <cassert>
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>
@@ -297,17 +296,12 @@ namespace lfs::vis {
         void setValCameras(std::shared_ptr<lfs::training::CameraDataset> dataset);
         void setInitialPointCloud(std::shared_ptr<lfs::core::PointCloud> point_cloud);
         void setSceneCenter(lfs::core::Tensor scene_center);
-        void setSceneScale(float scale) {
-            assert(scale > 0.f);
-            scene_scale_ = scale;
-        }
         void setImagesHaveAlpha(bool have_alpha) { images_have_alpha_ = have_alpha; }
 
         [[nodiscard]] std::shared_ptr<lfs::training::CameraDataset> getTrainCameras() const { return train_cameras_; }
         [[nodiscard]] std::shared_ptr<lfs::training::CameraDataset> getValCameras() const { return val_cameras_; }
         [[nodiscard]] std::shared_ptr<lfs::core::PointCloud> getInitialPointCloud() const { return initial_point_cloud_; }
         [[nodiscard]] const lfs::core::Tensor& getSceneCenter() const { return scene_center_; }
-        [[nodiscard]] float getSceneScale() const { return scene_scale_; }
         [[nodiscard]] bool imagesHaveAlpha() const { return images_have_alpha_; }
 
         [[nodiscard]] bool hasTrainingData() const { return train_cameras_ != nullptr; }
@@ -417,7 +411,6 @@ namespace lfs::vis {
         std::shared_ptr<lfs::training::CameraDataset> val_cameras_;
         std::shared_ptr<lfs::core::PointCloud> initial_point_cloud_;
         lfs::core::Tensor scene_center_;
-        float scene_scale_ = 0.f;
         bool images_have_alpha_ = false;
         std::string training_model_node_;
 

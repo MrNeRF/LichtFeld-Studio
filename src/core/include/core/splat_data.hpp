@@ -153,11 +153,18 @@ namespace lfs::core {
 
     // ========== Free function: Factory ==========
 
+    /**
+     * @brief Create SplatData from a PointCloud
+     * @param params Training parameters (SH degree, init settings)
+     * @param scene_center Center of the scene
+     * @param point_cloud Source point cloud
+     * @param capacity If > 0, pre-allocate for this many gaussians (bypasses memory pool)
+     * @return SplatData on success, error string on failure
+     */
     std::expected<SplatData, std::string> init_model_from_pointcloud(
         const param::TrainingParameters& params,
         Tensor scene_center,
         const PointCloud& point_cloud,
-        float scene_scale,
         int capacity = 0);
 
 } // namespace lfs::core

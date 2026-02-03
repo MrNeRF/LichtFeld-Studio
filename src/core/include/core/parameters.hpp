@@ -33,7 +33,7 @@ namespace lfs::core {
         struct OptimizationParameters {
             size_t iterations = 30'000;
             size_t sh_degree_interval = 1'000;
-            float means_lr = 0.00016f;
+            float means_lr = 0.000016f;
             float shs_lr = 0.0025f;
             float opacity_lr = 0.05f;
             float scaling_lr = 0.005f;

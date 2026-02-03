@@ -12,7 +12,6 @@
 #include "dataset.hpp"
 #include "io/loader.hpp"
 #include "visualizer/scene/scene.hpp"
-#include <cassert>
 #include <format>
 
 namespace lfs::training {
@@ -90,7 +89,6 @@ namespace lfs::training {
                 scene.setTrainCameras(data.cameras);
                 scene.setInitialPointCloud(data.point_cloud);
                 scene.setSceneCenter(load_result->scene_center);
-                scene.setSceneScale(load_result->scene_scale);
                 scene.setImagesHaveAlpha(load_result->images_have_alpha);
 
                 // Create dataset hierarchy:
@@ -133,9 +131,9 @@ namespace lfs::training {
                                                                lfs::core::path_to_utf8(init_file), pc_result.error()));
                         }
 
-                        assert(load_result->scene_scale > 0.f);
+                        // Use scene_center from loader (camera centroid) for correct scene_scale
                         auto splat_result = lfs::core::init_model_from_pointcloud(
-                            params, load_result->scene_center, *pc_result, load_result->scene_scale, static_cast<int>(pc_result->size()));
+                            params, load_result->scene_center, *pc_result, static_cast<int>(pc_result->size()));
 
                         if (!splat_result) {
                             return std::unexpected(std::format("Init failed: {}", splat_result.error()));
@@ -368,9 +366,11 @@ namespace lfs::training {
             point_cloud_to_use = lfs::core::PointCloud(positions, colors);
         }
 
+        // Use scene center from loader (camera centroid) if available, otherwise compute from point cloud
         lfs::core::Tensor scene_center = scene.getSceneCenter();
         if (!scene_center.is_valid() || scene_center.numel() == 0) {
-            LOG_WARN("No scene center from loader, computing from point cloud");
+            // Fallback: compute from point cloud (less accurate for scene_scale)
+            LOG_WARN("No scene center from loader, computing from point cloud (may affect densification)");
             if (point_cloud_to_use.size() > 0) {
                 auto means_cpu = point_cloud_to_use.means.cpu();
                 auto mean = means_cpu.mean({0});
@@ -383,10 +383,9 @@ namespace lfs::training {
             scene_center = max_cap > 0 ? scene_center.cpu() : scene_center.cuda();
         }
 
-        const float scene_scale = scene.getSceneScale();
-        assert(scene_scale > 0.f);
+        // Initialize SplatData from point cloud
         auto splat_result = lfs::core::init_model_from_pointcloud(
-            params, scene_center, point_cloud_to_use, scene_scale, max_cap);
+            params, scene_center, point_cloud_to_use, max_cap);
 
         if (!splat_result) {
             return std::unexpected(std::format("Failed to initialize model: {}", splat_result.error()));
@@ -451,7 +450,6 @@ namespace lfs::training {
                 scene.setTrainCameras(data.cameras);
                 scene.setInitialPointCloud(data.point_cloud);
                 scene.setSceneCenter(load_result.scene_center);
-                scene.setSceneScale(load_result.scene_scale);
                 scene.setImagesHaveAlpha(load_result.images_have_alpha);
 
                 std::string dataset_name = lfs::core::path_to_utf8(params.dataset.data_path.filename());
@@ -477,9 +475,8 @@ namespace lfs::training {
                                                                lfs::core::path_to_utf8(init_file), pc_result.error()));
                         }
 
-                        assert(load_result.scene_scale > 0.f);
                         auto splat_result = lfs::core::init_model_from_pointcloud(
-                            params, load_result.scene_center, *pc_result, load_result.scene_scale, static_cast<int>(pc_result->size()));
+                            params, load_result.scene_center, *pc_result, static_cast<int>(pc_result->size()));
                         if (!splat_result) {
                             return std::unexpected(std::format("Init failed: {}", splat_result.error()));
                         }

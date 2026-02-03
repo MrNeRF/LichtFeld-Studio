@@ -58,7 +58,6 @@ namespace lfs::io {
     struct LoadResult {
         std::variant<std::shared_ptr<SplatData>, LoadedScene> data;
         Tensor scene_center;
-        float scene_scale = 0.f;
         bool images_have_alpha = false;
         std::string loader_used;
         std::chrono::milliseconds load_time{0};
