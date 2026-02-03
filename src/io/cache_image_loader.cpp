@@ -640,8 +640,12 @@ namespace lfs::io {
                     jpeg_bytes, params.resize_factor, params.max_width, params.cuda_stream);
 
                 if (params.undistort) {
+                    const auto scaled = lfs::core::scale_undistort_params(
+                        *params.undistort,
+                        static_cast<int>(tensor.shape()[2]),
+                        static_cast<int>(tensor.shape()[1]));
                     tensor = lfs::core::undistort_image(
-                        tensor, *params.undistort, static_cast<cudaStream_t>(params.cuda_stream));
+                        tensor, scaled, static_cast<cudaStream_t>(params.cuda_stream));
                 }
 
                 bool should_cache = false;

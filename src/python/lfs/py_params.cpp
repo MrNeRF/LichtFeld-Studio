@@ -695,6 +695,9 @@ namespace lfs::python {
         if (!tm) {
             throw std::runtime_error("TrainerManager not available");
         }
+        if (can_edit()) {
+            return tm->getEditableDatasetParams();
+        }
         if (tm->hasTrainer()) {
             if (const auto* trainer = tm->getTrainer()) {
                 return trainer->getParams().dataset;

@@ -396,15 +396,15 @@ class TrainingPanel(Panel):
                         layout.table_next_column()
                         if dataset_can_edit:
                             layout.push_item_width(-1)
-                            resize_options = [1, 2, 4, 8]
-                            resize_labels = ["1", "2", "4", "8"]
+                            resize_options = [-1, 1, 2, 4, 8]
+                            resize_labels = ["Auto", "1", "2", "4", "8"]
                             current_idx = resize_options.index(dataset.resize_factor) if dataset.resize_factor in resize_options else 0
                             changed, new_idx = layout.combo("##py_resize_factor", current_idx, resize_labels)
                             if changed:
                                 dataset.resize_factor = resize_options[new_idx]
                             layout.pop_item_width()
                         else:
-                            layout.label(str(dataset.resize_factor))
+                            layout.label("Auto" if dataset.resize_factor < 0 else str(dataset.resize_factor))
 
                         layout.table_next_row()
                         layout.table_next_column()

@@ -414,7 +414,7 @@ protected:
 
         auto result = lfs::io::read_colmap_cameras_and_images(base_path_, "images_4");
         ASSERT_TRUE(result.has_value()) << "Failed to load COLMAP data";
-        auto& [cams, center, scale] = *result;
+        auto& [cams, center] = *result;
         cameras_ = std::move(cams);
         ASSERT_GT(cameras_.size(), 0u);
     }
@@ -518,4 +518,41 @@ TEST_F(UndistortCameraTest, NonPinholeModelDetectsDistortion) {
                         cam->camera_width(), cam->camera_height(), 996);
 
     EXPECT_TRUE(equirect_cam.has_distortion());
+}
+
+TEST(UndistortScale, ScaleUndistortParams) {
+    const auto radial = Tensor::from_vector({-0.1f, 0.02f}, TensorShape({2}), Device::CPU);
+    const auto params = compute_undistort_params(
+        TEST_FX, TEST_FY, TEST_CX, TEST_CY, TEST_W, TEST_H,
+        radial, Tensor(), CameraModelType::PINHOLE);
+
+    validate_params(params, TEST_W, TEST_H);
+
+    constexpr int HALF_W = TEST_W / 2;
+    constexpr int HALF_H = TEST_H / 2;
+    const auto scaled = scale_undistort_params(params, HALF_W, HALF_H);
+
+    EXPECT_EQ(scaled.src_width, HALF_W);
+    EXPECT_EQ(scaled.src_height, HALF_H);
+
+    const float sx = static_cast<float>(HALF_W) / static_cast<float>(params.src_width);
+    const float sy = static_cast<float>(HALF_H) / static_cast<float>(params.src_height);
+
+    EXPECT_NEAR(scaled.src_fx, params.src_fx * sx, 1e-4f);
+    EXPECT_NEAR(scaled.src_fy, params.src_fy * sy, 1e-4f);
+    EXPECT_NEAR(scaled.src_cx, params.src_cx * sx, 1e-4f);
+    EXPECT_NEAR(scaled.src_cy, params.src_cy * sy, 1e-4f);
+
+    EXPECT_NEAR(scaled.dst_fx, params.dst_fx * sx, 1e-4f);
+    EXPECT_NEAR(scaled.dst_fy, params.dst_fy * sy, 1e-4f);
+
+    const int expected_dst_w = std::max(1, static_cast<int>(std::lroundf(params.dst_width * sx)));
+    const int expected_dst_h = std::max(1, static_cast<int>(std::lroundf(params.dst_height * sy)));
+    EXPECT_EQ(scaled.dst_width, expected_dst_w);
+    EXPECT_EQ(scaled.dst_height, expected_dst_h);
+    EXPECT_FLOAT_EQ(scaled.dst_cx, scaled.dst_width * 0.5f);
+    EXPECT_FLOAT_EQ(scaled.dst_cy, scaled.dst_height * 0.5f);
+
+    run_image_undistort(scaled);
+    run_mask_undistort(scaled);
 }
