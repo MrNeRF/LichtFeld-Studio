@@ -349,7 +349,10 @@
     "training_stopped": "训练已停止",
     "training_error": "训练错误",
     "param_manager_unavailable": "参数管理器不可用",
-    "failed_to_load_params": "加载参数失败："
+    "failed_to_load_params": "加载参数失败：",
+    "err_distorted_images": "检测到畸变图像。请启用 --gut 或 --undistort 以使用有畸变的相机进行训练。",
+    "err_ortho_not_supported": "暂不支持使用正交相机模型进行训练。",
+    "err_non_pinhole": "请启用 --gut 或 --undistort 以使用非针孔相机进行训练。"
   },
 
   "controls": {

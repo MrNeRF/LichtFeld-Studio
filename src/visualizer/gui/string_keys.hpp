@@ -402,6 +402,9 @@ namespace lichtfeld::Strings {
         inline constexpr const char* TRAINING_ERROR = "messages.training_error";
         inline constexpr const char* PARAM_MANAGER_UNAVAILABLE = "messages.param_manager_unavailable";
         inline constexpr const char* FAILED_TO_LOAD_PARAMS = "messages.failed_to_load_params";
+        inline constexpr const char* ERR_DISTORTED_IMAGES = "messages.err_distorted_images";
+        inline constexpr const char* ERR_ORTHO_NOT_SUPPORTED = "messages.err_ortho_not_supported";
+        inline constexpr const char* ERR_NON_PINHOLE = "messages.err_non_pinhole";
     } // namespace Messages
 
     namespace Controls {

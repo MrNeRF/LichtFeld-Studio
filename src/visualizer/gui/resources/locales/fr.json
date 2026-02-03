@@ -349,7 +349,10 @@
     "training_stopped": "Entraînement Arrêté",
     "training_error": "Erreur d'Entraînement",
     "param_manager_unavailable": "Gestionnaire de paramètres indisponible",
-    "failed_to_load_params": "Échec du chargement des paramètres :"
+    "failed_to_load_params": "Échec du chargement des paramètres :",
+    "err_distorted_images": "Images distordues détectées. Activez --gut ou --undistort pour entraîner avec des caméras à distorsion.",
+    "err_ortho_not_supported": "L'entraînement avec le modèle de caméra orthographique n'est pas encore supporté.",
+    "err_non_pinhole": "Activez --gut ou --undistort pour entraîner avec des caméras non-pinhole."
   },
 
   "controls": {

@@ -349,7 +349,10 @@
     "training_stopped": "Training gestoppt",
     "training_error": "Trainingsfehler",
     "param_manager_unavailable": "ParameterManager nicht verfügbar",
-    "failed_to_load_params": "Parameter laden fehlgeschlagen:"
+    "failed_to_load_params": "Parameter laden fehlgeschlagen:",
+    "err_distorted_images": "Verzerrte Bilder erkannt. Aktivieren Sie --gut oder --undistort, um mit verzerrten Kameras zu trainieren.",
+    "err_ortho_not_supported": "Training mit orthographischem Kameramodell wird noch nicht unterstützt.",
+    "err_non_pinhole": "Aktivieren Sie --gut oder --undistort, um mit Nicht-Pinhole-Kameras zu trainieren."
   },
 
   "controls": {

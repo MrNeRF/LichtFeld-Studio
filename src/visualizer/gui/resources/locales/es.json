@@ -349,7 +349,10 @@
     "training_stopped": "Entrenamiento Detenido",
     "training_error": "Error de Entrenamiento",
     "param_manager_unavailable": "Gestor de parámetros no disponible",
-    "failed_to_load_params": "Error al cargar parámetros:"
+    "failed_to_load_params": "Error al cargar parámetros:",
+    "err_distorted_images": "Imágenes distorsionadas detectadas. Active --gut o --undistort para entrenar con cámaras con distorsión.",
+    "err_ortho_not_supported": "El entrenamiento con modelo de cámara ortográfica aún no es compatible.",
+    "err_non_pinhole": "Active --gut o --undistort para entrenar con cámaras no-pinhole."
   },
 
   "controls": {

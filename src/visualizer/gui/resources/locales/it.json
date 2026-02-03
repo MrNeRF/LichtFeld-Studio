@@ -349,7 +349,10 @@
     "training_stopped": "Addestramento Interrotto",
     "training_error": "Errore di Addestramento",
     "param_manager_unavailable": "Gestore parametri non disponibile",
-    "failed_to_load_params": "Caricamento parametri fallito:"
+    "failed_to_load_params": "Caricamento parametri fallito:",
+    "err_distorted_images": "Rilevate immagini distorte. Attivare --gut o --undistort per addestrare con fotocamere con distorsione.",
+    "err_ortho_not_supported": "L'addestramento con modello fotocamera ortografico non è ancora supportato.",
+    "err_non_pinhole": "Attivare --gut o --undistort per addestrare con fotocamere non-pinhole."
   },
 
   "controls": {

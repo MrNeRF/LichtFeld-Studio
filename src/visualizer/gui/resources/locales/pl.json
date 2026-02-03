@@ -349,7 +349,10 @@
     "training_stopped": "Trening Zatrzymany",
     "training_error": "Błąd Treningu",
     "param_manager_unavailable": "Menedżer parametrów niedostępny",
-    "failed_to_load_params": "Nie udało się załadować parametrów:"
+    "failed_to_load_params": "Nie udało się załadować parametrów:",
+    "err_distorted_images": "Wykryto zniekształcone obrazy. Włącz --gut lub --undistort, aby trenować z kamerami ze zniekształceniami.",
+    "err_ortho_not_supported": "Trening z ortograficznym modelem kamery nie jest jeszcze obsługiwany.",
+    "err_non_pinhole": "Włącz --gut lub --undistort, aby trenować z kamerami innymi niż pinhole."
   },
 
   "controls": {

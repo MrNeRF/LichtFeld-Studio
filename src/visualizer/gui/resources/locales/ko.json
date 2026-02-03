@@ -349,7 +349,10 @@
     "training_stopped": "학습 중지됨",
     "training_error": "학습 오류",
     "param_manager_unavailable": "파라미터 관리자를 사용할 수 없음",
-    "failed_to_load_params": "파라미터 로드 실패:"
+    "failed_to_load_params": "파라미터 로드 실패:",
+    "err_distorted_images": "왜곡된 이미지가 감지되었습니다. 왜곡이 있는 카메라로 학습하려면 --gut 또는 --undistort를 활성화하세요.",
+    "err_ortho_not_supported": "직교 카메라 모델로의 학습은 아직 지원되지 않습니다.",
+    "err_non_pinhole": "비 핀홀 카메라로 학습하려면 --gut 또는 --undistort를 활성화하세요."
   },
 
   "controls": {

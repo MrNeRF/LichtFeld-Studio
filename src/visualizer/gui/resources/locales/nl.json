@@ -349,7 +349,10 @@
     "training_stopped": "Training Gestopt",
     "training_error": "Training Fout",
     "param_manager_unavailable": "ParameterManager niet beschikbaar",
-    "failed_to_load_params": "Laden van params mislukt:"
+    "failed_to_load_params": "Laden van params mislukt:",
+    "err_distorted_images": "Vervormde beelden gedetecteerd. Activeer --gut of --undistort om te trainen met vervormde camera's.",
+    "err_ortho_not_supported": "Training met orthografisch cameramodel wordt nog niet ondersteund.",
+    "err_non_pinhole": "Activeer --gut of --undistort om te trainen met niet-pinhole camera's."
   },
 
   "controls": {

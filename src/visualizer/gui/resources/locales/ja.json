@@ -349,7 +349,10 @@
     "training_stopped": "トレーニング停止",
     "training_error": "トレーニングエラー",
     "param_manager_unavailable": "パラメータマネージャーが利用できません",
-    "failed_to_load_params": "パラメータの読み込みに失敗しました:"
+    "failed_to_load_params": "パラメータの読み込みに失敗しました:",
+    "err_distorted_images": "歪みのある画像が検出されました。歪みのあるカメラで学習するには --gut または --undistort を有効にしてください。",
+    "err_ortho_not_supported": "正射影カメラモデルでの学習はまだサポートされていません。",
+    "err_non_pinhole": "非ピンホールカメラで学習するには --gut または --undistort を有効にしてください。"
   },
 
   "controls": {

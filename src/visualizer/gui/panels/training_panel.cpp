@@ -1767,7 +1767,14 @@ namespace lfs::vis::gui::panels {
             case FinishReason::Error:
                 ImGui::TextColored(t.palette.error, "%s", LOC(Messages::TRAINING_ERROR));
                 if (const auto error_msg = trainer_manager->getLastError(); !error_msg.empty()) {
-                    ImGui::TextWrapped("%s", error_msg.c_str());
+                    const char* localized = nullptr;
+                    if (error_msg.find("Distorted images detected") != std::string::npos)
+                        localized = LOC(Messages::ERR_DISTORTED_IMAGES);
+                    else if (error_msg.find("ortho model") != std::string::npos)
+                        localized = LOC(Messages::ERR_ORTHO_NOT_SUPPORTED);
+                    else if (error_msg.find("non-pinhole") != std::string::npos)
+                        localized = LOC(Messages::ERR_NON_PINHOLE);
+                    ImGui::TextWrapped("%s", localized ? localized : error_msg.c_str());
                 }
                 break;
             default:
