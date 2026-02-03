@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/camera_types.h"
+#include "core/cuda/undistort/undistort.hpp"
 #include "core/tensor.hpp"
 #include <cuda_runtime.h>
 #include <filesystem>
@@ -106,6 +107,11 @@ namespace lfs::core {
         float FoVx() const noexcept { return _FoVx; }
         float FoVy() const noexcept { return _FoVy; }
 
+        void prepare_undistortion(float blank_pixels = 0.0f);
+        bool is_undistort_prepared() const noexcept { return _undistort_prepared; }
+        bool has_distortion() const noexcept;
+        const UndistortParams& undistort_params() const noexcept { return _undistort_params; }
+
     private:
         // IDs
         float _FoVx = 0.f;
@@ -141,6 +147,10 @@ namespace lfs::core {
         // Mask caching (processed mask stored on GPU)
         Tensor _cached_mask;
         bool _mask_loaded = false;
+
+        // Undistortion state
+        bool _undistort_prepared = false;
+        UndistortParams _undistort_params{};
 
         // CUDA stream for async operations
         cudaStream_t _stream = nullptr;

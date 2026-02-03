@@ -15,7 +15,7 @@
 #include <format>
 #include <fstream>
 #include <nlohmann/json.hpp>
-#include <stb_image.h>
+#include "core/image_io.hpp"
 
 namespace lfs::io {
 
@@ -178,10 +178,8 @@ namespace lfs::io {
 
                     // Validate mask dimensions match image dimensions
                     if (!mask_path.empty()) {
-                        int img_w, img_h, img_c;
-                        int mask_w, mask_h, mask_c;
-                        stbi_info(lfs::core::path_to_utf8(info._image_path).c_str(), &img_w, &img_h, &img_c);
-                        stbi_info(lfs::core::path_to_utf8(mask_path).c_str(), &mask_w, &mask_h, &mask_c);
+                        auto [img_w, img_h, img_c] = lfs::core::get_image_info(info._image_path);
+                        auto [mask_w, mask_h, mask_c] = lfs::core::get_image_info(mask_path);
                         if (img_w != mask_w || img_h != mask_h) {
                             return make_error(ErrorCode::MASK_SIZE_MISMATCH,
                                               std::format("Mask '{}' is {}x{} but image '{}' is {}x{}",
@@ -217,10 +215,10 @@ namespace lfs::io {
 
             bool images_have_alpha = false;
             if (!cameras.empty()) {
-                int w, h, c;
-                const auto& img_path = cameras[0]->image_path();
-                if (stbi_info(lfs::core::path_to_utf8(img_path).c_str(), &w, &h, &c)) {
+                try {
+                    auto [w, h, c] = lfs::core::get_image_info(cameras[0]->image_path());
                     images_have_alpha = (c == 4);
+                } catch (const std::exception&) {
                 }
             }
 

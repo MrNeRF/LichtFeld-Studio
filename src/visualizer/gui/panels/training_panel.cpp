@@ -1473,6 +1473,20 @@ namespace lfs::vis::gui::panels {
                 widgets::SetThemedTooltip("%s", LOC(Training::Tooltip::GUT));
             }
 
+            // Undistort
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("%s", LOC(TrainingParams::UNDISTORT));
+            ImGui::TableNextColumn();
+            if (can_edit) {
+                ImGui::Checkbox("##undistort", &opt_params.undistort);
+            } else {
+                ImGui::Text("%s", opt_params.undistort ? "Enabled" : "Disabled");
+            }
+            if (ImGui::IsItemHovered()) {
+                widgets::SetThemedTooltip("%s", LOC(Training::Tooltip::UNDISTORT));
+            }
+
             // Mip Filter (anti-aliasing)
             ImGui::TableNextRow();
             ImGui::TableNextColumn();

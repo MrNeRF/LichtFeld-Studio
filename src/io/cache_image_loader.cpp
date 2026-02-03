@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "io/cache_image_loader.hpp"
+#include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -10,6 +11,7 @@
 #include "io/nvcodec_image_loader.hpp"
 
 #include <algorithm>
+#include <cuda_runtime.h>
 #include <fstream>
 #include <random>
 
@@ -297,7 +299,10 @@ namespace lfs::io {
     }
 
     std::string CacheLoader::generate_cache_key(const std::filesystem::path& path, const LoadParams& params) const {
-        return std::format("{}:rf{}_mw{}", lfs::core::path_to_utf8(path), params.resize_factor, params.max_width);
+        auto key = std::format("{}:rf{}_mw{}", lfs::core::path_to_utf8(path), params.resize_factor, params.max_width);
+        if (params.undistort)
+            key += "_ud";
+        return key;
     }
 
     lfs::core::Tensor CacheLoader::load_cached_image_from_cpu(
@@ -634,6 +639,11 @@ namespace lfs::io {
                 auto tensor = nvcodec.load_image_from_memory_gpu(
                     jpeg_bytes, params.resize_factor, params.max_width, params.cuda_stream);
 
+                if (params.undistort) {
+                    tensor = lfs::core::undistort_image(
+                        tensor, *params.undistort, static_cast<cudaStream_t>(params.cuda_stream));
+                }
+
                 bool should_cache = false;
                 {
                     std::lock_guard lock(jpeg_blob_mutex_);
@@ -645,7 +655,7 @@ namespace lfs::io {
 
                 if (should_cache) {
                     std::vector<uint8_t> cache_bytes;
-                    if (needs_resize) {
+                    if (needs_resize || params.undistort) {
                         // Re-encode resized image
                         try {
                             cache_bytes = nvcodec.encode_to_jpeg(tensor, CACHE_JPEG_QUALITY, params.cuda_stream);

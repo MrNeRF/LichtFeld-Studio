@@ -15,7 +15,7 @@
 #include <chrono>
 #include <filesystem>
 #include <format>
-#include <stb_image.h>
+#include "core/image_io.hpp"
 #include <system_error>
 
 namespace lfs::io {
@@ -203,10 +203,10 @@ namespace lfs::io {
 
             bool images_have_alpha = false;
             if (!cameras.empty()) {
-                int w, h, c;
-                const auto& img_path = cameras[0]->image_path();
-                if (stbi_info(lfs::core::path_to_utf8(img_path).c_str(), &w, &h, &c)) {
+                try {
+                    auto [w, h, c] = lfs::core::get_image_info(cameras[0]->image_path());
                     images_have_alpha = (c == 4);
+                } catch (const std::exception&) {
                 }
             }
 

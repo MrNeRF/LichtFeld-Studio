@@ -137,6 +137,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* MASK_MODE = "training.opt.mask_mode";
             inline constexpr const char* SPARSITY = "training.opt.sparsity";
             inline constexpr const char* GUT = "training.opt.gut";
+            inline constexpr const char* UNDISTORT = "training.opt.undistort";
             inline constexpr const char* MIP_FILTER = "training.opt.mip_filter";
             inline constexpr const char* BG_MODULATION = "training.opt.bg_modulation";
             inline constexpr const char* LR_POSITION = "training.opt.lr.position";
@@ -221,6 +222,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* USE_ALPHA_AS_MASK = "training.tooltip.use_alpha_as_mask";
             inline constexpr const char* SPARSITY = "training.tooltip.sparsity";
             inline constexpr const char* GUT = "training.tooltip.gut";
+            inline constexpr const char* UNDISTORT = "training.tooltip.undistort";
             inline constexpr const char* BG_MODULATION = "training.tooltip.bg_modulation";
             inline constexpr const char* GRADIENT_THR = "training.tooltip.gradient_thr";
             inline constexpr const char* OPACITY_REG = "training.tooltip.opacity_reg";
@@ -743,6 +745,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* USE_ALPHA_AS_MASK = "training_params.use_alpha_as_mask";
         inline constexpr const char* SPARSITY = "training_params.sparsity";
         inline constexpr const char* GUT = "training_params.gut";
+        inline constexpr const char* UNDISTORT = "training_params.undistort";
         inline constexpr const char* MIP_FILTER = "training_params.mip_filter";
         inline constexpr const char* BG_SETTINGS = "training_params.bg_settings";
         inline constexpr const char* BG_MODE = "training_params.bg_mode";

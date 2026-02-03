@@ -3,6 +3,7 @@
 
 #include "io/pipelined_image_loader.hpp"
 #include "core/cuda/lanczos_resize/lanczos_resize.hpp"
+#include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -237,15 +238,21 @@ namespace lfs::io {
     }
 
     std::string PipelinedImageLoader::make_cache_key(const std::filesystem::path& path, const LoadParams& params) const {
-        return lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
+        auto key = lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
+        if (params.undistort)
+            key += "_ud";
+        return key;
     }
 
     std::string PipelinedImageLoader::make_mask_cache_key(
         const std::filesystem::path& path,
         const LoadParams& params) const {
-        return lfs::core::path_to_utf8(path) +
-               ":mask_rf" + std::to_string(params.resize_factor) +
-               "_mw" + std::to_string(params.max_width);
+        auto key = lfs::core::path_to_utf8(path) +
+                   ":mask_rf" + std::to_string(params.resize_factor) +
+                   "_mw" + std::to_string(params.max_width);
+        if (params.undistort)
+            key += "_ud";
+        return key;
     }
 
     std::filesystem::path PipelinedImageLoader::get_fs_cache_path(const std::string& cache_key) const {
@@ -417,7 +424,6 @@ namespace lfs::io {
                     mask_item.cache_key = alpha_key;
                     mask_item.jpeg_data = cached_alpha;
                     mask_item.is_mask = true;
-                    mask_item.mask_params = request.alpha_mask_params;
                     mask_item.is_cache_hit = true;
                     hot_queue_.push(std::move(mask_item));
 
@@ -432,6 +438,7 @@ namespace lfs::io {
                     result.alpha_as_mask = true;
                     result.alpha_mask_params = request.alpha_mask_params;
                     result.needs_processing = true;
+                    result.undistort = request.undistort;
 
                     cold_queue_.push(std::move(result));
                     std::lock_guard<std::mutex> lock(stats_mutex_);
@@ -446,6 +453,7 @@ namespace lfs::io {
             result.params = request.params;
             result.cache_key = make_cache_key(request.path, request.params);
             result.is_mask = false;
+            result.undistort = request.undistort;
 
             try {
                 if (auto cached = get_from_jpeg_cache(result.cache_key)) {
@@ -476,8 +484,8 @@ namespace lfs::io {
                             stats_.total_bytes_read += result.raw_bytes.size();
                         }
 
-                        const bool needs_resize = (request.params.resize_factor > 1 || request.params.max_width > 0);
-                        if (result.is_original_jpeg && !needs_resize) {
+                        const bool needs_processing = (request.params.resize_factor > 1 || request.params.max_width > 0 || request.params.undistort);
+                        if (result.is_original_jpeg && !needs_processing) {
                             auto data = std::make_shared<std::vector<uint8_t>>(std::move(result.raw_bytes));
                             put_in_jpeg_cache(result.cache_key, data);
                             result.jpeg_data = data;
@@ -502,8 +510,8 @@ namespace lfs::io {
                         stats_.total_bytes_read += result.raw_bytes.size();
                     }
 
-                    const bool needs_resize = (request.params.resize_factor > 1 || request.params.max_width > 0);
-                    if (result.is_original_jpeg && !needs_resize) {
+                    const bool needs_processing = (request.params.resize_factor > 1 || request.params.max_width > 0 || request.params.undistort);
+                    if (result.is_original_jpeg && !needs_processing) {
                         auto data = std::make_shared<std::vector<uint8_t>>(std::move(result.raw_bytes));
                         put_in_jpeg_cache(result.cache_key, data);
                         result.jpeg_data = data;
@@ -537,6 +545,7 @@ namespace lfs::io {
                 mask_result.cache_key = make_mask_cache_key(*request.mask_path, request.params);
                 mask_result.is_mask = true;
                 mask_result.mask_params = request.mask_params;
+                mask_result.undistort = request.undistort;
 
                 try {
                     if (auto cached = get_from_jpeg_cache(mask_result.cache_key)) {
@@ -652,20 +661,6 @@ namespace lfs::io {
                                 LOG_WARN("[PipelinedImageLoader] GPU mask decode failed for {}",
                                          lfs::core::path_to_utf8(batch[i].path));
                                 throw std::runtime_error("Invalid mask tensor");
-                            }
-
-                            const size_t H = mask_tensor.shape()[0];
-                            const size_t W = mask_tensor.shape()[1];
-                            float* const mask_ptr = static_cast<float*>(mask_tensor.data_ptr());
-
-                            if (batch[i].mask_params.invert) {
-                                cuda::launch_mask_invert(mask_ptr, H, W, nullptr);
-                            }
-                            if (batch[i].mask_params.threshold > 0) {
-                                cuda::launch_mask_threshold(mask_ptr, H, W, batch[i].mask_params.threshold, nullptr);
-                            }
-                            if (const cudaError_t err = cudaDeviceSynchronize(); err != cudaSuccess) {
-                                throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
                             }
 
                             try_complete_pair(batch[i].sequence_id, std::nullopt, std::move(mask_tensor), nullptr);
@@ -789,6 +784,21 @@ namespace lfs::io {
 
                     gpu_uint8 = lfs::core::Tensor();
 
+                    if (item.undistort) {
+                        rgb = lfs::core::undistort_image(rgb, *item.undistort, nullptr);
+                    }
+
+                    float* const alpha_ptr = alpha.ptr<float>();
+                    if (item.alpha_mask_params.invert) {
+                        cuda::launch_mask_invert(alpha_ptr, H, W, nullptr);
+                    }
+                    if (item.alpha_mask_params.threshold > 0) {
+                        cuda::launch_mask_threshold(alpha_ptr, H, W, item.alpha_mask_params.threshold, nullptr);
+                    }
+                    if (item.undistort) {
+                        alpha = lfs::core::undistort_mask(alpha, *item.undistort, nullptr);
+                    }
+
                     if (is_nvcodec_available()) {
                         try {
                             auto rgb_jpeg = nvcodec.encode_to_jpeg(rgb, config_.cache_jpeg_quality, nullptr);
@@ -802,14 +812,6 @@ namespace lfs::io {
                                               std::make_shared<std::vector<uint8_t>>(std::move(alpha_jpeg)));
                         } catch (const std::exception&) {
                         }
-                    }
-
-                    float* const alpha_ptr = alpha.ptr<float>();
-                    if (item.alpha_mask_params.invert) {
-                        cuda::launch_mask_invert(alpha_ptr, H, W, nullptr);
-                    }
-                    if (item.alpha_mask_params.threshold > 0) {
-                        cuda::launch_mask_threshold(alpha_ptr, H, W, item.alpha_mask_params.threshold, nullptr);
                     }
 
                     if (const cudaError_t err = cudaStreamSynchronize(nullptr); err != cudaSuccess) {
@@ -876,6 +878,16 @@ namespace lfs::io {
                     const size_t W = mask_tensor.shape()[1];
                     float* const mask_ptr = static_cast<float*>(mask_tensor.data_ptr());
 
+                    if (item.mask_params.invert) {
+                        cuda::launch_mask_invert(mask_ptr, H, W, nullptr);
+                    }
+                    if (item.mask_params.threshold > 0) {
+                        cuda::launch_mask_threshold(mask_ptr, H, W, item.mask_params.threshold, nullptr);
+                    }
+                    if (item.undistort) {
+                        mask_tensor = lfs::core::undistort_mask(mask_tensor, *item.undistort, nullptr);
+                    }
+
                     if (is_nvcodec_available()) {
                         try {
                             auto jpeg_bytes = nvcodec.encode_grayscale_to_jpeg(
@@ -886,12 +898,6 @@ namespace lfs::io {
                         }
                     }
 
-                    if (item.mask_params.invert) {
-                        cuda::launch_mask_invert(mask_ptr, H, W, nullptr);
-                    }
-                    if (item.mask_params.threshold > 0) {
-                        cuda::launch_mask_threshold(mask_ptr, H, W, item.mask_params.threshold, nullptr);
-                    }
                     if (const cudaError_t err = cudaStreamSynchronize(nullptr); err != cudaSuccess) {
                         throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
                     }
@@ -942,6 +948,10 @@ namespace lfs::io {
                             throw std::runtime_error(std::string("CUDA sync failed: ") + cudaGetErrorString(err));
                         }
                         gpu_uint8 = lfs::core::Tensor();
+                    }
+
+                    if (item.undistort) {
+                        decoded = lfs::core::undistort_image(decoded, *item.undistort, nullptr);
                     }
 
                     if (is_nvcodec_available()) {

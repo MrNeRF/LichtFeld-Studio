@@ -10,6 +10,7 @@
 set(LFS_CORE_CUDA_SOURCES
     memory_arena.cu
     lanczos_resize/lanczos_resize.cu
+    undistort/undistort.cu
     kernels/kmeans_new.cu
     kernels/kdtree_kmeans.cu
     kernels/morton_encoding_new.cu

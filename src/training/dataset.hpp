@@ -606,6 +606,10 @@ namespace lfs::training {
                 request.path = cam->image_path();
                 request.params.resize_factor = dataset_->get_resize_factor();
                 request.params.max_width = dataset_->get_max_width();
+                if (cam->is_undistort_prepared()) {
+                    request.undistort = &cam->undistort_params();
+                    request.params.undistort = request.undistort;
+                }
 
                 if (mask_config_.use_alpha_as_mask) {
                     request.extract_alpha_as_mask = true;

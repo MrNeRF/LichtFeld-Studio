@@ -135,6 +135,7 @@ namespace {
             ::args::Flag bg_modulation(parser, "bg_modulation", "Enable sinusoidal background modulation mixed with base background", {"bg-modulation"});
             ::args::Flag random(parser, "random", "Use random initialization instead of SfM", {"random"});
             ::args::Flag gut(parser, "gut", "Enable GUT mode", {"gut"});
+            ::args::Flag undistort(parser, "undistort", "Undistort images on-the-fly before training", {"undistort"});
             ::args::Flag enable_sparsity(parser, "enable_sparsity", "Enable sparsity optimization", {"enable-sparsity"});
 
             // Mask-related arguments
@@ -416,6 +417,7 @@ namespace {
                                         bg_modulation_flag = bool(bg_modulation),
                                         random_flag = bool(random),
                                         gut_flag = bool(gut),
+                                        undistort_flag = bool(undistort),
                                         enable_sparsity_flag = bool(enable_sparsity),
                                         invert_masks_flag = bool(invert_masks),
                                         no_alpha_as_mask_flag = bool(no_alpha_as_mask)]() {
@@ -473,6 +475,7 @@ namespace {
                 setFlag(bg_modulation_flag, opt.bg_modulation);
                 setFlag(random_flag, opt.random);
                 setFlag(gut_flag, opt.gut);
+                setFlag(undistort_flag, opt.undistort);
                 setFlag(enable_sparsity_flag, opt.enable_sparsity);
 
                 // Mask parameters

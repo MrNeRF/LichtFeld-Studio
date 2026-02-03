@@ -214,6 +214,7 @@ set(TEST_FILES
     test_ppisp_regularization.cpp
     test_ppisp_cuda_vs_torch.cpp
     test_controller_memory.cpp
+    test_undistort.cpp
 )
 
 # Build test sources list

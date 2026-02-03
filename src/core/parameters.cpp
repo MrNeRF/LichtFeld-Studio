@@ -87,6 +87,7 @@ namespace lfs::core {
             opt_json["pause_refine_after_reset"] = pause_refine_after_reset;
             opt_json["revised_opacity"] = revised_opacity;
             opt_json["gut"] = gut;
+            opt_json["undistort"] = undistort;
             opt_json["steps_scaler"] = steps_scaler;
             opt_json["sh_degree_interval"] = sh_degree_interval;
             opt_json["random"] = random;
@@ -301,6 +302,9 @@ namespace lfs::core {
             }
             if (json.contains("gut")) {
                 params.gut = json["gut"];
+            }
+            if (json.contains("undistort")) {
+                params.undistort = json["undistort"];
             }
 
             if (json.contains("bg_mode")) {

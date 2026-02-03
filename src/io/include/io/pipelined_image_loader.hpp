@@ -68,6 +68,7 @@ namespace lfs::io {
         MaskParams mask_params;
         bool extract_alpha_as_mask = false;
         MaskParams alpha_mask_params;
+        const lfs::core::UndistortParams* undistort = nullptr;
     };
 
     struct ReadyImage {
@@ -141,6 +142,7 @@ namespace lfs::io {
             MaskParams mask_params; // Invert/threshold params (only used if is_mask)
             bool alpha_as_mask = false;
             MaskParams alpha_mask_params;
+            const lfs::core::UndistortParams* undistort = nullptr;
         };
 
         // Pairing buffer: wait for both image and mask before output

@@ -546,6 +546,27 @@ namespace lfs::training {
                 return std::unexpected(result.error());
             }
 
+            // Prepare undistortion for all cameras with distortion
+            if (params.optimization.undistort) {
+                int prepared = 0;
+                for (auto& cam : train_dataset_->get_cameras()) {
+                    if (cam && cam->has_distortion()) {
+                        cam->prepare_undistortion();
+                        ++prepared;
+                    }
+                }
+                if (val_dataset_) {
+                    for (auto& cam : val_dataset_->get_cameras()) {
+                        if (cam && cam->has_distortion()) {
+                            cam->prepare_undistortion();
+                        }
+                    }
+                }
+                if (prepared > 0) {
+                    LOG_INFO("Prepared undistortion for {} cameras", prepared);
+                }
+            }
+
             // Initialize sparsity optimizer
             if (params.optimization.enable_sparsity) {
                 constexpr int UPDATE_INTERVAL = 50;
@@ -962,18 +983,17 @@ namespace lfs::training {
         RenderMode render_mode,
         std::stop_token stop_token) {
         try {
-            // GUT mode enables Gaussian Unscented Transform for lens distortion handling
             if (params_.optimization.gut) {
                 if (cam->camera_model_type() == core::CameraModelType::ORTHO) {
                     return std::unexpected("Training on cameras with ortho model is not supported yet.");
                 }
-            } else {
+            } else if (!params_.optimization.undistort || !cam->is_undistort_prepared()) {
                 if (cam->radial_distortion().numel() != 0 ||
                     cam->tangential_distortion().numel() != 0) {
-                    return std::unexpected("Distorted images detected.  You can use --gut option to train on cameras with distortion.");
+                    return std::unexpected("Distorted images detected. Use --gut or --undistort to train on cameras with distortion.");
                 }
                 if (cam->camera_model_type() != core::CameraModelType::PINHOLE) {
-                    return std::unexpected("You must use --gut option to train on cameras with non-pinhole model.");
+                    return std::unexpected("Use --gut or --undistort to train on cameras with non-pinhole model.");
                 }
             }
 

@@ -105,6 +105,7 @@ namespace lfs::core {
             size_t pause_refine_after_reset = 0;
             bool revised_opacity = false;
             bool gut = false;
+            bool undistort = false;
             float steps_scaler = 1.f; // Scales training step counts; values <= 0 disable scaling
 
             // Random initialization parameters
