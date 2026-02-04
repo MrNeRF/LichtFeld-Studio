@@ -127,7 +127,7 @@ target_link_libraries(lfs_visualizer
         lfs_io
         lfs_rendering
         lfs_training
-        lfs_python_runtime
+        $<$<BOOL:${BUILD_PYTHON_BINDINGS}>:lfs_python_runtime>
         $<$<BOOL:${BUILD_PYTHON_BINDINGS}>:lfs_python_utils>
         lfs_sequencer      # Camera animation sequencer
         glad::glad

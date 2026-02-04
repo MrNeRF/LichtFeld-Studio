@@ -190,10 +190,6 @@ set(TEST_FILES
     test_mask_loss.cpp
     test_checkpoint_resume.cpp
     test_video_color_convert.cpp
-    test_python_integration.cpp
-    test_uv_runner.cpp
-    test_uv_runner_proof.cpp
-    test_pytorch_install_proof.cpp
     test_nan_inf_gpu_check.cpp
     test_mcmc_nan_fix.cpp
     test_vram_resize.cpp
@@ -213,10 +209,8 @@ set(TEST_FILES
     test_torch_conversion.cpp
     test_fastgs_kernels.cpp
     test_fastgs_fuzz.cpp
-    test_python_io.cpp
     test_extended_unary_ops_vs_torch.cpp
     # test_property_system.cpp  # Disabled: needs API update after merge
-    test_scene_validity.cpp
     test_fastgs_analytical_gradients.cpp
     test_background_image.cpp
     test_operator_return_value.cpp
@@ -229,6 +223,17 @@ set(TEST_FILES
     test_controller_memory.cpp
     test_undistort.cpp
 )
+
+if(BUILD_PYTHON_BINDINGS)
+    list(APPEND TEST_FILES
+        test_python_integration.cpp
+        test_uv_runner.cpp
+        test_uv_runner_proof.cpp
+        test_pytorch_install_proof.cpp
+        test_python_io.cpp
+        test_scene_validity.cpp
+    )
+endif()
 
 # Build test sources list
 set(TEST_SOURCES test_main.cpp)
