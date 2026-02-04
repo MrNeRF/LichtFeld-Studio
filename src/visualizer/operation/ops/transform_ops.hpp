@@ -4,11 +4,12 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "operation/operation.hpp"
 
 namespace lfs::vis::op {
 
-    class TransformTranslate : public Operation {
+    class LFS_VIS_API TransformTranslate : public Operation {
     public:
         OperationResult execute(SceneManager& scene,
                                 const OperatorProperties& props,
@@ -20,7 +21,7 @@ namespace lfs::vis::op {
         [[nodiscard]] ModifiesFlag modifies() const override { return ModifiesFlag::TRANSFORMS; }
     };
 
-    class TransformRotate : public Operation {
+    class LFS_VIS_API TransformRotate : public Operation {
     public:
         OperationResult execute(SceneManager& scene,
                                 const OperatorProperties& props,
@@ -32,7 +33,7 @@ namespace lfs::vis::op {
         [[nodiscard]] ModifiesFlag modifies() const override { return ModifiesFlag::TRANSFORMS; }
     };
 
-    class TransformScale : public Operation {
+    class LFS_VIS_API TransformScale : public Operation {
     public:
         OperationResult execute(SceneManager& scene,
                                 const OperatorProperties& props,
@@ -44,7 +45,7 @@ namespace lfs::vis::op {
         [[nodiscard]] ModifiesFlag modifies() const override { return ModifiesFlag::TRANSFORMS; }
     };
 
-    class TransformSet : public Operation {
+    class LFS_VIS_API TransformSet : public Operation {
     public:
         OperationResult execute(SceneManager& scene,
                                 const OperatorProperties& props,

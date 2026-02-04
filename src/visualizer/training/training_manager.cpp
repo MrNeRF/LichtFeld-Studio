@@ -118,7 +118,7 @@ namespace lfs::vis {
 
             trainer_ = std::move(trainer);
             updateResourceTracking();
-            // Checkpoint load goes to Paused
+            internal::TrainerReady{}.emit();
 
             if (!state_machine_.transitionTo(TrainingState::Paused)) {
                 LOG_WARN("Failed to transition to Paused");

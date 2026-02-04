@@ -14,6 +14,7 @@
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/cache_image_loader.hpp"
 #include "rendering/framebuffer_factory.hpp"
+#include "core/checkpoint_format.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
 #include "visualizer/scene/scene.hpp"
@@ -37,49 +38,136 @@ namespace lfs::app {
         bool checkCudaDriverVersion();
 
         int runHeadless(std::unique_ptr<lfs::core::param::TrainingParameters> params) {
-            if (params->dataset.data_path.empty()) {
-                LOG_ERROR("Headless mode requires --data-path");
+            if (params->dataset.data_path.empty() && !params->resume_checkpoint) {
+                LOG_ERROR("Headless mode requires --data-path or --resume");
                 return 1;
             }
 
             checkCudaDriverVersion();
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
 
-            LOG_INFO("Starting headless training...");
-
             vis::Scene scene;
 
-            if (const auto result = training::loadTrainingDataIntoScene(*params, scene); !result) {
-                LOG_ERROR("Failed to load training data: {}", result.error());
-                return 1;
-            }
+            if (params->resume_checkpoint) {
+                LOG_INFO("Resuming from checkpoint: {}", core::path_to_utf8(*params->resume_checkpoint));
 
-            if (const auto result = training::initializeTrainingModel(*params, scene); !result) {
-                LOG_ERROR("Failed to initialize model: {}", result.error());
-                return 1;
-            }
-
-            auto trainer = std::make_unique<training::Trainer>(scene);
-
-            if (!params->python_scripts.empty()) {
-                trainer->set_python_scripts(params->python_scripts);
-                vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
-            }
-
-            if (const auto result = trainer->initialize(*params); !result) {
-                LOG_ERROR("Failed to initialize trainer: {}", result.error());
-                return 1;
-            }
-
-            lfs::core::CudaMemoryPool::instance().trim_cached_memory();
-
-            if (const auto result = trainer->train(); !result) {
-                LOG_ERROR("Training error: {}", result.error());
-                if (!params->python_scripts.empty()) {
-                    python::finalize();
-                    std::_Exit(1);
+                auto params_result = core::load_checkpoint_params(*params->resume_checkpoint);
+                if (!params_result) {
+                    LOG_ERROR("Failed to load checkpoint params: {}", params_result.error());
+                    return 1;
                 }
-                return 1;
+                auto checkpoint_params = std::move(*params_result);
+
+                if (!params->dataset.data_path.empty())
+                    checkpoint_params.dataset.data_path = params->dataset.data_path;
+                if (!params->dataset.output_path.empty())
+                    checkpoint_params.dataset.output_path = params->dataset.output_path;
+
+                if (checkpoint_params.dataset.data_path.empty()) {
+                    LOG_ERROR("Checkpoint has no dataset path and none provided via --data-path");
+                    return 1;
+                }
+                if (!std::filesystem::exists(checkpoint_params.dataset.data_path)) {
+                    LOG_ERROR("Dataset path does not exist: {}", core::path_to_utf8(checkpoint_params.dataset.data_path));
+                    return 1;
+                }
+
+                if (const auto result = training::validateDatasetPath(checkpoint_params); !result) {
+                    LOG_ERROR("Dataset validation failed: {}", result.error());
+                    return 1;
+                }
+
+                if (const auto result = training::loadTrainingDataIntoScene(checkpoint_params, scene); !result) {
+                    LOG_ERROR("Failed to load training data: {}", result.error());
+                    return 1;
+                }
+
+                for (const auto* node : scene.getNodes()) {
+                    if (node->type == vis::NodeType::POINTCLOUD) {
+                        scene.removeNode(node->name, false);
+                        break;
+                    }
+                }
+
+                auto splat_result = core::load_checkpoint_splat_data(*params->resume_checkpoint);
+                if (!splat_result) {
+                    LOG_ERROR("Failed to load checkpoint splat data: {}", splat_result.error());
+                    return 1;
+                }
+
+                auto splat_data = std::make_unique<core::SplatData>(std::move(*splat_result));
+                scene.addSplat("Model", std::move(splat_data), vis::NULL_NODE);
+                scene.setTrainingModelNode("Model");
+
+                checkpoint_params.resume_checkpoint = *params->resume_checkpoint;
+
+                if (params->optimization.iterations != checkpoint_params.optimization.iterations)
+                    checkpoint_params.optimization.iterations = params->optimization.iterations;
+
+                auto trainer = std::make_unique<training::Trainer>(scene);
+
+                if (!params->python_scripts.empty()) {
+                    trainer->set_python_scripts(params->python_scripts);
+                    vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
+                }
+
+                if (const auto result = trainer->initialize(checkpoint_params); !result) {
+                    LOG_ERROR("Failed to initialize trainer: {}", result.error());
+                    return 1;
+                }
+
+                const auto ckpt_result = trainer->load_checkpoint(*params->resume_checkpoint);
+                if (!ckpt_result) {
+                    LOG_ERROR("Failed to restore checkpoint state: {}", ckpt_result.error());
+                    return 1;
+                }
+                LOG_INFO("Resumed from iteration {}", *ckpt_result);
+
+                core::CudaMemoryPool::instance().trim_cached_memory();
+
+                if (const auto result = trainer->train(); !result) {
+                    LOG_ERROR("Training error: {}", result.error());
+                    if (!params->python_scripts.empty()) {
+                        python::finalize();
+                        std::_Exit(1);
+                    }
+                    return 1;
+                }
+            } else {
+                LOG_INFO("Starting headless training...");
+
+                if (const auto result = training::loadTrainingDataIntoScene(*params, scene); !result) {
+                    LOG_ERROR("Failed to load training data: {}", result.error());
+                    return 1;
+                }
+
+                if (const auto result = training::initializeTrainingModel(*params, scene); !result) {
+                    LOG_ERROR("Failed to initialize model: {}", result.error());
+                    return 1;
+                }
+
+                auto trainer = std::make_unique<training::Trainer>(scene);
+
+                if (!params->python_scripts.empty()) {
+                    trainer->set_python_scripts(params->python_scripts);
+                    vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
+                }
+
+                if (const auto result = trainer->initialize(*params); !result) {
+                    LOG_ERROR("Failed to initialize trainer: {}", result.error());
+                    return 1;
+                }
+
+                core::CudaMemoryPool::instance().trim_cached_memory();
+
+                if (const auto result = trainer->train(); !result) {
+                    LOG_ERROR("Training error: {}", result.error());
+                    if (!params->python_scripts.empty()) {
+                        python::finalize();
+                        std::_Exit(1);
+                    }
+                    return 1;
+                }
             }
 
             LOG_INFO("Headless training completed");

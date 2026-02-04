@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 #pragma once
 
+#include "core/export.hpp"
 #include <filesystem>
 #include <string>
 
@@ -28,25 +29,25 @@ namespace lfs::vis::gui {
 #endif
 
     // Cross-platform file open dialogs (return path, empty if cancelled)
-    std::filesystem::path OpenPlyFileDialogNative(const std::filesystem::path& startDir = {});
-    std::filesystem::path OpenCheckpointFileDialog();
-    std::filesystem::path OpenDatasetFolderDialogNative();
+    LFS_VIS_API std::filesystem::path OpenPlyFileDialogNative(const std::filesystem::path& startDir = {});
+    LFS_VIS_API std::filesystem::path OpenCheckpointFileDialog();
+    LFS_VIS_API std::filesystem::path OpenDatasetFolderDialogNative();
 
     // Cross-platform file save/open dialogs
-    std::filesystem::path OpenImageFileDialog(const std::filesystem::path& startDir = {});
-    std::filesystem::path SavePlyFileDialog(const std::string& defaultName);
-    std::filesystem::path SaveJsonFileDialog(const std::string& defaultName);
-    std::filesystem::path OpenJsonFileDialog();
-    std::filesystem::path SaveSogFileDialog(const std::string& defaultName);
-    std::filesystem::path SaveSpzFileDialog(const std::string& defaultName);
-    std::filesystem::path SaveHtmlFileDialog(const std::string& defaultName);
-    std::filesystem::path SaveMp4FileDialog(const std::string& defaultName);
-    std::filesystem::path OpenVideoFileDialog();
-    std::filesystem::path SelectFolderDialog(const std::string& title = "Select Folder",
-                                             const std::filesystem::path& startDir = {});
+    LFS_VIS_API std::filesystem::path OpenImageFileDialog(const std::filesystem::path& startDir = {});
+    LFS_VIS_API std::filesystem::path SavePlyFileDialog(const std::string& defaultName);
+    LFS_VIS_API std::filesystem::path SaveJsonFileDialog(const std::string& defaultName);
+    LFS_VIS_API std::filesystem::path OpenJsonFileDialog();
+    LFS_VIS_API std::filesystem::path SaveSogFileDialog(const std::string& defaultName);
+    LFS_VIS_API std::filesystem::path SaveSpzFileDialog(const std::string& defaultName);
+    LFS_VIS_API std::filesystem::path SaveHtmlFileDialog(const std::string& defaultName);
+    LFS_VIS_API std::filesystem::path SaveMp4FileDialog(const std::string& defaultName);
+    LFS_VIS_API std::filesystem::path OpenVideoFileDialog();
+    LFS_VIS_API std::filesystem::path SelectFolderDialog(const std::string& title = "Select Folder",
+                                                         const std::filesystem::path& startDir = {});
 
     // Python script file dialogs
-    std::filesystem::path OpenPythonFileDialog(const std::filesystem::path& startDir = {});
-    std::filesystem::path SavePythonFileDialog(const std::string& defaultName);
+    LFS_VIS_API std::filesystem::path OpenPythonFileDialog(const std::filesystem::path& startDir = {});
+    LFS_VIS_API std::filesystem::path SavePythonFileDialog(const std::string& defaultName);
 
 } // namespace lfs::vis::gui

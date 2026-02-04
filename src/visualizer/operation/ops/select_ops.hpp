@@ -4,11 +4,12 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "operation/operation.hpp"
 
 namespace lfs::vis::op {
 
-    class SelectAll : public Operation {
+    class LFS_VIS_API SelectAll : public Operation {
     public:
         OperationResult execute(SceneManager& scene,
                                 const OperatorProperties& props,
@@ -20,7 +21,7 @@ namespace lfs::vis::op {
         [[nodiscard]] ModifiesFlag modifies() const override { return ModifiesFlag::SELECTION; }
     };
 
-    class SelectNone : public Operation {
+    class LFS_VIS_API SelectNone : public Operation {
     public:
         OperationResult execute(SceneManager& scene,
                                 const OperatorProperties& props,
@@ -31,7 +32,7 @@ namespace lfs::vis::op {
         [[nodiscard]] ModifiesFlag modifies() const override { return ModifiesFlag::SELECTION; }
     };
 
-    class SelectInvert : public Operation {
+    class LFS_VIS_API SelectInvert : public Operation {
     public:
         OperationResult execute(SceneManager& scene,
                                 const OperatorProperties& props,
@@ -43,7 +44,7 @@ namespace lfs::vis::op {
         [[nodiscard]] ModifiesFlag modifies() const override { return ModifiesFlag::SELECTION; }
     };
 
-    class SelectGrow : public Operation {
+    class LFS_VIS_API SelectGrow : public Operation {
     public:
         OperationResult execute(SceneManager& scene,
                                 const OperatorProperties& props,
@@ -55,7 +56,7 @@ namespace lfs::vis::op {
         [[nodiscard]] ModifiesFlag modifies() const override { return ModifiesFlag::SELECTION; }
     };
 
-    class SelectShrink : public Operation {
+    class LFS_VIS_API SelectShrink : public Operation {
     public:
         OperationResult execute(SceneManager& scene,
                                 const OperatorProperties& props,

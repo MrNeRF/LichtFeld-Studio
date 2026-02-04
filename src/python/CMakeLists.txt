@@ -189,6 +189,9 @@ target_link_libraries(lfs_py PRIVATE
     OpenImageIO::OpenImageIO
     CUDA::cudart
     CUDA::curand
+    imgui::imgui
+    implot::implot
+    glfw
 )
 
 target_include_directories(lfs_py PRIVATE

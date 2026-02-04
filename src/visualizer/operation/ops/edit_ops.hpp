@@ -4,11 +4,12 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "operation/operation.hpp"
 
 namespace lfs::vis::op {
 
-    class EditDelete : public Operation {
+    class LFS_VIS_API EditDelete : public Operation {
     public:
         OperationResult execute(SceneManager& scene,
                                 const OperatorProperties& props,
@@ -22,7 +23,7 @@ namespace lfs::vis::op {
         }
     };
 
-    class EditDuplicate : public Operation {
+    class LFS_VIS_API EditDuplicate : public Operation {
     public:
         OperationResult execute(SceneManager& scene,
                                 const OperatorProperties& props,

@@ -124,7 +124,7 @@ namespace lfs::vis {
     };
 
     // Complete theme
-    struct Theme {
+    struct LFS_VIS_API Theme {
         std::string name;
         ThemePalette palette;
         ThemeSizes sizes;
@@ -221,31 +221,31 @@ namespace lfs::vis {
     };
 
     // DPI scale for theme sizing
-    void setThemeDpiScale(float scale);
-    [[nodiscard]] float getThemeDpiScale();
+    LFS_VIS_API void setThemeDpiScale(float scale);
+    [[nodiscard]] LFS_VIS_API float getThemeDpiScale();
 
     [[nodiscard]] LFS_VIS_API const Theme& theme();
     LFS_VIS_API void setTheme(const Theme& t);
     LFS_VIS_API void applyThemeToImGui();
 
     // Presets (loaded from JSON files with hot-reload support)
-    [[nodiscard]] const Theme& darkTheme();
-    [[nodiscard]] const Theme& lightTheme();
-    void checkThemeFileChanges(); // Call periodically to hot-reload
+    [[nodiscard]] LFS_VIS_API const Theme& darkTheme();
+    [[nodiscard]] LFS_VIS_API const Theme& lightTheme();
+    LFS_VIS_API void checkThemeFileChanges(); // Call periodically to hot-reload
 
     // Persistence
-    bool saveTheme(const Theme& t, const std::string& path);
-    bool loadTheme(Theme& t, const std::string& path);
+    LFS_VIS_API bool saveTheme(const Theme& t, const std::string& path);
+    LFS_VIS_API bool loadTheme(Theme& t, const std::string& path);
 
     // Theme preference (for splash screen)
     LFS_VIS_API void saveThemePreference(bool is_dark);
     [[nodiscard]] LFS_VIS_API bool loadThemePreference(); // Returns true if dark theme
 
     // Color utilities
-    [[nodiscard]] ImVec4 lighten(const ImVec4& color, float amount);
-    [[nodiscard]] ImVec4 darken(const ImVec4& color, float amount);
-    [[nodiscard]] ImVec4 withAlpha(const ImVec4& color, float alpha);
-    [[nodiscard]] ImU32 toU32(const ImVec4& color);
-    [[nodiscard]] ImU32 toU32WithAlpha(const ImVec4& color, float alpha);
+    [[nodiscard]] LFS_VIS_API ImVec4 lighten(const ImVec4& color, float amount);
+    [[nodiscard]] LFS_VIS_API ImVec4 darken(const ImVec4& color, float amount);
+    [[nodiscard]] LFS_VIS_API ImVec4 withAlpha(const ImVec4& color, float alpha);
+    [[nodiscard]] LFS_VIS_API ImU32 toU32(const ImVec4& color);
+    [[nodiscard]] LFS_VIS_API ImU32 toU32WithAlpha(const ImVec4& color, float alpha);
 
 } // namespace lfs::vis

@@ -240,9 +240,9 @@ namespace lfs::vis::input {
         void notifyBindingsChanged();
     };
 
-    std::string getActionName(Action action);
-    std::string getKeyName(int key);
-    std::string getMouseButtonName(MouseButton button);
-    std::string getModifierString(int modifiers);
+    LFS_VIS_API std::string getActionName(Action action);
+    LFS_VIS_API std::string getKeyName(int key);
+    LFS_VIS_API std::string getMouseButtonName(MouseButton button);
+    LFS_VIS_API std::string getModifierString(int modifiers);
 
 } // namespace lfs::vis::input

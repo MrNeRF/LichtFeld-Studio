@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 
 #include <array>
@@ -32,10 +33,10 @@ namespace lfs::vis {
     using GetViewCallback = std::function<std::optional<ViewInfo>()>;
     using GetViewportRenderCallback = std::function<std::optional<ViewportRender>()>;
 
-    void set_view_callback(GetViewCallback callback);
-    void set_viewport_render_callback(GetViewportRenderCallback callback);
-    [[nodiscard]] std::optional<ViewInfo> get_current_view_info();
-    [[nodiscard]] std::optional<ViewportRender> get_viewport_render();
+    LFS_VIS_API void set_view_callback(GetViewCallback callback);
+    LFS_VIS_API void set_viewport_render_callback(GetViewportRenderCallback callback);
+    [[nodiscard]] LFS_VIS_API std::optional<ViewInfo> get_current_view_info();
+    [[nodiscard]] LFS_VIS_API std::optional<ViewportRender> get_viewport_render();
 
     struct RenderSettingsProxy {
         float focal_length_mm = 35.0f;
@@ -82,8 +83,8 @@ namespace lfs::vis {
     using GetRenderSettingsCallback = std::function<std::optional<RenderSettingsProxy>()>;
     using SetRenderSettingsCallback = std::function<void(const RenderSettingsProxy&)>;
 
-    void set_render_settings_callbacks(GetRenderSettingsCallback get_cb, SetRenderSettingsCallback set_cb);
-    [[nodiscard]] std::optional<RenderSettingsProxy> get_render_settings();
-    void update_render_settings(const RenderSettingsProxy& settings);
+    LFS_VIS_API void set_render_settings_callbacks(GetRenderSettingsCallback get_cb, SetRenderSettingsCallback set_cb);
+    [[nodiscard]] LFS_VIS_API std::optional<RenderSettingsProxy> get_render_settings();
+    LFS_VIS_API void update_render_settings(const RenderSettingsProxy& settings);
 
 } // namespace lfs::vis
