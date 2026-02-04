@@ -160,8 +160,18 @@ target_link_libraries(lfs_visualizer
 # Set C++ standard
 target_compile_features(lfs_visualizer PUBLIC cxx_std_23)
 
-if(UNIX AND NOT APPLE)
-    target_link_options(lfs_visualizer PRIVATE -Wl,-z,notext)
+if(WIN32)
+    set_target_properties(lfs_visualizer PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        CXX_VISIBILITY_PRESET hidden
+        VISIBILITY_INLINES_HIDDEN ON
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+        RUNTIME_OUTPUT_DIRECTORY_DEBUG ${CMAKE_BINARY_DIR}
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}
+        RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO ${CMAKE_BINARY_DIR}
+        RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL ${CMAKE_BINARY_DIR}
+    )
 endif()
 
 # Compiler options

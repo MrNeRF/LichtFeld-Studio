@@ -596,6 +596,8 @@ function Copy-RequiredDLLs {
 
     $DLLSources += @{ Source = "src\python\$Config\lfs_python_runtime.dll"; Name = "lfs_python_runtime.dll" }
     $DLLSources += @{ Source = "src\python\$Config\python3.dll"; Name = "python3.dll" }
+    $DLLSources += @{ Source = "src\visualizer\$Config\lfs_visualizer.dll"; Name = "lfs_visualizer.dll" }
+    $DLLSources += @{ Source = "src\mcp\$Config\lfs_mcp.dll"; Name = "lfs_mcp.dll" }
 
     $CopiedCount = 0
     foreach ($DLL in $DLLSources) {
