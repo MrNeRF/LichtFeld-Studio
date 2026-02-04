@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "mcp_protocol.hpp"
 #include "mcp_tools.hpp"
 
@@ -15,7 +16,7 @@
 
 namespace lfs::mcp {
 
-    class McpServer {
+    class LFS_MCP_API McpServer {
     public:
         McpServer();
         ~McpServer();
@@ -48,6 +49,6 @@ namespace lfs::mcp {
         std::mutex io_mutex_;
     };
 
-    int run_mcp_server_main(int argc, char* argv[]);
+    LFS_MCP_API int run_mcp_server_main(int argc, char* argv[]);
 
 } // namespace lfs::mcp

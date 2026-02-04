@@ -238,8 +238,8 @@ namespace lfs::vis {
     bool loadTheme(Theme& t, const std::string& path);
 
     // Theme preference (for splash screen)
-    void saveThemePreference(bool is_dark);
-    [[nodiscard]] bool loadThemePreference(); // Returns true if dark theme
+    LFS_VIS_API void saveThemePreference(bool is_dark);
+    [[nodiscard]] LFS_VIS_API bool loadThemePreference(); // Returns true if dark theme
 
     // Color utilities
     [[nodiscard]] ImVec4 lighten(const ImVec4& color, float amount);
