@@ -74,6 +74,13 @@ class ToolRegistry:
         return True
 
     @classmethod
+    def clear_active(cls):
+        lf.ui.ops.cancel_modal()
+        lf.ui.clear_gizmo()
+        lf.ui.clear_active_operator()
+        cls._active_tool_id = ""
+
+    @classmethod
     def get_active(cls) -> Optional[ToolDef]:
         """Get the active tool definition."""
         return cls.get(cls._active_tool_id)

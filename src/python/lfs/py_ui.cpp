@@ -2993,6 +2993,7 @@ namespace lfs::python {
                 if (editor) {
                     editor->clearActiveOperator();
                 }
+                vis::UnifiedToolRegistry::instance().clearActiveTool();
             },
             "Clear the active operator");
 

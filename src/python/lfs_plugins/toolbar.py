@@ -67,7 +67,6 @@ class GizmoToolbar(Panel):
         return icon_manager.get_ui_icon(f"{icon_name}.png")
 
     def _activate_tool(self, tool_id):
-        """Activate a tool via the new tool/operator architecture."""
         ToolRegistry.set_active(tool_id)
 
     def draw(self, layout):
@@ -144,7 +143,10 @@ class GizmoToolbar(Panel):
                     if layout.toolbar_button(f"##{tool_id}", icon, btn_sz,
                                              selected, not enabled, tooltip):
                         if enabled:
-                            self._activate_tool(tool_id)
+                            if selected:
+                                ToolRegistry.clear_active()
+                            else:
+                                self._activate_tool(tool_id)
 
         layout.end_window()
         layout.pop_style_color(1)
