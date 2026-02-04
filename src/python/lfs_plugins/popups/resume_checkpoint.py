@@ -67,10 +67,7 @@ class ResumeCheckpointPopup:
         from pathlib import Path
 
         p = Path(path)
-        if not p.exists():
-            return False
-        # Check for common dataset indicators
-        return (p / "sparse").exists() or (p / "images").exists()
+        return p.is_dir()
 
     def draw(self, layout):
         """Draw the popup. Called every frame."""
