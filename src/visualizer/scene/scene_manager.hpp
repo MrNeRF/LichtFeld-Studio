@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/events.hpp"
+#include "core/export.hpp"
 #include "core/parameters.hpp"
 #include "core/services.hpp"
 #include "core/splat_data_mirror.hpp"

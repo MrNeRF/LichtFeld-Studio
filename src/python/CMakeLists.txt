@@ -217,6 +217,8 @@ if(WIN32)
             "$<TARGET_FILE:lfs_python_runtime>"
             "$<TARGET_FILE:lfs_event_bridge>"
             "$<TARGET_FILE:lfs_core>"
+            "$<TARGET_FILE:lfs_visualizer>"
+            "$<TARGET_FILE:lfs_mcp>"
             "${CMAKE_CURRENT_BINARY_DIR}"
         COMMENT "Copying project DLLs to Python module directory"
     )
