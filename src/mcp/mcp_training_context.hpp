@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/parameters.hpp"
 #include "core/tensor.hpp"
 #include "training/trainer.hpp"
@@ -18,7 +19,7 @@
 
 namespace lfs::mcp {
 
-    class TrainingContext {
+    class LFS_MCP_API TrainingContext {
     public:
         static TrainingContext& instance();
 

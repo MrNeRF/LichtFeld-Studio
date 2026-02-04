@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <chrono>
@@ -169,7 +170,7 @@ namespace lfs::vis::input {
         static constexpr double DOUBLE_CLICK_WAIT_TIME = 0.4;
     };
 
-    class InputBindings {
+    class LFS_VIS_API InputBindings {
     public:
         InputBindings();
 

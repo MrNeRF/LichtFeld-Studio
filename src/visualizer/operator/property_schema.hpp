@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include <mutex>
 #include <optional>
 #include <string>
@@ -39,7 +40,7 @@ namespace lfs::vis::op {
         std::vector<std::tuple<std::string, std::string, std::string>> enum_items;
     };
 
-    class PropertySchemaRegistry {
+    class LFS_VIS_API PropertySchemaRegistry {
     public:
         static PropertySchemaRegistry& instance();
 

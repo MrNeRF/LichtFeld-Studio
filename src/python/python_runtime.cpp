@@ -1047,36 +1047,4 @@ namespace lfs::python {
         }
     }
 
-    namespace {
-        std::atomic<PythonHookInvoker> g_python_hook_invoker{nullptr};
-        std::atomic<PythonHookChecker> g_python_hook_checker{nullptr};
-    } // namespace
-
-    void set_python_hook_invoker(const PythonHookInvoker invoker) {
-        g_python_hook_invoker.store(invoker, std::memory_order_release);
-    }
-
-    void set_python_hook_checker(const PythonHookChecker checker) {
-        g_python_hook_checker.store(checker, std::memory_order_release);
-    }
-
-    void clear_python_hook_invoker() {
-        g_python_hook_invoker.store(nullptr, std::memory_order_release);
-        g_python_hook_checker.store(nullptr, std::memory_order_release);
-    }
-
-    void invoke_python_hooks(const std::string& panel, const std::string& section, const bool prepend) {
-        const auto invoker = g_python_hook_invoker.load(std::memory_order_acquire);
-        if (!invoker)
-            return;
-        if (bridge().prepare_ui)
-            bridge().prepare_ui();
-        invoker(panel.c_str(), section.c_str(), prepend);
-    }
-
-    bool has_python_hooks(const std::string& panel, const std::string& section) {
-        const auto checker = g_python_hook_checker.load(std::memory_order_acquire);
-        return checker ? checker(panel.c_str(), section.c_str()) : false;
-    }
-
 } // namespace lfs::python

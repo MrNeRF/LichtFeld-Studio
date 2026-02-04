@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/tensor.hpp"
 #include <cstdint>
 #include <memory>
@@ -24,7 +25,7 @@ namespace lfs::vis {
         std::string error;
     };
 
-    class SelectionService {
+    class LFS_VIS_API SelectionService {
     public:
         SelectionService(SceneManager* scene_manager, RenderingManager* rendering_manager);
         ~SelectionService();

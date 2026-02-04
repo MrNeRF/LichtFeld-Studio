@@ -21,7 +21,7 @@ namespace lfs::vis {
     // Forward declarations
     class Trainer;
 
-    class SceneManager {
+    class LFS_VIS_API SceneManager {
     public:
         // Content type - what's loaded, not execution state
         enum class ContentType {

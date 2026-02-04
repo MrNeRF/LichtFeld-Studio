@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/animatable_property.hpp"
+#include "core/export.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "training/components/ppisp.hpp"
@@ -130,7 +131,7 @@ namespace lfs::vis {
         Scene* scene_ = nullptr;
     };
 
-    class Scene {
+    class LFS_VIS_API Scene {
     public:
         // Alias for backwards compatibility
         using Node = SceneNode;

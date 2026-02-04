@@ -589,14 +589,4 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void update_selection(bool has_selection, int count);
     LFS_PYTHON_RUNTIME_API void flush_signals();
 
-    // Python hook invoker — shared library for single instance across exe and .pyd
-    using PythonHookInvoker = void (*)(const char* panel, const char* section, bool prepend);
-    using PythonHookChecker = bool (*)(const char* panel, const char* section);
-
-    LFS_PYTHON_RUNTIME_API void set_python_hook_invoker(PythonHookInvoker invoker);
-    LFS_PYTHON_RUNTIME_API void set_python_hook_checker(PythonHookChecker checker);
-    LFS_PYTHON_RUNTIME_API void clear_python_hook_invoker();
-    LFS_PYTHON_RUNTIME_API void invoke_python_hooks(const std::string& panel, const std::string& section, bool prepend);
-    LFS_PYTHON_RUNTIME_API bool has_python_hooks(const std::string& panel, const std::string& section);
-
 } // namespace lfs::python

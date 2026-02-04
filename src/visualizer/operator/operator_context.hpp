@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "input/input_types.hpp"
 #include <glm/glm.hpp>
 #include <memory>
@@ -35,7 +36,7 @@ namespace lfs::vis::op {
         }
     };
 
-    class OperatorContext {
+    class LFS_VIS_API OperatorContext {
     public:
         explicit OperatorContext(SceneManager& scene);
 

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include <string>
 #include <imgui.h>
 
@@ -223,10 +224,9 @@ namespace lfs::vis {
     void setThemeDpiScale(float scale);
     [[nodiscard]] float getThemeDpiScale();
 
-    // Global access
-    [[nodiscard]] const Theme& theme();
-    void setTheme(const Theme& t);
-    void applyThemeToImGui();
+    [[nodiscard]] LFS_VIS_API const Theme& theme();
+    LFS_VIS_API void setTheme(const Theme& t);
+    LFS_VIS_API void applyThemeToImGui();
 
     // Presets (loaded from JSON files with hot-reload support)
     [[nodiscard]] const Theme& darkTheme();

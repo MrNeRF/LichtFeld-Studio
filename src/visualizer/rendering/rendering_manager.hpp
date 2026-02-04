@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "framerate_controller.hpp"
 #include "internal/viewport.hpp"
 #include "io/nvcodec_image_loader.hpp"
@@ -208,7 +209,7 @@ namespace lfs::vis {
         [[nodiscard]] bool valid() const { return gt_texture_id != 0 && dimensions.x > 0 && dimensions.y > 0; }
     };
 
-    class RenderingManager {
+    class LFS_VIS_API RenderingManager {
     public:
         struct RenderContext {
             const Viewport& viewport;

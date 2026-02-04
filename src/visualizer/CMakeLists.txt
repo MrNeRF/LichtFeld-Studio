@@ -5,7 +5,14 @@
 # Fetch libvterm for terminal emulation
 include(${CMAKE_SOURCE_DIR}/cmake/FetchLibvterm.cmake)
 
-add_library(lfs_visualizer STATIC
+# SHARED on Windows to avoid singleton duplication across .exe/.pyd boundary
+if(WIN32)
+    set(LFS_VIS_LIB_TYPE SHARED)
+else()
+    set(LFS_VIS_LIB_TYPE STATIC)
+endif()
+
+add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # Core
         visualizer.cpp
         visualizer_impl.cpp
@@ -13,6 +20,7 @@ add_library(lfs_visualizer STATIC
         core/data_loading_service.cpp
         core/editor_context.cpp
         core/parameter_manager.cpp
+        core/services.cpp
 
         # Window management
         window/window_manager.cpp
@@ -97,6 +105,9 @@ add_library(lfs_visualizer STATIC
         operation/ops/edit_ops.cpp
         operation/ops/transform_ops.cpp
 
+        # Python hook invoker (DLL boundary singleton)
+        ${CMAKE_SOURCE_DIR}/src/python/ui_hooks.cpp
+
         # IPC for MCP integration
         ipc/selection_server.cpp
         ipc/view_context.cpp
@@ -119,23 +130,22 @@ target_include_directories(lfs_visualizer
         ${OPENGL_INCLUDE_DIRS}
 )
 
-# Link dependencies
 target_link_libraries(lfs_visualizer
         PRIVATE
-        lfs_core           # Use modular core library (LibTorch-free)
-        lfs_geometry       # LibTorch-free geometry module
+        lfs_core
+        lfs_geometry
         lfs_io
         lfs_rendering
         lfs_training
         lfs_python_runtime
         lfs_python_utils
-        lfs_sequencer      # Camera animation sequencer
+        lfs_sequencer
         glad::glad
         glfw
         imgui::imgui
         implot::implot
-        imguizmo::imguizmo # 3D manipulation gizmo
-        imgui_textedit     # Syntax highlighting text editor
+        imguizmo::imguizmo
+        imgui_textedit
         glm::glm
         TBB::tbb
         spdlog::spdlog
@@ -144,11 +154,15 @@ target_link_libraries(lfs_visualizer
         OpenSSL::Crypto
         CUDA::cudart
         ${OPENGL_LIBRARIES}
-        vterm              # Terminal emulator (libvterm)
+        vterm
 )
 
 # Set C++ standard
 target_compile_features(lfs_visualizer PUBLIC cxx_std_23)
+
+if(UNIX AND NOT APPLE)
+    target_link_options(lfs_visualizer PRIVATE -Wl,-z,notext)
+endif()
 
 # Compiler options
 target_compile_options(lfs_visualizer PRIVATE
@@ -210,6 +224,7 @@ endforeach ()
 
 # Compile definitions
 target_compile_definitions(lfs_visualizer PRIVATE
+        LFS_VIS_EXPORTS
         $<$<BOOL:${CUDA_GL_INTEROP_ENABLED}>:CUDA_GL_INTEROP_ENABLED>
         PROJECT_ROOT_PATH="${PROJECT_SOURCE_DIR}"
         VISUALIZER_SHADER_PATH="${VISUALIZER_BUILD_RESOURCE_DIR}/shaders"

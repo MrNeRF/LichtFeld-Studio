@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/modal_event.hpp"
 #include "core/operator_callbacks.hpp"
 #include "scene/scene.hpp"
@@ -66,7 +67,7 @@ namespace lfs::vis {
     };
 
     // Centralized editor state - single source of truth for tool availability
-    class EditorContext : public lfs::core::IOperatorCallbacks {
+    class LFS_VIS_API EditorContext : public lfs::core::IOperatorCallbacks {
     public:
         EditorContext() = default;
 

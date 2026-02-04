@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/camera.hpp"
 #include "core/parameters.hpp"
 #include "training/trainer.hpp"
@@ -21,7 +22,7 @@ namespace lfs::vis {
     class VisualizerImpl;
     class Scene;
 
-    class TrainerManager {
+    class LFS_VIS_API TrainerManager {
     public:
         // Legacy State enum for backwards compatibility
         // Use TrainingState from training_state.hpp for new code

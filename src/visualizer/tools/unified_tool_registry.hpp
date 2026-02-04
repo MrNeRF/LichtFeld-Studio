@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "tool_descriptor.hpp"
 #include <mutex>
 #include <string>
@@ -12,7 +13,7 @@
 
 namespace lfs::vis {
 
-    class UnifiedToolRegistry {
+    class LFS_VIS_API UnifiedToolRegistry {
     public:
         static UnifiedToolRegistry& instance();
 

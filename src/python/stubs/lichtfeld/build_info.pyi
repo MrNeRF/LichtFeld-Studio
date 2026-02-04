@@ -1,8 +1,8 @@
 
 
-version: str = 'v0.4.2-17-gfdea5450-dirty'
+version: str = 'v0.4.2-18-g6adc04c0-dirty'
 
-commit: str = 'fdea5450'
+commit: str = '6adc04c0'
 
 build_type: str = 'Release'
 

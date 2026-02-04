@@ -4,12 +4,13 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "operation.hpp"
 #include <vector>
 
 namespace lfs::vis::op {
 
-    class Pipeline {
+    class LFS_VIS_API Pipeline {
     public:
         struct Stage {
             OperationFactory factory;

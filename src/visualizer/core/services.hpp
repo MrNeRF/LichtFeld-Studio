@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include <cassert>
 #include <glm/glm.hpp>
 #include <vector>
@@ -22,28 +23,12 @@ namespace lfs::vis {
         class GuiManager;
     }
 
-    /**
-     * @brief Service locator for accessing core application services.
-     *
-     * Provides centralized access to all major managers without requiring
-     * pointer-passing chains between components. Services are registered
-     * during VisualizerImpl initialization and cleared on shutdown.
-     *
-     * Usage:
-     *   services().scene().selectNode("Model");
-     *   services().rendering().markDirty();
-     *
-     * Thread safety: Registration/clear should only happen on main thread.
-     * Access is safe from any thread (pointers are stable after init).
-     */
-    class Services {
+    // Service locator — registration on main thread only, access from any thread.
+    class LFS_VIS_API Services {
     public:
-        static Services& instance() {
-            static Services s;
-            return s;
-        }
+        static Services& instance();
 
-        // Registration (called during VisualizerImpl::initialize)
+        // Registration
         void set(SceneManager* sm) { scene_manager_ = sm; }
         void set(TrainerManager* tm) { trainer_manager_ = tm; }
         void set(RenderingManager* rm) { rendering_manager_ = rm; }
@@ -52,7 +37,7 @@ namespace lfs::vis {
         void set(ParameterManager* pm) { parameter_manager_ = pm; }
         void set(EditorContext* ec) { editor_context_ = ec; }
 
-        // Access - asserts if service not registered
+        // Access
         [[nodiscard]] SceneManager& scene() {
             assert(scene_manager_ && "SceneManager not registered");
             return *scene_manager_;
@@ -88,7 +73,7 @@ namespace lfs::vis {
             return *editor_context_;
         }
 
-        // Optional access - returns nullptr if not registered
+        // Nullable access
         [[nodiscard]] SceneManager* sceneOrNull() { return scene_manager_; }
         [[nodiscard]] TrainerManager* trainerOrNull() { return trainer_manager_; }
         [[nodiscard]] RenderingManager* renderingOrNull() { return rendering_manager_; }
@@ -102,12 +87,11 @@ namespace lfs::vis {
             return scene_manager_ && trainer_manager_ && rendering_manager_ && window_manager_;
         }
 
-        // Align tool state (shared between operator and tool)
+        // Align tool state
         void setAlignPickedPoints(std::vector<glm::vec3> points) { align_picked_points_ = std::move(points); }
         [[nodiscard]] const std::vector<glm::vec3>& getAlignPickedPoints() const { return align_picked_points_; }
         void clearAlignPickedPoints() { align_picked_points_.clear(); }
 
-        // Clear all services (called during shutdown)
         void clear() {
             scene_manager_ = nullptr;
             trainer_manager_ = nullptr;
@@ -137,7 +121,6 @@ namespace lfs::vis {
         std::vector<glm::vec3> align_picked_points_;
     };
 
-    // Convenience function
     inline Services& services() { return Services::instance(); }
 
 } // namespace lfs::vis

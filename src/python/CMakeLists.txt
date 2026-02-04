@@ -94,7 +94,6 @@ add_library(lfs_python_utils STATIC
     plugin_runner.cpp
     subprocess.cpp
     uv_runner.cpp
-    ui_hooks.cpp
 )
 
 target_include_directories(lfs_python_utils
@@ -178,15 +177,15 @@ target_compile_definitions(lfs_py PRIVATE
 
 target_link_libraries(lfs_py PRIVATE
     lfs_core
-    lfs_event_bridge    # Explicit: shared event bus for Python<->C++ events
-    lfs_training
+    lfs_event_bridge
     lfs_geometry
-    lfs_io
     lfs_visualizer
-    lfs_rendering       # For render_view, compute_screen_positions
-    lfs_sequencer       # For animation API
     lfs_mcp
     lfs_python_runtime
+    lfs_training
+    lfs_io
+    lfs_rendering
+    lfs_sequencer
     OpenImageIO::OpenImageIO
     CUDA::cudart
     CUDA::curand

@@ -232,7 +232,7 @@ target_link_libraries(lfs_io
         lfs_io_cuda            # IO-specific CUDA kernels (morton, k-means)
         lfs_core_cuda          # Core CUDA utilities (lanczos_resize for nvcodec)
         spz_lib                # Niantic SPZ compressed format
-        PkgConfig::FFMPEG      # FFmpeg for video frame extraction
+        PkgConfig::FFMPEG
 )
 
 # Link nvImageCodec if available

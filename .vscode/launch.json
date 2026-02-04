@@ -2,6 +2,48 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "name": "C++/CUDA Debug",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/debug_build/LichtFeld-Studio",
+            "args": [
+                "-d", "data/bicycle",
+                "--output-path", "output",
+                "--images", "images_4",
+                "--strategy", "mcmc",
+                "--max-cap", "2500000",
+                "--debug-python"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [
+                {
+                    "name": "PYTHONHOME",
+                    "value": "${workspaceFolder}/debug_build/vcpkg_installed/x64-linux/tools/python3"
+                }
+            ],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/local/cuda-12.8/bin/cuda-gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set CUDA memcheck off for performance",
+                    "text": "-interpreter-exec console \"set cuda memcheck off\"",
+                    "ignoreFailures": true
+                }
+            ],
+            "serverReadyAction": {
+                "action": "debugWithChrome",
+                "pattern": "debugpy listening on port ([0-9]+)",
+                "debugConfiguration": "Attach Python (debugpy)"
+            }
+        },
+        {
             "name": "Attach Python (debugpy)",
             "type": "debugpy",
             "request": "attach",
@@ -16,6 +58,42 @@
                 }
             ],
             "justMyCode": false
+        },
+        {
+            "name": "C++ Only (no Python debug)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/debug_build/LichtFeld-Studio",
+            "args": [
+                "-d", "data/bicycle",
+                "--output-path", "output",
+                "--images", "images_4",
+                "--strategy", "mcmc",
+                "--max-cap", "2500000"
+            ],
+            "stopAtEntry": false,
+            "cwd": "${workspaceFolder}",
+            "environment": [
+                {
+                    "name": "PYTHONHOME",
+                    "value": "${workspaceFolder}/debug_build/vcpkg_installed/x64-linux/tools/python3"
+                }
+            ],
+            "externalConsole": false,
+            "MIMode": "gdb",
+            "miDebuggerPath": "/usr/local/cuda-12.8/bin/cuda-gdb",
+            "setupCommands": [
+                {
+                    "description": "Enable pretty-printing",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                },
+                {
+                    "description": "Set CUDA memcheck off for performance",
+                    "text": "-interpreter-exec console \"set cuda memcheck off\"",
+                    "ignoreFailures": true
+                }
+            ]
         }
     ]
 }

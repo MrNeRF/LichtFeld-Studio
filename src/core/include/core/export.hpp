@@ -14,12 +14,21 @@
 #else
 #define LFS_CORE_API __declspec(dllimport)
 #endif
-// lfs_io and lfs_visualizer are STATIC — no dllexport/dllimport needed
 #define LFS_IO_API
-#define LFS_VIS_API
+#ifdef LFS_VIS_EXPORTS
+#define LFS_VIS_API __declspec(dllexport)
+#else
+#define LFS_VIS_API __declspec(dllimport)
+#endif
+#ifdef LFS_MCP_EXPORTS
+#define LFS_MCP_API __declspec(dllexport)
+#else
+#define LFS_MCP_API __declspec(dllimport)
+#endif
 #else
 #define LFS_LOGGER_API __attribute__((visibility("default")))
 #define LFS_CORE_API   __attribute__((visibility("default")))
 #define LFS_IO_API     __attribute__((visibility("default")))
 #define LFS_VIS_API    __attribute__((visibility("default")))
+#define LFS_MCP_API    __attribute__((visibility("default")))
 #endif

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "mcp_protocol.hpp"
 #include "training/control/command_api.hpp"
 
@@ -13,7 +14,7 @@
 
 namespace lfs::mcp {
 
-    class ToolRegistry {
+    class LFS_MCP_API ToolRegistry {
     public:
         using ToolHandler = std::function<json(const json& params)>;
 

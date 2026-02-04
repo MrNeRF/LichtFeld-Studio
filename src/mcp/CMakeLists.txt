@@ -2,7 +2,13 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-add_library(lfs_mcp STATIC
+if(WIN32)
+    set(LFS_MCP_LIB_TYPE SHARED)
+else()
+    set(LFS_MCP_LIB_TYPE STATIC)
+endif()
+
+add_library(lfs_mcp ${LFS_MCP_LIB_TYPE}
     mcp_protocol.cpp
     mcp_tools.cpp
     mcp_server.cpp
@@ -34,6 +40,12 @@ target_link_libraries(lfs_mcp
 )
 
 target_compile_features(lfs_mcp PUBLIC cxx_std_23)
+
+target_compile_definitions(lfs_mcp PRIVATE LFS_MCP_EXPORTS)
+
+if(UNIX AND NOT APPLE)
+    target_link_options(lfs_mcp PRIVATE -Wl,-z,notext)
+endif()
 
 # Standalone MCP server executable
 add_executable(lichtfeld-mcp

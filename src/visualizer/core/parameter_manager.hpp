@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/parameters.hpp"
 #include <expected>
 #include <string>
@@ -12,7 +13,7 @@
 namespace lfs::vis {
 
     // Session defaults set once at startup (CLI > --config > JSON), current params are user-editable.
-    class ParameterManager {
+    class LFS_VIS_API ParameterManager {
     public:
         std::expected<void, std::string> ensureLoaded();
 
