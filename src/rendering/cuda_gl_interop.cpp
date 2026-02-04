@@ -153,7 +153,7 @@ namespace lfs::rendering {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
         // Allocate texture storage (RGBA for better alignment)
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0,
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, allocated_width_, allocated_height_, 0,
                      GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 
         // CRITICAL: Unbind texture before registering with CUDA
