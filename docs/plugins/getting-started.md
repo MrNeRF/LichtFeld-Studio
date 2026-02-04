@@ -185,6 +185,48 @@ class SettingsPanel(Panel):
                     self.enabled = True
 ```
 
+### Layout composition
+
+Sub-layouts let you compose UI structure declaratively. Each sub-layout is a context manager that positions its children automatically.
+
+```python
+def draw(self, layout):
+    # Row: children placed side by side
+    with layout.row() as row:
+        row.button("A")
+        row.button("B")
+
+    # Box: bordered container
+    with layout.box() as box:
+        box.heading("Settings")
+        box.prop(self, "opacity")
+
+    # Split: two-column layout
+    with layout.split(0.3) as split:
+        split.label("Name")
+        split.prop(self, "name")
+
+    # State cascading: disable all children
+    with layout.column() as col:
+        col.enabled = self.is_active
+        col.prop(self, "value")
+        with col.row() as row:  # inherits disabled state
+            row.button("Apply")
+            row.button("Cancel")
+
+    # Responsive grid
+    with layout.grid_flow(columns=3) as grid:
+        for item in items:
+            grid.button(item.name)
+
+    # Enum toggle buttons
+    with layout.row() as row:
+        row.prop_enum(self, "mode", "fast", "Fast")
+        row.prop_enum(self, "mode", "quality", "Quality")
+```
+
+See [layout examples](examples/) for more patterns.
+
 ### Example: viewport overlay
 
 ```python

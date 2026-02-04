@@ -3,7 +3,8 @@
 """Comprehensive tensor tests comparing lichtfeld against PyTorch."""
 
 import pytest
-import numpy as np
+
+np = pytest.importorskip("numpy")
 
 # Test shape configurations
 SHAPES_1D = [(5,), (100,), (1,)]

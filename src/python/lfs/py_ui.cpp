@@ -39,7 +39,6 @@
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
-#include <iostream>
 
 #include <algorithm>
 #include <cassert>
@@ -67,6 +66,10 @@ namespace lfs::python {
         }
 
         constexpr size_t INPUT_TEXT_BUFFER_SIZE = 1024;
+        constexpr float GRID_AUTO_COLUMN_WIDTH = 100.0f;
+        constexpr float ALERT_BG_ALPHA = 0.15f;
+        constexpr int PROP_ENUM_COLOR_COUNT = 3;
+        constexpr float BOX_BORDER_SIZE = 1.0f;
 
         ImVec4 tuple_to_imvec4(const std::tuple<float, float, float, float>& t) {
             return {std::get<0>(t), std::get<1>(t), std::get<2>(t), std::get<3>(t)};
@@ -290,6 +293,29 @@ namespace lfs::python {
 
         // Thread-local layout stack for hierarchical layouts
         thread_local std::stack<LayoutContext> g_layout_stack;
+
+        bool draw_prop_enum_button(nb::object data, const std::string& prop_id,
+                                   const std::string& value, const std::string& text) {
+            const std::string current = nb::cast<std::string>(data.attr(prop_id.c_str()));
+            const bool selected = (current == value);
+            const std::string& display = text.empty() ? value : text;
+
+            if (selected) {
+                const auto theme = get_current_theme();
+                ImGui::PushStyleColor(ImGuiCol_Button, tuple_to_imvec4(theme.palette.primary));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, tuple_to_imvec4(theme.palette.primary));
+                ImGui::PushStyleColor(ImGuiCol_ButtonActive, tuple_to_imvec4(theme.palette.primary_dim));
+            }
+            const bool clicked = ImGui::Button(display.c_str());
+            if (selected)
+                ImGui::PopStyleColor(PROP_ENUM_COLOR_COUNT);
+
+            if (clicked && !selected) {
+                data.attr(prop_id.c_str()) = nb::cast(value);
+                return true;
+            }
+            return false;
+        }
 
         // Window flags for Python bindings
         struct PyWindowFlags {
@@ -761,12 +787,33 @@ namespace lfs::python {
         return nb::none();
     }
 
-    PyLayoutContextManager::PyLayoutContextManager(LayoutType type, float split_factor)
-        : type_(type),
-          split_factor_(split_factor) {
+    // --- PySubLayout ---
+
+    PySubLayout::PySubLayout(PyUILayout* parent, LayoutType type, float split_factor,
+                             int grid_columns)
+        : parent_(parent),
+          type_(type),
+          split_factor_(split_factor),
+          grid_columns_(grid_columns) {
+        assert(parent_);
     }
 
-    void PyLayoutContextManager::enter() {
+    PySubLayout::PySubLayout(PySubLayout* parent_sub, LayoutType type, float split_factor,
+                             int grid_columns)
+        : parent_(parent_sub->parent_),
+          type_(type),
+          split_factor_(split_factor),
+          grid_columns_(grid_columns) {
+        assert(parent_);
+        inherited_state_ = parent_sub->effective_state();
+    }
+
+    PySubLayout::~PySubLayout() {
+        if (entered_)
+            exit();
+    }
+
+    PySubLayout& PySubLayout::enter() {
         entered_ = true;
 
         LayoutContext ctx;
@@ -776,88 +823,251 @@ namespace lfs::python {
         ctx.is_first_child = true;
         ctx.available_width = ImGui::GetContentRegionAvail().x;
         ctx.cursor_start_x = ImGui::GetCursorPosX();
+        ctx.grid_columns = grid_columns_;
 
-        if (type_ == LayoutType::Split) {
+        switch (type_) {
+        case LayoutType::Split:
             ImGui::BeginGroup();
+            break;
+        case LayoutType::Box: {
+            const auto theme = get_current_theme();
+            ImGui::PushStyleVar(ImGuiStyleVar_ChildRounding, theme.sizes.frame_rounding);
+            ImGui::PushStyleColor(ImGuiCol_ChildBg, tuple_to_imvec4(theme.palette.surface));
+            ImGui::PushStyleColor(ImGuiCol_Border, tuple_to_imvec4(theme.palette.border));
+            ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, BOX_BORDER_SIZE);
+            const std::string id = "##pybox_" + std::to_string(parent_->next_box_id());
+            ImGui::BeginChild(id.c_str(), {0, 0},
+                              ImGuiChildFlags_Border | ImGuiChildFlags_AutoResizeY);
+            break;
+        }
+        case LayoutType::GridFlow: {
+            int cols = grid_columns_;
+            if (cols <= 0) {
+                const float avail = ImGui::GetContentRegionAvail().x;
+                cols = std::max(1, static_cast<int>(avail / GRID_AUTO_COLUMN_WIDTH));
+            }
+            ctx.grid_actual_columns = cols;
+            const std::string id = "##pygrid_" + std::to_string(parent_->next_grid_id());
+            ctx.table_active =
+                ImGui::BeginTable(id.c_str(), cols, ImGuiTableFlags_SizingStretchSame);
+            if (ctx.table_active)
+                ImGui::TableNextRow();
+            break;
+        }
+        default:
+            break;
         }
 
         g_layout_stack.push(ctx);
+        return *this;
     }
 
-    void PyLayoutContextManager::exit() {
+    void PySubLayout::exit() {
         if (!entered_ || g_layout_stack.empty())
             return;
 
         entered_ = false;
-        auto ctx = g_layout_stack.top();
+        const auto ctx = g_layout_stack.top();
         g_layout_stack.pop();
 
-        if (ctx.type == LayoutType::Split) {
+        switch (ctx.type) {
+        case LayoutType::Split:
+            if (ctx.child_index > 0) {
+                ImGui::PopItemWidth();
+                ImGui::EndGroup();
+            }
             ImGui::EndGroup();
-        } else if (ctx.type == LayoutType::Row && !ctx.is_first_child) {
-            ImGui::NewLine();
+            break;
+        case LayoutType::Row:
+            break;
+        case LayoutType::Box:
+            ImGui::EndChild();
+            ImGui::PopStyleColor(2);
+            ImGui::PopStyleVar(2);
+            break;
+        case LayoutType::GridFlow:
+            if (ctx.table_active)
+                ImGui::EndTable();
+            break;
+        default:
+            break;
         }
     }
 
-    PyLayoutContextManager PyUILayout::row() {
-        return PyLayoutContextManager(LayoutType::Row);
-    }
-
-    PyLayoutContextManager PyUILayout::column() {
-        return PyLayoutContextManager(LayoutType::Column);
-    }
-
-    PyLayoutContextManager PyUILayout::split(float factor) {
-        return PyLayoutContextManager(LayoutType::Split, factor);
-    }
-
-    void PyUILayout::push_layout(LayoutContext ctx) {
-        g_layout_stack.push(ctx);
-    }
-
-    void PyUILayout::pop_layout() {
-        if (!g_layout_stack.empty()) {
-            g_layout_stack.pop();
-        }
-    }
-
-    void PyUILayout::layout_next_child() {
+    void PySubLayout::advance_child() {
         if (g_layout_stack.empty())
             return;
-
         auto& ctx = g_layout_stack.top();
-
         switch (ctx.type) {
         case LayoutType::Row:
-            if (!ctx.is_first_child) {
+            if (!ctx.is_first_child)
                 ImGui::SameLine();
-            }
             ctx.is_first_child = false;
             break;
-
         case LayoutType::Column:
             ctx.is_first_child = false;
             break;
-
         case LayoutType::Split:
             if (ctx.child_index == 0) {
-                float width = ctx.available_width * ctx.split_factor;
+                float w = ctx.available_width * ctx.split_factor;
                 ImGui::BeginGroup();
-                ImGui::PushItemWidth(width - ImGui::GetStyle().ItemSpacing.x);
+                ImGui::PushItemWidth(w - ImGui::GetStyle().ItemSpacing.x);
             } else if (ctx.child_index == 1) {
                 ImGui::PopItemWidth();
                 ImGui::EndGroup();
                 ImGui::SameLine();
-                float width = ctx.available_width * (1.0f - ctx.split_factor);
+                float w = ctx.available_width * (1.0f - ctx.split_factor);
                 ImGui::BeginGroup();
-                ImGui::PushItemWidth(width - ImGui::GetStyle().ItemSpacing.x);
+                ImGui::PushItemWidth(w - ImGui::GetStyle().ItemSpacing.x);
             }
             ctx.child_index++;
             break;
-
-        default:
+        case LayoutType::GridFlow:
+            if (ctx.table_active) {
+                if (ctx.child_index > 0 && ctx.child_index % ctx.grid_actual_columns == 0)
+                    ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+            }
+            ctx.child_index++;
+            break;
+        case LayoutType::Box:
+        case LayoutType::Root:
             break;
         }
+    }
+
+    LayoutState PySubLayout::effective_state() const {
+        LayoutState eff;
+        eff.enabled = own_state_.enabled && inherited_state_.enabled;
+        eff.active = own_state_.active && inherited_state_.active;
+        eff.scale_x = own_state_.scale_x * inherited_state_.scale_x;
+        eff.scale_y = own_state_.scale_y * inherited_state_.scale_y;
+        eff.alert = own_state_.alert;
+        return eff;
+    }
+
+    void PySubLayout::apply_state() {
+        const auto eff = effective_state();
+        if (!eff.enabled) {
+            ImGui::BeginDisabled(true);
+            disabled_pushed_ = true;
+        }
+        if (eff.alert) {
+            const auto theme = get_current_theme();
+            const auto err = tuple_to_imvec4(theme.palette.error);
+            ImGui::PushStyleColor(ImGuiCol_Text, err);
+            ImGui::PushStyleColor(ImGuiCol_FrameBg,
+                                  ImVec4(err.x, err.y, err.z, ALERT_BG_ALPHA));
+            color_push_count_ += 2;
+        }
+    }
+
+    void PySubLayout::pop_per_item_state() {
+        if (color_push_count_ > 0) {
+            ImGui::PopStyleColor(color_push_count_);
+            color_push_count_ = 0;
+        }
+        if (disabled_pushed_) {
+            ImGui::EndDisabled();
+            disabled_pushed_ = false;
+        }
+        if (own_state_.alert)
+            own_state_.alert = false;
+    }
+
+
+    // Sub-layout creation
+    PySubLayout PySubLayout::row() { return PySubLayout(this, LayoutType::Row); }
+    PySubLayout PySubLayout::column() { return PySubLayout(this, LayoutType::Column); }
+    PySubLayout PySubLayout::split(float factor) { return PySubLayout(this, LayoutType::Split, factor); }
+    PySubLayout PySubLayout::box() { return PySubLayout(this, LayoutType::Box); }
+    PySubLayout PySubLayout::grid_flow(int columns, bool, bool) {
+        return PySubLayout(this, LayoutType::GridFlow, 0.5f, columns);
+    }
+
+    // Delegated widget methods
+    void PySubLayout::label(const std::string& text) {
+        advance_child(); apply_state(); parent_->label(text); pop_per_item_state();
+    }
+    bool PySubLayout::button(const std::string& l, std::tuple<float, float> size) {
+        advance_child(); apply_state(); auto r = parent_->button(l, size); pop_per_item_state(); return r;
+    }
+    bool PySubLayout::button_styled(const std::string& l, const std::string& style,
+                                    std::tuple<float, float> size) {
+        advance_child(); apply_state(); auto r = parent_->button_styled(l, style, size); pop_per_item_state(); return r;
+    }
+    std::tuple<bool, nb::object> PySubLayout::prop(nb::object data, const std::string& prop_id,
+                                                    std::optional<std::string> text) {
+        advance_child(); apply_state(); auto r = parent_->prop(data, prop_id, text); pop_per_item_state(); return r;
+    }
+    std::tuple<bool, bool> PySubLayout::checkbox(const std::string& l, bool v) {
+        advance_child(); apply_state(); auto r = parent_->checkbox(l, v); pop_per_item_state(); return r;
+    }
+    std::tuple<bool, float> PySubLayout::slider_float(const std::string& l, float v, float mn, float mx) {
+        advance_child(); apply_state(); auto r = parent_->slider_float(l, v, mn, mx); pop_per_item_state(); return r;
+    }
+    std::tuple<bool, int> PySubLayout::slider_int(const std::string& l, int v, int mn, int mx) {
+        advance_child(); apply_state(); auto r = parent_->slider_int(l, v, mn, mx); pop_per_item_state(); return r;
+    }
+    std::tuple<bool, float> PySubLayout::drag_float(const std::string& l, float v, float speed, float mn, float mx) {
+        advance_child(); apply_state(); auto r = parent_->drag_float(l, v, speed, mn, mx); pop_per_item_state(); return r;
+    }
+    std::tuple<bool, int> PySubLayout::drag_int(const std::string& l, int v, float speed, int mn, int mx) {
+        advance_child(); apply_state(); auto r = parent_->drag_int(l, v, speed, mn, mx); pop_per_item_state(); return r;
+    }
+    std::tuple<bool, std::string> PySubLayout::input_text(const std::string& l, const std::string& v) {
+        advance_child(); apply_state(); auto r = parent_->input_text(l, v); pop_per_item_state(); return r;
+    }
+    std::tuple<bool, int> PySubLayout::combo(const std::string& l, int idx,
+                                              const std::vector<std::string>& items) {
+        advance_child(); apply_state(); auto r = parent_->combo(l, idx, items); pop_per_item_state(); return r;
+    }
+    void PySubLayout::separator() {
+        advance_child(); parent_->separator();
+    }
+    void PySubLayout::spacing() {
+        advance_child(); parent_->spacing();
+    }
+    void PySubLayout::heading(const std::string& text) {
+        advance_child(); apply_state(); parent_->heading(text); pop_per_item_state();
+    }
+    bool PySubLayout::collapsing_header(const std::string& l, bool default_open) {
+        advance_child(); apply_state(); auto r = parent_->collapsing_header(l, default_open); pop_per_item_state(); return r;
+    }
+    bool PySubLayout::tree_node(const std::string& l) {
+        advance_child(); apply_state(); auto r = parent_->tree_node(l); pop_per_item_state(); return r;
+    }
+    void PySubLayout::tree_pop() {
+        parent_->tree_pop();
+    }
+    void PySubLayout::progress_bar(float fraction, const std::string& overlay, float width) {
+        advance_child(); apply_state(); parent_->progress_bar(fraction, overlay, width); pop_per_item_state();
+    }
+    void PySubLayout::text_colored(const std::string& text, std::tuple<float, float, float, float> color) {
+        advance_child(); parent_->text_colored(text, color);
+    }
+    void PySubLayout::text_wrapped(const std::string& text) {
+        advance_child(); apply_state(); parent_->text_wrapped(text); pop_per_item_state();
+    }
+
+    bool PySubLayout::prop_enum(nb::object data, const std::string& prop_id,
+                                const std::string& value, const std::string& text) {
+        advance_child();
+        return draw_prop_enum_button(data, prop_id, value, text);
+    }
+
+    // PyUILayout layout methods
+    PySubLayout PyUILayout::row() { return PySubLayout(this, LayoutType::Row); }
+    PySubLayout PyUILayout::column() { return PySubLayout(this, LayoutType::Column); }
+    PySubLayout PyUILayout::split(float factor) { return PySubLayout(this, LayoutType::Split, factor); }
+    PySubLayout PyUILayout::box() { return PySubLayout(this, LayoutType::Box); }
+    PySubLayout PyUILayout::grid_flow(int columns, bool, bool) {
+        return PySubLayout(this, LayoutType::GridFlow, 0.5f, columns);
+    }
+
+    bool PyUILayout::prop_enum(nb::object data, const std::string& prop_id,
+                               const std::string& value, const std::string& text) {
+        return draw_prop_enum_button(data, prop_id, value, text);
     }
 
     nb::object PyUILayout::operator_(const std::string& operator_id, const std::string& text,
@@ -2309,16 +2519,69 @@ namespace lfs::python {
                 },
                 "Return string representation of the event");
 
-        nb::class_<PyLayoutContextManager>(m, "LayoutContext")
-            .def(
-                "__enter__", [](PyLayoutContextManager& self) {
-                    self.enter();
-                    return &self;
-                },
-                "Enter layout context manager scope")
-            .def("__exit__", [](PyLayoutContextManager& self, nb::object, nb::object, nb::object) {
-                    self.exit();
-                    return false; }, "Exit layout context manager scope");
+        nb::class_<PySubLayout>(m, "SubLayout")
+            .def("__enter__", &PySubLayout::enter, nb::rv_policy::reference)
+            .def("__exit__", [](PySubLayout& s, nb::args) {
+                s.exit();
+                return false;
+            })
+            .def_prop_rw("enabled", &PySubLayout::get_enabled, &PySubLayout::set_enabled)
+            .def_prop_rw("active", &PySubLayout::get_active, &PySubLayout::set_active)
+            .def_prop_rw("scale_x", &PySubLayout::get_scale_x, &PySubLayout::set_scale_x)
+            .def_prop_rw("scale_y", &PySubLayout::get_scale_y, &PySubLayout::set_scale_y)
+            .def_prop_rw("alert", &PySubLayout::get_alert, &PySubLayout::set_alert)
+            .def("row", &PySubLayout::row)
+            .def("column", &PySubLayout::column)
+            .def("split", &PySubLayout::split, nb::arg("factor") = 0.5f)
+            .def("box", &PySubLayout::box)
+            .def("grid_flow", &PySubLayout::grid_flow, nb::arg("columns") = 0,
+                 nb::arg("even_columns") = true, nb::arg("even_rows") = true)
+            .def("prop_enum", &PySubLayout::prop_enum, nb::arg("data"), nb::arg("prop_id"),
+                 nb::arg("value"), nb::arg("text") = "")
+            .def("label", &PySubLayout::label, nb::arg("text"))
+            .def("button", &PySubLayout::button, nb::arg("label"),
+                 nb::arg("size") = std::make_tuple(0.0f, 0.0f))
+            .def("button_styled", &PySubLayout::button_styled, nb::arg("label"),
+                 nb::arg("style"), nb::arg("size") = std::make_tuple(0.0f, 0.0f))
+            .def("prop", &PySubLayout::prop, nb::arg("data"), nb::arg("prop_id"),
+                 nb::arg("text") = nb::none())
+            .def("checkbox", &PySubLayout::checkbox, nb::arg("label"), nb::arg("value"))
+            .def("slider_float", &PySubLayout::slider_float, nb::arg("label"),
+                 nb::arg("value"), nb::arg("min"), nb::arg("max"))
+            .def("slider_int", &PySubLayout::slider_int, nb::arg("label"),
+                 nb::arg("value"), nb::arg("min"), nb::arg("max"))
+            .def("drag_float", &PySubLayout::drag_float, nb::arg("label"), nb::arg("value"),
+                 nb::arg("speed") = 1.0f, nb::arg("min") = 0.0f, nb::arg("max") = 0.0f)
+            .def("drag_int", &PySubLayout::drag_int, nb::arg("label"), nb::arg("value"),
+                 nb::arg("speed") = 1.0f, nb::arg("min") = 0, nb::arg("max") = 0)
+            .def("input_text", &PySubLayout::input_text, nb::arg("label"), nb::arg("value"))
+            .def("combo", &PySubLayout::combo, nb::arg("label"), nb::arg("current_idx"),
+                 nb::arg("items"))
+            .def("separator", &PySubLayout::separator)
+            .def("spacing", &PySubLayout::spacing)
+            .def("heading", &PySubLayout::heading, nb::arg("text"))
+            .def("collapsing_header", &PySubLayout::collapsing_header, nb::arg("label"),
+                 nb::arg("default_open") = false)
+            .def("tree_node", &PySubLayout::tree_node, nb::arg("label"))
+            .def("tree_pop", &PySubLayout::tree_pop)
+            .def("progress_bar", &PySubLayout::progress_bar, nb::arg("fraction"),
+                 nb::arg("overlay") = "", nb::arg("width") = 0.0f)
+            .def("text_colored", &PySubLayout::text_colored, nb::arg("text"), nb::arg("color"))
+            .def("text_wrapped", &PySubLayout::text_wrapped, nb::arg("text"))
+            .def("__getattr__", [](PySubLayout& self, const std::string& name) -> nb::object {
+                nb::object parent_obj = nb::cast(self.parent(), nb::rv_policy::reference);
+                if (!nb::hasattr(parent_obj, name.c_str()))
+                    throw nb::attribute_error(name.c_str());
+                nb::object method = parent_obj.attr(name.c_str());
+                PySubLayout* self_ptr = &self;
+                return nb::cpp_function([self_ptr, method](nb::args args, nb::kwargs kwargs) {
+                    self_ptr->advance_child();
+                    self_ptr->apply_state();
+                    nb::object result = method(*args, **kwargs);
+                    self_ptr->pop_per_item_state();
+                    return result;
+                });
+            });
 
         // PyUILayout - Window flags enum
         nb::class_<PyWindowFlags>(m, "WindowFlags")
@@ -2533,9 +2796,16 @@ namespace lfs::python {
             .def("prop", &PyUILayout::prop, nb::arg("data"), nb::arg("prop_id"),
                  nb::arg("text") = nb::none(),
                  "Draw a property widget based on metadata (auto-selects widget type)")
-            .def("row", &PyUILayout::row, "Create a horizontal row layout context manager")
-            .def("column", &PyUILayout::column, "Create a vertical column layout context manager")
-            .def("split", &PyUILayout::split, nb::arg("factor") = 0.5f, "Create a split layout context manager with given factor")
+            .def("row", &PyUILayout::row, "Create a horizontal row sub-layout")
+            .def("column", &PyUILayout::column, "Create a vertical column sub-layout")
+            .def("split", &PyUILayout::split, nb::arg("factor") = 0.5f, "Create a split sub-layout with given factor")
+            .def("box", &PyUILayout::box, "Create a bordered box sub-layout")
+            .def("grid_flow", &PyUILayout::grid_flow, nb::arg("columns") = 0,
+                 nb::arg("even_columns") = true, nb::arg("even_rows") = true,
+                 "Create a responsive grid sub-layout")
+            .def("prop_enum", &PyUILayout::prop_enum, nb::arg("data"), nb::arg("prop_id"),
+                 nb::arg("value"), nb::arg("text") = "",
+                 "Draw an enum toggle button for a property value")
             .def("operator_", &PyUILayout::operator_, nb::arg("operator_id"),
                  nb::arg("text") = "", nb::arg("icon") = "", "Draw a button that invokes a registered operator")
             .def("prop_search", &PyUILayout::prop_search, nb::arg("data"), nb::arg("prop_id"),

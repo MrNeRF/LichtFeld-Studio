@@ -168,7 +168,7 @@ namespace lfs::python {
             .def(
                 "__enter__", [](PyTransaction& self) { self.enter(); return &self; }, "Begin transaction context")
             .def(
-                "__exit__", [](PyTransaction& self, nb::object, nb::object, nb::object) {
+                "__exit__", [](PyTransaction& self, nb::args) {
                     self.exit(true);
                     return false;
                 },

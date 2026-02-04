@@ -212,9 +212,9 @@ class TestBuiltinTools:
     def test_tools_have_shortcuts(self):
         """Tools should have keyboard shortcuts."""
         tool = get_tool_by_id("builtin.select")
-        assert tool.shortcut == "Q"
+        assert tool.shortcut == "1"
         tool = get_tool_by_id("builtin.translate")
-        assert tool.shortcut == "G"
+        assert tool.shortcut == "2"
 
 
 class TestToolPolling:

@@ -67,10 +67,9 @@ class DemoPanel(Panel):
                 self.counter += 1
             layout.label(f"Clicked {self.counter} times")
 
-            layout.same_line()
-            layout.button_styled("Success", "success", (100, 0))
-            layout.same_line()
-            layout.button_styled("Error", "error", (100, 0))
+            with layout.row() as row:
+                row.button_styled("Success", "success", (100, 0))
+                row.button_styled("Error", "error", (100, 0))
 
             if layout.small_button("Small"):
                 lf.log.info("Small button clicked")
@@ -121,10 +120,10 @@ class DemoPanel(Panel):
 
         # --- Disabled region ---
         if layout.collapsing_header("Conditional UI", default_open=False):
-            layout.begin_disabled(not self.settings.enabled)
-            layout.label("This section is disabled when 'Enabled' is unchecked")
-            layout.button("Disabled Button")
-            layout.end_disabled()
+            with layout.column() as col:
+                col.enabled = self.settings.enabled
+                col.label("This section is disabled when 'Enabled' is unchecked")
+                col.button("Disabled Button")
 
 
 _classes = [DemoPanel]

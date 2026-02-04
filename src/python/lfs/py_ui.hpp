@@ -14,9 +14,7 @@
 
 #include <cfloat>
 #include <functional>
-#include <memory>
 #include <mutex>
-#include <stack>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -63,10 +61,15 @@ namespace lfs::python {
 
     void register_operator_return_value(nb::module_& m);
 
-    enum class LayoutType { Root,
-                            Row,
-                            Column,
-                            Split };
+    enum class LayoutType { Root, Row, Column, Split, Box, GridFlow };
+
+    struct LayoutState {
+        bool enabled = true;
+        bool active = true;
+        float scale_x = 1.0f;
+        float scale_y = 1.0f;
+        bool alert = false;
+    };
 
     struct LayoutContext {
         LayoutType type = LayoutType::Root;
@@ -75,18 +78,88 @@ namespace lfs::python {
         bool is_first_child = true;
         float available_width = 0.0f;
         float cursor_start_x = 0.0f;
+        int grid_columns = 0;
+        int grid_actual_columns = 0;
+        bool table_active = false;
+        LayoutState state;
     };
 
-    class PyLayoutContextManager {
+    class PyUILayout;
+
+    class PySubLayout {
     public:
-        explicit PyLayoutContextManager(LayoutType type, float split_factor = 0.5f);
-        void enter();
+        PySubLayout(PyUILayout* parent, LayoutType type, float split_factor = 0.5f,
+                    int grid_columns = 0);
+        PySubLayout(PySubLayout* parent_sub, LayoutType type, float split_factor = 0.5f,
+                    int grid_columns = 0);
+        ~PySubLayout();
+
+        PySubLayout& enter();
         void exit();
 
+        bool get_enabled() const { return own_state_.enabled; }
+        void set_enabled(bool v) { own_state_.enabled = v; }
+        bool get_active() const { return own_state_.active; }
+        void set_active(bool v) { own_state_.active = v; }
+        float get_scale_x() const { return own_state_.scale_x; }
+        void set_scale_x(float v) { own_state_.scale_x = v; }
+        float get_scale_y() const { return own_state_.scale_y; }
+        void set_scale_y(float v) { own_state_.scale_y = v; }
+        bool get_alert() const { return own_state_.alert; }
+        void set_alert(bool v) { own_state_.alert = v; }
+
+        PySubLayout row();
+        PySubLayout column();
+        PySubLayout split(float factor = 0.5f);
+        PySubLayout box();
+        PySubLayout grid_flow(int columns = 0, bool even_columns = true, bool even_rows = true);
+
+        void label(const std::string& text);
+        bool button(const std::string& label, std::tuple<float, float> size = {0, 0});
+        bool button_styled(const std::string& label, const std::string& style,
+                           std::tuple<float, float> size = {0, 0});
+        std::tuple<bool, nb::object> prop(nb::object data, const std::string& prop_id,
+                                          std::optional<std::string> text = std::nullopt);
+        std::tuple<bool, bool> checkbox(const std::string& label, bool value);
+        std::tuple<bool, float> slider_float(const std::string& label, float v, float min, float max);
+        std::tuple<bool, int> slider_int(const std::string& label, int v, int min, int max);
+        std::tuple<bool, float> drag_float(const std::string& label, float v,
+                                           float speed = 1.0f, float min = 0.0f, float max = 0.0f);
+        std::tuple<bool, int> drag_int(const std::string& label, int v,
+                                       float speed = 1.0f, int min = 0, int max = 0);
+        std::tuple<bool, std::string> input_text(const std::string& label, const std::string& value);
+        std::tuple<bool, int> combo(const std::string& label, int idx,
+                                    const std::vector<std::string>& items);
+        void separator();
+        void spacing();
+        void heading(const std::string& text);
+        bool collapsing_header(const std::string& label, bool default_open = false);
+        bool tree_node(const std::string& label);
+        void tree_pop();
+        void progress_bar(float fraction, const std::string& overlay = "", float width = 0.0f);
+        void text_colored(const std::string& text, std::tuple<float, float, float, float> color);
+        void text_wrapped(const std::string& text);
+
+        bool prop_enum(nb::object data, const std::string& prop_id,
+                       const std::string& value, const std::string& text = "");
+
+        PyUILayout* parent() const { return parent_; }
+        void advance_child();
+        void apply_state();
+        void pop_per_item_state();
+
     private:
+        LayoutState effective_state() const;
+
+        PyUILayout* parent_;
+        LayoutState own_state_;
+        LayoutState inherited_state_;
         LayoutType type_;
         float split_factor_;
+        int grid_columns_ = 0;
         bool entered_ = false;
+        int color_push_count_ = 0;
+        bool disabled_pushed_ = false;
     };
 
     // PanelSpace enum is defined in py_panel_registry.hpp
@@ -404,9 +477,18 @@ namespace lfs::python {
                                           const std::string& prop_id,
                                           std::optional<std::string> text = std::nullopt);
 
-        PyLayoutContextManager row();
-        PyLayoutContextManager column();
-        PyLayoutContextManager split(float factor = 0.5f);
+        PySubLayout row();
+        PySubLayout column();
+        PySubLayout split(float factor = 0.5f);
+        PySubLayout box();
+        PySubLayout grid_flow(int columns = 0, bool even_columns = true, bool even_rows = true);
+
+        bool prop_enum(nb::object data, const std::string& prop_id,
+                       const std::string& value, const std::string& text = "");
+
+        int next_box_id() { return box_id_counter_++; }
+        int next_grid_id() { return grid_id_counter_++; }
+        void reset_frame_state() { box_id_counter_ = 0; grid_id_counter_ = 0; }
 
         nb::object operator_(const std::string& operator_id, const std::string& text = "",
                              const std::string& icon = "");
@@ -487,13 +569,10 @@ namespace lfs::python {
             float blue_x, float blue_y, float neutral_x, float neutral_y,
             float range = 0.5f);
 
-        void push_layout(LayoutContext ctx);
-        void pop_layout();
-        void layout_next_child();
-
     private:
-        std::stack<LayoutContext> layout_stack_;
         int menu_depth_;
+        int box_id_counter_ = 0;
+        int grid_id_counter_ = 0;
     };
 
     enum class PanelOption : uint32_t {

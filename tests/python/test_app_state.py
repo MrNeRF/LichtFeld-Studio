@@ -47,8 +47,8 @@ class TestAppState:
         """Signals should be of correct types."""
         assert isinstance(AppState.is_training, Signal)
         assert isinstance(AppState.trainer_state, Signal)
-        assert isinstance(AppState.iteration, ThrottledSignal)
-        assert isinstance(AppState.loss, ThrottledSignal)
+        assert isinstance(AppState.iteration, Signal)
+        assert isinstance(AppState.loss, Signal)
 
     def test_default_values(self):
         """AppState should have sensible defaults."""
@@ -62,7 +62,7 @@ class TestAppState:
     def test_reset_restores_defaults(self):
         """reset() should restore default values."""
         AppState.is_training.value = True
-        AppState.iteration._signal.value = 1000
+        AppState.iteration.value = 1000
         AppState.reset()
         assert AppState.is_training.value is False
         assert AppState.iteration.value == 0
@@ -75,7 +75,7 @@ class TestAppState:
     def test_training_progress_computed(self):
         """training_progress should compute from iteration/max_iterations."""
         AppState.reset()
-        AppState.iteration._signal.value = 1500
+        AppState.iteration.value = 1500
         AppState.max_iterations.value = 30000
         assert 0.04 < AppState.training_progress.value < 0.06
 
@@ -89,11 +89,12 @@ class TestAppState:
         AppState.trainer_state.value = "running"
         assert AppState.can_start_training.value is False
 
-    def test_flush_throttled(self):
-        """flush_throttled should flush all throttled signals."""
-        AppState.iteration._has_pending = True
-        AppState.iteration._pending_value = 999
-        AppState.flush_throttled()
+    def test_signal_value_update(self):
+        """Signal values should be directly settable."""
+        AppState.reset()
+        AppState.iteration.value = 999
+        assert AppState.iteration.value == 999
+        AppState.reset()
 
 
 class TestAppStateSubscription:

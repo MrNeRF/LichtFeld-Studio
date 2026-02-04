@@ -846,7 +846,7 @@ The `layout` object is passed to `Panel.draw()` and provides all UI widget metho
 | `push_style_color(col, color)`                      | `None`  | Push color override      |
 | `pop_style_color(count=1)`                          | `None`  | Pop color overrides      |
 | `push_item_width(width)` / `pop_item_width()`      | `None`  | Item width stack         |
-| `begin_disabled(disabled=True)` / `end_disabled()`  | `None`  | Disable widget region    |
+| `begin_disabled(disabled=True)` / `end_disabled()`  | `None`  | Disable widget region. For composable disabled regions, prefer `SubLayout.enabled` (see Layout Composition below). |
 
 ### Keyboard / Mouse Capture
 
@@ -873,13 +873,56 @@ The `layout` object is passed to `Panel.draw()` and provides all UI widget metho
 | `chromaticity_diagram(label, rx, ry, gx, gy, bx, by, nx, ny, range=0.5)`         | `(bool, list)` | Chromaticity diagram  |
 | `template_list(list_type_id, list_id, data, prop_id, active_data, active_prop, rows=5)` | `(int, int)` | Custom list template |
 
-### Context Managers
+### Layout Composition
 
-| Method          | Returns         | Description              |
-|-----------------|-----------------|--------------------------|
-| `row()`         | `LayoutContext` | Row layout context       |
-| `column()`      | `LayoutContext` | Column layout context    |
-| `split(factor)` | `LayoutContext` | Split layout context     |
+Create composable sub-layouts with automatic widget positioning and state cascading.
+
+| Method                                             | Returns     | Description                     |
+|----------------------------------------------------|-------------|---------------------------------|
+| `row()`                                            | `SubLayout` | Horizontal layout               |
+| `column()`                                         | `SubLayout` | Vertical layout                 |
+| `split(factor=0.5)`                                | `SubLayout` | Two-column split                |
+| `box()`                                            | `SubLayout` | Bordered container              |
+| `grid_flow(columns=0, even_columns=True, even_rows=True)` | `SubLayout` | Responsive grid         |
+| `prop_enum(data, prop_id, value, text='')`          | `bool`      | Enum toggle button              |
+
+`SubLayout` is a context manager. Use `with layout.row() as row:` to enter the layout, then call widget methods on `row` instead of `layout`. Sub-layouts nest arbitrarily.
+
+#### SubLayout state properties
+
+| Property  | Type    | Description                                |
+|-----------|---------|--------------------------------------------|
+| `enabled` | `bool`  | Disabled state (cascades to children)      |
+| `active`  | `bool`  | Active state (cascades to children)        |
+| `scale_x` | `float` | Horizontal scale (cascades multiplicatively)|
+| `scale_y` | `float` | Vertical scale (cascades multiplicatively) |
+| `alert`   | `bool`  | One-shot alert styling (red text/bg)       |
+
+#### Example
+
+```python
+def draw(self, layout):
+    with layout.row() as row:
+        row.prop_enum(self, "mode", "fast", "Fast")
+        row.prop_enum(self, "mode", "quality", "Quality")
+
+    with layout.box() as box:
+        box.heading("Settings")
+        box.prop(self, "opacity")
+
+    with layout.column() as col:
+        col.enabled = self.is_active
+        col.prop(self, "value")
+        with col.row() as row:
+            row.button("Apply")
+            row.button("Cancel")
+
+    with layout.grid_flow(columns=3) as grid:
+        for item in items:
+            with grid.box() as cell:
+                cell.label(item.name)
+                cell.button("Select")
+```
 
 ---
 

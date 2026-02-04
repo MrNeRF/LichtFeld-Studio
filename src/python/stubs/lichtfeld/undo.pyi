@@ -30,7 +30,7 @@ class Transaction:
     def __enter__(self) -> Transaction:
         """Begin transaction context"""
 
-    def __exit__(self, arg0: object, arg1: object, arg2: object, /) -> bool:
+    def __exit__(self, *args) -> bool:
         """Commit transaction on context exit"""
 
     def add(self, undo: object, redo: object) -> None:

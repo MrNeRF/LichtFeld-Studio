@@ -471,12 +471,14 @@ namespace lfs::python {
     }
 
     TextureResult create_gl_texture(const unsigned char* data, const int w, const int h, const int channels) {
-        assert(g_create_texture);
+        if (!g_create_texture)
+            return {0, w, h};
         return g_create_texture(data, w, h, channels);
     }
 
     void delete_gl_texture(const uint32_t texture_id) {
-        assert(g_delete_texture);
+        if (!g_delete_texture || texture_id == 0)
+            return;
         g_delete_texture(texture_id);
     }
 

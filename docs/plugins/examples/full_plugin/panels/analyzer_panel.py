@@ -73,11 +73,11 @@ class AnalyzerPanel(Panel):
 
         layout.separator()
 
-        if layout.button("Select Filtered", (-1, 0)):
-            self._select_filtered()
-
-        if layout.button("Delete Filtered", (-1, 0)):
-            self._delete_filtered()
+        with layout.row() as row:
+            if row.button("Select Filtered"):
+                self._select_filtered()
+            if row.button_styled("Delete Filtered", "error"):
+                self._delete_filtered()
 
     def _select_filtered(self):
         scene = lf.get_scene()
