@@ -122,7 +122,12 @@ namespace lfs::vis::gui {
             try {
                 if (!check_poll(snap, ctx))
                     continue;
+            } catch (const std::exception& e) {
+                LOG_ERROR("Panel '{}' poll error: {}", snap.label, e.what());
+                continue;
+            }
 
+            try {
                 ImGui::PushID(snap.idname.c_str());
 
                 switch (space) {
