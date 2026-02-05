@@ -29,6 +29,7 @@ using namespace lichtfeld::Strings;
 #include <cfloat>
 #include <cstdlib>
 
+#include "python/gil_guard.hpp"
 #include "python/runner.hpp"
 #include <Python.h>
 #ifdef PLATFORM
@@ -240,7 +241,7 @@ namespace lfs::vis::gui {
 
             if (widgets::ColoredButton("Install", widgets::ButtonStyle::Success, {100 * scale, 0})) {
                 if (!plugin_install_url_.empty()) {
-                    const PyGILState_STATE gil = PyGILState_Ensure();
+                    const lfs::python::GilAcquire gil;
 
                     PyObject* const lf_mod = PyImport_ImportModule("lichtfeld");
                     if (lf_mod) {
@@ -275,8 +276,6 @@ namespace lfs::vis::gui {
                         Py_DECREF(lf_mod);
                     }
                     PyErr_Clear();
-
-                    PyGILState_Release(gil);
                 }
             }
             ImGui::SameLine();

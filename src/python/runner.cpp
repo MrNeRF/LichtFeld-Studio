@@ -15,6 +15,7 @@
 #include <core/logger.hpp>
 #include <core/path_utils.hpp>
 
+#include "gil_guard.hpp"
 #include "python_runtime.hpp"
 #include "training/control/control_boundary.hpp"
 #include <Python.h>
@@ -336,10 +337,12 @@ _add_dll_dirs()
             update_python_path();
         }
 
-        const PyGILState_STATE gil = PyGILState_Ensure();
-        const std::string code = std::format("import debugpy; debugpy.listen(('0.0.0.0', {}))", port);
-        const int rc = PyRun_SimpleString(code.c_str());
-        PyGILState_Release(gil);
+        int rc;
+        {
+            const GilAcquire gil;
+            const std::string code = std::format("import debugpy; debugpy.listen(('0.0.0.0', {}))", port);
+            rc = PyRun_SimpleString(code.c_str());
+        }
 
         if (rc != 0) {
             LOG_ERROR("Failed to start debugpy on port {}", port);
@@ -388,9 +391,8 @@ _add_dll_dirs()
 
     void install_output_redirect() {
         call_once_redirect([] {
-            const PyGILState_STATE gil = PyGILState_Ensure();
+            const GilAcquire gil;
             redirect_output();
-            PyGILState_Release(gil);
         });
     }
 
@@ -429,12 +431,13 @@ _add_dll_dirs()
         g_repl_running = true;
 
         g_repl_thread = std::thread([read_fd, write_fd]() {
-            const PyGILState_STATE gil = PyGILState_Ensure();
-            install_output_redirect();
+            {
+                const GilAcquire gil;
+                install_output_redirect();
 
-            SceneContextGuard ctx(get_application_scene());
+                SceneContextGuard ctx(get_application_scene());
 
-            const std::string setup = std::format(R"(
+                const std::string setup = std::format(R"(
 import sys, os, atexit
 
 _repl_read_fd = {}
@@ -508,11 +511,10 @@ sys.stderr = _saved_stderr
 _repl_in.close()
 _repl_out.close()
 )",
-                                                  read_fd, write_fd);
+                                                      read_fd, write_fd);
 
-            PyRun_SimpleString(setup.c_str());
-
-            PyGILState_Release(gil);
+                PyRun_SimpleString(setup.c_str());
+            }
 
             close_fd(read_fd);
             close_fd(write_fd);
@@ -546,7 +548,7 @@ _repl_out.close()
         if (!std::filesystem::exists(packages))
             return;
 
-        const PyGILState_STATE gil = PyGILState_Ensure();
+        const GilAcquire gil;
 
         PyObject* const sys_path = PySys_GetObject("path");
         if (sys_path) {
@@ -558,8 +560,6 @@ _repl_out.close()
             }
             Py_DECREF(py_path);
         }
-
-        PyGILState_Release(gil);
     }
 
     std::expected<void, std::string> run_scripts(const std::vector<std::filesystem::path>& scripts) {
@@ -569,7 +569,7 @@ _repl_out.close()
 
         ensure_initialized();
 
-        const PyGILState_STATE gil_state = PyGILState_Ensure();
+        const GilAcquire gil;
 
         // Install output redirect (calls redirect_output() once)
         call_once_redirect([] { redirect_output(); });
@@ -592,7 +592,6 @@ _repl_out.close()
             PyObject* lf_module = PyImport_ImportModule("lichtfeld");
             if (!lf_module) {
                 PyErr_Print();
-                PyGILState_Release(gil_state);
                 return std::unexpected("Failed to import lichtfeld module - check build output");
             }
             Py_DECREF(lf_module);
@@ -605,7 +604,6 @@ _repl_out.close()
         for (const auto& script : scripts) {
             const auto script_utf8 = lfs::core::path_to_utf8(script);
             if (!std::filesystem::exists(script)) {
-                PyGILState_Release(gil_state);
                 return std::unexpected(std::format("Python script not found: {}", script_utf8));
             }
 
@@ -626,21 +624,18 @@ _repl_out.close()
             FILE* const fp = fopen(script.c_str(), "r");
 #endif
             if (!fp) {
-                PyGILState_Release(gil_state);
                 return std::unexpected(std::format("Failed to open Python script: {}", script_utf8));
             }
 
             LOG_INFO("Executing Python script: {}", script_utf8);
             const int rc = PyRun_SimpleFileEx(fp, script_utf8.c_str(), /*closeit=*/1);
             if (rc != 0) {
-                PyGILState_Release(gil_state);
                 return std::unexpected(std::format("Python script failed: {} (rc={})", script_utf8, rc));
             }
 
             LOG_INFO("Python script completed: {}", script_utf8);
         }
 
-        PyGILState_Release(gil_state);
         return {};
     }
 
@@ -664,7 +659,7 @@ _repl_out.close()
         }
 
         ensure_initialized();
-        const PyGILState_STATE gil = PyGILState_Ensure();
+        const GilAcquire gil;
 
         static constexpr const char* FORMAT_CODE = R"(
 def _lfs_format_code(code):
@@ -752,14 +747,12 @@ def _lfs_format_code(code):
 
         PyObject* const main_module = PyImport_AddModule("__main__");
         if (!main_module) {
-            PyGILState_Release(gil);
             return {code, "Failed to get __main__ module", false};
         }
 
         PyObject* const main_dict = PyModule_GetDict(main_module);
         PyObject* const format_func = PyDict_GetItemString(main_dict, "_lfs_format_code");
         if (!format_func || !PyCallable_Check(format_func)) {
-            PyGILState_Release(gil);
             return {code, "Format function not found", false};
         }
 
@@ -796,7 +789,6 @@ def _lfs_format_code(code):
             result.error = "Format function returned unexpected result";
         }
 
-        PyGILState_Release(gil);
         return result;
     }
 
@@ -826,25 +818,23 @@ def _lfs_format_code(code):
             cb = g_frame_callback;
         }
         if (cb) {
-            const PyGILState_STATE gil = PyGILState_Ensure();
+            const GilAcquire gil;
             try {
                 cb(dt);
             } catch (const std::exception& e) {
                 LOG_ERROR("Frame callback error: {}", e.what());
             }
-            PyGILState_Release(gil);
         }
     }
 
     CapabilityResult invoke_capability(const std::string& name, const std::string& args_json) {
         ensure_initialized();
-        const PyGILState_STATE gil = PyGILState_Ensure();
+        const GilAcquire gil;
         CapabilityResult result;
 
         PyObject* lichtfeld = PyImport_ImportModule("lichtfeld");
         if (!lichtfeld) {
             PyErr_Print();
-            PyGILState_Release(gil);
             return {false, "", "Failed to import lichtfeld"};
         }
         Py_DECREF(lichtfeld);
@@ -854,14 +844,12 @@ def _lfs_format_code(code):
         PyObject* lfs_plugins = PyImport_ImportModule("lfs_plugins");
         if (!lfs_plugins) {
             PyErr_Print();
-            PyGILState_Release(gil);
             return {false, "", "Failed to import lfs_plugins"};
         }
 
         PyObject* registry_class = PyObject_GetAttrString(lfs_plugins, "CapabilityRegistry");
         if (!registry_class) {
             Py_DECREF(lfs_plugins);
-            PyGILState_Release(gil);
             return {false, "", "CapabilityRegistry not found"};
         }
 
@@ -872,7 +860,6 @@ def _lfs_format_code(code):
 
         if (!registry) {
             Py_DECREF(lfs_plugins);
-            PyGILState_Release(gil);
             return {false, "", "Failed to get capability registry instance"};
         }
 
@@ -923,13 +910,12 @@ def _lfs_format_code(code):
         Py_DECREF(json_module);
         Py_DECREF(registry);
         Py_DECREF(lfs_plugins);
-        PyGILState_Release(gil);
         return result;
     }
 
     bool has_capability(const std::string& name) {
         ensure_initialized();
-        const PyGILState_STATE gil = PyGILState_Ensure();
+        const GilAcquire gil;
         bool result = false;
 
         PyObject* lfs_plugins = PyImport_ImportModule("lfs_plugins");
@@ -956,14 +942,13 @@ def _lfs_format_code(code):
             Py_DECREF(lfs_plugins);
         }
 
-        PyGILState_Release(gil);
         return result;
     }
 
     std::vector<CapabilityInfo> list_capabilities() {
         std::vector<CapabilityInfo> result;
         ensure_initialized();
-        const PyGILState_STATE gil = PyGILState_Ensure();
+        const GilAcquire gil;
 
         PyObject* lfs_plugins = PyImport_ImportModule("lfs_plugins");
         if (lfs_plugins) {
@@ -1008,7 +993,6 @@ def _lfs_format_code(code):
             Py_DECREF(lfs_plugins);
         }
 
-        PyGILState_Release(gil);
         return result;
     }
 

@@ -20,6 +20,8 @@
 #include <filesystem>
 #include <mutex>
 
+#include "python/gil_guard.hpp"
+
 #include "core/executable_path.hpp"
 #include "core/services.hpp"
 #include "python/package_manager.hpp"
@@ -33,7 +35,7 @@ namespace {
 
     void setup_sys_path() {
         std::call_once(g_syspath_init_once, [] {
-            const PyGILState_STATE gil = PyGILState_Ensure();
+            const lfs::python::GilAcquire gil;
 
             const auto python_module_dir = lfs::core::getPythonModuleDir();
             if (!python_module_dir.empty()) {
@@ -46,8 +48,6 @@ namespace {
                     }
                 }
             }
-
-            PyGILState_Release(gil);
         });
     }
 
@@ -255,9 +255,8 @@ namespace lfs::vis::gui::panels {
     void PythonConsoleState::interruptScript() {
         const unsigned long tid = script_thread_id_.load();
         if (tid != 0 && script_running_.load()) {
-            const PyGILState_STATE gil = PyGILState_Ensure();
+            const python::GilAcquire gil;
             PyThreadState_SetAsyncExc(tid, PyExc_KeyboardInterrupt);
-            PyGILState_Release(gil);
         }
     }
 
@@ -280,25 +279,26 @@ namespace lfs::vis::gui::panels {
         script_running_ = true;
         script_thread_id_ = 0;
         script_thread_ = std::thread([this, code]() {
-            const PyGILState_STATE gil = PyGILState_Ensure();
+            {
+                const python::GilAcquire gil;
 
-            lfs::python::install_output_redirect();
+                lfs::python::install_output_redirect();
 
-            script_thread_id_ = PyThreadState_Get()->thread_id;
+                script_thread_id_ = PyThreadState_Get()->thread_id;
 
-            lfs::vis::Scene* scene = nullptr;
-            if (auto* sm = lfs::vis::services().sceneOrNull()) {
-                scene = &sm->getScene();
+                lfs::vis::Scene* scene = nullptr;
+                if (auto* sm = lfs::vis::services().sceneOrNull()) {
+                    scene = &sm->getScene();
+                }
+
+                lfs::python::SceneContextGuard ctx(scene);
+                const int result = PyRun_SimpleString(code.c_str());
+                if (result != 0) {
+                    PyErr_Print();
+                }
+
+                script_thread_id_ = 0;
             }
-
-            lfs::python::SceneContextGuard ctx(scene);
-            const int result = PyRun_SimpleString(code.c_str());
-            if (result != 0) {
-                PyErr_Print();
-            }
-
-            script_thread_id_ = 0;
-            PyGILState_Release(gil);
             script_running_ = false;
         });
     }

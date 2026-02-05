@@ -3,6 +3,7 @@
 
 #include "python_introspector.hpp"
 #include "core/logger.hpp"
+#include "python/gil_guard.hpp"
 #include <algorithm>
 
 #include <Python.h>
@@ -25,59 +26,57 @@ namespace lfs::vis::editor {
             return;
         }
 
-        PyGILState_STATE gil = PyGILState_Ensure();
-
         std::vector<CompletionItem> new_globals;
 
-        // Get __main__ module globals
-        PyObject* main_module = PyImport_AddModule("__main__");
-        if (main_module) {
-            PyObject* globals = PyModule_GetDict(main_module);
-            if (globals) {
-                PyObject* keys = PyDict_Keys(globals);
-                if (keys) {
-                    Py_ssize_t len = PyList_Size(keys);
-                    for (Py_ssize_t i = 0; i < len; ++i) {
-                        PyObject* key = PyList_GetItem(keys, i);
-                        if (key && PyUnicode_Check(key)) {
-                            const char* name = PyUnicode_AsUTF8(key);
-                            if (name && name[0] != '_') { // Skip private names
-                                PyObject* value = PyDict_GetItem(globals, key);
+        {
+            const lfs::python::GilAcquire gil;
 
-                                CompletionKind kind = CompletionKind::Variable;
-                                std::string type_str = "variable";
+            // Get __main__ module globals
+            PyObject* main_module = PyImport_AddModule("__main__");
+            if (main_module) {
+                PyObject* globals = PyModule_GetDict(main_module);
+                if (globals) {
+                    PyObject* keys = PyDict_Keys(globals);
+                    if (keys) {
+                        Py_ssize_t len = PyList_Size(keys);
+                        for (Py_ssize_t i = 0; i < len; ++i) {
+                            PyObject* key = PyList_GetItem(keys, i);
+                            if (key && PyUnicode_Check(key)) {
+                                const char* name = PyUnicode_AsUTF8(key);
+                                if (name && name[0] != '_') {
+                                    PyObject* value = PyDict_GetItem(globals, key);
 
-                                if (value) {
-                                    if (PyCallable_Check(value)) {
-                                        if (PyType_Check(value)) {
-                                            kind = CompletionKind::Class;
-                                            type_str = "class";
-                                        } else {
-                                            kind = CompletionKind::Function;
-                                            type_str = "function";
+                                    CompletionKind kind = CompletionKind::Variable;
+                                    std::string type_str = "variable";
+
+                                    if (value) {
+                                        if (PyCallable_Check(value)) {
+                                            if (PyType_Check(value)) {
+                                                kind = CompletionKind::Class;
+                                                type_str = "class";
+                                            } else {
+                                                kind = CompletionKind::Function;
+                                                type_str = "function";
+                                            }
+                                        } else if (PyModule_Check(value)) {
+                                            kind = CompletionKind::Module;
+                                            type_str = "module";
                                         }
-                                    } else if (PyModule_Check(value)) {
-                                        kind = CompletionKind::Module;
-                                        type_str = "module";
                                     }
-                                }
 
-                                new_globals.push_back({
-                                    std::string(name),
-                                    std::string(name),
-                                    "Runtime " + type_str,
-                                    kind,
-                                    70 // Lower priority than static completions
-                                });
+                                    new_globals.push_back({std::string(name),
+                                                           std::string(name),
+                                                           "Runtime " + type_str,
+                                                           kind,
+                                                           70});
+                                }
                             }
                         }
+                        Py_DECREF(keys);
                     }
-                    Py_DECREF(keys);
                 }
             }
         }
-
-        PyGILState_Release(gil);
 
         // Update cache
         {
@@ -93,16 +92,14 @@ namespace lfs::vis::editor {
             return;
         }
 
-        PyGILState_STATE gil = PyGILState_Ensure();
+        const lfs::python::GilAcquire gil;
 
-        // Evaluate the object expression
         PyObject* main_module = PyImport_AddModule("__main__");
         PyObject* globals = main_module ? PyModule_GetDict(main_module) : nullptr;
 
         if (globals) {
             PyObject* obj = PyRun_String(obj_expr.c_str(), Py_eval_input, globals, globals);
             if (obj) {
-                // Call dir() on the object
                 PyObject* dir_result = PyObject_Dir(obj);
                 if (dir_result) {
                     Py_ssize_t len = PyList_Size(dir_result);
@@ -110,8 +107,7 @@ namespace lfs::vis::editor {
                         PyObject* name_obj = PyList_GetItem(dir_result, i);
                         if (name_obj && PyUnicode_Check(name_obj)) {
                             const char* name = PyUnicode_AsUTF8(name_obj);
-                            if (name && name[0] != '_') { // Skip private/magic methods
-                                // Try to get the attribute to determine its type
+                            if (name && name[0] != '_') {
                                 PyObject* attr = PyObject_GetAttrString(obj, name);
                                 CompletionKind kind = CompletionKind::Property;
                                 std::string type_str = "attribute";
@@ -136,11 +132,9 @@ namespace lfs::vis::editor {
                 }
                 Py_DECREF(obj);
             } else {
-                PyErr_Clear(); // Clear any error from failed eval
+                PyErr_Clear();
             }
         }
-
-        PyGILState_Release(gil);
     }
 
     std::vector<CompletionItem> PythonIntrospector::getCompletions(
