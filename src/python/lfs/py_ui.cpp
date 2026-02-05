@@ -943,8 +943,6 @@ namespace lfs::python {
         LayoutState eff;
         eff.enabled = own_state_.enabled && inherited_state_.enabled;
         eff.active = own_state_.active && inherited_state_.active;
-        eff.scale_x = own_state_.scale_x * inherited_state_.scale_x;
-        eff.scale_y = own_state_.scale_y * inherited_state_.scale_y;
         eff.alert = own_state_.alert || inherited_state_.alert;
         return eff;
     }
@@ -974,6 +972,8 @@ namespace lfs::python {
             ImGui::EndDisabled();
             disabled_pushed_ = false;
         }
+        if (own_state_.alert)
+            own_state_.alert = false;
     }
 
     // Sub-layout creation
@@ -2770,8 +2770,6 @@ namespace lfs::python {
             })
             .def_prop_rw("enabled", &PySubLayout::get_enabled, &PySubLayout::set_enabled)
             .def_prop_rw("active", &PySubLayout::get_active, &PySubLayout::set_active)
-            .def_prop_rw("scale_x", &PySubLayout::get_scale_x, &PySubLayout::set_scale_x)
-            .def_prop_rw("scale_y", &PySubLayout::get_scale_y, &PySubLayout::set_scale_y)
             .def_prop_rw("alert", &PySubLayout::get_alert, &PySubLayout::set_alert)
             .def("row", &PySubLayout::row)
             .def("column", &PySubLayout::column)

@@ -92,19 +92,6 @@ class TestSubLayoutStateProperties:
         sub.active = False
         assert sub.active is False
 
-    def test_scale_x_default(self, lf):
-        sub = lf.ui.UILayout().row()
-        assert sub.scale_x == pytest.approx(1.0)
-
-    def test_scale_x_set(self, lf):
-        sub = lf.ui.UILayout().row()
-        sub.scale_x = 0.5
-        assert sub.scale_x == pytest.approx(0.5)
-
-    def test_scale_y_default(self, lf):
-        sub = lf.ui.UILayout().row()
-        assert sub.scale_y == pytest.approx(1.0)
-
     def test_alert_default(self, lf):
         sub = lf.ui.UILayout().row()
         assert sub.alert is False
@@ -166,6 +153,10 @@ class TestSubLayoutGetattr:
 
     def test_getattr_delegates_to_parent(self, lf):
         sub = lf.ui.UILayout().row()
+<<<<<<< HEAD
+=======
+        assert hasattr(sub, "same_line")
+>>>>>>> master
         assert hasattr(sub, "begin_group")
         assert hasattr(sub, "end_group")
 
@@ -176,7 +167,11 @@ class TestSubLayoutGetattr:
 
     def test_getattr_returns_callable(self, lf):
         sub = lf.ui.UILayout().row()
+<<<<<<< HEAD
         method = sub.begin_group
+=======
+        method = sub.same_line
+>>>>>>> master
         assert callable(method)
 
 
@@ -201,6 +196,7 @@ class TestEmptyContainers:
         assert sub.active is True
 
 
+<<<<<<< HEAD
 class TestExplicitMethods:
     """Tests for explicit SubLayout method bindings."""
 
@@ -239,6 +235,8 @@ class TestAlertCascade:
         assert sub.alert is True
 
 
+=======
+>>>>>>> master
 class TestNoOldAPI:
     """Verify old dead API is removed."""
 

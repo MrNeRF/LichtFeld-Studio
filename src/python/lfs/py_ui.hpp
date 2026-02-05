@@ -72,8 +72,6 @@ namespace lfs::python {
     struct LayoutState {
         bool enabled = true;
         bool active = true;
-        float scale_x = 1.0f;
-        float scale_y = 1.0f;
         bool alert = false;
     };
 
@@ -107,10 +105,6 @@ namespace lfs::python {
         void set_enabled(bool v) { own_state_.enabled = v; }
         bool get_active() const { return own_state_.active; }
         void set_active(bool v) { own_state_.active = v; }
-        float get_scale_x() const { return own_state_.scale_x; }
-        void set_scale_x(float v) { own_state_.scale_x = v; }
-        float get_scale_y() const { return own_state_.scale_y; }
-        void set_scale_y(float v) { own_state_.scale_y = v; }
         bool get_alert() const { return own_state_.alert; }
         void set_alert(bool v) { own_state_.alert = v; }
 

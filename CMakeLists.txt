@@ -434,10 +434,9 @@ endif()
 
 # Copy CUDA runtime DLLs for Windows (needed for Python module loading)
 if(WIN32 AND CUDAToolkit_FOUND)
-    set(CUDA_RUNTIME_DLLS
-        "${CUDAToolkit_BIN_DIR}/cudart64_12.dll"
-        "${CUDAToolkit_BIN_DIR}/curand64_10.dll"
-    )
+    file(GLOB CUDA_DLLS_1 "${CUDAToolkit_BIN_DIR}/cudart64*.dll" "${CUDAToolkit_BIN_DIR}/curand64*.dll")
+    file(GLOB CUDA_DLLS_2 "${CUDAToolkit_BIN_DIR}/x64/cudart64*.dll" "${CUDAToolkit_BIN_DIR}/x64/curand64*.dll")
+    set(CUDA_RUNTIME_DLLS ${CUDA_DLLS_1} ${CUDA_DLLS_2})
     foreach(CUDA_DLL ${CUDA_RUNTIME_DLLS})
         if(EXISTS "${CUDA_DLL}")
             add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD

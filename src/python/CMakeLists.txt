@@ -227,10 +227,9 @@ if(WIN32)
     )
 
     # Copy CUDA DLLs
-    set(CUDA_DLLS_FOR_PYD
-        "${CUDAToolkit_BIN_DIR}/cudart64_12.dll"
-        "${CUDAToolkit_BIN_DIR}/curand64_10.dll"
-    )
+    file(GLOB CUDA_DLLS_1 "${CUDAToolkit_BIN_DIR}/cudart64*.dll" "${CUDAToolkit_BIN_DIR}/curand64*.dll")
+    file(GLOB CUDA_DLLS_2 "${CUDAToolkit_BIN_DIR}/x64/cudart64*.dll" "${CUDAToolkit_BIN_DIR}/x64/curand64*.dll")
+    set(CUDA_DLLS_FOR_PYD ${CUDA_DLLS_1} ${CUDA_DLLS_2})
     foreach(DLL ${CUDA_DLLS_FOR_PYD})
         if(EXISTS "${DLL}")
             add_custom_command(TARGET lfs_py POST_BUILD
@@ -288,6 +287,7 @@ dll_dirs = [
     r'${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin',
     r'${CMAKE_BINARY_DIR}/external/nvImageCodec/src',
     r'${CUDAToolkit_BIN_DIR}',
+    r'${CUDAToolkit_BIN_DIR}/x64',
 ]
 
 for d in dll_dirs:
