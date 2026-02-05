@@ -3,7 +3,7 @@
 
 #include "python_introspector.hpp"
 #include "core/logger.hpp"
-#include "python/gil_guard.hpp"
+#include "python/gil.hpp"
 #include <algorithm>
 
 #include <Python.h>

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "plugin_runner.hpp"
-#include "gil_guard.hpp"
+#include "gil.hpp"
 #include "package_manager.hpp"
 #include "runner.hpp"
 

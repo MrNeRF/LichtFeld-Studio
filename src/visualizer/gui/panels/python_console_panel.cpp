@@ -20,7 +20,7 @@
 #include <filesystem>
 #include <mutex>
 
-#include "python/gil_guard.hpp"
+#include "python/gil.hpp"
 
 #include "core/executable_path.hpp"
 #include "core/services.hpp"

@@ -5,7 +5,7 @@
 #include "python_runtime.hpp"
 #include "core/modal_event.hpp"
 #include "core/operator_callbacks.hpp"
-#include "gil_guard.hpp"
+#include "gil.hpp"
 
 #include <atomic>
 #include <cassert>

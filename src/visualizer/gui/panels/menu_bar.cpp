@@ -29,7 +29,7 @@ using namespace lichtfeld::Strings;
 #include <cfloat>
 #include <cstdlib>
 
-#include "python/gil_guard.hpp"
+#include "python/gil.hpp"
 #include "python/runner.hpp"
 #include <Python.h>
 #ifdef PLATFORM

@@ -15,7 +15,7 @@
 #include <core/logger.hpp>
 #include <core/path_utils.hpp>
 
-#include "gil_guard.hpp"
+#include "gil.hpp"
 #include "python_runtime.hpp"
 #include "training/control/control_boundary.hpp"
 #include <Python.h>
