@@ -1342,6 +1342,11 @@ namespace lfs::training {
                         nvtxRangePop();
                     }
 
+                    // Final tonemapping: clamp to [0, 1] for loss computation.
+                    // This is redundant when PPISP is active (CRF already clamps), but ensures
+                    // valid output range for bilateral grids and raw rasterizer output.
+                    corrected_image = corrected_image.clamp(0.0f, 1.0f);
+
                     nvtxRangePush("compute_photometric_loss");
                     lfs::core::Tensor tile_loss;
                     lfs::core::Tensor tile_grad;
