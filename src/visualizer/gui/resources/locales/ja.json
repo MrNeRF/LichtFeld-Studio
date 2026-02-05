@@ -200,6 +200,15 @@
     "tooltip.ppisp_activation_step": "コントローラートレーニング開始イテレーション（-1 = 自動: イテレーション - 5000）",
     "tooltip.ppisp_controller_lr": "コントローラーネットワークの学習率",
     "tooltip.ppisp_freeze_gaussians": "コントローラートレーニング中にガウシアンパラメータを固定",
+    "tooltip.strategy_gut_conflict": "GUTが有効の場合、ADC戦略は使用できません",
+    "tooltip.gut_adc_conflict": "ADC戦略ではGUTは使用できません。先にMCMCに切り替えてください。",
+
+    "error.adc_gut_title": "互換性のない設定",
+    "conflict.adc_gut_start_message": "GUTとADC戦略は同時に使用できません。トレーニングを開始するアクションを選択してください。",
+    "conflict.adc_gut_strategy_message": "ADC戦略はGUTと互換性がありません。ADCに切り替えるためにGUTを無効にしますか？",
+    "conflict.btn_use_mcmc": "MCMCを使用",
+    "conflict.btn_disable_gut": "GUTを無効化",
+    "conflict.btn_cancel": "キャンセル",
 
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "Opacity Reg:",

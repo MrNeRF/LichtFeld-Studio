@@ -182,6 +182,23 @@ namespace lfs::vis {
 
         applyPendingParams();
 
+        if (auto error = trainer_->getParams().optimization.validate(); !error.empty()) {
+            LOG_ERROR("Cannot start training: {}", error);
+            last_error_ = error;
+            state::TrainingCompleted{
+                .iteration = 0,
+                .final_loss = 0.0f,
+                .elapsed_seconds = 0.0f,
+                .success = false,
+                .user_stopped = false,
+                .error = last_error_}
+                .emit();
+            if (!state_machine_.transitionToFinished(FinishReason::Error)) {
+                LOG_WARN("Failed to transition to Finished(Error)");
+            }
+            return false;
+        }
+
         if (trainer_->isInitialized()) {
             LOG_DEBUG("Resuming from iteration {}", trainer_->get_current_iteration());
         } else {
@@ -476,6 +493,12 @@ namespace lfs::vis {
         LOG_TIMER("Training execution");
 
         try {
+            trainer_->setOnIterationStart([this] {
+                if (auto* pm = services().paramsOrNull(); pm && pm->consumeDirty()) {
+                    applyPendingParams();
+                }
+            });
+
             LOG_DEBUG("Starting trainer->train() with stop token");
             auto train_result = trainer_->train(stop_token);
 
@@ -599,7 +622,7 @@ namespace lfs::vis {
 
         // Use ParameterManager in GUI mode, fallback to pending_opt_params_ for headless
         if (auto* const param_mgr = services().paramsOrNull()) {
-            params.optimization = param_mgr->getActiveParams();
+            params.optimization = param_mgr->copyActiveParams();
             LOG_DEBUG("Applied params: strategy={}, iter={}, max_cap={}",
                       params.optimization.strategy, params.optimization.iterations, params.optimization.max_cap);
         } else {

@@ -119,6 +119,12 @@ namespace lfs::core {
             return opt_json;
         }
 
+        std::string OptimizationParameters::validate() const {
+            if (gut && strategy == "adc")
+                return "GUT and ADC strategy cannot be used together";
+            return {};
+        }
+
         OptimizationParameters OptimizationParameters::mcmc_defaults() {
             return {};
         }

@@ -304,6 +304,14 @@ sys.argv = ['stubgen', '-m', 'lichtfeld',
             '-O', r'${CMAKE_CURRENT_BINARY_DIR}/typings',
             '-r']
 runpy.run_path(r'${NB_STUBGEN}', run_name='__main__')
+
+# Normalize CRLF -> LF so git doesn't warn about line endings
+import glob, pathlib
+for pyi in glob.glob(r'${CMAKE_CURRENT_BINARY_DIR}/typings/**/*.pyi', recursive=True):
+    p = pathlib.Path(pyi)
+    content = p.read_bytes()
+    if b'\\r\\n' in content:
+        p.write_bytes(content.replace(b'\\r\\n', b'\\n'))
 ")
 
             add_custom_command(

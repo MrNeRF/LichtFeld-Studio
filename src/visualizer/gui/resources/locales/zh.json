@@ -200,6 +200,15 @@
     "tooltip.ppisp_activation_step": "控制器训练开始的迭代次数（-1 = 自动：迭代次数 - 5000）",
     "tooltip.ppisp_controller_lr": "控制器网络学习率",
     "tooltip.ppisp_freeze_gaussians": "在控制器训练期间冻结高斯参数",
+    "tooltip.strategy_gut_conflict": "启用GUT时无法使用ADC策略",
+    "tooltip.gut_adc_conflict": "ADC策略下无法使用GUT。请先切换到MCMC。",
+
+    "error.adc_gut_title": "不兼容的设置",
+    "conflict.adc_gut_start_message": "GUT和ADC策略不能同时使用。请选择操作以开始训练。",
+    "conflict.adc_gut_strategy_message": "ADC策略与GUT不兼容。禁用GUT以切换到ADC？",
+    "conflict.btn_use_mcmc": "使用MCMC",
+    "conflict.btn_disable_gut": "禁用GUT",
+    "conflict.btn_cancel": "取消",
 
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "Opacity Reg:",

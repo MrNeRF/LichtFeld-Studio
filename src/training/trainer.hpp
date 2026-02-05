@@ -20,6 +20,7 @@
 #include "strategies/istrategy.hpp"
 #include <atomic>
 #include <expected>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <shared_mutex>
@@ -137,6 +138,8 @@ namespace lfs::training {
 
         const lfs::core::param::TrainingParameters& getParams() const { return params_; }
         void setParams(const lfs::core::param::TrainingParameters& params);
+
+        void setOnIterationStart(std::function<void()> cb) { on_iteration_start_ = std::move(cb); }
 
         // Get Scene (for Python bindings in headless mode)
         lfs::vis::Scene* getScene() const { return scene_; }
@@ -329,5 +332,7 @@ namespace lfs::training {
 
         // Python control scripts (file paths) to execute before training starts
         std::vector<std::filesystem::path> python_scripts_;
+
+        std::function<void()> on_iteration_start_;
     };
 } // namespace lfs::training

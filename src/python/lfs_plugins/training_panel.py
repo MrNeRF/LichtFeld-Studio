@@ -66,6 +66,11 @@ class TrainingPanel(Panel):
         self._checkpoint_saved_time = 0.0
         self._new_save_step = 7000
 
+    def _sync_render_setting(self, name, value):
+        rs = lf.get_render_settings()
+        if rs:
+            rs.set(name, value)
+
     def draw(self, layout):
         if not AppState.has_trainer.value:
             layout.text_colored("No trainer loaded", COLOR_IDLE)
@@ -94,7 +99,27 @@ class TrainingPanel(Panel):
         if state == "ready":
             label = tr("training_panel.resume_training") if iteration > 0 else tr("training_panel.start_training")
             if layout.button_styled(label, "success", FULL_WIDTH):
-                lf.start_training()
+                params = lf.optimization_params()
+                error = params.validate() if params.has_params() else ""
+                if error:
+                    btn_mcmc = tr("training.conflict.btn_use_mcmc")
+                    btn_gut = tr("training.conflict.btn_disable_gut")
+                    btn_cancel = tr("training.conflict.btn_cancel")
+                    def _on_start_conflict(button, _mcmc=btn_mcmc, _gut=btn_gut):
+                        p = lf.optimization_params()
+                        if button == _mcmc:
+                            p.set_strategy("mcmc")
+                            lf.start_training()
+                        elif button == _gut:
+                            p.gut = False
+                            lf.start_training()
+                    lf.ui.confirm_dialog(
+                        tr("training.error.adc_gut_title"),
+                        tr("training.conflict.adc_gut_start_message"),
+                        [btn_mcmc, btn_gut, btn_cancel],
+                        _on_start_conflict)
+                else:
+                    lf.start_training()
             if iteration > 0:
                 if layout.button_styled(tr("training_panel.reset"), "secondary", FULL_WIDTH):
                     lf.reset_training()
@@ -148,11 +173,13 @@ class TrainingPanel(Panel):
 
     def _draw_basic_params(self, layout, state, iteration, params):
         can_edit = (state == "ready") and (iteration == 0)
+        can_edit_live = state in ("ready", "running", "paused")
 
         if layout.begin_table("PyBasicParamsTable", 2):
             layout.table_setup_column("Label", 120.0)
             layout.table_setup_column("Control", 0.0)
 
+            # -- Structural params (only before training starts) --
             layout.begin_disabled(not can_edit)
 
             layout.table_next_row()
@@ -163,10 +190,25 @@ class TrainingPanel(Panel):
             strategy_idx = 0 if params.strategy == "mcmc" else 1
             changed, new_idx = layout.combo("##py_strategy", strategy_idx, STRATEGY_ITEMS)
             if changed:
-                params.set_strategy("mcmc" if new_idx == 0 else "adc")
+                if new_idx == 1 and params.gut:
+                    btn_gut = tr("training.conflict.btn_disable_gut")
+                    btn_cancel = tr("training.conflict.btn_cancel")
+                    def _on_strategy_conflict(button, _gut=btn_gut):
+                        p = lf.optimization_params()
+                        if button == _gut:
+                            p.gut = False
+                            p.set_strategy("adc")
+                    lf.ui.confirm_dialog(
+                        tr("training.error.adc_gut_title"),
+                        tr("training.conflict.adc_gut_strategy_message"),
+                        [btn_gut, btn_cancel],
+                        _on_strategy_conflict)
+                else:
+                    params.set_strategy("mcmc" if new_idx == 0 else "adc")
             layout.pop_item_width()
             if layout.is_item_hovered():
-                layout.set_tooltip(tr("training.tooltip.strategy"))
+                tooltip = tr("training.tooltip.strategy_gut_conflict") if params.gut else tr("training.tooltip.strategy")
+                layout.set_tooltip(tooltip)
 
             layout.table_next_row()
             layout.table_next_column()
@@ -229,6 +271,11 @@ class TrainingPanel(Panel):
             if layout.is_item_hovered():
                 layout.set_tooltip(tr("training.tooltip.steps_scaler"))
 
+            layout.end_disabled()
+
+            # -- Live-editable params (available during training) --
+            layout.begin_disabled(not can_edit_live)
+
             layout.table_next_row()
             layout.table_next_column()
             layout.label(tr("training_params.bilateral_grid"))
@@ -287,11 +334,18 @@ class TrainingPanel(Panel):
             layout.table_next_column()
             layout.label(tr("training_params.gut"))
             layout.table_next_column()
+            gut_disabled = (params.strategy == "adc")
+            if gut_disabled:
+                layout.begin_disabled(True)
             changed, new_val = layout.checkbox("##py_gut", params.gut)
             if changed:
                 params.gut = new_val
+                self._sync_render_setting("gut", new_val)
+            if gut_disabled:
+                layout.end_disabled()
             if layout.is_item_hovered():
-                layout.set_tooltip(tr("training.tooltip.gut"))
+                tooltip = tr("training.tooltip.gut_adc_conflict") if gut_disabled else tr("training.tooltip.gut")
+                layout.set_tooltip(tooltip)
 
             layout.table_next_row()
             layout.table_next_column()
@@ -310,6 +364,7 @@ class TrainingPanel(Panel):
             changed, new_val = layout.checkbox("##py_mip_filter", params.mip_filter)
             if changed:
                 params.mip_filter = new_val
+                self._sync_render_setting("mip_filter", new_val)
             if layout.is_item_hovered():
                 layout.set_tooltip(tr("training.tooltip.mip_filter"))
 
@@ -320,6 +375,7 @@ class TrainingPanel(Panel):
             changed, new_val = layout.checkbox("##py_ppisp", params.ppisp)
             if changed:
                 params.ppisp = new_val
+                self._sync_render_setting("apply_appearance_correction", new_val)
             if layout.is_item_hovered():
                 layout.set_tooltip(tr("training.tooltip.ppisp"))
 
@@ -344,6 +400,7 @@ class TrainingPanel(Panel):
                 changed, new_color = layout.color_edit3("##py_bg_color", params.bg_color)
                 if changed:
                     params.bg_color = new_color
+                    self._sync_render_setting("background_color", new_color)
                 layout.pop_item_width()
 
             if bg_mode_val == 2:

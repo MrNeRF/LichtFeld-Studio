@@ -131,6 +131,8 @@ namespace lfs::core {
             nlohmann::json to_json() const;
             static OptimizationParameters from_json(const nlohmann::json& j);
 
+            [[nodiscard]] std::string validate() const;
+
             // Factory methods for strategy presets
             static OptimizationParameters mcmc_defaults();
             static OptimizationParameters adc_defaults();

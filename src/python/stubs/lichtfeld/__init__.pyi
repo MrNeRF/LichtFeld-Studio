@@ -1267,6 +1267,9 @@ class OptimizationParams:
     def has_params(self) -> bool:
         """Check if ParameterManager is available"""
 
+    def validate(self) -> str:
+        """Validate parameter consistency, returns empty string if valid"""
+
     @property
     def iterations(self) -> int:
         """Maximum training iterations"""

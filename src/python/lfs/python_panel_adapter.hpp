@@ -9,6 +9,7 @@
 #include "python/python_runtime.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 
+#include <cassert>
 #include <nanobind/nanobind.h>
 
 namespace nb = nanobind;
@@ -18,16 +19,18 @@ namespace lfs::python {
     namespace gui = lfs::vis::gui;
 
     inline gui::PanelSpace to_gui_space(PanelSpace ps) {
-        return static_cast<gui::PanelSpace>(static_cast<int>(ps));
+        switch (ps) {
+        case PanelSpace::SidePanel: return gui::PanelSpace::SidePanel;
+        case PanelSpace::Floating: return gui::PanelSpace::Floating;
+        case PanelSpace::ViewportOverlay: return gui::PanelSpace::ViewportOverlay;
+        case PanelSpace::Dockable: return gui::PanelSpace::Dockable;
+        case PanelSpace::MainPanelTab: return gui::PanelSpace::MainPanelTab;
+        case PanelSpace::SceneHeader: return gui::PanelSpace::SceneHeader;
+        case PanelSpace::StatusBar: return gui::PanelSpace::StatusBar;
+        }
+        assert(false && "Unknown PanelSpace");
+        return gui::PanelSpace::Floating;
     }
-
-    static_assert(static_cast<int>(PanelSpace::SidePanel) == static_cast<int>(gui::PanelSpace::SidePanel));
-    static_assert(static_cast<int>(PanelSpace::Floating) == static_cast<int>(gui::PanelSpace::Floating));
-    static_assert(static_cast<int>(PanelSpace::ViewportOverlay) == static_cast<int>(gui::PanelSpace::ViewportOverlay));
-    static_assert(static_cast<int>(PanelSpace::Dockable) == static_cast<int>(gui::PanelSpace::Dockable));
-    static_assert(static_cast<int>(PanelSpace::MainPanelTab) == static_cast<int>(gui::PanelSpace::MainPanelTab));
-    static_assert(static_cast<int>(PanelSpace::SceneHeader) == static_cast<int>(gui::PanelSpace::SceneHeader));
-    static_assert(static_cast<int>(PanelSpace::StatusBar) == static_cast<int>(gui::PanelSpace::StatusBar));
 
     class PythonPanelAdapter : public gui::IPanel {
         nb::object panel_instance_;
@@ -39,11 +42,11 @@ namespace lfs::python {
               has_poll_(has_poll) {}
 
         void draw(const gui::PanelDrawContext& ctx) override {
-            (void)ctx;
             if (!can_acquire_gil())
                 return;
             if (bridge().prepare_ui)
                 bridge().prepare_ui();
+            const SceneContextGuard scene_guard(ctx.scene);
             const GilAcquire gil;
             PyUILayout layout;
             panel_instance_.attr("draw")(layout);

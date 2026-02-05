@@ -240,7 +240,7 @@ namespace lfs::vis::gui {
                                   snap.label, panels_[snap.index].consecutive_errors);
                     }
                 }
-            } else if (draw_succeeded) {
+            } else if (draw_succeeded && !snap.is_native) {
                 std::lock_guard lock(mutex_);
                 if (snap.index < panels_.size() && panels_[snap.index].idname == snap.idname) {
                     panels_[snap.index].consecutive_errors = 0;
@@ -290,7 +290,7 @@ namespace lfs::vis::gui {
                               snap.label, panels_[snap.index].consecutive_errors);
                 }
             }
-        } else if (draw_succeeded) {
+        } else if (draw_succeeded && !snap.is_native) {
             std::lock_guard lock(mutex_);
             if (snap.index < panels_.size() && panels_[snap.index].idname == idname) {
                 panels_[snap.index].consecutive_errors = 0;
@@ -336,7 +336,7 @@ namespace lfs::vis::gui {
         std::vector<std::string> names;
         for (const auto& p : panels_) {
             if (p.space == space)
-                names.push_back(p.label);
+                names.push_back(p.idname);
         }
         return names;
     }

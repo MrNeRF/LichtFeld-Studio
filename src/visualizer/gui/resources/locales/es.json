@@ -200,6 +200,15 @@
     "tooltip.ppisp_activation_step": "Iteración cuando comienza entrenamiento del controlador (-1 = auto: iteraciones - 5000)",
     "tooltip.ppisp_controller_lr": "Tasa de aprendizaje para la red del controlador",
     "tooltip.ppisp_freeze_gaussians": "Congelar parámetros de Gaussianos durante entrenamiento del controlador",
+    "tooltip.strategy_gut_conflict": "La estrategia ADC no está disponible cuando GUT está habilitado",
+    "tooltip.gut_adc_conflict": "GUT no está disponible con la estrategia ADC. Cambie primero a MCMC.",
+
+    "error.adc_gut_title": "Configuración incompatible",
+    "conflict.adc_gut_start_message": "GUT y la estrategia ADC no pueden usarse juntos. Elija una acción para iniciar el entrenamiento.",
+    "conflict.adc_gut_strategy_message": "La estrategia ADC es incompatible con GUT. ¿Desactivar GUT para cambiar a ADC?",
+    "conflict.btn_use_mcmc": "Usar MCMC",
+    "conflict.btn_disable_gut": "Desactivar GUT",
+    "conflict.btn_cancel": "Cancelar",
 
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "Opacity Reg:",

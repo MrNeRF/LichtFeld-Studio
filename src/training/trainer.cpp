@@ -1035,6 +1035,9 @@ namespace lfs::training {
             // Check control requests at the beginning
             handle_control_requests(iter, stop_token);
 
+            if (on_iteration_start_)
+                on_iteration_start_();
+
             // Python hook: iteration start (safe, pre-forward)
             {
                 lfs::training::HookContext ctx{

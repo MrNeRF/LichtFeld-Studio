@@ -627,10 +627,6 @@ namespace lfs::vis::gui {
 
         auto& reg = PanelRegistry::instance();
 
-        python::set_scene_for_python(scene);
-        auto clear_scene = [](void*) { python::set_scene_for_python(nullptr); };
-        std::unique_ptr<void, decltype(clear_scene)> scene_guard(reinterpret_cast<void*>(1), clear_scene);
-
         // Right panel and docked Python console
         panel_layout_.renderRightPanel(ctx, draw_ctx, show_main_panel_, ui_hidden_, window_states_, focus_panel_name_);
 
@@ -651,8 +647,6 @@ namespace lfs::vis::gui {
         if (!ui_hidden_) {
             reg.draw_panels(PanelSpace::StatusBar, draw_ctx);
         }
-
-        scene_guard.reset();
 
         python::draw_python_modals(scene);
         python::draw_python_popups(scene);

@@ -715,6 +715,9 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
     apply_step_scaling(*params);
     apply_ppisp_defaults(*params);
 
+    if (auto error = params->optimization.validate(); !error.empty())
+        return std::unexpected("ERROR: " + error);
+
     return params;
 }
 

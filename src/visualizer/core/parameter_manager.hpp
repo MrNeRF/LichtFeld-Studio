@@ -6,7 +6,9 @@
 
 #include "core/export.hpp"
 #include "core/parameters.hpp"
+#include <atomic>
 #include <expected>
+#include <mutex>
 #include <string>
 #include <string_view>
 
@@ -47,6 +49,17 @@ namespace lfs::vis {
 
         [[nodiscard]] bool isLoaded() const { return loaded_; }
 
+        void markDirty() {
+            std::lock_guard lock(params_mutex_);
+            dirty_.store(true, std::memory_order_release);
+        }
+        bool consumeDirty() { return dirty_.exchange(false, std::memory_order_acq_rel); }
+
+        [[nodiscard]] lfs::core::param::OptimizationParameters copyActiveParams() const {
+            std::lock_guard lock(params_mutex_);
+            return getActiveParams();
+        }
+
     private:
         bool loaded_ = false;
         bool session_defaults_set_ = false;
@@ -62,6 +75,9 @@ namespace lfs::vis {
 
         // Dataset config (CLI overrides JSON defaults)
         lfs::core::param::DatasetConfig dataset_config_;
+
+        mutable std::mutex params_mutex_;
+        std::atomic<bool> dirty_{false};
     };
 
 } // namespace lfs::vis

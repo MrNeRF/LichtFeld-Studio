@@ -127,7 +127,7 @@ namespace lfs::python {
         const float total_btns_width =
             btn_w * static_cast<float>(modal.buttons.size()) +
             im_style.ItemSpacing.x * static_cast<float>(modal.buttons.size() - 1);
-        ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - total_btns_width +
+        ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - total_btns_width) * 0.5f +
                              im_style.WindowPadding.x);
 
         for (size_t i = 0; i < modal.buttons.size(); ++i) {
@@ -182,7 +182,7 @@ namespace lfs::python {
 
         const auto& im_style = ImGui::GetStyle();
         const float total_btns_width = btn_w * 2.0f + im_style.ItemSpacing.x;
-        ImGui::SetCursorPosX(ImGui::GetContentRegionAvail().x - total_btns_width +
+        ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x - total_btns_width) * 0.5f +
                              im_style.WindowPadding.x);
 
         if (ColoredButton("OK", ButtonStyle::Primary, ImVec2(btn_w, 0))) {
