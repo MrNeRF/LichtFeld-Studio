@@ -1,5 +1,4 @@
 {
-    "python.defaultInterpreterPath": "${workspaceFolder}/build/vcpkg_installed/x64-linux/tools/python3/python3.12",
     "python.analysis.extraPaths": [
         "${workspaceFolder}/build/src/python",
         "${workspaceFolder}/build/src/python/typings"
