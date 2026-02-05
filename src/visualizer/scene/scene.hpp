@@ -10,6 +10,7 @@
 #include "core/tensor.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller_pool.hpp"
+#include <atomic>
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>
@@ -351,6 +352,9 @@ namespace lfs::vis {
 
         // Mark scene data as changed (e.g., after modifying a node's deleted mask)
         // Also called by SceneNode Observable properties when they change
+        void pinForExport() const { ++export_pin_count_; }
+        void unpinForExport() const { --export_pin_count_; }
+
         void invalidateCache() {
             model_cache_valid_ = false;
             transform_cache_valid_ = false;
@@ -367,6 +371,9 @@ namespace lfs::vis {
         std::vector<std::unique_ptr<Node>> nodes_;       // unique_ptr for stable addresses (Observable callbacks capture 'this')
         std::unordered_map<NodeId, size_t> id_to_index_; // NodeId -> index in nodes_
         NodeId next_node_id_ = 0;
+
+        // Export pin prevents cache invalidation while video/file export holds a pointer
+        mutable std::atomic<int> export_pin_count_{0};
 
         // Caching for combined model (rebuilt when models/visibility change)
         mutable std::unique_ptr<lfs::core::SplatData> cached_combined_;

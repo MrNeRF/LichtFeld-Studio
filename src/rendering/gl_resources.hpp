@@ -82,12 +82,19 @@ namespace lfs::rendering {
         }
     };
 
+    struct RenderbufferDeleter {
+        void operator()(GLsizei n, const GLuint* renderbuffers) const {
+            glDeleteRenderbuffers(n, renderbuffers);
+        }
+    };
+
     // Specific resource types
     using VAO = GLResource<VAODeleter>;
     using VBO = GLResource<BufferDeleter>;
     using EBO = GLResource<BufferDeleter>;
     using Texture = GLResource<TextureDeleter>;
     using FBO = GLResource<FramebufferDeleter>;
+    using RBO = GLResource<RenderbufferDeleter>;
 
     // Factory functions with error handling
     inline Result<VAO> create_vao() {

@@ -443,6 +443,9 @@ namespace lfs::vis {
         if (model_cache_valid_)
             return;
 
+        if (export_pin_count_.load(std::memory_order_acquire) > 0)
+            return;
+
         if (consolidated_ && cached_combined_) {
             model_cache_valid_ = true;
             return;

@@ -34,6 +34,12 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # GUI system
         gui/gui_manager.cpp
+        gui/gizmo_manager.cpp
+        gui/panel_layout.cpp
+        gui/layout_state.cpp
+        gui/async_task_manager.cpp
+        gui/startup_overlay.cpp
+        gui/sequencer_ui_manager.cpp
         gui/gizmo_transform.cpp
         gui/html_viewer_export.cpp
         gui/ui_widgets.cpp
