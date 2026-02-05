@@ -61,7 +61,7 @@ namespace lfs::python {
         vis::RenderingManager* rendering = nullptr;
         vis::SelectionService* selection = nullptr;
 
-        // Derived state (computed once per frame in set_context())
+        // Derived state (owned by set_context(), do not set externally)
         uint64_t scene_generation = 0;
         bool cached_has_selection = false;
         bool cached_is_training = false;

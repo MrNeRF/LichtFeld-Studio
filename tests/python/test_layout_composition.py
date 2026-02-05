@@ -166,7 +166,6 @@ class TestSubLayoutGetattr:
 
     def test_getattr_delegates_to_parent(self, lf):
         sub = lf.ui.UILayout().row()
-        assert hasattr(sub, "same_line")
         assert hasattr(sub, "begin_group")
         assert hasattr(sub, "end_group")
 
@@ -177,7 +176,7 @@ class TestSubLayoutGetattr:
 
     def test_getattr_returns_callable(self, lf):
         sub = lf.ui.UILayout().row()
-        method = sub.same_line
+        method = sub.begin_group
         assert callable(method)
 
 
@@ -200,6 +199,44 @@ class TestEmptyContainers:
     def test_empty_column_sublayout(self, lf):
         sub = lf.ui.UILayout().column()
         assert sub.active is True
+
+
+class TestExplicitMethods:
+    """Tests for explicit SubLayout method bindings."""
+
+    EXPLICIT_METHODS = [
+        "begin_table", "table_setup_column", "end_table",
+        "table_next_row", "table_next_column",
+        "input_int_formatted", "input_float", "input_int",
+        "radio_button", "small_button", "selectable",
+        "color_edit3", "text_disabled",
+        "image", "image_button",
+        "input_text_with_hint", "input_text_enter", "listbox",
+        "same_line", "begin_disabled", "end_disabled",
+        "push_item_width", "pop_item_width",
+        "set_tooltip", "is_item_hovered", "is_item_clicked",
+        "push_id", "pop_id",
+        "begin_child", "end_child",
+        "begin_context_menu", "end_context_menu",
+        "menu_item", "begin_menu", "end_menu",
+        "get_content_region_avail", "table_headers_row",
+    ]
+
+    def test_explicit_methods_exist(self, lf):
+        sub = lf.ui.UILayout().row()
+        for name in self.EXPLICIT_METHODS:
+            assert hasattr(sub, name), f"SubLayout missing: {name}"
+            assert callable(getattr(sub, name))
+
+
+class TestAlertCascade:
+    """Tests for alert persist and cascade behavior."""
+
+    def test_alert_persists_after_read(self, lf):
+        sub = lf.ui.UILayout().row()
+        sub.alert = True
+        _ = sub.alert
+        assert sub.alert is True
 
 
 class TestNoOldAPI:

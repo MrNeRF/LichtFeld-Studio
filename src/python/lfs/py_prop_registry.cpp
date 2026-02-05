@@ -253,6 +253,7 @@ namespace lfs::python {
                     return std::any{};
                 }
             } catch (...) {
+                LOG_WARN("Property getter failed for '{}'", id_copy);
                 return std::any{};
             }
         };
@@ -302,6 +303,7 @@ namespace lfs::python {
                     break;
                 }
             } catch (...) {
+                LOG_WARN("Property setter failed for '{}'", id_copy);
             }
         };
 
@@ -311,10 +313,12 @@ namespace lfs::python {
     void register_python_property_group(const std::string& group_id, const std::string& group_name,
                                         nb::object property_group_class) {
         if (!property_group_class.is_valid()) {
+            LOG_WARN("Property group '{}' has invalid class", group_id);
             return;
         }
 
         if (!nb::hasattr(property_group_class, "_get_property_descriptors")) {
+            LOG_WARN("Property group '{}' missing _get_property_descriptors", group_id);
             return;
         }
 

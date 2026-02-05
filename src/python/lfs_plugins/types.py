@@ -121,3 +121,14 @@ class Panel:
         pass
 
 
+class Menu:
+    """Base class for menu definitions."""
+
+    label: str = ""
+    location: str = "FILE"
+    order: int = 100
+
+    def draw(self, layout):
+        pass
+
+

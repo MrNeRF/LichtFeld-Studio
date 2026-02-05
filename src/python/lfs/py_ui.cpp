@@ -895,6 +895,7 @@ namespace lfs::python {
     }
 
     void PySubLayout::advance_child() {
+        assert(!g_layout_stack.empty() && "advance_child() called outside layout context");
         if (g_layout_stack.empty())
             return;
         auto& ctx = g_layout_stack.top();
@@ -919,6 +920,8 @@ namespace lfs::python {
                 float w = ctx.available_width * (1.0f - ctx.split_factor);
                 ImGui::BeginGroup();
                 ImGui::PushItemWidth(w - ImGui::GetStyle().ItemSpacing.x);
+            } else if (ctx.child_index == 2) {
+                LOG_WARN("Split layout received more than 2 children");
             }
             ctx.child_index++;
             break;
@@ -942,7 +945,7 @@ namespace lfs::python {
         eff.active = own_state_.active && inherited_state_.active;
         eff.scale_x = own_state_.scale_x * inherited_state_.scale_x;
         eff.scale_y = own_state_.scale_y * inherited_state_.scale_y;
-        eff.alert = own_state_.alert;
+        eff.alert = own_state_.alert || inherited_state_.alert;
         return eff;
     }
 
@@ -971,10 +974,7 @@ namespace lfs::python {
             ImGui::EndDisabled();
             disabled_pushed_ = false;
         }
-        if (own_state_.alert)
-            own_state_.alert = false;
     }
-
 
     // Sub-layout creation
     PySubLayout PySubLayout::row() { return PySubLayout(this, LayoutType::Row); }
@@ -987,73 +987,316 @@ namespace lfs::python {
 
     // Delegated widget methods
     void PySubLayout::label(const std::string& text) {
-        advance_child(); apply_state(); parent_->label(text); pop_per_item_state();
+        advance_child();
+        apply_state();
+        parent_->label(text);
+        pop_per_item_state();
     }
     bool PySubLayout::button(const std::string& l, std::tuple<float, float> size) {
-        advance_child(); apply_state(); auto r = parent_->button(l, size); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->button(l, size);
+        pop_per_item_state();
+        return r;
     }
     bool PySubLayout::button_styled(const std::string& l, const std::string& style,
                                     std::tuple<float, float> size) {
-        advance_child(); apply_state(); auto r = parent_->button_styled(l, style, size); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->button_styled(l, style, size);
+        pop_per_item_state();
+        return r;
     }
     std::tuple<bool, nb::object> PySubLayout::prop(nb::object data, const std::string& prop_id,
-                                                    std::optional<std::string> text) {
-        advance_child(); apply_state(); auto r = parent_->prop(data, prop_id, text); pop_per_item_state(); return r;
+                                                   std::optional<std::string> text) {
+        advance_child();
+        apply_state();
+        auto r = parent_->prop(data, prop_id, text);
+        pop_per_item_state();
+        return r;
     }
     std::tuple<bool, bool> PySubLayout::checkbox(const std::string& l, bool v) {
-        advance_child(); apply_state(); auto r = parent_->checkbox(l, v); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->checkbox(l, v);
+        pop_per_item_state();
+        return r;
     }
     std::tuple<bool, float> PySubLayout::slider_float(const std::string& l, float v, float mn, float mx) {
-        advance_child(); apply_state(); auto r = parent_->slider_float(l, v, mn, mx); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->slider_float(l, v, mn, mx);
+        pop_per_item_state();
+        return r;
     }
     std::tuple<bool, int> PySubLayout::slider_int(const std::string& l, int v, int mn, int mx) {
-        advance_child(); apply_state(); auto r = parent_->slider_int(l, v, mn, mx); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->slider_int(l, v, mn, mx);
+        pop_per_item_state();
+        return r;
     }
     std::tuple<bool, float> PySubLayout::drag_float(const std::string& l, float v, float speed, float mn, float mx) {
-        advance_child(); apply_state(); auto r = parent_->drag_float(l, v, speed, mn, mx); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->drag_float(l, v, speed, mn, mx);
+        pop_per_item_state();
+        return r;
     }
     std::tuple<bool, int> PySubLayout::drag_int(const std::string& l, int v, float speed, int mn, int mx) {
-        advance_child(); apply_state(); auto r = parent_->drag_int(l, v, speed, mn, mx); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->drag_int(l, v, speed, mn, mx);
+        pop_per_item_state();
+        return r;
     }
     std::tuple<bool, std::string> PySubLayout::input_text(const std::string& l, const std::string& v) {
-        advance_child(); apply_state(); auto r = parent_->input_text(l, v); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->input_text(l, v);
+        pop_per_item_state();
+        return r;
     }
     std::tuple<bool, int> PySubLayout::combo(const std::string& l, int idx,
-                                              const std::vector<std::string>& items) {
-        advance_child(); apply_state(); auto r = parent_->combo(l, idx, items); pop_per_item_state(); return r;
+                                             const std::vector<std::string>& items) {
+        advance_child();
+        apply_state();
+        auto r = parent_->combo(l, idx, items);
+        pop_per_item_state();
+        return r;
     }
     void PySubLayout::separator() {
-        advance_child(); parent_->separator();
+        advance_child();
+        parent_->separator();
     }
     void PySubLayout::spacing() {
-        advance_child(); parent_->spacing();
+        advance_child();
+        parent_->spacing();
     }
     void PySubLayout::heading(const std::string& text) {
-        advance_child(); apply_state(); parent_->heading(text); pop_per_item_state();
+        advance_child();
+        apply_state();
+        parent_->heading(text);
+        pop_per_item_state();
     }
     bool PySubLayout::collapsing_header(const std::string& l, bool default_open) {
-        advance_child(); apply_state(); auto r = parent_->collapsing_header(l, default_open); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->collapsing_header(l, default_open);
+        pop_per_item_state();
+        return r;
     }
     bool PySubLayout::tree_node(const std::string& l) {
-        advance_child(); apply_state(); auto r = parent_->tree_node(l); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->tree_node(l);
+        pop_per_item_state();
+        return r;
     }
     void PySubLayout::tree_pop() {
         parent_->tree_pop();
     }
     void PySubLayout::progress_bar(float fraction, const std::string& overlay, float width) {
-        advance_child(); apply_state(); parent_->progress_bar(fraction, overlay, width); pop_per_item_state();
+        advance_child();
+        apply_state();
+        parent_->progress_bar(fraction, overlay, width);
+        pop_per_item_state();
     }
     void PySubLayout::text_colored(const std::string& text, std::tuple<float, float, float, float> color) {
-        advance_child(); parent_->text_colored(text, color);
+        advance_child();
+        parent_->text_colored(text, color);
     }
     void PySubLayout::text_wrapped(const std::string& text) {
-        advance_child(); apply_state(); parent_->text_wrapped(text); pop_per_item_state();
+        advance_child();
+        apply_state();
+        parent_->text_wrapped(text);
+        pop_per_item_state();
     }
 
     bool PySubLayout::prop_enum(nb::object data, const std::string& prop_id,
                                 const std::string& value, const std::string& text) {
         advance_child();
         return draw_prop_enum_button(data, prop_id, value, text);
+    }
+
+    bool PySubLayout::begin_table(const std::string& id, int columns) {
+        advance_child();
+        apply_state();
+        auto r = parent_->begin_table(id, columns);
+        pop_per_item_state();
+        return r;
+    }
+    std::tuple<bool, float> PySubLayout::input_float(const std::string& label, float value,
+                                                     float step, float step_fast,
+                                                     const std::string& format) {
+        advance_child();
+        apply_state();
+        auto r = parent_->input_float(label, value, step, step_fast, format);
+        pop_per_item_state();
+        return r;
+    }
+    std::tuple<bool, int> PySubLayout::input_int(const std::string& label, int value,
+                                                 int step, int step_fast) {
+        advance_child();
+        apply_state();
+        auto r = parent_->input_int(label, value, step, step_fast);
+        pop_per_item_state();
+        return r;
+    }
+    std::tuple<bool, int> PySubLayout::input_int_formatted(const std::string& label, int value,
+                                                           int step, int step_fast) {
+        advance_child();
+        apply_state();
+        auto r = parent_->input_int_formatted(label, value, step, step_fast);
+        pop_per_item_state();
+        return r;
+    }
+    std::tuple<bool, int> PySubLayout::radio_button(const std::string& label, int current, int value) {
+        advance_child();
+        apply_state();
+        auto r = parent_->radio_button(label, current, value);
+        pop_per_item_state();
+        return r;
+    }
+    bool PySubLayout::small_button(const std::string& label) {
+        advance_child();
+        apply_state();
+        auto r = parent_->small_button(label);
+        pop_per_item_state();
+        return r;
+    }
+    bool PySubLayout::selectable(const std::string& label, bool selected, float height) {
+        advance_child();
+        apply_state();
+        auto r = parent_->selectable(label, selected, height);
+        pop_per_item_state();
+        return r;
+    }
+    std::tuple<bool, std::tuple<float, float, float>> PySubLayout::color_edit3(
+        const std::string& label, std::tuple<float, float, float> color) {
+        advance_child();
+        apply_state();
+        auto r = parent_->color_edit3(label, color);
+        pop_per_item_state();
+        return r;
+    }
+    void PySubLayout::text_disabled(const std::string& text) {
+        advance_child();
+        apply_state();
+        parent_->text_disabled(text);
+        pop_per_item_state();
+    }
+    std::tuple<bool, int> PySubLayout::listbox(const std::string& label, int current_idx,
+                                               const std::vector<std::string>& items, int height_items) {
+        advance_child();
+        apply_state();
+        auto r = parent_->listbox(label, current_idx, items, height_items);
+        pop_per_item_state();
+        return r;
+    }
+    void PySubLayout::image(uint64_t texture_id, std::tuple<float, float> size,
+                            std::tuple<float, float, float, float> tint) {
+        advance_child();
+        apply_state();
+        parent_->image(texture_id, size, tint);
+        pop_per_item_state();
+    }
+    bool PySubLayout::image_button(const std::string& id, uint64_t texture_id,
+                                   std::tuple<float, float> size,
+                                   std::tuple<float, float, float, float> tint) {
+        advance_child();
+        apply_state();
+        auto r = parent_->image_button(id, texture_id, size, tint);
+        pop_per_item_state();
+        return r;
+    }
+    std::tuple<bool, std::string> PySubLayout::input_text_with_hint(const std::string& label,
+                                                                    const std::string& hint,
+                                                                    const std::string& value) {
+        advance_child();
+        apply_state();
+        auto r = parent_->input_text_with_hint(label, hint, value);
+        pop_per_item_state();
+        return r;
+    }
+    std::tuple<bool, std::string> PySubLayout::input_text_enter(const std::string& label,
+                                                                const std::string& value) {
+        advance_child();
+        apply_state();
+        auto r = parent_->input_text_enter(label, value);
+        pop_per_item_state();
+        return r;
+    }
+
+    void PySubLayout::table_setup_column(const std::string& label, float width) const {
+        parent_->table_setup_column(label, width);
+    }
+    void PySubLayout::table_next_row() const {
+        parent_->table_next_row();
+    }
+    void PySubLayout::table_next_column() const {
+        parent_->table_next_column();
+    }
+    void PySubLayout::table_headers_row() const {
+        parent_->table_headers_row();
+    }
+    void PySubLayout::end_table() const {
+        parent_->end_table();
+    }
+
+    void PySubLayout::push_item_width(float width) const {
+        parent_->push_item_width(width);
+    }
+    void PySubLayout::pop_item_width() const {
+        parent_->pop_item_width();
+    }
+    void PySubLayout::set_tooltip(const std::string& text) const {
+        parent_->set_tooltip(text);
+    }
+    bool PySubLayout::is_item_hovered() const {
+        return parent_->is_item_hovered();
+    }
+    bool PySubLayout::is_item_clicked(int button) const {
+        return parent_->is_item_clicked(button);
+    }
+    void PySubLayout::begin_disabled(bool disabled) const {
+        parent_->begin_disabled(disabled);
+    }
+    void PySubLayout::end_disabled() const {
+        parent_->end_disabled();
+    }
+    void PySubLayout::same_line(float offset, float spacing) const {
+        parent_->same_line(offset, spacing);
+    }
+    void PySubLayout::push_id(const std::string& id) const {
+        parent_->push_id(id);
+    }
+    void PySubLayout::pop_id() const {
+        parent_->pop_id();
+    }
+    bool PySubLayout::begin_child(const std::string& id, std::tuple<float, float> size, bool border) const {
+        return parent_->begin_child(id, size, border);
+    }
+    void PySubLayout::end_child() const {
+        parent_->end_child();
+    }
+    bool PySubLayout::begin_context_menu(const std::string& id) const {
+        return parent_->begin_context_menu(id);
+    }
+    void PySubLayout::end_context_menu() const {
+        parent_->end_context_menu();
+    }
+    bool PySubLayout::menu_item(const std::string& label, bool enabled) const {
+        return parent_->menu_item(label, enabled);
+    }
+    bool PySubLayout::begin_menu(const std::string& label) const {
+        return parent_->begin_menu(label);
+    }
+    void PySubLayout::end_menu() const {
+        parent_->end_menu();
+    }
+    std::tuple<float, float> PySubLayout::get_content_region_avail() const {
+        return parent_->get_content_region_avail();
     }
 
     // PyUILayout layout methods
@@ -1139,7 +1382,7 @@ namespace lfs::python {
                 }
             }
         } catch (...) {
-            // Ignore errors in property access
+            LOG_WARN("prop_search: failed to enumerate items for '{}'", prop_id);
         }
 
         std::string label = text.empty() ? prop_id : text;
@@ -1174,7 +1417,7 @@ namespace lfs::python {
                 active_idx = nb::cast<int>(active_data.attr(active_prop.c_str()));
             }
         } catch (...) {
-            // Ignore errors
+            LOG_WARN("template_list: failed to get active index for '{}'", active_prop);
         }
 
         auto [changed, new_idx] = listbox(list_id, active_idx, items, rows);
@@ -1182,7 +1425,7 @@ namespace lfs::python {
             try {
                 nb::setattr(active_data, active_prop.c_str(), nb::cast(new_idx));
             } catch (...) {
-                // Ignore
+                LOG_WARN("template_list: failed to write selection for '{}'", active_prop);
             }
         }
 
@@ -2534,40 +2777,65 @@ namespace lfs::python {
             .def("column", &PySubLayout::column)
             .def("split", &PySubLayout::split, nb::arg("factor") = 0.5f)
             .def("box", &PySubLayout::box)
-            .def("grid_flow", &PySubLayout::grid_flow, nb::arg("columns") = 0,
-                 nb::arg("even_columns") = true, nb::arg("even_rows") = true)
-            .def("prop_enum", &PySubLayout::prop_enum, nb::arg("data"), nb::arg("prop_id"),
-                 nb::arg("value"), nb::arg("text") = "")
+            .def("grid_flow", &PySubLayout::grid_flow, nb::arg("columns") = 0, nb::arg("even_columns") = true, nb::arg("even_rows") = true)
+            .def("prop_enum", &PySubLayout::prop_enum, nb::arg("data"), nb::arg("prop_id"), nb::arg("value"), nb::arg("text") = "")
             .def("label", &PySubLayout::label, nb::arg("text"))
-            .def("button", &PySubLayout::button, nb::arg("label"),
-                 nb::arg("size") = std::make_tuple(0.0f, 0.0f))
-            .def("button_styled", &PySubLayout::button_styled, nb::arg("label"),
-                 nb::arg("style"), nb::arg("size") = std::make_tuple(0.0f, 0.0f))
-            .def("prop", &PySubLayout::prop, nb::arg("data"), nb::arg("prop_id"),
-                 nb::arg("text") = nb::none())
+            .def("button", &PySubLayout::button, nb::arg("label"), nb::arg("size") = std::make_tuple(0.0f, 0.0f))
+            .def("button_styled", &PySubLayout::button_styled, nb::arg("label"), nb::arg("style"), nb::arg("size") = std::make_tuple(0.0f, 0.0f))
+            .def("prop", &PySubLayout::prop, nb::arg("data"), nb::arg("prop_id"), nb::arg("text") = nb::none())
             .def("checkbox", &PySubLayout::checkbox, nb::arg("label"), nb::arg("value"))
-            .def("slider_float", &PySubLayout::slider_float, nb::arg("label"),
-                 nb::arg("value"), nb::arg("min"), nb::arg("max"))
-            .def("slider_int", &PySubLayout::slider_int, nb::arg("label"),
-                 nb::arg("value"), nb::arg("min"), nb::arg("max"))
-            .def("drag_float", &PySubLayout::drag_float, nb::arg("label"), nb::arg("value"),
-                 nb::arg("speed") = 1.0f, nb::arg("min") = 0.0f, nb::arg("max") = 0.0f)
-            .def("drag_int", &PySubLayout::drag_int, nb::arg("label"), nb::arg("value"),
-                 nb::arg("speed") = 1.0f, nb::arg("min") = 0, nb::arg("max") = 0)
+            .def("slider_float", &PySubLayout::slider_float, nb::arg("label"), nb::arg("value"), nb::arg("min"), nb::arg("max"))
+            .def("slider_int", &PySubLayout::slider_int, nb::arg("label"), nb::arg("value"), nb::arg("min"), nb::arg("max"))
+            .def("drag_float", &PySubLayout::drag_float, nb::arg("label"), nb::arg("value"), nb::arg("speed") = 1.0f, nb::arg("min") = 0.0f, nb::arg("max") = 0.0f)
+            .def("drag_int", &PySubLayout::drag_int, nb::arg("label"), nb::arg("value"), nb::arg("speed") = 1.0f, nb::arg("min") = 0, nb::arg("max") = 0)
             .def("input_text", &PySubLayout::input_text, nb::arg("label"), nb::arg("value"))
-            .def("combo", &PySubLayout::combo, nb::arg("label"), nb::arg("current_idx"),
-                 nb::arg("items"))
+            .def("combo", &PySubLayout::combo, nb::arg("label"), nb::arg("current_idx"), nb::arg("items"))
             .def("separator", &PySubLayout::separator)
             .def("spacing", &PySubLayout::spacing)
             .def("heading", &PySubLayout::heading, nb::arg("text"))
-            .def("collapsing_header", &PySubLayout::collapsing_header, nb::arg("label"),
-                 nb::arg("default_open") = false)
+            .def("collapsing_header", &PySubLayout::collapsing_header, nb::arg("label"), nb::arg("default_open") = false)
             .def("tree_node", &PySubLayout::tree_node, nb::arg("label"))
             .def("tree_pop", &PySubLayout::tree_pop)
-            .def("progress_bar", &PySubLayout::progress_bar, nb::arg("fraction"),
-                 nb::arg("overlay") = "", nb::arg("width") = 0.0f)
+            .def("progress_bar", &PySubLayout::progress_bar, nb::arg("fraction"), nb::arg("overlay") = "", nb::arg("width") = 0.0f)
             .def("text_colored", &PySubLayout::text_colored, nb::arg("text"), nb::arg("color"))
             .def("text_wrapped", &PySubLayout::text_wrapped, nb::arg("text"))
+            .def("begin_table", &PySubLayout::begin_table, nb::arg("id"), nb::arg("columns"))
+            .def("input_float", &PySubLayout::input_float, nb::arg("label"), nb::arg("value"), nb::arg("step") = 0.0f, nb::arg("step_fast") = 0.0f, nb::arg("format") = "%.3f")
+            .def("input_int", &PySubLayout::input_int, nb::arg("label"), nb::arg("value"), nb::arg("step") = 1, nb::arg("step_fast") = 100)
+            .def("input_int_formatted", &PySubLayout::input_int_formatted, nb::arg("label"), nb::arg("value"), nb::arg("step") = 0, nb::arg("step_fast") = 0)
+            .def("radio_button", &PySubLayout::radio_button, nb::arg("label"), nb::arg("current"), nb::arg("value"))
+            .def("small_button", &PySubLayout::small_button, nb::arg("label"))
+            .def("selectable", &PySubLayout::selectable, nb::arg("label"), nb::arg("selected") = false, nb::arg("height") = 0.0f)
+            .def("color_edit3", &PySubLayout::color_edit3, nb::arg("label"), nb::arg("color"))
+            .def("text_disabled", &PySubLayout::text_disabled, nb::arg("text"))
+            .def("listbox", &PySubLayout::listbox, nb::arg("label"), nb::arg("current_idx"), nb::arg("items"), nb::arg("height_items") = -1)
+            .def("image", &PySubLayout::image, nb::arg("texture_id"), nb::arg("size"), nb::arg("tint") = std::make_tuple(1.0f, 1.0f, 1.0f, 1.0f))
+            .def("image_button", &PySubLayout::image_button, nb::arg("id"), nb::arg("texture_id"), nb::arg("size"), nb::arg("tint") = std::make_tuple(1.0f, 1.0f, 1.0f, 1.0f))
+            .def("input_text_with_hint", &PySubLayout::input_text_with_hint, nb::arg("label"), nb::arg("hint"), nb::arg("value"))
+            .def("input_text_enter", &PySubLayout::input_text_enter, nb::arg("label"), nb::arg("value"))
+            .def("table_setup_column", &PySubLayout::table_setup_column, nb::arg("label"), nb::arg("width") = 0.0f)
+            .def("table_next_row", &PySubLayout::table_next_row)
+            .def("table_next_column", &PySubLayout::table_next_column)
+            .def("table_headers_row", &PySubLayout::table_headers_row)
+            .def("end_table", &PySubLayout::end_table)
+            .def("push_item_width", &PySubLayout::push_item_width, nb::arg("width"))
+            .def("pop_item_width", &PySubLayout::pop_item_width)
+            .def("set_tooltip", &PySubLayout::set_tooltip, nb::arg("text"))
+            .def("is_item_hovered", &PySubLayout::is_item_hovered)
+            .def("is_item_clicked", &PySubLayout::is_item_clicked, nb::arg("button") = 0)
+            .def("begin_disabled", &PySubLayout::begin_disabled, nb::arg("disabled") = true)
+            .def("end_disabled", &PySubLayout::end_disabled)
+            .def("same_line", &PySubLayout::same_line, nb::arg("offset") = 0.0f, nb::arg("spacing") = -1.0f)
+            .def("push_id", &PySubLayout::push_id, nb::arg("id"))
+            .def("pop_id", &PySubLayout::pop_id)
+            .def("begin_child", &PySubLayout::begin_child, nb::arg("id"), nb::arg("size"), nb::arg("border") = false)
+            .def("end_child", &PySubLayout::end_child)
+            .def("begin_context_menu", &PySubLayout::begin_context_menu, nb::arg("id") = "")
+            .def("end_context_menu", &PySubLayout::end_context_menu)
+            .def("menu_item", &PySubLayout::menu_item, nb::arg("label"), nb::arg("enabled") = true)
+            .def("begin_menu", &PySubLayout::begin_menu, nb::arg("label"))
+            .def("end_menu", &PySubLayout::end_menu)
+            .def("get_content_region_avail", &PySubLayout::get_content_region_avail)
             .def("__getattr__", [](PySubLayout& self, const std::string& name) -> nb::object {
                 nb::object parent_obj = nb::cast(self.parent(), nb::rv_policy::reference);
                 if (!nb::hasattr(parent_obj, name.c_str()))
@@ -2577,9 +2845,14 @@ namespace lfs::python {
                 return nb::cpp_function([self_ptr, method](nb::args args, nb::kwargs kwargs) {
                     self_ptr->advance_child();
                     self_ptr->apply_state();
-                    nb::object result = method(*args, **kwargs);
-                    self_ptr->pop_per_item_state();
-                    return result;
+                    try {
+                        nb::object result = method(*args, **kwargs);
+                        self_ptr->pop_per_item_state();
+                        return result;
+                    } catch (...) {
+                        self_ptr->pop_per_item_state();
+                        throw;
+                    }
                 });
             });
 
@@ -4163,6 +4436,7 @@ namespace lfs::python {
                 nb::module_ types_module = nb::module_::import_("lfs_plugins.types");
                 nb::object Panel_type = types_module.attr("Panel");
                 nb::object Operator_type = types_module.attr("Operator");
+                const nb::object Menu_type = types_module.attr("Menu");
 
                 if (nb::cast<bool>(issubclass(cls, Panel_type))) {
                     PyPanelRegistry::instance().register_panel(cls);
@@ -4174,11 +4448,13 @@ namespace lfs::python {
                         label = nb::cast<std::string>(cls.attr("label"));
                     }
                     register_python_property_group("operator." + idname, label, cls);
+                } else if (nb::cast<bool>(issubclass(cls, Menu_type))) {
+                    PyMenuRegistry::instance().register_menu(cls);
                 } else {
-                    throw std::runtime_error("register_class: must be subclass of Panel or Operator");
+                    throw std::runtime_error("register_class: must be subclass of Panel, Operator, or Menu");
                 }
             },
-            nb::arg("cls"), "Register a class (Panel or Operator)");
+            nb::arg("cls"), "Register a class (Panel, Operator, or Menu)");
 
         m.def(
             "unregister_class",
@@ -4189,6 +4465,7 @@ namespace lfs::python {
                 nb::module_ types_module = nb::module_::import_("lfs_plugins.types");
                 nb::object Panel_type = types_module.attr("Panel");
                 nb::object Operator_type = types_module.attr("Operator");
+                const nb::object Menu_type = types_module.attr("Menu");
 
                 if (nb::cast<bool>(issubclass(cls, Panel_type))) {
                     PyPanelRegistry::instance().unregister_panel(cls);
@@ -4197,9 +4474,11 @@ namespace lfs::python {
                     vis::op::operators().unregisterOperator(idname);
                     vis::op::propertySchemas().unregisterSchema(idname);
                     remove_python_operator_instance(idname);
+                } else if (nb::cast<bool>(issubclass(cls, Menu_type))) {
+                    PyMenuRegistry::instance().unregister_menu(cls);
                 }
             },
-            nb::arg("cls"), "Unregister a class (Panel or Operator)");
+            nb::arg("cls"), "Unregister a class (Panel, Operator, or Menu)");
     }
 
 } // namespace lfs::python

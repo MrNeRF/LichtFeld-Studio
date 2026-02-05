@@ -16,12 +16,6 @@ namespace lfs::python {
         return registry;
     }
 
-    void PyMenuRegistry::unregister_all() {
-        std::lock_guard lock(mutex_);
-        menu_classes_.clear();
-        synced_from_python_ = false;
-    }
-
     static const char* menu_location_to_string(MenuLocation loc) {
         switch (loc) {
         case MenuLocation::File: return "FILE";
@@ -34,7 +28,92 @@ namespace lfs::python {
         }
     }
 
+    static MenuLocation parse_menu_location(const std::string& s) {
+        if (s == "EDIT")
+            return MenuLocation::Edit;
+        if (s == "VIEW")
+            return MenuLocation::View;
+        if (s == "WINDOW")
+            return MenuLocation::Window;
+        if (s == "HELP")
+            return MenuLocation::Help;
+        if (s == "MENU_BAR")
+            return MenuLocation::MenuBar;
+        return MenuLocation::File;
+    }
+
+    static void sort_by_order(std::vector<PyMenuClassInfo>& menus) {
+        std::sort(menus.begin(), menus.end(),
+                  [](const PyMenuClassInfo& a, const PyMenuClassInfo& b) { return a.order < b.order; });
+    }
+
+    void PyMenuRegistry::register_menu(nb::object menu_class) {
+        if (!menu_class.is_valid()) {
+            LOG_ERROR("register_menu: invalid menu_class");
+            return;
+        }
+
+        const std::string idname = nb::cast<std::string>(menu_class.attr("__module__")) + "." +
+                                   nb::cast<std::string>(menu_class.attr("__qualname__"));
+
+        std::string label;
+        MenuLocation location = MenuLocation::File;
+        int order = 100;
+
+        try {
+            if (nb::hasattr(menu_class, "label"))
+                label = nb::cast<std::string>(menu_class.attr("label"));
+            if (nb::hasattr(menu_class, "location"))
+                location = parse_menu_location(nb::cast<std::string>(menu_class.attr("location")));
+            if (nb::hasattr(menu_class, "order"))
+                order = nb::cast<int>(menu_class.attr("order"));
+        } catch (const std::exception& e) {
+            LOG_ERROR("register_menu: failed to extract attributes: {}", e.what());
+            return;
+        }
+
+        nb::object instance;
+        try {
+            instance = menu_class();
+        } catch (const std::exception& e) {
+            LOG_ERROR("register_menu: failed to create instance for '{}': {}", idname, e.what());
+            return;
+        }
+
+        std::lock_guard lock(mutex_);
+
+        auto it = std::find_if(menu_classes_.begin(), menu_classes_.end(),
+                               [&idname](const PyMenuClassInfo& mc) { return mc.idname == idname; });
+
+        if (it != menu_classes_.end()) {
+            it->label = label;
+            it->location = location;
+            it->order = order;
+            it->menu_class = menu_class;
+            it->menu_instance = instance;
+        } else {
+            menu_classes_.push_back({idname, label, location, order, menu_class, instance});
+        }
+
+        sort_by_order(menu_classes_);
+    }
+
+    void PyMenuRegistry::unregister_menu(nb::object menu_class) {
+        const std::string idname = nb::cast<std::string>(menu_class.attr("__module__")) + "." +
+                                   nb::cast<std::string>(menu_class.attr("__qualname__"));
+
+        std::lock_guard lock(mutex_);
+        std::erase_if(menu_classes_, [&idname](const PyMenuClassInfo& mc) { return mc.idname == idname; });
+    }
+
+    void PyMenuRegistry::unregister_all() {
+        std::lock_guard lock(mutex_);
+        menu_classes_.clear();
+        synced_from_python_ = false;
+    }
+
     void PyMenuRegistry::draw_menu_items(MenuLocation location) {
+        ensure_synced();
         std::vector<PyMenuClassInfo> menu_classes_copy;
         {
             std::lock_guard lock(mutex_);
@@ -45,9 +124,8 @@ namespace lfs::python {
             }
         }
 
-        const std::string menu_name = std::string("menu");
-        const std::string section = menu_location_to_string(location);
-        bool has_hooks = PyUIHookRegistry::instance().has_hooks(menu_name, section);
+        const char* const section = menu_location_to_string(location);
+        const bool has_hooks = PyUIHookRegistry::instance().has_hooks("menu", section);
 
         if (menu_classes_copy.empty() && !has_hooks) {
             return;
@@ -56,7 +134,7 @@ namespace lfs::python {
         nb::gil_scoped_acquire gil;
 
         if (has_hooks) {
-            PyUIHookRegistry::instance().invoke(menu_name, section, PyHookPosition::Prepend);
+            PyUIHookRegistry::instance().invoke("menu", section, PyHookPosition::Prepend);
         }
 
         for (const auto& mc : menu_classes_copy) {
@@ -78,18 +156,19 @@ namespace lfs::python {
         }
 
         if (has_hooks) {
-            PyUIHookRegistry::instance().invoke(menu_name, section, PyHookPosition::Append);
+            PyUIHookRegistry::instance().invoke("menu", section, PyHookPosition::Append);
         }
     }
 
     bool PyMenuRegistry::has_items(MenuLocation location) const {
+        const_cast<PyMenuRegistry*>(this)->ensure_synced();
         std::lock_guard lock(mutex_);
         for (const auto& mc : menu_classes_) {
             if (mc.location == location) {
                 return true;
             }
         }
-        const std::string section = menu_location_to_string(location);
+        const char* const section = menu_location_to_string(location);
         if (PyUIHookRegistry::instance().has_hooks("menu", section)) {
             return true;
         }
@@ -188,20 +267,7 @@ namespace lfs::python {
                     label = nb::cast<std::string>(menu_class.attr("label"));
                 }
                 if (nb::hasattr(menu_class, "location")) {
-                    const std::string loc_str = nb::cast<std::string>(menu_class.attr("location"));
-                    if (loc_str == "FILE") {
-                        location = MenuLocation::File;
-                    } else if (loc_str == "EDIT") {
-                        location = MenuLocation::Edit;
-                    } else if (loc_str == "VIEW") {
-                        location = MenuLocation::View;
-                    } else if (loc_str == "WINDOW") {
-                        location = MenuLocation::Window;
-                    } else if (loc_str == "HELP") {
-                        location = MenuLocation::Help;
-                    } else if (loc_str == "MENU_BAR") {
-                        location = MenuLocation::MenuBar;
-                    }
+                    location = parse_menu_location(nb::cast<std::string>(menu_class.attr("location")));
                 }
                 if (nb::hasattr(menu_class, "order")) {
                     order = nb::cast<int>(menu_class.attr("order"));
@@ -220,8 +286,7 @@ namespace lfs::python {
                 menu_classes_.push_back(std::move(info));
             }
 
-            std::sort(menu_classes_.begin(), menu_classes_.end(),
-                      [](const PyMenuClassInfo& a, const PyMenuClassInfo& b) { return a.order < b.order; });
+            sort_by_order(menu_classes_);
 
             LOG_INFO("Synced {} menus from Python registry", menu_classes_.size());
         } catch (const std::exception& e) {
@@ -237,6 +302,16 @@ namespace lfs::python {
             .value("WINDOW", MenuLocation::Window)
             .value("HELP", MenuLocation::Help)
             .value("MENU_BAR", MenuLocation::MenuBar);
+
+        m.def(
+            "register_menu",
+            [](nb::object cls) { PyMenuRegistry::instance().register_menu(cls); },
+            nb::arg("cls"), "Register a menu class");
+
+        m.def(
+            "unregister_menu",
+            [](nb::object cls) { PyMenuRegistry::instance().unregister_menu(cls); },
+            nb::arg("cls"), "Unregister a menu class");
 
         m.def(
             "unregister_all_menus", []() {

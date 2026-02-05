@@ -9,6 +9,7 @@
 #include "operator_id.hpp"
 #include "operator_properties.hpp"
 #include "operator_result.hpp"
+#include "poll_dependency.hpp"
 #include <functional>
 #include <memory>
 #include <optional>
@@ -18,22 +19,6 @@ namespace lfs::vis::op {
 
     enum class OperatorSource : uint8_t { CPP,
                                           PYTHON };
-
-    enum class PollDependency : uint8_t {
-        NONE = 0,
-        SELECTION = 1 << 0,
-        TRAINING = 1 << 1,
-        SCENE = 1 << 2,
-        ALL = SELECTION | TRAINING | SCENE
-    };
-
-    inline PollDependency operator|(PollDependency a, PollDependency b) {
-        return static_cast<PollDependency>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
-    }
-
-    inline PollDependency operator&(PollDependency a, PollDependency b) {
-        return static_cast<PollDependency>(static_cast<uint8_t>(a) & static_cast<uint8_t>(b));
-    }
 
     struct OperatorDescriptor {
         std::optional<BuiltinOp> builtin_id;

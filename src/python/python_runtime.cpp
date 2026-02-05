@@ -131,6 +131,10 @@ namespace lfs::python {
         // Thread-local frame context for unified access
         thread_local PyContext g_frame_context;
 
+        // Cached state updated via signal bridge
+        std::atomic<bool> g_has_selection{false};
+        std::atomic<bool> g_is_training{false};
+
         // Redraw request flag
         std::atomic<bool> g_redraw_requested{false};
     } // namespace
@@ -143,10 +147,12 @@ namespace lfs::python {
     void set_keymap_bindings(vis::input::InputBindings* bindings) { g_keymap_bindings.store(bindings); }
     vis::input::InputBindings* get_keymap_bindings() { return g_keymap_bindings.load(); }
 
-    // Context API - set_context stores pre-computed state from caller
-    // The caller must set cached_has_selection and cached_is_training before calling
     void set_context(const PyContext& ctx) {
         g_frame_context = ctx;
+
+        // Derived state from signal bridge atomics
+        g_frame_context.cached_has_selection = g_has_selection.load(std::memory_order_relaxed);
+        g_frame_context.cached_is_training = g_is_training.load(std::memory_order_relaxed);
 
         // Override scene_generation from atomic state
         g_frame_context.scene_generation = g_app_scene_context.generation();
@@ -1014,6 +1020,7 @@ namespace lfs::python {
     }
 
     void update_training_state(bool is_training, const char* state) {
+        g_is_training.store(is_training, std::memory_order_relaxed);
         if (g_signal_bridge_callbacks.training_state) {
             g_signal_bridge_callbacks.training_state(is_training, state);
         }
@@ -1038,6 +1045,7 @@ namespace lfs::python {
     }
 
     void update_selection(bool has_selection, int count) {
+        g_has_selection.store(has_selection, std::memory_order_relaxed);
         if (g_signal_bridge_callbacks.selection) {
             g_signal_bridge_callbacks.selection(has_selection, count);
         }

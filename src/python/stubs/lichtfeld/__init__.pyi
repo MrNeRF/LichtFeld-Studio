@@ -1020,10 +1020,10 @@ class RenderSettings:
 def get_render_settings() -> RenderSettings | None: ...
 
 def register_class(cls: object) -> None:
-    """Register a class (Panel or Operator)"""
+    """Register a class (Panel, Operator, or Menu)"""
 
 def unregister_class(cls: object) -> None:
-    """Unregister a class (Panel or Operator)"""
+    """Unregister a class (Panel, Operator, or Menu)"""
 
 class GizmoEventType(enum.Enum):
     PRESS = 0

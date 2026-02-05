@@ -5,13 +5,13 @@
 #include "control/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/logger.hpp"
-#include "core/property_registry.hpp"
 #include "py_ui.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/theme/theme.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <imgui.h>
 
 namespace lfs::python {
@@ -22,6 +22,24 @@ namespace lfs::python {
             auto name = nb::cast<std::string>(cls.attr("__qualname__"));
             return mod + "." + name;
         }
+
+        std::optional<PanelSpace> parse_panel_space(const std::string& str) {
+            if (str == "SIDE_PANEL" || str == "PROPERTIES")
+                return PanelSpace::SidePanel;
+            if (str == "VIEWPORT_OVERLAY")
+                return PanelSpace::ViewportOverlay;
+            if (str == "DOCKABLE")
+                return PanelSpace::Dockable;
+            if (str == "MAIN_PANEL_TAB")
+                return PanelSpace::MainPanelTab;
+            if (str == "SCENE_HEADER")
+                return PanelSpace::SceneHeader;
+            if (str == "STATUS_BAR")
+                return PanelSpace::StatusBar;
+            if (str == "FLOATING")
+                return PanelSpace::Floating;
+            return std::nullopt;
+        }
     } // namespace
 
     PyPanelRegistry& PyPanelRegistry::instance() {
@@ -30,15 +48,6 @@ namespace lfs::python {
     }
 
     void PyPanelRegistry::init() {
-        // Subscribe to property changes for automatic UI invalidation
-        core::prop::PropertyRegistry::instance().subscribe(
-            [](const std::string& /*group_id*/, const std::string& /*prop_id*/,
-               const std::any& /*old_val*/, const std::any& /*new_val*/) {
-                // Invalidate poll cache when any property changes
-                PyPanelRegistry::instance().invalidate_poll_cache();
-                // Request UI redraw
-                request_redraw();
-            });
     }
 
     void PyPanelRegistry::register_panel(nb::object panel_class) {
@@ -53,43 +62,25 @@ namespace lfs::python {
         std::string idname = get_class_id(panel_class);
         PanelSpace space = PanelSpace::Floating;
         int order = 100;
-        std::string category;
-        std::string parent_id;
         uint32_t options = 0;
+        PollDependency poll_deps = PollDependency::ALL;
 
         try {
             if (nb::hasattr(panel_class, "label")) {
                 label = nb::cast<std::string>(panel_class.attr("label"));
             }
-            std::string space_str;
             if (nb::hasattr(panel_class, "space")) {
-                space_str = nb::cast<std::string>(panel_class.attr("space"));
-            }
-            if (!space_str.empty()) {
-                if (space_str == "SIDE_PANEL") {
-                    space = PanelSpace::SidePanel;
-                } else if (space_str == "VIEWPORT_OVERLAY") {
-                    space = PanelSpace::ViewportOverlay;
-                } else if (space_str == "DOCKABLE") {
-                    space = PanelSpace::Dockable;
-                } else if (space_str == "PROPERTIES") {
-                    space = PanelSpace::SidePanel;
-                } else if (space_str == "MAIN_PANEL_TAB") {
-                    space = PanelSpace::MainPanelTab;
-                } else if (space_str == "SCENE_HEADER") {
-                    space = PanelSpace::SceneHeader;
-                } else if (space_str == "STATUS_BAR") {
-                    space = PanelSpace::StatusBar;
+                std::string space_str = nb::cast<std::string>(panel_class.attr("space"));
+                if (!space_str.empty()) {
+                    if (auto ps = parse_panel_space(space_str)) {
+                        space = *ps;
+                    } else {
+                        LOG_WARN("Unknown panel space '{}' for panel '{}', defaulting to Floating", space_str, label);
+                    }
                 }
             }
             if (nb::hasattr(panel_class, "order")) {
                 order = nb::cast<int>(panel_class.attr("order"));
-            }
-            if (nb::hasattr(panel_class, "category")) {
-                category = nb::cast<std::string>(panel_class.attr("category"));
-            }
-            if (nb::hasattr(panel_class, "parent_id")) {
-                parent_id = nb::cast<std::string>(panel_class.attr("parent_id"));
             }
             nb::object opts;
             if (nb::hasattr(panel_class, "options")) {
@@ -103,6 +94,22 @@ namespace lfs::python {
                         options |= static_cast<uint32_t>(PanelOption::DEFAULT_CLOSED);
                     } else if (opt_str == "HIDE_HEADER") {
                         options |= static_cast<uint32_t>(PanelOption::HIDE_HEADER);
+                    }
+                }
+            }
+            if (nb::hasattr(panel_class, "poll_deps")) {
+                nb::object deps_obj = panel_class.attr("poll_deps");
+                if (deps_obj.is_valid() && nb::isinstance<nb::set>(deps_obj)) {
+                    poll_deps = PollDependency::NONE;
+                    nb::set deps_set = nb::cast<nb::set>(deps_obj);
+                    for (auto item : deps_set) {
+                        std::string dep = nb::cast<std::string>(item);
+                        if (dep == "SELECTION")
+                            poll_deps = poll_deps | PollDependency::SELECTION;
+                        else if (dep == "TRAINING")
+                            poll_deps = poll_deps | PollDependency::TRAINING;
+                        else if (dep == "SCENE")
+                            poll_deps = poll_deps | PollDependency::SCENE;
                     }
                 }
             }
@@ -121,9 +128,8 @@ namespace lfs::python {
                     p.label = label;
                     p.space = space;
                     p.order = order;
-                    p.category = category;
-                    p.parent_id = parent_id;
                     p.options = options;
+                    p.poll_deps = poll_deps;
                 } catch (const std::exception& e) {
                     LOG_ERROR("register_panel: failed to update '{}': {}", label, e.what());
                 }
@@ -151,9 +157,8 @@ namespace lfs::python {
         info.idname = idname;
         info.space = space;
         info.order = order;
-        info.category = category;
-        info.parent_id = parent_id;
         info.options = options;
+        info.poll_deps = poll_deps;
         info.enabled = true;
 
         panels_.push_back(std::move(info));
@@ -178,13 +183,19 @@ namespace lfs::python {
         poll_cache_.clear();
     }
 
-    void PyPanelRegistry::invalidate_poll_cache() {
+    void PyPanelRegistry::invalidate_poll_cache(PollDependency changed) {
         std::lock_guard lock(mutex_);
-        poll_cache_.clear();
+        if (changed == PollDependency::ALL) {
+            poll_cache_.clear();
+            return;
+        }
+        std::erase_if(poll_cache_, [&](const auto& pair) {
+            return (pair.second.deps & changed) != PollDependency::NONE;
+        });
     }
 
     bool PyPanelRegistry::check_poll_cached(const std::string& idname, nb::object panel_class,
-                                            PanelPollDependency deps) {
+                                            PollDependency deps) {
         // Use consolidated context for generation, direct checks for selection and training
         const auto& ctx = context();
         const uint64_t gen = ctx.scene_generation;
@@ -198,13 +209,13 @@ namespace lfs::python {
         if (cache_it != poll_cache_.end()) {
             const auto& e = cache_it->second;
             bool valid = true;
-            if ((deps & PanelPollDependency::SCENE) != PanelPollDependency::NONE) {
+            if ((deps & PollDependency::SCENE) != PollDependency::NONE) {
                 valid &= (e.scene_generation == gen);
             }
-            if ((deps & PanelPollDependency::SELECTION) != PanelPollDependency::NONE) {
+            if ((deps & PollDependency::SELECTION) != PollDependency::NONE) {
                 valid &= (e.has_selection == has_sel);
             }
-            if ((deps & PanelPollDependency::TRAINING) != PanelPollDependency::NONE) {
+            if ((deps & PollDependency::TRAINING) != PollDependency::NONE) {
                 valid &= (e.is_training == training);
             }
             if (valid) {
@@ -242,10 +253,7 @@ namespace lfs::python {
 
             bool draw_succeeded = false;
             try {
-                const bool should_draw = (space == PanelSpace::ViewportOverlay)
-                                             ? (!nb::hasattr(panel.panel_class, "poll") ||
-                                                nb::cast<bool>(panel.panel_class.attr("poll")(get_app_context())))
-                                             : check_poll_cached(panel.idname, panel.panel_class, panel.poll_deps);
+                const bool should_draw = check_poll_cached(panel.idname, panel.panel_class, panel.poll_deps);
                 if (!should_draw) {
                     continue;
                 }
@@ -540,18 +548,7 @@ namespace lfs::python {
 
         m.def(
             "get_panel_names", [](const std::string& space) {
-                PanelSpace ps = PanelSpace::Floating;
-                if (space == "SIDE_PANEL") {
-                    ps = PanelSpace::SidePanel;
-                } else if (space == "VIEWPORT_OVERLAY") {
-                    ps = PanelSpace::ViewportOverlay;
-                } else if (space == "DOCKABLE") {
-                    ps = PanelSpace::Dockable;
-                } else if (space == "SCENE_HEADER") {
-                    ps = PanelSpace::SceneHeader;
-                } else if (space == "STATUS_BAR") {
-                    ps = PanelSpace::StatusBar;
-                }
+                PanelSpace ps = parse_panel_space(space).value_or(PanelSpace::Floating);
                 return PyPanelRegistry::instance().get_panel_names(ps);
             },
             nb::arg("space") = "FLOATING", "Get registered panel names for a given space");
@@ -614,21 +611,11 @@ namespace lfs::python {
 
         m.def(
             "set_panel_space", [](const std::string& idname, const std::string& space_str) {
-                PanelSpace space = PanelSpace::Floating;
-                if (space_str == "SIDE_PANEL") {
-                    space = PanelSpace::SidePanel;
-                } else if (space_str == "VIEWPORT_OVERLAY") {
-                    space = PanelSpace::ViewportOverlay;
-                } else if (space_str == "DOCKABLE") {
-                    space = PanelSpace::Dockable;
-                } else if (space_str == "MAIN_PANEL_TAB") {
-                    space = PanelSpace::MainPanelTab;
-                } else if (space_str == "SCENE_HEADER") {
-                    space = PanelSpace::SceneHeader;
-                } else if (space_str == "STATUS_BAR") {
-                    space = PanelSpace::StatusBar;
+                auto ps = parse_panel_space(space_str);
+                if (!ps) {
+                    LOG_WARN("Unknown panel space '{}' for panel '{}', defaulting to Floating", space_str, idname);
                 }
-                return PyPanelRegistry::instance().set_panel_space(idname, space);
+                return PyPanelRegistry::instance().set_panel_space(idname, ps.value_or(PanelSpace::Floating));
             },
             nb::arg("idname"), nb::arg("space"), "Set the panel space (where it renders)");
 

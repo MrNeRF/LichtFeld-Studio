@@ -1579,7 +1579,8 @@ Example:
     lfs::python::set_invalidate_poll_cache_callback([](uint8_t dependency) {
         lfs::vis::op::OperatorRegistry::instance().invalidatePollCache(
             static_cast<lfs::vis::op::PollDependency>(dependency));
-        lfs::python::PyPanelRegistry::instance().invalidate_poll_cache();
+        lfs::python::PyPanelRegistry::instance().invalidate_poll_cache(
+            static_cast<lfs::vis::op::PollDependency>(dependency));
     });
 
     // Module metadata
