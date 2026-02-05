@@ -944,6 +944,8 @@ namespace lfs::python {
         eff.enabled = own_state_.enabled && inherited_state_.enabled;
         eff.active = own_state_.active && inherited_state_.active;
         eff.alert = own_state_.alert || inherited_state_.alert;
+        eff.scale_x = own_state_.scale_x * inherited_state_.scale_x;
+        eff.scale_y = own_state_.scale_y * inherited_state_.scale_y;
         return eff;
     }
 
@@ -961,9 +963,18 @@ namespace lfs::python {
                                   ImVec4(err.x, err.y, err.z, ALERT_BG_ALPHA));
             color_push_count_ += 2;
         }
+        const float scale = std::max(eff.scale_x, eff.scale_y);
+        if (scale != 1.0f) {
+            ImGui::SetWindowFontScale(scale);
+            font_scale_pushed_ = true;
+        }
     }
 
     void PySubLayout::pop_per_item_state() {
+        if (font_scale_pushed_) {
+            ImGui::SetWindowFontScale(1.0f);
+            font_scale_pushed_ = false;
+        }
         if (color_push_count_ > 0) {
             ImGui::PopStyleColor(color_push_count_);
             color_push_count_ = 0;
@@ -2771,6 +2782,8 @@ namespace lfs::python {
             .def_prop_rw("enabled", &PySubLayout::get_enabled, &PySubLayout::set_enabled)
             .def_prop_rw("active", &PySubLayout::get_active, &PySubLayout::set_active)
             .def_prop_rw("alert", &PySubLayout::get_alert, &PySubLayout::set_alert)
+            .def_prop_rw("scale_x", &PySubLayout::get_scale_x, &PySubLayout::set_scale_x)
+            .def_prop_rw("scale_y", &PySubLayout::get_scale_y, &PySubLayout::set_scale_y)
             .def("row", &PySubLayout::row)
             .def("column", &PySubLayout::column)
             .def("split", &PySubLayout::split, nb::arg("factor") = 0.5f)

@@ -73,6 +73,8 @@ namespace lfs::python {
         bool enabled = true;
         bool active = true;
         bool alert = false;
+        float scale_x = 1.0f;
+        float scale_y = 1.0f;
     };
 
     struct LayoutContext {
@@ -107,6 +109,10 @@ namespace lfs::python {
         void set_active(bool v) { own_state_.active = v; }
         bool get_alert() const { return own_state_.alert; }
         void set_alert(bool v) { own_state_.alert = v; }
+        float get_scale_x() const { return own_state_.scale_x; }
+        void set_scale_x(float v) { own_state_.scale_x = v; }
+        float get_scale_y() const { return own_state_.scale_y; }
+        void set_scale_y(float v) { own_state_.scale_y = v; }
 
         PySubLayout row();
         PySubLayout column();
@@ -206,6 +212,7 @@ namespace lfs::python {
         bool entered_ = false;
         int color_push_count_ = 0;
         bool disabled_pushed_ = false;
+        bool font_scale_pushed_ = false;
     };
 
     // PanelSpace enum is defined in py_panel_registry.hpp
