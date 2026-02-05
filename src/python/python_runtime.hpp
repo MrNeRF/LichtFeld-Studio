@@ -88,14 +88,8 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void request_redraw();
     LFS_PYTHON_RUNTIME_API bool consume_redraw_request();
 
-    // Panel callbacks (C-style function pointers for DLL boundary safety)
-    using DrawPanelsCallback = void (*)(PanelSpace);
-    using DrawSinglePanelCallback = void (*)(const char*);
-    using HasPanelsCallback = bool (*)(PanelSpace);
     using CleanupCallback = void (*)();
     using EnsureInitializedCallback = void (*)();
-    using PanelNameVisitor = void (*)(const char* name, void* user_data);
-    using GetPanelNamesCallback = void (*)(PanelSpace, PanelNameVisitor, void* user_data);
 
     // Bootstrap callback - set at startup, triggers Python initialization
     LFS_PYTHON_RUNTIME_API void set_ensure_initialized_callback(EnsureInitializedCallback cb);
@@ -127,25 +121,7 @@ namespace lfs::python {
     // Safe Python error extraction - avoids nanobind::python_error::what() crash on Windows
     LFS_PYTHON_RUNTIME_API std::string extract_python_error();
 
-    // Main panel tab info for C++ UI code
-    struct MainPanelTabInfo {
-        std::string idname;
-        std::string label;
-        int order;
-        bool enabled;
-    };
-
-    // C++ interface for the visualizer
-    LFS_PYTHON_RUNTIME_API void draw_python_panels(PanelSpace space, lfs::vis::Scene* scene = nullptr);
-    LFS_PYTHON_RUNTIME_API void draw_python_panel(const std::string& name, lfs::vis::Scene* scene = nullptr);
-    LFS_PYTHON_RUNTIME_API bool has_python_panels(PanelSpace space);
-    LFS_PYTHON_RUNTIME_API std::vector<std::string> get_python_panel_names(PanelSpace space);
     LFS_PYTHON_RUNTIME_API void invoke_python_cleanup();
-
-    // Main panel tab interface for C++ UI code
-    LFS_PYTHON_RUNTIME_API bool has_main_panel_tabs();
-    LFS_PYTHON_RUNTIME_API std::vector<MainPanelTabInfo> get_main_panel_tabs();
-    LFS_PYTHON_RUNTIME_API void draw_main_panel_tab(const std::string& idname, lfs::vis::Scene* scene = nullptr);
 
     // Menu interface for C++ code
     LFS_PYTHON_RUNTIME_API void draw_python_menu_items(MenuLocation location);
@@ -234,9 +210,6 @@ namespace lfs::python {
 
     LFS_PYTHON_RUNTIME_API bool dispatch_modal_event(const ModalEvent& event);
 
-    // Visitor callback for main panel tabs
-    using MainPanelTabVisitor = void (*)(const char* idname, const char* label, int order, bool enabled, void* user_data);
-
     // Menu bar entry visitor callback
     using MenuBarEntryVisitor = void (*)(const char* idname, const char* label, int order, void* user_data);
 
@@ -246,17 +219,6 @@ namespace lfs::python {
     using DrawMenuBarEntryCallback = void (*)(const char* idname);
 
     struct PyBridge {
-        // Panels
-        void (*draw_panels)(PanelSpace) = nullptr;
-        void (*draw_single_panel)(const char*) = nullptr;
-        bool (*has_panels)(PanelSpace) = nullptr;
-        void (*get_panel_names)(PanelSpace, PanelNameVisitor, void*) = nullptr;
-
-        // Main panel tabs
-        bool (*has_main_panel_tabs)() = nullptr;
-        void (*get_main_panel_tabs)(MainPanelTabVisitor, void*) = nullptr;
-        void (*draw_main_panel_tab)(const char*) = nullptr;
-
         // Menus
         void (*draw_menus)(MenuLocation) = nullptr;
         bool (*has_menus)(MenuLocation) = nullptr;

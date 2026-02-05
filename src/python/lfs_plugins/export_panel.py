@@ -19,6 +19,7 @@ class ExportFormat(IntEnum):
 class ExportPanel(Panel):
     """Export panel - floating window for scene export."""
 
+    idname = "lfs.export"
     label = "Export"
     space = "FLOATING"
     order = 10
@@ -114,7 +115,7 @@ class ExportPanel(Panel):
 
         layout.same_line()
         if layout.button(tr("export.cancel"), (80, 28)):
-            lf.ui.set_panel_enabled("Export", False)
+            lf.ui.set_panel_enabled("lfs.export", False)
 
     def _get_splat_nodes(self):
         nodes = []
@@ -144,7 +145,7 @@ class ExportPanel(Panel):
 
         if path:
             lf.export_scene(int(self._format), path, list(self._selected_nodes), self._export_sh_degree)
-            lf.ui.set_panel_enabled("Export", False)
+            lf.ui.set_panel_enabled("lfs.export", False)
             self._initialized = False
 
 

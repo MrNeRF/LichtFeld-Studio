@@ -10,6 +10,7 @@ from .windows.layout_utils import center_content
 class AboutPanel(Panel):
     """Floating panel displaying application information."""
 
+    idname = "lfs.about"
     label = "About"
     space = "FLOATING"
     order = 100

@@ -13,6 +13,7 @@ SENSOR_HALF_HEIGHT_MM = 12.0
 
 
 class RenderingPanel(Panel):
+    idname = "lfs.rendering"
     label = "Rendering"
     space = "MAIN_PANEL_TAB"
     order = 10

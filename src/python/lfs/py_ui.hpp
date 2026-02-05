@@ -15,6 +15,7 @@
 
 #include <cfloat>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -631,74 +632,17 @@ namespace lfs::python {
         int grid_id_counter_ = 0;
     };
 
-    enum class PanelOption : uint32_t {
-        DEFAULT_CLOSED = 1 << 0,
-        HIDE_HEADER = 1 << 1,
-    };
-
     using PollDependency = lfs::vis::op::PollDependency;
 
-    // Panel info stored in registry
-    struct PyPanelInfo {
-        nb::object panel_class;
-        nb::object panel_instance;
-        std::string label;
-        std::string idname;
-        PanelSpace space = PanelSpace::Floating;
-        int order = 100;
-        bool enabled = true;
+    class PythonPanelAdapter;
 
-        uint32_t options = 0; // Bitmask of PanelOption values
-        PollDependency poll_deps = PollDependency::ALL;
-
-        // Error recovery tracking
-        int consecutive_errors = 0;
-        bool error_disabled = false;
-        static constexpr int MAX_CONSECUTIVE_ERRORS = 3;
-
-        bool has_option(PanelOption opt) const {
-            return (options & static_cast<uint32_t>(opt)) != 0;
-        }
-    };
-
-    struct PanelPollCacheEntry {
-        bool result;
-        uint64_t scene_generation;
-        bool has_selection;
-        bool is_training;
-        PollDependency deps;
-    };
-
-    // Singleton registry for Python panels
     class PyPanelRegistry {
     public:
         static PyPanelRegistry& instance();
 
-        // Initialize property registry subscriptions for UI invalidation
-        void init();
-
         void register_panel(nb::object panel_class);
         void unregister_panel(nb::object panel_class);
         void unregister_all();
-
-        void draw_panels(PanelSpace space);
-        void draw_single_panel(const std::string& label);
-        bool has_panels(PanelSpace space) const;
-
-        std::vector<std::string> get_panel_names(PanelSpace space) const;
-        void set_panel_enabled(const std::string& label, bool enabled);
-        bool is_panel_enabled(const std::string& label) const;
-
-        // Main panel tab API - returns panels in order
-        std::vector<PyPanelInfo*> get_main_panel_tabs();
-
-        // Panel attribute modification API
-        PyPanelInfo* get_panel(const std::string& idname);
-        bool set_panel_label(const std::string& idname, const std::string& new_label);
-        bool set_panel_order(const std::string& idname, int new_order);
-        bool set_panel_space(const std::string& idname, PanelSpace new_space);
-
-        void invalidate_poll_cache(PollDependency changed = PollDependency::ALL);
 
     private:
         PyPanelRegistry() = default;
@@ -706,11 +650,8 @@ namespace lfs::python {
         PyPanelRegistry(const PyPanelRegistry&) = delete;
         PyPanelRegistry& operator=(const PyPanelRegistry&) = delete;
 
-        bool check_poll_cached(const std::string& idname, nb::object panel_class, PollDependency deps);
-
         mutable std::mutex mutex_;
-        std::vector<PyPanelInfo> panels_;
-        mutable std::unordered_map<std::string, PanelPollCacheEntry> poll_cache_;
+        std::unordered_map<std::string, std::shared_ptr<PythonPanelAdapter>> adapters_;
     };
 
     // Theme palette wrapper (read-only)

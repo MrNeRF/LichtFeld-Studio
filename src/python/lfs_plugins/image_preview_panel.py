@@ -69,6 +69,7 @@ class ThumbnailCache:
 class ImagePreviewPanel(Panel):
     """Modern image preview with filmstrip, info sidebar, and status bar."""
 
+    idname = "lfs.image_preview"
     label = "Image Preview"
     space = "FLOATING"
     order = 98
@@ -246,7 +247,7 @@ class ImagePreviewPanel(Panel):
 
     def _close_panel(self):
         self.close()
-        lf.ui.set_panel_enabled("Image Preview", False)
+        lf.ui.set_panel_enabled("lfs.image_preview", False)
 
     def draw(self, layout):
         if not self._image_paths:
@@ -592,4 +593,4 @@ def open_image_preview(image_paths: list[Path], mask_paths: list[Path], start_in
     """Public API to open image preview with specific images."""
     if _instance:
         _instance.open(image_paths, mask_paths, start_index)
-    lf.ui.set_panel_enabled("Image Preview", True)
+    lf.ui.set_panel_enabled("lfs.image_preview", True)

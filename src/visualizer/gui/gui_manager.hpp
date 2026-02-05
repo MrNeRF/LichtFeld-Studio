@@ -10,6 +10,7 @@
 #include "gui/async_task_manager.hpp"
 #include "gui/gizmo_manager.hpp"
 #include "gui/panel_layout.hpp"
+#include "gui/panel_registry.hpp"
 #include "gui/panels/menu_bar.hpp"
 #include "gui/sequencer_ui_manager.hpp"
 #include "gui/sequencer_ui_state.hpp"
@@ -99,14 +100,16 @@ namespace lfs::vis {
             // Drag-drop state for overlays
             [[nodiscard]] bool isDragHovering() const { return drag_drop_hovering_; }
 
+            // Used by native panel wrappers
+            void renderSelectionOverlays(const UIContext& ctx);
+            void renderViewportDecorations();
+
         private:
             void setupEventHandlers();
             void checkCudaVersionAndNotify();
             void applyDefaultStyle();
             void initMenuBar();
-            void renderPythonPanels(const UIContext& ctx);
-            void renderSelectionOverlays(const UIContext& ctx);
-            void renderViewportDecorations();
+            void registerNativePanels();
             void updateInputOverrides(bool mouse_in_viewport);
 
             // Core dependencies
@@ -155,6 +158,9 @@ namespace lfs::vis {
             // Native drag-drop handler
             NativeDragDrop drag_drop_;
             bool drag_drop_hovering_ = false;
+
+            // Native panel wrapper storage (registered with PanelRegistry)
+            std::vector<std::shared_ptr<IPanel>> native_panel_storage_;
         };
     } // namespace gui
 } // namespace lfs::vis

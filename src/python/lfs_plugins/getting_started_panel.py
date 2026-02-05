@@ -9,6 +9,7 @@ from .types import Panel
 class GettingStartedPanel(Panel):
     """Floating panel displaying tutorial videos and documentation."""
 
+    idname = "lfs.getting_started"
     label = "Getting Started"
     space = "FLOATING"
     order = 99

@@ -16,7 +16,7 @@ class EditMenu:
 
     def draw(self, layout):
         if layout.menu_item(lf.ui.tr("menu.edit.input_settings")):
-            lf.ui.set_panel_enabled("Input Settings", True)
+            lf.ui.set_panel_enabled("lfs.input_settings", True)
 
         layout.separator()
 

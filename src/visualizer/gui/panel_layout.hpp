@@ -5,6 +5,7 @@
 #pragma once
 
 #include "gui/layout_state.hpp"
+#include "gui/panel_registry.hpp"
 #include "gui/ui_context.hpp"
 #include <string>
 #include <unordered_map>
@@ -25,7 +26,8 @@ namespace lfs::vis::gui {
         void loadState();
         void saveState() const;
 
-        void renderRightPanel(const UIContext& ctx, bool show_main_panel, bool ui_hidden,
+        void renderRightPanel(const UIContext& ctx, const PanelDrawContext& draw_ctx,
+                              bool show_main_panel, bool ui_hidden,
                               std::unordered_map<std::string, bool>& window_states,
                               std::string& focus_panel_name);
 

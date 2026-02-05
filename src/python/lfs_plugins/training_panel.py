@@ -57,6 +57,7 @@ _rate_tracker = IterationRateTracker()
 
 
 class TrainingPanel(Panel):
+    idname = "lfs.training"
     label = "Training"
     space = "MAIN_PANEL_TAB"
     order = 20

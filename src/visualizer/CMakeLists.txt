@@ -36,6 +36,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/gui_manager.cpp
         gui/gizmo_manager.cpp
         gui/panel_layout.cpp
+        gui/panel_registry.cpp
+        gui/native_panels.cpp
         gui/layout_state.cpp
         gui/async_task_manager.cpp
         gui/startup_overlay.cpp

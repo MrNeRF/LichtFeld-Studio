@@ -28,6 +28,7 @@ def _fmt_time(secs: float) -> str:
 
 
 class StatusBarPanel(Panel):
+    idname = "lfs.status_bar"
     label = "##StatusBar"
     space = "STATUS_BAR"
     order = 0

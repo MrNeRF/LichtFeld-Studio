@@ -5,7 +5,6 @@
 #include "gui/panel_layout.hpp"
 #include "gui/panels/python_console_panel.hpp"
 #include "python/python_runtime.hpp"
-#include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
 #include "visualizer_impl.hpp"
 #include <imgui.h>
@@ -32,7 +31,8 @@ namespace lfs::vis::gui {
         state.save();
     }
 
-    void PanelLayoutManager::renderRightPanel(const UIContext& ctx, bool show_main_panel, bool ui_hidden,
+    void PanelLayoutManager::renderRightPanel(const UIContext& ctx, const PanelDrawContext& draw_ctx,
+                                              bool show_main_panel, bool ui_hidden,
                                               std::unordered_map<std::string, bool>& window_states,
                                               std::string& focus_panel_name) {
         if (!show_main_panel || ui_hidden) {
@@ -104,9 +104,6 @@ namespace lfs::vis::gui {
 
         if (ImGui::Begin("##RightPanel", nullptr, PANEL_FLAGS)) {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, {0, 0, 0, 0});
-            auto* const sm = ctx.viewer->getSceneManager();
-            lfs::vis::Scene* scene = sm ? &sm->getScene() : nullptr;
-
             const float avail_h = ImGui::GetContentRegionAvail().y;
             const float dpi = lfs::python::get_shared_dpi_scale();
             constexpr float SPLITTER_H = 6.0f;
@@ -116,7 +113,7 @@ namespace lfs::vis::gui {
 
             const float scene_h = std::max(min_h, avail_h * scene_panel_ratio_ - splitter_h * 0.5f);
             if (ImGui::BeginChild("##ScenePanel", {0, scene_h}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
-                python::draw_python_panels(python::PanelSpace::SceneHeader, scene);
+                PanelRegistry::instance().draw_panels(PanelSpace::SceneHeader, draw_ctx);
             }
             ImGui::EndChild();
 
@@ -132,7 +129,8 @@ namespace lfs::vis::gui {
             }
             ImGui::PopStyleColor(3);
 
-            const auto main_tabs = python::get_main_panel_tabs();
+            auto& reg = PanelRegistry::instance();
+            const auto main_tabs = reg.get_panels_for_space(PanelSpace::MainPanelTab);
             if (ImGui::BeginTabBar("##MainPanelTabs")) {
                 for (const auto& tab : main_tabs) {
                     ImGuiTabItemFlags flags = ImGuiTabItemFlags_None;
@@ -144,7 +142,8 @@ namespace lfs::vis::gui {
                     if (ImGui::BeginTabItem(tab_label.c_str(), nullptr, flags)) {
                         const std::string child_id = "##" + tab.idname + "Panel";
                         if (ImGui::BeginChild(child_id.c_str(), {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
-                            python::draw_main_panel_tab(tab.idname, scene);
+                            reg.draw_single_panel(tab.idname, draw_ctx);
+                            reg.draw_panels(PanelSpace::SidePanel, draw_ctx);
                         }
                         ImGui::EndChild();
                         ImGui::EndTabItem();

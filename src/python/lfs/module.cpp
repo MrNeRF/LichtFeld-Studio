@@ -51,6 +51,7 @@
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
+#include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/operator/operator_registry.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/training/training_manager.hpp"
@@ -1189,9 +1190,6 @@ NB_MODULE(lichtfeld, m) {
     // Signal bridge for reactive UI updates
     lfs::python::register_signals(ui_module);
 
-    // Initialize panel registry subscriptions for property-based UI invalidation
-    lfs::python::PyPanelRegistry::instance().init();
-
     // Set up notification handlers (C++ events -> PyModalRegistry)
     lfs::python::setup_notification_handlers();
 
@@ -1575,12 +1573,10 @@ Example:
         },
         nb::arg("path"), "Read training parameters from a checkpoint (None if failed)");
 
-    // Register poll cache invalidation callback - invalidates both OperatorRegistry and PyPanelRegistry
     lfs::python::set_invalidate_poll_cache_callback([](uint8_t dependency) {
-        lfs::vis::op::OperatorRegistry::instance().invalidatePollCache(
-            static_cast<lfs::vis::op::PollDependency>(dependency));
-        lfs::python::PyPanelRegistry::instance().invalidate_poll_cache(
-            static_cast<lfs::vis::op::PollDependency>(dependency));
+        const auto dep = static_cast<lfs::vis::op::PollDependency>(dependency);
+        lfs::vis::op::OperatorRegistry::instance().invalidatePollCache(dep);
+        lfs::vis::gui::PanelRegistry::instance().invalidate_poll_cache(dep);
     });
 
     // Module metadata

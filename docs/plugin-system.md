@@ -179,11 +179,12 @@ def on_unload():
 
 ```python
 import lichtfeld as lf
+from lfs_plugins.types import Panel
 
-class MyPanel:
-    panel_label = "My Panel"
-    panel_space = "SIDE_PANEL"
-    panel_order = 10
+class MyPanel(Panel):
+    label = "My Panel"
+    space = "SIDE_PANEL"
+    order = 10
 
     def __init__(self):
         self.value = 0
@@ -194,18 +195,15 @@ class MyPanel:
             self.value += 1
         layout.label(f"Clicked: {self.value}")
 
-_panel = None
+_classes = [MyPanel]
 
 def on_load():
-    global _panel
-    _panel = MyPanel
-    lf.ui.register_panel(MyPanel)
+    for cls in _classes:
+        lf.register_class(cls)
 
 def on_unload():
-    global _panel
-    if _panel:
-        lf.ui.unregister_panel(_panel)
-        _panel = None
+    for cls in reversed(_classes):
+        lf.unregister_class(cls)
 ```
 
 ## COLMAP Plugin

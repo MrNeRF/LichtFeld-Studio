@@ -24,6 +24,7 @@
 #include "python/ui_hooks.hpp"
 #include "rendering/render_constants.hpp"
 #include "visualizer/core/editor_context.hpp"
+#include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/operator/operator_context.hpp"
 #include "visualizer/operator/operator_registry.hpp"
 #include "visualizer/operator/property_schema.hpp"
@@ -1460,7 +1461,9 @@ namespace lfs::python {
         }
 
         if (ImGui::BeginPopup(panel_id.c_str())) {
-            PyPanelRegistry::instance().draw_single_panel(panel_id);
+            vis::gui::PanelDrawContext ctx;
+            ctx.scene = get_scene_for_python();
+            vis::gui::PanelRegistry::instance().draw_single_panel(panel_id, ctx);
             ImGui::EndPopup();
         }
     }
@@ -2453,24 +2456,27 @@ namespace lfs::python {
         }
 
         ImGuiCol string_to_style_color(const std::string& col) {
+            std::string lower = col;
+            std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
             static const std::unordered_map<std::string, ImGuiCol> map = {
-                {"WindowBg", ImGuiCol_WindowBg},
-                {"ChildBg", ImGuiCol_ChildBg},
-                {"PopupBg", ImGuiCol_PopupBg},
-                {"Border", ImGuiCol_Border},
-                {"FrameBg", ImGuiCol_FrameBg},
-                {"FrameBgHovered", ImGuiCol_FrameBgHovered},
-                {"FrameBgActive", ImGuiCol_FrameBgActive},
-                {"Button", ImGuiCol_Button},
-                {"ButtonHovered", ImGuiCol_ButtonHovered},
-                {"ButtonActive", ImGuiCol_ButtonActive},
-                {"Header", ImGuiCol_Header},
-                {"HeaderHovered", ImGuiCol_HeaderHovered},
-                {"HeaderActive", ImGuiCol_HeaderActive},
-                {"Text", ImGuiCol_Text},
-                {"TextDisabled", ImGuiCol_TextDisabled},
+                {"windowbg", ImGuiCol_WindowBg},
+                {"childbg", ImGuiCol_ChildBg},
+                {"popupbg", ImGuiCol_PopupBg},
+                {"border", ImGuiCol_Border},
+                {"framebg", ImGuiCol_FrameBg},
+                {"framebghovered", ImGuiCol_FrameBgHovered},
+                {"framebgactive", ImGuiCol_FrameBgActive},
+                {"button", ImGuiCol_Button},
+                {"buttonhovered", ImGuiCol_ButtonHovered},
+                {"buttonactive", ImGuiCol_ButtonActive},
+                {"header", ImGuiCol_Header},
+                {"headerhovered", ImGuiCol_HeaderHovered},
+                {"headeractive", ImGuiCol_HeaderActive},
+                {"text", ImGuiCol_Text},
+                {"textdisabled", ImGuiCol_TextDisabled},
             };
-            auto it = map.find(col);
+            auto it = map.find(lower);
             if (it != map.end())
                 return it->second;
             LOG_WARN("Unknown ImGui style color: {}", col);
@@ -4075,39 +4081,6 @@ namespace lfs::python {
             void* const plot_ctx = get_implot_context();
             if (plot_ctx)
                 ImPlot::SetCurrentContext(static_cast<ImPlotContext*>(plot_ctx));
-        };
-        bridge.draw_panels = [](PanelSpace space) { PyPanelRegistry::instance().draw_panels(space); };
-        bridge.draw_single_panel = [](const char* label) {
-            if (label)
-                PyPanelRegistry::instance().draw_single_panel(label);
-        };
-        bridge.has_panels = [](PanelSpace space) { return PyPanelRegistry::instance().has_panels(space); };
-        bridge.get_panel_names = [](PanelSpace space, PanelNameVisitor visitor, void* ctx) {
-            for (const auto& name : PyPanelRegistry::instance().get_panel_names(space)) {
-                visitor(name.c_str(), ctx);
-            }
-        };
-        bridge.has_main_panel_tabs = []() {
-            return PyPanelRegistry::instance().has_panels(PanelSpace::MainPanelTab);
-        };
-        bridge.get_main_panel_tabs = [](MainPanelTabVisitor visitor, void* ctx) {
-            auto tabs = PyPanelRegistry::instance().get_main_panel_tabs();
-            for (auto* tab : tabs) {
-                visitor(tab->idname.c_str(), tab->label.c_str(), tab->order, tab->enabled, ctx);
-            }
-        };
-        bridge.draw_main_panel_tab = [](const char* idname) {
-            if (idname) {
-                auto* panel = PyPanelRegistry::instance().get_panel(idname);
-                if (panel && panel->panel_instance.is_valid() && nb::hasattr(panel->panel_instance, "draw")) {
-                    try {
-                        PyUILayout layout;
-                        panel->panel_instance.attr("draw")(layout);
-                    } catch (const std::exception& e) {
-                        LOG_ERROR("Panel '{}' draw error: {}", idname, e.what());
-                    }
-                }
-            }
         };
         bridge.draw_menus = [](MenuLocation loc) { PyMenuRegistry::instance().draw_menu_items(loc); };
         bridge.has_menus = [](MenuLocation loc) { return PyMenuRegistry::instance().has_items(loc); };

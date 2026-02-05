@@ -214,10 +214,10 @@ def unregister_all_panels() -> None:
 def get_panel_names(space: str = 'FLOATING') -> list[str]:
     """Get registered panel names for a given space"""
 
-def set_panel_enabled(label: str, enabled: bool) -> None:
-    """Enable or disable a panel by label"""
+def set_panel_enabled(idname: str, enabled: bool) -> None:
+    """Enable or disable a panel by idname"""
 
-def is_panel_enabled(label: str) -> bool:
+def is_panel_enabled(idname: str) -> bool:
     """Check if a panel is enabled"""
 
 def get_main_panel_tabs() -> list:

@@ -12,7 +12,7 @@ class GettingStartedOperator(Operator):
     description = "Show the Getting Started guide"
 
     def execute(self, context) -> set:
-        lf.ui.set_panel_enabled("Getting Started", True)
+        lf.ui.set_panel_enabled("lfs.getting_started", True)
         return {"FINISHED"}
 
 
@@ -21,7 +21,7 @@ class AboutOperator(Operator):
     description = "Show About dialog"
 
     def execute(self, context) -> set:
-        lf.ui.set_panel_enabled("About", True)
+        lf.ui.set_panel_enabled("lfs.about", True)
         return {"FINISHED"}
 
 

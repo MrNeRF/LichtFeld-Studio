@@ -13,6 +13,7 @@ MAX_OUTPUT_LINES = 100
 class PluginManagerPanel(Panel):
     """GUI panel for managing plugins."""
 
+    idname = "lfs.plugin_manager"
     label = "Plugin Manager"
     space = "MAIN_PANEL_TAB"
     order = 90
@@ -261,27 +262,27 @@ def register_builtin_panels():
         # Floating panels
         from .export_panel import ExportPanel
         lf.register_class(ExportPanel)
-        lf.ui.set_panel_enabled("Export", False)
+        lf.ui.set_panel_enabled("lfs.export", False)
 
         from .about_panel import AboutPanel
         lf.register_class(AboutPanel)
-        lf.ui.set_panel_enabled("About", False)
+        lf.ui.set_panel_enabled("lfs.about", False)
 
         from .getting_started_panel import GettingStartedPanel
         lf.register_class(GettingStartedPanel)
-        lf.ui.set_panel_enabled("Getting Started", False)
+        lf.ui.set_panel_enabled("lfs.getting_started", False)
 
         from .image_preview_panel import ImagePreviewPanel
         lf.register_class(ImagePreviewPanel)
-        lf.ui.set_panel_enabled("Image Preview", False)
+        lf.ui.set_panel_enabled("lfs.image_preview", False)
 
         from .scripts_panel import ScriptsPanel
         lf.register_class(ScriptsPanel)
-        lf.ui.set_panel_enabled("Python Scripts", False)
+        lf.ui.set_panel_enabled("lfs.scripts", False)
 
         from .input_settings_panel import InputSettingsPanel
         lf.register_class(InputSettingsPanel)
-        lf.ui.set_panel_enabled("Input Settings", False)
+        lf.ui.set_panel_enabled("lfs.input_settings", False)
 
         # Status bar (must be registered last, always visible)
         from .status_bar_panel import StatusBarPanel

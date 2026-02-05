@@ -9,6 +9,7 @@ from .types import Panel
 class ScriptsPanel(Panel):
     """Python Scripts panel - floating window for managing loaded scripts."""
 
+    idname = "lfs.scripts"
     label = "Python Scripts"
     space = "FLOATING"
     order = 200

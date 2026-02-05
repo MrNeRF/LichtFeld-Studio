@@ -108,9 +108,12 @@ Panels are UI elements that draw into designated spaces using the layout API.
 from lfs_plugins.types import Panel
 
 class MyPanel(Panel):
-    label = "My Panel"       # Display name
-    space = "SIDE_PANEL"     # Where it appears
-    order = 100              # Sort order (lower = higher)
+    idname = "my_plugin.panel"  # Unique ID (default: module.qualname)
+    label = "My Panel"          # Display name
+    space = "SIDE_PANEL"        # Where it appears
+    order = 100                 # Sort order (lower = higher)
+    options = set()             # e.g. {"DEFAULT_CLOSED", "HIDE_HEADER"}
+    poll_deps = set()           # e.g. {"SCENE", "SELECTION", "TRAINING"}
 
     @classmethod
     def poll(cls, context) -> bool:
@@ -121,6 +124,15 @@ class MyPanel(Panel):
         """Draw panel contents using the layout API."""
         layout.label("Content here")
 ```
+
+| Attribute   | Type       | Default               | Description                                      |
+|-------------|------------|-----------------------|--------------------------------------------------|
+| `idname`    | `str`      | `module.qualname`     | Unique panel identifier. Used for enable/disable, replacement, and API lookups. |
+| `label`     | `str`      | `""`                  | Display name shown in the UI                     |
+| `space`     | `str`      | `"FLOATING"`          | Where the panel renders (see table below)        |
+| `order`     | `int`      | `100`                 | Sort order within its space (lower = higher)     |
+| `options`   | `Set[str]` | `set()`               | `"DEFAULT_CLOSED"` (start hidden), `"HIDE_HEADER"` (no collapsing header) |
+| `poll_deps` | `Set[str]` | `set()` (= poll always) | Declare which state changes trigger `poll()` re-evaluation: `"SCENE"`, `"SELECTION"`, `"TRAINING"`. Empty means poll on every frame. |
 
 ### Panel spaces
 
@@ -141,6 +153,42 @@ import lichtfeld as lf
 
 lf.register_class(MyPanel)      # Makes the panel visible
 lf.unregister_class(MyPanel)    # Removes the panel
+```
+
+### Panel replacement
+
+Registering a panel with the same `idname` as an existing panel replaces it entirely. This lets plugins override built-in panels:
+
+```python
+from lfs_plugins.types import Panel
+
+class MyTrainingPanel(Panel):
+    idname = "lfs.training"      # same idname as the built-in training panel
+    label = "Training"
+    space = "SIDE_PANEL"
+    order = 20
+
+    def draw(self, layout):
+        layout.label("Custom training controls")
+        if layout.button("Train"):
+            ...
+```
+
+Third-party plugins load after built-ins, so the replacement takes effect automatically. The replaced panel keeps its slot in the UI.
+
+### Panel management API
+
+```python
+import lichtfeld as lf
+
+lf.ui.set_panel_enabled("my_plugin.panel", False)  # Hide by idname
+lf.ui.is_panel_enabled("my_plugin.panel")           # Query visibility
+
+lf.ui.get_panel("my_plugin.panel")      # Returns dict with idname, label, order, enabled, space
+lf.ui.set_panel_label("my_plugin.panel", "New Name")
+lf.ui.set_panel_order("my_plugin.panel", 50)
+lf.ui.set_panel_space("my_plugin.panel", "FLOATING")
+lf.ui.get_panel_names("SIDE_PANEL")     # List panel idnames for a space
 ```
 
 ### Example: side panel with interactive widgets

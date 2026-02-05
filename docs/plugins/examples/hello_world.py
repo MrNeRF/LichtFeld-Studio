@@ -1,6 +1,6 @@
 """Minimal LichtFeld plugin.
 
-Copy this directory to ~/.lichtfeld/plugins/hello_world/ and add a plugin.toml.
+Copy this directory to ~/.lichtfeld/plugins/hello_world/ and add a pyproject.toml.
 """
 
 import lichtfeld as lf

@@ -72,24 +72,20 @@ Edit `__init__.py`:
 
 ```python
 import lichtfeld as lf
+from .panels.main_panel import MainPanel
 
-_panel = None
+_classes = [MainPanel]
 
 def on_load():
     """Called when plugin is loaded."""
-    global _panel
-    from .panels.main_panel import MainPanel
-
-    _panel = MainPanel
-    lf.plugins.register_panel(MainPanel)
+    for cls in _classes:
+        lf.register_class(cls)
     lf.log.info("my_plugin loaded")
 
 def on_unload():
     """Called when plugin is unloaded."""
-    global _panel
-    if _panel:
-        lf.plugins.unregister_panel(_panel)
-        _panel = None
+    for cls in reversed(_classes):
+        lf.unregister_class(cls)
     lf.log.info("my_plugin unloaded")
 ```
 
@@ -98,24 +94,23 @@ def on_unload():
 Edit `panels/main_panel.py`:
 
 ```python
-import lichtfeld as lf
+from lfs_plugins.types import Panel
 
-class MainPanel(lf.ui.Panel):
+class MainPanel(Panel):
     label = "My Plugin"
-    category = "Plugins"
+    space = "SIDE_PANEL"
+    order = 200
 
     def __init__(self):
-        super().__init__()
         self.counter = 0
 
-    def draw(self):
-        lf.ui.text("Hello from my_plugin!")
+    def draw(self, layout):
+        layout.label("Hello from my_plugin!")
 
-        if lf.ui.button("Click Me"):
+        if layout.button("Click Me"):
             self.counter += 1
-            lf.log.info(f"Button clicked {self.counter} times")
 
-        lf.ui.text(f"Count: {self.counter}")
+        layout.label(f"Count: {self.counter}")
 ```
 
 ## Development Workflow
@@ -230,8 +225,8 @@ lf.plugins.stop_watcher()          # Stop monitoring
 ### UI Panels
 
 ```python
-lf.plugins.register_panel(MyPanel)
-lf.plugins.unregister_panel(MyPanel)
+lf.register_class(MyPanel)       # Register panel, operator, or menu
+lf.unregister_class(MyPanel)     # Unregister
 ```
 
 ### Persistent Settings

@@ -21,16 +21,21 @@ lf.unregister_class(cls)         # Unregister a Panel or Operator class
 from lfs_plugins.types import Panel
 ```
 
-| Attribute | Type   | Description            |
-|-----------|--------|------------------------|
-| `label`   | `str`  | Display name           |
-| `space`   | `str`  | Panel space (see below)|
-| `order`   | `int`  | Sort order             |
+| Attribute   | Type       | Default           | Description                          |
+|-------------|------------|-------------------|--------------------------------------|
+| `idname`    | `str`      | `module.qualname` | Unique panel identifier              |
+| `label`     | `str`      | `""`              | Display name                         |
+| `space`     | `str`      | `"FLOATING"`      | Panel space (see below)              |
+| `order`     | `int`      | `100`             | Sort order (lower = higher)          |
+| `options`   | `Set[str]` | `set()`           | `"DEFAULT_CLOSED"`, `"HIDE_HEADER"` |
+| `poll_deps` | `Set[str]` | `set()`           | `"SCENE"`, `"SELECTION"`, `"TRAINING"` — which state changes trigger `poll()` |
 
 | Method               | Returns | Description                      |
 |----------------------|---------|----------------------------------|
 | `poll(cls, context)` | `bool`  | Classmethod. Show/hide condition |
 | `draw(self, layout)` | `None`  | Render panel via layout API      |
+
+Registering a panel with the same `idname` as an existing panel replaces it (see [Panel replacement](getting-started.md#panel-replacement)).
 
 ### Panel spaces
 
@@ -1178,9 +1183,13 @@ lf.undo.push(name: str, undo: Callable, redo: Callable)
 | `lf.ui.context()`                           | `AppContext`     | App context                |
 | `lf.ui.request_redraw()`                    | `None`           | Request UI redraw          |
 | `lf.ui.set_language(lang)`                  | `None`           | Set UI language            |
-| `lf.ui.set_panel_enabled(name, enabled)`    | `None`           | Toggle panel               |
-| `lf.ui.is_panel_enabled(name)`              | `bool`           | Panel enabled state        |
-| `lf.ui.get_panel_names()`                   | `list[str]`      | All panel names            |
+| `lf.ui.set_panel_enabled(idname, enabled)`  | `None`           | Toggle panel by idname     |
+| `lf.ui.is_panel_enabled(idname)`            | `bool`           | Panel enabled state        |
+| `lf.ui.get_panel_names(space='FLOATING')`   | `list[str]`      | Panel idnames for a space  |
+| `lf.ui.get_panel(idname)`                   | `dict or None`   | Panel info dict (`idname`, `label`, `order`, `enabled`, `space`) |
+| `lf.ui.set_panel_label(idname, label)`      | `bool`           | Change panel display name  |
+| `lf.ui.set_panel_order(idname, order)`      | `bool`           | Change panel sort order    |
+| `lf.ui.set_panel_space(idname, space)`      | `bool`           | Move panel to a different space |
 | `lf.ui.ops.invoke(op_id)`                   | `None`           | Invoke operator            |
 | `lf.ui.ops.cancel_modal()`                  | `None`           | Cancel modal operator      |
 | `lf.ui.get_active_tool()`                   | `str or None`    | Active tool ID             |

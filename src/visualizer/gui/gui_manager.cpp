@@ -8,12 +8,16 @@
 // clang-format on
 
 #include "gui/gui_manager.hpp"
+#include "control/command_api.hpp"
 #include "core/cuda_version.hpp"
+#include "core/event_bridge/command_center_bridge.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/editor/python_editor.hpp"
+#include "gui/native_panels.hpp"
+#include "gui/panel_registry.hpp"
 #include "gui/panels/python_console_panel.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_widgets.hpp"
@@ -418,6 +422,8 @@ namespace lfs::vis::gui {
                 LOG_ERROR("InputController not available for file drop handling");
             }
         });
+
+        registerNativePanels();
     }
 
     void GuiManager::shutdown() {
@@ -439,6 +445,78 @@ namespace lfs::vis::gui {
             ImPlot::DestroyContext();
             ImGui::DestroyContext();
         }
+    }
+
+    void GuiManager::registerNativePanels() {
+        using namespace native_panels;
+        auto& reg = PanelRegistry::instance();
+
+        auto make_panel = [this](auto panel) -> std::shared_ptr<IPanel> {
+            auto ptr = std::make_shared<decltype(panel)>(std::move(panel));
+            native_panel_storage_.push_back(ptr);
+            return ptr;
+        };
+
+        auto reg_panel = [&](const std::string& idname, const std::string& label,
+                             std::shared_ptr<IPanel> panel, PanelSpace space, int order, uint32_t options = 0) {
+            PanelInfo info;
+            info.panel = std::move(panel);
+            info.label = label;
+            info.idname = idname;
+            info.space = space;
+            info.order = order;
+            info.options = options;
+            info.is_native = true;
+            reg.register_panel(std::move(info));
+        };
+
+        constexpr uint32_t SELF = static_cast<uint32_t>(PanelOption::SELF_MANAGED);
+
+        // Floating panels (self-managed windows)
+        reg_panel("native.file_browser", "File Browser",
+                  make_panel(FileBrowserPanel(file_browser_.get(), &window_states_["file_browser"])),
+                  PanelSpace::Floating, 10, SELF);
+
+        reg_panel("native.video_extractor", "Video Extractor",
+                  make_panel(VideoExtractorPanel(video_extractor_dialog_.get(), &window_states_["video_extractor_dialog"])),
+                  PanelSpace::Floating, 11, SELF);
+
+        reg_panel("native.disk_space_error", "Disk Space Error",
+                  make_panel(DiskSpaceErrorPanel(disk_space_error_dialog_.get())),
+                  PanelSpace::Floating, 900, SELF);
+
+        // Viewport overlays (ordered by draw priority)
+        reg_panel("native.selection_overlay", "Selection Overlay",
+                  make_panel(SelectionOverlayPanel(this)),
+                  PanelSpace::ViewportOverlay, 200);
+
+        reg_panel("native.node_transform_gizmo", "Node Transform",
+                  make_panel(NodeTransformGizmoPanel(&gizmo_manager_)),
+                  PanelSpace::ViewportOverlay, 300);
+
+        reg_panel("native.cropbox_gizmo", "Crop Box",
+                  make_panel(CropBoxGizmoPanel(&gizmo_manager_)),
+                  PanelSpace::ViewportOverlay, 301);
+
+        reg_panel("native.ellipsoid_gizmo", "Ellipsoid",
+                  make_panel(EllipsoidGizmoPanel(&gizmo_manager_)),
+                  PanelSpace::ViewportOverlay, 302);
+
+        reg_panel("native.sequencer", "Sequencer",
+                  make_panel(SequencerPanel(&sequencer_ui_, &panel_layout_)),
+                  PanelSpace::ViewportOverlay, 500);
+
+        reg_panel("native.viewport_decorations", "Viewport Decorations",
+                  make_panel(ViewportDecorationsPanel(this)),
+                  PanelSpace::ViewportOverlay, 800);
+
+        reg_panel("native.viewport_gizmo", "Viewport Gizmo",
+                  make_panel(ViewportGizmoPanel(&gizmo_manager_)),
+                  PanelSpace::ViewportOverlay, 900);
+
+        reg_panel("native.startup_overlay", "Startup Overlay",
+                  make_panel(StartupOverlayPanel(&startup_overlay_, font_small_, &drag_drop_hovering_)),
+                  PanelSpace::ViewportOverlay, 1000);
     }
 
     void GuiManager::render() {
@@ -531,59 +609,53 @@ namespace lfs::vis::gui {
             .sequencer_controller = &sequencer_ui_.controller(),
             .fonts = buildFontSet()};
 
+        // Build draw context for panel registry
+        lfs::vis::Scene* scene = nullptr;
+        if (auto* sm = ctx.viewer->getSceneManager()) {
+            scene = &sm->getScene();
+        }
+        PanelDrawContext draw_ctx;
+        draw_ctx.ui = &ctx;
+        draw_ctx.viewport = &viewport_layout_;
+        draw_ctx.scene = scene;
+        draw_ctx.ui_hidden = ui_hidden_;
+        draw_ctx.scene_generation = python::get_scene_generation();
+        if (auto* sm = ctx.viewer->getSceneManager())
+            draw_ctx.has_selection = sm->hasSelectedNode();
+        if (auto* cc = lfs::event::command_center())
+            draw_ctx.is_training = cc->snapshot().is_running;
+
+        auto& reg = PanelRegistry::instance();
+
+        python::set_scene_for_python(scene);
+        auto clear_scene = [](void*) { python::set_scene_for_python(nullptr); };
+        std::unique_ptr<void, decltype(clear_scene)> scene_guard(reinterpret_cast<void*>(1), clear_scene);
+
         // Right panel and docked Python console
-        panel_layout_.renderRightPanel(ctx, show_main_panel_, ui_hidden_, window_states_, focus_panel_name_);
-
-        // Render floating windows
-        if (window_states_["file_browser"]) {
-            file_browser_->render(&window_states_["file_browser"]);
-        }
-
-        // Video extractor dialog
-        if (window_states_["video_extractor_dialog"]) {
-            video_extractor_dialog_->render(&window_states_["video_extractor_dialog"]);
-        }
+        panel_layout_.renderRightPanel(ctx, draw_ctx, show_main_panel_, ui_hidden_, window_states_, focus_panel_name_);
 
         python::set_viewport_bounds(viewport_layout_.pos.x, viewport_layout_.pos.y,
                                     viewport_layout_.size.x, viewport_layout_.size.y);
-        renderPythonPanels(ctx);
+
+        reg.draw_panels(PanelSpace::Floating, draw_ctx);
 
         gizmo_manager_.updateToolState(ctx, ui_hidden_);
-        renderSelectionOverlays(ctx);
-
-        gizmo_manager_.renderNodeTransformGizmo(ctx, viewport_layout_);
-        gizmo_manager_.renderCropBoxGizmo(ctx, viewport_layout_);
-        gizmo_manager_.renderEllipsoidGizmo(ctx, viewport_layout_);
         gizmo_manager_.updateCropFlash();
+
+        reg.draw_panels(PanelSpace::ViewportOverlay, draw_ctx);
 
         // Recompute viewport layout
         viewport_layout_ = panel_layout_.computeViewportLayout(
             show_main_panel_, ui_hidden_, window_states_["python_console"]);
 
-        renderViewportDecorations();
-
-        // Sequencer panel (above status bar)
-        if (!ui_hidden_ && ctx.editor && !ctx.editor->isToolsDisabled() && panel_layout_.isShowSequencer()) {
-            sequencer_ui_.render(ctx, viewport_layout_);
-        }
-
-        // Render status bar at bottom of viewport
         if (!ui_hidden_) {
-            lfs::vis::Scene* status_bar_scene = nullptr;
-            if (auto* sm = ctx.viewer->getSceneManager()) {
-                status_bar_scene = &sm->getScene();
-            }
-            python::draw_python_panels(python::PanelSpace::StatusBar, status_bar_scene);
+            reg.draw_panels(PanelSpace::StatusBar, draw_ctx);
         }
 
-        if (!ui_hidden_ && viewport_layout_.size.x > 0 && viewport_layout_.size.y > 0) {
-            gizmo_manager_.renderViewportGizmo(viewport_layout_);
-        }
+        scene_guard.reset();
 
-        startup_overlay_.render(viewport_layout_, font_small_, drag_drop_hovering_);
-
-        if (disk_space_error_dialog_)
-            disk_space_error_dialog_->render();
+        python::draw_python_modals(scene);
+        python::draw_python_popups(scene);
 
         // Notification popups are rendered via PyModalRegistry (draw_modals in Python bridge)
 
@@ -868,17 +940,6 @@ namespace lfs::vis::gui {
                 rel_x < viewport_layout_.pos.x + viewport_layout_.size.x &&
                 rel_y >= viewport_layout_.pos.y &&
                 rel_y < viewport_layout_.pos.y + viewport_layout_.size.y);
-    }
-
-    void GuiManager::renderPythonPanels([[maybe_unused]] const UIContext& ctx) {
-        lfs::vis::Scene* scene = nullptr;
-        if (auto* sm = ctx.viewer->getSceneManager()) {
-            scene = &sm->getScene();
-        }
-        python::draw_python_panels(python::PanelSpace::Floating, scene);
-        python::draw_python_panels(python::PanelSpace::ViewportOverlay, scene);
-        python::draw_python_modals(scene);
-        python::draw_python_popups(scene);
     }
 
     void GuiManager::setupEventHandlers() {

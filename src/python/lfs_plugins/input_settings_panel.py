@@ -9,6 +9,7 @@ from .types import Panel
 class InputSettingsPanel(Panel):
     """Input Settings panel - floating window for configuring keybindings."""
 
+    idname = "lfs.input_settings"
     label = "Input Settings"
     space = "FLOATING"
     order = 100

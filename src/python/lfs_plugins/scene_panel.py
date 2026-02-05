@@ -53,6 +53,7 @@ def tr(key):
 
 
 class ScenePanel(Panel):
+    idname = "lfs.scene"
     label = "Scene"
     space = "SCENE_HEADER"
     order = 0

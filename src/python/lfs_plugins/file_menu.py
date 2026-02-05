@@ -70,7 +70,7 @@ class ExportOperator(Operator):
     description = "Export the scene"
 
     def execute(self, context) -> set:
-        lf.ui.set_panel_enabled("Export", True)
+        lf.ui.set_panel_enabled("lfs.export", True)
         return {"FINISHED"}
 
 
