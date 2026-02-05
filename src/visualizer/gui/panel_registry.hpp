@@ -6,6 +6,8 @@
 
 #include "operator/poll_dependency.hpp"
 
+#include <core/export.hpp>
+
 #include <cassert>
 #include <cstdint>
 #include <memory>
@@ -111,7 +113,7 @@ namespace lfs::vis::gui {
         PollDependency deps;
     };
 
-    class PanelRegistry {
+    class LFS_VIS_API PanelRegistry {
     public:
         static PanelRegistry& instance();
 
