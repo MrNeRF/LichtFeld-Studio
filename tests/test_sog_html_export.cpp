@@ -11,6 +11,9 @@
  * 3. K-means clustering (cluster1d) works correctly for SH data
  */
 
+#ifdef WIN32
+#define NOMINMAX 
+#endif
 #include <algorithm>
 #include <archive.h>
 #include <archive_entry.h>
