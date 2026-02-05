@@ -18,6 +18,8 @@
 #include <nanobind/stl/vector.h>
 
 #include <algorithm>
+#include <cmath>
+#include <set>
 
 namespace lfs::python {
 
@@ -1020,6 +1022,41 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().steps_scaler; },
                 [](PyOptimizationParams& self, float v) { self.params().steps_scaler = v; },
                 "Scale factor for training step counts")
+            .def(
+                "apply_step_scaling",
+                [](PyOptimizationParams& self, float new_scaler) {
+                    auto& opt = self.params();
+                    new_scaler = std::max(0.0f, new_scaler);
+                    const float prev = opt.steps_scaler;
+                    opt.steps_scaler = new_scaler;
+                    if (new_scaler <= 0.0f)
+                        return;
+
+                    const float ratio = (prev > 0.0f) ? (new_scaler / prev) : new_scaler;
+                    const auto scale = [ratio](const size_t v) {
+                        return static_cast<size_t>(std::lround(static_cast<float>(v) * ratio));
+                    };
+                    opt.iterations = scale(opt.iterations);
+                    opt.start_refine = scale(opt.start_refine);
+                    opt.reset_every = scale(opt.reset_every);
+                    opt.stop_refine = scale(opt.stop_refine);
+                    opt.refine_every = scale(opt.refine_every);
+                    opt.sh_degree_interval = scale(opt.sh_degree_interval);
+
+                    auto scale_vec = [ratio](std::vector<size_t>& steps) {
+                        std::set<size_t> unique;
+                        for (const auto& s : steps) {
+                            size_t scaled = static_cast<size_t>(std::lround(static_cast<float>(s) * ratio));
+                            if (scaled > 0)
+                                unique.insert(scaled);
+                        }
+                        steps.assign(unique.begin(), unique.end());
+                    };
+                    scale_vec(opt.eval_steps);
+                    scale_vec(opt.save_steps);
+                },
+                nb::arg("new_scaler"),
+                "Set steps_scaler and scale all step-related parameters by the ratio")
             .def_prop_rw(
                 "gut",
                 [](PyOptimizationParams& self) { return self.params().gut; },

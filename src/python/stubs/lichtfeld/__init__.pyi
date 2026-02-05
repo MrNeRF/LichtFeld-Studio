@@ -1355,6 +1355,9 @@ class OptimizationParams:
     @steps_scaler.setter
     def steps_scaler(self, arg: float, /) -> None: ...
 
+    def apply_step_scaling(self, new_scaler: float) -> None:
+        """Set steps_scaler and scale all step-related parameters by the ratio"""
+
     @property
     def gut(self) -> bool:
         """Enable Gaussian Unscented Transform"""

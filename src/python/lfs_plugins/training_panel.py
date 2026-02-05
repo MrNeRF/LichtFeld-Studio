@@ -224,7 +224,7 @@ class TrainingPanel(Panel):
             layout.push_item_width(-1)
             changed, new_val = layout.input_float("##py_steps_scaler", params.steps_scaler, 0.1, 0.5, "%.2f")
             if changed:
-                params.steps_scaler = new_val
+                params.apply_step_scaling(new_val)
             layout.pop_item_width()
             if layout.is_item_hovered():
                 layout.set_tooltip(tr("training.tooltip.steps_scaler"))
