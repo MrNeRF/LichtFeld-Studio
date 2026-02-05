@@ -118,7 +118,7 @@ namespace lfs::vis::gui {
             }
 
             if (auto* gui = viewer_->getGuiManager()) {
-                gui->setSequencerVisible(false);
+                gui->panelLayout().setShowSequencer(false);
             }
         });
 

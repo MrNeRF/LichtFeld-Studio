@@ -33,6 +33,13 @@ namespace lfs::vis::gui {
 
     SequencerUIManager::~SequencerUIManager() = default;
 
+    void SequencerUIManager::destroyGLResources() {
+        pip_fbo_ = {};
+        pip_texture_ = {};
+        pip_depth_rbo_ = {};
+        pip_initialized_ = false;
+    }
+
     void SequencerUIManager::setupEvents() {
         using namespace lfs::core::events;
 

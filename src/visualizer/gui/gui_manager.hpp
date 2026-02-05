@@ -22,7 +22,9 @@
 #include <GLFW/glfw3.h>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <imgui.h>
 
@@ -42,6 +44,14 @@ namespace lfs::vis {
             void shutdown();
             void render();
 
+            // Sub-manager access
+            [[nodiscard]] AsyncTaskManager& asyncTasks() { return async_tasks_; }
+            [[nodiscard]] const AsyncTaskManager& asyncTasks() const { return async_tasks_; }
+            [[nodiscard]] GizmoManager& gizmo() { return gizmo_manager_; }
+            [[nodiscard]] const GizmoManager& gizmo() const { return gizmo_manager_; }
+            [[nodiscard]] PanelLayoutManager& panelLayout() { return panel_layout_; }
+            [[nodiscard]] const PanelLayoutManager& panelLayout() const { return panel_layout_; }
+
             // State queries
             bool needsAnimationFrame() const;
 
@@ -56,32 +66,12 @@ namespace lfs::vis {
             bool isMouseInViewport() const;
             bool isViewportFocused() const;
             bool isPositionInViewport(double x, double y) const;
-            bool isViewportGizmoDragging() const { return gizmo_manager_.isViewportGizmoDragging(); }
-            bool isResizingPanel() const { return panel_layout_.isResizingPanel(); }
-            bool isPositionInViewportGizmo(double x, double y) const { return gizmo_manager_.isPositionInViewportGizmo(x, y); }
-
-            void setSelectionSubMode(SelectionSubMode mode) { gizmo_manager_.setSelectionSubMode(mode); }
-            [[nodiscard]] SelectionSubMode getSelectionSubMode() const { return gizmo_manager_.getSelectionSubMode(); }
-            [[nodiscard]] ToolType getCurrentToolMode() const { return gizmo_manager_.getCurrentToolMode(); }
-
-            [[nodiscard]] TransformSpace getTransformSpace() const { return gizmo_manager_.getTransformSpace(); }
-            void setTransformSpace(TransformSpace space) { gizmo_manager_.setTransformSpace(space); }
-            [[nodiscard]] PivotMode getPivotMode() const { return gizmo_manager_.getPivotMode(); }
-            void setPivotMode(PivotMode mode) { gizmo_manager_.setPivotMode(mode); }
-            [[nodiscard]] ImGuizmo::OPERATION getCurrentOperation() const { return gizmo_manager_.getCurrentOperation(); }
-            void setCurrentOperation(ImGuizmo::OPERATION op) { gizmo_manager_.setCurrentOperation(op); }
-
-            bool isCropboxGizmoActive() const { return gizmo_manager_.isCropboxGizmoActive(); }
-            bool isEllipsoidGizmoActive() const { return gizmo_manager_.isEllipsoidGizmoActive(); }
 
             bool isForceExit() const { return force_exit_; }
             void setForceExit(bool value) { force_exit_ = value; }
 
             [[nodiscard]] SequencerController& sequencer() { return sequencer_ui_.controller(); }
             [[nodiscard]] const SequencerController& sequencer() const { return sequencer_ui_.controller(); }
-
-            [[nodiscard]] bool isSequencerVisible() const { return panel_layout_.isShowSequencer(); }
-            void setSequencerVisible(bool visible) { panel_layout_.setShowSequencer(visible); }
 
             [[nodiscard]] panels::SequencerUIState& getSequencerUIState() { return sequencer_ui_state_; }
             [[nodiscard]] const panels::SequencerUIState& getSequencerUIState() const { return sequencer_ui_state_; }
@@ -91,11 +81,6 @@ namespace lfs::vis {
 
             void requestExitConfirmation();
             bool isExitConfirmationPending() const;
-
-            void performExport(lfs::core::ExportFormat format, const std::filesystem::path& path,
-                               const std::vector<std::string>& node_names, int sh_degree) {
-                async_tasks_.performExport(format, path, node_names, sh_degree);
-            }
 
             bool isCapturingInput() const;
             bool isModalWindowOpen() const;
@@ -114,32 +99,6 @@ namespace lfs::vis {
             // Drag-drop state for overlays
             [[nodiscard]] bool isDragHovering() const { return drag_drop_hovering_; }
 
-            [[nodiscard]] float getExportProgress() const { return async_tasks_.getExportProgress(); }
-            [[nodiscard]] std::string getExportStage() const { return async_tasks_.getExportStage(); }
-            [[nodiscard]] lfs::core::ExportFormat getExportFormat() const { return async_tasks_.getExportFormat(); }
-            [[nodiscard]] bool isExporting() const { return async_tasks_.isExporting(); }
-            void cancelExport() { async_tasks_.cancelExport(); }
-
-            [[nodiscard]] bool isImporting() const { return async_tasks_.isImporting(); }
-            [[nodiscard]] bool isImportCompletionShowing() const { return async_tasks_.isImportCompletionShowing(); }
-            [[nodiscard]] float getImportProgress() const { return async_tasks_.getImportProgress(); }
-            [[nodiscard]] std::string getImportStage() const { return async_tasks_.getImportStage(); }
-            [[nodiscard]] std::string getImportDatasetType() const { return async_tasks_.getImportDatasetType(); }
-            [[nodiscard]] std::string getImportPath() const { return async_tasks_.getImportPath(); }
-            [[nodiscard]] bool getImportSuccess() const { return async_tasks_.getImportSuccess(); }
-            [[nodiscard]] std::string getImportError() const { return async_tasks_.getImportError(); }
-            [[nodiscard]] size_t getImportNumImages() const { return async_tasks_.getImportNumImages(); }
-            [[nodiscard]] size_t getImportNumPoints() const { return async_tasks_.getImportNumPoints(); }
-            [[nodiscard]] float getImportSecondsSinceCompletion() const { return async_tasks_.getImportSecondsSinceCompletion(); }
-            void dismissImport() { async_tasks_.dismissImport(); }
-
-            [[nodiscard]] bool isExportingVideo() const { return async_tasks_.isExportingVideo(); }
-            [[nodiscard]] float getVideoExportProgress() const { return async_tasks_.getVideoExportProgress(); }
-            [[nodiscard]] int getVideoExportCurrentFrame() const { return async_tasks_.getVideoExportCurrentFrame(); }
-            [[nodiscard]] int getVideoExportTotalFrames() const { return async_tasks_.getVideoExportTotalFrames(); }
-            [[nodiscard]] std::string getVideoExportStage() const { return async_tasks_.getVideoExportStage(); }
-            void cancelVideoExport() { async_tasks_.cancelVideoExport(); }
-
         private:
             void setupEventHandlers();
             void checkCudaVersionAndNotify();
@@ -157,6 +116,7 @@ namespace lfs::vis {
             std::unique_ptr<FileBrowser> file_browser_;
             std::unique_ptr<DiskSpaceErrorDialog> disk_space_error_dialog_;
             std::unique_ptr<lfs::gui::VideoExtractorDialog> video_extractor_dialog_;
+            std::optional<std::jthread> video_extraction_thread_;
 
             // UI state only
             std::unordered_map<std::string, bool> window_states_;

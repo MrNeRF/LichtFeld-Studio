@@ -59,7 +59,7 @@ namespace lfs::vis {
             PivotMode pivot_mode_ = PivotMode::Origin;
 
             // Node transform gizmo
-            bool show_node_gizmo_ = true;
+            bool show_node_gizmo_ = false;
             ImGuizmo::OPERATION node_gizmo_operation_ = ImGuizmo::TRANSLATE;
             bool node_gizmo_active_ = false;
             std::vector<std::string> node_gizmo_node_names_;

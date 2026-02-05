@@ -33,6 +33,8 @@ namespace lfs::vis {
             explicit AsyncTaskManager(VisualizerImpl* viewer);
             ~AsyncTaskManager();
 
+            void shutdown();
+
             void setupEvents();
             void pollImportCompletion();
 

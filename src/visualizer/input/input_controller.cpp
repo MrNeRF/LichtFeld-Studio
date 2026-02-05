@@ -380,8 +380,8 @@ namespace lfs::vis {
         }
 
         const bool over_gui = ImGui::GetIO().WantCaptureMouse ||
-                              (services().guiOrNull() && services().guiOrNull()->isResizingPanel());
-        const bool over_gizmo = services().guiOrNull() && services().guiOrNull()->isPositionInViewportGizmo(x, y);
+                              (services().guiOrNull() && services().guiOrNull()->panelLayout().isResizingPanel());
+        const bool over_gizmo = services().guiOrNull() && services().guiOrNull()->gizmo().isPositionInViewportGizmo(x, y);
 
         // Single binding lookup with current tool mode
         const int mods = getModifierKeys();
@@ -504,7 +504,7 @@ namespace lfs::vis {
                     if (selection_tool_ && selection_tool_->isEnabled()) {
                         // Invoke selection stroke operator
                         auto* gm = services().guiOrNull();
-                        const auto sub_mode = gm ? static_cast<int>(gm->getSelectionSubMode()) : 0;
+                        const auto sub_mode = gm ? static_cast<int>(gm->gizmo().getSelectionSubMode()) : 0;
                         const int selection_op = (bound_action == input::Action::SELECTION_ADD)      ? 1
                                                  : (bound_action == input::Action::SELECTION_REMOVE) ? 2
                                                                                                      : 0;
@@ -947,7 +947,7 @@ namespace lfs::vis {
 
             case input::Action::CYCLE_SELECTION_VIS:
                 if (services().guiOrNull() &&
-                    services().guiOrNull()->getCurrentToolMode() == ToolType::Selection) {
+                    services().guiOrNull()->gizmo().getCurrentToolMode() == ToolType::Selection) {
                     cmd::CycleSelectionVisualization{}.emit();
                 }
                 return;
@@ -1038,31 +1038,31 @@ namespace lfs::vis {
 
             case input::Action::SELECT_MODE_CENTERS:
                 if (services().guiOrNull()) {
-                    services().guiOrNull()->setSelectionSubMode(SelectionSubMode::Centers);
+                    services().guiOrNull()->gizmo().setSelectionSubMode(SelectionSubMode::Centers);
                 }
                 return;
 
             case input::Action::SELECT_MODE_RECTANGLE:
                 if (services().guiOrNull()) {
-                    services().guiOrNull()->setSelectionSubMode(SelectionSubMode::Rectangle);
+                    services().guiOrNull()->gizmo().setSelectionSubMode(SelectionSubMode::Rectangle);
                 }
                 return;
 
             case input::Action::SELECT_MODE_POLYGON:
                 if (services().guiOrNull()) {
-                    services().guiOrNull()->setSelectionSubMode(SelectionSubMode::Polygon);
+                    services().guiOrNull()->gizmo().setSelectionSubMode(SelectionSubMode::Polygon);
                 }
                 return;
 
             case input::Action::SELECT_MODE_LASSO:
                 if (services().guiOrNull()) {
-                    services().guiOrNull()->setSelectionSubMode(SelectionSubMode::Lasso);
+                    services().guiOrNull()->gizmo().setSelectionSubMode(SelectionSubMode::Lasso);
                 }
                 return;
 
             case input::Action::SELECT_MODE_RINGS:
                 if (services().guiOrNull()) {
-                    services().guiOrNull()->setSelectionSubMode(SelectionSubMode::Rings);
+                    services().guiOrNull()->gizmo().setSelectionSubMode(SelectionSubMode::Rings);
                 }
                 return;
 
@@ -1672,7 +1672,7 @@ namespace lfs::vis {
             return input::ToolMode::ALIGN;
         // Check GUI tool mode for transform tools
         if (services().guiOrNull()) {
-            const auto gui_tool = services().guiOrNull()->getCurrentToolMode();
+            const auto gui_tool = services().guiOrNull()->gizmo().getCurrentToolMode();
             if (gui_tool == ToolType::Translate)
                 return input::ToolMode::TRANSLATE;
             if (gui_tool == ToolType::Rotate)

@@ -60,6 +60,10 @@ namespace lfs::vis::gui {
         : viewer_(viewer) {}
 
     AsyncTaskManager::~AsyncTaskManager() {
+        shutdown();
+    }
+
+    void AsyncTaskManager::shutdown() {
         if (export_state_.active.load())
             cancelExport();
         if (export_state_.thread && export_state_.thread->joinable())
@@ -508,20 +512,19 @@ namespace lfs::vis::gui {
             return;
         }
 
-        auto* const scene = &scene_manager->getScene();
-        scene->pinForExport();
+        auto* const scene_ptr = &scene_manager->getScene();
+        scene_ptr->pinForExport();
+        auto export_pin = std::shared_ptr<void>(nullptr, [scene_ptr](void*) { scene_ptr->unpinForExport(); });
 
         const auto render_state = scene_manager->buildRenderState();
         if (!render_state.combined_model) {
             LOG_ERROR("No splat data to render");
-            scene->unpinForExport();
             return;
         }
 
         auto* const engine = rendering_manager->getRenderingEngine();
         if (!engine) {
             LOG_ERROR("Rendering engine not available");
-            scene->unpinForExport();
             return;
         }
 
@@ -556,10 +559,9 @@ namespace lfs::vis::gui {
         video_export_state_.thread.emplace(
             [this, path, options, total_frames, width, height,
              splat_ptr, engine, render_settings,
-             frame_states = std::move(frame_states), scene](std::stop_token stop_token) {
+             frame_states = std::move(frame_states),
+             export_pin = std::move(export_pin)](std::stop_token stop_token) {
                 io::video::VideoEncoder encoder;
-
-                auto unpin = [scene]() { scene->unpinForExport(); };
 
                 {
                     std::lock_guard lock(video_export_state_.mutex);
@@ -573,7 +575,6 @@ namespace lfs::vis::gui {
                     video_export_state_.stage = "Failed: " + result.error();
                     video_export_state_.active.store(false);
                     LOG_ERROR("Failed to open encoder: {}", result.error());
-                    unpin();
                     return;
                 }
 
@@ -646,7 +647,6 @@ namespace lfs::vis::gui {
                     }
                 }
 
-                unpin();
                 video_export_state_.active.store(false);
             });
     }

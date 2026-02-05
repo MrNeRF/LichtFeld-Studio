@@ -44,8 +44,7 @@ namespace lfs::vis::gui {
         void setShowSequencer(bool v) { show_sequencer_ = v; }
 
     private:
-        void renderDockedPythonConsole(const UIContext& ctx, float panel_x, float panel_h,
-                                       std::unordered_map<std::string, bool>& window_states);
+        void renderDockedPythonConsole(const UIContext& ctx, float panel_x, float panel_h);
 
         float right_panel_width_ = 300.0f;
         bool resizing_panel_ = false;

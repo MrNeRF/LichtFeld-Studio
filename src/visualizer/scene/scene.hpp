@@ -11,6 +11,7 @@
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller_pool.hpp"
 #include <atomic>
+#include <cassert>
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>
@@ -353,7 +354,10 @@ namespace lfs::vis {
         // Mark scene data as changed (e.g., after modifying a node's deleted mask)
         // Also called by SceneNode Observable properties when they change
         void pinForExport() const { ++export_pin_count_; }
-        void unpinForExport() const { --export_pin_count_; }
+        void unpinForExport() const {
+            assert(export_pin_count_.load(std::memory_order_acquire) > 0);
+            --export_pin_count_;
+        }
 
         void invalidateCache() {
             model_cache_valid_ = false;

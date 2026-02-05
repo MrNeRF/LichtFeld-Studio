@@ -66,8 +66,11 @@ namespace lfs::vis::gui {
 
         // Wire up video extractor dialog callback
         video_extractor_dialog_->setOnStartExtraction([this](const lfs::gui::VideoExtractionParams& params) {
+            if (video_extraction_thread_ && video_extraction_thread_->joinable())
+                video_extraction_thread_->join();
+
             auto* dialog = video_extractor_dialog_.get();
-            std::thread([params, dialog]() {
+            video_extraction_thread_.emplace([params, dialog]() {
                 lfs::io::VideoFrameExtractor extractor;
 
                 lfs::io::VideoFrameExtractor::Params extract_params;
@@ -98,7 +101,7 @@ namespace lfs::vis::gui {
                     LOG_INFO("Video frame extraction completed successfully");
                     dialog->setExtractionComplete();
                 }
-            }).detach();
+            });
         });
 
         // Initialize window states
@@ -419,8 +422,16 @@ namespace lfs::vis::gui {
 
     void GuiManager::shutdown() {
         panel_layout_.saveState();
-        drag_drop_.shutdown();
+
+        if (video_extraction_thread_ && video_extraction_thread_->joinable())
+            video_extraction_thread_->join();
+        video_extraction_thread_.reset();
+
+        async_tasks_.shutdown();
+
+        sequencer_ui_.destroyGLResources();
         startup_overlay_.destroyTextures();
+        drag_drop_.shutdown();
 
         if (ImGui::GetCurrentContext()) {
             ImGui_ImplOpenGL3_Shutdown();

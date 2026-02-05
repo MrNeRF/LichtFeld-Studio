@@ -48,8 +48,7 @@ namespace lfs::vis::gui {
         const float min_w = vp->WorkSize.x * RIGHT_PANEL_MIN_RATIO;
         const float max_w = vp->WorkSize.x * RIGHT_PANEL_MAX_RATIO;
 
-        if (min_w != 0 || max_w != 0)
-            right_panel_width_ = std::clamp(right_panel_width_, min_w, max_w);
+        right_panel_width_ = std::clamp(right_panel_width_, min_w, max_w);
 
         const bool python_console_visible = window_states["python_console"];
         const float available_for_split = vp->WorkSize.x - right_panel_width_ - PANEL_GAP;
@@ -67,7 +66,7 @@ namespace lfs::vis::gui {
         const float console_x = right_panel_x - (python_console_visible ? python_console_width_ + PANEL_GAP : 0.0f);
 
         if (python_console_visible) {
-            renderDockedPythonConsole(ctx, console_x, panel_h, window_states);
+            renderDockedPythonConsole(ctx, console_x, panel_h);
         } else {
             python_console_hovering_edge_ = false;
             python_console_resizing_ = false;
@@ -121,7 +120,6 @@ namespace lfs::vis::gui {
             }
             ImGui::EndChild();
 
-            const auto& t = vis::theme();
             ImGui::PushStyleColor(ImGuiCol_Button, withAlpha(t.palette.border, 0.4f));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, withAlpha(t.palette.info, 0.6f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, withAlpha(t.palette.info, 0.8f));
@@ -187,8 +185,7 @@ namespace lfs::vis::gui {
         return layout;
     }
 
-    void PanelLayoutManager::renderDockedPythonConsole(const UIContext& ctx, float panel_x, float panel_h,
-                                                       std::unordered_map<std::string, bool>& /*window_states*/) {
+    void PanelLayoutManager::renderDockedPythonConsole(const UIContext& ctx, float panel_x, float panel_h) {
         const auto* const vp = ImGui::GetMainViewport();
         const auto& io = ImGui::GetIO();
         constexpr float EDGE_GRAB_W = 8.0f;

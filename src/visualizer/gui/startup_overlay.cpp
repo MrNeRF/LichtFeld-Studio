@@ -14,6 +14,7 @@
 #include "gui/string_keys.hpp"
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
+#include <cassert>
 #include <cmath>
 #include <imgui.h>
 
@@ -23,14 +24,14 @@ namespace lfs::vis::gui {
         const auto load = [](const std::filesystem::path& path, rendering::Texture& tex, int& w, int& h) {
             try {
                 const auto [data, width, height, channels] = lfs::core::load_image_with_alpha(path);
+                assert(channels == 4);
                 glGenTextures(1, tex.ptr());
                 glBindTexture(GL_TEXTURE_2D, tex.get());
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
-                             channels == 4 ? GL_RGBA : GL_RGB, GL_UNSIGNED_BYTE, data);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
                 lfs::core::free_image(data);
                 glBindTexture(GL_TEXTURE_2D, 0);
                 w = width;

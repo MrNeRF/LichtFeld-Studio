@@ -110,11 +110,11 @@ namespace lfs::vis {
         python::set_sequencer_callbacks(
             []() {
                 const auto* gm = python::get_gui_manager();
-                return gm ? gm->isSequencerVisible() : false;
+                return gm ? gm->panelLayout().isShowSequencer() : false;
             },
             [](bool visible) {
                 if (auto* gm = python::get_gui_manager())
-                    gm->setSequencerVisible(visible);
+                    gm->panelLayout().setShowSequencer(visible);
             });
 
         // Overlay state callbacks (for Python overlay panels)
@@ -132,10 +132,11 @@ namespace lfs::vis {
                 if (!gm)
                     return {};
                 python::OverlayExportState state;
-                state.active = gm->isExporting();
-                state.progress = gm->getExportProgress();
-                state.stage = gm->getExportStage();
-                const auto fmt = gm->getExportFormat();
+                const auto& tasks = gm->asyncTasks();
+                state.active = tasks.isExporting();
+                state.progress = tasks.getExportProgress();
+                state.stage = tasks.getExportStage();
+                const auto fmt = tasks.getExportFormat();
                 state.format = fmt == core::ExportFormat::PLY   ? "PLY"
                                : fmt == core::ExportFormat::SOG ? "SOG"
                                                                 : "file";
@@ -143,45 +144,47 @@ namespace lfs::vis {
             },
             []() {
                 if (auto* gm = python::get_gui_manager())
-                    gm->cancelExport();
+                    gm->asyncTasks().cancelExport();
             },
             []() -> python::OverlayImportState {
                 const auto* gm = python::get_gui_manager();
                 if (!gm)
                     return {};
                 python::OverlayImportState state;
-                state.active = gm->isImporting();
-                state.show_completion = gm->isImportCompletionShowing();
-                state.progress = gm->getImportProgress();
-                state.stage = gm->getImportStage();
-                state.dataset_type = gm->getImportDatasetType();
-                state.path = gm->getImportPath();
-                state.success = gm->getImportSuccess();
-                state.error = gm->getImportError();
-                state.num_images = gm->getImportNumImages();
-                state.num_points = gm->getImportNumPoints();
-                state.seconds_since_completion = gm->getImportSecondsSinceCompletion();
+                const auto& tasks = gm->asyncTasks();
+                state.active = tasks.isImporting();
+                state.show_completion = tasks.isImportCompletionShowing();
+                state.progress = tasks.getImportProgress();
+                state.stage = tasks.getImportStage();
+                state.dataset_type = tasks.getImportDatasetType();
+                state.path = tasks.getImportPath();
+                state.success = tasks.getImportSuccess();
+                state.error = tasks.getImportError();
+                state.num_images = tasks.getImportNumImages();
+                state.num_points = tasks.getImportNumPoints();
+                state.seconds_since_completion = tasks.getImportSecondsSinceCompletion();
                 return state;
             },
             []() {
                 if (auto* gm = python::get_gui_manager())
-                    gm->dismissImport();
+                    gm->asyncTasks().dismissImport();
             },
             []() -> python::OverlayVideoExportState {
                 const auto* gm = python::get_gui_manager();
                 if (!gm)
                     return {};
                 python::OverlayVideoExportState state;
-                state.active = gm->isExportingVideo();
-                state.progress = gm->getVideoExportProgress();
-                state.current_frame = gm->getVideoExportCurrentFrame();
-                state.total_frames = gm->getVideoExportTotalFrames();
-                state.stage = gm->getVideoExportStage();
+                const auto& tasks = gm->asyncTasks();
+                state.active = tasks.isExportingVideo();
+                state.progress = tasks.getVideoExportProgress();
+                state.current_frame = tasks.getVideoExportCurrentFrame();
+                state.total_frames = tasks.getVideoExportTotalFrames();
+                state.stage = tasks.getVideoExportStage();
                 return state;
             },
             []() {
                 if (auto* gm = python::get_gui_manager())
-                    gm->cancelVideoExport();
+                    gm->asyncTasks().cancelVideoExport();
             });
 
         // Section drawing callbacks (for Python-first UI)
@@ -265,20 +268,20 @@ namespace lfs::vis {
         python::set_pivot_mode_callbacks(
             []() -> int {
                 const auto* gm = python::get_gui_manager();
-                return gm ? static_cast<int>(gm->getPivotMode()) : 0;
+                return gm ? static_cast<int>(gm->gizmo().getPivotMode()) : 0;
             },
             [](int mode) {
                 if (auto* gm = python::get_gui_manager())
-                    gm->setPivotMode(static_cast<PivotMode>(mode));
+                    gm->gizmo().setPivotMode(static_cast<PivotMode>(mode));
             });
         python::set_transform_space_callbacks(
             []() -> int {
                 const auto* gm = python::get_gui_manager();
-                return gm ? static_cast<int>(gm->getTransformSpace()) : 0;
+                return gm ? static_cast<int>(gm->gizmo().getTransformSpace()) : 0;
             },
             [](int space) {
                 if (auto* gm = python::get_gui_manager())
-                    gm->setTransformSpace(static_cast<TransformSpace>(space));
+                    gm->gizmo().setTransformSpace(static_cast<TransformSpace>(space));
             });
         python::set_thumbnail_callbacks(
             [](const char* video_id) {
@@ -307,8 +310,8 @@ namespace lfs::vis {
                 for (int i = 0; i < node_count; ++i) {
                     names.emplace_back(node_names[i]);
                 }
-                gm->performExport(static_cast<lfs::core::ExportFormat>(format),
-                                  std::filesystem::path(path), names, sh_degree);
+                gm->asyncTasks().performExport(static_cast<lfs::core::ExportFormat>(format),
+                                               std::filesystem::path(path), names, sh_degree);
             }
         });
 
@@ -924,8 +927,8 @@ namespace lfs::vis {
             .scene_manager = scene_manager_.get()};
 
         if (gui_manager_) {
-            rendering_manager_->setCropboxGizmoActive(gui_manager_->isCropboxGizmoActive());
-            rendering_manager_->setEllipsoidGizmoActive(gui_manager_->isEllipsoidGizmoActive());
+            rendering_manager_->setCropboxGizmoActive(gui_manager_->gizmo().isCropboxGizmoActive());
+            rendering_manager_->setEllipsoidGizmoActive(gui_manager_->gizmo().isEllipsoidGizmoActive());
         }
 
         rendering_manager_->renderFrame(context, scene_manager_.get());

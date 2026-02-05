@@ -30,6 +30,8 @@ namespace lfs::vis {
             void setupEvents();
             void render(const UIContext& ctx, const ViewportLayout& viewport);
 
+            void destroyGLResources();
+
             [[nodiscard]] SequencerController& controller() { return controller_; }
             [[nodiscard]] const SequencerController& controller() const { return controller_; }
 
