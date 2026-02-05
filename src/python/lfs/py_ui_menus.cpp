@@ -161,7 +161,7 @@ namespace lfs::python {
     }
 
     bool PyMenuRegistry::has_items(MenuLocation location) const {
-        const_cast<PyMenuRegistry*>(this)->ensure_synced();
+        ensure_synced();
         std::lock_guard lock(mutex_);
         for (const auto& mc : menu_classes_) {
             if (mc.location == location) {
@@ -175,7 +175,7 @@ namespace lfs::python {
         return false;
     }
 
-    void PyMenuRegistry::ensure_synced() {
+    void PyMenuRegistry::ensure_synced() const {
         if (!synced_from_python_) {
             synced_from_python_ = true;
             sync_from_python();
@@ -183,7 +183,7 @@ namespace lfs::python {
     }
 
     bool PyMenuRegistry::has_menu_bar_entries() const {
-        const_cast<PyMenuRegistry*>(this)->ensure_synced();
+        ensure_synced();
         std::lock_guard lock(mutex_);
         for (const auto& mc : menu_classes_) {
             if (mc.location == MenuLocation::MenuBar) {
@@ -239,7 +239,7 @@ namespace lfs::python {
         }
     }
 
-    void PyMenuRegistry::sync_from_python() {
+    void PyMenuRegistry::sync_from_python() const {
         nb::gil_scoped_acquire gil;
 
         try {

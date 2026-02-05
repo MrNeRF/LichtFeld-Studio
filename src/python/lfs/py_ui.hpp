@@ -836,7 +836,7 @@ namespace lfs::python {
         std::vector<PyMenuClassInfo*> get_menu_bar_entries();
         void draw_menu_bar_entry(const std::string& idname);
 
-        void sync_from_python();
+        void sync_from_python() const;
 
     private:
         PyMenuRegistry() = default;
@@ -844,11 +844,11 @@ namespace lfs::python {
         PyMenuRegistry(const PyMenuRegistry&) = delete;
         PyMenuRegistry& operator=(const PyMenuRegistry&) = delete;
 
-        void ensure_synced();
+        void ensure_synced() const;
 
         mutable std::mutex mutex_;
-        std::vector<PyMenuClassInfo> menu_classes_;
-        bool synced_from_python_ = false;
+        mutable std::vector<PyMenuClassInfo> menu_classes_;
+        mutable bool synced_from_python_ = false;
     };
 
     class PyOperatorProperties {

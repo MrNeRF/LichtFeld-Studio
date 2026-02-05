@@ -153,10 +153,6 @@ class TestSubLayoutGetattr:
 
     def test_getattr_delegates_to_parent(self, lf):
         sub = lf.ui.UILayout().row()
-<<<<<<< HEAD
-=======
-        assert hasattr(sub, "same_line")
->>>>>>> master
         assert hasattr(sub, "begin_group")
         assert hasattr(sub, "end_group")
 
@@ -167,11 +163,7 @@ class TestSubLayoutGetattr:
 
     def test_getattr_returns_callable(self, lf):
         sub = lf.ui.UILayout().row()
-<<<<<<< HEAD
         method = sub.begin_group
-=======
-        method = sub.same_line
->>>>>>> master
         assert callable(method)
 
 
@@ -196,7 +188,6 @@ class TestEmptyContainers:
         assert sub.active is True
 
 
-<<<<<<< HEAD
 class TestExplicitMethods:
     """Tests for explicit SubLayout method bindings."""
 
@@ -235,8 +226,6 @@ class TestAlertCascade:
         assert sub.alert is True
 
 
-=======
->>>>>>> master
 class TestNoOldAPI:
     """Verify old dead API is removed."""
 

@@ -110,6 +110,8 @@ namespace lfs::python {
                             poll_deps = poll_deps | PollDependency::TRAINING;
                         else if (dep == "SCENE")
                             poll_deps = poll_deps | PollDependency::SCENE;
+                        else
+                            LOG_WARN("Unknown poll dependency '{}' for panel '{}', ignoring", dep, label);
                     }
                 }
             }
