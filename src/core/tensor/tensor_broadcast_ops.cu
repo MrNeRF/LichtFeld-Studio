@@ -286,197 +286,197 @@ namespace lfs::core::tensor_ops {
     // ============================================================================
 
     // Arithmetic operations (same input/output type - comprehensive list)
-    template void launch_broadcast_binary<float, float, ops::add_op>(
+    template LFS_CORE_API void launch_broadcast_binary<float, float, ops::add_op>(
         const float*, const float*, float*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::add_op, cudaStream_t);
 
-    template void launch_broadcast_binary<int, int, ops::add_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int, int, ops::add_op>(
         const int*, const int*, int*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::add_op, cudaStream_t);
 
-    template void launch_broadcast_binary<float, float, ops::sub_op>(
+    template LFS_CORE_API void launch_broadcast_binary<float, float, ops::sub_op>(
         const float*, const float*, float*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::sub_op, cudaStream_t);
 
-    template void launch_broadcast_binary<int, int, ops::sub_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int, int, ops::sub_op>(
         const int*, const int*, int*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::sub_op, cudaStream_t);
 
-    template void launch_broadcast_binary<float, float, ops::mul_op>(
+    template LFS_CORE_API void launch_broadcast_binary<float, float, ops::mul_op>(
         const float*, const float*, float*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::mul_op, cudaStream_t);
 
-    template void launch_broadcast_binary<int, int, ops::mul_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int, int, ops::mul_op>(
         const int*, const int*, int*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::mul_op, cudaStream_t);
 
-    template void launch_broadcast_binary<float, float, ops::div_op>(
+    template LFS_CORE_API void launch_broadcast_binary<float, float, ops::div_op>(
         const float*, const float*, float*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::div_op, cudaStream_t);
 
-    template void launch_broadcast_binary<int, int, ops::div_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int, int, ops::div_op>(
         const int*, const int*, int*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::div_op, cudaStream_t);
 
     // Comparison operations (input T -> output unsigned char/bool)
-    template void launch_broadcast_binary<float, unsigned char, ops::greater_op>(
+    template LFS_CORE_API void launch_broadcast_binary<float, unsigned char, ops::greater_op>(
         const float*, const float*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::greater_op, cudaStream_t);
 
-    template void launch_broadcast_binary<int, unsigned char, ops::greater_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int, unsigned char, ops::greater_op>(
         const int*, const int*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::greater_op, cudaStream_t);
 
-    template void launch_broadcast_binary<unsigned char, unsigned char, ops::greater_op>(
+    template LFS_CORE_API void launch_broadcast_binary<unsigned char, unsigned char, ops::greater_op>(
         const unsigned char*, const unsigned char*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::greater_op, cudaStream_t);
 
-    template void launch_broadcast_binary<float, unsigned char, ops::greater_equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<float, unsigned char, ops::greater_equal_op>(
         const float*, const float*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::greater_equal_op, cudaStream_t);
 
-    template void launch_broadcast_binary<int, unsigned char, ops::greater_equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int, unsigned char, ops::greater_equal_op>(
         const int*, const int*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::greater_equal_op, cudaStream_t);
 
-    template void launch_broadcast_binary<unsigned char, unsigned char, ops::greater_equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<unsigned char, unsigned char, ops::greater_equal_op>(
         const unsigned char*, const unsigned char*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::greater_equal_op, cudaStream_t);
 
-    template void launch_broadcast_binary<float, unsigned char, ops::less_equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<float, unsigned char, ops::less_equal_op>(
         const float*, const float*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::less_equal_op, cudaStream_t);
 
-    template void launch_broadcast_binary<int, unsigned char, ops::less_equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int, unsigned char, ops::less_equal_op>(
         const int*, const int*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::less_equal_op, cudaStream_t);
 
-    template void launch_broadcast_binary<unsigned char, unsigned char, ops::less_equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<unsigned char, unsigned char, ops::less_equal_op>(
         const unsigned char*, const unsigned char*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::less_equal_op, cudaStream_t);
 
-    template void launch_broadcast_binary<float, unsigned char, ops::less_op>(
+    template LFS_CORE_API void launch_broadcast_binary<float, unsigned char, ops::less_op>(
         const float*, const float*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::less_op, cudaStream_t);
 
-    template void launch_broadcast_binary<int, unsigned char, ops::less_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int, unsigned char, ops::less_op>(
         const int*, const int*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::less_op, cudaStream_t);
 
-    template void launch_broadcast_binary<unsigned char, unsigned char, ops::less_op>(
+    template LFS_CORE_API void launch_broadcast_binary<unsigned char, unsigned char, ops::less_op>(
         const unsigned char*, const unsigned char*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::less_op, cudaStream_t);
 
-    template void launch_broadcast_binary<float, unsigned char, ops::equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<float, unsigned char, ops::equal_op>(
         const float*, const float*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::equal_op, cudaStream_t);
 
-    template void launch_broadcast_binary<int, unsigned char, ops::equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int, unsigned char, ops::equal_op>(
         const int*, const int*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::equal_op, cudaStream_t);
 
-    template void launch_broadcast_binary<unsigned char, unsigned char, ops::equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<unsigned char, unsigned char, ops::equal_op>(
         const unsigned char*, const unsigned char*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::equal_op, cudaStream_t);
 
     // Logical operations (bool/unsigned char -> unsigned char)
-    template void launch_broadcast_binary<float, unsigned char, ops::logical_and_op>(
+    template LFS_CORE_API void launch_broadcast_binary<float, unsigned char, ops::logical_and_op>(
         const float*, const float*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::logical_and_op, cudaStream_t);
 
-    template void launch_broadcast_binary<int, unsigned char, ops::logical_and_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int, unsigned char, ops::logical_and_op>(
         const int*, const int*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::logical_and_op, cudaStream_t);
 
-    template void launch_broadcast_binary<unsigned char, unsigned char, ops::logical_and_op>(
+    template LFS_CORE_API void launch_broadcast_binary<unsigned char, unsigned char, ops::logical_and_op>(
         const unsigned char*, const unsigned char*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::logical_and_op, cudaStream_t);
 
-    template void launch_broadcast_binary<float, unsigned char, ops::logical_or_op>(
+    template LFS_CORE_API void launch_broadcast_binary<float, unsigned char, ops::logical_or_op>(
         const float*, const float*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::logical_or_op, cudaStream_t);
 
-    template void launch_broadcast_binary<int, unsigned char, ops::logical_or_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int, unsigned char, ops::logical_or_op>(
         const int*, const int*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::logical_or_op, cudaStream_t);
 
-    template void launch_broadcast_binary<unsigned char, unsigned char, ops::logical_or_op>(
+    template LFS_CORE_API void launch_broadcast_binary<unsigned char, unsigned char, ops::logical_or_op>(
         const unsigned char*, const unsigned char*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::logical_or_op, cudaStream_t);
 
     // Min/max operations
-    template void launch_broadcast_binary<float, float, ops::minimum_op>(
+    template LFS_CORE_API void launch_broadcast_binary<float, float, ops::minimum_op>(
         const float*, const float*, float*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::minimum_op, cudaStream_t);
 
-    template void launch_broadcast_binary<int, int, ops::minimum_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int, int, ops::minimum_op>(
         const int*, const int*, int*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::minimum_op, cudaStream_t);
 
-    template void launch_broadcast_binary<float, float, ops::maximum_op>(
+    template LFS_CORE_API void launch_broadcast_binary<float, float, ops::maximum_op>(
         const float*, const float*, float*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::maximum_op, cudaStream_t);
 
-    template void launch_broadcast_binary<int, int, ops::maximum_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int, int, ops::maximum_op>(
         const int*, const int*, int*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::maximum_op, cudaStream_t);
 
     // Power operations
-    template void launch_broadcast_binary<float, float, ops::pow_op>(
+    template LFS_CORE_API void launch_broadcast_binary<float, float, ops::pow_op>(
         const float*, const float*, float*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::pow_op, cudaStream_t);
 
-    template void launch_broadcast_binary<int, int, ops::pow_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int, int, ops::pow_op>(
         const int*, const int*, int*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::pow_op, cudaStream_t);
 
     // Not equal operation
-    template void launch_broadcast_binary<float, unsigned char, ops::not_equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<float, unsigned char, ops::not_equal_op>(
         const float*, const float*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::not_equal_op, cudaStream_t);
 
-    template void launch_broadcast_binary<int, unsigned char, ops::not_equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int, unsigned char, ops::not_equal_op>(
         const int*, const int*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::not_equal_op, cudaStream_t);
 
-    template void launch_broadcast_binary<unsigned char, unsigned char, ops::not_equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<unsigned char, unsigned char, ops::not_equal_op>(
         const unsigned char*, const unsigned char*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::not_equal_op, cudaStream_t);
@@ -489,202 +489,202 @@ namespace lfs::core::tensor_ops {
     // ============================================================================
 
     // Float16 broadcast operations
-    template void launch_broadcast_binary<__half, __half, ops::add_op>(
+    template LFS_CORE_API void launch_broadcast_binary<__half, __half, ops::add_op>(
         const __half*, const __half*, __half*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::add_op, cudaStream_t);
-    template void launch_broadcast_binary<__half, __half, ops::sub_op>(
+    template LFS_CORE_API void launch_broadcast_binary<__half, __half, ops::sub_op>(
         const __half*, const __half*, __half*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::sub_op, cudaStream_t);
-    template void launch_broadcast_binary<__half, __half, ops::mul_op>(
+    template LFS_CORE_API void launch_broadcast_binary<__half, __half, ops::mul_op>(
         const __half*, const __half*, __half*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::mul_op, cudaStream_t);
-    template void launch_broadcast_binary<__half, __half, ops::div_op>(
+    template LFS_CORE_API void launch_broadcast_binary<__half, __half, ops::div_op>(
         const __half*, const __half*, __half*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::div_op, cudaStream_t);
-    template void launch_broadcast_binary<__half, __half, ops::maximum_op>(
+    template LFS_CORE_API void launch_broadcast_binary<__half, __half, ops::maximum_op>(
         const __half*, const __half*, __half*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::maximum_op, cudaStream_t);
-    template void launch_broadcast_binary<__half, __half, ops::minimum_op>(
+    template LFS_CORE_API void launch_broadcast_binary<__half, __half, ops::minimum_op>(
         const __half*, const __half*, __half*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::minimum_op, cudaStream_t);
-    template void launch_broadcast_binary<__half, __half, ops::pow_op>(
+    template LFS_CORE_API void launch_broadcast_binary<__half, __half, ops::pow_op>(
         const __half*, const __half*, __half*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::pow_op, cudaStream_t);
 
     // Int64 broadcast operations
-    template void launch_broadcast_binary<int64_t, int64_t, ops::add_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int64_t, int64_t, ops::add_op>(
         const int64_t*, const int64_t*, int64_t*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::add_op, cudaStream_t);
-    template void launch_broadcast_binary<int64_t, int64_t, ops::sub_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int64_t, int64_t, ops::sub_op>(
         const int64_t*, const int64_t*, int64_t*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::sub_op, cudaStream_t);
-    template void launch_broadcast_binary<int64_t, int64_t, ops::mul_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int64_t, int64_t, ops::mul_op>(
         const int64_t*, const int64_t*, int64_t*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::mul_op, cudaStream_t);
-    template void launch_broadcast_binary<int64_t, int64_t, ops::div_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int64_t, int64_t, ops::div_op>(
         const int64_t*, const int64_t*, int64_t*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::div_op, cudaStream_t);
-    template void launch_broadcast_binary<int64_t, int64_t, ops::maximum_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int64_t, int64_t, ops::maximum_op>(
         const int64_t*, const int64_t*, int64_t*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::maximum_op, cudaStream_t);
-    template void launch_broadcast_binary<int64_t, int64_t, ops::minimum_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int64_t, int64_t, ops::minimum_op>(
         const int64_t*, const int64_t*, int64_t*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::minimum_op, cudaStream_t);
-    template void launch_broadcast_binary<int64_t, int64_t, ops::pow_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int64_t, int64_t, ops::pow_op>(
         const int64_t*, const int64_t*, int64_t*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::pow_op, cudaStream_t);
-    template void launch_broadcast_binary<int64_t, int64_t, ops::mod_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int64_t, int64_t, ops::mod_op>(
         const int64_t*, const int64_t*, int64_t*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::mod_op, cudaStream_t);
 
     // UInt8 broadcast operations
-    template void launch_broadcast_binary<uint8_t, uint8_t, ops::add_op>(
+    template LFS_CORE_API void launch_broadcast_binary<uint8_t, uint8_t, ops::add_op>(
         const uint8_t*, const uint8_t*, uint8_t*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::add_op, cudaStream_t);
-    template void launch_broadcast_binary<uint8_t, uint8_t, ops::sub_op>(
+    template LFS_CORE_API void launch_broadcast_binary<uint8_t, uint8_t, ops::sub_op>(
         const uint8_t*, const uint8_t*, uint8_t*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::sub_op, cudaStream_t);
-    template void launch_broadcast_binary<uint8_t, uint8_t, ops::mul_op>(
+    template LFS_CORE_API void launch_broadcast_binary<uint8_t, uint8_t, ops::mul_op>(
         const uint8_t*, const uint8_t*, uint8_t*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::mul_op, cudaStream_t);
-    template void launch_broadcast_binary<uint8_t, uint8_t, ops::div_op>(
+    template LFS_CORE_API void launch_broadcast_binary<uint8_t, uint8_t, ops::div_op>(
         const uint8_t*, const uint8_t*, uint8_t*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::div_op, cudaStream_t);
-    template void launch_broadcast_binary<uint8_t, uint8_t, ops::maximum_op>(
+    template LFS_CORE_API void launch_broadcast_binary<uint8_t, uint8_t, ops::maximum_op>(
         const uint8_t*, const uint8_t*, uint8_t*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::maximum_op, cudaStream_t);
-    template void launch_broadcast_binary<uint8_t, uint8_t, ops::minimum_op>(
+    template LFS_CORE_API void launch_broadcast_binary<uint8_t, uint8_t, ops::minimum_op>(
         const uint8_t*, const uint8_t*, uint8_t*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::minimum_op, cudaStream_t);
-    template void launch_broadcast_binary<uint8_t, uint8_t, ops::pow_op>(
+    template LFS_CORE_API void launch_broadcast_binary<uint8_t, uint8_t, ops::pow_op>(
         const uint8_t*, const uint8_t*, uint8_t*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::pow_op, cudaStream_t);
 
     // mod_op broadcast (was missing!)
-    template void launch_broadcast_binary<float, float, ops::mod_op>(
+    template LFS_CORE_API void launch_broadcast_binary<float, float, ops::mod_op>(
         const float*, const float*, float*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::mod_op, cudaStream_t);
-    template void launch_broadcast_binary<int, int, ops::mod_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int, int, ops::mod_op>(
         const int*, const int*, int*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::mod_op, cudaStream_t);
-    template void launch_broadcast_binary<unsigned char, unsigned char, ops::mod_op>(
+    template LFS_CORE_API void launch_broadcast_binary<unsigned char, unsigned char, ops::mod_op>(
         const unsigned char*, const unsigned char*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::mod_op, cudaStream_t);
-    template void launch_broadcast_binary<__half, __half, ops::mod_op>(
+    template LFS_CORE_API void launch_broadcast_binary<__half, __half, ops::mod_op>(
         const __half*, const __half*, __half*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::mod_op, cudaStream_t);
 
     // Comparison operations for additional types
-    template void launch_broadcast_binary<int64_t, unsigned char, ops::greater_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int64_t, unsigned char, ops::greater_op>(
         const int64_t*, const int64_t*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::greater_op, cudaStream_t);
-    template void launch_broadcast_binary<int64_t, unsigned char, ops::greater_equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int64_t, unsigned char, ops::greater_equal_op>(
         const int64_t*, const int64_t*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::greater_equal_op, cudaStream_t);
-    template void launch_broadcast_binary<int64_t, unsigned char, ops::less_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int64_t, unsigned char, ops::less_op>(
         const int64_t*, const int64_t*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::less_op, cudaStream_t);
-    template void launch_broadcast_binary<int64_t, unsigned char, ops::less_equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int64_t, unsigned char, ops::less_equal_op>(
         const int64_t*, const int64_t*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::less_equal_op, cudaStream_t);
-    template void launch_broadcast_binary<int64_t, unsigned char, ops::equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int64_t, unsigned char, ops::equal_op>(
         const int64_t*, const int64_t*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::equal_op, cudaStream_t);
-    template void launch_broadcast_binary<int64_t, unsigned char, ops::not_equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int64_t, unsigned char, ops::not_equal_op>(
         const int64_t*, const int64_t*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::not_equal_op, cudaStream_t);
 
-    template void launch_broadcast_binary<__half, unsigned char, ops::greater_op>(
+    template LFS_CORE_API void launch_broadcast_binary<__half, unsigned char, ops::greater_op>(
         const __half*, const __half*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::greater_op, cudaStream_t);
-    template void launch_broadcast_binary<__half, unsigned char, ops::greater_equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<__half, unsigned char, ops::greater_equal_op>(
         const __half*, const __half*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::greater_equal_op, cudaStream_t);
-    template void launch_broadcast_binary<__half, unsigned char, ops::less_op>(
+    template LFS_CORE_API void launch_broadcast_binary<__half, unsigned char, ops::less_op>(
         const __half*, const __half*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::less_op, cudaStream_t);
-    template void launch_broadcast_binary<__half, unsigned char, ops::less_equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<__half, unsigned char, ops::less_equal_op>(
         const __half*, const __half*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::less_equal_op, cudaStream_t);
-    template void launch_broadcast_binary<__half, unsigned char, ops::equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<__half, unsigned char, ops::equal_op>(
         const __half*, const __half*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::equal_op, cudaStream_t);
-    template void launch_broadcast_binary<__half, unsigned char, ops::not_equal_op>(
+    template LFS_CORE_API void launch_broadcast_binary<__half, unsigned char, ops::not_equal_op>(
         const __half*, const __half*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::not_equal_op, cudaStream_t);
 
     // Logical operations for additional types
-    template void launch_broadcast_binary<int64_t, unsigned char, ops::logical_and_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int64_t, unsigned char, ops::logical_and_op>(
         const int64_t*, const int64_t*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::logical_and_op, cudaStream_t);
-    template void launch_broadcast_binary<int64_t, unsigned char, ops::logical_or_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int64_t, unsigned char, ops::logical_or_op>(
         const int64_t*, const int64_t*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::logical_or_op, cudaStream_t);
-    template void launch_broadcast_binary<__half, unsigned char, ops::logical_and_op>(
+    template LFS_CORE_API void launch_broadcast_binary<__half, unsigned char, ops::logical_and_op>(
         const __half*, const __half*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::logical_and_op, cudaStream_t);
-    template void launch_broadcast_binary<__half, unsigned char, ops::logical_or_op>(
+    template LFS_CORE_API void launch_broadcast_binary<__half, unsigned char, ops::logical_or_op>(
         const __half*, const __half*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::logical_or_op, cudaStream_t);
-    template void launch_broadcast_binary<float, unsigned char, ops::logical_xor_op>(
+    template LFS_CORE_API void launch_broadcast_binary<float, unsigned char, ops::logical_xor_op>(
         const float*, const float*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::logical_xor_op, cudaStream_t);
-    template void launch_broadcast_binary<int, unsigned char, ops::logical_xor_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int, unsigned char, ops::logical_xor_op>(
         const int*, const int*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::logical_xor_op, cudaStream_t);
-    template void launch_broadcast_binary<unsigned char, unsigned char, ops::logical_xor_op>(
+    template LFS_CORE_API void launch_broadcast_binary<unsigned char, unsigned char, ops::logical_xor_op>(
         const unsigned char*, const unsigned char*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::logical_xor_op, cudaStream_t);
-    template void launch_broadcast_binary<int64_t, unsigned char, ops::logical_xor_op>(
+    template LFS_CORE_API void launch_broadcast_binary<int64_t, unsigned char, ops::logical_xor_op>(
         const int64_t*, const int64_t*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::logical_xor_op, cudaStream_t);
-    template void launch_broadcast_binary<__half, unsigned char, ops::logical_xor_op>(
+    template LFS_CORE_API void launch_broadcast_binary<__half, unsigned char, ops::logical_xor_op>(
         const __half*, const __half*, unsigned char*,
         const size_t*, const size_t*, const size_t*,
         size_t, size_t, size_t, size_t, ops::logical_xor_op, cudaStream_t);

@@ -11,6 +11,7 @@
 #include "core/export.hpp"
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_generic_ops.cuh"
+#include <cuda_fp16.h>
 
 namespace lfs::core::tensor_ops {
 
@@ -20,6 +21,7 @@ namespace lfs::core::tensor_ops {
     using sr_mul_f = ops::scalar_right_op<ops::mul_op, float>;
     using sr_div_f = ops::scalar_right_op<ops::div_op, float>;
     using sr_pow_f = ops::scalar_right_op<ops::pow_op, float>;
+    using sr_mod_f = ops::scalar_right_op<ops::mod_op, float>;
 
     using sl_add_f = ops::scalar_left_op<ops::add_op, float>;
     using sl_sub_f = ops::scalar_left_op<ops::sub_op, float>;
@@ -32,6 +34,11 @@ namespace lfs::core::tensor_ops {
     using sr_le_f = ops::scalar_right_op<ops::less_equal_op, float>;
     using sr_gt_f = ops::scalar_right_op<ops::greater_op, float>;
     using sr_ge_f = ops::scalar_right_op<ops::greater_equal_op, float>;
+
+    // Composed unary ops found in tests
+    using composed_exp_mul = ops::composed_unary_op<ops::exp_op, sr_mul_f>;
+    using composed_mul_abs = ops::composed_unary_op<sr_mul_f, ops::abs_op>;
+    using composed_mul_relu = ops::composed_unary_op<sr_mul_f, ops::relu_op>;
 
     // ============================================================================
     // Helper macros for systematic instantiation
@@ -55,7 +62,13 @@ namespace lfs::core::tensor_ops {
     template LFS_CORE_API void launch_binary_op_generic<float, float, Op>(const float*, const float*, float*, size_t, Op, \
                                                                           cudaStream_t);                                  \
     template LFS_CORE_API void launch_binary_op_generic<int, int, Op>(const int*, const int*, int*, size_t, Op,           \
-                                                                      cudaStream_t);
+                                                                      cudaStream_t);                                      \
+    template LFS_CORE_API void launch_binary_op_generic<__half, __half, Op>(const __half*, const __half*, __half*, size_t, Op, \
+                                                                            cudaStream_t);                                  \
+    template LFS_CORE_API void launch_binary_op_generic<int64_t, int64_t, Op>(const int64_t*, const int64_t*, int64_t*, size_t, Op, \
+                                                                              cudaStream_t);                                  \
+    template LFS_CORE_API void launch_binary_op_generic<uint8_t, uint8_t, Op>(const uint8_t*, const uint8_t*, uint8_t*, size_t, Op, \
+                                                                              cudaStream_t);
 
 #define EXPORT_BINARY_BOOL(Op)                                                                                                      \
     template LFS_CORE_API void launch_binary_op_generic<float, uint8_t, Op>(const float*, const float*, uint8_t*, size_t, Op,       \
@@ -73,6 +86,14 @@ namespace lfs::core::tensor_ops {
     EXPORT_UNARY_SAME(sr_mul_f)
     EXPORT_UNARY_SAME(sr_div_f)
     EXPORT_UNARY_SAME(sr_pow_f)
+    EXPORT_UNARY_SAME(sr_mod_f)
+
+    // ============================================================================
+    // Unary: Composed ops
+    // ============================================================================
+    EXPORT_UNARY_SAME(composed_exp_mul)
+    EXPORT_UNARY_SAME(composed_mul_abs)
+    EXPORT_UNARY_SAME(composed_mul_relu)
 
     // ============================================================================
     // Unary: scalar_left_op arithmetic (scalar OP tensor)

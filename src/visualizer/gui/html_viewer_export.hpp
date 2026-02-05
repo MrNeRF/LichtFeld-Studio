@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/splat_data.hpp"
 #include <expected>
 #include <filesystem>
@@ -17,7 +18,7 @@ namespace lfs::vis::gui {
         std::function<void(float, const std::string&)> progress_callback;
     };
 
-    std::expected<void, std::string> export_html_viewer(
+    LFS_VIS_API std::expected<void, std::string> export_html_viewer(
         const lfs::core::SplatData& splat_data,
         const HtmlViewerExportOptions& options);
 
