@@ -57,7 +57,7 @@ namespace lfs::python {
 
         int result = 0;
         {
-            const GilAcquire gstate;
+            const GilAcquire gil;
 
             switch (mode.command) {
             case lfs::core::args::PluginMode::Command::CREATE: {
