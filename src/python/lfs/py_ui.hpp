@@ -61,13 +61,16 @@ namespace lfs::python {
 
     void register_operator_return_value(nb::module_& m);
 
-    enum class LayoutType { Root, Row, Column, Split, Box, GridFlow };
+    enum class LayoutType { Root,
+                            Row,
+                            Column,
+                            Split,
+                            Box,
+                            GridFlow };
 
     struct LayoutState {
         bool enabled = true;
         bool active = true;
-        float scale_x = 1.0f;
-        float scale_y = 1.0f;
         bool alert = false;
     };
 
@@ -101,10 +104,6 @@ namespace lfs::python {
         void set_enabled(bool v) { own_state_.enabled = v; }
         bool get_active() const { return own_state_.active; }
         void set_active(bool v) { own_state_.active = v; }
-        float get_scale_x() const { return own_state_.scale_x; }
-        void set_scale_x(float v) { own_state_.scale_x = v; }
-        float get_scale_y() const { return own_state_.scale_y; }
-        void set_scale_y(float v) { own_state_.scale_y = v; }
         bool get_alert() const { return own_state_.alert; }
         void set_alert(bool v) { own_state_.alert = v; }
 
@@ -488,7 +487,10 @@ namespace lfs::python {
 
         int next_box_id() { return box_id_counter_++; }
         int next_grid_id() { return grid_id_counter_++; }
-        void reset_frame_state() { box_id_counter_ = 0; grid_id_counter_ = 0; }
+        void reset_frame_state() {
+            box_id_counter_ = 0;
+            grid_id_counter_ = 0;
+        }
 
         nb::object operator_(const std::string& operator_id, const std::string& text = "",
                              const std::string& icon = "");

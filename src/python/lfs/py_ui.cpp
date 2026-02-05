@@ -940,8 +940,6 @@ namespace lfs::python {
         LayoutState eff;
         eff.enabled = own_state_.enabled && inherited_state_.enabled;
         eff.active = own_state_.active && inherited_state_.active;
-        eff.scale_x = own_state_.scale_x * inherited_state_.scale_x;
-        eff.scale_y = own_state_.scale_y * inherited_state_.scale_y;
         eff.alert = own_state_.alert;
         return eff;
     }
@@ -975,7 +973,6 @@ namespace lfs::python {
             own_state_.alert = false;
     }
 
-
     // Sub-layout creation
     PySubLayout PySubLayout::row() { return PySubLayout(this, LayoutType::Row); }
     PySubLayout PySubLayout::column() { return PySubLayout(this, LayoutType::Column); }
@@ -987,67 +984,130 @@ namespace lfs::python {
 
     // Delegated widget methods
     void PySubLayout::label(const std::string& text) {
-        advance_child(); apply_state(); parent_->label(text); pop_per_item_state();
+        advance_child();
+        apply_state();
+        parent_->label(text);
+        pop_per_item_state();
     }
     bool PySubLayout::button(const std::string& l, std::tuple<float, float> size) {
-        advance_child(); apply_state(); auto r = parent_->button(l, size); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->button(l, size);
+        pop_per_item_state();
+        return r;
     }
     bool PySubLayout::button_styled(const std::string& l, const std::string& style,
                                     std::tuple<float, float> size) {
-        advance_child(); apply_state(); auto r = parent_->button_styled(l, style, size); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->button_styled(l, style, size);
+        pop_per_item_state();
+        return r;
     }
     std::tuple<bool, nb::object> PySubLayout::prop(nb::object data, const std::string& prop_id,
-                                                    std::optional<std::string> text) {
-        advance_child(); apply_state(); auto r = parent_->prop(data, prop_id, text); pop_per_item_state(); return r;
+                                                   std::optional<std::string> text) {
+        advance_child();
+        apply_state();
+        auto r = parent_->prop(data, prop_id, text);
+        pop_per_item_state();
+        return r;
     }
     std::tuple<bool, bool> PySubLayout::checkbox(const std::string& l, bool v) {
-        advance_child(); apply_state(); auto r = parent_->checkbox(l, v); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->checkbox(l, v);
+        pop_per_item_state();
+        return r;
     }
     std::tuple<bool, float> PySubLayout::slider_float(const std::string& l, float v, float mn, float mx) {
-        advance_child(); apply_state(); auto r = parent_->slider_float(l, v, mn, mx); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->slider_float(l, v, mn, mx);
+        pop_per_item_state();
+        return r;
     }
     std::tuple<bool, int> PySubLayout::slider_int(const std::string& l, int v, int mn, int mx) {
-        advance_child(); apply_state(); auto r = parent_->slider_int(l, v, mn, mx); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->slider_int(l, v, mn, mx);
+        pop_per_item_state();
+        return r;
     }
     std::tuple<bool, float> PySubLayout::drag_float(const std::string& l, float v, float speed, float mn, float mx) {
-        advance_child(); apply_state(); auto r = parent_->drag_float(l, v, speed, mn, mx); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->drag_float(l, v, speed, mn, mx);
+        pop_per_item_state();
+        return r;
     }
     std::tuple<bool, int> PySubLayout::drag_int(const std::string& l, int v, float speed, int mn, int mx) {
-        advance_child(); apply_state(); auto r = parent_->drag_int(l, v, speed, mn, mx); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->drag_int(l, v, speed, mn, mx);
+        pop_per_item_state();
+        return r;
     }
     std::tuple<bool, std::string> PySubLayout::input_text(const std::string& l, const std::string& v) {
-        advance_child(); apply_state(); auto r = parent_->input_text(l, v); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->input_text(l, v);
+        pop_per_item_state();
+        return r;
     }
     std::tuple<bool, int> PySubLayout::combo(const std::string& l, int idx,
-                                              const std::vector<std::string>& items) {
-        advance_child(); apply_state(); auto r = parent_->combo(l, idx, items); pop_per_item_state(); return r;
+                                             const std::vector<std::string>& items) {
+        advance_child();
+        apply_state();
+        auto r = parent_->combo(l, idx, items);
+        pop_per_item_state();
+        return r;
     }
     void PySubLayout::separator() {
-        advance_child(); parent_->separator();
+        advance_child();
+        parent_->separator();
     }
     void PySubLayout::spacing() {
-        advance_child(); parent_->spacing();
+        advance_child();
+        parent_->spacing();
     }
     void PySubLayout::heading(const std::string& text) {
-        advance_child(); apply_state(); parent_->heading(text); pop_per_item_state();
+        advance_child();
+        apply_state();
+        parent_->heading(text);
+        pop_per_item_state();
     }
     bool PySubLayout::collapsing_header(const std::string& l, bool default_open) {
-        advance_child(); apply_state(); auto r = parent_->collapsing_header(l, default_open); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->collapsing_header(l, default_open);
+        pop_per_item_state();
+        return r;
     }
     bool PySubLayout::tree_node(const std::string& l) {
-        advance_child(); apply_state(); auto r = parent_->tree_node(l); pop_per_item_state(); return r;
+        advance_child();
+        apply_state();
+        auto r = parent_->tree_node(l);
+        pop_per_item_state();
+        return r;
     }
     void PySubLayout::tree_pop() {
         parent_->tree_pop();
     }
     void PySubLayout::progress_bar(float fraction, const std::string& overlay, float width) {
-        advance_child(); apply_state(); parent_->progress_bar(fraction, overlay, width); pop_per_item_state();
+        advance_child();
+        apply_state();
+        parent_->progress_bar(fraction, overlay, width);
+        pop_per_item_state();
     }
     void PySubLayout::text_colored(const std::string& text, std::tuple<float, float, float, float> color) {
-        advance_child(); parent_->text_colored(text, color);
+        advance_child();
+        parent_->text_colored(text, color);
     }
     void PySubLayout::text_wrapped(const std::string& text) {
-        advance_child(); apply_state(); parent_->text_wrapped(text); pop_per_item_state();
+        advance_child();
+        apply_state();
+        parent_->text_wrapped(text);
+        pop_per_item_state();
     }
 
     bool PySubLayout::prop_enum(nb::object data, const std::string& prop_id,
@@ -2527,45 +2587,31 @@ namespace lfs::python {
             })
             .def_prop_rw("enabled", &PySubLayout::get_enabled, &PySubLayout::set_enabled)
             .def_prop_rw("active", &PySubLayout::get_active, &PySubLayout::set_active)
-            .def_prop_rw("scale_x", &PySubLayout::get_scale_x, &PySubLayout::set_scale_x)
-            .def_prop_rw("scale_y", &PySubLayout::get_scale_y, &PySubLayout::set_scale_y)
             .def_prop_rw("alert", &PySubLayout::get_alert, &PySubLayout::set_alert)
             .def("row", &PySubLayout::row)
             .def("column", &PySubLayout::column)
             .def("split", &PySubLayout::split, nb::arg("factor") = 0.5f)
             .def("box", &PySubLayout::box)
-            .def("grid_flow", &PySubLayout::grid_flow, nb::arg("columns") = 0,
-                 nb::arg("even_columns") = true, nb::arg("even_rows") = true)
-            .def("prop_enum", &PySubLayout::prop_enum, nb::arg("data"), nb::arg("prop_id"),
-                 nb::arg("value"), nb::arg("text") = "")
+            .def("grid_flow", &PySubLayout::grid_flow, nb::arg("columns") = 0, nb::arg("even_columns") = true, nb::arg("even_rows") = true)
+            .def("prop_enum", &PySubLayout::prop_enum, nb::arg("data"), nb::arg("prop_id"), nb::arg("value"), nb::arg("text") = "")
             .def("label", &PySubLayout::label, nb::arg("text"))
-            .def("button", &PySubLayout::button, nb::arg("label"),
-                 nb::arg("size") = std::make_tuple(0.0f, 0.0f))
-            .def("button_styled", &PySubLayout::button_styled, nb::arg("label"),
-                 nb::arg("style"), nb::arg("size") = std::make_tuple(0.0f, 0.0f))
-            .def("prop", &PySubLayout::prop, nb::arg("data"), nb::arg("prop_id"),
-                 nb::arg("text") = nb::none())
+            .def("button", &PySubLayout::button, nb::arg("label"), nb::arg("size") = std::make_tuple(0.0f, 0.0f))
+            .def("button_styled", &PySubLayout::button_styled, nb::arg("label"), nb::arg("style"), nb::arg("size") = std::make_tuple(0.0f, 0.0f))
+            .def("prop", &PySubLayout::prop, nb::arg("data"), nb::arg("prop_id"), nb::arg("text") = nb::none())
             .def("checkbox", &PySubLayout::checkbox, nb::arg("label"), nb::arg("value"))
-            .def("slider_float", &PySubLayout::slider_float, nb::arg("label"),
-                 nb::arg("value"), nb::arg("min"), nb::arg("max"))
-            .def("slider_int", &PySubLayout::slider_int, nb::arg("label"),
-                 nb::arg("value"), nb::arg("min"), nb::arg("max"))
-            .def("drag_float", &PySubLayout::drag_float, nb::arg("label"), nb::arg("value"),
-                 nb::arg("speed") = 1.0f, nb::arg("min") = 0.0f, nb::arg("max") = 0.0f)
-            .def("drag_int", &PySubLayout::drag_int, nb::arg("label"), nb::arg("value"),
-                 nb::arg("speed") = 1.0f, nb::arg("min") = 0, nb::arg("max") = 0)
+            .def("slider_float", &PySubLayout::slider_float, nb::arg("label"), nb::arg("value"), nb::arg("min"), nb::arg("max"))
+            .def("slider_int", &PySubLayout::slider_int, nb::arg("label"), nb::arg("value"), nb::arg("min"), nb::arg("max"))
+            .def("drag_float", &PySubLayout::drag_float, nb::arg("label"), nb::arg("value"), nb::arg("speed") = 1.0f, nb::arg("min") = 0.0f, nb::arg("max") = 0.0f)
+            .def("drag_int", &PySubLayout::drag_int, nb::arg("label"), nb::arg("value"), nb::arg("speed") = 1.0f, nb::arg("min") = 0, nb::arg("max") = 0)
             .def("input_text", &PySubLayout::input_text, nb::arg("label"), nb::arg("value"))
-            .def("combo", &PySubLayout::combo, nb::arg("label"), nb::arg("current_idx"),
-                 nb::arg("items"))
+            .def("combo", &PySubLayout::combo, nb::arg("label"), nb::arg("current_idx"), nb::arg("items"))
             .def("separator", &PySubLayout::separator)
             .def("spacing", &PySubLayout::spacing)
             .def("heading", &PySubLayout::heading, nb::arg("text"))
-            .def("collapsing_header", &PySubLayout::collapsing_header, nb::arg("label"),
-                 nb::arg("default_open") = false)
+            .def("collapsing_header", &PySubLayout::collapsing_header, nb::arg("label"), nb::arg("default_open") = false)
             .def("tree_node", &PySubLayout::tree_node, nb::arg("label"))
             .def("tree_pop", &PySubLayout::tree_pop)
-            .def("progress_bar", &PySubLayout::progress_bar, nb::arg("fraction"),
-                 nb::arg("overlay") = "", nb::arg("width") = 0.0f)
+            .def("progress_bar", &PySubLayout::progress_bar, nb::arg("fraction"), nb::arg("overlay") = "", nb::arg("width") = 0.0f)
             .def("text_colored", &PySubLayout::text_colored, nb::arg("text"), nb::arg("color"))
             .def("text_wrapped", &PySubLayout::text_wrapped, nb::arg("text"))
             .def("__getattr__", [](PySubLayout& self, const std::string& name) -> nb::object {

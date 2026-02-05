@@ -894,8 +894,6 @@ Create composable sub-layouts with automatic widget positioning and state cascad
 |-----------|---------|--------------------------------------------|
 | `enabled` | `bool`  | Disabled state (cascades to children)      |
 | `active`  | `bool`  | Active state (cascades to children)        |
-| `scale_x` | `float` | Horizontal scale (cascades multiplicatively)|
-| `scale_y` | `float` | Vertical scale (cascades multiplicatively) |
 | `alert`   | `bool`  | One-shot alert styling (red text/bg)       |
 
 #### Example

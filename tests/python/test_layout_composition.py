@@ -92,19 +92,6 @@ class TestSubLayoutStateProperties:
         sub.active = False
         assert sub.active is False
 
-    def test_scale_x_default(self, lf):
-        sub = lf.ui.UILayout().row()
-        assert sub.scale_x == pytest.approx(1.0)
-
-    def test_scale_x_set(self, lf):
-        sub = lf.ui.UILayout().row()
-        sub.scale_x = 0.5
-        assert sub.scale_x == pytest.approx(0.5)
-
-    def test_scale_y_default(self, lf):
-        sub = lf.ui.UILayout().row()
-        assert sub.scale_y == pytest.approx(1.0)
-
     def test_alert_default(self, lf):
         sub = lf.ui.UILayout().row()
         assert sub.alert is False
