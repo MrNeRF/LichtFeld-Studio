@@ -708,7 +708,7 @@ NB_MODULE(lichtfeld, m) {
             }
             lfs::core::param::TrainingParameters params;
             params.dataset = param_manager->getDatasetConfig();
-            params.optimization = param_manager->getActiveParams();
+            params.optimization = param_manager->copyActiveParams();
             if (const auto result = lfs::core::param::save_training_parameters_to_json(params, path); !result) {
                 throw std::runtime_error("Failed to save config: " + result.error());
             }

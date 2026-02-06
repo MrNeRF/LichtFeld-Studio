@@ -376,6 +376,16 @@ namespace lfs::python {
             if (auto* pm = get_parameter_manager())
                 pm->markDirty();
         }
+
+        template <typename F>
+        void modify_params(F&& fn) {
+            auto* pm = get_parameter_manager();
+            if (!pm) {
+                fn(get_default_params());
+                return;
+            }
+            pm->modifyActiveParams(std::forward<F>(fn));
+        }
     } // namespace
 
     bool PyOptimizationParams::has_params() const {
@@ -437,11 +447,7 @@ namespace lfs::python {
             throw std::runtime_error("Property is read-only: " + prop_id);
         }
 
-        auto& p = params();
-        auto ref = PropertyObjectRef::cpp(&p);
-        std::any old_value = meta->getter(ref);
         std::any new_value;
-
         switch (meta->type) {
         case PropType::Bool:
             new_value = nb::cast<bool>(value);
@@ -465,8 +471,12 @@ namespace lfs::python {
             throw std::runtime_error("Unsupported property type");
         }
 
-        meta->setter(ref, new_value);
-        mark_params_dirty();
+        std::any old_value;
+        modify_params([&](auto& p) {
+            auto ref = PropertyObjectRef::cpp(&p);
+            old_value = meta->getter(ref);
+            meta->setter(ref, new_value);
+        });
         PropertyRegistry::instance().notify("optimization", prop_id, old_value, new_value);
     }
 
@@ -960,47 +970,47 @@ namespace lfs::python {
             .def_prop_rw(
                 "iterations",
                 [](PyOptimizationParams& self) { return self.params().iterations; },
-                [](PyOptimizationParams& self, size_t v) { self.params().iterations = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, size_t v) { modify_params([v](auto& p) { p.iterations = v; }); },
                 "Maximum training iterations")
             .def_prop_rw(
                 "means_lr",
                 [](PyOptimizationParams& self) { return self.params().means_lr; },
-                [](PyOptimizationParams& self, float v) { self.params().means_lr = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.means_lr = v; }); },
                 "Learning rate for gaussian positions")
             .def_prop_rw(
                 "shs_lr",
                 [](PyOptimizationParams& self) { return self.params().shs_lr; },
-                [](PyOptimizationParams& self, float v) { self.params().shs_lr = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.shs_lr = v; }); },
                 "Learning rate for spherical harmonics")
             .def_prop_rw(
                 "opacity_lr",
                 [](PyOptimizationParams& self) { return self.params().opacity_lr; },
-                [](PyOptimizationParams& self, float v) { self.params().opacity_lr = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.opacity_lr = v; }); },
                 "Learning rate for opacity")
             .def_prop_rw(
                 "scaling_lr",
                 [](PyOptimizationParams& self) { return self.params().scaling_lr; },
-                [](PyOptimizationParams& self, float v) { self.params().scaling_lr = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.scaling_lr = v; }); },
                 "Learning rate for gaussian scales")
             .def_prop_rw(
                 "rotation_lr",
                 [](PyOptimizationParams& self) { return self.params().rotation_lr; },
-                [](PyOptimizationParams& self, float v) { self.params().rotation_lr = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.rotation_lr = v; }); },
                 "Learning rate for rotations")
             .def_prop_rw(
                 "lambda_dssim",
                 [](PyOptimizationParams& self) { return self.params().lambda_dssim; },
-                [](PyOptimizationParams& self, float v) { self.params().lambda_dssim = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.lambda_dssim = v; }); },
                 "Weight for structural similarity loss")
             .def_prop_rw(
                 "sh_degree",
                 [](PyOptimizationParams& self) { return self.params().sh_degree; },
-                [](PyOptimizationParams& self, int v) { self.params().sh_degree = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.sh_degree = v; }); },
                 "Spherical harmonics degree (0-3)")
             .def_prop_rw(
                 "max_cap",
                 [](PyOptimizationParams& self) { return self.params().max_cap; },
-                [](PyOptimizationParams& self, int v) { self.params().max_cap = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.max_cap = v; }); },
                 "Maximum number of gaussians")
             .def_prop_ro(
                 "strategy", [](PyOptimizationParams& self) { return self.params().strategy; },
@@ -1013,8 +1023,7 @@ namespace lfs::python {
                     }
                     auto* pm = get_parameter_manager();
                     if (pm) {
-                        pm->setActiveStrategy(strategy);
-                        pm->markDirty();
+                        pm->modifyActiveParams([&](auto&) { pm->setActiveStrategy(strategy); });
                     }
                 },
                 nb::arg("strategy"),
@@ -1025,78 +1034,78 @@ namespace lfs::python {
             .def_prop_rw(
                 "tile_mode",
                 [](PyOptimizationParams& self) { return self.params().tile_mode; },
-                [](PyOptimizationParams& self, int v) { self.params().tile_mode = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, int v) { modify_params([v](auto& p) { p.tile_mode = v; }); },
                 "Tile mode (1, 2, or 4)")
             .def_prop_rw(
                 "steps_scaler",
                 [](PyOptimizationParams& self) { return self.params().steps_scaler; },
-                [](PyOptimizationParams& self, float v) { self.params().steps_scaler = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, float v) { modify_params([v](auto& p) { p.steps_scaler = v; }); },
                 "Scale factor for training step counts")
             .def(
                 "apply_step_scaling",
-                [](PyOptimizationParams& self, float new_scaler) {
-                    auto& opt = self.params();
-                    new_scaler = std::max(0.0f, new_scaler);
-                    const float prev = opt.steps_scaler;
-                    opt.steps_scaler = new_scaler;
-                    if (new_scaler <= 0.0f)
-                        return;
+                [](PyOptimizationParams&, float new_scaler) {
+                    modify_params([new_scaler](auto& opt) {
+                        const float clamped = std::max(0.0f, new_scaler);
+                        const float prev = opt.steps_scaler;
+                        opt.steps_scaler = clamped;
+                        if (clamped <= 0.0f)
+                            return;
 
-                    const float ratio = (prev > 0.0f) ? (new_scaler / prev) : new_scaler;
-                    const auto scale = [ratio](const size_t v) {
-                        return static_cast<size_t>(std::lround(static_cast<float>(v) * ratio));
-                    };
-                    opt.iterations = scale(opt.iterations);
-                    opt.start_refine = scale(opt.start_refine);
-                    opt.reset_every = scale(opt.reset_every);
-                    opt.stop_refine = scale(opt.stop_refine);
-                    opt.refine_every = scale(opt.refine_every);
-                    opt.sh_degree_interval = scale(opt.sh_degree_interval);
+                        const float ratio = (prev > 0.0f) ? (clamped / prev) : clamped;
+                        const auto scale = [ratio](const size_t v) {
+                            return static_cast<size_t>(std::lround(static_cast<float>(v) * ratio));
+                        };
+                        opt.iterations = scale(opt.iterations);
+                        opt.start_refine = scale(opt.start_refine);
+                        opt.reset_every = scale(opt.reset_every);
+                        opt.stop_refine = scale(opt.stop_refine);
+                        opt.refine_every = scale(opt.refine_every);
+                        opt.sh_degree_interval = scale(opt.sh_degree_interval);
 
-                    auto scale_vec = [ratio](std::vector<size_t>& steps) {
-                        std::set<size_t> unique;
-                        for (const auto& s : steps) {
-                            size_t scaled = static_cast<size_t>(std::lround(static_cast<float>(s) * ratio));
-                            if (scaled > 0)
-                                unique.insert(scaled);
-                        }
-                        steps.assign(unique.begin(), unique.end());
-                    };
-                    scale_vec(opt.eval_steps);
-                    scale_vec(opt.save_steps);
-                    mark_params_dirty();
+                        auto scale_vec = [ratio](std::vector<size_t>& steps) {
+                            std::set<size_t> unique;
+                            for (const auto& s : steps) {
+                                size_t scaled = static_cast<size_t>(std::lround(static_cast<float>(s) * ratio));
+                                if (scaled > 0)
+                                    unique.insert(scaled);
+                            }
+                            steps.assign(unique.begin(), unique.end());
+                        };
+                        scale_vec(opt.eval_steps);
+                        scale_vec(opt.save_steps);
+                    });
                 },
                 nb::arg("new_scaler"),
                 "Set steps_scaler and scale all step-related parameters by the ratio")
             .def_prop_rw(
                 "gut",
                 [](PyOptimizationParams& self) { return self.params().gut; },
-                [](PyOptimizationParams& self, bool v) { self.params().gut = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.gut = v; }); },
                 "Enable Gaussian Unscented Transform")
             .def_prop_rw(
                 "use_bilateral_grid",
                 [](PyOptimizationParams& self) { return self.params().use_bilateral_grid; },
-                [](PyOptimizationParams& self, bool v) { self.params().use_bilateral_grid = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.use_bilateral_grid = v; }); },
                 "Enable bilateral grid color correction")
             .def_prop_rw(
                 "enable_sparsity",
                 [](PyOptimizationParams& self) { return self.params().enable_sparsity; },
-                [](PyOptimizationParams& self, bool v) { self.params().enable_sparsity = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.enable_sparsity = v; }); },
                 "Enable sparsity optimization")
             .def_prop_rw(
                 "mip_filter",
                 [](PyOptimizationParams& self) { return self.params().mip_filter; },
-                [](PyOptimizationParams& self, bool v) { self.params().mip_filter = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.mip_filter = v; }); },
                 "Enable mip filtering (anti-aliasing)")
             .def_prop_rw(
                 "ppisp",
                 [](PyOptimizationParams& self) { return self.params().use_ppisp; },
-                [](PyOptimizationParams& self, bool v) { self.params().use_ppisp = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.use_ppisp = v; }); },
                 "Enable per-pixel image signal processing")
             .def_prop_rw(
                 "bg_mode",
                 [](PyOptimizationParams& self) { return self.params().bg_mode; },
-                [](PyOptimizationParams& self, BackgroundMode v) { self.params().bg_mode = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, BackgroundMode v) { modify_params([v](auto& p) { p.bg_mode = v; }); },
                 "Background rendering mode")
             .def_prop_rw(
                 "bg_color",
@@ -1104,40 +1113,39 @@ namespace lfs::python {
                     auto& c = self.params().bg_color;
                     return std::make_tuple(c[0], c[1], c[2]);
                 },
-                [](PyOptimizationParams& self, std::tuple<float, float, float> v) {
-                    self.params().bg_color = {std::get<0>(v), std::get<1>(v), std::get<2>(v)};
-                    mark_params_dirty();
+                [](PyOptimizationParams&, std::tuple<float, float, float> v) {
+                    modify_params([v](auto& p) { p.bg_color = {std::get<0>(v), std::get<1>(v), std::get<2>(v)}; });
                 },
                 "Background color as (r, g, b) tuple")
             .def_prop_rw(
                 "bg_image_path",
                 [](PyOptimizationParams& self) { return self.params().bg_image_path.string(); },
-                [](PyOptimizationParams& self, const std::string& v) { self.params().bg_image_path = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, const std::string& v) { modify_params([&v](auto& p) { p.bg_image_path = v; }); },
                 "Path to background image")
             .def_prop_rw(
                 "random",
                 [](PyOptimizationParams& self) { return self.params().random; },
-                [](PyOptimizationParams& self, bool v) { self.params().random = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.random = v; }); },
                 "Use random initialization instead of SfM")
             .def_prop_rw(
                 "mask_mode",
                 [](PyOptimizationParams& self) { return self.params().mask_mode; },
-                [](PyOptimizationParams& self, MaskMode v) { self.params().mask_mode = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, MaskMode v) { modify_params([v](auto& p) { p.mask_mode = v; }); },
                 "Attention mask behavior during training")
             .def_prop_rw(
                 "invert_masks",
                 [](PyOptimizationParams& self) { return self.params().invert_masks; },
-                [](PyOptimizationParams& self, bool v) { self.params().invert_masks = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.invert_masks = v; }); },
                 "Swap object and background in masks")
             .def_prop_rw(
                 "use_alpha_as_mask",
                 [](PyOptimizationParams& self) { return self.params().use_alpha_as_mask; },
-                [](PyOptimizationParams& self, bool v) { self.params().use_alpha_as_mask = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.use_alpha_as_mask = v; }); },
                 "Use alpha channel from RGBA images as mask source")
             .def_prop_rw(
                 "undistort",
                 [](PyOptimizationParams& self) { return self.params().undistort; },
-                [](PyOptimizationParams& self, bool v) { self.params().undistort = v; mark_params_dirty(); },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.undistort = v; }); },
                 "Undistort images on-the-fly before training")
             .def_prop_ro(
                 "save_steps",
@@ -1147,27 +1155,29 @@ namespace lfs::python {
                 "List of iterations at which to save checkpoints")
             .def(
                 "add_save_step",
-                [](PyOptimizationParams& self, size_t step) {
-                    auto& steps = self.params().save_steps;
-                    if (std::find(steps.begin(), steps.end(), step) == steps.end()) {
-                        steps.push_back(step);
-                        std::sort(steps.begin(), steps.end());
-                    }
+                [](PyOptimizationParams&, size_t step) {
+                    modify_params([step](auto& p) {
+                        if (std::find(p.save_steps.begin(), p.save_steps.end(), step) == p.save_steps.end()) {
+                            p.save_steps.push_back(step);
+                            std::sort(p.save_steps.begin(), p.save_steps.end());
+                        }
+                    });
                 },
                 nb::arg("step"),
                 "Add a save step (ignored if duplicate)")
             .def(
                 "remove_save_step",
-                [](PyOptimizationParams& self, size_t step) {
-                    auto& steps = self.params().save_steps;
-                    steps.erase(std::remove(steps.begin(), steps.end(), step), steps.end());
+                [](PyOptimizationParams&, size_t step) {
+                    modify_params([step](auto& p) {
+                        p.save_steps.erase(std::remove(p.save_steps.begin(), p.save_steps.end(), step), p.save_steps.end());
+                    });
                 },
                 nb::arg("step"),
                 "Remove a save step")
             .def(
                 "clear_save_steps",
-                [](PyOptimizationParams& self) {
-                    self.params().save_steps.clear();
+                [](PyOptimizationParams&) {
+                    modify_params([](auto& p) { p.save_steps.clear(); });
                 },
                 "Clear all save steps");
 

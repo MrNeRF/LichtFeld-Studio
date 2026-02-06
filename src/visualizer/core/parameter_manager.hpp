@@ -49,15 +49,19 @@ namespace lfs::vis {
 
         [[nodiscard]] bool isLoaded() const { return loaded_; }
 
-        void markDirty() {
-            std::lock_guard lock(params_mutex_);
-            dirty_.store(true, std::memory_order_release);
-        }
+        void markDirty() { dirty_.store(true, std::memory_order_release); }
         bool consumeDirty() { return dirty_.exchange(false, std::memory_order_acq_rel); }
 
         [[nodiscard]] lfs::core::param::OptimizationParameters copyActiveParams() const {
             std::lock_guard lock(params_mutex_);
             return getActiveParams();
+        }
+
+        template <typename F>
+        void modifyActiveParams(F&& fn) {
+            std::lock_guard lock(params_mutex_);
+            fn(getActiveParams());
+            dirty_.store(true, std::memory_order_release);
         }
 
     private:

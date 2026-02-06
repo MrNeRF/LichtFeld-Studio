@@ -30,6 +30,7 @@ namespace lfs::vis {
     }
 
     void ParameterManager::resetToDefaults(const std::string_view strategy) {
+        std::lock_guard lock(params_mutex_);
         if (strategy.empty() || strategy == "mcmc") {
             mcmc_current_ = mcmc_session_;
         }
@@ -76,6 +77,7 @@ namespace lfs::vis {
     }
 
     void ParameterManager::setCurrentParams(const lfs::core::param::OptimizationParameters& params) {
+        std::lock_guard lock(params_mutex_);
         if (!params.strategy.empty()) {
             setActiveStrategy(params.strategy);
         }
@@ -88,6 +90,7 @@ namespace lfs::vis {
     }
 
     void ParameterManager::importParams(const lfs::core::param::OptimizationParameters& params) {
+        std::lock_guard lock(params_mutex_);
         if (!params.strategy.empty()) {
             setActiveStrategy(params.strategy);
         }
@@ -119,6 +122,7 @@ namespace lfs::vis {
         const std::filesystem::path& data_path,
         const std::filesystem::path& output_path) const {
 
+        std::lock_guard lock(params_mutex_);
         lfs::core::param::TrainingParameters params;
         params.optimization = getActiveParams();
         params.dataset = dataset_config_;
