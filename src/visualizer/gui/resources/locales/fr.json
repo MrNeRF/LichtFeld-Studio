@@ -242,7 +242,7 @@
     "button.reset": "Réinitialiser l'Entraînement",
     "button.clear": "Effacer",
     "button.save_checkpoint": "Sauvegarder le Point de Contrôle",
-    "button.switch_edit_mode": "Passer en Mode Édition",
+    "button.switch_edit_mode": "Mode Édition",
     "button.add": "Ajouter",
     "button.remove": "Retirer"
   },
@@ -515,7 +515,7 @@
     "stop": "Arrêter l'Entraînement",
     "reset": "Réinitialiser l'Entraînement",
     "clear": "Effacer",
-    "switch_edit_mode": "Passer en Mode Édition",
+    "switch_edit_mode": "Mode Édition",
     "save_checkpoint": "Sauvegarder le Point de Contrôle",
     "checkpoint_saved": "Point de contrôle sauvegardé !",
     "idle": "Inactif",

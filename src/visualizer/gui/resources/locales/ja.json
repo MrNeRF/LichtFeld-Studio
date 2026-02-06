@@ -242,7 +242,7 @@
     "button.reset": "トレーニングをリセット",
     "button.clear": "クリア",
     "button.save_checkpoint": "チェックポイントを保存",
-    "button.switch_edit_mode": "編集モードに切り替え",
+    "button.switch_edit_mode": "編集モード",
     "button.add": "追加",
     "button.remove": "削除"
   },
@@ -515,7 +515,7 @@
     "stop": "トレーニングを停止",
     "reset": "トレーニングをリセット",
     "clear": "クリア",
-    "switch_edit_mode": "編集モードに切り替え",
+    "switch_edit_mode": "編集モード",
     "save_checkpoint": "チェックポイントを保存",
     "checkpoint_saved": "チェックポイントを保存しました！",
     "idle": "待機中",

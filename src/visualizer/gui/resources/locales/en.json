@@ -242,7 +242,7 @@
     "button.reset": "Reset Training",
     "button.clear": "Clear",
     "button.save_checkpoint": "Save Checkpoint",
-    "button.switch_edit_mode": "Switch to Edit Mode",
+    "button.switch_edit_mode": "Edit Mode",
     "button.add": "Add",
     "button.remove": "Remove"
   },
@@ -529,7 +529,7 @@
     "stop": "Stop Training",
     "reset": "Reset Training",
     "clear": "Clear",
-    "switch_edit_mode": "Switch to Edit Mode",
+    "switch_edit_mode": "Edit Mode",
     "save_checkpoint": "Save Checkpoint",
     "checkpoint_saved": "Checkpoint saved!",
     "idle": "Idle",

@@ -242,7 +242,7 @@
     "button.reset": "Resetuj Trening",
     "button.clear": "Wyczyść",
     "button.save_checkpoint": "Zapisz Punkt Kontrolny",
-    "button.switch_edit_mode": "Przełącz na Tryb Edycji",
+    "button.switch_edit_mode": "Tryb Edycji",
     "button.add": "Dodaj",
     "button.remove": "Usuń"
   },
@@ -515,7 +515,7 @@
     "stop": "Zatrzymaj Trening",
     "reset": "Resetuj Trening",
     "clear": "Wyczyść",
-    "switch_edit_mode": "Przełącz na Tryb Edycji",
+    "switch_edit_mode": "Tryb Edycji",
     "save_checkpoint": "Zapisz Punkt Kontrolny",
     "checkpoint_saved": "Punkt kontrolny zapisany!",
     "idle": "Bezczynny",

@@ -242,7 +242,7 @@
     "button.reset": "Reset Training",
     "button.clear": "Wissen",
     "button.save_checkpoint": "Controlepunt Opslaan",
-    "button.switch_edit_mode": "Schakel naar Bewerk Modus",
+    "button.switch_edit_mode": "Bewerkingsmodus",
     "button.add": "Toevoegen",
     "button.remove": "Verwijderen"
   },
@@ -515,7 +515,7 @@
     "stop": "Stop Training",
     "reset": "Reset Training",
     "clear": "Wissen",
-    "switch_edit_mode": "Schakel naar Bewerk Modus",
+    "switch_edit_mode": "Bewerkingsmodus",
     "save_checkpoint": "Controlepunt Opslaan",
     "checkpoint_saved": "Controlepunt opgeslagen!",
     "idle": "Inactief",

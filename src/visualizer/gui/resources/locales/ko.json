@@ -242,7 +242,7 @@
     "button.reset": "학습 재설정",
     "button.clear": "지우기",
     "button.save_checkpoint": "체크포인트 저장",
-    "button.switch_edit_mode": "편집 모드로 전환",
+    "button.switch_edit_mode": "편집 모드",
     "button.add": "추가",
     "button.remove": "제거"
   },
@@ -515,7 +515,7 @@
     "stop": "학습 중지",
     "reset": "학습 재설정",
     "clear": "지우기",
-    "switch_edit_mode": "편집 모드로 전환",
+    "switch_edit_mode": "편집 모드",
     "save_checkpoint": "체크포인트 저장",
     "checkpoint_saved": "체크포인트가 저장되었습니다!",
     "idle": "대기 중",

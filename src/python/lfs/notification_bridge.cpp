@@ -107,6 +107,8 @@ namespace lfs::python {
                 return;
 
             if (e.success) {
+                namespace Str = lichtfeld::Strings::Training::Button;
+
                 const auto message = std::format(
                     "Training completed successfully!\n\n"
                     "Iterations: {}\n"
@@ -114,8 +116,14 @@ namespace lfs::python {
                     "Duration: {}",
                     e.iteration, e.final_loss, formatDuration(e.elapsed_seconds));
 
-                PyModalRegistry::instance().show_message(
-                    "Training Complete", message, MessageStyle::Info);
+                const std::string edit_label = LOC(Str::SWITCH_EDIT_MODE);
+                PyModalRegistry::instance().show_confirm(
+                    "Training Complete", message,
+                    {edit_label, "OK"},
+                    [edit_label](const std::string& clicked) {
+                        if (clicked == edit_label)
+                            cmd::SwitchToEditMode{}.emit();
+                    });
 
                 cmd::SwitchToLatestCheckpoint{}.emit();
             } else {

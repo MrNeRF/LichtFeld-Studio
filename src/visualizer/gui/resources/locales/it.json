@@ -242,7 +242,7 @@
     "button.reset": "Resetta Addestramento",
     "button.clear": "Cancella",
     "button.save_checkpoint": "Salva Checkpoint",
-    "button.switch_edit_mode": "Passa a Modalità Modifica",
+    "button.switch_edit_mode": "Modalità Modifica",
     "button.add": "Aggiungi",
     "button.remove": "Rimuovi"
   },
@@ -515,7 +515,7 @@
     "stop": "Interrompi Addestramento",
     "reset": "Resetta Addestramento",
     "clear": "Cancella",
-    "switch_edit_mode": "Passa a Modalità Modifica",
+    "switch_edit_mode": "Modalità Modifica",
     "save_checkpoint": "Salva Checkpoint",
     "checkpoint_saved": "Checkpoint salvato!",
     "idle": "Inattivo",

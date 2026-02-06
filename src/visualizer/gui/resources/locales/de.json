@@ -242,7 +242,7 @@
     "button.reset": "Training zurücksetzen",
     "button.clear": "Löschen",
     "button.save_checkpoint": "Checkpoint speichern",
-    "button.switch_edit_mode": "Zum Bearbeitungsmodus wechseln",
+    "button.switch_edit_mode": "Bearbeitungsmodus",
     "button.add": "Hinzufügen",
     "button.remove": "Entfernen"
   },
@@ -515,7 +515,7 @@
     "stop": "Training stoppen",
     "reset": "Training zurücksetzen",
     "clear": "Löschen",
-    "switch_edit_mode": "Zum Bearbeitungsmodus wechseln",
+    "switch_edit_mode": "Bearbeitungsmodus",
     "save_checkpoint": "Checkpoint speichern",
     "checkpoint_saved": "Checkpoint gespeichert!",
     "idle": "Inaktiv",

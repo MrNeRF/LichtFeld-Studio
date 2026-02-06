@@ -242,7 +242,7 @@
     "button.reset": "Reiniciar Entrenamiento",
     "button.clear": "Limpiar",
     "button.save_checkpoint": "Guardar Punto de Control",
-    "button.switch_edit_mode": "Cambiar a Modo Edición",
+    "button.switch_edit_mode": "Modo Edición",
     "button.add": "Añadir",
     "button.remove": "Eliminar"
   },
@@ -515,7 +515,7 @@
     "stop": "Detener Entrenamiento",
     "reset": "Reiniciar Entrenamiento",
     "clear": "Limpiar",
-    "switch_edit_mode": "Cambiar a Modo Edición",
+    "switch_edit_mode": "Modo Edición",
     "save_checkpoint": "Guardar Punto de Control",
     "checkpoint_saved": "¡Punto de control guardado!",
     "idle": "Inactivo",

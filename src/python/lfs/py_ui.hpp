@@ -830,6 +830,7 @@ namespace lfs::python {
         std::string message;
         std::vector<std::string> buttons;
         nb::object callback;
+        std::function<void(const std::string&)> cpp_callback;
         ModalDialogType type;
         MessageStyle style = MessageStyle::Info;
         std::string input_value;
@@ -845,6 +846,9 @@ namespace lfs::python {
         // Show dialogs
         void show_confirm(const std::string& title, const std::string& message,
                           const std::vector<std::string>& buttons, nb::object callback);
+        void show_confirm(const std::string& title, const std::string& message,
+                          const std::vector<std::string>& buttons,
+                          std::function<void(const std::string&)> callback);
         void show_input(const std::string& title, const std::string& message,
                         const std::string& default_value, nb::object callback);
         void show_message(const std::string& title, const std::string& message,

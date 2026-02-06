@@ -242,7 +242,7 @@
     "button.reset": "重置训练",
     "button.clear": "清除",
     "button.save_checkpoint": "保存检查点",
-    "button.switch_edit_mode": "切换到编辑模式",
+    "button.switch_edit_mode": "编辑模式",
     "button.add": "添加",
     "button.remove": "移除"
   },
@@ -515,7 +515,7 @@
     "stop": "停止训练",
     "reset": "重置训练",
     "clear": "清除",
-    "switch_edit_mode": "切换到编辑模式",
+    "switch_edit_mode": "编辑模式",
     "save_checkpoint": "保存检查点",
     "checkpoint_saved": "检查点已保存！",
     "idle": "空闲",
