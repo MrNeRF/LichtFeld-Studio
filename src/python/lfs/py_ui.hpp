@@ -143,7 +143,8 @@ namespace lfs::python {
         bool collapsing_header(const std::string& label, bool default_open = false);
         bool tree_node(const std::string& label);
         void tree_pop();
-        void progress_bar(float fraction, const std::string& overlay = "", float width = 0.0f);
+        void progress_bar(float fraction, const std::string& overlay = "", float width = 0.0f,
+                          float height = 0.0f);
         void text_colored(const std::string& text, std::tuple<float, float, float, float> color);
         void text_wrapped(const std::string& text);
 
@@ -472,7 +473,8 @@ namespace lfs::python {
         void end_drag_drop_target();
 
         // Misc
-        void progress_bar(float fraction, const std::string& overlay = "", float width = 0.0f);
+        void progress_bar(float fraction, const std::string& overlay = "", float width = 0.0f,
+                          float height = 0.0f);
         void set_tooltip(const std::string& text);
         bool is_item_hovered();
         bool is_item_clicked(int button = 0);

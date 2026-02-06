@@ -535,7 +535,7 @@ class SubLayout:
 
     def tree_pop(self) -> None: ...
 
-    def progress_bar(self, fraction: float, overlay: str = '', width: float = 0.0) -> None: ...
+    def progress_bar(self, fraction: float, overlay: str = '', width: float = 0.0, height: float = 0.0) -> None: ...
 
     def text_colored(self, text: str, color: tuple[float, float, float, float]) -> None: ...
 
@@ -967,7 +967,7 @@ class UILayout:
     def end_drag_drop_target(self) -> None:
         """End the drag-drop target"""
 
-    def progress_bar(self, fraction: float, overlay: str = '', width: float = 0.0) -> None:
+    def progress_bar(self, fraction: float, overlay: str = '', width: float = 0.0, height: float = 0.0) -> None:
         """Draw a progress bar with fraction 0.0-1.0"""
 
     def set_tooltip(self, text: str) -> None:

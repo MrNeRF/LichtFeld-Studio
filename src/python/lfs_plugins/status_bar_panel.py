@@ -99,7 +99,12 @@ class StatusBarPanel(Panel):
         total_iter = lf.trainer_total_iterations()
         progress = current_iter / total_iter if total_iter > 0 else 0.0
 
-        layout.progress_bar(progress, f"{progress * 100:.0f}%", 80)
+        sb = p.surface_bright
+        bar_bg = (sb[0], sb[1], sb[2], 0.5)
+        layout.push_style_color("FrameBg", bar_bg)
+        layout.push_style_color("PlotHistogram", p.primary)
+        layout.progress_bar(progress, f"{progress * 100:.0f}%", 120, 16)
+        layout.pop_style_color(2)
 
         layout.same_line(spacing=12)
         layout.text_colored("Step", p.text_dim)
@@ -217,7 +222,14 @@ class StatusBarPanel(Panel):
         mem_text = f"{used_gb:.1f}/{total_gb:.1f}GB"
         fps_text = f"{fps:.0f}"
 
-        right_width = 240
+        gpu_w, _ = layout.calc_text_size("GPU ")
+        mem_w, _ = layout.calc_text_size(mem_text)
+        fps_w, _ = layout.calc_text_size(fps_text)
+        fps_label_w, _ = layout.calc_text_size(" FPS")
+        commit_w, _ = layout.calc_text_size(git_commit)
+        padding = 16
+        right_width = gpu_w + mem_w + padding + fps_w + fps_label_w + padding + commit_w + padding
+
         window_w = layout.get_window_width()
         target_x = window_w - right_width
 

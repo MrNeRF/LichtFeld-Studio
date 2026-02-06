@@ -1108,10 +1108,11 @@ namespace lfs::python {
     void PySubLayout::tree_pop() {
         parent_->tree_pop();
     }
-    void PySubLayout::progress_bar(float fraction, const std::string& overlay, float width) {
+    void PySubLayout::progress_bar(float fraction, const std::string& overlay, float width,
+                                   float height) {
         advance_child();
         apply_state();
-        parent_->progress_bar(fraction, overlay, width);
+        parent_->progress_bar(fraction, overlay, width, height);
         pop_per_item_state();
     }
     void PySubLayout::text_colored(const std::string& text, std::tuple<float, float, float, float> color) {
@@ -2264,9 +2265,11 @@ namespace lfs::python {
     }
 
     // Misc
-    void PyUILayout::progress_bar(float fraction, const std::string& overlay, float width) {
+    void PyUILayout::progress_bar(float fraction, const std::string& overlay, float width,
+                                  float height) {
         const float w = (width > 0) ? width : -FLT_MIN;
-        ImGui::ProgressBar(fraction, {w, 0}, overlay.empty() ? nullptr : overlay.c_str());
+        const float h = (height > 0) ? height : 0;
+        ImGui::ProgressBar(fraction, {w, h}, overlay.empty() ? nullptr : overlay.c_str());
     }
 
     void PyUILayout::set_tooltip(const std::string& text) {
@@ -2475,6 +2478,8 @@ namespace lfs::python {
                 {"headeractive", ImGuiCol_HeaderActive},
                 {"text", ImGuiCol_Text},
                 {"textdisabled", ImGuiCol_TextDisabled},
+                {"plothistogram", ImGuiCol_PlotHistogram},
+                {"plothistogramhovered", ImGuiCol_PlotHistogramHovered},
             };
             auto it = map.find(lower);
             if (it != map.end())
@@ -2813,7 +2818,7 @@ namespace lfs::python {
             .def("collapsing_header", &PySubLayout::collapsing_header, nb::arg("label"), nb::arg("default_open") = false)
             .def("tree_node", &PySubLayout::tree_node, nb::arg("label"))
             .def("tree_pop", &PySubLayout::tree_pop)
-            .def("progress_bar", &PySubLayout::progress_bar, nb::arg("fraction"), nb::arg("overlay") = "", nb::arg("width") = 0.0f)
+            .def("progress_bar", &PySubLayout::progress_bar, nb::arg("fraction"), nb::arg("overlay") = "", nb::arg("width") = 0.0f, nb::arg("height") = 0.0f)
             .def("text_colored", &PySubLayout::text_colored, nb::arg("text"), nb::arg("color"))
             .def("text_wrapped", &PySubLayout::text_wrapped, nb::arg("text"))
             .def("begin_table", &PySubLayout::begin_table, nb::arg("id"), nb::arg("columns"))
@@ -3039,7 +3044,7 @@ namespace lfs::python {
             .def("accept_drag_drop_payload", &PyUILayout::accept_drag_drop_payload, nb::arg("type"), "Accept a drag-drop payload by type, returns data string or None")
             .def("end_drag_drop_target", &PyUILayout::end_drag_drop_target, "End the drag-drop target")
             // Misc
-            .def("progress_bar", &PyUILayout::progress_bar, nb::arg("fraction"), nb::arg("overlay") = "", nb::arg("width") = 0.0f, "Draw a progress bar with fraction 0.0-1.0")
+            .def("progress_bar", &PyUILayout::progress_bar, nb::arg("fraction"), nb::arg("overlay") = "", nb::arg("width") = 0.0f, nb::arg("height") = 0.0f, "Draw a progress bar with fraction 0.0-1.0")
             .def("set_tooltip", &PyUILayout::set_tooltip, nb::arg("text"), "Show tooltip on hover of the previous item")
             .def("is_item_hovered", &PyUILayout::is_item_hovered, "Check if the previous item is hovered")
             .def("is_item_clicked", &PyUILayout::is_item_clicked, nb::arg("button") = 0, "Check if the previous item was clicked")
