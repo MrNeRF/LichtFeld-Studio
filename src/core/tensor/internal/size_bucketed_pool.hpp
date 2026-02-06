@@ -38,9 +38,9 @@ namespace lfs::core {
         }
 
         void shutdown() {
-            if (shutdown_)
+            bool expected = false;
+            if (!shutdown_.compare_exchange_strong(expected, true))
                 return;
-            shutdown_ = true;
             trim_cache();
         }
 
@@ -196,13 +196,11 @@ namespace lfs::core {
         SizeBucketedPool() = default;
 
         ~SizeBucketedPool() {
-            if (!shutdown_) {
-                shutdown();
-            }
+            shutdown();
         }
 
         std::array<Bucket, NUM_BUCKETS> buckets_;
-        bool shutdown_{false};
+        std::atomic<bool> shutdown_{false};
         Stats stats_;
     };
 

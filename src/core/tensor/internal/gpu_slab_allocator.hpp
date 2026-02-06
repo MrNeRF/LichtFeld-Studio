@@ -37,9 +37,9 @@ namespace lfs::core {
         }
 
         void shutdown() {
-            if (shutdown_)
+            bool expected = false;
+            if (!shutdown_.compare_exchange_strong(expected, true))
                 return;
-            shutdown_ = true;
             enabled_.store(false, std::memory_order_release);
             cleanup();
         }
@@ -179,9 +179,7 @@ namespace lfs::core {
         }
 
         ~GPUSlabAllocator() {
-            if (!shutdown_) {
-                shutdown();
-            }
+            shutdown();
         }
 
         bool initialize_slabs() {
@@ -265,7 +263,7 @@ namespace lfs::core {
         mutable std::mutex slabs_mutex_;
         Stats stats_;
         std::atomic<bool> enabled_{false};
-        bool shutdown_{false};
+        std::atomic<bool> shutdown_{false};
     };
 
 } // namespace lfs::core

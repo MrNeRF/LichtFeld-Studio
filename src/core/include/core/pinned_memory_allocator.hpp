@@ -5,6 +5,7 @@
 
 #include "core/export.hpp"
 
+#include <atomic>
 #include <cstddef>
 #include <cuda_runtime.h>
 #include <memory>
@@ -162,7 +163,7 @@ namespace lfs::core {
         mutable std::mutex mutex_;
         Stats stats_;
         bool enabled_{true}; // Can disable for A/B testing
-        bool shutdown_{false};
+        std::atomic<bool> shutdown_{false};
     };
 
 } // namespace lfs::core

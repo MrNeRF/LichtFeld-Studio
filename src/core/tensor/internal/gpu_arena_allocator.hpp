@@ -5,6 +5,7 @@
 
 #include "core/logger.hpp"
 #include "offset_allocator.hpp"
+#include <atomic>
 #include <cuda_runtime.h>
 #include <memory>
 #include <mutex>
@@ -40,6 +41,13 @@ namespace lfs::core {
         static GPUArenaAllocator& instance() {
             static GPUArenaAllocator allocator;
             return allocator;
+        }
+
+        void shutdown() {
+            bool expected = false;
+            if (!shutdown_.compare_exchange_strong(expected, true))
+                return;
+            cleanup();
         }
 
         /**
@@ -89,6 +97,8 @@ namespace lfs::core {
             if (!ptr) {
                 return;
             }
+            if (shutdown_.load(std::memory_order_acquire))
+                return;
 
             std::lock_guard<std::mutex> lock(mutex_);
 
@@ -193,7 +203,7 @@ namespace lfs::core {
         }
 
         ~GPUArenaAllocator() {
-            cleanup();
+            shutdown();
         }
 
         void initialize(size_t size_bytes, uint32_t max_allocs) {
@@ -248,11 +258,12 @@ namespace lfs::core {
             arena_size_ = 0;
         }
 
-        void* gpu_base_;                                                     // Pre-allocated GPU buffer
-        size_t arena_size_;                                                  // Total size in bytes
-        std::unique_ptr<OffsetAllocator::Allocator> allocator_;              // OffsetAllocator instance
-        std::unordered_map<void*, OffsetAllocator::Allocation> allocations_; // Track allocations
-        mutable std::mutex mutex_;                                           // Thread safety
+        void* gpu_base_;
+        size_t arena_size_;
+        std::unique_ptr<OffsetAllocator::Allocator> allocator_;
+        std::unordered_map<void*, OffsetAllocator::Allocation> allocations_;
+        mutable std::mutex mutex_;
+        std::atomic<bool> shutdown_{false};
     };
 
 } // namespace lfs::core

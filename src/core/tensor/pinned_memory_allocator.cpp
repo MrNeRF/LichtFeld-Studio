@@ -82,19 +82,13 @@ namespace lfs::core {
     }
 
     PinnedMemoryAllocator::~PinnedMemoryAllocator() {
-        if (!shutdown_) {
-            empty_cache();
-        }
+        shutdown();
     }
 
     void PinnedMemoryAllocator::shutdown() {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (shutdown_) {
-                return;
-            }
-            shutdown_ = true;
-        }
+        bool expected = false;
+        if (!shutdown_.compare_exchange_strong(expected, true))
+            return;
         LOG_INFO("Shutting down PinnedMemoryAllocator...");
         empty_cache();
     }
@@ -129,7 +123,7 @@ namespace lfs::core {
 
         std::lock_guard<std::mutex> lock(mutex_);
 
-        if (shutdown_) {
+        if (shutdown_.load(std::memory_order_acquire)) {
             LOG_ERROR("Attempted to allocate pinned memory after shutdown!");
             return nullptr;
         }
@@ -207,6 +201,9 @@ namespace lfs::core {
         if (!ptr) {
             return;
         }
+
+        if (shutdown_.load(std::memory_order_acquire))
+            return;
 
         // Fall back to regular free if disabled
         if (!enabled_) {

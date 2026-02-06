@@ -34,12 +34,9 @@ namespace lfs::core {
         }
 
         void shutdown() {
-            {
-                std::lock_guard<std::mutex> lock(map_mutex_);
-                if (shutdown_)
-                    return;
-                shutdown_ = true;
-            }
+            bool expected = false;
+            if (!shutdown_.compare_exchange_strong(expected, true))
+                return;
             LOG_INFO("Shutting down CudaMemoryPool...");
             DeferredFreeQueue::instance().shutdown();
             SizeBucketedPool::instance().shutdown();
@@ -50,7 +47,7 @@ namespace lfs::core {
             if (bytes == 0)
                 return nullptr;
 
-            if (shutdown_) {
+            if (shutdown_.load(std::memory_order_acquire)) {
                 LOG_ERROR("Attempted to allocate CUDA memory after shutdown!");
                 return nullptr;
             }
@@ -128,6 +125,8 @@ namespace lfs::core {
         void deallocate(void* ptr, cudaStream_t stream = nullptr) {
             if (!ptr)
                 return;
+            if (shutdown_.load(std::memory_order_acquire))
+                return;
 
             if constexpr (ENABLE_ALLOCATION_PROFILING) {
                 AllocationProfiler::instance().record_deallocation(ptr);
@@ -163,6 +162,8 @@ namespace lfs::core {
 
         void deallocate(void* ptr, size_t bytes, cudaStream_t stream = nullptr) {
             if (!ptr)
+                return;
+            if (shutdown_.load(std::memory_order_acquire))
                 return;
 
             if constexpr (ENABLE_ALLOCATION_PROFILING) {
@@ -341,9 +342,7 @@ namespace lfs::core {
         }
 
         ~CudaMemoryPool() {
-            if (!shutdown_) {
-                shutdown();
-            }
+            shutdown();
         }
 
         void* allocate_direct(size_t bytes) {
@@ -439,7 +438,7 @@ namespace lfs::core {
         std::mutex map_mutex_;
         std::atomic<size_t> direct_alloc_count_{0};
         bool slab_enabled_{false};
-        bool shutdown_{false};
+        std::atomic<bool> shutdown_{false};
         Stats stats_;
     };
 
