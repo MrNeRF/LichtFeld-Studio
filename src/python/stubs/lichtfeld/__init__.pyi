@@ -1394,6 +1394,34 @@ class OptimizationParams:
     def ppisp(self, arg: bool, /) -> None: ...
 
     @property
+    def ppisp_use_controller(self) -> bool:
+        """Enable PPISP controller for novel view synthesis"""
+
+    @ppisp_use_controller.setter
+    def ppisp_use_controller(self, arg: bool, /) -> None: ...
+
+    @property
+    def ppisp_controller_activation_step(self) -> int:
+        """Iteration to start controller distillation (-1 = auto)"""
+
+    @ppisp_controller_activation_step.setter
+    def ppisp_controller_activation_step(self, arg: int, /) -> None: ...
+
+    @property
+    def ppisp_controller_lr(self) -> float:
+        """Learning rate for PPISP controller"""
+
+    @ppisp_controller_lr.setter
+    def ppisp_controller_lr(self, arg: float, /) -> None: ...
+
+    @property
+    def ppisp_freeze_gaussians(self) -> bool:
+        """Freeze Gaussians during controller distillation"""
+
+    @ppisp_freeze_gaussians.setter
+    def ppisp_freeze_gaussians(self, arg: bool, /) -> None: ...
+
+    @property
     def bg_mode(self) -> BackgroundMode:
         """Background rendering mode"""
 

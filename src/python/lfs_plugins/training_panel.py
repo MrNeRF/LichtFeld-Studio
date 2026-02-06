@@ -323,6 +323,58 @@ class TrainingPanel(Panel):
             if layout.is_item_hovered():
                 layout.set_tooltip(tr("training.tooltip.ppisp"))
 
+            if params.ppisp:
+                layout.table_next_row()
+                layout.table_next_column()
+                layout.label(tr("training_params.ppisp_controller"))
+                layout.table_next_column()
+                changed, new_val = layout.checkbox("##py_ppisp_controller", params.ppisp_use_controller)
+                if changed:
+                    params.ppisp_use_controller = new_val
+                if layout.is_item_hovered():
+                    layout.set_tooltip(tr("training.tooltip.ppisp_controller"))
+
+                if params.ppisp_use_controller:
+                    layout.table_next_row()
+                    layout.table_next_column()
+                    layout.label(tr("training_params.ppisp_activation_step"))
+                    layout.table_next_column()
+                    is_auto = params.ppisp_controller_activation_step < 0
+                    changed, new_auto = layout.checkbox("Auto##py_ppisp_auto_step", is_auto)
+                    if changed:
+                        params.ppisp_controller_activation_step = -1 if new_auto else max(1, int(params.iterations) - 5000)
+                    if not is_auto:
+                        layout.same_line()
+                        layout.push_item_width(-1)
+                        changed, new_val = layout.input_int_formatted("##py_ppisp_ctrl_step", params.ppisp_controller_activation_step, 1000, 5000)
+                        if changed:
+                            params.ppisp_controller_activation_step = max(1, new_val)
+                        layout.pop_item_width()
+                    if layout.is_item_hovered():
+                        layout.set_tooltip(tr("training.tooltip.ppisp_activation_step"))
+
+                    layout.table_next_row()
+                    layout.table_next_column()
+                    layout.label(tr("training_params.ppisp_controller_lr"))
+                    layout.table_next_column()
+                    layout.push_item_width(-1)
+                    changed, new_val = layout.input_float("##py_ppisp_ctrl_lr", params.ppisp_controller_lr, 0.0001, 0.001, "%.5f")
+                    if changed:
+                        params.ppisp_controller_lr = new_val
+                    layout.pop_item_width()
+                    if layout.is_item_hovered():
+                        layout.set_tooltip(tr("training.tooltip.ppisp_controller_lr"))
+
+                    layout.table_next_row()
+                    layout.table_next_column()
+                    layout.label(tr("training_params.ppisp_freeze_gaussians"))
+                    layout.table_next_column()
+                    changed, new_val = layout.checkbox("##py_ppisp_freeze", params.ppisp_freeze_gaussians)
+                    if changed:
+                        params.ppisp_freeze_gaussians = new_val
+                    if layout.is_item_hovered():
+                        layout.set_tooltip(tr("training.tooltip.ppisp_freeze_gaussians"))
+
             layout.table_next_row()
             layout.table_next_column()
             layout.label(tr("training_params.bg_mode"))

@@ -183,6 +183,18 @@ namespace lfs::python {
             .bool_prop(&OptimizationParameters::use_ppisp,
                        "ppisp", "PPISP", true,
                        "Per-pixel image signal processing")
+            .bool_prop(&OptimizationParameters::ppisp_use_controller,
+                       "ppisp_use_controller", "Controller", false,
+                       "Enable PPISP controller for novel view synthesis")
+            .int_prop(&OptimizationParameters::ppisp_controller_activation_step,
+                      "ppisp_controller_activation_step", "Controller Step", -1, -1, 100000,
+                      "Iteration to start controller distillation (-1 = auto)")
+            .float_prop(&OptimizationParameters::ppisp_controller_lr,
+                        "ppisp_controller_lr", "Controller LR", 2e-3f, 1e-5f, 1e-1f,
+                        "Learning rate for PPISP controller")
+            .bool_prop(&OptimizationParameters::ppisp_freeze_gaussians_on_distill,
+                       "ppisp_freeze_gaussians", "Freeze Gaussians", true,
+                       "Freeze Gaussians during controller distillation")
             .bool_prop(&OptimizationParameters::bg_modulation,
                        "bg_modulation", "BG Modulation", false,
                        "Enable sinusoidal background modulation")
@@ -1082,6 +1094,26 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().use_ppisp; },
                 [](PyOptimizationParams& self, bool v) { self.params().use_ppisp = v; },
                 "Enable per-pixel image signal processing")
+            .def_prop_rw(
+                "ppisp_use_controller",
+                [](PyOptimizationParams& self) { return self.params().ppisp_use_controller; },
+                [](PyOptimizationParams& self, bool v) { self.params().ppisp_use_controller = v; },
+                "Enable PPISP controller for novel view synthesis")
+            .def_prop_rw(
+                "ppisp_controller_activation_step",
+                [](PyOptimizationParams& self) { return self.params().ppisp_controller_activation_step; },
+                [](PyOptimizationParams& self, int v) { self.params().ppisp_controller_activation_step = v; },
+                "Iteration to start controller distillation (-1 = auto)")
+            .def_prop_rw(
+                "ppisp_controller_lr",
+                [](PyOptimizationParams& self) { return self.params().ppisp_controller_lr; },
+                [](PyOptimizationParams& self, float v) { self.params().ppisp_controller_lr = v; },
+                "Learning rate for PPISP controller")
+            .def_prop_rw(
+                "ppisp_freeze_gaussians",
+                [](PyOptimizationParams& self) { return self.params().ppisp_freeze_gaussians_on_distill; },
+                [](PyOptimizationParams& self, bool v) { self.params().ppisp_freeze_gaussians_on_distill = v; },
+                "Freeze Gaussians during controller distillation")
             .def_prop_rw(
                 "bg_mode",
                 [](PyOptimizationParams& self) { return self.params().bg_mode; },
