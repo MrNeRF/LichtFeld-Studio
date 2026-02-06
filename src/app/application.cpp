@@ -12,6 +12,7 @@
 #include "core/image_loader.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/pinned_memory_allocator.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/cache_image_loader.hpp"
 #include "rendering/framebuffer_factory.hpp"
@@ -172,6 +173,9 @@ namespace lfs::app {
 
             LOG_INFO("Headless training completed");
 
+            core::CudaMemoryPool::instance().shutdown();
+            core::PinnedMemoryAllocator::instance().shutdown();
+
             if (!params->python_scripts.empty()) {
                 python::finalize();
                 std::_Exit(0);
@@ -268,6 +272,10 @@ namespace lfs::app {
             }
 
             viewer->run();
+            viewer.reset();
+
+            core::CudaMemoryPool::instance().shutdown();
+            core::PinnedMemoryAllocator::instance().shutdown();
 
             python::finalize();
             std::_Exit(0);

@@ -33,9 +33,27 @@ namespace lfs::core {
             return pool;
         }
 
+        void shutdown() {
+            {
+                std::lock_guard<std::mutex> lock(map_mutex_);
+                if (shutdown_)
+                    return;
+                shutdown_ = true;
+            }
+            LOG_INFO("Shutting down CudaMemoryPool...");
+            DeferredFreeQueue::instance().shutdown();
+            SizeBucketedPool::instance().shutdown();
+            GPUSlabAllocator::instance().shutdown();
+        }
+
         void* allocate(size_t bytes, cudaStream_t stream = nullptr) {
             if (bytes == 0)
                 return nullptr;
+
+            if (shutdown_) {
+                LOG_ERROR("Attempted to allocate CUDA memory after shutdown!");
+                return nullptr;
+            }
 
             void* ptr = nullptr;
 
@@ -323,8 +341,9 @@ namespace lfs::core {
         }
 
         ~CudaMemoryPool() {
-            DeferredFreeQueue::instance().flush();
-            SizeBucketedPool::instance().trim_cache();
+            if (!shutdown_) {
+                shutdown();
+            }
         }
 
         void* allocate_direct(size_t bytes) {
@@ -420,6 +439,7 @@ namespace lfs::core {
         std::mutex map_mutex_;
         std::atomic<size_t> direct_alloc_count_{0};
         bool slab_enabled_{false};
+        bool shutdown_{false};
         Stats stats_;
     };
 

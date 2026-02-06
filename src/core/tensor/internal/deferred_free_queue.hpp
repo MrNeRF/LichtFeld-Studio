@@ -27,6 +27,17 @@ namespace lfs::core {
             return queue;
         }
 
+        void shutdown() {
+            {
+                std::lock_guard<std::mutex> lock(queue_mutex_);
+                if (shutdown_)
+                    return;
+                shutdown_ = true;
+            }
+            flush();
+            cleanup_event_pool();
+        }
+
         void defer_free(void* ptr, size_t size, cudaStream_t stream, FreeCallback callback) {
             if (!ptr)
                 return;
@@ -145,8 +156,9 @@ namespace lfs::core {
         }
 
         ~DeferredFreeQueue() {
-            flush();
-            cleanup_event_pool();
+            if (!shutdown_) {
+                shutdown();
+            }
         }
 
         void initialize_event_pool() {
@@ -197,6 +209,8 @@ namespace lfs::core {
 
         std::vector<cudaEvent_t> event_pool_;
         std::mutex event_pool_mutex_;
+
+        bool shutdown_{false};
 
         Stats stats_;
     };

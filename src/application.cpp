@@ -5,6 +5,7 @@
 #include "core/application.hpp"
 #include "core/argument_parser.hpp"
 #include "core/logger.hpp"
+#include "core/pinned_memory_allocator.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "training/control/control_boundary.hpp"
 #include "training/trainer.hpp"
@@ -142,29 +143,39 @@ namespace lfs::core {
     }
 
     int Application::run(std::unique_ptr<param::TrainingParameters> params) {
+        int result = 0;
+
         // no gui
         if (params->optimization.headless) {
-            return run_headless_app(std::move(params));
-        }
-
+            result = run_headless_app(std::move(params));
+        } else {
 #ifdef WIN32
-        // hide console window on windows
-        HWND hwnd = GetConsoleWindow();
-        Sleep(1);
-        HWND owner = GetWindow(hwnd, GW_OWNER);
-        DWORD dwProcessId;
-        GetWindowThreadProcessId(hwnd, &dwProcessId);
+            // hide console window on windows
+            HWND hwnd = GetConsoleWindow();
+            Sleep(1);
+            HWND owner = GetWindow(hwnd, GW_OWNER);
+            DWORD dwProcessId;
+            GetWindowThreadProcessId(hwnd, &dwProcessId);
 
-        // Only hide if did not start from console
-        if (GetCurrentProcessId() == dwProcessId) {
-            if (owner == NULL) {
-                ShowWindow(hwnd, SW_HIDE); // Windows 10
-            } else {
-                ShowWindow(owner, SW_HIDE); // Windows 11
+            // Only hide if did not start from console
+            if (GetCurrentProcessId() == dwProcessId) {
+                if (owner == NULL) {
+                    ShowWindow(hwnd, SW_HIDE); // Windows 10
+                } else {
+                    ShowWindow(owner, SW_HIDE); // Windows 11
+                }
             }
-        }
 #endif
-        // gui app
-        return run_gui_app(std::move(params));
+            // gui app
+            result = run_gui_app(std::move(params));
+        }
+
+        // Ensure explicit shutdown of pinned memory allocator before CUDA context destruction
+        // This must happen after run_*_app returns so that all local objects (Scene, Visualizer)
+        // have been destroyed and returned their memory to the allocator.
+        CudaMemoryPool::instance().shutdown();
+        PinnedMemoryAllocator::instance().shutdown();
+
+        return result;
     }
 } // namespace lfs::core

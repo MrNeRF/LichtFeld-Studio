@@ -37,6 +37,13 @@ namespace lfs::core {
             return pool;
         }
 
+        void shutdown() {
+            if (shutdown_)
+                return;
+            shutdown_ = true;
+            trim_cache();
+        }
+
         static size_t get_bucket_size(size_t bytes) {
             if (bytes <= MIN_BUCKET_SIZE)
                 return MIN_BUCKET_SIZE;
@@ -189,10 +196,13 @@ namespace lfs::core {
         SizeBucketedPool() = default;
 
         ~SizeBucketedPool() {
-            trim_cache();
+            if (!shutdown_) {
+                shutdown();
+            }
         }
 
         std::array<Bucket, NUM_BUCKETS> buckets_;
+        bool shutdown_{false};
         Stats stats_;
     };
 

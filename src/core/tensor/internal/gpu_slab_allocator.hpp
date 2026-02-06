@@ -36,6 +36,14 @@ namespace lfs::core {
             return allocator;
         }
 
+        void shutdown() {
+            if (shutdown_)
+                return;
+            shutdown_ = true;
+            enabled_.store(false, std::memory_order_release);
+            cleanup();
+        }
+
         void* allocate(size_t bytes) {
             if (!enabled_.load(std::memory_order_acquire) || bytes == 0 || bytes > MAX_BLOCK_SIZE) {
                 return nullptr;
@@ -171,7 +179,9 @@ namespace lfs::core {
         }
 
         ~GPUSlabAllocator() {
-            cleanup();
+            if (!shutdown_) {
+                shutdown();
+            }
         }
 
         bool initialize_slabs() {
@@ -255,6 +265,7 @@ namespace lfs::core {
         mutable std::mutex slabs_mutex_;
         Stats stats_;
         std::atomic<bool> enabled_{false};
+        bool shutdown_{false};
     };
 
 } // namespace lfs::core
