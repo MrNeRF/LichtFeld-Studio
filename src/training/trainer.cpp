@@ -1119,6 +1119,7 @@ namespace lfs::training {
             const int ppisp_cam_idx = known_ppisp_camera ? ppisp_->camera_index(cam->camera_id()) : -1;
             const bool in_controller_phase = ppisp_controller_pool_ && known_ppisp_camera &&
                                              params_.optimization.ppisp_use_controller &&
+                                             params_.optimization.ppisp_freeze_gaussians_on_distill &&
                                              iter >= params_.optimization.ppisp_controller_activation_step &&
                                              ppisp_cam_idx >= 0 &&
                                              ppisp_cam_idx < ppisp_controller_pool_->num_cameras();
@@ -1246,6 +1247,22 @@ namespace lfs::training {
                     // Controller phase: forward through ISP with controller params, photometric loss,
                     // backward only through controller (base params frozen)
                     nvtxRangePush("controller_phase");
+                    auto cleanup_controller_tile_context = [&]() {
+                        auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
+                        if (fast_ctx) {
+                            arena.end_frame(fast_ctx->forward_ctx.frame_id);
+                        } else if (gsplat_ctx) {
+                            if (gsplat_ctx->isect_ids_ptr != nullptr) {
+                                cudaFree(gsplat_ctx->isect_ids_ptr);
+                                gsplat_ctx->isect_ids_ptr = nullptr;
+                            }
+                            if (gsplat_ctx->flatten_ids_ptr != nullptr) {
+                                cudaFree(gsplat_ctx->flatten_ids_ptr);
+                                gsplat_ctx->flatten_ids_ptr = nullptr;
+                            }
+                            arena.end_frame(gsplat_ctx->frame_id);
+                        }
+                    };
 
                     lfs::core::Tensor corrected_image = output.image;
                     if (bilateral_grid_ && params_.optimization.use_bilateral_grid) {
@@ -1284,6 +1301,7 @@ namespace lfs::training {
                         auto result = compute_photometric_loss_with_mask(
                             corrected_image, gt_tile, mask_tile, output.alpha, params_.optimization);
                         if (!result) {
+                            cleanup_controller_tile_context();
                             nvtxRangePop();
                             nvtxRangePop();
                             nvtxRangePop();
@@ -1295,6 +1313,7 @@ namespace lfs::training {
                         auto result = compute_photometric_loss_with_gradient(
                             corrected_image, gt_tile, params_.optimization);
                         if (!result) {
+                            cleanup_controller_tile_context();
                             nvtxRangePop();
                             nvtxRangePop();
                             nvtxRangePop();
@@ -1313,13 +1332,7 @@ namespace lfs::training {
                     ppisp_controller_pool_->backward(ppisp_cam_idx, ctrl_grad);
 
                     // End arena frame explicitly (normally done inside rasterize_backward which we skip)
-                    if (fast_ctx) {
-                        auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
-                        arena.end_frame(fast_ctx->forward_ctx.frame_id);
-                    } else if (gsplat_ctx) {
-                        auto& arena = lfs::core::GlobalArenaManager::instance().get_arena();
-                        arena.end_frame(gsplat_ctx->frame_id);
-                    }
+                    cleanup_controller_tile_context();
 
                     nvtxRangePop(); // controller_phase
                 } else {
