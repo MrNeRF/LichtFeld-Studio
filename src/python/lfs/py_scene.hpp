@@ -172,6 +172,8 @@ namespace lfs::python {
 
         // Replace point cloud data (for live updates)
         void set_data(const PyTensor& points, const PyTensor& colors);
+        void set_colors(const PyTensor& colors);
+        void set_means(const PyTensor& points);
 
         core::PointCloud* data() { return pc_; }
         const core::PointCloud* data() const { return pc_; }
@@ -221,6 +223,17 @@ namespace lfs::python {
         std::string image_path() const { return node_->image_path; }
         std::string mask_path() const { return node_->mask_path; }
         bool has_camera() const { return node_->camera != nullptr; }
+        bool has_mask() const {
+            if (!node_->camera)
+                return false;
+            return node_->camera->has_mask();
+        }
+        std::optional<PyTensor> load_mask(int resize_factor = 1, int max_width = 3840,
+                                          bool invert = false, float threshold = 0.5f) {
+            if (!node_->camera || !node_->camera->has_mask())
+                return std::nullopt;
+            return PyTensor(node_->camera->load_and_get_mask(resize_factor, max_width, invert, threshold), true);
+        }
         std::optional<PyTensor> camera_R() const {
             if (!node_->camera)
                 return std::nullopt;
@@ -277,6 +290,7 @@ namespace lfs::python {
                                      "gaussian_count", "centroid",
                                      "splat_data", "point_cloud", "cropbox", "ellipsoid",
                                      "camera_uid", "image_path", "mask_path", "has_camera",
+                                     "has_mask", "load_mask",
                                      "camera_R", "camera_T", "camera_focal_x", "camera_focal_y",
                                      "camera_width", "camera_height",
                                      "prop_info"}) {
@@ -399,7 +413,6 @@ namespace lfs::python {
         std::optional<PySceneNode> get_node(const std::string& name);
         std::vector<PySceneNode> get_nodes();
         std::vector<PySceneNode> get_visible_nodes();
-        std::vector<PySceneNode> get_active_cameras();
         bool is_node_effectively_visible(int32_t id) const {
             return scene_->isNodeEffectivelyVisible(id);
         }
@@ -484,6 +497,13 @@ namespace lfs::python {
             scene_->invalidateCache();
             core::events::state::SceneChanged{}.emit();
         }
+
+        // Camera training control
+        void set_camera_training_enabled(const std::string& name, bool enabled) {
+            scene_->setCameraTrainingEnabled(name, enabled);
+        }
+        size_t active_camera_count() const { return scene_->getActiveCameraCount(); }
+        std::vector<PySceneNode> get_active_cameras();
 
         // Training data
         bool has_training_data() const { return scene_->hasTrainingData(); }

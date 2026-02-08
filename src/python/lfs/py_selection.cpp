@@ -7,6 +7,8 @@
 #include "python/python_runtime.hpp"
 #include "rendering/rasterizer/rasterization/include/forward.h"
 #include "rendering/rasterizer/rasterization/include/rasterization_api_tensor.h"
+#include "visualizer/internal/viewport.hpp"
+#include "visualizer/ipc/view_context.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/selection/selection_service.hpp"
@@ -398,6 +400,64 @@ namespace lfs::python {
                 return rm ? rm->getHoveredGaussianId() : -1;
             },
             "Get ID of gaussian under cursor (-1 if none)");
+
+        // PickResult struct
+        struct PyPickResult {
+            int index;
+            float depth;
+            std::tuple<float, float, float> world_position;
+        };
+
+        nb::class_<PyPickResult>(sel, "PickResult")
+            .def_ro("index", &PyPickResult::index, "Gaussian index at current cursor position (-1 if unavailable)")
+            .def_ro("depth", &PyPickResult::depth, "Camera-space depth")
+            .def_ro("world_position", &PyPickResult::world_position, "Hit point in world coordinates");
+
+        sel.def(
+            "pick_at_screen", [](float screen_x, float screen_y) -> std::optional<PyPickResult> {
+                auto* rm = get_rm();
+                if (!rm)
+                    return std::nullopt;
+
+                float vx, vy, vw, vh;
+                get_viewport_bounds(vx, vy, vw, vh);
+                const float local_x = screen_x - vx;
+                const float local_y = screen_y - vy;
+
+                const float depth = rm->getDepthAtPixel(
+                    static_cast<int>(local_x), static_cast<int>(local_y));
+                if (depth <= 0.0f)
+                    return std::nullopt;
+
+                auto view_info = vis::get_current_view_info();
+                if (!view_info)
+                    return std::nullopt;
+
+                Viewport vp(static_cast<size_t>(vw), static_cast<size_t>(vh));
+                for (int i = 0; i < 3; ++i)
+                    for (int j = 0; j < 3; ++j)
+                        vp.camera.R[i][j] = view_info->rotation[i * 3 + j];
+                vp.camera.t = glm::vec3(
+                    view_info->translation[0],
+                    view_info->translation[1],
+                    view_info->translation[2]);
+
+                const glm::vec3 world_pos = vp.unprojectPixel(
+                    local_x, local_y, depth, rm->getFocalLengthMm());
+
+                constexpr float INVALID = -1e10f;
+                if (world_pos.x <= INVALID)
+                    return std::nullopt;
+
+                const int gaussian_id = rm->getHoveredGaussianId();
+
+                return PyPickResult{
+                    gaussian_id,
+                    depth,
+                    {world_pos.x, world_pos.y, world_pos.z}};
+            },
+            nb::arg("screen_x"), nb::arg("screen_y"), "Pick at screen coordinates. Returns PickResult with depth and world_position at the given coords. "
+                                                      "The index field reflects the gaussian under the current cursor, not the queried coordinates.");
 
         // ─────────────────────────────────────────────────────────────────────
         // SELECTION GROUPS

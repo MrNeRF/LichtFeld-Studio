@@ -90,6 +90,7 @@ namespace lfs::python {
 
         [[nodiscard]] std::vector<std::string> get_handler_ids() const;
         [[nodiscard]] bool has_handlers() const;
+        [[nodiscard]] bool has_handler(const std::string& id) const;
 
     private:
         PyViewportDrawRegistry() = default;

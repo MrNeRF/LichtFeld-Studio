@@ -5,6 +5,11 @@
 #include "py_splat_data.hpp"
 #include <nanobind/stl/optional.h>
 
+namespace {
+    constexpr float SH_C0 = 0.28209479177387814f;
+    constexpr float SH_DC_OFFSET = 0.5f;
+} // namespace
+
 namespace lfs::python {
 
     // Raw tensor access - return views (no copy)
@@ -53,6 +58,22 @@ namespace lfs::python {
         return PyTensor(data_->get_shs(), true);
     }
 
+    PyTensor PySplatData::get_colors_rgb() const {
+        auto sh0 = data_->sh0_raw();
+        assert(sh0.shape().rank() == 3 && sh0.shape()[1] == 1 && sh0.shape()[2] == 3);
+        auto flat = sh0.reshape({static_cast<int>(sh0.shape()[0]), 3});
+        return PyTensor(flat * SH_C0 + SH_DC_OFFSET, true);
+    }
+
+    void PySplatData::set_colors_rgb(const PyTensor& colors) {
+        const auto& rgb = colors.tensor();
+        assert(rgb.shape().rank() == 2 && rgb.shape()[1] == 3);
+        assert(rgb.shape()[0] == static_cast<int64_t>(data_->size()));
+        auto sh0_values = (rgb - SH_DC_OFFSET) / SH_C0;
+        auto sh0 = data_->sh0_raw();
+        sh0.copy_(sh0_values.reshape({static_cast<int>(rgb.shape()[0]), 1, 3}));
+    }
+
     // Soft deletion
     PyTensor PySplatData::deleted() const {
         if (!data_->has_deleted_mask()) {
@@ -97,6 +118,12 @@ namespace lfs::python {
                  "Get scaling with exp applied")
             .def("get_shs", &PySplatData::get_shs,
                  "Get concatenated SH coefficients (sh0 + shN)")
+
+            // RGB color accessors
+            .def("get_colors_rgb", &PySplatData::get_colors_rgb,
+                 "Get RGB colors [N, 3] in [0,1] range (handles SH0 encoding)")
+            .def("set_colors_rgb", &PySplatData::set_colors_rgb, nb::arg("colors"),
+                 "Set RGB colors from [N, 3] tensor in [0,1] range (handles SH0 encoding)")
 
             // Metadata
             .def_prop_ro("active_sh_degree", &PySplatData::active_sh_degree,

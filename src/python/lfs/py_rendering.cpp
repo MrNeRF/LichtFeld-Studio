@@ -495,7 +495,14 @@ namespace lfs::python {
             .def_ro("width", &PyViewInfo::width)
             .def_ro("height", &PyViewInfo::height)
             .def_ro("fov_x", &PyViewInfo::fov_x)
-            .def_ro("fov_y", &PyViewInfo::fov_y);
+            .def_ro("fov_y", &PyViewInfo::fov_y)
+            .def_prop_ro(
+                "position", [](const PyViewInfo& self) -> std::tuple<float, float, float> {
+                    auto t = self.translation.tensor().cpu();
+                    auto acc = t.accessor<float, 1>();
+                    return {acc(0), acc(1), acc(2)};
+                },
+                "Camera position as (x, y, z) tuple");
 
         nb::class_<PyViewportRender>(m, "ViewportRender")
             .def_ro("image", &PyViewportRender::image)

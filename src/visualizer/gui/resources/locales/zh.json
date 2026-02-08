@@ -279,7 +279,13 @@
     "no_groups_available": "没有可用的组",
     "delete_node": "删除",
     "cannot_delete_training": "训练进行中无法删除",
-    "background": "背景"
+    "background": "背景",
+    "enable_for_training": "启用训练",
+    "disable_for_training": "禁用训练",
+    "enable_all_training": "全部启用训练",
+    "disable_all_training": "全部禁用训练",
+    "training_enabled_tooltip": "已包含在训练中",
+    "training_disabled_tooltip": "已从训练中排除"
   },
 
   "export": {

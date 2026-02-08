@@ -323,6 +323,12 @@ namespace lichtfeld::Strings {
         inline constexpr const char* DELETE_NODE = "scene.delete_node";
         inline constexpr const char* CANNOT_DELETE_TRAINING = "scene.cannot_delete_training";
         inline constexpr const char* BACKGROUND = "scene.background";
+        inline constexpr const char* ENABLE_FOR_TRAINING = "scene.enable_for_training";
+        inline constexpr const char* DISABLE_FOR_TRAINING = "scene.disable_for_training";
+        inline constexpr const char* ENABLE_ALL_TRAINING = "scene.enable_all_training";
+        inline constexpr const char* DISABLE_ALL_TRAINING = "scene.disable_all_training";
+        inline constexpr const char* TRAINING_ENABLED_TOOLTIP = "scene.training_enabled_tooltip";
+        inline constexpr const char* TRAINING_DISABLED_TOOLTIP = "scene.training_disabled_tooltip";
     } // namespace Scene
 
     namespace Export {

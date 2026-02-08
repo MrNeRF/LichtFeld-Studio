@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 #include "python/python_runtime.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace lfs::python {
@@ -245,6 +246,12 @@ namespace lfs::python {
         return !handlers_.empty();
     }
 
+    bool PyViewportDrawRegistry::has_handler(const std::string& id) const {
+        std::lock_guard lock(mutex_);
+        return std::any_of(handlers_.begin(), handlers_.end(),
+                           [&id](const PyDrawHandlerInfo& h) { return h.id == id; });
+    }
+
     void register_viewport(nb::module_& m) {
         nb::enum_<DrawHandlerTiming>(m, "DrawHandlerTiming")
             .value("PRE_VIEW", DrawHandlerTiming::PreView)
@@ -321,10 +328,14 @@ namespace lfs::python {
             "Add a viewport draw handler with explicit id");
 
         m.def(
-            "remove_draw_handler", [](const std::string& id) {
-                PyViewportDrawRegistry::instance().remove_handler(id);
+            "remove_draw_handler", [](const std::string& id) -> bool {
+                auto& reg = PyViewportDrawRegistry::instance();
+                if (!reg.has_handler(id))
+                    return false;
+                reg.remove_handler(id);
+                return true;
             },
-            nb::arg("id"), "Remove a viewport draw handler");
+            nb::arg("id"), "Remove a viewport draw handler (returns false if not found)");
 
         m.def(
             "clear_draw_handlers", []() {
@@ -343,6 +354,12 @@ namespace lfs::python {
                 return PyViewportDrawRegistry::instance().has_handlers();
             },
             "Check if any draw handlers are registered");
+
+        m.def(
+            "has_draw_handler", [](const std::string& id) {
+                return PyViewportDrawRegistry::instance().has_handler(id);
+            },
+            nb::arg("id"), "Check if a specific draw handler exists");
     }
 
 } // namespace lfs::python

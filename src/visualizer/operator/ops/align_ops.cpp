@@ -128,7 +128,7 @@ namespace lfs::vis::op {
 
         const auto& viewport = gm->getViewer()->getViewport();
         return viewport.unprojectPixel(static_cast<float>(x), static_cast<float>(y), depth,
-                                       rm->getFovDegrees());
+                                       rm->getFocalLengthMm());
     }
 
     void AlignPickPointOperator::captureTransformsBefore(const OperatorContext& ctx) {

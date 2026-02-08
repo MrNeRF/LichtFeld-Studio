@@ -50,6 +50,10 @@ namespace lfs::core {
         }
     }
 
+    constexpr bool is_bool_like(DataType dt) {
+        return dt == DataType::Bool || dt == DataType::UInt8;
+    }
+
     inline const char* device_name(Device device) {
         return device == Device::CPU ? "cpu" : "cuda";
     }

@@ -607,9 +607,16 @@ namespace lfs::vis {
 
     std::vector<std::shared_ptr<lfs::core::Camera>> TrainerManager::getCamList() const {
         if (scene_) {
-            return scene_->getAllCameras();
+            return scene_->getActiveCameras();
         }
         LOG_ERROR("getCamList called but scene is not set");
+        return {};
+    }
+
+    std::vector<std::shared_ptr<lfs::core::Camera>> TrainerManager::getAllCamList() const {
+        if (scene_) {
+            return scene_->getAllCameras();
+        }
         return {};
     }
 

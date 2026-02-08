@@ -273,11 +273,20 @@ def trainer_current_loss() -> float:
 def set_node_visibility(name: str, visible: bool) -> None:
     """Set visibility of a scene node by name"""
 
+def set_camera_training_enabled(name: str, enabled: bool) -> None:
+    """Enable or disable a camera for training by name"""
+
 def remove_node(name: str, keep_children: bool = False) -> None:
     """Remove a scene node by name"""
 
 def select_node(name: str) -> None:
     """Select a scene node by name"""
+
+def add_to_selection(name: str) -> None:
+    """Add a node to the current selection"""
+
+def select_nodes(names: Sequence[str]) -> None:
+    """Select multiple nodes at once"""
 
 def deselect_all() -> None:
     """Deselect all scene nodes"""
@@ -942,6 +951,10 @@ class ViewInfo:
     @property
     def fov_y(self) -> float: ...
 
+    @property
+    def position(self) -> tuple[float, float, float]:
+        """Camera position as (x, y, z) tuple"""
+
 class ViewportRender:
     @property
     def image(self) -> Tensor: ...
@@ -1206,8 +1219,8 @@ def draw_handler(timing: str = 'POST_VIEW') -> object:
 def add_draw_handler(id: str, callback: object, timing: str = 'POST_VIEW') -> None:
     """Add a viewport draw handler with explicit id"""
 
-def remove_draw_handler(id: str) -> None:
-    """Remove a viewport draw handler"""
+def remove_draw_handler(id: str) -> bool:
+    """Remove a viewport draw handler (returns false if not found)"""
 
 def clear_draw_handlers() -> None:
     """Clear all viewport draw handlers"""
@@ -1217,6 +1230,9 @@ def get_draw_handler_ids() -> list[str]:
 
 def has_draw_handlers() -> bool:
     """Check if any draw handlers are registered"""
+
+def has_draw_handler(id: str) -> bool:
+    """Check if a specific draw handler exists"""
 
 class MaskMode(enum.Enum):
     NONE = 0
@@ -1605,6 +1621,11 @@ def on_frame(callback: Callable) -> None:
 def stop_animation() -> None:
     """Stop any running animation (clears frame callback)"""
 
+def colormap(values: Tensor, name: str = 'jet') -> Tensor:
+    """
+    Apply colormap to [N] values in [0,1], returns [N,3] RGB tensor on same device
+    """
+
 def mat4(rows: Sequence[Sequence[float]]) -> Tensor:
     """Create a 4x4 matrix tensor from nested list [[r0], [r1], [r2], [r3]]"""
 
@@ -1678,4 +1699,4 @@ class CheckpointParams:
 def read_checkpoint_params(path: str) -> CheckpointParams | None:
     """Read training parameters from a checkpoint (None if failed)"""
 
-__all__: tuple = ('context', 'gaussians', 'session', 'get_scene', 'Tensor', 'Hook', 'ScopedHandler', 'on_training_start', 'on_iteration_start', 'on_post_step', 'on_pre_optimizer_step', 'on_training_end', 'on_frame', 'stop_animation', 'run', 'list_scene', 'mat4', 'help', 'scene', 'io', 'packages', 'mcp')
+__all__: tuple = ('context', 'gaussians', 'session', 'get_scene', 'Tensor', 'Hook', 'ScopedHandler', 'on_training_start', 'on_iteration_start', 'on_post_step', 'on_pre_optimizer_step', 'on_training_end', 'on_frame', 'stop_animation', 'run', 'list_scene', 'mat4', 'colormap', 'help', 'scene', 'io', 'packages', 'mcp')

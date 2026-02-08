@@ -48,6 +48,14 @@ class SplatData:
     def get_shs(self) -> lichtfeld.Tensor:
         """Get concatenated SH coefficients (sh0 + shN)"""
 
+    def get_colors_rgb(self) -> lichtfeld.Tensor:
+        """Get RGB colors [N, 3] in [0,1] range (handles SH0 encoding)"""
+
+    def set_colors_rgb(self, colors: lichtfeld.Tensor) -> None:
+        """
+        Set RGB colors from [N, 3] tensor in [0,1] range (handles SH0 encoding)
+        """
+
     @property
     def active_sh_degree(self) -> int:
         """Current active SH degree"""
@@ -240,6 +248,12 @@ class PointCloud:
     def set_data(self, points: lichtfeld.Tensor, colors: lichtfeld.Tensor) -> None:
         """Replace point cloud data with new points and colors tensors"""
 
+    def set_colors(self, colors: lichtfeld.Tensor) -> None:
+        """Update colors without re-uploading positions [N, 3]"""
+
+    def set_means(self, points: lichtfeld.Tensor) -> None:
+        """Update positions without re-uploading colors [N, 3]"""
+
 class SceneNode:
     @property
     def __property_group__(self) -> str:
@@ -309,6 +323,15 @@ class SceneNode:
     @property
     def has_camera(self) -> bool:
         """Whether this node has camera data"""
+
+    @property
+    def has_mask(self) -> bool:
+        """Whether this camera node has a mask file"""
+
+    def load_mask(self, resize_factor: int = 1, max_width: int = 3840, invert: bool = False, threshold: float = 0.5) -> lichtfeld.Tensor | None:
+        """
+        Load mask as tensor [1, H, W] on CUDA (None if not a camera node or no mask)
+        """
 
     @property
     def camera_R(self) -> lichtfeld.Tensor | None:
@@ -468,13 +491,23 @@ class Scene:
     def training_model_node_name(self) -> str:
         """Name of the node providing the training model"""
 
+    @overload
     def get_node_bounds(self, id: int) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
         """
         Get axis-aligned bounding box as ((min_x, min_y, min_z), (max_x, max_y, max_z))
         """
 
+    @overload
+    def get_node_bounds(self, name: str) -> tuple[tuple[float, float, float], tuple[float, float, float]] | None:
+        """Get axis-aligned bounding box by node name"""
+
+    @overload
     def get_node_bounds_center(self, id: int) -> tuple[float, float, float]:
         """Get center of the node bounding box as (x, y, z)"""
+
+    @overload
+    def get_node_bounds_center(self, name: str) -> tuple[float, float, float]:
+        """Get center of the node bounding box by name"""
 
     def get_cropbox_for_splat(self, splat_id: int) -> int:
         """Get the crop box node ID associated with a splat (-1 if none)"""
@@ -540,6 +573,16 @@ class Scene:
 
     def reset_selection_state(self) -> None:
         """Reset all selection state to defaults"""
+
+    def set_camera_training_enabled(self, name: str, enabled: bool) -> None:
+        """Enable or disable a camera for training by name"""
+
+    @property
+    def active_camera_count(self) -> int:
+        """Number of cameras enabled for training"""
+
+    def get_active_cameras(self) -> list[SceneNode]:
+        """Get camera nodes enabled for training"""
 
     def has_training_data(self) -> bool:
         """Check if training dataset is loaded"""

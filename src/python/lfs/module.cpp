@@ -804,6 +804,15 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("name"), nb::arg("visible"), "Set visibility of a scene node by name");
 
     m.def(
+        "set_camera_training_enabled", [](const std::string& name, bool enabled) {
+            auto* scene = get_scene_internal();
+            if (!scene)
+                return;
+            scene->setCameraTrainingEnabled(name, enabled);
+        },
+        nb::arg("name"), nb::arg("enabled"), "Enable or disable a camera for training by name");
+
+    m.def(
         "remove_node", [](const std::string& name, bool keep_children) {
             lfs::core::events::cmd::RemovePLY{.name = name, .keep_children = keep_children}.emit();
         },
@@ -818,6 +827,22 @@ NB_MODULE(lichtfeld, m) {
                 .emit();
         },
         nb::arg("name"), "Select a scene node by name");
+
+    m.def(
+        "add_to_selection", [](const std::string& name) {
+            auto* sm = lfs::python::get_scene_manager();
+            if (sm)
+                sm->addToSelection(name);
+        },
+        nb::arg("name"), "Add a node to the current selection");
+
+    m.def(
+        "select_nodes", [](const std::vector<std::string>& names) {
+            auto* sm = lfs::python::get_scene_manager();
+            if (sm)
+                sm->selectNodes(names);
+        },
+        nb::arg("names"), "Select multiple nodes at once");
 
     m.def(
         "deselect_all", []() {
@@ -1425,6 +1450,31 @@ NB_MODULE(lichtfeld, m) {
         },
         "Stop any running animation (clears frame callback)");
 
+    // GPU colormap: maps [N] normalized values in [0,1] to [N,3] RGB via jet colormap
+    m.def(
+        "colormap", [](const lfs::python::PyTensor& values, const std::string& name) -> lfs::python::PyTensor {
+            if (name != "jet") {
+                throw std::runtime_error("Only 'jet' colormap is currently supported");
+            }
+            const auto& t = values.tensor();
+            assert(t.shape().rank() == 1);
+
+            auto v = t.clamp(0.0f, 1.0f);
+
+            using T = lfs::core::Tensor;
+
+            // Jet: piecewise linear through Blue->Cyan->Green->Yellow->Red
+            T r = ((v - 0.375f) * 4.0f).clamp(0.0f, 1.0f) - ((v - 0.875f) * 4.0f).clamp(0.0f, 1.0f);
+            T g = ((v - 0.125f) * 4.0f).clamp(0.0f, 1.0f) - ((v - 0.625f) * 4.0f).clamp(0.0f, 1.0f);
+            T one = T::ones_like(v);
+            T b = (one - (v - 0.125f) * 4.0f).clamp(0.0f, 1.0f);
+
+            std::vector<T> channels = {r, g, b};
+            T result = T::stack(channels, 1);
+            return lfs::python::PyTensor(std::move(result), true);
+        },
+        nb::arg("values"), nb::arg("name") = "jet", "Apply colormap to [N] values in [0,1], returns [N,3] RGB tensor on same device");
+
     // Create 4x4 matrix tensor from nested list (for transforms)
     m.def(
         "mat4", [](const std::vector<std::vector<float>>& rows) -> lfs::python::PyTensor {
@@ -1592,7 +1642,7 @@ Example:
         // Animation
         "on_frame", "stop_animation",
         // Utilities
-        "run", "list_scene", "mat4", "help",
+        "run", "list_scene", "mat4", "colormap", "help",
         // Submodules
         "scene", "io", "packages", "mcp");
 }

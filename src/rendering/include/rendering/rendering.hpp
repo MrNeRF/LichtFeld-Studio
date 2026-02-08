@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace lfs::core {
@@ -391,7 +392,9 @@ namespace lfs::rendering {
             const glm::vec3& train_color = glm::vec3(0.0f, 1.0f, 0.0f),
             const glm::vec3& eval_color = glm::vec3(1.0f, 0.0f, 0.0f),
             const glm::mat4& scene_transform = glm::mat4(1.0f),
-            bool equirectangular_view = false) = 0;
+            bool equirectangular_view = false,
+            const std::unordered_set<int>& disabled_uids = {},
+            const std::unordered_set<int>& selected_uids = {}) = 0;
 
         // Camera frustum rendering with highlighting
         virtual Result<void> renderCameraFrustumsWithHighlight(
@@ -402,7 +405,9 @@ namespace lfs::rendering {
             const glm::vec3& eval_color = glm::vec3(1.0f, 0.0f, 0.0f),
             int highlight_index = -1,
             const glm::mat4& scene_transform = glm::mat4(1.0f),
-            bool equirectangular_view = false) = 0;
+            bool equirectangular_view = false,
+            const std::unordered_set<int>& disabled_uids = {},
+            const std::unordered_set<int>& selected_uids = {}) = 0;
 
         // Camera frustum picking
         virtual Result<int> pickCameraFrustum(

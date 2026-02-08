@@ -22,6 +22,8 @@ TRASH_DEFAULT_TINT = (0.5, 0.5, 0.5, 0.5)
 GRIP_ACTIVE_TINT = (0.5, 0.5, 0.5, 0.5)
 GRIP_INACTIVE_TINT = (0.0, 0.0, 0.0, 0.0)
 MASK_TINT = (0.9, 0.5, 0.6, 0.8)
+TRAINING_ENABLED_TINT = (0.4, 0.7, 1.0, 1.0)
+TRAINING_DISABLED_TINT = (0.5, 0.5, 0.5, 0.4)
 DEFAULT_ICON_COLOR = (0.7, 0.7, 0.7, 1.0)
 
 NODE_TYPE_COLORS = {
@@ -65,7 +67,11 @@ class ScenePanel(Panel):
         self._rename_node = None
         self._rename_buffer = ""
         self._rename_focus = False
-        self._last_scrolled_camera_uid = -1
+        self._click_anchor = None
+        self._visible_node_order = []
+        self._committed_node_order = []
+        self._prev_selected = set()
+        self._scroll_to_node = None
 
     def _is_node_selected(self, node):
         return node.name in self._selected_nodes
@@ -118,6 +124,11 @@ class ScenePanel(Panel):
 
         self._selected_nodes = set(lf.get_selected_node_names())
 
+        new_nodes = self._selected_nodes - self._prev_selected
+        if new_nodes:
+            self._scroll_to_node = next(iter(new_nodes))
+        self._prev_selected = set(self._selected_nodes)
+
         theme = lf.ui.theme()
         scale = layout.get_dpi_scale()
 
@@ -137,6 +148,7 @@ class ScenePanel(Panel):
         layout.push_style_var("IndentSpacing", INDENT_SPACING * scale)
 
         self._row_index = 0
+        self._visible_node_order = []
 
         if layout.is_window_focused() and self._rename_node is None:
             if lf.ui.is_key_pressed(lf.ui.Key.F2) and self._selected_nodes:
@@ -144,6 +156,8 @@ class ScenePanel(Panel):
                 self._rename_node = first_selected
                 self._rename_buffer = first_selected
                 self._rename_focus = True
+            if lf.ui.is_key_pressed(lf.ui.Key.DELETE) and self._selected_nodes:
+                self._delete_selected(scene)
 
         nodes = scene.get_nodes()
         splat_count = sum(1 for n in nodes if str(n.type).endswith("SPLAT"))
@@ -169,6 +183,8 @@ class ScenePanel(Panel):
 
             if not nodes:
                 layout.text_colored(tr("scene.no_models_loaded"), theme.palette.text_dim)
+
+        self._committed_node_order = self._visible_node_order
 
         layout.pop_style_var()
         layout.pop_style_var()
@@ -207,6 +223,7 @@ class ScenePanel(Panel):
         can_drag = node_type in ("SPLAT", "GROUP", "POINTCLOUD", "CROPBOX", "ELLIPSOID") and not parent_is_dataset
 
         is_selected = self._is_node_selected(node)
+        self._visible_node_order.append(node.name)
 
         icon_size = ICON_SIZE_BASE * scale
         icon_spacing = ICON_SPACING_BASE * scale
@@ -215,10 +232,9 @@ class ScenePanel(Panel):
         self._draw_row_background(layout, is_selected, self._row_index)
         self._row_index += 1
 
-        if is_selected and is_camera:
-            if node.camera_uid != self._last_scrolled_camera_uid:
-                layout.set_scroll_here_y(0.5)
-                self._last_scrolled_camera_uid = node.camera_uid
+        if self._scroll_to_node == node.name:
+            layout.set_scroll_here_y(0.5)
+            self._scroll_to_node = None
 
         if depth > 0:
             layout.indent(depth * INDENT_SPACING * scale)
@@ -234,6 +250,17 @@ class ScenePanel(Panel):
         if vis_tex and layout.image_button(f"##vis_{node.id}", vis_tex, icon_sz, vis_tint):
             lf.set_node_visibility(node.name, not is_visible)
         layout.same_line(0.0, icon_spacing)
+
+        if is_camera:
+            train_enabled = node.training_enabled
+            train_tex = self._get_icon("camera")
+            train_tint = TRAINING_ENABLED_TINT if train_enabled else TRAINING_DISABLED_TINT
+            if train_tex and layout.image_button(f"##train_{node.id}", train_tex, icon_sz, train_tint):
+                node.training_enabled = not train_enabled
+            if layout.is_item_hovered():
+                tip = tr("scene.training_enabled_tooltip") if train_enabled else tr("scene.training_disabled_tooltip")
+                layout.set_tooltip(tip)
+            layout.same_line(0.0, icon_spacing)
 
         if is_deletable:
             trash_tex = self._get_icon("trash")
@@ -275,6 +302,11 @@ class ScenePanel(Panel):
 
             layout.same_line(0.0, 2.0 * scale)
 
+            training_disabled = is_camera and not node.training_enabled
+            if training_disabled:
+                theme = lf.ui.theme()
+                layout.push_style_color("Text", theme.palette.text_dim)
+
             label = node.name
             if is_splat:
                 label += f"  ({node.gaussian_count:,})"
@@ -283,10 +315,14 @@ class ScenePanel(Panel):
                 if pc:
                     label += f"  ({pc.size:,})"
 
+            label_x, label_y = layout.get_cursor_screen_pos()
+
             if has_children:
                 flags = "OpenOnArrow|SpanAvailWidth"
                 if is_group or is_dataset:
                     flags += "|DefaultOpen"
+                if is_selected:
+                    flags += "|Selected"
                 is_open = layout.tree_node_ex(label, flags)
                 node_clicked = layout.is_item_clicked()
 
@@ -294,7 +330,7 @@ class ScenePanel(Panel):
                 self._handle_drag_drop(layout, node, can_drag)
 
                 if node_clicked:
-                    lf.select_node(node.name)
+                    self._handle_click(node.name)
 
                 if is_camera and layout.is_item_hovered() and layout.is_mouse_double_clicked(0):
                     if node.image_path:
@@ -308,17 +344,28 @@ class ScenePanel(Panel):
                     layout.tree_pop()
             else:
                 flags = "Leaf|NoTreePushOnOpen|SpanAvailWidth"
+                if is_selected:
+                    flags += "|Selected"
                 layout.tree_node_ex(label, flags)
 
                 self._draw_context_menu(layout, scene, node, node_type, is_deletable, can_drag)
                 self._handle_drag_drop(layout, node, can_drag)
 
                 if layout.is_item_clicked():
-                    lf.select_node(node.name)
+                    self._handle_click(node.name)
 
                 if is_camera and layout.is_item_hovered() and layout.is_mouse_double_clicked(0):
                     if node.image_path:
                         self._open_camera_preview(scene, node.camera_uid)
+
+            if training_disabled:
+                layout.pop_style_color()
+                tw, th = layout.calc_text_size(label)
+                arrow_indent = layout.get_text_line_height() + 4.0 * scale
+                line_y = label_y + th * 0.5
+                layout.draw_window_line(label_x + arrow_indent, line_y,
+                                        label_x + arrow_indent + tw, line_y,
+                                        theme.palette.text_dim, 1.0)
 
         if depth > 0:
             layout.unindent(depth * INDENT_SPACING * scale)
@@ -339,20 +386,88 @@ class ScenePanel(Panel):
                     lf.reparent_node(payload, node.name)
                 layout.end_drag_drop_target()
 
+    def _handle_click(self, node_name):
+        ctrl = lf.ui.is_ctrl_down()
+        shift = lf.ui.is_shift_down()
+
+        if ctrl:
+            if node_name in self._selected_nodes:
+                self._selected_nodes.discard(node_name)
+                lf.select_nodes(list(self._selected_nodes))
+            else:
+                lf.add_to_selection(node_name)
+                self._selected_nodes.add(node_name)
+            self._click_anchor = node_name
+        elif shift and self._click_anchor:
+            names = self._get_range(self._click_anchor, node_name)
+            lf.select_nodes(names)
+            self._selected_nodes = set(names)
+        else:
+            lf.select_node(node_name)
+            self._selected_nodes = {node_name}
+            self._click_anchor = node_name
+
+    def _get_range(self, a, b):
+        order = self._committed_node_order
+        try:
+            ia, ib = order.index(a), order.index(b)
+        except ValueError:
+            return [b]
+        lo, hi = min(ia, ib), max(ia, ib)
+        return order[lo:hi + 1]
+
+    def _delete_selected(self, scene):
+        for name in list(self._selected_nodes):
+            node = scene.get_node(name)
+            if not node:
+                continue
+            ntype = str(node.type).split(".")[-1]
+            parent_is_dataset = False
+            if node.parent_id != -1:
+                parent = scene.get_node_by_id(node.parent_id)
+                if parent and str(parent.type).split(".")[-1] == "DATASET":
+                    parent_is_dataset = True
+            if ntype not in ("CAMERA", "CAMERA_GROUP") and not parent_is_dataset:
+                lf.remove_node(name, False)
+
     def _draw_context_menu(self, layout, scene, node, node_type, is_deletable, can_drag):
         if not layout.begin_context_menu(f"##ctx_{node.name}"):
             return
 
-        lf.select_node(node.name)
+        if node.name not in self._selected_nodes:
+            lf.select_node(node.name)
+            self._selected_nodes = {node.name}
+            self._click_anchor = node.name
+
+        if len(self._selected_nodes) > 1:
+            self._draw_multi_context_menu(layout, scene)
+            layout.end_context_menu()
+            return
 
         if node_type == "CAMERA":
             if layout.menu_item(tr("scene.go_to_camera_view")):
                 lf.ui.go_to_camera_view(node.camera_uid)
+            layout.separator()
+            if node.training_enabled:
+                if layout.menu_item(tr("scene.disable_for_training")):
+                    node.training_enabled = False
+            else:
+                if layout.menu_item(tr("scene.enable_for_training")):
+                    node.training_enabled = True
             layout.end_context_menu()
             return
 
         if node_type == "CAMERA_GROUP":
-            layout.label(tr("scene.no_actions"))
+            if layout.menu_item(tr("scene.enable_all_training")):
+                for child_id in node.children:
+                    child = scene.get_node_by_id(child_id)
+                    if child and str(child.type).split(".")[-1] == "CAMERA":
+                        child.training_enabled = True
+            if layout.menu_item(tr("scene.disable_all_training")):
+                for child_id in node.children:
+                    child = scene.get_node_by_id(child_id)
+                    if child and str(child.type).split(".")[-1] == "CAMERA":
+                        child.training_enabled = False
             layout.end_context_menu()
             return
 
@@ -436,3 +551,59 @@ class ScenePanel(Panel):
                 lf.remove_node(node.name, False)
 
         layout.end_context_menu()
+
+    def _draw_multi_context_menu(self, layout, scene):
+        types = set()
+        deletable = []
+        for name in self._selected_nodes:
+            node = scene.get_node(name)
+            if not node:
+                continue
+            ntype = str(node.type).split(".")[-1]
+            types.add(ntype)
+            parent_is_dataset = False
+            if node.parent_id != -1:
+                parent = scene.get_node_by_id(node.parent_id)
+                if parent and str(parent.type).split(".")[-1] == "DATASET":
+                    parent_is_dataset = True
+            if ntype not in ("CAMERA", "CAMERA_GROUP") and not parent_is_dataset:
+                deletable.append(name)
+
+        if types == {"CAMERA"}:
+            if layout.menu_item(tr("scene.enable_all_training")):
+                for name in self._selected_nodes:
+                    node = scene.get_node(name)
+                    if node:
+                        node.training_enabled = True
+            if layout.menu_item(tr("scene.disable_all_training")):
+                for name in self._selected_nodes:
+                    node = scene.get_node(name)
+                    if node:
+                        node.training_enabled = False
+        elif types == {"CAMERA_GROUP"}:
+            if layout.menu_item(tr("scene.enable_all_training")):
+                for name in self._selected_nodes:
+                    grp = scene.get_node(name)
+                    if not grp:
+                        continue
+                    for child_id in grp.children:
+                        child = scene.get_node_by_id(child_id)
+                        if child and str(child.type).split(".")[-1] == "CAMERA":
+                            child.training_enabled = True
+            if layout.menu_item(tr("scene.disable_all_training")):
+                for name in self._selected_nodes:
+                    grp = scene.get_node(name)
+                    if not grp:
+                        continue
+                    for child_id in grp.children:
+                        child = scene.get_node_by_id(child_id)
+                        if child and str(child.type).split(".")[-1] == "CAMERA":
+                            child.training_enabled = False
+
+        if deletable:
+            if types in ({"CAMERA"}, {"CAMERA_GROUP"}):
+                layout.separator()
+            label = f"{tr('scene.delete')} ({len(deletable)})"
+            if layout.menu_item(label):
+                for name in deletable:
+                    lf.remove_node(name, False)

@@ -279,7 +279,13 @@
     "no_groups_available": "Nessun gruppo disponibile",
     "delete_node": "Elimina",
     "cannot_delete_training": "Impossibile eliminare durante l'addestramento",
-    "background": "Sfondo"
+    "background": "Sfondo",
+    "enable_for_training": "Abilita per addestramento",
+    "disable_for_training": "Disabilita per addestramento",
+    "enable_all_training": "Abilita tutti per addestramento",
+    "disable_all_training": "Disabilita tutti per addestramento",
+    "training_enabled_tooltip": "Incluso nell'addestramento",
+    "training_disabled_tooltip": "Escluso dall'addestramento"
   },
 
   "export": {

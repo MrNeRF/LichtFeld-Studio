@@ -415,6 +415,16 @@ namespace lfs::core {
         return result;
     }
 
+    std::unordered_set<int> Scene::getTrainingDisabledCameraUids() const {
+        std::unordered_set<int> result;
+        for (const auto& node : nodes_) {
+            if (node->type == NodeType::CAMERA && node->camera && !node->training_enabled) {
+                result.insert(node->camera->uid());
+            }
+        }
+        return result;
+    }
+
     const Scene::Node* Scene::getNode(const std::string& name) const {
         auto it = std::find_if(nodes_.begin(), nodes_.end(),
                                [&name](const std::unique_ptr<Node>& node) { return node->name == name; });

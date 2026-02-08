@@ -549,6 +549,9 @@ class SubLayout:
 
     def input_int_formatted(self, label: str, value: int, step: int = 0, step_fast: int = 0) -> tuple[bool, int]: ...
 
+    def stepper_float(self, label: str, value: float, steps: Sequence[float] = [1.0, 0.10000000149011612, 0.009999999776482582]) -> tuple[bool, float]:
+        """Float input with increment/decrement buttons, returns (changed, value)"""
+
     def radio_button(self, label: str, current: int, value: int) -> tuple[bool, int]: ...
 
     def small_button(self, label: str) -> bool: ...
@@ -741,6 +744,11 @@ class UILayout:
 
     def input_int_formatted(self, label: str, value: int, step: int = 0, step_fast: int = 0) -> tuple[bool, int]:
         """Draw a formatted int input field, returns (changed, value)"""
+
+    def stepper_float(self, label: str, value: float, steps: Sequence[float] = [1.0, 0.10000000149011612, 0.009999999776482582]) -> tuple[bool, float]:
+        """
+        Draw a float input with increment/decrement buttons, returns (changed, value)
+        """
 
     def path_input(self, label: str, value: str, folder_mode: bool = True, dialog_title: str = '') -> tuple[bool, str]:
         """Draw a path input with browse button, returns (changed, path)"""
@@ -1288,6 +1296,12 @@ def is_key_pressed(key: Key, repeat: bool = True) -> bool:
 
 def is_key_down(key: Key) -> bool:
     """Check if a key is currently held down"""
+
+def is_ctrl_down() -> bool:
+    """Check if Ctrl is currently held"""
+
+def is_shift_down() -> bool:
+    """Check if Shift is currently held"""
 
 @overload
 def tr(key: str) -> str:

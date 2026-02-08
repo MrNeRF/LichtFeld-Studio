@@ -7,6 +7,8 @@ layout(location = 6) in vec4 aInstanceColorAlpha;
 layout(location = 7) in uint aTextureID;
 layout(location = 8) in uint aIsValidation;
 layout(location = 9) in uint aIsEquirectangular;
+layout(location = 10) in uint aIsTrainingDisabled;
+layout(location = 11) in uint aIsSelected;
 
 uniform mat4 viewProj;
 uniform mat4 view;
@@ -25,6 +27,8 @@ flat out uint textureID;
 flat out uint isValidation;
 flat out uint isEquirectangular;
 flat out int equiView;
+flat out uint isTrainingDisabled;
+flat out uint isSelected;
 
 void main() {
     instanceID = gl_InstanceID;
@@ -34,6 +38,8 @@ void main() {
     textureID = aTextureID;
     isValidation = aIsValidation;
     isEquirectangular = aIsEquirectangular;
+    isTrainingDisabled = aIsTrainingDisabled;
+    isSelected = aIsSelected;
     FragPos = vec3(worldPos);
     equiView = equirectangularView ? 1 : 0;
     ndcX = 0.0;

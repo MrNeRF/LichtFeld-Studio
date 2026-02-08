@@ -184,6 +184,33 @@ namespace lfs::python {
         }
     }
 
+    void PyPointCloud::set_colors(const PyTensor& colors) {
+        const auto& cols = colors.tensor();
+        assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
+        assert(cols.shape()[0] == pc_->size());
+        pc_->colors = cols.to(core::Device::CUDA);
+        if (scene_) {
+            scene_->invalidateCache();
+            lfs::core::events::state::SceneChanged{}.emit();
+        }
+    }
+
+    void PyPointCloud::set_means(const PyTensor& points) {
+        const auto& pts = points.tensor();
+        assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
+        assert(pts.shape()[0] == pc_->size());
+        pc_->means = pts.to(core::Device::CUDA);
+        if (node_ && pc_->size() > 0) {
+            auto centroid = pc_->means.mean(0).cpu();
+            auto acc = centroid.accessor<float, 1>();
+            node_->centroid = glm::vec3(acc(0), acc(1), acc(2));
+        }
+        if (scene_) {
+            scene_->invalidateCache();
+            lfs::core::events::state::SceneChanged{}.emit();
+        }
+    }
+
     std::optional<PyCropBox> PySceneNode::cropbox() {
         if (node_->type != core::NodeType::CROPBOX || !node_->cropbox) {
             return std::nullopt;
@@ -544,7 +571,11 @@ namespace lfs::python {
             .def("filter_indices", &PyPointCloud::filter_indices, nb::arg("indices"),
                  "Keep only points at specified indices, returns number of points removed")
             .def("set_data", &PyPointCloud::set_data, nb::arg("points"), nb::arg("colors"),
-                 "Replace point cloud data with new points and colors tensors");
+                 "Replace point cloud data with new points and colors tensors")
+            .def("set_colors", &PyPointCloud::set_colors, nb::arg("colors"),
+                 "Update colors without re-uploading positions [N, 3]")
+            .def("set_means", &PyPointCloud::set_means, nb::arg("points"),
+                 "Update positions without re-uploading colors [N, 3]");
 
         // SceneNode class
         nb::class_<PySceneNode>(m, "SceneNode")
@@ -573,6 +604,11 @@ namespace lfs::python {
             .def_prop_ro("image_path", &PySceneNode::image_path, "Path to the camera image file")
             .def_prop_ro("mask_path", &PySceneNode::mask_path, "Path to the camera mask file")
             .def_prop_ro("has_camera", &PySceneNode::has_camera, "Whether this node has camera data")
+            .def_prop_ro("has_mask", &PySceneNode::has_mask, "Whether this camera node has a mask file")
+            .def("load_mask", &PySceneNode::load_mask,
+                 nb::arg("resize_factor") = 1, nb::arg("max_width") = 3840,
+                 nb::arg("invert") = false, nb::arg("threshold") = 0.5f,
+                 "Load mask as tensor [1, H, W] on CUDA (None if not a camera node or no mask)")
             .def_prop_ro("camera_R", &PySceneNode::camera_R, "Camera rotation matrix [3, 3]")
             .def_prop_ro("camera_T", &PySceneNode::camera_T, "Camera translation vector [3, 1]")
             .def_prop_ro("camera_focal_x", &PySceneNode::camera_focal_x, "Camera focal length in pixels (x)")
@@ -730,9 +766,22 @@ Returns:
             .def("training_model", &PyScene::training_model, "Get the SplatData used for training (None if unavailable)")
             .def("set_training_model_node", &PyScene::set_training_model_node, nb::arg("name"), "Set which node provides the training model")
             .def_prop_ro("training_model_node_name", &PyScene::training_model_node_name, "Name of the node providing the training model")
-            // Bounds
+            // Bounds (by id)
             .def("get_node_bounds", &PyScene::get_node_bounds, nb::arg("id"), "Get axis-aligned bounding box as ((min_x, min_y, min_z), (max_x, max_y, max_z))")
             .def("get_node_bounds_center", &PyScene::get_node_bounds_center, nb::arg("id"), "Get center of the node bounding box as (x, y, z)")
+            // Bounds (by name)
+            .def(
+                "get_node_bounds", [](PyScene& self, const std::string& name) {
+                    auto node = self.get_node(name);
+                    if (!node)
+                        return decltype(self.get_node_bounds(0)){std::nullopt};
+                    return self.get_node_bounds(node->id()); }, nb::arg("name"), "Get axis-aligned bounding box by node name")
+            .def(
+                "get_node_bounds_center", [](PyScene& self, const std::string& name) {
+                    auto node = self.get_node(name);
+                    if (!node)
+                        throw std::runtime_error("Node not found: " + name);
+                    return self.get_node_bounds_center(node->id()); }, nb::arg("name"), "Get center of the node bounding box by name")
             // CropBox
             .def("get_cropbox_for_splat", &PyScene::get_cropbox_for_splat, nb::arg("splat_id"), "Get the crop box node ID associated with a splat (-1 if none)")
             .def("get_or_create_cropbox_for_splat", &PyScene::get_or_create_cropbox_for_splat, nb::arg("splat_id"), "Get or create a crop box for a splat, returns cropbox node ID")
@@ -756,6 +805,10 @@ Returns:
             .def("update_selection_group_counts", &PyScene::update_selection_group_counts, "Recompute selection counts for all groups")
             .def("clear_selection_group", &PyScene::clear_selection_group, nb::arg("id"), "Clear all selections in a group")
             .def("reset_selection_state", &PyScene::reset_selection_state, "Reset all selection state to defaults")
+            // Camera training control
+            .def("set_camera_training_enabled", &PyScene::set_camera_training_enabled, nb::arg("name"), nb::arg("enabled"), "Enable or disable a camera for training by name")
+            .def_prop_ro("active_camera_count", &PyScene::active_camera_count, "Number of cameras enabled for training")
+            .def("get_active_cameras", &PyScene::get_active_cameras, "Get camera nodes enabled for training")
             // Training data
             .def("has_training_data", &PyScene::has_training_data, "Check if training dataset is loaded")
             .def_prop_ro("scene_center", &PyScene::scene_center, "Scene center position as a [3] tensor")

@@ -27,8 +27,8 @@ namespace lfs::core {
             return Tensor();
         }
 
-        if (mask.dtype() != DataType::Bool) {
-            LOG_ERROR("masked_select requires boolean mask");
+        if (!is_bool_like(mask.dtype())) {
+            LOG_ERROR("masked_select requires boolean or uint8 mask");
             return Tensor();
         }
 
@@ -88,8 +88,8 @@ namespace lfs::core {
             return *this;
         }
 
-        if (mask.dtype() != DataType::Bool) {
-            LOG_ERROR("masked_fill_ requires boolean mask");
+        if (!is_bool_like(mask.dtype())) {
+            LOG_ERROR("masked_fill_ requires boolean or uint8 mask");
             return *this;
         }
 
@@ -145,7 +145,7 @@ namespace lfs::core {
         if (dim < 0 || dim >= static_cast<int>(shape_.rank()))
             return {};
 
-        if (indices.dtype() == DataType::Bool) {
+        if (is_bool_like(indices.dtype())) {
             if (indices.numel() != shape_[dim])
                 return {};
             const auto idx = indices.nonzero().squeeze(1);
@@ -1174,7 +1174,7 @@ namespace lfs::core {
             CHECK_CUDA(cudaMalloc(&d_count, sizeof(size_t)));
             CHECK_CUDA(cudaMemset(d_count, 0, sizeof(size_t)));
 
-            if (dtype_ == DataType::Bool) {
+            if (is_bool_like(dtype_)) {
                 tensor_ops::launch_count_nonzero_bool(ptr<unsigned char>(), d_count, numel(), stream_);
             } else if (dtype_ == DataType::Float32) {
                 tensor_ops::launch_count_nonzero_float(ptr<float>(), d_count, numel(), stream_);
@@ -1190,7 +1190,7 @@ namespace lfs::core {
             // CPU implementation
             size_t count = 0;
 
-            if (dtype_ == DataType::Bool) {
+            if (is_bool_like(dtype_)) {
                 const unsigned char* data = ptr<unsigned char>();
                 for (size_t i = 0; i < numel(); ++i) {
                     if (data[i])
@@ -1245,7 +1245,7 @@ namespace lfs::core {
 
             if (device_ == Device::CUDA) {
                 // Get ACTUAL count from CUB (not Thrust which may differ!)
-                if (dtype_ == DataType::Bool) {
+                if (is_bool_like(dtype_)) {
                     actual_count = tensor_ops::launch_nonzero_bool(ptr<unsigned char>(),
                                                                    reinterpret_cast<int64_t*>(temp.data_ptr()),
                                                                    numel(), numel(), stream_);
@@ -1273,7 +1273,7 @@ namespace lfs::core {
                 int64_t* indices = reinterpret_cast<int64_t*>(temp.data_ptr());
                 size_t write_idx = 0;
 
-                if (dtype_ == DataType::Bool) {
+                if (is_bool_like(dtype_)) {
                     const unsigned char* data = ptr<unsigned char>();
                     for (size_t i = 0; i < numel(); ++i) {
                         if (data[i]) {
@@ -1326,7 +1326,7 @@ namespace lfs::core {
 
             auto strides = shape_.strides();
 
-            if (dtype_ == DataType::Bool) {
+            if (is_bool_like(dtype_)) {
                 const unsigned char* data = ptr<unsigned char>();
                 for (size_t i = 0; i < numel(); ++i) {
                     if (data[i]) {
@@ -1655,7 +1655,7 @@ namespace lfs::core {
 
     void TensorIndexer::operator=(float value) {
         if (indices_.size() == 1) {
-            if (indices_[0].dtype() == DataType::Bool) {
+            if (is_bool_like(indices_[0].dtype())) {
                 tensor_->masked_fill_(indices_[0], value);
             } else {
                 tensor_->scatter_(0, indices_[0], value);
@@ -1665,7 +1665,7 @@ namespace lfs::core {
 
     void TensorIndexer::operator=(const Tensor& other) {
         if (indices_.size() == 1) {
-            if (indices_[0].dtype() == DataType::Bool) {
+            if (is_bool_like(indices_[0].dtype())) {
                 MaskedTensorProxy proxy(tensor_, std::move(indices_[0]));
                 proxy = other;
             } else {

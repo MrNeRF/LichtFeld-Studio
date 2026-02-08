@@ -279,7 +279,13 @@
     "no_groups_available": "Aucun groupe disponible",
     "delete_node": "Supprimer",
     "cannot_delete_training": "Suppression impossible pendant l'entraînement",
-    "background": "Arrière-plan"
+    "background": "Arrière-plan",
+    "enable_for_training": "Activer pour l'entraînement",
+    "disable_for_training": "Désactiver pour l'entraînement",
+    "enable_all_training": "Tout activer pour l'entraînement",
+    "disable_all_training": "Tout désactiver pour l'entraînement",
+    "training_enabled_tooltip": "Inclus dans l'entraînement",
+    "training_disabled_tooltip": "Exclu de l'entraînement"
   },
 
   "export": {

@@ -36,7 +36,9 @@ namespace lfs::rendering {
                             const glm::vec3& train_color = glm::vec3(0.0f, 1.0f, 0.0f),
                             const glm::vec3& eval_color = glm::vec3(1.0f, 0.0f, 0.0f),
                             const glm::mat4& scene_transform = glm::mat4(1.0f),
-                            bool equirectangular_view = false);
+                            bool equirectangular_view = false,
+                            const std::unordered_set<int>& disabled_uids = {},
+                            const std::unordered_set<int>& selected_uids = {});
 
         Result<int> pickCamera(const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
                                const glm::vec2& mouse_pos,
@@ -73,7 +75,8 @@ namespace lfs::rendering {
             uint32_t texture_id;
             uint32_t is_validation;
             uint32_t is_equirectangular;
-            uint32_t padding; // 16-byte alignment
+            uint32_t is_training_disabled;
+            uint32_t is_selected;
         };
 
         struct ThumbnailRequest {
@@ -100,7 +103,9 @@ namespace lfs::rendering {
                               const glm::vec3& eval_color,
                               bool for_picking,
                               const glm::vec3& view_position,
-                              const glm::mat4& scene_transform);
+                              const glm::mat4& scene_transform,
+                              const std::unordered_set<int>& disabled_uids = {},
+                              const std::unordered_set<int>& selected_uids = {});
 
         void updateInstanceVisibility(const glm::vec3& view_position);
 
@@ -152,6 +157,8 @@ namespace lfs::rendering {
         glm::vec3 last_eval_color_{-1, -1, -1};
         glm::vec3 last_view_position_{0, 0, 0};
         glm::mat4 last_scene_transform_{1.0f};
+        std::unordered_set<int> last_disabled_uids_;
+        std::unordered_set<int> last_selected_uids_;
 
         // Image preview
         bool show_images_ = true;

@@ -1164,6 +1164,14 @@ namespace lfs::python {
         pop_per_item_state();
         return r;
     }
+    std::tuple<bool, float> PySubLayout::stepper_float(const std::string& label, float value,
+                                                       const std::vector<float>& steps) {
+        advance_child();
+        apply_state();
+        auto r = parent_->stepper_float(label, value, steps);
+        pop_per_item_state();
+        return r;
+    }
     std::tuple<bool, int> PySubLayout::radio_button(const std::string& label, int current, int value) {
         advance_child();
         apply_state();
@@ -1788,6 +1796,65 @@ namespace lfs::python {
         return {changed, v};
     }
 
+    std::tuple<bool, float> PyUILayout::stepper_float(const std::string& label, float value,
+                                                      const std::vector<float>& steps) {
+        float v = value;
+        bool changed = false;
+
+        ImGui::PushID(label.c_str());
+
+        const float avail = ImGui::GetContentRegionAvail().x;
+        const float btn_height = ImGui::GetFrameHeight();
+        const float spacing = ImGui::GetStyle().ItemSpacing.x;
+
+        float buttons_total = 0.0f;
+        for (size_t i = 0; i < steps.size(); ++i) {
+            char minus_buf[32], plus_buf[32];
+            std::snprintf(minus_buf, sizeof(minus_buf), "-%.6g", steps[i]);
+            std::snprintf(plus_buf, sizeof(plus_buf), "+%.6g", steps[i]);
+            buttons_total += ImGui::CalcTextSize(minus_buf).x + ImGui::GetStyle().FramePadding.x * 2;
+            buttons_total += ImGui::CalcTextSize(plus_buf).x + ImGui::GetStyle().FramePadding.x * 2;
+            buttons_total += spacing * 2;
+        }
+
+        const float input_width = std::max(avail - buttons_total - spacing, 60.0f);
+        ImGui::SetNextItemWidth(input_width);
+        if (ImGui::InputFloat("##val", &v, 0.0f, 0.0f, "%.3f")) {
+            changed = true;
+        }
+
+        for (size_t i = 0; i < steps.size(); ++i) {
+            const float step = steps[i];
+            char buf[32];
+
+            ImGui::SameLine();
+            std::snprintf(buf, sizeof(buf), "-%.6g", step);
+            ImGui::PushID(static_cast<int>(i * 2));
+            if (ImGui::Button(buf, ImVec2(0, btn_height))) {
+                v -= step;
+                changed = true;
+            }
+            ImGui::PopID();
+
+            ImGui::SameLine();
+            std::snprintf(buf, sizeof(buf), "+%.6g", step);
+            ImGui::PushID(static_cast<int>(i * 2 + 1));
+            if (ImGui::Button(buf, ImVec2(0, btn_height))) {
+                v += step;
+                changed = true;
+            }
+            ImGui::PopID();
+        }
+
+        if (!label.empty() && label[0] != '#') {
+            ImGui::SameLine();
+            ImGui::TextUnformatted(label.c_str());
+        }
+
+        ImGui::PopID();
+        return {changed, v};
+    }
+
     std::tuple<bool, std::string> PyUILayout::path_input(const std::string& label, const std::string& value,
                                                          const bool folder_mode, const std::string& dialog_title) {
         char buffer[INPUT_TEXT_BUFFER_SIZE];
@@ -1944,6 +2011,8 @@ namespace lfs::python {
             flags |= ImGuiTreeNodeFlags_Leaf;
         if (flags_str.find("NoTreePushOnOpen") != std::string::npos)
             flags |= ImGuiTreeNodeFlags_NoTreePushOnOpen;
+        if (flags_str.find("Selected") != std::string::npos)
+            flags |= ImGuiTreeNodeFlags_Selected;
         return ImGui::TreeNodeEx(label.c_str(), flags);
     }
 
@@ -2825,6 +2894,7 @@ namespace lfs::python {
             .def("input_float", &PySubLayout::input_float, nb::arg("label"), nb::arg("value"), nb::arg("step") = 0.0f, nb::arg("step_fast") = 0.0f, nb::arg("format") = "%.3f")
             .def("input_int", &PySubLayout::input_int, nb::arg("label"), nb::arg("value"), nb::arg("step") = 1, nb::arg("step_fast") = 100)
             .def("input_int_formatted", &PySubLayout::input_int_formatted, nb::arg("label"), nb::arg("value"), nb::arg("step") = 0, nb::arg("step_fast") = 0)
+            .def("stepper_float", &PySubLayout::stepper_float, nb::arg("label"), nb::arg("value"), nb::arg("steps") = std::vector<float>{1.0f, 0.1f, 0.01f}, "Float input with increment/decrement buttons, returns (changed, value)")
             .def("radio_button", &PySubLayout::radio_button, nb::arg("label"), nb::arg("current"), nb::arg("value"))
             .def("small_button", &PySubLayout::small_button, nb::arg("label"))
             .def("selectable", &PySubLayout::selectable, nb::arg("label"), nb::arg("selected") = false, nb::arg("height") = 0.0f)
@@ -2936,6 +3006,9 @@ namespace lfs::python {
                  nb::arg("step") = 1, nb::arg("step_fast") = 100, "Draw an int input field with step buttons, returns (changed, value)")
             .def("input_int_formatted", &PyUILayout::input_int_formatted, nb::arg("label"), nb::arg("value"),
                  nb::arg("step") = 0, nb::arg("step_fast") = 0, "Draw a formatted int input field, returns (changed, value)")
+            .def("stepper_float", &PyUILayout::stepper_float, nb::arg("label"), nb::arg("value"),
+                 nb::arg("steps") = std::vector<float>{1.0f, 0.1f, 0.01f},
+                 "Draw a float input with increment/decrement buttons, returns (changed, value)")
             .def("path_input", &PyUILayout::path_input, nb::arg("label"), nb::arg("value"),
                  nb::arg("folder_mode") = true, nb::arg("dialog_title") = "", "Draw a path input with browse button, returns (changed, path)")
             // Color
@@ -3387,6 +3460,16 @@ namespace lfs::python {
             "is_key_down",
             [](ImGuiKey key) { return ImGui::IsKeyDown(key); },
             nb::arg("key"), "Check if a key is currently held down");
+
+        m.def(
+            "is_ctrl_down",
+            []() { return ImGui::GetIO().KeyCtrl; },
+            "Check if Ctrl is currently held");
+
+        m.def(
+            "is_shift_down",
+            []() { return ImGui::GetIO().KeyShift; },
+            "Check if Shift is currently held");
 
         // Localization
         m.def(
