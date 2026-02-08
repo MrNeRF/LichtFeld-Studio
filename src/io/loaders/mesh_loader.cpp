@@ -7,6 +7,7 @@
 #include "core/mesh_data.hpp"
 #include "core/path_utils.hpp"
 #include "io/error.hpp"
+#include <array>
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
@@ -21,6 +22,8 @@ namespace lfs::io {
     using lfs::core::Material;
     using lfs::core::MeshData;
     using lfs::core::Tensor;
+
+    constexpr std::array MESH_EXTENSIONS = {".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".blend"};
 
     namespace {
 
@@ -348,10 +351,7 @@ namespace lfs::io {
         auto ext = path.extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
 
-        static const std::vector<std::string> mesh_exts = {
-            ".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".blend"};
-
-        for (const auto& e : mesh_exts) {
+        for (const auto& e : MESH_EXTENSIONS) {
             if (ext == e)
                 return true;
         }
@@ -363,8 +363,15 @@ namespace lfs::io {
     }
 
     std::vector<std::string> MeshLoader::supportedExtensions() const {
-        return {".obj", ".OBJ", ".fbx", ".FBX", ".gltf", ".GLTF", ".glb", ".GLB",
-                ".stl", ".STL", ".dae", ".DAE", ".3ds", ".3DS"};
+        std::vector<std::string> result;
+        result.reserve(MESH_EXTENSIONS.size() * 2);
+        for (const auto& ext : MESH_EXTENSIONS) {
+            result.emplace_back(ext);
+            std::string upper(ext);
+            std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+            result.push_back(std::move(upper));
+        }
+        return result;
     }
 
     int MeshLoader::priority() const {

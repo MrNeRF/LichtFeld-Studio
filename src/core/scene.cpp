@@ -103,7 +103,7 @@ namespace lfs::core {
 
         // Check if name already exists
         auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                               [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
+                               [&name](const std::unique_ptr<SceneNode>& node) { return node->name == name; });
 
         if (it != nodes_.end()) {
             // Replace existing model
@@ -113,7 +113,7 @@ namespace lfs::core {
         } else {
             // Add new splat node
             const NodeId id = next_node_id_++;
-            auto node = std::make_unique<Node>();
+            auto node = std::make_unique<SceneNode>();
             node->id = id;
             node->type = NodeType::SPLAT;
             node->name = name;
@@ -139,7 +139,7 @@ namespace lfs::core {
             return;
 
         const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
+                                     [&name](const std::unique_ptr<SceneNode>& node) { return node->name == name; });
         if (it == nodes_.end())
             return;
 
@@ -180,7 +180,7 @@ namespace lfs::core {
 
         // Remove from lookup and vector (re-find iterator since recursive calls may have invalidated it)
         const auto it_final = std::find_if(nodes_.begin(), nodes_.end(),
-                                           [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
+                                           [&name](const std::unique_ptr<SceneNode>& node) { return node->name == name; });
         if (it_final == nodes_.end())
             return; // Already removed somehow
 
@@ -205,7 +205,7 @@ namespace lfs::core {
 
     void Scene::replaceNodeModel(const std::string& name, std::unique_ptr<lfs::core::SplatData> model) {
         const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
+                                     [&name](const std::unique_ptr<SceneNode>& node) { return node->name == name; });
 
         if (it != nodes_.end()) {
             const size_t gaussian_count = static_cast<size_t>(model->size());
@@ -222,7 +222,7 @@ namespace lfs::core {
 
     void Scene::setNodeVisibility(const std::string& name, const bool visible) {
         const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [&name](const std::unique_ptr<Node>& n) { return n->name == name; });
+                                     [&name](const std::unique_ptr<SceneNode>& n) { return n->name == name; });
         if (it != nodes_.end()) {
             setNodeVisibilityById((*it)->id, visible);
         }
@@ -233,7 +233,7 @@ namespace lfs::core {
         if (idx_it == id_to_index_.end())
             return;
 
-        Node* node = nodes_[idx_it->second].get();
+        SceneNode* node = nodes_[idx_it->second].get();
         node->visible = visible;
 
         for (const NodeId child_id : node->children) {
@@ -243,7 +243,7 @@ namespace lfs::core {
 
     void Scene::setNodeTransform(const std::string& name, const glm::mat4& transform) {
         const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
+                                     [&name](const std::unique_ptr<SceneNode>& node) { return node->name == name; });
         if (it != nodes_.end()) {
             (*it)->local_transform = transform;
         }
@@ -251,7 +251,7 @@ namespace lfs::core {
 
     glm::mat4 Scene::getNodeTransform(const std::string& name) const {
         const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
+                                     [&name](const std::unique_ptr<SceneNode>& node) { return node->name == name; });
 
         if (it != nodes_.end()) {
             return (*it)->local_transform;
@@ -296,7 +296,7 @@ namespace lfs::core {
 
         // Find first visible node using modular arithmetic as suggested
         auto visible = std::find_if(nodes_.begin(), nodes_.end(),
-                                    [](const std::unique_ptr<Node>& n) { return n->visible; });
+                                    [](const std::unique_ptr<SceneNode>& n) { return n->visible; });
 
         if (visible != nodes_.end()) {
             (*visible)->visible = false;
@@ -395,8 +395,8 @@ namespace lfs::core {
         return total;
     }
 
-    std::vector<const Scene::Node*> Scene::getNodes() const {
-        std::vector<const Node*> result;
+    std::vector<const SceneNode*> Scene::getNodes() const {
+        std::vector<const SceneNode*> result;
         result.reserve(nodes_.size());
         for (const auto& node : nodes_) {
             result.push_back(node.get());
@@ -404,8 +404,8 @@ namespace lfs::core {
         return result;
     }
 
-    std::vector<const Scene::Node*> Scene::getVisibleNodes() const {
-        std::vector<const Node*> visible;
+    std::vector<const SceneNode*> Scene::getVisibleNodes() const {
+        std::vector<const SceneNode*> visible;
         for (const auto& node : nodes_) {
             if (node->visible && node->model) {
                 visible.push_back(node.get());
@@ -435,15 +435,15 @@ namespace lfs::core {
         return result;
     }
 
-    const Scene::Node* Scene::getNode(const std::string& name) const {
+    const SceneNode* Scene::getNode(const std::string& name) const {
         auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                               [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
+                               [&name](const std::unique_ptr<SceneNode>& node) { return node->name == name; });
         return (it != nodes_.end()) ? it->get() : nullptr;
     }
 
-    Scene::Node* Scene::getMutableNode(const std::string& name) {
+    SceneNode* Scene::getMutableNode(const std::string& name) {
         auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                               [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
+                               [&name](const std::unique_ptr<SceneNode>& node) { return node->name == name; });
         if (it != nodes_.end()) {
             invalidateCache();
             return it->get();
@@ -467,7 +467,7 @@ namespace lfs::core {
 
         single_node_model_ = nullptr;
 
-        std::vector<const Node*> visible_nodes;
+        std::vector<const SceneNode*> visible_nodes;
         for (const auto& node : nodes_) {
             if (node->model && isNodeEffectivelyVisible(node->id)) {
                 visible_nodes.push_back(node.get());
@@ -544,7 +544,7 @@ namespace lfs::core {
         Tensor rotation = Tensor::empty({static_cast<size_t>(stats.total_gaussians), 4}, device);
 
         const bool has_any_deleted = std::any_of(visible_nodes.begin(), visible_nodes.end(),
-                                                 [](const Node* node) { return node->model->has_deleted_mask(); });
+                                                 [](const SceneNode* node) { return node->model->has_deleted_mask(); });
 
         Tensor deleted = has_any_deleted
                              ? Tensor::zeros({static_cast<size_t>(stats.total_gaussians)}, device, lfs::core::DataType::Bool)
@@ -671,7 +671,7 @@ namespace lfs::core {
             return std::vector<bool>(visible_count, false);
         }
 
-        const Node* selected = getNode(selected_node_name);
+        const SceneNode* selected = getNode(selected_node_name);
         if (!selected) {
             return std::vector<bool>(visible_count, false);
         }
@@ -683,8 +683,8 @@ namespace lfs::core {
         }
 
         const NodeId selected_id = selected->id;
-        const auto isSelectedOrDescendant = [this, selected_id](const Node* node) {
-            for (const Node* n = node; n; n = (n->parent_id != NULL_NODE) ? getNodeById(n->parent_id) : nullptr) {
+        const auto isSelectedOrDescendant = [this, selected_id](const SceneNode* node) {
+            for (const SceneNode* n = node; n; n = (n->parent_id != NULL_NODE) ? getNodeById(n->parent_id) : nullptr) {
                 if (n->id == selected_id)
                     return true;
             }
@@ -711,7 +711,7 @@ namespace lfs::core {
 
         std::set<NodeId> selected_ids;
         for (const auto& name : selected_node_names) {
-            const Node* selected = getNode(name);
+            const SceneNode* selected = getNode(name);
             if (!selected)
                 continue;
 
@@ -727,8 +727,8 @@ namespace lfs::core {
             return std::vector<bool>(visible_count, false);
         }
 
-        const auto isSelectedOrDescendant = [this, &selected_ids](const Node* node) {
-            for (const Node* n = node; n; n = (n->parent_id != NULL_NODE) ? getNodeById(n->parent_id) : nullptr) {
+        const auto isSelectedOrDescendant = [this, &selected_ids](const SceneNode* node) {
+            for (const SceneNode* n = node; n; n = (n->parent_id != NULL_NODE) ? getNodeById(n->parent_id) : nullptr) {
                 if (selected_ids.count(n->id) > 0)
                     return true;
             }
@@ -821,7 +821,7 @@ namespace lfs::core {
 
         // Check if new name already exists
         auto existing_it = std::find_if(nodes_.begin(), nodes_.end(),
-                                        [&new_name](const std::unique_ptr<Node>& node) {
+                                        [&new_name](const std::unique_ptr<SceneNode>& node) {
                                             return node->name == new_name;
                                         });
 
@@ -832,7 +832,7 @@ namespace lfs::core {
 
         // Find the node to rename
         auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                               [&old_name](const std::unique_ptr<Node>& node) {
+                               [&old_name](const std::unique_ptr<SceneNode>& node) {
                                    return node->name == old_name;
                                });
 
@@ -1016,7 +1016,7 @@ namespace lfs::core {
 
     NodeId Scene::addGroup(const std::string& name, const NodeId parent) {
         const NodeId id = next_node_id_++;
-        auto node = std::make_unique<Node>();
+        auto node = std::make_unique<SceneNode>();
         node->id = id;
         node->parent_id = parent;
         node->type = NodeType::GROUP;
@@ -1050,7 +1050,7 @@ namespace lfs::core {
         const glm::vec3 centroid = computeCentroid(model.get());
 
         const NodeId id = next_node_id_++;
-        auto node = std::make_unique<Node>();
+        auto node = std::make_unique<SceneNode>();
         node->id = id;
         node->parent_id = parent;
         node->type = NodeType::SPLAT;
@@ -1097,7 +1097,7 @@ namespace lfs::core {
         }();
 
         const NodeId id = next_node_id_++;
-        auto node = std::make_unique<Node>();
+        auto node = std::make_unique<SceneNode>();
         node->id = id;
         node->parent_id = parent;
         node->type = NodeType::POINTCLOUD;
@@ -1129,26 +1129,25 @@ namespace lfs::core {
         }
 
         const int64_t nv = mesh_data->vertex_count();
-        const glm::vec3 centroid = [&]() {
-            if (nv == 0)
+        const glm::vec3 centroid = [&] {
+            if (!mesh_data || mesh_data->vertex_count() == 0) return glm::vec3(0.0f);
+            auto mean = mesh_data->vertices.mean({0}, false);
+            glm::vec3 result(
+                mean.slice(0, 0, 1).item<float>(),
+                mean.slice(0, 1, 2).item<float>(),
+                mean.slice(0, 2, 3).item<float>());
+            if (std::isnan(result.x) || std::isnan(result.y) || std::isnan(result.z))
                 return glm::vec3(0.0f);
-            auto verts_cpu = mesh_data->vertices.cpu();
-            auto acc = verts_cpu.accessor<float, 2>();
-            glm::vec3 sum(0.0f);
-            for (int64_t i = 0; i < nv; ++i) {
-                sum.x += acc(i, 0);
-                sum.y += acc(i, 1);
-                sum.z += acc(i, 2);
-            }
-            return sum / static_cast<float>(nv);
+            return result;
         }();
 
         const NodeId id = next_node_id_++;
-        auto node = std::make_unique<Node>();
+        auto node = std::make_unique<SceneNode>();
         node->id = id;
         node->parent_id = parent;
         node->type = NodeType::MESH;
         node->name = name;
+        const auto nf = mesh_data->face_count();
         node->mesh = std::move(mesh_data);
         node->gaussian_count = static_cast<size_t>(nv);
         node->centroid = centroid;
@@ -1164,7 +1163,7 @@ namespace lfs::core {
         nodes_.push_back(std::move(node));
         invalidateCache();
 
-        LOG_DEBUG("Added mesh node '{}' (id={}, {} vertices, {} faces)", name, id, nv, node->mesh ? node->mesh->face_count() : 0);
+        LOG_DEBUG("Added mesh node '{}' (id={}, {} vertices, {} faces)", name, id, nv, nf);
         return id;
     }
 
@@ -1184,7 +1183,7 @@ namespace lfs::core {
         }
 
         const NodeId id = next_node_id_++;
-        auto node = std::make_unique<Node>();
+        auto node = std::make_unique<SceneNode>();
         node->id = id;
         node->parent_id = parent_id;
         node->type = NodeType::CROPBOX;
@@ -1227,7 +1226,7 @@ namespace lfs::core {
         }
 
         const NodeId id = next_node_id_++;
-        auto node = std::make_unique<Node>();
+        auto node = std::make_unique<SceneNode>();
         node->id = id;
         node->parent_id = parent_id;
         node->type = NodeType::ELLIPSOID;
@@ -1258,7 +1257,7 @@ namespace lfs::core {
 
     NodeId Scene::addDataset(const std::string& name) {
         const NodeId id = next_node_id_++;
-        auto node = std::make_unique<Node>();
+        auto node = std::make_unique<SceneNode>();
         node->id = id;
         node->parent_id = NULL_NODE;
         node->type = NodeType::DATASET;
@@ -1274,7 +1273,7 @@ namespace lfs::core {
 
     NodeId Scene::addCameraGroup(const std::string& name, const NodeId parent, const size_t camera_count) {
         const NodeId id = next_node_id_++;
-        auto node = std::make_unique<Node>();
+        auto node = std::make_unique<SceneNode>();
         node->id = id;
         node->parent_id = parent;
         node->type = NodeType::CAMERA_GROUP;
@@ -1300,7 +1299,7 @@ namespace lfs::core {
         assert(camera && "Camera object cannot be null");
 
         const NodeId id = next_node_id_++;
-        auto node = std::make_unique<Node>();
+        auto node = std::make_unique<SceneNode>();
         node->id = id;
         node->parent_id = parent;
         node->type = NodeType::CAMERA;
@@ -1334,7 +1333,7 @@ namespace lfs::core {
             std::string new_name = base_name + "_copy";
             int counter = 2;
             while (std::any_of(nodes_.begin(), nodes_.end(),
-                               [&new_name](const std::unique_ptr<Node>& n) { return n->name == new_name; })) {
+                               [&new_name](const std::unique_ptr<SceneNode>& n) { return n->name == new_name; })) {
                 new_name = base_name + "_copy_" + std::to_string(counter++);
             }
             return new_name;
@@ -1653,14 +1652,14 @@ namespace lfs::core {
         return roots;
     }
 
-    Scene::Node* Scene::getNodeById(const NodeId id) {
+    SceneNode* Scene::getNodeById(const NodeId id) {
         const auto it = id_to_index_.find(id);
         if (it == id_to_index_.end())
             return nullptr;
         return nodes_[it->second].get();
     }
 
-    const Scene::Node* Scene::getNodeById(const NodeId id) const {
+    const SceneNode* Scene::getNodeById(const NodeId id) const {
         const auto it = id_to_index_.find(id);
         if (it == id_to_index_.end())
             return nullptr;
@@ -1695,7 +1694,7 @@ namespace lfs::core {
         }
     }
 
-    void Scene::updateWorldTransform(const Node& node) const {
+    void Scene::updateWorldTransform(const SceneNode& node) const {
         if (!node.transform_dirty)
             return;
 
@@ -2030,12 +2029,12 @@ namespace lfs::core {
         // Direct lookup without cache invalidation - training model access
         // shouldn't trigger visualization cache rebuild
         auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                               [this](const std::unique_ptr<Node>& node) {
+                               [this](const std::unique_ptr<SceneNode>& node) {
                                    return node->name == training_model_node_;
                                });
         if (it == nodes_.end())
             return nullptr;
-        Node* node = it->get();
+        SceneNode* node = it->get();
         if (!isNodeEffectivelyVisible(node->id))
             return nullptr;
         return node->model.get();

@@ -240,6 +240,9 @@ set(TEST_FILES
     test_ppisp_cuda_vs_torch.cpp
     test_controller_memory.cpp
     test_undistort.cpp
+    test_mesh_data.cpp
+    test_openmesh_bridge.cpp
+    test_mesh_loader.cpp
 )
 
 # Build test sources list
@@ -318,6 +321,8 @@ target_link_libraries(lichtfeld_tests PRIVATE
     ${TORCH_LIBRARIES}
     ${OPENGL_LIBRARIES}
     OpenImageIO::OpenImageIO
+    OpenMeshCore
+    assimp::assimp
 
     # CUDA libraries
     CUDA::cudart

@@ -39,7 +39,7 @@ namespace lfs::core {
         normals = Tensor::empty({nv, 3}, Device::CPU, DataType::Float32);
         auto nacc = normals.accessor<float, 2>();
         for (int64_t i = 0; i < nv; ++i) {
-            auto n = mesh.normal(vhandles[i]);
+            const auto n = mesh.normal(vhandles[i]);
             nacc(i, 0) = n[0];
             nacc(i, 1) = n[1];
             nacc(i, 2) = n[2];

@@ -72,9 +72,6 @@ namespace lfs::python::openmesh_bindings {
                 if (_vertex_status) {
                     mesh.request_vertex_status();
                 }
-                if (_edge_status) {
-                    mesh.request_vertex_status();
-                }
                 if (_halfedge_status) {
                     mesh.request_halfedge_status();
                 }

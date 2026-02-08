@@ -240,6 +240,7 @@ namespace lfs::training {
                 return {};
 
             } else if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::MeshData>>) {
+                assert(data && "MeshData must not be null");
                 std::string mesh_name = lfs::core::path_to_utf8(params.dataset.data_path.stem());
                 if (mesh_name.empty())
                     mesh_name = "mesh";
@@ -553,6 +554,7 @@ namespace lfs::training {
                 return {};
 
             } else if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::MeshData>>) {
+                assert(data && "MeshData must not be null");
                 std::string mesh_name = lfs::core::path_to_utf8(params.dataset.data_path.stem());
                 if (mesh_name.empty())
                     mesh_name = "mesh";

@@ -540,7 +540,7 @@ namespace lfs::vis {
     }
 
     void RenderingManager::markDirty() {
-        needs_render_ = true;
+        needs_render_.store(true);
         render_texture_valid_ = false;
         LOG_TRACE("Render marked dirty");
     }
@@ -1035,7 +1035,7 @@ namespace lfs::vis {
         if (current_size != last_viewport_size_) {
             LOG_DEBUG("Viewport resize: {}x{} -> {}x{}", last_viewport_size_.x, last_viewport_size_.y,
                       current_size.x, current_size.y);
-            needs_render_ = true;
+            needs_render_.store(true);
             last_viewport_size_ = current_size;
         }
 
@@ -1046,7 +1046,7 @@ namespace lfs::vis {
 
         if (model_ptr != last_model_ptr_) {
             LOG_DEBUG("Model ptr changed: {} -> {}, size={}", last_model_ptr_, model_ptr, model ? model->size() : 0);
-            needs_render_ = true;
+            needs_render_.store(true);
             render_texture_valid_ = false;
             last_model_ptr_ = model_ptr;
             cached_result_ = {};
@@ -1118,7 +1118,7 @@ namespace lfs::vis {
 
         if (!cached_result_.image || needs_render_now || split_view_active) {
             should_render = true;
-            needs_render_ = false;
+            needs_render_.store(false);
         }
 
         glViewport(0, 0, context.viewport.frameBufferSize.x, context.viewport.frameBufferSize.y);
@@ -1230,6 +1230,12 @@ namespace lfs::vis {
             current_split_info_ = SplitViewInfo{};
         }
 
+        bool splats_presented = false;
+
+        // Build scene state once for both point cloud and mesh rendering
+        const auto scene_state = scene_manager ? scene_manager->buildRenderState()
+                                               : SceneRenderState{};
+
         // For non-split view, render to texture first (for potential reuse)
         if (model && model->size() > 0) {
             renderToTexture(context, scene_manager, model);
@@ -1250,14 +1256,13 @@ namespace lfs::vis {
                     cached_result_,
                     viewport_pos,
                     cached_result_size_);
-                if (!present_result) {
+                if (present_result) {
+                    splats_presented = true;
+                } else {
                     LOG_ERROR("Failed to present render result: {}", present_result.error());
                 }
             }
         } else if (scene_manager) {
-            // No splat model - try to render point cloud (pre-training mode only)
-            auto scene_state = scene_manager->buildRenderState();
-
             // Invalidate point cloud cache if source removed
             if (!scene_state.point_cloud && cached_source_point_cloud_) {
                 cached_filtered_point_cloud_.reset();
@@ -1423,7 +1428,9 @@ namespace lfs::vis {
                     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
                     const auto present_result = engine_->presentToScreen(cached_result_, viewport_pos, actual_image_size);
-                    if (!present_result) {
+                    if (present_result) {
+                        splats_presented = true;
+                    } else {
                         LOG_ERROR("Failed to present point cloud: {}", present_result.error());
                     }
                 } else {
@@ -1434,9 +1441,8 @@ namespace lfs::vis {
 
         // Render visible meshes
         if (scene_manager && engine_) {
-            auto mesh_scene_state = scene_manager->buildRenderState();
-            if (!mesh_scene_state.meshes.empty()) {
-                lfs::rendering::ViewportData mesh_viewport{
+            if (!scene_state.meshes.empty()) {
+                const lfs::rendering::ViewportData mesh_viewport{
                     .rotation = context.viewport.getRotationMatrix(),
                     .translation = context.viewport.getTranslation(),
                     .size = render_size,
@@ -1444,7 +1450,7 @@ namespace lfs::vis {
                     .orthographic = settings_.orthographic,
                     .ortho_scale = settings_.ortho_scale};
 
-                lfs::rendering::MeshRenderOptions mesh_opts{
+                const lfs::rendering::MeshRenderOptions mesh_opts{
                     .wireframe_overlay = settings_.mesh_wireframe,
                     .wireframe_color = settings_.mesh_wireframe_color,
                     .wireframe_width = settings_.mesh_wireframe_width,
@@ -1456,11 +1462,18 @@ namespace lfs::vis {
                 glEnable(GL_DEPTH_TEST);
                 glDepthFunc(GL_LESS);
 
-                for (const auto& vm : mesh_scene_state.meshes) {
-                    auto result = engine_->renderMesh(*vm.mesh, mesh_viewport, vm.transform, mesh_opts);
-                    if (!result) {
+                for (const auto& vm : scene_state.meshes) {
+                    const auto result = engine_->renderMesh(
+                        *vm.mesh, mesh_viewport, vm.transform, mesh_opts, splats_presented);
+                    if (!result)
                         LOG_ERROR("Failed to render mesh: {}", result.error());
-                    }
+                }
+
+                if (splats_presented && engine_->hasMeshRender()) {
+                    const auto composite_result = engine_->compositeMeshAndSplat(
+                        cached_result_, render_size);
+                    if (!composite_result)
+                        LOG_ERROR("Failed to composite: {}", composite_result.error());
                 }
             }
         }

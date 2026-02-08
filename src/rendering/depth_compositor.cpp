@@ -96,10 +96,13 @@ namespace lfs::rendering {
 
         glViewport(0, 0, viewport_size.x, viewport_size.y);
         glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_ALWAYS);
 
         glBindVertexArray(vao_.get());
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         glBindVertexArray(0);
+
+        glDepthFunc(GL_LESS);
 
         glActiveTexture(GL_TEXTURE0);
 

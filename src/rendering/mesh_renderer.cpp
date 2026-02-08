@@ -11,6 +11,8 @@
 
 namespace lfs::rendering {
 
+    constexpr float FAR_DEPTH_SENTINEL = 1e10f;
+
     Result<void> MeshRenderer::initialize() {
         if (initialized_)
             return {};
@@ -160,14 +162,14 @@ namespace lfs::rendering {
             return {};
         }
 
-        auto cpu_verts = mesh.vertices.to(lfs::core::Device::CPU).contiguous();
+        const auto cpu_verts = mesh.vertices.to(lfs::core::Device::CPU).contiguous();
         glBindBuffer(GL_ARRAY_BUFFER, vbo_positions_.get());
         glBufferData(GL_ARRAY_BUFFER,
                      cpu_verts.numel() * sizeof(float),
                      cpu_verts.ptr<float>(), GL_DYNAMIC_DRAW);
 
         if (mesh.has_normals()) {
-            auto cpu_normals = mesh.normals.to(lfs::core::Device::CPU).contiguous();
+            const auto cpu_normals = mesh.normals.to(lfs::core::Device::CPU).contiguous();
             glBindBuffer(GL_ARRAY_BUFFER, vbo_normals_.get());
             glBufferData(GL_ARRAY_BUFFER,
                          cpu_normals.numel() * sizeof(float),
@@ -178,7 +180,7 @@ namespace lfs::rendering {
         }
 
         if (mesh.has_tangents()) {
-            auto cpu_tangents = mesh.tangents.to(lfs::core::Device::CPU).contiguous();
+            const auto cpu_tangents = mesh.tangents.to(lfs::core::Device::CPU).contiguous();
             glBindBuffer(GL_ARRAY_BUFFER, vbo_tangents_.get());
             glBufferData(GL_ARRAY_BUFFER,
                          cpu_tangents.numel() * sizeof(float),
@@ -189,7 +191,7 @@ namespace lfs::rendering {
         }
 
         if (mesh.has_texcoords()) {
-            auto cpu_tc = mesh.texcoords.to(lfs::core::Device::CPU).contiguous();
+            const auto cpu_tc = mesh.texcoords.to(lfs::core::Device::CPU).contiguous();
             glBindBuffer(GL_ARRAY_BUFFER, vbo_texcoords_.get());
             glBufferData(GL_ARRAY_BUFFER,
                          cpu_tc.numel() * sizeof(float),
@@ -200,7 +202,7 @@ namespace lfs::rendering {
         }
 
         if (mesh.has_colors()) {
-            auto cpu_colors = mesh.colors.to(lfs::core::Device::CPU).contiguous();
+            const auto cpu_colors = mesh.colors.to(lfs::core::Device::CPU).contiguous();
             glBindBuffer(GL_ARRAY_BUFFER, vbo_colors_.get());
             glBufferData(GL_ARRAY_BUFFER,
                          cpu_colors.numel() * sizeof(float),
@@ -210,7 +212,7 @@ namespace lfs::rendering {
             glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);
         }
 
-        auto cpu_idx = mesh.indices.to(lfs::core::Device::CPU).contiguous();
+        const auto cpu_idx = mesh.indices.to(lfs::core::Device::CPU).contiguous();
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ebo_.get());
         glBufferData(GL_ELEMENT_ARRAY_BUFFER,
                      cpu_idx.numel() * sizeof(int32_t),
@@ -231,7 +233,8 @@ namespace lfs::rendering {
                                       const glm::mat4& projection,
                                       const glm::vec3& camera_pos,
                                       const MeshRenderOptions& opts,
-                                      bool use_fbo) {
+                                      bool use_fbo,
+                                      bool clear_fbo) {
         if (!initialized_)
             return std::unexpected("MeshRenderer not initialized");
 
@@ -246,10 +249,11 @@ namespace lfs::rendering {
             glBindFramebuffer(GL_FRAMEBUFFER, fbo_.get());
             glViewport(0, 0, fbo_width_, fbo_height_);
 
-            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-            const float far_depth = 1e10f;
-            glClearBufferfv(GL_COLOR, 1, &far_depth);
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            if (clear_fbo) {
+                glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+                glClearBufferfv(GL_COLOR, 1, &FAR_DEPTH_SENTINEL);
+                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            }
         }
 
         glEnable(GL_DEPTH_TEST);
@@ -266,7 +270,7 @@ namespace lfs::rendering {
         {
             ShaderScope scope(pbr_shader_);
 
-            glm::mat3 normal_matrix = glm::inverseTranspose(glm::mat3(model));
+            const glm::mat3 normal_matrix = glm::inverseTranspose(glm::mat3(model));
 
             pbr_shader_->set_uniform("u_model", model);
             pbr_shader_->set_uniform("u_view", view);
@@ -302,8 +306,10 @@ namespace lfs::rendering {
         if (opts.wireframe_overlay) {
             ShaderScope scope(wireframe_shader_);
 
-            glm::mat4 mvp = projection * view * model;
+            const glm::mat4 mvp = projection * view * model;
             wireframe_shader_->set_uniform("u_mvp", mvp);
+            wireframe_shader_->set_uniform("u_model", model);
+            wireframe_shader_->set_uniform("u_camera_pos", camera_pos);
             wireframe_shader_->set_uniform("u_color", opts.wireframe_color);
 
             glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);

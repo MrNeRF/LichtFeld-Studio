@@ -2979,7 +2979,7 @@ namespace lfs::vis {
     }
 
     bool SceneManager::executeMirror(const lfs::core::MirrorAxis axis) {
-        std::vector<core::Scene::Node*> nodes;
+        std::vector<core::SceneNode*> nodes;
         nodes.reserve(selected_nodes_.size());
         for (const auto& name : selected_nodes_) {
             if (auto* n = scene_.getMutableNode(name); n && n->type == core::NodeType::SPLAT && n->model) {
@@ -3116,9 +3116,9 @@ namespace lfs::vis {
                                           std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool) {
         appearance_ppisp_ = std::move(ppisp);
         appearance_controller_pool_ = std::move(controller_pool);
-        LOG_INFO("SceneManager: appearance model set (PPISP: {}, Controllers: {})",
-                 appearance_ppisp_ ? "yes" : "no",
-                 appearance_controller_pool_ ? appearance_controller_pool_->num_cameras() : 0);
+        LOG_DEBUG("SceneManager: appearance model set (PPISP: {}, Controllers: {})",
+                  appearance_ppisp_ ? "yes" : "no",
+                  appearance_controller_pool_ ? appearance_controller_pool_->num_cameras() : 0);
     }
 
     void SceneManager::clearAppearanceModel() {

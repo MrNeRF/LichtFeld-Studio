@@ -26,7 +26,8 @@ namespace lfs::rendering {
                             const glm::mat4& projection,
                             const glm::vec3& camera_pos,
                             const MeshRenderOptions& opts,
-                            bool use_fbo = true);
+                            bool use_fbo = false,
+                            bool clear_fbo = true);
 
         GLuint getColorTexture() const { return color_texture_.get(); }
         GLuint getDepthTexture() const { return depth_texture_.get(); }

@@ -13,8 +13,10 @@ uniform bool u_flip_splat_y;
 
 layout(location = 0) out vec4 frag_color;
 
+const float FAR_DEPTH_SENTINEL = 1e10;
+
 float view_depth_to_ndc(float z) {
-    if (z > 1e9) return 1.0;
+    if (z > FAR_DEPTH_SENTINEL) return 1.0;
     float A = (u_far_plane + u_near_plane) / (u_far_plane - u_near_plane);
     float B = (2.0 * u_far_plane * u_near_plane) / (u_far_plane - u_near_plane);
     float ndc = A - B / z;
@@ -35,7 +37,7 @@ void main() {
         return;
     }
 
-    if (splat_color.a < 0.001 || splat_depth > 1e9) {
+    if (splat_color.a < 0.001 || splat_depth > FAR_DEPTH_SENTINEL) {
         frag_color = mesh_color;
         gl_FragDepth = view_depth_to_ndc(mesh_depth);
         return;

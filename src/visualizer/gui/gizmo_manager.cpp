@@ -100,20 +100,20 @@ namespace lfs::vis::gui {
             switch (tool) {
             case ToolType::Translate:
                 current_operation_ = ImGuizmo::TRANSLATE;
-                LOG_INFO("SetToolbarTool: TRANSLATE");
+                LOG_DEBUG("SetToolbarTool: TRANSLATE");
                 break;
             case ToolType::Rotate:
                 current_operation_ = ImGuizmo::ROTATE;
-                LOG_INFO("SetToolbarTool: ROTATE");
+                LOG_DEBUG("SetToolbarTool: ROTATE");
                 break;
             case ToolType::Scale:
                 current_operation_ = ImGuizmo::SCALE;
-                LOG_INFO("SetToolbarTool: SCALE");
+                LOG_DEBUG("SetToolbarTool: SCALE");
                 break;
             case ToolType::Selection:
                 break;
             default:
-                LOG_INFO("SetToolbarTool: tool_mode={}", e.tool_mode);
+                LOG_DEBUG("SetToolbarTool: tool_mode={}", e.tool_mode);
                 break;
             }
 

@@ -45,7 +45,8 @@ namespace lfs::rendering {
             const lfs::core::MeshData& mesh,
             const ViewportData& viewport,
             const glm::mat4& model_transform = glm::mat4(1.0f),
-            const MeshRenderOptions& options = {}) override;
+            const MeshRenderOptions& options = {},
+            bool use_fbo = false) override;
 
         unsigned int getMeshColorTexture() const override;
         unsigned int getMeshDepthTexture() const override;

@@ -305,7 +305,7 @@ namespace lfs::python {
             for (const char* attr : {"id", "parent_id", "children", "type",
                                      "world_transform", "set_local_transform",
                                      "gaussian_count", "centroid",
-                                     "splat_data", "point_cloud", "cropbox", "ellipsoid",
+                                     "splat_data", "point_cloud", "mesh", "cropbox", "ellipsoid",
                                      "camera_uid", "image_path", "mask_path", "has_camera",
                                      "has_mask", "load_mask",
                                      "camera_R", "camera_T", "camera_focal_x", "camera_focal_y",

@@ -155,7 +155,7 @@ namespace lfs::rendering {
 
         // Validate request
         if (request.viewport.size.x <= 0 || request.viewport.size.y <= 0 ||
-            request.viewport.size.x > 16384 || request.viewport.size.y > 16384) {
+            request.viewport.size.x > MAX_VIEWPORT_SIZE || request.viewport.size.y > MAX_VIEWPORT_SIZE) {
             LOG_ERROR("Invalid viewport dimensions: {}x{}", request.viewport.size.x, request.viewport.size.y);
             return std::unexpected("Invalid viewport dimensions");
         }
@@ -325,7 +325,7 @@ namespace lfs::rendering {
 
         // Validate request
         if (request.viewport.size.x <= 0 || request.viewport.size.y <= 0 ||
-            request.viewport.size.x > 16384 || request.viewport.size.y > 16384) {
+            request.viewport.size.x > MAX_VIEWPORT_SIZE || request.viewport.size.y > MAX_VIEWPORT_SIZE) {
             LOG_ERROR("Invalid viewport dimensions: {}x{}", request.viewport.size.x, request.viewport.size.y);
             return std::unexpected("Invalid viewport dimensions");
         }
@@ -789,18 +789,20 @@ namespace lfs::rendering {
         const lfs::core::MeshData& mesh,
         const ViewportData& viewport,
         const glm::mat4& model_transform,
-        const MeshRenderOptions& options) {
+        const MeshRenderOptions& options,
+        bool use_fbo) {
 
         if (!mesh_renderer_.isInitialized())
             return std::unexpected("Mesh renderer not initialized");
 
         mesh_renderer_.resize(viewport.size.x, viewport.size.y);
 
-        glm::mat4 view = createViewMatrix(viewport);
-        glm::mat4 projection = createProjectionMatrix(viewport);
-        glm::vec3 camera_pos = -glm::transpose(glm::mat3(view)) * glm::vec3(view[3]);
+        const glm::mat4 view = createViewMatrix(viewport);
+        const glm::mat4 projection = createProjectionMatrix(viewport);
+        const glm::vec3 camera_pos = -glm::transpose(glm::mat3(view)) * glm::vec3(view[3]);
 
-        auto result = mesh_renderer_.render(mesh, model_transform, view, projection, camera_pos, options, false);
+        const bool clear_fbo = use_fbo && !mesh_rendered_this_frame_;
+        auto result = mesh_renderer_.render(mesh, model_transform, view, projection, camera_pos, options, use_fbo, clear_fbo);
         if (result) {
             mesh_rendered_this_frame_ = true;
         }
@@ -829,18 +831,11 @@ namespace lfs::rendering {
         if (!mesh_rendered_this_frame_)
             return {};
 
-        GLuint splat_color = 0;
-        GLuint splat_depth = 0;
+        const GLuint splat_color = screen_renderer_->getUploadedColorTexture();
+        const GLuint splat_depth = screen_renderer_->getUploadedDepthTexture();
 
-        if (splat_result.image && splat_result.image->is_valid()) {
-            if (splat_result.external_depth_texture) {
-                splat_depth = splat_result.external_depth_texture;
-            }
-        }
-
-        if (splat_color == 0 || splat_depth == 0) {
+        if (splat_color == 0 || splat_depth == 0)
             return {};
-        }
 
         auto result = depth_compositor_.composite(
             splat_color, splat_depth,

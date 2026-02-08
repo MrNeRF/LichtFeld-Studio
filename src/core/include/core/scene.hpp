@@ -128,9 +128,6 @@ namespace lfs::core {
 
     class LFS_CORE_API Scene {
     public:
-        // Alias for backwards compatibility
-        using Node = SceneNode;
-
         Scene();
         ~Scene() = default;
 
@@ -174,8 +171,8 @@ namespace lfs::core {
         [[nodiscard]] std::string mergeGroup(const std::string& group_name);
         [[nodiscard]] const glm::mat4& getWorldTransform(NodeId node) const;
         [[nodiscard]] std::vector<NodeId> getRootNodes() const;
-        [[nodiscard]] Node* getNodeById(NodeId id);
-        [[nodiscard]] const Node* getNodeById(NodeId id) const;
+        [[nodiscard]] SceneNode* getNodeById(NodeId id);
+        [[nodiscard]] const SceneNode* getNodeById(NodeId id) const;
 
         // Check if node is effectively visible (considers parent hierarchy)
         [[nodiscard]] bool isNodeEffectivelyVisible(NodeId id) const;
@@ -327,13 +324,13 @@ namespace lfs::core {
         // Direct queries
         size_t getNodeCount() const { return nodes_.size(); }
         size_t getTotalGaussianCount() const;
-        std::vector<const Node*> getNodes() const;
-        const Node* getNode(const std::string& name) const;
-        Node* getMutableNode(const std::string& name);
+        std::vector<const SceneNode*> getNodes() const;
+        const SceneNode* getNode(const std::string& name) const;
+        SceneNode* getMutableNode(const std::string& name);
         bool hasNodes() const { return !nodes_.empty(); }
 
         // Get visible nodes for split view
-        std::vector<const Node*> getVisibleNodes() const;
+        std::vector<const SceneNode*> getVisibleNodes() const;
 
         // Get visible cameras (for frustum rendering)
         // Returns Camera objects from visible CAMERA nodes
@@ -360,7 +357,7 @@ namespace lfs::core {
         size_t applyDeleted();
 
     private:
-        std::vector<std::unique_ptr<Node>> nodes_;       // unique_ptr for stable addresses (Observable callbacks capture 'this')
+        std::vector<std::unique_ptr<SceneNode>> nodes_;  // unique_ptr for stable addresses (Observable callbacks capture 'this')
         std::unordered_map<NodeId, size_t> id_to_index_; // NodeId -> index in nodes_
         NodeId next_node_id_ = 0;
 
@@ -391,7 +388,7 @@ namespace lfs::core {
         void rebuildCacheIfNeeded() const;
         void rebuildModelCacheIfNeeded() const;
         void rebuildTransformCacheIfNeeded() const;
-        void updateWorldTransform(const Node& node) const;
+        void updateWorldTransform(const SceneNode& node) const;
         void removeNodeInternal(const std::string& name, bool keep_children, bool force);
         void setNodeVisibilityById(NodeId id, bool visible);
 
