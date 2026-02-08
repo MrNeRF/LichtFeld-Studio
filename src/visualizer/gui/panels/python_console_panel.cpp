@@ -286,7 +286,7 @@ namespace lfs::vis::gui::panels {
 
                 script_thread_id_ = PyThreadState_Get()->thread_id;
 
-                lfs::vis::Scene* scene = nullptr;
+                lfs::core::Scene* scene = nullptr;
                 if (auto* sm = lfs::vis::services().sceneOrNull()) {
                     scene = &sm->getScene();
                 }

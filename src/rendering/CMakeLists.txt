@@ -40,7 +40,6 @@ target_link_libraries(lfs_rendering
         # gs_kernels              # Temporarily disabled - requires LibTorch
         PRIVATE
         lfs_rasterizer
-        lfs_training            # For gsplat rasterizer in GUT mode
         glm::glm
         glad::glad
         glfw

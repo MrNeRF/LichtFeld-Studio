@@ -4,7 +4,7 @@
 
 #include "undo_entry.hpp"
 #include "core/logger.hpp"
-#include "scene/scene.hpp"
+#include "core/scene.hpp"
 #include "scene/scene_manager.hpp"
 
 namespace lfs::vis::op {

@@ -5,11 +5,10 @@
 #pragma once
 
 #include "core/animatable_property.hpp"
+#include "core/camera.hpp"
 #include "core/export.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
-#include "training/components/ppisp.hpp"
-#include "training/components/ppisp_controller_pool.hpp"
 #include <atomic>
 #include <cassert>
 #include <glm/glm.hpp>
@@ -20,17 +19,7 @@
 #include <utility>
 #include <vector>
 
-// Forward declarations
-namespace lfs::training {
-    class CameraDataset;
-} // namespace lfs::training
 namespace lfs::core {
-    struct PointCloud;
-    class Camera;
-    enum class CameraModelType : int;
-} // namespace lfs::core
-
-namespace lfs::vis {
 
     // Node identifier (-1 = invalid/root)
     using NodeId = int32_t;
@@ -84,7 +73,7 @@ namespace lfs::vis {
 
     // Scene graph node with Observable properties
     // Changes to observable properties automatically invalidate the scene cache
-    class SceneNode {
+    class LFS_CORE_API SceneNode {
     public:
         SceneNode() = default;
         explicit SceneNode(Scene* scene);
@@ -133,7 +122,7 @@ namespace lfs::vis {
         Scene* scene_ = nullptr;
     };
 
-    class LFS_VIS_API Scene {
+    class LFS_CORE_API Scene {
     public:
         // Alias for backwards compatibility
         using Node = SceneNode;
@@ -302,24 +291,6 @@ namespace lfs::vis {
 
         [[nodiscard]] bool hasTrainingData() const;
 
-        // ========== Appearance Model (PPISP) ==========
-        // For standalone viewing of trained models with appearance correction
-
-        void setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp,
-                                std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool = nullptr);
-        void clearAppearanceModel();
-
-        [[nodiscard]] lfs::training::PPISP* getAppearancePPISP() { return appearance_ppisp_.get(); }
-        [[nodiscard]] const lfs::training::PPISP* getAppearancePPISP() const { return appearance_ppisp_.get(); }
-        [[nodiscard]] lfs::training::PPISPControllerPool* getAppearanceControllerPool() {
-            return appearance_controller_pool_.get();
-        }
-        [[nodiscard]] const lfs::training::PPISPControllerPool* getAppearanceControllerPool() const {
-            return appearance_controller_pool_.get();
-        }
-        [[nodiscard]] bool hasAppearanceController() const { return appearance_controller_pool_ != nullptr; }
-        [[nodiscard]] bool hasAppearanceModel() const { return appearance_ppisp_ != nullptr; }
-
         // Camera access (iterates CAMERA nodes)
         [[nodiscard]] std::shared_ptr<const lfs::core::Camera> getCameraByUid(int uid) const;
         [[nodiscard]] std::vector<std::shared_ptr<lfs::core::Camera>> getAllCameras() const;
@@ -416,10 +387,18 @@ namespace lfs::vis {
         lfs::core::Tensor scene_center_;
         bool images_have_alpha_ = false;
         std::string training_model_node_;
-
-        // Standalone appearance model (for viewing without training)
-        std::unique_ptr<lfs::training::PPISP> appearance_ppisp_;
-        std::unique_ptr<lfs::training::PPISPControllerPool> appearance_controller_pool_;
     };
 
+} // namespace lfs::core
+
+// Backwards-compatible aliases — Scene was moved from lfs::vis to lfs::core
+namespace lfs::vis {
+    using Scene = lfs::core::Scene;
+    using SceneNode = lfs::core::SceneNode;
+    using NodeId = lfs::core::NodeId;
+    using NodeType = lfs::core::NodeType;
+    using CropBoxData = lfs::core::CropBoxData;
+    using EllipsoidData = lfs::core::EllipsoidData;
+    using SelectionGroup = lfs::core::SelectionGroup;
+    constexpr auto NULL_NODE = lfs::core::NULL_NODE;
 } // namespace lfs::vis

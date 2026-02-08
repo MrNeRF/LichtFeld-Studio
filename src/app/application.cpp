@@ -13,12 +13,12 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/pinned_memory_allocator.hpp"
+#include "core/scene.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/cache_image_loader.hpp"
 #include "rendering/framebuffer_factory.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
-#include "visualizer/scene/scene.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include "python/runner.hpp"
@@ -48,7 +48,7 @@ namespace lfs::app {
             lfs::event::CommandCenterBridge::instance().set(&lfs::training::CommandCenter::instance());
 
             {
-                vis::Scene scene;
+                core::Scene scene;
 
                 if (params->resume_checkpoint) {
                     LOG_INFO("Resuming from checkpoint: {}", core::path_to_utf8(*params->resume_checkpoint));
@@ -85,7 +85,7 @@ namespace lfs::app {
                     }
 
                     for (const auto* node : scene.getNodes()) {
-                        if (node->type == vis::NodeType::POINTCLOUD) {
+                        if (node->type == core::NodeType::POINTCLOUD) {
                             scene.removeNode(node->name, false);
                             break;
                         }
@@ -98,7 +98,7 @@ namespace lfs::app {
                     }
 
                     auto splat_data = std::make_unique<core::SplatData>(std::move(*splat_result));
-                    scene.addSplat("Model", std::move(splat_data), vis::NULL_NODE);
+                    scene.addSplat("Model", std::move(splat_data), core::NULL_NODE);
                     scene.setTrainingModelNode("Model");
 
                     checkpoint_params.resume_checkpoint = *params->resume_checkpoint;

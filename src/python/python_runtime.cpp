@@ -96,7 +96,7 @@ namespace lfs::python {
 
         // Operation context (short-lived, per-call)
         // Thread-safety: Set/cleared only via SceneContextGuard RAII, accessed from single thread
-        vis::Scene* g_scene_for_python = nullptr;
+        core::Scene* g_scene_for_python = nullptr;
 
         ApplicationSceneContext g_app_scene_context;
         std::atomic<vis::TrainerManager*> g_trainer_manager{nullptr};
@@ -196,8 +196,8 @@ namespace lfs::python {
     }
 
     // Operation context (short-lived)
-    void set_scene_for_python(vis::Scene* scene) { g_scene_for_python = scene; }
-    vis::Scene* get_scene_for_python() { return g_scene_for_python; }
+    void set_scene_for_python(core::Scene* scene) { g_scene_for_python = scene; }
+    core::Scene* get_scene_for_python() { return g_scene_for_python; }
 
     void set_trainer_manager(vis::TrainerManager* tm) { g_trainer_manager.store(tm); }
     vis::TrainerManager* get_trainer_manager() { return g_trainer_manager.load(); }
@@ -418,18 +418,18 @@ namespace lfs::python {
     vis::SelectionService* get_selection_service() { return g_selection_service.load(); }
 
     // Application context (long-lived)
-    void ApplicationSceneContext::set(vis::Scene* scene) {
+    void ApplicationSceneContext::set(core::Scene* scene) {
         scene_.store(scene);
         generation_.fetch_add(1);
     }
 
-    vis::Scene* ApplicationSceneContext::get() const { return scene_.load(); }
+    core::Scene* ApplicationSceneContext::get() const { return scene_.load(); }
 
     uint64_t ApplicationSceneContext::generation() const { return generation_.load(); }
 
-    void set_application_scene(vis::Scene* scene) { g_app_scene_context.set(scene); }
+    void set_application_scene(core::Scene* scene) { g_app_scene_context.set(scene); }
 
-    vis::Scene* get_application_scene() { return g_app_scene_context.get(); }
+    core::Scene* get_application_scene() { return g_app_scene_context.get(); }
 
     uint64_t get_scene_generation() { return g_app_scene_context.generation(); }
 
@@ -641,7 +641,7 @@ namespace lfs::python {
         g_bridge.draw_menu_bar_entry(idname.c_str());
     }
 
-    void draw_python_modals(lfs::vis::Scene* scene) {
+    void draw_python_modals(lfs::core::Scene* scene) {
         if (!g_bridge.draw_modals)
             return;
 #ifndef NDEBUG
@@ -672,7 +672,7 @@ namespace lfs::python {
 
     void set_popup_draw_callback(DrawPopupsCallback cb) { g_popup_draw_callback = cb; }
 
-    void draw_python_popups(lfs::vis::Scene* scene) {
+    void draw_python_popups(lfs::core::Scene* scene) {
         if (!g_popup_draw_callback)
             return;
 

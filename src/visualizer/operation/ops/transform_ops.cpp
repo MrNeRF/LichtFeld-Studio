@@ -4,7 +4,7 @@
 
 #include "transform_ops.hpp"
 #include "core/logger.hpp"
-#include "scene/scene.hpp"
+#include "core/scene.hpp"
 #include "scene/scene_manager.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 

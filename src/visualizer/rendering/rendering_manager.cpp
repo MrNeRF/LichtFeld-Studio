@@ -53,10 +53,10 @@ namespace lfs::vis {
             return r;
         }
 
-        lfs::core::Tensor applyStandaloneAppearance(const lfs::core::Tensor& rgb, Scene& scene,
+        lfs::core::Tensor applyStandaloneAppearance(const lfs::core::Tensor& rgb, SceneManager& scene_mgr,
                                                     const int camera_uid, const PPISPOverrides& overrides,
                                                     const bool use_controller = true) {
-            auto* ppisp = scene.getAppearancePPISP();
+            auto* ppisp = scene_mgr.getAppearancePPISP();
             if (!ppisp) {
                 return rgb;
             }
@@ -64,12 +64,12 @@ namespace lfs::vis {
             const bool was_hwc = (rgb.ndim() == 3 && rgb.shape()[2] == 3);
             const auto input = was_hwc ? rgb.permute({2, 0, 1}).contiguous() : rgb;
             const bool is_training_camera = (camera_uid >= 0 && camera_uid < ppisp->num_frames());
-            const bool has_controller = use_controller && scene.hasAppearanceController();
+            const bool has_controller = use_controller && scene_mgr.hasAppearanceController();
 
             lfs::core::Tensor result;
 
             if (has_controller) {
-                auto* pool = scene.getAppearanceControllerPool();
+                auto* pool = scene_mgr.getAppearanceControllerPool();
                 const int controller_idx = camera_uid >= 0 ? camera_uid % pool->num_cameras() : 0;
                 const auto params = pool->predict(controller_idx, input.unsqueeze(0), 1.0f);
                 result = overrides.isIdentity()
@@ -907,14 +907,13 @@ namespace lfs::vis {
             }
 
             if (!applied && scene_manager) {
-                auto& scene = scene_manager->getScene();
-                if (scene.hasAppearanceModel()) {
+                if (scene_manager->hasAppearanceModel()) {
                     const auto& overrides = (settings_.ppisp_mode == RenderSettings::PPISPMode::MANUAL)
                                                 ? settings_.ppisp_overrides
                                                 : PPISPOverrides{};
                     const bool use_controller = (settings_.ppisp_mode == RenderSettings::PPISPMode::AUTO);
                     auto corrected = applyStandaloneAppearance(
-                        *render_result->image, scene, current_camera_id_, overrides, use_controller);
+                        *render_result->image, *scene_manager, current_camera_id_, overrides, use_controller);
                     if (corrected.is_valid()) {
                         render_result->image = std::make_shared<lfs::core::Tensor>(std::move(corrected));
                     }

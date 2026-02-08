@@ -4,8 +4,8 @@
 
 #include "select_ops.hpp"
 #include "core/logger.hpp"
+#include "core/scene.hpp"
 #include "core/tensor.hpp"
-#include "scene/scene.hpp"
 #include "scene/scene_manager.hpp"
 
 namespace lfs::vis::op {

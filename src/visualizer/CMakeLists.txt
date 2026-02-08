@@ -65,7 +65,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/windows/video_extractor_dialog.cpp
 
         # Scene management
-        scene/scene.cpp
         scene/scene_manager.cpp
 
         # Input handling

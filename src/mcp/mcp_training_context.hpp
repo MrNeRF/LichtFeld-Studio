@@ -5,9 +5,9 @@
 
 #include "core/export.hpp"
 #include "core/parameters.hpp"
+#include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "training/trainer.hpp"
-#include "visualizer/scene/scene.hpp"
 
 #include <atomic>
 #include <expected>
@@ -52,7 +52,7 @@ namespace lfs::mcp {
         bool is_loaded() const { return scene_ != nullptr; }
         bool is_training() const { return training_thread_ != nullptr; }
 
-        std::shared_ptr<vis::Scene> scene() {
+        std::shared_ptr<core::Scene> scene() {
             std::lock_guard lock(mutex_);
             return scene_;
         }
@@ -68,7 +68,7 @@ namespace lfs::mcp {
 
         // shared_ptr allows tool lambdas to hold references across async boundaries.
         // INVARIANT: stop_training() must complete before scene_.reset().
-        std::shared_ptr<vis::Scene> scene_;
+        std::shared_ptr<core::Scene> scene_;
         std::unique_ptr<training::Trainer> trainer_;
         core::param::TrainingParameters params_;
 

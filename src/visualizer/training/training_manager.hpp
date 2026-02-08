@@ -16,11 +16,14 @@
 #include <stop_token>
 #include <thread>
 
+namespace lfs::core {
+    class Scene;
+}
+
 namespace lfs::vis {
 
     // Forward declarations
     class VisualizerImpl;
-    class Scene;
 
     class LFS_VIS_API TrainerManager {
     public:
@@ -49,8 +52,8 @@ namespace lfs::vis {
         void setViewer(VisualizerImpl* viewer) { viewer_ = viewer; }
 
         // Link to scene for data access (Scene-based trainer mode)
-        void setScene(Scene* scene) { scene_ = scene; }
-        [[nodiscard]] const Scene* getScene() const { return scene_; }
+        void setScene(core::Scene* scene) { scene_ = scene; }
+        [[nodiscard]] const core::Scene* getScene() const { return scene_; }
 
         // Training control
         bool startTraining();
@@ -137,7 +140,7 @@ namespace lfs::vis {
         std::unique_ptr<lfs::training::Trainer> trainer_;
         std::unique_ptr<std::jthread> training_thread_;
         VisualizerImpl* viewer_ = nullptr;
-        Scene* scene_ = nullptr;
+        core::Scene* scene_ = nullptr;
 
         // State machine (single source of truth for state)
         TrainingStateMachine state_machine_;

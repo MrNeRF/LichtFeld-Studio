@@ -7,11 +7,11 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
+#include "core/scene.hpp"
 #include "core/splat_data.hpp"
 #include "core/splat_data_transform.hpp"
 #include "dataset.hpp"
 #include "io/loader.hpp"
-#include "visualizer/scene/scene.hpp"
 #include <format>
 
 namespace lfs::training {
@@ -40,7 +40,7 @@ namespace lfs::training {
 
     std::expected<void, std::string> loadTrainingDataIntoScene(
         const lfs::core::param::TrainingParameters& params,
-        lfs::vis::Scene& scene) {
+        lfs::core::Scene& scene) {
 
         // 1. Create loader
         auto data_loader = lfs::io::Loader::create();
@@ -247,7 +247,7 @@ namespace lfs::training {
 
     std::expected<void, std::string> initializeTrainingModel(
         const lfs::core::param::TrainingParameters& params,
-        lfs::vis::Scene& scene) {
+        lfs::core::Scene& scene) {
 
         // Skip if training model already exists (e.g., from --init)
         if (scene.getTrainingModel() != nullptr) {
@@ -255,12 +255,12 @@ namespace lfs::training {
         }
 
         // Find POINTCLOUD node
-        lfs::vis::NodeId point_cloud_node_id = lfs::vis::NULL_NODE;
-        lfs::vis::NodeId parent_id = lfs::vis::NULL_NODE;
+        lfs::core::NodeId point_cloud_node_id = lfs::core::NULL_NODE;
+        lfs::core::NodeId parent_id = lfs::core::NULL_NODE;
         const lfs::core::PointCloud* point_cloud = nullptr;
 
         for (const auto* node : scene.getNodes()) {
-            if (node->type == lfs::vis::NodeType::POINTCLOUD && node->point_cloud) {
+            if (node->type == lfs::core::NodeType::POINTCLOUD && node->point_cloud) {
                 point_cloud_node_id = node->id;
                 parent_id = node->parent_id;
                 point_cloud = node->point_cloud.get();
@@ -273,12 +273,12 @@ namespace lfs::training {
 
         if (point_cloud && point_cloud->size() > 0) {
             // Check for enabled CropBox
-            const lfs::vis::CropBoxData* cropbox_data = nullptr;
-            lfs::vis::NodeId cropbox_id = lfs::vis::NULL_NODE;
+            const lfs::core::CropBoxData* cropbox_data = nullptr;
+            lfs::core::NodeId cropbox_id = lfs::core::NULL_NODE;
 
-            if (point_cloud_node_id != lfs::vis::NULL_NODE) {
+            if (point_cloud_node_id != lfs::core::NULL_NODE) {
                 cropbox_id = scene.getCropBoxForSplat(point_cloud_node_id);
-                if (cropbox_id != lfs::vis::NULL_NODE) {
+                if (cropbox_id != lfs::core::NULL_NODE) {
                     cropbox_data = scene.getCropBoxData(cropbox_id);
                 }
             }
@@ -389,7 +389,7 @@ namespace lfs::training {
         }
 
         // Remove the POINTCLOUD node and its children (e.g., CropBox)
-        if (point_cloud_node_id != lfs::vis::NULL_NODE) {
+        if (point_cloud_node_id != lfs::core::NULL_NODE) {
             if (const auto* pc_node = scene.getNodeById(point_cloud_node_id)) {
                 scene.removeNode(pc_node->name, false);
             }
@@ -424,7 +424,7 @@ namespace lfs::training {
 
     std::expected<void, std::string> applyLoadResultToScene(
         const lfs::core::param::TrainingParameters& params,
-        lfs::vis::Scene& scene,
+        lfs::core::Scene& scene,
         lfs::io::LoadResult&& load_result) {
 
         return std::visit([&](auto&& data) -> std::expected<void, std::string> {

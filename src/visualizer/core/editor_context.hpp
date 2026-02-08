@@ -7,7 +7,7 @@
 #include "core/export.hpp"
 #include "core/modal_event.hpp"
 #include "core/operator_callbacks.hpp"
-#include "scene/scene.hpp"
+#include "core/scene.hpp"
 #include <cstdint>
 #include <string>
 

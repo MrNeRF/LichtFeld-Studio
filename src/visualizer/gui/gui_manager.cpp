@@ -32,11 +32,11 @@
 
 #include "core/events.hpp"
 #include "core/parameters.hpp"
+#include "core/scene.hpp"
 #include "python/package_manager.hpp"
 #include "python/python_runtime.hpp"
 #include "python/ui_hooks.hpp"
 #include "rendering/rendering_manager.hpp"
-#include "scene/scene.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
 #include "tools/brush_tool.hpp"
@@ -610,7 +610,7 @@ namespace lfs::vis::gui {
             .fonts = buildFontSet()};
 
         // Build draw context for panel registry
-        lfs::vis::Scene* scene = nullptr;
+        lfs::core::Scene* scene = nullptr;
         if (auto* sm = ctx.viewer->getSceneManager()) {
             scene = &sm->getScene();
         }
@@ -951,7 +951,7 @@ namespace lfs::vis::gui {
             if (auto* sm = viewer_->getSceneManager()) {
                 const auto& scene = sm->getScene();
                 for (const auto* node : scene.getNodes()) {
-                    if (node->type == NodeType::CAMERA && node->camera_uid == e.cam_id) {
+                    if (node->type == core::NodeType::CAMERA && node->camera_uid == e.cam_id) {
                         ui::NodeSelected{.path = node->name, .type = "Camera", .metadata = {}}.emit();
                         break;
                     }

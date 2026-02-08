@@ -22,10 +22,10 @@
 
 namespace lfs::core {
     class IOperatorCallbacks;
+    class Scene;
 } // namespace lfs::core
 
 namespace lfs::vis {
-    class Scene;
     class SceneManager;
     class TrainerManager;
     class ParameterManager;
@@ -55,7 +55,7 @@ namespace lfs::python {
 
     struct PyContext {
         // Managers (set directly)
-        vis::Scene* scene = nullptr;
+        core::Scene* scene = nullptr;
         vis::SceneManager* scene_manager = nullptr;
         vis::TrainerManager* trainer = nullptr;
         vis::RenderingManager* rendering = nullptr;
@@ -136,12 +136,12 @@ namespace lfs::python {
     using DrawModalsCallback = void (*)();
     using HasModalsCallback = bool (*)();
 
-    LFS_PYTHON_RUNTIME_API void draw_python_modals(lfs::vis::Scene* scene = nullptr);
+    LFS_PYTHON_RUNTIME_API void draw_python_modals(lfs::core::Scene* scene = nullptr);
     LFS_PYTHON_RUNTIME_API bool has_python_modals();
 
     using DrawPopupsCallback = void (*)();
     LFS_PYTHON_RUNTIME_API void set_popup_draw_callback(DrawPopupsCallback cb);
-    LFS_PYTHON_RUNTIME_API void draw_python_popups(lfs::vis::Scene* scene = nullptr);
+    LFS_PYTHON_RUNTIME_API void draw_python_popups(lfs::core::Scene* scene = nullptr);
 
     using ExportCallback = void (*)(int format, const char* path, const char** node_names, int node_count, int sh_degree);
     LFS_PYTHON_RUNTIME_API void set_export_callback(ExportCallback cb);
@@ -248,8 +248,8 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API vis::input::InputBindings* get_keymap_bindings();
 
     // Operation context for Python code (short-lived, per-call)
-    LFS_PYTHON_RUNTIME_API void set_scene_for_python(vis::Scene* scene);
-    LFS_PYTHON_RUNTIME_API vis::Scene* get_scene_for_python();
+    LFS_PYTHON_RUNTIME_API void set_scene_for_python(core::Scene* scene);
+    LFS_PYTHON_RUNTIME_API core::Scene* get_scene_for_python();
 
     LFS_PYTHON_RUNTIME_API void set_trainer_manager(vis::TrainerManager* tm);
     LFS_PYTHON_RUNTIME_API vis::TrainerManager* get_trainer_manager();
@@ -432,7 +432,7 @@ namespace lfs::python {
     // RAII guard for operation context (used for capability invocations)
     class SceneContextGuard {
     public:
-        explicit SceneContextGuard(vis::Scene* scene) { set_scene_for_python(scene); }
+        explicit SceneContextGuard(core::Scene* scene) { set_scene_for_python(scene); }
         ~SceneContextGuard() { set_scene_for_python(nullptr); }
 
         SceneContextGuard(const SceneContextGuard&) = delete;
@@ -444,17 +444,17 @@ namespace lfs::python {
     // Application scene context (long-lived, persists while model is loaded)
     class LFS_PYTHON_RUNTIME_API ApplicationSceneContext {
     public:
-        void set(vis::Scene* scene);
-        vis::Scene* get() const;
+        void set(core::Scene* scene);
+        core::Scene* get() const;
         uint64_t generation() const;
 
     private:
-        std::atomic<vis::Scene*> scene_{nullptr};
+        std::atomic<core::Scene*> scene_{nullptr};
         std::atomic<uint64_t> generation_{0};
     };
 
-    LFS_PYTHON_RUNTIME_API void set_application_scene(vis::Scene* scene);
-    LFS_PYTHON_RUNTIME_API vis::Scene* get_application_scene();
+    LFS_PYTHON_RUNTIME_API void set_application_scene(core::Scene* scene);
+    LFS_PYTHON_RUNTIME_API core::Scene* get_application_scene();
     LFS_PYTHON_RUNTIME_API uint64_t get_scene_generation();
 
     LFS_PYTHON_RUNTIME_API void set_gil_state_ready(bool ready);

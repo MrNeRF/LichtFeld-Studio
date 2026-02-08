@@ -7,12 +7,14 @@
 #include "core/events.hpp"
 #include "core/export.hpp"
 #include "core/parameters.hpp"
+#include "core/scene.hpp"
 #include "core/services.hpp"
 #include "core/splat_data_mirror.hpp"
 #include "geometry/bounding_box.hpp"
 #include "io/loader.hpp"
-#include "scene/scene.hpp"
 #include "scene/scene_render_state.hpp"
+#include "training/components/ppisp.hpp"
+#include "training/components/ppisp_controller_pool.hpp"
 #include <filesystem>
 #include <mutex>
 #include <set>
@@ -211,6 +213,17 @@ namespace lfs::vis {
         /// Mirror selected gaussians along specified axis
         bool executeMirror(lfs::core::MirrorAxis axis);
 
+        // Appearance model (PPISP) - owned by scene_manager, not scene
+        void setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp,
+                                std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool = nullptr);
+        void clearAppearanceModel();
+        [[nodiscard]] lfs::training::PPISP* getAppearancePPISP() { return appearance_ppisp_.get(); }
+        [[nodiscard]] const lfs::training::PPISP* getAppearancePPISP() const { return appearance_ppisp_.get(); }
+        [[nodiscard]] lfs::training::PPISPControllerPool* getAppearanceControllerPool() { return appearance_controller_pool_.get(); }
+        [[nodiscard]] const lfs::training::PPISPControllerPool* getAppearanceControllerPool() const { return appearance_controller_pool_.get(); }
+        [[nodiscard]] bool hasAppearanceController() const { return appearance_controller_pool_ != nullptr; }
+        [[nodiscard]] bool hasAppearanceModel() const { return appearance_ppisp_ != nullptr; }
+
     private:
         void setupEventHandlers();
         void emitSceneChanged();
@@ -263,6 +276,10 @@ namespace lfs::vis {
 
         ClipboardEntry::HierarchyNode copyNodeHierarchy(const SceneNode* node);
         void pasteNodeHierarchy(const ClipboardEntry::HierarchyNode& src, NodeId parent_id);
+
+        // Standalone appearance model (for viewing without training)
+        std::unique_ptr<lfs::training::PPISP> appearance_ppisp_;
+        std::unique_ptr<lfs::training::PPISPControllerPool> appearance_controller_pool_;
     };
 
 } // namespace lfs::vis

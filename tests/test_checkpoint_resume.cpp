@@ -6,10 +6,10 @@
 
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
+#include "core/scene.hpp"
 #include "training/checkpoint.hpp"
 #include "training/trainer.hpp"
 #include "training/training_setup.hpp"
-#include "visualizer/scene/scene.hpp"
 
 namespace {
 

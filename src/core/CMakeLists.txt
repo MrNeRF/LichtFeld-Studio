@@ -50,6 +50,7 @@ set(CORE_SOURCES
         image_io.cpp
         parameters.cpp
         property_registry.cpp
+        scene.cpp
         splat_data.cpp
         splat_data_mirror.cpp
         splat_data_transform.cpp
@@ -65,8 +66,6 @@ target_include_directories(lfs_core
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_BINARY_DIR}/include
-        ${CMAKE_SOURCE_DIR}/src/training/rasterization/gsplat
-        ${CMAKE_SOURCE_DIR}/fastgs
         ${CUDAToolkit_INCLUDE_DIRS}
     PRIVATE
         ${CMAKE_SOURCE_DIR}/src

@@ -15,51 +15,56 @@ namespace lfs::python {
     namespace {
         void register_scene_node_properties() {
             using namespace lfs::core::prop;
-            PropertyGroupBuilder<vis::SceneNode>("scene_node", "Scene Node")
-                .string_prop(&vis::SceneNode::name, "name", "Name", "", "Node name")
-                .animatable_prop(&vis::SceneNode::local_transform, "local_transform", "Transform",
+            PropertyGroupBuilder<core::SceneNode>("scene_node", "Scene Node")
+                .string_prop(&core::SceneNode::name, "name", "Name", "", "Node name")
+                .animatable_prop(&core::SceneNode::local_transform, "local_transform", "Transform",
                                  glm::mat4(1.0f), "Local transform matrix")
-                .animatable_prop(&vis::SceneNode::visible, "visible", "Visible", true,
+                .animatable_prop(&core::SceneNode::visible, "visible", "Visible", true,
                                  "Node visibility")
-                .animatable_prop(&vis::SceneNode::locked, "locked", "Locked", false,
+                .animatable_prop(&core::SceneNode::locked, "locked", "Locked", false,
                                  "Lock node from editing")
+<<<<<<< Updated upstream
+=======
+                .bool_prop(&core::SceneNode::training_enabled, "training_enabled", "Training Enabled",
+                           true, "Include camera in training dataset")
+>>>>>>> Stashed changes
                 .build();
         }
 
         void register_cropbox_properties() {
             using namespace lfs::core::prop;
-            PropertyGroupBuilder<vis::CropBoxData>("crop_box", "Crop Box")
-                .vec3_prop(&vis::CropBoxData::min, "min", "Min", glm::vec3(-1.0f),
+            PropertyGroupBuilder<core::CropBoxData>("crop_box", "Crop Box")
+                .vec3_prop(&core::CropBoxData::min, "min", "Min", glm::vec3(-1.0f),
                            "Minimum corner of crop box")
-                .vec3_prop(&vis::CropBoxData::max, "max", "Max", glm::vec3(1.0f),
+                .vec3_prop(&core::CropBoxData::max, "max", "Max", glm::vec3(1.0f),
                            "Maximum corner of crop box")
-                .bool_prop(&vis::CropBoxData::inverse, "inverse", "Invert", false,
+                .bool_prop(&core::CropBoxData::inverse, "inverse", "Invert", false,
                            "Invert crop logic")
-                .bool_prop(&vis::CropBoxData::enabled, "enabled", "Enabled", false,
+                .bool_prop(&core::CropBoxData::enabled, "enabled", "Enabled", false,
                            "Enable crop filtering")
-                .color3_prop(&vis::CropBoxData::color, "color", "Color", glm::vec3(1.0f, 1.0f, 0.0f),
+                .color3_prop(&core::CropBoxData::color, "color", "Color", glm::vec3(1.0f, 1.0f, 0.0f),
                              "Visualization color")
-                .float_prop(&vis::CropBoxData::line_width, "line_width", "Line Width", 2.0f, 0.1f,
+                .float_prop(&core::CropBoxData::line_width, "line_width", "Line Width", 2.0f, 0.1f,
                             10.0f, "Border line width")
-                .float_prop(&vis::CropBoxData::flash_intensity, "flash_intensity", "Flash", 0.0f,
+                .float_prop(&core::CropBoxData::flash_intensity, "flash_intensity", "Flash", 0.0f,
                             0.0f, 1.0f, "Flash effect intensity")
                 .build();
         }
 
         void register_ellipsoid_properties() {
             using namespace lfs::core::prop;
-            PropertyGroupBuilder<vis::EllipsoidData>("ellipsoid", "Ellipsoid")
-                .vec3_prop(&vis::EllipsoidData::radii, "radii", "Radii", glm::vec3(1.0f),
+            PropertyGroupBuilder<core::EllipsoidData>("ellipsoid", "Ellipsoid")
+                .vec3_prop(&core::EllipsoidData::radii, "radii", "Radii", glm::vec3(1.0f),
                            "Ellipsoid radii")
-                .bool_prop(&vis::EllipsoidData::inverse, "inverse", "Invert", false,
+                .bool_prop(&core::EllipsoidData::inverse, "inverse", "Invert", false,
                            "Invert selection logic")
-                .bool_prop(&vis::EllipsoidData::enabled, "enabled", "Enabled", false,
+                .bool_prop(&core::EllipsoidData::enabled, "enabled", "Enabled", false,
                            "Enable selection filtering")
-                .color3_prop(&vis::EllipsoidData::color, "color", "Color", glm::vec3(1.0f, 1.0f, 0.0f),
+                .color3_prop(&core::EllipsoidData::color, "color", "Color", glm::vec3(1.0f, 1.0f, 0.0f),
                              "Visualization color")
-                .float_prop(&vis::EllipsoidData::line_width, "line_width", "Line Width", 2.0f, 0.1f,
+                .float_prop(&core::EllipsoidData::line_width, "line_width", "Line Width", 2.0f, 0.1f,
                             10.0f, "Border line width")
-                .float_prop(&vis::EllipsoidData::flash_intensity, "flash_intensity", "Flash", 0.0f,
+                .float_prop(&core::EllipsoidData::flash_intensity, "flash_intensity", "Flash", 0.0f,
                             0.0f, 1.0f, "Flash effect intensity")
                 .build();
         }
@@ -100,14 +105,14 @@ namespace lfs::python {
     }
 
     std::optional<PySplatData> PySceneNode::splat_data() {
-        if (node_->type != vis::NodeType::SPLAT || !node_->model) {
+        if (node_->type != core::NodeType::SPLAT || !node_->model) {
             return std::nullopt;
         }
         return PySplatData(node_->model.get());
     }
 
     std::optional<PyPointCloud> PySceneNode::point_cloud() {
-        if (node_->type != vis::NodeType::POINTCLOUD || !node_->point_cloud) {
+        if (node_->type != core::NodeType::POINTCLOUD || !node_->point_cloud) {
             return std::nullopt;
         }
         return PyPointCloud(node_->point_cloud.get(), false, node_, scene_);
@@ -183,21 +188,21 @@ namespace lfs::python {
     }
 
     std::optional<PyCropBox> PySceneNode::cropbox() {
-        if (node_->type != vis::NodeType::CROPBOX || !node_->cropbox) {
+        if (node_->type != core::NodeType::CROPBOX || !node_->cropbox) {
             return std::nullopt;
         }
         return PyCropBox(node_->cropbox.get());
     }
 
     std::optional<PyEllipsoid> PySceneNode::ellipsoid() {
-        if (node_->type != vis::NodeType::ELLIPSOID || !node_->ellipsoid) {
+        if (node_->type != core::NodeType::ELLIPSOID || !node_->ellipsoid) {
             return std::nullopt;
         }
         return PyEllipsoid(node_->ellipsoid.get());
     }
 
     // PyScene implementation
-    PyScene::PyScene(vis::Scene* scene)
+    PyScene::PyScene(core::Scene* scene)
         : scene_(scene),
           generation_(get_scene_generation()) {
         assert(scene_ != nullptr);
@@ -330,7 +335,7 @@ namespace lfs::python {
     std::vector<PySceneNode> PyScene::get_nodes() {
         std::vector<PySceneNode> result;
         for (const auto* node : scene_->getNodes()) {
-            result.emplace_back(const_cast<vis::SceneNode*>(node), scene_);
+            result.emplace_back(const_cast<core::SceneNode*>(node), scene_);
         }
         return result;
     }
@@ -338,11 +343,24 @@ namespace lfs::python {
     std::vector<PySceneNode> PyScene::get_visible_nodes() {
         std::vector<PySceneNode> result;
         for (const auto* node : scene_->getVisibleNodes()) {
-            result.emplace_back(const_cast<vis::SceneNode*>(node), scene_);
+            result.emplace_back(const_cast<core::SceneNode*>(node), scene_);
         }
         return result;
     }
 
+<<<<<<< Updated upstream
+=======
+    std::vector<PySceneNode> PyScene::get_active_cameras() {
+        std::vector<PySceneNode> result;
+        for (const auto* node : scene_->getNodes()) {
+            if (node->type == core::NodeType::CAMERA && node->camera && node->training_enabled) {
+                result.emplace_back(const_cast<core::SceneNode*>(node), scene_);
+            }
+        }
+        return result;
+    }
+
+>>>>>>> Stashed changes
     nb::tuple PyScene::get_world_transform(int32_t node_id) const {
         return mat4_to_tuple(scene_->getWorldTransform(node_id));
     }
@@ -447,17 +465,17 @@ namespace lfs::python {
         register_ellipsoid_properties();
 
         // NodeType enum
-        nb::enum_<vis::NodeType>(m, "NodeType")
-            .value("SPLAT", vis::NodeType::SPLAT)
-            .value("POINTCLOUD", vis::NodeType::POINTCLOUD)
-            .value("GROUP", vis::NodeType::GROUP)
-            .value("CROPBOX", vis::NodeType::CROPBOX)
-            .value("ELLIPSOID", vis::NodeType::ELLIPSOID)
-            .value("DATASET", vis::NodeType::DATASET)
-            .value("CAMERA_GROUP", vis::NodeType::CAMERA_GROUP)
-            .value("CAMERA", vis::NodeType::CAMERA)
-            .value("IMAGE_GROUP", vis::NodeType::IMAGE_GROUP)
-            .value("IMAGE", vis::NodeType::IMAGE);
+        nb::enum_<core::NodeType>(m, "NodeType")
+            .value("SPLAT", core::NodeType::SPLAT)
+            .value("POINTCLOUD", core::NodeType::POINTCLOUD)
+            .value("GROUP", core::NodeType::GROUP)
+            .value("CROPBOX", core::NodeType::CROPBOX)
+            .value("ELLIPSOID", core::NodeType::ELLIPSOID)
+            .value("DATASET", core::NodeType::DATASET)
+            .value("CAMERA_GROUP", core::NodeType::CAMERA_GROUP)
+            .value("CAMERA", core::NodeType::CAMERA)
+            .value("IMAGE_GROUP", core::NodeType::IMAGE_GROUP)
+            .value("IMAGE", core::NodeType::IMAGE);
 
         // SelectionGroup struct
         nb::class_<PySelectionGroup>(m, "SelectionGroup")
@@ -606,7 +624,7 @@ namespace lfs::python {
                          "Generation counter when scene was acquired")
             // Node CRUD
             .def("add_group", &PyScene::add_group,
-                 nb::arg("name"), nb::arg("parent") = vis::NULL_NODE,
+                 nb::arg("name"), nb::arg("parent") = core::NULL_NODE,
                  "Add an empty group node, returns node ID")
             .def("add_splat", &PyScene::add_splat,
                  nb::arg("name"),
@@ -618,7 +636,7 @@ namespace lfs::python {
                  nb::arg("opacity"),
                  nb::arg("sh_degree") = 0,
                  nb::arg("scene_scale") = 1.0f,
-                 nb::arg("parent") = vis::NULL_NODE,
+                 nb::arg("parent") = core::NULL_NODE,
                  R"doc(Add a new splat node from tensor data.
 
 Args:
@@ -640,7 +658,7 @@ Returns:
                  nb::arg("name"),
                  nb::arg("points"),
                  nb::arg("colors"),
-                 nb::arg("parent") = vis::NULL_NODE,
+                 nb::arg("parent") = core::NULL_NODE,
                  "Add a point cloud node from tensor data [N,3] positions and colors")
             .def("add_camera_group", &PyScene::add_camera_group,
                  nb::arg("name"),
@@ -694,6 +712,7 @@ Returns:
                  "Find a node by its integer ID (None if not found)")
             .def("get_node", &PyScene::get_node, nb::arg("name"),
                  "Find a node by name (None if not found)")
+<<<<<<< Updated upstream
             .def("get_nodes", &PyScene::get_nodes,
                  "Get all nodes in the scene")
             .def("get_visible_nodes", &PyScene::get_visible_nodes,
@@ -701,6 +720,23 @@ Returns:
             .def("is_node_effectively_visible", &PyScene::is_node_effectively_visible,
                  nb::arg("id"),
                  "Check if a node is visible considering parent visibility")
+=======
+            .def(
+                "get_nodes", [](PyScene& self, std::optional<core::NodeType> type) -> std::vector<PySceneNode> {
+                    auto all = self.get_nodes();
+                    if (!type)
+                        return all;
+                    std::vector<PySceneNode> filtered;
+                    for (auto& node : all) {
+                        if (node.type() == *type)
+                            filtered.push_back(std::move(node));
+                    }
+                    return filtered;
+                },
+                nb::arg("type") = nb::none(), "Get nodes, optionally filtered by NodeType")
+            .def("get_visible_nodes", &PyScene::get_visible_nodes, "Get all visible nodes in the scene")
+            .def("is_node_effectively_visible", &PyScene::is_node_effectively_visible, nb::arg("id"), "Check if a node is visible considering parent visibility")
+>>>>>>> Stashed changes
             // Transforms
             .def("get_world_transform", &PyScene::get_world_transform, nb::arg("node_id"),
                  "Get world-space transform as 4x4 row-major tuple")

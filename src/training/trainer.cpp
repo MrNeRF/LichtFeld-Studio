@@ -15,6 +15,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
 #include "io/cache_image_loader.hpp"
@@ -30,7 +31,6 @@
 #include "strategies/mcmc.hpp"
 #include "strategies/strategy_factory.hpp"
 #include "training/kernels/grad_alpha.hpp"
-#include "visualizer/scene/scene.hpp"
 
 #include <filesystem>
 
@@ -421,7 +421,7 @@ namespace lfs::training {
     }
 
     // New constructor - Scene owns all data
-    Trainer::Trainer(lfs::vis::Scene& scene)
+    Trainer::Trainer(lfs::core::Scene& scene)
         : scene_(&scene) {
         // Check CUDA availability
         int device_count = 0;

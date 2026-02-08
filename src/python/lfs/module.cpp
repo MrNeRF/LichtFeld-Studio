@@ -428,7 +428,7 @@ namespace {
     }
 
     // Get Scene from application context, trainer, or operation context
-    lfs::vis::Scene* get_scene_internal() {
+    lfs::core::Scene* get_scene_internal() {
         // Priority 1: Application scene (persistent, works from background threads)
         if (auto* app_scene = lfs::python::get_application_scene()) {
             return app_scene;
@@ -1349,30 +1349,30 @@ NB_MODULE(lichtfeld, m) {
             nb::print(nb::str("Scene: {} nodes, {} gaussians\n").format(nodes.size(), scene->getTotalGaussianCount()));
 
             // Build id->node map
-            std::unordered_map<int32_t, const lfs::vis::SceneNode*> node_map;
+            std::unordered_map<int32_t, const lfs::core::SceneNode*> node_map;
             for (const auto* n : nodes) {
                 node_map[n->id] = n;
             }
 
             // Recursive print function
-            std::function<void(const lfs::vis::SceneNode*, int)> print_node =
-                [&](const lfs::vis::SceneNode* node, int depth) {
+            std::function<void(const lfs::core::SceneNode*, int)> print_node =
+                [&](const lfs::core::SceneNode* node, int depth) {
                     std::string indent(depth * 2, ' ');
                     char vis = node->visible ? '+' : '-';
                     char lock = node->locked ? 'L' : ' ';
 
                     std::string type_name;
                     switch (node->type) {
-                    case lfs::vis::NodeType::SPLAT: type_name = "SPLAT"; break;
-                    case lfs::vis::NodeType::POINTCLOUD: type_name = "POINTCLOUD"; break;
-                    case lfs::vis::NodeType::GROUP: type_name = "GROUP"; break;
-                    case lfs::vis::NodeType::CROPBOX: type_name = "CROPBOX"; break;
-                    case lfs::vis::NodeType::ELLIPSOID: type_name = "ELLIPSOID"; break;
-                    case lfs::vis::NodeType::DATASET: type_name = "DATASET"; break;
-                    case lfs::vis::NodeType::CAMERA_GROUP: type_name = "CAMERA_GROUP"; break;
-                    case lfs::vis::NodeType::CAMERA: type_name = "CAMERA"; break;
-                    case lfs::vis::NodeType::IMAGE_GROUP: type_name = "IMAGE_GROUP"; break;
-                    case lfs::vis::NodeType::IMAGE: type_name = "IMAGE"; break;
+                    case lfs::core::NodeType::SPLAT: type_name = "SPLAT"; break;
+                    case lfs::core::NodeType::POINTCLOUD: type_name = "POINTCLOUD"; break;
+                    case lfs::core::NodeType::GROUP: type_name = "GROUP"; break;
+                    case lfs::core::NodeType::CROPBOX: type_name = "CROPBOX"; break;
+                    case lfs::core::NodeType::ELLIPSOID: type_name = "ELLIPSOID"; break;
+                    case lfs::core::NodeType::DATASET: type_name = "DATASET"; break;
+                    case lfs::core::NodeType::CAMERA_GROUP: type_name = "CAMERA_GROUP"; break;
+                    case lfs::core::NodeType::CAMERA: type_name = "CAMERA"; break;
+                    case lfs::core::NodeType::IMAGE_GROUP: type_name = "IMAGE_GROUP"; break;
+                    case lfs::core::NodeType::IMAGE: type_name = "IMAGE"; break;
                     default: type_name = "UNKNOWN"; break;
                     }
 
@@ -1395,7 +1395,7 @@ NB_MODULE(lichtfeld, m) {
 
             // Print root nodes
             for (const auto* node : nodes) {
-                if (node->parent_id == lfs::vis::NULL_NODE) {
+                if (node->parent_id == lfs::core::NULL_NODE) {
                     print_node(node, 0);
                 }
             }
@@ -1489,7 +1489,7 @@ Example:
     // Internal context API for GUI console (C++ calls these before/after executing user code)
     m.def(
         "_set_scene_context", [](nb::capsule scene_capsule) {
-            auto* scene = static_cast<lfs::vis::Scene*>(scene_capsule.data());
+            auto* scene = static_cast<lfs::core::Scene*>(scene_capsule.data());
             lfs::python::set_scene_for_python(scene);
         },
         nb::arg("scene_capsule"), "Internal: Set scene context for console execution");

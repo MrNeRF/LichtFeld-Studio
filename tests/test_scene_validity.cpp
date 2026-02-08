@@ -6,8 +6,8 @@
 #include <thread>
 #include <vector>
 
+#include "core/scene.hpp"
 #include "python/python_runtime.hpp"
-#include "visualizer/scene/scene.hpp"
 
 namespace lfs::python {
 

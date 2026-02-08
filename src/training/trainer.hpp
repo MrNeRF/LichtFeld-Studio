@@ -28,7 +28,7 @@
 #include <unordered_map>
 
 // Forward declaration for Scene
-namespace lfs::vis {
+namespace lfs::core {
     class Scene;
 }
 
@@ -84,7 +84,7 @@ namespace lfs::training {
          * - Training model via getTrainingModel() (SplatData)
          * - Cameras via getAllCameras() (from CAMERA nodes)
          */
-        Trainer(lfs::vis::Scene& scene);
+        Trainer(lfs::core::Scene& scene);
 
         // Delete copy operations
         Trainer(const Trainer&) = delete;
@@ -142,7 +142,7 @@ namespace lfs::training {
         void setOnIterationStart(std::function<void()> cb) { on_iteration_start_ = std::move(cb); }
 
         // Get Scene (for Python bindings in headless mode)
-        lfs::vis::Scene* getScene() const { return scene_; }
+        lfs::core::Scene* getScene() const { return scene_; }
 
         /// Apply PPISP correction to a rendered image for viewport display
         /// @param rgb rendered image [C,H,W] or [H,W,C]
@@ -268,7 +268,7 @@ namespace lfs::training {
         void save_ply(const std::filesystem::path& save_path, int iter_num, bool join_threads = true);
 
         // Member variables
-        lfs::vis::Scene* scene_ = nullptr;            // Non-owning pointer to Scene (new mode)
+        lfs::core::Scene* scene_ = nullptr;           // Non-owning pointer to Scene (new mode)
         std::shared_ptr<CameraDataset> base_dataset_; // Legacy mode only - source cameras
         std::shared_ptr<CameraDataset> train_dataset_;
         std::shared_ptr<CameraDataset> val_dataset_;

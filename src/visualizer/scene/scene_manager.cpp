@@ -11,6 +11,7 @@
 #include "core/splat_data_transform.hpp"
 #include "geometry/bounding_box.hpp"
 #include "geometry/euclidean_transform.hpp"
+#include "io/cache_image_loader.hpp"
 #include "io/formats/colmap.hpp"
 #include "io/loader.hpp"
 #include "operation/undo_entry.hpp"
@@ -367,7 +368,7 @@ namespace lfs::vis {
             }
 
             const bool has_controller = (controller_pool != nullptr);
-            scene_.setAppearanceModel(std::move(ppisp), std::move(controller_pool));
+            setAppearanceModel(std::move(ppisp), std::move(controller_pool));
             ui::AppearanceModelLoaded{.has_controller = has_controller}.emit();
 
         } catch (const std::exception& e) {
@@ -1558,7 +1559,7 @@ namespace lfs::vis {
 
             // Remove POINTCLOUD node (checkpoint model replaces it)
             for (const auto* node : scene_.getNodes()) {
-                if (node->type == lfs::vis::NodeType::POINTCLOUD) {
+                if (node->type == lfs::core::NodeType::POINTCLOUD) {
                     scene_.removeNode(node->name, false);
                     break;
                 }
@@ -1573,7 +1574,7 @@ namespace lfs::vis {
             const size_t num_gaussians = splat_data->size();
             constexpr const char* MODEL_NAME = "Model";
 
-            scene_.addSplat(MODEL_NAME, std::move(splat_data), lfs::vis::NULL_NODE);
+            scene_.addSplat(MODEL_NAME, std::move(splat_data), lfs::core::NULL_NODE);
             scene_.setTrainingModelNode(MODEL_NAME);
 
             // Mark as checkpoint restore for sparsity handling
@@ -1650,7 +1651,12 @@ namespace lfs::vis {
         }
 
         python::set_application_scene(nullptr);
+        clearAppearanceModel();
         scene_.clear();
+
+        if (lfs::io::CacheLoader::hasInstance()) {
+            lfs::io::CacheLoader::getInstance().reset_cache();
+        }
 
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
@@ -1697,9 +1703,9 @@ namespace lfs::vis {
         scene_.addNode(MODEL_NAME, std::move(splat_data));
         selectNode(MODEL_NAME);
 
-        // Restore PPISP appearance model to scene
+        // Restore PPISP appearance model
         if (ppisp) {
-            scene_.setAppearanceModel(std::move(ppisp), std::move(controller_pool));
+            setAppearanceModel(std::move(ppisp), std::move(controller_pool));
         }
 
         {
@@ -3036,6 +3042,21 @@ namespace lfs::vis {
 
         LOG_DEBUG("Pasted {} nodes", pasted_names.size());
         return pasted_names;
+    }
+
+    void SceneManager::setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp,
+                                          std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool) {
+        appearance_ppisp_ = std::move(ppisp);
+        appearance_controller_pool_ = std::move(controller_pool);
+        LOG_INFO("SceneManager: appearance model set (PPISP: {}, Controllers: {})",
+                 appearance_ppisp_ ? "yes" : "no",
+                 appearance_controller_pool_ ? appearance_controller_pool_->num_cameras() : 0);
+    }
+
+    void SceneManager::clearAppearanceModel() {
+        appearance_ppisp_.reset();
+        appearance_controller_pool_.reset();
+        LOG_DEBUG("SceneManager: appearance model cleared");
     }
 
 } // namespace lfs::vis

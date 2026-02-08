@@ -4,13 +4,13 @@
 #include "py_rendering.hpp"
 #include "core/camera.hpp"
 #include "core/property_registry.hpp"
+#include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include "py_scene.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/gs_rasterizer_tensor.hpp"
 #include "training/dataset.hpp"
 #include "visualizer/ipc/view_context.hpp"
-#include "visualizer/scene/scene.hpp"
 
 #include <cmath>
 #include <cstring>
@@ -19,11 +19,11 @@ namespace nb = nanobind;
 
 namespace lfs::python {
 
-    void set_render_scene_context(vis::Scene* scene) {
+    void set_render_scene_context(core::Scene* scene) {
         set_scene_for_python(scene);
     }
 
-    vis::Scene* get_render_scene() {
+    core::Scene* get_render_scene() {
         if (auto* app_scene = get_application_scene()) {
             return app_scene;
         }
@@ -388,7 +388,7 @@ namespace {
         return camera;
     }
 
-    lfs::core::SplatData* get_model(lfs::vis::Scene* scene) {
+    lfs::core::SplatData* get_model(lfs::core::Scene* scene) {
         return scene ? const_cast<lfs::core::SplatData*>(scene->getCombinedModel()) : nullptr;
     }
 

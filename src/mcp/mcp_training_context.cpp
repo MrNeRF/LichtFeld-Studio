@@ -75,7 +75,7 @@ namespace lfs::mcp {
         params_ = params;
         params_.dataset.data_path = path;
 
-        scene_ = std::make_shared<vis::Scene>();
+        scene_ = std::make_shared<core::Scene>();
 
         if (auto result = training::loadTrainingDataIntoScene(params_, *scene_); !result) {
             scene_.reset();
@@ -122,7 +122,7 @@ namespace lfs::mcp {
             return std::unexpected(splat_result.error());
         }
 
-        scene_ = std::make_shared<vis::Scene>();
+        scene_ = std::make_shared<core::Scene>();
         scene_->setTrainingModel(
             std::make_unique<core::SplatData>(std::move(*splat_result)),
             "checkpoint");

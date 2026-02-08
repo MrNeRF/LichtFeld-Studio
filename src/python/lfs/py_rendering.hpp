@@ -12,7 +12,7 @@
 
 namespace nb = nanobind;
 
-namespace lfs::vis {
+namespace lfs::core {
     class Scene;
 }
 
@@ -100,7 +100,7 @@ namespace lfs::python {
 
     void register_rendering(nb::module_& m);
 
-    void set_render_scene_context(vis::Scene* scene);
-    [[nodiscard]] vis::Scene* get_render_scene();
+    void set_render_scene_context(core::Scene* scene);
+    [[nodiscard]] core::Scene* get_render_scene();
 
 } // namespace lfs::python

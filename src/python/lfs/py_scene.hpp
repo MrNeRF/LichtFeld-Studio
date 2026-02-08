@@ -6,10 +6,10 @@
 
 #include "core/camera.hpp"
 #include "core/events.hpp"
+#include "core/scene.hpp"
 #include "py_prop.hpp"
 #include "py_splat_data.hpp"
 #include "py_tensor.hpp"
-#include "visualizer/scene/scene.hpp"
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
@@ -36,8 +36,8 @@ namespace lfs::python {
 
     class PyCropBox {
     public:
-        explicit PyCropBox(vis::CropBoxData* data) : data_(data),
-                                                     prop_(data, "crop_box") {
+        explicit PyCropBox(core::CropBoxData* data) : data_(data),
+                                                      prop_(data, "crop_box") {
             assert(data_ != nullptr);
         }
 
@@ -65,18 +65,18 @@ namespace lfs::python {
             }
             return result;
         }
-        [[nodiscard]] vis::CropBoxData* data() { return data_; }
-        [[nodiscard]] const vis::CropBoxData* data() const { return data_; }
+        [[nodiscard]] core::CropBoxData* data() { return data_; }
+        [[nodiscard]] const core::CropBoxData* data() const { return data_; }
 
     private:
-        vis::CropBoxData* data_;
-        PyProp<vis::CropBoxData> prop_;
+        core::CropBoxData* data_;
+        PyProp<core::CropBoxData> prop_;
     };
 
     class PyEllipsoid {
     public:
-        explicit PyEllipsoid(vis::EllipsoidData* data) : data_(data),
-                                                         prop_(data, "ellipsoid") {
+        explicit PyEllipsoid(core::EllipsoidData* data) : data_(data),
+                                                          prop_(data, "ellipsoid") {
             assert(data_ != nullptr);
         }
 
@@ -104,19 +104,19 @@ namespace lfs::python {
             }
             return result;
         }
-        [[nodiscard]] vis::EllipsoidData* data() { return data_; }
-        [[nodiscard]] const vis::EllipsoidData* data() const { return data_; }
+        [[nodiscard]] core::EllipsoidData* data() { return data_; }
+        [[nodiscard]] const core::EllipsoidData* data() const { return data_; }
 
     private:
-        vis::EllipsoidData* data_;
-        PyProp<vis::EllipsoidData> prop_;
+        core::EllipsoidData* data_;
+        PyProp<core::EllipsoidData> prop_;
     };
 
     // PointCloud wrapper
     class PyPointCloud {
     public:
         explicit PyPointCloud(core::PointCloud* pc, bool owns = false,
-                              vis::SceneNode* node = nullptr, vis::Scene* scene = nullptr)
+                              core::SceneNode* node = nullptr, core::Scene* scene = nullptr)
             : pc_(pc),
               owns_(owns),
               node_(node),
@@ -179,14 +179,14 @@ namespace lfs::python {
     private:
         core::PointCloud* pc_;
         bool owns_;
-        vis::SceneNode* node_ = nullptr;
-        vis::Scene* scene_ = nullptr;
+        core::SceneNode* node_ = nullptr;
+        core::Scene* scene_ = nullptr;
     };
 
     // Scene node wrapper
     class PySceneNode {
     public:
-        PySceneNode(vis::SceneNode* node, vis::Scene* scene)
+        PySceneNode(core::SceneNode* node, core::Scene* scene)
             : node_(node),
               scene_(scene),
               prop_(node, "scene_node") {
@@ -198,7 +198,7 @@ namespace lfs::python {
         int32_t id() const { return node_->id; }
         int32_t parent_id() const { return node_->parent_id; }
         std::vector<int32_t> children() const { return node_->children; }
-        vis::NodeType type() const { return node_->type; }
+        core::NodeType type() const { return node_->type; }
 
         // Transform (special matrix conversion)
         void set_local_transform(nb::ndarray<float, nb::shape<4, 4>> transform);
@@ -290,15 +290,15 @@ namespace lfs::python {
         }
 
     private:
-        vis::SceneNode* node_;
-        vis::Scene* scene_;
-        PyProp<vis::SceneNode> prop_;
+        core::SceneNode* node_;
+        core::Scene* scene_;
+        PyProp<core::SceneNode> prop_;
     };
 
     // Node collection for scene.nodes property
     class PyNodeCollection {
     public:
-        explicit PyNodeCollection(vis::Scene* scene) : scene_(scene) {
+        explicit PyNodeCollection(core::Scene* scene) : scene_(scene) {
             assert(scene_ != nullptr);
         }
 
@@ -312,21 +312,21 @@ namespace lfs::python {
             if (index < 0 || static_cast<size_t>(index) >= nodes.size()) {
                 throw nb::index_error("Node index out of range");
             }
-            return PySceneNode(const_cast<vis::SceneNode*>(nodes[static_cast<size_t>(index)]),
+            return PySceneNode(const_cast<core::SceneNode*>(nodes[static_cast<size_t>(index)]),
                                scene_);
         }
 
         std::vector<PySceneNode> items() const {
             std::vector<PySceneNode> result;
             for (const auto* node : scene_->getNodes()) {
-                result.emplace_back(const_cast<vis::SceneNode*>(node), scene_);
+                result.emplace_back(const_cast<core::SceneNode*>(node), scene_);
             }
             return result;
         }
 
         class Iterator {
         public:
-            Iterator(vis::Scene* scene)
+            Iterator(core::Scene* scene)
                 : scene_(scene),
                   index_(0),
                   nodes_(scene->getNodes()) {}
@@ -335,32 +335,32 @@ namespace lfs::python {
                 if (index_ >= nodes_.size()) {
                     throw nb::stop_iteration();
                 }
-                return PySceneNode(const_cast<vis::SceneNode*>(nodes_[index_++]), scene_);
+                return PySceneNode(const_cast<core::SceneNode*>(nodes_[index_++]), scene_);
             }
 
         private:
-            vis::Scene* scene_;
+            core::Scene* scene_;
             size_t index_;
-            std::vector<const vis::SceneNode*> nodes_;
+            std::vector<const core::SceneNode*> nodes_;
         };
 
         Iterator iter() const { return Iterator(scene_); }
 
     private:
-        vis::Scene* scene_;
+        core::Scene* scene_;
     };
 
     // Main scene wrapper
     class PyScene {
     public:
-        explicit PyScene(vis::Scene* scene);
+        explicit PyScene(core::Scene* scene);
 
         // Thread-safe validity checking
         bool is_valid() const;
         uint64_t generation() const;
 
         // Node CRUD
-        int32_t add_group(const std::string& name, int32_t parent = vis::NULL_NODE);
+        int32_t add_group(const std::string& name, int32_t parent = core::NULL_NODE);
         int32_t add_splat(const std::string& name,
                           const PyTensor& means,
                           const PyTensor& sh0,
@@ -370,11 +370,11 @@ namespace lfs::python {
                           const PyTensor& opacity,
                           int sh_degree,
                           float scene_scale,
-                          int32_t parent = vis::NULL_NODE);
+                          int32_t parent = core::NULL_NODE);
         int32_t add_point_cloud(const std::string& name,
                                 const PyTensor& points,
                                 const PyTensor& colors,
-                                int32_t parent = vis::NULL_NODE);
+                                int32_t parent = core::NULL_NODE);
         int32_t add_camera_group(const std::string& name, int32_t parent, size_t camera_count);
         int32_t add_camera(const std::string& name,
                            int32_t parent,
@@ -511,11 +511,11 @@ namespace lfs::python {
         PyNodeCollection nodes() { return PyNodeCollection(scene_); }
 
         // Access underlying scene (for internal use)
-        vis::Scene* scene() { return scene_; }
-        const vis::Scene* scene() const { return scene_; }
+        core::Scene* scene() { return scene_; }
+        const core::Scene* scene() const { return scene_; }
 
     private:
-        vis::Scene* scene_;
+        core::Scene* scene_;
         uint64_t generation_;
     };
 

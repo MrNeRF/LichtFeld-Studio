@@ -10,9 +10,12 @@
 #include <string>
 #include <unordered_map>
 
+namespace lfs::core {
+    class Scene;
+}
+
 namespace lfs::vis {
     class SceneManager;
-    class Scene;
 } // namespace lfs::vis
 
 namespace lfs::vis::op {

@@ -8,7 +8,7 @@
 
 #include "control/command_api.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
-#include "visualizer/scene/scene.hpp"
+#include "core/scene.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/training/training_manager.hpp"
 

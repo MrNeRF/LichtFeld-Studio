@@ -17,7 +17,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace lfs::vis {
+namespace lfs::core {
     class Scene;
 }
 
@@ -47,7 +47,7 @@ namespace lfs::vis::gui {
     struct PanelDrawContext {
         const UIContext* ui = nullptr;
         const ViewportLayout* viewport = nullptr;
-        Scene* scene = nullptr;
+        core::Scene* scene = nullptr;
         bool ui_hidden = false;
         uint64_t scene_generation = 0;
         bool has_selection = false;

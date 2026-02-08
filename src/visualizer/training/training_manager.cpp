@@ -6,9 +6,9 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/parameter_manager.hpp"
+#include "core/scene.hpp"
 #include "core/services.hpp"
 #include "python/python_runtime.hpp"
-#include "scene/scene.hpp"
 #include "training/training_setup.hpp"
 #include <cstring>
 #include <cuda_runtime.h>

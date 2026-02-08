@@ -5,8 +5,8 @@
 #pragma once
 
 #include "core/point_cloud.hpp"
+#include "core/scene.hpp"
 #include "core/tensor.hpp"
-#include "scene.hpp"
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>

@@ -9,7 +9,7 @@
 #include <expected>
 #include <string>
 
-namespace lfs::vis {
+namespace lfs::core {
     class Scene;
 }
 
@@ -33,7 +33,7 @@ namespace lfs::training {
      */
     std::expected<void, std::string> loadTrainingDataIntoScene(
         const lfs::core::param::TrainingParameters& params,
-        lfs::vis::Scene& scene);
+        lfs::core::Scene& scene);
 
     /**
      * @brief Initialize training model from point cloud
@@ -49,7 +49,7 @@ namespace lfs::training {
      */
     std::expected<void, std::string> initializeTrainingModel(
         const lfs::core::param::TrainingParameters& params,
-        lfs::vis::Scene& scene);
+        lfs::core::Scene& scene);
 
     /**
      * @brief Validate dataset path without loading data
@@ -66,6 +66,6 @@ namespace lfs::training {
     /// Apply pre-loaded data to scene (for async loading)
     std::expected<void, std::string> applyLoadResultToScene(
         const lfs::core::param::TrainingParameters& params,
-        lfs::vis::Scene& scene,
+        lfs::core::Scene& scene,
         lfs::io::LoadResult&& load_result);
 } // namespace lfs::training
