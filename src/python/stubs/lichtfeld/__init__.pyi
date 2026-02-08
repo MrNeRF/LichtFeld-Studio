@@ -53,23 +53,26 @@ class Hook(enum.Enum):
 
     training_end = 4
 
-class Session:
+class ControlSession:
     def __init__(self) -> None: ...
 
-    def optimizer(self) -> Optimizer:
-        """Get optimizer view"""
+    def on_training_start(self, arg: Callable, /) -> None:
+        """Register training start callback"""
 
-    def model(self) -> Model:
-        """Get model view"""
+    def on_iteration_start(self, arg: Callable, /) -> None:
+        """Register iteration start callback"""
 
-    def pause(self) -> None:
-        """Pause training"""
+    def on_pre_optimizer_step(self, arg: Callable, /) -> None:
+        """Register pre-optimizer callback"""
 
-    def resume(self) -> None:
-        """Resume training"""
+    def on_post_step(self, arg: Callable, /) -> None:
+        """Register post-step callback"""
 
-    def request_stop(self) -> None:
-        """Request training stop"""
+    def on_training_end(self, arg: Callable, /) -> None:
+        """Register training end callback"""
+
+    def clear(self) -> None:
+        """Unregister all callbacks"""
 
 class ScopedHandler:
     def __init__(self) -> None: ...
@@ -172,6 +175,24 @@ class Model:
 
     def set(self, attr: str, value: float) -> None:
         """Set attribute value"""
+
+class Session:
+    def __init__(self) -> None: ...
+
+    def optimizer(self) -> Optimizer:
+        """Get optimizer view"""
+
+    def model(self) -> Model:
+        """Get model view"""
+
+    def pause(self) -> None:
+        """Pause training"""
+
+    def resume(self) -> None:
+        """Resume training"""
+
+    def request_stop(self) -> None:
+        """Request training stop"""
 
 def context() -> Context:
     """Get current training context"""

@@ -431,7 +431,7 @@ namespace lfs::vis::gui {
 #ifdef _WIN32
         PWSTR filePath = nullptr;
         COMDLG_FILTERSPEC rgSpec[] = {{L"MP4 Video", L"*.mp4"}};
-        const std::wstring wDefaultName(defaultName.begin(), defaultName.end());
+        const std::wstring wDefaultName = utils::utf8_to_wstring(defaultName);
 
         if (SUCCEEDED(utils::saveFileNative(filePath, rgSpec, 1, wDefaultName.c_str()))) {
             std::filesystem::path result(filePath);
@@ -573,6 +573,7 @@ namespace lfs::vis::gui {
 
         if (SUCCEEDED(utils::selectFileNative(filePath, rgSpec, 1, false))) {
             std::filesystem::path result(filePath);
+            CoTaskMemFree(filePath);
             return result;
         }
         return {};
@@ -593,13 +594,44 @@ namespace lfs::vis::gui {
 #endif
     }
 
+    std::filesystem::path OpenMeshFileDialog(const std::filesystem::path& startDir) {
+#ifdef _WIN32
+        PWSTR filePath = nullptr;
+        COMDLG_FILTERSPEC rgSpec[] = {{L"3D Mesh", L"*.obj;*.fbx;*.gltf;*.glb;*.stl;*.dae;*.3ds;*.ply"}};
+
+        if (SUCCEEDED(utils::selectFileNative(filePath, rgSpec, 1, false))) {
+            std::filesystem::path result(filePath);
+            CoTaskMemFree(filePath);
+            return result;
+        }
+        return {};
+#else
+        const bool has_valid_start = !startDir.empty() && std::filesystem::exists(startDir);
+        const std::string start_path = has_valid_start
+                                           ? shell_escape(lfs::core::path_to_utf8(startDir))
+                                           : "'.'";
+        const std::string primary = "zenity --file-selection "
+                                    "--filename=" +
+                                    start_path + "/ "
+                                                 "--file-filter='3D Mesh|*.obj *.fbx *.gltf *.glb *.stl *.dae *.3ds *.ply' "
+                                                 "--title='Open Mesh' 2>/dev/null";
+        const std::string fallback = "kdialog --getopenfilename " + start_path +
+                                     " '3D Mesh (*.obj *.fbx *.gltf *.glb *.stl *.dae *.3ds *.ply)' 2>/dev/null";
+
+        const std::string result = runDialogCommand(primary, fallback);
+        return result.empty() ? std::filesystem::path{} : std::filesystem::path(result);
+#endif
+    }
+
     std::filesystem::path OpenCheckpointFileDialog() {
 #ifdef _WIN32
         PWSTR filePath = nullptr;
         COMDLG_FILTERSPEC rgSpec[] = {{L"Checkpoint", L"*.resume"}};
 
         if (SUCCEEDED(utils::selectFileNative(filePath, rgSpec, 1, false))) {
-            return std::filesystem::path(filePath);
+            std::filesystem::path result(filePath);
+            CoTaskMemFree(filePath);
+            return result;
         }
         return {};
 #else

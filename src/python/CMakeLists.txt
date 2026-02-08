@@ -191,8 +191,8 @@ target_link_libraries(lfs_py PRIVATE
     lfs_training
     lfs_io
     lfs_rendering
-    OpenMeshCore
-    OpenMeshTools
+    $<IF:$<PLATFORM_ID:Windows>,OpenMeshCore,OpenMeshCoreStatic>
+    $<IF:$<PLATFORM_ID:Windows>,OpenMeshTools,OpenMeshToolsStatic>
     lfs_sequencer
     OpenImageIO::OpenImageIO
     CUDA::cudart

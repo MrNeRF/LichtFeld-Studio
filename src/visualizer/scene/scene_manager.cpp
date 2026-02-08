@@ -233,7 +233,15 @@ namespace lfs::vis {
             }
 
             std::string name = lfs::core::path_to_utf8(path.stem());
-            size_t gaussian_count = 0;
+
+            auto ext = path.extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+            state::SceneLoaded::Type file_type = state::SceneLoaded::Type::PLY;
+            if (ext == ".sog") {
+                file_type = state::SceneLoaded::Type::SOG;
+            } else if (ext == ".spz") {
+                file_type = state::SceneLoaded::Type::SPZ;
+            }
 
             auto* mesh_data = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&load_result->data);
             if (mesh_data && *mesh_data) {
@@ -246,6 +254,30 @@ namespace lfs::vis {
                     content_type_ = ContentType::SplatFiles;
                     splat_paths_.clear();
                 }
+
+                state::SceneLoaded{
+                    .scene = nullptr,
+                    .path = path,
+                    .type = file_type,
+                    .num_gaussians = 0}
+                    .emit();
+
+                python::set_application_scene(&scene_);
+
+                state::PLYAdded{
+                    .name = name,
+                    .node_gaussians = 0,
+                    .total_gaussians = scene_.getTotalGaussianCount(),
+                    .is_visible = true,
+                    .parent_name = "",
+                    .is_group = false,
+                    .node_type = static_cast<int>(core::NodeType::MESH)}
+                    .emit();
+
+                emitSceneChanged();
+                selectNode(name);
+
+                LOG_INFO("Loaded mesh '{}'", name);
             } else {
                 auto* splat_data = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&load_result->data);
                 if (!splat_data || !*splat_data) {
@@ -253,7 +285,7 @@ namespace lfs::vis {
                     throw std::runtime_error("Expected splat/mesh file but got different data type");
                 }
 
-                gaussian_count = (*splat_data)->size();
+                const size_t gaussian_count = (*splat_data)->size();
                 LOG_DEBUG("Adding '{}' to scene with {} gaussians", name, gaussian_count);
 
                 scene_.addNode(name, std::make_unique<lfs::core::SplatData>(std::move(**splat_data)));
@@ -264,71 +296,60 @@ namespace lfs::vis {
                     splat_paths_.clear();
                     splat_paths_[name] = path;
                 }
-            }
 
-            // Determine file type for event
-            auto ext = path.extension().string();
-            std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-            state::SceneLoaded::Type file_type = state::SceneLoaded::Type::PLY;
-            if (ext == ".sog") {
-                file_type = state::SceneLoaded::Type::SOG;
-            } else if (ext == ".spz") {
-                file_type = state::SceneLoaded::Type::SPZ;
-            }
+                state::SceneLoaded{
+                    .scene = nullptr,
+                    .path = path,
+                    .type = file_type,
+                    .num_gaussians = scene_.getTotalGaussianCount()}
+                    .emit();
 
-            // Emit events
-            state::SceneLoaded{
-                .scene = nullptr,
-                .path = path,
-                .type = file_type,
-                .num_gaussians = scene_.getTotalGaussianCount()}
-                .emit();
+                python::set_application_scene(&scene_);
 
-            python::set_application_scene(&scene_);
+                state::PLYAdded{
+                    .name = name,
+                    .node_gaussians = gaussian_count,
+                    .total_gaussians = scene_.getTotalGaussianCount(),
+                    .is_visible = true,
+                    .parent_name = "",
+                    .is_group = false,
+                    .node_type = 0}
+                    .emit();
 
-            state::PLYAdded{
-                .name = name,
-                .node_gaussians = gaussian_count,
-                .total_gaussians = scene_.getTotalGaussianCount(),
-                .is_visible = true,
-                .parent_name = "",
-                .is_group = false,
-                .node_type = 0} // SPLAT
-                .emit();
-
-            // Emit PLYAdded for the cropbox (re-lookup splat as vector may have reallocated)
-            const auto* splat_for_cropbox = scene_.getNode(name);
-            if (splat_for_cropbox) {
-                const core::NodeId cropbox_id = scene_.getCropBoxForSplat(splat_for_cropbox->id);
-                if (cropbox_id != core::NULL_NODE) {
-                    const auto* cropbox_node = scene_.getNodeById(cropbox_id);
-                    if (cropbox_node) {
-                        LOG_DEBUG("Emitting PLYAdded for cropbox '{}'", cropbox_node->name);
-                        state::PLYAdded{
-                            .name = cropbox_node->name,
-                            .node_gaussians = 0,
-                            .total_gaussians = scene_.getTotalGaussianCount(),
-                            .is_visible = true,
-                            .parent_name = name,
-                            .is_group = false,
-                            .node_type = 2} // CROPBOX
-                            .emit();
+                // Emit PLYAdded for the cropbox
+                const auto* splat_for_cropbox = scene_.getNode(name);
+                if (splat_for_cropbox) {
+                    const core::NodeId cropbox_id = scene_.getCropBoxForSplat(splat_for_cropbox->id);
+                    if (cropbox_id != core::NULL_NODE) {
+                        const auto* cropbox_node = scene_.getNodeById(cropbox_id);
+                        if (cropbox_node) {
+                            LOG_DEBUG("Emitting PLYAdded for cropbox '{}'", cropbox_node->name);
+                            state::PLYAdded{
+                                .name = cropbox_node->name,
+                                .node_gaussians = 0,
+                                .total_gaussians = scene_.getTotalGaussianCount(),
+                                .is_visible = true,
+                                .parent_name = name,
+                                .is_group = false,
+                                .node_type = 2}
+                                .emit();
+                        }
                     }
                 }
+
+                emitSceneChanged();
+                updateCropBoxToFitScene(true);
+                selectNode(name);
+
+                // Check for companion PPISP file
+                auto ppisp_path = lfs::training::find_ppisp_companion(path);
+                if (!ppisp_path.empty()) {
+                    LOG_INFO("Found PPISP companion file: {}", lfs::core::path_to_utf8(ppisp_path));
+                    loadPPISPCompanion(ppisp_path);
+                }
+
+                LOG_INFO("Loaded '{}' with {} gaussians", name, gaussian_count);
             }
-
-            emitSceneChanged();
-            updateCropBoxToFitScene(true);
-            selectNode(name);
-
-            // Check for companion PPISP file
-            auto ppisp_path = lfs::training::find_ppisp_companion(path);
-            if (!ppisp_path.empty()) {
-                LOG_INFO("Found PPISP companion file: {}", lfs::core::path_to_utf8(ppisp_path));
-                loadPPISPCompanion(ppisp_path);
-            }
-
-            LOG_INFO("Loaded '{}' with {} gaussians", name, gaussian_count);
 
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to load splat file: {} (path: {})", e.what(), lfs::core::path_to_utf8(path));
@@ -422,6 +443,16 @@ namespace lfs::vis {
             auto* mesh_data = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&load_result->data);
             if (mesh_data && *mesh_data) {
                 scene_.addMesh(name, *mesh_data);
+
+                state::PLYAdded{
+                    .name = name,
+                    .node_gaussians = 0,
+                    .total_gaussians = scene_.getTotalGaussianCount(),
+                    .is_visible = is_visible,
+                    .parent_name = "",
+                    .is_group = false,
+                    .node_type = static_cast<int>(core::NodeType::MESH)}
+                    .emit();
 
                 emitSceneChanged();
                 selectNode(name);
@@ -1768,7 +1799,6 @@ namespace lfs::vis {
         scene_.addNode(MODEL_NAME, std::move(splat_data));
         selectNode(MODEL_NAME);
 
-        // Restore PPISP appearance model
         if (ppisp) {
             setAppearanceModel(std::move(ppisp), std::move(controller_pool));
         }
@@ -1822,7 +1852,6 @@ namespace lfs::vis {
             state.point_cloud = scene_.getVisiblePointCloud();
         }
 
-        // Collect visible meshes
         state.meshes = scene_.getVisibleMeshes();
 
         // Get transforms and indices
@@ -3116,15 +3145,11 @@ namespace lfs::vis {
                                           std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool) {
         appearance_ppisp_ = std::move(ppisp);
         appearance_controller_pool_ = std::move(controller_pool);
-        LOG_DEBUG("SceneManager: appearance model set (PPISP: {}, Controllers: {})",
-                  appearance_ppisp_ ? "yes" : "no",
-                  appearance_controller_pool_ ? appearance_controller_pool_->num_cameras() : 0);
     }
 
     void SceneManager::clearAppearanceModel() {
         appearance_ppisp_.reset();
         appearance_controller_pool_.reset();
-        LOG_DEBUG("SceneManager: appearance model cleared");
     }
 
 } // namespace lfs::vis

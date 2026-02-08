@@ -21,10 +21,8 @@ namespace lfs::rendering {
         }
         shader_ = std::move(*shader_result);
 
-        // Full-screen quad
         // clang-format off
         constexpr float QUAD_VERTICES[] = {
-            // pos      // uv
             -1.0f, -1.0f, 0.0f, 0.0f,
              1.0f, -1.0f, 1.0f, 0.0f,
             -1.0f,  1.0f, 0.0f, 1.0f,
@@ -35,14 +33,14 @@ namespace lfs::rendering {
         auto vao_result = create_vao();
         if (!vao_result)
             return std::unexpected(vao_result.error());
+        vao_ = std::move(*vao_result);
 
         auto vbo_result = create_vbo();
         if (!vbo_result)
             return std::unexpected(vbo_result.error());
-
         vbo_ = std::move(*vbo_result);
 
-        glBindVertexArray(vao_result->get());
+        glBindVertexArray(vao_.get());
 
         glBindBuffer(GL_ARRAY_BUFFER, vbo_.get());
         glBufferData(GL_ARRAY_BUFFER, sizeof(QUAD_VERTICES), QUAD_VERTICES, GL_STATIC_DRAW);
@@ -57,18 +55,16 @@ namespace lfs::rendering {
         glBindVertexArray(0);
         glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-        vao_ = std::move(*vao_result);
-
         initialized_ = true;
-        LOG_INFO("DepthCompositor initialized");
         return {};
     }
 
     Result<void> DepthCompositor::composite(GLuint splat_color_tex, GLuint splat_depth_tex,
                                             GLuint mesh_color_tex, GLuint mesh_depth_tex,
-                                            const glm::ivec2& viewport_size,
                                             float near_plane, float far_plane,
-                                            bool flip_splat_y) {
+                                            bool flip_splat_y,
+                                            const glm::vec2& splat_texcoord_scale,
+                                            bool splat_depth_is_ndc) {
         if (!initialized_)
             return std::unexpected("DepthCompositor not initialized");
 
@@ -93,8 +89,13 @@ namespace lfs::rendering {
         shader_->set_uniform("u_near_plane", near_plane);
         shader_->set_uniform("u_far_plane", far_plane);
         shader_->set_uniform("u_flip_splat_y", flip_splat_y);
+        shader_->set_uniform("u_splat_texcoord_scale", splat_texcoord_scale);
+        shader_->set_uniform("u_splat_depth_is_ndc", splat_depth_is_ndc);
 
-        glViewport(0, 0, viewport_size.x, viewport_size.y);
+        const GLboolean depth_was_enabled = glIsEnabled(GL_DEPTH_TEST);
+        GLint prev_depth_func = GL_LESS;
+        glGetIntegerv(GL_DEPTH_FUNC, &prev_depth_func);
+
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_ALWAYS);
 
@@ -102,7 +103,9 @@ namespace lfs::rendering {
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         glBindVertexArray(0);
 
-        glDepthFunc(GL_LESS);
+        glDepthFunc(prev_depth_func);
+        if (!depth_was_enabled)
+            glDisable(GL_DEPTH_TEST);
 
         glActiveTexture(GL_TEXTURE0);
 

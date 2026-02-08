@@ -238,7 +238,7 @@ target_link_libraries(lfs_io
         lfs_io_cuda            # IO-specific CUDA kernels (morton, k-means)
         lfs_core_cuda          # Core CUDA utilities (lanczos_resize for nvcodec)
         assimp::assimp         # Multi-format mesh import
-        OpenMeshCore           # Half-edge mesh data structure
+        $<IF:$<PLATFORM_ID:Windows>,OpenMeshCore,OpenMeshCoreStatic>
         spz_lib                # Niantic SPZ compressed format
         PkgConfig::FFMPEG
 )

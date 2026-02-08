@@ -3,7 +3,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "openmesh_bridge.hpp"
+#include <algorithm>
 #include <cassert>
+#include <limits>
 
 namespace lfs::io::mesh {
 
@@ -15,11 +17,12 @@ namespace lfs::io::mesh {
         const int64_t nv = static_cast<int64_t>(mesh.n_vertices());
         const int64_t nf = static_cast<int64_t>(mesh.n_faces());
         assert(nv > 0 && nf > 0);
+        assert(nv <= std::numeric_limits<int>::max());
 
         auto vertices = Tensor::empty({static_cast<size_t>(nv), size_t{3}}, Device::CPU, DataType::Float32);
         auto vacc = vertices.accessor<float, 2>();
         for (int64_t i = 0; i < nv; ++i) {
-            auto p = mesh.point(TriMesh::VertexHandle(static_cast<int>(i)));
+            const auto p = mesh.point(TriMesh::VertexHandle(static_cast<int>(i)));
             vacc(i, 0) = p[0];
             vacc(i, 1) = p[1];
             vacc(i, 2) = p[2];
@@ -46,7 +49,7 @@ namespace lfs::io::mesh {
             result.normals = Tensor::empty({static_cast<size_t>(nv), size_t{3}}, Device::CPU, DataType::Float32);
             auto nacc = result.normals.accessor<float, 2>();
             for (int64_t i = 0; i < nv; ++i) {
-                auto n = mesh.normal(TriMesh::VertexHandle(static_cast<int>(i)));
+                const auto n = mesh.normal(TriMesh::VertexHandle(static_cast<int>(i)));
                 nacc(i, 0) = n[0];
                 nacc(i, 1) = n[1];
                 nacc(i, 2) = n[2];
@@ -57,7 +60,7 @@ namespace lfs::io::mesh {
             result.texcoords = Tensor::empty({static_cast<size_t>(nv), size_t{2}}, Device::CPU, DataType::Float32);
             auto tacc = result.texcoords.accessor<float, 2>();
             for (int64_t i = 0; i < nv; ++i) {
-                auto tc = mesh.texcoord2D(TriMesh::VertexHandle(static_cast<int>(i)));
+                const auto tc = mesh.texcoord2D(TriMesh::VertexHandle(static_cast<int>(i)));
                 tacc(i, 0) = tc[0];
                 tacc(i, 1) = tc[1];
             }
@@ -67,7 +70,7 @@ namespace lfs::io::mesh {
             result.colors = Tensor::empty({static_cast<size_t>(nv), size_t{4}}, Device::CPU, DataType::Float32);
             auto cacc = result.colors.accessor<float, 2>();
             for (int64_t i = 0; i < nv; ++i) {
-                auto c = mesh.color(TriMesh::VertexHandle(static_cast<int>(i)));
+                const auto c = mesh.color(TriMesh::VertexHandle(static_cast<int>(i)));
                 cacc(i, 0) = static_cast<float>(c[0]) / 255.0f;
                 cacc(i, 1) = static_cast<float>(c[1]) / 255.0f;
                 cacc(i, 2) = static_cast<float>(c[2]) / 255.0f;
@@ -85,6 +88,7 @@ namespace lfs::io::mesh {
         auto cpu_idx = data.indices.to(Device::CPU).contiguous();
         const int64_t nv = data.vertex_count();
         const int64_t nf = data.face_count();
+        assert(nv <= std::numeric_limits<int>::max());
 
         TriMesh mesh;
 
@@ -126,14 +130,17 @@ namespace lfs::io::mesh {
             auto cacc = cpu_colors.accessor<float, 2>();
             for (int64_t i = 0; i < nv; ++i) {
                 mesh.set_color(vhandles[i], TriMesh::Color(
-                                                static_cast<unsigned char>(cacc(i, 0) * 255.0f),
-                                                static_cast<unsigned char>(cacc(i, 1) * 255.0f),
-                                                static_cast<unsigned char>(cacc(i, 2) * 255.0f)));
+                                                static_cast<unsigned char>(std::clamp(cacc(i, 0) * 255.0f, 0.0f, 255.0f)),
+                                                static_cast<unsigned char>(std::clamp(cacc(i, 1) * 255.0f, 0.0f, 255.0f)),
+                                                static_cast<unsigned char>(std::clamp(cacc(i, 2) * 255.0f, 0.0f, 255.0f))));
             }
         }
 
         auto iacc = cpu_idx.accessor<int32_t, 2>();
         for (int64_t i = 0; i < nf; ++i) {
+            assert(iacc(i, 0) >= 0 && iacc(i, 0) < nv);
+            assert(iacc(i, 1) >= 0 && iacc(i, 1) < nv);
+            assert(iacc(i, 2) >= 0 && iacc(i, 2) < nv);
             mesh.add_face(vhandles[iacc(i, 0)], vhandles[iacc(i, 1)], vhandles[iacc(i, 2)]);
         }
 

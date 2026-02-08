@@ -6,6 +6,7 @@
     "file.new_project": "New Project",
     "file.import_dataset": "Import Dataset",
     "file.import_ply": "Import PLY, SOG, SPZ",
+    "file.import_mesh": "Import Mesh",
     "file.import_checkpoint": "Import Checkpoint",
     "file.import_config": "Import Config",
     "file.export": "Export...",

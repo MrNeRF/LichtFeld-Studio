@@ -17,9 +17,10 @@ namespace lfs::rendering {
 
         Result<void> composite(GLuint splat_color_tex, GLuint splat_depth_tex,
                                GLuint mesh_color_tex, GLuint mesh_depth_tex,
-                               const glm::ivec2& viewport_size,
                                float near_plane, float far_plane,
-                               bool flip_splat_y = true);
+                               bool flip_splat_y = true,
+                               const glm::vec2& splat_texcoord_scale = glm::vec2(1.0f),
+                               bool splat_depth_is_ndc = false);
 
     private:
         ManagedShader shader_;

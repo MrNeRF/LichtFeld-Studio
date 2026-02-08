@@ -10,46 +10,59 @@ uniform sampler2D u_mesh_depth;
 uniform float u_near_plane;
 uniform float u_far_plane;
 uniform bool u_flip_splat_y;
+uniform vec2 u_splat_texcoord_scale;
+uniform bool u_splat_depth_is_ndc;
 
 layout(location = 0) out vec4 frag_color;
 
-const float FAR_DEPTH_SENTINEL = 1e10;
-
 float view_depth_to_ndc(float z) {
-    if (z > FAR_DEPTH_SENTINEL) return 1.0;
     float A = (u_far_plane + u_near_plane) / (u_far_plane - u_near_plane);
     float B = (2.0 * u_far_plane * u_near_plane) / (u_far_plane - u_near_plane);
     float ndc = A - B / z;
     return ndc * 0.5 + 0.5;
 }
 
+float ndc_to_view_depth(float ndc_z) {
+    float z_ndc = ndc_z * 2.0 - 1.0;
+    float A = (u_far_plane + u_near_plane) / (u_far_plane - u_near_plane);
+    float B = (2.0 * u_far_plane * u_near_plane) / (u_far_plane - u_near_plane);
+    return B / (A - z_ndc);
+}
+
 void main() {
-    vec2 splat_uv = u_flip_splat_y ? vec2(v_texcoord.x, 1.0 - v_texcoord.y) : v_texcoord;
+    vec2 splat_uv = v_texcoord * u_splat_texcoord_scale;
+    if (u_flip_splat_y)
+        splat_uv.y = u_splat_texcoord_scale.y - splat_uv.y;
     vec4 splat_color = texture(u_splat_color, splat_uv);
     float splat_depth = texture(u_splat_depth, splat_uv).r;
+    if (u_splat_depth_is_ndc)
+        splat_depth = ndc_to_view_depth(splat_depth);
 
     vec4 mesh_color = texture(u_mesh_color, v_texcoord);
-    float mesh_depth = texture(u_mesh_depth, v_texcoord).r;
+    float mesh_ndc = texture(u_mesh_depth, v_texcoord).r;
 
-    if (mesh_color.a < 0.001) {
+    bool splat_has_depth = splat_depth >= u_near_plane && splat_depth < 1e9;
+    bool mesh_has_depth = mesh_ndc < 1.0;
+
+    if (!mesh_has_depth) {
         frag_color = splat_color;
-        gl_FragDepth = view_depth_to_ndc(splat_depth);
+        gl_FragDepth = splat_has_depth ? view_depth_to_ndc(splat_depth) : 1.0;
         return;
     }
 
-    if (splat_color.a < 0.001 || splat_depth > FAR_DEPTH_SENTINEL) {
+    float mesh_view_depth = ndc_to_view_depth(mesh_ndc);
+
+    if (!splat_has_depth) {
         frag_color = mesh_color;
-        gl_FragDepth = view_depth_to_ndc(mesh_depth);
+        gl_FragDepth = mesh_ndc;
         return;
     }
 
-    if (mesh_depth < splat_depth) {
-        frag_color = vec4(mesh_color.rgb * mesh_color.a + splat_color.rgb * (1.0 - mesh_color.a),
-                          max(mesh_color.a, splat_color.a));
-        gl_FragDepth = view_depth_to_ndc(mesh_depth);
+    if (mesh_view_depth < splat_depth) {
+        frag_color = mesh_color;
+        gl_FragDepth = mesh_ndc;
     } else {
-        frag_color = vec4(splat_color.rgb * splat_color.a + mesh_color.rgb * (1.0 - splat_color.a),
-                          max(splat_color.a, mesh_color.a));
+        frag_color = splat_color;
         gl_FragDepth = view_depth_to_ndc(splat_depth);
     }
 }

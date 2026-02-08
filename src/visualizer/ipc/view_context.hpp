@@ -80,7 +80,6 @@ namespace lfs::vis {
         int ppisp_mode = 1;
         PPISPOverrides ppisp;
 
-        // Mesh rendering
         bool mesh_wireframe = false;
         std::array<float, 3> mesh_wireframe_color{0.2f, 0.2f, 0.2f};
         float mesh_wireframe_width = 1.0f;

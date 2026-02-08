@@ -43,6 +43,17 @@ class ImportPlyOperator(Operator):
         return {"FINISHED"}
 
 
+class ImportMeshOperator(Operator):
+    label = "menu.file.import_mesh"
+    description = "Import a 3D mesh file"
+
+    def execute(self, context) -> set:
+        path = lf.ui.open_mesh_file_dialog("")
+        if path:
+            lf.load_file(path, is_dataset=False)
+        return {"FINISHED"}
+
+
 class ImportCheckpointOperator(Operator):
     label = "menu.file.import_checkpoint"
     description = "Import a checkpoint file"
@@ -136,6 +147,7 @@ class FileMenu:
         layout.separator()
         layout.operator_(ImportDatasetOperator._class_id())
         layout.operator_(ImportPlyOperator._class_id())
+        layout.operator_(ImportMeshOperator._class_id())
         layout.operator_(ImportCheckpointOperator._class_id())
         layout.operator_(ImportConfigOperator._class_id())
         layout.separator()
@@ -149,6 +161,7 @@ _operator_classes = [
     NewProjectOperator,
     ImportDatasetOperator,
     ImportPlyOperator,
+    ImportMeshOperator,
     ImportCheckpointOperator,
     ImportConfigOperator,
     ExportOperator,

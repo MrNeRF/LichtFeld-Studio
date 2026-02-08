@@ -25,9 +25,7 @@ namespace lfs::python {
     namespace OM = OpenMesh;
 
     PyMeshData PyMeshData::to_device(const std::string& device) const {
-        auto target = core::Device::CPU;
-        if (device == "cuda" || device == "gpu")
-            target = core::Device::CUDA;
+        const auto target = (device == "cuda" || device == "gpu") ? core::Device::CUDA : core::Device::CPU;
         return PyMeshData(std::make_shared<core::MeshData>(data_->to(target)));
     }
 
@@ -110,6 +108,7 @@ namespace lfs::python {
         TriMesh mesh_data_to_trimesh(const PyMeshData& md) {
             TriMesh mesh;
             const auto& d = *md.data();
+            assert(d.vertices.shape()[1] == 3);
 
             auto cpu_verts = d.vertices.to(core::Device::CPU).contiguous();
             auto vacc = cpu_verts.accessor<float, 2>();
@@ -122,11 +121,15 @@ namespace lfs::python {
             }
 
             if (d.face_count() > 0) {
+                assert(d.indices.shape()[1] == 3);
                 auto cpu_idx = d.indices.to(core::Device::CPU).contiguous();
                 auto iacc = cpu_idx.accessor<int32_t, 2>();
                 const int64_t nf = d.face_count();
 
                 for (int64_t i = 0; i < nf; ++i) {
+                    assert(iacc(i, 0) >= 0 && iacc(i, 0) < nv);
+                    assert(iacc(i, 1) >= 0 && iacc(i, 1) < nv);
+                    assert(iacc(i, 2) >= 0 && iacc(i, 2) < nv);
                     mesh.add_face(OM::VertexHandle(iacc(i, 0)), OM::VertexHandle(iacc(i, 1)),
                                   OM::VertexHandle(iacc(i, 2)));
                 }
@@ -152,6 +155,16 @@ namespace lfs::python {
                     mesh.set_texcoord2D(
                         vh, TriMesh::TexCoord2D(static_cast<double>(tacc(vh.idx(), 0)),
                                                 static_cast<double>(tacc(vh.idx(), 1))));
+                }
+            }
+
+            if (d.has_colors()) {
+                mesh.request_vertex_colors();
+                auto cpu_colors = d.colors.to(core::Device::CPU).contiguous();
+                auto cacc = cpu_colors.accessor<float, 2>();
+                for (auto vh : mesh.vertices()) {
+                    mesh.set_color(vh, TriMesh::Color(cacc(vh.idx(), 0), cacc(vh.idx(), 1),
+                                                      cacc(vh.idx(), 2), cacc(vh.idx(), 3)));
                 }
             }
 
@@ -192,7 +205,6 @@ namespace lfs::python {
     } // namespace
 
     void register_mesh(nb::module_& m) {
-        // MeshData wrapper
         nb::class_<PyMeshData>(m, "MeshData")
             .def(
                 "__init__",
@@ -225,14 +237,11 @@ namespace lfs::python {
                 "Convert to OpenMesh TriMesh for topology operations")
             .def("__repr__", &PyMeshData::repr);
 
-        // OpenMesh handle types
         expose_handles(m);
 
-        // Mesh types
         expose_mesh<TriMesh>(m, "TriMesh");
         expose_mesh<PolyMesh>(m, "PolyMesh");
 
-        // Iterators
         expose_iterator<OM::PolyConnectivity::VertexIter, &OM::ArrayKernel::n_vertices>(
             m, "VertexIter");
         expose_iterator<OM::PolyConnectivity::HalfedgeIter, &OM::ArrayKernel::n_halfedges>(
@@ -240,7 +249,6 @@ namespace lfs::python {
         expose_iterator<OM::PolyConnectivity::EdgeIter, &OM::ArrayKernel::n_edges>(m, "EdgeIter");
         expose_iterator<OM::PolyConnectivity::FaceIter, &OM::ArrayKernel::n_faces>(m, "FaceIter");
 
-        // Circulators
         expose_circulator<OM::PolyConnectivity::VertexVertexIter, OM::VertexHandle>(
             m, "VertexVertexIter");
         expose_circulator<OM::PolyConnectivity::VertexIHalfedgeIter, OM::VertexHandle>(
@@ -260,20 +268,16 @@ namespace lfs::python {
         expose_circulator<OM::PolyConnectivity::HalfedgeLoopIter, OM::HalfedgeHandle>(
             m, "HalfedgeLoopIter");
 
-        // File I/O (read_trimesh, read_polymesh, write_mesh)
         expose_io(m);
 
-        // Decimater
         expose_decimater<TriMesh>(m, "TriMesh");
         expose_decimater<PolyMesh>(m, "PolyMesh");
 
-        // Bridge: TriMesh <-> MeshData
         m.def("to_mesh_data", &trimesh_to_mesh_data, nb::arg("trimesh"),
               "Convert TriMesh to tensor-backed MeshData");
         m.def("from_mesh_data", &mesh_data_to_trimesh, nb::arg("mesh_data"),
               "Convert MeshData to TriMesh");
 
-        // Convenience I/O that reads/writes directly as MeshData
         m.def("read_mesh", &read_mesh_data, nb::arg("path"),
               "Read a mesh file into MeshData (auto-computes normals if missing)");
         m.def("write_mesh", &write_mesh_data, nb::arg("mesh_data"), nb::arg("path"),

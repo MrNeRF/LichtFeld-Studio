@@ -14,6 +14,7 @@
 #include <cassert>
 #include <chrono>
 #include <format>
+#include <limits>
 
 namespace lfs::io {
 
@@ -23,7 +24,7 @@ namespace lfs::io {
     using lfs::core::MeshData;
     using lfs::core::Tensor;
 
-    constexpr std::array MESH_EXTENSIONS = {".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".blend"};
+    constexpr std::array MESH_EXTENSIONS = {".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds"};
 
     namespace {
 
@@ -72,15 +73,29 @@ namespace lfs::io {
             }
 
             const int64_t nf = static_cast<int64_t>(ai_mesh->mNumFaces);
-            auto indices = Tensor::empty({nf, 3}, Device::CPU, DataType::Int32);
+            int64_t tri_count = 0;
+            for (int64_t i = 0; i < nf; ++i) {
+                if (ai_mesh->mFaces[i].mNumIndices == 3)
+                    ++tri_count;
+            }
+            if (tri_count < nf) {
+                LOG_WARN("Mesh has {} non-triangle faces (skipped), {} triangles kept",
+                         nf - tri_count, tri_count);
+            }
+
+            auto indices = Tensor::empty({tri_count, 3}, Device::CPU, DataType::Int32);
             auto iacc = indices.accessor<int32_t, 2>();
+            int64_t ti = 0;
             for (int64_t i = 0; i < nf; ++i) {
                 const auto& face = ai_mesh->mFaces[i];
-                assert(face.mNumIndices == 3);
-                iacc(i, 0) = static_cast<int32_t>(face.mIndices[0]);
-                iacc(i, 1) = static_cast<int32_t>(face.mIndices[1]);
-                iacc(i, 2) = static_cast<int32_t>(face.mIndices[2]);
+                if (face.mNumIndices != 3)
+                    continue;
+                iacc(ti, 0) = static_cast<int32_t>(face.mIndices[0]);
+                iacc(ti, 1) = static_cast<int32_t>(face.mIndices[1]);
+                iacc(ti, 2) = static_cast<int32_t>(face.mIndices[2]);
+                ++ti;
             }
+            assert(ti == tri_count);
 
             MeshData mesh(std::move(vertices), std::move(indices));
 
@@ -102,11 +117,11 @@ namespace lfs::io {
                     const auto& t = ai_mesh->mTangents[i];
                     const auto& b = ai_mesh->mBitangents[i];
                     const auto& n = ai_mesh->mNormals[i];
-                    float handedness = (n.x * (t.y * b.z - t.z * b.y) -
-                                        n.y * (t.x * b.z - t.z * b.x) +
-                                        n.z * (t.x * b.y - t.y * b.x)) < 0.0f
-                                           ? -1.0f
-                                           : 1.0f;
+                    const float handedness = (n.x * (t.y * b.z - t.z * b.y) -
+                                              n.y * (t.x * b.z - t.z * b.x) +
+                                              n.z * (t.x * b.y - t.y * b.x)) < 0.0f
+                                                 ? -1.0f
+                                                 : 1.0f;
                     tacc(i, 0) = t.x;
                     tacc(i, 1) = t.y;
                     tacc(i, 2) = t.z;
@@ -139,7 +154,7 @@ namespace lfs::io {
             return mesh;
         }
 
-        MeshData merge_meshes(std::vector<MeshData>& meshes) {
+        MeshData merge_meshes(std::vector<MeshData> meshes) {
             assert(!meshes.empty());
             if (meshes.size() == 1)
                 return std::move(meshes[0]);
@@ -151,7 +166,7 @@ namespace lfs::io {
             bool any_texcoords = false;
             bool any_colors = false;
 
-            for (auto& m : meshes) {
+            for (const auto& m : meshes) {
                 total_verts += m.vertex_count();
                 total_faces += m.face_count();
                 any_normals |= m.has_normals();
@@ -182,6 +197,10 @@ namespace lfs::io {
             MeshData result;
 
             for (auto& m : meshes) {
+                if (v_offset > static_cast<int64_t>(std::numeric_limits<int32_t>::max())) {
+                    LOG_ERROR("Vertex offset {} exceeds Int32 range, truncating merge", v_offset);
+                    break;
+                }
                 const int64_t nv = m.vertex_count();
                 const int64_t nf = m.face_count();
 
@@ -194,6 +213,9 @@ namespace lfs::io {
 
                 auto src_iacc = m.indices.accessor<int32_t, 2>();
                 for (int64_t i = 0; i < nf; ++i) {
+                    for (int j = 0; j < 3; ++j) {
+                        assert(src_iacc(i, j) >= 0 && src_iacc(i, j) < nv);
+                    }
                     iacc(f_offset + i, 0) = src_iacc(i, 0) + static_cast<int32_t>(v_offset);
                     iacc(f_offset + i, 1) = src_iacc(i, 1) + static_cast<int32_t>(v_offset);
                     iacc(f_offset + i, 2) = src_iacc(i, 2) + static_cast<int32_t>(v_offset);
@@ -267,7 +289,7 @@ namespace lfs::io {
         const std::filesystem::path& path,
         const LoadOptions& options) {
 
-        auto start_time = std::chrono::high_resolution_clock::now();
+        const auto start_time = std::chrono::high_resolution_clock::now();
         const auto path_str = lfs::core::path_to_utf8(path);
 
         if (options.progress) {
@@ -278,7 +300,7 @@ namespace lfs::io {
             return make_error(ErrorCode::PATH_NOT_FOUND, "Mesh file does not exist", path);
         }
 
-        constexpr unsigned int import_flags =
+        constexpr unsigned int IMPORT_FLAGS =
             aiProcess_Triangulate |
             aiProcess_GenSmoothNormals |
             aiProcess_CalcTangentSpace |
@@ -287,7 +309,7 @@ namespace lfs::io {
             aiProcess_SortByPType;
 
         Assimp::Importer importer;
-        const aiScene* scene = importer.ReadFile(path_str, import_flags);
+        const aiScene* scene = importer.ReadFile(path_str, IMPORT_FLAGS);
 
         if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
             return make_error(ErrorCode::CORRUPTED_DATA,
@@ -316,7 +338,7 @@ namespace lfs::io {
             options.progress(70.0f, "Merging mesh data...");
         }
 
-        auto mesh_data = std::make_shared<MeshData>(merge_meshes(sub_meshes));
+        auto mesh_data = std::make_shared<MeshData>(merge_meshes(std::move(sub_meshes)));
         mesh_data->materials = std::move(materials);
 
         if (!mesh_data->has_normals()) {
@@ -327,8 +349,8 @@ namespace lfs::io {
             options.progress(100.0f, "Mesh loading complete");
         }
 
-        auto end_time = std::chrono::high_resolution_clock::now();
-        auto load_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+        const auto end_time = std::chrono::high_resolution_clock::now();
+        const auto load_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
 
         LOG_INFO("Loaded mesh: {} vertices, {} faces in {}ms",
                  mesh_data->vertex_count(), mesh_data->face_count(), load_time.count());

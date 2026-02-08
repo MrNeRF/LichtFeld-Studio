@@ -420,10 +420,8 @@ namespace lfs::training {
         LOG_DEBUG("Trainer constructed with {} cameras", base_dataset_->get_cameras().size());
     }
 
-    // New constructor - Scene owns all data
     Trainer::Trainer(lfs::core::Scene& scene)
         : scene_(&scene) {
-        // Check CUDA availability
         int device_count = 0;
         cudaError_t error = cudaGetDeviceCount(&device_count);
         if (error != cudaSuccess || device_count == 0) {

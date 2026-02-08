@@ -43,10 +43,8 @@ namespace lfs::training {
         const lfs::core::param::TrainingParameters& params,
         lfs::core::Scene& scene) {
 
-        // 1. Create loader
         auto data_loader = lfs::io::Loader::create();
 
-        // 2. Set up load options with progress callback that emits events
         const auto& data_path = params.dataset.data_path;
         lfs::io::LoadOptions load_options{
             .resize_factor = params.dataset.resize_factor,
@@ -62,7 +60,6 @@ namespace lfs::training {
                     .emit();
             }};
 
-        // 3. Load the dataset
         LOG_INFO("Loading dataset from: {}", lfs::core::path_to_utf8(params.dataset.data_path));
         auto load_result = data_loader->load(params.dataset.data_path, load_options);
         if (!load_result) {
@@ -71,12 +68,10 @@ namespace lfs::training {
 
         LOG_INFO("Dataset loaded successfully using {} loader", load_result->loader_used);
 
-        // 4. Handle the loaded data
         return std::visit([&](auto&& data) -> std::expected<void, std::string> {
             using T = std::decay_t<decltype(data)>;
 
             if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::SplatData>>) {
-                // Direct PLY load - add to scene as splat node
                 auto model = std::make_unique<lfs::core::SplatData>(std::move(*data));
                 scene.addSplat("loaded_model", std::move(model));
                 scene.setTrainingModelNode("loaded_model");
@@ -84,26 +79,11 @@ namespace lfs::training {
                 return {};
 
             } else if constexpr (std::is_same_v<T, lfs::io::LoadedScene>) {
-                // Full scene data - cameras added as nodes, point cloud stored for initialization
                 scene.setInitialPointCloud(data.point_cloud);
                 scene.setSceneCenter(load_result->scene_center);
                 scene.setImagesHaveAlpha(load_result->images_have_alpha);
 
-                // Create dataset hierarchy:
-                // [Dataset] bicycle
-                // ├── PointCloud (54,275) - or Model if init_ply is used
-                // │   └── CropBox (optional, can be added later)
-                // ├── Cameras
-                // │   ├── Training (185)
-                // │   │   ├── cam_00001
-                // │   │   └── ...
-                // │   └── Validation (9)
-                // │       └── ...
-                // └── Images (194)
-                //     ├── _DSC8679.JPG
-                //     └── ...
-
-                // Get dataset name from path
+                // Build dataset hierarchy in scene graph
                 std::string dataset_name = lfs::core::path_to_utf8(params.dataset.data_path.filename());
                 if (dataset_name.empty()) {
                     dataset_name = lfs::core::path_to_utf8(params.dataset.data_path.parent_path().filename());
@@ -112,16 +92,12 @@ namespace lfs::training {
                     dataset_name = "Dataset";
                 }
 
-                // Add dataset root node
-                auto dataset_id = scene.addDataset(dataset_name);
+                const auto dataset_id = scene.addDataset(dataset_name);
 
-                // Load from --init file
                 if (params.init_path.has_value()) {
-                    // Use utf8_to_path for proper Unicode handling on Windows
                     const std::filesystem::path init_file = lfs::core::utf8_to_path(params.init_path.value());
                     const auto ext = init_file.extension().string();
 
-                    // Point cloud PLY: initialize Gaussians from xyz+colors
                     if (ext == ".ply" && !lfs::io::is_gaussian_splat_ply(init_file)) {
                         auto pc_result = lfs::io::load_ply_point_cloud(init_file);
                         if (!pc_result) {
@@ -129,7 +105,6 @@ namespace lfs::training {
                                                                lfs::core::path_to_utf8(init_file), pc_result.error()));
                         }
 
-                        // Use scene_center from loader (camera centroid) for correct scene_scale
                         auto splat_result = lfs::core::init_model_from_pointcloud(
                             params, load_result->scene_center, *pc_result, static_cast<int>(pc_result->size()));
 
@@ -143,7 +118,6 @@ namespace lfs::training {
                         scene.addSplat("Model", std::move(model), dataset_id);
                         scene.setTrainingModelNode("Model");
                     } else {
-                        // Gaussian splat file
                         auto loader = lfs::io::Loader::create();
                         auto load_result = loader->load(init_file);
 
@@ -171,24 +145,18 @@ namespace lfs::training {
                         }
                     }
                 } else {
-                    // Add point cloud as a POINTCLOUD node (defer SplatData creation until training starts)
-                    // This allows the user to apply crop before training
                     if (data.point_cloud && data.point_cloud->size() > 0) {
-                        LOG_INFO("Adding point cloud to scene ({} points) - SplatData will be created when training starts",
-                                 data.point_cloud->size());
+                        LOG_INFO("Adding {} points to scene", data.point_cloud->size());
                         scene.addPointCloud("PointCloud", data.point_cloud, dataset_id);
                     } else {
-                        // No point cloud - will use random initialization when training starts
-                        LOG_INFO("No point cloud provided - random initialization will be used when training starts");
+                        LOG_INFO("No point cloud, random initialization will be used");
                     }
                 }
 
-                // Get camera info for train/val splits
                 const auto& cameras = data.cameras;
                 const bool enable_eval = params.optimization.enable_eval;
                 const int test_every = params.dataset.test_every;
 
-                // Count train/val cameras and masks
                 size_t train_count = 0;
                 size_t val_count = 0;
                 size_t mask_count = 0;
@@ -203,25 +171,21 @@ namespace lfs::training {
                     }
                 }
 
-                // Add Cameras group
-                auto cameras_group_id = scene.addGroup("Cameras", dataset_id);
+                const auto cameras_group_id = scene.addGroup("Cameras", dataset_id);
 
-                // Add Training cameras group
-                auto train_cameras_id = scene.addCameraGroup(
+                const auto train_cameras_id = scene.addCameraGroup(
                     std::format("Training ({})", train_count),
                     cameras_group_id,
                     train_count);
 
-                // Add individual training camera nodes
                 for (size_t i = 0; i < cameras.size(); ++i) {
                     if (!enable_eval || (i % test_every) != 0) {
                         scene.addCamera(cameras[i]->image_name(), train_cameras_id, cameras[i]);
                     }
                 }
 
-                // Add Validation cameras group only if eval is enabled
                 if (enable_eval && val_count > 0) {
-                    auto val_cameras_id = scene.addCameraGroup(
+                    const auto val_cameras_id = scene.addCameraGroup(
                         std::format("Validation ({})", val_count),
                         cameras_group_id,
                         val_count);
@@ -259,12 +223,10 @@ namespace lfs::training {
         const lfs::core::param::TrainingParameters& params,
         lfs::core::Scene& scene) {
 
-        // Skip if training model already exists (e.g., from --init)
         if (scene.getTrainingModel() != nullptr) {
             return {};
         }
 
-        // Find POINTCLOUD node
         lfs::core::NodeId point_cloud_node_id = lfs::core::NULL_NODE;
         lfs::core::NodeId parent_id = lfs::core::NULL_NODE;
         const lfs::core::PointCloud* point_cloud = nullptr;
@@ -282,7 +244,6 @@ namespace lfs::training {
         const int max_cap = params.optimization.max_cap;
 
         if (point_cloud && point_cloud->size() > 0) {
-            // Check for enabled CropBox
             const lfs::core::CropBoxData* cropbox_data = nullptr;
             lfs::core::NodeId cropbox_id = lfs::core::NULL_NODE;
 
@@ -294,7 +255,6 @@ namespace lfs::training {
             }
 
             if (cropbox_data && cropbox_data->enabled) {
-                // Filter points by CropBox
                 const glm::mat4 world_to_cropbox = glm::inverse(scene.getWorldTransform(cropbox_id));
                 const auto& means = point_cloud->means;
                 const auto& colors = point_cloud->colors;
@@ -348,7 +308,6 @@ namespace lfs::training {
 
                 point_cloud_to_use = lfs::core::PointCloud(filtered_means_tensor, filtered_colors_tensor);
             } else {
-                // No CropBox or not enabled - use full point cloud
                 point_cloud_to_use = *point_cloud;
                 if (max_cap > 0) {
                     point_cloud_to_use.means = point_cloud_to_use.means.cpu();
@@ -356,7 +315,6 @@ namespace lfs::training {
                 }
             }
         } else {
-            // No point cloud - use random initialization
             LOG_INFO("No point cloud provided, using random initialization");
             constexpr size_t NUM_INIT_GAUSSIANS = 10000;
             auto positions = lfs::core::Tensor::rand({NUM_INIT_GAUSSIANS, 3}, lfs::core::Device::CPU);
@@ -366,11 +324,9 @@ namespace lfs::training {
             point_cloud_to_use = lfs::core::PointCloud(positions, colors);
         }
 
-        // Use scene center from loader (camera centroid) if available, otherwise compute from point cloud
         lfs::core::Tensor scene_center = scene.getSceneCenter();
         if (!scene_center.is_valid() || scene_center.numel() == 0) {
-            // Fallback: compute from point cloud (less accurate for scene_scale)
-            LOG_WARN("No scene center from loader, computing from point cloud (may affect densification)");
+            LOG_WARN("No scene center from loader, computing from point cloud");
             if (point_cloud_to_use.size() > 0) {
                 auto means_cpu = point_cloud_to_use.means.cpu();
                 auto mean = means_cpu.mean({0});
@@ -379,11 +335,9 @@ namespace lfs::training {
                 scene_center = lfs::core::Tensor::zeros({3}, lfs::core::Device::CPU);
             }
         } else {
-            // Ensure scene_center is on the correct device
             scene_center = max_cap > 0 ? scene_center.cpu() : scene_center.cuda();
         }
 
-        // Initialize SplatData from point cloud
         auto splat_result = lfs::core::init_model_from_pointcloud(
             params, scene_center, point_cloud_to_use, max_cap);
 
@@ -391,21 +345,18 @@ namespace lfs::training {
             return std::unexpected(std::format("Failed to initialize model: {}", splat_result.error()));
         }
 
-        // Apply max_cap if needed
         if (max_cap > 0 && max_cap < static_cast<int>(splat_result->size())) {
             LOG_WARN("Max cap ({}) is less than initial splat count ({}), randomly selecting {} splats",
                      max_cap, splat_result->size(), max_cap);
             lfs::core::random_choose(*splat_result, max_cap);
         }
 
-        // Remove the POINTCLOUD node and its children (e.g., CropBox)
         if (point_cloud_node_id != lfs::core::NULL_NODE) {
             if (const auto* pc_node = scene.getNodeById(point_cloud_node_id)) {
                 scene.removeNode(pc_node->name, false);
             }
         }
 
-        // Add the new model
         auto model = std::make_unique<lfs::core::SplatData>(std::move(*splat_result));
         LOG_INFO("Created training model with {} gaussians", model->size());
         scene.addSplat("Model", std::move(model), parent_id);
@@ -461,9 +412,7 @@ namespace lfs::training {
 
                 const auto dataset_id = scene.addDataset(dataset_name);
 
-                // Handle --init file
                 if (params.init_path.has_value()) {
-                    // Use utf8_to_path for proper Unicode handling on Windows
                     const std::filesystem::path init_file = lfs::core::utf8_to_path(params.init_path.value());
                     const auto ext = init_file.extension().string();
 
@@ -514,7 +463,6 @@ namespace lfs::training {
                     scene.addPointCloud("PointCloud", data.point_cloud, dataset_id);
                 }
 
-                // Build camera hierarchy
                 const auto& cameras = data.cameras;
                 const bool enable_eval = params.optimization.enable_eval;
                 const int test_every = params.dataset.test_every;

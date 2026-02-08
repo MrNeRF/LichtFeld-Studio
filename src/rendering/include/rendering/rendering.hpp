@@ -335,7 +335,6 @@ namespace lfs::rendering {
         virtual Result<RenderResult> renderSplitView(
             const SplitViewRequest& request) = 0;
 
-        // Mesh rendering
         virtual Result<void> renderMesh(
             const lfs::core::MeshData& mesh,
             const ViewportData& viewport,
@@ -345,9 +344,10 @@ namespace lfs::rendering {
 
         virtual unsigned int getMeshColorTexture() const = 0;
         virtual unsigned int getMeshDepthTexture() const = 0;
+        virtual unsigned int getMeshFramebuffer() const = 0;
         virtual bool hasMeshRender() const = 0;
+        virtual void resetMeshFrameState() = 0;
 
-        // Depth compositing (mesh + splat)
         virtual Result<void> compositeMeshAndSplat(
             const RenderResult& splat_result,
             const glm::ivec2& viewport_size) = 0;

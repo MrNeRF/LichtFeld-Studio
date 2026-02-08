@@ -3309,6 +3309,19 @@ namespace lfs::python {
             "Open a file dialog to select a PLY file. Returns empty string if cancelled.");
 
         m.def(
+            "open_mesh_file_dialog",
+            [](const std::string& start_dir) -> std::string {
+                std::filesystem::path start_path;
+                if (!start_dir.empty()) {
+                    start_path = start_dir;
+                }
+                auto result = lfs::vis::gui::OpenMeshFileDialog(start_path);
+                return result.empty() ? "" : result.string();
+            },
+            nb::arg("start_dir") = "",
+            "Open a file dialog to select a mesh file. Returns empty string if cancelled.");
+
+        m.def(
             "open_checkpoint_file_dialog",
             []() -> std::string {
                 auto result = lfs::vis::gui::OpenCheckpointFileDialog();

@@ -58,7 +58,8 @@ namespace lfs::vis {
         return type == core::NodeType::DATASET ||
                type == core::NodeType::SPLAT ||
                type == core::NodeType::CROPBOX ||
-               type == core::NodeType::ELLIPSOID;
+               type == core::NodeType::ELLIPSOID ||
+               type == core::NodeType::MESH;
     }
 
     bool EditorContext::canTransformSelectedNode() const {

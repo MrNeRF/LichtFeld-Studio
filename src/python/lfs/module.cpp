@@ -485,8 +485,7 @@ NB_MODULE(lichtfeld, m) {
         .value("post_step", ControlHook::PostStep)
         .value("training_end", ControlHook::TrainingEnd);
 
-    // Session class for managing callbacks
-    nb::class_<PyControlSession>(m, "Session")
+    nb::class_<PyControlSession>(m, "ControlSession")
         .def(nb::init<>())
         .def("on_training_start", &PyControlSession::on_training_start, "Register training start callback")
         .def("on_iteration_start", &PyControlSession::on_iteration_start, "Register iteration start callback")
@@ -545,7 +544,6 @@ NB_MODULE(lichtfeld, m) {
         .def("scale", &PyModelView::scale, nb::arg("attr"), nb::arg("factor"), "Scale attribute by factor")
         .def("set", &PyModelView::set, nb::arg("attr"), nb::arg("value"), "Set attribute value");
 
-    // Session class
     nb::class_<PySession>(m, "Session")
         .def(nb::init<>())
         .def("optimizer", &PySession::optimizer, "Get optimizer view")
@@ -1196,7 +1194,6 @@ NB_MODULE(lichtfeld, m) {
     lfs::python::register_scene(scene_module);
     lfs::python::register_cameras(scene_module);
 
-    // Mesh submodule (MeshData + OpenMesh TriMesh bindings)
     auto mesh_module = m.def_submodule("mesh", "Mesh operations and OpenMesh bindings");
     lfs::python::register_mesh(mesh_module);
 
@@ -1349,17 +1346,17 @@ NB_MODULE(lichtfeld, m) {
             const auto parent = script_path.parent_path().string();
             const auto abs_path = std::filesystem::absolute(script_path).string();
 
-            // Get Python's exec function
+            nb::module_ sys = nb::module_::import_("sys");
+            nb::list sys_path = nb::cast<nb::list>(sys.attr("path"));
+            nb::str parent_str(parent.c_str());
+            if (!nb::cast<bool>(sys_path.attr("__contains__")(parent_str))) {
+                sys_path.attr("insert")(0, parent_str);
+            }
+
             nb::object builtins = nb::module_::import_("builtins");
+            builtins.attr("__file__") = nb::str(abs_path.c_str());
+
             nb::object py_exec = builtins.attr("exec");
-
-            std::string setup_code = std::format(
-                "import sys\n"
-                "if '{}' not in sys.path: sys.path.insert(0, '{}')\n"
-                "__file__ = '{}'\n",
-                parent, parent, abs_path);
-
-            py_exec(setup_code);
             py_exec(code);
 
             LOG_INFO("Executed script: {}", path);
@@ -1403,6 +1400,7 @@ NB_MODULE(lichtfeld, m) {
                     case lfs::core::NodeType::CAMERA: type_name = "CAMERA"; break;
                     case lfs::core::NodeType::IMAGE_GROUP: type_name = "IMAGE_GROUP"; break;
                     case lfs::core::NodeType::IMAGE: type_name = "IMAGE"; break;
+                    case lfs::core::NodeType::MESH: type_name = "MESH"; break;
                     default: type_name = "UNKNOWN"; break;
                     }
 

@@ -417,6 +417,13 @@ namespace lfs::rendering {
             LOG_TRACE("Set uniform '{}' to vec4({}, {}, {}, {})", name, vector.x, vector.y, vector.z, vector.w);
         }
 
+        void set_uniform(const std::string& name, const glm::mat3& matrix) {
+            GLint uni = uniform(name);
+            glUniformMatrix3fv(uni, 1, GL_FALSE, &matrix[0][0]);
+            CHECK_GL_ERROR(std::format("glUniformMatrix3fv({})", name));
+            LOG_TRACE("Set uniform '{}' to mat3", name);
+        }
+
         void set_uniform(const std::string& name, const glm::mat4& matrix) {
             GLint uni = uniform(name);
             glUniformMatrix4fv(uni, 1, GL_FALSE, &matrix[0][0]);

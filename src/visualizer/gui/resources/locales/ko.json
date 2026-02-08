@@ -6,6 +6,7 @@
     "file.new_project": "새 프로젝트",
     "file.import_dataset": "데이터셋 가져오기",
     "file.import_ply": "PLY, SOG, SPZ 가져오기",
+    "file.import_mesh": "메시 가져오기",
     "file.import_checkpoint": "체크포인트 가져오기",
     "file.import_config": "설정 가져오기",
     "file.export": "내보내기...",

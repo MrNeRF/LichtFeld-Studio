@@ -6,6 +6,7 @@
     "file.new_project": "新規プロジェクト",
     "file.import_dataset": "データセットをインポート",
     "file.import_ply": "PLY, SOG, SPZをインポート",
+    "file.import_mesh": "メッシュをインポート",
     "file.import_checkpoint": "チェックポイントをインポート",
     "file.import_config": "設定をインポート",
     "file.export": "エクスポート...",

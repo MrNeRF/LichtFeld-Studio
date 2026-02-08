@@ -113,7 +113,6 @@ namespace lfs::python {
         PyProp<core::EllipsoidData> prop_;
     };
 
-    // PointCloud wrapper
     class PyPointCloud {
     public:
         explicit PyPointCloud(core::PointCloud* pc, bool owns = false,
@@ -188,8 +187,8 @@ namespace lfs::python {
 
     class PyMeshInfo {
     public:
-        explicit PyMeshInfo(const core::MeshData* mesh) : mesh_(mesh) {
-            assert(mesh_ != nullptr);
+        explicit PyMeshInfo(std::shared_ptr<core::MeshData> mesh) : mesh_(std::move(mesh)) {
+            assert(mesh_);
         }
 
         int64_t vertex_count() const { return mesh_->vertex_count(); }
@@ -198,10 +197,9 @@ namespace lfs::python {
         bool has_texcoords() const { return mesh_->has_texcoords(); }
 
     private:
-        const core::MeshData* mesh_;
+        std::shared_ptr<core::MeshData> mesh_;
     };
 
-    // Scene node wrapper
     class PySceneNode {
     public:
         PySceneNode(core::SceneNode* node, core::Scene* scene)

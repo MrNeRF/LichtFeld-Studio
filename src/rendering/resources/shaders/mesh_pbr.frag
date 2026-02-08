@@ -27,7 +27,6 @@ uniform sampler2D u_metallic_roughness_tex;
 uniform bool u_has_vertex_colors;
 
 layout(location = 0) out vec4 frag_color;
-layout(location = 1) out float frag_depth;
 
 const float PI = 3.14159265359;
 
@@ -104,8 +103,5 @@ void main() {
     color = color / (color + vec3(1.0));
     color = pow(color, vec3(1.0 / 2.2));
 
-    frag_color = vec4(color, albedo.a);
-
-    float dist = length(u_camera_pos - v_world_pos);
-    frag_depth = dist;
+    frag_color = vec4(color, 1.0);
 }

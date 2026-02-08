@@ -31,10 +31,12 @@ namespace lfs::rendering {
 
         GLuint getColorTexture() const { return color_texture_.get(); }
         GLuint getDepthTexture() const { return depth_texture_.get(); }
+        GLuint getFramebuffer() const { return fbo_.get(); }
         int getWidth() const { return fbo_width_; }
         int getHeight() const { return fbo_height_; }
 
         void resize(int width, int height);
+        void blitToScreen(const glm::ivec2& dst_pos, const glm::ivec2& dst_size);
 
     private:
         Result<void> setupFBO(int width, int height);
@@ -54,12 +56,12 @@ namespace lfs::rendering {
         FBO fbo_;
         Texture color_texture_;
         Texture depth_texture_;
-        RBO depth_rbo_;
 
         int fbo_width_ = 0;
         int fbo_height_ = 0;
         int64_t uploaded_vertex_count_ = 0;
         int64_t uploaded_face_count_ = 0;
+        uint32_t uploaded_generation_ = 0;
 
         bool initialized_ = false;
     };

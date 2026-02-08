@@ -143,7 +143,6 @@ namespace lfs::vis {
         bool depth_clip_enabled = false;
         float depth_clip_far = 100.0f;
 
-        // Mesh rendering
         bool mesh_wireframe = false;
         glm::vec3 mesh_wireframe_color{0.2f};
         float mesh_wireframe_width = 1.0f;
@@ -550,6 +549,8 @@ namespace lfs::vis {
 
         std::optional<GTComparisonContext> gt_context_;
         int gt_context_camera_id_ = -1;
+
+        std::atomic<bool> mesh_dirty_{false};
 
         // Gizmo state for wireframe sync
         bool cropbox_gizmo_active_ = false;

@@ -119,10 +119,9 @@ namespace lfs::python {
         if (node_->type != core::NodeType::MESH || !node_->mesh) {
             return std::nullopt;
         }
-        return PyMeshInfo(node_->mesh.get());
+        return PyMeshInfo(node_->mesh);
     }
 
-    // PyPointCloud filter implementation - uses tensor[mask] row selection
     int64_t PyPointCloud::filter(const PyTensor& keep_mask) {
         const auto& mask = keep_mask.tensor();
         assert(mask.dtype() == core::DataType::Bool && "Mask must be boolean");

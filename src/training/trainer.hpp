@@ -27,7 +27,6 @@
 #include <stop_token>
 #include <unordered_map>
 
-// Forward declaration for Scene
 namespace lfs::core {
     class Scene;
 }
@@ -141,7 +140,6 @@ namespace lfs::training {
 
         void setOnIterationStart(std::function<void()> cb) { on_iteration_start_ = std::move(cb); }
 
-        // Get Scene (for Python bindings in headless mode)
         lfs::core::Scene* getScene() const { return scene_; }
 
         /// Apply PPISP correction to a rendered image for viewport display
@@ -267,9 +265,8 @@ namespace lfs::training {
 
         void save_ply(const std::filesystem::path& save_path, int iter_num, bool join_threads = true);
 
-        // Member variables
-        lfs::core::Scene* scene_ = nullptr;           // Non-owning pointer to Scene (new mode)
-        std::shared_ptr<CameraDataset> base_dataset_; // Legacy mode only - source cameras
+        lfs::core::Scene* scene_ = nullptr;
+        std::shared_ptr<CameraDataset> base_dataset_;
         std::shared_ptr<CameraDataset> train_dataset_;
         std::shared_ptr<CameraDataset> val_dataset_;
         std::unique_ptr<IStrategy> strategy_;

@@ -466,6 +466,7 @@ namespace lfs::vis {
         state::SceneChanged::when([this](const auto&) {
             cached_filtered_point_cloud_.reset();
             cached_source_point_cloud_ = nullptr;
+            mesh_dirty_.store(true);
             markDirty();
         });
 
@@ -489,8 +490,10 @@ namespace lfs::vis {
         });
 
         // PLY added/removed
-        state::PLYAdded::when([this](const auto&) {
+        state::PLYAdded::when([this](const auto& e) {
             LOG_DEBUG("PLY added, marking render dirty");
+            if (e.node_type == static_cast<int>(lfs::core::NodeType::MESH))
+                mesh_dirty_.store(true);
             markDirty();
         });
 
@@ -1138,7 +1141,8 @@ namespace lfs::vis {
             glEnable(GL_SCISSOR_TEST);
         }
 
-        if (should_render || !model) {
+        const bool mesh_needs_render = mesh_dirty_.load();
+        if (should_render || !model || mesh_needs_render) {
             doFullRender(context, scene_manager, model);
         } else if (cached_result_.image && cached_result_size_.x > 0 && cached_result_size_.y > 0) {
             // Use cached result - display at current viewport size (upscaling if needed)
@@ -1155,8 +1159,14 @@ namespace lfs::vis {
             }
             glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            // Pass IMAGE size for upload validation
             engine_->presentToScreen(cached_result_, viewport_pos, cached_result_size_);
+
+            // Re-composite mesh if present from previous frame
+            if (engine_->hasMeshRender()) {
+                glViewport(viewport_pos.x, viewport_pos.y, display_size.x, display_size.y);
+                engine_->compositeMeshAndSplat(cached_result_, display_size);
+            }
+
             renderOverlays(context);
         }
 
@@ -1232,7 +1242,6 @@ namespace lfs::vis {
 
         bool splats_presented = false;
 
-        // Build scene state once for both point cloud and mesh rendering
         const auto scene_state = scene_manager ? scene_manager->buildRenderState()
                                                : SceneRenderState{};
 
@@ -1439,7 +1448,6 @@ namespace lfs::vis {
             }
         }
 
-        // Render visible meshes
         if (scene_manager && engine_) {
             if (!scene_state.meshes.empty()) {
                 const lfs::rendering::ViewportData mesh_viewport{
@@ -1462,18 +1470,55 @@ namespace lfs::vis {
                 glEnable(GL_DEPTH_TEST);
                 glDepthFunc(GL_LESS);
 
+                engine_->resetMeshFrameState();
                 for (const auto& vm : scene_state.meshes) {
                     const auto result = engine_->renderMesh(
                         *vm.mesh, mesh_viewport, vm.transform, mesh_opts, splats_presented);
                     if (!result)
                         LOG_ERROR("Failed to render mesh: {}", result.error());
                 }
+                mesh_dirty_.store(false);
 
-                if (splats_presented && engine_->hasMeshRender()) {
-                    const auto composite_result = engine_->compositeMeshAndSplat(
-                        cached_result_, render_size);
-                    if (!composite_result)
-                        LOG_ERROR("Failed to composite: {}", composite_result.error());
+                if (engine_->hasMeshRender()) {
+                    glm::ivec2 mesh_pos(0, 0);
+                    if (context.viewport_region) {
+                        const int gl_y = context.viewport.frameBufferSize.y -
+                                         static_cast<int>(context.viewport_region->y) -
+                                         static_cast<int>(context.viewport_region->height);
+                        mesh_pos = glm::ivec2(static_cast<int>(context.viewport_region->x), gl_y);
+                    }
+
+                    if (splats_presented) {
+                        glViewport(mesh_pos.x, mesh_pos.y, render_size.x, render_size.y);
+                        const auto composite_result = engine_->compositeMeshAndSplat(
+                            cached_result_, render_size);
+                        if (!composite_result)
+                            LOG_ERROR("Failed to composite: {}", composite_result.error());
+                    } else {
+                        const GLuint mesh_fbo = engine_->getMeshFramebuffer();
+                        if (mesh_fbo == 0) {
+                            LOG_ERROR("Mesh framebuffer not available for blit");
+                        } else {
+                            glBindFramebuffer(GL_READ_FRAMEBUFFER, mesh_fbo);
+                            glReadBuffer(GL_COLOR_ATTACHMENT0);
+                            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+
+                            glBlitFramebuffer(0, 0, render_size.x, render_size.y,
+                                              mesh_pos.x, mesh_pos.y,
+                                              mesh_pos.x + render_size.x,
+                                              mesh_pos.y + render_size.y,
+                                              GL_COLOR_BUFFER_BIT, GL_LINEAR);
+
+                            // Blit depth so overlays compose correctly with mesh geometry
+                            glBlitFramebuffer(0, 0, render_size.x, render_size.y,
+                                              mesh_pos.x, mesh_pos.y,
+                                              mesh_pos.x + render_size.x,
+                                              mesh_pos.y + render_size.y,
+                                              GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+
+                            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                        }
+                    }
                 }
             }
         }

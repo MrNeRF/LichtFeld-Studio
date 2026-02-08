@@ -31,7 +31,11 @@ namespace lfs::core {
 
         auto iacc = cpu_idx.accessor<int32_t, 2>();
         for (int64_t i = 0; i < nf; ++i) {
-            mesh.add_face(vhandles[iacc(i, 0)], vhandles[iacc(i, 1)], vhandles[iacc(i, 2)]);
+            const int32_t i0 = iacc(i, 0), i1 = iacc(i, 1), i2 = iacc(i, 2);
+            assert(i0 >= 0 && i0 < nv);
+            assert(i1 >= 0 && i1 < nv);
+            assert(i2 >= 0 && i2 < nv);
+            mesh.add_face(vhandles[i0], vhandles[i1], vhandles[i2]);
         }
 
         mesh.update_normals();
@@ -48,6 +52,8 @@ namespace lfs::core {
         if (vertices.device() == Device::CUDA) {
             normals = normals.to(Device::CUDA);
         }
+
+        mark_dirty();
     }
 
 } // namespace lfs::core

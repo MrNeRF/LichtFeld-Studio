@@ -30,6 +30,7 @@ namespace lfs::vis::gui {
 
     // Cross-platform file open dialogs (return path, empty if cancelled)
     LFS_VIS_API std::filesystem::path OpenPlyFileDialogNative(const std::filesystem::path& startDir = {});
+    LFS_VIS_API std::filesystem::path OpenMeshFileDialog(const std::filesystem::path& startDir = {});
     LFS_VIS_API std::filesystem::path OpenCheckpointFileDialog();
     LFS_VIS_API std::filesystem::path OpenDatasetFolderDialogNative();
 

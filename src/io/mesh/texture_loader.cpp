@@ -6,21 +6,22 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include <cassert>
+#include <limits>
 #include <stb_image.h>
 
 namespace lfs::io::mesh {
 
-    TextureData TextureLoader::load_from_file(const std::filesystem::path& path) {
+    const TextureData* TextureLoader::load_from_file(const std::filesystem::path& path) {
         auto key = lfs::core::path_to_utf8(path);
         if (auto it = cache_.find(key); it != cache_.end()) {
-            return it->second;
+            return &it->second;
         }
 
         TextureData tex;
         auto* data = stbi_load(key.c_str(), &tex.width, &tex.height, &tex.channels, 4);
         if (!data) {
             LOG_ERROR("Failed to load texture: {}", key);
-            return {};
+            return nullptr;
         }
 
         tex.channels = 4;
@@ -29,12 +30,13 @@ namespace lfs::io::mesh {
         stbi_image_free(data);
 
         LOG_INFO("Loaded texture: {} ({}x{}, {} ch)", key, tex.width, tex.height, tex.channels);
-        cache_[key] = tex;
-        return tex;
+        auto [it, _] = cache_.emplace(std::move(key), std::move(tex));
+        return &it->second;
     }
 
     TextureData TextureLoader::load_from_memory(const uint8_t* data, size_t size) {
         assert(data && size > 0);
+        assert(size <= static_cast<size_t>(std::numeric_limits<int>::max()));
 
         TextureData tex;
         auto* pixels = stbi_load_from_memory(data, static_cast<int>(size),

@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 #include "core/material.hpp"
 #include "core/tensor.hpp"
+#include <atomic>
 #include <cassert>
 #include <utility>
 #include <vector>
@@ -23,6 +24,7 @@ namespace lfs::core {
 
         std::vector<Material> materials;
         std::vector<std::pair<size_t, size_t>> submeshes; // (start_index, count) per material
+        std::atomic<uint32_t> generation_{0};
 
         MeshData() = default;
 
@@ -30,7 +32,38 @@ namespace lfs::core {
             : vertices(std::move(verts)),
               indices(std::move(idx)) {
             assert(vertices.ndim() == 2 && vertices.shape()[1] == 3);
+            assert(vertices.dtype() == DataType::Float32);
             assert(indices.ndim() == 2 && indices.shape()[1] == 3);
+            assert(indices.dtype() == DataType::Int32);
+        }
+
+        MeshData(const MeshData&) = delete;
+        MeshData& operator=(const MeshData&) = delete;
+
+        MeshData(MeshData&& o) noexcept
+            : vertices(std::move(o.vertices)),
+              normals(std::move(o.normals)),
+              tangents(std::move(o.tangents)),
+              texcoords(std::move(o.texcoords)),
+              colors(std::move(o.colors)),
+              indices(std::move(o.indices)),
+              materials(std::move(o.materials)),
+              submeshes(std::move(o.submeshes)),
+              generation_(o.generation_.load(std::memory_order_relaxed)) {}
+
+        MeshData& operator=(MeshData&& o) noexcept {
+            if (this != &o) {
+                vertices = std::move(o.vertices);
+                normals = std::move(o.normals);
+                tangents = std::move(o.tangents);
+                texcoords = std::move(o.texcoords);
+                colors = std::move(o.colors);
+                indices = std::move(o.indices);
+                materials = std::move(o.materials);
+                submeshes = std::move(o.submeshes);
+                generation_.store(o.generation_.load(std::memory_order_relaxed), std::memory_order_relaxed);
+            }
+            return *this;
         }
 
         int64_t vertex_count() const {
@@ -46,6 +79,9 @@ namespace lfs::core {
         bool has_texcoords() const { return texcoords.is_valid() && texcoords.numel() > 0; }
         bool has_colors() const { return colors.is_valid() && colors.numel() > 0; }
 
+        uint32_t generation() const { return generation_.load(std::memory_order_relaxed); }
+        void mark_dirty() { generation_.fetch_add(1, std::memory_order_relaxed); }
+
         MeshData to(Device device) const {
             MeshData m;
             m.vertices = vertices.is_valid() ? vertices.to(device) : vertices;
@@ -56,6 +92,7 @@ namespace lfs::core {
             m.indices = indices.is_valid() ? indices.to(device) : indices;
             m.materials = materials;
             m.submeshes = submeshes;
+            m.generation_.store(generation_.load(std::memory_order_relaxed), std::memory_order_relaxed);
             return m;
         }
 

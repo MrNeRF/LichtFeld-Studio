@@ -94,7 +94,7 @@ namespace {
             ::args::Group mode_group(parser, "MODE SELECTION:");
             ::args::HelpFlag help(mode_group, "help", "Display help menu", {'h', "help"});
             ::args::Flag version(mode_group, "version", "Display version information", {'V', "version"});
-            ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View splat file(s). Supports .ply, .sog, .resume. If directory, loads all.", {'v', "view"});
+            ::args::ValueFlag<std::string> view_ply(mode_group, "path", "View file(s). Supports splat (.ply, .sog, .spz) and mesh (.obj, .fbx, .gltf, .glb, .stl) formats. If directory, loads all.", {'v', "view"});
             ::args::ValueFlag<std::string> resume_checkpoint(mode_group, "checkpoint", "Resume training from checkpoint file", {"resume"});
             ::args::CompletionFlag completion(parser, {"complete"});
 
@@ -306,7 +306,9 @@ namespace {
                         return std::unexpected(std::format("Path does not exist: {}", lfs::core::path_to_utf8(view_path)));
                     }
 
-                    constexpr std::array<std::string_view, 4> SUPPORTED_EXTENSIONS = {".ply", ".sog", ".spz", ".resume"};
+                    constexpr std::array<std::string_view, 12> SUPPORTED_EXTENSIONS = {
+                        ".ply", ".sog", ".spz", ".resume",
+                        ".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".blend"};
                     const auto is_supported = [&](const std::filesystem::path& p) {
                         auto ext = p.extension().string();
                         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -323,13 +325,13 @@ namespace {
 
                         if (params.view_paths.empty()) {
                             return std::unexpected(std::format(
-                                "No supported files (.ply, .sog, .spz, .resume) found in: {}", lfs::core::path_to_utf8(view_path)));
+                                "No supported files found in: {}", lfs::core::path_to_utf8(view_path)));
                         }
                         LOG_DEBUG("Found {} view files in directory", params.view_paths.size());
                     } else {
                         if (!is_supported(view_path)) {
                             return std::unexpected(std::format(
-                                "Unsupported format. Expected: .ply, .sog, .spz, .resume. Got: {}", lfs::core::path_to_utf8(view_path)));
+                                "Unsupported file format: {}", lfs::core::path_to_utf8(view_path)));
                         }
                         params.view_paths.push_back(view_path);
                     }
