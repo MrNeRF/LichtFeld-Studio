@@ -158,6 +158,9 @@ nanobind_add_module(
     lfs/py_uilist.cpp
     lfs/py_viewport.cpp
     lfs/py_mcp.cpp
+    lfs/py_mesh.cpp
+    lfs/openmesh/handles.cpp
+    lfs/openmesh/io.cpp
     lfs/py_rendering.cpp
     lfs/py_selection.cpp
     lfs/py_operator.cpp
@@ -188,6 +191,8 @@ target_link_libraries(lfs_py PRIVATE
     lfs_training
     lfs_io
     lfs_rendering
+    OpenMeshCore
+    OpenMeshTools
     lfs_sequencer
     OpenImageIO::OpenImageIO
     CUDA::cudart

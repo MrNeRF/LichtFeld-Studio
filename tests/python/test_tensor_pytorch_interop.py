@@ -5,6 +5,7 @@
 import pytest
 
 np = pytest.importorskip("numpy")
+pytest.importorskip("torch")
 
 # Test shape configurations
 SHAPES_1D = [(5,), (100,), (1,)]

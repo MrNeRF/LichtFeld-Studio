@@ -14,6 +14,7 @@
 #include "py_gizmo.hpp"
 #include "py_io.hpp"
 #include "py_mcp.hpp"
+#include "py_mesh.hpp"
 #include "py_operator.hpp"
 #include "py_packages.hpp"
 #include "py_params.hpp"
@@ -1194,6 +1195,10 @@ NB_MODULE(lichtfeld, m) {
     lfs::python::register_splat_data(scene_module);
     lfs::python::register_scene(scene_module);
     lfs::python::register_cameras(scene_module);
+
+    // Mesh submodule (MeshData + OpenMesh TriMesh bindings)
+    auto mesh_module = m.def_submodule("mesh", "Mesh operations and OpenMesh bindings");
+    lfs::python::register_mesh(mesh_module);
 
     // Rendering functions (render_view, compute_screen_positions, etc.)
     lfs::python::register_rendering(m);

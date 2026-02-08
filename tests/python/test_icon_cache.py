@@ -8,6 +8,7 @@ Targets:
 """
 
 import concurrent.futures
+import os
 import sys
 import tempfile
 import threading
@@ -15,7 +16,10 @@ from pathlib import Path
 
 import pytest
 
+_has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
+
+@pytest.mark.skipif(not _has_display, reason="No display available for GL context")
 class TestIconCache:
     """Tests for icon cache edge cases."""
 
@@ -97,6 +101,7 @@ def plugin_icons_dir(monkeypatch):
         PluginManager._instance = original_instance
 
 
+@pytest.mark.skipif(not _has_display, reason="No display available for GL context")
 class TestPluginIconCleanup:
     """Tests for plugin icon cleanup."""
 
@@ -139,6 +144,7 @@ def on_unload():
         # Should not crash
 
 
+@pytest.mark.skipif(not _has_display, reason="No display available for GL context")
 class TestIconCacheMemory:
     """Tests for icon cache memory management."""
 
