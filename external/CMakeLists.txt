@@ -32,6 +32,17 @@ else()
     message(WARNING "ImGuiColorTextEdit not found at external/ImGuiColorTextEdit")
 endif()
 
+# OpenMesh - Half-edge mesh data structure
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/OpenMesh/CMakeLists.txt")
+    message(STATUS "Adding OpenMesh")
+    set(OPENMESH_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    set(OPENMESH_BUILD_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    add_subdirectory(OpenMesh EXCLUDE_FROM_ALL)
+else()
+    message(WARNING "OpenMesh not found at external/OpenMesh")
+endif()
+
 # nvImageCodec - GPU-accelerated image codec library
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/nvImageCodec/CMakeLists.txt")
     message(STATUS "Adding nvImageCodec")

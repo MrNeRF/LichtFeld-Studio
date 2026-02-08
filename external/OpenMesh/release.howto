@@ -1,0 +1,18 @@
+1. check files, build on windows,mac,linux with cmake (-> Done by CI)
+2. check files with release numbers:
+    
+   cmake/FindOpenMesh.cmake
+   Doc/changelog.docu
+   src/OpenMesh/Core/System/config.h
+   README
+   CMakeLists.txt ( version setting in project call)
+   CI/Windows.bat
+3. Tag the current version in the git 
+4. Create HTML-Documentation in OpenMesh/Documentation (!)
+5. Create tar-ball and zip-archive ( -> Done by CI)
+   > tar cvzf OpenMesh-<version>.tar.gz OpenMesh-<version>/
+   > tar cvjf OpenMesh-<version>.tar.bz2 OpenMesh-<version>/
+   > zip -9 -r OpenMesh-<version>.zip OpenMesh-<version>/
+6. Release Upload
+7. Upload the Documentation to webserver
+8. Set new links in content management system

@@ -496,7 +496,8 @@ namespace lfs::python {
             .value("CAMERA_GROUP", core::NodeType::CAMERA_GROUP)
             .value("CAMERA", core::NodeType::CAMERA)
             .value("IMAGE_GROUP", core::NodeType::IMAGE_GROUP)
-            .value("IMAGE", core::NodeType::IMAGE);
+            .value("IMAGE", core::NodeType::IMAGE)
+            .value("MESH", core::NodeType::MESH);
 
         // SelectionGroup struct
         nb::class_<PySelectionGroup>(m, "SelectionGroup")

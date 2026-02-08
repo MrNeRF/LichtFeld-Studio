@@ -7,6 +7,7 @@
 #include "core/animatable_property.hpp"
 #include "core/camera.hpp"
 #include "core/export.hpp"
+#include "core/mesh_data.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include <atomic>
@@ -36,7 +37,8 @@ namespace lfs::core {
         CAMERA_GROUP, // Container for camera nodes (e.g., "Training", "Validation")
         CAMERA,       // Individual camera from dataset (may have mask_path)
         IMAGE_GROUP,  // Container for image nodes
-        IMAGE         // Individual image file reference (not loaded, just path)
+        IMAGE,        // Individual image file reference (not loaded, just path)
+        MESH          // Triangle mesh (imported via Assimp, processed via OpenMesh)
     };
 
     // Crop box data for CROPBOX nodes (parent_id references associated splat)
@@ -91,6 +93,7 @@ namespace lfs::core {
         // Data (changes require manual cache invalidation via scene)
         std::unique_ptr<lfs::core::SplatData> model;        // For SPLAT nodes
         std::shared_ptr<lfs::core::PointCloud> point_cloud; // For POINTCLOUD nodes
+        std::shared_ptr<lfs::core::MeshData> mesh;          // For MESH nodes
         std::unique_ptr<CropBoxData> cropbox;
         std::unique_ptr<EllipsoidData> ellipsoid;
         size_t gaussian_count = 0; // For SPLAT: num gaussians, for POINTCLOUD: num points
@@ -154,6 +157,7 @@ namespace lfs::core {
         NodeId addGroup(const std::string& name, NodeId parent = NULL_NODE);
         NodeId addSplat(const std::string& name, std::unique_ptr<lfs::core::SplatData> model, NodeId parent = NULL_NODE);
         NodeId addPointCloud(const std::string& name, std::shared_ptr<lfs::core::PointCloud> point_cloud, NodeId parent = NULL_NODE);
+        NodeId addMesh(const std::string& name, std::shared_ptr<lfs::core::MeshData> mesh_data, NodeId parent = NULL_NODE);
         NodeId addCropBox(const std::string& name, NodeId parent_id);   // Child of splat node
         NodeId addEllipsoid(const std::string& name, NodeId parent_id); // Child of splat node
         NodeId addDataset(const std::string& name);                     // Root node for training dataset

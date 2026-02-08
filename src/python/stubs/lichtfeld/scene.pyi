@@ -127,6 +127,8 @@ class NodeType(enum.Enum):
 
     IMAGE = 9
 
+    MESH = 10
+
 class SelectionGroup:
     @property
     def id(self) -> int:

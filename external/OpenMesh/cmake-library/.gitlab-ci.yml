@@ -1,0 +1,24 @@
+# image: debian:buster-20190812
+
+test-linux:
+  image: gitlab.inf.unibe.ch:5001/cgg/misc/buildbox-docker:master
+  tags:
+    - linux
+  before_script:
+    - apt-get install -y cmake libgmm++-dev
+  script:
+    - mkdir build
+    - cd build
+    - cmake ../CI -G Ninja
+    - cmake --build .
+    - ctest .
+
+test-windows:
+  tags:
+    - windows
+  script:
+    - mkdir build
+    - cd build
+    - cmake ../CI
+  allow_failure: true
+

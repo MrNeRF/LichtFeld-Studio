@@ -45,6 +45,7 @@
         "extensions"
       ]
     },
-    "nanobind"
+    "nanobind",
+    "assimp"
   ]
 }

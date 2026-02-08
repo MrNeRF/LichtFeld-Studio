@@ -1,0 +1,18 @@
+.project
+.cproject
+CMakeLists.txt.user*
+build*
+*.swp
+.settings
+# ignore mac temporal files
+.DS_Store 
+.idea
+cmake-build*/
+*.substvars
+debian/tmp
+debian/files
+debian/stamp*
+debian/stamp*
+debian/.debhelper
+debian/libopenmesh*
+obj-x86_64-linux-gnu

@@ -1112,6 +1112,52 @@ namespace lfs::core {
         return id;
     }
 
+    NodeId Scene::addMesh(const std::string& name, std::shared_ptr<lfs::core::MeshData> mesh_data, const NodeId parent) {
+        if (!mesh_data) {
+            LOG_WARN("Cannot add mesh node '{}': mesh data is null", name);
+            return NULL_NODE;
+        }
+
+        const int64_t nv = mesh_data->vertex_count();
+        const glm::vec3 centroid = [&]() {
+            if (nv == 0)
+                return glm::vec3(0.0f);
+            auto verts_cpu = mesh_data->vertices.cpu();
+            auto acc = verts_cpu.accessor<float, 2>();
+            glm::vec3 sum(0.0f);
+            for (int64_t i = 0; i < nv; ++i) {
+                sum.x += acc(i, 0);
+                sum.y += acc(i, 1);
+                sum.z += acc(i, 2);
+            }
+            return sum / static_cast<float>(nv);
+        }();
+
+        const NodeId id = next_node_id_++;
+        auto node = std::make_unique<Node>();
+        node->id = id;
+        node->parent_id = parent;
+        node->type = NodeType::MESH;
+        node->name = name;
+        node->mesh = std::move(mesh_data);
+        node->gaussian_count = static_cast<size_t>(nv);
+        node->centroid = centroid;
+
+        if (parent != NULL_NODE) {
+            if (auto* p = getNodeById(parent)) {
+                p->children.push_back(id);
+            }
+        }
+
+        id_to_index_[id] = nodes_.size();
+        node->initObservables(this);
+        nodes_.push_back(std::move(node));
+        invalidateCache();
+
+        LOG_DEBUG("Added mesh node '{}' (id={}, {} vertices, {} faces)", name, id, nv, node->mesh ? node->mesh->face_count() : 0);
+        return id;
+    }
+
     NodeId Scene::addCropBox(const std::string& name, const NodeId parent_id) {
         assert(parent_id != NULL_NODE && "CropBox must have a parent splat node");
 

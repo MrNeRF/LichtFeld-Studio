@@ -1,0 +1,930 @@
+#############################################################
+#                                                           #
+# This is an auto generated file. Do not make               #
+# changes to this file. They possible will be overriden.    #
+#                                                           #
+# To make persistent changes, changes files in              #
+# ./CI/gitlab-ci/ ...                                       #
+# and regenerate this file with the configuration tool      #
+# python3 ./CI/gitlab-ci/assemble-gitlab-ci.py              #
+#                                                           #
+#############################################################
+
+stages:
+  - build
+  - test
+  - deploy
+
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+
+# -----------------
+# Linux tasks
+# -----------------
+
+cppcheck:
+  stage: build
+  script: "CI/ci-cppcheck.sh"
+  image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+  timeout: 6h
+  artifacts:
+    paths:
+      - cppcheck.log
+
+#-----------  Job Informations:
+# Type:       Build: debug
+# OS:         Linux
+# Compiler:   gcc
+# Language:   cpp17
+# QT Version: qt6.7.1
+
+build-debug-gcc-cpp17-qt6.7.1:
+  stage: build
+  script: "CI/ci-linux-build.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+  variables:
+    COMPILER: "gcc"
+    LANGUAGE: "cpp17"
+    BUILD_TYPE: "debug"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  artifacts:
+    paths:
+    - build-gcc-cpp17-qt6.7.1-debug-vectorchecks/
+
+#-----------  Job Informations:
+# Type:       Test: debug
+# OS:         Linux
+# Compiler:   gcc
+# Language:   cpp17
+
+test-debug-gcc-cpp17-qt6.7.1:
+  stage: test
+  script: "CI/ci-linux-test.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+    - MultiThreads
+  variables:
+    COMPILER: "gcc"
+    LANGUAGE: "cpp17"
+    BUILD_TYPE: "debug"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  dependencies: [build-debug-gcc-cpp17-qt6.7.1]
+  needs: [build-debug-gcc-cpp17-qt6.7.1]
+  artifacts:
+    reports:
+      junit:
+        - build-gcc-cpp17-qt6.7.1-debug-vectorchecks/Unittests/report.xml
+        - build-gcc-cpp17-qt6.7.1-debug-vectorchecks/Unittests/report-customvec.xml
+        - build-gcc-cpp17-qt6.7.1-debug-vectorchecks/Unittests/report-doublevec.xml
+
+
+#-----------  Job Informations:
+# Type:       Build: release
+# OS:         Linux
+# Compiler:   gcc
+# Language:   cpp17
+# QT Version: qt6.7.1
+
+build-release-gcc-cpp17-qt6.7.1:
+  stage: build
+  script: "CI/ci-linux-build.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+  variables:
+    COMPILER: "gcc"
+    LANGUAGE: "cpp17"
+    BUILD_TYPE: "release"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  artifacts:
+    paths:
+    - build-gcc-cpp17-qt6.7.1-release-vectorchecks/
+
+#-----------  Job Informations:
+# Type:       Test: release
+# OS:         Linux
+# Compiler:   gcc
+# Language:   cpp17
+
+test-release-gcc-cpp17-qt6.7.1:
+  stage: test
+  script: "CI/ci-linux-test.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+    - MultiThreads
+  variables:
+    COMPILER: "gcc"
+    LANGUAGE: "cpp17"
+    BUILD_TYPE: "release"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  dependencies: [build-release-gcc-cpp17-qt6.7.1]
+  needs: [build-release-gcc-cpp17-qt6.7.1]
+  artifacts:
+    reports:
+      junit:
+        - build-gcc-cpp17-qt6.7.1-release-vectorchecks/Unittests/report.xml
+        - build-gcc-cpp17-qt6.7.1-release-vectorchecks/Unittests/report-customvec.xml
+        - build-gcc-cpp17-qt6.7.1-release-vectorchecks/Unittests/report-doublevec.xml
+
+
+#-----------  Job Informations:
+# Type:       Build: debug
+# OS:         Linux
+# Compiler:   clang
+# Language:   cpp17
+# QT Version: qt6.7.1
+
+build-debug-clang-cpp17-qt6.7.1:
+  stage: build
+  script: "CI/ci-linux-build.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+  variables:
+    COMPILER: "clang"
+    LANGUAGE: "cpp17"
+    BUILD_TYPE: "debug"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  artifacts:
+    paths:
+    - build-clang-cpp17-qt6.7.1-debug-vectorchecks/
+
+#-----------  Job Informations:
+# Type:       Test: debug
+# OS:         Linux
+# Compiler:   clang
+# Language:   cpp17
+
+test-debug-clang-cpp17-qt6.7.1:
+  stage: test
+  script: "CI/ci-linux-test.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+    - MultiThreads
+  variables:
+    COMPILER: "clang"
+    LANGUAGE: "cpp17"
+    BUILD_TYPE: "debug"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  dependencies: [build-debug-clang-cpp17-qt6.7.1]
+  needs: [build-debug-clang-cpp17-qt6.7.1]
+  artifacts:
+    reports:
+      junit:
+        - build-clang-cpp17-qt6.7.1-debug-vectorchecks/Unittests/report.xml
+        - build-clang-cpp17-qt6.7.1-debug-vectorchecks/Unittests/report-customvec.xml
+        - build-clang-cpp17-qt6.7.1-debug-vectorchecks/Unittests/report-doublevec.xml
+
+
+#-----------  Job Informations:
+# Type:       Build: release
+# OS:         Linux
+# Compiler:   clang
+# Language:   cpp17
+# QT Version: qt6.7.1
+
+build-release-clang-cpp17-qt6.7.1:
+  stage: build
+  script: "CI/ci-linux-build.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+  variables:
+    COMPILER: "clang"
+    LANGUAGE: "cpp17"
+    BUILD_TYPE: "release"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  artifacts:
+    paths:
+    - build-clang-cpp17-qt6.7.1-release-vectorchecks/
+
+#-----------  Job Informations:
+# Type:       Test: release
+# OS:         Linux
+# Compiler:   clang
+# Language:   cpp17
+
+test-release-clang-cpp17-qt6.7.1:
+  stage: test
+  script: "CI/ci-linux-test.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+    - MultiThreads
+  variables:
+    COMPILER: "clang"
+    LANGUAGE: "cpp17"
+    BUILD_TYPE: "release"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  dependencies: [build-release-clang-cpp17-qt6.7.1]
+  needs: [build-release-clang-cpp17-qt6.7.1]
+  artifacts:
+    reports:
+      junit:
+        - build-clang-cpp17-qt6.7.1-release-vectorchecks/Unittests/report.xml
+        - build-clang-cpp17-qt6.7.1-release-vectorchecks/Unittests/report-customvec.xml
+        - build-clang-cpp17-qt6.7.1-release-vectorchecks/Unittests/report-doublevec.xml
+
+
+
+#-----------  Job Informations:
+# Type:       Build: debug
+# OS:         Linux
+# Compiler:   gcc
+# Language:   cpp20
+# QT Version: qt6.7.1
+
+build-debug-gcc-cpp20-qt6.7.1:
+  stage: build
+  script: "CI/ci-linux-build.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+  variables:
+    COMPILER: "gcc"
+    LANGUAGE: "cpp20"
+    BUILD_TYPE: "debug"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  artifacts:
+    paths:
+    - build-gcc-cpp20-qt6.7.1-debug-vectorchecks/
+
+#-----------  Job Informations:
+# Type:       Test: debug
+# OS:         Linux
+# Compiler:   gcc
+# Language:   cpp20
+
+test-debug-gcc-cpp20-qt6.7.1:
+  stage: test
+  script: "CI/ci-linux-test.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+    - MultiThreads
+  variables:
+    COMPILER: "gcc"
+    LANGUAGE: "cpp20"
+    BUILD_TYPE: "debug"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  dependencies: [build-debug-gcc-cpp20-qt6.7.1]
+  needs: [build-debug-gcc-cpp20-qt6.7.1]
+  artifacts:
+    reports:
+      junit:
+        - build-gcc-cpp20-qt6.7.1-debug-vectorchecks/Unittests/report.xml
+        - build-gcc-cpp20-qt6.7.1-debug-vectorchecks/Unittests/report-customvec.xml
+        - build-gcc-cpp20-qt6.7.1-debug-vectorchecks/Unittests/report-doublevec.xml
+
+
+#-----------  Job Informations:
+# Type:       Build: release
+# OS:         Linux
+# Compiler:   gcc
+# Language:   cpp20
+# QT Version: qt6.7.1
+
+build-release-gcc-cpp20-qt6.7.1:
+  stage: build
+  script: "CI/ci-linux-build.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+  variables:
+    COMPILER: "gcc"
+    LANGUAGE: "cpp20"
+    BUILD_TYPE: "release"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  artifacts:
+    paths:
+    - build-gcc-cpp20-qt6.7.1-release-vectorchecks/
+
+#-----------  Job Informations:
+# Type:       Test: release
+# OS:         Linux
+# Compiler:   gcc
+# Language:   cpp20
+
+test-release-gcc-cpp20-qt6.7.1:
+  stage: test
+  script: "CI/ci-linux-test.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+    - MultiThreads
+  variables:
+    COMPILER: "gcc"
+    LANGUAGE: "cpp20"
+    BUILD_TYPE: "release"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  dependencies: [build-release-gcc-cpp20-qt6.7.1]
+  needs: [build-release-gcc-cpp20-qt6.7.1]
+  artifacts:
+    reports:
+      junit:
+        - build-gcc-cpp20-qt6.7.1-release-vectorchecks/Unittests/report.xml
+        - build-gcc-cpp20-qt6.7.1-release-vectorchecks/Unittests/report-customvec.xml
+        - build-gcc-cpp20-qt6.7.1-release-vectorchecks/Unittests/report-doublevec.xml
+
+
+#-----------  Job Informations:
+# Type:       Build: debug
+# OS:         Linux
+# Compiler:   clang
+# Language:   cpp20
+# QT Version: qt6.7.1
+
+build-debug-clang-cpp20-qt6.7.1:
+  stage: build
+  script: "CI/ci-linux-build.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+  variables:
+    COMPILER: "clang"
+    LANGUAGE: "cpp20"
+    BUILD_TYPE: "debug"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  artifacts:
+    paths:
+    - build-clang-cpp20-qt6.7.1-debug-vectorchecks/
+
+#-----------  Job Informations:
+# Type:       Test: debug
+# OS:         Linux
+# Compiler:   clang
+# Language:   cpp20
+
+test-debug-clang-cpp20-qt6.7.1:
+  stage: test
+  script: "CI/ci-linux-test.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+    - MultiThreads
+  variables:
+    COMPILER: "clang"
+    LANGUAGE: "cpp20"
+    BUILD_TYPE: "debug"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  dependencies: [build-debug-clang-cpp20-qt6.7.1]
+  needs: [build-debug-clang-cpp20-qt6.7.1]
+  artifacts:
+    reports:
+      junit:
+        - build-clang-cpp20-qt6.7.1-debug-vectorchecks/Unittests/report.xml
+        - build-clang-cpp20-qt6.7.1-debug-vectorchecks/Unittests/report-customvec.xml
+        - build-clang-cpp20-qt6.7.1-debug-vectorchecks/Unittests/report-doublevec.xml
+
+
+#-----------  Job Informations:
+# Type:       Build: release
+# OS:         Linux
+# Compiler:   clang
+# Language:   cpp20
+# QT Version: qt6.7.1
+
+build-release-clang-cpp20-qt6.7.1:
+  stage: build
+  script: "CI/ci-linux-build.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+  variables:
+    COMPILER: "clang"
+    LANGUAGE: "cpp20"
+    BUILD_TYPE: "release"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  artifacts:
+    paths:
+    - build-clang-cpp20-qt6.7.1-release-vectorchecks/
+
+#-----------  Job Informations:
+# Type:       Test: release
+# OS:         Linux
+# Compiler:   clang
+# Language:   cpp20
+
+test-release-clang-cpp20-qt6.7.1:
+  stage: test
+  script: "CI/ci-linux-test.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+    - MultiThreads
+  variables:
+    COMPILER: "clang"
+    LANGUAGE: "cpp20"
+    BUILD_TYPE: "release"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  dependencies: [build-release-clang-cpp20-qt6.7.1]
+  needs: [build-release-clang-cpp20-qt6.7.1]
+  artifacts:
+    reports:
+      junit:
+        - build-clang-cpp20-qt6.7.1-release-vectorchecks/Unittests/report.xml
+        - build-clang-cpp20-qt6.7.1-release-vectorchecks/Unittests/report-customvec.xml
+        - build-clang-cpp20-qt6.7.1-release-vectorchecks/Unittests/report-doublevec.xml
+
+
+
+#-----------  Job Informations:
+# Type:       Build: debug
+# OS:         Linux
+# Compiler:   gcc
+# Language:   cpp14
+# QT Version: qt6.7.1
+
+build-debug-gcc-cpp14-qt6.7.1:
+  stage: build
+  script: "CI/ci-linux-build.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+  variables:
+    COMPILER: "gcc"
+    LANGUAGE: "cpp14"
+    BUILD_TYPE: "debug"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  artifacts:
+    paths:
+    - build-gcc-cpp14-qt6.7.1-debug-vectorchecks/
+
+#-----------  Job Informations:
+# Type:       Test: debug
+# OS:         Linux
+# Compiler:   gcc
+# Language:   cpp14
+
+test-debug-gcc-cpp14-qt6.7.1:
+  stage: test
+  script: "CI/ci-linux-test.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+    - MultiThreads
+  variables:
+    COMPILER: "gcc"
+    LANGUAGE: "cpp14"
+    BUILD_TYPE: "debug"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  dependencies: [build-debug-gcc-cpp14-qt6.7.1]
+  needs: [build-debug-gcc-cpp14-qt6.7.1]
+  artifacts:
+    reports:
+      junit:
+        - build-gcc-cpp14-qt6.7.1-debug-vectorchecks/Unittests/report.xml
+        - build-gcc-cpp14-qt6.7.1-debug-vectorchecks/Unittests/report-customvec.xml
+        - build-gcc-cpp14-qt6.7.1-debug-vectorchecks/Unittests/report-doublevec.xml
+
+
+#-----------  Job Informations:
+# Type:       Build: release
+# OS:         Linux
+# Compiler:   gcc
+# Language:   cpp14
+# QT Version: qt6.7.1
+
+build-release-gcc-cpp14-qt6.7.1:
+  stage: build
+  script: "CI/ci-linux-build.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+  variables:
+    COMPILER: "gcc"
+    LANGUAGE: "cpp14"
+    BUILD_TYPE: "release"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  artifacts:
+    paths:
+    - build-gcc-cpp14-qt6.7.1-release-vectorchecks/
+
+#-----------  Job Informations:
+# Type:       Test: release
+# OS:         Linux
+# Compiler:   gcc
+# Language:   cpp14
+
+test-release-gcc-cpp14-qt6.7.1:
+  stage: test
+  script: "CI/ci-linux-test.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+    - MultiThreads
+  variables:
+    COMPILER: "gcc"
+    LANGUAGE: "cpp14"
+    BUILD_TYPE: "release"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  dependencies: [build-release-gcc-cpp14-qt6.7.1]
+  needs: [build-release-gcc-cpp14-qt6.7.1]
+  artifacts:
+    reports:
+      junit:
+        - build-gcc-cpp14-qt6.7.1-release-vectorchecks/Unittests/report.xml
+        - build-gcc-cpp14-qt6.7.1-release-vectorchecks/Unittests/report-customvec.xml
+        - build-gcc-cpp14-qt6.7.1-release-vectorchecks/Unittests/report-doublevec.xml
+
+
+#-----------  Job Informations:
+# Type:       Build: debug
+# OS:         Linux
+# Compiler:   clang
+# Language:   cpp14
+# QT Version: qt6.7.1
+
+build-debug-clang-cpp14-qt6.7.1:
+  stage: build
+  script: "CI/ci-linux-build.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+  variables:
+    COMPILER: "clang"
+    LANGUAGE: "cpp14"
+    BUILD_TYPE: "debug"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  artifacts:
+    paths:
+    - build-clang-cpp14-qt6.7.1-debug-vectorchecks/
+
+#-----------  Job Informations:
+# Type:       Test: debug
+# OS:         Linux
+# Compiler:   clang
+# Language:   cpp14
+
+test-debug-clang-cpp14-qt6.7.1:
+  stage: test
+  script: "CI/ci-linux-test.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+    - MultiThreads
+  variables:
+    COMPILER: "clang"
+    LANGUAGE: "cpp14"
+    BUILD_TYPE: "debug"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  dependencies: [build-debug-clang-cpp14-qt6.7.1]
+  needs: [build-debug-clang-cpp14-qt6.7.1]
+  artifacts:
+    reports:
+      junit:
+        - build-clang-cpp14-qt6.7.1-debug-vectorchecks/Unittests/report.xml
+        - build-clang-cpp14-qt6.7.1-debug-vectorchecks/Unittests/report-customvec.xml
+        - build-clang-cpp14-qt6.7.1-debug-vectorchecks/Unittests/report-doublevec.xml
+
+
+#-----------  Job Informations:
+# Type:       Build: release
+# OS:         Linux
+# Compiler:   clang
+# Language:   cpp14
+# QT Version: qt6.7.1
+
+build-release-clang-cpp14-qt6.7.1:
+  stage: build
+  script: "CI/ci-linux-build.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+  variables:
+    COMPILER: "clang"
+    LANGUAGE: "cpp14"
+    BUILD_TYPE: "release"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  artifacts:
+    paths:
+    - build-clang-cpp14-qt6.7.1-release-vectorchecks/
+
+#-----------  Job Informations:
+# Type:       Test: release
+# OS:         Linux
+# Compiler:   clang
+# Language:   cpp14
+
+test-release-clang-cpp14-qt6.7.1:
+  stage: test
+  script: "CI/ci-linux-test.sh"
+  #image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+    - MultiThreads
+  variables:
+    COMPILER: "clang"
+    LANGUAGE: "cpp14"
+    BUILD_TYPE: "release"
+    QTVERSION: "qt6.7.1"
+    IWYU: "no"
+    VECTORCHECKS: "yes"
+  dependencies: [build-release-clang-cpp14-qt6.7.1]
+  needs: [build-release-clang-cpp14-qt6.7.1]
+  artifacts:
+    reports:
+      junit:
+        - build-clang-cpp14-qt6.7.1-release-vectorchecks/Unittests/report.xml
+        - build-clang-cpp14-qt6.7.1-release-vectorchecks/Unittests/report-customvec.xml
+        - build-clang-cpp14-qt6.7.1-release-vectorchecks/Unittests/report-doublevec.xml
+
+
+
+#{linux-iwyu-job.yml, BUILDTYPE=release, COMPILER=clang, LANGUAGE=cpp14, QT_VERSION=qt5.15.1}
+#-----------  Job Informations:
+# Type:       Build: release
+# OS:         Linux
+# Compiler:   clang
+# Language:   cpp14
+
+nvc-release-clang-cpp14-qt5.15.1:
+  stage: build
+  script: "CI/ci-linux-build.sh"
+  image: gitlab.vci.rwth-aachen.de:4567/docker/docker/docker-openmesh-container
+  tags:
+    - Linux
+    - stretch
+  variables:
+    COMPILER: "clang"
+    LANGUAGE: "cpp14"
+    BUILD_TYPE: "release"
+    QTVERSION: "qt5.15.1"
+    IWYU: "no"
+    VECTORCHECKS: "no"
+  artifacts:
+    paths:
+      - build-clang-cpp14-qt5.15.1-release/
+
+# -----------------
+# MAC tasks
+# -----------------
+
+#{mac-template-job.yml, BUILDTYPE=debug, LANGUAGE=cpp14}
+#{mac-template-job.yml, BUILDTYPE=release, LANGUAGE=cpp14}
+
+#-----------  Job Informations:
+# Type:       Build+Test: debug
+# OS:         Mac
+# Language:   cpp14
+
+macos-M1-cpp14-debug:
+    stage: build
+    script: "CI/ci-mac-M1-build.sh cpp14 debug ; CI/ci-mac-M1-test.sh cpp14 debug"
+    tags:
+      - AppleM1
+    artifacts:
+      paths:
+        - build-debug-cpp14/*.dmg
+        - build-debug-cpp14/*.tar.gz
+#      reports:
+#        junit:
+#          - build-debug-cpp14/Unittests/report.xml
+#          - build-debug-cpp14/Unittests/report-customvec.xml
+#          - build-debug-cpp14/Unittests/report-doublevec.xml
+
+#-----------  Job Informations:
+# Type:       Build+Test: release
+# OS:         Mac
+# Language:   cpp14
+
+macos-M1-cpp14-release:
+    stage: build
+    script: "CI/ci-mac-M1-build.sh cpp14 release ; CI/ci-mac-M1-test.sh cpp14 release"
+    tags:
+      - AppleM1
+    artifacts:
+      paths:
+        - build-release-cpp14/*.dmg
+        - build-release-cpp14/*.tar.gz
+#      reports:
+#        junit:
+#          - build-release-cpp14/Unittests/report.xml
+#          - build-release-cpp14/Unittests/report-customvec.xml
+#          - build-release-cpp14/Unittests/report-doublevec.xml
+
+
+
+
+# -----------------
+# Windows tasks
+# -----------------
+
+#-------------  Job Informations:
+# Type:         Build+Test: Release
+# OS:           Windows
+# Architecture: x64
+# Shared:       TRUE
+# VS Version:   VS2019
+# Apps:         {{APPS}}
+
+build-VS2019-x64-shared-TRUE-apps:
+  stage: build
+  variables:
+    BUILD_PLATFORM: "VS2019"
+    ARCHITECTURE:   "x64"
+    SHARED:         "TRUE"
+    APPS:           "ON"
+  script: "CI\\Windows.bat"
+  tags:
+    - VS2019
+    - Qt612
+  artifacts:
+    paths:
+      - build-release/*.exe
+    reports:
+      junit:
+        - build-release/unittests/report.xml
+        - build-release/unittests/report-customvec.xml
+        - build-release/unittests/report-doublevec.xml
+
+#-------------  Job Informations:
+# Type:         Build+Test: Release
+# OS:           Windows
+# Architecture: x64
+# Shared:       FALSE
+# VS Version:   VS2019
+# Apps:         {{APPS}}
+
+build-VS2019-x64-shared-FALSE-apps:
+  stage: build
+  variables:
+    BUILD_PLATFORM: "VS2019"
+    ARCHITECTURE:   "x64"
+    SHARED:         "FALSE"
+    APPS:           "ON"
+  script: "CI\\Windows.bat"
+  tags:
+    - VS2019
+    - Qt612
+  artifacts:
+    paths:
+      - build-release/*.exe
+    reports:
+      junit:
+        - build-release/unittests/report.xml
+        - build-release/unittests/report-customvec.xml
+        - build-release/unittests/report-doublevec.xml
+
+
+#-------------  Job Informations:
+# Type:         Build+Test: Release
+# OS:           Windows
+# Architecture: x64
+# Shared:       TRUE
+# VS Version:   VS2017
+# Apps:         {{APPS}}
+
+build-VS2017-x64-shared-TRUE-apps:
+  stage: build
+  variables:
+    BUILD_PLATFORM: "VS2017"
+    ARCHITECTURE:   "x64"
+    SHARED:         "TRUE"
+    APPS:           "ON"
+  script: "CI\\Windows.bat"
+  tags:
+    - VS2017
+    - Qt5101
+  artifacts:
+    paths:
+      - build-release/*.exe
+    reports:
+      junit:
+        - build-release/unittests/report.xml
+        - build-release/unittests/report-customvec.xml
+        - build-release/unittests/report-doublevec.xml
+
+#-------------  Job Informations:
+# Type:         Build+Test: Release
+# OS:           Windows
+# Architecture: x64
+# Shared:       FALSE
+# VS Version:   VS2017
+# Apps:         {{APPS}}
+
+build-VS2017-x64-shared-FALSE-apps:
+  stage: build
+  variables:
+    BUILD_PLATFORM: "VS2017"
+    ARCHITECTURE:   "x64"
+    SHARED:         "FALSE"
+    APPS:           "ON"
+  script: "CI\\Windows.bat"
+  tags:
+    - VS2017
+    - Qt5101
+  artifacts:
+    paths:
+      - build-release/*.exe
+    reports:
+      junit:
+        - build-release/unittests/report.xml
+        - build-release/unittests/report-customvec.xml
+        - build-release/unittests/report-doublevec.xml
+
+
+Doc-publish:
+  stage: deploy
+  only:
+     - master
+  script: "CI/ci-doc.sh"
+  dependencies: []
+  tags:
+     - Linux
+     - stretch     
+
+Sources:
+  stage: deploy
+  only:
+     - master
+  script: "CI/ci-source.sh"
+  tags:
+     - Linux
+  dependencies: []
+  artifacts:
+    paths:
+      - OpenMesh*.zip
+      - OpenMesh*.tar.bz2
+      - OpenMesh*.tar.gz
+
+trigger_openmesh-python-rebuild:
+  stage: deploy
+  only:
+     - master
+  dependencies: []
+  script:
+    - "curl -X POST -F token=b63ed804ada51d7d1ffe5d6ea0dfa2 -F ref=track-OM-master https://gitlab.vci.rwth-aachen.de:9000/api/v4/projects/1024/trigger/pipeline"
+
+#Debian:
+#  stage: deploy
+#  only:
+#     - master
+#  script: 
+#     - mkdir .OpenMesh
+#     - cp -r * .OpenMesh
+#     - mv .OpenMesh OpenMesh
+#     - cd OpenMesh
+#     - dpkg-buildpackage --no-sign
+#  tags:
+#     - Linux
+#     - stretch
+#  dependencies: []
+#  artifacts:
+#    paths:
+#      - libopenmesh*.deb
+
+
