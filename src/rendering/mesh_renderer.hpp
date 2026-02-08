@@ -5,6 +5,7 @@
 #pragma once
 
 #include "gl_resources.hpp"
+#include "rendering/rendering.hpp"
 #include "shader_manager.hpp"
 #include <glm/glm.hpp>
 
@@ -13,16 +14,6 @@ namespace lfs::core {
 }
 
 namespace lfs::rendering {
-
-    struct MeshRenderOptions {
-        bool wireframe_overlay = false;
-        glm::vec3 wireframe_color{0.2f};
-        float wireframe_width = 1.0f;
-        glm::vec3 light_dir{0.3f, 1.0f, 0.5f};
-        float light_intensity = 1.5f;
-        float ambient = 0.15f;
-        bool backface_culling = true;
-    };
 
     class MeshRenderer {
     public:
@@ -34,7 +25,8 @@ namespace lfs::rendering {
                             const glm::mat4& view,
                             const glm::mat4& projection,
                             const glm::vec3& camera_pos,
-                            const MeshRenderOptions& opts);
+                            const MeshRenderOptions& opts,
+                            bool use_fbo = true);
 
         GLuint getColorTexture() const { return color_texture_.get(); }
         GLuint getDepthTexture() const { return depth_texture_.get(); }

@@ -788,7 +788,8 @@ namespace lfs::rendering {
     Result<void> RenderingEngineImpl::renderMesh(
         const lfs::core::MeshData& mesh,
         const ViewportData& viewport,
-        const glm::mat4& model_transform) {
+        const glm::mat4& model_transform,
+        const MeshRenderOptions& options) {
 
         if (!mesh_renderer_.isInitialized())
             return std::unexpected("Mesh renderer not initialized");
@@ -799,8 +800,7 @@ namespace lfs::rendering {
         glm::mat4 projection = createProjectionMatrix(viewport);
         glm::vec3 camera_pos = -glm::transpose(glm::mat3(view)) * glm::vec3(view[3]);
 
-        MeshRenderOptions opts;
-        auto result = mesh_renderer_.render(mesh, model_transform, view, projection, camera_pos, opts);
+        auto result = mesh_renderer_.render(mesh, model_transform, view, projection, camera_pos, options, false);
         if (result) {
             mesh_rendered_this_frame_ = true;
         }

@@ -35,6 +35,7 @@ NODE_TYPE_COLORS = {
     "CROPBOX": (1.0, 0.7, 0.3, 0.9),
     "ELLIPSOID": (0.3, 0.8, 1.0, 0.9),
     "POINTCLOUD": (0.8, 0.5, 1.0, 0.8),
+    "MESH": (0.5, 0.9, 0.6, 0.9),
 }
 
 NODE_TYPE_ICON_NAMES = {
@@ -46,6 +47,7 @@ NODE_TYPE_ICON_NAMES = {
     "CROPBOX": "cropbox",
     "ELLIPSOID": "ellipsoid",
     "POINTCLOUD": "pointcloud",
+    "MESH": "pointcloud",
 }
 
 
@@ -211,6 +213,7 @@ class ScenePanel(Panel):
         is_dataset = node_type == "DATASET"
         is_splat = node_type == "SPLAT"
         is_pointcloud = node_type == "POINTCLOUD"
+        is_mesh = node_type == "MESH"
 
         parent_is_dataset = False
         if node.parent_id != -1:
@@ -220,7 +223,7 @@ class ScenePanel(Panel):
                 parent_is_dataset = parent_type == "DATASET"
 
         is_deletable = not is_camera and not is_camera_group and not parent_is_dataset
-        can_drag = node_type in ("SPLAT", "GROUP", "POINTCLOUD", "CROPBOX", "ELLIPSOID") and not parent_is_dataset
+        can_drag = node_type in ("SPLAT", "GROUP", "POINTCLOUD", "MESH", "CROPBOX", "ELLIPSOID") and not parent_is_dataset
 
         is_selected = self._is_node_selected(node)
         self._visible_node_order.append(node.name)
@@ -314,6 +317,10 @@ class ScenePanel(Panel):
                 pc = node.point_cloud()
                 if pc:
                     label += f"  ({pc.size:,})"
+            elif is_mesh:
+                mesh = node.mesh()
+                if mesh:
+                    label += f"  ({mesh.vertex_count:,}V / {mesh.face_count:,}F)"
 
             label_x, label_y = layout.get_cursor_screen_pos()
 
@@ -379,7 +386,7 @@ class ScenePanel(Panel):
             layout.label(tr("scene.move_node").format(node.name))
             layout.end_drag_drop_source()
 
-        if node_type in ("GROUP", "SPLAT", "POINTCLOUD"):
+        if node_type in ("GROUP", "SPLAT", "POINTCLOUD", "MESH"):
             if layout.begin_drag_drop_target():
                 payload = layout.accept_drag_drop_payload("SCENE_NODE")
                 if payload and payload != node.name:

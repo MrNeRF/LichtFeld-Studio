@@ -299,6 +299,16 @@ namespace lfs::rendering {
         virtual bool isAxisVisible(int axis) const = 0;
     };
 
+    struct MeshRenderOptions {
+        bool wireframe_overlay = false;
+        glm::vec3 wireframe_color{0.2f};
+        float wireframe_width = 1.0f;
+        glm::vec3 light_dir{0.3f, 1.0f, 0.5f};
+        float light_intensity = 1.5f;
+        float ambient = 0.15f;
+        bool backface_culling = true;
+    };
+
     // Main rendering engine
     class RenderingEngine {
     public:
@@ -329,7 +339,8 @@ namespace lfs::rendering {
         virtual Result<void> renderMesh(
             const lfs::core::MeshData& mesh,
             const ViewportData& viewport,
-            const glm::mat4& model_transform = glm::mat4(1.0f)) = 0;
+            const glm::mat4& model_transform = glm::mat4(1.0f),
+            const MeshRenderOptions& options = {}) = 0;
 
         virtual unsigned int getMeshColorTexture() const = 0;
         virtual unsigned int getMeshDepthTexture() const = 0;

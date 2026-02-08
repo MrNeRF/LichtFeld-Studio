@@ -129,6 +129,19 @@ class NodeType(enum.Enum):
 
     MESH = 10
 
+class MeshInfo:
+    @property
+    def vertex_count(self) -> int: ...
+
+    @property
+    def face_count(self) -> int: ...
+
+    @property
+    def has_normals(self) -> bool: ...
+
+    @property
+    def has_texcoords(self) -> bool: ...
+
 class SelectionGroup:
     @property
     def id(self) -> int:
@@ -303,6 +316,9 @@ class SceneNode:
 
     def point_cloud(self) -> PointCloud | None:
         """Get PointCloud for POINTCLOUD nodes (None otherwise)"""
+
+    def mesh(self) -> MeshInfo | None:
+        """Get MeshInfo for MESH nodes (None otherwise)"""
 
     def cropbox(self) -> CropBox | None:
         """Get CropBox for CROPBOX nodes (None otherwise)"""

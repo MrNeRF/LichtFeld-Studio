@@ -6,6 +6,7 @@
 
 #include "core/camera.hpp"
 #include "core/events.hpp"
+#include "core/mesh_data.hpp"
 #include "core/scene.hpp"
 #include "py_prop.hpp"
 #include "py_splat_data.hpp"
@@ -185,6 +186,21 @@ namespace lfs::python {
         core::Scene* scene_ = nullptr;
     };
 
+    class PyMeshInfo {
+    public:
+        explicit PyMeshInfo(const core::MeshData* mesh) : mesh_(mesh) {
+            assert(mesh_ != nullptr);
+        }
+
+        int64_t vertex_count() const { return mesh_->vertex_count(); }
+        int64_t face_count() const { return mesh_->face_count(); }
+        bool has_normals() const { return mesh_->has_normals(); }
+        bool has_texcoords() const { return mesh_->has_texcoords(); }
+
+    private:
+        const core::MeshData* mesh_;
+    };
+
     // Scene node wrapper
     class PySceneNode {
     public:
@@ -215,6 +231,7 @@ namespace lfs::python {
         // Data accessors
         std::optional<PySplatData> splat_data();
         std::optional<PyPointCloud> point_cloud();
+        std::optional<PyMeshInfo> mesh();
         std::optional<PyCropBox> cropbox();
         std::optional<PyEllipsoid> ellipsoid();
 

@@ -1822,6 +1822,9 @@ namespace lfs::vis {
             state.point_cloud = scene_.getVisiblePointCloud();
         }
 
+        // Collect visible meshes
+        state.meshes = scene_.getVisibleMeshes();
+
         // Get transforms and indices
         state.model_transforms = scene_.getVisibleNodeTransforms();
         state.transform_indices = scene_.getTransformIndices();

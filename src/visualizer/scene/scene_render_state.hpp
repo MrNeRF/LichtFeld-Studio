@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/mesh_data.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
@@ -18,6 +19,7 @@ namespace lfs::vis {
     struct SceneRenderState {
         const lfs::core::SplatData* combined_model = nullptr;
         const lfs::core::PointCloud* point_cloud = nullptr; // For pre-training point cloud rendering
+        std::vector<core::Scene::VisibleMesh> meshes;       // Visible mesh nodes with transforms
         std::vector<glm::mat4> model_transforms;
         std::shared_ptr<lfs::core::Tensor> transform_indices; // Per-Gaussian index into model_transforms
         std::shared_ptr<lfs::core::Tensor> selection_mask;    // Per-Gaussian selection group ID

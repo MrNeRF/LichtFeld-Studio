@@ -4,8 +4,9 @@
 
 #include "rendering_manager.hpp"
 #include "core/camera.hpp"
-#include "core/image_io.hpp" // Use existing image_io utilities
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "core/mesh_data.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor/internal/memory_pool.hpp"
@@ -1427,6 +1428,39 @@ namespace lfs::vis {
                     }
                 } else {
                     LOG_ERROR("Failed to render point cloud: {}", render_result.error());
+                }
+            }
+        }
+
+        // Render visible meshes
+        if (scene_manager && engine_) {
+            auto mesh_scene_state = scene_manager->buildRenderState();
+            if (!mesh_scene_state.meshes.empty()) {
+                lfs::rendering::ViewportData mesh_viewport{
+                    .rotation = context.viewport.getRotationMatrix(),
+                    .translation = context.viewport.getTranslation(),
+                    .size = render_size,
+                    .focal_length_mm = settings_.focal_length_mm,
+                    .orthographic = settings_.orthographic,
+                    .ortho_scale = settings_.ortho_scale};
+
+                lfs::rendering::MeshRenderOptions mesh_opts{
+                    .wireframe_overlay = settings_.mesh_wireframe,
+                    .wireframe_color = settings_.mesh_wireframe_color,
+                    .wireframe_width = settings_.mesh_wireframe_width,
+                    .light_dir = settings_.mesh_light_dir,
+                    .light_intensity = settings_.mesh_light_intensity,
+                    .ambient = settings_.mesh_ambient,
+                    .backface_culling = settings_.mesh_backface_culling};
+
+                glEnable(GL_DEPTH_TEST);
+                glDepthFunc(GL_LESS);
+
+                for (const auto& vm : mesh_scene_state.meshes) {
+                    auto result = engine_->renderMesh(*vm.mesh, mesh_viewport, vm.transform, mesh_opts);
+                    if (!result) {
+                        LOG_ERROR("Failed to render mesh: {}", result.error());
+                    }
                 }
             }
         }

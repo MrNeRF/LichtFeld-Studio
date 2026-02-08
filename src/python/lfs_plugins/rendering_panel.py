@@ -150,3 +150,15 @@ class RenderingPanel(Panel):
 
         layout.prop(settings, "mip_filter")
         layout.prop(settings, "render_scale")
+
+        layout.separator()
+        if layout.collapsing_header("Mesh"):
+            layout.prop(settings, "mesh_wireframe")
+            if settings.mesh_wireframe:
+                layout.indent()
+                layout.prop(settings, "mesh_wireframe_color")
+                layout.prop(settings, "mesh_wireframe_width")
+                layout.unindent()
+            layout.prop(settings, "mesh_light_intensity")
+            layout.prop(settings, "mesh_ambient")
+            layout.prop(settings, "mesh_backface_culling")

@@ -115,6 +115,13 @@ namespace lfs::python {
         return PyPointCloud(node_->point_cloud.get(), false, node_, scene_);
     }
 
+    std::optional<PyMeshInfo> PySceneNode::mesh() {
+        if (node_->type != core::NodeType::MESH || !node_->mesh) {
+            return std::nullopt;
+        }
+        return PyMeshInfo(node_->mesh.get());
+    }
+
     // PyPointCloud filter implementation - uses tensor[mask] row selection
     int64_t PyPointCloud::filter(const PyTensor& keep_mask) {
         const auto& mask = keep_mask.tensor();
@@ -499,6 +506,12 @@ namespace lfs::python {
             .value("IMAGE", core::NodeType::IMAGE)
             .value("MESH", core::NodeType::MESH);
 
+        nb::class_<PyMeshInfo>(m, "MeshInfo")
+            .def_prop_ro("vertex_count", &PyMeshInfo::vertex_count)
+            .def_prop_ro("face_count", &PyMeshInfo::face_count)
+            .def_prop_ro("has_normals", &PyMeshInfo::has_normals)
+            .def_prop_ro("has_texcoords", &PyMeshInfo::has_texcoords);
+
         // SelectionGroup struct
         nb::class_<PySelectionGroup>(m, "SelectionGroup")
             .def_ro("id", &PySelectionGroup::id, "Group identifier")
@@ -598,6 +611,7 @@ namespace lfs::python {
             // Data accessors
             .def("splat_data", &PySceneNode::splat_data, "Get SplatData for SPLAT nodes (None otherwise)")
             .def("point_cloud", &PySceneNode::point_cloud, "Get PointCloud for POINTCLOUD nodes (None otherwise)")
+            .def("mesh", &PySceneNode::mesh, "Get MeshInfo for MESH nodes (None otherwise)")
             .def("cropbox", &PySceneNode::cropbox, "Get CropBox for CROPBOX nodes (None otherwise)")
             .def("ellipsoid", &PySceneNode::ellipsoid, "Get Ellipsoid for ELLIPSOID nodes (None otherwise)")
             // Camera specific (read-only)

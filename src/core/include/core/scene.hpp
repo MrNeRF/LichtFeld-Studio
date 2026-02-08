@@ -237,6 +237,12 @@ namespace lfs::core {
         // Returns first visible POINTCLOUD node's data, or nullptr
         [[nodiscard]] const lfs::core::PointCloud* getVisiblePointCloud() const;
 
+        struct VisibleMesh {
+            const lfs::core::MeshData* mesh;
+            glm::mat4 transform;
+        };
+        [[nodiscard]] std::vector<VisibleMesh> getVisibleMeshes() const;
+
         // Get transforms for visible nodes (for kernel-based transform)
         std::vector<glm::mat4> getVisibleNodeTransforms() const;
 

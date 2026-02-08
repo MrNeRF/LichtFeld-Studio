@@ -726,6 +726,13 @@ namespace lfs::vis {
                     proxy.apply_appearance_correction = s.apply_appearance_correction;
                     proxy.ppisp_mode = static_cast<int>(s.ppisp_mode);
                     proxy.ppisp = s.ppisp_overrides;
+                    proxy.mesh_wireframe = s.mesh_wireframe;
+                    proxy.mesh_wireframe_color = {s.mesh_wireframe_color.r, s.mesh_wireframe_color.g, s.mesh_wireframe_color.b};
+                    proxy.mesh_wireframe_width = s.mesh_wireframe_width;
+                    proxy.mesh_light_dir = {s.mesh_light_dir.x, s.mesh_light_dir.y, s.mesh_light_dir.z};
+                    proxy.mesh_light_intensity = s.mesh_light_intensity;
+                    proxy.mesh_ambient = s.mesh_ambient;
+                    proxy.mesh_backface_culling = s.mesh_backface_culling;
                     return proxy;
                 },
                 [this](const vis::RenderSettingsProxy& proxy) {
@@ -772,6 +779,13 @@ namespace lfs::vis {
                     s.apply_appearance_correction = proxy.apply_appearance_correction;
                     s.ppisp_mode = static_cast<vis::RenderSettings::PPISPMode>(proxy.ppisp_mode);
                     s.ppisp_overrides = proxy.ppisp;
+                    s.mesh_wireframe = proxy.mesh_wireframe;
+                    s.mesh_wireframe_color = glm::vec3(proxy.mesh_wireframe_color[0], proxy.mesh_wireframe_color[1], proxy.mesh_wireframe_color[2]);
+                    s.mesh_wireframe_width = proxy.mesh_wireframe_width;
+                    s.mesh_light_dir = glm::vec3(proxy.mesh_light_dir[0], proxy.mesh_light_dir[1], proxy.mesh_light_dir[2]);
+                    s.mesh_light_intensity = proxy.mesh_light_intensity;
+                    s.mesh_ambient = proxy.mesh_ambient;
+                    s.mesh_backface_culling = proxy.mesh_backface_culling;
                     rendering_manager_->updateSettings(s);
                 });
 

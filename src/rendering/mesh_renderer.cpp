@@ -230,7 +230,8 @@ namespace lfs::rendering {
                                       const glm::mat4& view,
                                       const glm::mat4& projection,
                                       const glm::vec3& camera_pos,
-                                      const MeshRenderOptions& opts) {
+                                      const MeshRenderOptions& opts,
+                                      bool use_fbo) {
         if (!initialized_)
             return std::unexpected("MeshRenderer not initialized");
 
@@ -241,13 +242,15 @@ namespace lfs::rendering {
         if (!upload_result)
             return upload_result;
 
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo_.get());
-        glViewport(0, 0, fbo_width_, fbo_height_);
+        if (use_fbo) {
+            glBindFramebuffer(GL_FRAMEBUFFER, fbo_.get());
+            glViewport(0, 0, fbo_width_, fbo_height_);
 
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        const float far_depth = 1e10f;
-        glClearBufferfv(GL_COLOR, 1, &far_depth);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            const float far_depth = 1e10f;
+            glClearBufferfv(GL_COLOR, 1, &far_depth);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        }
 
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LESS);
@@ -320,7 +323,10 @@ namespace lfs::rendering {
         }
 
         glDisable(GL_CULL_FACE);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        if (use_fbo) {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        }
 
         return {};
     }

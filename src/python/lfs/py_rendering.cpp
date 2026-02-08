@@ -241,6 +241,18 @@ namespace lfs::python {
         add_ppisp_float(&PPISP::color_blue_x, "ppisp_color_blue_x", "Blue X", "Blue chromaticity X", 0.0, -0.5, 0.5);
         add_ppisp_float(&PPISP::color_blue_y, "ppisp_color_blue_y", "Blue Y", "Blue chromaticity Y", 0.0, -0.5, 0.5);
 
+        // Mesh rendering
+        add_bool(&Proxy::mesh_wireframe, "mesh_wireframe", "Wireframe Overlay", "Show wireframe on meshes", false);
+        add_color3(&Proxy::mesh_wireframe_color, "mesh_wireframe_color", "Wireframe Color", "Mesh wireframe color",
+                   {0.2, 0.2, 0.2});
+        add_float(&Proxy::mesh_wireframe_width, "mesh_wireframe_width", "Wireframe Width", "Wireframe line width", 1.0,
+                  0.5, 5.0);
+        add_float(&Proxy::mesh_light_intensity, "mesh_light_intensity", "Light Intensity", "Mesh light intensity", 1.5,
+                  0.0, 5.0);
+        add_float(&Proxy::mesh_ambient, "mesh_ambient", "Ambient", "Mesh ambient light", 0.15, 0.0, 1.0);
+        add_bool(&Proxy::mesh_backface_culling, "mesh_backface_culling", "Backface Culling", "Cull mesh back faces",
+                 true);
+
         PropertyRegistry::instance().register_group(std::move(group));
     }
 

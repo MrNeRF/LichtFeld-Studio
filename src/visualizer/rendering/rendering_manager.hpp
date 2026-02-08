@@ -143,6 +143,15 @@ namespace lfs::vis {
         bool depth_clip_enabled = false;
         float depth_clip_far = 100.0f;
 
+        // Mesh rendering
+        bool mesh_wireframe = false;
+        glm::vec3 mesh_wireframe_color{0.2f};
+        float mesh_wireframe_width = 1.0f;
+        glm::vec3 mesh_light_dir{0.3f, 1.0f, 0.5f};
+        float mesh_light_intensity = 1.5f;
+        float mesh_ambient = 0.15f;
+        bool mesh_backface_culling = true;
+
         // Depth filter (Selection tool only - separate from crop box)
         bool depth_filter_enabled = false;
         glm::vec3 depth_filter_min = glm::vec3(-50.0f, -10000.0f, 0.0f);

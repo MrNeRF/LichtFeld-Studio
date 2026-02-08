@@ -375,6 +375,16 @@ namespace lfs::core {
         return nullptr;
     }
 
+    std::vector<Scene::VisibleMesh> Scene::getVisibleMeshes() const {
+        std::vector<VisibleMesh> result;
+        for (const auto& node : nodes_) {
+            if (node->type == NodeType::MESH && isNodeEffectivelyVisible(node->id) && node->mesh) {
+                result.push_back({node->mesh.get(), getWorldTransform(node->id)});
+            }
+        }
+        return result;
+    }
+
     size_t Scene::getTotalGaussianCount() const {
         size_t total = 0;
         for (const auto& node : nodes_) {
@@ -604,7 +614,7 @@ namespace lfs::core {
         cached_transforms_.clear();
         for (const auto& node : nodes_) {
             // Include both SPLAT nodes (with model) and POINTCLOUD nodes (with point_cloud)
-            const bool has_renderable = node->model || node->point_cloud;
+            const bool has_renderable = node->model || node->point_cloud || node->mesh;
             if (has_renderable && isNodeEffectivelyVisible(node->id)) {
                 cached_transforms_.push_back(getWorldTransform(node->id));
             }
