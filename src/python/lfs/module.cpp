@@ -804,6 +804,15 @@ NB_MODULE(lichtfeld, m) {
         nb::arg("name"), nb::arg("visible"), "Set visibility of a scene node by name");
 
     m.def(
+        "set_camera_training_enabled", [](const std::string& name, bool enabled) {
+            auto* scene = get_scene_internal();
+            if (!scene)
+                return;
+            scene->setCameraTrainingEnabled(name, enabled);
+        },
+        nb::arg("name"), nb::arg("enabled"), "Enable or disable a camera for training by name");
+
+    m.def(
         "remove_node", [](const std::string& name, bool keep_children) {
             lfs::core::events::cmd::RemovePLY{.name = name, .keep_children = keep_children}.emit();
         },
@@ -818,6 +827,22 @@ NB_MODULE(lichtfeld, m) {
                 .emit();
         },
         nb::arg("name"), "Select a scene node by name");
+
+    m.def(
+        "add_to_selection", [](const std::string& name) {
+            auto* sm = lfs::python::get_scene_manager();
+            if (sm)
+                sm->addToSelection(name);
+        },
+        nb::arg("name"), "Add a node to the current selection");
+
+    m.def(
+        "select_nodes", [](const std::vector<std::string>& names) {
+            auto* sm = lfs::python::get_scene_manager();
+            if (sm)
+                sm->selectNodes(names);
+        },
+        nb::arg("names"), "Select multiple nodes at once");
 
     m.def(
         "deselect_all", []() {

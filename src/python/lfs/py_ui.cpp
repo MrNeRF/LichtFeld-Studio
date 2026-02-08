@@ -2011,6 +2011,8 @@ namespace lfs::python {
             flags |= ImGuiTreeNodeFlags_Leaf;
         if (flags_str.find("NoTreePushOnOpen") != std::string::npos)
             flags |= ImGuiTreeNodeFlags_NoTreePushOnOpen;
+        if (flags_str.find("Selected") != std::string::npos)
+            flags |= ImGuiTreeNodeFlags_Selected;
         return ImGui::TreeNodeEx(label.c_str(), flags);
     }
 
@@ -3458,6 +3460,16 @@ namespace lfs::python {
             "is_key_down",
             [](ImGuiKey key) { return ImGui::IsKeyDown(key); },
             nb::arg("key"), "Check if a key is currently held down");
+
+        m.def(
+            "is_ctrl_down",
+            []() { return ImGui::GetIO().KeyCtrl; },
+            "Check if Ctrl is currently held");
+
+        m.def(
+            "is_shift_down",
+            []() { return ImGui::GetIO().KeyShift; },
+            "Check if Shift is currently held");
 
         // Localization
         m.def(

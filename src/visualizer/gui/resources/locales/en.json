@@ -279,7 +279,13 @@
     "no_groups_available": "No groups available",
     "delete_node": "Delete",
     "cannot_delete_training": "Cannot delete while training is in progress",
-    "background": "Background"
+    "background": "Background",
+    "enable_for_training": "Enable for Training",
+    "disable_for_training": "Disable for Training",
+    "enable_all_training": "Enable All for Training",
+    "disable_all_training": "Disable All for Training",
+    "training_enabled_tooltip": "Included in training",
+    "training_disabled_tooltip": "Excluded from training"
   },
 
   "export": {

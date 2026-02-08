@@ -1297,6 +1297,12 @@ def is_key_pressed(key: Key, repeat: bool = True) -> bool:
 def is_key_down(key: Key) -> bool:
     """Check if a key is currently held down"""
 
+def is_ctrl_down() -> bool:
+    """Check if Ctrl is currently held"""
+
+def is_shift_down() -> bool:
+    """Check if Shift is currently held"""
+
 @overload
 def tr(key: str) -> str:
     """Get localized string by key"""

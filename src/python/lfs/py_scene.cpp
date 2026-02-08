@@ -23,6 +23,8 @@ namespace lfs::python {
                                  "Node visibility")
                 .animatable_prop(&vis::SceneNode::locked, "locked", "Locked", false,
                                  "Lock node from editing")
+                .bool_prop(&vis::SceneNode::training_enabled, "training_enabled", "Training Enabled",
+                           true, "Include camera in training dataset")
                 .build();
         }
 
@@ -366,6 +368,16 @@ namespace lfs::python {
         std::vector<PySceneNode> result;
         for (const auto* node : scene_->getVisibleNodes()) {
             result.emplace_back(const_cast<vis::SceneNode*>(node), scene_);
+        }
+        return result;
+    }
+
+    std::vector<PySceneNode> PyScene::get_active_cameras() {
+        std::vector<PySceneNode> result;
+        for (const auto* node : scene_->getNodes()) {
+            if (node->type == vis::NodeType::CAMERA && node->camera && node->training_enabled) {
+                result.emplace_back(const_cast<vis::SceneNode*>(node), scene_);
+            }
         }
         return result;
     }
@@ -797,6 +809,10 @@ Returns:
             .def("update_selection_group_counts", &PyScene::update_selection_group_counts, "Recompute selection counts for all groups")
             .def("clear_selection_group", &PyScene::clear_selection_group, nb::arg("id"), "Clear all selections in a group")
             .def("reset_selection_state", &PyScene::reset_selection_state, "Reset all selection state to defaults")
+            // Camera training control
+            .def("set_camera_training_enabled", &PyScene::set_camera_training_enabled, nb::arg("name"), nb::arg("enabled"), "Enable or disable a camera for training by name")
+            .def_prop_ro("active_camera_count", &PyScene::active_camera_count, "Number of cameras enabled for training")
+            .def("get_active_cameras", &PyScene::get_active_cameras, "Get camera nodes enabled for training")
             // Training data
             .def("has_training_data", &PyScene::has_training_data, "Check if training dataset is loaded")
             .def_prop_ro("scene_center", &PyScene::scene_center, "Scene center position as a [3] tensor")

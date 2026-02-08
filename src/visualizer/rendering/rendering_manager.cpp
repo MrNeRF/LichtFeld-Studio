@@ -1482,10 +1482,14 @@ namespace lfs::vis {
             auto letterbox_viewport = viewport_data;
             letterbox_viewport.size = render_size;
 
+            const auto disabled_uids = scene_manager->getScene().getTrainingDisabledCameraUids();
+            const bool cam_disabled = current_camera_id_ >= 0 && disabled_uids.count(current_camera_id_) > 0;
+            std::string gt_label = cam_disabled ? "Ground Truth (Excluded from Training)" : "Ground Truth";
+
             return lfs::rendering::SplitViewRequest{
                 .panels = {{.content_type = lfs::rendering::PanelContentType::Image2D,
                             .texture_id = gt_context_->gt_texture_id,
-                            .label = "Ground Truth",
+                            .label = std::move(gt_label),
                             .start_position = 0.0f,
                             .end_position = settings_.split_position},
                            {.content_type = lfs::rendering::PanelContentType::CachedRender,
@@ -1722,6 +1726,15 @@ namespace lfs::vis {
                 LOG_TRACE("Rendering {} camera frustums with scale {}, highlighted index: {} (ID: {})",
                           cameras.size(), settings_.camera_frustum_scale, highlight_index, hovered_camera_id_);
 
+                auto disabled_uids = context.scene_manager->getScene().getTrainingDisabledCameraUids();
+
+                std::unordered_set<int> selected_uids;
+                for (const auto& name : context.scene_manager->getSelectedNodeNames()) {
+                    const auto* node = context.scene_manager->getScene().getNode(name);
+                    if (node && node->type == NodeType::CAMERA && node->camera_uid >= 0)
+                        selected_uids.insert(node->camera_uid);
+                }
+
                 auto frustum_result = engine_->renderCameraFrustumsWithHighlight(
                     cameras, viewport,
                     settings_.camera_frustum_scale,
@@ -1729,7 +1742,9 @@ namespace lfs::vis {
                     settings_.eval_camera_color,
                     highlight_index,
                     scene_transform,
-                    settings_.equirectangular);
+                    settings_.equirectangular,
+                    disabled_uids,
+                    selected_uids);
 
                 if (!frustum_result) {
                     LOG_ERROR("Failed to render camera frustums: {}", frustum_result.error());

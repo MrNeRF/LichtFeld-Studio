@@ -279,7 +279,13 @@
     "no_groups_available": "Geen groepen beschikbaar",
     "delete_node": "Verwijderen",
     "cannot_delete_training": "Kan niet verwijderen tijdens training",
-    "background": "Achtergrond"
+    "background": "Achtergrond",
+    "enable_for_training": "Inschakelen voor training",
+    "disable_for_training": "Uitschakelen voor training",
+    "enable_all_training": "Alles inschakelen voor training",
+    "disable_all_training": "Alles uitschakelen voor training",
+    "training_enabled_tooltip": "Opgenomen in training",
+    "training_disabled_tooltip": "Uitgesloten van training"
   },
 
   "export": {

@@ -7,6 +7,8 @@ flat in int g_instanceID;
 flat in uint g_textureID;
 flat in uint g_isValidation;
 flat in uint g_isEquirectangular;
+flat in uint g_isTrainingDisabled;
+flat in uint g_isSelected;
 
 out vec4 FragColor;
 
@@ -14,6 +16,7 @@ uniform vec3 viewPos;
 uniform int highlightIndex = -1;
 uniform vec3 trainHighlightColor = vec3(1.0, 0.55, 0.0);
 uniform vec3 valHighlightColor = vec3(0.9, 0.75, 0.0);
+uniform vec3 selectionColor = vec3(1.0, 0.55, 0.0);
 uniform bool pickingMode = false;
 uniform float minimumPickDistance = 0.5;
 uniform bool showImages = false;
@@ -35,9 +38,18 @@ void main() {
         vec4 imageColor = texture(cameraTextures, vec3(g_TexCoord, float(g_textureID - 1u)));
         vec4 finalColor = vec4(imageColor.rgb, imageOpacity);
 
+        if (g_isSelected > 0u) {
+            finalColor.rgb = mix(finalColor.rgb, selectionColor, 0.4);
+        }
+
         if (g_instanceID == highlightIndex) {
             vec3 highlightTint = (g_isValidation > 0u) ? valHighlightColor : trainHighlightColor;
             finalColor.rgb = mix(finalColor.rgb, highlightTint, 0.3);
+        }
+
+        if (g_isTrainingDisabled > 0u) {
+            finalColor.rgb = mix(finalColor.rgb, vec3(0.5), 0.5);
+            finalColor.a *= 0.5;
         }
 
         FragColor = finalColor;
@@ -47,10 +59,22 @@ void main() {
     // Wireframe: use vertex color (contains per-camera color with alpha)
     vec4 finalColor = g_vertexColor;
 
+    if (g_isSelected > 0u) {
+        finalColor.rgb = selectionColor;
+        finalColor.a = min(1.0, finalColor.a + 0.4);
+    }
+
     // Apply highlight when hovered - different color for train vs validation
     if (g_instanceID == highlightIndex) {
         finalColor.rgb = (g_isValidation > 0u) ? valHighlightColor : trainHighlightColor;
         finalColor.a = min(1.0, finalColor.a + 0.3);
+    }
+
+    if (g_isTrainingDisabled > 0u) {
+        if (mod(gl_FragCoord.x + gl_FragCoord.y, 8.0) < 4.0)
+            discard;
+        finalColor.rgb = mix(finalColor.rgb, vec3(0.5), 0.5);
+        finalColor.a *= 0.5;
     }
 
     FragColor = finalColor;

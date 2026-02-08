@@ -279,7 +279,13 @@
     "no_groups_available": "利用可能なグループがありません",
     "delete_node": "削除",
     "cannot_delete_training": "トレーニング中は削除できません",
-    "background": "背景"
+    "background": "背景",
+    "enable_for_training": "トレーニングに含める",
+    "disable_for_training": "トレーニングから除外",
+    "enable_all_training": "すべてをトレーニングに含める",
+    "disable_all_training": "すべてをトレーニングから除外",
+    "training_enabled_tooltip": "トレーニングに含まれています",
+    "training_disabled_tooltip": "トレーニングから除外されています"
   },
 
   "export": {

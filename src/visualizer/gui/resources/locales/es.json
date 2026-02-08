@@ -279,7 +279,13 @@
     "no_groups_available": "No hay grupos disponibles",
     "delete_node": "Eliminar",
     "cannot_delete_training": "No se puede eliminar mientras el entrenamiento está en progreso",
-    "background": "Fondo"
+    "background": "Fondo",
+    "enable_for_training": "Activar para entrenamiento",
+    "disable_for_training": "Desactivar para entrenamiento",
+    "enable_all_training": "Activar todos para entrenamiento",
+    "disable_all_training": "Desactivar todos para entrenamiento",
+    "training_enabled_tooltip": "Incluido en el entrenamiento",
+    "training_disabled_tooltip": "Excluido del entrenamiento"
   },
 
   "export": {

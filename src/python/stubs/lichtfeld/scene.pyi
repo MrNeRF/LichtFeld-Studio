@@ -574,6 +574,16 @@ class Scene:
     def reset_selection_state(self) -> None:
         """Reset all selection state to defaults"""
 
+    def set_camera_training_enabled(self, name: str, enabled: bool) -> None:
+        """Enable or disable a camera for training by name"""
+
+    @property
+    def active_camera_count(self) -> int:
+        """Number of cameras enabled for training"""
+
+    def get_active_cameras(self) -> list[SceneNode]:
+        """Get camera nodes enabled for training"""
+
     def has_training_data(self) -> bool:
         """Check if training dataset is loaded"""
 

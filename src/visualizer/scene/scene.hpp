@@ -126,6 +126,8 @@ namespace lfs::vis {
         lfs::core::prop::AnimatableProperty<bool> visible{true};
         lfs::core::prop::AnimatableProperty<bool> locked{false};
 
+        bool training_enabled = true;
+
         // Legacy accessor
         [[nodiscard]] const glm::mat4& transform() const { return local_transform.get(); }
 
@@ -323,6 +325,9 @@ namespace lfs::vis {
         // Camera access (iterates CAMERA nodes)
         [[nodiscard]] std::shared_ptr<const lfs::core::Camera> getCameraByUid(int uid) const;
         [[nodiscard]] std::vector<std::shared_ptr<lfs::core::Camera>> getAllCameras() const;
+        [[nodiscard]] std::vector<std::shared_ptr<lfs::core::Camera>> getActiveCameras() const;
+        [[nodiscard]] size_t getActiveCameraCount() const;
+        void setCameraTrainingEnabled(const std::string& name, bool enabled);
 
         // Get the primary training model node (for Trainer to operate on)
         // Returns nullptr if no training model exists
@@ -350,6 +355,9 @@ namespace lfs::vis {
         // Get visible cameras (for frustum rendering)
         // Returns Camera objects from visible CAMERA nodes
         [[nodiscard]] std::vector<std::shared_ptr<const lfs::core::Camera>> getVisibleCameras() const;
+
+        // Get UIDs of cameras with training disabled (for frustum rendering dimming)
+        [[nodiscard]] std::unordered_set<int> getTrainingDisabledCameraUids() const;
 
         // Mark scene data as changed (e.g., after modifying a node's deleted mask)
         // Also called by SceneNode Observable properties when they change

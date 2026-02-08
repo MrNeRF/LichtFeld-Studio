@@ -464,7 +464,7 @@ namespace lfs::training {
             // Get source cameras from Scene nodes or base_dataset_
             std::vector<std::shared_ptr<lfs::core::Camera>> source_cameras;
             if (scene_) {
-                source_cameras = scene_->getAllCameras();
+                source_cameras = scene_->getActiveCameras();
                 if (source_cameras.empty()) {
                     return std::unexpected("Scene has no cameras");
                 }

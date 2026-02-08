@@ -12,6 +12,8 @@ flat in uint textureID[];
 flat in uint isValidation[];
 flat in uint isEquirectangular[];
 flat in int equiView[];
+flat in uint isTrainingDisabled[];
+flat in uint isSelected[];
 
 out vec3 g_FragPos;
 out vec4 g_vertexColor;
@@ -20,6 +22,8 @@ flat out int g_instanceID;
 flat out uint g_textureID;
 flat out uint g_isValidation;
 flat out uint g_isEquirectangular;
+flat out uint g_isTrainingDisabled;
+flat out uint g_isSelected;
 
 void main() {
     if (equiView[0] == 1 && abs(ndcX[0] - ndcX[1]) > 1.0)
@@ -34,6 +38,8 @@ void main() {
         g_textureID = textureID[i];
         g_isValidation = isValidation[i];
         g_isEquirectangular = isEquirectangular[i];
+        g_isTrainingDisabled = isTrainingDisabled[i];
+        g_isSelected = isSelected[i];
         EmitVertex();
     }
     EndPrimitive();

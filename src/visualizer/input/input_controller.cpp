@@ -896,7 +896,7 @@ namespace lfs::vis {
                 bound_action == input::Action::CAMERA_PREV_VIEW) {
                 const auto* trainer = services().trainerOrNull();
                 if (trainer) {
-                    const int num_cams = static_cast<int>(trainer->getCamList().size());
+                    const int num_cams = static_cast<int>(trainer->getAllCamList().size());
                     if (num_cams > 0) {
                         const int delta = (bound_action == input::Action::CAMERA_NEXT_VIEW) ? 1 : -1;
                         last_camview_ = (last_camview_ < 0)

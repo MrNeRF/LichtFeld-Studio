@@ -423,6 +423,16 @@ namespace lfs::vis {
         return result;
     }
 
+    std::unordered_set<int> Scene::getTrainingDisabledCameraUids() const {
+        std::unordered_set<int> result;
+        for (const auto& node : nodes_) {
+            if (node->type == NodeType::CAMERA && node->camera && !node->training_enabled) {
+                result.insert(node->camera->uid());
+            }
+        }
+        return result;
+    }
+
     const Scene::Node* Scene::getNode(const std::string& name) const {
         auto it = std::find_if(nodes_.begin(), nodes_.end(),
                                [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
@@ -2009,6 +2019,33 @@ namespace lfs::vis {
             }
         }
         return result;
+    }
+
+    std::vector<std::shared_ptr<lfs::core::Camera>> Scene::getActiveCameras() const {
+        std::vector<std::shared_ptr<lfs::core::Camera>> result;
+        for (const auto& node : nodes_) {
+            if (node->type == NodeType::CAMERA && node->camera && node->training_enabled) {
+                result.push_back(node->camera);
+            }
+        }
+        return result;
+    }
+
+    size_t Scene::getActiveCameraCount() const {
+        size_t count = 0;
+        for (const auto& node : nodes_) {
+            if (node->type == NodeType::CAMERA && node->camera && node->training_enabled) {
+                ++count;
+            }
+        }
+        return count;
+    }
+
+    void Scene::setCameraTrainingEnabled(const std::string& name, bool enabled) {
+        auto* node = getMutableNode(name);
+        if (node && node->type == NodeType::CAMERA) {
+            node->training_enabled = enabled;
+        }
     }
 
     void Scene::setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp,

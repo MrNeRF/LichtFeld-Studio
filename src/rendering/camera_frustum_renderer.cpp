@@ -285,14 +285,18 @@ namespace lfs::rendering {
         const glm::vec3& eval_color,
         const bool for_picking,
         const glm::vec3& view_position,
-        const glm::mat4& scene_transform) {
+        const glm::mat4& scene_transform,
+        const std::unordered_set<int>& disabled_uids,
+        const std::unordered_set<int>& selected_uids) {
 
         const bool needs_regeneration =
             cached_instances_.size() != cameras.size() ||
             last_scale_ != scale ||
             last_train_color_ != train_color ||
             last_eval_color_ != eval_color ||
-            last_scene_transform_ != scene_transform;
+            last_scene_transform_ != scene_transform ||
+            last_disabled_uids_ != disabled_uids ||
+            last_selected_uids_ != selected_uids;
 
         if (!needs_regeneration && !cached_instances_.empty()) {
             updateInstanceVisibility(view_position);
@@ -363,7 +367,12 @@ namespace lfs::rendering {
                 }
             }
 
-            cached_instances_.push_back({model, color, alpha, 0, is_validation ? 1u : 0u, is_equirect ? 1u : 0u, 0});
+            const bool is_disabled = disabled_uids.count(cam->uid()) > 0;
+            if (is_disabled)
+                alpha *= 0.4f;
+
+            const bool is_selected = selected_uids.count(cam->uid()) > 0;
+            cached_instances_.push_back({model, color, alpha, 0, is_validation ? 1u : 0u, is_equirect ? 1u : 0u, is_disabled ? 1u : 0u, is_selected ? 1u : 0u});
             camera_ids_.push_back(cam->uid());
         }
 
@@ -372,6 +381,8 @@ namespace lfs::rendering {
         last_eval_color_ = eval_color;
         last_view_position_ = view_position;
         last_scene_transform_ = scene_transform;
+        last_disabled_uids_ = disabled_uids;
+        last_selected_uids_ = selected_uids;
     }
 
     void CameraFrustumRenderer::updateInstanceVisibility(const glm::vec3& view_position) {
@@ -407,7 +418,9 @@ namespace lfs::rendering {
         const glm::vec3& train_color,
         const glm::vec3& eval_color,
         const glm::mat4& scene_transform,
-        const bool equirectangular_view) {
+        const bool equirectangular_view,
+        const std::unordered_set<int>& disabled_uids,
+        const std::unordered_set<int>& selected_uids) {
 
         if (!initialized_ || cameras.empty())
             return {};
@@ -415,7 +428,7 @@ namespace lfs::rendering {
         uploadReadyThumbnails();
 
         const glm::vec3 view_position = glm::vec3(glm::inverse(view)[3]);
-        prepareInstances(cameras, scale, train_color, eval_color, false, view_position, scene_transform);
+        prepareInstances(cameras, scale, train_color, eval_color, false, view_position, scene_transform, disabled_uids, selected_uids);
 
         if (cached_instances_.empty())
             return {};
@@ -479,10 +492,20 @@ namespace lfs::rendering {
             glVertexAttribIPointer(9, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
                                    reinterpret_cast<void*>(offsetof(InstanceData, is_equirectangular)));
             glVertexAttribDivisor(9, 1);
+
+            glEnableVertexAttribArray(10);
+            glVertexAttribIPointer(10, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
+                                   reinterpret_cast<void*>(offsetof(InstanceData, is_training_disabled)));
+            glVertexAttribDivisor(10, 1);
+
+            glEnableVertexAttribArray(11);
+            glVertexAttribIPointer(11, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
+                                   reinterpret_cast<void*>(offsetof(InstanceData, is_selected)));
+            glVertexAttribDivisor(11, 1);
         };
 
         const auto cleanupInstanceAttributes = []() {
-            for (int i = 2; i <= 9; ++i) {
+            for (int i = 2; i <= 11; ++i) {
                 glDisableVertexAttribArray(i);
                 glVertexAttribDivisor(i, 0);
             }
@@ -679,10 +702,20 @@ namespace lfs::rendering {
             glVertexAttribIPointer(9, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
                                    reinterpret_cast<void*>(offsetof(InstanceData, is_equirectangular)));
             glVertexAttribDivisor(9, 1);
+
+            glEnableVertexAttribArray(10);
+            glVertexAttribIPointer(10, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
+                                   reinterpret_cast<void*>(offsetof(InstanceData, is_training_disabled)));
+            glVertexAttribDivisor(10, 1);
+
+            glEnableVertexAttribArray(11);
+            glVertexAttribIPointer(11, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
+                                   reinterpret_cast<void*>(offsetof(InstanceData, is_selected)));
+            glVertexAttribDivisor(11, 1);
         };
 
         const auto cleanupPickingAttributes = []() {
-            for (int i = 2; i <= 9; ++i) {
+            for (int i = 2; i <= 11; ++i) {
                 glDisableVertexAttribArray(i);
                 glVertexAttribDivisor(i, 0);
             }

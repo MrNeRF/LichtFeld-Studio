@@ -279,7 +279,13 @@
     "no_groups_available": "사용 가능한 그룹이 없습니다",
     "delete_node": "삭제",
     "cannot_delete_training": "훈련 중에는 삭제할 수 없습니다",
-    "background": "배경"
+    "background": "배경",
+    "enable_for_training": "훈련에 포함",
+    "disable_for_training": "훈련에서 제외",
+    "enable_all_training": "모두 훈련에 포함",
+    "disable_all_training": "모두 훈련에서 제외",
+    "training_enabled_tooltip": "훈련에 포함됨",
+    "training_disabled_tooltip": "훈련에서 제외됨"
   },
 
   "export": {

@@ -273,11 +273,20 @@ def trainer_current_loss() -> float:
 def set_node_visibility(name: str, visible: bool) -> None:
     """Set visibility of a scene node by name"""
 
+def set_camera_training_enabled(name: str, enabled: bool) -> None:
+    """Enable or disable a camera for training by name"""
+
 def remove_node(name: str, keep_children: bool = False) -> None:
     """Remove a scene node by name"""
 
 def select_node(name: str) -> None:
     """Select a scene node by name"""
+
+def add_to_selection(name: str) -> None:
+    """Add a node to the current selection"""
+
+def select_nodes(names: Sequence[str]) -> None:
+    """Select multiple nodes at once"""
 
 def deselect_all() -> None:
     """Deselect all scene nodes"""

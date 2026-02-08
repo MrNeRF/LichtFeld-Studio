@@ -609,16 +609,18 @@ namespace lfs::rendering {
         const glm::vec3& train_color,
         const glm::vec3& eval_color,
         const glm::mat4& scene_transform,
-        bool equirectangular_view) {
+        bool equirectangular_view,
+        const std::unordered_set<int>& disabled_uids,
+        const std::unordered_set<int>& selected_uids) {
 
         if (!camera_frustum_renderer_.isInitialized()) {
-            return {}; // Silent fail if not initialized
+            return {};
         }
 
         auto view = createViewMatrix(viewport);
         auto proj = createProjectionMatrix(viewport);
 
-        return camera_frustum_renderer_.render(cameras, view, proj, scale, train_color, eval_color, scene_transform, equirectangular_view);
+        return camera_frustum_renderer_.render(cameras, view, proj, scale, train_color, eval_color, scene_transform, equirectangular_view, disabled_uids, selected_uids);
     }
 
     Result<void> RenderingEngineImpl::renderCameraFrustumsWithHighlight(
@@ -629,19 +631,20 @@ namespace lfs::rendering {
         const glm::vec3& eval_color,
         int highlight_index,
         const glm::mat4& scene_transform,
-        bool equirectangular_view) {
+        bool equirectangular_view,
+        const std::unordered_set<int>& disabled_uids,
+        const std::unordered_set<int>& selected_uids) {
 
         if (!camera_frustum_renderer_.isInitialized()) {
-            return {}; // Silent fail if not initialized
+            return {};
         }
 
-        // Set the highlight before rendering
         camera_frustum_renderer_.setHighlightedCamera(highlight_index);
 
         auto view = createViewMatrix(viewport);
         auto proj = createProjectionMatrix(viewport);
 
-        return camera_frustum_renderer_.render(cameras, view, proj, scale, train_color, eval_color, scene_transform, equirectangular_view);
+        return camera_frustum_renderer_.render(cameras, view, proj, scale, train_color, eval_color, scene_transform, equirectangular_view, disabled_uids, selected_uids);
     }
 
     Result<int> RenderingEngineImpl::pickCameraFrustum(

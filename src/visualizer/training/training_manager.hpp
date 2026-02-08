@@ -112,6 +112,7 @@ namespace lfs::vis {
         // Camera access
         std::shared_ptr<const lfs::core::Camera> getCamById(int camId) const;
         std::vector<std::shared_ptr<lfs::core::Camera>> getCamList() const;
+        std::vector<std::shared_ptr<lfs::core::Camera>> getAllCamList() const;
 
         // Pending parameters (editable in Ready state, applied on start)
         lfs::core::param::OptimizationParameters& getEditableOptParams() { return pending_opt_params_; }
