@@ -2043,8 +2043,10 @@ namespace lfs::vis {
 
     void Scene::setCameraTrainingEnabled(const std::string& name, bool enabled) {
         auto* node = getMutableNode(name);
-        if (node && node->type == NodeType::CAMERA) {
+        if (node && node->type == NodeType::CAMERA && node->training_enabled != enabled) {
             node->training_enabled = enabled;
+            invalidateCache();
+            core::events::state::SceneChanged{}.emit();
         }
     }
 

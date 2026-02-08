@@ -111,7 +111,7 @@ def get_hovered_gaussian_id() -> int:
 class PickResult:
     @property
     def index(self) -> int:
-        """Gaussian index (-1 if background)"""
+        """Gaussian index at current cursor position (-1 if unavailable)"""
 
     @property
     def depth(self) -> float:
@@ -123,7 +123,7 @@ class PickResult:
 
 def pick_at_screen(screen_x: float, screen_y: float) -> PickResult | None:
     """
-    Pick at screen coordinates, returns PickResult with depth, world_position, and gaussian index
+    Pick at screen coordinates. Returns PickResult with depth and world_position at the given coords. The index field reflects the gaussian under the current cursor, not the queried coordinates.
     """
 
 def get_active_group() -> int:

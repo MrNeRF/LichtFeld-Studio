@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 #include "python/python_runtime.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace lfs::python {

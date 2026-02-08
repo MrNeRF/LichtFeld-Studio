@@ -409,7 +409,7 @@ namespace lfs::python {
         };
 
         nb::class_<PyPickResult>(sel, "PickResult")
-            .def_ro("index", &PyPickResult::index, "Gaussian index (-1 if background)")
+            .def_ro("index", &PyPickResult::index, "Gaussian index at current cursor position (-1 if unavailable)")
             .def_ro("depth", &PyPickResult::depth, "Camera-space depth")
             .def_ro("world_position", &PyPickResult::world_position, "Hit point in world coordinates");
 
@@ -456,7 +456,8 @@ namespace lfs::python {
                     depth,
                     {world_pos.x, world_pos.y, world_pos.z}};
             },
-            nb::arg("screen_x"), nb::arg("screen_y"), "Pick at screen coordinates, returns PickResult with depth, world_position, and gaussian index");
+            nb::arg("screen_x"), nb::arg("screen_y"), "Pick at screen coordinates. Returns PickResult with depth and world_position at the given coords. "
+                                                      "The index field reflects the gaussian under the current cursor, not the queried coordinates.");
 
         // ─────────────────────────────────────────────────────────────────────
         // SELECTION GROUPS
