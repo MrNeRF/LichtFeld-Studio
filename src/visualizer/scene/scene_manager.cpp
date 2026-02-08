@@ -728,6 +728,47 @@ namespace lfs::vis {
             }
         }
 
+        glm::mat4 cam_scene_transform(1.0f);
+        auto visible_transforms = scene_.getVisibleNodeTransforms();
+        if (!visible_transforms.empty())
+            cam_scene_transform = visible_transforms[0];
+
+        for (const auto* node : scene_.getNodes()) {
+            if (node->type != NodeType::CAMERA || !node->camera)
+                continue;
+            if (!scene_.isNodeEffectivelyVisible(node->id))
+                continue;
+
+            auto R_tensor = node->camera->R();
+            auto T_tensor = node->camera->T();
+            if (!R_tensor.is_valid() || !T_tensor.is_valid())
+                continue;
+
+            if (R_tensor.device() != lfs::core::Device::CPU)
+                R_tensor = R_tensor.cpu();
+            if (T_tensor.device() != lfs::core::Device::CPU)
+                T_tensor = T_tensor.cpu();
+
+            glm::mat4 w2c(1.0f);
+            auto R_acc = R_tensor.accessor<float, 2>();
+            auto T_acc = T_tensor.accessor<float, 1>();
+            for (int i = 0; i < 3; ++i) {
+                for (int j = 0; j < 3; ++j)
+                    w2c[j][i] = R_acc(i, j);
+                w2c[3][i] = T_acc(i);
+            }
+            const glm::vec3 cam_pos = glm::vec3((cam_scene_transform * glm::inverse(w2c))[3]);
+
+            const glm::vec2 screen_pos = projectToScreen(cam_pos);
+            if (screen_pos.x <= BEHIND_CAMERA + 1e5f)
+                continue;
+
+            if (screen_pos.x >= rect_min.x && screen_pos.x <= rect_max.x &&
+                screen_pos.y >= rect_min.y && screen_pos.y <= rect_max.y) {
+                result.push_back(node->name);
+            }
+        }
+
         return result;
     }
 

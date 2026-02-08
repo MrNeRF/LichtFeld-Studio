@@ -615,13 +615,17 @@ namespace lfs::vis {
                             scene_manager->clearSelection();
                         }
                     } else {
-                        // Rectangle selection
+                        // Rectangle selection — convert window coords to viewport-local
+                        glm::vec2 vp_offset(0.0f);
+                        if (auto* gm = services().guiOrNull())
+                            vp_offset = glm::vec2(gm->getViewportPos().x, gm->getViewportPos().y);
+
                         const glm::vec2 rect_min(
-                            std::min(node_rect_start_.x, node_rect_end_.x),
-                            std::min(node_rect_start_.y, node_rect_end_.y));
+                            std::min(node_rect_start_.x, node_rect_end_.x) - vp_offset.x,
+                            std::min(node_rect_start_.y, node_rect_end_.y) - vp_offset.y);
                         const glm::vec2 rect_max(
-                            std::max(node_rect_start_.x, node_rect_end_.x),
-                            std::max(node_rect_start_.y, node_rect_end_.y));
+                            std::max(node_rect_start_.x, node_rect_end_.x) - vp_offset.x,
+                            std::max(node_rect_start_.y, node_rect_end_.y) - vp_offset.y);
 
                         const std::vector<std::string> picked_nodes = scene_manager->pickNodesInScreenRect(
                             rect_min, rect_max,
