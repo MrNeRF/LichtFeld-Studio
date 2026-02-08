@@ -4,6 +4,7 @@
 
 #include "rendering_engine_impl.hpp"
 #include "core/logger.hpp"
+#include "core/mesh_data.hpp"
 #include "core/point_cloud.hpp"
 #include "framebuffer_factory.hpp"
 #include "geometry/bounding_box.hpp"
@@ -92,10 +93,22 @@ namespace lfs::rendering {
             LOG_DEBUG("Camera frustum renderer initialized");
         }
 
+        if (auto result = mesh_renderer_.initialize(); !result) {
+            LOG_ERROR("Failed to initialize mesh renderer: {}", result.error());
+        } else {
+            LOG_DEBUG("Mesh renderer initialized");
+        }
+
+        if (auto result = depth_compositor_.initialize(); !result) {
+            LOG_ERROR("Failed to initialize depth compositor: {}", result.error());
+        } else {
+            LOG_DEBUG("Depth compositor initialized");
+        }
+
         auto shader_result = initializeShaders();
         if (!shader_result) {
             LOG_ERROR("Failed to initialize shaders: {}", shader_result.error());
-            shutdown(); // Clean up partial initialization
+            shutdown();
             return std::unexpected(shader_result.error());
         }
 
@@ -770,6 +783,75 @@ namespace lfs::rendering {
         }
         LOG_DEBUG("Created coordinate axes renderer");
         return axes;
+    }
+
+    Result<void> RenderingEngineImpl::renderMesh(
+        const lfs::core::MeshData& mesh,
+        const ViewportData& viewport,
+        const glm::mat4& model_transform) {
+
+        if (!mesh_renderer_.isInitialized())
+            return std::unexpected("Mesh renderer not initialized");
+
+        mesh_renderer_.resize(viewport.size.x, viewport.size.y);
+
+        glm::mat4 view = createViewMatrix(viewport);
+        glm::mat4 projection = createProjectionMatrix(viewport);
+        glm::vec3 camera_pos = -glm::transpose(glm::mat3(view)) * glm::vec3(view[3]);
+
+        MeshRenderOptions opts;
+        auto result = mesh_renderer_.render(mesh, model_transform, view, projection, camera_pos, opts);
+        if (result) {
+            mesh_rendered_this_frame_ = true;
+        }
+        return result;
+    }
+
+    unsigned int RenderingEngineImpl::getMeshColorTexture() const {
+        return mesh_renderer_.getColorTexture();
+    }
+
+    unsigned int RenderingEngineImpl::getMeshDepthTexture() const {
+        return mesh_renderer_.getDepthTexture();
+    }
+
+    bool RenderingEngineImpl::hasMeshRender() const {
+        return mesh_rendered_this_frame_ && mesh_renderer_.isInitialized();
+    }
+
+    Result<void> RenderingEngineImpl::compositeMeshAndSplat(
+        const RenderResult& splat_result,
+        const glm::ivec2& viewport_size) {
+
+        if (!depth_compositor_.isInitialized())
+            return std::unexpected("Depth compositor not initialized");
+
+        if (!mesh_rendered_this_frame_)
+            return {};
+
+        GLuint splat_color = 0;
+        GLuint splat_depth = 0;
+
+        if (splat_result.image && splat_result.image->is_valid()) {
+            if (splat_result.external_depth_texture) {
+                splat_depth = splat_result.external_depth_texture;
+            }
+        }
+
+        if (splat_color == 0 || splat_depth == 0) {
+            return {};
+        }
+
+        auto result = depth_compositor_.composite(
+            splat_color, splat_depth,
+            mesh_renderer_.getColorTexture(),
+            mesh_renderer_.getDepthTexture(),
+            viewport_size,
+            splat_result.near_plane,
+            splat_result.far_plane);
+
+        mesh_rendered_this_frame_ = false;
+        return result;
     }
 
 } // namespace lfs::rendering

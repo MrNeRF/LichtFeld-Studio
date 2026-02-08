@@ -22,6 +22,8 @@ set(RENDERING_SOURCES
         screen_renderer.cpp
         split_view_renderer.cpp
         camera_frustum_renderer.cpp
+        mesh_renderer.cpp
+        depth_compositor.cpp
 )
 
 # Conditionally add CUDA GL interop

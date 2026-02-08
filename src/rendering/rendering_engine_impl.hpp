@@ -7,8 +7,10 @@
 #include "axes_renderer.hpp"
 #include "bbox_renderer.hpp"
 #include "camera_frustum_renderer.hpp"
+#include "depth_compositor.hpp"
 #include "ellipsoid_renderer.hpp"
 #include "grid_renderer.hpp"
+#include "mesh_renderer.hpp"
 #include "pivot_renderer.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering_pipeline.hpp"
@@ -38,6 +40,19 @@ namespace lfs::rendering {
 
         Result<RenderResult> renderSplitView(
             const SplitViewRequest& request) override;
+
+        Result<void> renderMesh(
+            const lfs::core::MeshData& mesh,
+            const ViewportData& viewport,
+            const glm::mat4& model_transform = glm::mat4(1.0f)) override;
+
+        unsigned int getMeshColorTexture() const override;
+        unsigned int getMeshDepthTexture() const override;
+        bool hasMeshRender() const override;
+
+        Result<void> compositeMeshAndSplat(
+            const RenderResult& splat_result,
+            const glm::ivec2& viewport_size) override;
 
         Result<void> presentToScreen(
             const RenderResult& result,
@@ -155,6 +170,11 @@ namespace lfs::rendering {
         ViewportGizmo viewport_gizmo_;
         CameraFrustumRenderer camera_frustum_renderer_;
         RenderPivotPoint pivot_renderer_;
+
+        // Mesh rendering
+        MeshRenderer mesh_renderer_;
+        DepthCompositor depth_compositor_;
+        bool mesh_rendered_this_frame_ = false;
 
         // Shaders
         ManagedShader quad_shader_;

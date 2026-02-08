@@ -19,6 +19,7 @@
 namespace lfs::core {
     class SplatData;
     struct PointCloud;
+    struct MeshData;
     class Camera;
     class Tensor;
 } // namespace lfs::core
@@ -323,6 +324,21 @@ namespace lfs::rendering {
         // Split view rendering
         virtual Result<RenderResult> renderSplitView(
             const SplitViewRequest& request) = 0;
+
+        // Mesh rendering
+        virtual Result<void> renderMesh(
+            const lfs::core::MeshData& mesh,
+            const ViewportData& viewport,
+            const glm::mat4& model_transform = glm::mat4(1.0f)) = 0;
+
+        virtual unsigned int getMeshColorTexture() const = 0;
+        virtual unsigned int getMeshDepthTexture() const = 0;
+        virtual bool hasMeshRender() const = 0;
+
+        // Depth compositing (mesh + splat)
+        virtual Result<void> compositeMeshAndSplat(
+            const RenderResult& splat_result,
+            const glm::ivec2& viewport_size) = 0;
 
         // Present to screen
         virtual Result<void> presentToScreen(
