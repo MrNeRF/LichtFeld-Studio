@@ -184,6 +184,7 @@ namespace lfs::python {
         PyTensor gather(int dim, const PyTensor& indices) const;
         PyTensor masked_select(const PyTensor& mask) const;
         PyTensor masked_fill(const PyTensor& mask, float value) const;
+        PyTensor& masked_fill_(const PyTensor& mask, float value);
         PyTensor nonzero() const;
 
         // Linear algebra

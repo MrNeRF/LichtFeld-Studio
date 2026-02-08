@@ -186,6 +186,7 @@ set(TEST_FILES
     test_tensor_index_select_bool.cpp
     test_tensor_index_select_uint8.cpp
     test_tensor_uint8_inversion.cpp
+    test_tensor_uint8_masking.cpp
     test_tensor_serialization.cpp
     test_tensor_cat_reduction_bug.cpp
     test_tensor_inplace_capacity.cpp

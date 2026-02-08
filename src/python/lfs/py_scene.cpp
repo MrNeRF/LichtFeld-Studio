@@ -182,6 +182,33 @@ namespace lfs::python {
         }
     }
 
+    void PyPointCloud::set_colors(const PyTensor& colors) {
+        const auto& cols = colors.tensor();
+        assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
+        assert(cols.shape()[0] == pc_->size());
+        pc_->colors = cols.to(core::Device::CUDA);
+        if (scene_) {
+            scene_->invalidateCache();
+            lfs::core::events::state::SceneChanged{}.emit();
+        }
+    }
+
+    void PyPointCloud::set_means(const PyTensor& points) {
+        const auto& pts = points.tensor();
+        assert(pts.shape().rank() == 2 && pts.shape()[1] == 3);
+        assert(pts.shape()[0] == pc_->size());
+        pc_->means = pts.to(core::Device::CUDA);
+        if (node_ && pc_->size() > 0) {
+            auto centroid = pc_->means.mean(0).cpu();
+            auto acc = centroid.accessor<float, 1>();
+            node_->centroid = glm::vec3(acc(0), acc(1), acc(2));
+        }
+        if (scene_) {
+            scene_->invalidateCache();
+            lfs::core::events::state::SceneChanged{}.emit();
+        }
+    }
+
     std::optional<PyCropBox> PySceneNode::cropbox() {
         if (node_->type != vis::NodeType::CROPBOX || !node_->cropbox) {
             return std::nullopt;
@@ -532,7 +559,11 @@ namespace lfs::python {
             .def("filter_indices", &PyPointCloud::filter_indices, nb::arg("indices"),
                  "Keep only points at specified indices, returns number of points removed")
             .def("set_data", &PyPointCloud::set_data, nb::arg("points"), nb::arg("colors"),
-                 "Replace point cloud data with new points and colors tensors");
+                 "Replace point cloud data with new points and colors tensors")
+            .def("set_colors", &PyPointCloud::set_colors, nb::arg("colors"),
+                 "Update colors without re-uploading positions [N, 3]")
+            .def("set_means", &PyPointCloud::set_means, nb::arg("points"),
+                 "Update positions without re-uploading colors [N, 3]");
 
         // SceneNode class
         nb::class_<PySceneNode>(m, "SceneNode")
@@ -561,6 +592,11 @@ namespace lfs::python {
             .def_prop_ro("image_path", &PySceneNode::image_path, "Path to the camera image file")
             .def_prop_ro("mask_path", &PySceneNode::mask_path, "Path to the camera mask file")
             .def_prop_ro("has_camera", &PySceneNode::has_camera, "Whether this node has camera data")
+            .def_prop_ro("has_mask", &PySceneNode::has_mask, "Whether this camera node has a mask file")
+            .def("load_mask", &PySceneNode::load_mask,
+                 nb::arg("resize_factor") = 1, nb::arg("max_width") = 3840,
+                 nb::arg("invert") = false, nb::arg("threshold") = 0.5f,
+                 "Load mask as tensor [1, H, W] on CUDA (None if not a camera node or no mask)")
             .def_prop_ro("camera_R", &PySceneNode::camera_R, "Camera rotation matrix [3, 3]")
             .def_prop_ro("camera_T", &PySceneNode::camera_T, "Camera translation vector [3, 1]")
             .def_prop_ro("camera_focal_x", &PySceneNode::camera_focal_x, "Camera focal length in pixels (x)")
@@ -694,111 +730,87 @@ Returns:
                  "Find a node by its integer ID (None if not found)")
             .def("get_node", &PyScene::get_node, nb::arg("name"),
                  "Find a node by name (None if not found)")
-            .def("get_nodes", &PyScene::get_nodes,
-                 "Get all nodes in the scene")
-            .def("get_visible_nodes", &PyScene::get_visible_nodes,
-                 "Get all visible nodes in the scene")
-            .def("is_node_effectively_visible", &PyScene::is_node_effectively_visible,
-                 nb::arg("id"),
-                 "Check if a node is visible considering parent visibility")
+            .def(
+                "get_nodes", [](PyScene& self, std::optional<vis::NodeType> type) -> std::vector<PySceneNode> {
+                    auto all = self.get_nodes();
+                    if (!type)
+                        return all;
+                    std::vector<PySceneNode> filtered;
+                    for (auto& node : all) {
+                        if (node.type() == *type)
+                            filtered.push_back(std::move(node));
+                    }
+                    return filtered;
+                },
+                nb::arg("type") = nb::none(), "Get nodes, optionally filtered by NodeType")
+            .def("get_visible_nodes", &PyScene::get_visible_nodes, "Get all visible nodes in the scene")
+            .def("is_node_effectively_visible", &PyScene::is_node_effectively_visible, nb::arg("id"), "Check if a node is visible considering parent visibility")
             // Transforms
-            .def("get_world_transform", &PyScene::get_world_transform, nb::arg("node_id"),
-                 "Get world-space transform as 4x4 row-major tuple")
-            .def("set_node_transform", &PyScene::set_node_transform,
-                 nb::arg("name"), nb::arg("transform"),
-                 "Set node local transform from a [4, 4] ndarray")
-            .def("set_node_transform", &PyScene::set_node_transform_tensor,
-                 nb::arg("name"), nb::arg("transform"),
-                 "Set node local transform from a [4, 4] Tensor")
+            .def("get_world_transform", &PyScene::get_world_transform, nb::arg("node_id"), "Get world-space transform as 4x4 row-major tuple")
+            .def("set_node_transform", &PyScene::set_node_transform, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] ndarray")
+            .def("set_node_transform", &PyScene::set_node_transform_tensor, nb::arg("name"), nb::arg("transform"), "Set node local transform from a [4, 4] Tensor")
             // Combined/training model
-            .def("combined_model", &PyScene::combined_model,
-                 "Get the merged SplatData for all visible splats (None if empty)")
-            .def("training_model", &PyScene::training_model,
-                 "Get the SplatData used for training (None if unavailable)")
-            .def("set_training_model_node", &PyScene::set_training_model_node, nb::arg("name"),
-                 "Set which node provides the training model")
-            .def_prop_ro("training_model_node_name", &PyScene::training_model_node_name,
-                         "Name of the node providing the training model")
-            // Bounds
-            .def("get_node_bounds", &PyScene::get_node_bounds, nb::arg("id"),
-                 "Get axis-aligned bounding box as ((min_x, min_y, min_z), (max_x, max_y, max_z))")
-            .def("get_node_bounds_center", &PyScene::get_node_bounds_center, nb::arg("id"),
-                 "Get center of the node bounding box as (x, y, z)")
+            .def("combined_model", &PyScene::combined_model, "Get the merged SplatData for all visible splats (None if empty)")
+            .def("training_model", &PyScene::training_model, "Get the SplatData used for training (None if unavailable)")
+            .def("set_training_model_node", &PyScene::set_training_model_node, nb::arg("name"), "Set which node provides the training model")
+            .def_prop_ro("training_model_node_name", &PyScene::training_model_node_name, "Name of the node providing the training model")
+            // Bounds (by id)
+            .def("get_node_bounds", &PyScene::get_node_bounds, nb::arg("id"), "Get axis-aligned bounding box as ((min_x, min_y, min_z), (max_x, max_y, max_z))")
+            .def("get_node_bounds_center", &PyScene::get_node_bounds_center, nb::arg("id"), "Get center of the node bounding box as (x, y, z)")
+            // Bounds (by name)
+            .def(
+                "get_node_bounds", [](PyScene& self, const std::string& name) {
+                    auto node = self.get_node(name);
+                    if (!node)
+                        return decltype(self.get_node_bounds(0)){std::nullopt};
+                    return self.get_node_bounds(node->id());
+                },
+                nb::arg("name"), "Get axis-aligned bounding box by node name")
+            .def(
+                "get_node_bounds_center", [](PyScene& self, const std::string& name) {
+                    auto node = self.get_node(name);
+                    if (!node)
+                        throw std::runtime_error("Node not found: " + name);
+                    return self.get_node_bounds_center(node->id());
+                },
+                nb::arg("name"), "Get center of the node bounding box by name")
             // CropBox
-            .def("get_cropbox_for_splat", &PyScene::get_cropbox_for_splat, nb::arg("splat_id"),
-                 "Get the crop box node ID associated with a splat (-1 if none)")
-            .def("get_or_create_cropbox_for_splat", &PyScene::get_or_create_cropbox_for_splat,
-                 nb::arg("splat_id"),
-                 "Get or create a crop box for a splat, returns cropbox node ID")
-            .def("get_cropbox_data", &PyScene::get_cropbox_data, nb::arg("cropbox_id"),
-                 "Get CropBox data for a cropbox node (None if invalid)")
-            .def("set_cropbox_data", &PyScene::set_cropbox_data,
-                 nb::arg("cropbox_id"), nb::arg("data"),
-                 "Set CropBox data for a cropbox node")
+            .def("get_cropbox_for_splat", &PyScene::get_cropbox_for_splat, nb::arg("splat_id"), "Get the crop box node ID associated with a splat (-1 if none)")
+            .def("get_or_create_cropbox_for_splat", &PyScene::get_or_create_cropbox_for_splat, nb::arg("splat_id"), "Get or create a crop box for a splat, returns cropbox node ID")
+            .def("get_cropbox_data", &PyScene::get_cropbox_data, nb::arg("cropbox_id"), "Get CropBox data for a cropbox node (None if invalid)")
+            .def("set_cropbox_data", &PyScene::set_cropbox_data, nb::arg("cropbox_id"), nb::arg("data"), "Set CropBox data for a cropbox node")
             // Selection
-            .def_prop_ro("selection_mask", &PyScene::selection_mask,
-                         "Current selection mask tensor [N] uint8 (None if no selection)")
-            .def("set_selection", &PyScene::set_selection, nb::arg("indices"),
-                 "Set selection from index tensor")
-            .def("set_selection_mask", &PyScene::set_selection_mask, nb::arg("mask"),
-                 "Set selection from boolean mask tensor [N]")
-            .def("clear_selection", &PyScene::clear_selection,
-                 "Clear all selected Gaussians")
-            .def("has_selection", &PyScene::has_selection,
-                 "Check if any Gaussians are selected")
+            .def_prop_ro("selection_mask", &PyScene::selection_mask, "Current selection mask tensor [N] uint8 (None if no selection)")
+            .def("set_selection", &PyScene::set_selection, nb::arg("indices"), "Set selection from index tensor")
+            .def("set_selection_mask", &PyScene::set_selection_mask, nb::arg("mask"), "Set selection from boolean mask tensor [N]")
+            .def("clear_selection", &PyScene::clear_selection, "Clear all selected Gaussians")
+            .def("has_selection", &PyScene::has_selection, "Check if any Gaussians are selected")
             // Selection groups
-            .def("add_selection_group", &PyScene::add_selection_group,
-                 nb::arg("name"), nb::arg("color"),
-                 "Add a named selection group with (r, g, b) color, returns group ID")
-            .def("remove_selection_group", &PyScene::remove_selection_group, nb::arg("id"),
-                 "Remove a selection group by ID")
-            .def("rename_selection_group", &PyScene::rename_selection_group,
-                 nb::arg("id"), nb::arg("name"),
-                 "Rename a selection group")
-            .def("set_selection_group_color", &PyScene::set_selection_group_color,
-                 nb::arg("id"), nb::arg("color"),
-                 "Set a selection group color as (r, g, b) tuple")
-            .def("set_selection_group_locked", &PyScene::set_selection_group_locked,
-                 nb::arg("id"), nb::arg("locked"),
-                 "Lock or unlock a selection group")
-            .def("is_selection_group_locked", &PyScene::is_selection_group_locked, nb::arg("id"),
-                 "Check if a selection group is locked")
-            .def_prop_rw("active_selection_group",
-                         &PyScene::active_selection_group, &PyScene::set_active_selection_group,
-                         "Currently active selection group ID")
-            .def("selection_groups", &PyScene::selection_groups,
-                 "Get all selection groups")
-            .def("update_selection_group_counts", &PyScene::update_selection_group_counts,
-                 "Recompute selection counts for all groups")
-            .def("clear_selection_group", &PyScene::clear_selection_group, nb::arg("id"),
-                 "Clear all selections in a group")
-            .def("reset_selection_state", &PyScene::reset_selection_state,
-                 "Reset all selection state to defaults")
+            .def("add_selection_group", &PyScene::add_selection_group, nb::arg("name"), nb::arg("color"), "Add a named selection group with (r, g, b) color, returns group ID")
+            .def("remove_selection_group", &PyScene::remove_selection_group, nb::arg("id"), "Remove a selection group by ID")
+            .def("rename_selection_group", &PyScene::rename_selection_group, nb::arg("id"), nb::arg("name"), "Rename a selection group")
+            .def("set_selection_group_color", &PyScene::set_selection_group_color, nb::arg("id"), nb::arg("color"), "Set a selection group color as (r, g, b) tuple")
+            .def("set_selection_group_locked", &PyScene::set_selection_group_locked, nb::arg("id"), nb::arg("locked"), "Lock or unlock a selection group")
+            .def("is_selection_group_locked", &PyScene::is_selection_group_locked, nb::arg("id"), "Check if a selection group is locked")
+            .def_prop_rw("active_selection_group", &PyScene::active_selection_group, &PyScene::set_active_selection_group, "Currently active selection group ID")
+            .def("selection_groups", &PyScene::selection_groups, "Get all selection groups")
+            .def("update_selection_group_counts", &PyScene::update_selection_group_counts, "Recompute selection counts for all groups")
+            .def("clear_selection_group", &PyScene::clear_selection_group, nb::arg("id"), "Clear all selections in a group")
+            .def("reset_selection_state", &PyScene::reset_selection_state, "Reset all selection state to defaults")
             // Training data
-            .def("has_training_data", &PyScene::has_training_data,
-                 "Check if training dataset is loaded")
-            .def_prop_ro("scene_center", &PyScene::scene_center,
-                         "Scene center position as a [3] tensor")
+            .def("has_training_data", &PyScene::has_training_data, "Check if training dataset is loaded")
+            .def_prop_ro("scene_center", &PyScene::scene_center, "Scene center position as a [3] tensor")
             // Counts
-            .def_prop_ro("node_count", &PyScene::node_count,
-                         "Total number of nodes in the scene")
-            .def_prop_ro("total_gaussian_count", &PyScene::total_gaussian_count,
-                         "Total number of Gaussians across all nodes")
-            .def("has_nodes", &PyScene::has_nodes,
-                 "Check if the scene contains any nodes")
+            .def_prop_ro("node_count", &PyScene::node_count, "Total number of nodes in the scene")
+            .def_prop_ro("total_gaussian_count", &PyScene::total_gaussian_count, "Total number of Gaussians across all nodes")
+            .def("has_nodes", &PyScene::has_nodes, "Check if the scene contains any nodes")
             // Operations
-            .def("apply_deleted", &PyScene::apply_deleted,
-                 "Permanently remove soft-deleted Gaussians from all nodes")
-            .def("invalidate_cache", &PyScene::invalidate_cache,
-                 "Invalidate the combined model cache")
-            .def("notify_changed", &PyScene::notify_changed,
-                 "Notify the renderer that scene data has changed")
-            .def("duplicate_node", &PyScene::duplicate_node, nb::arg("name"),
-                 "Duplicate a node by name, returns new node ID")
-            .def("merge_group", &PyScene::merge_group, nb::arg("group_name"),
-                 "Merge all splats in a group into a single node, returns merged node ID")
-            .def_prop_ro("nodes", &PyScene::nodes,
-                         "Iterable collection of all scene nodes");
+            .def("apply_deleted", &PyScene::apply_deleted, "Permanently remove soft-deleted Gaussians from all nodes")
+            .def("invalidate_cache", &PyScene::invalidate_cache, "Invalidate the combined model cache")
+            .def("notify_changed", &PyScene::notify_changed, "Notify the renderer that scene data has changed")
+            .def("duplicate_node", &PyScene::duplicate_node, nb::arg("name"), "Duplicate a node by name, returns new node ID")
+            .def("merge_group", &PyScene::merge_group, nb::arg("group_name"), "Merge all splats in a group into a single node, returns merged node ID")
+            .def_prop_ro("nodes", &PyScene::nodes, "Iterable collection of all scene nodes");
     }
 
 } // namespace lfs::python

@@ -34,6 +34,10 @@ namespace lfs::python {
         PyTensor get_scaling() const;
         PyTensor get_shs() const;
 
+        // RGB color accessors (handle SH0 encoding internally)
+        PyTensor get_colors_rgb() const;
+        void set_colors_rgb(const PyTensor& colors);
+
         // Metadata
         int active_sh_degree() const { return data_->get_active_sh_degree(); }
         int max_sh_degree() const { return data_->get_max_sh_degree(); }

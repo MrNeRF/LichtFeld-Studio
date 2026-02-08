@@ -153,6 +153,8 @@ namespace lfs::python {
                                             float step_fast = 0.0f, const std::string& format = "%.3f");
         std::tuple<bool, int> input_int(const std::string& label, int value, int step = 1, int step_fast = 100);
         std::tuple<bool, int> input_int_formatted(const std::string& label, int value, int step = 0, int step_fast = 0);
+        std::tuple<bool, float> stepper_float(const std::string& label, float value,
+                                              const std::vector<float>& steps = {1.0f, 0.1f, 0.01f});
         std::tuple<bool, int> radio_button(const std::string& label, int current, int value);
         bool small_button(const std::string& label);
         bool selectable(const std::string& label, bool selected = false, float height = 0.0f);
@@ -350,6 +352,8 @@ namespace lfs::python {
                                             float step_fast = 0.0f, const std::string& format = "%.3f");
         std::tuple<bool, int> input_int(const std::string& label, int value, int step = 1, int step_fast = 100);
         std::tuple<bool, int> input_int_formatted(const std::string& label, int value, int step = 0, int step_fast = 0);
+        std::tuple<bool, float> stepper_float(const std::string& label, float value,
+                                              const std::vector<float>& steps = {1.0f, 0.1f, 0.01f});
         std::tuple<bool, std::string> path_input(const std::string& label, const std::string& value,
                                                  bool folder_mode = true, const std::string& dialog_title = "");
 

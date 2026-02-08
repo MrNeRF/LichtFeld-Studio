@@ -557,7 +557,8 @@ namespace lfs::python {
         // Boolean mask
         if (nb::isinstance<PyTensor>(key)) {
             auto mask_tensor = nb::cast<PyTensor>(key);
-            if (mask_tensor.tensor().dtype() != DataType::Bool) {
+            auto dt = mask_tensor.tensor().dtype();
+            if (dt != DataType::Bool && dt != DataType::UInt8) {
                 throw std::runtime_error("Mask must be a boolean tensor");
             }
             return PyTensor(tensor_.masked_select(mask_tensor.tensor()));
@@ -646,6 +647,22 @@ namespace lfs::python {
 
             assign_to_target(target);
             return;
+        }
+
+        // Boolean mask indexing: tensor[bool_mask] = value
+        if (nb::isinstance<PyTensor>(key)) {
+            auto& mask_py = nb::cast<PyTensor&>(key);
+            const auto& mask_t = mask_py.tensor();
+            if (mask_t.dtype() == DataType::UInt8 || mask_t.dtype() == DataType::Bool) {
+                if (is_scalar_value) {
+                    tensor_.masked_fill_(mask_t, scalar_value);
+                } else {
+                    const auto& ct = static_cast<const Tensor&>(tensor_);
+                    auto proxy = ct[mask_t];
+                    proxy = val_tensor;
+                }
+                return;
+            }
         }
 
         throw std::runtime_error("Unsupported index type for setitem");
@@ -1169,6 +1186,11 @@ namespace lfs::python {
         return PyTensor(tensor_.masked_fill(mask.tensor_, value));
     }
 
+    PyTensor& PyTensor::masked_fill_(const PyTensor& mask, float value) {
+        tensor_.masked_fill_(mask.tensor_, value);
+        return *this;
+    }
+
     PyTensor PyTensor::nonzero() const {
         return PyTensor(tensor_.nonzero());
     }
@@ -1556,25 +1578,32 @@ namespace lfs::python {
                     return self.iadd(other);
                 },
                 nb::rv_policy::reference, "In-place add tensor")
-            .def("__iadd__", [](PyTensor& self, float scalar) -> PyTensor& { return self.iadd_scalar(scalar); }, nb::rv_policy::reference, "In-place add scalar")
+            .def(
+                "__iadd__", [](PyTensor& self, float scalar) -> PyTensor& { return self.iadd_scalar(scalar); }, nb::rv_policy::reference, "In-place add scalar")
 
             .def("__sub__", &PyTensor::sub, "Subtract tensor")
             .def("__sub__", &PyTensor::sub_scalar, "Subtract scalar")
             .def("__rsub__", &PyTensor::rsub_scalar, "Reverse subtract scalar")
-            .def("__isub__", [](PyTensor& self, const PyTensor& other) -> PyTensor& { return self.isub(other); }, nb::rv_policy::reference, "In-place subtract tensor")
-            .def("__isub__", [](PyTensor& self, float scalar) -> PyTensor& { return self.isub_scalar(scalar); }, nb::rv_policy::reference, "In-place subtract scalar")
+            .def(
+                "__isub__", [](PyTensor& self, const PyTensor& other) -> PyTensor& { return self.isub(other); }, nb::rv_policy::reference, "In-place subtract tensor")
+            .def(
+                "__isub__", [](PyTensor& self, float scalar) -> PyTensor& { return self.isub_scalar(scalar); }, nb::rv_policy::reference, "In-place subtract scalar")
 
             .def("__mul__", &PyTensor::mul, "Multiply tensor")
             .def("__mul__", &PyTensor::mul_scalar, "Multiply scalar")
             .def("__rmul__", &PyTensor::mul_scalar, "Reverse multiply scalar")
-            .def("__imul__", [](PyTensor& self, const PyTensor& other) -> PyTensor& { return self.imul(other); }, nb::rv_policy::reference, "In-place multiply tensor")
-            .def("__imul__", [](PyTensor& self, float scalar) -> PyTensor& { return self.imul_scalar(scalar); }, nb::rv_policy::reference, "In-place multiply scalar")
+            .def(
+                "__imul__", [](PyTensor& self, const PyTensor& other) -> PyTensor& { return self.imul(other); }, nb::rv_policy::reference, "In-place multiply tensor")
+            .def(
+                "__imul__", [](PyTensor& self, float scalar) -> PyTensor& { return self.imul_scalar(scalar); }, nb::rv_policy::reference, "In-place multiply scalar")
 
             .def("__truediv__", &PyTensor::div, "Divide tensor")
             .def("__truediv__", &PyTensor::div_scalar, "Divide scalar")
             .def("__rtruediv__", &PyTensor::rdiv_scalar, "Reverse divide scalar")
-            .def("__itruediv__", [](PyTensor& self, const PyTensor& other) -> PyTensor& { return self.idiv(other); }, nb::rv_policy::reference, "In-place divide tensor")
-            .def("__itruediv__", [](PyTensor& self, float scalar) -> PyTensor& { return self.idiv_scalar(scalar); }, nb::rv_policy::reference, "In-place divide scalar")
+            .def(
+                "__itruediv__", [](PyTensor& self, const PyTensor& other) -> PyTensor& { return self.idiv(other); }, nb::rv_policy::reference, "In-place divide tensor")
+            .def(
+                "__itruediv__", [](PyTensor& self, float scalar) -> PyTensor& { return self.idiv_scalar(scalar); }, nb::rv_policy::reference, "In-place divide scalar")
 
             .def("fill_", &PyTensor::fill_, nb::rv_policy::reference, "Fill tensor with value in-place")
             .def("zero_", &PyTensor::zero_, nb::rv_policy::reference, "Zero tensor in-place")
@@ -1680,6 +1709,7 @@ namespace lfs::python {
             .def("gather", &PyTensor::gather, nb::arg("dim"), nb::arg("indices"), "Gather values along dimension")
             .def("masked_select", &PyTensor::masked_select, nb::arg("mask"), "Select elements where mask is true")
             .def("masked_fill", &PyTensor::masked_fill, nb::arg("mask"), nb::arg("value"), "Fill elements where mask is true")
+            .def("masked_fill_", &PyTensor::masked_fill_, nb::arg("mask"), nb::arg("value"), nb::rv_policy::reference, "In-place fill elements where mask is true")
             .def("nonzero", &PyTensor::nonzero, "Indices of non-zero elements")
 
             // Linear algebra
@@ -1721,11 +1751,12 @@ namespace lfs::python {
 
             // __array__ protocol for zero-copy NumPy interop (CPU only)
             // Allows: np.asarray(tensor) for zero-copy when tensor is CPU + contiguous
-            .def("__array__", [](PyTensor& self, nb::object dtype) -> nb::object {
-                (void)dtype;              // We return our native dtype, ignore requested dtype
-                return self.numpy(false); // Zero-copy
-            },
-                 nb::arg("dtype") = nb::none(), "Return numpy array view (zero-copy for CPU contiguous tensors)");
+            .def(
+                "__array__", [](PyTensor& self, nb::object dtype) -> nb::object {
+                    (void)dtype;              // We return our native dtype, ignore requested dtype
+                    return self.numpy(false); // Zero-copy
+                },
+                nb::arg("dtype") = nb::none(), "Return numpy array view (zero-copy for CPU contiguous tensors)");
     }
 
 } // namespace lfs::python

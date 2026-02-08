@@ -108,6 +108,24 @@ def screen_to_render(screen_x: float, screen_y: float) -> tuple[float, float]:
 def get_hovered_gaussian_id() -> int:
     """Get ID of gaussian under cursor (-1 if none)"""
 
+class PickResult:
+    @property
+    def index(self) -> int:
+        """Gaussian index (-1 if background)"""
+
+    @property
+    def depth(self) -> float:
+        """Camera-space depth"""
+
+    @property
+    def world_position(self) -> tuple[float, float, float]:
+        """Hit point in world coordinates"""
+
+def pick_at_screen(screen_x: float, screen_y: float) -> PickResult | None:
+    """
+    Pick at screen coordinates, returns PickResult with depth, world_position, and gaussian index
+    """
+
 def get_active_group() -> int:
     """Get the active selection group ID"""
 
