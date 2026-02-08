@@ -5,6 +5,7 @@
 #include "training_setup.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/mesh_data.hpp"
 #include "core/path_utils.hpp"
 #include "core/point_cloud.hpp"
 #include "core/scene.hpp"
@@ -236,6 +237,14 @@ namespace lfs::training {
                          dataset_name, train_count,
                          enable_eval ? std::format(" + {} val", val_count) : "",
                          mask_count > 0 ? std::format(" ({} with masks)", mask_count) : "");
+                return {};
+
+            } else if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::MeshData>>) {
+                std::string mesh_name = lfs::core::path_to_utf8(params.dataset.data_path.stem());
+                if (mesh_name.empty())
+                    mesh_name = "mesh";
+                scene.addMesh(mesh_name, data);
+                LOG_INFO("Loaded mesh '{}' into scene", mesh_name);
                 return {};
 
             } else {
@@ -541,6 +550,14 @@ namespace lfs::training {
                          dataset_name, train_count,
                          enable_eval ? std::format(" + {} val", val_count) : "",
                          mask_count > 0 ? std::format(" ({} masked)", mask_count) : "");
+                return {};
+
+            } else if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::MeshData>>) {
+                std::string mesh_name = lfs::core::path_to_utf8(params.dataset.data_path.stem());
+                if (mesh_name.empty())
+                    mesh_name = "mesh";
+                scene.addMesh(mesh_name, data);
+                LOG_INFO("Loaded mesh '{}' into scene", mesh_name);
                 return {};
 
             } else {

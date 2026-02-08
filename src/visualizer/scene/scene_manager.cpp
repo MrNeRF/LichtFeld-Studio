@@ -5,6 +5,7 @@
 #include "scene/scene_manager.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/logger.hpp"
+#include "core/mesh_data.hpp"
 #include "core/parameter_manager.hpp"
 #include "core/path_utils.hpp"
 #include "core/services.hpp"
@@ -231,25 +232,38 @@ namespace lfs::vis {
                 throw std::runtime_error(load_result.error().format());
             }
 
-            auto* splat_data = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&load_result->data);
-            if (!splat_data || !*splat_data) {
-                LOG_ERROR("Expected splat file but got different data type from: {}", lfs::core::path_to_utf8(path));
-                throw std::runtime_error("Expected splat file but got different data type");
-            }
-
-            // Add to scene
             std::string name = lfs::core::path_to_utf8(path.stem());
-            size_t gaussian_count = (*splat_data)->size();
-            LOG_DEBUG("Adding '{}' to scene with {} gaussians", name, gaussian_count);
+            size_t gaussian_count = 0;
 
-            scene_.addNode(name, std::make_unique<lfs::core::SplatData>(std::move(**splat_data)));
+            auto* mesh_data = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&load_result->data);
+            if (mesh_data && *mesh_data) {
+                LOG_INFO("Adding mesh '{}' ({} vertices, {} faces)", name,
+                         (*mesh_data)->vertex_count(), (*mesh_data)->face_count());
+                scene_.addMesh(name, *mesh_data);
 
-            // Update content state
-            {
-                std::lock_guard<std::mutex> lock(state_mutex_);
-                content_type_ = ContentType::SplatFiles;
-                splat_paths_.clear();
-                splat_paths_[name] = path;
+                {
+                    std::lock_guard<std::mutex> lock(state_mutex_);
+                    content_type_ = ContentType::SplatFiles;
+                    splat_paths_.clear();
+                }
+            } else {
+                auto* splat_data = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&load_result->data);
+                if (!splat_data || !*splat_data) {
+                    LOG_ERROR("Expected splat/mesh file but got different data type from: {}", lfs::core::path_to_utf8(path));
+                    throw std::runtime_error("Expected splat/mesh file but got different data type");
+                }
+
+                gaussian_count = (*splat_data)->size();
+                LOG_DEBUG("Adding '{}' to scene with {} gaussians", name, gaussian_count);
+
+                scene_.addNode(name, std::make_unique<lfs::core::SplatData>(std::move(**splat_data)));
+
+                {
+                    std::lock_guard<std::mutex> lock(state_mutex_);
+                    content_type_ = ContentType::SplatFiles;
+                    splat_paths_.clear();
+                    splat_paths_[name] = path;
+                }
             }
 
             // Determine file type for event
@@ -398,17 +412,28 @@ namespace lfs::vis {
                 throw std::runtime_error(load_result.error().format());
             }
 
-            auto* splat_data = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&load_result->data);
-            if (!splat_data || !*splat_data) {
-                throw std::runtime_error("Expected splat file");
-            }
-
-            // Generate unique name
             const std::string base_name = name_hint.empty() ? lfs::core::path_to_utf8(path.stem()) : name_hint;
             std::string name = base_name;
             int counter = 1;
             while (scene_.getNode(name) != nullptr) {
                 name = std::format("{}_{}", base_name, counter++);
+            }
+
+            auto* mesh_data = std::get_if<std::shared_ptr<lfs::core::MeshData>>(&load_result->data);
+            if (mesh_data && *mesh_data) {
+                scene_.addMesh(name, *mesh_data);
+
+                emitSceneChanged();
+                selectNode(name);
+
+                LOG_INFO("Added mesh '{}' ({} vertices, {} faces)", name,
+                         (*mesh_data)->vertex_count(), (*mesh_data)->face_count());
+                return name;
+            }
+
+            auto* splat_data = std::get_if<std::shared_ptr<lfs::core::SplatData>>(&load_result->data);
+            if (!splat_data || !*splat_data) {
+                throw std::runtime_error("Expected splat or mesh file");
             }
 
             const size_t gaussian_count = (*splat_data)->size();
@@ -432,7 +457,6 @@ namespace lfs::vis {
             emitSceneChanged();
             selectNode(name);
 
-            // Check for companion PPISP file
             auto ppisp_path = lfs::training::find_ppisp_companion(path);
             if (!ppisp_path.empty()) {
                 LOG_INFO("Found PPISP companion file: {}", lfs::core::path_to_utf8(ppisp_path));

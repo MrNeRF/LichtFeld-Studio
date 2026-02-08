@@ -1,0 +1,374 @@
+/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#include "mesh_loader.hpp"
+#include "core/logger.hpp"
+#include "core/mesh_data.hpp"
+#include "core/path_utils.hpp"
+#include "io/error.hpp"
+#include <assimp/Importer.hpp>
+#include <assimp/postprocess.h>
+#include <assimp/scene.h>
+#include <cassert>
+#include <chrono>
+#include <format>
+
+namespace lfs::io {
+
+    using lfs::core::DataType;
+    using lfs::core::Device;
+    using lfs::core::Material;
+    using lfs::core::MeshData;
+    using lfs::core::Tensor;
+
+    namespace {
+
+        Material extract_material(const aiMaterial* ai_mat) {
+            Material mat;
+
+            aiColor4D color;
+            if (ai_mat->Get(AI_MATKEY_BASE_COLOR, color) == AI_SUCCESS ||
+                ai_mat->Get(AI_MATKEY_COLOR_DIFFUSE, color) == AI_SUCCESS) {
+                mat.base_color = {color.r, color.g, color.b, color.a};
+            }
+
+            aiColor3D emissive;
+            if (ai_mat->Get(AI_MATKEY_COLOR_EMISSIVE, emissive) == AI_SUCCESS) {
+                mat.emissive = {emissive.r, emissive.g, emissive.b};
+            }
+
+            ai_mat->Get(AI_MATKEY_METALLIC_FACTOR, mat.metallic);
+            ai_mat->Get(AI_MATKEY_ROUGHNESS_FACTOR, mat.roughness);
+
+            int two_sided = 0;
+            if (ai_mat->Get(AI_MATKEY_TWOSIDED, two_sided) == AI_SUCCESS) {
+                mat.double_sided = (two_sided != 0);
+            }
+
+            aiString ai_name;
+            if (ai_mat->Get(AI_MATKEY_NAME, ai_name) == AI_SUCCESS) {
+                mat.name = ai_name.C_Str();
+            }
+
+            return mat;
+        }
+
+        MeshData convert_ai_mesh(const aiMesh* ai_mesh) {
+            assert(ai_mesh);
+            const int64_t nv = static_cast<int64_t>(ai_mesh->mNumVertices);
+            assert(nv > 0);
+
+            auto vertices = Tensor::empty({nv, 3}, Device::CPU, DataType::Float32);
+            auto vacc = vertices.accessor<float, 2>();
+            for (int64_t i = 0; i < nv; ++i) {
+                const auto& v = ai_mesh->mVertices[i];
+                vacc(i, 0) = v.x;
+                vacc(i, 1) = v.y;
+                vacc(i, 2) = v.z;
+            }
+
+            const int64_t nf = static_cast<int64_t>(ai_mesh->mNumFaces);
+            auto indices = Tensor::empty({nf, 3}, Device::CPU, DataType::Int32);
+            auto iacc = indices.accessor<int32_t, 2>();
+            for (int64_t i = 0; i < nf; ++i) {
+                const auto& face = ai_mesh->mFaces[i];
+                assert(face.mNumIndices == 3);
+                iacc(i, 0) = static_cast<int32_t>(face.mIndices[0]);
+                iacc(i, 1) = static_cast<int32_t>(face.mIndices[1]);
+                iacc(i, 2) = static_cast<int32_t>(face.mIndices[2]);
+            }
+
+            MeshData mesh(std::move(vertices), std::move(indices));
+
+            if (ai_mesh->HasNormals()) {
+                mesh.normals = Tensor::empty({nv, 3}, Device::CPU, DataType::Float32);
+                auto nacc = mesh.normals.accessor<float, 2>();
+                for (int64_t i = 0; i < nv; ++i) {
+                    const auto& n = ai_mesh->mNormals[i];
+                    nacc(i, 0) = n.x;
+                    nacc(i, 1) = n.y;
+                    nacc(i, 2) = n.z;
+                }
+            }
+
+            if (ai_mesh->HasTangentsAndBitangents()) {
+                mesh.tangents = Tensor::empty({nv, 4}, Device::CPU, DataType::Float32);
+                auto tacc = mesh.tangents.accessor<float, 2>();
+                for (int64_t i = 0; i < nv; ++i) {
+                    const auto& t = ai_mesh->mTangents[i];
+                    const auto& b = ai_mesh->mBitangents[i];
+                    const auto& n = ai_mesh->mNormals[i];
+                    float handedness = (n.x * (t.y * b.z - t.z * b.y) -
+                                        n.y * (t.x * b.z - t.z * b.x) +
+                                        n.z * (t.x * b.y - t.y * b.x)) < 0.0f
+                                           ? -1.0f
+                                           : 1.0f;
+                    tacc(i, 0) = t.x;
+                    tacc(i, 1) = t.y;
+                    tacc(i, 2) = t.z;
+                    tacc(i, 3) = handedness;
+                }
+            }
+
+            if (ai_mesh->HasTextureCoords(0)) {
+                mesh.texcoords = Tensor::empty({nv, 2}, Device::CPU, DataType::Float32);
+                auto tcacc = mesh.texcoords.accessor<float, 2>();
+                for (int64_t i = 0; i < nv; ++i) {
+                    const auto& tc = ai_mesh->mTextureCoords[0][i];
+                    tcacc(i, 0) = tc.x;
+                    tcacc(i, 1) = tc.y;
+                }
+            }
+
+            if (ai_mesh->HasVertexColors(0)) {
+                mesh.colors = Tensor::empty({nv, 4}, Device::CPU, DataType::Float32);
+                auto cacc = mesh.colors.accessor<float, 2>();
+                for (int64_t i = 0; i < nv; ++i) {
+                    const auto& c = ai_mesh->mColors[0][i];
+                    cacc(i, 0) = c.r;
+                    cacc(i, 1) = c.g;
+                    cacc(i, 2) = c.b;
+                    cacc(i, 3) = c.a;
+                }
+            }
+
+            return mesh;
+        }
+
+        MeshData merge_meshes(std::vector<MeshData>& meshes) {
+            assert(!meshes.empty());
+            if (meshes.size() == 1)
+                return std::move(meshes[0]);
+
+            int64_t total_verts = 0;
+            int64_t total_faces = 0;
+            bool any_normals = false;
+            bool any_tangents = false;
+            bool any_texcoords = false;
+            bool any_colors = false;
+
+            for (auto& m : meshes) {
+                total_verts += m.vertex_count();
+                total_faces += m.face_count();
+                any_normals |= m.has_normals();
+                any_tangents |= m.has_tangents();
+                any_texcoords |= m.has_texcoords();
+                any_colors |= m.has_colors();
+            }
+
+            auto vertices = Tensor::empty({total_verts, 3}, Device::CPU, DataType::Float32);
+            auto indices = Tensor::empty({total_faces, 3}, Device::CPU, DataType::Int32);
+
+            Tensor normals, tangents, texcoords, colors;
+            if (any_normals)
+                normals = Tensor::zeros({total_verts, 3}, Device::CPU, DataType::Float32);
+            if (any_tangents)
+                tangents = Tensor::zeros({total_verts, 4}, Device::CPU, DataType::Float32);
+            if (any_texcoords)
+                texcoords = Tensor::zeros({total_verts, 2}, Device::CPU, DataType::Float32);
+            if (any_colors)
+                colors = Tensor::ones({total_verts, 4}, Device::CPU, DataType::Float32);
+
+            auto vacc = vertices.accessor<float, 2>();
+            auto iacc = indices.accessor<int32_t, 2>();
+
+            int64_t v_offset = 0;
+            int64_t f_offset = 0;
+
+            MeshData result;
+
+            for (auto& m : meshes) {
+                const int64_t nv = m.vertex_count();
+                const int64_t nf = m.face_count();
+
+                auto src_vacc = m.vertices.accessor<float, 2>();
+                for (int64_t i = 0; i < nv; ++i) {
+                    vacc(v_offset + i, 0) = src_vacc(i, 0);
+                    vacc(v_offset + i, 1) = src_vacc(i, 1);
+                    vacc(v_offset + i, 2) = src_vacc(i, 2);
+                }
+
+                auto src_iacc = m.indices.accessor<int32_t, 2>();
+                for (int64_t i = 0; i < nf; ++i) {
+                    iacc(f_offset + i, 0) = src_iacc(i, 0) + static_cast<int32_t>(v_offset);
+                    iacc(f_offset + i, 1) = src_iacc(i, 1) + static_cast<int32_t>(v_offset);
+                    iacc(f_offset + i, 2) = src_iacc(i, 2) + static_cast<int32_t>(v_offset);
+                }
+
+                if (any_normals && m.has_normals()) {
+                    auto dst = normals.accessor<float, 2>();
+                    auto src = m.normals.accessor<float, 2>();
+                    for (int64_t i = 0; i < nv; ++i) {
+                        dst(v_offset + i, 0) = src(i, 0);
+                        dst(v_offset + i, 1) = src(i, 1);
+                        dst(v_offset + i, 2) = src(i, 2);
+                    }
+                }
+
+                if (any_tangents && m.has_tangents()) {
+                    auto dst = tangents.accessor<float, 2>();
+                    auto src = m.tangents.accessor<float, 2>();
+                    for (int64_t i = 0; i < nv; ++i) {
+                        dst(v_offset + i, 0) = src(i, 0);
+                        dst(v_offset + i, 1) = src(i, 1);
+                        dst(v_offset + i, 2) = src(i, 2);
+                        dst(v_offset + i, 3) = src(i, 3);
+                    }
+                }
+
+                if (any_texcoords && m.has_texcoords()) {
+                    auto dst = texcoords.accessor<float, 2>();
+                    auto src = m.texcoords.accessor<float, 2>();
+                    for (int64_t i = 0; i < nv; ++i) {
+                        dst(v_offset + i, 0) = src(i, 0);
+                        dst(v_offset + i, 1) = src(i, 1);
+                    }
+                }
+
+                if (any_colors && m.has_colors()) {
+                    auto dst = colors.accessor<float, 2>();
+                    auto src = m.colors.accessor<float, 2>();
+                    for (int64_t i = 0; i < nv; ++i) {
+                        dst(v_offset + i, 0) = src(i, 0);
+                        dst(v_offset + i, 1) = src(i, 1);
+                        dst(v_offset + i, 2) = src(i, 2);
+                        dst(v_offset + i, 3) = src(i, 3);
+                    }
+                }
+
+                result.submeshes.emplace_back(static_cast<size_t>(f_offset * 3),
+                                              static_cast<size_t>(nf * 3));
+
+                v_offset += nv;
+                f_offset += nf;
+            }
+
+            result.vertices = std::move(vertices);
+            result.indices = std::move(indices);
+            if (any_normals)
+                result.normals = std::move(normals);
+            if (any_tangents)
+                result.tangents = std::move(tangents);
+            if (any_texcoords)
+                result.texcoords = std::move(texcoords);
+            if (any_colors)
+                result.colors = std::move(colors);
+
+            return result;
+        }
+
+    } // namespace
+
+    Result<LoadResult> MeshLoader::load(
+        const std::filesystem::path& path,
+        const LoadOptions& options) {
+
+        auto start_time = std::chrono::high_resolution_clock::now();
+        const auto path_str = lfs::core::path_to_utf8(path);
+
+        if (options.progress) {
+            options.progress(0.0f, "Loading mesh file...");
+        }
+
+        if (!std::filesystem::exists(path)) {
+            return make_error(ErrorCode::PATH_NOT_FOUND, "Mesh file does not exist", path);
+        }
+
+        constexpr unsigned int import_flags =
+            aiProcess_Triangulate |
+            aiProcess_GenSmoothNormals |
+            aiProcess_CalcTangentSpace |
+            aiProcess_JoinIdenticalVertices |
+            aiProcess_FlipUVs |
+            aiProcess_SortByPType;
+
+        Assimp::Importer importer;
+        const aiScene* scene = importer.ReadFile(path_str, import_flags);
+
+        if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
+            return make_error(ErrorCode::CORRUPTED_DATA,
+                              std::format("Assimp failed: {}", importer.GetErrorString()), path);
+        }
+
+        if (options.progress) {
+            options.progress(30.0f, "Processing meshes...");
+        }
+
+        LOG_INFO("Mesh file: {} meshes, {} materials", scene->mNumMeshes, scene->mNumMaterials);
+
+        std::vector<Material> materials;
+        materials.reserve(scene->mNumMaterials);
+        for (unsigned int i = 0; i < scene->mNumMaterials; ++i) {
+            materials.push_back(extract_material(scene->mMaterials[i]));
+        }
+
+        std::vector<MeshData> sub_meshes;
+        sub_meshes.reserve(scene->mNumMeshes);
+        for (unsigned int i = 0; i < scene->mNumMeshes; ++i) {
+            sub_meshes.push_back(convert_ai_mesh(scene->mMeshes[i]));
+        }
+
+        if (options.progress) {
+            options.progress(70.0f, "Merging mesh data...");
+        }
+
+        auto mesh_data = std::make_shared<MeshData>(merge_meshes(sub_meshes));
+        mesh_data->materials = std::move(materials);
+
+        if (!mesh_data->has_normals()) {
+            mesh_data->compute_normals();
+        }
+
+        if (options.progress) {
+            options.progress(100.0f, "Mesh loading complete");
+        }
+
+        auto end_time = std::chrono::high_resolution_clock::now();
+        auto load_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+
+        LOG_INFO("Loaded mesh: {} vertices, {} faces in {}ms",
+                 mesh_data->vertex_count(), mesh_data->face_count(), load_time.count());
+
+        LoadResult result{
+            .data = std::move(mesh_data),
+            .scene_center = Tensor::zeros({3}, Device::CPU),
+            .loader_used = name(),
+            .load_time = load_time,
+            .warnings = {}};
+
+        return result;
+    }
+
+    bool MeshLoader::canLoad(const std::filesystem::path& path) const {
+        if (!std::filesystem::exists(path) || std::filesystem::is_directory(path)) {
+            return false;
+        }
+
+        auto ext = path.extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+
+        static const std::vector<std::string> mesh_exts = {
+            ".obj", ".fbx", ".gltf", ".glb", ".stl", ".dae", ".3ds", ".blend"};
+
+        for (const auto& e : mesh_exts) {
+            if (ext == e)
+                return true;
+        }
+        return false;
+    }
+
+    std::string MeshLoader::name() const {
+        return "Mesh";
+    }
+
+    std::vector<std::string> MeshLoader::supportedExtensions() const {
+        return {".obj", ".OBJ", ".fbx", ".FBX", ".gltf", ".GLTF", ".glb", ".GLB",
+                ".stl", ".STL", ".dae", ".DAE", ".3ds", ".3DS"};
+    }
+
+    int MeshLoader::priority() const {
+        return 5;
+    }
+
+} // namespace lfs::io

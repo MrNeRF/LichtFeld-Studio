@@ -9,6 +9,7 @@
 #include "io/loaders/blender_loader.hpp"
 #include "io/loaders/checkpoint_loader.hpp"
 #include "io/loaders/colmap_loader.hpp"
+#include "io/loaders/mesh_loader.hpp"
 #include "io/loaders/ply_loader.hpp"
 #include "io/loaders/sogs_loader.hpp"
 #include "io/loaders/spz_loader.hpp"
@@ -26,6 +27,7 @@ namespace lfs::io {
         registry_->registerLoader(std::make_unique<CheckpointLoader>());
         registry_->registerLoader(std::make_unique<ColmapLoader>());
         registry_->registerLoader(std::make_unique<BlenderLoader>());
+        registry_->registerLoader(std::make_unique<MeshLoader>());
 
         LOG_DEBUG("LoaderService initialized with {} loaders", registry_->size());
     }
@@ -65,6 +67,7 @@ namespace lfs::io {
                     "Cannot open '{}' - unsupported file format.\n\n"
                     "Supported formats:\n"
                     "  - Gaussian Splat files: .ply, .sog, .spz\n"
+                    "  - Mesh files: .obj, .fbx, .gltf, .glb, .stl, .dae\n"
                     "  - Training checkpoints: .resume\n"
                     "  - NeRF transforms: .json",
                     filename);

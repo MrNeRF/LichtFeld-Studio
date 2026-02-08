@@ -20,11 +20,13 @@ namespace lfs::core {
     class Camera;
     class SplatData;
     struct PointCloud;
+    struct MeshData;
 } // namespace lfs::core
 
 namespace lfs::io {
 
     // Import types from lfs::core for convenience
+    using lfs::core::MeshData;
     using lfs::core::PointCloud;
     using lfs::core::SplatData;
     using lfs::core::Tensor;
@@ -54,7 +56,7 @@ namespace lfs::io {
     };
 
     struct LoadResult {
-        std::variant<std::shared_ptr<SplatData>, LoadedScene> data;
+        std::variant<std::shared_ptr<SplatData>, LoadedScene, std::shared_ptr<MeshData>> data;
         Tensor scene_center;
         bool images_have_alpha = false;
         std::string loader_used;

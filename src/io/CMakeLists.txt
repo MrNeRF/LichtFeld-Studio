@@ -149,6 +149,12 @@ add_library(lfs_io STATIC
         loaders/spz_loader.cpp
         loaders/checkpoint_loader.hpp
         loaders/checkpoint_loader.cpp
+        loaders/mesh_loader.hpp
+        loaders/mesh_loader.cpp
+        mesh/openmesh_bridge.hpp
+        mesh/openmesh_bridge.cpp
+        mesh/texture_loader.hpp
+        mesh/texture_loader.cpp
         cache_image_loader.cpp
         nvcodec_image_loader.hpp
         nvcodec_image_loader.cpp
@@ -231,6 +237,8 @@ target_link_libraries(lfs_io
         CUDA::cudart           # CUDA runtime for nvImageCodec
         lfs_io_cuda            # IO-specific CUDA kernels (morton, k-means)
         lfs_core_cuda          # Core CUDA utilities (lanczos_resize for nvcodec)
+        assimp::assimp         # Multi-format mesh import
+        OpenMeshCore           # Half-edge mesh data structure
         spz_lib                # Niantic SPZ compressed format
         PkgConfig::FFMPEG
 )
