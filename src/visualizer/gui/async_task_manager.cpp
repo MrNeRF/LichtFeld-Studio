@@ -173,14 +173,14 @@ namespace lfs::vis::gui {
         splats.reserve(node_names.size());
         for (const auto& name : node_names) {
             const auto* node = scene.getNode(name);
-            if (node && node->type == NodeType::SPLAT && node->model) {
+            if (node && node->type == core::NodeType::SPLAT && node->model) {
                 splats.emplace_back(node->model.get(), scene.getWorldTransform(node->id));
             }
         }
         if (splats.empty())
             return;
 
-        auto merged = Scene::mergeSplatsWithTransforms(splats);
+        auto merged = core::Scene::mergeSplatsWithTransforms(splats);
         if (!merged)
             return;
 

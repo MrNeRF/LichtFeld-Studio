@@ -1001,7 +1001,7 @@ namespace lfs::vis {
                 if (tool_context_) {
                     if (auto* sm = tool_context_->getSceneManager()) {
                         const auto ellipsoid_id = sm->getSelectedNodeEllipsoidId();
-                        if (ellipsoid_id != NULL_NODE) {
+                        if (ellipsoid_id != core::NULL_NODE) {
                             cmd::ApplyEllipsoid{}.emit();
                             return;
                         }
@@ -1434,7 +1434,7 @@ namespace lfs::vis {
         if (!sm)
             return;
         for (const auto* node : sm->getScene().getNodes()) {
-            if (node->type == NodeType::CAMERA && node->camera_uid == uid) {
+            if (node->type == core::NodeType::CAMERA && node->camera_uid == uid) {
                 sm->selectNode(node->name);
                 return;
             }
@@ -1455,7 +1455,7 @@ namespace lfs::vis {
         glm::vec3 total_max(std::numeric_limits<float>::lowest());
 
         // Accumulate world-space AABB from node's local bounds
-        const auto accumulateBounds = [&](const SceneNode* node) {
+        const auto accumulateBounds = [&](const core::SceneNode* node) {
             glm::vec3 local_min, local_max;
             if (!scene.getNodeBounds(node->id, local_min, local_max))
                 return;
@@ -1475,8 +1475,8 @@ namespace lfs::vis {
         if (selected.empty()) {
             // Focus on entire scene (skip group nodes)
             for (const auto* node : scene.getNodes()) {
-                if (node->type == NodeType::GROUP || node->type == NodeType::CAMERA_GROUP ||
-                    node->type == NodeType::IMAGE_GROUP)
+                if (node->type == core::NodeType::GROUP || node->type == core::NodeType::CAMERA_GROUP ||
+                    node->type == core::NodeType::IMAGE_GROUP)
                     continue;
                 accumulateBounds(node);
             }

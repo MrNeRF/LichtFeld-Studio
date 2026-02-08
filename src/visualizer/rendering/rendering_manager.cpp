@@ -847,11 +847,11 @@ namespace lfs::vis {
         if (settings_.use_ellipsoid || settings_.show_ellipsoid) {
             const auto& scene = scene_manager->getScene();
             const auto visible_ellipsoids = scene.getVisibleEllipsoids();
-            const NodeId selected_ellipsoid_id = scene_manager->getSelectedNodeEllipsoidId();
+            const core::NodeId selected_ellipsoid_id = scene_manager->getSelectedNodeEllipsoidId();
             for (const auto& el : visible_ellipsoids) {
                 if (!el.data)
                     continue;
-                if (selected_ellipsoid_id != NULL_NODE && el.node_id != selected_ellipsoid_id)
+                if (selected_ellipsoid_id != core::NULL_NODE && el.node_id != selected_ellipsoid_id)
                     continue;
                 request.ellipsoid = lfs::rendering::Ellipsoid{
                     .radii = el.data->radii,
@@ -1592,7 +1592,7 @@ namespace lfs::vis {
         // Render wireframe overlays before grid
         if (settings_.show_crop_box && engine_ && context.scene_manager) {
             const auto visible_cropboxes = context.scene_manager->getScene().getVisibleCropBoxes();
-            const NodeId selected_cropbox_id = context.scene_manager->getSelectedNodeCropBoxId();
+            const core::NodeId selected_cropbox_id = context.scene_manager->getSelectedNodeCropBoxId();
 
             for (const auto& cb : visible_cropboxes) {
                 if (!cb.data)
@@ -1629,7 +1629,7 @@ namespace lfs::vis {
         // Render ellipsoid wireframe overlays
         if (settings_.show_ellipsoid && engine_ && context.scene_manager) {
             const auto visible_ellipsoids = context.scene_manager->getScene().getVisibleEllipsoids();
-            const NodeId selected_ellipsoid_id = context.scene_manager->getSelectedNodeEllipsoidId();
+            const core::NodeId selected_ellipsoid_id = context.scene_manager->getSelectedNodeEllipsoidId();
 
             for (const auto& el : visible_ellipsoids) {
                 if (!el.data)

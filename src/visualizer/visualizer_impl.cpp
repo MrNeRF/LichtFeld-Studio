@@ -1161,7 +1161,7 @@ namespace lfs::vis {
             std::vector<std::string> splat_names;
             splat_names.reserve(nodes.size());
             for (const auto* node : nodes) {
-                if (node->type == NodeType::SPLAT) {
+                if (node->type == core::NodeType::SPLAT) {
                     splat_names.push_back(node->name);
                 }
             }

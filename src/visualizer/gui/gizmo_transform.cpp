@@ -56,8 +56,8 @@ namespace lfs::vis::gui {
         }
 
         glm::vec3 computeLocalPivot(
-            const Scene& scene,
-            NodeId target_id,
+            const core::Scene& scene,
+            core::NodeId target_id,
             PivotMode mode,
             GizmoTargetType type) {
 
@@ -103,7 +103,7 @@ namespace lfs::vis::gui {
         }
 
         GizmoTransformContext captureCropBox(
-            const Scene& scene,
+            const core::Scene& scene,
             const std::string& name,
             const glm::vec3& pivot_world,
             const glm::vec3& pivot_local,
@@ -134,7 +134,7 @@ namespace lfs::vis::gui {
             const glm::vec3 bounds_center = (node->cropbox->min + node->cropbox->max) * 0.5f;
             state.world_position = glm::vec3(world_transform * glm::vec4(bounds_center, 1.0f));
 
-            if (node->parent_id != NULL_NODE) {
+            if (node->parent_id != core::NULL_NODE) {
                 const glm::mat4 parent_world = scene.getWorldTransform(node->parent_id);
                 state.parent_world_inverse = glm::inverse(parent_world);
             } else {
@@ -149,7 +149,7 @@ namespace lfs::vis::gui {
         }
 
         GizmoTransformContext captureEllipsoid(
-            const Scene& scene,
+            const core::Scene& scene,
             const std::string& name,
             const glm::vec3& pivot_world,
             const glm::vec3& pivot_local,
@@ -179,7 +179,7 @@ namespace lfs::vis::gui {
             const glm::mat4 world_transform = scene.getWorldTransform(node->id);
             state.world_position = extractTranslation(world_transform);
 
-            if (node->parent_id != NULL_NODE) {
+            if (node->parent_id != core::NULL_NODE) {
                 const glm::mat4 parent_world = scene.getWorldTransform(node->parent_id);
                 state.parent_world_inverse = glm::inverse(parent_world);
             } else {
@@ -194,7 +194,7 @@ namespace lfs::vis::gui {
 
         void applyTranslation(
             GizmoTransformContext& ctx,
-            Scene& scene,
+            core::Scene& scene,
             const glm::vec3& new_pivot_world) {
 
             const glm::vec3 delta = new_pivot_world - ctx.pivot_world;
@@ -230,7 +230,7 @@ namespace lfs::vis::gui {
 
         void applyRotation(
             GizmoTransformContext& ctx,
-            Scene& scene,
+            core::Scene& scene,
             const glm::mat3& delta_rotation) {
 
             // Accumulate rotation in world space
@@ -273,7 +273,7 @@ namespace lfs::vis::gui {
 
         void applyScale(
             GizmoTransformContext& ctx,
-            Scene& scene,
+            core::Scene& scene,
             const glm::vec3& delta_scale,
             const glm::vec3& new_pivot_world) {
 
@@ -311,7 +311,7 @@ namespace lfs::vis::gui {
 
         void applyBoundsScale(
             GizmoTransformContext& ctx,
-            Scene& scene,
+            core::Scene& scene,
             const glm::vec3& new_size) {
 
             assert(ctx.targets.size() == 1);
@@ -339,12 +339,12 @@ namespace lfs::vis::gui {
         }
 
         MultiNodeCapture captureNodes(
-            const Scene& scene,
+            const core::Scene& scene,
             const std::vector<std::string>& selected_names) {
 
             MultiNodeCapture capture;
 
-            std::unordered_set<NodeId> selected_ids;
+            std::unordered_set<core::NodeId> selected_ids;
             for (const auto& name : selected_names) {
                 if (const auto* node = scene.getNode(name)) {
                     selected_ids.insert(node->id);
@@ -359,13 +359,13 @@ namespace lfs::vis::gui {
                     continue;
 
                 bool ancestor_selected = false;
-                for (NodeId check_id = node->parent_id; check_id != NULL_NODE;) {
+                for (core::NodeId check_id = node->parent_id; check_id != core::NULL_NODE;) {
                     if (selected_ids.count(check_id)) {
                         ancestor_selected = true;
                         break;
                     }
                     const auto* parent = scene.getNodeById(check_id);
-                    check_id = parent ? parent->parent_id : NULL_NODE;
+                    check_id = parent ? parent->parent_id : core::NULL_NODE;
                 }
 
                 if (!ancestor_selected) {
@@ -388,7 +388,7 @@ namespace lfs::vis::gui {
                 capture.world_positions.emplace_back(world_t[3]);
 
                 glm::mat4 parent_world(1.0f);
-                if (node->parent_id != NULL_NODE) {
+                if (node->parent_id != core::NULL_NODE) {
                     parent_world = scene.getWorldTransform(node->parent_id);
                 }
                 capture.parent_world_inverses.push_back(glm::inverse(parent_world));
@@ -399,7 +399,7 @@ namespace lfs::vis::gui {
 
         void applyMultiTranslation(
             const MultiNodeCapture& capture,
-            Scene& scene,
+            core::Scene& scene,
             const glm::vec3& cumulative_delta) {
 
             for (size_t i = 0; i < capture.node_names.size(); ++i) {
@@ -426,7 +426,7 @@ namespace lfs::vis::gui {
 
         void applyMultiRotation(
             const MultiNodeCapture& capture,
-            Scene& scene,
+            core::Scene& scene,
             const glm::mat3& cumulative_rotation,
             const glm::vec3& pivot_world) {
 
@@ -466,7 +466,7 @@ namespace lfs::vis::gui {
 
         void applyMultiScale(
             const MultiNodeCapture& capture,
-            Scene& scene,
+            core::Scene& scene,
             const glm::vec3& cumulative_scale,
             const glm::vec3& pivot_world) {
 

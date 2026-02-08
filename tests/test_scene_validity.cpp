@@ -21,7 +21,7 @@ namespace lfs::python {
             set_application_scene(nullptr);
         }
 
-        vis::Scene dummy_scene_;
+        core::Scene dummy_scene_;
     };
 
     TEST_F(SceneValidityTest, GenerationNonNegative) {

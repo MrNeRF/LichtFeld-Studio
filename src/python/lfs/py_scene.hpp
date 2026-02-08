@@ -399,6 +399,7 @@ namespace lfs::python {
         std::optional<PySceneNode> get_node(const std::string& name);
         std::vector<PySceneNode> get_nodes();
         std::vector<PySceneNode> get_visible_nodes();
+        std::vector<PySceneNode> get_active_cameras();
         bool is_node_effectively_visible(int32_t id) const {
             return scene_->isNodeEffectivelyVisible(id);
         }

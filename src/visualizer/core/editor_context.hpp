@@ -89,7 +89,7 @@ namespace lfs::vis {
 
         // Selection queries
         [[nodiscard]] bool hasSelection() const { return has_selection_; }
-        [[nodiscard]] NodeType getSelectedNodeType() const { return selected_node_type_; }
+        [[nodiscard]] core::NodeType getSelectedNodeType() const { return selected_node_type_; }
 
         // Tool availability
         [[nodiscard]] bool isToolAvailable(ToolType tool) const;
@@ -135,7 +135,7 @@ namespace lfs::vis {
 
     private:
         EditorMode mode_ = EditorMode::EMPTY;
-        NodeType selected_node_type_ = NodeType::SPLAT;
+        core::NodeType selected_node_type_ = core::NodeType::SPLAT;
         ToolType active_tool_ = ToolType::None;
         bool has_selection_ = false;
         bool has_gaussians_ = false;
@@ -149,7 +149,7 @@ namespace lfs::vis {
         InvokeOperatorCallback invoke_operator_cb_;
         ModalEventCallback modal_event_cb_;
 
-        [[nodiscard]] static bool isTransformableNodeType(NodeType type);
+        [[nodiscard]] static bool isTransformableNodeType(core::NodeType type);
     };
 
 } // namespace lfs::vis

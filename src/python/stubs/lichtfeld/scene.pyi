@@ -435,8 +435,8 @@ class Scene:
     def get_node(self, name: str) -> SceneNode | None:
         """Find a node by name (None if not found)"""
 
-    def get_nodes(self) -> list[SceneNode]:
-        """Get all nodes in the scene"""
+    def get_nodes(self, type: NodeType | None = None) -> list[SceneNode]:
+        """Get nodes, optionally filtered by NodeType"""
 
     def get_visible_nodes(self) -> list[SceneNode]:
         """Get all visible nodes in the scene"""

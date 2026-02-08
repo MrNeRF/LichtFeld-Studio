@@ -153,8 +153,8 @@ namespace lfs::vis::gui {
             if (!sm)
                 return;
 
-            const NodeId cropbox_id = sm->getSelectedNodeCropBoxId();
-            if (cropbox_id == NULL_NODE)
+            const core::NodeId cropbox_id = sm->getSelectedNodeCropBoxId();
+            if (cropbox_id == core::NULL_NODE)
                 return;
 
             const auto* cropbox_node = sm->getScene().getNodeById(cropbox_id);
@@ -175,8 +175,8 @@ namespace lfs::vis::gui {
             if (!sm)
                 return;
 
-            const NodeId ellipsoid_id = sm->getSelectedNodeEllipsoidId();
-            if (ellipsoid_id == NULL_NODE)
+            const core::NodeId ellipsoid_id = sm->getSelectedNodeEllipsoidId();
+            if (ellipsoid_id == core::NULL_NODE)
                 return;
 
             const auto* ellipsoid_node = sm->getScene().getNodeById(ellipsoid_id);
@@ -200,8 +200,8 @@ namespace lfs::vis::gui {
             if (!sm)
                 return;
 
-            const NodeId cropbox_id = sm->getSelectedNodeCropBoxId();
-            if (cropbox_id == NULL_NODE)
+            const core::NodeId cropbox_id = sm->getSelectedNodeCropBoxId();
+            if (cropbox_id == core::NULL_NODE)
                 return;
 
             auto* node = sm->getScene().getMutableNode(sm->getScene().getNodeById(cropbox_id)->name);
@@ -325,7 +325,7 @@ namespace lfs::vis::gui {
             return;
 
         const auto selected_type = scene_manager->getSelectedNodeType();
-        if (selected_type == NodeType::CROPBOX || selected_type == NodeType::ELLIPSOID)
+        if (selected_type == core::NodeType::CROPBOX || selected_type == core::NodeType::ELLIPSOID)
             return;
 
         const auto& scene = scene_manager->getScene();
@@ -429,7 +429,7 @@ namespace lfs::vis::gui {
             gizmo_cumulative_rotation_ = glm::mat3(1.0f);
             gizmo_cumulative_scale_ = glm::vec3(1.0f);
 
-            std::unordered_set<NodeId> selected_ids;
+            std::unordered_set<core::NodeId> selected_ids;
             for (const auto& name : selected_names) {
                 if (const auto* node = scene.getNode(name)) {
                     selected_ids.insert(node->id);
@@ -443,13 +443,13 @@ namespace lfs::vis::gui {
                     continue;
 
                 bool ancestor_selected = false;
-                for (NodeId check_id = node->parent_id; check_id != NULL_NODE;) {
+                for (core::NodeId check_id = node->parent_id; check_id != core::NULL_NODE;) {
                     if (selected_ids.count(check_id)) {
                         ancestor_selected = true;
                         break;
                     }
                     const auto* parent = scene.getNodeById(check_id);
-                    check_id = parent ? parent->parent_id : NULL_NODE;
+                    check_id = parent ? parent->parent_id : core::NULL_NODE;
                 }
 
                 if (!ancestor_selected) {
@@ -475,7 +475,7 @@ namespace lfs::vis::gui {
                 node_original_scales_.push_back(extractScale(local_t));
 
                 glm::mat4 parent_world(1.0f);
-                if (node->parent_id != NULL_NODE) {
+                if (node->parent_id != core::NULL_NODE) {
                     parent_world = scene.getWorldTransform(node->parent_id);
                 }
 
@@ -568,7 +568,7 @@ namespace lfs::vis::gui {
 
                 const auto& sm_scene = scene_manager->getScene();
                 const auto* node = sm_scene.getNode(*selected_names.begin());
-                const glm::mat4 parent_world_inv = (node && node->parent_id != NULL_NODE)
+                const glm::mat4 parent_world_inv = (node && node->parent_id != core::NULL_NODE)
                                                        ? glm::inverse(sm_scene.getWorldTransform(node->parent_id))
                                                        : glm::mat4(1.0f);
                 const glm::vec3 new_gizmo_pos = glm::vec3(parent_world_inv * glm::vec4(new_gizmo_pos_world, 1.0f));
@@ -625,11 +625,11 @@ namespace lfs::vis::gui {
         if (node_gizmo_active_ && render_manager) {
             for (const auto& name : selected_names) {
                 const auto* node = scene.getNode(name);
-                if (!node || node->type != NodeType::SPLAT)
+                if (!node || node->type != core::NodeType::SPLAT)
                     continue;
 
-                const NodeId cropbox_id = scene.getCropBoxForSplat(node->id);
-                if (cropbox_id != NULL_NODE) {
+                const core::NodeId cropbox_id = scene.getCropBoxForSplat(node->id);
+                if (cropbox_id != core::NULL_NODE) {
                     const auto* cropbox_node = scene.getNodeById(cropbox_id);
                     if (cropbox_node && cropbox_node->cropbox) {
                         const glm::mat4 cropbox_world = scene.getWorldTransform(cropbox_id);
@@ -638,8 +638,8 @@ namespace lfs::vis::gui {
                     }
                 }
 
-                const NodeId ellipsoid_id = scene.getEllipsoidForSplat(node->id);
-                if (ellipsoid_id != NULL_NODE) {
+                const core::NodeId ellipsoid_id = scene.getEllipsoidForSplat(node->id);
+                if (ellipsoid_id != core::NULL_NODE) {
                     const auto* ellipsoid_node = scene.getNodeById(ellipsoid_id);
                     if (ellipsoid_node && ellipsoid_node->ellipsoid) {
                         const glm::mat4 ellipsoid_world = scene.getWorldTransform(ellipsoid_id);
@@ -663,14 +663,14 @@ namespace lfs::vis::gui {
         if (!settings.show_crop_box)
             return;
 
-        NodeId cropbox_id = NULL_NODE;
-        const SceneNode* cropbox_node = nullptr;
+        core::NodeId cropbox_id = core::NULL_NODE;
+        const core::SceneNode* cropbox_node = nullptr;
 
-        if (scene_manager->getSelectedNodeType() == NodeType::CROPBOX) {
+        if (scene_manager->getSelectedNodeType() == core::NodeType::CROPBOX) {
             cropbox_id = scene_manager->getSelectedNodeCropBoxId();
         }
 
-        if (cropbox_id == NULL_NODE)
+        if (cropbox_id == core::NULL_NODE)
             return;
 
         cropbox_node = scene_manager->getScene().getNodeById(cropbox_id);
@@ -837,14 +837,14 @@ namespace lfs::vis::gui {
         if (!settings.show_ellipsoid)
             return;
 
-        NodeId ellipsoid_id = NULL_NODE;
-        const SceneNode* ellipsoid_node = nullptr;
+        core::NodeId ellipsoid_id = core::NULL_NODE;
+        const core::SceneNode* ellipsoid_node = nullptr;
 
-        if (scene_manager->getSelectedNodeType() == NodeType::ELLIPSOID) {
+        if (scene_manager->getSelectedNodeType() == core::NodeType::ELLIPSOID) {
             ellipsoid_id = scene_manager->getSelectedNodeEllipsoidId();
         }
 
-        if (ellipsoid_id == NULL_NODE)
+        if (ellipsoid_id == core::NULL_NODE)
             return;
 
         ellipsoid_node = scene_manager->getScene().getNodeById(ellipsoid_id);
@@ -1158,8 +1158,8 @@ namespace lfs::vis::gui {
                                     std::chrono::steady_clock::now() - crop_flash_start_)
                                     .count();
 
-        const NodeId cropbox_id = sm->getSelectedNodeCropBoxId();
-        if (cropbox_id == NULL_NODE) {
+        const core::NodeId cropbox_id = sm->getSelectedNodeCropBoxId();
+        if (cropbox_id == core::NULL_NODE) {
             crop_flash_active_ = false;
             return;
         }

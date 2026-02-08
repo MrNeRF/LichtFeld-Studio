@@ -99,6 +99,7 @@ namespace lfs::core {
         // Camera data (for CAMERA nodes) - node owns the Camera object directly
         std::shared_ptr<lfs::core::Camera> camera;
         int camera_uid = -1; // Camera unique identifier (for GoToCamView)
+        bool training_enabled = true;
 
         // Image data (for IMAGE and CAMERA nodes) - just the filename, not loaded
         std::string image_path; // Path to image file
@@ -294,6 +295,12 @@ namespace lfs::core {
         // Camera access (iterates CAMERA nodes)
         [[nodiscard]] std::shared_ptr<const lfs::core::Camera> getCameraByUid(int uid) const;
         [[nodiscard]] std::vector<std::shared_ptr<lfs::core::Camera>> getAllCameras() const;
+        [[nodiscard]] std::vector<std::shared_ptr<lfs::core::Camera>> getActiveCameras() const;
+        [[nodiscard]] size_t getActiveCameraCount() const;
+        void setCameraTrainingEnabled(const std::string& name, bool enabled);
+
+        // Get UIDs of cameras with training disabled (for frustum rendering dimming)
+        [[nodiscard]] std::unordered_set<int> getTrainingDisabledCameraUids() const;
 
         // Get the primary training model node (for Trainer to operate on)
         // Returns nullptr if no training model exists
@@ -390,15 +397,3 @@ namespace lfs::core {
     };
 
 } // namespace lfs::core
-
-// Backwards-compatible aliases — Scene was moved from lfs::vis to lfs::core
-namespace lfs::vis {
-    using Scene = lfs::core::Scene;
-    using SceneNode = lfs::core::SceneNode;
-    using NodeId = lfs::core::NodeId;
-    using NodeType = lfs::core::NodeType;
-    using CropBoxData = lfs::core::CropBoxData;
-    using EllipsoidData = lfs::core::EllipsoidData;
-    using SelectionGroup = lfs::core::SelectionGroup;
-    constexpr auto NULL_NODE = lfs::core::NULL_NODE;
-} // namespace lfs::vis

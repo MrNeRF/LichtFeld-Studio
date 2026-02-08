@@ -65,7 +65,7 @@ namespace {
         // Phase 1: Train to checkpoint iteration
         {
             auto params = createParams(CHECKPOINT_ITER);
-            lfs::vis::Scene scene;
+            lfs::core::Scene scene;
 
             auto load_result = lfs::training::loadTrainingDataIntoScene(params, scene);
             ASSERT_TRUE(load_result.has_value()) << "Failed to load training data: " << load_result.error();
@@ -99,7 +99,7 @@ namespace {
             auto params = createParams(RESUME_ITER);
             params.resume_checkpoint = checkpoint_path;
 
-            lfs::vis::Scene scene;
+            lfs::core::Scene scene;
 
             auto load_result = lfs::training::loadTrainingDataIntoScene(params, scene);
             ASSERT_TRUE(load_result.has_value()) << "Failed to load training data: " << load_result.error();

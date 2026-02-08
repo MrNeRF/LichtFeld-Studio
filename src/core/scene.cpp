@@ -2003,24 +2003,6 @@ namespace lfs::core {
         return result;
     }
 
-<<<<<<< Updated upstream:src/visualizer/scene/scene.cpp
-    void Scene::setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp,
-                                   std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool) {
-        appearance_ppisp_ = std::move(ppisp);
-        appearance_controller_pool_ = std::move(controller_pool);
-        LOG_INFO("Scene: appearance model set (PPISP: {}, Controllers: {})",
-                 appearance_ppisp_ ? "yes" : "no",
-                 appearance_controller_pool_ ? appearance_controller_pool_->num_cameras() : 0);
-    }
-
-    void Scene::clearAppearanceModel() {
-        appearance_ppisp_.reset();
-        appearance_controller_pool_.reset();
-        LOG_DEBUG("Scene: appearance model cleared");
-    }
-
-} // namespace lfs::vis
-=======
     std::vector<std::shared_ptr<lfs::core::Camera>> Scene::getActiveCameras() const {
         std::vector<std::shared_ptr<lfs::core::Camera>> result;
         for (const auto& node : nodes_) {
@@ -2051,4 +2033,3 @@ namespace lfs::core {
     }
 
 } // namespace lfs::core
->>>>>>> Stashed changes:src/core/scene.cpp
