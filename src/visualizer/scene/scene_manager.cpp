@@ -894,6 +894,7 @@ namespace lfs::vis {
             selected_nodes_.insert(cropbox->name);
         }
 
+        scene_.notifyMutation(core::Scene::MutationType::SELECTION_CHANGED);
         LOG_DEBUG("Auto-selected cropbox '{}'", cropbox->name);
     }
 
@@ -1258,6 +1259,7 @@ namespace lfs::vis {
             selected_nodes_.insert(ellipsoid->name);
         }
 
+        scene_.notifyMutation(core::Scene::MutationType::SELECTION_CHANGED);
         LOG_DEBUG("Auto-selected ellipsoid '{}'", ellipsoid->name);
     }
 
@@ -2569,6 +2571,7 @@ namespace lfs::vis {
             rm->markDirty();
         }
 
+        scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         LOG_INFO("Reset cropbox '{}'", cropbox_node->name);
     }
 
@@ -2603,6 +2606,7 @@ namespace lfs::vis {
             rm->markDirty();
         }
 
+        scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         LOG_INFO("Reset ellipsoid '{}'", ellipsoid_node->name);
     }
 
