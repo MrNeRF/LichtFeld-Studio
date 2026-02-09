@@ -332,10 +332,7 @@ namespace lfs::training::kernels {
                 case 2:  // gamma: target=1.0, min_value=0.1
                     raw_value = bounded_positive_inverse(1.0f, 0.1f);
                     break;
-                case 3:  // center: sigmoid(0) = 0.5 (identity)
-                    raw_value = 0.0f;
-                    break;
-                default:
+                default:  // case 3: center: sigmoid(0) = 0.5 (identity)
                     raw_value = 0.0f;
                     break;
             }
