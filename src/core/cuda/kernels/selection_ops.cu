@@ -360,7 +360,7 @@ namespace lfs::core::cuda {
         assert(mask.dtype() == DataType::UInt8);
         assert(means.dtype() == DataType::Float32);
         assert(mask.numel() == means.size(0));
-        assert(means.shape().size() == 2 && means.size(1) == 3);
+        assert(means.ndim() == 2 && means.size(1) == 3);
         assert(radius > 0.0f);
 
         nvtxRangePush("selection_grow");
@@ -396,7 +396,7 @@ namespace lfs::core::cuda {
         assert(mask.dtype() == DataType::UInt8);
         assert(means.dtype() == DataType::Float32);
         assert(mask.numel() == means.size(0));
-        assert(means.shape().size() == 2 && means.size(1) == 3);
+        assert(means.ndim() == 2 && means.size(1) == 3);
         assert(radius > 0.0f);
 
         nvtxRangePush("selection_shrink");
@@ -455,7 +455,7 @@ namespace lfs::core::cuda {
     Tensor select_by_scale(const Tensor& scale_raw, float max_scale, uint8_t group_id) {
         assert(scale_raw.device() == Device::CUDA);
         assert(scale_raw.dtype() == DataType::Float32);
-        assert(scale_raw.shape().size() == 2 && scale_raw.size(1) == 3);
+        assert(scale_raw.ndim() == 2 && scale_raw.size(1) == 3);
 
         nvtxRangePush("select_by_scale");
 
