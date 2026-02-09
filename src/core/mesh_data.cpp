@@ -40,7 +40,8 @@ namespace lfs::core {
 
         mesh.update_normals();
 
-        normals = Tensor::empty({nv, 3}, Device::CPU, DataType::Float32);
+        const size_t n = static_cast<size_t>(nv);
+        normals = Tensor::empty({n, 3}, Device::CPU, DataType::Float32);
         auto nacc = normals.accessor<float, 2>();
         for (int64_t i = 0; i < nv; ++i) {
             const auto n = mesh.normal(vhandles[i]);
