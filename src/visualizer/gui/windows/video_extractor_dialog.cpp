@@ -751,7 +751,7 @@ namespace lfs::gui {
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
-            ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.2f, 1.0f), LOC(VideoExtractor::ERROR), error_message_.c_str());
+            ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.2f, 1.0f), LOC(VideoExtractor::ERROR_MSG), error_message_.c_str());
 
             if (ImGui::Button(LOC(VideoExtractor::DISMISS), ImVec2(100, 30))) {
                 error_message_.clear();

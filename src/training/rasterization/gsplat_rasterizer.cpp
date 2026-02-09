@@ -331,8 +331,7 @@ namespace lfs::training {
         // Convert from [1, H, W, C] to [C, H, W] format
         // IMPORTANT: squeeze(0).permute({2,0,1}).contiguous() copies data out of arena
         if (final_image.is_valid() && final_image.numel() > 0) {
-            auto pre_clamp = final_image.squeeze(0).permute({2, 0, 1}).contiguous();
-            render_output.image = pre_clamp.clamp(0.0f, 1.0f);
+            render_output.image = final_image.squeeze(0).permute({2, 0, 1}).contiguous();
         }
 
         render_output.alpha = render_alphas_tensor.squeeze(0).permute({2, 0, 1}).contiguous();

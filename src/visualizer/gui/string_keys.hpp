@@ -908,7 +908,7 @@ namespace lichtfeld::Strings {
         inline constexpr const char* COMPLETE = "video_extractor.complete";
         inline constexpr const char* EXTRACTED = "video_extractor.extracted";
         inline constexpr const char* OK = "video_extractor.ok";
-        inline constexpr const char* ERROR = "video_extractor.error";
+        inline constexpr const char* ERROR_MSG = "video_extractor.error";
         inline constexpr const char* DISMISS = "video_extractor.dismiss";
     } // namespace VideoExtractor
 

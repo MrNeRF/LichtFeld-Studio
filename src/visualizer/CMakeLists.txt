@@ -66,6 +66,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Scene management
         scene/scene_manager.cpp
+        scene/selection_state.cpp
 
         # Input handling
         input/input_controller.cpp

@@ -289,6 +289,14 @@ namespace lfs::training::kernels {
         params[idx] -= lr * m_hat / (v_hat_sqrt + eps);
     }
 
+    // Inverse of bounded_positive_forward: find raw value that produces target
+    // bounded_positive_forward(raw, min_value) = min_value + log(1 + exp(raw))
+    // Inverse: raw = log(exp(target - min_value) - 1)
+    __device__ __forceinline__ float bounded_positive_inverse(float target, float min_value) {
+        float delta = target - min_value;
+        return __logf(__expf(delta) - 1.0f);
+    }
+
     // Initialize parameters to zero/identity
     __global__ void ppisp_init_identity_kernel(float* exposure, float* vignetting, float* color, float* crf,
                                                int num_cameras, int num_frames) {
@@ -308,9 +316,27 @@ namespace lfs::training::kernels {
             color[idx] = 0.0f;
         }
 
+        // CRF: Initialize to identity curve (toe=1, shoulder=1, gamma=1, center=0.5)
+        // CRF layout: [num_cameras * 3 channels * 4 params] where params are [toe, shoulder, gamma, center]
         int crf_total = num_cameras * 3 * 4;
         if (idx < crf_total) {
-            crf[idx] = 0.0f;
+            int param_idx = idx % 4; // Which of the 4 CRF params
+            float raw_value;
+            switch (param_idx) {
+            case 0: // toe: target=1.0, min_value=0.3
+                raw_value = bounded_positive_inverse(1.0f, 0.3f);
+                break;
+            case 1: // shoulder: target=1.0, min_value=0.3
+                raw_value = bounded_positive_inverse(1.0f, 0.3f);
+                break;
+            case 2: // gamma: target=1.0, min_value=0.1
+                raw_value = bounded_positive_inverse(1.0f, 0.1f);
+                break;
+            default: // case 3: center: sigmoid(0) = 0.5 (identity)
+                raw_value = 0.0f;
+                break;
+            }
+            crf[idx] = raw_value;
         }
     }
 

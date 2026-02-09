@@ -240,8 +240,7 @@ namespace lfs::python {
     }
 
     void PyMenuRegistry::sync_from_python() const {
-        nb::gil_scoped_acquire gil;
-
+        // GIL is already held by callers (bridge functions in python_runtime.cpp)
         try {
             auto menus_module = nb::module_::import_("lfs_plugins.layouts.menus");
             auto get_menu_classes = menus_module.attr("get_menu_classes");

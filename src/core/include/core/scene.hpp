@@ -111,6 +111,33 @@ namespace lfs::core {
 
     class LFS_CORE_API Scene {
     public:
+        using Node = SceneNode;
+
+        enum class MutationType : uint32_t {
+            NODE_ADDED = 1 << 0,
+            NODE_REMOVED = 1 << 1,
+            NODE_RENAMED = 1 << 2,
+            NODE_REPARENTED = 1 << 3,
+            TRANSFORM_CHANGED = 1 << 4,
+            VISIBILITY_CHANGED = 1 << 5,
+            MODEL_CHANGED = 1 << 6,
+            SELECTION_CHANGED = 1 << 7,
+            CLEARED = 1 << 8,
+        };
+
+        void notifyMutation(MutationType type);
+
+        class LFS_CORE_API Transaction {
+        public:
+            explicit Transaction(Scene& scene);
+            ~Transaction();
+            Transaction(const Transaction&) = delete;
+            Transaction& operator=(const Transaction&) = delete;
+
+        private:
+            Scene& scene_;
+        };
+
         Scene();
         ~Scene() = default;
 
@@ -258,6 +285,7 @@ namespace lfs::core {
         std::vector<const SceneNode*> getNodes() const;
         const SceneNode* getNode(const std::string& name) const;
         SceneNode* getMutableNode(const std::string& name);
+        [[nodiscard]] NodeId getNodeIdByName(const std::string& name) const;
         bool hasNodes() const { return !nodes_.empty(); }
 
         std::vector<const SceneNode*> getVisibleNodes() const;
@@ -282,8 +310,12 @@ namespace lfs::core {
     private:
         std::vector<std::unique_ptr<SceneNode>> nodes_;
         std::unordered_map<NodeId, size_t> id_to_index_;
+        std::unordered_map<std::string, NodeId> name_to_id_;
         NodeId next_node_id_ = 0;
 
+        uint32_t pending_mutations_ = 0;
+        int transaction_depth_ = 0;
+        void flushMutations();
         mutable std::atomic<int> export_pin_count_{0};
         mutable std::unique_ptr<lfs::core::SplatData> cached_combined_;
         mutable std::shared_ptr<lfs::core::Tensor> cached_transform_indices_;

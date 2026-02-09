@@ -26,6 +26,7 @@
 #include "visualizer_impl.hpp"
 #include <GLFW/glfw3.h>
 #include <array>
+#include <cassert>
 #include <glm/gtc/type_ptr.hpp>
 #include <unordered_set>
 
@@ -63,6 +64,7 @@ namespace lfs::vis::gui {
                 t->setEnabled(false);
             if (auto* const sm = viewer_->getSceneManager())
                 sm->syncCropBoxToRenderSettings();
+            node_bounds_cache_valid_ = false;
         });
 
         ui::NodeDeselected::when([this](const auto&) {
@@ -71,6 +73,7 @@ namespace lfs::vis::gui {
                 t->setEnabled(false);
             if (auto* const t = viewer_->getAlignTool())
                 t->setEnabled(false);
+            node_bounds_cache_valid_ = false;
         });
 
         state::PLYRemoved::when([this](const auto&) { deactivateAllTools(); });
@@ -361,21 +364,86 @@ namespace lfs::vis::gui {
                                           ? glm::vec3(0.0f)
                                           : scene_manager->getSelectionCenter();
 
-        const glm::vec3 gizmo_position = node_gizmo_active_
-                                             ? gizmo_pivot_
-                                             : (is_multi_selection
-                                                    ? scene_manager->getSelectionWorldCenter()
-                                                    : glm::vec3(scene_manager->getSelectedNodeWorldTransform() *
-                                                                glm::vec4(local_pivot, 1.0f)));
+        bool has_valid_bounds = false;
+        const bool use_bounds_scale = !is_multi_selection && node_gizmo_operation_ == ImGuizmo::SCALE;
+
+        const auto* first_node = (!is_multi_selection && !selected_names.empty())
+                                     ? scene.getNode(*selected_names.begin())
+                                     : nullptr;
+
+        glm::vec3 bounds_min(0.0f), bounds_max(0.0f);
+        glm::mat4 world_transform(1.0f);
+        glm::vec3 world_scale(1.0f);
+        glm::mat3 node_rotation(1.0f);
+
+        if (use_bounds_scale && first_node) {
+            world_transform = scene.getWorldTransform(first_node->id);
+            world_scale = extractScale(world_transform);
+            node_rotation = extractRotation(world_transform);
+
+            if (node_bounds_scale_active_) {
+                has_valid_bounds = true;
+                bounds_min = node_bounds_min_;
+                bounds_max = node_bounds_max_;
+            } else {
+                if (!node_bounds_cache_valid_ || node_bounds_cache_node_id_ != first_node->id) {
+                    if (scene.getNodeBounds(first_node->id, node_bounds_cache_min_, node_bounds_cache_max_)) {
+                        node_bounds_cache_valid_ = true;
+                        node_bounds_cache_node_id_ = first_node->id;
+                    } else {
+                        node_bounds_cache_valid_ = false;
+                    }
+                }
+                if (node_bounds_cache_valid_) {
+                    has_valid_bounds = true;
+                    bounds_min = node_bounds_cache_min_;
+                    bounds_max = node_bounds_cache_max_;
+                }
+            }
+        }
+
+        const bool actually_using_bounds = use_bounds_scale && has_valid_bounds;
 
         glm::mat4 gizmo_matrix(1.0f);
-        gizmo_matrix[3] = glm::vec4(gizmo_position, 1.0f);
+        if (actually_using_bounds) {
+            const glm::vec3 bounds_size = bounds_max - bounds_min;
+            const glm::vec3 bounds_center_local = (bounds_min + bounds_max) * 0.5f;
 
-        if (!is_multi_selection && !use_world_space) {
-            const glm::mat3 rotation_scale(scene_manager->getSelectedNodeWorldTransform());
-            gizmo_matrix[0] = glm::vec4(rotation_scale[0], 0.0f);
-            gizmo_matrix[1] = glm::vec4(rotation_scale[1], 0.0f);
-            gizmo_matrix[2] = glm::vec4(rotation_scale[2], 0.0f);
+            glm::vec3 center_world;
+            if (node_bounds_scale_active_) {
+                const glm::vec3 original_bounds_size = node_bounds_max_ - node_bounds_min_;
+                const glm::vec3 current_size = original_bounds_size * gizmo_cumulative_scale_;
+                const glm::vec3 scaled_center = (node_bounds_min_ + node_bounds_max_) * 0.5f;
+                center_world = glm::vec3(world_transform * glm::vec4(scaled_center, 1.0f));
+
+                gizmo_matrix[3] = glm::vec4(center_world, 1.0f);
+                const glm::vec3 display_size = current_size * world_scale;
+                gizmo_matrix[0] = glm::vec4(node_rotation[0] * display_size.x, 0.0f);
+                gizmo_matrix[1] = glm::vec4(node_rotation[1] * display_size.y, 0.0f);
+                gizmo_matrix[2] = glm::vec4(node_rotation[2] * display_size.z, 0.0f);
+            } else {
+                center_world = glm::vec3(world_transform * glm::vec4(bounds_center_local, 1.0f));
+                gizmo_matrix[3] = glm::vec4(center_world, 1.0f);
+                const glm::vec3 display_size = bounds_size * world_scale;
+                gizmo_matrix[0] = glm::vec4(node_rotation[0] * display_size.x, 0.0f);
+                gizmo_matrix[1] = glm::vec4(node_rotation[1] * display_size.y, 0.0f);
+                gizmo_matrix[2] = glm::vec4(node_rotation[2] * display_size.z, 0.0f);
+            }
+        } else {
+            const glm::vec3 gizmo_position = node_gizmo_active_
+                                                 ? gizmo_pivot_
+                                                 : (is_multi_selection
+                                                        ? scene_manager->getSelectionWorldCenter()
+                                                        : glm::vec3(scene_manager->getSelectedNodeWorldTransform() *
+                                                                    glm::vec4(local_pivot, 1.0f)));
+            gizmo_matrix[3] = glm::vec4(gizmo_position, 1.0f);
+
+            if (!is_multi_selection && !use_world_space) {
+                const glm::mat3 rotation_scale(scene_manager->getSelectedNodeWorldTransform());
+                gizmo_matrix[0] = glm::vec4(rotation_scale[0], 0.0f);
+                gizmo_matrix[1] = glm::vec4(rotation_scale[1], 0.0f);
+                gizmo_matrix[2] = glm::vec4(rotation_scale[2], 0.0f);
+            }
         }
 
         ImGuizmo::SetOrthographic(settings.orthographic);
@@ -388,7 +456,8 @@ namespace lfs::vis::gui {
         if (!is_using) {
             node_hovered_axis_ = ImGuizmo::IsOver(ImGuizmo::TRANSLATE_X) ||
                                  ImGuizmo::IsOver(ImGuizmo::TRANSLATE_Y) ||
-                                 ImGuizmo::IsOver(ImGuizmo::TRANSLATE_Z);
+                                 ImGuizmo::IsOver(ImGuizmo::TRANSLATE_Z) ||
+                                 ImGuizmo::IsOver(ImGuizmo::BOUNDS);
             ImGuizmo::SetAxisMask(false, false, false);
         } else {
             ImGuizmo::SetAxisMask(node_hovered_axis_, node_hovered_axis_, node_hovered_axis_);
@@ -401,16 +470,20 @@ namespace lfs::vis::gui {
         overlay_drawlist->PushClipRect(clip_min, clip_max, true);
         ImGuizmo::SetDrawlist(overlay_drawlist);
 
-        const ImGuizmo::MODE gizmo_mode = use_world_space ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
+        static const float local_bounds[6] = {-0.5f, -0.5f, -0.5f, 0.5f, 0.5f, 0.5f};
+        const ImGuizmo::OPERATION effective_op = actually_using_bounds ? ImGuizmo::BOUNDS : node_gizmo_operation_;
+        const float* bounds_ptr = actually_using_bounds ? local_bounds : nullptr;
+        const ImGuizmo::MODE gizmo_mode = (actually_using_bounds || !use_world_space) ? ImGuizmo::LOCAL : ImGuizmo::WORLD;
 
         glm::mat4 delta_matrix;
         const bool gizmo_changed = ImGuizmo::Manipulate(
             glm::value_ptr(view), glm::value_ptr(projection),
-            node_gizmo_operation_, gizmo_mode,
-            glm::value_ptr(gizmo_matrix), glm::value_ptr(delta_matrix), nullptr);
+            effective_op, gizmo_mode,
+            glm::value_ptr(gizmo_matrix), glm::value_ptr(delta_matrix), nullptr, bounds_ptr);
 
         if (node_gizmo_operation_ == ImGuizmo::ROTATE) {
-            const glm::vec4 clip_pos = projection * view * glm::vec4(gizmo_position, 1.0f);
+            const glm::vec3 pivot_pos = glm::vec3(gizmo_matrix[3]);
+            const glm::vec4 clip_pos = projection * view * glm::vec4(pivot_pos, 1.0f);
             if (clip_pos.w > 0.0f) {
                 const glm::vec2 ndc(clip_pos.x / clip_pos.w, clip_pos.y / clip_pos.w);
                 const ImVec2 screen_pos(viewport.pos.x + (ndc.x * 0.5f + 0.5f) * viewport.size.x,
@@ -425,9 +498,21 @@ namespace lfs::vis::gui {
 
         if (is_using && !node_gizmo_active_) {
             node_gizmo_active_ = true;
-            gizmo_pivot_ = gizmo_position;
+            gizmo_pivot_ = glm::vec3(gizmo_matrix[3]);
             gizmo_cumulative_rotation_ = glm::mat3(1.0f);
             gizmo_cumulative_scale_ = glm::vec3(1.0f);
+
+            if (actually_using_bounds && first_node) {
+                glm::vec3 fresh_min, fresh_max;
+                if (scene.getNodeBounds(first_node->id, fresh_min, fresh_max)) {
+                    node_bounds_min_ = fresh_min;
+                    node_bounds_max_ = fresh_max;
+                    node_bounds_orig_scale_ = extractScale(first_node->local_transform.get());
+                    node_bounds_orig_rotation_ = extractRotation(first_node->local_transform.get());
+                    node_bounds_world_scale_ = world_scale;
+                    node_bounds_scale_active_ = true;
+                }
+            }
 
             std::unordered_set<core::NodeId> selected_ids;
             for (const auto& name : selected_names) {
@@ -562,6 +647,41 @@ namespace lfs::vis::gui {
                         scene_manager->setNodeTransform(node_gizmo_node_names_[i], new_transform);
                     }
                 }
+            } else if (node_bounds_scale_active_) {
+                assert(!is_multi_selection);
+                float mat_trans[3], mat_rot[3], mat_scale[3];
+                ImGuizmo::DecomposeMatrixToComponents(glm::value_ptr(gizmo_matrix), mat_trans, mat_rot, mat_scale);
+
+                const glm::vec3 safe_world_scale = glm::max(node_bounds_world_scale_, glm::vec3(1e-6f));
+                const glm::vec3 new_local_size = glm::max(
+                    glm::vec3(mat_scale[0], mat_scale[1], mat_scale[2]) / safe_world_scale,
+                    glm::vec3(MIN_GIZMO_SCALE));
+
+                const glm::vec3 original_bounds_size = node_bounds_max_ - node_bounds_min_;
+                const glm::vec3 safe_bounds = glm::max(original_bounds_size, glm::vec3(1e-6f));
+                const glm::vec3 scale_ratio = new_local_size / safe_bounds;
+
+                const glm::vec3 new_scale = node_bounds_orig_scale_ * scale_ratio;
+                gizmo_cumulative_scale_ = scale_ratio;
+
+                glm::mat4 new_transform(1.0f);
+                new_transform[0] = glm::vec4(node_bounds_orig_rotation_[0] * new_scale.x, 0.0f);
+                new_transform[1] = glm::vec4(node_bounds_orig_rotation_[1] * new_scale.y, 0.0f);
+                new_transform[2] = glm::vec4(node_bounds_orig_rotation_[2] * new_scale.z, 0.0f);
+
+                const glm::vec3 new_center_world(mat_trans[0], mat_trans[1], mat_trans[2]);
+                const glm::vec3 bounds_center_local = (node_bounds_min_ + node_bounds_max_) * 0.5f;
+                const glm::mat3 new_rs(new_transform);
+                const glm::vec3 scaled_center = new_rs * bounds_center_local;
+
+                const auto* node = scene.getNode(*selected_names.begin());
+                const glm::mat4 parent_world_inv = (node && node->parent_id != core::NULL_NODE)
+                                                       ? glm::inverse(scene.getWorldTransform(node->parent_id))
+                                                       : glm::mat4(1.0f);
+                const glm::vec3 new_pos_local = glm::vec3(parent_world_inv * glm::vec4(new_center_world, 1.0f)) - scaled_center;
+                new_transform[3] = glm::vec4(new_pos_local, 1.0f);
+
+                scene_manager->setSelectedNodeTransform(new_transform);
             } else {
                 const glm::mat4 node_transform = scene_manager->getSelectedNodeTransform();
                 const glm::vec3 new_gizmo_pos_world = glm::vec3(gizmo_matrix[3]);
@@ -594,6 +714,8 @@ namespace lfs::vis::gui {
 
         if (!is_using && node_gizmo_active_) {
             node_gizmo_active_ = false;
+            node_bounds_scale_active_ = false;
+            node_bounds_cache_valid_ = false;
             if (render_manager) {
                 render_manager->setCropboxGizmoActive(false);
                 render_manager->setEllipsoidGizmoActive(false);

@@ -68,4 +68,28 @@ namespace lfs::vis::op {
         [[nodiscard]] ModifiesFlag modifies() const override { return ModifiesFlag::SELECTION; }
     };
 
+    class LFS_VIS_API SelectByOpacity : public Operation {
+    public:
+        OperationResult execute(SceneManager& scene,
+                                const OperatorProperties& props,
+                                const std::any& input) override;
+
+        [[nodiscard]] bool poll(SceneManager& scene) const override;
+        [[nodiscard]] std::string id() const override { return "select.by_opacity"; }
+        [[nodiscard]] std::string label() const override { return "Select By Opacity"; }
+        [[nodiscard]] ModifiesFlag modifies() const override { return ModifiesFlag::SELECTION; }
+    };
+
+    class LFS_VIS_API SelectByScale : public Operation {
+    public:
+        OperationResult execute(SceneManager& scene,
+                                const OperatorProperties& props,
+                                const std::any& input) override;
+
+        [[nodiscard]] bool poll(SceneManager& scene) const override;
+        [[nodiscard]] std::string id() const override { return "select.by_scale"; }
+        [[nodiscard]] std::string label() const override { return "Select By Scale"; }
+        [[nodiscard]] ModifiesFlag modifies() const override { return ModifiesFlag::SELECTION; }
+    };
+
 } // namespace lfs::vis::op

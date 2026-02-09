@@ -185,8 +185,7 @@ namespace lfs::python {
             }
         }
         if (scene_) {
-            scene_->invalidateCache();
-            lfs::core::events::state::SceneChanged{}.emit();
+            scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         }
     }
 
@@ -196,8 +195,7 @@ namespace lfs::python {
         assert(cols.shape()[0] == pc_->size());
         pc_->colors = cols.to(core::Device::CUDA);
         if (scene_) {
-            scene_->invalidateCache();
-            lfs::core::events::state::SceneChanged{}.emit();
+            scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         }
     }
 
@@ -212,8 +210,7 @@ namespace lfs::python {
             node_->centroid = glm::vec3(acc(0), acc(1), acc(2));
         }
         if (scene_) {
-            scene_->invalidateCache();
-            lfs::core::events::state::SceneChanged{}.emit();
+            scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         }
     }
 

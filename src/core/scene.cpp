@@ -40,23 +40,62 @@ namespace lfs::core {
 
         local_transform.setCallback([this] {
             if (scene_) {
-                scene_->invalidateTransformCache();
                 scene_->markTransformDirty(id);
+                scene_->notifyMutation(Scene::MutationType::TRANSFORM_CHANGED);
             }
         });
         visible.setCallback([this] {
             if (scene_) {
-                if (scene_->isConsolidated()) {
-                    scene_->invalidateTransformCache();
-                } else {
-                    scene_->invalidateCache();
-                }
+                scene_->notifyMutation(Scene::MutationType::VISIBILITY_CHANGED);
             }
         });
     }
 
     Scene::Scene() {
         addSelectionGroup("Group 1", glm::vec3(0.0f));
+    }
+
+    void Scene::notifyMutation(MutationType type) {
+        pending_mutations_ |= static_cast<uint32_t>(type);
+
+        switch (type) {
+        case MutationType::TRANSFORM_CHANGED:
+            invalidateTransformCache();
+            break;
+        case MutationType::VISIBILITY_CHANGED:
+            if (isConsolidated())
+                invalidateTransformCache();
+            else
+                invalidateCache();
+            break;
+        case MutationType::SELECTION_CHANGED:
+            break;
+        default:
+            invalidateCache();
+            break;
+        }
+
+        if (transaction_depth_ == 0) {
+            flushMutations();
+        }
+    }
+
+    void Scene::flushMutations() {
+        if (pending_mutations_ == 0)
+            return;
+        pending_mutations_ = 0;
+        events::state::SceneChanged{}.emit();
+    }
+
+    Scene::Transaction::Transaction(Scene& scene) : scene_(scene) {
+        ++scene_.transaction_depth_;
+    }
+
+    Scene::Transaction::~Transaction() {
+        assert(scene_.transaction_depth_ > 0);
+        if (--scene_.transaction_depth_ == 0) {
+            scene_.flushMutations();
+        }
     }
 
     static glm::vec3 computeCentroid(const lfs::core::SplatData* model) {
@@ -94,13 +133,13 @@ namespace lfs::core {
         const size_t gaussian_count = static_cast<size_t>(model->size());
         const glm::vec3 centroid = computeCentroid(model.get());
 
-        const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [&name](const std::unique_ptr<SceneNode>& node) { return node->name == name; });
-
-        if (it != nodes_.end()) {
-            (*it)->model = std::move(model);
-            (*it)->gaussian_count = gaussian_count;
-            (*it)->centroid = centroid;
+        auto name_it = name_to_id_.find(name);
+        if (name_it != name_to_id_.end()) {
+            auto* existing = getNodeById(name_it->second);
+            assert(existing);
+            existing->model = std::move(model);
+            existing->gaussian_count = gaussian_count;
+            existing->centroid = centroid;
         } else {
             const NodeId id = next_node_id_++;
             auto node = std::make_unique<SceneNode>();
@@ -112,11 +151,12 @@ namespace lfs::core {
             node->centroid = centroid;
 
             id_to_index_[id] = nodes_.size();
-            node->initObservables(this); // Initialize before adding (address is stable with unique_ptr)
+            name_to_id_[name] = id;
+            node->initObservables(this);
             nodes_.push_back(std::move(node));
         }
 
-        invalidateCache();
+        notifyMutation(MutationType::NODE_ADDED);
         LOG_DEBUG("Added node '{}': {} gaussians", name, gaussian_count);
     }
 
@@ -128,13 +168,15 @@ namespace lfs::core {
         if (name.empty())
             return;
 
-        const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [&name](const std::unique_ptr<SceneNode>& node) { return node->name == name; });
-        if (it == nodes_.end())
+        auto name_it = name_to_id_.find(name);
+        if (name_it == name_to_id_.end())
             return;
 
-        const NodeId id = (*it)->id;
-        const NodeId parent_id = (*it)->parent_id;
+        const NodeId id = name_it->second;
+        auto idx_it = id_to_index_.find(id);
+        assert(idx_it != id_to_index_.end());
+        SceneNode* node = nodes_[idx_it->second].get();
+        const NodeId parent_id = node->parent_id;
 
         if (parent_id != NULL_NODE) {
             if (auto* parent = getNodeById(parent_id)) {
@@ -144,7 +186,7 @@ namespace lfs::core {
         }
 
         if (keep_children) {
-            for (const NodeId child_id : (*it)->children) {
+            for (const NodeId child_id : node->children) {
                 if (auto* child = getNodeById(child_id)) {
                     child->parent_id = parent_id;
                     child->transform_dirty = true;
@@ -156,7 +198,7 @@ namespace lfs::core {
                 }
             }
         } else {
-            const std::vector<NodeId> children_copy = (*it)->children;
+            const std::vector<NodeId> children_copy = node->children;
             for (const NodeId child_id : children_copy) {
                 if (const auto* child = getNodeById(child_id)) {
                     removeNodeInternal(child->name, false, true);
@@ -164,50 +206,50 @@ namespace lfs::core {
             }
         }
 
-        const auto it_final = std::find_if(nodes_.begin(), nodes_.end(),
-                                           [&name](const std::unique_ptr<SceneNode>& node) { return node->name == name; });
-        if (it_final == nodes_.end())
+        name_it = name_to_id_.find(name);
+        if (name_it == name_to_id_.end())
             return;
+
+        idx_it = id_to_index_.find(name_it->second);
+        assert(idx_it != id_to_index_.end());
+        const size_t removed_index = idx_it->second;
 
         const std::string name_copy = name;
 
+        name_to_id_.erase(name_it);
         id_to_index_.erase(id);
-        const size_t removed_index = static_cast<size_t>(std::distance(nodes_.begin(), it_final));
-        nodes_.erase(it_final);
+        nodes_.erase(nodes_.begin() + static_cast<ptrdiff_t>(removed_index));
 
         for (auto& [node_id, index] : id_to_index_) {
             if (index > removed_index)
                 --index;
         }
 
-        invalidateCache();
+        notifyMutation(MutationType::NODE_REMOVED);
         if (!name_copy.empty()) {
             LOG_DEBUG("Removed node '{}'{}", name_copy, keep_children ? " (children kept)" : "");
         }
     }
 
     void Scene::replaceNodeModel(const std::string& name, std::unique_ptr<lfs::core::SplatData> model) {
-        const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [&name](const std::unique_ptr<SceneNode>& node) { return node->name == name; });
-
-        if (it != nodes_.end()) {
+        auto* node = getMutableNode(name);
+        if (node) {
             const size_t gaussian_count = static_cast<size_t>(model->size());
             const glm::vec3 centroid = computeCentroid(model.get());
-            LOG_DEBUG("replaceNodeModel '{}': {} -> {} gaussians", name, (*it)->gaussian_count, gaussian_count);
-            (*it)->model = std::move(model);
-            (*it)->gaussian_count = gaussian_count;
-            (*it)->centroid = centroid;
-            invalidateCache();
+            LOG_DEBUG("replaceNodeModel '{}': {} -> {} gaussians", name, node->gaussian_count, gaussian_count);
+            node->model = std::move(model);
+            node->gaussian_count = gaussian_count;
+            node->centroid = centroid;
+            notifyMutation(MutationType::MODEL_CHANGED);
         } else {
             LOG_WARN("replaceNodeModel: node '{}' not found", name);
         }
     }
 
     void Scene::setNodeVisibility(const std::string& name, const bool visible) {
-        const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [&name](const std::unique_ptr<SceneNode>& n) { return n->name == name; });
-        if (it != nodes_.end()) {
-            setNodeVisibilityById((*it)->id, visible);
+        auto it = name_to_id_.find(name);
+        if (it != name_to_id_.end()) {
+            setNodeVisibilityById(it->second, visible);
         }
     }
 
@@ -225,26 +267,23 @@ namespace lfs::core {
     }
 
     void Scene::setNodeTransform(const std::string& name, const glm::mat4& transform) {
-        const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [&name](const std::unique_ptr<SceneNode>& node) { return node->name == name; });
-        if (it != nodes_.end()) {
-            (*it)->local_transform = transform;
+        auto* node = getMutableNode(name);
+        if (node) {
+            node->local_transform = transform;
         }
     }
 
     glm::mat4 Scene::getNodeTransform(const std::string& name) const {
-        const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [&name](const std::unique_ptr<SceneNode>& node) { return node->name == name; });
-
-        if (it != nodes_.end()) {
-            return (*it)->local_transform;
-        }
-        return glm::mat4(1.0f);
+        const auto* node = getNode(name);
+        return node ? glm::mat4(node->local_transform) : glm::mat4(1.0f);
     }
 
     void Scene::clear() {
+        Transaction txn(*this);
+
         nodes_.clear();
         id_to_index_.clear();
+        name_to_id_.clear();
         next_node_id_ = 0;
 
         cached_combined_.reset();
@@ -265,6 +304,8 @@ namespace lfs::core {
         cudaDeviceSynchronize();
         lfs::core::CudaMemoryPool::instance().trim_cached_memory();
         lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
+
+        notifyMutation(MutationType::CLEARED);
     }
 
     std::pair<std::string, std::string> Scene::cycleVisibilityWithNames() {
@@ -274,6 +315,7 @@ namespace lfs::core {
             return EMPTY_PAIR;
         }
 
+        Transaction txn(*this);
         std::string hidden_name, shown_name;
 
         auto visible = std::find_if(nodes_.begin(), nodes_.end(),
@@ -293,7 +335,6 @@ namespace lfs::core {
             shown_name = nodes_[0]->name;
         }
 
-        invalidateCache();
         return {hidden_name, shown_name};
     }
 
@@ -324,6 +365,7 @@ namespace lfs::core {
             constexpr size_t BYTES_PER_GAUSSIAN = 3 * 4 + 1 * 3 * 4 + 3 * 4 + 4 * 4 + 1 * 4;
             const size_t saved_mb = getTotalGaussianCount() * BYTES_PER_GAUSSIAN / (1024 * 1024);
             LOG_INFO("Consolidated {} nodes, saved ~{} MB VRAM", consolidated, saved_mb);
+            notifyMutation(MutationType::MODEL_CHANGED);
         }
 
         return consolidated;
@@ -424,19 +466,23 @@ namespace lfs::core {
     }
 
     const SceneNode* Scene::getNode(const std::string& name) const {
-        auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                               [&name](const std::unique_ptr<SceneNode>& node) { return node->name == name; });
-        return (it != nodes_.end()) ? it->get() : nullptr;
+        auto it = name_to_id_.find(name);
+        if (it == name_to_id_.end())
+            return nullptr;
+        return getNodeById(it->second);
     }
 
     SceneNode* Scene::getMutableNode(const std::string& name) {
-        auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                               [&name](const std::unique_ptr<SceneNode>& node) { return node->name == name; });
-        if (it != nodes_.end()) {
-            invalidateCache();
-            return it->get();
-        }
-        return nullptr;
+        auto it = name_to_id_.find(name);
+        if (it == name_to_id_.end())
+            return nullptr;
+        invalidateCache();
+        return getNodeById(it->second);
+    }
+
+    NodeId Scene::getNodeIdByName(const std::string& name) const {
+        auto it = name_to_id_.find(name);
+        return (it != name_to_id_.end()) ? it->second : NULL_NODE;
     }
 
     void Scene::rebuildModelCacheIfNeeded() const {
@@ -768,9 +814,11 @@ namespace lfs::core {
                 .has_selection = true,
                 .count = static_cast<int>(selected_indices.size())}
                 .emit();
+            notifyMutation(MutationType::SELECTION_CHANGED);
         } else {
             has_selection_ = false;
             events::state::SelectionChanged{.has_selection = false, .count = 0}.emit();
+            notifyMutation(MutationType::SELECTION_CHANGED);
         }
     }
 
@@ -780,15 +828,17 @@ namespace lfs::core {
 
         int count = 0;
         if (has_selection_) {
-            count = static_cast<int>(selection_mask_->to(core::DataType::Float32).sum_scalar());
+            count = static_cast<int>(selection_mask_->ne(0).to(core::DataType::Float32).sum_scalar());
         }
         events::state::SelectionChanged{.has_selection = has_selection_, .count = count}.emit();
+        notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
     void Scene::clearSelection() {
         selection_mask_.reset();
         has_selection_ = false;
         events::state::SelectionChanged{.has_selection = false, .count = 0}.emit();
+        notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
     bool Scene::hasSelection() const {
@@ -796,35 +846,31 @@ namespace lfs::core {
     }
 
     bool Scene::renameNode(const std::string& old_name, const std::string& new_name) {
-        if (old_name == new_name) {
+        if (old_name == new_name)
             return true;
-        }
 
-        const auto existing_it = std::find_if(nodes_.begin(), nodes_.end(),
-                                              [&new_name](const std::unique_ptr<SceneNode>& node) {
-                                                  return node->name == new_name;
-                                              });
-
-        if (existing_it != nodes_.end()) {
+        if (name_to_id_.contains(new_name)) {
             LOG_WARN("Cannot rename '{}' to '{}' - name exists", old_name, new_name);
             return false;
         }
 
-        const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [&old_name](const std::unique_ptr<SceneNode>& node) {
-                                         return node->name == old_name;
-                                     });
-
-        if (it != nodes_.end()) {
-            std::string prev_name = (*it)->name;
-            (*it)->name = new_name;
-            invalidateCache();
-            LOG_DEBUG("Renamed node '{}' to '{}'", prev_name, new_name);
-            return true;
+        auto it = name_to_id_.find(old_name);
+        if (it == name_to_id_.end()) {
+            LOG_WARN("Scene: Cannot find node '{}' to rename", old_name);
+            return false;
         }
 
-        LOG_WARN("Scene: Cannot find node '{}' to rename", old_name);
-        return false;
+        const NodeId id = it->second;
+        name_to_id_.erase(it);
+        name_to_id_[new_name] = id;
+
+        auto* node = getNodeById(id);
+        assert(node);
+        node->name = new_name;
+
+        notifyMutation(MutationType::NODE_RENAMED);
+        LOG_DEBUG("Renamed node '{}' to '{}'", old_name, new_name);
+        return true;
     }
 
     size_t Scene::applyDeleted() {
@@ -842,8 +888,9 @@ namespace lfs::core {
         }
 
         if (total_removed > 0) {
-            invalidateCache();
+            Transaction txn(*this);
             clearSelection();
+            notifyMutation(MutationType::MODEL_CHANGED);
         }
 
         return total_removed;
@@ -980,6 +1027,7 @@ namespace lfs::core {
         if (auto* group = findGroup(id)) {
             group->count = 0;
         }
+        notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
     void Scene::resetSelectionState() {
@@ -988,6 +1036,7 @@ namespace lfs::core {
         selection_groups_.clear();
         next_group_id_ = 1;
         addSelectionGroup("Group 1", glm::vec3(0.0f));
+        notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
     NodeId Scene::addGroup(const std::string& name, const NodeId parent) {
@@ -1005,9 +1054,10 @@ namespace lfs::core {
         }
 
         id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
-        invalidateCache();
+        notifyMutation(MutationType::NODE_ADDED);
 
         LOG_DEBUG("Added group node '{}' (id={})", name, id);
         return id;
@@ -1041,9 +1091,10 @@ namespace lfs::core {
         }
 
         id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
-        invalidateCache();
+        notifyMutation(MutationType::NODE_ADDED);
 
         LOG_DEBUG("Added splat node '{}' (id={}, {} gaussians)", name, id, gaussian_count);
         return id;
@@ -1087,9 +1138,10 @@ namespace lfs::core {
         }
 
         id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
-        invalidateCache();
+        notifyMutation(MutationType::NODE_ADDED);
 
         LOG_DEBUG("Added point cloud node '{}' (id={}, {} points)", name, id, point_count);
         return id;
@@ -1133,9 +1185,10 @@ namespace lfs::core {
         }
 
         id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
-        invalidateCache();
+        notifyMutation(MutationType::NODE_ADDED);
 
         LOG_DEBUG("Added mesh node '{}' (id={}, {} vertices, {} faces)", name, id, nv, nf);
         return id;
@@ -1169,13 +1222,15 @@ namespace lfs::core {
         }
 
         id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
 
-        if (auto* mutable_parent = getMutableNode(parent->name)) {
+        if (auto* mutable_parent = getNodeById(parent_id)) {
             mutable_parent->children.push_back(id);
         }
 
+        notifyMutation(MutationType::NODE_ADDED);
         LOG_DEBUG("Added cropbox node '{}' (id={}) as child of node id={}", name, id, parent_id);
         return id;
     }
@@ -1210,13 +1265,15 @@ namespace lfs::core {
         }
 
         id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
 
-        if (auto* mutable_parent = getMutableNode(parent->name)) {
+        if (auto* mutable_parent = getNodeById(parent_id)) {
             mutable_parent->children.push_back(id);
         }
 
+        notifyMutation(MutationType::NODE_ADDED);
         LOG_DEBUG("Added ellipsoid node '{}' (id={}) as child of node id={}", name, id, parent_id);
         return id;
     }
@@ -1230,9 +1287,11 @@ namespace lfs::core {
         node->name = name;
 
         id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
 
+        notifyMutation(MutationType::NODE_ADDED);
         LOG_DEBUG("Added dataset node '{}' (id={})", name, id);
         return id;
     }
@@ -1253,9 +1312,11 @@ namespace lfs::core {
         }
 
         id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
 
+        notifyMutation(MutationType::NODE_ADDED);
         LOG_DEBUG("Added camera group '{}' (id={}, {} cameras)", name, id, camera_count);
         return id;
     }
@@ -1281,8 +1342,10 @@ namespace lfs::core {
         }
 
         id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
+        notifyMutation(MutationType::NODE_ADDED);
 
         return id;
     }
@@ -1295,8 +1358,7 @@ namespace lfs::core {
         const auto generate_unique_name = [this](const std::string& base_name) -> std::string {
             std::string new_name = base_name + "_copy";
             int counter = 2;
-            while (std::any_of(nodes_.begin(), nodes_.end(),
-                               [&new_name](const std::unique_ptr<SceneNode>& n) { return n->name == new_name; })) {
+            while (name_to_id_.contains(new_name)) {
                 new_name = base_name + "_copy_" + std::to_string(counter++);
             }
             return new_name;
@@ -1384,7 +1446,7 @@ namespace lfs::core {
 
         duplicate_recursive(src_id, src_parent_id);
 
-        invalidateCache();
+        notifyMutation(MutationType::NODE_ADDED);
         LOG_DEBUG("Duplicated node '{}' as '{}'", name, result_name);
         return result_name;
     }
@@ -1415,9 +1477,9 @@ namespace lfs::core {
             return "";
         }
 
+        Transaction txn(*this);
         removeNode(group_name, false);
         addSplat(group_name, std::move(merged), parent_id);
-        invalidateCache();
 
         return group_name;
     }
@@ -1595,7 +1657,7 @@ namespace lfs::core {
         }
 
         markTransformDirty(node_id);
-        invalidateCache();
+        notifyMutation(MutationType::NODE_REPARENTED);
     }
 
     const glm::mat4& Scene::getWorldTransform(const NodeId node_id) const {
@@ -1984,14 +2046,11 @@ namespace lfs::core {
     lfs::core::SplatData* Scene::getTrainingModel() {
         if (training_model_node_.empty())
             return nullptr;
-        const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [this](const std::unique_ptr<SceneNode>& node) {
-                                         return node->name == training_model_node_;
-                                     });
-        if (it == nodes_.end())
+        auto name_it = name_to_id_.find(training_model_node_);
+        if (name_it == name_to_id_.end())
             return nullptr;
-        SceneNode* node = it->get();
-        if (!isNodeEffectivelyVisible(node->id))
+        SceneNode* node = getNodeById(name_it->second);
+        if (!node || !isNodeEffectivelyVisible(node->id))
             return nullptr;
         return node->model.get();
     }
@@ -2048,8 +2107,7 @@ namespace lfs::core {
         auto* node = getMutableNode(name);
         if (node && node->type == NodeType::CAMERA && node->training_enabled != enabled) {
             node->training_enabled = enabled;
-            invalidateCache();
-            events::state::SceneChanged{}.emit();
+            notifyMutation(MutationType::VISIBILITY_CHANGED);
         }
     }
 

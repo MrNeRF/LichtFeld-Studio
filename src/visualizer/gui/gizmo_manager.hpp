@@ -97,6 +97,20 @@ namespace lfs::vis {
             std::chrono::steady_clock::time_point crop_flash_start_;
             bool crop_flash_active_ = false;
 
+            // Bounds-mode scale gizmo state (single selection only)
+            bool node_bounds_scale_active_ = false;
+            glm::vec3 node_bounds_min_{0.0f};
+            glm::vec3 node_bounds_max_{0.0f};
+            glm::vec3 node_bounds_orig_scale_{1.0f};
+            glm::mat3 node_bounds_orig_rotation_{1.0f};
+            glm::vec3 node_bounds_world_scale_{1.0f};
+
+            // Display cache to avoid per-frame compute_bounds on large splats
+            bool node_bounds_cache_valid_ = false;
+            core::NodeId node_bounds_cache_node_id_ = core::NULL_NODE;
+            glm::vec3 node_bounds_cache_min_{0.0f};
+            glm::vec3 node_bounds_cache_max_{0.0f};
+
             // Axis hover state for gizmo interaction
             bool node_hovered_axis_ = false;
             bool cropbox_hovered_axis_ = false;

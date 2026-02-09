@@ -13,11 +13,12 @@
 #include "geometry/bounding_box.hpp"
 #include "io/loader.hpp"
 #include "scene/scene_render_state.hpp"
+#include "scene/selection_state.hpp"
+#include "selection/selection_service.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller_pool.hpp"
 #include <filesystem>
 #include <mutex>
-#include <set>
 
 namespace lfs::vis {
 
@@ -116,8 +117,7 @@ namespace lfs::vis {
         [[nodiscard]] int getSelectedNodeIndex() const;
         [[nodiscard]] std::vector<bool> getSelectedNodeMask() const;
         [[nodiscard]] int getSelectedCameraUid() const;
-        void ensureCropBoxForSelectedNode();
-        void selectCropBoxForCurrentNode();
+        [[nodiscard]] const SelectionState& selectionState() const { return selection_; }
 
         // Node picking
         [[nodiscard]] std::string pickNodeAtWorldPosition(const glm::vec3& world_pos) const;
@@ -150,8 +150,6 @@ namespace lfs::vis {
         void syncCropBoxToRenderSettings();
 
         // Ellipsoid operations for selected node
-        void ensureEllipsoidForSelectedNode();
-        void selectEllipsoidForCurrentNode();
         core::NodeId getSelectedNodeEllipsoidId() const;
         core::EllipsoidData* getSelectedNodeEllipsoid();
         const core::EllipsoidData* getSelectedNodeEllipsoid() const;
@@ -213,6 +211,18 @@ namespace lfs::vis {
         /// Mirror selected gaussians along specified axis
         bool executeMirror(lfs::core::MirrorAxis axis);
 
+        void deleteSelectedGaussians();
+        void invertSelection();
+        void deselectAllGaussians();
+        void selectAllGaussians();
+        void copySelectionToClipboard();
+        void pasteSelectionFromClipboard();
+        void selectRect(float x0, float y0, float x1, float y1, const std::string& mode);
+        void applySelectionMask(const std::vector<uint8_t>& mask);
+
+        void initSelectionService();
+        [[nodiscard]] SelectionService* getSelectionService() { return selection_service_.get(); }
+
         void setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp,
                                 std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool = nullptr);
         void clearAppearanceModel();
@@ -225,7 +235,6 @@ namespace lfs::vis {
 
     private:
         void setupEventHandlers();
-        void emitSceneChanged();
         void syncCropToolRenderSettings(const core::SceneNode* node);
         void loadPPISPCompanion(const std::filesystem::path& ppisp_path);
         void handleCropActivePly(const lfs::geometry::BoundingBox& crop_box, bool inverse);
@@ -243,6 +252,7 @@ namespace lfs::vis {
         void updateEllipsoidToFitScene(bool use_percentile);
 
         core::Scene scene_;
+        // Lock ordering: state_mutex_ before selection_.mutex() when both needed
         mutable std::mutex state_mutex_;
 
         ContentType content_type_ = ContentType::Empty;
@@ -253,7 +263,7 @@ namespace lfs::vis {
         // Cache for parameters
         std::optional<lfs::core::param::TrainingParameters> cached_params_;
 
-        std::set<std::string> selected_nodes_;
+        SelectionState selection_;
 
         // Clipboard for copy/paste (supports multi-selection)
         struct ClipboardEntry {
@@ -278,6 +288,9 @@ namespace lfs::vis {
 
         std::unique_ptr<lfs::training::PPISP> appearance_ppisp_;
         std::unique_ptr<lfs::training::PPISPControllerPool> appearance_controller_pool_;
+
+        // Selection service (GPU-based rect/polygon/brush selection)
+        std::unique_ptr<SelectionService> selection_service_;
     };
 
 } // namespace lfs::vis

@@ -47,9 +47,9 @@ namespace lfs::training {
 
     void PPISP::register_frame(int uid, int camera_id) {
         assert(!finalized_ && "Cannot register frames after finalize()");
-        assert(uid_to_frame_idx_.find(uid) == uid_to_frame_idx_.end() && "Duplicate frame UID");
+        assert(!is_known_frame(uid) && "Duplicate frame UID");
 
-        if (camera_id_to_idx_.find(camera_id) == camera_id_to_idx_.end()) {
+        if (!is_known_camera(camera_id)) {
             camera_id_to_idx_[camera_id] = static_cast<int>(camera_id_to_idx_.size());
         }
         uid_to_frame_idx_[uid] = static_cast<int>(uid_to_frame_idx_.size());
