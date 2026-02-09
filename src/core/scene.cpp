@@ -299,6 +299,8 @@ namespace lfs::core {
     }
 
     void Scene::clear() {
+        Transaction txn(*this);
+
         nodes_.clear();
         id_to_index_.clear();
         next_node_id_ = 0;
