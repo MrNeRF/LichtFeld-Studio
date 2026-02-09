@@ -948,6 +948,7 @@ namespace lfs::vis::gui {
 
         ui::FileDropReceived::when([this](const auto&) {
             startup_overlay_.dismiss();
+            drag_drop_.resetHovering();
         });
 
         cmd::ShowWindow::when([this](const auto& e) {

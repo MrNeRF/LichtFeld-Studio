@@ -46,6 +46,9 @@ namespace lfs::vis::gui {
         void setDragLeaveCallback(DragLeaveCallback cb) { on_drag_leave_ = std::move(cb); }
         void setFileDropCallback(FileDropCallback cb) { on_file_drop_ = std::move(cb); }
 
+        // Force-reset hovering state (called when file drop is confirmed via GLFW callback)
+        void resetHovering() { setDragHovering(false); }
+
         // Poll for X11 events (call each frame on Linux)
         void pollEvents();
 

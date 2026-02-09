@@ -283,21 +283,26 @@ namespace lfs::vis::gui {
         if (XPending(dpy) <= 0)
             return;
 
-        // Peek only - GLFW handles full XDnD protocol
+        // Extract all ClientMessage events to find XDnD state changes.
+        // XPeekEvent only checks the first event; XDnD messages may be
+        // buried behind mouse/keyboard/expose events in the queue.
         XEvent event;
-        XPeekEvent(dpy, &event);
-        if (event.type != ClientMessage)
-            return;
+        std::vector<XEvent> extracted;
+        while (XCheckTypedEvent(dpy, ClientMessage, &event)) {
+            const Atom msg_type = event.xclient.message_type;
+            if (msg_type == platform_data_->xdnd_enter && !drag_hovering_) {
+                platform_data_->source_window = static_cast<Window>(event.xclient.data.l[0]);
+                setDragHovering(true);
+            } else if ((msg_type == platform_data_->xdnd_leave || msg_type == platform_data_->xdnd_drop) && drag_hovering_) {
+                setDragHovering(false);
+                platform_data_->source_window = 0;
+            }
+            extracted.push_back(event);
+        }
 
-        const XClientMessageEvent& cm = event.xclient;
-        const Atom msg_type = cm.message_type;
-
-        if (msg_type == platform_data_->xdnd_enter && !drag_hovering_) {
-            platform_data_->source_window = static_cast<Window>(cm.data.l[0]);
-            setDragHovering(true);
-        } else if ((msg_type == platform_data_->xdnd_leave || msg_type == platform_data_->xdnd_drop) && drag_hovering_) {
-            setDragHovering(false);
-            platform_data_->source_window = 0;
+        // Restore events for GLFW to process (reverse order preserves queue ordering)
+        for (auto it = extracted.rbegin(); it != extracted.rend(); ++it) {
+            XPutBackEvent(dpy, &*it);
         }
     }
 
