@@ -112,7 +112,8 @@ namespace lfs::vis::gui {
                 auto& p = panels_[i];
                 if (p.space == space && p.enabled && !p.error_disabled) {
                     snapshots.push_back({i, p.panel.get(), p.label, p.idname,
-                                         p.options, p.is_native, p.poll_deps});
+                                         p.options, p.is_native, p.poll_deps,
+                                         p.initial_width, p.initial_height});
                 }
             }
         }
@@ -135,6 +136,8 @@ namespace lfs::vis::gui {
                     if (snap.has_option(PanelOption::SELF_MANAGED)) {
                         snap.panel->draw(ctx);
                     } else {
+                        if (snap.initial_width > 0 || snap.initial_height > 0)
+                            ImGui::SetNextWindowSize(ImVec2(snap.initial_width, snap.initial_height), ImGuiCond_Appearing);
                         bool open = true;
                         if (ImGui::Begin(snap.label.c_str(), &open)) {
                             snap.panel->draw(ctx);
@@ -169,6 +172,8 @@ namespace lfs::vis::gui {
                     if (snap.has_option(PanelOption::SELF_MANAGED)) {
                         snap.panel->draw(ctx);
                     } else {
+                        if (snap.initial_width > 0 || snap.initial_height > 0)
+                            ImGui::SetNextWindowSize(ImVec2(snap.initial_width, snap.initial_height), ImGuiCond_Appearing);
                         bool open = true;
                         if (ImGui::Begin(snap.label.c_str(), &open)) {
                             snap.panel->draw(ctx);
@@ -259,7 +264,8 @@ namespace lfs::vis::gui {
                 if (panels_[i].idname == idname && panels_[i].enabled && !panels_[i].error_disabled) {
                     panel_holder = panels_[i].panel;
                     snap = {i, panels_[i].panel.get(), panels_[i].label, panels_[i].idname,
-                            panels_[i].options, panels_[i].is_native, panels_[i].poll_deps};
+                            panels_[i].options, panels_[i].is_native, panels_[i].poll_deps,
+                            panels_[i].initial_width, panels_[i].initial_height};
                     found = true;
                     break;
                 }

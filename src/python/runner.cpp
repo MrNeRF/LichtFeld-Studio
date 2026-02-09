@@ -264,15 +264,30 @@ _add_dll_dirs()
             if (!Py_IsInitialized()) {
                 PyImport_AppendInittab("_lfs_output", init_capture_module);
 
+                PyConfig config;
+                PyConfig_InitPythonConfig(&config);
+                config.user_site_directory = 0;
+
                 const auto python_home = lfs::core::getPythonHome();
-                static std::wstring python_home_wstr;
                 if (!python_home.empty()) {
-                    python_home_wstr = python_home.wstring();
-                    Py_SetPythonHome(python_home_wstr.c_str());
+                    const auto home_wstr = python_home.wstring();
+                    PyStatus st = PyConfig_SetString(&config, &config.home, home_wstr.c_str());
+                    if (PyStatus_Exception(st)) {
+                        LOG_ERROR("Failed to set Python home: {}", st.err_msg ? st.err_msg : "unknown");
+                        PyConfig_Clear(&config);
+                        return;
+                    }
                     LOG_INFO("Set Python home: {}", lfs::core::path_to_utf8(python_home));
                 }
 
-                Py_Initialize();
+                PyStatus status = Py_InitializeFromConfig(&config);
+                PyConfig_Clear(&config);
+                if (PyStatus_Exception(status)) {
+                    LOG_ERROR("Failed to initialize Python: {}",
+                              status.err_msg ? status.err_msg : "unknown");
+                    return;
+                }
+
                 g_we_initialized_python = true;
                 LOG_INFO("Python interpreter initialized by application");
             } else {
@@ -280,7 +295,6 @@ _add_dll_dirs()
                 g_we_initialized_python = false;
             }
 
-            PyEval_InitThreads();
             register_output_module_post_init();
 
             // Add user site-packages to sys.path

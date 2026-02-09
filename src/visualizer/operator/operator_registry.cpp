@@ -391,7 +391,7 @@ namespace lfs::vis::op {
 
             lock.lock();
 
-            if (result != OperatorResult::RUNNING_MODAL) {
+            if (result == OperatorResult::FINISHED || result == OperatorResult::CANCELLED) {
                 if (result == OperatorResult::CANCELLED && reg.cancel_fn) {
                     reg.cancel_fn();
                 }
@@ -422,7 +422,7 @@ namespace lfs::vis::op {
 
         lock.lock();
 
-        if (result == OperatorResult::RUNNING_MODAL) {
+        if (result == OperatorResult::RUNNING_MODAL || result == OperatorResult::PASS_THROUGH) {
             active_modal_ = std::move(op);
             modal_props_ = props;
         } else if (result == OperatorResult::CANCELLED) {

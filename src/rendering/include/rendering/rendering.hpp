@@ -307,6 +307,8 @@ namespace lfs::rendering {
         float light_intensity = 1.5f;
         float ambient = 0.15f;
         bool backface_culling = true;
+        bool shadow_enabled = false;
+        int shadow_map_resolution = 2048;
     };
 
     // Main rendering engine

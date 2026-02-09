@@ -150,6 +150,8 @@ namespace lfs::vis {
         float mesh_light_intensity = 1.5f;
         float mesh_ambient = 0.15f;
         bool mesh_backface_culling = true;
+        bool mesh_shadow_enabled = false;
+        int mesh_shadow_resolution = 2048;
 
         // Depth filter (Selection tool only - separate from crop box)
         bool depth_filter_enabled = false;

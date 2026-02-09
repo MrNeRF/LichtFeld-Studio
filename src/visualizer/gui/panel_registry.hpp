@@ -76,6 +76,8 @@ namespace lfs::vis::gui {
         bool is_native = true;
         int consecutive_errors = 0;
         bool error_disabled = false;
+        float initial_width = 0;
+        float initial_height = 0;
         static constexpr int MAX_CONSECUTIVE_ERRORS = 3;
 
         bool has_option(PanelOption opt) const {
@@ -99,6 +101,8 @@ namespace lfs::vis::gui {
         uint32_t options;
         bool is_native;
         PollDependency poll_deps;
+        float initial_width;
+        float initial_height;
 
         bool has_option(PanelOption opt) const {
             return (options & static_cast<uint32_t>(opt)) != 0;

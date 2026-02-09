@@ -23,6 +23,10 @@ namespace lfs::core {
         uint32_t emissive_tex = 0;
         uint32_t ao_tex = 0;
 
+        std::string albedo_tex_path;
+        std::string normal_tex_path;
+        std::string metallic_roughness_tex_path;
+
         bool double_sided = false;
         std::string name;
 

@@ -1,6 +1,5 @@
 {
   "_language_name": "日本語",
-
   "menu": {
     "file": "ファイル",
     "file.new_project": "新規プロジェクト",
@@ -11,23 +10,20 @@
     "file.import_config": "設定をインポート",
     "file.export": "エクスポート...",
     "file.export_config": "設定をエクスポート...",
+    "file.extract_video_frames": "動画からフレームを抽出...",
     "file.exit": "終了",
-
     "edit": "編集",
     "edit.input_settings": "入力設定...",
     "edit.preferences": "環境設定...",
-
     "view": "表示",
     "view.theme": "テーマ",
     "view.theme.dark": "ダーク",
     "view.theme.light": "ライト",
     "view.debug_info": "デバッグ情報...",
-
     "help": "ヘルプ",
     "help.getting_started": "はじめに",
     "help.about": "LichtFeld Studioについて"
   },
-
   "window": {
     "getting_started": "はじめに",
     "about": "LichtFeld Studioについて",
@@ -39,7 +35,6 @@
     "training": "トレーニング",
     "preferences": "環境設定"
   },
-
   "getting_started": {
     "title": "クイックスタートガイド",
     "description": "データセットの準備方法とLichtFeld Studioの使い方を学びましょう:",
@@ -52,7 +47,6 @@
     "video_masks": "マスクチュートリアル",
     "loading": "読み込み中..."
   },
-
   "about": {
     "title": "LICHTFELD STUDIO",
     "description": "リアルタイムニューラルレンダリング、トレーニング、ビジュアライゼーションのための高性能C++およびCUDA実装の3D Gaussian Splatting。",
@@ -75,7 +69,6 @@
     "authors": "LichtFeld Studio 開発者",
     "license": "GPLv3の下でライセンス"
   },
-
   "training": {
     "section.dataset": "データセット",
     "section.optimization": "最適化",
@@ -90,7 +83,6 @@
     "section.advanced_params": "詳細トレーニングパラメータ",
     "section.sparsity": "スパース設定",
     "section.pruning_growing": "プルーニング/グロウイング",
-
     "dataset.path": "Path:",
     "dataset.images": "Images:",
     "dataset.resize_factor": "Resize Factor:",
@@ -98,7 +90,6 @@
     "dataset.cpu_cache": "CPU Cache:",
     "dataset.fs_cache": "FS Cache:",
     "dataset.output": "Output:",
-
     "opt.strategy": "Strategy:",
     "opt.learning_rates": "Learning Rates:",
     "opt.iterations": "Iterations:",
@@ -115,30 +106,25 @@
     "opt.lr.opacity": "  Opacity:",
     "opt.lr.scaling": "  Scaling:",
     "opt.lr.rotation": "  Rotation:",
-
     "refinement.refine_every": "  Refine Every:",
     "refinement.start_refine": "  Start Refine:",
     "refinement.stop_refine": "  Stop Refine:",
     "refinement.gradient_thr": "  Gradient Thr:",
     "refinement.reset_every": "  Reset Every:",
     "refinement.sh_upgrade_every": "  SH Upgrade Every:",
-
     "bilateral.grid_x": "Grid X:",
     "bilateral.grid_y": "Grid Y:",
     "bilateral.grid_w": "Grid W:",
     "bilateral.learning_rate": "Learning Rate:",
-
     "masking.invert_masks": "Invert Masks:",
     "masking.threshold": "Threshold:",
     "masking.penalty_weight": "Penalty Weight:",
     "masking.penalty_power": "Penalty Power:",
-
     "mask.invert": "  Invert Masks:",
     "mask.threshold": "  Mask Threshold:",
     "mask.penalty_weight": "  Opacity Penalty Weight:",
     "mask.penalty_power": "  Opacity Penalty Power:",
     "mask.no_masks": "(no masks)",
-
     "tooltip.invert_masks": "マスクのオブジェクト/背景を入れ替える",
     "tooltip.penalty_weight": "背景領域の不透明度ペナルティ重み",
     "tooltip.penalty_power": "ペナルティ減衰: 1=線形, 2=二次, >2=より緩やか",
@@ -203,25 +189,21 @@
     "tooltip.ppisp_freeze_gaussians": "コントローラートレーニング中にガウシアンパラメータを固定",
     "tooltip.strategy_gut_conflict": "GUTが有効の場合、ADC戦略は使用できません",
     "tooltip.gut_adc_conflict": "ADC戦略ではGUTは使用できません。先にMCMCに切り替えてください。",
-
     "error.adc_gut_title": "互換性のない設定",
     "conflict.adc_gut_start_message": "GUTとADC戦略は同時に使用できません。トレーニングを開始するアクションを選択してください。",
     "conflict.adc_gut_strategy_message": "ADC戦略はGUTと互換性がありません。ADCに切り替えるためにGUTを無効にしますか？",
     "conflict.btn_use_mcmc": "MCMCを使用",
     "conflict.btn_disable_gut": "GUTを無効化",
     "conflict.btn_cancel": "キャンセル",
-
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "Opacity Reg:",
     "losses.scale_reg": "Scale Reg:",
     "losses.tv_loss_weight": "TV Loss Weight:",
-
     "init.init_opacity": "Init Opacity:",
     "init.init_scaling": "Init Scaling:",
     "init.random_init": "Random Init:",
     "init.num_points": "  Num Points:",
     "init.extent": "  Extent:",
-
     "thresholds.min_opacity": "Min Opacity:",
     "thresholds.prune_opacity": "Prune Opacity:",
     "thresholds.grow_scale_3d": "Grow Scale 3D:",
@@ -230,12 +212,10 @@
     "thresholds.prune_scale_2d": "Prune Scale 2D:",
     "thresholds.pause_after_reset": "Pause After Reset:",
     "thresholds.revised_opacity": "Revised Opacity:",
-
     "status.enabled": "有効",
     "status.disabled": "無効",
     "status.yes": "はい",
     "status.no": "いいえ",
-
     "button.start": "トレーニングを開始",
     "button.resume": "再開",
     "button.pause": "一時停止",
@@ -247,7 +227,6 @@
     "button.add": "追加",
     "button.remove": "削除"
   },
-
   "scene": {
     "add_ply": "PLYを追加...",
     "add_group": "グループを追加",
@@ -288,7 +267,6 @@
     "training_enabled_tooltip": "トレーニングに含まれています",
     "training_disabled_tooltip": "トレーニングから除外されています"
   },
-
   "export": {
     "title": "エクスポート",
     "format.ply_standard": "PLY (標準)",
@@ -307,7 +285,6 @@
     "failed": "失敗",
     "select_at_least_one": "少なくとも1つのモデルを選択してください"
   },
-
   "common": {
     "ok": "OK",
     "cancel": "キャンセル",
@@ -323,7 +300,6 @@
     "reset": "リセット",
     "double_click_reset": "ダブルクリックでリセット"
   },
-
   "status": {
     "ready": "準備完了",
     "training": "トレーニング中",
@@ -348,14 +324,12 @@
     "training_finished": "トレーニング終了",
     "ply_models_count": "PLYモデル: %zu"
   },
-
   "mode": {
     "empty": "空",
     "dataset": "データセット",
     "edit_mode": "編集モード",
     "ply_models": "PLYモデル:"
   },
-
   "messages": {
     "no_data_loaded": "データが読み込まれていません",
     "use_file_menu": "ファイルメニューを使用してインポートしてください",
@@ -370,18 +344,15 @@
     "err_ortho_not_supported": "正射影カメラモデルでの学習はまだサポートされていません。",
     "err_non_pinhole": "非ピンホールカメラで学習するには --gut または --undistort を有効にしてください。"
   },
-
   "controls": {
     "wasd": "WASD:",
     "zoom": "ズーム:"
   },
-
   "preferences": {
     "title": "環境設定",
     "language": "言語:",
     "select_language": "言語を選択"
   },
-
   "main_panel": {
     "windows": "ウィンドウ",
     "scene_panel": "シーンパネル",
@@ -434,7 +405,6 @@
     "no_selection_groups": "選択グループがありません",
     "clear": "クリア"
   },
-
   "toolbar": {
     "selection": "選択",
     "translate": "移動",
@@ -469,7 +439,6 @@
     "orthographic": "平行投影 (O)",
     "sequencer": "シーケンサー"
   },
-
   "transform": {
     "node": "ノード: %s",
     "space": "空間: %s",
@@ -485,7 +454,6 @@
     "reset_transform": "変換をリセット",
     "nodes_selected": "%zu ノードを選択中"
   },
-
   "cropbox": {
     "title": "クロップボックス",
     "not_visible": "クロップボックスが非表示",
@@ -498,7 +466,6 @@
     "line_width": "線の太さ",
     "instructions": "Enter: クロップを確定 | Ctrl+C: 内容をコピー"
   },
-
   "file_browser": {
     "title": "ファイルブラウザ",
     "quick_access": "クイックアクセス",
@@ -513,7 +480,6 @@
     "load_ply": "PLYを読み込む",
     "enter_dir": "ディレクトリに入る"
   },
-
   "training_panel": {
     "start_training": "トレーニングを開始",
     "resume_training": "トレーニングを再開",
@@ -534,7 +500,6 @@
     "sparsity": "スパース設定",
     "pruning_growing": "プルーニング/グロウイング"
   },
-
   "tooltip": {
     "gut_mode": "魚眼/歪み/エクイレクタンギュラーカメラ用",
     "mip_filter": "サブピクセルガウシアンのエイリアシング軽減",
@@ -568,14 +533,12 @@
     "point_cloud_mode": "スプラットではなくポイントでレンダリング",
     "selection_colors": "選択範囲の可視化色"
   },
-
   "exit_popup": {
     "title": "アプリケーションを終了しますか？",
     "message": "本当に終了しますか？",
     "unsaved_warning": "保存されていない変更は失われます。",
     "exit": "終了"
   },
-
   "load_dataset_popup": {
     "title": "データセットを読み込む",
     "configure_paths": "データセットのパスを設定",
@@ -586,7 +549,6 @@
     "init_file": "Init file（任意、points3Dを置換）:",
     "help_text": "チェックポイント、ログ、エクスポートされたモデルは出力ディレクトリに保存されます。"
   },
-
   "notification": {
     "cannot_open": "開けません",
     "dropped_not_recognized": "ドロップされた",
@@ -595,7 +557,6 @@
     "items": "項目",
     "and_more": "... 他"
   },
-
   "export_dialog": {
     "format": "フォーマット",
     "models": "モデル",
@@ -603,12 +564,10 @@
     "sh_degree": "SH Degree",
     "export_merged": "結合してエクスポート..."
   },
-
   "selection_group": {
     "lock": "ロック",
     "unlock": "ロック解除"
   },
-
   "file_browser_ext": {
     "dataset": "[データセット]",
     "sog": "[SOG]",
@@ -618,7 +577,6 @@
     "sog_meta": "(SOG meta.json)",
     "error": "エラー:"
   },
-
   "progress": {
     "loss": "損失:",
     "gaussians_count": "%s ガウシアン",
@@ -632,7 +590,6 @@
     "num_splats": "スプラット数: %s",
     "status_label": "ステータス: %s"
   },
-
   "input_settings": {
     "active_profile": "アクティブプロファイル:",
     "save_current_profile": "現在のプロファイルを保存",
@@ -666,7 +623,6 @@
     "mode.crop_box": "クロップボックス",
     "mode.unknown": "不明"
   },
-
   "debug_info": {
     "free_memory": "空き: %.2f GB",
     "enable_tracing": "操作トレースを有効化",
@@ -674,7 +630,6 @@
     "clear_history": "履歴をクリア",
     "print_to_log": "ログに出力"
   },
-
   "training_params": {
     "strategy": "Strategy:",
     "iterations": "Iterations:",
@@ -729,7 +684,6 @@
     "ppisp_freeze_gaussians": "ガウシアン固定:",
     "disabled": "無効"
   },
-
   "image_preview": {
     "image_section": "画像",
     "file_section": "ファイル",
@@ -770,7 +724,6 @@
     "hidden": "非表示",
     "mask_section": "マスク"
   },
-
   "startup": {
     "supported_by": "サポート",
     "click_to_continue": "クリックして続行",
@@ -780,14 +733,12 @@
     "drop_to_import": "ドロップしてインポート",
     "drop_to_import_subtitle": "PLY、SOG、COLMAPデータセット、またはプロジェクト"
   },
-
   "axis": {
     "x": "X:",
     "y": "Y:",
     "z": "Z:",
     "u": "U:"
   },
-
   "resume_checkpoint_popup": {
     "title": "チェックポイントを再開",
     "checkpoint": "チェックポイント",
@@ -800,7 +751,6 @@
     "output_path": "出力パス:",
     "help_text": "チェックポイントに保存されたデータセットパスが変更されている可能性があります。必要に応じて更新してください。"
   },
-
   "disk_space_dialog": {
     "title": "ディスク容量不足",
     "error_label": "エラー",
@@ -815,5 +765,62 @@
     "change_location": "場所を変更",
     "retry": "再試行",
     "select_output_location": "出力場所を選択"
+  },
+  "video_extractor": {
+    "title": "動画からフレームを抽出",
+    "select_preview": "プレビューする動画ファイルを選択",
+    "step_backward": "前のフレーム",
+    "step_forward": "次のフレーム",
+    "pause": "一時停止（スペース）",
+    "play": "再生（スペース）",
+    "trim_range": "トリム範囲：",
+    "set": "設定",
+    "set_start": "開始位置を現在の位置に設定",
+    "set_end": "終了位置を現在の位置に設定",
+    "reset": "リセット",
+    "estimated_frames": "（約%dフレーム）",
+    "input_video": "入力動画",
+    "video": "動画：",
+    "no_file": "ファイル未選択",
+    "browse": "参照...",
+    "output": "出力：",
+    "no_dir": "ディレクトリ未選択",
+    "select_folder": "出力フォルダを選択",
+    "settings": "抽出設定",
+    "mode": "モード：",
+    "mode_fps": "FPSベース",
+    "mode_interval": "フレーム間隔",
+    "fps_label": "FPS",
+    "fps_tooltip": "このレートでフレームを抽出",
+    "every_label": "間隔",
+    "frames_format": "%dフレーム",
+    "interval_tooltip": "N番目のフレームごとに抽出",
+    "output_format": "出力フォーマット",
+    "format": "フォーマット：",
+    "format_png": "PNG（ロスレス）",
+    "format_jpeg": "JPEG（小さい）",
+    "quality_label": "品質",
+    "resolution": "解像度",
+    "resolution_label": "解像度：",
+    "res_original": "オリジナル",
+    "res_scale": "スケール",
+    "res_custom": "カスタム",
+    "width": "幅",
+    "height": "高さ",
+    "output_res": "出力：%dx%d",
+    "naming": "出力の命名",
+    "pattern": "パターン：",
+    "pattern_tooltip": "%%dでフレーム番号を指定（例：frame_%%04dでゼロ埋め）",
+    "example": "例：%s%s",
+    "start": "抽出を開始",
+    "cancel": "キャンセル",
+    "select_both": "動画と出力ディレクトリを選択してください",
+    "extracting": "抽出中：%d / %dフレーム",
+    "starting": "抽出を開始しています...",
+    "complete": "抽出が正常に完了しました！",
+    "extracted": "%dフレームを抽出しました",
+    "ok": "OK",
+    "error": "エラー：%s",
+    "dismiss": "閉じる"
   }
 }

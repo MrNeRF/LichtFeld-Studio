@@ -44,7 +44,7 @@ namespace lfs::gui {
         VideoExtractorDialog();
         ~VideoExtractorDialog();
 
-        void render(bool* p_open);
+        bool render();
         void setOnStartExtraction(std::function<void(const VideoExtractionParams&)> callback);
 
         void updateProgress(int current, int total);

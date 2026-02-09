@@ -12,6 +12,55 @@
 
 namespace lfs::rendering {
 
+    namespace {
+        Texture create_gl_texture(const lfs::core::TextureImage& img) {
+            assert(!img.pixels.empty());
+            assert(img.width > 0 && img.height > 0);
+
+            GLuint tex;
+            glGenTextures(1, &tex);
+            glBindTexture(GL_TEXTURE_2D, tex);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, img.width, img.height, 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, img.pixels.data());
+            glGenerateMipmap(GL_TEXTURE_2D);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            return Texture(tex);
+        }
+
+        glm::mat4 compute_light_vp(const lfs::core::MeshData& mesh, const glm::mat4& model,
+                                   const glm::vec3& light_dir) {
+            auto cpu_verts = mesh.vertices.to(lfs::core::Device::CPU).contiguous();
+            auto vacc = cpu_verts.accessor<float, 2>();
+            const int64_t nv = mesh.vertex_count();
+
+            glm::vec3 aabb_min(std::numeric_limits<float>::max());
+            glm::vec3 aabb_max(std::numeric_limits<float>::lowest());
+            for (int64_t i = 0; i < nv; ++i) {
+                glm::vec3 p = glm::vec3(model * glm::vec4(vacc(i, 0), vacc(i, 1), vacc(i, 2), 1.0f));
+                aabb_min = glm::min(aabb_min, p);
+                aabb_max = glm::max(aabb_max, p);
+            }
+
+            const glm::vec3 center = (aabb_min + aabb_max) * 0.5f;
+            const float radius = glm::length(aabb_max - aabb_min) * 0.5f;
+            const glm::vec3 dir = glm::normalize(light_dir);
+            const glm::vec3 eye = center + dir * radius * 2.0f;
+
+            glm::vec3 up(0.0f, 1.0f, 0.0f);
+            if (std::abs(glm::dot(dir, up)) > 0.99f)
+                up = glm::vec3(0.0f, 0.0f, 1.0f);
+
+            const glm::mat4 light_view = glm::lookAt(eye, center, up);
+            const glm::mat4 light_proj = glm::ortho(-radius, radius, -radius, radius,
+                                                    0.01f, radius * 4.0f);
+            return light_proj * light_view;
+        }
+    } // namespace
+
     Result<void> MeshRenderer::initialize() {
         if (initialized_)
             return {};
@@ -29,6 +78,13 @@ namespace lfs::rendering {
             return std::unexpected(wire_result.error().what());
         }
         wireframe_shader_ = std::move(*wire_result);
+
+        auto shadow_result = load_shader("shadow_depth", "shadow_depth.vert", "shadow_depth.frag", false);
+        if (!shadow_result) {
+            LOG_ERROR("Failed to load shadow shader: {}", shadow_result.error().what());
+            return std::unexpected(shadow_result.error().what());
+        }
+        shadow_shader_ = std::move(*shadow_result);
 
         auto vao_result = create_vao();
         if (!vao_result)
@@ -127,6 +183,43 @@ namespace lfs::rendering {
         return {};
     }
 
+    Result<void> MeshRenderer::setupShadowFBO(int resolution) {
+        assert(resolution > 0);
+
+        GLuint depth_tex;
+        glGenTextures(1, &depth_tex);
+        glBindTexture(GL_TEXTURE_2D, depth_tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, resolution, resolution, 0,
+                     GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+        const float border_color[] = {1.0f, 1.0f, 1.0f, 1.0f};
+        glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border_color);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+        shadow_depth_texture_ = Texture(depth_tex);
+
+        GLuint fbo;
+        glGenFramebuffers(1, &fbo);
+        shadow_fbo_ = FBO(fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, shadow_fbo_.get());
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, shadow_depth_texture_.get(), 0);
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            return std::unexpected("Shadow FBO incomplete");
+        }
+
+        shadow_map_resolution_ = resolution;
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        return {};
+    }
+
     void MeshRenderer::resize(int width, int height) {
         if (width == fbo_width_ && height == fbo_height_)
             return;
@@ -209,6 +302,75 @@ namespace lfs::rendering {
         return {};
     }
 
+    void MeshRenderer::uploadTextures(const lfs::core::MeshData& mesh) {
+        if (mesh.generation() == uploaded_texture_generation_ && !material_textures_.empty())
+            return;
+
+        material_textures_.clear();
+
+        for (size_t mat_idx = 0; mat_idx < mesh.materials.size(); ++mat_idx) {
+            const auto& mat = mesh.materials[mat_idx];
+            GLMaterialTextures gl_tex;
+
+            if (mat.albedo_tex > 0 && mat.albedo_tex <= mesh.texture_images.size()) {
+                gl_tex.albedo = create_gl_texture(mesh.texture_images[mat.albedo_tex - 1]);
+            }
+            if (mat.normal_tex > 0 && mat.normal_tex <= mesh.texture_images.size()) {
+                gl_tex.normal = create_gl_texture(mesh.texture_images[mat.normal_tex - 1]);
+            }
+            if (mat.metallic_roughness_tex > 0 && mat.metallic_roughness_tex <= mesh.texture_images.size()) {
+                gl_tex.metallic_roughness = create_gl_texture(mesh.texture_images[mat.metallic_roughness_tex - 1]);
+            }
+
+            if (gl_tex.albedo.get() || gl_tex.normal.get() || gl_tex.metallic_roughness.get()) {
+                material_textures_[mat_idx] = std::move(gl_tex);
+            }
+        }
+
+        uploaded_texture_generation_ = mesh.generation();
+        LOG_INFO("Uploaded {} material texture sets", material_textures_.size());
+    }
+
+    void MeshRenderer::bindMaterial(const lfs::core::Material& mat, size_t mat_idx, bool has_texcoords) {
+        pbr_shader_->set_uniform("u_base_color", glm::vec4(mat.base_color));
+        pbr_shader_->set_uniform("u_metallic", mat.metallic);
+        pbr_shader_->set_uniform("u_roughness", mat.roughness);
+        pbr_shader_->set_uniform("u_emissive", glm::vec3(mat.emissive));
+
+        bool has_albedo = false;
+        bool has_normal = false;
+        bool has_mr = false;
+
+        if (has_texcoords) {
+            auto it = material_textures_.find(mat_idx);
+            if (it != material_textures_.end()) {
+                const auto& gl_tex = it->second;
+                if (gl_tex.albedo.get()) {
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, gl_tex.albedo.get());
+                    pbr_shader_->set_uniform("u_albedo_tex", 0);
+                    has_albedo = true;
+                }
+                if (gl_tex.normal.get()) {
+                    glActiveTexture(GL_TEXTURE1);
+                    glBindTexture(GL_TEXTURE_2D, gl_tex.normal.get());
+                    pbr_shader_->set_uniform("u_normal_tex", 1);
+                    has_normal = true;
+                }
+                if (gl_tex.metallic_roughness.get()) {
+                    glActiveTexture(GL_TEXTURE2);
+                    glBindTexture(GL_TEXTURE_2D, gl_tex.metallic_roughness.get());
+                    pbr_shader_->set_uniform("u_metallic_roughness_tex", 2);
+                    has_mr = true;
+                }
+            }
+        }
+
+        pbr_shader_->set_uniform("u_has_albedo_tex", has_albedo);
+        pbr_shader_->set_uniform("u_has_normal_tex", has_normal);
+        pbr_shader_->set_uniform("u_has_metallic_roughness_tex", has_mr);
+    }
+
     Result<void> MeshRenderer::render(const lfs::core::MeshData& mesh,
                                       const glm::mat4& model,
                                       const glm::mat4& view,
@@ -227,6 +389,9 @@ namespace lfs::rendering {
         if (!upload_result)
             return upload_result;
 
+        if (!mesh.texture_images.empty())
+            uploadTextures(mesh);
+
         glBindVertexArray(vao_.get());
         const auto enable_attrib = [](GLuint loc, bool has_data) {
             if (has_data)
@@ -239,6 +404,41 @@ namespace lfs::rendering {
         enable_attrib(2, mesh.has_tangents());
         enable_attrib(3, mesh.has_texcoords());
         enable_attrib(4, mesh.has_colors());
+
+        glm::mat4 light_vp(1.0f);
+        if (opts.shadow_enabled && shadow_shader_.valid()) {
+            const int res = opts.shadow_map_resolution;
+            if (shadow_map_resolution_ != res)
+                setupShadowFBO(res);
+
+            if (shadow_fbo_.get()) {
+                light_vp = compute_light_vp(mesh, model, opts.light_dir);
+
+                glBindFramebuffer(GL_FRAMEBUFFER, shadow_fbo_.get());
+                glViewport(0, 0, shadow_map_resolution_, shadow_map_resolution_);
+                glClear(GL_DEPTH_BUFFER_BIT);
+
+                glEnable(GL_DEPTH_TEST);
+                glEnable(GL_CULL_FACE);
+                glCullFace(GL_FRONT);
+                glEnable(GL_POLYGON_OFFSET_FILL);
+                glPolygonOffset(1.1f, 4.0f);
+
+                {
+                    ShaderScope scope(shadow_shader_);
+                    const glm::mat4 shadow_mvp = light_vp * model;
+                    shadow_shader_->set_uniform("u_mvp", shadow_mvp);
+
+                    glDrawElements(GL_TRIANGLES,
+                                   static_cast<GLsizei>(mesh.face_count() * 3),
+                                   GL_UNSIGNED_INT, nullptr);
+                }
+
+                glDisable(GL_POLYGON_OFFSET_FILL);
+                glCullFace(GL_BACK);
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            }
+        }
 
         if (use_fbo) {
             glBindFramebuffer(GL_FRAMEBUFFER, fbo_.get());
@@ -273,24 +473,45 @@ namespace lfs::rendering {
             pbr_shader_->set_uniform("u_light_dir", glm::normalize(opts.light_dir));
             pbr_shader_->set_uniform("u_light_intensity", opts.light_intensity);
             pbr_shader_->set_uniform("u_ambient", opts.ambient);
-
-            const auto& mat = mesh.materials.empty()
-                                  ? lfs::core::Material{}
-                                  : mesh.materials[0];
-
-            pbr_shader_->set_uniform("u_base_color", glm::vec4(mat.base_color));
-            pbr_shader_->set_uniform("u_metallic", mat.metallic);
-            pbr_shader_->set_uniform("u_roughness", mat.roughness);
-            pbr_shader_->set_uniform("u_emissive", glm::vec3(mat.emissive));
-
-            pbr_shader_->set_uniform("u_has_albedo_tex", false);
-            pbr_shader_->set_uniform("u_has_normal_tex", false);
-            pbr_shader_->set_uniform("u_has_metallic_roughness_tex", false);
             pbr_shader_->set_uniform("u_has_vertex_colors", mesh.has_colors());
 
-            glDrawElements(GL_TRIANGLES,
-                           static_cast<GLsizei>(mesh.face_count() * 3),
-                           GL_UNSIGNED_INT, nullptr);
+            const bool shadow_active = opts.shadow_enabled && shadow_fbo_.get() && shadow_depth_texture_.get();
+            pbr_shader_->set_uniform("u_shadow_enabled", shadow_active);
+            if (shadow_active) {
+                pbr_shader_->set_uniform("u_light_vp", light_vp);
+                glActiveTexture(GL_TEXTURE3);
+                glBindTexture(GL_TEXTURE_2D, shadow_depth_texture_.get());
+                pbr_shader_->set_uniform("u_shadow_map", 3);
+            }
+
+            if (mesh.submeshes.empty()) {
+                const auto& mat = mesh.materials.empty() ? lfs::core::Material{} : mesh.materials[0];
+                bindMaterial(mat, 0, mesh.has_texcoords());
+
+                glDrawElements(GL_TRIANGLES,
+                               static_cast<GLsizei>(mesh.face_count() * 3),
+                               GL_UNSIGNED_INT, nullptr);
+            } else {
+                for (const auto& sub : mesh.submeshes) {
+                    assert(sub.material_index < mesh.materials.size() || mesh.materials.empty());
+                    const auto& mat = mesh.materials.empty()
+                                          ? lfs::core::Material{}
+                                          : mesh.materials[std::min(sub.material_index, mesh.materials.size() - 1)];
+
+                    bindMaterial(mat, sub.material_index, mesh.has_texcoords());
+
+                    if (mat.double_sided)
+                        glDisable(GL_CULL_FACE);
+                    else if (opts.backface_culling)
+                        glEnable(GL_CULL_FACE);
+
+                    const auto byte_offset = static_cast<GLintptr>(sub.start_index * sizeof(uint32_t));
+                    glDrawElements(GL_TRIANGLES,
+                                   static_cast<GLsizei>(sub.index_count),
+                                   GL_UNSIGNED_INT,
+                                   reinterpret_cast<const void*>(byte_offset));
+                }
+            }
         }
 
         if (opts.wireframe_overlay) {

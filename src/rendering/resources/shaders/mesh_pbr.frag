@@ -26,6 +26,10 @@ uniform sampler2D u_metallic_roughness_tex;
 
 uniform bool u_has_vertex_colors;
 
+uniform bool u_shadow_enabled;
+uniform sampler2DShadow u_shadow_map;
+uniform mat4 u_light_vp;
+
 layout(location = 0) out vec4 frag_color;
 
 const float PI = 3.14159265359;
@@ -53,6 +57,25 @@ float geometry_smith(vec3 N, vec3 V, vec3 L, float roughness) {
 
 vec3 fresnel_schlick(float cos_theta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cos_theta, 0.0, 1.0), 5.0);
+}
+
+float calculate_shadow(vec3 world_pos) {
+    vec4 light_space = u_light_vp * vec4(world_pos, 1.0);
+    vec3 proj = light_space.xyz / light_space.w;
+    proj = proj * 0.5 + 0.5;
+
+    if (proj.z > 1.0)
+        return 1.0;
+
+    float shadow = 0.0;
+    vec2 texel_size = 1.0 / textureSize(u_shadow_map, 0);
+    for (int x = -1; x <= 1; ++x) {
+        for (int y = -1; y <= 1; ++y) {
+            vec3 sample_coord = vec3(proj.xy + vec2(x, y) * texel_size, proj.z);
+            shadow += texture(u_shadow_map, sample_coord);
+        }
+    }
+    return shadow / 9.0;
 }
 
 void main() {
@@ -97,6 +120,12 @@ void main() {
     float NdotL = max(dot(N, L), 0.0);
 
     vec3 Lo = (kD * albedo.rgb / PI + specular) * u_light_intensity * NdotL;
+
+    if (u_shadow_enabled) {
+        float shadow = calculate_shadow(v_world_pos);
+        Lo *= shadow;
+    }
+
     vec3 ambient = u_ambient * albedo.rgb;
 
     vec3 color = ambient + Lo + u_emissive;

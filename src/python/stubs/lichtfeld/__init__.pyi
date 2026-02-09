@@ -1187,8 +1187,6 @@ class DrawHandlerTiming(enum.Enum):
     POST_UI = 2
 
 class ViewportDrawContext:
-    def __init__(self) -> None: ...
-
     def world_to_screen(self, pos: tuple[float, float, float]) -> tuple[float, float] | None:
         """Project a (x, y, z) world position to (sx, sy) screen coordinates"""
 
@@ -1209,36 +1207,39 @@ class ViewportDrawContext:
     def viewport_size(self) -> tuple[float, float]:
         """Viewport dimensions as (width, height)"""
 
-    def draw_line_2d(self, start: tuple[float, float], end: tuple[float, float], color: tuple[float, float, float, float], thickness: float = 1.0) -> None:
+    def draw_line_2d(self, start: tuple[float, float], end: tuple[float, float], color: object, thickness: float = 1.0) -> None:
         """Draw a 2D line from start to end in screen coordinates"""
 
-    def draw_circle_2d(self, center: tuple[float, float], radius: float, color: tuple[float, float, float, float], thickness: float = 1.0) -> None:
+    def draw_circle_2d(self, center: tuple[float, float], radius: float, color: object, thickness: float = 1.0) -> None:
         """Draw a 2D circle outline in screen coordinates"""
 
-    def draw_rect_2d(self, min: tuple[float, float], max: tuple[float, float], color: tuple[float, float, float, float], thickness: float = 1.0) -> None:
+    def draw_rect_2d(self, min: tuple[float, float], max: tuple[float, float], color: object, thickness: float = 1.0) -> None:
         """Draw a 2D rectangle outline in screen coordinates"""
 
-    def draw_filled_rect_2d(self, min: tuple[float, float], max: tuple[float, float], color: tuple[float, float, float, float]) -> None:
+    def draw_filled_rect_2d(self, min: tuple[float, float], max: tuple[float, float], color: object) -> None:
         """Draw a filled 2D rectangle in screen coordinates"""
 
-    def draw_filled_circle_2d(self, center: tuple[float, float], radius: float, color: tuple[float, float, float, float]) -> None:
+    def draw_filled_circle_2d(self, center: tuple[float, float], radius: float, color: object) -> None:
         """Draw a filled 2D circle in screen coordinates"""
 
-    def draw_text_2d(self, pos: tuple[float, float], text: str, color: tuple[float, float, float, float]) -> None:
-        """Draw text at a 2D screen position"""
+    def draw_text_2d(self, pos: tuple[float, float], text: str, color: object, font_size: float = 0.0) -> None:
+        """Draw text at a 2D screen position (font_size=0 uses default)"""
 
-    def draw_line_3d(self, start: tuple[float, float, float], end: tuple[float, float, float], color: tuple[float, float, float, float], thickness: float = 1.0) -> None:
+    def draw_line_3d(self, start: tuple[float, float, float], end: tuple[float, float, float], color: object, thickness: float = 1.0) -> None:
         """Draw a 3D line between two world-space points"""
 
-    def draw_point_3d(self, pos: tuple[float, float, float], color: tuple[float, float, float, float], size: float = 4.0) -> None:
+    def draw_point_3d(self, pos: tuple[float, float, float], color: object, size: float = 4.0) -> None:
         """Draw a point at a 3D world-space position"""
+
+    def draw_text_3d(self, pos: tuple[float, float, float], text: str, color: object, font_size: float = 0.0) -> None:
+        """Draw text at a 3D world-space position (font_size=0 uses default)"""
 
 def draw_handler(timing: str = 'POST_VIEW') -> object:
     """
     Decorator to register a viewport draw handler (PRE_VIEW, POST_VIEW, POST_UI)
     """
 
-def add_draw_handler(id: str, callback: object, timing: str = 'POST_VIEW') -> None:
+def add_draw_handler(id: str, callback: object, timing: object = 'POST_VIEW') -> None:
     """Add a viewport draw handler with explicit id"""
 
 def remove_draw_handler(id: str) -> bool:

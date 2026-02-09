@@ -551,4 +551,21 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void update_selection(bool has_selection, int count);
     LFS_PYTHON_RUNTIME_API void flush_signals();
 
+    // Viewport draw overlay - bridge from visualizer to Python draw handlers
+    // view_matrix/proj_matrix: column-major 4x4, others: float arrays
+    // draw_list: opaque pointer to ImDrawList (cast by implementation)
+    using HasViewportDrawHandlersCallback = bool (*)();
+    using InvokeViewportOverlayCallback = void (*)(const float* view_matrix, const float* proj_matrix,
+                                                   const float* vp_pos, const float* vp_size,
+                                                   const float* cam_pos, const float* cam_fwd,
+                                                   void* draw_list);
+
+    LFS_PYTHON_RUNTIME_API void set_viewport_overlay_callbacks(HasViewportDrawHandlersCallback has_cb,
+                                                               InvokeViewportOverlayCallback invoke_cb);
+    LFS_PYTHON_RUNTIME_API bool has_viewport_draw_handlers();
+    LFS_PYTHON_RUNTIME_API void invoke_viewport_overlay(const float* view_matrix, const float* proj_matrix,
+                                                        const float* vp_pos, const float* vp_size,
+                                                        const float* cam_pos, const float* cam_fwd,
+                                                        void* draw_list);
+
 } // namespace lfs::python

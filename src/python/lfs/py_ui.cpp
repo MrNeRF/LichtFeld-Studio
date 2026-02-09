@@ -76,6 +76,17 @@ namespace lfs::python {
             return {std::get<0>(t), std::get<1>(t), std::get<2>(t), std::get<3>(t)};
         }
 
+        ImVec4 tuple_to_imvec4(const nb::object& obj) {
+            const auto len = nb::len(obj);
+            assert(len == 3 || len == 4);
+            if (len == 3) {
+                auto t = nb::cast<std::tuple<float, float, float>>(obj);
+                return {std::get<0>(t), std::get<1>(t), std::get<2>(t), 1.0f};
+            }
+            auto t = nb::cast<std::tuple<float, float, float, float>>(obj);
+            return {std::get<0>(t), std::get<1>(t), std::get<2>(t), std::get<3>(t)};
+        }
+
         // Icon cache for Python toolbar
         std::unordered_map<std::string, unsigned int> g_icon_cache;
         std::mutex g_icon_cache_mutex;
@@ -1115,7 +1126,7 @@ namespace lfs::python {
         parent_->progress_bar(fraction, overlay, width, height);
         pop_per_item_state();
     }
-    void PySubLayout::text_colored(const std::string& text, std::tuple<float, float, float, float> color) {
+    void PySubLayout::text_colored(const std::string& text, nb::object color) {
         advance_child();
         parent_->text_colored(text, color);
     }
@@ -1216,7 +1227,7 @@ namespace lfs::python {
         return r;
     }
     void PySubLayout::image(uint64_t texture_id, std::tuple<float, float> size,
-                            std::tuple<float, float, float, float> tint) {
+                            nb::object tint) {
         advance_child();
         apply_state();
         parent_->image(texture_id, size, tint);
@@ -1224,7 +1235,7 @@ namespace lfs::python {
     }
     bool PySubLayout::image_button(const std::string& id, uint64_t texture_id,
                                    std::tuple<float, float> size,
-                                   std::tuple<float, float, float, float> tint) {
+                                   nb::object tint) {
         advance_child();
         apply_state();
         auto r = parent_->image_button(id, texture_id, size, tint);
@@ -1479,71 +1490,72 @@ namespace lfs::python {
 
     // PyUILayout implementation - Drawing (for viewport overlays)
     namespace {
-        ImU32 tuple_to_color32(std::tuple<float, float, float, float> color) {
+        ImU32 tuple_to_color32(const nb::object& obj) {
+            const auto c = tuple_to_imvec4(obj);
             return IM_COL32(
-                static_cast<int>(std::get<0>(color) * 255),
-                static_cast<int>(std::get<1>(color) * 255),
-                static_cast<int>(std::get<2>(color) * 255),
-                static_cast<int>(std::get<3>(color) * 255));
+                static_cast<int>(c.x * 255),
+                static_cast<int>(c.y * 255),
+                static_cast<int>(c.z * 255),
+                static_cast<int>(c.w * 255));
         }
     } // namespace
 
     void PyUILayout::draw_circle(float x, float y, float radius,
-                                 std::tuple<float, float, float, float> color,
+                                 nb::object color,
                                  int segments, float thickness) {
         auto* const dl = ImGui::GetWindowDrawList();
         dl->AddCircle(ImVec2(x, y), radius, tuple_to_color32(color), segments, thickness);
     }
 
     void PyUILayout::draw_circle_filled(float x, float y, float radius,
-                                        std::tuple<float, float, float, float> color,
+                                        nb::object color,
                                         int segments) {
         auto* const dl = ImGui::GetWindowDrawList();
         dl->AddCircleFilled(ImVec2(x, y), radius, tuple_to_color32(color), segments);
     }
 
     void PyUILayout::draw_rect(float x0, float y0, float x1, float y1,
-                               std::tuple<float, float, float, float> color,
+                               nb::object color,
                                float thickness) {
         auto* const dl = ImGui::GetWindowDrawList();
         dl->AddRect(ImVec2(x0, y0), ImVec2(x1, y1), tuple_to_color32(color), 0.0f, 0, thickness);
     }
 
     void PyUILayout::draw_rect_filled(float x0, float y0, float x1, float y1,
-                                      std::tuple<float, float, float, float> color, bool background) {
+                                      nb::object color, bool background) {
         auto* const dl = background ? ImGui::GetBackgroundDrawList() : ImGui::GetWindowDrawList();
         dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), tuple_to_color32(color));
     }
 
     void PyUILayout::draw_rect_rounded(float x0, float y0, float x1, float y1,
-                                       std::tuple<float, float, float, float> color,
+                                       nb::object color,
                                        float rounding, float thickness, bool background) {
         auto* const dl = background ? ImGui::GetBackgroundDrawList() : ImGui::GetWindowDrawList();
         dl->AddRect(ImVec2(x0, y0), ImVec2(x1, y1), tuple_to_color32(color), rounding, 0, thickness);
     }
 
     void PyUILayout::draw_rect_rounded_filled(float x0, float y0, float x1, float y1,
-                                              std::tuple<float, float, float, float> color,
+                                              nb::object color,
                                               float rounding, bool background) {
         auto* const dl = background ? ImGui::GetBackgroundDrawList() : ImGui::GetWindowDrawList();
         dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), tuple_to_color32(color), rounding);
     }
 
     void PyUILayout::draw_triangle_filled(float x0, float y0, float x1, float y1, float x2, float y2,
-                                          std::tuple<float, float, float, float> color, bool background) {
+                                          nb::object color, bool background) {
         auto* const dl = background ? ImGui::GetBackgroundDrawList() : ImGui::GetWindowDrawList();
         dl->AddTriangleFilled(ImVec2(x0, y0), ImVec2(x1, y1), ImVec2(x2, y2), tuple_to_color32(color));
     }
 
     void PyUILayout::draw_line(float x0, float y0, float x1, float y1,
-                               std::tuple<float, float, float, float> color,
+                               nb::object color,
                                float thickness) {
         auto* dl = ImGui::GetForegroundDrawList();
         dl->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), tuple_to_color32(color), thickness);
     }
 
     void PyUILayout::draw_polyline(const std::vector<std::tuple<float, float>>& points,
-                                   std::tuple<float, float, float, float> color,
+                                   nb::object color,
                                    bool closed, float thickness) {
         if (points.empty())
             return;
@@ -1558,7 +1570,7 @@ namespace lfs::python {
     }
 
     void PyUILayout::draw_poly_filled(const std::vector<std::tuple<float, float>>& points,
-                                      std::tuple<float, float, float, float> color) {
+                                      nb::object color) {
         if (points.size() < 3)
             return;
         auto* dl = ImGui::GetForegroundDrawList();
@@ -1571,53 +1583,53 @@ namespace lfs::python {
     }
 
     void PyUILayout::draw_text(float x, float y, const std::string& text,
-                               std::tuple<float, float, float, float> color, bool background) {
+                               nb::object color, bool background) {
         auto* const dl = background ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
         ImFont* const font = ImGui::GetFont();
         dl->AddText(font, font->FontSize, ImVec2(x, y), tuple_to_color32(color), text.c_str());
     }
 
     void PyUILayout::draw_window_rect_filled(float x0, float y0, float x1, float y1,
-                                             std::tuple<float, float, float, float> color) {
+                                             nb::object color) {
         auto* const dl = ImGui::GetWindowDrawList();
         dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), tuple_to_color32(color));
     }
 
     void PyUILayout::draw_window_rect(float x0, float y0, float x1, float y1,
-                                      std::tuple<float, float, float, float> color, float thickness) {
+                                      nb::object color, float thickness) {
         auto* const dl = ImGui::GetWindowDrawList();
         dl->AddRect(ImVec2(x0, y0), ImVec2(x1, y1), tuple_to_color32(color), 0.0f, 0, thickness);
     }
 
     void PyUILayout::draw_window_rect_rounded(float x0, float y0, float x1, float y1,
-                                              std::tuple<float, float, float, float> color,
+                                              nb::object color,
                                               float rounding, float thickness) {
         auto* const dl = ImGui::GetWindowDrawList();
         dl->AddRect(ImVec2(x0, y0), ImVec2(x1, y1), tuple_to_color32(color), rounding, 0, thickness);
     }
 
     void PyUILayout::draw_window_rect_rounded_filled(float x0, float y0, float x1, float y1,
-                                                     std::tuple<float, float, float, float> color,
+                                                     nb::object color,
                                                      float rounding) {
         auto* const dl = ImGui::GetWindowDrawList();
         dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), tuple_to_color32(color), rounding);
     }
 
     void PyUILayout::draw_window_line(float x0, float y0, float x1, float y1,
-                                      std::tuple<float, float, float, float> color, float thickness) {
+                                      nb::object color, float thickness) {
         auto* const dl = ImGui::GetWindowDrawList();
         dl->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), tuple_to_color32(color), thickness);
     }
 
     void PyUILayout::draw_window_text(float x, float y, const std::string& text,
-                                      std::tuple<float, float, float, float> color) {
+                                      nb::object color) {
         auto* const dl = ImGui::GetWindowDrawList();
         ImFont* const font = ImGui::GetFont();
         dl->AddText(font, font->FontSize, ImVec2(x, y), tuple_to_color32(color), text.c_str());
     }
 
     void PyUILayout::draw_window_triangle_filled(float x0, float y0, float x1, float y1, float x2, float y2,
-                                                 std::tuple<float, float, float, float> color) {
+                                                 nb::object color) {
         auto* const dl = ImGui::GetWindowDrawList();
         dl->AddTriangleFilled(ImVec2(x0, y0), ImVec2(x1, y1), ImVec2(x2, y2), tuple_to_color32(color));
     }
@@ -1656,11 +1668,11 @@ namespace lfs::python {
         ImGui::PopFont();
     }
 
-    void PyUILayout::text_colored(const std::string& text, std::tuple<float, float, float, float> color) {
+    void PyUILayout::text_colored(const std::string& text, nb::object color) {
         ImGui::TextColored(tuple_to_imvec4(color), "%s", text.c_str());
     }
 
-    void PyUILayout::text_colored_centered(const std::string& text, std::tuple<float, float, float, float> color) {
+    void PyUILayout::text_colored_centered(const std::string& text, nb::object color) {
         const float text_width = ImGui::CalcTextSize(text.c_str()).x;
         const float avail_width = ImGui::GetContentRegionAvail().x;
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail_width - text_width) * 0.5f);
@@ -1904,7 +1916,7 @@ namespace lfs::python {
         return {changed, {c[0], c[1], c[2], c[3]}};
     }
 
-    bool PyUILayout::color_button(const std::string& label, std::tuple<float, float, float, float> color,
+    bool PyUILayout::color_button(const std::string& label, nb::object color,
                                   std::tuple<float, float> size) {
         return ImGui::ColorButton(label.c_str(), tuple_to_imvec4(color), 0,
                                   {std::get<0>(size), std::get<1>(size)});
@@ -2045,10 +2057,9 @@ namespace lfs::python {
         ImGui::TableHeadersRow();
     }
 
-    void PyUILayout::table_set_bg_color(int target, std::tuple<float, float, float, float> color) {
-        ImU32 col = ImGui::ColorConvertFloat4ToU32(
-            ImVec4(std::get<0>(color), std::get<1>(color), std::get<2>(color), std::get<3>(color)));
-        ImGui::TableSetBgColor(static_cast<ImGuiTableBgTarget>(target), col);
+    void PyUILayout::table_set_bg_color(int target, nb::object color) {
+        ImGui::TableSetBgColor(static_cast<ImGuiTableBgTarget>(target),
+                               ImGui::ColorConvertFloat4ToU32(tuple_to_imvec4(color)));
     }
 
     void PyUILayout::table_setup_column(const std::string& label, const float width) {
@@ -2258,29 +2269,32 @@ namespace lfs::python {
 
     // Images
     void PyUILayout::image(uint64_t texture_id, std::tuple<float, float> size,
-                           std::tuple<float, float, float, float> tint) {
+                           nb::object tint) {
+        const ImVec4 t = tint.is_none() ? ImVec4(1, 1, 1, 1) : tuple_to_imvec4(tint);
         ImGui::Image(static_cast<ImTextureID>(texture_id),
                      {std::get<0>(size), std::get<1>(size)},
                      {0, 0}, {1, 1},
-                     tuple_to_imvec4(tint), {0, 0, 0, 0});
+                     t, {0, 0, 0, 0});
     }
 
     void PyUILayout::image_uv(uint64_t texture_id, std::tuple<float, float> size,
                               std::tuple<float, float> uv0, std::tuple<float, float> uv1,
-                              std::tuple<float, float, float, float> tint) {
+                              nb::object tint) {
+        const ImVec4 t = tint.is_none() ? ImVec4(1, 1, 1, 1) : tuple_to_imvec4(tint);
         ImGui::Image(static_cast<ImTextureID>(texture_id),
                      {std::get<0>(size), std::get<1>(size)},
                      {std::get<0>(uv0), std::get<1>(uv0)},
                      {std::get<0>(uv1), std::get<1>(uv1)},
-                     tuple_to_imvec4(tint), {0, 0, 0, 0});
+                     t, {0, 0, 0, 0});
     }
 
     bool PyUILayout::image_button(const std::string& id, uint64_t texture_id, std::tuple<float, float> size,
-                                  std::tuple<float, float, float, float> tint) {
+                                  nb::object tint) {
+        const ImVec4 t = tint.is_none() ? ImVec4(1, 1, 1, 1) : tuple_to_imvec4(tint);
         return ImGui::ImageButton(id.c_str(), static_cast<ImTextureID>(texture_id),
                                   {std::get<0>(size), std::get<1>(size)},
                                   {0, 0}, {1, 1},
-                                  {0, 0, 0, 0}, tuple_to_imvec4(tint));
+                                  {0, 0, 0, 0}, t);
     }
 
     bool PyUILayout::toolbar_button(const std::string& id, uint64_t texture_id, std::tuple<float, float> size,
@@ -2570,7 +2584,7 @@ namespace lfs::python {
         ImGui::PopStyleVar(count);
     }
 
-    void PyUILayout::push_style_color(const std::string& col, std::tuple<float, float, float, float> color) {
+    void PyUILayout::push_style_color(const std::string& col, nb::object color) {
         ImGui::PushStyleColor(string_to_style_color(col), tuple_to_imvec4(color));
     }
 
@@ -2901,8 +2915,8 @@ namespace lfs::python {
             .def("color_edit3", &PySubLayout::color_edit3, nb::arg("label"), nb::arg("color"))
             .def("text_disabled", &PySubLayout::text_disabled, nb::arg("text"))
             .def("listbox", &PySubLayout::listbox, nb::arg("label"), nb::arg("current_idx"), nb::arg("items"), nb::arg("height_items") = -1)
-            .def("image", &PySubLayout::image, nb::arg("texture_id"), nb::arg("size"), nb::arg("tint") = std::make_tuple(1.0f, 1.0f, 1.0f, 1.0f))
-            .def("image_button", &PySubLayout::image_button, nb::arg("id"), nb::arg("texture_id"), nb::arg("size"), nb::arg("tint") = std::make_tuple(1.0f, 1.0f, 1.0f, 1.0f))
+            .def("image", &PySubLayout::image, nb::arg("texture_id"), nb::arg("size"), nb::arg("tint") = nb::none())
+            .def("image_button", &PySubLayout::image_button, nb::arg("id"), nb::arg("texture_id"), nb::arg("size"), nb::arg("tint") = nb::none())
             .def("input_text_with_hint", &PySubLayout::input_text_with_hint, nb::arg("label"), nb::arg("hint"), nb::arg("value"))
             .def("input_text_enter", &PySubLayout::input_text_enter, nb::arg("label"), nb::arg("value"))
             .def("table_setup_column", &PySubLayout::table_setup_column, nb::arg("label"), nb::arg("width") = 0.0f)
@@ -2973,8 +2987,8 @@ namespace lfs::python {
             .def("label", &PyUILayout::label, nb::arg("text"), "Draw a text label")
             .def("label_centered", &PyUILayout::label_centered, nb::arg("text"), "Draw a horizontally centered text label")
             .def("heading", &PyUILayout::heading, nb::arg("text"), "Draw a bold heading text")
-            .def("text_colored", &PyUILayout::text_colored, nb::arg("text"), nb::arg("color"), "Draw text with RGBA color tuple")
-            .def("text_colored_centered", &PyUILayout::text_colored_centered, nb::arg("text"), nb::arg("color"), "Draw centered text with RGBA color tuple")
+            .def("text_colored", &PyUILayout::text_colored, nb::arg("text"), nb::arg("color"), "Draw text with RGB or RGBA color tuple")
+            .def("text_colored_centered", &PyUILayout::text_colored_centered, nb::arg("text"), nb::arg("color"), "Draw centered text with RGB or RGBA color tuple")
             .def("text_selectable", &PyUILayout::text_selectable, nb::arg("text"), nb::arg("height") = 0.0f, "Draw selectable read-only text area")
             .def("text_wrapped", &PyUILayout::text_wrapped, nb::arg("text"), "Draw word-wrapped text")
             .def("text_disabled", &PyUILayout::text_disabled, nb::arg("text"), "Draw greyed-out disabled text")
@@ -3100,12 +3114,12 @@ namespace lfs::python {
             .def("end_disabled", &PyUILayout::end_disabled, "End a disabled UI region")
             // Images
             .def("image", &PyUILayout::image, nb::arg("texture_id"), nb::arg("size"),
-                 nb::arg("tint") = std::make_tuple(1.0f, 1.0f, 1.0f, 1.0f), "Draw an image from a GL texture ID")
+                 nb::arg("tint") = nb::none(), "Draw an image from a GL texture ID")
             .def("image_uv", &PyUILayout::image_uv, nb::arg("texture_id"), nb::arg("size"),
                  nb::arg("uv0"), nb::arg("uv1"),
-                 nb::arg("tint") = std::make_tuple(1.0f, 1.0f, 1.0f, 1.0f), "Draw an image with custom UV coordinates")
+                 nb::arg("tint") = nb::none(), "Draw an image with custom UV coordinates")
             .def("image_button", &PyUILayout::image_button, nb::arg("id"), nb::arg("texture_id"),
-                 nb::arg("size"), nb::arg("tint") = std::make_tuple(1.0f, 1.0f, 1.0f, 1.0f), "Draw an image button, returns True if clicked")
+                 nb::arg("size"), nb::arg("tint") = nb::none(), "Draw an image button, returns True if clicked")
             .def("toolbar_button", &PyUILayout::toolbar_button, nb::arg("id"), nb::arg("texture_id"),
                  nb::arg("size"), nb::arg("selected") = false, nb::arg("disabled") = false,
                  nb::arg("tooltip") = "", "Draw a toolbar-style icon button with selection state")

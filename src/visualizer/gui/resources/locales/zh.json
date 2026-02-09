@@ -1,6 +1,5 @@
 {
   "_language_name": "简体中文",
-
   "menu": {
     "file": "文件",
     "file.new_project": "新建项目",
@@ -11,23 +10,20 @@
     "file.import_config": "导入配置",
     "file.export": "导出...",
     "file.export_config": "导出配置...",
+    "file.extract_video_frames": "从视频提取帧...",
     "file.exit": "退出",
-
     "edit": "编辑",
     "edit.input_settings": "输入设置...",
     "edit.preferences": "偏好设置...",
-
     "view": "视图",
     "view.theme": "主题",
     "view.theme.dark": "深色",
     "view.theme.light": "浅色",
     "view.debug_info": "调试信息...",
-
     "help": "帮助",
     "help.getting_started": "入门指南",
     "help.about": "关于LichtFeld Studio"
   },
-
   "window": {
     "getting_started": "入门指南",
     "about": "关于LichtFeld Studio",
@@ -39,7 +35,6 @@
     "training": "训练",
     "preferences": "偏好设置"
   },
-
   "getting_started": {
     "title": "快速入门指南",
     "description": "学习如何准备数据集并开始使用LichtFeld Studio：",
@@ -52,7 +47,6 @@
     "video_masks": "蒙版教程",
     "loading": "加载中..."
   },
-
   "about": {
     "title": "LICHTFELD STUDIO",
     "description": "用于实时神经渲染、训练和可视化的高性能C++和CUDA实现的3D Gaussian Splatting。",
@@ -75,7 +69,6 @@
     "authors": "LichtFeld Studio作者",
     "license": "根据GPLv3许可"
   },
-
   "training": {
     "section.dataset": "数据集",
     "section.optimization": "优化",
@@ -90,7 +83,6 @@
     "section.advanced_params": "高级训练参数",
     "section.sparsity": "稀疏性设置",
     "section.pruning_growing": "修剪/生长",
-
     "dataset.path": "Path:",
     "dataset.images": "Images:",
     "dataset.resize_factor": "Resize Factor:",
@@ -98,7 +90,6 @@
     "dataset.cpu_cache": "CPU Cache:",
     "dataset.fs_cache": "FS Cache:",
     "dataset.output": "Output:",
-
     "opt.strategy": "Strategy:",
     "opt.learning_rates": "Learning Rates:",
     "opt.iterations": "Iterations:",
@@ -115,30 +106,25 @@
     "opt.lr.opacity": "  Opacity:",
     "opt.lr.scaling": "  Scaling:",
     "opt.lr.rotation": "  Rotation:",
-
     "refinement.refine_every": "  Refine Every:",
     "refinement.start_refine": "  Start Refine:",
     "refinement.stop_refine": "  Stop Refine:",
     "refinement.gradient_thr": "  Gradient Thr:",
     "refinement.reset_every": "  Reset Every:",
     "refinement.sh_upgrade_every": "  SH Upgrade Every:",
-
     "bilateral.grid_x": "Grid X:",
     "bilateral.grid_y": "Grid Y:",
     "bilateral.grid_w": "Grid W:",
     "bilateral.learning_rate": "Learning Rate:",
-
     "masking.invert_masks": "Invert Masks:",
     "masking.threshold": "Threshold:",
     "masking.penalty_weight": "Penalty Weight:",
     "masking.penalty_power": "Penalty Power:",
-
     "mask.invert": "  Invert Masks:",
     "mask.threshold": "  Mask Threshold:",
     "mask.penalty_weight": "  Opacity Penalty Weight:",
     "mask.penalty_power": "  Opacity Penalty Power:",
     "mask.no_masks": "(无掩码)",
-
     "tooltip.invert_masks": "在掩码中交换对象/背景",
     "tooltip.penalty_weight": "背景区域的不透明度惩罚权重",
     "tooltip.penalty_power": "惩罚衰减：1=线性，2=二次，>2=更平缓",
@@ -203,25 +189,21 @@
     "tooltip.ppisp_freeze_gaussians": "在控制器训练期间冻结高斯参数",
     "tooltip.strategy_gut_conflict": "启用GUT时无法使用ADC策略",
     "tooltip.gut_adc_conflict": "ADC策略下无法使用GUT。请先切换到MCMC。",
-
     "error.adc_gut_title": "不兼容的设置",
     "conflict.adc_gut_start_message": "GUT和ADC策略不能同时使用。请选择操作以开始训练。",
     "conflict.adc_gut_strategy_message": "ADC策略与GUT不兼容。禁用GUT以切换到ADC？",
     "conflict.btn_use_mcmc": "使用MCMC",
     "conflict.btn_disable_gut": "禁用GUT",
     "conflict.btn_cancel": "取消",
-
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "Opacity Reg:",
     "losses.scale_reg": "Scale Reg:",
     "losses.tv_loss_weight": "TV Loss Weight:",
-
     "init.init_opacity": "Init Opacity:",
     "init.init_scaling": "Init Scaling:",
     "init.random_init": "Random Init:",
     "init.num_points": "  Num Points:",
     "init.extent": "  Extent:",
-
     "thresholds.min_opacity": "Min Opacity:",
     "thresholds.prune_opacity": "Prune Opacity:",
     "thresholds.grow_scale_3d": "Grow Scale 3D:",
@@ -230,12 +212,10 @@
     "thresholds.prune_scale_2d": "Prune Scale 2D:",
     "thresholds.pause_after_reset": "Pause After Reset:",
     "thresholds.revised_opacity": "Revised Opacity:",
-
     "status.enabled": "已启用",
     "status.disabled": "已禁用",
     "status.yes": "是",
     "status.no": "否",
-
     "button.start": "开始训练",
     "button.resume": "继续",
     "button.pause": "暂停",
@@ -247,7 +227,6 @@
     "button.add": "添加",
     "button.remove": "移除"
   },
-
   "scene": {
     "add_ply": "添加PLY...",
     "add_group": "添加组",
@@ -288,7 +267,6 @@
     "training_enabled_tooltip": "已包含在训练中",
     "training_disabled_tooltip": "已从训练中排除"
   },
-
   "export": {
     "title": "导出",
     "format.ply_standard": "PLY（标准）",
@@ -307,7 +285,6 @@
     "failed": "失败",
     "select_at_least_one": "至少选择一个模型"
   },
-
   "common": {
     "ok": "确定",
     "cancel": "取消",
@@ -323,7 +300,6 @@
     "reset": "重置",
     "double_click_reset": "双击重置"
   },
-
   "status": {
     "ready": "就绪",
     "training": "训练中",
@@ -348,14 +324,12 @@
     "training_finished": "训练完成",
     "ply_models_count": "PLY模型：{}"
   },
-
   "mode": {
     "empty": "空",
     "dataset": "数据集",
     "edit_mode": "编辑模式",
     "ply_models": "PLY模型："
   },
-
   "messages": {
     "no_data_loaded": "未加载数据",
     "use_file_menu": "使用文件菜单导入",
@@ -370,18 +344,15 @@
     "err_ortho_not_supported": "暂不支持使用正交相机模型进行训练。",
     "err_non_pinhole": "请启用 --gut 或 --undistort 以使用非针孔相机进行训练。"
   },
-
   "controls": {
     "wasd": "WASD：",
     "zoom": "缩放："
   },
-
   "preferences": {
     "title": "偏好设置",
     "language": "语言：",
     "select_language": "选择语言"
   },
-
   "main_panel": {
     "windows": "窗口",
     "scene_panel": "场景面板",
@@ -434,7 +405,6 @@
     "no_selection_groups": "无选择组",
     "clear": "清除"
   },
-
   "toolbar": {
     "selection": "选择",
     "translate": "移动",
@@ -469,7 +439,6 @@
     "orthographic": "正交（O）",
     "sequencer": "序列器"
   },
-
   "transform": {
     "node": "节点：%s",
     "space": "空间：%s",
@@ -485,7 +454,6 @@
     "reset_transform": "重置变换",
     "nodes_selected": "已选择%zu个节点"
   },
-
   "cropbox": {
     "title": "裁剪框",
     "not_visible": "裁剪框不可见",
@@ -498,7 +466,6 @@
     "line_width": "线宽",
     "instructions": "Enter：确认裁剪 | Ctrl+C：复制内容"
   },
-
   "file_browser": {
     "title": "文件浏览器",
     "quick_access": "快速访问",
@@ -513,7 +480,6 @@
     "load_ply": "加载PLY",
     "enter_dir": "进入目录"
   },
-
   "training_panel": {
     "start_training": "开始训练",
     "resume_training": "继续训练",
@@ -534,7 +500,6 @@
     "sparsity": "稀疏性设置",
     "pruning_growing": "修剪/生长"
   },
-
   "tooltip": {
     "gut_mode": "用于鱼眼/畸变/等距柱状相机",
     "mip_filter": "减少亚像素高斯的锯齿",
@@ -568,14 +533,12 @@
     "point_cloud_mode": "以点而非泼溅渲染",
     "selection_colors": "选区可视化颜色"
   },
-
   "exit_popup": {
     "title": "退出应用程序？",
     "message": "确定要退出吗？",
     "unsaved_warning": "任何未保存的更改将丢失。",
     "exit": "退出"
   },
-
   "load_dataset_popup": {
     "title": "加载数据集",
     "configure_paths": "配置数据集路径",
@@ -586,7 +549,6 @@
     "init_file": "Init file（可选，替换 points3D）：",
     "help_text": "检查点、日志和导出的模型将保存到输出目录。"
   },
-
   "notification": {
     "cannot_open": "无法打开",
     "dropped_not_recognized": "拖放的",
@@ -595,7 +557,6 @@
     "items": "项目",
     "and_more": "... 和"
   },
-
   "export_dialog": {
     "format": "格式",
     "models": "模型",
@@ -603,12 +564,10 @@
     "sh_degree": "SH Degree",
     "export_merged": "导出合并的..."
   },
-
   "selection_group": {
     "lock": "锁定",
     "unlock": "解锁"
   },
-
   "file_browser_ext": {
     "dataset": "[数据集]",
     "sog": "[SOG]",
@@ -618,7 +577,6 @@
     "sog_meta": "（SOG meta.json）",
     "error": "错误："
   },
-
   "progress": {
     "loss": "损失：",
     "gaussians_count": "%s高斯",
@@ -632,7 +590,6 @@
     "num_splats": "Splat数量：%s",
     "status_label": "状态：%s"
   },
-
   "input_settings": {
     "active_profile": "活动配置文件：",
     "save_current_profile": "保存当前配置文件",
@@ -666,7 +623,6 @@
     "mode.crop_box": "裁剪框",
     "mode.unknown": "未知"
   },
-
   "debug_info": {
     "free_memory": "可用：%.2f GB",
     "enable_tracing": "启用操作追踪",
@@ -674,7 +630,6 @@
     "clear_history": "清除历史",
     "print_to_log": "打印到日志"
   },
-
   "training_params": {
     "strategy": "Strategy:",
     "iterations": "Iterations:",
@@ -729,7 +684,6 @@
     "ppisp_freeze_gaussians": "冻结高斯:",
     "disabled": "已禁用"
   },
-
   "image_preview": {
     "image_section": "图像",
     "file_section": "文件",
@@ -770,7 +724,6 @@
     "hidden": "隐藏",
     "mask_section": "掩码"
   },
-
   "startup": {
     "supported_by": "支持：",
     "click_to_continue": "点击任意位置继续",
@@ -780,14 +733,12 @@
     "drop_to_import": "放下以导入",
     "drop_to_import_subtitle": "PLY、SOG、COLMAP数据集或项目"
   },
-
   "axis": {
     "x": "X：",
     "y": "Y：",
     "z": "Z：",
     "u": "U："
   },
-
   "resume_checkpoint_popup": {
     "title": "恢复检查点",
     "checkpoint": "检查点",
@@ -800,7 +751,6 @@
     "output_path": "输出路径：",
     "help_text": "在检查点中保存的数据集路径可能已更改。如果需要，请更新它。"
   },
-
   "disk_space_dialog": {
     "title": "磁盘空间不足",
     "error_label": "错误",
@@ -815,5 +765,62 @@
     "change_location": "更改位置",
     "retry": "重试",
     "select_output_location": "选择输出位置"
+  },
+  "video_extractor": {
+    "title": "从视频提取帧",
+    "select_preview": "选择视频文件进行预览",
+    "step_backward": "上一帧",
+    "step_forward": "下一帧",
+    "pause": "暂停（空格）",
+    "play": "播放（空格）",
+    "trim_range": "裁剪范围：",
+    "set": "设置",
+    "set_start": "将起点设置为当前位置",
+    "set_end": "将终点设置为当前位置",
+    "reset": "重置",
+    "estimated_frames": "（约%d帧）",
+    "input_video": "输入视频",
+    "video": "视频：",
+    "no_file": "未选择文件",
+    "browse": "浏览...",
+    "output": "输出：",
+    "no_dir": "未选择目录",
+    "select_folder": "选择输出文件夹",
+    "settings": "提取设置",
+    "mode": "模式：",
+    "mode_fps": "基于FPS",
+    "mode_interval": "帧间隔",
+    "fps_label": "FPS",
+    "fps_tooltip": "以此速率提取帧",
+    "every_label": "每隔",
+    "frames_format": "%d帧",
+    "interval_tooltip": "每隔N帧提取",
+    "output_format": "输出格式",
+    "format": "格式：",
+    "format_png": "PNG（无损）",
+    "format_jpeg": "JPEG（较小）",
+    "quality_label": "质量",
+    "resolution": "分辨率",
+    "resolution_label": "分辨率：",
+    "res_original": "原始",
+    "res_scale": "缩放",
+    "res_custom": "自定义",
+    "width": "宽度",
+    "height": "高度",
+    "output_res": "输出：%dx%d",
+    "naming": "输出命名",
+    "pattern": "命名模板：",
+    "pattern_tooltip": "使用%%d作为帧编号（例如frame_%%04d用于零填充）",
+    "example": "示例：%s%s",
+    "start": "开始提取",
+    "cancel": "取消",
+    "select_both": "请选择视频和输出目录",
+    "extracting": "提取中：%d / %d帧",
+    "starting": "正在开始提取...",
+    "complete": "提取成功完成！",
+    "extracted": "已提取%d帧",
+    "ok": "确定",
+    "error": "错误：%s",
+    "dismiss": "关闭"
   }
 }

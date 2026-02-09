@@ -8,10 +8,13 @@
 #include "rendering/rendering.hpp"
 #include "shader_manager.hpp"
 #include <glm/glm.hpp>
+#include <unordered_map>
+#include <vector>
 
 namespace lfs::core {
     struct MeshData;
-}
+    struct Material;
+} // namespace lfs::core
 
 namespace lfs::rendering {
 
@@ -32,6 +35,7 @@ namespace lfs::rendering {
         GLuint getColorTexture() const { return color_texture_.get(); }
         GLuint getDepthTexture() const { return depth_texture_.get(); }
         GLuint getFramebuffer() const { return fbo_.get(); }
+        GLuint getShadowDepthTexture() const { return shadow_depth_texture_.get(); }
         int getWidth() const { return fbo_width_; }
         int getHeight() const { return fbo_height_; }
 
@@ -40,10 +44,14 @@ namespace lfs::rendering {
 
     private:
         Result<void> setupFBO(int width, int height);
+        Result<void> setupShadowFBO(int resolution);
         Result<void> uploadMeshData(const lfs::core::MeshData& mesh);
+        void uploadTextures(const lfs::core::MeshData& mesh);
+        void bindMaterial(const lfs::core::Material& mat, size_t mat_idx, bool has_texcoords);
 
         ManagedShader pbr_shader_;
         ManagedShader wireframe_shader_;
+        ManagedShader shadow_shader_;
 
         VAO vao_;
         VBO vbo_positions_;
@@ -56,6 +64,18 @@ namespace lfs::rendering {
         FBO fbo_;
         Texture color_texture_;
         Texture depth_texture_;
+
+        FBO shadow_fbo_;
+        Texture shadow_depth_texture_;
+        int shadow_map_resolution_ = 0;
+
+        struct GLMaterialTextures {
+            Texture albedo;
+            Texture normal;
+            Texture metallic_roughness;
+        };
+        std::unordered_map<size_t, GLMaterialTextures> material_textures_;
+        uint32_t uploaded_texture_generation_ = 0;
 
         int fbo_width_ = 0;
         int fbo_height_ = 0;

@@ -6,11 +6,19 @@
 #include "gui/gizmo_manager.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/panel_layout.hpp"
+#include "gui/panel_registry.hpp"
 #include "gui/sequencer_ui_manager.hpp"
 #include "gui/startup_overlay.hpp"
 #include "gui/windows/file_browser.hpp"
+#include "internal/viewport.hpp"
+#include "python/python_runtime.hpp"
+#include "rendering/rendering_manager.hpp"
+#include "visualizer_impl.hpp"
 #include "windows/disk_space_error_dialog.hpp"
 #include "windows/video_extractor_dialog.hpp"
+
+#include <glm/gtc/type_ptr.hpp>
+#include <imgui.h>
 
 namespace lfs::vis::gui::native_panels {
 
@@ -28,18 +36,13 @@ namespace lfs::vis::gui::native_panels {
         return visible_ && *visible_;
     }
 
-    VideoExtractorPanel::VideoExtractorPanel(lfs::gui::VideoExtractorDialog* dialog, bool* visible)
-        : dialog_(dialog),
-          visible_(visible) {}
+    VideoExtractorPanel::VideoExtractorPanel(lfs::gui::VideoExtractorDialog* dialog)
+        : dialog_(dialog) {}
 
     void VideoExtractorPanel::draw(const PanelDrawContext& ctx) {
         (void)ctx;
-        dialog_->render(visible_);
-    }
-
-    bool VideoExtractorPanel::poll(const PanelDrawContext& ctx) {
-        (void)ctx;
-        return visible_ && *visible_;
+        if (!dialog_->render())
+            PanelRegistry::instance().set_panel_enabled("native.video_extractor", false);
     }
 
     DiskSpaceErrorPanel::DiskSpaceErrorPanel(DiskSpaceErrorDialog* dialog)
@@ -135,6 +138,33 @@ namespace lfs::vis::gui::native_panels {
     bool ViewportGizmoPanel::poll(const PanelDrawContext& ctx) {
         return !ctx.ui_hidden && ctx.viewport &&
                ctx.viewport->size.x > 0 && ctx.viewport->size.y > 0;
+    }
+
+    PythonOverlayPanel::PythonOverlayPanel(GuiManager* gui)
+        : gui_(gui) {}
+
+    bool PythonOverlayPanel::poll(const PanelDrawContext& ctx) {
+        return ctx.viewport && ctx.viewport->size.x > 0 && ctx.viewport->size.y > 0 &&
+               python::has_viewport_draw_handlers();
+    }
+
+    void PythonOverlayPanel::draw(const PanelDrawContext& ctx) {
+        if (!ctx.ui || !ctx.ui->viewer || !ctx.viewport)
+            return;
+
+        const auto& vp = ctx.ui->viewer->getViewport();
+        const auto view = vp.getViewMatrix();
+        auto* rm = ctx.ui->viewer->getRenderingManager();
+        const float focal_mm = rm ? rm->getFocalLengthMm() : lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
+        const auto proj = vp.getProjectionMatrix(focal_mm);
+        const float vp_pos[] = {ctx.viewport->pos.x, ctx.viewport->pos.y};
+        const float vp_size[] = {ctx.viewport->size.x, ctx.viewport->size.y};
+        const float cam_pos[] = {vp.camera.t.x, vp.camera.t.y, vp.camera.t.z};
+        const float cam_fwd[] = {vp.camera.R[2].x, vp.camera.R[2].y, vp.camera.R[2].z};
+
+        python::invoke_viewport_overlay(glm::value_ptr(view), glm::value_ptr(proj),
+                                        vp_pos, vp_size, cam_pos, cam_fwd,
+                                        ImGui::GetBackgroundDrawList());
     }
 
 } // namespace lfs::vis::gui::native_panels

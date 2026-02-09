@@ -30,6 +30,7 @@
 #include "py_ui.hpp"
 #include "py_uilist.hpp"
 #include "py_viewport.hpp"
+#include "python/viewport_overlay.hpp"
 
 #include "control/command_api.hpp"
 #include "control/control_boundary.hpp"
@@ -1257,6 +1258,7 @@ NB_MODULE(lichtfeld, m) {
     lfs::python::register_pipeline(m);
     lfs::python::register_uilist(m);
     lfs::python::register_viewport(m);
+    lfs::python::register_viewport_overlay_bridge();
 
     // Parameters (OptimizationParameters with RNA-style property access)
     lfs::python::register_params(m);

@@ -316,7 +316,6 @@ namespace lfs::vis {
                     .node_type = 0}
                     .emit();
 
-                // Emit PLYAdded for the cropbox
                 const auto* splat_for_cropbox = scene_.getNode(name);
                 if (splat_for_cropbox) {
                     const core::NodeId cropbox_id = scene_.getCropBoxForSplat(splat_for_cropbox->id);

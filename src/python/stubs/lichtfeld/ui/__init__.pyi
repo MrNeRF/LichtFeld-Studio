@@ -537,7 +537,7 @@ class SubLayout:
 
     def progress_bar(self, fraction: float, overlay: str = '', width: float = 0.0, height: float = 0.0) -> None: ...
 
-    def text_colored(self, text: str, color: tuple[float, float, float, float]) -> None: ...
+    def text_colored(self, text: str, color: object) -> None: ...
 
     def text_wrapped(self, text: str) -> None: ...
 
@@ -564,9 +564,9 @@ class SubLayout:
 
     def listbox(self, label: str, current_idx: int, items: Sequence[str], height_items: int = -1) -> tuple[bool, int]: ...
 
-    def image(self, texture_id: int, size: tuple[float, float], tint: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0)) -> None: ...
+    def image(self, texture_id: int, size: tuple[float, float], tint: object | None = None) -> None: ...
 
-    def image_button(self, id: str, texture_id: int, size: tuple[float, float], tint: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0)) -> bool: ...
+    def image_button(self, id: str, texture_id: int, size: tuple[float, float], tint: object | None = None) -> bool: ...
 
     def input_text_with_hint(self, label: str, hint: str, value: str) -> tuple[bool, str]: ...
 
@@ -679,11 +679,11 @@ class UILayout:
     def heading(self, text: str) -> None:
         """Draw a bold heading text"""
 
-    def text_colored(self, text: str, color: tuple[float, float, float, float]) -> None:
-        """Draw text with RGBA color tuple"""
+    def text_colored(self, text: str, color: object) -> None:
+        """Draw text with RGB or RGBA color tuple"""
 
-    def text_colored_centered(self, text: str, color: tuple[float, float, float, float]) -> None:
-        """Draw centered text with RGBA color tuple"""
+    def text_colored_centered(self, text: str, color: object) -> None:
+        """Draw centered text with RGB or RGBA color tuple"""
 
     def text_selectable(self, text: str, height: float = 0.0) -> None:
         """Draw selectable read-only text area"""
@@ -759,7 +759,7 @@ class UILayout:
     def color_edit4(self, label: str, color: tuple[float, float, float, float]) -> tuple[bool, tuple[float, float, float, float]]:
         """Draw an RGBA color editor, returns (changed, color)"""
 
-    def color_button(self, label: str, color: tuple[float, float, float, float], size: tuple[float, float] = (0.0, 0.0)) -> bool:
+    def color_button(self, label: str, color: object, size: tuple[float, float] = (0.0, 0.0)) -> bool:
         """Draw a color swatch button, returns True if clicked"""
 
     def combo(self, label: str, current_idx: int, items: Sequence[str]) -> tuple[bool, int]:
@@ -828,7 +828,7 @@ class UILayout:
     def table_headers_row(self) -> None:
         """Draw the table header row"""
 
-    def table_set_bg_color(self, target: int, color: tuple[float, float, float, float]) -> None:
+    def table_set_bg_color(self, target: int, color: object) -> None:
         """Set table background color for target region"""
 
     def button_styled(self, label: str, style: str, size: tuple[float, float] = (0.0, 0.0)) -> bool:
@@ -945,13 +945,13 @@ class UILayout:
     def end_disabled(self) -> None:
         """End a disabled UI region"""
 
-    def image(self, texture_id: int, size: tuple[float, float], tint: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0)) -> None:
+    def image(self, texture_id: int, size: tuple[float, float], tint: object | None = None) -> None:
         """Draw an image from a GL texture ID"""
 
-    def image_uv(self, texture_id: int, size: tuple[float, float], uv0: tuple[float, float], uv1: tuple[float, float], tint: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0)) -> None:
+    def image_uv(self, texture_id: int, size: tuple[float, float], uv0: tuple[float, float], uv1: tuple[float, float], tint: object | None = None) -> None:
         """Draw an image with custom UV coordinates"""
 
-    def image_button(self, id: str, texture_id: int, size: tuple[float, float], tint: tuple[float, float, float, float] = (1.0, 1.0, 1.0, 1.0)) -> bool:
+    def image_button(self, id: str, texture_id: int, size: tuple[float, float], tint: object | None = None) -> bool:
         """Draw an image button, returns True if clicked"""
 
     def toolbar_button(self, id: str, texture_id: int, size: tuple[float, float], selected: bool = False, disabled: bool = False, tooltip: str = '') -> bool:
@@ -1083,7 +1083,7 @@ class UILayout:
     def pop_style_var(self, count: int = 1) -> None:
         """Pop style variables from the stack"""
 
-    def push_style_color(self, col: str, color: tuple[float, float, float, float]) -> None:
+    def push_style_color(self, col: str, color: object) -> None:
         """Push a style color override by name"""
 
     def pop_style_color(self, count: int = 1) -> None:
@@ -1122,58 +1122,58 @@ class UILayout:
     def popover(self, panel_id: str, text: str = '', icon: str = '') -> None:
         """Panel popover"""
 
-    def draw_circle(self, x: float, y: float, radius: float, color: tuple[float, float, float, float], segments: int = 32, thickness: float = 1.0) -> None:
+    def draw_circle(self, x: float, y: float, radius: float, color: object, segments: int = 32, thickness: float = 1.0) -> None:
         """Draw a circle outline at (x, y) with given radius and color"""
 
-    def draw_circle_filled(self, x: float, y: float, radius: float, color: tuple[float, float, float, float], segments: int = 32) -> None:
+    def draw_circle_filled(self, x: float, y: float, radius: float, color: object, segments: int = 32) -> None:
         """Draw a filled circle at (x, y) with given radius and color"""
 
-    def draw_rect(self, x0: float, y0: float, x1: float, y1: float, color: tuple[float, float, float, float], thickness: float = 1.0) -> None:
+    def draw_rect(self, x0: float, y0: float, x1: float, y1: float, color: object, thickness: float = 1.0) -> None:
         """Draw a rectangle outline from (x0,y0) to (x1,y1)"""
 
-    def draw_rect_filled(self, x0: float, y0: float, x1: float, y1: float, color: tuple[float, float, float, float], background: bool = False) -> None:
+    def draw_rect_filled(self, x0: float, y0: float, x1: float, y1: float, color: object, background: bool = False) -> None:
         """Draw a filled rectangle from (x0,y0) to (x1,y1)"""
 
-    def draw_rect_rounded(self, x0: float, y0: float, x1: float, y1: float, color: tuple[float, float, float, float], rounding: float, thickness: float = 1.0, background: bool = False) -> None:
+    def draw_rect_rounded(self, x0: float, y0: float, x1: float, y1: float, color: object, rounding: float, thickness: float = 1.0, background: bool = False) -> None:
         """Draw a rounded rectangle outline"""
 
-    def draw_rect_rounded_filled(self, x0: float, y0: float, x1: float, y1: float, color: tuple[float, float, float, float], rounding: float, background: bool = False) -> None:
+    def draw_rect_rounded_filled(self, x0: float, y0: float, x1: float, y1: float, color: object, rounding: float, background: bool = False) -> None:
         """Draw a filled rounded rectangle"""
 
-    def draw_triangle_filled(self, x0: float, y0: float, x1: float, y1: float, x2: float, y2: float, color: tuple[float, float, float, float], background: bool = False) -> None:
+    def draw_triangle_filled(self, x0: float, y0: float, x1: float, y1: float, x2: float, y2: float, color: object, background: bool = False) -> None:
         """Draw a filled triangle"""
 
-    def draw_line(self, x0: float, y0: float, x1: float, y1: float, color: tuple[float, float, float, float], thickness: float = 1.0) -> None:
+    def draw_line(self, x0: float, y0: float, x1: float, y1: float, color: object, thickness: float = 1.0) -> None:
         """Draw a line from (x0,y0) to (x1,y1)"""
 
-    def draw_polyline(self, points: Sequence[tuple[float, float]], color: tuple[float, float, float, float], closed: bool = False, thickness: float = 1.0) -> None:
+    def draw_polyline(self, points: Sequence[tuple[float, float]], color: object, closed: bool = False, thickness: float = 1.0) -> None:
         """Draw a polyline through the given points"""
 
-    def draw_poly_filled(self, points: Sequence[tuple[float, float]], color: tuple[float, float, float, float]) -> None:
+    def draw_poly_filled(self, points: Sequence[tuple[float, float]], color: object) -> None:
         """Draw a filled convex polygon"""
 
-    def draw_text(self, x: float, y: float, text: str, color: tuple[float, float, float, float], background: bool = False) -> None:
+    def draw_text(self, x: float, y: float, text: str, color: object, background: bool = False) -> None:
         """Draw text at (x, y) with given color"""
 
-    def draw_window_rect_filled(self, x0: float, y0: float, x1: float, y1: float, color: tuple[float, float, float, float]) -> None:
+    def draw_window_rect_filled(self, x0: float, y0: float, x1: float, y1: float, color: object) -> None:
         """Draw a filled rectangle on the window draw list"""
 
-    def draw_window_rect(self, x0: float, y0: float, x1: float, y1: float, color: tuple[float, float, float, float], thickness: float = 1.0) -> None:
+    def draw_window_rect(self, x0: float, y0: float, x1: float, y1: float, color: object, thickness: float = 1.0) -> None:
         """Draw a rectangle outline on the window draw list"""
 
-    def draw_window_rect_rounded(self, x0: float, y0: float, x1: float, y1: float, color: tuple[float, float, float, float], rounding: float, thickness: float = 1.0) -> None:
+    def draw_window_rect_rounded(self, x0: float, y0: float, x1: float, y1: float, color: object, rounding: float, thickness: float = 1.0) -> None:
         """Draw a rounded rectangle outline on the window draw list"""
 
-    def draw_window_rect_rounded_filled(self, x0: float, y0: float, x1: float, y1: float, color: tuple[float, float, float, float], rounding: float) -> None:
+    def draw_window_rect_rounded_filled(self, x0: float, y0: float, x1: float, y1: float, color: object, rounding: float) -> None:
         """Draw a filled rounded rectangle on the window draw list"""
 
-    def draw_window_line(self, x0: float, y0: float, x1: float, y1: float, color: tuple[float, float, float, float], thickness: float = 1.0) -> None:
+    def draw_window_line(self, x0: float, y0: float, x1: float, y1: float, color: object, thickness: float = 1.0) -> None:
         """Draw a line on the window draw list"""
 
-    def draw_window_text(self, x: float, y: float, text: str, color: tuple[float, float, float, float]) -> None:
+    def draw_window_text(self, x: float, y: float, text: str, color: object) -> None:
         """Draw text on the window draw list"""
 
-    def draw_window_triangle_filled(self, x0: float, y0: float, x1: float, y1: float, x2: float, y2: float, color: tuple[float, float, float, float]) -> None:
+    def draw_window_triangle_filled(self, x0: float, y0: float, x1: float, y1: float, x2: float, y2: float, color: object) -> None:
         """Draw a filled triangle on the window draw list"""
 
     def crf_curve_preview(self, label: str, gamma: float, toe: float, shoulder: float, gamma_r: float = 0.0, gamma_g: float = 0.0, gamma_b: float = 0.0) -> None:

@@ -96,6 +96,15 @@ class ExportConfigOperator(Operator):
         return {"FINISHED"}
 
 
+class ExtractVideoFramesOperator(Operator):
+    label = "menu.file.extract_video_frames"
+    description = "Extract frames from a video file"
+
+    def execute(self, context) -> set:
+        lf.ui.set_panel_enabled("native.video_extractor", True)
+        return {"FINISHED"}
+
+
 class ExitOperator(Operator):
     label = "menu.file.exit"
     description = "Exit the application"
@@ -154,6 +163,8 @@ class FileMenu:
         layout.operator_(ExportOperator._class_id())
         layout.operator_(ExportConfigOperator._class_id())
         layout.separator()
+        layout.operator_(ExtractVideoFramesOperator._class_id())
+        layout.separator()
         layout.operator_(ExitOperator._class_id())
 
 
@@ -166,6 +177,7 @@ _operator_classes = [
     ImportConfigOperator,
     ExportOperator,
     ExportConfigOperator,
+    ExtractVideoFramesOperator,
     ExitOperator,
 ]
 

@@ -88,6 +88,10 @@ namespace lfs::python {
         IsThumbnailReadyCallback g_is_thumbnail_ready_cb = nullptr;
         GetThumbnailTextureCallback g_get_thumbnail_texture_cb = nullptr;
 
+        // Viewport overlay callbacks
+        HasViewportDrawHandlersCallback g_has_viewport_draw_handlers_cb = nullptr;
+        InvokeViewportOverlayCallback g_invoke_viewport_overlay_cb = nullptr;
+
         // Selection sub-mode (shared between C++ toolbar and Python operator)
         std::atomic<int> g_selection_submode{0};
 
@@ -941,6 +945,26 @@ namespace lfs::python {
     void flush_signals() {
         if (g_signal_bridge_callbacks.flush) {
             g_signal_bridge_callbacks.flush();
+        }
+    }
+
+    void set_viewport_overlay_callbacks(HasViewportDrawHandlersCallback has_cb,
+                                        InvokeViewportOverlayCallback invoke_cb) {
+        g_has_viewport_draw_handlers_cb = has_cb;
+        g_invoke_viewport_overlay_cb = invoke_cb;
+    }
+
+    bool has_viewport_draw_handlers() {
+        return g_has_viewport_draw_handlers_cb && g_has_viewport_draw_handlers_cb();
+    }
+
+    void invoke_viewport_overlay(const float* view_matrix, const float* proj_matrix,
+                                 const float* vp_pos, const float* vp_size,
+                                 const float* cam_pos, const float* cam_fwd,
+                                 void* draw_list) {
+        if (g_invoke_viewport_overlay_cb) {
+            g_invoke_viewport_overlay_cb(view_matrix, proj_matrix, vp_pos, vp_size,
+                                         cam_pos, cam_fwd, draw_list);
         }
     }
 

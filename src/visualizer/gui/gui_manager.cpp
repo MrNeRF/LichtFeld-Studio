@@ -115,7 +115,6 @@ namespace lfs::vis::gui {
         window_states_["training_tab"] = false;
         window_states_["export_dialog"] = false;
         window_states_["python_console"] = false;
-        window_states_["video_extractor_dialog"] = false;
 
         setupEventHandlers();
         async_tasks_.setupEvents();
@@ -458,7 +457,8 @@ namespace lfs::vis::gui {
         };
 
         auto reg_panel = [&](const std::string& idname, const std::string& label,
-                             std::shared_ptr<IPanel> panel, PanelSpace space, int order, uint32_t options = 0) {
+                             std::shared_ptr<IPanel> panel, PanelSpace space, int order,
+                             uint32_t options = 0, float initial_width = 0, float initial_height = 0) {
             PanelInfo info;
             info.panel = std::move(panel);
             info.label = label;
@@ -467,6 +467,8 @@ namespace lfs::vis::gui {
             info.order = order;
             info.options = options;
             info.is_native = true;
+            info.initial_width = initial_width;
+            info.initial_height = initial_height;
             reg.register_panel(std::move(info));
         };
 
@@ -478,8 +480,9 @@ namespace lfs::vis::gui {
                   PanelSpace::Floating, 10, SELF);
 
         reg_panel("native.video_extractor", "Video Extractor",
-                  make_panel(VideoExtractorPanel(video_extractor_dialog_.get(), &window_states_["video_extractor_dialog"])),
-                  PanelSpace::Floating, 11, SELF);
+                  make_panel(VideoExtractorPanel(video_extractor_dialog_.get())),
+                  PanelSpace::Floating, 11, 0, 750.0f);
+        reg.set_panel_enabled("native.video_extractor", false);
 
         reg_panel("native.disk_space_error", "Disk Space Error",
                   make_panel(DiskSpaceErrorPanel(disk_space_error_dialog_.get())),
@@ -504,6 +507,10 @@ namespace lfs::vis::gui {
 
         reg_panel("native.sequencer", "Sequencer",
                   make_panel(SequencerPanel(&sequencer_ui_, &panel_layout_)),
+                  PanelSpace::ViewportOverlay, 500);
+
+        reg_panel("native.python_overlay", "Python Overlay",
+                  make_panel(PythonOverlayPanel(this)),
                   PanelSpace::ViewportOverlay, 500);
 
         reg_panel("native.viewport_decorations", "Viewport Decorations",

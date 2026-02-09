@@ -707,17 +707,6 @@ namespace lfs::training {
                     lfs::training::TrainingPhase::SafeControl);
             }
 
-            // Default Python control script if none provided
-            if (python_scripts_.empty()) {
-                std::filesystem::path default_script = std::filesystem::path(PROJECT_ROOT_PATH) / "src/python/sample/command_demo.py";
-                if (std::filesystem::exists(default_script)) {
-                    set_python_scripts({default_script});
-                    LOG_INFO("No Python scripts specified; using default: {}", default_script.string());
-                } else {
-                    LOG_WARN("Default Python script not found: {}", default_script.string());
-                }
-            }
-
             // Execute configured Python scripts to register iteration callbacks
             if (!python_scripts_.empty()) {
                 auto py_result = lfs::python::run_scripts(python_scripts_);

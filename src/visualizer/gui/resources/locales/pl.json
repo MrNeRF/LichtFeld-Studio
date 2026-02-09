@@ -1,6 +1,5 @@
 {
   "_language_name": "Polski",
-
   "menu": {
     "file": "Plik",
     "file.new_project": "Nowy Projekt",
@@ -11,23 +10,20 @@
     "file.import_config": "Importuj Konfigurację",
     "file.export": "Eksportuj...",
     "file.export_config": "Eksportuj Konfigurację...",
+    "file.extract_video_frames": "Wyodrębnij klatki z wideo...",
     "file.exit": "Zakończ",
-
     "edit": "Edycja",
     "edit.input_settings": "Ustawienia Wejścia...",
     "edit.preferences": "Preferencje...",
-
     "view": "Widok",
     "view.theme": "Motyw",
     "view.theme.dark": "Ciemny",
     "view.theme.light": "Jasny",
     "view.debug_info": "Informacje Debugowania...",
-
     "help": "Pomoc",
     "help.getting_started": "Wprowadzenie",
     "help.about": "O LichtFeld Studio"
   },
-
   "window": {
     "getting_started": "Wprowadzenie",
     "about": "O LichtFeld Studio",
@@ -39,7 +35,6 @@
     "training": "Trening",
     "preferences": "Preferencje"
   },
-
   "getting_started": {
     "title": "PRZEWODNIK SZYBKIEGO STARTU",
     "description": "Dowiedz się, jak przygotować zbiory danych i rozpocząć pracę z LichtFeld Studio:",
@@ -52,7 +47,6 @@
     "video_masks": "Samouczek Masek",
     "loading": "Ładowanie..."
   },
-
   "about": {
     "title": "LICHTFELD STUDIO",
     "description": "Wydajna implementacja C++ i CUDA 3D Gaussian Splatting dla renderowania neuronowego w czasie rzeczywistym, treningu i wizualizacji.",
@@ -75,7 +69,6 @@
     "authors": "Autorzy LichtFeld Studio",
     "license": "Licencjonowane na GPLv3"
   },
-
   "training": {
     "section.dataset": "Zbiór Danych",
     "section.optimization": "Optymalizacja",
@@ -90,7 +83,6 @@
     "section.advanced_params": "Zaawansowane Parametry Treningu",
     "section.sparsity": "Ustawienia Rzadkości",
     "section.pruning_growing": "Przycinanie/Rozrost",
-
     "dataset.path": "Path:",
     "dataset.images": "Images:",
     "dataset.resize_factor": "Resize Factor:",
@@ -98,7 +90,6 @@
     "dataset.cpu_cache": "CPU Cache:",
     "dataset.fs_cache": "FS Cache:",
     "dataset.output": "Output:",
-
     "opt.strategy": "Strategy:",
     "opt.learning_rates": "Learning Rates:",
     "opt.iterations": "Iterations:",
@@ -115,30 +106,25 @@
     "opt.lr.opacity": "  Opacity:",
     "opt.lr.scaling": "  Scaling:",
     "opt.lr.rotation": "  Rotation:",
-
     "refinement.refine_every": "  Refine Every:",
     "refinement.start_refine": "  Start Refine:",
     "refinement.stop_refine": "  Stop Refine:",
     "refinement.gradient_thr": "  Gradient Thr:",
     "refinement.reset_every": "  Reset Every:",
     "refinement.sh_upgrade_every": "  SH Upgrade Every:",
-
     "bilateral.grid_x": "Grid X:",
     "bilateral.grid_y": "Grid Y:",
     "bilateral.grid_w": "Grid W:",
     "bilateral.learning_rate": "Learning Rate:",
-
     "masking.invert_masks": "Invert Masks:",
     "masking.threshold": "Threshold:",
     "masking.penalty_weight": "Penalty Weight:",
     "masking.penalty_power": "Penalty Power:",
-
     "mask.invert": "  Invert Masks:",
     "mask.threshold": "  Mask Threshold:",
     "mask.penalty_weight": "  Opacity Penalty Weight:",
     "mask.penalty_power": "  Opacity Penalty Power:",
     "mask.no_masks": "(brak masek)",
-
     "tooltip.invert_masks": "Zamień obiekt/tło w maskach",
     "tooltip.penalty_weight": "Waga kary nieprzezroczystości w obszarach tła",
     "tooltip.penalty_power": "Spadek kary: 1=liniowy, 2=kwadratowy, >2=łagodniejszy",
@@ -203,25 +189,21 @@
     "tooltip.ppisp_freeze_gaussians": "Zamroź parametry Gaussowskich podczas treningu kontrolera",
     "tooltip.strategy_gut_conflict": "Strategia ADC jest niedostępna gdy GUT jest włączony",
     "tooltip.gut_adc_conflict": "GUT jest niedostępny ze strategią ADC. Najpierw przełącz na MCMC.",
-
     "error.adc_gut_title": "Niekompatybilne ustawienia",
     "conflict.adc_gut_start_message": "GUT i strategia ADC nie mogą być używane jednocześnie. Wybierz akcję, aby rozpocząć trening.",
     "conflict.adc_gut_strategy_message": "Strategia ADC jest niekompatybilna z GUT. Wyłączyć GUT, aby przełączyć na ADC?",
     "conflict.btn_use_mcmc": "Użyj MCMC",
     "conflict.btn_disable_gut": "Wyłącz GUT",
     "conflict.btn_cancel": "Anuluj",
-
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "Opacity Reg:",
     "losses.scale_reg": "Scale Reg:",
     "losses.tv_loss_weight": "TV Loss Weight:",
-
     "init.init_opacity": "Init Opacity:",
     "init.init_scaling": "Init Scaling:",
     "init.random_init": "Random Init:",
     "init.num_points": "  Num Points:",
     "init.extent": "  Extent:",
-
     "thresholds.min_opacity": "Min Opacity:",
     "thresholds.prune_opacity": "Prune Opacity:",
     "thresholds.grow_scale_3d": "Grow Scale 3D:",
@@ -230,12 +212,10 @@
     "thresholds.prune_scale_2d": "Prune Scale 2D:",
     "thresholds.pause_after_reset": "Pause After Reset:",
     "thresholds.revised_opacity": "Revised Opacity:",
-
     "status.enabled": "Włączony",
     "status.disabled": "Wyłączony",
     "status.yes": "Tak",
     "status.no": "Nie",
-
     "button.start": "Rozpocznij Trening",
     "button.resume": "Wznów",
     "button.pause": "Pauza",
@@ -247,7 +227,6 @@
     "button.add": "Dodaj",
     "button.remove": "Usuń"
   },
-
   "scene": {
     "add_ply": "Dodaj PLY...",
     "add_group": "Dodaj Grupę",
@@ -288,7 +267,6 @@
     "training_enabled_tooltip": "Uwzględniono w treningu",
     "training_disabled_tooltip": "Wykluczono z treningu"
   },
-
   "export": {
     "title": "Eksportuj",
     "format.ply_standard": "PLY (Standard)",
@@ -307,7 +285,6 @@
     "failed": "Niepowodzenie",
     "select_at_least_one": "Wybierz co najmniej jeden model"
   },
-
   "common": {
     "ok": "OK",
     "cancel": "Anuluj",
@@ -323,7 +300,6 @@
     "reset": "Resetuj",
     "double_click_reset": "podwójne kliknięcie resetuje"
   },
-
   "status": {
     "ready": "Gotowy",
     "training": "Trening",
@@ -348,14 +324,12 @@
     "training_finished": "Trening Ukończony",
     "ply_models_count": "Modele PLY: {}"
   },
-
   "mode": {
     "empty": "Pusty",
     "dataset": "Zbiór Danych",
     "edit_mode": "Tryb Edycji",
     "ply_models": "Modele PLY:"
   },
-
   "messages": {
     "no_data_loaded": "Nie załadowano danych",
     "use_file_menu": "Użyj menu Plik, aby zaimportować",
@@ -370,18 +344,15 @@
     "err_ortho_not_supported": "Trening z ortograficznym modelem kamery nie jest jeszcze obsługiwany.",
     "err_non_pinhole": "Włącz --gut lub --undistort, aby trenować z kamerami innymi niż pinhole."
   },
-
   "controls": {
     "wasd": "WASD:",
     "zoom": "Zoom:"
   },
-
   "preferences": {
     "title": "Preferencje",
     "language": "Język:",
     "select_language": "Wybierz Język"
   },
-
   "main_panel": {
     "windows": "Okna",
     "scene_panel": "Panel Sceny",
@@ -434,7 +405,6 @@
     "no_selection_groups": "Brak grup zaznaczenia",
     "clear": "Wyczyść"
   },
-
   "toolbar": {
     "selection": "Zaznaczenie",
     "translate": "Przesunięcie",
@@ -469,7 +439,6 @@
     "orthographic": "Ortograficzna (O)",
     "sequencer": "Sekwencer"
   },
-
   "transform": {
     "node": "Węzeł: %s",
     "space": "Przestrzeń: %s",
@@ -485,7 +454,6 @@
     "reset_transform": "Resetuj Transformację",
     "nodes_selected": "%zu węzłów zaznaczonych"
   },
-
   "cropbox": {
     "title": "Pole Przycinania",
     "not_visible": "Pole przycinania niewidoczne",
@@ -498,7 +466,6 @@
     "line_width": "Szerokość Linii",
     "instructions": "Enter: Zatwierdź przycinanie | Ctrl+C: Kopiuj zawartość"
   },
-
   "file_browser": {
     "title": "Przeglądarka Plików",
     "quick_access": "Szybki Dostęp",
@@ -513,7 +480,6 @@
     "load_ply": "Wczytaj PLY",
     "enter_dir": "Wejdź do Katalogu"
   },
-
   "training_panel": {
     "start_training": "Rozpocznij Trening",
     "resume_training": "Wznów Trening",
@@ -534,7 +500,6 @@
     "sparsity": "Ustawienia Rzadkości",
     "pruning_growing": "Przycinanie/Rozrost"
   },
-
   "tooltip": {
     "gut_mode": "Dla kamer rybie oko/zniekształconych/równokątnych",
     "mip_filter": "Zmniejsz aliasing dla sub-pikselowych Gaussowskich",
@@ -568,14 +533,12 @@
     "point_cloud_mode": "Renderuj jako punkty zamiast splatów",
     "selection_colors": "Kolory wizualizacji zaznaczenia"
   },
-
   "exit_popup": {
     "title": "Zakończyć Aplikację?",
     "message": "Czy na pewno chcesz zakończyć?",
     "unsaved_warning": "Wszystkie niezapisane zmiany zostaną utracone.",
     "exit": "Zakończ"
   },
-
   "load_dataset_popup": {
     "title": "Wczytaj Zbiór Danych",
     "configure_paths": "Skonfiguruj ścieżki zbioru danych",
@@ -586,7 +549,6 @@
     "init_file": "Init file (opcjonalnie, zastępuje points3D):",
     "help_text": "Punkty kontrolne, logi i wyeksportowane modele zostaną zapisane w katalogu wyjściowym."
   },
-
   "notification": {
     "cannot_open": "Nie można otworzyć",
     "dropped_not_recognized": "Upuszczony",
@@ -595,7 +557,6 @@
     "items": "elementy",
     "and_more": "... i"
   },
-
   "export_dialog": {
     "format": "FORMAT",
     "models": "MODELE",
@@ -603,12 +564,10 @@
     "sh_degree": "SH DEGREE",
     "export_merged": "Eksportuj Połączony..."
   },
-
   "selection_group": {
     "lock": "Zablokuj",
     "unlock": "Odblokuj"
   },
-
   "file_browser_ext": {
     "dataset": "[Zbiór Danych]",
     "sog": "[SOG]",
@@ -618,7 +577,6 @@
     "sog_meta": "(SOG meta.json)",
     "error": "Błąd:"
   },
-
   "progress": {
     "loss": "Strata:",
     "gaussians_count": "%s Gaussowskich",
@@ -632,7 +590,6 @@
     "num_splats": "liczba Splatów: %s",
     "status_label": "Status: %s"
   },
-
   "input_settings": {
     "active_profile": "Aktywny Profil:",
     "save_current_profile": "Zapisz Bieżący Profil",
@@ -666,7 +623,6 @@
     "mode.crop_box": "Pole Przycinania",
     "mode.unknown": "Nieznany"
   },
-
   "debug_info": {
     "free_memory": "Wolna: %.2f GB",
     "enable_tracing": "Włącz Śledzenie Operacji",
@@ -674,7 +630,6 @@
     "clear_history": "Wyczyść Historię",
     "print_to_log": "Wydrukuj do Logu"
   },
-
   "training_params": {
     "strategy": "Strategy:",
     "iterations": "Iterations:",
@@ -729,7 +684,6 @@
     "ppisp_freeze_gaussians": "Zamroź Gaussowskie:",
     "disabled": "Wyłączony"
   },
-
   "image_preview": {
     "image_section": "OBRAZ",
     "file_section": "PLIK",
@@ -770,7 +724,6 @@
     "hidden": "Ukryty",
     "mask_section": "MASKA"
   },
-
   "startup": {
     "supported_by": "Wspierane przez",
     "click_to_continue": "Kliknij gdziekolwiek, aby kontynuować",
@@ -780,14 +733,12 @@
     "drop_to_import": "Upuść, aby Zaimportować",
     "drop_to_import_subtitle": "PLY, SOG, zbiór danych COLMAP lub Projekt"
   },
-
   "axis": {
     "x": "X:",
     "y": "Y:",
     "z": "Z:",
     "u": "U:"
   },
-
   "resume_checkpoint_popup": {
     "title": "Wznów Checkpoint",
     "checkpoint": "CHECKPOINT",
@@ -800,7 +751,6 @@
     "output_path": "Ścieżka Wyjściowa:",
     "help_text": "Ścieżka datasetu zapisana w punkcie kontrolnym mogła się zmienić. Zaktualizuj ją w razie potrzeby."
   },
-
   "disk_space_dialog": {
     "title": "Niewystarczające Miejsce na Dysku",
     "error_label": "Błąd",
@@ -815,5 +765,62 @@
     "change_location": "Zmień Lokalizację",
     "retry": "Ponów",
     "select_output_location": "Wybierz Lokalizację Wyjściową"
+  },
+  "video_extractor": {
+    "title": "Wyodrębnij klatki z wideo",
+    "select_preview": "Wybierz plik wideo do podglądu",
+    "step_backward": "Klatka wstecz",
+    "step_forward": "Klatka do przodu",
+    "pause": "Pauza (Spacja)",
+    "play": "Odtwórz (Spacja)",
+    "trim_range": "Zakres przycinania:",
+    "set": "Ustaw",
+    "set_start": "Ustaw początek na bieżącą pozycję",
+    "set_end": "Ustaw koniec na bieżącą pozycję",
+    "reset": "Resetuj",
+    "estimated_frames": "(~%d klatek)",
+    "input_video": "Wideo wejściowe",
+    "video": "Wideo:",
+    "no_file": "Nie wybrano pliku",
+    "browse": "Przeglądaj...",
+    "output": "Wyjście:",
+    "no_dir": "Nie wybrano katalogu",
+    "select_folder": "Wybierz folder wyjściowy",
+    "settings": "Ustawienia ekstrakcji",
+    "mode": "Tryb:",
+    "mode_fps": "Oparty na FPS",
+    "mode_interval": "Interwał klatek",
+    "fps_label": "FPS",
+    "fps_tooltip": "Wyodrębniaj klatki z tą częstotliwością",
+    "every_label": "Co",
+    "frames_format": "%d klatek",
+    "interval_tooltip": "Wyodrębniaj co N-tą klatkę",
+    "output_format": "Format wyjściowy",
+    "format": "Format:",
+    "format_png": "PNG (bezstratny)",
+    "format_jpeg": "JPEG (mniejszy)",
+    "quality_label": "Jakość",
+    "resolution": "Rozdzielczość",
+    "resolution_label": "Rozdzielczość:",
+    "res_original": "Oryginalna",
+    "res_scale": "Skala",
+    "res_custom": "Niestandardowa",
+    "width": "Szerokość",
+    "height": "Wysokość",
+    "output_res": "Wyjście: %dx%d",
+    "naming": "Nazewnictwo wyjścia",
+    "pattern": "Wzorzec:",
+    "pattern_tooltip": "Użyj %%d dla numeru klatki (np. frame_%%04d dla wypełnienia zerami)",
+    "example": "Przykład: %s%s",
+    "start": "Rozpocznij ekstrakcję",
+    "cancel": "Anuluj",
+    "select_both": "Wybierz wideo i katalog wyjściowy",
+    "extracting": "Wyodrębnianie: %d / %d klatek",
+    "starting": "Rozpoczynanie ekstrakcji...",
+    "complete": "Ekstrakcja zakończona pomyślnie!",
+    "extracted": "Wyodrębniono %d klatek",
+    "ok": "OK",
+    "error": "Błąd: %s",
+    "dismiss": "Zamknij"
   }
 }

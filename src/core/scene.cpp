@@ -1347,6 +1347,7 @@ namespace lfs::core {
                         cloned->colors = sm.colors.clone();
                     cloned->materials = sm.materials;
                     cloned->submeshes = sm.submeshes;
+                    cloned->texture_images = sm.texture_images;
                     new_id = addMesh(new_name, std::move(cloned), parent_id);
                 }
             } else {

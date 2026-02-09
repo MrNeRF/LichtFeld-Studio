@@ -1,6 +1,5 @@
 {
   "_language_name": "English",
-
   "menu": {
     "file": "File",
     "file.new_project": "New Project",
@@ -11,23 +10,20 @@
     "file.import_config": "Import Config",
     "file.export": "Export...",
     "file.export_config": "Export Config...",
+    "file.extract_video_frames": "Extract Frames from Video...",
     "file.exit": "Exit",
-
     "edit": "Edit",
     "edit.input_settings": "Input Settings...",
     "edit.preferences": "Preferences...",
-
     "view": "View",
     "view.theme": "Theme",
     "view.theme.dark": "Dark",
     "view.theme.light": "Light",
     "view.debug_info": "Debug Info...",
-
     "help": "Help",
     "help.getting_started": "Getting Started",
     "help.about": "About LichtFeld Studio"
   },
-
   "window": {
     "getting_started": "Getting Started",
     "about": "About LichtFeld Studio",
@@ -39,7 +35,6 @@
     "training": "Training",
     "preferences": "Preferences"
   },
-
   "getting_started": {
     "title": "QUICK START GUIDE",
     "description": "Learn how to prepare datasets and get started with LichtFeld Studio:",
@@ -52,7 +47,6 @@
     "video_masks": "Masks Tutorial",
     "loading": "Loading..."
   },
-
   "about": {
     "title": "LICHTFELD STUDIO",
     "description": "A high-performance C++ and CUDA implementation of 3D Gaussian Splatting for real-time neural rendering, training, and visualization.",
@@ -75,7 +69,6 @@
     "authors": "LichtFeld Studio Authors",
     "license": "Licensed under GPLv3"
   },
-
   "training": {
     "section.dataset": "Dataset",
     "section.optimization": "Optimization",
@@ -90,7 +83,6 @@
     "section.advanced_params": "Advanced Training Params",
     "section.sparsity": "Sparsity Settings",
     "section.pruning_growing": "Pruning/Growing",
-
     "dataset.path": "Path:",
     "dataset.images": "Images:",
     "dataset.resize_factor": "Resize Factor:",
@@ -98,7 +90,6 @@
     "dataset.cpu_cache": "CPU Cache:",
     "dataset.fs_cache": "FS Cache:",
     "dataset.output": "Output:",
-
     "opt.strategy": "Strategy:",
     "opt.learning_rates": "Learning Rates:",
     "opt.iterations": "Iterations:",
@@ -115,30 +106,25 @@
     "opt.lr.opacity": "  Opacity:",
     "opt.lr.scaling": "  Scaling:",
     "opt.lr.rotation": "  Rotation:",
-
     "refinement.refine_every": "  Refine Every:",
     "refinement.start_refine": "  Start Refine:",
     "refinement.stop_refine": "  Stop Refine:",
     "refinement.gradient_thr": "  Gradient Thr:",
     "refinement.reset_every": "  Reset Every:",
     "refinement.sh_upgrade_every": "  SH Upgrade Every:",
-
     "bilateral.grid_x": "Grid X:",
     "bilateral.grid_y": "Grid Y:",
     "bilateral.grid_w": "Grid W:",
     "bilateral.learning_rate": "Learning Rate:",
-
     "masking.invert_masks": "Invert Masks:",
     "masking.threshold": "Threshold:",
     "masking.penalty_weight": "Penalty Weight:",
     "masking.penalty_power": "Penalty Power:",
-
     "mask.invert": "  Invert Masks:",
     "mask.threshold": "  Mask Threshold:",
     "mask.penalty_weight": "  Opacity Penalty Weight:",
     "mask.penalty_power": "  Opacity Penalty Power:",
     "mask.no_masks": "(no masks)",
-
     "tooltip.invert_masks": "Swap object/background in masks",
     "tooltip.penalty_weight": "Weight for opacity penalty in background regions",
     "tooltip.penalty_power": "Penalty falloff: 1=linear, 2=quadratic, >2=gentler",
@@ -203,25 +189,21 @@
     "tooltip.ppisp_freeze_gaussians": "Freeze Gaussian parameters during controller training",
     "tooltip.strategy_gut_conflict": "ADC strategy is not available when GUT is enabled",
     "tooltip.gut_adc_conflict": "GUT is not available with ADC strategy. Switch to MCMC first.",
-
     "error.adc_gut_title": "Incompatible Settings",
     "conflict.adc_gut_start_message": "GUT and ADC strategy cannot be used together. Choose an action to start training.",
     "conflict.adc_gut_strategy_message": "ADC strategy is incompatible with GUT. Disable GUT to switch to ADC?",
     "conflict.btn_use_mcmc": "Use MCMC",
     "conflict.btn_disable_gut": "Disable GUT",
     "conflict.btn_cancel": "Cancel",
-
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "Opacity Reg:",
     "losses.scale_reg": "Scale Reg:",
     "losses.tv_loss_weight": "TV Loss Weight:",
-
     "init.init_opacity": "Init Opacity:",
     "init.init_scaling": "Init Scaling:",
     "init.random_init": "Random Init:",
     "init.num_points": "  Num Points:",
     "init.extent": "  Extent:",
-
     "thresholds.min_opacity": "Min Opacity:",
     "thresholds.prune_opacity": "Prune Opacity:",
     "thresholds.grow_scale_3d": "Grow Scale 3D:",
@@ -230,12 +212,10 @@
     "thresholds.prune_scale_2d": "Prune Scale 2D:",
     "thresholds.pause_after_reset": "Pause After Reset:",
     "thresholds.revised_opacity": "Revised Opacity:",
-
     "status.enabled": "Enabled",
     "status.disabled": "Disabled",
     "status.yes": "Yes",
     "status.no": "No",
-
     "button.start": "Start Training",
     "button.resume": "Resume",
     "button.pause": "Pause",
@@ -247,7 +227,6 @@
     "button.add": "Add",
     "button.remove": "Remove"
   },
-
   "scene": {
     "add_ply": "Add PLY...",
     "add_group": "Add Group",
@@ -288,7 +267,6 @@
     "training_enabled_tooltip": "Included in training",
     "training_disabled_tooltip": "Excluded from training"
   },
-
   "export": {
     "title": "Export",
     "format.ply_standard": "PLY (Standard)",
@@ -307,7 +285,6 @@
     "failed": "Failed",
     "select_at_least_one": "Select at least one model"
   },
-
   "common": {
     "ok": "OK",
     "cancel": "Cancel",
@@ -323,7 +300,6 @@
     "reset": "Reset",
     "double_click_reset": "dbl-click reset"
   },
-
   "status": {
     "ready": "Ready",
     "training": "Training",
@@ -348,14 +324,12 @@
     "training_finished": "Training Finished",
     "ply_models_count": "PLY Models: {}"
   },
-
   "mode": {
     "empty": "Empty",
     "dataset": "Dataset",
     "edit_mode": "Edit Mode",
     "ply_models": "PLY Models:"
   },
-
   "messages": {
     "no_data_loaded": "No data loaded",
     "use_file_menu": "Use File menu to import",
@@ -370,18 +344,15 @@
     "err_ortho_not_supported": "Training on cameras with ortho model is not supported yet.",
     "err_non_pinhole": "Enable --gut or --undistort to train on cameras with non-pinhole model."
   },
-
   "controls": {
     "wasd": "WASD:",
     "zoom": "Zoom:"
   },
-
   "preferences": {
     "title": "Preferences",
     "language": "Language:",
     "select_language": "Select Language"
   },
-
   "main_panel": {
     "windows": "Windows",
     "scene_panel": "Scene Panel",
@@ -434,7 +405,6 @@
     "no_selection_groups": "No selection groups",
     "clear": "Clear"
   },
-
   "toolbar": {
     "selection": "Selection",
     "translate": "Translate",
@@ -470,7 +440,6 @@
     "orthographic": "Orthographic (O)",
     "sequencer": "Sequencer"
   },
-
   "transform": {
     "node": "Node: %s",
     "space": "Space: %s",
@@ -486,7 +455,6 @@
     "reset_transform": "Reset Transform",
     "nodes_selected": "%zu nodes selected"
   },
-
   "cropbox": {
     "title": "Crop Box",
     "not_visible": "Crop box not visible",
@@ -499,7 +467,6 @@
     "line_width": "Line Width",
     "instructions": "Enter: Commit crop | Ctrl+C: Copy contents"
   },
-
   "ellipsoid": {
     "title": "Ellipsoid",
     "not_visible": "Ellipsoid not visible",
@@ -512,7 +479,6 @@
     "line_width": "Line Width",
     "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   },
-
   "file_browser": {
     "title": "File Browser",
     "quick_access": "Quick Access",
@@ -527,7 +493,6 @@
     "load_ply": "Load PLY",
     "enter_dir": "Enter Directory"
   },
-
   "training_panel": {
     "start_training": "Start Training",
     "resume_training": "Resume Training",
@@ -548,7 +513,6 @@
     "sparsity": "Sparsity Settings",
     "pruning_growing": "Pruning/Growing"
   },
-
   "tooltip": {
     "gut_mode": "For fisheye/distorted/equirect cameras",
     "mip_filter": "Reduce aliasing for sub-pixel Gaussians",
@@ -580,14 +544,12 @@
     "point_cloud_mode": "Render as points instead of splats",
     "selection_colors": "Colors for selection visualization"
   },
-
   "exit_popup": {
     "title": "Exit Application?",
     "message": "Are you sure you want to exit?",
     "unsaved_warning": "Any unsaved changes will be lost.",
     "exit": "Exit"
   },
-
   "load_dataset_popup": {
     "title": "Load Dataset",
     "configure_paths": "Configure dataset paths",
@@ -598,7 +560,6 @@
     "init_file": "Init file (optional, replaces points3D):",
     "help_text": "Training checkpoints, logs, and exported models will be saved to the output directory."
   },
-
   "notification": {
     "cannot_open": "Cannot Open",
     "dropped_not_recognized": "The dropped",
@@ -607,7 +568,6 @@
     "items": "items",
     "and_more": "... and"
   },
-
   "export_dialog": {
     "format": "FORMAT",
     "models": "MODELS",
@@ -615,12 +575,10 @@
     "sh_degree": "SH DEGREE",
     "export_merged": "Export Merged..."
   },
-
   "selection_group": {
     "lock": "Lock",
     "unlock": "Unlock"
   },
-
   "file_browser_ext": {
     "dataset": "[Dataset]",
     "sog": "[SOG]",
@@ -630,7 +588,6 @@
     "sog_meta": "(SOG meta.json)",
     "error": "Error:"
   },
-
   "progress": {
     "loss": "Loss:",
     "gaussians_count": "%s Gaussians",
@@ -644,7 +601,6 @@
     "num_splats": "num Splats: %s",
     "status_label": "Status: %s"
   },
-
   "input_settings": {
     "active_profile": "Active Profile:",
     "save_current_profile": "Save Current Profile",
@@ -678,7 +634,6 @@
     "mode.crop_box": "Crop Box",
     "mode.unknown": "Unknown"
   },
-
   "debug_info": {
     "free_memory": "Free: %.2f GB",
     "enable_tracing": "Enable Operation Tracing",
@@ -686,7 +641,6 @@
     "clear_history": "Clear History",
     "print_to_log": "Print to Log"
   },
-
   "training_params": {
     "strategy": "Strategy:",
     "iterations": "Iterations:",
@@ -741,7 +695,6 @@
     "ppisp_freeze_gaussians": "Freeze Gaussians:",
     "disabled": "Disabled"
   },
-
   "image_preview": {
     "image_section": "IMAGE",
     "file_section": "FILE",
@@ -782,7 +735,6 @@
     "hidden": "Hidden",
     "mask_section": "MASK"
   },
-
   "startup": {
     "supported_by": "Supported by",
     "click_to_continue": "Click anywhere to continue",
@@ -792,14 +744,12 @@
     "drop_to_import": "Drop to Import",
     "drop_to_import_subtitle": "PLY, SOG, COLMAP dataset, or Project"
   },
-
   "axis": {
     "x": "X:",
     "y": "Y:",
     "z": "Z:",
     "u": "U:"
   },
-
   "resume_checkpoint_popup": {
     "title": "Resume Checkpoint",
     "checkpoint": "CHECKPOINT",
@@ -812,7 +762,6 @@
     "output_path": "Output Path:",
     "help_text": "The dataset path stored in the checkpoint may have changed. Update it if needed."
   },
-
   "disk_space_dialog": {
     "title": "Insufficient Disk Space",
     "error_label": "Error",
@@ -827,5 +776,62 @@
     "change_location": "Change Location",
     "retry": "Retry",
     "select_output_location": "Select Output Location"
+  },
+  "video_extractor": {
+    "title": "Extract Frames from Video",
+    "select_preview": "Select a video file to preview",
+    "step_backward": "Step backward",
+    "step_forward": "Step forward",
+    "pause": "Pause (Space)",
+    "play": "Play (Space)",
+    "trim_range": "Trim Range:",
+    "set": "Set",
+    "set_start": "Set start to current position",
+    "set_end": "Set end to current position",
+    "reset": "Reset",
+    "estimated_frames": "(~%d frames)",
+    "input_video": "Input Video",
+    "video": "Video:",
+    "no_file": "No file selected",
+    "browse": "Browse...",
+    "output": "Output:",
+    "no_dir": "No directory selected",
+    "select_folder": "Select Output Folder",
+    "settings": "Extraction Settings",
+    "mode": "Mode:",
+    "mode_fps": "FPS-based",
+    "mode_interval": "Frame Interval",
+    "fps_label": "FPS",
+    "fps_tooltip": "Extract frames at this rate",
+    "every_label": "Every",
+    "frames_format": "%d frames",
+    "interval_tooltip": "Extract every Nth frame",
+    "output_format": "Output Format",
+    "format": "Format:",
+    "format_png": "PNG (lossless)",
+    "format_jpeg": "JPEG (smaller)",
+    "quality_label": "Quality",
+    "resolution": "Resolution",
+    "resolution_label": "Resolution:",
+    "res_original": "Original",
+    "res_scale": "Scale",
+    "res_custom": "Custom",
+    "width": "Width",
+    "height": "Height",
+    "output_res": "Output: %dx%d",
+    "naming": "Output Naming",
+    "pattern": "Pattern:",
+    "pattern_tooltip": "Use %%d for frame number (e.g., frame_%%04d for zero-padded)",
+    "example": "Example: %s%s",
+    "start": "Start Extraction",
+    "cancel": "Cancel",
+    "select_both": "Select video and output directory",
+    "extracting": "Extracting: %d / %d frames",
+    "starting": "Starting extraction...",
+    "complete": "Extraction completed successfully!",
+    "extracted": "Extracted %d frames",
+    "ok": "OK",
+    "error": "Error: %s",
+    "dismiss": "Dismiss"
   }
 }

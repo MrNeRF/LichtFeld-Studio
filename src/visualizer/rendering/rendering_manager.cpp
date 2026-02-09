@@ -1465,7 +1465,9 @@ namespace lfs::vis {
                     .light_dir = settings_.mesh_light_dir,
                     .light_intensity = settings_.mesh_light_intensity,
                     .ambient = settings_.mesh_ambient,
-                    .backface_culling = settings_.mesh_backface_culling};
+                    .backface_culling = settings_.mesh_backface_culling,
+                    .shadow_enabled = settings_.mesh_shadow_enabled,
+                    .shadow_map_resolution = settings_.mesh_shadow_resolution};
 
                 glEnable(GL_DEPTH_TEST);
                 glDepthFunc(GL_LESS);

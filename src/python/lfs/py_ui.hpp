@@ -145,7 +145,7 @@ namespace lfs::python {
         void tree_pop();
         void progress_bar(float fraction, const std::string& overlay = "", float width = 0.0f,
                           float height = 0.0f);
-        void text_colored(const std::string& text, std::tuple<float, float, float, float> color);
+        void text_colored(const std::string& text, nb::object color);
         void text_wrapped(const std::string& text);
 
         bool begin_table(const std::string& id, int columns);
@@ -164,9 +164,9 @@ namespace lfs::python {
         std::tuple<bool, int> listbox(const std::string& label, int current_idx,
                                       const std::vector<std::string>& items, int height_items = -1);
         void image(uint64_t texture_id, std::tuple<float, float> size,
-                   std::tuple<float, float, float, float> tint = {1, 1, 1, 1});
+                   nb::object tint = nb::none());
         bool image_button(const std::string& id, uint64_t texture_id, std::tuple<float, float> size,
-                          std::tuple<float, float, float, float> tint = {1, 1, 1, 1});
+                          nb::object tint = nb::none());
         std::tuple<bool, std::string> input_text_with_hint(const std::string& label, const std::string& hint,
                                                            const std::string& value);
         std::tuple<bool, std::string> input_text_enter(const std::string& label, const std::string& value);
@@ -313,8 +313,8 @@ namespace lfs::python {
         void label(const std::string& text);
         void label_centered(const std::string& text);
         void heading(const std::string& text);
-        void text_colored(const std::string& text, std::tuple<float, float, float, float> color);
-        void text_colored_centered(const std::string& text, std::tuple<float, float, float, float> color);
+        void text_colored(const std::string& text, nb::object color);
+        void text_colored_centered(const std::string& text, nb::object color);
         void text_selectable(const std::string& text, float height = 0);
         void text_wrapped(const std::string& text);
         void text_disabled(const std::string& text);
@@ -362,7 +362,7 @@ namespace lfs::python {
                                                                       std::tuple<float, float, float> color);
         std::tuple<bool, std::tuple<float, float, float, float>> color_edit4(const std::string& label,
                                                                              std::tuple<float, float, float, float> color);
-        bool color_button(const std::string& label, std::tuple<float, float, float, float> color,
+        bool color_button(const std::string& label, nb::object color,
                           std::tuple<float, float> size = {0, 0});
 
         // Selection
@@ -396,7 +396,7 @@ namespace lfs::python {
         void table_next_column();
         bool table_set_column_index(int column);
         void table_headers_row();
-        void table_set_bg_color(int target, std::tuple<float, float, float, float> color);
+        void table_set_bg_color(int target, nb::object color);
 
         // Styled buttons
         bool button_styled(const std::string& label, const std::string& style,
@@ -457,12 +457,12 @@ namespace lfs::python {
 
         // Images (texture_id is OpenGL texture handle as uint64)
         void image(uint64_t texture_id, std::tuple<float, float> size,
-                   std::tuple<float, float, float, float> tint = {1, 1, 1, 1});
+                   nb::object tint = nb::none());
         void image_uv(uint64_t texture_id, std::tuple<float, float> size,
                       std::tuple<float, float> uv0, std::tuple<float, float> uv1,
-                      std::tuple<float, float, float, float> tint = {1, 1, 1, 1});
+                      nb::object tint = nb::none());
         bool image_button(const std::string& id, uint64_t texture_id, std::tuple<float, float> size,
-                          std::tuple<float, float, float, float> tint = {1, 1, 1, 1});
+                          nb::object tint = nb::none());
 
         // Toolbar button (icon with selection state, themed for toolbar use)
         bool toolbar_button(const std::string& id, uint64_t texture_id, std::tuple<float, float> size,
@@ -528,7 +528,7 @@ namespace lfs::python {
         void push_style_var_float(const std::string& var, float value);
         void push_style_var_vec2(const std::string& var, std::tuple<float, float> value);
         void pop_style_var(int count = 1);
-        void push_style_color(const std::string& col, std::tuple<float, float, float, float> color);
+        void push_style_color(const std::string& col, nb::object color);
         void pop_style_color(int count = 1);
 
         // RNA-style property widget (auto-generates from metadata)
@@ -576,52 +576,52 @@ namespace lfs::python {
 
         // Drawing functions for viewport overlays
         void draw_circle(float x, float y, float radius,
-                         std::tuple<float, float, float, float> color,
+                         nb::object color,
                          int segments = 32, float thickness = 1.0f);
         void draw_circle_filled(float x, float y, float radius,
-                                std::tuple<float, float, float, float> color,
+                                nb::object color,
                                 int segments = 32);
         void draw_rect(float x0, float y0, float x1, float y1,
-                       std::tuple<float, float, float, float> color,
+                       nb::object color,
                        float thickness = 1.0f);
         void draw_rect_filled(float x0, float y0, float x1, float y1,
-                              std::tuple<float, float, float, float> color, bool background = false);
+                              nb::object color, bool background = false);
         void draw_rect_rounded(float x0, float y0, float x1, float y1,
-                               std::tuple<float, float, float, float> color,
+                               nb::object color,
                                float rounding, float thickness = 1.0f, bool background = false);
         void draw_rect_rounded_filled(float x0, float y0, float x1, float y1,
-                                      std::tuple<float, float, float, float> color,
+                                      nb::object color,
                                       float rounding, bool background = false);
         void draw_triangle_filled(float x0, float y0, float x1, float y1, float x2, float y2,
-                                  std::tuple<float, float, float, float> color, bool background = false);
+                                  nb::object color, bool background = false);
         void draw_line(float x0, float y0, float x1, float y1,
-                       std::tuple<float, float, float, float> color,
+                       nb::object color,
                        float thickness = 1.0f);
         void draw_polyline(const std::vector<std::tuple<float, float>>& points,
-                           std::tuple<float, float, float, float> color,
+                           nb::object color,
                            bool closed = false, float thickness = 1.0f);
         void draw_poly_filled(const std::vector<std::tuple<float, float>>& points,
-                              std::tuple<float, float, float, float> color);
+                              nb::object color);
         void draw_text(float x, float y, const std::string& text,
-                       std::tuple<float, float, float, float> color, bool background = false);
+                       nb::object color, bool background = false);
 
         // Window-scoped drawing (respects z-order)
         void draw_window_rect_filled(float x0, float y0, float x1, float y1,
-                                     std::tuple<float, float, float, float> color);
+                                     nb::object color);
         void draw_window_rect(float x0, float y0, float x1, float y1,
-                              std::tuple<float, float, float, float> color, float thickness = 1.0f);
+                              nb::object color, float thickness = 1.0f);
         void draw_window_rect_rounded(float x0, float y0, float x1, float y1,
-                                      std::tuple<float, float, float, float> color,
+                                      nb::object color,
                                       float rounding, float thickness = 1.0f);
         void draw_window_rect_rounded_filled(float x0, float y0, float x1, float y1,
-                                             std::tuple<float, float, float, float> color,
+                                             nb::object color,
                                              float rounding);
         void draw_window_line(float x0, float y0, float x1, float y1,
-                              std::tuple<float, float, float, float> color, float thickness = 1.0f);
+                              nb::object color, float thickness = 1.0f);
         void draw_window_text(float x, float y, const std::string& text,
-                              std::tuple<float, float, float, float> color);
+                              nb::object color);
         void draw_window_triangle_filled(float x0, float y0, float x1, float y1, float x2, float y2,
-                                         std::tuple<float, float, float, float> color);
+                                         nb::object color);
 
         void crf_curve_preview(const std::string& label, float gamma, float toe, float shoulder,
                                float gamma_r = 0.0f, float gamma_g = 0.0f, float gamma_b = 0.0f);

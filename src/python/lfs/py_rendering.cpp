@@ -252,6 +252,15 @@ namespace lfs::python {
         add_float(&Proxy::mesh_ambient, "mesh_ambient", "Ambient", "Mesh ambient light", 0.15, 0.0, 1.0);
         add_bool(&Proxy::mesh_backface_culling, "mesh_backface_culling", "Backface Culling", "Cull mesh back faces",
                  true);
+        add_bool(&Proxy::mesh_shadow_enabled, "mesh_shadow_enabled", "Shadows", "Enable shadow mapping for meshes",
+                 false);
+        add_int_enum(&Proxy::mesh_shadow_resolution, "mesh_shadow_resolution", "Shadow Resolution",
+                     "Shadow map resolution",
+                     {{"512", "512", 512},
+                      {"1024", "1024", 1024},
+                      {"2048", "2048", 2048},
+                      {"4096", "4096", 4096}},
+                     2);
 
         PropertyRegistry::instance().register_group(std::move(group));
     }

@@ -157,6 +157,7 @@ nanobind_add_module(
     lfs/py_ui_panels.cpp
     lfs/py_uilist.cpp
     lfs/py_viewport.cpp
+    viewport_overlay.cpp
     lfs/py_mcp.cpp
     lfs/py_mesh.cpp
     lfs/openmesh/handles.cpp
@@ -483,6 +484,15 @@ if(BUILD_PORTABLE)
                 PATTERN "__pycache__" EXCLUDE
             )
         endif()
+
+        # Install python312._pth next to python312.dll in bin/ to isolate
+        # the embedded interpreter from system Python packages (e.g. Anaconda).
+        # This file overrides CPython's default path computation on Windows.
+        install(CODE "
+            file(WRITE \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/python312._pth\"
+                \"../Lib\\n../DLLs\\nimport site\\n\")
+            message(STATUS \"Installed python312._pth for path isolation\")
+        " COMPONENT runtime)
 
     else()
         # Linux: Python layout is tools/python3/python3.12, lib/python3.12/

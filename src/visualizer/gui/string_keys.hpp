@@ -17,6 +17,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* IMPORT_CONFIG = "menu.file.import_config";
             inline constexpr const char* EXPORT = "menu.file.export";
             inline constexpr const char* EXPORT_CONFIG = "menu.file.export_config";
+            inline constexpr const char* EXTRACT_VIDEO_FRAMES = "menu.file.extract_video_frames";
             inline constexpr const char* EXIT = "menu.file.exit";
         } // namespace File
 
@@ -852,6 +853,64 @@ namespace lichtfeld::Strings {
         inline constexpr const char* Z = "axis.z";
         inline constexpr const char* U = "axis.u";
     } // namespace Axis
+
+    namespace VideoExtractor {
+        inline constexpr const char* TITLE = "video_extractor.title";
+        inline constexpr const char* SELECT_PREVIEW = "video_extractor.select_preview";
+        inline constexpr const char* STEP_BACKWARD = "video_extractor.step_backward";
+        inline constexpr const char* STEP_FORWARD = "video_extractor.step_forward";
+        inline constexpr const char* PAUSE = "video_extractor.pause";
+        inline constexpr const char* PLAY = "video_extractor.play";
+        inline constexpr const char* TRIM_RANGE = "video_extractor.trim_range";
+        inline constexpr const char* SET = "video_extractor.set";
+        inline constexpr const char* SET_START = "video_extractor.set_start";
+        inline constexpr const char* SET_END = "video_extractor.set_end";
+        inline constexpr const char* RESET = "video_extractor.reset";
+        inline constexpr const char* ESTIMATED_FRAMES = "video_extractor.estimated_frames";
+        inline constexpr const char* INPUT_VIDEO = "video_extractor.input_video";
+        inline constexpr const char* VIDEO = "video_extractor.video";
+        inline constexpr const char* NO_FILE = "video_extractor.no_file";
+        inline constexpr const char* BROWSE = "video_extractor.browse";
+        inline constexpr const char* OUTPUT = "video_extractor.output";
+        inline constexpr const char* NO_DIR = "video_extractor.no_dir";
+        inline constexpr const char* SELECT_FOLDER = "video_extractor.select_folder";
+        inline constexpr const char* SETTINGS = "video_extractor.settings";
+        inline constexpr const char* MODE = "video_extractor.mode";
+        inline constexpr const char* MODE_FPS = "video_extractor.mode_fps";
+        inline constexpr const char* MODE_INTERVAL = "video_extractor.mode_interval";
+        inline constexpr const char* FPS_LABEL = "video_extractor.fps_label";
+        inline constexpr const char* FPS_TOOLTIP = "video_extractor.fps_tooltip";
+        inline constexpr const char* EVERY_LABEL = "video_extractor.every_label";
+        inline constexpr const char* FRAMES_FORMAT = "video_extractor.frames_format";
+        inline constexpr const char* INTERVAL_TOOLTIP = "video_extractor.interval_tooltip";
+        inline constexpr const char* OUTPUT_FORMAT = "video_extractor.output_format";
+        inline constexpr const char* FORMAT = "video_extractor.format";
+        inline constexpr const char* FORMAT_PNG = "video_extractor.format_png";
+        inline constexpr const char* FORMAT_JPEG = "video_extractor.format_jpeg";
+        inline constexpr const char* QUALITY_LABEL = "video_extractor.quality_label";
+        inline constexpr const char* RESOLUTION = "video_extractor.resolution";
+        inline constexpr const char* RESOLUTION_LABEL = "video_extractor.resolution_label";
+        inline constexpr const char* RES_ORIGINAL = "video_extractor.res_original";
+        inline constexpr const char* RES_SCALE = "video_extractor.res_scale";
+        inline constexpr const char* RES_CUSTOM = "video_extractor.res_custom";
+        inline constexpr const char* WIDTH = "video_extractor.width";
+        inline constexpr const char* HEIGHT = "video_extractor.height";
+        inline constexpr const char* OUTPUT_RES = "video_extractor.output_res";
+        inline constexpr const char* NAMING = "video_extractor.naming";
+        inline constexpr const char* PATTERN = "video_extractor.pattern";
+        inline constexpr const char* PATTERN_TOOLTIP = "video_extractor.pattern_tooltip";
+        inline constexpr const char* EXAMPLE = "video_extractor.example";
+        inline constexpr const char* START = "video_extractor.start";
+        inline constexpr const char* CANCEL = "video_extractor.cancel";
+        inline constexpr const char* SELECT_BOTH = "video_extractor.select_both";
+        inline constexpr const char* EXTRACTING = "video_extractor.extracting";
+        inline constexpr const char* STARTING = "video_extractor.starting";
+        inline constexpr const char* COMPLETE = "video_extractor.complete";
+        inline constexpr const char* EXTRACTED = "video_extractor.extracted";
+        inline constexpr const char* OK = "video_extractor.ok";
+        inline constexpr const char* ERROR = "video_extractor.error";
+        inline constexpr const char* DISMISS = "video_extractor.dismiss";
+    } // namespace VideoExtractor
 
     namespace DiskSpaceDialog {
         inline constexpr const char* TITLE = "disk_space_dialog.title";

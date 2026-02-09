@@ -163,10 +163,10 @@ namespace lfs::core {
         const auto exe_dir = getExecutableDir();
 
 #ifdef _WIN32
-        // Windows Production: exe in bin/, Python stdlib in ../lib/python3.12/
-        // Py_SetPythonHome expects the parent of lib/ on Windows too when using Unix-style layout
-        if (const auto prod = exe_dir.parent_path() / "lib" / "python3.12";
-            std::filesystem::exists(prod)) {
+        // Windows Production: exe in bin/, Python stdlib in ../Lib/
+        // CPython on Windows expects Lib/ (not lib/python3.12/)
+        if (const auto prod = exe_dir.parent_path() / "Lib";
+            std::filesystem::exists(prod / "os.py")) {
             return exe_dir.parent_path();
         }
 

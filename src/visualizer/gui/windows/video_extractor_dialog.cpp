@@ -3,6 +3,8 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "video_extractor_dialog.hpp"
+#include "core/event_bridge/localization_manager.hpp"
+#include "gui/string_keys.hpp"
 #include "gui/utils/windows_utils.hpp"
 #include "theme/theme.hpp"
 
@@ -10,6 +12,8 @@
 #include <cmath>
 #include <format>
 #include <imgui.h>
+
+using namespace lichtfeld::Strings;
 
 using lfs::vis::gui::OpenVideoFileDialog;
 using lfs::vis::gui::SelectFolderDialog;
@@ -215,7 +219,7 @@ namespace lfs::gui {
             ImGui::Image(static_cast<ImTextureID>(preview_texture_),
                          ImVec2(display_width, display_height));
         } else {
-            const char* hint = "Select a video file to preview";
+            const char* hint = LOC(VideoExtractor::SELECT_PREVIEW);
             const ImVec2 text_size = ImGui::CalcTextSize(hint);
             const ImVec2 region = ImGui::GetContentRegionAvail();
             ImGui::SetCursorPos(ImVec2((region.x - text_size.x) * 0.5f,
@@ -241,7 +245,7 @@ namespace lfs::gui {
             texture_needs_update_ = true;
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Step backward");
+            ImGui::SetTooltip("%s", LOC(VideoExtractor::STEP_BACKWARD));
         {
             ImDrawList* dl = ImGui::GetWindowDrawList();
             const ImVec2 btn_min = ImGui::GetItemRectMin();
@@ -261,7 +265,7 @@ namespace lfs::gui {
             player_->togglePlayPause();
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(player_->isPlaying() ? "Pause (Space)" : "Play (Space)");
+            ImGui::SetTooltip("%s", player_->isPlaying() ? LOC(VideoExtractor::PAUSE) : LOC(VideoExtractor::PLAY));
         {
             ImDrawList* dl = ImGui::GetWindowDrawList();
             const ImVec2 btn_min = ImGui::GetItemRectMin();
@@ -290,7 +294,7 @@ namespace lfs::gui {
             texture_needs_update_ = true;
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Step forward");
+            ImGui::SetTooltip("%s", LOC(VideoExtractor::STEP_FORWARD));
         {
             ImDrawList* dl = ImGui::GetWindowDrawList();
             const ImVec2 btn_min = ImGui::GetItemRectMin();
@@ -396,7 +400,7 @@ namespace lfs::gui {
         const auto& t = lfs::vis::theme();
         const float duration = static_cast<float>(player_->duration());
 
-        ImGui::Text("Trim Range:");
+        ImGui::Text("%s", LOC(VideoExtractor::TRIM_RANGE));
         ImGui::SameLine();
 
         // Start time
@@ -410,11 +414,13 @@ namespace lfs::gui {
         ImGui::PopItemWidth();
 
         ImGui::SameLine();
-        if (ImGui::Button("Set##start")) {
+        ImGui::PushID("start");
+        if (ImGui::Button(LOC(VideoExtractor::SET))) {
             trim_start_ = static_cast<float>(player_->currentTime());
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Set start to current position");
+            ImGui::SetTooltip("%s", LOC(VideoExtractor::SET_START));
+        ImGui::PopID();
 
         ImGui::SameLine();
         ImGui::Text("-");
@@ -430,111 +436,122 @@ namespace lfs::gui {
         ImGui::PopItemWidth();
 
         ImGui::SameLine();
-        if (ImGui::Button("Set##end")) {
+        ImGui::PushID("end");
+        if (ImGui::Button(LOC(VideoExtractor::SET))) {
             trim_end_ = static_cast<float>(player_->currentTime());
         }
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Set end to current position");
+            ImGui::SetTooltip("%s", LOC(VideoExtractor::SET_END));
+        ImGui::PopID();
 
         ImGui::SameLine();
-        if (ImGui::Button("Reset")) {
+        if (ImGui::Button(LOC(VideoExtractor::RESET))) {
             trim_start_ = 0.0f;
             trim_end_ = duration;
         }
 
         // Show estimated frame count
         ImGui::SameLine();
-        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "(~%d frames)", calculateEstimatedFrames());
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), LOC(VideoExtractor::ESTIMATED_FRAMES), calculateEstimatedFrames());
     }
 
     void VideoExtractorDialog::renderFileSelection() {
-        ImGui::SeparatorText("Input Video");
+        ImGui::SeparatorText(LOC(VideoExtractor::INPUT_VIDEO));
 
         // Video file selection with browse button inline
-        ImGui::Text("Video:");
+        ImGui::Text("%s", LOC(VideoExtractor::VIDEO));
         ImGui::SameLine();
 
-        std::string video_display =
-            video_path_.empty() ? "No file selected" : video_path_.filename().string();
+        const std::string video_display =
+            video_path_.empty() ? LOC(VideoExtractor::NO_FILE) : video_path_.filename().string();
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", video_display.c_str());
 
         ImGui::SameLine();
-        if (ImGui::Button("Browse...##video")) {
+        ImGui::PushID("video");
+        if (ImGui::Button(LOC(VideoExtractor::BROWSE))) {
             const auto path = OpenVideoFileDialog();
             if (!path.empty()) {
                 openVideo(path);
             }
         }
+        ImGui::PopID();
 
         // Output directory
-        ImGui::Text("Output:");
+        ImGui::Text("%s", LOC(VideoExtractor::OUTPUT));
         ImGui::SameLine();
 
-        std::string output_display =
-            output_dir_.empty() ? "No directory selected" : output_dir_.string();
+        const std::string output_display =
+            output_dir_.empty() ? LOC(VideoExtractor::NO_DIR) : output_dir_.string();
         ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "%s", output_display.c_str());
 
         ImGui::SameLine();
-        if (ImGui::Button("Browse...##output")) {
-            const auto path = SelectFolderDialog("Select Output Folder");
+        ImGui::PushID("output");
+        if (ImGui::Button(LOC(VideoExtractor::BROWSE))) {
+            const auto path = SelectFolderDialog(LOC(VideoExtractor::SELECT_FOLDER));
             if (!path.empty()) {
                 output_dir_ = path;
             }
         }
+        ImGui::PopID();
     }
 
     void VideoExtractorDialog::renderExtractionSettings() {
-        ImGui::SeparatorText("Extraction Settings");
+        ImGui::SeparatorText(LOC(VideoExtractor::SETTINGS));
 
         // Mode selection
-        ImGui::Text("Mode:");
+        ImGui::Text("%s", LOC(VideoExtractor::MODE));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(150);
-        std::array<const char*, 2> modes = {"FPS-based", "Frame Interval"};
-        ImGui::Combo("##mode", &mode_selection_, modes.data(), static_cast<int>(modes.size()));
+        const char* modes[] = {LOC(VideoExtractor::MODE_FPS), LOC(VideoExtractor::MODE_INTERVAL)};
+        ImGui::Combo("##mode", &mode_selection_, modes, 2);
 
         ImGui::SameLine(0, 20);
 
         // Mode-specific settings
         if (mode_selection_ == 0) {
             ImGui::SetNextItemWidth(100);
-            ImGui::SliderFloat("FPS##fps", &fps_, 0.1f, 30.0f, "%.1f");
+            ImGui::PushID("fps");
+            ImGui::SliderFloat(LOC(VideoExtractor::FPS_LABEL), &fps_, 0.1f, 30.0f, "%.1f");
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Extract frames at this rate");
+                ImGui::SetTooltip("%s", LOC(VideoExtractor::FPS_TOOLTIP));
+            ImGui::PopID();
         } else {
             ImGui::SetNextItemWidth(100);
-            ImGui::SliderInt("Every##interval", &frame_interval_, 1, 100, "%d frames");
+            ImGui::PushID("interval");
+            ImGui::SliderInt(LOC(VideoExtractor::EVERY_LABEL), &frame_interval_, 1, 100, LOC(VideoExtractor::FRAMES_FORMAT));
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Extract every Nth frame");
+                ImGui::SetTooltip("%s", LOC(VideoExtractor::INTERVAL_TOOLTIP));
+            ImGui::PopID();
         }
     }
 
     void VideoExtractorDialog::renderFormatSettings() {
-        ImGui::SeparatorText("Output Format");
+        ImGui::SeparatorText(LOC(VideoExtractor::OUTPUT_FORMAT));
 
         // Format and quality on same line
-        ImGui::Text("Format:");
+        ImGui::Text("%s", LOC(VideoExtractor::FORMAT));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(150);
-        std::array<const char*, 2> formats = {"PNG (lossless)", "JPEG (smaller)"};
-        ImGui::Combo("##format", &format_selection_, formats.data(), static_cast<int>(formats.size()));
+        const char* formats[] = {LOC(VideoExtractor::FORMAT_PNG), LOC(VideoExtractor::FORMAT_JPEG)};
+        ImGui::Combo("##format", &format_selection_, formats, 2);
 
         if (format_selection_ == 1) {
             ImGui::SameLine(0, 20);
             ImGui::SetNextItemWidth(100);
-            ImGui::SliderInt("Quality##quality", &jpg_quality_, 50, 100, "%d%%");
+            ImGui::PushID("quality");
+            ImGui::SliderInt(LOC(VideoExtractor::QUALITY_LABEL), &jpg_quality_, 50, 100, "%d%%");
+            ImGui::PopID();
         }
     }
 
     void VideoExtractorDialog::renderResolutionSettings() {
-        ImGui::SeparatorText("Resolution");
+        ImGui::SeparatorText(LOC(VideoExtractor::RESOLUTION));
 
-        std::array<const char*, 3> res_modes = {"Original", "Scale", "Custom"};
-        ImGui::Text("Resolution:");
+        const char* res_modes[] = {LOC(VideoExtractor::RES_ORIGINAL), LOC(VideoExtractor::RES_SCALE), LOC(VideoExtractor::RES_CUSTOM)};
+        ImGui::Text("%s", LOC(VideoExtractor::RESOLUTION_LABEL));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(150);
-        ImGui::Combo("##resolution_mode", &resolution_mode_, res_modes.data(),
-                     static_cast<int>(res_modes.size()));
+        ImGui::Combo("##resolution_mode", &resolution_mode_, res_modes, 3);
 
         ImGui::SameLine(0, 20);
 
@@ -546,14 +563,14 @@ namespace lfs::gui {
             ImGui::SetNextItemWidth(80);
             ImGui::InputInt("##custom_w", &custom_width_, 0, 0);
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Width");
+                ImGui::SetTooltip("%s", LOC(VideoExtractor::WIDTH));
             ImGui::SameLine();
             ImGui::Text("x");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(80);
             ImGui::InputInt("##custom_h", &custom_height_, 0, 0);
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("Height");
+                ImGui::SetTooltip("%s", LOC(VideoExtractor::HEIGHT));
 
             custom_width_ = std::max(16, custom_width_);
             custom_height_ = std::max(16, custom_height_);
@@ -575,195 +592,173 @@ namespace lfs::gui {
             }
 
             ImGui::SameLine(0, 20);
-            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Output: %dx%d", out_w, out_h);
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), LOC(VideoExtractor::OUTPUT_RES), out_w, out_h);
         }
     }
 
     void VideoExtractorDialog::renderOutputSettings() {
-        ImGui::SeparatorText("Output Naming");
+        ImGui::SeparatorText(LOC(VideoExtractor::NAMING));
 
-        ImGui::Text("Pattern:");
+        ImGui::Text("%s", LOC(VideoExtractor::PATTERN));
         ImGui::SameLine();
         ImGui::SetNextItemWidth(200);
         ImGui::InputText("##pattern", filename_pattern_.data(), filename_pattern_.size());
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Use %%d for frame number (e.g., frame_%%04d for zero-padded)");
+            ImGui::SetTooltip("%s", LOC(VideoExtractor::PATTERN_TOOLTIP));
 
         ImGui::SameLine();
         const char* ext = format_selection_ == 0 ? ".png" : ".jpg";
         char preview[128];
         std::snprintf(preview, sizeof(preview), filename_pattern_.data(), 1);
-        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "Example: %s%s", preview, ext);
+        ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), LOC(VideoExtractor::EXAMPLE), preview, ext);
     }
 
-    void VideoExtractorDialog::render(bool* p_open) {
-        if (!*p_open) {
-            return;
+    bool VideoExtractorDialog::render() {
+        renderVideoPreview();
+
+        ImGui::Spacing();
+
+        renderTransportControls();
+
+        ImGui::Spacing();
+
+        renderTimeline();
+
+        ImGui::Spacing();
+
+        renderTrimControls();
+
+        ImGui::Spacing();
+
+        renderFileSelection();
+
+        ImGui::Spacing();
+
+        renderExtractionSettings();
+
+        ImGui::Spacing();
+
+        renderFormatSettings();
+
+        ImGui::Spacing();
+
+        renderResolutionSettings();
+
+        ImGui::Spacing();
+
+        renderOutputSettings();
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        const bool can_start =
+            !video_path_.empty() && !output_dir_.empty() && !extracting_.load();
+
+        if (!can_start) {
+            ImGui::BeginDisabled();
         }
 
-        ImGui::SetNextWindowSize(ImVec2(700, 700), ImGuiCond_FirstUseEver);
+        if (ImGui::Button(LOC(VideoExtractor::START), ImVec2(150, 30))) {
+            if (on_start_extraction_) {
+                VideoExtractionParams params;
+                params.video_path = video_path_;
+                params.output_dir = output_dir_;
+                params.mode =
+                    mode_selection_ == 0 ? io::ExtractionMode::FPS : io::ExtractionMode::INTERVAL;
+                params.fps = static_cast<double>(fps_);
+                params.frame_interval = frame_interval_;
+                params.format = format_selection_ == 0 ? io::ImageFormat::PNG : io::ImageFormat::JPG;
+                params.jpg_quality = jpg_quality_;
+                params.start_time = static_cast<double>(trim_start_);
+                params.end_time = static_cast<double>(trim_end_);
 
-        if (ImGui::Begin("Extract Frames from Video", p_open)) {
-            // Video preview at top
-            renderVideoPreview();
+                static constexpr std::array<io::ResolutionMode, 3> res_modes = {
+                    io::ResolutionMode::Original,
+                    io::ResolutionMode::Scale,
+                    io::ResolutionMode::Custom};
+                static constexpr std::array<float, 4> scale_values = {0.25f, 0.5f, 0.75f, 1.0f};
 
-            ImGui::Spacing();
+                params.resolution_mode = res_modes[resolution_mode_];
+                params.scale = scale_values[scale_selection_];
+                params.custom_width = custom_width_;
+                params.custom_height = custom_height_;
 
-            // Transport controls
-            renderTransportControls();
+                params.filename_pattern = filename_pattern_.data();
 
-            ImGui::Spacing();
+                extracting_.store(true);
+                current_frame_.store(0);
+                total_frames_.store(0);
+                error_message_.clear();
+                show_completion_message_ = false;
 
-            // Timeline
-            renderTimeline();
+                on_start_extraction_(params);
+            }
+        }
 
-            ImGui::Spacing();
+        if (!can_start) {
+            ImGui::EndDisabled();
+        }
 
-            // Trim controls
-            renderTrimControls();
+        ImGui::SameLine();
 
-            ImGui::Spacing();
+        if (ImGui::Button(LOC(VideoExtractor::CANCEL), ImVec2(100, 30))) {
+            return false;
+        }
 
-            // File selection
-            renderFileSelection();
+        if (video_path_.empty() || output_dir_.empty()) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.0f, 1.0f),
+                               "%s", LOC(VideoExtractor::SELECT_BOTH));
+        }
 
-            ImGui::Spacing();
-
-            // Extraction settings
-            renderExtractionSettings();
-
-            ImGui::Spacing();
-
-            // Format settings
-            renderFormatSettings();
-
-            ImGui::Spacing();
-
-            // Resolution settings
-            renderResolutionSettings();
-
-            ImGui::Spacing();
-
-            // Output naming
-            renderOutputSettings();
-
+        if (extracting_.load()) {
             ImGui::Spacing();
             ImGui::Separator();
             ImGui::Spacing();
 
-            // Start button
-            const bool can_start =
-                !video_path_.empty() && !output_dir_.empty() && !extracting_.load();
+            const int current = current_frame_.load();
+            const int total = total_frames_.load();
 
-            if (!can_start) {
-                ImGui::BeginDisabled();
-            }
-
-            if (ImGui::Button("Start Extraction", ImVec2(150, 30))) {
-                if (on_start_extraction_) {
-                    VideoExtractionParams params;
-                    params.video_path = video_path_;
-                    params.output_dir = output_dir_;
-                    params.mode =
-                        mode_selection_ == 0 ? io::ExtractionMode::FPS : io::ExtractionMode::INTERVAL;
-                    params.fps = static_cast<double>(fps_);
-                    params.frame_interval = frame_interval_;
-                    params.format = format_selection_ == 0 ? io::ImageFormat::PNG : io::ImageFormat::JPG;
-                    params.jpg_quality = jpg_quality_;
-                    params.start_time = static_cast<double>(trim_start_);
-                    params.end_time = static_cast<double>(trim_end_);
-
-                    // Resolution settings
-                    static constexpr std::array<io::ResolutionMode, 3> res_modes = {
-                        io::ResolutionMode::Original,
-                        io::ResolutionMode::Scale,
-                        io::ResolutionMode::Custom};
-                    static constexpr std::array<float, 4> scale_values = {0.25f, 0.5f, 0.75f, 1.0f};
-
-                    params.resolution_mode = res_modes[resolution_mode_];
-                    params.scale = scale_values[scale_selection_];
-                    params.custom_width = custom_width_;
-                    params.custom_height = custom_height_;
-
-                    // Filename pattern
-                    params.filename_pattern = filename_pattern_.data();
-
-                    extracting_.store(true);
-                    current_frame_.store(0);
-                    total_frames_.store(0);
-                    error_message_.clear();
-                    show_completion_message_ = false;
-
-                    on_start_extraction_(params);
-                }
-            }
-
-            if (!can_start) {
-                ImGui::EndDisabled();
-            }
-
-            ImGui::SameLine();
-
-            if (ImGui::Button("Cancel", ImVec2(100, 30))) {
-                *p_open = false;
-            }
-
-            if (video_path_.empty() || output_dir_.empty()) {
-                ImGui::SameLine();
-                ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.0f, 1.0f),
-                                   "Select video and output directory");
-            }
-
-            // Show progress
-            if (extracting_.load()) {
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
-
-                int current = current_frame_.load();
-                int total = total_frames_.load();
-
-                if (total > 0) {
-                    float progress = static_cast<float>(current) / static_cast<float>(total);
-                    ImGui::Text("Extracting: %d / %d frames", current, total);
-                    ImGui::ProgressBar(progress, ImVec2(-1, 0));
-                } else {
-                    ImGui::Text("Starting extraction...");
-                    ImGui::ProgressBar(0.0f, ImVec2(-1, 0));
-                }
-            }
-
-            // Show completion message
-            if (show_completion_message_ && !extracting_.load()) {
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
-
-                int total = current_frame_.load();
-                ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f),
-                                   "Extraction completed successfully!");
-                ImGui::Text("Extracted %d frames", total);
-
-                if (ImGui::Button("OK", ImVec2(100, 30))) {
-                    show_completion_message_ = false;
-                    current_frame_.store(0);
-                    total_frames_.store(0);
-                }
-            }
-
-            // Show error if any
-            if (!error_message_.empty()) {
-                ImGui::Spacing();
-                ImGui::Separator();
-                ImGui::Spacing();
-                ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.2f, 1.0f), "Error: %s", error_message_.c_str());
-
-                if (ImGui::Button("Dismiss", ImVec2(100, 30))) {
-                    error_message_.clear();
-                }
+            if (total > 0) {
+                const float progress = static_cast<float>(current) / static_cast<float>(total);
+                ImGui::Text(LOC(VideoExtractor::EXTRACTING), current, total);
+                ImGui::ProgressBar(progress, ImVec2(-1, 0));
+            } else {
+                ImGui::Text("%s", LOC(VideoExtractor::STARTING));
+                ImGui::ProgressBar(0.0f, ImVec2(-1, 0));
             }
         }
-        ImGui::End();
+
+        if (show_completion_message_ && !extracting_.load()) {
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+
+            const int total = current_frame_.load();
+            ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f),
+                               "%s", LOC(VideoExtractor::COMPLETE));
+            ImGui::Text(LOC(VideoExtractor::EXTRACTED), total);
+
+            if (ImGui::Button(LOC(VideoExtractor::OK), ImVec2(100, 30))) {
+                show_completion_message_ = false;
+                current_frame_.store(0);
+                total_frames_.store(0);
+            }
+        }
+
+        if (!error_message_.empty()) {
+            ImGui::Spacing();
+            ImGui::Separator();
+            ImGui::Spacing();
+            ImGui::TextColored(ImVec4(1.0f, 0.2f, 0.2f, 1.0f), LOC(VideoExtractor::ERROR), error_message_.c_str());
+
+            if (ImGui::Button(LOC(VideoExtractor::DISMISS), ImVec2(100, 30))) {
+                error_message_.clear();
+            }
+        }
+
+        return true;
     }
 
 } // namespace lfs::gui

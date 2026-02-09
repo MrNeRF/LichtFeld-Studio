@@ -7,6 +7,7 @@
 #include "core/mesh_data.hpp"
 #include "core/path_utils.hpp"
 #include "io/error.hpp"
+#include "io/mesh/texture_loader.hpp"
 #include <array>
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
@@ -53,6 +54,21 @@ namespace lfs::io {
             aiString ai_name;
             if (ai_mat->Get(AI_MATKEY_NAME, ai_name) == AI_SUCCESS) {
                 mat.name = ai_name.C_Str();
+            }
+
+            aiString tex_path;
+            if (ai_mat->GetTexture(aiTextureType_BASE_COLOR, 0, &tex_path) == AI_SUCCESS ||
+                ai_mat->GetTexture(aiTextureType_DIFFUSE, 0, &tex_path) == AI_SUCCESS) {
+                mat.albedo_tex_path = tex_path.C_Str();
+            }
+
+            if (ai_mat->GetTexture(aiTextureType_NORMALS, 0, &tex_path) == AI_SUCCESS) {
+                mat.normal_tex_path = tex_path.C_Str();
+            }
+
+            if (ai_mat->GetTexture(aiTextureType_UNKNOWN, 0, &tex_path) == AI_SUCCESS ||
+                ai_mat->GetTexture(aiTextureType_METALNESS, 0, &tex_path) == AI_SUCCESS) {
+                mat.metallic_roughness_tex_path = tex_path.C_Str();
             }
 
             return mat;
@@ -154,10 +170,16 @@ namespace lfs::io {
             return mesh;
         }
 
-        MeshData merge_meshes(std::vector<MeshData> meshes) {
+        MeshData merge_meshes(std::vector<MeshData> meshes, const std::vector<unsigned int>& material_indices) {
             assert(!meshes.empty());
-            if (meshes.size() == 1)
-                return std::move(meshes[0]);
+            assert(meshes.size() == material_indices.size());
+            if (meshes.size() == 1) {
+                auto& m = meshes[0];
+                if (m.submeshes.empty()) {
+                    m.submeshes.push_back({0, static_cast<size_t>(m.face_count() * 3), material_indices[0]});
+                }
+                return std::move(m);
+            }
 
             int64_t total_verts = 0;
             int64_t total_faces = 0;
@@ -262,8 +284,10 @@ namespace lfs::io {
                     }
                 }
 
-                result.submeshes.emplace_back(static_cast<size_t>(f_offset * 3),
-                                              static_cast<size_t>(nf * 3));
+                const size_t sub_idx = static_cast<size_t>(&m - &meshes[0]);
+                result.submeshes.push_back({static_cast<size_t>(f_offset * 3),
+                                            static_cast<size_t>(nf * 3),
+                                            material_indices[sub_idx]});
 
                 v_offset += nv;
                 f_offset += nf;
@@ -329,17 +353,72 @@ namespace lfs::io {
         }
 
         std::vector<MeshData> sub_meshes;
+        std::vector<unsigned int> mesh_material_indices;
         sub_meshes.reserve(scene->mNumMeshes);
+        mesh_material_indices.reserve(scene->mNumMeshes);
         for (unsigned int i = 0; i < scene->mNumMeshes; ++i) {
             sub_meshes.push_back(convert_ai_mesh(scene->mMeshes[i]));
+            mesh_material_indices.push_back(scene->mMeshes[i]->mMaterialIndex);
+        }
+
+        if (options.progress) {
+            options.progress(50.0f, "Loading textures...");
+        }
+
+        const auto model_dir = path.parent_path();
+        mesh::TextureLoader tex_loader;
+        std::vector<lfs::core::TextureImage> texture_images;
+
+        auto load_texture = [&](const std::string& tex_path) -> uint32_t {
+            if (tex_path.empty())
+                return 0;
+
+            if (tex_path[0] == '*') {
+                const unsigned int embed_idx = std::stoul(tex_path.substr(1));
+                if (embed_idx < scene->mNumTextures) {
+                    const auto* ai_tex = scene->mTextures[embed_idx];
+                    auto td = tex_loader.load_from_memory(
+                        reinterpret_cast<const uint8_t*>(ai_tex->pcData), ai_tex->mWidth);
+                    if (!td.pixels.empty()) {
+                        lfs::core::TextureImage img;
+                        img.pixels = std::move(td.pixels);
+                        img.width = td.width;
+                        img.height = td.height;
+                        img.channels = td.channels;
+                        texture_images.push_back(std::move(img));
+                        return static_cast<uint32_t>(texture_images.size());
+                    }
+                }
+                return 0;
+            }
+
+            const auto full_path = model_dir / tex_path;
+            const auto* td = tex_loader.load_from_file(full_path);
+            if (td) {
+                lfs::core::TextureImage img;
+                img.pixels = td->pixels;
+                img.width = td->width;
+                img.height = td->height;
+                img.channels = td->channels;
+                texture_images.push_back(std::move(img));
+                return static_cast<uint32_t>(texture_images.size());
+            }
+            return 0;
+        };
+
+        for (auto& mat : materials) {
+            mat.albedo_tex = load_texture(mat.albedo_tex_path);
+            mat.normal_tex = load_texture(mat.normal_tex_path);
+            mat.metallic_roughness_tex = load_texture(mat.metallic_roughness_tex_path);
         }
 
         if (options.progress) {
             options.progress(70.0f, "Merging mesh data...");
         }
 
-        auto mesh_data = std::make_shared<MeshData>(merge_meshes(std::move(sub_meshes)));
+        auto mesh_data = std::make_shared<MeshData>(merge_meshes(std::move(sub_meshes), mesh_material_indices));
         mesh_data->materials = std::move(materials);
+        mesh_data->texture_images = std::move(texture_images);
 
         if (!mesh_data->has_normals()) {
             mesh_data->compute_normals();

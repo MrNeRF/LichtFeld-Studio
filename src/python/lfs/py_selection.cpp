@@ -436,7 +436,7 @@ namespace lfs::python {
                 Viewport vp(static_cast<size_t>(vw), static_cast<size_t>(vh));
                 for (int i = 0; i < 3; ++i)
                     for (int j = 0; j < 3; ++j)
-                        vp.camera.R[i][j] = view_info->rotation[i * 3 + j];
+                        vp.camera.R[i][j] = view_info->rotation[j * 3 + i];
                 vp.camera.t = glm::vec3(
                     view_info->translation[0],
                     view_info->translation[1],

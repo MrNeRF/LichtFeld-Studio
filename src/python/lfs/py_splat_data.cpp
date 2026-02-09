@@ -61,7 +61,8 @@ namespace lfs::python {
     PyTensor PySplatData::get_colors_rgb() const {
         auto sh0 = data_->sh0_raw();
         assert(sh0.shape().rank() == 3 && sh0.shape()[1] == 1 && sh0.shape()[2] == 3);
-        auto flat = sh0.reshape({static_cast<int>(sh0.shape()[0]), 3});
+        const int n = static_cast<int>(sh0.shape()[0]);
+        auto flat = sh0.reshape({n, 3});
         return PyTensor(flat * SH_C0 + SH_DC_OFFSET, true);
     }
 
@@ -71,7 +72,8 @@ namespace lfs::python {
         assert(rgb.shape()[0] == static_cast<int64_t>(data_->size()));
         auto sh0_values = (rgb - SH_DC_OFFSET) / SH_C0;
         auto sh0 = data_->sh0_raw();
-        sh0.copy_(sh0_values.reshape({static_cast<int>(rgb.shape()[0]), 1, 3}));
+        const int n = static_cast<int>(rgb.shape()[0]);
+        sh0.copy_(sh0_values.reshape({n, 1, 3}));
     }
 
     // Soft deletion

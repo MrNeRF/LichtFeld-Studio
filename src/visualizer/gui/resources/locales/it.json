@@ -1,6 +1,5 @@
 {
   "_language_name": "Italiano",
-
   "menu": {
     "file": "File",
     "file.new_project": "Nuovo Progetto",
@@ -11,23 +10,20 @@
     "file.import_config": "Importa Configurazione",
     "file.export": "Esporta...",
     "file.export_config": "Esporta Configurazione...",
+    "file.extract_video_frames": "Estrai fotogrammi da video...",
     "file.exit": "Esci",
-
     "edit": "Modifica",
     "edit.input_settings": "Impostazioni di Input...",
     "edit.preferences": "Preferenze...",
-
     "view": "Visualizza",
     "view.theme": "Tema",
     "view.theme.dark": "Scuro",
     "view.theme.light": "Chiaro",
     "view.debug_info": "Info di Debug...",
-
     "help": "Aiuto",
     "help.getting_started": "Inizia",
     "help.about": "Informazioni su LichtFeld Studio"
   },
-
   "window": {
     "getting_started": "Inizia",
     "about": "Informazioni su LichtFeld Studio",
@@ -39,7 +35,6 @@
     "training": "Addestramento",
     "preferences": "Preferenze"
   },
-
   "getting_started": {
     "title": "GUIDA RAPIDA",
     "description": "Impara a preparare i dataset e iniziare con LichtFeld Studio:",
@@ -52,7 +47,6 @@
     "video_masks": "Tutorial Maschere",
     "loading": "Caricamento..."
   },
-
   "about": {
     "title": "LICHTFELD STUDIO",
     "description": "Un'implementazione C++ e CUDA ad alte prestazioni del 3D Gaussian Splatting per rendering neurale in tempo reale, addestramento e visualizzazione.",
@@ -75,7 +69,6 @@
     "authors": "Autori di LichtFeld Studio",
     "license": "Sotto licenza GPLv3"
   },
-
   "training": {
     "section.dataset": "Dataset",
     "section.optimization": "Ottimizzazione",
@@ -90,7 +83,6 @@
     "section.advanced_params": "Parametri Avanzati di Addestramento",
     "section.sparsity": "Impostazioni di Sparsità",
     "section.pruning_growing": "Potatura/Crescita",
-
     "dataset.path": "Path:",
     "dataset.images": "Images:",
     "dataset.resize_factor": "Resize Factor:",
@@ -98,7 +90,6 @@
     "dataset.cpu_cache": "CPU Cache:",
     "dataset.fs_cache": "FS Cache:",
     "dataset.output": "Output:",
-
     "opt.strategy": "Strategy:",
     "opt.learning_rates": "Learning Rates:",
     "opt.iterations": "Iterations:",
@@ -115,30 +106,25 @@
     "opt.lr.opacity": "  Opacity:",
     "opt.lr.scaling": "  Scaling:",
     "opt.lr.rotation": "  Rotation:",
-
     "refinement.refine_every": "  Refine Every:",
     "refinement.start_refine": "  Start Refine:",
     "refinement.stop_refine": "  Stop Refine:",
     "refinement.gradient_thr": "  Gradient Thr:",
     "refinement.reset_every": "  Reset Every:",
     "refinement.sh_upgrade_every": "  SH Upgrade Every:",
-
     "bilateral.grid_x": "Grid X:",
     "bilateral.grid_y": "Grid Y:",
     "bilateral.grid_w": "Grid W:",
     "bilateral.learning_rate": "Learning Rate:",
-
     "masking.invert_masks": "Invert Masks:",
     "masking.threshold": "Threshold:",
     "masking.penalty_weight": "Penalty Weight:",
     "masking.penalty_power": "Penalty Power:",
-
     "mask.invert": "  Invert Masks:",
     "mask.threshold": "  Mask Threshold:",
     "mask.penalty_weight": "  Opacity Penalty Weight:",
     "mask.penalty_power": "  Opacity Penalty Power:",
     "mask.no_masks": "(nessuna maschera)",
-
     "tooltip.invert_masks": "Scambia oggetto/sfondo nelle maschere",
     "tooltip.penalty_weight": "Peso della penalità di opacità nelle aree di sfondo",
     "tooltip.penalty_power": "Decadimento penalità: 1=lineare, 2=quadratico, >2=più dolce",
@@ -203,25 +189,21 @@
     "tooltip.ppisp_freeze_gaussians": "Congela parametri Gaussiani durante addestramento controller",
     "tooltip.strategy_gut_conflict": "La strategia ADC non è disponibile quando GUT è abilitato",
     "tooltip.gut_adc_conflict": "GUT non è disponibile con la strategia ADC. Passa prima a MCMC.",
-
     "error.adc_gut_title": "Impostazioni incompatibili",
     "conflict.adc_gut_start_message": "GUT e la strategia ADC non possono essere usati insieme. Scegli un'azione per avviare l'addestramento.",
     "conflict.adc_gut_strategy_message": "La strategia ADC è incompatibile con GUT. Disabilitare GUT per passare ad ADC?",
     "conflict.btn_use_mcmc": "Usa MCMC",
     "conflict.btn_disable_gut": "Disabilita GUT",
     "conflict.btn_cancel": "Annulla",
-
     "losses.lambda_dssim": "Lambda DSSIM:",
     "losses.opacity_reg": "Opacity Reg:",
     "losses.scale_reg": "Scale Reg:",
     "losses.tv_loss_weight": "TV Loss Weight:",
-
     "init.init_opacity": "Init Opacity:",
     "init.init_scaling": "Init Scaling:",
     "init.random_init": "Random Init:",
     "init.num_points": "  Num Points:",
     "init.extent": "  Extent:",
-
     "thresholds.min_opacity": "Min Opacity:",
     "thresholds.prune_opacity": "Prune Opacity:",
     "thresholds.grow_scale_3d": "Grow Scale 3D:",
@@ -230,12 +212,10 @@
     "thresholds.prune_scale_2d": "Prune Scale 2D:",
     "thresholds.pause_after_reset": "Pause After Reset:",
     "thresholds.revised_opacity": "Revised Opacity:",
-
     "status.enabled": "Abilitato",
     "status.disabled": "Disabilitato",
     "status.yes": "Sì",
     "status.no": "No",
-
     "button.start": "Avvia Addestramento",
     "button.resume": "Riprendi",
     "button.pause": "Pausa",
@@ -247,7 +227,6 @@
     "button.add": "Aggiungi",
     "button.remove": "Rimuovi"
   },
-
   "scene": {
     "add_ply": "Aggiungi PLY...",
     "add_group": "Aggiungi Gruppo",
@@ -288,7 +267,6 @@
     "training_enabled_tooltip": "Incluso nell'addestramento",
     "training_disabled_tooltip": "Escluso dall'addestramento"
   },
-
   "export": {
     "title": "Esporta",
     "format.ply_standard": "PLY (Standard)",
@@ -307,7 +285,6 @@
     "failed": "Fallito",
     "select_at_least_one": "Seleziona almeno un modello"
   },
-
   "common": {
     "ok": "OK",
     "cancel": "Annulla",
@@ -323,7 +300,6 @@
     "reset": "Resetta",
     "double_click_reset": "doppio clic per resettare"
   },
-
   "status": {
     "ready": "Pronto",
     "training": "Addestramento",
@@ -348,14 +324,12 @@
     "training_finished": "Addestramento Completato",
     "ply_models_count": "Modelli PLY: {}"
   },
-
   "mode": {
     "empty": "Vuoto",
     "dataset": "Dataset",
     "edit_mode": "Modalità Modifica",
     "ply_models": "Modelli PLY:"
   },
-
   "messages": {
     "no_data_loaded": "Nessun dato caricato",
     "use_file_menu": "Usa il menu File per importare",
@@ -370,18 +344,15 @@
     "err_ortho_not_supported": "L'addestramento con modello fotocamera ortografico non è ancora supportato.",
     "err_non_pinhole": "Attivare --gut o --undistort per addestrare con fotocamere non-pinhole."
   },
-
   "controls": {
     "wasd": "WASD:",
     "zoom": "Zoom:"
   },
-
   "preferences": {
     "title": "Preferenze",
     "language": "Lingua:",
     "select_language": "Seleziona Lingua"
   },
-
   "main_panel": {
     "windows": "Finestre",
     "scene_panel": "Pannello Scena",
@@ -434,7 +405,6 @@
     "no_selection_groups": "Nessun gruppo di selezione",
     "clear": "Cancella"
   },
-
   "toolbar": {
     "selection": "Selezione",
     "translate": "Trasla",
@@ -469,7 +439,6 @@
     "orthographic": "Ortografica (O)",
     "sequencer": "Sequencer"
   },
-
   "transform": {
     "node": "Nodo: %s",
     "space": "Spazio: %s",
@@ -485,7 +454,6 @@
     "reset_transform": "Resetta Trasformazione",
     "nodes_selected": "%zu nodi selezionati"
   },
-
   "cropbox": {
     "title": "Scatola di Ritaglio",
     "not_visible": "Scatola di ritaglio non visibile",
@@ -498,7 +466,6 @@
     "line_width": "Spessore Linea",
     "instructions": "Invio: Conferma ritaglio | Ctrl+C: Copia contenuto"
   },
-
   "file_browser": {
     "title": "Browser File",
     "quick_access": "Accesso Rapido",
@@ -513,7 +480,6 @@
     "load_ply": "Carica PLY",
     "enter_dir": "Entra nella Cartella"
   },
-
   "training_panel": {
     "start_training": "Avvia Addestramento",
     "resume_training": "Riprendi Addestramento",
@@ -534,7 +500,6 @@
     "sparsity": "Impostazioni di Sparsità",
     "pruning_growing": "Potatura/Crescita"
   },
-
   "tooltip": {
     "gut_mode": "Per fotocamere fisheye/distorte/equirettangolari",
     "mip_filter": "Riduci aliasing per Gaussiani sub-pixel",
@@ -568,14 +533,12 @@
     "point_cloud_mode": "Renderizza come punti invece di splat",
     "selection_colors": "Colori per visualizzazione selezione"
   },
-
   "exit_popup": {
     "title": "Uscire dall'Applicazione?",
     "message": "Sei sicuro di voler uscire?",
     "unsaved_warning": "Tutte le modifiche non salvate andranno perse.",
     "exit": "Esci"
   },
-
   "load_dataset_popup": {
     "title": "Carica Dataset",
     "configure_paths": "Configura percorsi dataset",
@@ -586,7 +549,6 @@
     "init_file": "Init file (opzionale, sostituisce points3D):",
     "help_text": "I checkpoint, i log e i modelli esportati saranno salvati nella cartella di output."
   },
-
   "notification": {
     "cannot_open": "Impossibile aprire",
     "dropped_not_recognized": "L'elemento trascinato",
@@ -595,7 +557,6 @@
     "items": "elementi",
     "and_more": "... e"
   },
-
   "export_dialog": {
     "format": "FORMATO",
     "models": "MODELLI",
@@ -603,12 +564,10 @@
     "sh_degree": "SH DEGREE",
     "export_merged": "Esporta Unito..."
   },
-
   "selection_group": {
     "lock": "Blocca",
     "unlock": "Sblocca"
   },
-
   "file_browser_ext": {
     "dataset": "[Dataset]",
     "sog": "[SOG]",
@@ -618,7 +577,6 @@
     "sog_meta": "(SOG meta.json)",
     "error": "Errore:"
   },
-
   "progress": {
     "loss": "Perdita:",
     "gaussians_count": "%s Gaussiani",
@@ -632,7 +590,6 @@
     "num_splats": "num Splat: %s",
     "status_label": "Stato: %s"
   },
-
   "input_settings": {
     "active_profile": "Profilo Attivo:",
     "save_current_profile": "Salva Profilo Corrente",
@@ -666,7 +623,6 @@
     "mode.crop_box": "Scatola di Ritaglio",
     "mode.unknown": "Sconosciuto"
   },
-
   "debug_info": {
     "free_memory": "Libera: %.2f GB",
     "enable_tracing": "Abilita Tracciamento Operazioni",
@@ -674,7 +630,6 @@
     "clear_history": "Cancella Cronologia",
     "print_to_log": "Stampa nel Log"
   },
-
   "training_params": {
     "strategy": "Strategy:",
     "iterations": "Iterations:",
@@ -729,7 +684,6 @@
     "ppisp_freeze_gaussians": "Congela Gaussiani:",
     "disabled": "Disabilitato"
   },
-
   "image_preview": {
     "image_section": "IMMAGINE",
     "file_section": "FILE",
@@ -770,7 +724,6 @@
     "hidden": "Nascosto",
     "mask_section": "MASCHERA"
   },
-
   "startup": {
     "supported_by": "Supportato da",
     "click_to_continue": "Clicca ovunque per continuare",
@@ -780,14 +733,12 @@
     "drop_to_import": "Rilascia per Importare",
     "drop_to_import_subtitle": "PLY, SOG, dataset COLMAP o Progetto"
   },
-
   "axis": {
     "x": "X:",
     "y": "Y:",
     "z": "Z:",
     "u": "U:"
   },
-
   "resume_checkpoint_popup": {
     "title": "Riprendi Checkpoint",
     "checkpoint": "CHECKPOINT",
@@ -800,7 +751,6 @@
     "output_path": "Percorso Output:",
     "help_text": "Il percorso del dataset memorizzato nel checkpoint potrebbe essere cambiato. Aggiornalo se necessario."
   },
-
   "disk_space_dialog": {
     "title": "Spazio su Disco Insufficiente",
     "error_label": "Errore",
@@ -815,5 +765,62 @@
     "change_location": "Cambia Posizione",
     "retry": "Riprova",
     "select_output_location": "Seleziona Posizione di Output"
+  },
+  "video_extractor": {
+    "title": "Estrai fotogrammi da video",
+    "select_preview": "Seleziona un video per l'anteprima",
+    "step_backward": "Fotogramma precedente",
+    "step_forward": "Fotogramma successivo",
+    "pause": "Pausa (Spazio)",
+    "play": "Riproduci (Spazio)",
+    "trim_range": "Intervallo di taglio:",
+    "set": "Imposta",
+    "set_start": "Imposta inizio alla posizione attuale",
+    "set_end": "Imposta fine alla posizione attuale",
+    "reset": "Reimposta",
+    "estimated_frames": "(~%d fotogrammi)",
+    "input_video": "Video di input",
+    "video": "Video:",
+    "no_file": "Nessun file selezionato",
+    "browse": "Sfoglia...",
+    "output": "Output:",
+    "no_dir": "Nessuna directory selezionata",
+    "select_folder": "Seleziona cartella di output",
+    "settings": "Impostazioni di estrazione",
+    "mode": "Modalità:",
+    "mode_fps": "Basato su FPS",
+    "mode_interval": "Intervallo fotogrammi",
+    "fps_label": "FPS",
+    "fps_tooltip": "Estrai fotogrammi a questa frequenza",
+    "every_label": "Ogni",
+    "frames_format": "%d fotogrammi",
+    "interval_tooltip": "Estrai ogni N fotogrammi",
+    "output_format": "Formato di output",
+    "format": "Formato:",
+    "format_png": "PNG (senza perdita)",
+    "format_jpeg": "JPEG (più piccolo)",
+    "quality_label": "Qualità",
+    "resolution": "Risoluzione",
+    "resolution_label": "Risoluzione:",
+    "res_original": "Originale",
+    "res_scale": "Scala",
+    "res_custom": "Personalizzata",
+    "width": "Larghezza",
+    "height": "Altezza",
+    "output_res": "Output: %dx%d",
+    "naming": "Nomi di output",
+    "pattern": "Modello:",
+    "pattern_tooltip": "Usa %%d per il numero di fotogramma (es. frame_%%04d per riempimento con zeri)",
+    "example": "Esempio: %s%s",
+    "start": "Avvia estrazione",
+    "cancel": "Annulla",
+    "select_both": "Seleziona video e directory di output",
+    "extracting": "Estrazione: %d / %d fotogrammi",
+    "starting": "Avvio estrazione...",
+    "complete": "Estrazione completata con successo!",
+    "extracted": "%d fotogrammi estratti",
+    "ok": "OK",
+    "error": "Errore: %s",
+    "dismiss": "Chiudi"
   }
 }

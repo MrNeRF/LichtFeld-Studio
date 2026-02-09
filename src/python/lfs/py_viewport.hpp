@@ -10,6 +10,8 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
+#include <glm/glm.hpp>
+
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -33,13 +35,15 @@ namespace lfs::python {
                         FILLED_CIRCLE_2D,
                         TEXT_2D,
                         LINE_3D,
-                        POINT_3D };
+                        POINT_3D,
+                        TEXT_3D };
             Type type;
             float x1, y1, z1;
             float x2, y2, z2;
             float r, g, b, a;
             float thickness;
             float radius;
+            float font_size;
             std::string text;
         };
 
@@ -50,27 +54,41 @@ namespace lfs::python {
         [[nodiscard]] std::tuple<float, float> viewport_size() const;
 
         void draw_line_2d(std::tuple<float, float> start, std::tuple<float, float> end,
-                          std::tuple<float, float, float, float> color, float thickness = 1.0f);
+                          nb::object color, float thickness = 1.0f);
         void draw_circle_2d(std::tuple<float, float> center, float radius,
-                            std::tuple<float, float, float, float> color, float thickness = 1.0f);
+                            nb::object color, float thickness = 1.0f);
         void draw_rect_2d(std::tuple<float, float> min, std::tuple<float, float> max,
-                          std::tuple<float, float, float, float> color, float thickness = 1.0f);
+                          nb::object color, float thickness = 1.0f);
         void draw_filled_rect_2d(std::tuple<float, float> min, std::tuple<float, float> max,
-                                 std::tuple<float, float, float, float> color);
+                                 nb::object color);
         void draw_filled_circle_2d(std::tuple<float, float> center, float radius,
-                                   std::tuple<float, float, float, float> color);
+                                   nb::object color);
         void draw_text_2d(std::tuple<float, float> pos, const std::string& text,
-                          std::tuple<float, float, float, float> color);
+                          nb::object color, float font_size = 0.0f);
         void draw_line_3d(std::tuple<float, float, float> start, std::tuple<float, float, float> end,
-                          std::tuple<float, float, float, float> color, float thickness = 1.0f);
+                          nb::object color, float thickness = 1.0f);
         void draw_point_3d(std::tuple<float, float, float> pos,
-                           std::tuple<float, float, float, float> color, float size = 4.0f);
+                           nb::object color, float size = 4.0f);
+        void draw_text_3d(std::tuple<float, float, float> pos, const std::string& text,
+                          nb::object color, float font_size = 0.0f);
+
+        void set_camera_state(const glm::mat4& view, const glm::mat4& proj,
+                              const glm::vec2& viewport_pos, const glm::vec2& viewport_size,
+                              const glm::vec3& camera_pos, const glm::vec3& camera_fwd);
 
         [[nodiscard]] const std::vector<DrawCommand>& get_draw_commands() const { return draw_commands_; }
         void clear_draw_commands() { draw_commands_.clear(); }
 
     private:
         mutable std::vector<DrawCommand> draw_commands_;
+
+        glm::mat4 view_matrix_{1.0f};
+        glm::mat4 proj_matrix_{1.0f};
+        glm::vec2 viewport_pos_{0.0f};
+        glm::vec2 viewport_size_{800.0f, 600.0f};
+        glm::vec3 camera_pos_{0.0f, 0.0f, 5.0f};
+        glm::vec3 camera_fwd_{0.0f, 0.0f, -1.0f};
+        bool has_camera_state_ = false;
     };
 
     struct PyDrawHandlerInfo {
