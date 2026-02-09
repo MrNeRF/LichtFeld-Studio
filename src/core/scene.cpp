@@ -477,7 +477,7 @@ namespace lfs::core {
         auto it = std::find_if(nodes_.begin(), nodes_.end(),
                                [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
         if (it != nodes_.end()) {
-            notifyMutation(MutationType::MODEL_CHANGED);
+            invalidateCache();
             return it->get();
         }
         return nullptr;

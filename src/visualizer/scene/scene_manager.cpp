@@ -2976,6 +2976,7 @@ namespace lfs::vis {
         }
 
         pasted_names.reserve(clipboard_.size());
+        core::Scene::Transaction txn(scene_);
 
         for (const auto& entry : clipboard_) {
             if (!entry.data || entry.data->size() == 0)
