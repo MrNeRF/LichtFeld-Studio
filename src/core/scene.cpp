@@ -42,17 +42,13 @@ namespace lfs::core {
 
         local_transform.setCallback([this] {
             if (scene_) {
-                scene_->invalidateTransformCache();
                 scene_->markTransformDirty(id);
+                scene_->notifyMutation(Scene::MutationType::TRANSFORM_CHANGED);
             }
         });
         visible.setCallback([this] {
             if (scene_) {
-                if (scene_->isConsolidated()) {
-                    scene_->invalidateTransformCache();
-                } else {
-                    scene_->invalidateCache();
-                }
+                scene_->notifyMutation(Scene::MutationType::VISIBILITY_CHANGED);
             }
         });
     }
@@ -60,6 +56,49 @@ namespace lfs::core {
     Scene::Scene() {
         // Create default selection group
         addSelectionGroup("Group 1", glm::vec3(0.0f));
+    }
+
+    void Scene::notifyMutation(MutationType type) {
+        pending_mutations_ |= static_cast<uint32_t>(type);
+
+        switch (type) {
+        case MutationType::TRANSFORM_CHANGED:
+            invalidateTransformCache();
+            break;
+        case MutationType::VISIBILITY_CHANGED:
+            if (isConsolidated())
+                invalidateTransformCache();
+            else
+                invalidateCache();
+            break;
+        case MutationType::SELECTION_CHANGED:
+            break;
+        default:
+            invalidateCache();
+            break;
+        }
+
+        if (transaction_depth_ == 0) {
+            flushMutations();
+        }
+    }
+
+    void Scene::flushMutations() {
+        if (pending_mutations_ == 0)
+            return;
+        pending_mutations_ = 0;
+        events::state::SceneChanged{}.emit();
+    }
+
+    Scene::Transaction::Transaction(Scene& scene) : scene_(scene) {
+        ++scene_.transaction_depth_;
+    }
+
+    Scene::Transaction::~Transaction() {
+        assert(scene_.transaction_depth_ > 0);
+        if (--scene_.transaction_depth_ == 0) {
+            scene_.flushMutations();
+        }
     }
 
     // Helper to compute centroid from model (GPU computation, single copy)
@@ -126,7 +165,7 @@ namespace lfs::core {
             nodes_.push_back(std::move(node));
         }
 
-        invalidateCache();
+        notifyMutation(MutationType::NODE_ADDED);
         LOG_DEBUG("Added node '{}': {} gaussians", name, gaussian_count);
     }
 
@@ -197,7 +236,7 @@ namespace lfs::core {
                 --index;
         }
 
-        invalidateCache();
+        notifyMutation(MutationType::NODE_REMOVED);
         if (!name_copy.empty()) {
             LOG_DEBUG("Removed node '{}'{}", name_copy, keep_children ? " (children kept)" : "");
         }
@@ -214,7 +253,7 @@ namespace lfs::core {
             (*it)->model = std::move(model);
             (*it)->gaussian_count = gaussian_count;
             (*it)->centroid = centroid;
-            invalidateCache();
+            notifyMutation(MutationType::MODEL_CHANGED);
         } else {
             LOG_WARN("replaceNodeModel: node '{}' not found", name);
         }
@@ -283,6 +322,8 @@ namespace lfs::core {
         cudaDeviceSynchronize();
         lfs::core::CudaMemoryPool::instance().trim_cached_memory();
         lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
+
+        notifyMutation(MutationType::CLEARED);
     }
 
     std::pair<std::string, std::string> Scene::cycleVisibilityWithNames() {
@@ -292,6 +333,7 @@ namespace lfs::core {
             return EMPTY_PAIR;
         }
 
+        Transaction txn(*this);
         std::string hidden_name, shown_name;
 
         // Find first visible node using modular arithmetic as suggested
@@ -313,7 +355,6 @@ namespace lfs::core {
             shown_name = nodes_[0]->name;
         }
 
-        invalidateCache();
         return {hidden_name, shown_name};
     }
 
@@ -344,6 +385,7 @@ namespace lfs::core {
             constexpr size_t BYTES_PER_GAUSSIAN = 3 * 4 + 1 * 3 * 4 + 3 * 4 + 4 * 4 + 1 * 4;
             const size_t saved_mb = getTotalGaussianCount() * BYTES_PER_GAUSSIAN / (1024 * 1024);
             LOG_INFO("Consolidated {} nodes, saved ~{} MB VRAM", consolidated, saved_mb);
+            notifyMutation(MutationType::MODEL_CHANGED);
         }
 
         return consolidated;
@@ -435,7 +477,7 @@ namespace lfs::core {
         auto it = std::find_if(nodes_.begin(), nodes_.end(),
                                [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
         if (it != nodes_.end()) {
-            invalidateCache();
+            notifyMutation(MutationType::MODEL_CHANGED);
             return it->get();
         }
         return nullptr;
@@ -776,9 +818,11 @@ namespace lfs::core {
                 .has_selection = true,
                 .count = static_cast<int>(selected_indices.size())}
                 .emit();
+            notifyMutation(MutationType::SELECTION_CHANGED);
         } else {
             has_selection_ = false;
             events::state::SelectionChanged{.has_selection = false, .count = 0}.emit();
+            notifyMutation(MutationType::SELECTION_CHANGED);
         }
     }
 
@@ -791,12 +835,14 @@ namespace lfs::core {
             count = static_cast<int>(selection_mask_->to(core::DataType::Float32).sum_scalar());
         }
         events::state::SelectionChanged{.has_selection = has_selection_, .count = count}.emit();
+        notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
     void Scene::clearSelection() {
         selection_mask_.reset();
         has_selection_ = false;
         events::state::SelectionChanged{.has_selection = false, .count = 0}.emit();
+        notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
     bool Scene::hasSelection() const {
@@ -829,7 +875,7 @@ namespace lfs::core {
         if (it != nodes_.end()) {
             std::string prev_name = (*it)->name;
             (*it)->name = new_name;
-            invalidateCache();
+            notifyMutation(MutationType::NODE_RENAMED);
             LOG_DEBUG("Renamed node '{}' to '{}'", prev_name, new_name);
             return true;
         }
@@ -853,8 +899,9 @@ namespace lfs::core {
         }
 
         if (total_removed > 0) {
-            invalidateCache();
+            Transaction txn(*this);
             clearSelection();
+            notifyMutation(MutationType::MODEL_CHANGED);
         }
 
         return total_removed;
@@ -992,6 +1039,7 @@ namespace lfs::core {
         if (auto* group = findGroup(id)) {
             group->count = 0;
         }
+        notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
     void Scene::resetSelectionState() {
@@ -1000,6 +1048,7 @@ namespace lfs::core {
         selection_groups_.clear();
         next_group_id_ = 1;
         addSelectionGroup("Group 1", glm::vec3(0.0f));
+        notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
     // ========== Scene Graph Operations ==========
@@ -1022,7 +1071,7 @@ namespace lfs::core {
         id_to_index_[id] = nodes_.size();
         node->initObservables(this);
         nodes_.push_back(std::move(node));
-        invalidateCache();
+        notifyMutation(MutationType::NODE_ADDED);
 
         LOG_DEBUG("Added group node '{}' (id={})", name, id);
         return id;
@@ -1059,7 +1108,7 @@ namespace lfs::core {
         id_to_index_[id] = nodes_.size();
         node->initObservables(this);
         nodes_.push_back(std::move(node));
-        invalidateCache();
+        notifyMutation(MutationType::NODE_ADDED);
 
         LOG_DEBUG("Added splat node '{}' (id={}, {} gaussians)", name, id, gaussian_count);
         return id;
@@ -1106,7 +1155,7 @@ namespace lfs::core {
         id_to_index_[id] = nodes_.size();
         node->initObservables(this);
         nodes_.push_back(std::move(node));
-        invalidateCache();
+        notifyMutation(MutationType::NODE_ADDED);
 
         LOG_DEBUG("Added point cloud node '{}' (id={}, {} points)", name, id, point_count);
         return id;
@@ -1151,6 +1200,7 @@ namespace lfs::core {
             mutable_parent->children.push_back(id);
         }
 
+        notifyMutation(MutationType::NODE_ADDED);
         LOG_DEBUG("Added cropbox node '{}' (id={}) as child of node id={}", name, id, parent_id);
         return id;
     }
@@ -1196,6 +1246,7 @@ namespace lfs::core {
             mutable_parent->children.push_back(id);
         }
 
+        notifyMutation(MutationType::NODE_ADDED);
         LOG_DEBUG("Added ellipsoid node '{}' (id={}) as child of node id={}", name, id, parent_id);
         return id;
     }
@@ -1212,6 +1263,7 @@ namespace lfs::core {
         node->initObservables(this);
         nodes_.push_back(std::move(node));
 
+        notifyMutation(MutationType::NODE_ADDED);
         LOG_DEBUG("Added dataset node '{}' (id={})", name, id);
         return id;
     }
@@ -1236,6 +1288,7 @@ namespace lfs::core {
         node->initObservables(this);
         nodes_.push_back(std::move(node));
 
+        notifyMutation(MutationType::NODE_ADDED);
         LOG_DEBUG("Added camera group '{}' (id={}, {} cameras)", name, id, camera_count);
         return id;
     }
@@ -1264,6 +1317,7 @@ namespace lfs::core {
         id_to_index_[id] = nodes_.size();
         node->initObservables(this);
         nodes_.push_back(std::move(node));
+        notifyMutation(MutationType::NODE_ADDED);
 
         return id;
     }
@@ -1357,7 +1411,7 @@ namespace lfs::core {
 
         duplicate_recursive(src_id, src_parent_id);
 
-        invalidateCache();
+        notifyMutation(MutationType::NODE_ADDED);
         LOG_DEBUG("Duplicated node '{}' as '{}'", name, result_name);
         return result_name;
     }
@@ -1388,9 +1442,9 @@ namespace lfs::core {
             return "";
         }
 
+        Transaction txn(*this);
         removeNode(group_name, false);
         addSplat(group_name, std::move(merged), parent_id);
-        invalidateCache();
 
         return group_name;
     }
@@ -1574,7 +1628,7 @@ namespace lfs::core {
         }
 
         markTransformDirty(node_id);
-        invalidateCache();
+        notifyMutation(MutationType::NODE_REPARENTED);
     }
 
     const glm::mat4& Scene::getWorldTransform(const NodeId node_id) const {
@@ -2037,8 +2091,7 @@ namespace lfs::core {
         auto* node = getMutableNode(name);
         if (node && node->type == NodeType::CAMERA && node->training_enabled != enabled) {
             node->training_enabled = enabled;
-            invalidateCache();
-            events::state::SceneChanged{}.emit();
+            notifyMutation(MutationType::VISIBILITY_CHANGED);
         }
     }
 

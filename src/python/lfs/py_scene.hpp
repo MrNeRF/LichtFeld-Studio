@@ -449,21 +449,11 @@ namespace lfs::python {
 
         // Selection (auto-invalidate + redraw for UI update)
         std::optional<PyTensor> selection_mask() const;
-        void set_selection(const std::vector<size_t>& indices) {
-            scene_->setSelection(indices);
-            scene_->invalidateCache();
-            core::events::state::SceneChanged{}.emit();
-        }
+        void set_selection(const std::vector<size_t>& indices) { scene_->setSelection(indices); }
         void set_selection_mask(const PyTensor& mask) {
             scene_->setSelectionMask(std::make_shared<core::Tensor>(mask.tensor()));
-            scene_->invalidateCache();
-            core::events::state::SceneChanged{}.emit();
         }
-        void clear_selection() {
-            scene_->clearSelection();
-            scene_->invalidateCache();
-            core::events::state::SceneChanged{}.emit();
-        }
+        void clear_selection() { scene_->clearSelection(); }
         bool has_selection() const { return scene_->hasSelection(); }
 
         // Selection groups
@@ -487,16 +477,8 @@ namespace lfs::python {
         }
         std::vector<PySelectionGroup> selection_groups() const;
         void update_selection_group_counts() { scene_->updateSelectionGroupCounts(); }
-        void clear_selection_group(uint8_t id) {
-            scene_->clearSelectionGroup(id);
-            scene_->invalidateCache();
-            core::events::state::SceneChanged{}.emit();
-        }
-        void reset_selection_state() {
-            scene_->resetSelectionState();
-            scene_->invalidateCache();
-            core::events::state::SceneChanged{}.emit();
-        }
+        void clear_selection_group(uint8_t id) { scene_->clearSelectionGroup(id); }
+        void reset_selection_state() { scene_->resetSelectionState(); }
 
         // Camera training control
         void set_camera_training_enabled(const std::string& name, bool enabled) {
@@ -517,10 +499,7 @@ namespace lfs::python {
         // Operations
         size_t apply_deleted() { return scene_->applyDeleted(); }
         void invalidate_cache() { scene_->invalidateCache(); }
-        void notify_changed() {
-            scene_->invalidateCache();
-            core::events::state::SceneChanged{}.emit();
-        }
+        void notify_changed() { scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED); }
         std::string duplicate_node(const std::string& name) {
             return scene_->duplicateNode(name);
         }

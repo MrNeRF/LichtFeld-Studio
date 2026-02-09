@@ -226,7 +226,6 @@ namespace lfs::vis {
 
     private:
         void setupEventHandlers();
-        void emitSceneChanged();
         void syncCropToolRenderSettings(const core::SceneNode* node);
         void loadPPISPCompanion(const std::filesystem::path& ppisp_path);
         void handleCropActivePly(const lfs::geometry::BoundingBox& crop_box, bool inverse);

@@ -128,6 +128,31 @@ namespace lfs::core {
         // Alias for backwards compatibility
         using Node = SceneNode;
 
+        enum class MutationType : uint32_t {
+            NODE_ADDED = 1 << 0,
+            NODE_REMOVED = 1 << 1,
+            NODE_RENAMED = 1 << 2,
+            NODE_REPARENTED = 1 << 3,
+            TRANSFORM_CHANGED = 1 << 4,
+            VISIBILITY_CHANGED = 1 << 5,
+            MODEL_CHANGED = 1 << 6,
+            SELECTION_CHANGED = 1 << 7,
+            CLEARED = 1 << 8,
+        };
+
+        void notifyMutation(MutationType type);
+
+        class Transaction {
+        public:
+            explicit Transaction(Scene& scene);
+            ~Transaction();
+            Transaction(const Transaction&) = delete;
+            Transaction& operator=(const Transaction&) = delete;
+
+        private:
+            Scene& scene_;
+        };
+
         Scene();
         ~Scene() = default;
 
@@ -353,6 +378,10 @@ namespace lfs::core {
         std::vector<std::unique_ptr<Node>> nodes_;       // unique_ptr for stable addresses (Observable callbacks capture 'this')
         std::unordered_map<NodeId, size_t> id_to_index_; // NodeId -> index in nodes_
         NodeId next_node_id_ = 0;
+
+        uint32_t pending_mutations_ = 0;
+        int transaction_depth_ = 0;
+        void flushMutations();
 
         // Export pin prevents cache invalidation while video/file export holds a pointer
         mutable std::atomic<int> export_pin_count_{0};
