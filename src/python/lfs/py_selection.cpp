@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_selection.hpp"
+#include "core/cuda/selection_ops.hpp"
 #include "core/tensor.hpp"
 #include "py_tensor.hpp"
 #include "python/python_runtime.hpp"
@@ -489,6 +490,87 @@ namespace lfs::python {
                 return sm->getScene().isSelectionGroupLocked(static_cast<uint8_t>(group_id));
             },
             nb::arg("group_id"), "Check if a selection group is locked");
+
+        // ─────────────────────────────────────────────────────────────────────
+        // SPATIAL SELECTION OPERATIONS (GPU)
+        // ─────────────────────────────────────────────────────────────────────
+
+        sel.def(
+            "grow", [](float radius, int iterations) {
+                auto* sm = get_sm();
+                if (!sm)
+                    return;
+                auto& scene = sm->getScene();
+                auto mask = scene.getSelectionMask();
+                if (!mask || !scene.hasSelection())
+                    return;
+                auto* model = scene.getCombinedModel();
+                if (!model)
+                    return;
+                const auto group_id = scene.getActiveSelectionGroup();
+                auto current = *mask;
+                for (int i = 0; i < iterations; ++i)
+                    current = core::cuda::selection_grow(current, model->means(), radius, group_id);
+                scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(current)));
+                if (auto* rm = get_rm())
+                    rm->markDirty();
+            },
+            nb::arg("radius"), nb::arg("iterations") = 1, "Grow selection by radius (scene units). Uses spatial hashing, O(N).");
+
+        sel.def(
+            "shrink", [](float radius, int iterations) {
+                auto* sm = get_sm();
+                if (!sm)
+                    return;
+                auto& scene = sm->getScene();
+                auto mask = scene.getSelectionMask();
+                if (!mask || !scene.hasSelection())
+                    return;
+                auto* model = scene.getCombinedModel();
+                if (!model)
+                    return;
+                auto current = *mask;
+                for (int i = 0; i < iterations; ++i)
+                    current = core::cuda::selection_shrink(current, model->means(), radius);
+                scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(current)));
+                if (auto* rm = get_rm())
+                    rm->markDirty();
+            },
+            nb::arg("radius"), nb::arg("iterations") = 1, "Shrink selection by radius (scene units). Uses spatial hashing, O(N).");
+
+        sel.def(
+            "by_opacity", [](float min_opacity, float max_opacity) {
+                auto* sm = get_sm();
+                if (!sm)
+                    return;
+                auto& scene = sm->getScene();
+                auto* model = scene.getCombinedModel();
+                if (!model)
+                    return;
+                const auto group_id = scene.getActiveSelectionGroup();
+                auto mask = core::cuda::select_by_opacity(model->opacity_raw(), min_opacity, max_opacity, group_id);
+                scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(mask)));
+                if (auto* rm = get_rm())
+                    rm->markDirty();
+            },
+            nb::arg("min_opacity") = 0.0f, nb::arg("max_opacity") = 1.0f, "Select gaussians by activated opacity range [min, max].");
+
+        sel.def(
+            "by_scale", [](float max_scale) {
+                auto* sm = get_sm();
+                if (!sm)
+                    return;
+                auto& scene = sm->getScene();
+                auto* model = scene.getCombinedModel();
+                if (!model)
+                    return;
+                const auto group_id = scene.getActiveSelectionGroup();
+                auto mask = core::cuda::select_by_scale(model->scaling_raw(), max_scale, group_id);
+                scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(mask)));
+                if (auto* rm = get_rm())
+                    rm->markDirty();
+            },
+            nb::arg("max_scale"), "Select gaussians with max activated scale <= threshold.");
 
         // ─────────────────────────────────────────────────────────────────────
         // FLASH & FEEDBACK

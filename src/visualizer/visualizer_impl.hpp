@@ -16,7 +16,6 @@
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
-#include "selection/selection_service.hpp"
 #include "tools/tool_base.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
@@ -123,16 +122,6 @@ namespace lfs::vis {
         void undo();
         void redo();
 
-        // Selection operations
-        void deleteSelectedGaussians();
-        void invertSelection();
-        void deselectAll();
-        void selectAll();
-        void copySelection();
-        void pasteSelection();
-        void selectRect(float x0, float y0, float x1, float y1, const std::string& mode);
-        void applySelectionMask(const std::vector<uint8_t>& mask);
-
         // GUI manager
         std::unique_ptr<gui::GuiManager> gui_manager_;
         friend class gui::GuiManager;
@@ -188,9 +177,6 @@ namespace lfs::vis {
 
         // IPC for MCP selection commands
         std::unique_ptr<SelectionServer> selection_server_;
-
-        // Selection service
-        std::unique_ptr<SelectionService> selection_service_;
 
         // Capability request synchronization (IPC thread waits for main thread to process)
         struct CapabilityRequest {

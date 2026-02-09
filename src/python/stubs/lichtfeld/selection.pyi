@@ -135,5 +135,17 @@ def set_active_group(group_id: int) -> None:
 def is_group_locked(group_id: int) -> bool:
     """Check if a selection group is locked"""
 
+def grow(radius: float, iterations: int = 1) -> None:
+    """Grow selection by radius (scene units). Uses spatial hashing, O(N)."""
+
+def shrink(radius: float, iterations: int = 1) -> None:
+    """Shrink selection by radius (scene units). Uses spatial hashing, O(N)."""
+
+def by_opacity(min_opacity: float = 0.0, max_opacity: float = 1.0) -> None:
+    """Select gaussians by activated opacity range [min, max]."""
+
+def by_scale(max_scale: float) -> None:
+    """Select gaussians with max activated scale <= threshold."""
+
 def trigger_flash() -> None:
     """Trigger selection flash animation feedback"""

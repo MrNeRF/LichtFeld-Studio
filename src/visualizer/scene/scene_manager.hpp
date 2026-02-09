@@ -13,11 +13,12 @@
 #include "geometry/bounding_box.hpp"
 #include "io/loader.hpp"
 #include "scene/scene_render_state.hpp"
+#include "scene/selection_state.hpp"
+#include "selection/selection_service.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller_pool.hpp"
 #include <filesystem>
 #include <mutex>
-#include <set>
 
 namespace lfs::vis {
 
@@ -116,6 +117,7 @@ namespace lfs::vis {
         [[nodiscard]] int getSelectedNodeIndex() const;
         [[nodiscard]] std::vector<bool> getSelectedNodeMask() const;
         [[nodiscard]] int getSelectedCameraUid() const;
+        [[nodiscard]] const SelectionState& selectionState() const { return selection_; }
         void ensureCropBoxForSelectedNode();
         void selectCropBoxForCurrentNode();
 
@@ -213,6 +215,20 @@ namespace lfs::vis {
         /// Mirror selected gaussians along specified axis
         bool executeMirror(lfs::core::MirrorAxis axis);
 
+        // Gaussian-level selection operations (moved from VisualizerImpl)
+        void deleteSelectedGaussians();
+        void invertSelection();
+        void deselectAllGaussians();
+        void selectAllGaussians();
+        void copySelectionToClipboard();
+        void pasteSelectionFromClipboard();
+        void selectRect(float x0, float y0, float x1, float y1, const std::string& mode);
+        void applySelectionMask(const std::vector<uint8_t>& mask);
+
+        // Selection service
+        void initSelectionService();
+        [[nodiscard]] SelectionService* getSelectionService() { return selection_service_.get(); }
+
         // Appearance model (PPISP) - owned by scene_manager, not scene
         void setAppearanceModel(std::unique_ptr<lfs::training::PPISP> ppisp,
                                 std::unique_ptr<lfs::training::PPISPControllerPool> controller_pool = nullptr);
@@ -253,7 +269,7 @@ namespace lfs::vis {
         // Cache for parameters
         std::optional<lfs::core::param::TrainingParameters> cached_params_;
 
-        std::set<std::string> selected_nodes_;
+        SelectionState selection_;
 
         // Clipboard for copy/paste (supports multi-selection)
         struct ClipboardEntry {
@@ -279,6 +295,9 @@ namespace lfs::vis {
         // Standalone appearance model (for viewing without training)
         std::unique_ptr<lfs::training::PPISP> appearance_ppisp_;
         std::unique_ptr<lfs::training::PPISPControllerPool> appearance_controller_pool_;
+
+        // Selection service (GPU-based rect/polygon/brush selection)
+        std::unique_ptr<SelectionService> selection_service_;
     };
 
 } // namespace lfs::vis

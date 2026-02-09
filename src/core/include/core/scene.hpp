@@ -142,7 +142,7 @@ namespace lfs::core {
 
         void notifyMutation(MutationType type);
 
-        class Transaction {
+        class LFS_CORE_API Transaction {
         public:
             explicit Transaction(Scene& scene);
             ~Transaction();
@@ -345,6 +345,7 @@ namespace lfs::core {
         std::vector<const Node*> getNodes() const;
         const Node* getNode(const std::string& name) const;
         Node* getMutableNode(const std::string& name);
+        [[nodiscard]] NodeId getNodeIdByName(const std::string& name) const;
         bool hasNodes() const { return !nodes_.empty(); }
 
         // Get visible nodes for split view
@@ -375,8 +376,9 @@ namespace lfs::core {
         size_t applyDeleted();
 
     private:
-        std::vector<std::unique_ptr<Node>> nodes_;       // unique_ptr for stable addresses (Observable callbacks capture 'this')
-        std::unordered_map<NodeId, size_t> id_to_index_; // NodeId -> index in nodes_
+        std::vector<std::unique_ptr<Node>> nodes_;           // unique_ptr for stable addresses (Observable callbacks capture 'this')
+        std::unordered_map<NodeId, size_t> id_to_index_;     // NodeId -> index in nodes_
+        std::unordered_map<std::string, NodeId> name_to_id_; // name -> NodeId for O(1) lookup
         NodeId next_node_id_ = 0;
 
         uint32_t pending_mutations_ = 0;

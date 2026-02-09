@@ -136,21 +136,17 @@ namespace lfs::core {
             cached_combined_.reset();
         }
 
-        // Calculate gaussian count and centroid before moving
         const size_t gaussian_count = static_cast<size_t>(model->size());
         const glm::vec3 centroid = computeCentroid(model.get());
 
-        // Check if name already exists
-        auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                               [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
-
-        if (it != nodes_.end()) {
-            // Replace existing model
-            (*it)->model = std::move(model);
-            (*it)->gaussian_count = gaussian_count;
-            (*it)->centroid = centroid;
+        auto name_it = name_to_id_.find(name);
+        if (name_it != name_to_id_.end()) {
+            auto* existing = getNodeById(name_it->second);
+            assert(existing);
+            existing->model = std::move(model);
+            existing->gaussian_count = gaussian_count;
+            existing->centroid = centroid;
         } else {
-            // Add new splat node
             const NodeId id = next_node_id_++;
             auto node = std::make_unique<Node>();
             node->id = id;
@@ -161,7 +157,8 @@ namespace lfs::core {
             node->centroid = centroid;
 
             id_to_index_[id] = nodes_.size();
-            node->initObservables(this); // Initialize before adding (address is stable with unique_ptr)
+            name_to_id_[name] = id;
+            node->initObservables(this);
             nodes_.push_back(std::move(node));
         }
 
@@ -177,15 +174,16 @@ namespace lfs::core {
         if (name.empty())
             return;
 
-        const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
-        if (it == nodes_.end())
+        auto name_it = name_to_id_.find(name);
+        if (name_it == name_to_id_.end())
             return;
 
-        const NodeId id = (*it)->id;
-        const NodeId parent_id = (*it)->parent_id;
+        const NodeId id = name_it->second;
+        auto idx_it = id_to_index_.find(id);
+        assert(idx_it != id_to_index_.end());
+        Node* node = nodes_[idx_it->second].get();
+        const NodeId parent_id = node->parent_id;
 
-        // Remove from parent's children list
         if (parent_id != NULL_NODE) {
             if (auto* parent = getNodeById(parent_id)) {
                 auto& children = parent->children;
@@ -194,12 +192,10 @@ namespace lfs::core {
         }
 
         if (keep_children) {
-            // Reparent children to the removed node's parent (or root if no parent)
-            for (const NodeId child_id : (*it)->children) {
+            for (const NodeId child_id : node->children) {
                 if (auto* child = getNodeById(child_id)) {
                     child->parent_id = parent_id;
                     child->transform_dirty = true;
-                    // Add to new parent's children list
                     if (parent_id != NULL_NODE) {
                         if (auto* new_parent = getNodeById(parent_id)) {
                             new_parent->children.push_back(child_id);
@@ -208,8 +204,7 @@ namespace lfs::core {
                 }
             }
         } else {
-            // Recursively remove children (force=true to allow CROPBOX deletion)
-            const std::vector<NodeId> children_copy = (*it)->children;
+            const std::vector<NodeId> children_copy = node->children;
             for (const NodeId child_id : children_copy) {
                 if (const auto* child = getNodeById(child_id)) {
                     removeNodeInternal(child->name, false, true);
@@ -217,20 +212,21 @@ namespace lfs::core {
             }
         }
 
-        // Remove from lookup and vector (re-find iterator since recursive calls may have invalidated it)
-        const auto it_final = std::find_if(nodes_.begin(), nodes_.end(),
-                                           [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
-        if (it_final == nodes_.end())
-            return; // Already removed somehow
+        // Re-lookup after recursive calls may have invalidated iterators
+        name_it = name_to_id_.find(name);
+        if (name_it == name_to_id_.end())
+            return;
 
-        // Copy before erase - 'name' may reference the node being deleted
+        idx_it = id_to_index_.find(name_it->second);
+        assert(idx_it != id_to_index_.end());
+        const size_t removed_index = idx_it->second;
+
         const std::string name_copy = name;
 
+        name_to_id_.erase(name_it);
         id_to_index_.erase(id);
-        const size_t removed_index = static_cast<size_t>(std::distance(nodes_.begin(), it_final));
-        nodes_.erase(it_final);
+        nodes_.erase(nodes_.begin() + static_cast<ptrdiff_t>(removed_index));
 
-        // Update indices for nodes after removed one
         for (auto& [node_id, index] : id_to_index_) {
             if (index > removed_index)
                 --index;
@@ -243,16 +239,14 @@ namespace lfs::core {
     }
 
     void Scene::replaceNodeModel(const std::string& name, std::unique_ptr<lfs::core::SplatData> model) {
-        const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
-
-        if (it != nodes_.end()) {
+        auto* node = getMutableNode(name);
+        if (node) {
             const size_t gaussian_count = static_cast<size_t>(model->size());
             const glm::vec3 centroid = computeCentroid(model.get());
-            LOG_DEBUG("replaceNodeModel '{}': {} -> {} gaussians", name, (*it)->gaussian_count, gaussian_count);
-            (*it)->model = std::move(model);
-            (*it)->gaussian_count = gaussian_count;
-            (*it)->centroid = centroid;
+            LOG_DEBUG("replaceNodeModel '{}': {} -> {} gaussians", name, node->gaussian_count, gaussian_count);
+            node->model = std::move(model);
+            node->gaussian_count = gaussian_count;
+            node->centroid = centroid;
             notifyMutation(MutationType::MODEL_CHANGED);
         } else {
             LOG_WARN("replaceNodeModel: node '{}' not found", name);
@@ -260,10 +254,9 @@ namespace lfs::core {
     }
 
     void Scene::setNodeVisibility(const std::string& name, const bool visible) {
-        const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [&name](const std::unique_ptr<Node>& n) { return n->name == name; });
-        if (it != nodes_.end()) {
-            setNodeVisibilityById((*it)->id, visible);
+        auto it = name_to_id_.find(name);
+        if (it != name_to_id_.end()) {
+            setNodeVisibilityById(it->second, visible);
         }
     }
 
@@ -281,21 +274,15 @@ namespace lfs::core {
     }
 
     void Scene::setNodeTransform(const std::string& name, const glm::mat4& transform) {
-        const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
-        if (it != nodes_.end()) {
-            (*it)->local_transform = transform;
+        auto* node = getMutableNode(name);
+        if (node) {
+            node->local_transform = transform;
         }
     }
 
     glm::mat4 Scene::getNodeTransform(const std::string& name) const {
-        const auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                                     [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
-
-        if (it != nodes_.end()) {
-            return (*it)->local_transform;
-        }
-        return glm::mat4(1.0f);
+        const auto* node = getNode(name);
+        return node ? glm::mat4(node->local_transform) : glm::mat4(1.0f);
     }
 
     void Scene::clear() {
@@ -303,6 +290,7 @@ namespace lfs::core {
 
         nodes_.clear();
         id_to_index_.clear();
+        name_to_id_.clear();
         next_node_id_ = 0;
 
         cached_combined_.reset();
@@ -470,19 +458,23 @@ namespace lfs::core {
     }
 
     const Scene::Node* Scene::getNode(const std::string& name) const {
-        auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                               [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
-        return (it != nodes_.end()) ? it->get() : nullptr;
+        auto it = name_to_id_.find(name);
+        if (it == name_to_id_.end())
+            return nullptr;
+        return getNodeById(it->second);
     }
 
     Scene::Node* Scene::getMutableNode(const std::string& name) {
-        auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                               [&name](const std::unique_ptr<Node>& node) { return node->name == name; });
-        if (it != nodes_.end()) {
-            invalidateCache();
-            return it->get();
-        }
-        return nullptr;
+        auto it = name_to_id_.find(name);
+        if (it == name_to_id_.end())
+            return nullptr;
+        invalidateCache();
+        return getNodeById(it->second);
+    }
+
+    NodeId Scene::getNodeIdByName(const std::string& name) const {
+        auto it = name_to_id_.find(name);
+        return (it != name_to_id_.end()) ? it->second : NULL_NODE;
     }
 
     void Scene::rebuildModelCacheIfNeeded() const {
@@ -834,7 +826,7 @@ namespace lfs::core {
 
         int count = 0;
         if (has_selection_) {
-            count = static_cast<int>(selection_mask_->to(core::DataType::Float32).sum_scalar());
+            count = static_cast<int>(selection_mask_->ne(0).to(core::DataType::Float32).sum_scalar());
         }
         events::state::SelectionChanged{.has_selection = has_selection_, .count = count}.emit();
         notifyMutation(MutationType::SELECTION_CHANGED);
@@ -852,38 +844,31 @@ namespace lfs::core {
     }
 
     bool Scene::renameNode(const std::string& old_name, const std::string& new_name) {
-        // Check if new name already exists (case-sensitive)
-        if (old_name == new_name) {
-            return true; // Same name, consider it successful
-        }
-
-        // Check if new name already exists
-        auto existing_it = std::find_if(nodes_.begin(), nodes_.end(),
-                                        [&new_name](const std::unique_ptr<Node>& node) {
-                                            return node->name == new_name;
-                                        });
-
-        if (existing_it != nodes_.end()) {
-            LOG_WARN("Cannot rename '{}' to '{}' - name exists", old_name, new_name);
-            return false; // Name already exists
-        }
-
-        // Find the node to rename
-        auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                               [&old_name](const std::unique_ptr<Node>& node) {
-                                   return node->name == old_name;
-                               });
-
-        if (it != nodes_.end()) {
-            std::string prev_name = (*it)->name;
-            (*it)->name = new_name;
-            notifyMutation(MutationType::NODE_RENAMED);
-            LOG_DEBUG("Renamed node '{}' to '{}'", prev_name, new_name);
+        if (old_name == new_name)
             return true;
+
+        if (name_to_id_.contains(new_name)) {
+            LOG_WARN("Cannot rename '{}' to '{}' - name exists", old_name, new_name);
+            return false;
         }
 
-        LOG_WARN("Scene: Cannot find node '{}' to rename", old_name);
-        return false;
+        auto it = name_to_id_.find(old_name);
+        if (it == name_to_id_.end()) {
+            LOG_WARN("Scene: Cannot find node '{}' to rename", old_name);
+            return false;
+        }
+
+        const NodeId id = it->second;
+        name_to_id_.erase(it);
+        name_to_id_[new_name] = id;
+
+        auto* node = getNodeById(id);
+        assert(node);
+        node->name = new_name;
+
+        notifyMutation(MutationType::NODE_RENAMED);
+        LOG_DEBUG("Renamed node '{}' to '{}'", old_name, new_name);
+        return true;
     }
 
     size_t Scene::applyDeleted() {
@@ -1071,6 +1056,7 @@ namespace lfs::core {
         }
 
         id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
         notifyMutation(MutationType::NODE_ADDED);
@@ -1108,6 +1094,7 @@ namespace lfs::core {
         }
 
         id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
         notifyMutation(MutationType::NODE_ADDED);
@@ -1155,6 +1142,7 @@ namespace lfs::core {
         }
 
         id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
         notifyMutation(MutationType::NODE_ADDED);
@@ -1194,11 +1182,12 @@ namespace lfs::core {
         }
 
         id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
 
-        // Add to parent's children list
-        if (auto* mutable_parent = getMutableNode(parent->name)) {
+        // Add to parent's children list (use getNodeById to avoid cache invalidation)
+        if (auto* mutable_parent = getNodeById(parent_id)) {
             mutable_parent->children.push_back(id);
         }
 
@@ -1240,11 +1229,12 @@ namespace lfs::core {
         }
 
         id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
 
-        // Add to parent's children list
-        if (auto* mutable_parent = getMutableNode(parent->name)) {
+        // Add to parent's children list (use getNodeById to avoid cache invalidation)
+        if (auto* mutable_parent = getNodeById(parent_id)) {
             mutable_parent->children.push_back(id);
         }
 
@@ -1262,6 +1252,7 @@ namespace lfs::core {
         node->name = name;
 
         id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
 
@@ -1287,6 +1278,7 @@ namespace lfs::core {
         }
 
         id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
 
@@ -1317,6 +1309,7 @@ namespace lfs::core {
         }
 
         id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
         notifyMutation(MutationType::NODE_ADDED);
@@ -1333,8 +1326,7 @@ namespace lfs::core {
         auto generate_unique_name = [this](const std::string& base_name) -> std::string {
             std::string new_name = base_name + "_copy";
             int counter = 2;
-            while (std::any_of(nodes_.begin(), nodes_.end(),
-                               [&new_name](const std::unique_ptr<Node>& n) { return n->name == new_name; })) {
+            while (name_to_id_.contains(new_name)) {
                 new_name = base_name + "_copy_" + std::to_string(counter++);
             }
             return new_name;
@@ -2027,16 +2019,11 @@ namespace lfs::core {
     lfs::core::SplatData* Scene::getTrainingModel() {
         if (training_model_node_.empty())
             return nullptr;
-        // Direct lookup without cache invalidation - training model access
-        // shouldn't trigger visualization cache rebuild
-        auto it = std::find_if(nodes_.begin(), nodes_.end(),
-                               [this](const std::unique_ptr<Node>& node) {
-                                   return node->name == training_model_node_;
-                               });
-        if (it == nodes_.end())
+        auto name_it = name_to_id_.find(training_model_node_);
+        if (name_it == name_to_id_.end())
             return nullptr;
-        Node* node = it->get();
-        if (!isNodeEffectivelyVisible(node->id))
+        Node* node = getNodeById(name_it->second);
+        if (!node || !isNodeEffectivelyVisible(node->id))
             return nullptr;
         return node->model.get();
     }
