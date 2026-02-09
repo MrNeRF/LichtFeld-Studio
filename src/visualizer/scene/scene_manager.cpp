@@ -701,7 +701,7 @@ namespace lfs::vis {
         }
 
         for (const auto* node : scene_.getVisibleNodes()) {
-            if (node->type != core::NodeType::SPLAT)
+            if (node->type != core::NodeType::SPLAT && node->type != core::NodeType::MESH)
                 continue;
 
             glm::vec3 local_min, local_max;
@@ -747,7 +747,7 @@ namespace lfs::vis {
         };
 
         for (const auto* node : scene_.getVisibleNodes()) {
-            if (node->type != core::NodeType::SPLAT)
+            if (node->type != core::NodeType::SPLAT && node->type != core::NodeType::MESH)
                 continue;
 
             glm::vec3 local_min, local_max;

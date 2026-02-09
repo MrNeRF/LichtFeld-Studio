@@ -22,11 +22,9 @@ namespace nb = nanobind;
 
 namespace lfs::python {
 
-    // Forward declarations
     class PyScene;
     class PyCameraDataset;
 
-    // Selection group view (read-only)
     struct PySelectionGroup {
         uint8_t id;
         std::string name;
@@ -210,7 +208,6 @@ namespace lfs::python {
             assert(scene_ != nullptr);
         }
 
-        // Identity (read-only, not in prop system)
         int32_t id() const { return node_->id; }
         int32_t parent_id() const { return node_->parent_id; }
         std::vector<int32_t> children() const { return node_->children; }
