@@ -15,6 +15,8 @@
 namespace lfs::vis {
 
     class LFS_VIS_API SelectionState {
+        friend class SceneManager;
+
     public:
         void selectNode(core::NodeId id);
         void selectNodes(std::span<const core::NodeId> ids);
@@ -22,8 +24,6 @@ namespace lfs::vis {
         void removeFromSelection(core::NodeId id);
         void clearNodeSelection();
         [[nodiscard]] bool isNodeSelected(core::NodeId id) const;
-        // Caller must hold shared_lock on mutex() while iterating
-        [[nodiscard]] const std::unordered_set<core::NodeId>& selectedNodeIds() const;
         [[nodiscard]] size_t selectedNodeCount() const;
 
         [[nodiscard]] const std::vector<bool>& getNodeMask(const core::Scene& scene) const;
@@ -34,6 +34,9 @@ namespace lfs::vis {
         [[nodiscard]] std::shared_mutex& mutex() const { return mutex_; }
 
     private:
+        // Requires caller to hold shared_lock on mutex()
+        [[nodiscard]] const std::unordered_set<core::NodeId>& selectedNodeIds() const;
+
         void bumpGeneration();
 
         std::unordered_set<core::NodeId> selected_nodes_;

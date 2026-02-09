@@ -195,7 +195,8 @@ namespace lfs::vis::tools {
                 }
             }
         } else if (sm && !node_before_crop_filter_.empty()) {
-            sm->selectNode(node_before_crop_filter_);
+            if (sm->getScene().getNode(node_before_crop_filter_))
+                sm->selectNode(node_before_crop_filter_);
             node_before_crop_filter_.clear();
         }
 

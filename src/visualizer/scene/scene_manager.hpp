@@ -118,8 +118,6 @@ namespace lfs::vis {
         [[nodiscard]] std::vector<bool> getSelectedNodeMask() const;
         [[nodiscard]] int getSelectedCameraUid() const;
         [[nodiscard]] const SelectionState& selectionState() const { return selection_; }
-        void ensureCropBoxForSelectedNode();
-        void selectCropBoxForCurrentNode();
 
         // Node picking
         [[nodiscard]] std::string pickNodeAtWorldPosition(const glm::vec3& world_pos) const;
@@ -152,8 +150,6 @@ namespace lfs::vis {
         void syncCropBoxToRenderSettings();
 
         // Ellipsoid operations for selected node
-        void ensureEllipsoidForSelectedNode();
-        void selectEllipsoidForCurrentNode();
         core::NodeId getSelectedNodeEllipsoidId() const;
         core::EllipsoidData* getSelectedNodeEllipsoid();
         const core::EllipsoidData* getSelectedNodeEllipsoid() const;
@@ -259,6 +255,7 @@ namespace lfs::vis {
         void updateEllipsoidToFitScene(bool use_percentile);
 
         core::Scene scene_;
+        // Lock ordering: state_mutex_ before selection_.mutex() when both needed
         mutable std::mutex state_mutex_;
 
         ContentType content_type_ = ContentType::Empty;

@@ -157,21 +157,13 @@ namespace lfs::vis {
 
         // Handle node selection from scene panel (both PLYs and Groups)
         ui::NodeSelected::when([this](const auto& event) {
-            // Don't allow selection changes during training
             if (services().trainerOrNull() && services().trainerOrNull()->isRunning()) {
-                LOG_TRACE("Ignoring selection change during training");
+                LOG_INFO("Selection blocked while training is active");
                 return;
             }
 
             if (event.type == "PLY" || event.type == "Group" || event.type == "Dataset" ||
                 event.type == "PointCloud" || event.type == "CameraGroup" || event.type == "Camera") {
-                // Skip if this is a multi-select event (already handled by selectNodes)
-                auto it = event.metadata.find("multi_select");
-                if (it != event.metadata.end() && it->second != "1") {
-                    syncCropBoxToRenderSettings();
-                    return;
-                }
-
                 const core::NodeId id = scene_.getNodeIdByName(event.path);
                 if (id != core::NULL_NODE)
                     selection_.selectNode(id);
@@ -181,9 +173,8 @@ namespace lfs::vis {
 
         // Handle node deselection (but not during training)
         ui::NodeDeselected::when([this](const auto&) {
-            // Don't clear selection during training - dataset and model must stay selected
             if (services().trainerOrNull() && services().trainerOrNull()->isRunning()) {
-                LOG_TRACE("Ignoring deselection during training");
+                LOG_INFO("Selection blocked while training is active");
                 return;
             }
             selection_.clearNodeSelection();
@@ -598,6 +589,8 @@ namespace lfs::vis {
     void SceneManager::clearSelection() {
         selection_.clearNodeSelection();
         python::invalidate_poll_caches(1);
+        if (auto* rm = services().renderingOrNull())
+            rm->markDirty();
         LOG_TRACE("Cleared node selection");
     }
 
@@ -797,140 +790,6 @@ namespace lfs::vis {
         }
 
         return result;
-    }
-
-    void SceneManager::ensureCropBoxForSelectedNode() {
-        std::string node_name;
-        {
-            std::shared_lock slock(selection_.mutex());
-            const auto& ids = selection_.selectedNodeIds();
-            if (ids.empty()) {
-                for (const auto* node : scene_.getNodes()) {
-                    if (node->type == core::NodeType::POINTCLOUD) {
-                        node_name = node->name;
-                        break;
-                    }
-                }
-                if (node_name.empty())
-                    return;
-            } else {
-                const auto* node = scene_.getNodeById(*ids.begin());
-                if (!node)
-                    return;
-                node_name = node->name;
-            }
-        }
-        if (node_name.empty())
-            return;
-
-        const auto* node = scene_.getNode(node_name);
-        if (!node)
-            return;
-
-        // For CROPBOX/ELLIPSOID nodes, use parent_id to find the associated splat
-        core::NodeId target_id = node->id;
-        if ((node->type == core::NodeType::CROPBOX || node->type == core::NodeType::ELLIPSOID) &&
-            node->parent_id != core::NULL_NODE) {
-            target_id = node->parent_id;
-        } else if (node->type == core::NodeType::GROUP) {
-            // For groups, find first child SPLAT or POINTCLOUD
-            for (const core::NodeId child_id : node->children) {
-                if (const auto* child = scene_.getNodeById(child_id)) {
-                    if (child->type == core::NodeType::SPLAT || child->type == core::NodeType::POINTCLOUD) {
-                        target_id = child_id;
-                        break;
-                    }
-                }
-            }
-        }
-
-        const auto* target = scene_.getNodeById(target_id);
-        if (!target || (target->type != core::NodeType::SPLAT && target->type != core::NodeType::POINTCLOUD))
-            return;
-
-        // Check if cropbox already exists
-        const core::NodeId existing = scene_.getCropBoxForSplat(target_id);
-        if (existing != core::NULL_NODE)
-            return;
-
-        // Create cropbox and fit to bounds
-        const core::NodeId cropbox_id = scene_.getOrCreateCropBoxForSplat(target_id);
-        if (cropbox_id == core::NULL_NODE)
-            return;
-
-        // Fit cropbox to node bounds
-        glm::vec3 min_bounds, max_bounds;
-        if (scene_.getNodeBounds(target_id, min_bounds, max_bounds)) {
-            core::CropBoxData data;
-            data.min = min_bounds;
-            data.max = max_bounds;
-            data.enabled = true;
-            scene_.setCropBoxData(cropbox_id, data);
-        }
-
-        // Emit PLYAdded for the new cropbox (child node)
-        if (const auto* cropbox = scene_.getNodeById(cropbox_id)) {
-            state::PLYAdded{
-                .name = cropbox->name,
-                .node_gaussians = 0,
-                .total_gaussians = scene_.getTotalGaussianCount(),
-                .is_visible = cropbox->visible,
-                .parent_name = target->name,
-                .is_group = false,
-                .node_type = static_cast<int>(core::NodeType::CROPBOX)}
-                .emit();
-        }
-
-        LOG_DEBUG("Created cropbox as child of '{}'", target->name);
-    }
-
-    void SceneManager::selectCropBoxForCurrentNode() {
-        core::NodeId target_id = core::NULL_NODE;
-
-        {
-            std::shared_lock slock(selection_.mutex());
-            const auto& ids = selection_.selectedNodeIds();
-            if (!ids.empty()) {
-                const auto* node = scene_.getNodeById(*ids.begin());
-                if (node) {
-                    if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) {
-                        target_id = node->id;
-                    } else if (node->type == core::NodeType::CROPBOX) {
-                        return; // Already a cropbox selected
-                    }
-                }
-            }
-        }
-
-        // Fall back to first POINTCLOUD
-        if (target_id == core::NULL_NODE) {
-            for (const auto* node : scene_.getNodes()) {
-                if (node->type == core::NodeType::POINTCLOUD) {
-                    target_id = node->id;
-                    break;
-                }
-            }
-        }
-
-        if (target_id == core::NULL_NODE)
-            return;
-
-        const core::NodeId cropbox_id = scene_.getCropBoxForSplat(target_id);
-        if (cropbox_id == core::NULL_NODE)
-            return;
-
-        const auto* cropbox = scene_.getNodeById(cropbox_id);
-        if (!cropbox)
-            return;
-
-        {
-            const core::NodeId cropbox_nid = scene_.getNodeIdByName(cropbox->name);
-            assert(cropbox_nid != core::NULL_NODE);
-            selection_.selectNode(cropbox_nid);
-        }
-
-        scene_.notifyMutation(core::Scene::MutationType::SELECTION_CHANGED);
-        LOG_DEBUG("Auto-selected cropbox '{}'", cropbox->name);
     }
 
     // ========== Node Transforms ==========
@@ -1189,134 +1048,6 @@ namespace lfs::vis {
     }
 
     // ========== Ellipsoid Operations ==========
-
-    void SceneManager::ensureEllipsoidForSelectedNode() {
-        std::string node_name;
-        {
-            std::shared_lock slock(selection_.mutex());
-            const auto& ids = selection_.selectedNodeIds();
-            if (ids.empty()) {
-                for (const auto* node : scene_.getNodes()) {
-                    if (node->type == core::NodeType::POINTCLOUD) {
-                        node_name = node->name;
-                        break;
-                    }
-                }
-                if (node_name.empty())
-                    return;
-            } else {
-                const auto* node = scene_.getNodeById(*ids.begin());
-                if (!node)
-                    return;
-                node_name = node->name;
-            }
-        }
-        if (node_name.empty())
-            return;
-
-        const auto* node = scene_.getNode(node_name);
-        if (!node)
-            return;
-
-        // For ELLIPSOID/CROPBOX nodes, use parent_id to find the associated splat
-        core::NodeId target_id = node->id;
-        if ((node->type == core::NodeType::ELLIPSOID || node->type == core::NodeType::CROPBOX) &&
-            node->parent_id != core::NULL_NODE) {
-            target_id = node->parent_id;
-        } else if (node->type == core::NodeType::GROUP) {
-            for (const core::NodeId child_id : node->children) {
-                if (const auto* child = scene_.getNodeById(child_id)) {
-                    if (child->type == core::NodeType::SPLAT || child->type == core::NodeType::POINTCLOUD) {
-                        target_id = child_id;
-                        break;
-                    }
-                }
-            }
-        }
-
-        const auto* target = scene_.getNodeById(target_id);
-        if (!target || (target->type != core::NodeType::SPLAT && target->type != core::NodeType::POINTCLOUD))
-            return;
-
-        const core::NodeId existing = scene_.getEllipsoidForSplat(target_id);
-        if (existing != core::NULL_NODE)
-            return;
-
-        const core::NodeId ellipsoid_id = scene_.getOrCreateEllipsoidForSplat(target_id);
-        if (ellipsoid_id == core::NULL_NODE)
-            return;
-
-        glm::vec3 min_bounds, max_bounds;
-        if (scene_.getNodeBounds(target_id, min_bounds, max_bounds)) {
-            core::EllipsoidData data;
-            data.radii = (max_bounds - min_bounds) * 0.5f;
-            data.enabled = true;
-            scene_.setEllipsoidData(ellipsoid_id, data);
-        }
-
-        // Emit PLYAdded for the new ellipsoid (child node)
-        if (const auto* ellipsoid = scene_.getNodeById(ellipsoid_id)) {
-            state::PLYAdded{
-                .name = ellipsoid->name,
-                .node_gaussians = 0,
-                .total_gaussians = scene_.getTotalGaussianCount(),
-                .is_visible = ellipsoid->visible,
-                .parent_name = target->name,
-                .is_group = false,
-                .node_type = static_cast<int>(core::NodeType::ELLIPSOID)}
-                .emit();
-        }
-
-        LOG_DEBUG("Created ellipsoid as child of '{}'", target->name);
-    }
-
-    void SceneManager::selectEllipsoidForCurrentNode() {
-        core::NodeId target_id = core::NULL_NODE;
-
-        {
-            std::shared_lock slock(selection_.mutex());
-            const auto& ids = selection_.selectedNodeIds();
-            if (!ids.empty()) {
-                const auto* node = scene_.getNodeById(*ids.begin());
-                if (node) {
-                    if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) {
-                        target_id = node->id;
-                    } else if (node->type == core::NodeType::ELLIPSOID) {
-                        return;
-                    }
-                }
-            }
-        }
-
-        if (target_id == core::NULL_NODE) {
-            for (const auto* node : scene_.getNodes()) {
-                if (node->type == core::NodeType::POINTCLOUD) {
-                    target_id = node->id;
-                    break;
-                }
-            }
-        }
-
-        if (target_id == core::NULL_NODE)
-            return;
-
-        const core::NodeId ellipsoid_id = scene_.getEllipsoidForSplat(target_id);
-        if (ellipsoid_id == core::NULL_NODE)
-            return;
-
-        const auto* ellipsoid = scene_.getNodeById(ellipsoid_id);
-        if (!ellipsoid)
-            return;
-
-        {
-            const core::NodeId ellipsoid_nid = scene_.getNodeIdByName(ellipsoid->name);
-            assert(ellipsoid_nid != core::NULL_NODE);
-            selection_.selectNode(ellipsoid_nid);
-        }
-
-        scene_.notifyMutation(core::Scene::MutationType::SELECTION_CHANGED);
-        LOG_DEBUG("Auto-selected ellipsoid '{}'", ellipsoid->name);
-    }
 
     core::NodeId SceneManager::getSelectedNodeEllipsoidId() const {
         std::shared_lock slock(selection_.mutex());
@@ -1865,16 +1596,13 @@ namespace lfs::vis {
         // Get cropboxes (before lock — no selection dependency)
         state.cropboxes = scene_.getVisibleCropBoxes();
 
-        // Read all selection-dependent state under a single lock
+        // Read selection-dependent state
         {
             std::shared_lock slock(selection_.mutex());
             const auto& sel_ids = selection_.selectedNodeIds();
-            if (sel_ids.empty()) {
-                state.selected_node_name = "";
-            } else {
+            if (!sel_ids.empty()) {
                 const auto* first = scene_.getNodeById(*sel_ids.begin());
                 state.selected_node_name = first ? first->name : "";
-                state.selected_node_mask = selection_.getNodeMask(scene_);
 
                 if (first) {
                     core::NodeId cropbox_id = core::NULL_NODE;
@@ -1894,6 +1622,8 @@ namespace lfs::vis {
                 }
             }
         }
+        // getNodeMask() may promote shared→exclusive internally, call outside shared_lock
+        state.selected_node_mask = selection_.getNodeMask(scene_);
 
         return state;
     }

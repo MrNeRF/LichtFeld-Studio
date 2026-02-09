@@ -309,7 +309,9 @@ namespace lfs::core::cuda {
             grid_dims.y = std::min(grid_dims.y, MAX_DIM);
             grid_dims.z = std::min(grid_dims.z, MAX_DIM);
 
-            int num_cells = grid_dims.x * grid_dims.y * grid_dims.z;
+            const int64_t total = static_cast<int64_t>(grid_dims.x) * grid_dims.y * grid_dims.z;
+            assert(total <= INT_MAX && "Grid cell count overflows int32");
+            int num_cells = static_cast<int>(total);
 
             // Compute cell IDs
             auto cell_ids = Tensor::empty({static_cast<size_t>(N)}, Device::CUDA, DataType::Int32);

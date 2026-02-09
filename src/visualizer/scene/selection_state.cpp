@@ -63,11 +63,11 @@ namespace lfs::vis {
         if (!node_mask_dirty_)
             return cached_node_mask_;
 
-        // Upgrade to exclusive — rebuild cache
+        // DCLP: release shared lock then acquire exclusive. Another thread may
+        // rebuild the cache in the gap — the double-check below handles that.
         lock.unlock();
         std::unique_lock wlock(mutex_);
 
-        // Double-check after acquiring write lock
         if (!node_mask_dirty_)
             return cached_node_mask_;
 
