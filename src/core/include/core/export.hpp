@@ -32,3 +32,11 @@
 #define LFS_VIS_API    __attribute__((visibility("default")))
 #define LFS_MCP_API    __attribute__((visibility("default")))
 #endif
+
+// For functions in CUDA static libs (lfs_core_cuda) that are resolved directly
+// from the static lib objects, not through DLL import/export.
+#ifdef _WIN32
+#define LFS_CUDA_API
+#else
+#define LFS_CUDA_API __attribute__((visibility("default")))
+#endif

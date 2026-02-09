@@ -60,11 +60,8 @@ target_compile_options(lfs_core_cuda PRIVATE
 )
 
 # Windows: Disable fmt Unicode check for CUDA files
-# LFS_CORE_EXPORTS: This static lib is linked into lfs_core (shared).
-# Without this define, LFS_CORE_API resolves to dllimport and symbols are not exported.
 if(MSVC)
     target_compile_definitions(lfs_core_cuda PRIVATE
-        LFS_CORE_EXPORTS
         $<$<COMPILE_LANGUAGE:CUDA>:FMT_UNICODE=0>
     )
 endif()
