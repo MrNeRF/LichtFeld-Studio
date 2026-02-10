@@ -162,6 +162,8 @@ namespace lfs::vis {
         // Loads cameras from sparse folder and displays frustums without needing image files
         void loadColmapCamerasOnly(const std::filesystem::path& sparse_path);
 
+        void prepareTrainingFromScene();
+
         // Apply pre-loaded dataset to scene (for async loading)
         // The LoadResult comes from background thread, scene modification happens on main thread
         std::expected<void, std::string> applyLoadedDataset(

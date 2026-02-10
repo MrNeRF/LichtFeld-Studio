@@ -293,7 +293,7 @@ namespace lfs::python {
         assert(cols.shape().rank() == 2 && cols.shape()[1] == 3);
         assert(pts.shape()[0] == cols.shape()[0]);
 
-        auto pc = std::make_shared<core::PointCloud>(pts.clone(), cols.clone());
+        auto pc = std::make_shared<core::PointCloud>(pts.to(core::Device::CUDA), cols.to(core::Device::CUDA));
         return scene_->addPointCloud(name, std::move(pc), parent);
     }
 
@@ -314,11 +314,13 @@ namespace lfs::python {
         const auto& R_tensor = R.tensor();
         const auto& T_tensor = T.tensor();
         assert(R_tensor.ndim() == 2 && R_tensor.size(0) == 3 && R_tensor.size(1) == 3);
-        assert(T_tensor.ndim() == 2 && T_tensor.size(0) == 3 && T_tensor.size(1) == 1);
+        assert(T_tensor.numel() == 3);
+
+        auto T_flat = T_tensor.ndim() == 2 ? T_tensor.reshape({3}) : T_tensor;
 
         auto camera = std::make_shared<lfs::core::Camera>(
             R_tensor.clone(),
-            T_tensor.clone(),
+            T_flat.clone(),
             focal_x, focal_y,
             static_cast<float>(width) / 2.0f, static_cast<float>(height) / 2.0f,
             lfs::core::Tensor{},

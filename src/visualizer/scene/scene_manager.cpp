@@ -77,6 +77,10 @@ namespace lfs::vis {
             loadColmapCamerasOnly(cmd.sparse_path);
         });
 
+        cmd::PrepareTrainingFromScene::when([this](const auto&) {
+            prepareTrainingFromScene();
+        });
+
         // Handle PLY cycling with proper event emission for UI updates
         cmd::CyclePLY::when([this](const auto&) {
             // Check if rendering manager has split view enabled (in PLY comparison mode)
@@ -1374,6 +1378,47 @@ namespace lfs::vis {
                 .files = {lfs::core::path_to_utf8(sparse_path)},
                 .error = e.what()}
                 .emit();
+        }
+    }
+
+    void SceneManager::prepareTrainingFromScene() {
+        if (!scene_.hasTrainingData()) {
+            LOG_ERROR("Cannot prepare training: scene has no cameras");
+            return;
+        }
+
+        auto* trainer_mgr = services().trainerOrNull();
+        if (!trainer_mgr) {
+            LOG_ERROR("Cannot prepare training: no trainer manager");
+            return;
+        }
+
+        try {
+            auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
+            trainer_mgr->setScene(&scene_);
+            trainer_mgr->setTrainer(std::move(trainer));
+
+            {
+                std::lock_guard<std::mutex> lock(state_mutex_);
+                content_type_ = ContentType::Dataset;
+            }
+
+            const auto* point_cloud = scene_.getVisiblePointCloud();
+            const size_t num_points = point_cloud ? point_cloud->size() : 0;
+            const size_t num_cameras = scene_.getAllCameras().size();
+
+            state::SceneLoaded{
+                .scene = nullptr,
+                .path = {},
+                .type = state::SceneLoaded::Type::Dataset,
+                .num_gaussians = 0}
+                .emit();
+
+            python::set_application_scene(&scene_);
+
+            LOG_INFO("Trainer prepared from scene: {} cameras, {} points", num_cameras, num_points);
+        } catch (const std::exception& e) {
+            LOG_ERROR("Failed to prepare training from scene: {}", e.what());
         }
     }
 

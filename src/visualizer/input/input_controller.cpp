@@ -1322,12 +1322,15 @@ namespace lfs::vis {
     void InputController::handleGoToCamView(const lfs::core::events::cmd::GoToCamView& event) {
         LOG_TIMER_TRACE("HandleGoToCamView");
 
-        if (!services().trainerOrNull()) {
-            LOG_ERROR("GoToCamView: trainer_manager_ not initialized");
-            return;
+        std::shared_ptr<const lfs::core::Camera> cam_data;
+        if (auto* trainer = services().trainerOrNull()) {
+            cam_data = trainer->getCamById(event.cam_id);
         }
-
-        auto cam_data = services().trainerOrNull()->getCamById(event.cam_id);
+        if (!cam_data) {
+            if (auto* scene_mgr = services().sceneOrNull()) {
+                cam_data = scene_mgr->getScene().getCameraByUid(event.cam_id);
+            }
+        }
         if (!cam_data) {
             LOG_ERROR("Camera ID {} not found", event.cam_id);
             return;

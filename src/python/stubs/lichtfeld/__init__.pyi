@@ -212,6 +212,9 @@ def finish_reason() -> str | None:
 def trainer_error() -> str | None:
     """Get trainer error message"""
 
+def prepare_training_from_scene() -> None:
+    """Initialize trainer from existing scene cameras and point cloud"""
+
 def start_training() -> None:
     """Start training with current parameters"""
 

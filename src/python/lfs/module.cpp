@@ -606,6 +606,12 @@ NB_MODULE(lichtfeld, m) {
         "Get trainer error message");
 
     m.def(
+        "prepare_training_from_scene", []() {
+            nb::gil_scoped_release release;
+            lfs::core::events::cmd::PrepareTrainingFromScene{}.emit();
+        },
+        "Initialize trainer from existing scene cameras and point cloud");
+    m.def(
         "start_training", []() {
             nb::gil_scoped_release release;
             lfs::core::events::cmd::StartTraining{}.emit();
