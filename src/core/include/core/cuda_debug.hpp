@@ -6,35 +6,52 @@
 
 #include "core/logger.hpp"
 #include <cuda_runtime.h>
+#include <source_location>
+#include <string>
 
 namespace lfs::core::debug {
 
-    inline void check_cuda_error(const cudaError_t err, const char* file, const int line, const char* expr) {
+    inline void check_cuda_error(const cudaError_t err, const char* file, const int line, const char* expr,
+                                 const std::source_location loc = std::source_location::current()) {
         if (err != cudaSuccess) {
-            LOG_ERROR("CUDA error at {}:{} - {}: {} ({})",
-                      file, line, cudaGetErrorName(err), cudaGetErrorString(err), expr);
+            std::string msg = std::string("CUDA error at ") + file + ":" + std::to_string(line) +
+                              " - " + cudaGetErrorName(err) + ": " + cudaGetErrorString(err) +
+                              " (" + expr + ")";
+            ::lfs::core::Logger::get().log_internal(
+                ::lfs::core::LogLevel::Error, loc, msg);
         }
     }
 
-    inline void check_kernel_sync(const char* file, const int line, const char* kernel_name) {
+    inline void check_kernel_sync(const char* file, const int line, const char* kernel_name,
+                                  const std::source_location loc = std::source_location::current()) {
         cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
-            LOG_ERROR("Kernel '{}' launch failed at {}:{} - {}: {}",
-                      kernel_name, file, line, cudaGetErrorName(err), cudaGetErrorString(err));
+            std::string msg = std::string("Kernel '") + kernel_name + "' launch failed at " +
+                              file + ":" + std::to_string(line) +
+                              " - " + cudaGetErrorName(err) + ": " + cudaGetErrorString(err);
+            ::lfs::core::Logger::get().log_internal(
+                ::lfs::core::LogLevel::Error, loc, msg);
             return;
         }
         err = cudaDeviceSynchronize();
         if (err != cudaSuccess) {
-            LOG_ERROR("Kernel '{}' execution failed at {}:{} - {}: {}",
-                      kernel_name, file, line, cudaGetErrorName(err), cudaGetErrorString(err));
+            std::string msg = std::string("Kernel '") + kernel_name + "' execution failed at " +
+                              file + ":" + std::to_string(line) +
+                              " - " + cudaGetErrorName(err) + ": " + cudaGetErrorString(err);
+            ::lfs::core::Logger::get().log_internal(
+                ::lfs::core::LogLevel::Error, loc, msg);
         }
     }
 
-    inline void check_kernel_async(const char* file, const int line, const char* kernel_name) {
+    inline void check_kernel_async(const char* file, const int line, const char* kernel_name,
+                                   const std::source_location loc = std::source_location::current()) {
         const cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
-            LOG_ERROR("Kernel '{}' launch failed at {}:{} - {}: {}",
-                      kernel_name, file, line, cudaGetErrorName(err), cudaGetErrorString(err));
+            std::string msg = std::string("Kernel '") + kernel_name + "' launch failed at " +
+                              file + ":" + std::to_string(line) +
+                              " - " + cudaGetErrorName(err) + ": " + cudaGetErrorString(err);
+            ::lfs::core::Logger::get().log_internal(
+                ::lfs::core::LogLevel::Error, loc, msg);
         }
     }
 

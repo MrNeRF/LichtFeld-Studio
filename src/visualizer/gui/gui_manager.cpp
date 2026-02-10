@@ -426,6 +426,7 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::shutdown() {
+        lfs::python::shutdown_python_gl_resources();
         panel_layout_.saveState();
 
         if (video_extraction_thread_ && video_extraction_thread_->joinable())

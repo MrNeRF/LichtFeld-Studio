@@ -122,6 +122,7 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API std::string extract_python_error();
 
     LFS_PYTHON_RUNTIME_API void invoke_python_cleanup();
+    LFS_PYTHON_RUNTIME_API void shutdown_python_gl_resources();
 
     // Menu interface for C++ code
     LFS_PYTHON_RUNTIME_API void draw_python_menu_items(MenuLocation location);
@@ -238,6 +239,7 @@ namespace lfs::python {
         // Lifecycle
         void (*cleanup)() = nullptr;
         void (*prepare_ui)() = nullptr;
+        void (*shutdown_gl_resources)() = nullptr;
     };
 
     LFS_PYTHON_RUNTIME_API void set_bridge(const PyBridge& b);

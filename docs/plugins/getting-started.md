@@ -292,6 +292,42 @@ class StatsOverlay(Panel):
 
 ---
 
+### Displaying GPU tensors
+
+Use `image_tensor` to render a CUDA tensor directly in a panel — no manual texture management needed:
+
+```python
+class PreviewPanel(Panel):
+    label = "Preview"
+    space = "FLOATING"
+
+    def draw(self, layout):
+        tensor = lf.Tensor.rand([256, 256, 3], device="cuda")
+        layout.image_tensor("my_preview", tensor, (256, 256))
+```
+
+The `label` argument (`"my_preview"`) caches the underlying GL texture between frames. Passing a tensor with a different resolution automatically recreates the texture. The tensor must be `[H, W, 3]` (RGB) or `[H, W, 4]` (RGBA). CPU tensors and integer dtypes are converted automatically.
+
+For advanced use cases (sharing one texture across multiple widgets, explicit lifetime control), use `DynamicTexture`:
+
+```python
+class AdvancedPanel(Panel):
+    label = "Advanced"
+    space = "FLOATING"
+
+    def __init__(self):
+        self.tex = lf.ui.DynamicTexture()
+
+    def draw(self, layout):
+        self.tex.update(my_tensor)
+        layout.image_texture(self.tex, (256, 256))
+        # Can also use self.tex.id with image() or image_button()
+```
+
+See the [DynamicTexture API reference](api-reference.md#dynamictexture) for all properties and methods.
+
+---
+
 ## UI Hooks
 
 Hooks let you inject UI into existing panels without replacing them. A hook callback receives a `layout` object and draws into the host panel at a predefined hook point.

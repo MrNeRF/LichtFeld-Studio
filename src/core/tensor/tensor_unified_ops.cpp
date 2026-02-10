@@ -1831,64 +1831,21 @@ namespace lfs::core {
         // Size of one "slice" along the stacked dimension
         size_t stride_at_dim = result_strides[dim];
 
-        // For each input tensor, we need to copy it to the right location in output
-        if (first_device == Device::CUDA) {
-            for (size_t i = 0; i < tensors.size(); ++i) {
-                if (dim == 0) {
-                    // Contiguous copy for dim=0 case (optimized path)
-                    void* dst = static_cast<char*>(result.data_ptr()) + i * bytes_per_tensor;
-                    cudaMemcpy(dst, tensors[i].data_ptr(), bytes_per_tensor,
-                               cudaMemcpyDeviceToDevice);
-                } else {
-                    // For non-zero dimensions, we need to scatter the data properly
-                    size_t outer_size = 1;
-                    for (int d = 0; d < dim; ++d) {
-                        outer_size *= result.shape()[d];
-                    }
-
-                    size_t inner_size = elements_per_tensor / outer_size;
-
-                    // Copy each outer slice
-                    for (size_t outer = 0; outer < outer_size; ++outer) {
-                        const void* src_ptr = static_cast<const char*>(tensors[i].data_ptr()) +
-                                              outer * inner_size * dtype_size(first_dtype);
-                        void* dst_ptr = static_cast<char*>(result.data_ptr()) +
-                                        (outer * result_strides[dim == 0 ? 1 : 0] +
-                                         i * stride_at_dim) *
-                                            dtype_size(first_dtype);
-
-                        cudaMemcpy(dst_ptr, src_ptr, inner_size * dtype_size(first_dtype),
-                                   cudaMemcpyDeviceToDevice);
-                    }
-                }
-            }
-        } else {
-            // CPU implementation
-            for (size_t i = 0; i < tensors.size(); ++i) {
-                if (dim == 0) {
-                    // Contiguous copy for dim=0 case
-                    void* dst = static_cast<char*>(result.data_ptr()) + i * bytes_per_tensor;
-                    std::memcpy(dst, tensors[i].data_ptr(), bytes_per_tensor);
-                } else {
-                    // For non-zero dimensions, scatter properly
-                    size_t outer_size = 1;
-                    for (int d = 0; d < dim; ++d) {
-                        outer_size *= result.shape()[d];
-                    }
-
-                    size_t inner_size = elements_per_tensor / outer_size;
-
-                    for (size_t outer = 0; outer < outer_size; ++outer) {
-                        const void* src_ptr = static_cast<const char*>(tensors[i].data_ptr()) +
-                                              outer * inner_size * dtype_size(first_dtype);
-                        void* dst_ptr = static_cast<char*>(result.data_ptr()) +
-                                        (outer * result_strides[dim == 0 ? 1 : 0] +
-                                         i * stride_at_dim) *
-                                            dtype_size(first_dtype);
-
-                        std::memcpy(dst_ptr, src_ptr, inner_size * dtype_size(first_dtype));
-                    }
-                }
+        // Copy each input tensor into the corresponding slice of the output
+        for (size_t i = 0; i < tensors.size(); ++i) {
+            const int si = static_cast<int>(i);
+            if (dim == 0 && first_device == Device::CUDA) {
+                // dim=0: output slices are contiguous, use direct memcpy
+                void* dst = static_cast<char*>(result.data_ptr()) + i * bytes_per_tensor;
+                cudaMemcpy(dst, tensors[i].data_ptr(), bytes_per_tensor,
+                           cudaMemcpyDeviceToDevice);
+            } else if (dim == 0) {
+                void* dst = static_cast<char*>(result.data_ptr()) + i * bytes_per_tensor;
+                std::memcpy(dst, tensors[i].data_ptr(), bytes_per_tensor);
+            } else {
+                // dim>0: use strided scatter via slice (single kernel launch per tensor)
+                auto dst_slice = result.slice(dim, si, si + 1);
+                dst_slice.copy_from(tensors[i].unsqueeze(dim));
             }
         }
 

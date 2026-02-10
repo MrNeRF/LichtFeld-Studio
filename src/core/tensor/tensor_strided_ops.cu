@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_debug.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
 #include <cuda_runtime.h>
@@ -110,6 +111,7 @@ namespace lfs::core {
             strided_scatter_int32_to_float32_rank2<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
                 static_cast<const int32_t*>(input), static_cast<float*>(output),
                 shape[0], shape[1], strides[0], strides[1], n);
+            CHECK_CUDA(cudaGetLastError());
         }
 
         void launch_strided_scatter(
@@ -151,13 +153,18 @@ namespace lfs::core {
 
 #undef LAUNCH_RANK2
 #undef LAUNCH_GENERIC
+            CHECK_CUDA(cudaGetLastError());
         }
 
         void launch_strided_scatter_immediate(
             const void* input, void* output,
             const std::vector<size_t>& shape, const std::vector<size_t>& strides,
             const size_t n, const DataType dtype, cudaStream_t stream) {
-            const int blocks = (n + SCATTER_BLOCK_SIZE - 1) / SCATTER_BLOCK_SIZE;
+            if (n == 0)
+                return;
+            const int blocks = static_cast<int>(std::min(
+                (n + SCATTER_BLOCK_SIZE - 1) / SCATTER_BLOCK_SIZE,
+                static_cast<size_t>(INT_MAX)));
             const size_t rank = shape.size();
 
 #define LAUNCH_SCATTER2(T) strided_scatter_kernel_rank2<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
@@ -198,6 +205,7 @@ namespace lfs::core {
 #undef LAUNCH_SCATTER2
 #undef LAUNCH_SCATTER3
 #undef LAUNCH_SCATTER4
+            CHECK_CUDA(cudaGetLastError());
         }
 
         // Strided copy kernels (read strided → write contiguous)
@@ -312,6 +320,7 @@ namespace lfs::core {
 #undef LAUNCH_COPY2
 #undef LAUNCH_COPY3
 #undef LAUNCH_COPY4
+            CHECK_CUDA(cudaGetLastError());
         }
 
         void launch_strided_copy(
@@ -358,9 +367,9 @@ namespace lfs::core {
                     shape, strides, rank, total_elements);
                 break;
             default:
-                // Unsupported dtype - do nothing
                 break;
             }
+            CHECK_CUDA(cudaGetLastError());
         }
 
         // ============= Fused Strided Upload Kernel =============

@@ -19,10 +19,12 @@
 #include "py_params.hpp"
 #include "py_prop_registry.hpp"
 #include "py_signals.hpp"
+#include "py_tensor.hpp"
 #include "py_uilist.hpp"
 #include "py_viewport.hpp"
 #include "python/python_runtime.hpp"
 #include "python/ui_hooks.hpp"
+#include "rendering/cuda_gl_interop.hpp"
 #include "rendering/render_constants.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui/panel_registry.hpp"
@@ -42,6 +44,7 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cstring>
 #include <future>
@@ -49,6 +52,7 @@
 #include <stack>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <imgui.h>
 
 #ifdef _WIN32
@@ -94,6 +98,91 @@ namespace lfs::python {
         // Plugin icon ownership tracking
         std::unordered_map<std::string, std::vector<std::string>> g_plugin_icons;
         std::mutex g_plugin_icons_mutex;
+
+        // Dynamic texture tracking
+        std::atomic<bool> g_gl_alive{true};
+        std::mutex g_dynamic_textures_mutex;
+
+        class PyDynamicTexture;
+        std::unordered_set<PyDynamicTexture*> g_all_dynamic_textures;
+        std::unordered_map<std::string, std::vector<PyDynamicTexture*>> g_plugin_textures;
+        std::unordered_map<std::string, std::unique_ptr<PyDynamicTexture>> g_tensor_cache;
+
+        class PyDynamicTexture {
+        public:
+            PyDynamicTexture() {
+                std::lock_guard lock(g_dynamic_textures_mutex);
+                g_all_dynamic_textures.insert(this);
+            }
+
+            ~PyDynamicTexture() {
+                destroy();
+                std::lock_guard lock(g_dynamic_textures_mutex);
+                g_all_dynamic_textures.erase(this);
+            }
+
+            PyDynamicTexture(const PyDynamicTexture&) = delete;
+            PyDynamicTexture& operator=(const PyDynamicTexture&) = delete;
+            PyDynamicTexture(PyDynamicTexture&&) = delete;
+            PyDynamicTexture& operator=(PyDynamicTexture&&) = delete;
+
+            void update(const PyTensor& py_tensor) {
+                auto t = py_tensor.tensor();
+                if (t.ndim() != 3)
+                    throw std::invalid_argument("DynamicTexture requires 3D tensor [H, W, C]");
+                if (t.size(2) != 3 && t.size(2) != 4)
+                    throw std::invalid_argument("DynamicTexture channels must be 3 (RGB) or 4 (RGBA)");
+
+                if (t.device() == core::Device::CPU)
+                    t = t.cuda();
+                if (t.dtype() != core::DataType::Float32)
+                    t = t.to(core::DataType::Float32) / 255.0f;
+
+                const int w = t.size(1);
+                const int h = t.size(0);
+
+                if (!interop_ || width_ != w || height_ != h) {
+                    interop_ = std::make_unique<rendering::CudaGLInteropTexture>();
+                    auto r = interop_->init(w, h);
+                    if (!r.has_value())
+                        throw std::runtime_error("Failed to initialize GL interop texture");
+                }
+
+                auto r = interop_->updateFromTensor(t);
+                if (!r.has_value())
+                    throw std::runtime_error("Failed to update GL interop texture");
+                width_ = w;
+                height_ = h;
+            }
+
+            void destroy() {
+                if (interop_ && g_gl_alive) {
+                    interop_.reset();
+                } else {
+                    interop_.release();
+                }
+                width_ = height_ = 0;
+            }
+
+            uint64_t texture_id() const {
+                return interop_ ? static_cast<uint64_t>(interop_->getTextureID()) : 0;
+            }
+
+            int width() const { return width_; }
+            int height() const { return height_; }
+            bool valid() const { return interop_ != nullptr && width_ > 0 && height_ > 0; }
+
+            std::tuple<float, float> uv1() const {
+                if (!interop_)
+                    return {1.0f, 1.0f};
+                return {interop_->getTexcoordScaleX(), interop_->getTexcoordScaleY()};
+            }
+
+        private:
+            std::unique_ptr<rendering::CudaGLInteropTexture> interop_;
+            int width_ = 0;
+            int height_ = 0;
+        };
 
         // Operator cancel callback (Python callable)
         nb::callable g_cancel_operator_py_callback;
@@ -301,6 +390,18 @@ namespace lfs::python {
                     g_icon_cache.erase(it);
                 }
             }
+        }
+
+        void free_plugin_textures(const std::string& plugin_name) {
+            std::lock_guard lock(g_dynamic_textures_mutex);
+            auto it = g_plugin_textures.find(plugin_name);
+            if (it == g_plugin_textures.end())
+                return;
+            for (auto* tex : it->second) {
+                tex->destroy();
+                g_all_dynamic_textures.erase(tex);
+            }
+            g_plugin_textures.erase(it);
         }
 
         // Thread-local layout stack for hierarchical layouts
@@ -2822,6 +2923,17 @@ namespace lfs::python {
         return {changed, new_value};
     }
 
+    void shutdown_dynamic_textures() {
+        std::lock_guard lock(g_dynamic_textures_mutex);
+        g_tensor_cache.clear();
+        for (auto* tex : g_all_dynamic_textures) {
+            tex->destroy();
+        }
+        g_all_dynamic_textures.clear();
+        g_plugin_textures.clear();
+        g_gl_alive = false;
+    }
+
     // Register UI classes with nanobind module
     void register_ui(nb::module_& m) {
         // Call sub-registration functions
@@ -3123,6 +3235,30 @@ namespace lfs::python {
             .def("toolbar_button", &PyUILayout::toolbar_button, nb::arg("id"), nb::arg("texture_id"),
                  nb::arg("size"), nb::arg("selected") = false, nb::arg("disabled") = false,
                  nb::arg("tooltip") = "", "Draw a toolbar-style icon button with selection state")
+            .def(
+                "image_texture", [](PyUILayout& /*self*/, PyDynamicTexture& tex, std::tuple<float, float> size, nb::object tint) {
+                    if (!tex.valid())
+                        return;
+                    auto [u1, v1] = tex.uv1();
+                    const ImVec4 t = tint.is_none() ? ImVec4(1, 1, 1, 1) : tuple_to_imvec4(tint);
+                    ImGui::Image(static_cast<ImTextureID>(tex.texture_id()),
+                                 {std::get<0>(size), std::get<1>(size)},
+                                 {0, 0}, {u1, v1}, t, {0, 0, 0, 0});
+                },
+                nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
+            .def(
+                "image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+                    auto it = g_tensor_cache.find(label);
+                    if (it == g_tensor_cache.end())
+                        it = g_tensor_cache.emplace(label, std::make_unique<PyDynamicTexture>()).first;
+                    it->second->update(tensor);
+                    auto& tex = *it->second;
+                    auto [u1, v1] = tex.uv1();
+                    const ImVec4 t = tint.is_none() ? ImVec4(1, 1, 1, 1) : tuple_to_imvec4(tint);
+                    ImGui::Image(static_cast<ImTextureID>(tex.texture_id()),
+                                 {std::get<0>(size), std::get<1>(size)}, {0, 0}, {u1, v1}, t, {0, 0, 0, 0});
+                },
+                nb::arg("label"), nb::arg("tensor"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a tensor as an image, caching the GL texture by label")
             // Drag-drop
             .def("begin_drag_drop_source", &PyUILayout::begin_drag_drop_source, "Begin a drag-drop source on the last item, returns True if dragging")
             .def("set_drag_drop_payload", &PyUILayout::set_drag_drop_payload, nb::arg("type"), nb::arg("data"), "Set the drag-drop payload type and data string")
@@ -3175,112 +3311,40 @@ namespace lfs::python {
             .def("push_style_color", &PyUILayout::push_style_color, nb::arg("col"), nb::arg("color"), "Push a style color override by name")
             .def("pop_style_color", &PyUILayout::pop_style_color, nb::arg("count") = 1, "Pop style colors from the stack")
             // RNA-style property widget
-            .def("prop", &PyUILayout::prop, nb::arg("data"), nb::arg("prop_id"),
-                 nb::arg("text") = nb::none(),
-                 "Draw a property widget based on metadata (auto-selects widget type)")
+            .def("prop", &PyUILayout::prop, nb::arg("data"), nb::arg("prop_id"), nb::arg("text") = nb::none(), "Draw a property widget based on metadata (auto-selects widget type)")
             .def("row", &PyUILayout::row, "Create a horizontal row sub-layout")
             .def("column", &PyUILayout::column, "Create a vertical column sub-layout")
             .def("split", &PyUILayout::split, nb::arg("factor") = 0.5f, "Create a split sub-layout with given factor")
             .def("box", &PyUILayout::box, "Create a bordered box sub-layout")
-            .def("grid_flow", &PyUILayout::grid_flow, nb::arg("columns") = 0,
-                 nb::arg("even_columns") = true, nb::arg("even_rows") = true,
-                 "Create a responsive grid sub-layout")
-            .def("prop_enum", &PyUILayout::prop_enum, nb::arg("data"), nb::arg("prop_id"),
-                 nb::arg("value"), nb::arg("text") = "",
-                 "Draw an enum toggle button for a property value")
-            .def("operator_", &PyUILayout::operator_, nb::arg("operator_id"),
-                 nb::arg("text") = "", nb::arg("icon") = "", "Draw a button that invokes a registered operator")
-            .def("prop_search", &PyUILayout::prop_search, nb::arg("data"), nb::arg("prop_id"),
-                 nb::arg("search_data"), nb::arg("search_prop"), nb::arg("text") = "",
-                 "Searchable dropdown for selecting from a collection")
-            .def("template_list", &PyUILayout::template_list, nb::arg("list_type_id"), nb::arg("list_id"),
-                 nb::arg("data"), nb::arg("prop_id"), nb::arg("active_data"), nb::arg("active_prop"),
-                 nb::arg("rows") = 5, "UIList template for drawing custom lists")
-            .def("menu", &PyUILayout::menu, nb::arg("menu_id"), nb::arg("text") = "", nb::arg("icon") = "",
-                 "Inline menu reference")
-            .def("popover", &PyUILayout::popover, nb::arg("panel_id"), nb::arg("text") = "", nb::arg("icon") = "",
-                 "Panel popover")
+            .def("grid_flow", &PyUILayout::grid_flow, nb::arg("columns") = 0, nb::arg("even_columns") = true, nb::arg("even_rows") = true, "Create a responsive grid sub-layout")
+            .def("prop_enum", &PyUILayout::prop_enum, nb::arg("data"), nb::arg("prop_id"), nb::arg("value"), nb::arg("text") = "", "Draw an enum toggle button for a property value")
+            .def("operator_", &PyUILayout::operator_, nb::arg("operator_id"), nb::arg("text") = "", nb::arg("icon") = "", "Draw a button that invokes a registered operator")
+            .def("prop_search", &PyUILayout::prop_search, nb::arg("data"), nb::arg("prop_id"), nb::arg("search_data"), nb::arg("search_prop"), nb::arg("text") = "", "Searchable dropdown for selecting from a collection")
+            .def("template_list", &PyUILayout::template_list, nb::arg("list_type_id"), nb::arg("list_id"), nb::arg("data"), nb::arg("prop_id"), nb::arg("active_data"), nb::arg("active_prop"), nb::arg("rows") = 5, "UIList template for drawing custom lists")
+            .def("menu", &PyUILayout::menu, nb::arg("menu_id"), nb::arg("text") = "", nb::arg("icon") = "", "Inline menu reference")
+            .def("popover", &PyUILayout::popover, nb::arg("panel_id"), nb::arg("text") = "", nb::arg("icon") = "", "Panel popover")
             // Drawing functions for viewport overlays
-            .def("draw_circle", &PyUILayout::draw_circle,
-                 nb::arg("x"), nb::arg("y"), nb::arg("radius"), nb::arg("color"),
-                 nb::arg("segments") = 32, nb::arg("thickness") = 1.0f,
-                 "Draw a circle outline at (x, y) with given radius and color")
-            .def("draw_circle_filled", &PyUILayout::draw_circle_filled,
-                 nb::arg("x"), nb::arg("y"), nb::arg("radius"), nb::arg("color"),
-                 nb::arg("segments") = 32,
-                 "Draw a filled circle at (x, y) with given radius and color")
-            .def("draw_rect", &PyUILayout::draw_rect,
-                 nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"),
-                 nb::arg("thickness") = 1.0f,
-                 "Draw a rectangle outline from (x0,y0) to (x1,y1)")
-            .def("draw_rect_filled", &PyUILayout::draw_rect_filled,
-                 nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"),
-                 nb::arg("background") = false,
-                 "Draw a filled rectangle from (x0,y0) to (x1,y1)")
-            .def("draw_rect_rounded", &PyUILayout::draw_rect_rounded,
-                 nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"),
-                 nb::arg("rounding"), nb::arg("thickness") = 1.0f, nb::arg("background") = false,
-                 "Draw a rounded rectangle outline")
-            .def("draw_rect_rounded_filled", &PyUILayout::draw_rect_rounded_filled,
-                 nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"),
-                 nb::arg("rounding"), nb::arg("background") = false,
-                 "Draw a filled rounded rectangle")
-            .def("draw_triangle_filled", &PyUILayout::draw_triangle_filled,
-                 nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("x2"), nb::arg("y2"),
-                 nb::arg("color"), nb::arg("background") = false,
-                 "Draw a filled triangle")
-            .def("draw_line", &PyUILayout::draw_line,
-                 nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"),
-                 nb::arg("thickness") = 1.0f,
-                 "Draw a line from (x0,y0) to (x1,y1)")
-            .def("draw_polyline", &PyUILayout::draw_polyline,
-                 nb::arg("points"), nb::arg("color"), nb::arg("closed") = false, nb::arg("thickness") = 1.0f,
-                 "Draw a polyline through the given points")
-            .def("draw_poly_filled", &PyUILayout::draw_poly_filled,
-                 nb::arg("points"), nb::arg("color"),
-                 "Draw a filled convex polygon")
-            .def("draw_text", &PyUILayout::draw_text,
-                 nb::arg("x"), nb::arg("y"), nb::arg("text"), nb::arg("color"), nb::arg("background") = false,
-                 "Draw text at (x, y) with given color")
+            .def("draw_circle", &PyUILayout::draw_circle, nb::arg("x"), nb::arg("y"), nb::arg("radius"), nb::arg("color"), nb::arg("segments") = 32, nb::arg("thickness") = 1.0f, "Draw a circle outline at (x, y) with given radius and color")
+            .def("draw_circle_filled", &PyUILayout::draw_circle_filled, nb::arg("x"), nb::arg("y"), nb::arg("radius"), nb::arg("color"), nb::arg("segments") = 32, "Draw a filled circle at (x, y) with given radius and color")
+            .def("draw_rect", &PyUILayout::draw_rect, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("thickness") = 1.0f, "Draw a rectangle outline from (x0,y0) to (x1,y1)")
+            .def("draw_rect_filled", &PyUILayout::draw_rect_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("background") = false, "Draw a filled rectangle from (x0,y0) to (x1,y1)")
+            .def("draw_rect_rounded", &PyUILayout::draw_rect_rounded, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("rounding"), nb::arg("thickness") = 1.0f, nb::arg("background") = false, "Draw a rounded rectangle outline")
+            .def("draw_rect_rounded_filled", &PyUILayout::draw_rect_rounded_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("rounding"), nb::arg("background") = false, "Draw a filled rounded rectangle")
+            .def("draw_triangle_filled", &PyUILayout::draw_triangle_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("x2"), nb::arg("y2"), nb::arg("color"), nb::arg("background") = false, "Draw a filled triangle")
+            .def("draw_line", &PyUILayout::draw_line, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("thickness") = 1.0f, "Draw a line from (x0,y0) to (x1,y1)")
+            .def("draw_polyline", &PyUILayout::draw_polyline, nb::arg("points"), nb::arg("color"), nb::arg("closed") = false, nb::arg("thickness") = 1.0f, "Draw a polyline through the given points")
+            .def("draw_poly_filled", &PyUILayout::draw_poly_filled, nb::arg("points"), nb::arg("color"), "Draw a filled convex polygon")
+            .def("draw_text", &PyUILayout::draw_text, nb::arg("x"), nb::arg("y"), nb::arg("text"), nb::arg("color"), nb::arg("background") = false, "Draw text at (x, y) with given color")
             // Window-scoped drawing (respects z-order)
-            .def("draw_window_rect_filled", &PyUILayout::draw_window_rect_filled,
-                 nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"),
-                 "Draw a filled rectangle on the window draw list")
-            .def("draw_window_rect", &PyUILayout::draw_window_rect,
-                 nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"),
-                 nb::arg("thickness") = 1.0f,
-                 "Draw a rectangle outline on the window draw list")
-            .def("draw_window_rect_rounded", &PyUILayout::draw_window_rect_rounded,
-                 nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"),
-                 nb::arg("rounding"), nb::arg("thickness") = 1.0f,
-                 "Draw a rounded rectangle outline on the window draw list")
-            .def("draw_window_rect_rounded_filled", &PyUILayout::draw_window_rect_rounded_filled,
-                 nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"),
-                 nb::arg("rounding"),
-                 "Draw a filled rounded rectangle on the window draw list")
-            .def("draw_window_line", &PyUILayout::draw_window_line,
-                 nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"),
-                 nb::arg("thickness") = 1.0f,
-                 "Draw a line on the window draw list")
-            .def("draw_window_text", &PyUILayout::draw_window_text,
-                 nb::arg("x"), nb::arg("y"), nb::arg("text"), nb::arg("color"),
-                 "Draw text on the window draw list")
-            .def("draw_window_triangle_filled", &PyUILayout::draw_window_triangle_filled,
-                 nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("x2"), nb::arg("y2"),
-                 nb::arg("color"),
-                 "Draw a filled triangle on the window draw list")
-            .def("crf_curve_preview", &PyUILayout::crf_curve_preview,
-                 nb::arg("label"), nb::arg("gamma"), nb::arg("toe"), nb::arg("shoulder"),
-                 nb::arg("gamma_r") = 0.0f, nb::arg("gamma_g") = 0.0f, nb::arg("gamma_b") = 0.0f,
-                 "Draw CRF tone curve preview widget")
-            .def("chromaticity_diagram", &PyUILayout::chromaticity_diagram,
-                 nb::arg("label"),
-                 nb::arg("red_x"), nb::arg("red_y"),
-                 nb::arg("green_x"), nb::arg("green_y"),
-                 nb::arg("blue_x"), nb::arg("blue_y"),
-                 nb::arg("neutral_x"), nb::arg("neutral_y"),
-                 nb::arg("range") = 0.5f,
-                 "Draw chromaticity diagram widget for color correction");
+            .def("draw_window_rect_filled", &PyUILayout::draw_window_rect_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), "Draw a filled rectangle on the window draw list")
+            .def("draw_window_rect", &PyUILayout::draw_window_rect, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("thickness") = 1.0f, "Draw a rectangle outline on the window draw list")
+            .def("draw_window_rect_rounded", &PyUILayout::draw_window_rect_rounded, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("rounding"), nb::arg("thickness") = 1.0f, "Draw a rounded rectangle outline on the window draw list")
+            .def("draw_window_rect_rounded_filled", &PyUILayout::draw_window_rect_rounded_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("rounding"), "Draw a filled rounded rectangle on the window draw list")
+            .def("draw_window_line", &PyUILayout::draw_window_line, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("color"), nb::arg("thickness") = 1.0f, "Draw a line on the window draw list")
+            .def("draw_window_text", &PyUILayout::draw_window_text, nb::arg("x"), nb::arg("y"), nb::arg("text"), nb::arg("color"), "Draw text on the window draw list")
+            .def("draw_window_triangle_filled", &PyUILayout::draw_window_triangle_filled, nb::arg("x0"), nb::arg("y0"), nb::arg("x1"), nb::arg("y1"), nb::arg("x2"), nb::arg("y2"), nb::arg("color"), "Draw a filled triangle on the window draw list")
+            .def("crf_curve_preview", &PyUILayout::crf_curve_preview, nb::arg("label"), nb::arg("gamma"), nb::arg("toe"), nb::arg("shoulder"), nb::arg("gamma_r") = 0.0f, nb::arg("gamma_g") = 0.0f, nb::arg("gamma_b") = 0.0f, "Draw CRF tone curve preview widget")
+            .def("chromaticity_diagram", &PyUILayout::chromaticity_diagram, nb::arg("label"), nb::arg("red_x"), nb::arg("red_y"), nb::arg("green_x"), nb::arg("green_y"), nb::arg("blue_x"), nb::arg("blue_y"), nb::arg("neutral_x"), nb::arg("neutral_y"), nb::arg("range") = 0.5f, "Draw chromaticity diagram widget for color correction");
 
         // File dialogs
         m.def(
@@ -4103,6 +4167,25 @@ namespace lfs::python {
         m.def("free_plugin_icons", &free_plugin_icons, nb::arg("plugin_name"),
               "Free all icons associated with a plugin");
 
+        m.def("free_plugin_textures", &free_plugin_textures, nb::arg("plugin_name"),
+              "Free all dynamic textures associated with a plugin");
+
+        nb::class_<PyDynamicTexture>(m, "DynamicTexture")
+            .def(nb::init<>())
+            .def(
+                "__init__", [](PyDynamicTexture* self, PyTensor& tensor) {
+                    new (self) PyDynamicTexture();
+                    self->update(tensor);
+                },
+                nb::arg("tensor"))
+            .def("update", &PyDynamicTexture::update, nb::arg("tensor"))
+            .def("destroy", &PyDynamicTexture::destroy)
+            .def_prop_ro("id", &PyDynamicTexture::texture_id)
+            .def_prop_ro("width", &PyDynamicTexture::width)
+            .def_prop_ro("height", &PyDynamicTexture::height)
+            .def_prop_ro("valid", &PyDynamicTexture::valid)
+            .def_prop_ro("uv1", &PyDynamicTexture::uv1);
+
         // Scene panel state for Python scene panel
         m.def(
             "get_selected_camera_uid",
@@ -4213,6 +4296,7 @@ namespace lfs::python {
         bridge.draw_modals = []() { PyModalRegistry::instance().draw_modals(); };
         bridge.has_modals = []() { return PyModalRegistry::instance().has_open_modals(); };
         bridge.has_toolbar = []() { return true; }; // Always true - Python ToolRegistry has builtin tools
+        bridge.shutdown_gl_resources = []() { shutdown_dynamic_textures(); };
         bridge.cleanup = []() {
             PyPanelRegistry::instance().unregister_all();
             PyUIHookRegistry::instance().clear_all();

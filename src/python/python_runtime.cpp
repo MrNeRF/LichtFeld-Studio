@@ -567,6 +567,12 @@ namespace lfs::python {
         }
     }
 
+    void shutdown_python_gl_resources() {
+        if (g_bridge.shutdown_gl_resources) {
+            g_bridge.shutdown_gl_resources();
+        }
+    }
+
     void draw_python_menu_items(MenuLocation location) {
         if (!g_bridge.draw_menus)
             return;

@@ -1,6 +1,7 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_debug.hpp"
 #include "core/logger.hpp"
 #include "internal/memory_pool.hpp"
 #include "internal/tensor_functors.hpp"
@@ -34,17 +35,7 @@
 #include <thrust/tuple.h>
 #include <unordered_map>
 
-// CUDA error checking macro
-#define CHECK_CUDA(call)                              \
-    do {                                              \
-        cudaError_t error = call;                     \
-        if (error != cudaSuccess) {                   \
-            LOG_ERROR("CUDA error at {}:{} - {}: {}", \
-                      __FILE__, __LINE__,             \
-                      cudaGetErrorName(error),        \
-                      cudaGetErrorString(error));     \
-        }                                             \
-    } while (0)
+// CHECK_CUDA provided by core/cuda_debug.hpp
 
 namespace lfs::core::tensor_ops {
 

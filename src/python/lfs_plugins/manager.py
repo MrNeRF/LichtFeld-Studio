@@ -283,6 +283,7 @@ class PluginManager:
             try:
                 import lichtfeld as lf
                 lf.ui.free_plugin_icons(name)
+                lf.ui.free_plugin_textures(name)
             except Exception:
                 pass
 

@@ -10,6 +10,7 @@ from . import (
     ops as ops,
     signals as signals
 )
+import lichtfeld
 
 
 class AppContext:
@@ -957,6 +958,12 @@ class UILayout:
     def toolbar_button(self, id: str, texture_id: int, size: tuple[float, float], selected: bool = False, disabled: bool = False, tooltip: str = '') -> bool:
         """Draw a toolbar-style icon button with selection state"""
 
+    def image_texture(self, texture: DynamicTexture, size: tuple[float, float], tint: object | None = None) -> None:
+        """Draw a DynamicTexture with automatic UV scaling"""
+
+    def image_tensor(self, label: str, tensor: lichtfeld.Tensor, size: tuple[float, float], tint: object | None = None) -> None:
+        """Draw a tensor as an image, caching the GL texture by label"""
+
     def begin_drag_drop_source(self) -> bool:
         """Begin a drag-drop source on the last item, returns True if dragging"""
 
@@ -1588,6 +1595,35 @@ def load_plugin_icon(icon_name: str, plugin_path: str, plugin_name: str) -> int:
 
 def free_plugin_icons(plugin_name: str) -> None:
     """Free all icons associated with a plugin"""
+
+def free_plugin_textures(plugin_name: str) -> None:
+    """Free all dynamic textures associated with a plugin"""
+
+class DynamicTexture:
+    @overload
+    def __init__(self) -> None: ...
+
+    @overload
+    def __init__(self, tensor: lichtfeld.Tensor) -> None: ...
+
+    def update(self, tensor: lichtfeld.Tensor) -> None: ...
+
+    def destroy(self) -> None: ...
+
+    @property
+    def id(self) -> int: ...
+
+    @property
+    def width(self) -> int: ...
+
+    @property
+    def height(self) -> int: ...
+
+    @property
+    def valid(self) -> bool: ...
+
+    @property
+    def uv1(self) -> tuple[float, float]: ...
 
 def get_selected_camera_uid() -> int:
     """

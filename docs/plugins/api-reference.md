@@ -730,6 +730,44 @@ The `layout` object is passed to `Panel.draw()` and provides all UI widget metho
 | `image_uv(texture_id, size, uv0, uv1, tint=(1,1,1,1))`     | `None`  | Image with UV coords   |
 | `image_button(id, texture_id, size, tint=(1,1,1,1))`        | `bool`  | Clickable image        |
 | `toolbar_button(id, tex, size, selected=F, disabled=F, tooltip='')` | `bool` | Toolbar icon button |
+| `image_tensor(label, tensor, size, tint=None)`               | `None`  | Display a tensor as an image (cached by label) |
+| `image_texture(texture, size, tint=None)`                    | `None`  | Display a `DynamicTexture` |
+
+`image_tensor` is the simplest way to display a GPU tensor — it internally manages a `DynamicTexture` cached by `label`. The tensor must be `[H, W, 3]` or `[H, W, 4]` (RGB/RGBA). CPU tensors and non-float32 dtypes are converted automatically.
+
+```python
+layout.image_tensor("preview", my_tensor, (256, 256))
+```
+
+For full control (e.g. reusing one texture across multiple draw calls), use `DynamicTexture` directly:
+
+```python
+tex = lf.ui.DynamicTexture(tensor)   # or DynamicTexture() + tex.update(tensor)
+layout.image_texture(tex, (256, 256))
+```
+
+---
+
+### DynamicTexture
+
+GPU tensor to OpenGL texture bridge via CUDA-GL interop.
+
+```python
+tex = lf.ui.DynamicTexture()          # Empty
+tex = lf.ui.DynamicTexture(tensor)    # From tensor
+```
+
+| Method / Property  | Returns              | Description                                    |
+|--------------------|----------------------|------------------------------------------------|
+| `update(tensor)`   | `None`               | Upload `[H, W, 3\|4]` tensor (auto-converts CPU→CUDA, uint8→float32) |
+| `destroy()`        | `None`               | Release GL resources                           |
+| `id`               | `int`                | OpenGL texture ID                              |
+| `width`            | `int`                | Current width in pixels                        |
+| `height`           | `int`                | Current height in pixels                       |
+| `valid`            | `bool`               | `True` if texture is initialized               |
+| `uv1`             | `tuple[float, float]` | UV scale factors for power-of-2 padding        |
+
+Calling `update()` with a different resolution automatically recreates the GL texture. Textures are freed on plugin unload via `lf.ui.free_plugin_textures(name)`.
 
 ### Drag & Drop
 

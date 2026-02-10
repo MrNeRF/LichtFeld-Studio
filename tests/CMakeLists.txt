@@ -209,6 +209,8 @@ set(TEST_FILES
     test_mcmc_nan_fix.cpp
     test_vram_resize.cpp
     test_stride_bugs.cpp
+    test_strided_fill.cpp
+    test_expanded_tensor_ops.cpp
     test_bool_any_all.cpp
     test_fused_l1_ssim.cpp
     test_add_new_gs_tensor_ops.cpp
