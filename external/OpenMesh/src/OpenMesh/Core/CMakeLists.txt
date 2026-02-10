@@ -166,7 +166,7 @@ else ()
 endif ()
 
 if (MSVC)
-  target_compile_options(OpenMeshCore PUBLIC /bigobj)
+  target_compile_options(OpenMeshCore PUBLIC $<$<COMPILE_LANGUAGE:CXX>:/bigobj>)
   target_compile_definitions(OpenMeshCore PUBLIC -D_USE_MATH_DEFINES -DNOMINMAX -D_CRT_SECURE_NO_WARNINGS)
 endif ()
 
