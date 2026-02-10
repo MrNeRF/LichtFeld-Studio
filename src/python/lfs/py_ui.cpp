@@ -2924,14 +2924,18 @@ namespace lfs::python {
     }
 
     void shutdown_dynamic_textures() {
-        std::lock_guard lock(g_dynamic_textures_mutex);
-        g_tensor_cache.clear();
-        for (auto* tex : g_all_dynamic_textures) {
-            tex->destroy();
+        decltype(g_tensor_cache) cache_to_destroy;
+        {
+            std::lock_guard lock(g_dynamic_textures_mutex);
+            for (auto* tex : g_all_dynamic_textures) {
+                tex->destroy();
+            }
+            g_all_dynamic_textures.clear();
+            g_plugin_textures.clear();
+            g_gl_alive = false;
+            cache_to_destroy = std::move(g_tensor_cache);
         }
-        g_all_dynamic_textures.clear();
-        g_plugin_textures.clear();
-        g_gl_alive = false;
+        // ~PyDynamicTexture destructors run here without holding the mutex
     }
 
     // Register UI classes with nanobind module
