@@ -957,6 +957,22 @@ class Tensor:
     def __array__(self, dtype: object | None = None) -> object:
         """Return numpy array view (zero-copy for CPU contiguous tensors)"""
 
+def mesh_to_splat(mesh_name: str, sigma: float = 0.6499999761581421, quality: float = 0.5, max_resolution: int = 1024, light_dir: tuple[float, float, float] | None = None, light_intensity: float = 0.699999988079071, ambient: float = 0.4000000059604645) -> None:
+    """
+    Convert a mesh node to gaussian splats. Runs asynchronously on the GL thread.
+    """
+
+def is_mesh2splat_active() -> bool:
+    """Check if a mesh-to-splat conversion is currently running"""
+
+def get_mesh2splat_progress() -> float:
+    """Get mesh-to-splat conversion progress (0.0 to 1.0)"""
+
+def get_mesh2splat_error() -> str:
+    """
+    Get error message from last mesh-to-splat conversion (empty on success)
+    """
+
 class ViewInfo:
     @property
     def rotation(self) -> Tensor: ...
@@ -1725,4 +1741,4 @@ class CheckpointParams:
 def read_checkpoint_params(path: str) -> CheckpointParams | None:
     """Read training parameters from a checkpoint (None if failed)"""
 
-__all__: tuple = ('context', 'gaussians', 'session', 'get_scene', 'Tensor', 'Hook', 'ScopedHandler', 'on_training_start', 'on_iteration_start', 'on_post_step', 'on_pre_optimizer_step', 'on_training_end', 'on_frame', 'stop_animation', 'run', 'list_scene', 'mat4', 'colormap', 'help', 'scene', 'io', 'packages', 'mcp')
+__all__: tuple = ('context', 'gaussians', 'session', 'get_scene', 'Tensor', 'Hook', 'ScopedHandler', 'on_training_start', 'on_iteration_start', 'on_post_step', 'on_pre_optimizer_step', 'on_training_end', 'mesh_to_splat', 'is_mesh2splat_active', 'get_mesh2splat_progress', 'get_mesh2splat_error', 'on_frame', 'stop_animation', 'run', 'list_scene', 'mat4', 'colormap', 'help', 'scene', 'io', 'packages', 'mcp')

@@ -225,6 +225,34 @@ namespace lfs::python {
     vis::gui::GuiManager* get_gui_manager() { return g_gui_manager.load(); }
 
     namespace {
+        Mesh2SplatStartFn g_m2s_start;
+        std::function<bool()> g_m2s_active;
+        std::function<float()> g_m2s_progress;
+        std::function<std::string()> g_m2s_error;
+    } // namespace
+
+    void set_mesh2splat_callbacks(Mesh2SplatStartFn start,
+                                  std::function<bool()> is_active,
+                                  std::function<float()> get_progress,
+                                  std::function<std::string()> get_error) {
+        g_m2s_start = std::move(start);
+        g_m2s_active = std::move(is_active);
+        g_m2s_progress = std::move(get_progress);
+        g_m2s_error = std::move(get_error);
+    }
+
+    void invoke_mesh2splat_start(std::shared_ptr<core::MeshData> mesh, const std::string& name,
+                                 int res, float sigma, float lx, float ly, float lz,
+                                 float intensity, float ambient) {
+        if (g_m2s_start)
+            g_m2s_start(std::move(mesh), name, res, sigma, lx, ly, lz, intensity, ambient);
+    }
+
+    bool invoke_mesh2splat_active() { return g_m2s_active ? g_m2s_active() : false; }
+    float invoke_mesh2splat_progress() { return g_m2s_progress ? g_m2s_progress() : 0.0f; }
+    std::string invoke_mesh2splat_error() { return g_m2s_error ? g_m2s_error() : std::string{}; }
+
+    namespace {
         GetSelectedCameraUidCallback g_get_selected_camera_cb = nullptr;
         GetInvertMasksCallback g_get_invert_masks_cb = nullptr;
     } // namespace

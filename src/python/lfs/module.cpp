@@ -15,6 +15,7 @@
 #include "py_io.hpp"
 #include "py_mcp.hpp"
 #include "py_mesh.hpp"
+#include "py_mesh2splat.hpp"
 #include "py_operator.hpp"
 #include "py_packages.hpp"
 #include "py_params.hpp"
@@ -1204,6 +1205,9 @@ NB_MODULE(lichtfeld, m) {
     auto mesh_module = m.def_submodule("mesh", "Mesh operations and OpenMesh bindings");
     lfs::python::register_mesh(mesh_module);
 
+    // Mesh-to-splat conversion (async, uses GL thread)
+    lfs::python::register_mesh2splat(m);
+
     // Rendering functions (render_view, compute_screen_positions, etc.)
     lfs::python::register_rendering(m);
 
@@ -1535,6 +1539,12 @@ Plugin Hooks (RAII):
   handler.on_iteration_start(callback)
   # Auto-unregisters when handler is destroyed
 
+Mesh-to-Splat:
+  lf.mesh_to_splat("name")       - Convert mesh to splats (async)
+  lf.is_mesh2splat_active()      - Check if conversion is running
+  lf.get_mesh2splat_progress()   - Get progress (0.0-1.0)
+  lf.get_mesh2splat_error()      - Get error message
+
 Utilities:
   lf.run("script.py") - Execute a Python script file
   lf.help()           - Show this help
@@ -1650,6 +1660,9 @@ Example:
         // Hook decorators
         "on_training_start", "on_iteration_start",
         "on_post_step", "on_pre_optimizer_step", "on_training_end",
+        // Mesh-to-splat conversion
+        "mesh_to_splat", "is_mesh2splat_active",
+        "get_mesh2splat_progress", "get_mesh2splat_error",
         // Animation
         "on_frame", "stop_animation",
         // Utilities

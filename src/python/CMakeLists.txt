@@ -160,6 +160,7 @@ nanobind_add_module(
     viewport_overlay.cpp
     lfs/py_mcp.cpp
     lfs/py_mesh.cpp
+    lfs/py_mesh2splat.cpp
     lfs/openmesh/handles.cpp
     lfs/openmesh/io.cpp
     lfs/py_rendering.cpp

@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,7 @@
 
 namespace lfs::core {
     class IOperatorCallbacks;
+    class MeshData;
     class Scene;
 } // namespace lfs::core
 
@@ -34,7 +36,7 @@ namespace lfs::vis {
     class SelectionService;
     namespace gui {
         class GuiManager;
-    }
+    } // namespace gui
     namespace input {
         class InputBindings;
     }
@@ -271,6 +273,22 @@ namespace lfs::python {
 
     LFS_PYTHON_RUNTIME_API void set_gui_manager(vis::gui::GuiManager* gm);
     LFS_PYTHON_RUNTIME_API vis::gui::GuiManager* get_gui_manager();
+
+    // Mesh2Splat async callbacks — set by visualizer, called by Python module.
+    // Arguments: mesh, source_name, resolution_target, sigma, light_dir xyz, light_intensity, ambient
+    using Mesh2SplatStartFn = std::function<void(std::shared_ptr<core::MeshData>, std::string,
+                                                 int, float, float, float, float, float, float)>;
+    LFS_PYTHON_RUNTIME_API void set_mesh2splat_callbacks(
+        Mesh2SplatStartFn start,
+        std::function<bool()> is_active,
+        std::function<float()> get_progress,
+        std::function<std::string()> get_error);
+    LFS_PYTHON_RUNTIME_API void invoke_mesh2splat_start(std::shared_ptr<core::MeshData> mesh, const std::string& name,
+                                                        int res, float sigma, float lx, float ly, float lz,
+                                                        float intensity, float ambient);
+    LFS_PYTHON_RUNTIME_API bool invoke_mesh2splat_active();
+    LFS_PYTHON_RUNTIME_API float invoke_mesh2splat_progress();
+    LFS_PYTHON_RUNTIME_API std::string invoke_mesh2splat_error();
 
     // Scene panel state callbacks
     using GetSelectedCameraUidCallback = int (*)();
