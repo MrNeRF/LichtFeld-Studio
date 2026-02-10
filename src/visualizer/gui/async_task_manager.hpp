@@ -155,6 +155,7 @@ namespace lfs::vis {
                 size_t num_images{0};
                 size_t num_points{0};
                 bool success{false};
+                bool is_mesh{false};
                 std::chrono::steady_clock::time_point completion_time;
                 std::optional<lfs::io::LoadResult> load_result;
                 lfs::core::param::TrainingParameters params;

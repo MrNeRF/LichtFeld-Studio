@@ -1169,14 +1169,16 @@ namespace lfs::vis {
                 return std::unexpected(apply_result.error());
             }
 
-            auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
-            trainer->setParams(dataset_params);
+            if (scene_.hasTrainingData()) {
+                auto trainer = std::make_unique<lfs::training::Trainer>(scene_);
+                trainer->setParams(dataset_params);
 
-            if (!services().trainerOrNull()) {
-                return std::unexpected("No trainer manager");
+                if (!services().trainerOrNull()) {
+                    return std::unexpected("No trainer manager");
+                }
+                services().trainerOrNull()->setScene(&scene_);
+                services().trainerOrNull()->setTrainer(std::move(trainer));
             }
-            services().trainerOrNull()->setScene(&scene_);
-            services().trainerOrNull()->setTrainer(std::move(trainer));
 
             {
                 std::lock_guard<std::mutex> lock(state_mutex_);

@@ -355,10 +355,10 @@ namespace lfs::io {
             __cpuid(cpuInfo, 7);
             has_avx2 = (cpuInfo[1] & (1 << 5)) != 0;
 #elif defined(__GNUC__) || defined(__clang__)
-            __builtin_cpu_init();
-            has_avx2 = __builtin_cpu_supports("avx2");
+                __builtin_cpu_init();
+                has_avx2 = __builtin_cpu_supports("avx2");
 #else
-            has_avx2 = false;
+                has_avx2 = false;
 #endif
         });
 
@@ -897,6 +897,27 @@ namespace lfs::io {
             }
         }
         return {};
+    }
+
+    bool ply_has_faces(const std::filesystem::path& filepath) {
+        if (!std::filesystem::exists(filepath))
+            return false;
+
+        std::ifstream file;
+        if (!lfs::core::open_file_for_read(filepath, std::ios::binary, file))
+            return false;
+
+        std::string line;
+        while (std::getline(file, line)) {
+            if (line.find("end_header") != std::string::npos)
+                break;
+            if (line.compare(0, 13, "element face ") == 0) {
+                const int count = std::atoi(line.c_str() + 13);
+                if (count > 0)
+                    return true;
+            }
+        }
+        return false;
     }
 
     bool is_gaussian_splat_ply(const std::filesystem::path& filepath) {

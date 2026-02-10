@@ -16,6 +16,9 @@ namespace lfs::io {
         constexpr float SH_C0 = 0.28209479177387814f;
     } // namespace ply_constants
 
+    // Check if PLY contains triangle face elements
+    bool ply_has_faces(const std::filesystem::path& filepath);
+
     // Check if PLY contains Gaussian splat properties (opacity, scaling, rotation)
     bool is_gaussian_splat_ply(const std::filesystem::path& filepath);
 

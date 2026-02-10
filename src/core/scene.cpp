@@ -1153,6 +1153,14 @@ namespace lfs::core {
             return NULL_NODE;
         }
 
+        std::string unique_name = name;
+        if (name_to_id_.contains(unique_name)) {
+            int counter = 2;
+            while (name_to_id_.contains(unique_name)) {
+                unique_name = name + "_" + std::to_string(counter++);
+            }
+        }
+
         const int64_t nv = mesh_data->vertex_count();
         const glm::vec3 centroid = [&] {
             if (nv == 0)
@@ -1172,7 +1180,7 @@ namespace lfs::core {
         node->id = id;
         node->parent_id = parent;
         node->type = NodeType::MESH;
-        node->name = name;
+        node->name = unique_name;
         const int64_t nf = mesh_data->face_count();
         node->mesh = std::move(mesh_data);
         node->gaussian_count = static_cast<size_t>(nv);
@@ -1185,12 +1193,12 @@ namespace lfs::core {
         }
 
         id_to_index_[id] = nodes_.size();
-        name_to_id_[name] = id;
+        name_to_id_[unique_name] = id;
         node->initObservables(this);
         nodes_.push_back(std::move(node));
         notifyMutation(MutationType::NODE_ADDED);
 
-        LOG_DEBUG("Added mesh node '{}' (id={}, {} vertices, {} faces)", name, id, nv, nf);
+        LOG_DEBUG("Added mesh node '{}' (id={}, {} vertices, {} faces)", unique_name, id, nv, nf);
         return id;
     }
 

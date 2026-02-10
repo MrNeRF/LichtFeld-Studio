@@ -401,6 +401,12 @@ namespace lfs::python {
                                 const PyTensor& points,
                                 const PyTensor& colors,
                                 int32_t parent = core::NULL_NODE);
+        int32_t add_mesh(const std::string& name,
+                         const PyTensor& vertices,
+                         const PyTensor& indices,
+                         std::optional<PyTensor> colors = std::nullopt,
+                         std::optional<PyTensor> normals = std::nullopt,
+                         int32_t parent = core::NULL_NODE);
         int32_t add_camera_group(const std::string& name, int32_t parent, size_t camera_count);
         int32_t add_camera(const std::string& name,
                            int32_t parent,

@@ -165,7 +165,13 @@ namespace lfs::io {
 
         auto ext = path.extension().string();
         std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
-        return ext == ".ply";
+        if (ext != ".ply")
+            return false;
+
+        if (ply_has_faces(path))
+            return false;
+
+        return true;
     }
 
     std::string PLYLoader::name() const {

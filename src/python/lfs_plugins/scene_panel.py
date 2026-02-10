@@ -47,7 +47,7 @@ NODE_TYPE_ICON_NAMES = {
     "CROPBOX": "cropbox",
     "ELLIPSOID": "ellipsoid",
     "POINTCLOUD": "pointcloud",
-    "MESH": "pointcloud",
+    "MESH": "mesh",
 }
 
 

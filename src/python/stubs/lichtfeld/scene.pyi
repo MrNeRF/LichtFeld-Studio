@@ -432,6 +432,11 @@ class Scene:
     def add_point_cloud(self, name: str, points: lichtfeld.Tensor, colors: lichtfeld.Tensor, parent: int = -1) -> int:
         """Add a point cloud node from tensor data [N,3] positions and colors"""
 
+    def add_mesh(self, name: str, vertices: lichtfeld.Tensor, indices: lichtfeld.Tensor, colors: lichtfeld.Tensor | None = None, normals: lichtfeld.Tensor | None = None, parent: int = -1) -> int:
+        """
+        Add a mesh node from [V,3] vertices, [F,3] face indices, optional [V,4] colors and [V,3] normals
+        """
+
     def add_camera_group(self, name: str, parent: int, camera_count: int) -> int:
         """Add a camera group node"""
 

@@ -338,6 +338,7 @@ namespace lfs::vis::gui {
             import_state_.num_images = 0;
             import_state_.num_points = 0;
             import_state_.success = false;
+            import_state_.is_mesh = false;
             import_state_.load_result.reset();
             import_state_.params = params;
             import_state_.dataset_type = getDatasetTypeName(path);
@@ -387,6 +388,10 @@ namespace lfs::vis::gui {
                         } else if constexpr (std::is_same_v<T, lfs::io::LoadedScene>) {
                             import_state_.num_images = data.cameras.size();
                             import_state_.num_points = data.point_cloud ? data.point_cloud->size() : 0;
+                        } else if constexpr (std::is_same_v<T, std::shared_ptr<lfs::core::MeshData>>) {
+                            import_state_.num_points = data ? data->vertex_count() : 0;
+                            import_state_.num_images = 0;
+                            import_state_.is_mesh = true;
                         }
                     },
                                import_state_.load_result->data);
@@ -471,7 +476,12 @@ namespace lfs::vis::gui {
         }
 
         import_state_.active.store(false);
-        import_state_.show_completion.store(true);
+        bool is_mesh_load;
+        {
+            const std::lock_guard lock(import_state_.mutex);
+            is_mesh_load = import_state_.is_mesh;
+        }
+        import_state_.show_completion.store(!(success_val && is_mesh_load));
 
         lfs::core::events::state::DatasetLoadCompleted{
             .path = path,

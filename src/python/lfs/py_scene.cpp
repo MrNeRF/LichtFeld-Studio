@@ -297,6 +297,38 @@ namespace lfs::python {
         return scene_->addPointCloud(name, std::move(pc), parent);
     }
 
+    int32_t PyScene::add_mesh(const std::string& name,
+                              const PyTensor& vertices,
+                              const PyTensor& indices,
+                              std::optional<PyTensor> colors,
+                              std::optional<PyTensor> normals,
+                              const int32_t parent) {
+        const auto& verts = vertices.tensor();
+        const auto& idx = indices.tensor();
+        assert(verts.shape().rank() == 2 && verts.shape()[1] == 3);
+        assert(idx.shape().rank() == 2 && idx.shape()[1] == 3);
+
+        auto mesh = std::make_shared<core::MeshData>(
+            verts.to(core::DataType::Float32).to(core::Device::CPU),
+            idx.to(core::DataType::Int32).to(core::Device::CPU));
+
+        if (colors && colors->tensor().is_valid()) {
+            const auto& c = colors->tensor();
+            assert(c.shape().rank() == 2 && c.shape()[0] == verts.shape()[0]);
+            mesh->colors = c.to(core::DataType::Float32).to(core::Device::CPU);
+        }
+
+        if (normals && normals->tensor().is_valid()) {
+            const auto& n = normals->tensor();
+            assert(n.shape().rank() == 2 && n.shape()[1] == 3 && n.shape()[0] == verts.shape()[0]);
+            mesh->normals = n.to(core::DataType::Float32).to(core::Device::CPU);
+        } else {
+            mesh->compute_normals();
+        }
+
+        return scene_->addMesh(name, std::move(mesh), parent);
+    }
+
     int32_t PyScene::add_camera_group(const std::string& name, const int32_t parent, const size_t camera_count) {
         return scene_->addCameraGroup(name, parent, camera_count);
     }
@@ -703,6 +735,14 @@ Returns:
                  nb::arg("colors"),
                  nb::arg("parent") = core::NULL_NODE,
                  "Add a point cloud node from tensor data [N,3] positions and colors")
+            .def("add_mesh", &PyScene::add_mesh,
+                 nb::arg("name"),
+                 nb::arg("vertices"),
+                 nb::arg("indices"),
+                 nb::arg("colors") = nb::none(),
+                 nb::arg("normals") = nb::none(),
+                 nb::arg("parent") = core::NULL_NODE,
+                 "Add a mesh node from [V,3] vertices, [F,3] face indices, optional [V,4] colors and [V,3] normals")
             .def("add_camera_group", &PyScene::add_camera_group,
                  nb::arg("name"),
                  nb::arg("parent"),
