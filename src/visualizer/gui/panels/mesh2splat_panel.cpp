@@ -15,6 +15,7 @@
 #include "visualizer_impl.hpp"
 
 #include <cassert>
+#include <glm/glm.hpp>
 #include <imgui.h>
 
 using namespace lichtfeld::Strings;
@@ -53,6 +54,12 @@ namespace lfs::vis::gui::panels {
         lfs::core::Mesh2SplatOptions options;
         options.resolution_target = computeResolutionTarget();
         options.sigma = gaussian_scale_;
+
+        glm::vec3 cam_pos = viewer_->getViewport().getTranslation();
+        float cam_len = glm::length(cam_pos);
+        if (cam_len > 1e-6f)
+            options.light_dir = cam_pos / cam_len;
+
         async.startMesh2Splat(node->mesh, selected_mesh_name_, options);
         has_initial_conversion_ = true;
     }
@@ -146,6 +153,8 @@ namespace lfs::vis::gui::panels {
 
         static const char* resolution_labels[] = {"128", "256", "512", "1024", "2048", "4096"};
         reconvert |= ImGui::Combo("##max_resolution", &resolution_index_, resolution_labels, kResolutionOptionCount);
+
+        ImGui::Spacing();
 
         ImGui::Spacing();
         const int target = computeResolutionTarget();

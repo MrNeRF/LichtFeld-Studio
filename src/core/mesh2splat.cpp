@@ -541,63 +541,71 @@ namespace lfs::core {
                      mat.name, mat.base_color.r, mat.base_color.g, mat.base_color.b, mat.base_color.a,
                      mat.albedo_tex, mat.albedo_tex_path);
 
-            // Albedo texture (unit 0)
+            // Upload all textures before binding — upload_texture() binds/unbinds
+            // on the active texture unit, which would clobber earlier bindings.
+            GLuint albedo_gl = 0, normal_gl = 0, mr_gl = 0;
+
             if (mat.has_albedo_texture() && mat.albedo_tex > 0 &&
                 mat.albedo_tex <= mesh.texture_images.size()) {
                 const auto& img = mesh.texture_images[mat.albedo_tex - 1];
                 if (!img.pixels.empty()) {
                     LOG_INFO("mesh2splat: uploading albedo texture {}x{} ({} ch, {} bytes)",
                              img.width, img.height, img.channels, img.pixels.size());
-                    GLuint tex = upload_texture(img);
-                    if (tex) {
-                        cleanup.textures.push_back(tex);
-                        glActiveTexture(GL_TEXTURE0);
-                        glBindTexture(GL_TEXTURE_2D, tex);
-                        GLint loc = glGetUniformLocation(program, "albedoTexture");
-                        if (loc >= 0)
-                            glUniform1i(loc, 0);
-                        if (has_albedo_loc >= 0)
-                            glUniform1i(has_albedo_loc, 1);
-                    }
+                    albedo_gl = upload_texture(img);
+                    if (albedo_gl)
+                        cleanup.textures.push_back(albedo_gl);
                 }
             }
 
-            // Normal texture (unit 1)
             if (mat.has_normal_texture() && mat.normal_tex > 0 &&
                 mat.normal_tex <= mesh.texture_images.size()) {
                 const auto& img = mesh.texture_images[mat.normal_tex - 1];
                 if (!img.pixels.empty()) {
-                    GLuint tex = upload_texture(img);
-                    if (tex) {
-                        cleanup.textures.push_back(tex);
-                        glActiveTexture(GL_TEXTURE1);
-                        glBindTexture(GL_TEXTURE_2D, tex);
-                        GLint loc = glGetUniformLocation(program, "normalTexture");
-                        if (loc >= 0)
-                            glUniform1i(loc, 1);
-                        if (has_normal_loc >= 0)
-                            glUniform1i(has_normal_loc, 1);
-                    }
+                    normal_gl = upload_texture(img);
+                    if (normal_gl)
+                        cleanup.textures.push_back(normal_gl);
                 }
             }
 
-            // Metallic-roughness texture (unit 2)
             if (mat.has_metallic_roughness_texture() && mat.metallic_roughness_tex > 0 &&
                 mat.metallic_roughness_tex <= mesh.texture_images.size()) {
                 const auto& img = mesh.texture_images[mat.metallic_roughness_tex - 1];
                 if (!img.pixels.empty()) {
-                    GLuint tex = upload_texture(img);
-                    if (tex) {
-                        cleanup.textures.push_back(tex);
-                        glActiveTexture(GL_TEXTURE2);
-                        glBindTexture(GL_TEXTURE_2D, tex);
-                        GLint loc = glGetUniformLocation(program, "metallicRoughnessTexture");
-                        if (loc >= 0)
-                            glUniform1i(loc, 2);
-                        if (has_mr_loc >= 0)
-                            glUniform1i(has_mr_loc, 1);
-                    }
+                    mr_gl = upload_texture(img);
+                    if (mr_gl)
+                        cleanup.textures.push_back(mr_gl);
                 }
+            }
+
+            // Bind to texture units after all uploads are complete
+            if (albedo_gl) {
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, albedo_gl);
+                GLint loc = glGetUniformLocation(program, "albedoTexture");
+                if (loc >= 0)
+                    glUniform1i(loc, 0);
+                if (has_albedo_loc >= 0)
+                    glUniform1i(has_albedo_loc, 1);
+            }
+
+            if (normal_gl) {
+                glActiveTexture(GL_TEXTURE1);
+                glBindTexture(GL_TEXTURE_2D, normal_gl);
+                GLint loc = glGetUniformLocation(program, "normalTexture");
+                if (loc >= 0)
+                    glUniform1i(loc, 1);
+                if (has_normal_loc >= 0)
+                    glUniform1i(has_normal_loc, 1);
+            }
+
+            if (mr_gl) {
+                glActiveTexture(GL_TEXTURE2);
+                glBindTexture(GL_TEXTURE_2D, mr_gl);
+                GLint loc = glGetUniformLocation(program, "metallicRoughnessTexture");
+                if (loc >= 0)
+                    glUniform1i(loc, 2);
+                if (has_mr_loc >= 0)
+                    glUniform1i(has_mr_loc, 1);
             }
         }
 
@@ -752,16 +760,36 @@ namespace lfs::core {
 
             // Set uniforms
             glm::vec4 material_factor(1.0f);
+            float metallic_factor = 0.0f;
+            float roughness_factor = 1.0f;
             if (geo.material_index < mesh.materials.size()) {
-                material_factor = mesh.materials[geo.material_index].base_color;
+                const auto& mat = mesh.materials[geo.material_index];
+                material_factor = mat.base_color;
+                metallic_factor = mat.metallic;
+                roughness_factor = mat.roughness;
             }
 
             GLint loc_material = glGetUniformLocation(cleanup.program, "u_materialFactor");
+            GLint loc_metallic = glGetUniformLocation(cleanup.program, "u_metallicFactor");
+            GLint loc_roughness = glGetUniformLocation(cleanup.program, "u_roughnessFactor");
+            GLint loc_light_dir = glGetUniformLocation(cleanup.program, "u_lightDir");
+            GLint loc_light_int = glGetUniformLocation(cleanup.program, "u_lightIntensity");
+            GLint loc_ambient = glGetUniformLocation(cleanup.program, "u_ambient");
             GLint loc_bbox_min = glGetUniformLocation(cleanup.program, "u_bboxMin");
             GLint loc_bbox_max = glGetUniformLocation(cleanup.program, "u_bboxMax");
 
             if (loc_material >= 0)
                 glUniform4fv(loc_material, 1, glm::value_ptr(material_factor));
+            if (loc_metallic >= 0)
+                glUniform1f(loc_metallic, metallic_factor);
+            if (loc_roughness >= 0)
+                glUniform1f(loc_roughness, roughness_factor);
+            if (loc_light_dir >= 0)
+                glUniform3fv(loc_light_dir, 1, glm::value_ptr(options.light_dir));
+            if (loc_light_int >= 0)
+                glUniform1f(loc_light_int, options.light_intensity);
+            if (loc_ambient >= 0)
+                glUniform1f(loc_ambient, options.ambient);
             // Use GLOBAL bbox so all submeshes share the same orthogonal UV space.
             // The GS maps positions to FBO pixels via triplanar projection using bbox.
             // Shared bbox = shared UV space = no duplicate gaussians across submeshes.
@@ -773,8 +801,18 @@ namespace lfs::core {
             // Bind textures for this submesh
             bind_submesh_textures(cleanup.program, mesh, geo.material_index, cleanup);
 
+            LOG_INFO("mesh2splat: submesh[{}] material_factor=({},{},{},{}), vertices={}, "
+                     "uniform_locs: material={}, bbox_min={}, bbox_max={}",
+                     si, material_factor.x, material_factor.y, material_factor.z, material_factor.w,
+                     geo.vertices.size(), loc_material, loc_bbox_min, loc_bbox_max);
+
             // Draw
+            GLenum err_before = glGetError(); // clear any pre-existing errors
+            (void)err_before;
             glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(geo.vertices.size()));
+            GLenum err_after = glGetError();
+            if (err_after != GL_NO_ERROR)
+                LOG_ERROR("mesh2splat: GL error after draw: 0x{:X}", err_after);
 
             // Cleanup per-submesh resources
             glDeleteBuffers(1, &vbo);
@@ -800,17 +838,49 @@ namespace lfs::core {
 
         LOG_INFO("mesh2splat: produced {} gaussians (resolution={})", num_gaussians, options.resolution_target);
 
-        // Log sample colors for debugging
-        if (num_gaussians > 0) {
-            std::vector<GaussianVertex> sample(std::min(num_gaussians, 5u));
+        // Log color and scale statistics for debugging
+        {
+            const size_t sample_count = std::min(num_gaussians, 1000u);
+            std::vector<GaussianVertex> sample(sample_count);
             glBindBuffer(GL_SHADER_STORAGE_BUFFER, cleanup.ssbo);
             glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
                                static_cast<GLsizeiptr>(sample.size() * sizeof(GaussianVertex)),
                                sample.data());
             glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+            glm::vec4 color_min(std::numeric_limits<float>::max());
+            glm::vec4 color_max(std::numeric_limits<float>::lowest());
+            glm::vec3 scale_min(std::numeric_limits<float>::max());
+            glm::vec3 scale_max(std::numeric_limits<float>::lowest());
+            double color_sum[4] = {};
             for (size_t i = 0; i < sample.size(); i++) {
-                LOG_INFO("mesh2splat: gaussian[{}] color=({},{},{},{})", i,
-                         sample[i].color.x, sample[i].color.y, sample[i].color.z, sample[i].color.w);
+                const auto& c = sample[i].color;
+                color_min = glm::min(color_min, c);
+                color_max = glm::max(color_max, c);
+                color_sum[0] += c.x;
+                color_sum[1] += c.y;
+                color_sum[2] += c.z;
+                color_sum[3] += c.w;
+                const auto& s = sample[i].scale;
+                scale_min = glm::min(scale_min, glm::vec3(s));
+                scale_max = glm::max(scale_max, glm::vec3(s));
+            }
+            const auto n = static_cast<double>(sample.size());
+            LOG_INFO("mesh2splat: SSBO color  min=({:.4f},{:.4f},{:.4f},{:.4f}) max=({:.4f},{:.4f},{:.4f},{:.4f}) "
+                     "mean=({:.4f},{:.4f},{:.4f},{:.4f})",
+                     color_min.x, color_min.y, color_min.z, color_min.w,
+                     color_max.x, color_max.y, color_max.z, color_max.w,
+                     color_sum[0] / n, color_sum[1] / n, color_sum[2] / n, color_sum[3] / n);
+            LOG_INFO("mesh2splat: SSBO scale  min=({:.6f},{:.6f},{:.6f}) max=({:.4f},{:.4f},{:.4f})",
+                     scale_min.x, scale_min.y, scale_min.z,
+                     scale_max.x, scale_max.y, scale_max.z);
+            LOG_INFO("mesh2splat: first 3 gaussians:");
+            for (size_t i = 0; i < std::min(sample.size(), size_t{3}); i++) {
+                LOG_INFO("  [{}] pos=({:.3f},{:.3f},{:.3f}) color=({:.4f},{:.4f},{:.4f},{:.4f}) "
+                         "scale=({:.6f},{:.6f},{:.6f})",
+                         i, sample[i].position.x, sample[i].position.y, sample[i].position.z,
+                         sample[i].color.x, sample[i].color.y, sample[i].color.z, sample[i].color.w,
+                         sample[i].scale.x, sample[i].scale.y, sample[i].scale.z);
             }
         }
 
@@ -830,7 +900,25 @@ namespace lfs::core {
             return std::unexpected("Cancelled");
 
         const float scale_multiplier = options.sigma / static_cast<float>(res);
+        LOG_INFO("mesh2splat: scale_multiplier={:.6f} (sigma={}, res={})",
+                 scale_multiplier, options.sigma, res);
         auto splat = build_splat_data(gpu_data, scale_multiplier, scene_scale);
+
+        // Log SplatData statistics
+        {
+            auto sh0_cpu = splat->sh0_raw().to(Device::CPU);
+            auto scale_cpu = splat->scaling_raw().to(Device::CPU);
+            LOG_INFO("mesh2splat: SplatData sh0  min=({:.3f},{:.3f},{:.3f}) max=({:.3f},{:.3f},{:.3f})",
+                     sh0_cpu.slice(2, 0, 1).min().item(), sh0_cpu.slice(2, 1, 2).min().item(),
+                     sh0_cpu.slice(2, 2, 3).min().item(),
+                     sh0_cpu.slice(2, 0, 1).max().item(), sh0_cpu.slice(2, 1, 2).max().item(),
+                     sh0_cpu.slice(2, 2, 3).max().item());
+            LOG_INFO("mesh2splat: SplatData scale(log) min=({:.3f},{:.3f},{:.3f}) max=({:.3f},{:.3f},{:.3f})",
+                     scale_cpu.slice(1, 0, 1).min().item(), scale_cpu.slice(1, 1, 2).min().item(),
+                     scale_cpu.slice(1, 2, 3).min().item(),
+                     scale_cpu.slice(1, 0, 1).max().item(), scale_cpu.slice(1, 1, 2).max().item(),
+                     scale_cpu.slice(1, 2, 3).max().item());
+        }
 
         if (!report(1.0f, "Complete"))
             return std::unexpected("Cancelled");
