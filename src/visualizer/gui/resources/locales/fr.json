@@ -11,6 +11,7 @@
     "file.export": "Exporter...",
     "file.export_config": "Exporter la Configuration...",
     "file.extract_video_frames": "Extraire des images d'une vidéo...",
+    "file.mesh_to_splat": "Mesh vers Splat...",
     "file.exit": "Quitter",
     "edit": "Édition",
     "edit.input_settings": "Paramètres d'Entrée...",
@@ -751,6 +752,20 @@
     "invalid": "(invalide)",
     "output_path": "Chemin de Sortie :",
     "help_text": "Le chemin du dataset stocké dans le checkpoint a peut-être changé. Mettez-le à jour si nécessaire."
+  },
+  "mesh2splat": {
+    "title": "Mesh vers Splat",
+    "source_mesh": "Mesh source",
+    "no_meshes": "Aucun mesh chargé",
+    "convert": "Convertir",
+    "gaussian_scale": "Gaussian Scale",
+    "tooltip_gaussian_scale": "Écart-type de chaque gaussien. Contrôle l'étendue visuelle.",
+    "sampling_density_header": "Paramètres de densité d'échantillonnage",
+    "sampling_density": "Sampling Density",
+    "tooltip_quality": "Contrôle la densité d'échantillonnage de la surface du mesh. Des valeurs plus élevées produisent plus de Gaussians.",
+    "max_resolution": "Max Resolution",
+    "tooltip_max_resolution": "Résolution maximale pour la grille d'échantillonnage. Des valeurs plus élevées permettent un échantillonnage plus fin à qualité 1.0.",
+    "effective_resolution": "Résolution effective"
   },
   "disk_space_dialog": {
     "title": "Espace Disque Insuffisant",

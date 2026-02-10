@@ -84,8 +84,8 @@ namespace lfs::vis {
         std::array<float, 3> mesh_wireframe_color{0.2f, 0.2f, 0.2f};
         float mesh_wireframe_width = 1.0f;
         std::array<float, 3> mesh_light_dir{0.3f, 1.0f, 0.5f};
-        float mesh_light_intensity = 1.5f;
-        float mesh_ambient = 0.15f;
+        float mesh_light_intensity = 0.7f;
+        float mesh_ambient = 0.4f;
         bool mesh_backface_culling = true;
         bool mesh_shadow_enabled = false;
         int mesh_shadow_resolution = 2048;

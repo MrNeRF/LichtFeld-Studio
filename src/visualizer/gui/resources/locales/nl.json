@@ -11,6 +11,7 @@
     "file.export": "Exporteren...",
     "file.export_config": "Configuratie Exporteren...",
     "file.extract_video_frames": "Frames uit video extraheren...",
+    "file.mesh_to_splat": "Mesh naar Splat...",
     "file.exit": "Afsluiten",
     "edit": "Bewerken",
     "edit.input_settings": "Invoerinstellingen...",
@@ -751,6 +752,20 @@
     "invalid": "(ongeldig)",
     "output_path": "Uitvoer Pad:",
     "help_text": "Het dataset-pad dat in het checkpoint is opgeslagen, is mogelijk gewijzigd. Werk het indien nodig bij."
+  },
+  "mesh2splat": {
+    "title": "Mesh naar Splat",
+    "source_mesh": "Bronmesh",
+    "no_meshes": "Geen meshes geladen",
+    "convert": "Converteren",
+    "gaussian_scale": "Gaussian Scale",
+    "tooltip_gaussian_scale": "Standaardafwijking van elke Gaussian. Regelt de visuele spreiding.",
+    "sampling_density_header": "Instellingen bemonsteringsdichtheid",
+    "sampling_density": "Sampling Density",
+    "tooltip_quality": "Regelt hoe dicht het mesh-oppervlak wordt bemonsterd. Hogere waarden produceren meer Gaussians.",
+    "max_resolution": "Max Resolution",
+    "tooltip_max_resolution": "Maximale resolutie voor het bemonsteringsraster. Hogere waarden maken fijnere bemonstering mogelijk bij kwaliteit 1.0.",
+    "effective_resolution": "Effectieve resolutie"
   },
   "disk_space_dialog": {
     "title": "Onvoldoende Schijfruimte",

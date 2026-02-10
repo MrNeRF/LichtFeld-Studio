@@ -49,6 +49,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/panels/tools_panel.cpp
         gui/panels/python_console_panel.cpp
         gui/panels/python_scripts_panel.cpp
+        gui/panels/mesh2splat_panel.cpp
         gui/editor/python_language_def.cpp
         gui/editor/editor_theme.cpp
         gui/editor/autocomplete/static_providers.cpp

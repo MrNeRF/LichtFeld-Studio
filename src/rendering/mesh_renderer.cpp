@@ -366,9 +366,9 @@ namespace lfs::rendering {
             }
         }
 
-        pbr_shader_->set_uniform("u_has_albedo_tex", has_albedo);
-        pbr_shader_->set_uniform("u_has_normal_tex", has_normal);
-        pbr_shader_->set_uniform("u_has_metallic_roughness_tex", has_mr);
+        pbr_shader_->set_uniform("u_has_albedo_tex", static_cast<int>(has_albedo));
+        pbr_shader_->set_uniform("u_has_normal_tex", static_cast<int>(has_normal));
+        pbr_shader_->set_uniform("u_has_metallic_roughness_tex", static_cast<int>(has_mr));
     }
 
     Result<void> MeshRenderer::render(const lfs::core::MeshData& mesh,
@@ -450,6 +450,8 @@ namespace lfs::rendering {
             }
         }
 
+        const GLboolean blend_was_enabled = glIsEnabled(GL_BLEND);
+        glDisable(GL_BLEND);
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_LESS);
 
@@ -470,13 +472,14 @@ namespace lfs::rendering {
             pbr_shader_->set_uniform("u_projection", projection);
             pbr_shader_->set_uniform("u_normal_matrix", normal_matrix);
             pbr_shader_->set_uniform("u_camera_pos", camera_pos);
-            pbr_shader_->set_uniform("u_light_dir", glm::normalize(opts.light_dir));
+            const glm::vec3 headlight_dir = glm::normalize(camera_pos);
+            pbr_shader_->set_uniform("u_light_dir", headlight_dir);
             pbr_shader_->set_uniform("u_light_intensity", opts.light_intensity);
             pbr_shader_->set_uniform("u_ambient", opts.ambient);
-            pbr_shader_->set_uniform("u_has_vertex_colors", mesh.has_colors());
+            pbr_shader_->set_uniform("u_has_vertex_colors", static_cast<int>(mesh.has_colors()));
 
             const bool shadow_active = opts.shadow_enabled && shadow_fbo_.get() && shadow_depth_texture_.get();
-            pbr_shader_->set_uniform("u_shadow_enabled", shadow_active);
+            pbr_shader_->set_uniform("u_shadow_enabled", static_cast<int>(shadow_active));
             if (shadow_active) {
                 pbr_shader_->set_uniform("u_light_vp", light_vp);
                 glActiveTexture(GL_TEXTURE3);
@@ -537,6 +540,9 @@ namespace lfs::rendering {
 
         glBindVertexArray(0);
         glDisable(GL_CULL_FACE);
+
+        if (blend_was_enabled)
+            glEnable(GL_BLEND);
 
         if (use_fbo) {
             glBindFramebuffer(GL_FRAMEBUFFER, 0);

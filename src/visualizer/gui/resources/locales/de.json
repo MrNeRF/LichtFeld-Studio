@@ -11,6 +11,7 @@
     "file.export": "Exportieren...",
     "file.export_config": "Konfiguration exportieren...",
     "file.extract_video_frames": "Frames aus Video extrahieren...",
+    "file.mesh_to_splat": "Mesh zu Splat...",
     "file.exit": "Beenden",
     "edit": "Bearbeiten",
     "edit.input_settings": "Eingabeeinstellungen...",
@@ -751,6 +752,20 @@
     "invalid": "(ungültig)",
     "output_path": "Ausgabe-Pfad:",
     "help_text": "Der im Checkpoint gespeicherte Datensatz-Pfad hat sich möglicherweise geändert. Aktualisieren Sie ihn bei Bedarf."
+  },
+  "mesh2splat": {
+    "title": "Mesh zu Splat",
+    "source_mesh": "Quell-Mesh",
+    "no_meshes": "Keine Meshes geladen",
+    "convert": "Konvertieren",
+    "gaussian_scale": "Gaussian Scale",
+    "tooltip_gaussian_scale": "Standardabweichung jedes Gaussians. Steuert die visuelle Ausbreitung.",
+    "sampling_density_header": "Abtastdichte-Einstellungen",
+    "sampling_density": "Sampling Density",
+    "tooltip_quality": "Steuert wie dicht die Mesh-Oberfläche abgetastet wird. Höhere Werte erzeugen mehr Gaussians.",
+    "max_resolution": "Max Resolution",
+    "tooltip_max_resolution": "Maximale Auflösung für das Abtastraster. Höhere Werte ermöglichen feinere Abtastung bei Qualität 1.0.",
+    "effective_resolution": "Effektive Auflösung"
   },
   "disk_space_dialog": {
     "title": "Unzureichender Speicherplatz",

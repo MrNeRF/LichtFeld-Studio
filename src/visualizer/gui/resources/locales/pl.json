@@ -11,6 +11,7 @@
     "file.export": "Eksportuj...",
     "file.export_config": "Eksportuj Konfigurację...",
     "file.extract_video_frames": "Wyodrębnij klatki z wideo...",
+    "file.mesh_to_splat": "Mesh na Splat...",
     "file.exit": "Zakończ",
     "edit": "Edycja",
     "edit.input_settings": "Ustawienia Wejścia...",
@@ -751,6 +752,20 @@
     "invalid": "(nieprawidłowa)",
     "output_path": "Ścieżka Wyjściowa:",
     "help_text": "Ścieżka datasetu zapisana w punkcie kontrolnym mogła się zmienić. Zaktualizuj ją w razie potrzeby."
+  },
+  "mesh2splat": {
+    "title": "Mesh na Splat",
+    "source_mesh": "Mesh źródłowy",
+    "no_meshes": "Brak załadowanych meshy",
+    "convert": "Konwertuj",
+    "gaussian_scale": "Gaussian Scale",
+    "tooltip_gaussian_scale": "Odchylenie standardowe każdego gaussiana. Kontroluje wizualne rozproszenie.",
+    "sampling_density_header": "Ustawienia gęstości próbkowania",
+    "sampling_density": "Sampling Density",
+    "tooltip_quality": "Kontroluje jak gęsto próbkowana jest powierzchnia meshy. Wyższe wartości generują więcej gaussianów.",
+    "max_resolution": "Max Resolution",
+    "tooltip_max_resolution": "Maksymalna rozdzielczość siatki próbkowania. Wyższe wartości umożliwiają dokładniejsze próbkowanie przy jakości 1.0.",
+    "effective_resolution": "Efektywna rozdzielczość"
   },
   "disk_space_dialog": {
     "title": "Niewystarczające Miejsce na Dysku",

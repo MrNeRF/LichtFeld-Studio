@@ -11,6 +11,7 @@
     "file.export": "エクスポート...",
     "file.export_config": "設定をエクスポート...",
     "file.extract_video_frames": "動画からフレームを抽出...",
+    "file.mesh_to_splat": "メッシュをスプラットに変換...",
     "file.exit": "終了",
     "edit": "編集",
     "edit.input_settings": "入力設定...",
@@ -751,6 +752,20 @@
     "invalid": "(無効)",
     "output_path": "出力パス:",
     "help_text": "チェックポイントに保存されたデータセットパスが変更されている可能性があります。必要に応じて更新してください。"
+  },
+  "mesh2splat": {
+    "title": "メッシュをスプラットに変換",
+    "source_mesh": "ソースメッシュ",
+    "no_meshes": "メッシュが読み込まれていません",
+    "convert": "変換",
+    "gaussian_scale": "Gaussian Scale",
+    "tooltip_gaussian_scale": "各ガウシアンの標準偏差。視覚的な広がりを制御します。",
+    "sampling_density_header": "サンプリング密度設定",
+    "sampling_density": "Sampling Density",
+    "tooltip_quality": "メッシュ表面のサンプリング密度を制御します。値が高いほどGaussianが多く生成されます。",
+    "max_resolution": "Max Resolution",
+    "tooltip_max_resolution": "サンプリンググリッドの最大解像度。値が高いほどクオリティ1.0でより細かいサンプリングが可能になります。",
+    "effective_resolution": "実効解像度"
   },
   "disk_space_dialog": {
     "title": "ディスク容量不足",

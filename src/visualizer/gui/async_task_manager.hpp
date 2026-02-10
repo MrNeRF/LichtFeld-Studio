@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/events.hpp"
+#include "core/mesh2splat.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
 #include "io/loader.hpp"
@@ -21,6 +22,7 @@
 
 namespace lfs::core {
     class SplatData;
+    class MeshData;
 } // namespace lfs::core
 
 namespace lfs::vis {
@@ -105,6 +107,22 @@ namespace lfs::vis {
             }
             void cancelVideoExport();
 
+            // Mesh to Splat conversion
+            void startMesh2Splat(std::shared_ptr<lfs::core::MeshData> mesh,
+                                 const std::string& source_name,
+                                 const lfs::core::Mesh2SplatOptions& options);
+            void pollMesh2SplatCompletion();
+            [[nodiscard]] bool isMesh2SplatActive() const { return mesh2splat_state_.active.load(); }
+            [[nodiscard]] float getMesh2SplatProgress() const { return mesh2splat_state_.progress.load(); }
+            [[nodiscard]] std::string getMesh2SplatStage() const {
+                std::lock_guard lock(mesh2splat_state_.mutex);
+                return mesh2splat_state_.stage;
+            }
+            [[nodiscard]] std::string getMesh2SplatError() const {
+                std::lock_guard lock(mesh2splat_state_.mutex);
+                return mesh2splat_state_.error;
+            }
+
         private:
             void startAsyncExport(lfs::core::ExportFormat format, const std::filesystem::path& path,
                                   std::unique_ptr<lfs::core::SplatData> data);
@@ -162,6 +180,23 @@ namespace lfs::vis {
                 std::optional<std::jthread> thread;
             };
             ImportState import_state_;
+
+            struct Mesh2SplatState {
+                std::atomic<bool> active{false};
+                std::atomic<bool> pending{false};
+                std::atomic<float> progress{0.0f};
+                mutable std::mutex mutex;
+                std::string stage;
+                std::string error;
+                std::string source_name;
+                std::shared_ptr<lfs::core::MeshData> pending_mesh;
+                lfs::core::Mesh2SplatOptions pending_options;
+                std::unique_ptr<lfs::core::SplatData> result;
+            };
+            Mesh2SplatState mesh2splat_state_;
+
+            void executeMesh2SplatOnGlThread();
+            void applyMesh2SplatResult();
         };
 
     } // namespace gui

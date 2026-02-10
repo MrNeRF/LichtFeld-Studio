@@ -18,6 +18,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* EXPORT = "menu.file.export";
             inline constexpr const char* EXPORT_CONFIG = "menu.file.export_config";
             inline constexpr const char* EXTRACT_VIDEO_FRAMES = "menu.file.extract_video_frames";
+            inline constexpr const char* MESH_TO_SPLAT = "menu.file.mesh_to_splat";
             inline constexpr const char* EXIT = "menu.file.exit";
         } // namespace File
 
@@ -40,7 +41,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* GETTING_STARTED = "menu.help.getting_started";
             inline constexpr const char* ABOUT = "menu.help.about";
         } // namespace Help
-    } // namespace Menu
+    }     // namespace Menu
 
     namespace Window {
         inline constexpr const char* GETTING_STARTED = "window.getting_started";
@@ -100,7 +101,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* ENABLED = "about.interop.enabled";
             inline constexpr const char* DISABLED = "about.interop.disabled";
         } // namespace Interop
-    } // namespace About
+    }     // namespace About
 
     namespace Training {
         namespace Section {
@@ -289,7 +290,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* ADD = "training.button.add";
             inline constexpr const char* REMOVE = "training.button.remove";
         } // namespace Button
-    } // namespace Training
+    }     // namespace Training
 
     namespace Scene {
         inline constexpr const char* ADD_PLY = "scene.add_ply";
@@ -911,6 +912,21 @@ namespace lichtfeld::Strings {
         inline constexpr const char* ERROR_MSG = "video_extractor.error";
         inline constexpr const char* DISMISS = "video_extractor.dismiss";
     } // namespace VideoExtractor
+
+    namespace Mesh2Splat {
+        inline constexpr const char* TITLE = "mesh2splat.title";
+        inline constexpr const char* SOURCE_MESH = "mesh2splat.source_mesh";
+        inline constexpr const char* NO_MESHES = "mesh2splat.no_meshes";
+        inline constexpr const char* CONVERT = "mesh2splat.convert";
+        inline constexpr const char* GAUSSIAN_SCALE = "mesh2splat.gaussian_scale";
+        inline constexpr const char* TOOLTIP_GAUSSIAN_SCALE = "mesh2splat.tooltip_gaussian_scale";
+        inline constexpr const char* SAMPLING_DENSITY_HEADER = "mesh2splat.sampling_density_header";
+        inline constexpr const char* SAMPLING_DENSITY = "mesh2splat.sampling_density";
+        inline constexpr const char* TOOLTIP_QUALITY = "mesh2splat.tooltip_quality";
+        inline constexpr const char* MAX_RESOLUTION = "mesh2splat.max_resolution";
+        inline constexpr const char* TOOLTIP_MAX_RESOLUTION = "mesh2splat.tooltip_max_resolution";
+        inline constexpr const char* EFFECTIVE_RESOLUTION = "mesh2splat.effective_resolution";
+    } // namespace Mesh2Splat
 
     namespace DiskSpaceDialog {
         inline constexpr const char* TITLE = "disk_space_dialog.title";

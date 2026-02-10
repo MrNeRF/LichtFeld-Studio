@@ -6,6 +6,7 @@
 #include "core/data_loading_service.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/mesh2splat.hpp"
 #include "core/scene.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/html_viewer_export.hpp"
@@ -82,6 +83,9 @@ namespace lfs::vis::gui {
                 import_state_.thread->join();
             import_state_.thread.reset();
         }
+
+        mesh2splat_state_.active.store(false);
+        mesh2splat_state_.pending.store(false);
     }
 
     void AsyncTaskManager::setupEvents() {
@@ -659,6 +663,126 @@ namespace lfs::vis::gui {
 
                 video_export_state_.active.store(false);
             });
+    }
+
+    void AsyncTaskManager::startMesh2Splat(std::shared_ptr<lfs::core::MeshData> mesh,
+                                           const std::string& source_name,
+                                           const lfs::core::Mesh2SplatOptions& options) {
+        if (mesh2splat_state_.active.load()) {
+            LOG_WARN("Mesh2Splat conversion already in progress");
+            return;
+        }
+
+        assert(mesh);
+
+        mesh2splat_state_.active.store(true);
+        mesh2splat_state_.progress.store(0.0f);
+        {
+            const std::lock_guard lock(mesh2splat_state_.mutex);
+            mesh2splat_state_.stage = "Starting...";
+            mesh2splat_state_.error.clear();
+            mesh2splat_state_.source_name = source_name;
+            mesh2splat_state_.pending_mesh = std::move(mesh);
+            mesh2splat_state_.pending_options = options;
+            mesh2splat_state_.result.reset();
+        }
+
+        LOG_INFO("Mesh2Splat conversion started: {} (resolution={}, sigma={})",
+                 source_name, options.resolution_target, options.sigma);
+
+        mesh2splat_state_.pending.store(true);
+    }
+
+    void AsyncTaskManager::pollMesh2SplatCompletion() {
+        if (!mesh2splat_state_.pending.load())
+            return;
+        mesh2splat_state_.pending.store(false);
+
+        executeMesh2SplatOnGlThread();
+
+        bool has_result;
+        {
+            const std::lock_guard lock(mesh2splat_state_.mutex);
+            has_result = mesh2splat_state_.result != nullptr;
+        }
+
+        if (has_result)
+            applyMesh2SplatResult();
+
+        mesh2splat_state_.active.store(false);
+        mesh2splat_state_.progress.store(has_result ? 1.0f : 0.0f);
+    }
+
+    void AsyncTaskManager::executeMesh2SplatOnGlThread() {
+        std::shared_ptr<lfs::core::MeshData> mesh;
+        lfs::core::Mesh2SplatOptions options;
+        {
+            const std::lock_guard lock(mesh2splat_state_.mutex);
+            mesh = std::move(mesh2splat_state_.pending_mesh);
+            options = mesh2splat_state_.pending_options;
+        }
+
+        if (!mesh)
+            return;
+
+        auto progress_cb = [this](float progress, const std::string& stage) -> bool {
+            mesh2splat_state_.progress.store(progress);
+            {
+                const std::lock_guard lock(mesh2splat_state_.mutex);
+                mesh2splat_state_.stage = stage;
+            }
+            return true;
+        };
+
+        auto result = lfs::core::mesh_to_splat(*mesh, options, progress_cb);
+
+        const std::lock_guard lock(mesh2splat_state_.mutex);
+        if (result) {
+            mesh2splat_state_.result = std::move(*result);
+            mesh2splat_state_.stage = "Applying...";
+            LOG_INFO("Mesh2Splat conversion produced {} gaussians",
+                     mesh2splat_state_.result->size());
+        } else {
+            mesh2splat_state_.error = result.error();
+            mesh2splat_state_.stage = "Failed";
+            LOG_ERROR("Mesh2Splat conversion failed: {}", result.error());
+        }
+    }
+
+    void AsyncTaskManager::applyMesh2SplatResult() {
+        auto* const scene_manager = viewer_->getSceneManager();
+        if (!scene_manager) {
+            LOG_ERROR("Mesh2Splat: no scene manager");
+            return;
+        }
+
+        std::unique_ptr<lfs::core::SplatData> splat_data;
+        std::string source_name;
+        {
+            const std::lock_guard lock(mesh2splat_state_.mutex);
+            splat_data = std::move(mesh2splat_state_.result);
+            source_name = mesh2splat_state_.source_name;
+        }
+
+        if (!splat_data) {
+            LOG_ERROR("Mesh2Splat: no result data");
+            return;
+        }
+
+        const std::string node_name = source_name + " (splat)";
+        auto& scene = scene_manager->getScene();
+
+        if (scene.getNode(node_name))
+            scene.removeNode(node_name);
+
+        scene.addSplat(node_name, std::move(splat_data));
+
+        {
+            const std::lock_guard lock(mesh2splat_state_.mutex);
+            mesh2splat_state_.stage = "Complete";
+        }
+
+        LOG_INFO("Mesh2Splat: added splat node '{}'", node_name);
     }
 
 } // namespace lfs::vis::gui

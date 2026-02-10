@@ -89,10 +89,12 @@ void main() {
 
     float metallic = u_metallic;
     float roughness = u_roughness;
+    float ao = 1.0;
     if (u_has_metallic_roughness_tex) {
-        vec2 mr = texture(u_metallic_roughness_tex, v_texcoord).bg;
-        metallic *= mr.y;
-        roughness *= mr.x;
+        vec3 orm = texture(u_metallic_roughness_tex, v_texcoord).rgb;
+        ao = orm.r;
+        roughness *= orm.g;
+        metallic *= orm.b;
     }
     roughness = max(roughness, 0.04);
 
@@ -106,31 +108,28 @@ void main() {
     vec3 L = normalize(u_light_dir);
     vec3 H = normalize(V + L);
 
-    vec3 F0 = mix(vec3(0.04), albedo.rgb, metallic);
+    float NdotL = max(dot(N, L), 0.0);
 
+    float shadow = 1.0;
+    if (u_shadow_enabled)
+        shadow = calculate_shadow(v_world_pos);
+
+    vec3 F0 = mix(vec3(0.04), albedo.rgb, metallic);
     float NDF = distribution_ggx(N, H, roughness);
     float G = geometry_smith(N, V, L, roughness);
     vec3 F = fresnel_schlick(max(dot(H, V), 0.0), F0);
 
-    vec3 numerator = NDF * G * F;
-    float denominator = 4.0 * max(dot(N, V), 0.0) * max(dot(N, L), 0.0) + 0.0001;
-    vec3 specular = numerator / denominator;
+    vec3 kS = F;
+    vec3 kD = (1.0 - kS) * (1.0 - metallic);
 
-    vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
-    float NdotL = max(dot(N, L), 0.0);
+    vec3 diffuse = kD * albedo.rgb / PI;
+    vec3 spec = (NDF * G * F) / (4.0 * max(dot(N, V), 0.0) * NdotL + 0.0001);
 
-    vec3 Lo = (kD * albedo.rgb / PI + specular) * u_light_intensity * NdotL;
-
-    if (u_shadow_enabled) {
-        float shadow = calculate_shadow(v_world_pos);
-        Lo *= shadow;
-    }
-
-    vec3 ambient = u_ambient * albedo.rgb;
-
+    vec3 Lo = (diffuse + spec) * NdotL * u_light_intensity * shadow;
+    vec3 ambient = albedo.rgb * u_ambient * ao;
     vec3 color = ambient + Lo + u_emissive;
-    color = color / (color + vec3(1.0));
-    color = pow(color, vec3(1.0 / 2.2));
 
-    frag_color = vec4(color, 1.0);
+    color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
+
+    frag_color = vec4(color, albedo.a);
 }

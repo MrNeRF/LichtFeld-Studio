@@ -11,6 +11,7 @@
     "file.export": "Esporta...",
     "file.export_config": "Esporta Configurazione...",
     "file.extract_video_frames": "Estrai fotogrammi da video...",
+    "file.mesh_to_splat": "Mesh a Splat...",
     "file.exit": "Esci",
     "edit": "Modifica",
     "edit.input_settings": "Impostazioni di Input...",
@@ -751,6 +752,20 @@
     "invalid": "(non valido)",
     "output_path": "Percorso Output:",
     "help_text": "Il percorso del dataset memorizzato nel checkpoint potrebbe essere cambiato. Aggiornalo se necessario."
+  },
+  "mesh2splat": {
+    "title": "Mesh a Splat",
+    "source_mesh": "Mesh sorgente",
+    "no_meshes": "Nessun mesh caricato",
+    "convert": "Converti",
+    "gaussian_scale": "Gaussian Scale",
+    "tooltip_gaussian_scale": "Deviazione standard di ogni gaussiano. Controlla la diffusione visiva.",
+    "sampling_density_header": "Impostazioni densità di campionamento",
+    "sampling_density": "Sampling Density",
+    "tooltip_quality": "Controlla la densità di campionamento della superficie del mesh. Valori più alti producono più Gaussians.",
+    "max_resolution": "Max Resolution",
+    "tooltip_max_resolution": "Risoluzione massima per la griglia di campionamento. Valori più alti permettono un campionamento più fine a qualità 1.0.",
+    "effective_resolution": "Risoluzione effettiva"
   },
   "disk_space_dialog": {
     "title": "Spazio su Disco Insufficiente",

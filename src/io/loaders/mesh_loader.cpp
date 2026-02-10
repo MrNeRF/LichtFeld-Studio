@@ -40,7 +40,11 @@ namespace lfs::io {
 
             aiColor3D emissive;
             if (ai_mat->Get(AI_MATKEY_COLOR_EMISSIVE, emissive) == AI_SUCCESS) {
-                mat.emissive = {emissive.r, emissive.g, emissive.b};
+                aiString emissive_tex_path;
+                bool has_emissive_tex = ai_mat->GetTexture(aiTextureType_EMISSIVE, 0, &emissive_tex_path) == AI_SUCCESS;
+                if (!has_emissive_tex) {
+                    mat.emissive = {emissive.r, emissive.g, emissive.b};
+                }
             }
 
             ai_mat->Get(AI_MATKEY_METALLIC_FACTOR, mat.metallic);
@@ -344,12 +348,16 @@ namespace lfs::io {
             options.progress(30.0f, "Processing meshes...");
         }
 
-        LOG_INFO("Mesh file: {} meshes, {} materials", scene->mNumMeshes, scene->mNumMaterials);
+        LOG_INFO("Mesh file: {} meshes, {} materials, {} embedded textures",
+                 scene->mNumMeshes, scene->mNumMaterials, scene->mNumTextures);
 
         std::vector<Material> materials;
         materials.reserve(scene->mNumMaterials);
         for (unsigned int i = 0; i < scene->mNumMaterials; ++i) {
             materials.push_back(extract_material(scene->mMaterials[i]));
+            LOG_INFO("  material[{}]: name='{}', albedo_path='{}', normal_path='{}', mr_path='{}'",
+                     i, materials.back().name, materials.back().albedo_tex_path,
+                     materials.back().normal_tex_path, materials.back().metallic_roughness_tex_path);
         }
 
         std::vector<MeshData> sub_meshes;
@@ -359,6 +367,9 @@ namespace lfs::io {
         for (unsigned int i = 0; i < scene->mNumMeshes; ++i) {
             sub_meshes.push_back(convert_ai_mesh(scene->mMeshes[i]));
             mesh_material_indices.push_back(scene->mMeshes[i]->mMaterialIndex);
+            LOG_INFO("  mesh[{}]: {} verts, {} faces, material_index={}",
+                     i, scene->mMeshes[i]->mNumVertices, scene->mMeshes[i]->mNumFaces,
+                     scene->mMeshes[i]->mMaterialIndex);
         }
 
         if (options.progress) {
@@ -406,10 +417,13 @@ namespace lfs::io {
             return 0;
         };
 
-        for (auto& mat : materials) {
+        for (size_t mi = 0; mi < materials.size(); ++mi) {
+            auto& mat = materials[mi];
             mat.albedo_tex = load_texture(mat.albedo_tex_path);
             mat.normal_tex = load_texture(mat.normal_tex_path);
             mat.metallic_roughness_tex = load_texture(mat.metallic_roughness_tex_path);
+            LOG_INFO("  material[{}] textures: albedo={}, normal={}, mr={}",
+                     mi, mat.albedo_tex, mat.normal_tex, mat.metallic_roughness_tex);
         }
 
         if (options.progress) {

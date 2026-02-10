@@ -69,11 +69,20 @@ set(RENDERING_BUILD_RESOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/resources")
 set(RENDERING_SOURCE_RESOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/resources")
 
 file(MAKE_DIRECTORY "${RENDERING_BUILD_RESOURCE_DIR}/shaders")
+file(MAKE_DIRECTORY "${RENDERING_BUILD_RESOURCE_DIR}/shaders/mesh2splat")
 
 file(GLOB SHADER_FILES "${RENDERING_SOURCE_RESOURCE_DIR}/shaders/*")
 foreach(SHADER_FILE ${SHADER_FILES})
+    if(NOT IS_DIRECTORY ${SHADER_FILE})
+        get_filename_component(SHADER_NAME ${SHADER_FILE} NAME)
+        configure_file(${SHADER_FILE} "${RENDERING_BUILD_RESOURCE_DIR}/shaders/${SHADER_NAME}" COPYONLY)
+    endif()
+endforeach()
+
+file(GLOB MESH2SPLAT_SHADER_FILES "${RENDERING_SOURCE_RESOURCE_DIR}/shaders/mesh2splat/*")
+foreach(SHADER_FILE ${MESH2SPLAT_SHADER_FILES})
     get_filename_component(SHADER_NAME ${SHADER_FILE} NAME)
-    configure_file(${SHADER_FILE} "${RENDERING_BUILD_RESOURCE_DIR}/shaders/${SHADER_NAME}" COPYONLY)
+    configure_file(${SHADER_FILE} "${RENDERING_BUILD_RESOURCE_DIR}/shaders/mesh2splat/${SHADER_NAME}" COPYONLY)
 endforeach()
 
 target_compile_definitions(lfs_rendering PRIVATE

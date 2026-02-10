@@ -11,6 +11,7 @@
     "file.export": "Exportar...",
     "file.export_config": "Exportar Configuración...",
     "file.extract_video_frames": "Extraer fotogramas de vídeo...",
+    "file.mesh_to_splat": "Mesh a Splat...",
     "file.exit": "Salir",
     "edit": "Editar",
     "edit.input_settings": "Configuración de Entrada...",
@@ -751,6 +752,20 @@
     "invalid": "(inválido)",
     "output_path": "Ruta de Salida:",
     "help_text": "La ruta del dataset almacenada en el checkpoint puede haber cambiado. Actualícela si es necesario."
+  },
+  "mesh2splat": {
+    "title": "Mesh a Splat",
+    "source_mesh": "Mesh de origen",
+    "no_meshes": "No hay meshes cargados",
+    "convert": "Convertir",
+    "gaussian_scale": "Gaussian Scale",
+    "tooltip_gaussian_scale": "Desviación estándar de cada gaussiano. Controla la dispersión visual.",
+    "sampling_density_header": "Configuración de densidad de muestreo",
+    "sampling_density": "Sampling Density",
+    "tooltip_quality": "Controla la densidad del muestreo de la superficie del mesh. Valores más altos producen más Gaussians.",
+    "max_resolution": "Max Resolution",
+    "tooltip_max_resolution": "Resolución máxima para la cuadrícula de muestreo. Valores más altos permiten un muestreo más fino a calidad 1.0.",
+    "effective_resolution": "Resolución efectiva"
   },
   "disk_space_dialog": {
     "title": "Espacio en Disco Insuficiente",

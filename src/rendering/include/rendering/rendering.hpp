@@ -304,8 +304,8 @@ namespace lfs::rendering {
         glm::vec3 wireframe_color{0.2f};
         float wireframe_width = 1.0f;
         glm::vec3 light_dir{0.3f, 1.0f, 0.5f};
-        float light_intensity = 1.5f;
-        float ambient = 0.15f;
+        float light_intensity = 0.7f;
+        float ambient = 0.4f;
         bool backface_culling = true;
         bool shadow_enabled = false;
         int shadow_map_resolution = 2048;

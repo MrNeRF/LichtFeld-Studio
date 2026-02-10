@@ -2,8 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include <filesystem>
+#include <fstream>
 #include <gtest/gtest.h>
 
+#include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
 #include "io/exporter.hpp"
 #include "io/loader.hpp"
@@ -348,4 +350,119 @@ TEST_F(PythonIOTest, LoadRealPlyFile) {
     auto& splat = *std::get<std::shared_ptr<SplatData>>(result->data);
 
     EXPECT_GT(splat.size(), 0) << "Should have loaded some gaussians";
+}
+
+// Test PLY save with uint8 colors round-trip
+TEST_F(PythonIOTest, PlySaveWithColorsUint8) {
+    constexpr size_t N = 200;
+    PointCloud pc;
+    pc.means = Tensor::empty({N, 3}, Device::CPU, DataType::Float32);
+    pc.colors = Tensor::empty({N, 3}, Device::CPU, DataType::UInt8);
+
+    auto* means_ptr = pc.means.ptr<float>();
+    auto* colors_ptr = pc.colors.ptr<uint8_t>();
+    for (size_t i = 0; i < N; ++i) {
+        means_ptr[i * 3 + 0] = static_cast<float>(i);
+        means_ptr[i * 3 + 1] = static_cast<float>(i + 1);
+        means_ptr[i * 3 + 2] = static_cast<float>(i + 2);
+        colors_ptr[i * 3 + 0] = static_cast<uint8_t>(i % 256);
+        colors_ptr[i * 3 + 1] = static_cast<uint8_t>((i * 3) % 256);
+        colors_ptr[i * 3 + 2] = static_cast<uint8_t>((i * 7) % 256);
+    }
+    pc.attribute_names = {"x", "y", "z"};
+
+    fs::path output_path = temp_dir / "colors_u8.ply";
+    PlySaveOptions options;
+    options.output_path = output_path;
+    options.binary = true;
+
+    auto result = save_ply(pc, options);
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+
+    // Verify header contains red/green/blue properties
+    std::ifstream file(output_path, std::ios::binary);
+    std::string header_text;
+    std::string line;
+    while (std::getline(file, line) && line != "end_header") {
+        header_text += line + "\n";
+    }
+    EXPECT_NE(header_text.find("property uchar red"), std::string::npos);
+    EXPECT_NE(header_text.find("property uchar green"), std::string::npos);
+    EXPECT_NE(header_text.find("property uchar blue"), std::string::npos);
+}
+
+// Test PLY save with float32 colors converts to uint8
+TEST_F(PythonIOTest, PlySaveWithColorsFloat32) {
+    constexpr size_t N = 100;
+    PointCloud pc;
+    pc.means = Tensor::empty({N, 3}, Device::CPU, DataType::Float32);
+    pc.colors = Tensor::empty({N, 3}, Device::CPU, DataType::Float32);
+
+    auto* means_ptr = pc.means.ptr<float>();
+    auto* colors_ptr = pc.colors.ptr<float>();
+    for (size_t i = 0; i < N; ++i) {
+        means_ptr[i * 3 + 0] = static_cast<float>(i);
+        means_ptr[i * 3 + 1] = 0.0f;
+        means_ptr[i * 3 + 2] = 0.0f;
+        colors_ptr[i * 3 + 0] = static_cast<float>(i) / static_cast<float>(N);
+        colors_ptr[i * 3 + 1] = 0.5f;
+        colors_ptr[i * 3 + 2] = 1.0f;
+    }
+    pc.attribute_names = {"x", "y", "z"};
+
+    fs::path output_path = temp_dir / "colors_f32.ply";
+    PlySaveOptions options;
+    options.output_path = output_path;
+    options.binary = true;
+
+    auto result = save_ply(pc, options);
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+
+    // Verify header has uchar color properties (float32 should be converted)
+    std::ifstream file(output_path, std::ios::binary);
+    std::string header_text;
+    std::string line;
+    while (std::getline(file, line) && line != "end_header") {
+        header_text += line + "\n";
+    }
+    EXPECT_NE(header_text.find("property uchar red"), std::string::npos);
+}
+
+// Test PLY save uses fallback attribute names when attribute_names is empty
+TEST_F(PythonIOTest, PlySaveFallbackAttributeNames) {
+    constexpr size_t N = 50;
+    PointCloud pc;
+    pc.means = Tensor::empty({N, 3}, Device::CPU, DataType::Float32);
+    pc.opacity = Tensor::empty({N, 1}, Device::CPU, DataType::Float32);
+
+    auto* means_ptr = pc.means.ptr<float>();
+    auto* opacity_ptr = pc.opacity.ptr<float>();
+    for (size_t i = 0; i < N; ++i) {
+        means_ptr[i * 3 + 0] = static_cast<float>(i);
+        means_ptr[i * 3 + 1] = 0.0f;
+        means_ptr[i * 3 + 2] = 0.0f;
+        opacity_ptr[i] = 0.5f;
+    }
+    // Leave attribute_names empty to trigger fallback
+    assert(pc.attribute_names.empty());
+
+    fs::path output_path = temp_dir / "fallback_names.ply";
+    PlySaveOptions options;
+    options.output_path = output_path;
+    options.binary = true;
+
+    auto result = save_ply(pc, options);
+    ASSERT_TRUE(result.has_value()) << result.error().format();
+
+    // Parse header and verify fallback names are present
+    std::ifstream file(output_path, std::ios::binary);
+    std::string header_text;
+    std::string line;
+    while (std::getline(file, line) && line != "end_header") {
+        header_text += line + "\n";
+    }
+    EXPECT_NE(header_text.find("property float x"), std::string::npos);
+    EXPECT_NE(header_text.find("property float y"), std::string::npos);
+    EXPECT_NE(header_text.find("property float z"), std::string::npos);
+    EXPECT_NE(header_text.find("property float opacity"), std::string::npos);
 }

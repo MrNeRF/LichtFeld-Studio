@@ -11,6 +11,7 @@
     "file.export": "내보내기...",
     "file.export_config": "설정 내보내기...",
     "file.extract_video_frames": "동영상에서 프레임 추출...",
+    "file.mesh_to_splat": "메시를 스플랫으로 변환...",
     "file.exit": "종료",
     "edit": "편집",
     "edit.input_settings": "입력 설정...",
@@ -751,6 +752,20 @@
     "invalid": "(유효하지 않음)",
     "output_path": "출력 경로:",
     "help_text": "체크포인트에 저장된 데이터셋 경로가 변경되었을 수 있습니다. 필요한 경우 업데이트하세요."
+  },
+  "mesh2splat": {
+    "title": "메시를 스플랫으로 변환",
+    "source_mesh": "소스 메시",
+    "no_meshes": "로드된 메시 없음",
+    "convert": "변환",
+    "gaussian_scale": "Gaussian Scale",
+    "tooltip_gaussian_scale": "각 가우시안의 표준편차. 시각적 확산을 제어합니다.",
+    "sampling_density_header": "샘플링 밀도 설정",
+    "sampling_density": "Sampling Density",
+    "tooltip_quality": "메시 표면의 샘플링 밀도를 제어합니다. 높은 값은 더 많은 가우시안을 생성합니다.",
+    "max_resolution": "Max Resolution",
+    "tooltip_max_resolution": "샘플링 그리드의 최대 해상도. 높은 값은 품질 1.0에서 더 세밀한 샘플링을 가능하게 합니다.",
+    "effective_resolution": "유효 해상도"
   },
   "disk_space_dialog": {
     "title": "디스크 공간 부족",

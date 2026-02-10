@@ -247,9 +247,9 @@ namespace lfs::python {
                    {0.2, 0.2, 0.2});
         add_float(&Proxy::mesh_wireframe_width, "mesh_wireframe_width", "Wireframe Width", "Wireframe line width", 1.0,
                   0.5, 5.0);
-        add_float(&Proxy::mesh_light_intensity, "mesh_light_intensity", "Light Intensity", "Mesh light intensity", 1.5,
+        add_float(&Proxy::mesh_light_intensity, "mesh_light_intensity", "Light Intensity", "Mesh light intensity", 0.7,
                   0.0, 5.0);
-        add_float(&Proxy::mesh_ambient, "mesh_ambient", "Ambient", "Mesh ambient light", 0.15, 0.0, 1.0);
+        add_float(&Proxy::mesh_ambient, "mesh_ambient", "Ambient", "Mesh ambient light", 0.4, 0.0, 1.0);
         add_bool(&Proxy::mesh_backface_culling, "mesh_backface_culling", "Backface Culling", "Cull mesh back faces",
                  true);
         add_bool(&Proxy::mesh_shadow_enabled, "mesh_shadow_enabled", "Shadows", "Enable shadow mapping for meshes",

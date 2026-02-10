@@ -18,6 +18,7 @@
 #include "gui/editor/python_editor.hpp"
 #include "gui/native_panels.hpp"
 #include "gui/panel_registry.hpp"
+#include "gui/panels/mesh2splat_panel.hpp"
 #include "gui/panels/python_console_panel.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_widgets.hpp"
@@ -489,6 +490,11 @@ namespace lfs::vis::gui {
                   make_panel(DiskSpaceErrorPanel(disk_space_error_dialog_.get())),
                   PanelSpace::Floating, 900, SELF);
 
+        reg_panel("native.mesh2splat", "Mesh to Splat",
+                  make_panel(panels::Mesh2SplatPanel(viewer_)),
+                  PanelSpace::Floating, 12, 0, 400.0f);
+        reg.set_panel_enabled("native.mesh2splat", false);
+
         // Viewport overlays (ordered by draw priority)
         reg_panel("native.selection_overlay", "Selection Overlay",
                   make_panel(SelectionOverlayPanel(this)),
@@ -550,6 +556,7 @@ namespace lfs::vis::gui {
 
         // Check for async import completion (must happen on main thread)
         async_tasks_.pollImportCompletion();
+        async_tasks_.pollMesh2SplatCompletion();
 
         // Poll UV package manager for async operations
         python::PackageManager::instance().poll();

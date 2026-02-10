@@ -57,6 +57,7 @@ set(CORE_SOURCES
         tensor_debug.cpp
         training_snapshot.cpp
         mesh_data.cpp
+        mesh2splat.cpp
 )
 
 add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES})
@@ -93,6 +94,7 @@ target_link_libraries(lfs_core
         taywee::args
         OpenImageIO::OpenImageIO
         $<IF:$<PLATFORM_ID:Windows>,OpenMeshCore,OpenMeshCoreStatic>
+        glad::glad
 )
 
 # OpenMP for tensor multi-threaded operations

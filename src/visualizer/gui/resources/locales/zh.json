@@ -11,6 +11,7 @@
     "file.export": "导出...",
     "file.export_config": "导出配置...",
     "file.extract_video_frames": "从视频提取帧...",
+    "file.mesh_to_splat": "网格转Splat...",
     "file.exit": "退出",
     "edit": "编辑",
     "edit.input_settings": "输入设置...",
@@ -751,6 +752,20 @@
     "invalid": "（无效）",
     "output_path": "输出路径：",
     "help_text": "在检查点中保存的数据集路径可能已更改。如果需要，请更新它。"
+  },
+  "mesh2splat": {
+    "title": "网格转Splat",
+    "source_mesh": "源网格",
+    "no_meshes": "未加载网格",
+    "convert": "转换",
+    "gaussian_scale": "Gaussian Scale",
+    "tooltip_gaussian_scale": "每个高斯的标准差。控制视觉扩展范围。",
+    "sampling_density_header": "采样密度设置",
+    "sampling_density": "Sampling Density",
+    "tooltip_quality": "控制网格表面的采样密度。较高的值会产生更多的高斯分布。",
+    "max_resolution": "Max Resolution",
+    "tooltip_max_resolution": "采样网格的最大分辨率。较高的值允许在质量1.0时进行更精细的采样。",
+    "effective_resolution": "有效分辨率"
   },
   "disk_space_dialog": {
     "title": "磁盘空间不足",
