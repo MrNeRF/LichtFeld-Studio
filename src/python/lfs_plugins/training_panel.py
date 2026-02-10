@@ -672,13 +672,13 @@ class TrainingPanel(Panel):
                     layout.table_setup_column("Label", 140.0)
                     layout.table_setup_column("Control", 0.0)
                     layout.begin_disabled(not can_edit)
-                    self._table_prop(layout, params, "min_opacity", tr("training.thresholds.min_opacity"))
-                    self._table_prop(layout, params, "prune_opacity", tr("training.thresholds.prune_opacity"))
-                    self._table_prop(layout, params, "grow_scale3d", tr("training.thresholds.grow_scale_3d"))
-                    self._table_prop(layout, params, "grow_scale2d", tr("training.thresholds.grow_scale_2d"))
-                    self._table_prop(layout, params, "prune_scale3d", tr("training.thresholds.prune_scale_3d"))
-                    self._table_prop(layout, params, "prune_scale2d", tr("training.thresholds.prune_scale_2d"))
-                    self._table_prop(layout, params, "pause_refine_after_reset", tr("training.thresholds.pause_after_reset"))
+                    self._input_float_prop_row(layout, tr("training.thresholds.min_opacity"), "min_opacity", params, 0.001, 0.01, "%.4f", min_val=0.0)
+                    self._input_float_prop_row(layout, tr("training.thresholds.prune_opacity"), "prune_opacity", params, 0.001, 0.01, "%.4f", min_val=0.0)
+                    self._input_float_prop_row(layout, tr("training.thresholds.grow_scale_3d"), "grow_scale3d", params, 0.001, 0.01, "%.4f", min_val=0.0)
+                    self._input_float_prop_row(layout, tr("training.thresholds.grow_scale_2d"), "grow_scale2d", params, 0.01, 0.05, "%.3f", min_val=0.0)
+                    self._input_float_prop_row(layout, tr("training.thresholds.prune_scale_3d"), "prune_scale3d", params, 0.01, 0.1, "%.3f", min_val=0.0)
+                    self._input_float_prop_row(layout, tr("training.thresholds.prune_scale_2d"), "prune_scale2d", params, 0.01, 0.1, "%.3f", min_val=0.0)
+                    self._input_int_row(layout, tr("training.thresholds.pause_after_reset"), "pause_refine_after_reset", params, 100, 500)
                     self._table_prop(layout, params, "revised_opacity", tr("training.thresholds.revised_opacity"))
                     layout.end_disabled()
             finally:
@@ -756,7 +756,7 @@ class TrainingPanel(Panel):
             params.set(prop_id, new_val)
         layout.pop_item_width()
 
-    def _input_float_prop_row(self, layout, label, prop_id, params, step, step_fast, fmt):
+    def _input_float_prop_row(self, layout, label, prop_id, params, step, step_fast, fmt, min_val=None):
         layout.table_next_row()
         layout.table_next_column()
         layout.label(label)
@@ -767,6 +767,8 @@ class TrainingPanel(Panel):
             current_val = 0.0
         changed, new_val = layout.input_float(f"##py_{prop_id}", float(current_val), step, step_fast, fmt)
         if changed:
+            if min_val is not None:
+                new_val = max(min_val, new_val)
             params.set(prop_id, new_val)
         layout.pop_item_width()
 

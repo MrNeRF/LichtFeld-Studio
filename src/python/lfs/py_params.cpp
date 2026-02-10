@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <set>
 
 namespace lfs::python {
@@ -90,7 +91,7 @@ namespace lfs::python {
                         "grad_threshold", "Grad Threshold", 0.0002f, 0.0f, 0.01f,
                         "Gradient threshold for densification")
             .float_prop(&OptimizationParameters::min_opacity,
-                        "min_opacity", "Min Opacity", 0.005f, 0.0f, 0.1f,
+                        "min_opacity", "Min Opacity", 0.005f, 0.0f, std::numeric_limits<float>::infinity(),
                         "Minimum opacity for pruning")
             .float_prop(&OptimizationParameters::init_opacity,
                         "init_opacity", "Init Opacity", 0.5f, 0.0f, 1.0f,
@@ -152,25 +153,25 @@ namespace lfs::python {
 
             // ADC strategy parameters
             .float_prop(&OptimizationParameters::prune_opacity,
-                        "prune_opacity", "Prune Opacity", 0.005f, 0.0f, 0.1f,
+                        "prune_opacity", "Prune Opacity", 0.005f, 0.0f, std::numeric_limits<float>::infinity(),
                         "Opacity threshold for pruning (ADC)")
             .float_prop(&OptimizationParameters::grow_scale3d,
-                        "grow_scale3d", "Grow Scale 3D", 0.01f, 0.0f, 0.1f,
+                        "grow_scale3d", "Grow Scale 3D", 0.01f, 0.0f, std::numeric_limits<float>::infinity(),
                         "3D scale threshold for growing (ADC)")
             .float_prop(&OptimizationParameters::grow_scale2d,
-                        "grow_scale2d", "Grow Scale 2D", 0.05f, 0.0f, 0.2f,
+                        "grow_scale2d", "Grow Scale 2D", 0.05f, 0.0f, std::numeric_limits<float>::infinity(),
                         "2D scale threshold for growing (ADC)")
             .size_prop(&OptimizationParameters::reset_every,
                        "reset_every", "Reset Every", 3000, 100, 10000,
                        "Iteration interval for opacity reset (ADC)")
             .float_prop(&OptimizationParameters::prune_scale3d,
-                        "prune_scale3d", "Prune Scale 3D", 0.1f, 0.0f, 1.0f,
+                        "prune_scale3d", "Prune Scale 3D", 0.1f, 0.0f, std::numeric_limits<float>::infinity(),
                         "3D scale threshold for pruning (ADC)")
             .float_prop(&OptimizationParameters::prune_scale2d,
-                        "prune_scale2d", "Prune Scale 2D", 0.15f, 0.0f, 0.5f,
+                        "prune_scale2d", "Prune Scale 2D", 0.15f, 0.0f, std::numeric_limits<float>::infinity(),
                         "2D scale threshold for pruning (ADC)")
             .size_prop(&OptimizationParameters::pause_refine_after_reset,
-                       "pause_refine_after_reset", "Pause After Reset", 0, 0, 1000,
+                       "pause_refine_after_reset", "Pause After Reset", 0, 0, std::numeric_limits<size_t>::max(),
                        "Iterations to pause refinement after opacity reset")
             .bool_prop(&OptimizationParameters::revised_opacity,
                        "revised_opacity", "Revised Opacity", false,

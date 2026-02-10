@@ -2712,7 +2712,11 @@ namespace lfs::python {
         }
 
         nb::object prop_desc = all_props[prop_key];
-        nb::object current_value = data.attr(prop_id.c_str());
+
+        const bool has_get = nb::hasattr(data, "get") && PyCallable_Check(data.attr("get").ptr());
+        nb::object current_value = has_get
+                                       ? data.attr("get")(nb::cast(prop_id))
+                                       : data.attr(prop_id.c_str());
         const std::string prop_type = nb::cast<std::string>(
             nb::object(prop_desc.attr("__class__").attr("__name__")));
 
@@ -2906,7 +2910,12 @@ namespace lfs::python {
         }
 
         if (changed) {
-            nb::setattr(data, prop_id.c_str(), new_value);
+            const bool has_set = nb::hasattr(data, "set") && PyCallable_Check(data.attr("set").ptr());
+            if (has_set) {
+                data.attr("set")(nb::cast(prop_id), new_value);
+            } else {
+                nb::setattr(data, prop_id.c_str(), new_value);
+            }
 
             if (nb::hasattr(prop_desc, "update")) {
                 nb::object update_cb = prop_desc.attr("update");
