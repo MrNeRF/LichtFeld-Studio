@@ -270,6 +270,7 @@ namespace lfs::vis {
         // Clipboard for copy/paste (supports multi-selection)
         struct ClipboardEntry {
             std::unique_ptr<lfs::core::SplatData> data;
+            std::shared_ptr<lfs::core::MeshData> mesh;
             glm::mat4 transform{1.0f};
             struct HierarchyNode {
                 core::NodeType type = core::NodeType::SPLAT;

@@ -2723,21 +2723,42 @@ namespace lfs::vis {
 
         for (const auto id : sel_ids) {
             const auto* node = scene_.getNodeById(id);
-            if (!node || !node->model || node->model->size() == 0)
+            if (!node)
                 continue;
 
-            const auto& src = *node->model;
-            auto cloned = std::make_unique<lfs::core::SplatData>(
-                src.get_max_sh_degree(),
-                src.means_raw().clone(), src.sh0_raw().clone(), src.shN_raw().clone(),
-                src.scaling_raw().clone(), src.rotation_raw().clone(), src.opacity_raw().clone(),
-                src.get_scene_scale());
-            cloned->set_active_sh_degree(src.get_active_sh_degree());
-
             ClipboardEntry entry;
-            entry.data = std::move(cloned);
             entry.transform = node->local_transform.get();
             entry.hierarchy = copyNodeHierarchy(node);
+
+            if (node->type == core::NodeType::MESH && node->mesh) {
+                const auto& sm = *node->mesh;
+                auto cloned = std::make_shared<core::MeshData>();
+                cloned->vertices = sm.vertices.clone();
+                cloned->indices = sm.indices.clone();
+                if (sm.has_normals())
+                    cloned->normals = sm.normals.clone();
+                if (sm.has_tangents())
+                    cloned->tangents = sm.tangents.clone();
+                if (sm.has_texcoords())
+                    cloned->texcoords = sm.texcoords.clone();
+                if (sm.has_colors())
+                    cloned->colors = sm.colors.clone();
+                cloned->materials = sm.materials;
+                cloned->submeshes = sm.submeshes;
+                cloned->texture_images = sm.texture_images;
+                entry.mesh = std::move(cloned);
+            } else if (node->model && node->model->size() > 0) {
+                const auto& src = *node->model;
+                auto cloned = std::make_unique<lfs::core::SplatData>(
+                    src.get_max_sh_degree(),
+                    src.means_raw().clone(), src.sh0_raw().clone(), src.shN_raw().clone(),
+                    src.scaling_raw().clone(), src.rotation_raw().clone(), src.opacity_raw().clone(),
+                    src.get_scene_scale());
+                cloned->set_active_sh_degree(src.get_active_sh_degree());
+                entry.data = std::move(cloned);
+            } else {
+                continue;
+            }
 
             clipboard_.push_back(std::move(entry));
         }
@@ -2896,37 +2917,54 @@ namespace lfs::vis {
         core::Scene::Transaction txn(scene_);
 
         for (const auto& entry : clipboard_) {
-            if (!entry.data || entry.data->size() == 0)
-                continue;
-
-            auto paste_data = std::make_unique<lfs::core::SplatData>(
-                entry.data->get_max_sh_degree(),
-                entry.data->means_raw().clone(), entry.data->sh0_raw().clone(), entry.data->shN_raw().clone(),
-                entry.data->scaling_raw().clone(), entry.data->rotation_raw().clone(), entry.data->opacity_raw().clone(),
-                entry.data->get_scene_scale());
-            paste_data->set_active_sh_degree(entry.data->get_active_sh_degree());
-
             ++clipboard_counter_;
             const std::string name = std::format("Pasted_{}", clipboard_counter_);
-            const size_t count = entry.data->size();
-            scene_.addNode(name, std::move(paste_data));
+
+            if (entry.mesh) {
+                auto cloned = std::make_shared<core::MeshData>();
+                cloned->vertices = entry.mesh->vertices.clone();
+                cloned->indices = entry.mesh->indices.clone();
+                if (entry.mesh->has_normals())
+                    cloned->normals = entry.mesh->normals.clone();
+                if (entry.mesh->has_tangents())
+                    cloned->tangents = entry.mesh->tangents.clone();
+                if (entry.mesh->has_texcoords())
+                    cloned->texcoords = entry.mesh->texcoords.clone();
+                if (entry.mesh->has_colors())
+                    cloned->colors = entry.mesh->colors.clone();
+                cloned->materials = entry.mesh->materials;
+                cloned->submeshes = entry.mesh->submeshes;
+                cloned->texture_images = entry.mesh->texture_images;
+                scene_.addMesh(name, std::move(cloned));
+            } else if (entry.data && entry.data->size() > 0) {
+                auto paste_data = std::make_unique<lfs::core::SplatData>(
+                    entry.data->get_max_sh_degree(),
+                    entry.data->means_raw().clone(), entry.data->sh0_raw().clone(), entry.data->shN_raw().clone(),
+                    entry.data->scaling_raw().clone(), entry.data->rotation_raw().clone(), entry.data->opacity_raw().clone(),
+                    entry.data->get_scene_scale());
+                paste_data->set_active_sh_degree(entry.data->get_active_sh_degree());
+
+                scene_.addNode(name, std::move(paste_data));
+            } else {
+                --clipboard_counter_;
+                continue;
+            }
+
             selection_.invalidateNodeMask();
 
-            // Apply original transform
             static constexpr glm::mat4 IDENTITY{1.0f};
             if (entry.transform != IDENTITY) {
                 scene_.setNodeTransform(name, entry.transform);
             }
 
-            // Paste node hierarchy (cropbox)
-            const auto* splat_node = scene_.getNode(name);
-            if (splat_node && entry.hierarchy) {
-                pasteNodeHierarchy(*entry.hierarchy, splat_node->id);
+            const auto* pasted_node = scene_.getNode(name);
+            if (pasted_node && entry.hierarchy) {
+                pasteNodeHierarchy(*entry.hierarchy, pasted_node->id);
             }
 
             state::PLYAdded{
                 .name = name,
-                .node_gaussians = count,
+                .node_gaussians = pasted_node ? pasted_node->gaussian_count : 0,
                 .total_gaussians = scene_.getTotalGaussianCount(),
                 .is_visible = true,
                 .parent_name = "",
@@ -2934,10 +2972,8 @@ namespace lfs::vis {
                 .node_type = 0}
                 .emit();
 
-            // Emit PLYAdded for cropbox
-            const auto* pasted_splat = scene_.getNode(name);
-            if (pasted_splat) {
-                const core::NodeId cropbox_id = scene_.getCropBoxForSplat(pasted_splat->id);
+            if (pasted_node && pasted_node->type == core::NodeType::SPLAT) {
+                const core::NodeId cropbox_id = scene_.getCropBoxForSplat(pasted_node->id);
                 if (cropbox_id != core::NULL_NODE) {
                     if (const auto* cropbox_node = scene_.getNodeById(cropbox_id)) {
                         state::PLYAdded{
