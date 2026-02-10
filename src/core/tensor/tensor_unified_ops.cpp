@@ -1825,12 +1825,6 @@ namespace lfs::core {
         size_t elements_per_tensor = first_shape.elements();
         size_t bytes_per_tensor = elements_per_tensor * dtype_size(first_dtype);
 
-        // Compute strides for the output tensor
-        auto result_strides = result.shape().strides();
-
-        // Size of one "slice" along the stacked dimension
-        size_t stride_at_dim = result_strides[dim];
-
         // Copy each input tensor into the corresponding slice of the output
         for (size_t i = 0; i < tensors.size(); ++i) {
             const int si = static_cast<int>(i);

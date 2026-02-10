@@ -4,6 +4,7 @@
 #include "core/cuda_debug.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
+#include <algorithm>
 #include <cuda_runtime.h>
 
 namespace lfs::core {
@@ -20,18 +21,17 @@ namespace lfs::core {
             const size_t* __restrict__ strides,
             const size_t rank,
             const size_t n) {
-            const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n)
-                return;
-
-            size_t tmp = idx;
-            size_t offset = 0;
-            for (int d = rank - 1; d >= 0; --d) {
-                const size_t coord = tmp % shape[d];
-                tmp /= shape[d];
-                offset += coord * strides[d];
+            const size_t stride = blockDim.x * static_cast<size_t>(gridDim.x);
+            for (size_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < n; idx += stride) {
+                size_t tmp = idx;
+                size_t offset = 0;
+                for (int d = rank - 1; d >= 0; --d) {
+                    const size_t coord = tmp % shape[d];
+                    tmp /= shape[d];
+                    offset += coord * strides[d];
+                }
+                output[offset] = input[idx];
             }
-            output[offset] = input[idx];
         }
 
         // Rank-2 optimized (column slices)
@@ -42,13 +42,12 @@ namespace lfs::core {
             const size_t d0, const size_t d1,
             const size_t s0, const size_t s1,
             const size_t n) {
-            const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n)
-                return;
-
-            const size_t i1 = idx % d1;
-            const size_t i0 = idx / d1;
-            output[i0 * s0 + i1 * s1] = input[idx];
+            const size_t stride = blockDim.x * static_cast<size_t>(gridDim.x);
+            for (size_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < n; idx += stride) {
+                const size_t i1 = idx % d1;
+                const size_t i0 = idx / d1;
+                output[i0 * s0 + i1 * s1] = input[idx];
+            }
         }
 
         template <typename T>
@@ -57,14 +56,14 @@ namespace lfs::core {
             const size_t d0, const size_t d1, const size_t d2,
             const size_t s0, const size_t s1, const size_t s2,
             const size_t n) {
-            const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n)
-                return;
-            const size_t i2 = idx % d2;
-            const size_t tmp = idx / d2;
-            const size_t i1 = tmp % d1;
-            const size_t i0 = tmp / d1;
-            output[i0 * s0 + i1 * s1 + i2 * s2] = input[idx];
+            const size_t stride = blockDim.x * static_cast<size_t>(gridDim.x);
+            for (size_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < n; idx += stride) {
+                const size_t i2 = idx % d2;
+                const size_t tmp = idx / d2;
+                const size_t i1 = tmp % d1;
+                const size_t i0 = tmp / d1;
+                output[i0 * s0 + i1 * s1 + i2 * s2] = input[idx];
+            }
         }
 
         template <typename T>
@@ -73,16 +72,16 @@ namespace lfs::core {
             const size_t d0, const size_t d1, const size_t d2, const size_t d3,
             const size_t s0, const size_t s1, const size_t s2, const size_t s3,
             const size_t n) {
-            const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n)
-                return;
-            const size_t i3 = idx % d3;
-            size_t tmp = idx / d3;
-            const size_t i2 = tmp % d2;
-            tmp /= d2;
-            const size_t i1 = tmp % d1;
-            const size_t i0 = tmp / d1;
-            output[i0 * s0 + i1 * s1 + i2 * s2 + i3 * s3] = input[idx];
+            const size_t stride = blockDim.x * static_cast<size_t>(gridDim.x);
+            for (size_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < n; idx += stride) {
+                const size_t i3 = idx % d3;
+                size_t tmp = idx / d3;
+                const size_t i2 = tmp % d2;
+                tmp /= d2;
+                const size_t i1 = tmp % d1;
+                const size_t i0 = tmp / d1;
+                output[i0 * s0 + i1 * s1 + i2 * s2 + i3 * s3] = input[idx];
+            }
         }
 
         // Fused int32→float32 rank-2
@@ -92,14 +91,15 @@ namespace lfs::core {
             const size_t d0, const size_t d1,
             const size_t s0, const size_t s1,
             const size_t n) {
-            const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n)
-                return;
-
-            const size_t i1 = idx % d1;
-            const size_t i0 = idx / d1;
-            output[i0 * s0 + i1 * s1] = static_cast<float>(input[idx]);
+            const size_t stride = blockDim.x * static_cast<size_t>(gridDim.x);
+            for (size_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < n; idx += stride) {
+                const size_t i1 = idx % d1;
+                const size_t i0 = idx / d1;
+                output[i0 * s0 + i1 * s1] = static_cast<float>(input[idx]);
+            }
         }
+
+        constexpr int MAX_GRID = 65535;
 
         void launch_strided_scatter_int32_to_float32(
             const void* input, void* output,
@@ -107,7 +107,9 @@ namespace lfs::core {
             const size_t rank, const size_t n, cudaStream_t stream) {
             if (rank != 2)
                 return;
-            const int blocks = (n + SCATTER_BLOCK_SIZE - 1) / SCATTER_BLOCK_SIZE;
+            const int blocks = static_cast<int>(std::min(
+                (n + SCATTER_BLOCK_SIZE - 1) / SCATTER_BLOCK_SIZE,
+                static_cast<size_t>(MAX_GRID)));
             strided_scatter_int32_to_float32_rank2<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>(
                 static_cast<const int32_t*>(input), static_cast<float*>(output),
                 shape[0], shape[1], strides[0], strides[1], n);
@@ -119,7 +121,9 @@ namespace lfs::core {
             const size_t* shape, const size_t* strides,
             const size_t rank, const size_t n,
             const DataType dtype, cudaStream_t stream) {
-            const int blocks = (n + SCATTER_BLOCK_SIZE - 1) / SCATTER_BLOCK_SIZE;
+            const int blocks = static_cast<int>(std::min(
+                (n + SCATTER_BLOCK_SIZE - 1) / SCATTER_BLOCK_SIZE,
+                static_cast<size_t>(MAX_GRID)));
 
 #define LAUNCH_RANK2(T)                                                      \
     strided_scatter_kernel_rank2<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
@@ -164,7 +168,7 @@ namespace lfs::core {
                 return;
             const int blocks = static_cast<int>(std::min(
                 (n + SCATTER_BLOCK_SIZE - 1) / SCATTER_BLOCK_SIZE,
-                static_cast<size_t>(INT_MAX)));
+                static_cast<size_t>(MAX_GRID)));
             const size_t rank = shape.size();
 
 #define LAUNCH_SCATTER2(T) strided_scatter_kernel_rank2<<<blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
@@ -214,12 +218,12 @@ namespace lfs::core {
             const T* __restrict__ input, T* __restrict__ output,
             const size_t d0, const size_t d1, const size_t s0, const size_t s1,
             const size_t n) {
-            const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n)
-                return;
-            const size_t i1 = idx % d1;
-            const size_t i0 = idx / d1;
-            output[idx] = input[i0 * s0 + i1 * s1];
+            const size_t stride = blockDim.x * static_cast<size_t>(gridDim.x);
+            for (size_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < n; idx += stride) {
+                const size_t i1 = idx % d1;
+                const size_t i0 = idx / d1;
+                output[idx] = input[i0 * s0 + i1 * s1];
+            }
         }
 
         template <typename T>
@@ -228,14 +232,14 @@ namespace lfs::core {
             const size_t d0, const size_t d1, const size_t d2,
             const size_t s0, const size_t s1, const size_t s2,
             const size_t n) {
-            const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n)
-                return;
-            const size_t i2 = idx % d2;
-            const size_t tmp = idx / d2;
-            const size_t i1 = tmp % d1;
-            const size_t i0 = tmp / d1;
-            output[idx] = input[i0 * s0 + i1 * s1 + i2 * s2];
+            const size_t stride = blockDim.x * static_cast<size_t>(gridDim.x);
+            for (size_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < n; idx += stride) {
+                const size_t i2 = idx % d2;
+                const size_t tmp = idx / d2;
+                const size_t i1 = tmp % d1;
+                const size_t i0 = tmp / d1;
+                output[idx] = input[i0 * s0 + i1 * s1 + i2 * s2];
+            }
         }
 
         template <typename T>
@@ -244,16 +248,16 @@ namespace lfs::core {
             const size_t d0, const size_t d1, const size_t d2, const size_t d3,
             const size_t s0, const size_t s1, const size_t s2, const size_t s3,
             const size_t n) {
-            const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n)
-                return;
-            const size_t i3 = idx % d3;
-            size_t tmp = idx / d3;
-            const size_t i2 = tmp % d2;
-            tmp /= d2;
-            const size_t i1 = tmp % d1;
-            const size_t i0 = tmp / d1;
-            output[idx] = input[i0 * s0 + i1 * s1 + i2 * s2 + i3 * s3];
+            const size_t stride = blockDim.x * static_cast<size_t>(gridDim.x);
+            for (size_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < n; idx += stride) {
+                const size_t i3 = idx % d3;
+                size_t tmp = idx / d3;
+                const size_t i2 = tmp % d2;
+                tmp /= d2;
+                const size_t i1 = tmp % d1;
+                const size_t i0 = tmp / d1;
+                output[idx] = input[i0 * s0 + i1 * s1 + i2 * s2 + i3 * s3];
+            }
         }
 
         template <typename T>
@@ -261,25 +265,26 @@ namespace lfs::core {
             const T* __restrict__ input, T* __restrict__ output,
             const size_t* __restrict__ shape, const size_t* __restrict__ strides,
             const size_t rank, const size_t n) {
-            const size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= n)
-                return;
-
-            size_t tmp = idx;
-            size_t input_offset = 0;
-            for (int d = rank - 1; d >= 0; --d) {
-                const size_t coord = tmp % shape[d];
-                tmp /= shape[d];
-                input_offset += coord * strides[d];
+            const size_t stride = blockDim.x * static_cast<size_t>(gridDim.x);
+            for (size_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < n; idx += stride) {
+                size_t tmp = idx;
+                size_t input_offset = 0;
+                for (int d = rank - 1; d >= 0; --d) {
+                    const size_t coord = tmp % shape[d];
+                    tmp /= shape[d];
+                    input_offset += coord * strides[d];
+                }
+                output[idx] = input[input_offset];
             }
-            output[idx] = input[input_offset];
         }
 
         void launch_strided_copy_immediate(
             const void* input, void* output,
             const std::vector<size_t>& shape, const std::vector<size_t>& strides,
             const size_t n, const DataType dtype, cudaStream_t stream) {
-            const int num_blocks = (n + SCATTER_BLOCK_SIZE - 1) / SCATTER_BLOCK_SIZE;
+            const int num_blocks = static_cast<int>(std::min(
+                (n + SCATTER_BLOCK_SIZE - 1) / SCATTER_BLOCK_SIZE,
+                static_cast<size_t>(MAX_GRID)));
             const size_t rank = shape.size();
 
 #define LAUNCH_COPY2(T) strided_copy_kernel_rank2<<<num_blocks, SCATTER_BLOCK_SIZE, 0, stream>>>( \
@@ -333,7 +338,9 @@ namespace lfs::core {
             DataType dtype,
             cudaStream_t stream) {
             const int block_size = 256;
-            const int num_blocks = (total_elements + block_size - 1) / block_size;
+            const int num_blocks = static_cast<int>(std::min(
+                (total_elements + block_size - 1) / block_size,
+                static_cast<size_t>(MAX_GRID)));
 
             switch (dtype) {
             case DataType::Float32:
@@ -387,21 +394,16 @@ namespace lfs::core {
             size_t d0, size_t d1, size_t d2,  // Shape (immediate parameters)
             size_t s0, size_t s1, size_t s2,  // Strides (immediate parameters)
             size_t total_elements) {
-            size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= total_elements)
-                return;
+            const size_t stride = blockDim.x * static_cast<size_t>(gridDim.x);
+            for (size_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < total_elements; idx += stride) {
+                size_t i2 = idx % d2;
+                size_t tmp = idx / d2;
+                size_t i1 = tmp % d1;
+                size_t i0 = tmp / d1;
 
-            // Convert flat output index to multi-dimensional coordinates
-            // Iteration order: i2 → i1 → i0
-            size_t i2 = idx % d2;
-            size_t tmp = idx / d2;
-            size_t i1 = tmp % d1;
-            size_t i0 = tmp / d1;
-
-            size_t input_offset = i0 * s0 + i1 * s1 + i2 * s2;
-
-            // Read from pinned host memory and write to GPU memory
-            gpu_output[idx] = host_input[input_offset];
+                size_t input_offset = i0 * s0 + i1 * s1 + i2 * s2;
+                gpu_output[idx] = host_input[input_offset];
+            }
         }
 
         // ============= SPECIALIZED HWC→CHW KERNEL =============
@@ -416,27 +418,17 @@ namespace lfs::core {
             const T* __restrict__ host_input,
             T* __restrict__ gpu_output,
             size_t H, size_t W, size_t C) {
+            const size_t total = H * W * C;
+            const size_t stride = blockDim.x * static_cast<size_t>(gridDim.x);
+            for (size_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < total; idx += stride) {
+                size_t c = idx % C;
+                size_t tmp = idx / C;
+                size_t w = tmp % W;
+                size_t h = tmp / W;
 
-            size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            size_t total = H * W * C;
-            if (idx >= total)
-                return;
-
-            // Decompose linear index in HWC order (INPUT layout)
-            // idx = h*W*C + w*C + c
-            size_t c = idx % C;
-            size_t tmp = idx / C;
-            size_t w = tmp % W;
-            size_t h = tmp / W;
-
-            // Input offset (already in HWC order, contiguous)
-            size_t input_offset = idx;
-
-            // Output offset in CHW order: [C, H, W]
-            size_t output_offset = c * (H * W) + h * W + w;
-
-            // Consecutive threads read consecutive host memory (FAST PCIe!)
-            gpu_output[output_offset] = host_input[input_offset];
+                size_t output_offset = c * (H * W) + h * W + w;
+                gpu_output[output_offset] = host_input[idx];
+            }
         }
 
         // ============= ADAPTIVE GATHER KERNELS (Different iteration orders) =============
@@ -450,23 +442,17 @@ namespace lfs::core {
             size_t d0, size_t d1, size_t d2,
             size_t s0, size_t s1, size_t s2,
             size_t total_elements) {
-            size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= total_elements)
-                return;
+            const size_t stride = blockDim.x * static_cast<size_t>(gridDim.x);
+            for (size_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < total_elements; idx += stride) {
+                size_t i1 = idx % d1;
+                size_t tmp = idx / d1;
+                size_t i2 = tmp % d2;
+                size_t i0 = tmp / d2;
 
-            // Iteration order: i1 → i2 → i0
-            size_t i1 = idx % d1;
-            size_t tmp = idx / d1;
-            size_t i2 = tmp % d2;
-            size_t i0 = tmp / d2;
-
-            // Input offset with strides
-            size_t input_offset = i0 * s0 + i1 * s1 + i2 * s2;
-
-            // Output offset in standard row-major order [d0, d1, d2]
-            size_t output_offset = i0 * (d1 * d2) + i1 * d2 + i2;
-
-            gpu_output[output_offset] = host_input[input_offset];
+                size_t input_offset = i0 * s0 + i1 * s1 + i2 * s2;
+                size_t output_offset = i0 * (d1 * d2) + i1 * d2 + i2;
+                gpu_output[output_offset] = host_input[input_offset];
+            }
         }
 
         // Iteration order: i0 → i1 → i2 (good when s0 is smallest)
@@ -477,23 +463,17 @@ namespace lfs::core {
             size_t d0, size_t d1, size_t d2,
             size_t s0, size_t s1, size_t s2,
             size_t total_elements) {
-            size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= total_elements)
-                return;
+            const size_t stride = blockDim.x * static_cast<size_t>(gridDim.x);
+            for (size_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < total_elements; idx += stride) {
+                size_t i0 = idx % d0;
+                size_t tmp = idx / d0;
+                size_t i1 = tmp % d1;
+                size_t i2 = tmp / d1;
 
-            // Iteration order: i0 → i1 → i2
-            size_t i0 = idx % d0;
-            size_t tmp = idx / d0;
-            size_t i1 = tmp % d1;
-            size_t i2 = tmp / d1;
-
-            // Input offset with strides
-            size_t input_offset = i0 * s0 + i1 * s1 + i2 * s2;
-
-            // Output offset in standard row-major order [d0, d1, d2]
-            size_t output_offset = i0 * (d1 * d2) + i1 * d2 + i2;
-
-            gpu_output[output_offset] = host_input[input_offset];
+                size_t input_offset = i0 * s0 + i1 * s1 + i2 * s2;
+                size_t output_offset = i0 * (d1 * d2) + i1 * d2 + i2;
+                gpu_output[output_offset] = host_input[input_offset];
+            }
         }
 
         // Generic fallback for arbitrary rank
@@ -505,23 +485,17 @@ namespace lfs::core {
             const size_t* __restrict__ strides,
             size_t rank,
             size_t total_elements) {
-            size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-            if (idx >= total_elements)
-                return;
-
-            // Convert flat output index to multi-dimensional coordinates
-            size_t tmp = idx;
-            size_t input_offset = 0;
-
-            // Generic path for arbitrary rank
-            for (int d = rank - 1; d >= 0; --d) {
-                size_t coord = tmp % shape[d];
-                tmp /= shape[d];
-                input_offset += coord * strides[d];
+            const size_t stride = blockDim.x * static_cast<size_t>(gridDim.x);
+            for (size_t idx = blockIdx.x * blockDim.x + threadIdx.x; idx < total_elements; idx += stride) {
+                size_t tmp = idx;
+                size_t input_offset = 0;
+                for (int d = rank - 1; d >= 0; --d) {
+                    size_t coord = tmp % shape[d];
+                    tmp /= shape[d];
+                    input_offset += coord * strides[d];
+                }
+                gpu_output[idx] = host_input[input_offset];
             }
-
-            // Read from pinned host memory and write to GPU memory
-            gpu_output[idx] = host_input[input_offset];
         }
 
         void launch_strided_upload(
@@ -534,9 +508,10 @@ namespace lfs::core {
             DataType dtype,
             cudaStream_t stream) {
 
-            // Use larger blocks for better occupancy during PCIe reads
             const int block_size = 256;
-            const int num_blocks = (total_elements + block_size - 1) / block_size;
+            const int num_blocks = static_cast<int>(std::min(
+                (total_elements + block_size - 1) / block_size,
+                static_cast<size_t>(MAX_GRID)));
 
             // FAST PATH: Rank-3 with adaptive kernel selection based on stride pattern
             if (rank == 3) {

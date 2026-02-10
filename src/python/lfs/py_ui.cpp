@@ -51,6 +51,7 @@
 #include <implot.h>
 #include <stack>
 #include <string_view>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <imgui.h>
@@ -101,6 +102,7 @@ namespace lfs::python {
 
         // Dynamic texture tracking
         std::atomic<bool> g_gl_alive{true};
+        std::thread::id g_gl_thread_id{};
         std::mutex g_dynamic_textures_mutex;
 
         class PyDynamicTexture;
@@ -115,10 +117,27 @@ namespace lfs::python {
                 g_all_dynamic_textures.insert(this);
             }
 
+            explicit PyDynamicTexture(const std::string& plugin_name)
+                : plugin_name_(plugin_name) {
+                std::lock_guard lock(g_dynamic_textures_mutex);
+                g_all_dynamic_textures.insert(this);
+                if (!plugin_name_.empty())
+                    g_plugin_textures[plugin_name_].push_back(this);
+            }
+
             ~PyDynamicTexture() {
                 destroy();
                 std::lock_guard lock(g_dynamic_textures_mutex);
                 g_all_dynamic_textures.erase(this);
+                if (!plugin_name_.empty()) {
+                    auto it = g_plugin_textures.find(plugin_name_);
+                    if (it != g_plugin_textures.end()) {
+                        auto& vec = it->second;
+                        vec.erase(std::remove(vec.begin(), vec.end(), this), vec.end());
+                        if (vec.empty())
+                            g_plugin_textures.erase(it);
+                    }
+                }
             }
 
             PyDynamicTexture(const PyDynamicTexture&) = delete;
@@ -135,8 +154,11 @@ namespace lfs::python {
 
                 if (t.device() == core::Device::CPU)
                     t = t.cuda();
-                if (t.dtype() != core::DataType::Float32)
-                    t = t.to(core::DataType::Float32) / 255.0f;
+                const auto orig_dtype = t.dtype();
+                if (orig_dtype != core::DataType::Float32)
+                    t = t.to(core::DataType::Float32);
+                if (orig_dtype == core::DataType::UInt8)
+                    t = t / 255.0f;
 
                 const int w = t.size(1);
                 const int h = t.size(0);
@@ -180,6 +202,7 @@ namespace lfs::python {
 
         private:
             std::unique_ptr<rendering::CudaGLInteropTexture> interop_;
+            std::string plugin_name_;
             int width_ = 0;
             int height_ = 0;
         };
@@ -393,6 +416,7 @@ namespace lfs::python {
         }
 
         void free_plugin_textures(const std::string& plugin_name) {
+            assert(g_gl_thread_id == std::thread::id{} || std::this_thread::get_id() == g_gl_thread_id);
             std::lock_guard lock(g_dynamic_textures_mutex);
             auto it = g_plugin_textures.find(plugin_name);
             if (it == g_plugin_textures.end())
@@ -2933,6 +2957,7 @@ namespace lfs::python {
     }
 
     void shutdown_dynamic_textures() {
+        assert(g_gl_thread_id == std::thread::id{} || std::this_thread::get_id() == g_gl_thread_id);
         decltype(g_tensor_cache) cache_to_destroy;
         {
             std::lock_guard lock(g_dynamic_textures_mutex);
@@ -2949,6 +2974,8 @@ namespace lfs::python {
 
     // Register UI classes with nanobind module
     void register_ui(nb::module_& m) {
+        g_gl_thread_id = std::this_thread::get_id();
+
         // Call sub-registration functions
         register_ui_context(m);
         register_ui_theme(m);
@@ -3261,11 +3288,21 @@ namespace lfs::python {
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
             .def(
                 "image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
-                    auto it = g_tensor_cache.find(label);
-                    if (it == g_tensor_cache.end())
-                        it = g_tensor_cache.emplace(label, std::make_unique<PyDynamicTexture>()).first;
-                    it->second->update(tensor);
-                    auto& tex = *it->second;
+                    PyDynamicTexture* tex_ptr = nullptr;
+                    {
+                        std::lock_guard lock(g_dynamic_textures_mutex);
+                        auto it = g_tensor_cache.find(label);
+                        if (it != g_tensor_cache.end())
+                            tex_ptr = it->second.get();
+                    }
+                    if (!tex_ptr) {
+                        auto new_tex = std::make_unique<PyDynamicTexture>();
+                        tex_ptr = new_tex.get();
+                        std::lock_guard lock(g_dynamic_textures_mutex);
+                        g_tensor_cache.try_emplace(label, std::move(new_tex));
+                    }
+                    tex_ptr->update(tensor);
+                    auto& tex = *tex_ptr;
                     auto [u1, v1] = tex.uv1();
                     const ImVec4 t = tint.is_none() ? ImVec4(1, 1, 1, 1) : tuple_to_imvec4(tint);
                     ImGui::Image(static_cast<ImTextureID>(tex.texture_id()),
@@ -4186,11 +4223,11 @@ namespace lfs::python {
         nb::class_<PyDynamicTexture>(m, "DynamicTexture")
             .def(nb::init<>())
             .def(
-                "__init__", [](PyDynamicTexture* self, PyTensor& tensor) {
-                    new (self) PyDynamicTexture();
+                "__init__", [](PyDynamicTexture* self, PyTensor& tensor, const std::string& plugin_name) {
+                    new (self) PyDynamicTexture(plugin_name);
                     self->update(tensor);
                 },
-                nb::arg("tensor"))
+                nb::arg("tensor"), nb::arg("plugin_name") = "")
             .def("update", &PyDynamicTexture::update, nb::arg("tensor"))
             .def("destroy", &PyDynamicTexture::destroy)
             .def_prop_ro("id", &PyDynamicTexture::texture_id)
