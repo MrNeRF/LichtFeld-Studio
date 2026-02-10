@@ -76,21 +76,21 @@ namespace lfs::io {
 
         MeshData convert_ai_mesh(const aiMesh* ai_mesh) {
             assert(ai_mesh);
-            const int64_t nv = static_cast<int64_t>(ai_mesh->mNumVertices);
+            const int nv = static_cast<int>(ai_mesh->mNumVertices);
             assert(nv > 0);
 
-            auto vertices = Tensor::empty({nv, 3}, Device::CPU, DataType::Float32);
+            auto vertices = Tensor::empty({static_cast<size_t>(nv), size_t{3}}, Device::CPU, DataType::Float32);
             auto vacc = vertices.accessor<float, 2>();
-            for (int64_t i = 0; i < nv; ++i) {
+            for (int i = 0; i < nv; ++i) {
                 const auto& v = ai_mesh->mVertices[i];
                 vacc(i, 0) = v.x;
                 vacc(i, 1) = v.y;
                 vacc(i, 2) = v.z;
             }
 
-            const int64_t nf = static_cast<int64_t>(ai_mesh->mNumFaces);
-            int64_t tri_count = 0;
-            for (int64_t i = 0; i < nf; ++i) {
+            const int nf = static_cast<int>(ai_mesh->mNumFaces);
+            int tri_count = 0;
+            for (int i = 0; i < nf; ++i) {
                 if (ai_mesh->mFaces[i].mNumIndices == 3)
                     ++tri_count;
             }
@@ -99,10 +99,10 @@ namespace lfs::io {
                          nf - tri_count, tri_count);
             }
 
-            auto indices = Tensor::empty({tri_count, 3}, Device::CPU, DataType::Int32);
+            auto indices = Tensor::empty({static_cast<size_t>(tri_count), size_t{3}}, Device::CPU, DataType::Int32);
             auto iacc = indices.accessor<int32_t, 2>();
-            int64_t ti = 0;
-            for (int64_t i = 0; i < nf; ++i) {
+            int ti = 0;
+            for (int i = 0; i < nf; ++i) {
                 const auto& face = ai_mesh->mFaces[i];
                 if (face.mNumIndices != 3)
                     continue;
@@ -116,9 +116,9 @@ namespace lfs::io {
             MeshData mesh(std::move(vertices), std::move(indices));
 
             if (ai_mesh->HasNormals()) {
-                mesh.normals = Tensor::empty({nv, 3}, Device::CPU, DataType::Float32);
+                mesh.normals = Tensor::empty({static_cast<size_t>(nv), size_t{3}}, Device::CPU, DataType::Float32);
                 auto nacc = mesh.normals.accessor<float, 2>();
-                for (int64_t i = 0; i < nv; ++i) {
+                for (int i = 0; i < nv; ++i) {
                     const auto& n = ai_mesh->mNormals[i];
                     nacc(i, 0) = n.x;
                     nacc(i, 1) = n.y;
@@ -127,9 +127,9 @@ namespace lfs::io {
             }
 
             if (ai_mesh->HasTangentsAndBitangents()) {
-                mesh.tangents = Tensor::empty({nv, 4}, Device::CPU, DataType::Float32);
+                mesh.tangents = Tensor::empty({static_cast<size_t>(nv), size_t{4}}, Device::CPU, DataType::Float32);
                 auto tacc = mesh.tangents.accessor<float, 2>();
-                for (int64_t i = 0; i < nv; ++i) {
+                for (int i = 0; i < nv; ++i) {
                     const auto& t = ai_mesh->mTangents[i];
                     const auto& b = ai_mesh->mBitangents[i];
                     const auto& n = ai_mesh->mNormals[i];
@@ -146,9 +146,9 @@ namespace lfs::io {
             }
 
             if (ai_mesh->HasTextureCoords(0)) {
-                mesh.texcoords = Tensor::empty({nv, 2}, Device::CPU, DataType::Float32);
+                mesh.texcoords = Tensor::empty({static_cast<size_t>(nv), size_t{2}}, Device::CPU, DataType::Float32);
                 auto tcacc = mesh.texcoords.accessor<float, 2>();
-                for (int64_t i = 0; i < nv; ++i) {
+                for (int i = 0; i < nv; ++i) {
                     const auto& tc = ai_mesh->mTextureCoords[0][i];
                     tcacc(i, 0) = tc.x;
                     tcacc(i, 1) = tc.y;
@@ -156,9 +156,9 @@ namespace lfs::io {
             }
 
             if (ai_mesh->HasVertexColors(0)) {
-                mesh.colors = Tensor::empty({nv, 4}, Device::CPU, DataType::Float32);
+                mesh.colors = Tensor::empty({static_cast<size_t>(nv), size_t{4}}, Device::CPU, DataType::Float32);
                 auto cacc = mesh.colors.accessor<float, 2>();
-                for (int64_t i = 0; i < nv; ++i) {
+                for (int i = 0; i < nv; ++i) {
                     const auto& c = ai_mesh->mColors[0][i];
                     cacc(i, 0) = c.r;
                     cacc(i, 1) = c.g;
@@ -181,60 +181,60 @@ namespace lfs::io {
                 return std::move(m);
             }
 
-            int64_t total_verts = 0;
-            int64_t total_faces = 0;
+            int total_verts = 0;
+            int total_faces = 0;
             bool any_normals = false;
             bool any_tangents = false;
             bool any_texcoords = false;
             bool any_colors = false;
 
             for (const auto& m : meshes) {
-                total_verts += m.vertex_count();
-                total_faces += m.face_count();
+                total_verts += static_cast<int>(m.vertex_count());
+                total_faces += static_cast<int>(m.face_count());
                 any_normals |= m.has_normals();
                 any_tangents |= m.has_tangents();
                 any_texcoords |= m.has_texcoords();
                 any_colors |= m.has_colors();
             }
 
-            auto vertices = Tensor::empty({total_verts, 3}, Device::CPU, DataType::Float32);
-            auto indices = Tensor::empty({total_faces, 3}, Device::CPU, DataType::Int32);
+            auto vertices = Tensor::empty({static_cast<size_t>(total_verts), size_t{3}}, Device::CPU, DataType::Float32);
+            auto indices = Tensor::empty({static_cast<size_t>(total_faces), size_t{3}}, Device::CPU, DataType::Int32);
 
             Tensor normals, tangents, texcoords, colors;
             if (any_normals)
-                normals = Tensor::zeros({total_verts, 3}, Device::CPU, DataType::Float32);
+                normals = Tensor::zeros({static_cast<size_t>(total_verts), size_t{3}}, Device::CPU, DataType::Float32);
             if (any_tangents)
-                tangents = Tensor::zeros({total_verts, 4}, Device::CPU, DataType::Float32);
+                tangents = Tensor::zeros({static_cast<size_t>(total_verts), size_t{4}}, Device::CPU, DataType::Float32);
             if (any_texcoords)
-                texcoords = Tensor::zeros({total_verts, 2}, Device::CPU, DataType::Float32);
+                texcoords = Tensor::zeros({static_cast<size_t>(total_verts), size_t{2}}, Device::CPU, DataType::Float32);
             if (any_colors)
-                colors = Tensor::ones({total_verts, 4}, Device::CPU, DataType::Float32);
+                colors = Tensor::ones({static_cast<size_t>(total_verts), size_t{4}}, Device::CPU, DataType::Float32);
 
             auto vacc = vertices.accessor<float, 2>();
             auto iacc = indices.accessor<int32_t, 2>();
 
-            int64_t v_offset = 0;
-            int64_t f_offset = 0;
+            int v_offset = 0;
+            int f_offset = 0;
 
             MeshData result;
 
             for (auto& m : meshes) {
-                if (v_offset > static_cast<int64_t>(std::numeric_limits<int32_t>::max())) {
+                if (v_offset > std::numeric_limits<int32_t>::max()) {
                     LOG_ERROR("Vertex offset {} exceeds Int32 range, truncating merge", v_offset);
                     break;
                 }
-                const int64_t nv = m.vertex_count();
-                const int64_t nf = m.face_count();
+                const int nv = static_cast<int>(m.vertex_count());
+                const int nf = static_cast<int>(m.face_count());
 
                 auto src_vacc = m.vertices.accessor<float, 2>();
-                for (int64_t i = 0; i < nv; ++i) {
+                for (int i = 0; i < nv; ++i) {
                     vacc(v_offset + i, 0) = src_vacc(i, 0);
                     vacc(v_offset + i, 1) = src_vacc(i, 1);
                     vacc(v_offset + i, 2) = src_vacc(i, 2);
                 }
 
                 auto src_iacc = m.indices.accessor<int32_t, 2>();
-                for (int64_t i = 0; i < nf; ++i) {
+                for (int i = 0; i < nf; ++i) {
                     for (int j = 0; j < 3; ++j) {
                         assert(src_iacc(i, j) >= 0 && src_iacc(i, j) < nv);
                     }
@@ -246,7 +246,7 @@ namespace lfs::io {
                 if (any_normals && m.has_normals()) {
                     auto dst = normals.accessor<float, 2>();
                     auto src = m.normals.accessor<float, 2>();
-                    for (int64_t i = 0; i < nv; ++i) {
+                    for (int i = 0; i < nv; ++i) {
                         dst(v_offset + i, 0) = src(i, 0);
                         dst(v_offset + i, 1) = src(i, 1);
                         dst(v_offset + i, 2) = src(i, 2);
@@ -256,7 +256,7 @@ namespace lfs::io {
                 if (any_tangents && m.has_tangents()) {
                     auto dst = tangents.accessor<float, 2>();
                     auto src = m.tangents.accessor<float, 2>();
-                    for (int64_t i = 0; i < nv; ++i) {
+                    for (int i = 0; i < nv; ++i) {
                         dst(v_offset + i, 0) = src(i, 0);
                         dst(v_offset + i, 1) = src(i, 1);
                         dst(v_offset + i, 2) = src(i, 2);
@@ -267,7 +267,7 @@ namespace lfs::io {
                 if (any_texcoords && m.has_texcoords()) {
                     auto dst = texcoords.accessor<float, 2>();
                     auto src = m.texcoords.accessor<float, 2>();
-                    for (int64_t i = 0; i < nv; ++i) {
+                    for (int i = 0; i < nv; ++i) {
                         dst(v_offset + i, 0) = src(i, 0);
                         dst(v_offset + i, 1) = src(i, 1);
                     }
@@ -276,7 +276,7 @@ namespace lfs::io {
                 if (any_colors && m.has_colors()) {
                     auto dst = colors.accessor<float, 2>();
                     auto src = m.colors.accessor<float, 2>();
-                    for (int64_t i = 0; i < nv; ++i) {
+                    for (int i = 0; i < nv; ++i) {
                         dst(v_offset + i, 0) = src(i, 0);
                         dst(v_offset + i, 1) = src(i, 1);
                         dst(v_offset + i, 2) = src(i, 2);
