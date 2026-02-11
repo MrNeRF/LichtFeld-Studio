@@ -3,6 +3,7 @@
 """Plugin dependency installer using uv."""
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -38,6 +39,13 @@ class PluginInstaller:
             pass
         return None
 
+    @staticmethod
+    def _embedded_python_env() -> dict:
+        """Return env dict with PYTHONHOME set so uv subprocesses find the stdlib."""
+        env = os.environ.copy()
+        env["PYTHONHOME"] = sys.prefix
+        return env
+
     def ensure_venv(self) -> bool:
         """Create plugin-specific venv if needed."""
         venv_path = self.plugin.info.path / ".venv"
@@ -58,11 +66,12 @@ class PluginInstaller:
             logger.info("Plugin venv using embedded Python: %s", embedded_python)
             try:
                 probe = subprocess.run(
-                    [str(embedded_python), "-I", "-c",
+                    [str(embedded_python), "-s", "-c",
                      "import sys; print(f'executable={sys.executable}'); "
                      "print(f'prefix={sys.prefix}'); "
                      "print(f'base_prefix={sys.base_prefix}')"],
                     capture_output=True, text=True, timeout=10,
+                    env=self._embedded_python_env(),
                 )
                 for line in probe.stdout.strip().splitlines():
                     logger.info("Python probe: %s", line)
@@ -82,6 +91,7 @@ class PluginInstaller:
             cmd,
             capture_output=True,
             text=True,
+            env=self._embedded_python_env(),
         )
 
         if result.returncode != 0:
@@ -145,6 +155,7 @@ class PluginInstaller:
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            env=self._embedded_python_env(),
         ) as proc:
             if proc.stdout is not None:
                 for line in iter(proc.stdout.readline, ""):

@@ -228,8 +228,29 @@ namespace lfs::python {
                      lfs::core::getExecutableDir().string());
         }
 
+        const auto python_home = lfs::core::getPythonHome();
+        if (!python_home.empty()) {
+            const auto home_str = python_home.string();
+#ifdef _WIN32
+            std::wstring whome(home_str.begin(), home_str.end());
+            SetEnvironmentVariableW(L"PYTHONHOME", whome.c_str());
+#else
+            setenv("PYTHONHOME", home_str.c_str(), 1);
+#endif
+            LOG_INFO("Set PYTHONHOME={}", home_str);
+        }
+
         LOG_INFO("Executing: {}", cmd.str());
         const auto [exit_code, output] = execute_command(cmd.str());
+
+        if (!python_home.empty()) {
+#ifdef _WIN32
+            SetEnvironmentVariableW(L"PYTHONHOME", nullptr);
+#else
+            unsetenv("PYTHONHOME");
+#endif
+        }
+
         if (exit_code != 0) {
             LOG_ERROR("Failed to create venv: {}", output);
             return false;
