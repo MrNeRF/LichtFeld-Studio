@@ -673,7 +673,10 @@ namespace lfs::vis::gui {
             return;
         }
 
-        assert(mesh);
+        if (!mesh) {
+            LOG_ERROR("Mesh2Splat: null mesh pointer");
+            return;
+        }
 
         mesh2splat_state_.active.store(true);
         mesh2splat_state_.progress.store(0.0f);

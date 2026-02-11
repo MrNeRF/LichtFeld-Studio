@@ -107,6 +107,7 @@ namespace lfs::rendering {
             GLint prev_program;
             GLint prev_fbo;
             GLint prev_vao;
+            GLint prev_active_texture;
             GLboolean depth_test;
             GLboolean blend;
             GLboolean cull_face;
@@ -116,6 +117,7 @@ namespace lfs::rendering {
                 glGetIntegerv(GL_CURRENT_PROGRAM, &prev_program);
                 glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_fbo);
                 glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prev_vao);
+                glGetIntegerv(GL_ACTIVE_TEXTURE, &prev_active_texture);
                 depth_test = glIsEnabled(GL_DEPTH_TEST);
                 blend = glIsEnabled(GL_BLEND);
                 cull_face = glIsEnabled(GL_CULL_FACE);
@@ -126,6 +128,7 @@ namespace lfs::rendering {
                 glUseProgram(prev_program);
                 glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
                 glBindVertexArray(prev_vao);
+                glActiveTexture(prev_active_texture);
                 if (depth_test)
                     glEnable(GL_DEPTH_TEST);
                 else

@@ -466,7 +466,6 @@ namespace lfs::vis {
         state::SceneChanged::when([this](const auto&) {
             cached_filtered_point_cloud_.reset();
             cached_source_point_cloud_ = nullptr;
-            mesh_dirty_.store(true);
             markDirty();
         });
 
@@ -490,10 +489,8 @@ namespace lfs::vis {
         });
 
         // PLY added/removed
-        state::PLYAdded::when([this](const auto& e) {
+        state::PLYAdded::when([this](const auto&) {
             LOG_DEBUG("PLY added, marking render dirty");
-            if (e.node_type == static_cast<int>(lfs::core::NodeType::MESH))
-                mesh_dirty_.store(true);
             markDirty();
         });
 
@@ -545,6 +542,7 @@ namespace lfs::vis {
     void RenderingManager::markDirty() {
         needs_render_.store(true);
         render_texture_valid_ = false;
+        mesh_dirty_.store(true);
         LOG_TRACE("Render marked dirty");
     }
 
@@ -1039,6 +1037,7 @@ namespace lfs::vis {
             LOG_DEBUG("Viewport resize: {}x{} -> {}x{}", last_viewport_size_.x, last_viewport_size_.y,
                       current_size.x, current_size.y);
             needs_render_.store(true);
+            mesh_dirty_.store(true);
             last_viewport_size_ = current_size;
         }
 
@@ -1450,36 +1449,38 @@ namespace lfs::vis {
 
         if (scene_manager && engine_) {
             if (!scene_state.meshes.empty()) {
-                const lfs::rendering::ViewportData mesh_viewport{
-                    .rotation = context.viewport.getRotationMatrix(),
-                    .translation = context.viewport.getTranslation(),
-                    .size = render_size,
-                    .focal_length_mm = settings_.focal_length_mm,
-                    .orthographic = settings_.orthographic,
-                    .ortho_scale = settings_.ortho_scale};
+                if (mesh_dirty_.load()) {
+                    const lfs::rendering::ViewportData mesh_viewport{
+                        .rotation = context.viewport.getRotationMatrix(),
+                        .translation = context.viewport.getTranslation(),
+                        .size = render_size,
+                        .focal_length_mm = settings_.focal_length_mm,
+                        .orthographic = settings_.orthographic,
+                        .ortho_scale = settings_.ortho_scale};
 
-                const lfs::rendering::MeshRenderOptions mesh_opts{
-                    .wireframe_overlay = settings_.mesh_wireframe,
-                    .wireframe_color = settings_.mesh_wireframe_color,
-                    .wireframe_width = settings_.mesh_wireframe_width,
-                    .light_dir = settings_.mesh_light_dir,
-                    .light_intensity = settings_.mesh_light_intensity,
-                    .ambient = settings_.mesh_ambient,
-                    .backface_culling = settings_.mesh_backface_culling,
-                    .shadow_enabled = settings_.mesh_shadow_enabled,
-                    .shadow_map_resolution = settings_.mesh_shadow_resolution};
+                    const lfs::rendering::MeshRenderOptions mesh_opts{
+                        .wireframe_overlay = settings_.mesh_wireframe,
+                        .wireframe_color = settings_.mesh_wireframe_color,
+                        .wireframe_width = settings_.mesh_wireframe_width,
+                        .light_dir = settings_.mesh_light_dir,
+                        .light_intensity = settings_.mesh_light_intensity,
+                        .ambient = settings_.mesh_ambient,
+                        .backface_culling = settings_.mesh_backface_culling,
+                        .shadow_enabled = settings_.mesh_shadow_enabled,
+                        .shadow_map_resolution = settings_.mesh_shadow_resolution};
 
-                glEnable(GL_DEPTH_TEST);
-                glDepthFunc(GL_LESS);
+                    glEnable(GL_DEPTH_TEST);
+                    glDepthFunc(GL_LESS);
 
-                engine_->resetMeshFrameState();
-                for (const auto& vm : scene_state.meshes) {
-                    const auto result = engine_->renderMesh(
-                        *vm.mesh, mesh_viewport, vm.transform, mesh_opts, splats_presented);
-                    if (!result)
-                        LOG_ERROR("Failed to render mesh: {}", result.error());
+                    engine_->resetMeshFrameState();
+                    for (const auto& vm : scene_state.meshes) {
+                        const auto result = engine_->renderMesh(
+                            *vm.mesh, mesh_viewport, vm.transform, mesh_opts, splats_presented);
+                        if (!result)
+                            LOG_ERROR("Failed to render mesh: {}", result.error());
+                    }
+                    mesh_dirty_.store(false);
                 }
-                mesh_dirty_.store(false);
 
                 if (engine_->hasMeshRender()) {
                     glm::ivec2 mesh_pos(0, 0);

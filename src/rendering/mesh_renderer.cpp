@@ -405,6 +405,8 @@ namespace lfs::rendering {
         enable_attrib(3, mesh.has_texcoords());
         enable_attrib(4, mesh.has_colors());
 
+        const glm::vec3 headlight_dir = glm::normalize(camera_pos);
+
         glm::mat4 light_vp(1.0f);
         if (opts.shadow_enabled && shadow_shader_.valid()) {
             const int res = opts.shadow_map_resolution;
@@ -412,7 +414,7 @@ namespace lfs::rendering {
                 setupShadowFBO(res);
 
             if (shadow_fbo_.get()) {
-                light_vp = compute_light_vp(mesh, model, opts.light_dir);
+                light_vp = compute_light_vp(mesh, model, headlight_dir);
 
                 glBindFramebuffer(GL_FRAMEBUFFER, shadow_fbo_.get());
                 glViewport(0, 0, shadow_map_resolution_, shadow_map_resolution_);
@@ -472,7 +474,6 @@ namespace lfs::rendering {
             pbr_shader_->set_uniform("u_projection", projection);
             pbr_shader_->set_uniform("u_normal_matrix", normal_matrix);
             pbr_shader_->set_uniform("u_camera_pos", camera_pos);
-            const glm::vec3 headlight_dir = glm::normalize(camera_pos);
             pbr_shader_->set_uniform("u_light_dir", headlight_dir);
             pbr_shader_->set_uniform("u_light_intensity", opts.light_intensity);
             pbr_shader_->set_uniform("u_ambient", opts.ambient);
