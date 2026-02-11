@@ -68,6 +68,7 @@ target_include_directories(lfs_python_runtime
 target_link_libraries(lfs_python_runtime
     PUBLIC
         Python::Python
+        glm::glm
     PRIVATE
         lfs_logger
 )
