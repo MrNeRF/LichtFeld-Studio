@@ -14,7 +14,7 @@ layout(location = 2) in vec4 tangent;
 layout(location = 3) in vec2 uv;
 layout(location = 4) in vec2 normalizedUv;
 layout(location = 5) in vec3 scale;
-
+layout(location = 6) in vec4 vertexColor;
 
 // Output struct definition
 out VS_OUT{
@@ -24,6 +24,7 @@ out VS_OUT{
     vec2 uv;
     vec2 normalizedUv;
     vec3 scale;
+    vec4 vertexColor;
 } vs_out;
 
 void main() {
@@ -33,5 +34,6 @@ void main() {
     vs_out.uv = uv;
     vs_out.normalizedUv = normalizedUv;
     vs_out.scale = scale;
+    vs_out.vertexColor = vertexColor;
     gl_Position = vec4(position, 1.0);
 }

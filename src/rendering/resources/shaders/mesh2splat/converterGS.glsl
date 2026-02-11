@@ -22,12 +22,14 @@ in VS_OUT{
     vec2 uv;
     vec2 normalizedUv;
     vec3 scale;
+    vec4 vertexColor;
 } gs_in[];
 
 out vec3 Position;
 flat out vec3 Scale;
 out vec2 UV;
 out vec4 Tangent;
+out vec4 VertexColor;
 out vec3 Normal;
 flat out vec4 Quaternion;
 
@@ -266,10 +268,11 @@ void main() {
 
     for (int i = 0; i < 3; i++)
     {
-        Tangent                 = gs_in[i].tangent;       
+        Tangent                 = gs_in[i].tangent;
         Position                = gs_in[i].position;
         Normal                  = gs_in[i].normal;
         UV                      = gs_in[i].uv;
+        VertexColor             = gs_in[i].vertexColor;
         Quaternion              = quaternion;
         gl_Position             = vec4(orthogonalUvs[i] * 2.0 - 1.0, 0.0, 1.0);
         EmitVertex();

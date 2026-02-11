@@ -60,8 +60,9 @@ namespace lfs::rendering {
             glm::vec2 uv;            // location 3
             glm::vec2 normalized_uv; // location 4
             glm::vec3 scale;         // location 5
+            glm::vec4 color;         // location 6
         };
-        static_assert(sizeof(PerVertexData) == 17 * sizeof(float));
+        static_assert(sizeof(PerVertexData) == 21 * sizeof(float));
 
         struct SubmeshGeometry {
             std::vector<PerVertexData> vertices;
@@ -214,6 +215,14 @@ namespace lfs::rendering {
                 assert(texcoords_cpu.shape()[0] == verts_cpu.shape()[0]);
             }
 
+            const float* colors_ptr = nullptr;
+            Tensor colors_cpu;
+            if (mesh.has_colors()) {
+                colors_cpu = mesh.colors.device() == Device::CPU ? mesh.colors : mesh.colors.to(Device::CPU);
+                colors_ptr = colors_cpu.ptr<float>();
+                assert(colors_cpu.shape()[0] == verts_cpu.shape()[0]);
+            }
+
             // Build submesh list; treat whole mesh as one if no submeshes defined
             std::vector<Submesh> submeshes;
             if (mesh.submeshes.empty()) {
@@ -248,6 +257,7 @@ namespace lfs::rendering {
                     glm::vec3 nrm[3];
                     glm::vec4 tan[3];
                     glm::vec2 uv[3];
+                    glm::vec4 col[3] = {glm::vec4(1.0f), glm::vec4(1.0f), glm::vec4(1.0f)};
 
                     for (int k = 0; k < 3; k++) {
                         int32_t vi = indices[k];
@@ -269,6 +279,11 @@ namespace lfs::rendering {
                         if (tangents_ptr) {
                             tan[k] = {tangents_ptr[vi * 4], tangents_ptr[vi * 4 + 1],
                                       tangents_ptr[vi * 4 + 2], tangents_ptr[vi * 4 + 3]};
+                        }
+
+                        if (colors_ptr) {
+                            col[k] = {colors_ptr[vi * 4], colors_ptr[vi * 4 + 1],
+                                      colors_ptr[vi * 4 + 2], colors_ptr[vi * 4 + 3]};
                         }
                     }
 
@@ -292,6 +307,7 @@ namespace lfs::rendering {
                         vtx.uv = uv[k];
                         vtx.normalized_uv = {0.0f, 0.0f}; // GS ignores this; uses triplanar projection
                         vtx.scale = {0.0f, 0.0f, 0.0f};   // unused by GS
+                        vtx.color = col[k];
                         geo.vertices.push_back(vtx);
                     }
                 }
@@ -689,13 +705,14 @@ namespace lfs::rendering {
         if (!cleanup.program)
             return std::unexpected("Failed to compile mesh2splat shaders");
 
-        // Create SSBO for gaussian output
-        // All submeshes render into a shared FBO using the global bbox, so total
-        // output is bounded by res^2, not res^2 * num_submeshes. ×6 oversize factor
-        // (6 vec4s per GaussianVertex × 6 safety margin, matching original mesh2splat).
-        const GLsizeiptr ssbo_size =
-            static_cast<GLsizeiptr>(res) * res *
-            static_cast<GLsizeiptr>(sizeof(glm::vec4)) * 6 * 6;
+        // SSBO for gaussian output. Each rasterized fragment writes one GaussianVertex.
+        // For sparse meshes (few large triangles), res^2 * 6 is sufficient.
+        // For dense meshes (many small triangles), fragments scale with triangle count.
+        const auto triangle_count = static_cast<GLsizeiptr>(total_vertices / 3);
+        const GLsizeiptr pixel_based = static_cast<GLsizeiptr>(res) * res * 6;
+        const GLsizeiptr triangle_based = triangle_count * 2;
+        const GLsizeiptr ssbo_entries = std::max(pixel_based, triangle_based);
+        const GLsizeiptr ssbo_size = ssbo_entries * static_cast<GLsizeiptr>(sizeof(GaussianVertex));
 
         glGenBuffers(1, &cleanup.ssbo);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, cleanup.ssbo);
@@ -775,6 +792,11 @@ namespace lfs::rendering {
                                   reinterpret_cast<void*>(offsetof(PerVertexData, scale)));
             glEnableVertexAttribArray(5);
 
+            // location 6: vertex color (vec4)
+            glVertexAttribPointer(6, 4, GL_FLOAT, GL_FALSE, stride,
+                                  reinterpret_cast<void*>(offsetof(PerVertexData, color)));
+            glEnableVertexAttribArray(6);
+
             // Set uniforms
             glm::vec4 material_factor(1.0f);
             float metallic_factor = 0.0f;
@@ -794,6 +816,7 @@ namespace lfs::rendering {
             GLint loc_ambient = glGetUniformLocation(cleanup.program, "u_ambient");
             GLint loc_bbox_min = glGetUniformLocation(cleanup.program, "u_bboxMin");
             GLint loc_bbox_max = glGetUniformLocation(cleanup.program, "u_bboxMax");
+            GLint loc_has_vtx_colors = glGetUniformLocation(cleanup.program, "hasVertexColors");
 
             if (loc_material >= 0)
                 glUniform4fv(loc_material, 1, glm::value_ptr(material_factor));
@@ -807,6 +830,8 @@ namespace lfs::rendering {
                 glUniform1f(loc_light_int, options.light_intensity);
             if (loc_ambient >= 0)
                 glUniform1f(loc_ambient, options.ambient);
+            if (loc_has_vtx_colors >= 0)
+                glUniform1i(loc_has_vtx_colors, mesh.has_colors() ? 1 : 0);
             // Use GLOBAL bbox so all submeshes share the same orthogonal UV space.
             // The GS maps positions to FBO pixels via triplanar projection using bbox.
             // Shared bbox = shared UV space = no duplicate gaussians across submeshes.
@@ -851,6 +876,13 @@ namespace lfs::rendering {
 
         if (num_gaussians == 0) {
             return std::unexpected("Conversion produced zero gaussians");
+        }
+
+        const uint32_t max_gaussians = static_cast<uint32_t>(ssbo_size / sizeof(GaussianVertex));
+        if (num_gaussians > max_gaussians) {
+            LOG_WARN("mesh2splat: atomic counter ({}) exceeds SSBO capacity ({}), clamping",
+                     num_gaussians, max_gaussians);
+            num_gaussians = max_gaussians;
         }
 
         LOG_INFO("mesh2splat: produced {} gaussians (resolution={})", num_gaussians, options.resolution_target);

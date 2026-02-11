@@ -16,6 +16,7 @@ uniform sampler2D emissiveTexture;
 uniform int hasAlbedoMap;
 uniform int hasNormalMap;
 uniform int hasMetallicRoughnessMap;
+uniform int hasVertexColors;
 uniform vec4 u_materialFactor;
 uniform float u_metallicFactor;
 uniform float u_roughnessFactor;
@@ -44,6 +45,7 @@ flat in vec3 Scale;
 in vec2 UV;
 in vec4 Tangent;
 in vec3 Normal;
+in vec4 VertexColor;
 flat in vec4 Quaternion;
 
 const float PI = 3.14159265359;
@@ -79,6 +81,8 @@ void main() {
     vec4 out_Color = vec4(1);
     if (hasAlbedoMap == 1)
         out_Color = texture(albedoTexture, UV);
+    else if (hasVertexColors == 1)
+        out_Color = VertexColor;
 
     vec3 out_Normal;
     if (hasNormalMap == 1) {
