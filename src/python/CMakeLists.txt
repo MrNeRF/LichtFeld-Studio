@@ -438,6 +438,19 @@ if(BUILD_PORTABLE)
             COMPONENT runtime
         )
 
+        # Install venv launchers (required for python -m venv to create python.exe in venvs)
+        if(EXISTS "${VCPKG_PYTHON_TOOLS_DIR}/venvlauncher.exe")
+            install(PROGRAMS
+                "${VCPKG_PYTHON_TOOLS_DIR}/venvlauncher.exe"
+                "${VCPKG_PYTHON_TOOLS_DIR}/venvwlauncher.exe"
+                DESTINATION "${CMAKE_INSTALL_BINDIR}"
+                COMPONENT runtime
+            )
+            message(STATUS "  Will bundle venv launchers for plugin venv support")
+        else()
+            message(WARNING "venvlauncher.exe not found - plugin venv creation may fail")
+        endif()
+
         # Install python3.dll and python312.dll to bin/ (where exe is)
         file(GLOB PYTHON_DLLS "${VCPKG_PYTHON_TOOLS_DIR}/python*.dll")
         if(PYTHON_DLLS)
