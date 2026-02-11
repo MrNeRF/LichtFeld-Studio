@@ -222,6 +222,34 @@ namespace lfs::core {
         return {};
     }
 
+    // Embedded Python executable (for uv venv creation / plugin isolation)
+    inline std::filesystem::path getEmbeddedPython() {
+        const auto exe_dir = getExecutableDir();
+
+#ifdef _WIN32
+        if (const auto p = exe_dir / "python.exe"; std::filesystem::exists(p))
+            return p;
+
+        if (const auto p = exe_dir / "vcpkg_installed" / "x64-windows" / "tools" / "python3" / "python.exe";
+            std::filesystem::exists(p))
+            return p;
+#else
+        if (const auto p = exe_dir / "python3"; std::filesystem::exists(p))
+            return p;
+
+        if (const auto p = exe_dir / "vcpkg_installed" / "x64-linux" / "tools" / "python3" / "python3.12";
+            std::filesystem::exists(p))
+            return p;
+#endif
+
+#ifdef LFS_PYTHON_EXECUTABLE
+        if (const auto p = std::filesystem::path(LFS_PYTHON_EXECUTABLE); std::filesystem::exists(p))
+            return p;
+#endif
+
+        return {};
+    }
+
     // nvImageCodec extensions directory
     inline std::filesystem::path getExtensionsDir() {
         const auto exe_dir = getExecutableDir();

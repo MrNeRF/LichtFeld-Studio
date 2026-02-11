@@ -5,6 +5,7 @@
 #include "package_manager.hpp"
 
 #include <core/cuda_version.hpp>
+#include <core/executable_path.hpp>
 #include <core/logger.hpp>
 
 #include <cstdio>
@@ -218,10 +219,16 @@ namespace lfs::python {
         std::ostringstream cmd;
         cmd << "\"" << uv.string() << "\" venv \"" << m_venv_dir.string() << "\" --allow-existing";
 
-#ifdef LFS_PYTHON_EXECUTABLE
-        cmd << " --python \"" << LFS_PYTHON_EXECUTABLE << "\"";
-#endif
+        const auto embedded_python = lfs::core::getEmbeddedPython();
+        if (!embedded_python.empty()) {
+            cmd << " --python \"" << embedded_python.string() << "\"";
+            LOG_INFO("Using embedded Python for venv: {}", embedded_python.string());
+        } else {
+            LOG_WARN("Embedded Python not found (exe_dir={}), uv will use system Python",
+                     lfs::core::getExecutableDir().string());
+        }
 
+        LOG_INFO("Executing: {}", cmd.str());
         const auto [exit_code, output] = execute_command(cmd.str());
         if (exit_code != 0) {
             LOG_ERROR("Failed to create venv: {}", output);

@@ -491,7 +491,7 @@ if(BUILD_PORTABLE)
         # This file overrides CPython's default path computation on Windows.
         install(CODE "
             file(WRITE \"\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}/python312._pth\"
-                \"../Lib\\n../DLLs\\nimport site\\n\")
+                \".\\n../Lib\\n../DLLs\\nimport site\\n\")
             message(STATUS \"Installed python312._pth for path isolation\")
         " COMPONENT runtime)
 

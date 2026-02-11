@@ -6,7 +6,7 @@
 # Downloads the uv Python package manager for bundling with portable builds.
 # uv is a fast, Rust-based Python package manager from Astral.
 
-set(UV_VERSION "0.5.14" CACHE STRING "UV version to download")
+set(UV_VERSION "0.10.2" CACHE STRING "UV version to download")
 
 # Platform-specific download URL and binary name
 if(WIN32)

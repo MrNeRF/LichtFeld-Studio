@@ -79,11 +79,7 @@ namespace lfs::python {
                 const std::string uv_path = pm.uv_path().string();
                 const std::string site_packages = pm.site_packages_dir().string();
                 const std::string typings_dir = lfs::core::getTypingsDir().string();
-#ifdef LFS_PYTHON_EXECUTABLE
-                const std::string python_path = LFS_PYTHON_EXECUTABLE;
-#else
-                const std::string python_path;
-#endif
+                const std::string python_path = lfs::core::getEmbeddedPython().string();
                 if (uv_path.empty()) {
                     std::println(stderr, "Error: UV not found");
                     result = 1;
