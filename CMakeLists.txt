@@ -504,7 +504,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 
 # Copy rendering shaders
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
         "${CMAKE_SOURCE_DIR}/src/rendering/resources/shaders"
         "${RESOURCE_DIR}/shaders"
     COMMENT "Copying rendering shaders"
@@ -512,7 +512,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 
 # Copy visualizer icons
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
         "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/icon"
         "${RESOURCE_DIR}/assets/icon"
     COMMENT "Copying visualizer icons"
@@ -520,7 +520,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 
 # Copy fonts (from visualizer)
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
         "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/fonts"
         "${RESOURCE_DIR}/assets/fonts"
     COMMENT "Copying visualizer fonts"
@@ -536,7 +536,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 
 # Copy themes
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
         "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/themes"
         "${RESOURCE_DIR}/assets/themes"
     COMMENT "Copying themes"
@@ -570,7 +570,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
 
 # Copy locale files
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
+    COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different
         "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales"
         "${RESOURCE_DIR}/locales"
     COMMENT "Copying locale files"
