@@ -16,6 +16,26 @@ This project builds upon and is inspired by the following:
 | [splat-transform](https://github.com/playcanvas/splat-transform) | Transformation utilities for splats | MIT |
 | [spz](https://github.com/nianticlabs/spz) | Niantic's compressed splat format | MIT |
 
+## Mesh-to-Splat Conversion
+| Project | Description | License |
+|---------|-------------|---------|
+| [Mesh2Splat](https://github.com/electronicarts/mesh2splat) | Fast mesh to 3D Gaussian splat conversion by Electronic Arts / SEED | BSD 3-Clause |
+
+<details>
+<summary>Mesh2Splat License (BSD 3-Clause)</summary>
+
+Copyright (c) 2025 Electronic Arts Inc. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+3. Neither the name of Electronic Arts, Inc. ("EA") nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+4. EA's marks or logos, including SEED logos, are distributed with this software solely for demonstration purposes and may not be displayed or shared other than as part of a redistribution of this software, provided they are redistributed without modification. No other rights are provided for the use of these marks and logos, other than for their intended demonstration purposes.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+</details>
+
 ## Mesh Processing
 | Project | Description | License |
 |---------|-------------|---------|

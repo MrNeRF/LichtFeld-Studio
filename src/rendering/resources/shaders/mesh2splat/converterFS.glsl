@@ -1,6 +1,8 @@
 ///////////////////////////////////////////////////////////////////////////////
 //         Mesh2Splat: fast mesh to 3D gaussian splat conversion             //
 //        Copyright (c) 2025 Electronic Arts Inc. All rights reserved.       //
+//        Modifications: Copyright (c) 2025 LichtFeld Studio Authors         //
+//        SPDX-License-Identifier: GPL-3.0-or-later                          //
 ///////////////////////////////////////////////////////////////////////////////
 
 #version 430 core

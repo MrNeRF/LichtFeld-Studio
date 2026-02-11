@@ -1,3 +1,8 @@
+///////////////////////////////////////////////////////////////////////////////
+//         Mesh2Splat: fast mesh to 3D gaussian splat conversion             //
+//        Copyright (c) 2025 Electronic Arts Inc. All rights reserved.       //
+///////////////////////////////////////////////////////////////////////////////
+
 void getEigenValuesVectors(in float mat_data[3][3], out float vectors[3][3], out float values[3])
 {
     vec3 e = vec3(0);
