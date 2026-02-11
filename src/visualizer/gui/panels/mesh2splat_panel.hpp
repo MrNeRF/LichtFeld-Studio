@@ -42,7 +42,6 @@ namespace lfs::vis::gui::panels {
         int resolution_index_ = 3;
         float gaussian_scale_ = 0.65f;
 
-        static constexpr int kMinResolution = 16;
         static constexpr int kResolutionOptions[] = {128, 256, 512, 1024, 2048, 4096};
         static constexpr int kResolutionOptionCount = 6;
     };

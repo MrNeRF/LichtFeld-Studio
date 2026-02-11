@@ -33,8 +33,10 @@ namespace lfs::vis::gui::panels {
     }
 
     int Mesh2SplatPanel::computeResolutionTarget() const {
+        assert(resolution_index_ >= 0 && resolution_index_ < kResolutionOptionCount);
         const int max_res = kResolutionOptions[resolution_index_];
-        return static_cast<int>(kMinResolution + quality_ * (max_res - kMinResolution));
+        constexpr int kMinRes = lfs::core::Mesh2SplatOptions::kMinResolution;
+        return static_cast<int>(kMinRes + quality_ * (max_res - kMinRes));
     }
 
     void Mesh2SplatPanel::triggerConversion() {

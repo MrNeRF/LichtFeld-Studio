@@ -118,6 +118,8 @@ class PluginInstaller:
         if self._deps_already_installed():
             return True
 
+        logger.info("Installing dependencies for %s...", self.plugin.info.name)
+
         uv = self._find_uv()
         if not uv:
             raise PluginDependencyError("uv not found")

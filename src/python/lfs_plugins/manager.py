@@ -166,7 +166,8 @@ class PluginManager:
             plugin.state = PluginState.INSTALLING
             installer = PluginInstaller(plugin)
             installer.ensure_venv()
-            installer.install_dependencies(on_progress)
+            progress_fn = on_progress or (lambda msg: _log.info("  [%s] %s", name, msg))
+            installer.install_dependencies(progress_fn)
 
             plugin.state = PluginState.LOADING
             self._load_module(plugin)

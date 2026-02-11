@@ -29,7 +29,6 @@ out vec4 Tangent;
 out vec3 Normal;
 flat out vec4 Quaternion;
 
-//not sure why transpose does not work automatically, as it should: https://registry.khronos.org/OpenGL-Refpages/gl4/html/transpose.xhtml
 void transpose2x3(in mat2x3 m, out mat3x2 outputMat) {
     outputMat[0][0] = m[0][0];
     outputMat[1][0] = m[0][1];
@@ -40,94 +39,6 @@ void transpose2x3(in mat2x3 m, out mat3x2 outputMat) {
     outputMat[2][1] = m[1][2];
 }
 
-vec4 quat_mult(vec4 q1, vec4 q2) {
-    return vec4(
-        q1.w * q2.x + q1.x * q2.w + q1.y * q2.z - q1.z * q2.y,
-        q1.w * q2.y + q1.y * q2.w + q1.z * q2.x - q1.x * q2.z,
-        q1.w * q2.z + q1.z * q2.w + q1.x * q2.y - q1.y * q2.x,
-        q1.w * q2.w - q1.x * q2.x - q1.y * q2.y - q1.z * q2.z
-    );
-}
-
-vec4 quat_normalize(vec4 q) {
-    return q / length(q);
-}
-
-//q = (x,y,z,w) some might write it as  w,x,y,z
-mat3 mat3_cast(vec4 q) {
-   mat3 rotMat;
-   float e0 = q[3];
-   float e1 = q[0];
-   float e2 = q[1];
-   float e3 = q[2];
-
-   float e0_square = e0 * e0;
-   float e1_square = e1 * e1;
-   float e2_square = e2 * e2;
-   float e3_square = e3 * e3;
-
-   float e1xe2 = e1 * e2;
-   float e0xe2 = e0 * e2;
-   float e0xe3 = e0 * e3;
-   float e1xe3 = e1 * e3;
-   float e2xe3 = e2 * e3;
-   float e0xe1 = e0 * e1;
-
-   rotMat[0][0] = e0_square + e0_square - e1_square - e2_square;
-   rotMat[1][0] = (2 * e1xe2) - (2 * e0xe3);
-   rotMat[2][0] = (2 * e0xe2) + (2 * e1xe3);
-
-   rotMat[0][1] = (2 * e0xe3) + (2 * e1xe2);
-   rotMat[1][1] = e0_square - e1_square + e2_square - e3_square;
-   rotMat[2][1] = (2 * e0xe1) - (2 * e2xe3);
-
-   rotMat[0][2] = (2 * e1xe3) - (2 * e0xe2);
-   rotMat[1][2] = (2 * e0xe1) + (2 * e2xe3);
-   rotMat[2][2] = e0_square - e1_square - e2_square + e3_square;
-
-   return rotMat;
-}
-
-//Taken from Martin, modified indexing to be column-first
-
-vec4 Diagonalizer(mat3 A, out vec3 outDiagonal) {
-    int maxsteps = 30;
-    vec4 q = vec4(0.0, 0.0, 0.0, 1.0);
-
-    for (int i = 0; i < maxsteps; i++) {
-        mat3 Q = mat3_cast(q);
-        mat3 D = transpose(Q) * A * Q;
-        vec3 offdiag = vec3(D[2][1], D[2][0], D[1][0]);
-        vec3 om = abs(offdiag);
-
-        outDiagonal = vec3(D[0][0], D[1][1], D[2][2]);
-
-        int k = (om.x > om.y && om.x > om.z) ? 0 : (om.y > om.z) ? 1 : 2;
-        int k1 = (k + 1) % 3;
-        int k2 = (k + 2) % 3;
-        if (offdiag[k] == 0.0)
-            break;
-        float thet = (D[k2][k2] - D[k1][k1]) / (2.0 * offdiag[k]);
-        float sgn = (thet > 0.0) ? 1.0 : -1.0;
-        thet *= sgn;
-        float t = sgn / (thet + ((thet < 1.0e6) ? sqrt(thet * thet + 1.0) : thet));
-        float c = 1.0 / sqrt(t * t + 1.0);
-        if (c == 1.0)
-            break;
-        vec4 jr = vec4(0.0);
-        jr[k] = sgn * sqrt((1.0 - c) / 2.0);
-        jr[k] *= -1.0;
-        jr.w = sqrt(1.0 - (jr[k] * jr[k]));
-        if (jr.w == 1.0)
-            break;
-        q = quat_mult(q, jr);
-        q = quat_normalize(q);
-    }
-    return q;
-}
-
-
-//Copied and translated to GLSL from GLM
 vec4 quat_cast(mat3 m) {
     float fourXSquaredMinus1 = m[0][0] - m[1][1] - m[2][2];
     float fourYSquaredMinus1 = m[1][1] - m[0][0] - m[2][2];
@@ -182,27 +93,6 @@ vec4 quat_cast(mat3 m) {
     return q;
 }
 
-vec3 project(vec3 v, vec3 u)
-{
-    float scalar = dot(v, u) / dot(u, u);
-    return scalar * u;
-}
-
-mat2 construct2DCovMatrix(float sigmaX, float sigmaY)
-{
-    mat2 covMatrix;
-
-    // Set the variances
-    covMatrix[0][0] = sigmaX * sigmaX; // Variance in the X direction
-    covMatrix[1][1] = sigmaY * sigmaY; // Variance in the Y direction
-
-    // Set the covariances to 0
-    covMatrix[0][1] = 0.0;
-    covMatrix[1][0] = 0.0;
-
-    return covMatrix;
-}
-
 mat2 inverse2x2(mat2 m) {
     float determinant = m[0][0] * m[1][1] - m[0][1] * m[1][0];
     if (determinant == 0.0) {
@@ -230,38 +120,6 @@ mat2x3 multiplyMat2x3WithMat2x2(mat2x3 matA, mat2 matB) {
 
     result[0][2] = matA[0][2] * matB[0][0] + matA[1][2] * matB[0][1];
     result[1][2] = matA[0][2] * matB[1][0] + matA[1][2] * matB[1][1];
-
-    return result;
-}
-
-mat3x2 multiplyMat2x2WithMat3x2(mat2 matA, mat3x2 matB) {
-    mat3x2 result;
-
-    result[0][0] = matA[0][0] * matB[0][0] + matA[1][0] * matB[0][1];
-    result[1][0] = matA[0][0] * matB[1][0] + matA[1][0] * matB[1][1];
-    result[2][0] = matA[0][0] * matB[2][0] + matA[1][0] * matB[2][1];
-
-    result[0][1] = matA[0][1] * matB[0][0] + matA[1][1] * matB[0][1];
-    result[1][1] = matA[0][1] * matB[1][0] + matA[1][1] * matB[1][1];
-    result[2][1] = matA[0][1] * matB[2][0] + matA[1][1] * matB[2][1];
-
-    return result;
-}
-
-mat3 multiplyMat2x3WithMat3x2(mat2x3 matA, mat3x2 matB) {
-    mat3 result;
-
-    result[0][0] = matA[0][0] * matB[0][0] + matA[1][0] * matB[0][1];
-    result[1][0] = matA[0][0] * matB[1][0] + matA[1][0] * matB[1][1];
-    result[2][0] = matA[0][0] * matB[2][0] + matA[1][0] * matB[2][1];
-
-    result[0][1] = matA[0][1] * matB[0][0] + matA[1][1] * matB[0][1];
-    result[1][1] = matA[0][1] * matB[1][0] + matA[1][1] * matB[1][1];
-    result[2][1] = matA[0][1] * matB[2][0] + matA[1][1] * matB[2][1];
-
-    result[0][2] = matA[0][2] * matB[0][0] + matA[1][2] * matB[0][1];
-    result[1][2] = matA[0][2] * matB[1][0] + matA[1][2] * matB[1][1];
-    result[2][2] = matA[0][2] * matB[2][0] + matA[1][2] * matB[2][1];
 
     return result;
 }
@@ -297,30 +155,6 @@ mat2x3 computeUv3DJacobian(vec3 verticesTriangle3D[3], vec2 verticesTriangleUV[3
 
     // Compute the Jacobian matrix
     return multiplyMat2x3WithMat2x2(VMatrix, inverse2x2(UVMatrix));
-}
-
-vec3 sortDescending(vec3 v) {
-    float temp;
-
-    if (v.x < v.y) {
-        temp = v.x;
-        v.x = v.y;
-        v.y = temp;
-    }
-
-    if (v.x < v.z) {
-        temp = v.x;
-        v.x = v.z;
-        v.z = temp;
-    }
-
-    if (v.y < v.z) {
-        temp = v.y;
-        v.y = v.z;
-        v.z = temp;
-    }
-
-    return v;
 }
 
 void main() {
@@ -416,7 +250,6 @@ void main() {
     mat3x2 J_T;
     transpose2x3(J, J_T);
 
-    //TODO: add uniform flag to control if to make them isotropic or anisotropic along the tangent plane
     vec3 Ju = vec3(J_T[0][0], J_T[1][0], J_T[2][0]); 
     vec3 Jv = vec3(J_T[0][1], J_T[1][1], J_T[2][1]); 
 

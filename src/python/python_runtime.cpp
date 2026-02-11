@@ -242,10 +242,9 @@ namespace lfs::python {
     }
 
     void invoke_mesh2splat_start(std::shared_ptr<core::MeshData> mesh, const std::string& name,
-                                 int res, float sigma, float lx, float ly, float lz,
-                                 float intensity, float ambient) {
+                                 const core::Mesh2SplatOptions& options) {
         if (g_m2s_start)
-            g_m2s_start(std::move(mesh), name, res, sigma, lx, ly, lz, intensity, ambient);
+            g_m2s_start(std::move(mesh), name, options);
     }
 
     bool invoke_mesh2splat_active() { return g_m2s_active ? g_m2s_active() : false; }

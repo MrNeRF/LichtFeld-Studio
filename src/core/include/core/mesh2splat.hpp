@@ -4,13 +4,7 @@
 
 #pragma once
 
-#include "core/export.hpp"
-#include "core/mesh_data.hpp"
-#include "core/splat_data.hpp"
-
-#include <expected>
 #include <functional>
-#include <memory>
 #include <string>
 
 #include <glm/glm.hpp>
@@ -18,6 +12,8 @@
 namespace lfs::core {
 
     struct Mesh2SplatOptions {
+        static constexpr int kMinResolution = 16;
+
         int resolution_target = 1024;
         float sigma = 0.65f;
         glm::vec3 light_dir{0.0f, 0.0f, 1.0f};
@@ -26,10 +22,5 @@ namespace lfs::core {
     };
 
     using Mesh2SplatProgressCallback = std::function<bool(float progress, const std::string& stage)>;
-
-    [[nodiscard]] LFS_CORE_API std::expected<std::unique_ptr<SplatData>, std::string>
-    mesh_to_splat(const MeshData& mesh,
-                  const Mesh2SplatOptions& options = {},
-                  Mesh2SplatProgressCallback progress = nullptr);
 
 } // namespace lfs::core

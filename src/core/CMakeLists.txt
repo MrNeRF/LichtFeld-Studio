@@ -57,7 +57,6 @@ set(CORE_SOURCES
         tensor_debug.cpp
         training_snapshot.cpp
         mesh_data.cpp
-        mesh2splat.cpp
 )
 
 add_library(lfs_core SHARED ${CORE_SOURCES} ${TENSOR_SOURCES})
@@ -73,7 +72,6 @@ target_include_directories(lfs_core
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/external
         ${CMAKE_CURRENT_SOURCE_DIR}/tensor  # For internal/ headers
-        ${OPENGL_INCLUDE_DIRS}
 )
 
 target_link_libraries(lfs_core
@@ -94,7 +92,6 @@ target_link_libraries(lfs_core
         taywee::args
         OpenImageIO::OpenImageIO
         $<IF:$<PLATFORM_ID:Windows>,OpenMeshCore,OpenMeshCoreStatic>
-        glad::glad
 )
 
 # OpenMP for tensor multi-threaded operations

@@ -6,13 +6,13 @@
 #include "core/data_loading_service.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
-#include "core/mesh2splat.hpp"
 #include "core/scene.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/html_viewer_export.hpp"
 #include "gui/utils/windows_utils.hpp"
 #include "io/exporter.hpp"
 #include "io/video/video_encoder.hpp"
+#include "rendering/mesh2splat.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
@@ -734,7 +734,7 @@ namespace lfs::vis::gui {
             return true;
         };
 
-        auto result = lfs::core::mesh_to_splat(*mesh, options, progress_cb);
+        auto result = lfs::rendering::mesh_to_splat(*mesh, options, progress_cb);
 
         const std::lock_guard lock(mesh2splat_state_.mutex);
         if (result) {

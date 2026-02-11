@@ -129,7 +129,8 @@ void main() {
     vec3 ambient = albedo.rgb * u_ambient * ao;
     vec3 color = ambient + Lo + u_emissive;
 
-    color = pow(clamp(color, 0.0, 1.0), vec3(1.0 / 2.2));
+    color = color / (color + vec3(1.0));
+    color = pow(color, vec3(1.0 / 2.2));
 
     frag_color = vec4(color, albedo.a);
 }

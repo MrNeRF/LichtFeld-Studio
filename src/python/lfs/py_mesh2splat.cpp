@@ -4,6 +4,7 @@
 
 #include "py_mesh2splat.hpp"
 
+#include "core/mesh2splat.hpp"
 #include "core/scene.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/ipc/view_context.hpp"
@@ -39,27 +40,28 @@ namespace lfs::python {
                 if (invoke_mesh2splat_active())
                     throw std::runtime_error("A mesh-to-splat conversion is already running");
 
-                constexpr int kMinResolution = 16;
-                const int resolution_target = kMinResolution + static_cast<int>(quality * (max_resolution - kMinResolution));
+                constexpr int kMinRes = core::Mesh2SplatOptions::kMinResolution;
 
-                glm::vec3 ld(0.0f, 0.0f, 1.0f);
+                core::Mesh2SplatOptions opts;
+                opts.resolution_target = kMinRes + static_cast<int>(quality * (max_resolution - kMinRes));
+                opts.sigma = sigma;
+                opts.light_intensity = light_intensity;
+                opts.ambient = ambient;
+
                 if (light_dir) {
                     auto [x, y, z] = *light_dir;
-                    ld = glm::normalize(glm::vec3(x, y, z));
+                    opts.light_dir = glm::normalize(glm::vec3(x, y, z));
                 } else {
                     auto view = vis::get_current_view_info();
                     if (view) {
                         glm::vec3 cam(view->translation[0], view->translation[1], view->translation[2]);
                         float len = glm::length(cam);
                         if (len > 1e-6f)
-                            ld = cam / len;
+                            opts.light_dir = cam / len;
                     }
                 }
 
-                invoke_mesh2splat_start(node->mesh, mesh_name,
-                                        resolution_target, sigma,
-                                        ld.x, ld.y, ld.z,
-                                        light_intensity, ambient);
+                invoke_mesh2splat_start(node->mesh, mesh_name, opts);
             },
             nb::arg("mesh_name"),
             nb::arg("sigma") = 0.65f,

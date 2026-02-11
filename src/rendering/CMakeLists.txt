@@ -23,6 +23,7 @@ set(RENDERING_SOURCES
         split_view_renderer.cpp
         camera_frustum_renderer.cpp
         mesh_renderer.cpp
+        mesh2splat.cpp
         depth_compositor.cpp
 )
 

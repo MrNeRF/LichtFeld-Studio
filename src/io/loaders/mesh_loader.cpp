@@ -355,9 +355,9 @@ namespace lfs::io {
         materials.reserve(scene->mNumMaterials);
         for (unsigned int i = 0; i < scene->mNumMaterials; ++i) {
             materials.push_back(extract_material(scene->mMaterials[i]));
-            LOG_INFO("  material[{}]: name='{}', albedo_path='{}', normal_path='{}', mr_path='{}'",
-                     i, materials.back().name, materials.back().albedo_tex_path,
-                     materials.back().normal_tex_path, materials.back().metallic_roughness_tex_path);
+            LOG_DEBUG("  material[{}]: name='{}', albedo_path='{}', normal_path='{}', mr_path='{}'",
+                      i, materials.back().name, materials.back().albedo_tex_path,
+                      materials.back().normal_tex_path, materials.back().metallic_roughness_tex_path);
         }
 
         std::vector<MeshData> sub_meshes;
@@ -367,9 +367,9 @@ namespace lfs::io {
         for (unsigned int i = 0; i < scene->mNumMeshes; ++i) {
             sub_meshes.push_back(convert_ai_mesh(scene->mMeshes[i]));
             mesh_material_indices.push_back(scene->mMeshes[i]->mMaterialIndex);
-            LOG_INFO("  mesh[{}]: {} verts, {} faces, material_index={}",
-                     i, scene->mMeshes[i]->mNumVertices, scene->mMeshes[i]->mNumFaces,
-                     scene->mMeshes[i]->mMaterialIndex);
+            LOG_DEBUG("  mesh[{}]: {} verts, {} faces, material_index={}",
+                      i, scene->mMeshes[i]->mNumVertices, scene->mMeshes[i]->mNumFaces,
+                      scene->mMeshes[i]->mMaterialIndex);
         }
 
         if (options.progress) {
@@ -422,8 +422,8 @@ namespace lfs::io {
             mat.albedo_tex = load_texture(mat.albedo_tex_path);
             mat.normal_tex = load_texture(mat.normal_tex_path);
             mat.metallic_roughness_tex = load_texture(mat.metallic_roughness_tex_path);
-            LOG_INFO("  material[{}] textures: albedo={}, normal={}, mr={}",
-                     mi, mat.albedo_tex, mat.normal_tex, mat.metallic_roughness_tex);
+            LOG_DEBUG("  material[{}] textures: albedo={}, normal={}, mr={}",
+                      mi, mat.albedo_tex, mat.normal_tex, mat.metallic_roughness_tex);
         }
 
         if (options.progress) {

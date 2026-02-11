@@ -5,9 +5,10 @@
  * Modifications: Copyright (c) 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "core/mesh2splat.hpp"
+#include "rendering/mesh2splat.hpp"
 #include "core/executable_path.hpp"
 #include "core/logger.hpp"
+#include "core/mesh_data.hpp"
 #include "core/tensor.hpp"
 
 // clang-format off
@@ -24,7 +25,17 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
-namespace lfs::core {
+namespace lfs::rendering {
+
+    using core::DataType;
+    using core::Device;
+    using core::Mesh2SplatOptions;
+    using core::Mesh2SplatProgressCallback;
+    using core::MeshData;
+    using core::SplatData;
+    using core::Submesh;
+    using core::Tensor;
+    using core::TextureImage;
 
     namespace {
 
@@ -327,7 +338,7 @@ namespace lfs::core {
         }
 
         GLuint create_conversion_program() {
-            auto shader_dir = getShadersDir() / "mesh2splat";
+            auto shader_dir = core::getShadersDir() / "mesh2splat";
 
             auto vs_source = read_file_contents(shader_dir / "converterVS.glsl");
             auto gs_source = read_file_contents(shader_dir / "converterGS.glsl");
@@ -536,13 +547,13 @@ namespace lfs::core {
                 glUniform1i(has_mr_loc, 0);
 
             if (material_index >= mesh.materials.size()) {
-                LOG_INFO("mesh2splat: no material at index {}", material_index);
+                LOG_DEBUG("mesh2splat: no material at index {}", material_index);
                 return;
             }
             const auto& mat = mesh.materials[material_index];
-            LOG_INFO("mesh2splat: material '{}' base_color=({},{},{},{}), albedo_tex={}, albedo_path='{}'",
-                     mat.name, mat.base_color.r, mat.base_color.g, mat.base_color.b, mat.base_color.a,
-                     mat.albedo_tex, mat.albedo_tex_path);
+            LOG_DEBUG("mesh2splat: material '{}' base_color=({},{},{},{}), albedo_tex={}, albedo_path='{}'",
+                      mat.name, mat.base_color.r, mat.base_color.g, mat.base_color.b, mat.base_color.a,
+                      mat.albedo_tex, mat.albedo_tex_path);
 
             // Upload all textures before binding — upload_texture() binds/unbinds
             // on the active texture unit, which would clobber earlier bindings.
@@ -552,8 +563,8 @@ namespace lfs::core {
                 mat.albedo_tex <= mesh.texture_images.size()) {
                 const auto& img = mesh.texture_images[mat.albedo_tex - 1];
                 if (!img.pixels.empty()) {
-                    LOG_INFO("mesh2splat: uploading albedo texture {}x{} ({} ch, {} bytes)",
-                             img.width, img.height, img.channels, img.pixels.size());
+                    LOG_DEBUG("mesh2splat: uploading albedo texture {}x{} ({} ch, {} bytes)",
+                              img.width, img.height, img.channels, img.pixels.size());
                     albedo_gl = upload_texture(img);
                     if (albedo_gl)
                         cleanup.textures.push_back(albedo_gl);
@@ -804,10 +815,10 @@ namespace lfs::core {
             // Bind textures for this submesh
             bind_submesh_textures(cleanup.program, mesh, geo.material_index, cleanup);
 
-            LOG_INFO("mesh2splat: submesh[{}] material_factor=({},{},{},{}), vertices={}, "
-                     "uniform_locs: material={}, bbox_min={}, bbox_max={}",
-                     si, material_factor.x, material_factor.y, material_factor.z, material_factor.w,
-                     geo.vertices.size(), loc_material, loc_bbox_min, loc_bbox_max);
+            LOG_DEBUG("mesh2splat: submesh[{}] material_factor=({},{},{},{}), vertices={}, "
+                      "uniform_locs: material={}, bbox_min={}, bbox_max={}",
+                      si, material_factor.x, material_factor.y, material_factor.z, material_factor.w,
+                      geo.vertices.size(), loc_material, loc_bbox_min, loc_bbox_max);
 
             // Draw
             GLenum err_before = glGetError(); // clear any pre-existing errors
@@ -841,52 +852,6 @@ namespace lfs::core {
 
         LOG_INFO("mesh2splat: produced {} gaussians (resolution={})", num_gaussians, options.resolution_target);
 
-        // Log color and scale statistics for debugging
-        {
-            const size_t sample_count = std::min(num_gaussians, 1000u);
-            std::vector<GaussianVertex> sample(sample_count);
-            glBindBuffer(GL_SHADER_STORAGE_BUFFER, cleanup.ssbo);
-            glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
-                               static_cast<GLsizeiptr>(sample.size() * sizeof(GaussianVertex)),
-                               sample.data());
-            glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-
-            glm::vec4 color_min(std::numeric_limits<float>::max());
-            glm::vec4 color_max(std::numeric_limits<float>::lowest());
-            glm::vec3 scale_min(std::numeric_limits<float>::max());
-            glm::vec3 scale_max(std::numeric_limits<float>::lowest());
-            double color_sum[4] = {};
-            for (size_t i = 0; i < sample.size(); i++) {
-                const auto& c = sample[i].color;
-                color_min = glm::min(color_min, c);
-                color_max = glm::max(color_max, c);
-                color_sum[0] += c.x;
-                color_sum[1] += c.y;
-                color_sum[2] += c.z;
-                color_sum[3] += c.w;
-                const auto& s = sample[i].scale;
-                scale_min = glm::min(scale_min, glm::vec3(s));
-                scale_max = glm::max(scale_max, glm::vec3(s));
-            }
-            const auto n = static_cast<double>(sample.size());
-            LOG_INFO("mesh2splat: SSBO color  min=({:.4f},{:.4f},{:.4f},{:.4f}) max=({:.4f},{:.4f},{:.4f},{:.4f}) "
-                     "mean=({:.4f},{:.4f},{:.4f},{:.4f})",
-                     color_min.x, color_min.y, color_min.z, color_min.w,
-                     color_max.x, color_max.y, color_max.z, color_max.w,
-                     color_sum[0] / n, color_sum[1] / n, color_sum[2] / n, color_sum[3] / n);
-            LOG_INFO("mesh2splat: SSBO scale  min=({:.6f},{:.6f},{:.6f}) max=({:.4f},{:.4f},{:.4f})",
-                     scale_min.x, scale_min.y, scale_min.z,
-                     scale_max.x, scale_max.y, scale_max.z);
-            LOG_INFO("mesh2splat: first 3 gaussians:");
-            for (size_t i = 0; i < std::min(sample.size(), size_t{3}); i++) {
-                LOG_INFO("  [{}] pos=({:.3f},{:.3f},{:.3f}) color=({:.4f},{:.4f},{:.4f},{:.4f}) "
-                         "scale=({:.6f},{:.6f},{:.6f})",
-                         i, sample[i].position.x, sample[i].position.y, sample[i].position.z,
-                         sample[i].color.x, sample[i].color.y, sample[i].color.z, sample[i].color.w,
-                         sample[i].scale.x, sample[i].scale.y, sample[i].scale.z);
-            }
-        }
-
         if (!report(0.85f, "Reading back data"))
             return std::unexpected("Cancelled");
 
@@ -903,24 +868,24 @@ namespace lfs::core {
             return std::unexpected("Cancelled");
 
         const float scale_multiplier = options.sigma / static_cast<float>(res);
-        LOG_INFO("mesh2splat: scale_multiplier={:.6f} (sigma={}, res={})",
-                 scale_multiplier, options.sigma, res);
+        LOG_DEBUG("mesh2splat: scale_multiplier={:.6f} (sigma={}, res={})",
+                  scale_multiplier, options.sigma, res);
         auto splat = build_splat_data(gpu_data, scale_multiplier, scene_scale);
 
         // Log SplatData statistics
         {
             auto sh0_cpu = splat->sh0_raw().to(Device::CPU);
             auto scale_cpu = splat->scaling_raw().to(Device::CPU);
-            LOG_INFO("mesh2splat: SplatData sh0  min=({:.3f},{:.3f},{:.3f}) max=({:.3f},{:.3f},{:.3f})",
-                     sh0_cpu.slice(2, 0, 1).min().item(), sh0_cpu.slice(2, 1, 2).min().item(),
-                     sh0_cpu.slice(2, 2, 3).min().item(),
-                     sh0_cpu.slice(2, 0, 1).max().item(), sh0_cpu.slice(2, 1, 2).max().item(),
-                     sh0_cpu.slice(2, 2, 3).max().item());
-            LOG_INFO("mesh2splat: SplatData scale(log) min=({:.3f},{:.3f},{:.3f}) max=({:.3f},{:.3f},{:.3f})",
-                     scale_cpu.slice(1, 0, 1).min().item(), scale_cpu.slice(1, 1, 2).min().item(),
-                     scale_cpu.slice(1, 2, 3).min().item(),
-                     scale_cpu.slice(1, 0, 1).max().item(), scale_cpu.slice(1, 1, 2).max().item(),
-                     scale_cpu.slice(1, 2, 3).max().item());
+            LOG_DEBUG("mesh2splat: SplatData sh0  min=({:.3f},{:.3f},{:.3f}) max=({:.3f},{:.3f},{:.3f})",
+                      sh0_cpu.slice(2, 0, 1).min().item(), sh0_cpu.slice(2, 1, 2).min().item(),
+                      sh0_cpu.slice(2, 2, 3).min().item(),
+                      sh0_cpu.slice(2, 0, 1).max().item(), sh0_cpu.slice(2, 1, 2).max().item(),
+                      sh0_cpu.slice(2, 2, 3).max().item());
+            LOG_DEBUG("mesh2splat: SplatData scale(log) min=({:.3f},{:.3f},{:.3f}) max=({:.3f},{:.3f},{:.3f})",
+                      scale_cpu.slice(1, 0, 1).min().item(), scale_cpu.slice(1, 1, 2).min().item(),
+                      scale_cpu.slice(1, 2, 3).min().item(),
+                      scale_cpu.slice(1, 0, 1).max().item(), scale_cpu.slice(1, 1, 2).max().item(),
+                      scale_cpu.slice(1, 2, 3).max().item());
         }
 
         if (!report(1.0f, "Complete"))
@@ -929,4 +894,4 @@ namespace lfs::core {
         return splat;
     }
 
-} // namespace lfs::core
+} // namespace lfs::rendering
