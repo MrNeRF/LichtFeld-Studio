@@ -22,7 +22,7 @@
 
 namespace lfs::core {
     class SplatData;
-    class MeshData;
+    struct MeshData;
 } // namespace lfs::core
 
 namespace lfs::vis {

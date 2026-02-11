@@ -23,7 +23,7 @@
 
 namespace lfs::core {
     class IOperatorCallbacks;
-    class MeshData;
+    struct MeshData;
     class Scene;
 } // namespace lfs::core
 
