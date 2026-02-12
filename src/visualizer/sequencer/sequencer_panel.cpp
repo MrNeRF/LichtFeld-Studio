@@ -565,15 +565,6 @@ namespace lfs::vis {
         if (!editing_focal_length_)
             return;
 
-<<<<<<< HEAD
-        const char* popup_title = LOC(lichtfeld::Strings::Sequencer::EDIT_FOCAL_LENGTH_TITLE);
-        if (!ImGui::IsPopupOpen(popup_title)) {
-            ImGui::OpenPopup(popup_title);
-        }
-
-        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, {0.5f, 0.5f});
-        if (ImGui::BeginPopupModal(popup_title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-=======
         if (!ImGui::IsPopupOpen("EditKeyframeFocalLength")) {
             ImGui::OpenPopup("EditKeyframeFocalLength");
         }
@@ -582,7 +573,6 @@ namespace lfs::vis {
         if (ImGui::BeginPopupModal("EditKeyframeFocalLength", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
             ImGui::TextUnformatted(LOC(lichtfeld::Strings::Sequencer::EDIT_FOCAL_LENGTH_TITLE));
             ImGui::Separator();
->>>>>>> master
             auto applyFocalChange = [this]() {
                 float new_focal = std::strtof(focal_edit_buffer_, nullptr);
                 new_focal = std::clamp(new_focal,
@@ -590,10 +580,7 @@ namespace lfs::vis {
                                        lfs::rendering::MAX_FOCAL_LENGTH_MM);
                 if (editing_focal_index_ < controller_.timeline().keyframes().size()) {
                     controller_.timeline().setKeyframeFocalLength(editing_focal_index_, new_focal);
-<<<<<<< HEAD
-=======
                     controller_.updateLoopKeyframe();
->>>>>>> master
                 }
             };
 
@@ -605,22 +592,14 @@ namespace lfs::vis {
                 ImGui::CloseCurrentPopup();
             }
 
-<<<<<<< HEAD
-            if (ImGui::Button("OK", {60, 0})) {
-=======
             if (ImGui::Button(LOC(lichtfeld::Strings::Common::OK), {60, 0})) {
->>>>>>> master
                 applyFocalChange();
                 editing_focal_length_ = false;
                 ImGui::CloseCurrentPopup();
             }
 
             ImGui::SameLine();
-<<<<<<< HEAD
-            if (ImGui::Button("Cancel", {60, 0})) {
-=======
             if (ImGui::Button(LOC(lichtfeld::Strings::Common::CANCEL), {60, 0})) {
->>>>>>> master
                 editing_focal_length_ = false;
                 ImGui::CloseCurrentPopup();
             }
