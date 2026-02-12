@@ -386,6 +386,7 @@ namespace lfs::python {
         bool collapsing_header(const std::string& label, bool default_open = false);
         bool tree_node(const std::string& label);
         bool tree_node_ex(const std::string& label, const std::string& flags);
+        void set_next_item_open(bool is_open);
         void tree_pop();
 
         // Tables

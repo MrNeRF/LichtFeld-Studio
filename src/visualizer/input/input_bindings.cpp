@@ -486,6 +486,11 @@ namespace lfs::vis::input {
         profile.bindings.push_back({ToolMode::GLOBAL, KeyTrigger{GLFW_KEY_6}, Action::TOOL_BRUSH, "Brush"});
         profile.bindings.push_back({ToolMode::GLOBAL, KeyTrigger{GLFW_KEY_7}, Action::TOOL_ALIGN, "Align"});
 
+        // Pie menu (all modes)
+        for (const auto mode : ALL_MODES) {
+            profile.bindings.push_back({mode, KeyTrigger{GLFW_KEY_GRAVE_ACCENT}, Action::PIE_MENU, "Pie Menu"});
+        }
+
         return profile;
     }
 
@@ -554,6 +559,7 @@ namespace lfs::vis::input {
         case Action::TOOL_MIRROR: return "Mirror Tool";
         case Action::TOOL_BRUSH: return "Brush Tool";
         case Action::TOOL_ALIGN: return "Align Tool";
+        case Action::PIE_MENU: return "Pie Menu";
         default: return "Unknown";
         }
     }

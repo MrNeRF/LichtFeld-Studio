@@ -6,6 +6,7 @@
 
 #include "gui/gizmo_transform.hpp"
 #include "gui/panel_layout.hpp"
+#include "gui/pie_menu.hpp"
 #include "gui/ui_context.hpp"
 #include <chrono>
 #include <glm/glm.hpp>
@@ -48,6 +49,15 @@ namespace lfs::vis {
             [[nodiscard]] bool isViewportGizmoDragging() const { return viewport_gizmo_dragging_; }
             [[nodiscard]] bool isPositionInViewportGizmo(double x, double y) const;
             [[nodiscard]] ToolType getCurrentToolMode() const;
+
+            // Pie menu
+            void openPieMenu(ImVec2 cursor_pos);
+            void closePieMenu();
+            void renderPieMenu();
+            void onPieMenuKeyRelease();
+            void onPieMenuMouseMove(ImVec2 pos);
+            void onPieMenuClick(ImVec2 pos);
+            [[nodiscard]] bool isPieMenuOpen() const { return pie_menu_.isOpen(); }
 
         private:
             VisualizerImpl* viewer_;
@@ -119,6 +129,13 @@ namespace lfs::vis {
             // Tool tracking
             std::string previous_tool_id_;
             SelectionSubMode previous_selection_mode_ = SelectionSubMode::Centers;
+
+            // Pie menu
+            PieMenu pie_menu_;
+
+            void handlePieMenuSelection();
+            void handleCropAction(const std::string& action_id);
+            void addCropObject(bool is_cropbox);
         };
 
     } // namespace gui

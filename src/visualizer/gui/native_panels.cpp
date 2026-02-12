@@ -140,6 +140,17 @@ namespace lfs::vis::gui::native_panels {
                ctx.viewport->size.x > 0 && ctx.viewport->size.y > 0;
     }
 
+    PieMenuPanel::PieMenuPanel(GizmoManager* gizmo)
+        : gizmo_(gizmo) {}
+
+    void PieMenuPanel::draw(const PanelDrawContext&) {
+        gizmo_->renderPieMenu();
+    }
+
+    bool PieMenuPanel::poll(const PanelDrawContext&) {
+        return gizmo_->isPieMenuOpen();
+    }
+
     PythonOverlayPanel::PythonOverlayPanel(GuiManager* gui)
         : gui_(gui) {}
 

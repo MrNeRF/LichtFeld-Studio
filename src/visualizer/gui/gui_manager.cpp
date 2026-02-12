@@ -528,6 +528,10 @@ namespace lfs::vis::gui {
                   make_panel(ViewportGizmoPanel(&gizmo_manager_)),
                   PanelSpace::ViewportOverlay, 900);
 
+        reg_panel("native.pie_menu", "Pie Menu",
+                  make_panel(PieMenuPanel(&gizmo_manager_)),
+                  PanelSpace::ViewportOverlay, 950);
+
         reg_panel("native.startup_overlay", "Startup Overlay",
                   make_panel(StartupOverlayPanel(&startup_overlay_, font_small_, &drag_drop_hovering_)),
                   PanelSpace::ViewportOverlay, 1000);

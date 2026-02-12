@@ -134,6 +134,16 @@ namespace lfs::vis::gui::native_panels {
         GizmoManager* gizmo_;
     };
 
+    class PieMenuPanel : public IPanel {
+    public:
+        explicit PieMenuPanel(GizmoManager* gizmo);
+        void draw(const PanelDrawContext& ctx) override;
+        bool poll(const PanelDrawContext& ctx) override;
+
+    private:
+        GizmoManager* gizmo_;
+    };
+
     class PythonOverlayPanel : public IPanel {
     public:
         explicit PythonOverlayPanel(GuiManager* gui);

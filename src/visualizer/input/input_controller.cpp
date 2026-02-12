@@ -316,6 +316,13 @@ namespace lfs::vis {
 
     // Core handlers
     void InputController::handleMouseButton(int button, int action, double x, double y) {
+        // Handle pie menu click (tap mode)
+        if (action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_LEFT &&
+            services().guiOrNull() && services().guiOrNull()->gizmo().isPieMenuOpen()) {
+            services().guiOrNull()->gizmo().onPieMenuClick({static_cast<float>(x), static_cast<float>(y)});
+            return;
+        }
+
         // Forward to GUI for mouse capture (rebinding)
         if (action == GLFW_PRESS && services().guiOrNull() && services().guiOrNull()->isCapturingInput()) {
             services().guiOrNull()->captureMouseButton(button, getModifierKeys());
@@ -645,6 +652,11 @@ namespace lfs::vis {
     }
 
     void InputController::handleMouseMove(double x, double y) {
+        // Forward to pie menu if open
+        if (services().guiOrNull() && services().guiOrNull()->gizmo().isPieMenuOpen()) {
+            services().guiOrNull()->gizmo().onPieMenuMouseMove({static_cast<float>(x), static_cast<float>(y)});
+        }
+
         // Track if we moved significantly
         glm::dvec2 current_pos{x, y};
         const double delta_x = x - last_mouse_pos_.x;
@@ -884,6 +896,21 @@ namespace lfs::vis {
             return;
         }
 
+        // Handle pie menu key release and escape
+        if (services().guiOrNull() && services().guiOrNull()->gizmo().isPieMenuOpen()) {
+            if (action == GLFW_RELEASE) {
+                const auto pie_key = bindings_.getKeyForAction(input::Action::PIE_MENU, getCurrentToolMode());
+                if (pie_key >= 0 && key == pie_key) {
+                    services().guiOrNull()->gizmo().onPieMenuKeyRelease();
+                    return;
+                }
+            }
+            if (action == GLFW_PRESS && key == GLFW_KEY_ESCAPE) {
+                services().guiOrNull()->gizmo().closePieMenu();
+                return;
+            }
+        }
+
         const bool wants_text_input = ImGui::GetIO().WantTextInput;
         const bool imgui_wants_keyboard =
             ImGui::IsAnyItemActive() || wants_text_input || ImGui::GetIO().WantCaptureKeyboard;
@@ -1116,6 +1143,14 @@ namespace lfs::vis {
 
             case input::Action::TOOL_ALIGN:
                 lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(ToolType::Align)}.emit();
+                return;
+
+            case input::Action::PIE_MENU:
+                if (services().guiOrNull()) {
+                    double px, py;
+                    glfwGetCursorPos(window_, &px, &py);
+                    services().guiOrNull()->gizmo().openPieMenu({static_cast<float>(px), static_cast<float>(py)});
+                }
                 return;
 
             default:

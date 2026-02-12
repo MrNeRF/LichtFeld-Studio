@@ -35,6 +35,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # GUI system
         gui/gui_manager.cpp
         gui/gizmo_manager.cpp
+        gui/pie_menu.cpp
         gui/panel_layout.cpp
         gui/panel_registry.cpp
         gui/native_panels.cpp

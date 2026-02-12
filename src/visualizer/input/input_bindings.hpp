@@ -105,6 +105,8 @@ namespace lfs::vis::input {
         TOOL_MIRROR,
         TOOL_BRUSH,
         TOOL_ALIGN,
+        // Pie menu
+        PIE_MENU,
     };
 
     // Using MODIFIER_ prefix to avoid Windows macro conflicts

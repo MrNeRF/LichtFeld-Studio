@@ -2154,6 +2154,10 @@ namespace lfs::python {
         return ImGui::TreeNodeEx(label.c_str(), flags);
     }
 
+    void PyUILayout::set_next_item_open(bool is_open) {
+        ImGui::SetNextItemOpen(is_open);
+    }
+
     void PyUILayout::tree_pop() {
         ImGui::TreePop();
     }
@@ -3201,6 +3205,7 @@ namespace lfs::python {
             .def("collapsing_header", &PyUILayout::collapsing_header, nb::arg("label"), nb::arg("default_open") = false, "Draw a collapsible header, returns True if open")
             .def("tree_node", &PyUILayout::tree_node, nb::arg("label"), "Draw a tree node, returns True if open")
             .def("tree_node_ex", &PyUILayout::tree_node_ex, nb::arg("label"), nb::arg("flags") = "", "Draw a tree node with flags string, returns True if open")
+            .def("set_next_item_open", &PyUILayout::set_next_item_open, nb::arg("is_open"), "Force the next tree node or collapsing header open/closed")
             .def("tree_pop", &PyUILayout::tree_pop, "Pop a tree node level")
             // Tables
             .def("begin_table", &PyUILayout::begin_table, nb::arg("id"), nb::arg("columns"), "Begin a table with given column count, returns True if visible")
@@ -3287,7 +3292,8 @@ namespace lfs::python {
                                  {0, 0}, {u1, v1}, t, {0, 0, 0, 0});
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def("image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def(
+                "image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);

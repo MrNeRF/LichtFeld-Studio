@@ -1357,4 +1357,167 @@ namespace lfs::vis::gui {
         return viewer_->getEditorContext().getActiveTool();
     }
 
+    void GizmoManager::openPieMenu(ImVec2 cursor_pos) {
+        pie_menu_.updateItems(viewer_->getEditorContext());
+        pie_menu_.open(cursor_pos);
+    }
+
+    void GizmoManager::closePieMenu() {
+        pie_menu_.close();
+    }
+
+    void GizmoManager::onPieMenuKeyRelease() {
+        pie_menu_.onKeyRelease();
+        handlePieMenuSelection();
+    }
+
+    void GizmoManager::onPieMenuMouseMove(ImVec2 pos) {
+        pie_menu_.onMouseMove(pos);
+    }
+
+    void GizmoManager::onPieMenuClick(ImVec2 pos) {
+        pie_menu_.onMouseClick(pos);
+        handlePieMenuSelection();
+    }
+
+    void GizmoManager::renderPieMenu() {
+        if (!pie_menu_.isOpen())
+            return;
+
+        auto* drawlist = ImGui::GetForegroundDrawList();
+        pie_menu_.draw(drawlist);
+    }
+
+    void GizmoManager::handlePieMenuSelection() {
+        if (!pie_menu_.hasSelection())
+            return;
+
+        const auto& tool_id = pie_menu_.getSelectedId();
+        if (tool_id.empty()) {
+            pie_menu_.close();
+            return;
+        }
+
+        if (tool_id == "builtin.cropbox" || tool_id == "builtin.ellipsoid") {
+            addCropObject(tool_id == "builtin.cropbox");
+            pie_menu_.close();
+            return;
+        }
+
+        if (tool_id.starts_with("crop.")) {
+            handleCropAction(tool_id);
+            pie_menu_.close();
+            return;
+        }
+
+        static const std::pair<const char*, ToolType> TOOL_MAP[] = {
+            {"builtin.select", ToolType::Selection},
+            {"builtin.translate", ToolType::Translate},
+            {"builtin.rotate", ToolType::Rotate},
+            {"builtin.scale", ToolType::Scale},
+            {"builtin.mirror", ToolType::Mirror},
+            {"builtin.brush", ToolType::Brush},
+            {"builtin.align", ToolType::Align},
+        };
+
+        for (const auto& [id, type] : TOOL_MAP) {
+            if (tool_id != id)
+                continue;
+
+            lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(type)}.emit();
+
+            const auto& submode_id = pie_menu_.getSelectedSubmodeId();
+            if (submode_id.empty())
+                break;
+
+            if (type == ToolType::Selection) {
+                static const std::pair<const char*, SelectionSubMode> SUBMODE_MAP[] = {
+                    {"centers", SelectionSubMode::Centers},
+                    {"rectangle", SelectionSubMode::Rectangle},
+                    {"polygon", SelectionSubMode::Polygon},
+                    {"lasso", SelectionSubMode::Lasso},
+                    {"rings", SelectionSubMode::Rings},
+                };
+                for (const auto& [sm_id, sm_mode] : SUBMODE_MAP) {
+                    if (submode_id == sm_id) {
+                        lfs::core::events::tools::SetSelectionSubMode{
+                            .selection_mode = static_cast<int>(sm_mode)}
+                            .emit();
+                        break;
+                    }
+                }
+            } else if (type == ToolType::Mirror) {
+                int axis = 0;
+                if (submode_id == "y")
+                    axis = 1;
+                else if (submode_id == "z")
+                    axis = 2;
+                lfs::core::events::tools::ExecuteMirror{.axis = axis}.emit();
+            }
+            break;
+        }
+
+        pie_menu_.close();
+    }
+
+    void GizmoManager::addCropObject(bool is_cropbox) {
+        auto* sm = viewer_->getSceneManager();
+        if (!sm)
+            return;
+
+        const auto selected = sm->getSelectedNodeNames();
+        for (const auto& name : selected) {
+            const auto* node = sm->getScene().getNode(name);
+            if (!node || node->type != core::NodeType::SPLAT)
+                continue;
+
+            if (is_cropbox)
+                lfs::core::events::cmd::AddCropBox{.node_name = name}.emit();
+            else
+                lfs::core::events::cmd::AddCropEllipsoid{.node_name = name}.emit();
+
+            sm->syncCropBoxToRenderSettings();
+            current_operation_ = ImGuizmo::TRANSLATE;
+            return;
+        }
+    }
+
+    void GizmoManager::handleCropAction(const std::string& action_id) {
+        using namespace lfs::core::events;
+
+        if (action_id == "crop.translate") {
+            current_operation_ = ImGuizmo::TRANSLATE;
+        } else if (action_id == "crop.rotate") {
+            current_operation_ = ImGuizmo::ROTATE;
+        } else if (action_id == "crop.scale") {
+            current_operation_ = ImGuizmo::SCALE;
+        } else if (action_id == "crop.apply") {
+            auto* sm = viewer_->getSceneManager();
+            if (sm && sm->getSelectedNodeType() == core::NodeType::CROPBOX)
+                cmd::ApplyCropBox{}.emit();
+            else
+                cmd::ApplyEllipsoid{}.emit();
+        } else if (action_id == "crop.fit") {
+            auto* sm = viewer_->getSceneManager();
+            if (sm && sm->getSelectedNodeType() == core::NodeType::CROPBOX)
+                cmd::FitCropBoxToScene{.use_percentile = false}.emit();
+            else
+                cmd::FitEllipsoidToScene{.use_percentile = false}.emit();
+        } else if (action_id == "crop.fit_trim") {
+            auto* sm = viewer_->getSceneManager();
+            if (sm && sm->getSelectedNodeType() == core::NodeType::CROPBOX)
+                cmd::FitCropBoxToScene{.use_percentile = true}.emit();
+            else
+                cmd::FitEllipsoidToScene{.use_percentile = true}.emit();
+        } else if (action_id == "crop.invert") {
+            cmd::ToggleCropInverse{}.emit();
+        } else if (action_id == "crop.reset") {
+            auto* sm = viewer_->getSceneManager();
+            if (sm && sm->getSelectedNodeType() == core::NodeType::CROPBOX)
+                cmd::ResetCropBox{}.emit();
+            else
+                cmd::ResetEllipsoid{}.emit();
+        }
+    }
+
 } // namespace lfs::vis::gui

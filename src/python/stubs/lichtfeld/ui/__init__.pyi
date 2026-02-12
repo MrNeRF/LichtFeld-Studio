@@ -805,6 +805,9 @@ class UILayout:
     def tree_node_ex(self, label: str, flags: str = '') -> bool:
         """Draw a tree node with flags string, returns True if open"""
 
+    def set_next_item_open(self, is_open: bool) -> None:
+        """Force the next tree node or collapsing header open/closed"""
+
     def tree_pop(self) -> None:
         """Pop a tree node level"""
 

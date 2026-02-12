@@ -74,6 +74,7 @@ class ScenePanel(Panel):
         self._committed_node_order = []
         self._prev_selected = set()
         self._scroll_to_node = None
+        self._force_open_ids = set()
 
     def _is_node_selected(self, node):
         return node.name in self._selected_nodes
@@ -129,6 +130,11 @@ class ScenePanel(Panel):
         new_nodes = self._selected_nodes - self._prev_selected
         if new_nodes:
             self._scroll_to_node = next(iter(new_nodes))
+            target = scene.get_node(self._scroll_to_node)
+            self._force_open_ids = set()
+            while target and target.parent_id != -1:
+                self._force_open_ids.add(target.parent_id)
+                target = scene.get_node_by_id(target.parent_id)
         self._prev_selected = set(self._selected_nodes)
 
         theme = lf.ui.theme()
@@ -330,6 +336,9 @@ class ScenePanel(Panel):
                     flags += "|DefaultOpen"
                 if is_selected:
                     flags += "|Selected"
+                if node.id in self._force_open_ids:
+                    layout.set_next_item_open(True)
+                    self._force_open_ids.discard(node.id)
                 is_open = layout.tree_node_ex(label, flags)
                 node_clicked = layout.is_item_clicked()
 
