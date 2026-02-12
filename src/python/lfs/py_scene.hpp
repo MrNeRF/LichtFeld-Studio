@@ -198,6 +198,14 @@ namespace lfs::python {
         std::shared_ptr<core::MeshData> mesh_;
     };
 
+    struct PyKeyframeData {
+        size_t keyframe_index;
+        float time;
+        std::tuple<float, float, float> position;
+        float focal_length_mm;
+        int easing;
+    };
+
     class PySceneNode {
     public:
         PySceneNode(core::SceneNode* node, core::Scene* scene)
@@ -229,6 +237,7 @@ namespace lfs::python {
         std::optional<PyMeshInfo> mesh();
         std::optional<PyCropBox> cropbox();
         std::optional<PyEllipsoid> ellipsoid();
+        std::optional<PyKeyframeData> keyframe_data();
 
         // Camera node specific
         int camera_uid() const { return node_->camera_uid; }
@@ -300,7 +309,7 @@ namespace lfs::python {
             for (const char* attr : {"id", "parent_id", "children", "type",
                                      "world_transform", "set_local_transform",
                                      "gaussian_count", "centroid",
-                                     "splat_data", "point_cloud", "mesh", "cropbox", "ellipsoid",
+                                     "splat_data", "point_cloud", "mesh", "cropbox", "ellipsoid", "keyframe_data",
                                      "camera_uid", "image_path", "mask_path", "has_camera",
                                      "has_mask", "load_mask",
                                      "camera_R", "camera_T", "camera_focal_x", "camera_focal_y",

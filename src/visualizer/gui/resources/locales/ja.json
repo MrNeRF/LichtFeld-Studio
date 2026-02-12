@@ -267,7 +267,12 @@
     "enable_all_training": "すべてをトレーニングに含める",
     "disable_all_training": "すべてをトレーニングから除外",
     "training_enabled_tooltip": "トレーニングに含まれています",
-    "training_disabled_tooltip": "トレーニングから除外されています"
+    "training_disabled_tooltip": "トレーニングから除外されています",
+    "go_to_keyframe": "キーフレームビューに移動",
+    "update_keyframe": "現在のビューに更新",
+    "select_in_timeline": "タイムラインで選択",
+    "add_keyframe_scene": "キーフレームを追加",
+    "keyframe_easing": "イージング"
   },
   "export": {
     "title": "エクスポート",

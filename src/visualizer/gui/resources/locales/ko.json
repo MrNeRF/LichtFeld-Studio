@@ -267,7 +267,12 @@
     "enable_all_training": "모두 훈련에 포함",
     "disable_all_training": "모두 훈련에서 제외",
     "training_enabled_tooltip": "훈련에 포함됨",
-    "training_disabled_tooltip": "훈련에서 제외됨"
+    "training_disabled_tooltip": "훈련에서 제외됨",
+    "go_to_keyframe": "키프레임 뷰로 이동",
+    "update_keyframe": "현재 뷰로 업데이트",
+    "select_in_timeline": "타임라인에서 선택",
+    "add_keyframe_scene": "키프레임 추가",
+    "keyframe_easing": "이징"
   },
   "export": {
     "title": "내보내기",

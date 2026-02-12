@@ -267,7 +267,12 @@
     "enable_all_training": "Alle für Training aktivieren",
     "disable_all_training": "Alle für Training deaktivieren",
     "training_enabled_tooltip": "Im Training enthalten",
-    "training_disabled_tooltip": "Vom Training ausgeschlossen"
+    "training_disabled_tooltip": "Vom Training ausgeschlossen",
+    "go_to_keyframe": "Zur Keyframe-Ansicht",
+    "update_keyframe": "Auf aktuelle Ansicht aktualisieren",
+    "select_in_timeline": "In Timeline auswählen",
+    "add_keyframe_scene": "Keyframe hinzufügen",
+    "keyframe_easing": "Easing"
   },
   "export": {
     "title": "Exportieren",

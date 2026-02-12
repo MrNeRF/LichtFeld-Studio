@@ -267,7 +267,12 @@
     "enable_all_training": "Alles inschakelen voor training",
     "disable_all_training": "Alles uitschakelen voor training",
     "training_enabled_tooltip": "Opgenomen in training",
-    "training_disabled_tooltip": "Uitgesloten van training"
+    "training_disabled_tooltip": "Uitgesloten van training",
+    "go_to_keyframe": "Ga naar keyframe-weergave",
+    "update_keyframe": "Bijwerken naar huidige weergave",
+    "select_in_timeline": "Selecteer in tijdlijn",
+    "add_keyframe_scene": "Keyframe toevoegen",
+    "keyframe_easing": "Easing"
   },
   "export": {
     "title": "Exporteren",

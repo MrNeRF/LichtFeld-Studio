@@ -191,7 +191,7 @@ namespace lfs::python {
         void end_child() const;
         bool begin_context_menu(const std::string& id = "") const;
         void end_context_menu() const;
-        bool menu_item(const std::string& label, bool enabled = true) const;
+        bool menu_item(const std::string& label, bool enabled = true, bool selected = false) const;
         bool begin_menu(const std::string& label) const;
         void end_menu() const;
         std::tuple<float, float> get_content_region_avail() const;
@@ -421,7 +421,7 @@ namespace lfs::python {
         bool begin_popup(const std::string& id);
         void open_popup(const std::string& id);
         void end_popup();
-        bool menu_item(const std::string& label, bool enabled = true);
+        bool menu_item(const std::string& label, bool enabled = true, bool selected = false);
         bool begin_menu(const std::string& label);
         void end_menu();
         std::tuple<bool, std::string> input_text_enter(const std::string& label, const std::string& value);

@@ -331,6 +331,11 @@ namespace lichtfeld::Strings {
         inline constexpr const char* DISABLE_ALL_TRAINING = "scene.disable_all_training";
         inline constexpr const char* TRAINING_ENABLED_TOOLTIP = "scene.training_enabled_tooltip";
         inline constexpr const char* TRAINING_DISABLED_TOOLTIP = "scene.training_disabled_tooltip";
+        inline constexpr const char* GO_TO_KEYFRAME = "scene.go_to_keyframe";
+        inline constexpr const char* UPDATE_KEYFRAME = "scene.update_keyframe";
+        inline constexpr const char* SELECT_IN_TIMELINE = "scene.select_in_timeline";
+        inline constexpr const char* ADD_KEYFRAME_SCENE = "scene.add_keyframe_scene";
+        inline constexpr const char* KEYFRAME_EASING = "scene.keyframe_easing";
     } // namespace Scene
 
     namespace Export {

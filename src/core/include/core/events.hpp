@@ -108,6 +108,10 @@ namespace lfs::core {
             EVENT(SequencerUpdateKeyframe, ); // Update selected keyframe to current camera
             EVENT(SequencerPlayPause, );
             EVENT(SequencerExportVideo, int width; int height; int framerate; int crf;);
+            EVENT(SequencerGoToKeyframe, size_t keyframe_index;);
+            EVENT(SequencerSelectKeyframe, size_t keyframe_index;);
+            EVENT(SequencerDeleteKeyframe, size_t keyframe_index;);
+            EVENT(SequencerSetKeyframeEasing, size_t keyframe_index; int easing_type;);
         } // namespace cmd
 
         // ============================================================================
@@ -123,7 +127,7 @@ namespace lfs::core {
             EVENT(SetSelectionSubMode, int selection_mode;);
             EVENT(ExecuteMirror, int axis;); // 0=X, 1=Y, 2=Z
             EVENT(CancelActiveOperator, );   // Cancel and revert current operator
-        } // namespace tools
+        }                                    // namespace tools
 
         // ============================================================================
         // State - Notifications about what has happened (broadcasts)
@@ -194,6 +198,7 @@ namespace lfs::core {
                   size_t ram_total;
                   float ram_percent;);
             EVENT(FrameRendered, float render_ms; float fps; int num_gaussians;);
+            EVENT(KeyframeListChanged, size_t count;);
 
             // CUDA version check
             EVENT(CudaVersionUnsupported, int major; int minor; int min_major; int min_minor;);
@@ -252,7 +257,7 @@ namespace lfs::core {
             EVENT(TrainingReadyToStart, );
             EVENT(WindowFocusLost, );
         } // namespace internal
-    } // namespace events
+    }     // namespace events
 
     // ============================================================================
     // Convenience functions

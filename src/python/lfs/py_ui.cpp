@@ -1444,8 +1444,8 @@ namespace lfs::python {
     void PySubLayout::end_context_menu() const {
         parent_->end_context_menu();
     }
-    bool PySubLayout::menu_item(const std::string& label, bool enabled) const {
-        return parent_->menu_item(label, enabled);
+    bool PySubLayout::menu_item(const std::string& label, bool enabled, bool selected) const {
+        return parent_->menu_item(label, enabled, selected);
     }
     bool PySubLayout::begin_menu(const std::string& label) const {
         return parent_->begin_menu(label);
@@ -2263,8 +2263,8 @@ namespace lfs::python {
         ImGui::EndPopup();
     }
 
-    bool PyUILayout::menu_item(const std::string& label, bool enabled) {
-        return ImGui::MenuItem(label.c_str(), nullptr, false, enabled);
+    bool PyUILayout::menu_item(const std::string& label, bool enabled, bool selected) {
+        return ImGui::MenuItem(label.c_str(), nullptr, selected, enabled);
     }
 
     bool PyUILayout::begin_menu(const std::string& label) {
@@ -3095,7 +3095,7 @@ namespace lfs::python {
             .def("end_child", &PySubLayout::end_child)
             .def("begin_context_menu", &PySubLayout::begin_context_menu, nb::arg("id") = "")
             .def("end_context_menu", &PySubLayout::end_context_menu)
-            .def("menu_item", &PySubLayout::menu_item, nb::arg("label"), nb::arg("enabled") = true)
+            .def("menu_item", &PySubLayout::menu_item, nb::arg("label"), nb::arg("enabled") = true, nb::arg("selected") = false)
             .def("begin_menu", &PySubLayout::begin_menu, nb::arg("label"))
             .def("end_menu", &PySubLayout::end_menu)
             .def("get_content_region_avail", &PySubLayout::get_content_region_avail)
@@ -3235,7 +3235,7 @@ namespace lfs::python {
             .def("begin_popup", &PyUILayout::begin_popup, nb::arg("id"), "Begin a popup by id, returns True if open")
             .def("open_popup", &PyUILayout::open_popup, nb::arg("id"), "Open a popup by id")
             .def("end_popup", &PyUILayout::end_popup, "End the current popup")
-            .def("menu_item", &PyUILayout::menu_item, nb::arg("label"), nb::arg("enabled") = true, "Draw a menu item, returns True if clicked")
+            .def("menu_item", &PyUILayout::menu_item, nb::arg("label"), nb::arg("enabled") = true, nb::arg("selected") = false, "Draw a menu item, returns True if clicked")
             .def("begin_menu", &PyUILayout::begin_menu, nb::arg("label"), "Begin a sub-menu, returns True if open")
             .def("end_menu", &PyUILayout::end_menu, "End the current sub-menu")
             // Rename input with auto-select and enter-to-confirm
@@ -3292,7 +3292,8 @@ namespace lfs::python {
                                  {0, 0}, {u1, v1}, t, {0, 0, 0, 0});
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def("image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def(
+                "image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);
@@ -4233,6 +4234,32 @@ namespace lfs::python {
             "play_pause",
             []() { lfs::core::events::cmd::SequencerPlayPause{}.emit(); },
             "Toggle sequencer playback");
+
+        m.def(
+            "go_to_keyframe",
+            [](size_t index) { lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = index}.emit(); },
+            nb::arg("index"),
+            "Navigate viewport to keyframe camera pose");
+
+        m.def(
+            "select_keyframe",
+            [](size_t index) { lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = index}.emit(); },
+            nb::arg("index"),
+            "Select keyframe in timeline");
+
+        m.def(
+            "delete_keyframe",
+            [](size_t index) { lfs::core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = index}.emit(); },
+            nb::arg("index"),
+            "Delete keyframe by index");
+
+        m.def(
+            "set_keyframe_easing",
+            [](size_t index, int easing) {
+                lfs::core::events::cmd::SequencerSetKeyframeEasing{.keyframe_index = index, .easing_type = easing}.emit();
+            },
+            nb::arg("index"), nb::arg("easing"),
+            "Set easing type for keyframe (0=Linear, 1=EaseIn, 2=EaseOut, 3=EaseInOut)");
 
         // Section drawing wrappers - callable from Python panel draw()
         // These use callbacks to avoid ImGuizmo header dependency in py_ui.cpp

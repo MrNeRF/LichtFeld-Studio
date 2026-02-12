@@ -611,7 +611,7 @@ class SubLayout:
 
     def end_context_menu(self) -> None: ...
 
-    def menu_item(self, label: str, enabled: bool = True) -> bool: ...
+    def menu_item(self, label: str, enabled: bool = True, selected: bool = False) -> bool: ...
 
     def begin_menu(self, label: str) -> bool: ...
 
@@ -865,7 +865,7 @@ class UILayout:
     def end_popup(self) -> None:
         """End the current popup"""
 
-    def menu_item(self, label: str, enabled: bool = True) -> bool:
+    def menu_item(self, label: str, enabled: bool = True, selected: bool = False) -> bool:
         """Draw a menu item, returns True if clicked"""
 
     def begin_menu(self, label: str) -> bool:
@@ -1561,6 +1561,20 @@ def update_keyframe() -> None:
 
 def play_pause() -> None:
     """Toggle sequencer playback"""
+
+def go_to_keyframe(index: int) -> None:
+    """Navigate viewport to keyframe camera pose"""
+
+def select_keyframe(index: int) -> None:
+    """Select keyframe in timeline"""
+
+def delete_keyframe(index: int) -> None:
+    """Delete keyframe by index"""
+
+def set_keyframe_easing(index: int, easing: int) -> None:
+    """
+    Set easing type for keyframe (0=Linear, 1=EaseIn, 2=EaseOut, 3=EaseInOut)
+    """
 
 def draw_tools_section() -> None:
     """Draw tools section (C++ implementation)"""

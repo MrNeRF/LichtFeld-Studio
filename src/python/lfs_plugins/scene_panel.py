@@ -36,6 +36,8 @@ NODE_TYPE_COLORS = {
     "ELLIPSOID": (0.3, 0.8, 1.0, 0.9),
     "POINTCLOUD": (0.8, 0.5, 1.0, 0.8),
     "MESH": (0.5, 0.9, 0.6, 0.9),
+    "KEYFRAME_GROUP": (0.9, 0.7, 0.3, 0.8),
+    "KEYFRAME": (1.0, 0.8, 0.2, 0.9),
 }
 
 NODE_TYPE_ICON_NAMES = {
@@ -48,6 +50,8 @@ NODE_TYPE_ICON_NAMES = {
     "ELLIPSOID": "ellipsoid",
     "POINTCLOUD": "pointcloud",
     "MESH": "mesh",
+    "KEYFRAME_GROUP": "camera",
+    "KEYFRAME": "camera",
 }
 
 
@@ -220,6 +224,8 @@ class ScenePanel(Panel):
         is_splat = node_type == "SPLAT"
         is_pointcloud = node_type == "POINTCLOUD"
         is_mesh = node_type == "MESH"
+        is_keyframe = node_type == "KEYFRAME"
+        is_keyframe_group = node_type == "KEYFRAME_GROUP"
 
         parent_is_dataset = False
         if node.parent_id != -1:
@@ -228,8 +234,10 @@ class ScenePanel(Panel):
                 parent_type = str(parent.type).split(".")[-1]
                 parent_is_dataset = parent_type == "DATASET"
 
-        is_deletable = not is_camera and not is_camera_group and not parent_is_dataset
-        can_drag = node_type in ("SPLAT", "GROUP", "POINTCLOUD", "MESH", "CROPBOX", "ELLIPSOID") and not parent_is_dataset
+        is_deletable = (not is_camera and not is_camera_group and not parent_is_dataset
+                        and not is_keyframe and not is_keyframe_group)
+        can_drag = (node_type in ("SPLAT", "GROUP", "POINTCLOUD", "MESH", "CROPBOX", "ELLIPSOID")
+                    and not parent_is_dataset)
 
         is_selected = self._is_node_selected(node)
         self._visible_node_order.append(node.name)
@@ -327,6 +335,10 @@ class ScenePanel(Panel):
                 mesh = node.mesh()
                 if mesh:
                     label += f"  ({mesh.vertex_count:,}V / {mesh.face_count:,}F)"
+            elif is_keyframe:
+                kf = node.keyframe_data()
+                if kf:
+                    label = f"Keyframe {kf.keyframe_index + 1}  ({kf.time:.2f}s)"
 
             label_x, label_y = layout.get_cursor_screen_pos()
 
@@ -347,10 +359,19 @@ class ScenePanel(Panel):
 
                 if node_clicked:
                     self._handle_click(node.name)
+                    if is_keyframe:
+                        kf = node.keyframe_data()
+                        if kf:
+                            lf.ui.select_keyframe(kf.keyframe_index)
 
                 if is_camera and layout.is_item_hovered() and layout.is_mouse_double_clicked(0):
                     if node.image_path:
                         self._open_camera_preview(scene, node.camera_uid)
+
+                if is_keyframe and layout.is_item_hovered() and layout.is_mouse_double_clicked(0):
+                    kf = node.keyframe_data()
+                    if kf:
+                        lf.ui.go_to_keyframe(kf.keyframe_index)
 
                 if is_open:
                     for child_id in node.children:
@@ -369,10 +390,19 @@ class ScenePanel(Panel):
 
                 if layout.is_item_clicked():
                     self._handle_click(node.name)
+                    if is_keyframe:
+                        kf = node.keyframe_data()
+                        if kf:
+                            lf.ui.select_keyframe(kf.keyframe_index)
 
                 if is_camera and layout.is_item_hovered() and layout.is_mouse_double_clicked(0):
                     if node.image_path:
                         self._open_camera_preview(scene, node.camera_uid)
+
+                if is_keyframe and layout.is_item_hovered() and layout.is_mouse_double_clicked(0):
+                    kf = node.keyframe_data()
+                    if kf:
+                        lf.ui.go_to_keyframe(kf.keyframe_index)
 
             if training_disabled:
                 layout.pop_style_color()
@@ -443,7 +473,7 @@ class ScenePanel(Panel):
                 parent = scene.get_node_by_id(node.parent_id)
                 if parent and str(parent.type).split(".")[-1] == "DATASET":
                     parent_is_dataset = True
-            if ntype not in ("CAMERA", "CAMERA_GROUP") and not parent_is_dataset:
+            if ntype not in ("CAMERA", "CAMERA_GROUP", "KEYFRAME", "KEYFRAME_GROUP") and not parent_is_dataset:
                 lf.remove_node(name, False)
 
     def _draw_context_menu(self, layout, scene, node, node_type, is_deletable, can_drag):
@@ -470,6 +500,38 @@ class ScenePanel(Panel):
             else:
                 if layout.menu_item(tr("scene.enable_for_training")):
                     node.training_enabled = True
+            layout.end_context_menu()
+            return
+
+        if node_type == "KEYFRAME":
+            kf = node.keyframe_data()
+            if kf:
+                if layout.menu_item(tr("scene.go_to_keyframe")):
+                    lf.ui.go_to_keyframe(kf.keyframe_index)
+                if layout.menu_item(tr("scene.update_keyframe")):
+                    lf.ui.select_keyframe(kf.keyframe_index)
+                    lf.ui.update_keyframe()
+                if layout.menu_item(tr("scene.select_in_timeline")):
+                    lf.ui.select_keyframe(kf.keyframe_index)
+                layout.separator()
+                if layout.begin_menu(tr("scene.keyframe_easing")):
+                    easing_names = ["Linear", "Ease In", "Ease Out", "Ease In-Out"]
+                    for e_idx, e_name in enumerate(easing_names):
+                        is_current = kf.easing == e_idx
+                        if layout.menu_item(e_name, selected=is_current):
+                            if not is_current:
+                                lf.ui.set_keyframe_easing(kf.keyframe_index, e_idx)
+                    layout.end_menu()
+                layout.separator()
+                if kf.keyframe_index > 0:
+                    if layout.menu_item(tr("scene.delete")):
+                        lf.ui.delete_keyframe(kf.keyframe_index)
+            layout.end_context_menu()
+            return
+
+        if node_type == "KEYFRAME_GROUP":
+            if layout.menu_item(tr("scene.add_keyframe_scene")):
+                lf.ui.add_keyframe()
             layout.end_context_menu()
             return
 
@@ -584,7 +646,7 @@ class ScenePanel(Panel):
                 parent = scene.get_node_by_id(node.parent_id)
                 if parent and str(parent.type).split(".")[-1] == "DATASET":
                     parent_is_dataset = True
-            if ntype not in ("CAMERA", "CAMERA_GROUP") and not parent_is_dataset:
+            if ntype not in ("CAMERA", "CAMERA_GROUP", "KEYFRAME", "KEYFRAME_GROUP") and not parent_is_dataset:
                 deletable.append(name)
 
         if types == {"CAMERA"}:

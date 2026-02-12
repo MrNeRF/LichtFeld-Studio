@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "gui/keyframe_scene_sync.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/sequencer_ui_state.hpp"
 #include "gui/ui_context.hpp"
@@ -48,6 +49,7 @@ namespace lfs::vis {
             panels::SequencerUIState& ui_state_;
             SequencerController controller_;
             std::unique_ptr<SequencerPanel> panel_;
+            std::unique_ptr<KeyframeSceneSync> scene_sync_;
 
             bool context_menu_open_ = false;
             std::optional<size_t> context_menu_keyframe_;

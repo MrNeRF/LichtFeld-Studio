@@ -1358,6 +1358,74 @@ namespace lfs::core {
         return id;
     }
 
+    NodeId Scene::addKeyframeGroup(const std::string& name, const NodeId parent) {
+        const NodeId id = next_node_id_++;
+        auto node = std::make_unique<SceneNode>();
+        node->id = id;
+        node->parent_id = parent;
+        node->type = NodeType::KEYFRAME_GROUP;
+        node->name = name;
+
+        if (parent != NULL_NODE) {
+            if (auto* p = getNodeById(parent)) {
+                p->children.push_back(id);
+            }
+        }
+
+        id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
+        node->initObservables(this);
+        nodes_.push_back(std::move(node));
+
+        notifyMutation(MutationType::NODE_ADDED);
+        return id;
+    }
+
+    NodeId Scene::addKeyframe(const std::string& name, const NodeId parent, std::unique_ptr<KeyframeData> data) {
+        assert(data && "KeyframeData cannot be null");
+
+        const NodeId id = next_node_id_++;
+        auto node = std::make_unique<SceneNode>();
+        node->id = id;
+        node->parent_id = parent;
+        node->type = NodeType::KEYFRAME;
+        node->name = name;
+        node->keyframe = std::move(data);
+
+        const auto& kf = *node->keyframe;
+        const glm::mat3 rot_mat = glm::mat3_cast(kf.rotation);
+        glm::mat4 transform(rot_mat);
+        transform[3] = glm::vec4(kf.position, 1.0f);
+        node->local_transform = transform;
+
+        if (parent != NULL_NODE) {
+            if (auto* p = getNodeById(parent)) {
+                p->children.push_back(id);
+            }
+        }
+
+        id_to_index_[id] = nodes_.size();
+        name_to_id_[name] = id;
+        node->initObservables(this);
+        nodes_.push_back(std::move(node));
+        notifyMutation(MutationType::NODE_ADDED);
+
+        return id;
+    }
+
+    void Scene::removeKeyframeNodes() {
+        Transaction tx(*this);
+        std::vector<std::string> to_remove;
+        for (const auto& node : nodes_) {
+            if (node->type == NodeType::KEYFRAME || node->type == NodeType::KEYFRAME_GROUP) {
+                to_remove.push_back(node->name);
+            }
+        }
+        for (auto it = to_remove.rbegin(); it != to_remove.rend(); ++it) {
+            removeNodeInternal(*it, false, true);
+        }
+    }
+
     std::string Scene::duplicateNode(const std::string& name) {
         const auto* src_node = getNode(name);
         if (!src_node)

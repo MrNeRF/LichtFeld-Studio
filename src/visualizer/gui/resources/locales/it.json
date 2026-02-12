@@ -267,7 +267,12 @@
     "enable_all_training": "Abilita tutti per addestramento",
     "disable_all_training": "Disabilita tutti per addestramento",
     "training_enabled_tooltip": "Incluso nell'addestramento",
-    "training_disabled_tooltip": "Escluso dall'addestramento"
+    "training_disabled_tooltip": "Escluso dall'addestramento",
+    "go_to_keyframe": "Vai alla vista del keyframe",
+    "update_keyframe": "Aggiorna alla vista corrente",
+    "select_in_timeline": "Seleziona nella timeline",
+    "add_keyframe_scene": "Aggiungi keyframe",
+    "keyframe_easing": "Easing"
   },
   "export": {
     "title": "Esporta",

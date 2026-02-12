@@ -129,6 +129,10 @@ class NodeType(enum.Enum):
 
     MESH = 10
 
+    KEYFRAME_GROUP = 11
+
+    KEYFRAME = 12
+
 class MeshInfo:
     @property
     def vertex_count(self) -> int: ...
@@ -141,6 +145,22 @@ class MeshInfo:
 
     @property
     def has_texcoords(self) -> bool: ...
+
+class KeyframeData:
+    @property
+    def keyframe_index(self) -> int: ...
+
+    @property
+    def time(self) -> float: ...
+
+    @property
+    def position(self) -> tuple[float, float, float]: ...
+
+    @property
+    def focal_length_mm(self) -> float: ...
+
+    @property
+    def easing(self) -> int: ...
 
 class SelectionGroup:
     @property
@@ -325,6 +345,9 @@ class SceneNode:
 
     def ellipsoid(self) -> Ellipsoid | None:
         """Get Ellipsoid for ELLIPSOID nodes (None otherwise)"""
+
+    def keyframe_data(self) -> KeyframeData | None:
+        """Get KeyframeData for KEYFRAME nodes (None otherwise)"""
 
     @property
     def camera_uid(self) -> int:

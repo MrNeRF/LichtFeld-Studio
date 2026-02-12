@@ -228,6 +228,19 @@ namespace lfs::python {
         return PyEllipsoid(node_->ellipsoid.get());
     }
 
+    std::optional<PyKeyframeData> PySceneNode::keyframe_data() {
+        if (node_->type != core::NodeType::KEYFRAME || !node_->keyframe) {
+            return std::nullopt;
+        }
+        const auto& kf = *node_->keyframe;
+        return PyKeyframeData{
+            .keyframe_index = kf.keyframe_index,
+            .time = kf.time,
+            .position = {kf.position.x, kf.position.y, kf.position.z},
+            .focal_length_mm = kf.focal_length_mm,
+            .easing = static_cast<int>(kf.easing)};
+    }
+
     // PyScene implementation
     PyScene::PyScene(core::Scene* scene)
         : scene_(scene),
@@ -534,13 +547,22 @@ namespace lfs::python {
             .value("CAMERA", core::NodeType::CAMERA)
             .value("IMAGE_GROUP", core::NodeType::IMAGE_GROUP)
             .value("IMAGE", core::NodeType::IMAGE)
-            .value("MESH", core::NodeType::MESH);
+            .value("MESH", core::NodeType::MESH)
+            .value("KEYFRAME_GROUP", core::NodeType::KEYFRAME_GROUP)
+            .value("KEYFRAME", core::NodeType::KEYFRAME);
 
         nb::class_<PyMeshInfo>(m, "MeshInfo")
             .def_prop_ro("vertex_count", &PyMeshInfo::vertex_count)
             .def_prop_ro("face_count", &PyMeshInfo::face_count)
             .def_prop_ro("has_normals", &PyMeshInfo::has_normals)
             .def_prop_ro("has_texcoords", &PyMeshInfo::has_texcoords);
+
+        nb::class_<PyKeyframeData>(m, "KeyframeData")
+            .def_ro("keyframe_index", &PyKeyframeData::keyframe_index)
+            .def_ro("time", &PyKeyframeData::time)
+            .def_ro("position", &PyKeyframeData::position)
+            .def_ro("focal_length_mm", &PyKeyframeData::focal_length_mm)
+            .def_ro("easing", &PyKeyframeData::easing);
 
         // SelectionGroup struct
         nb::class_<PySelectionGroup>(m, "SelectionGroup")
@@ -644,6 +666,7 @@ namespace lfs::python {
             .def("mesh", &PySceneNode::mesh, "Get MeshInfo for MESH nodes (None otherwise)")
             .def("cropbox", &PySceneNode::cropbox, "Get CropBox for CROPBOX nodes (None otherwise)")
             .def("ellipsoid", &PySceneNode::ellipsoid, "Get Ellipsoid for ELLIPSOID nodes (None otherwise)")
+            .def("keyframe_data", &PySceneNode::keyframe_data, "Get KeyframeData for KEYFRAME nodes (None otherwise)")
             // Camera specific (read-only)
             .def_prop_ro("camera_uid", &PySceneNode::camera_uid, "Camera unique identifier")
             .def_prop_ro("image_path", &PySceneNode::image_path, "Path to the camera image file")
@@ -823,12 +846,14 @@ Returns:
             .def("get_node_bounds", &PyScene::get_node_bounds, nb::arg("id"), "Get axis-aligned bounding box as ((min_x, min_y, min_z), (max_x, max_y, max_z))")
             .def("get_node_bounds_center", &PyScene::get_node_bounds_center, nb::arg("id"), "Get center of the node bounding box as (x, y, z)")
             // Bounds (by name)
-            .def("get_node_bounds", [](PyScene& self, const std::string& name) {
+            .def(
+                "get_node_bounds", [](PyScene& self, const std::string& name) {
                     auto node = self.get_node(name);
                     if (!node)
                         return decltype(self.get_node_bounds(0)){std::nullopt};
                     return self.get_node_bounds(node->id()); }, nb::arg("name"), "Get axis-aligned bounding box by node name")
-            .def("get_node_bounds_center", [](PyScene& self, const std::string& name) {
+            .def(
+                "get_node_bounds_center", [](PyScene& self, const std::string& name) {
                     auto node = self.get_node(name);
                     if (!node)
                         throw std::runtime_error("Node not found: " + name);

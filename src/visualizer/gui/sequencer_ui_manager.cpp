@@ -31,7 +31,8 @@ namespace lfs::vis::gui {
     SequencerUIManager::SequencerUIManager(VisualizerImpl* viewer, panels::SequencerUIState& ui_state)
         : viewer_(viewer),
           ui_state_(ui_state),
-          panel_(std::make_unique<SequencerPanel>(controller_)) {}
+          panel_(std::make_unique<SequencerPanel>(controller_)),
+          scene_sync_(std::make_unique<KeyframeSceneSync>(controller_, viewer)) {}
 
     SequencerUIManager::~SequencerUIManager() = default;
 
@@ -62,6 +63,7 @@ namespace lfs::vis::gui {
             kf.focal_length_mm = focal_mm;
             timeline.addKeyframe(kf);
             controller_.seek(time);
+            state::KeyframeListChanged{.count = timeline.size()}.emit();
         });
 
         cmd::SequencerUpdateKeyframe::when([this](const auto&) {
@@ -74,11 +76,14 @@ namespace lfs::vis::gui {
                 cam.t,
                 glm::quat_cast(cam.R),
                 focal_mm);
+            state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
         });
 
         cmd::SequencerPlayPause::when([this](const auto&) {
             controller_.togglePlayPause();
         });
+
+        scene_sync_->setupEvents();
     }
 
     void SequencerUIManager::render(const UIContext& ctx, const ViewportLayout& viewport) {
@@ -358,6 +363,7 @@ namespace lfs::vis::gui {
 
         if (!is_using && keyframe_gizmo_active_) {
             keyframe_gizmo_active_ = false;
+            lfs::core::events::state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
         }
 
         dl->PopClipRect();
@@ -408,6 +414,7 @@ namespace lfs::vis::gui {
                         if (ImGui::MenuItem(EASING_NAMES[e], nullptr, current_easing == easing)) {
                             if (current_easing != easing) {
                                 controller_.timeline().setKeyframeEasing(idx, easing);
+                                lfs::core::events::state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
                             }
                         }
                     }
@@ -421,6 +428,7 @@ namespace lfs::vis::gui {
                 if (ImGui::MenuItem("Delete Keyframe", "Del", false, !is_first)) {
                     controller_.selectKeyframe(*context_menu_keyframe_);
                     controller_.removeSelectedKeyframe();
+                    lfs::core::events::state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
                 }
                 if (is_first && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
                     ImGui::SetTooltip("Cannot delete first keyframe");

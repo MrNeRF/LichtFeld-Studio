@@ -267,7 +267,12 @@
     "enable_all_training": "Włącz wszystkie do treningu",
     "disable_all_training": "Wyłącz wszystkie z treningu",
     "training_enabled_tooltip": "Uwzględniono w treningu",
-    "training_disabled_tooltip": "Wykluczono z treningu"
+    "training_disabled_tooltip": "Wykluczono z treningu",
+    "go_to_keyframe": "Przejdź do widoku klatki kluczowej",
+    "update_keyframe": "Aktualizuj do bieżącego widoku",
+    "select_in_timeline": "Wybierz na osi czasu",
+    "add_keyframe_scene": "Dodaj klatkę kluczową",
+    "keyframe_easing": "Easing"
   },
   "export": {
     "title": "Eksportuj",

@@ -267,7 +267,12 @@
     "enable_all_training": "全部启用训练",
     "disable_all_training": "全部禁用训练",
     "training_enabled_tooltip": "已包含在训练中",
-    "training_disabled_tooltip": "已从训练中排除"
+    "training_disabled_tooltip": "已从训练中排除",
+    "go_to_keyframe": "转到关键帧视图",
+    "update_keyframe": "更新为当前视图",
+    "select_in_timeline": "在时间轴中选择",
+    "add_keyframe_scene": "添加关键帧",
+    "keyframe_easing": "缓动"
   },
   "export": {
     "title": "导出",

@@ -13,6 +13,7 @@
 #include <atomic>
 #include <cassert>
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -26,17 +27,19 @@ namespace lfs::core {
     constexpr NodeId NULL_NODE = -1;
 
     enum class NodeType : uint8_t {
-        SPLAT,        // Contains gaussian splat data
-        POINTCLOUD,   // Contains point cloud (pre-training, can be cropped)
-        GROUP,        // Empty transform node for organization
-        CROPBOX,      // Crop box visualization (child of SPLAT, POINTCLOUD, or DATASET)
-        ELLIPSOID,    // Ellipsoid selection (child of SPLAT, POINTCLOUD, or DATASET)
-        DATASET,      // Root node for training dataset (contains cameras + model)
-        CAMERA_GROUP, // Container for camera nodes (e.g., "Training", "Validation")
-        CAMERA,       // Individual camera from dataset (may have mask_path)
-        IMAGE_GROUP,  // Container for image nodes
-        IMAGE,        // Individual image file reference (not loaded, just path)
-        MESH          // Triangle mesh (imported via Assimp, processed via OpenMesh)
+        SPLAT,          // Contains gaussian splat data
+        POINTCLOUD,     // Contains point cloud (pre-training, can be cropped)
+        GROUP,          // Empty transform node for organization
+        CROPBOX,        // Crop box visualization (child of SPLAT, POINTCLOUD, or DATASET)
+        ELLIPSOID,      // Ellipsoid selection (child of SPLAT, POINTCLOUD, or DATASET)
+        DATASET,        // Root node for training dataset (contains cameras + model)
+        CAMERA_GROUP,   // Container for camera nodes (e.g., "Training", "Validation")
+        CAMERA,         // Individual camera from dataset (may have mask_path)
+        IMAGE_GROUP,    // Container for image nodes
+        IMAGE,          // Individual image file reference (not loaded, just path)
+        MESH,           // Triangle mesh (imported via Assimp, processed via OpenMesh)
+        KEYFRAME_GROUP, // Container for keyframe nodes (camera animation)
+        KEYFRAME        // Individual camera animation keyframe
     };
 
     struct CropBoxData {
@@ -56,6 +59,15 @@ namespace lfs::core {
         glm::vec3 color{1.0f, 1.0f, 0.0f};
         float line_width = 2.0f;
         float flash_intensity = 0.0f;
+    };
+
+    struct KeyframeData {
+        size_t keyframe_index = 0;
+        float time = 0.0f;
+        glm::vec3 position{0.0f};
+        glm::quat rotation{1, 0, 0, 0};
+        float focal_length_mm = 35.0f;
+        uint8_t easing = 0; // 0=LINEAR, 1=EASE_IN, 2=EASE_OUT, 3=EASE_IN_OUT
     };
 
     struct SelectionGroup {
@@ -86,6 +98,7 @@ namespace lfs::core {
         std::shared_ptr<lfs::core::MeshData> mesh;
         std::unique_ptr<CropBoxData> cropbox;
         std::unique_ptr<EllipsoidData> ellipsoid;
+        std::unique_ptr<KeyframeData> keyframe;
         size_t gaussian_count = 0;
         glm::vec3 centroid{0.0f};
 
@@ -166,6 +179,9 @@ namespace lfs::core {
         NodeId addDataset(const std::string& name);
         NodeId addCameraGroup(const std::string& name, NodeId parent, size_t camera_count);
         NodeId addCamera(const std::string& name, NodeId parent, std::shared_ptr<lfs::core::Camera> camera);
+        NodeId addKeyframeGroup(const std::string& name, NodeId parent = NULL_NODE);
+        NodeId addKeyframe(const std::string& name, NodeId parent, std::unique_ptr<KeyframeData> data);
+        void removeKeyframeNodes();
         void reparent(NodeId node, NodeId new_parent);
         [[nodiscard]] std::string duplicateNode(const std::string& name);
         [[nodiscard]] std::string mergeGroup(const std::string& group_name);

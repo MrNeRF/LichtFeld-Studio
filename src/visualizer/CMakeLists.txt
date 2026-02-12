@@ -43,6 +43,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/async_task_manager.cpp
         gui/startup_overlay.cpp
         gui/sequencer_ui_manager.cpp
+        gui/keyframe_scene_sync.cpp
         gui/gizmo_transform.cpp
         gui/html_viewer_export.cpp
         gui/ui_widgets.cpp
