@@ -63,12 +63,12 @@ class PluginInstaller:
             logger.warning("Broken venv (missing python), removing: %s", venv_path)
             shutil.rmtree(venv_path)
 
-        # Use uv to create the venv with Python 3.12 (matching LFS's embedded Python)
         uv = self._find_uv()
         if not uv:
             raise PluginDependencyError("uv not found - cannot create plugin venv")
 
-        cmd = [str(uv), "venv", str(venv_path), "--python", "3.12"]
+        python = self._get_embedded_python() or Path(sys.executable)
+        cmd = [str(uv), "venv", str(venv_path), "--python", str(python)]
         logger.info("Creating venv: %s", " ".join(cmd))
 
         result = subprocess.run(
