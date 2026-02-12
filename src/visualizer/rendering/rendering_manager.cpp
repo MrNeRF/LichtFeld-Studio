@@ -1947,11 +1947,11 @@ namespace lfs::vis {
 
                 constexpr float DEPTH_BG_THRESHOLD = 0.9999f;
                 if (ndc_depth < DEPTH_BG_THRESHOLD) {
-                    const float near = cached_result_.valid ? cached_result_.near_plane : lfs::rendering::DEFAULT_NEAR_PLANE;
-                    const float far = cached_result_.valid ? cached_result_.far_plane : lfs::rendering::DEFAULT_FAR_PLANE;
+                    const float z_near = cached_result_.valid ? cached_result_.near_plane : lfs::rendering::DEFAULT_NEAR_PLANE;
+                    const float z_far = cached_result_.valid ? cached_result_.far_plane : lfs::rendering::DEFAULT_FAR_PLANE;
                     const float z_ndc = ndc_depth * 2.0f - 1.0f;
-                    const float A = (far + near) / (far - near);
-                    const float B = (2.0f * far * near) / (far - near);
+                    const float A = (z_far + z_near) / (z_far - z_near);
+                    const float B = (2.0f * z_far * z_near) / (z_far - z_near);
                     mesh_depth = B / (A - z_ndc);
                 }
             }
