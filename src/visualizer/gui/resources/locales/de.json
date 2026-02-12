@@ -838,5 +838,10 @@
     "ok": "OK",
     "error": "Fehler: %s",
     "dismiss": "Schließen"
+  },
+  "sequencer": {
+    "edit_focal_length": "Brennweite bearbeiten...",
+    "edit_focal_length_title": "Brennweite bearbeiten",
+    "focal_length_mm": "Brennweite (mm)"
   }
 }

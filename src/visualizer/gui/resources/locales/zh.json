@@ -838,5 +838,10 @@
     "ok": "确定",
     "error": "错误：%s",
     "dismiss": "关闭"
+  },
+  "sequencer": {
+    "edit_focal_length": "编辑焦距...",
+    "edit_focal_length_title": "编辑焦距",
+    "focal_length_mm": "焦距 (mm)"
   }
 }

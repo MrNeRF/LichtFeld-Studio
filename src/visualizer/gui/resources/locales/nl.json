@@ -838,5 +838,10 @@
     "ok": "OK",
     "error": "Fout: %s",
     "dismiss": "Sluiten"
+  },
+  "sequencer": {
+    "edit_focal_length": "Brandpuntsafstand bewerken...",
+    "edit_focal_length_title": "Brandpuntsafstand bewerken",
+    "focal_length_mm": "Brandpuntsafstand (mm)"
   }
 }

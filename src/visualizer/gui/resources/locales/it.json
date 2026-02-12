@@ -838,5 +838,10 @@
     "ok": "OK",
     "error": "Errore: %s",
     "dismiss": "Chiudi"
+  },
+  "sequencer": {
+    "edit_focal_length": "Modifica lunghezza focale...",
+    "edit_focal_length_title": "Modifica lunghezza focale",
+    "focal_length_mm": "Lunghezza focale (mm)"
   }
 }

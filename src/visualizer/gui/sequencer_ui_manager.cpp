@@ -8,8 +8,10 @@
 // clang-format on
 
 #include "gui/sequencer_ui_manager.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "gui/string_keys.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
@@ -380,7 +382,7 @@ namespace lfs::vis::gui {
                     controller_.selectKeyframe(*context_menu_keyframe_);
                     controller_.seek(timeline.keyframes()[*context_menu_keyframe_].time);
                 }
-                if (ImGui::MenuItem("Edit Focal Length...")) {
+                if (ImGui::MenuItem(LOC(lichtfeld::Strings::Sequencer::EDIT_FOCAL_LENGTH))) {
                     panel_->openFocalLengthEdit(*context_menu_keyframe_,
                                                 timeline.keyframes()[*context_menu_keyframe_].focal_length_mm);
                 }

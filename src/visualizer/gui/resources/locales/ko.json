@@ -838,5 +838,10 @@
     "ok": "OK",
     "error": "오류: %s",
     "dismiss": "닫기"
+  },
+  "sequencer": {
+    "edit_focal_length": "초점 거리 편집...",
+    "edit_focal_length_title": "초점 거리 편집",
+    "focal_length_mm": "초점 거리 (mm)"
   }
 }

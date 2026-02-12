@@ -838,5 +838,10 @@
     "ok": "OK",
     "error": "Error: %s",
     "dismiss": "Descartar"
+  },
+  "sequencer": {
+    "edit_focal_length": "Editar distancia focal...",
+    "edit_focal_length_title": "Editar distancia focal",
+    "focal_length_mm": "Distancia focal (mm)"
   }
 }

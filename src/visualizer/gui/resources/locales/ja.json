@@ -838,5 +838,10 @@
     "ok": "OK",
     "error": "エラー：%s",
     "dismiss": "閉じる"
+  },
+  "sequencer": {
+    "edit_focal_length": "焦点距離を編集...",
+    "edit_focal_length_title": "焦点距離を編集",
+    "focal_length_mm": "焦点距離 (mm)"
   }
 }

@@ -143,6 +143,8 @@ namespace lfs::sequencer {
                     kf.focal_length_mm = jkf["focal_length_mm"];
                 } else if (version <= 1 && jkf.contains("fov")) {
                     kf.focal_length_mm = lfs::rendering::vFovToFocalLength(jkf["fov"].get<float>());
+                } else {
+                    LOG_DEBUG("Keyframe at t={} missing focal length, using default", kf.time);
                 }
                 kf.easing = static_cast<EasingType>(jkf["easing"].get<int>());
                 keyframes_.push_back(kf);

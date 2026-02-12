@@ -25,7 +25,7 @@ namespace lfs::sequencer {
         glm::quat rotation = IDENTITY_ROTATION;
         float focal_length_mm = rendering::DEFAULT_FOCAL_LENGTH_MM;
         EasingType easing = EasingType::LINEAR;
-        bool is_loop_point = false;
+        bool is_loop_point = false; // mirrors first keyframe for seamless looping
 
         [[nodiscard]] bool operator<(const Keyframe& other) const { return time < other.time; }
     };

@@ -2,8 +2,10 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "sequencer_panel.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
+#include "gui/string_keys.hpp"
 #include "rendering/render_constants.hpp"
 #include "theme/theme.hpp"
 #include <algorithm>
@@ -462,7 +464,7 @@ namespace lfs::vis {
                     editing_keyframe_index_ = idx;
                     std::snprintf(time_edit_buffer_, sizeof(time_edit_buffer_), "%.2f", keyframes[idx].time);
                 }
-                if (ImGui::MenuItem("Edit Focal Length...", nullptr)) {
+                if (ImGui::MenuItem(LOC(lichtfeld::Strings::Sequencer::EDIT_FOCAL_LENGTH), nullptr)) {
                     editing_focal_length_ = true;
                     editing_focal_index_ = idx;
                     std::snprintf(focal_edit_buffer_, sizeof(focal_edit_buffer_), "%.1f", keyframes[idx].focal_length_mm);
@@ -563,15 +565,13 @@ namespace lfs::vis {
         if (!editing_focal_length_)
             return;
 
-        if (!ImGui::IsPopupOpen("EditFocalLength")) {
-            ImGui::OpenPopup("EditFocalLength");
+        const char* popup_title = LOC(lichtfeld::Strings::Sequencer::EDIT_FOCAL_LENGTH_TITLE);
+        if (!ImGui::IsPopupOpen(popup_title)) {
+            ImGui::OpenPopup(popup_title);
         }
 
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, {0.5f, 0.5f});
-        if (ImGui::BeginPopupModal("EditFocalLength", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text("Edit Focal Length");
-            ImGui::Separator();
-
+        if (ImGui::BeginPopupModal(popup_title, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
             auto applyFocalChange = [this]() {
                 float new_focal = std::strtof(focal_edit_buffer_, nullptr);
                 new_focal = std::clamp(new_focal,
@@ -583,7 +583,7 @@ namespace lfs::vis {
             };
 
             ImGui::SetNextItemWidth(120);
-            if (ImGui::InputText("Focal Length (mm)", focal_edit_buffer_, sizeof(focal_edit_buffer_),
+            if (ImGui::InputText(LOC(lichtfeld::Strings::Sequencer::FOCAL_LENGTH_MM), focal_edit_buffer_, sizeof(focal_edit_buffer_),
                                  ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_EnterReturnsTrue)) {
                 applyFocalChange();
                 editing_focal_length_ = false;

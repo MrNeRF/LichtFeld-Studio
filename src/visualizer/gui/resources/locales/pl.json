@@ -838,5 +838,10 @@
     "ok": "OK",
     "error": "Błąd: %s",
     "dismiss": "Zamknij"
+  },
+  "sequencer": {
+    "edit_focal_length": "Edytuj ogniskową...",
+    "edit_focal_length_title": "Edytuj ogniskową",
+    "focal_length_mm": "Ogniskowa (mm)"
   }
 }

@@ -41,7 +41,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* GETTING_STARTED = "menu.help.getting_started";
             inline constexpr const char* ABOUT = "menu.help.about";
         } // namespace Help
-    } // namespace Menu
+    }     // namespace Menu
 
     namespace Window {
         inline constexpr const char* GETTING_STARTED = "window.getting_started";
@@ -101,7 +101,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* ENABLED = "about.interop.enabled";
             inline constexpr const char* DISABLED = "about.interop.disabled";
         } // namespace Interop
-    } // namespace About
+    }     // namespace About
 
     namespace Training {
         namespace Section {
@@ -290,7 +290,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* ADD = "training.button.add";
             inline constexpr const char* REMOVE = "training.button.remove";
         } // namespace Button
-    } // namespace Training
+    }     // namespace Training
 
     namespace Scene {
         inline constexpr const char* ADD_PLY = "scene.add_ply";
@@ -927,6 +927,12 @@ namespace lichtfeld::Strings {
         inline constexpr const char* TOOLTIP_MAX_RESOLUTION = "mesh2splat.tooltip_max_resolution";
         inline constexpr const char* EFFECTIVE_RESOLUTION = "mesh2splat.effective_resolution";
     } // namespace Mesh2Splat
+
+    namespace Sequencer {
+        inline constexpr const char* EDIT_FOCAL_LENGTH = "sequencer.edit_focal_length";
+        inline constexpr const char* EDIT_FOCAL_LENGTH_TITLE = "sequencer.edit_focal_length_title";
+        inline constexpr const char* FOCAL_LENGTH_MM = "sequencer.focal_length_mm";
+    } // namespace Sequencer
 
     namespace DiskSpaceDialog {
         inline constexpr const char* TITLE = "disk_space_dialog.title";
