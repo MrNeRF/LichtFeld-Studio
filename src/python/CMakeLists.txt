@@ -316,13 +316,14 @@ sys.argv = ['stubgen', '-m', 'lichtfeld',
             '-r']
 runpy.run_path(r'${NB_STUBGEN}', run_name='__main__')
 
-# Normalize CRLF -> LF so git doesn't warn about line endings
-import glob, pathlib
+# Normalize CRLF -> LF and add space after comma in templates for consistency with linux
+import glob, pathlib, re
 for pyi in glob.glob(r'${CMAKE_CURRENT_BINARY_DIR}/typings/**/*.pyi', recursive=True):
     p = pathlib.Path(pyi)
-    content = p.read_bytes()
-    if b'\\r\\n' in content:
-        p.write_bytes(content.replace(b'\\r\\n', b'\\n'))
+    content = p.read_bytes().decode('utf-8').replace('\\r\\n', '\\n')
+    # Add space after comma in C++ templates (e.g., VectorT<float,3> -> VectorT<float, 3>)
+    content = re.sub(r',([a-zA-Z0-9_])', r', \\1', content)
+    p.write_bytes(content.encode('utf-8'))
 ")
 
             add_custom_command(
