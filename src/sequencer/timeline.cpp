@@ -139,6 +139,7 @@ namespace lfs::sequencer {
                 kf.time = jkf["time"];
                 kf.position = {jkf["position"][0], jkf["position"][1], jkf["position"][2]};
                 kf.rotation = {jkf["rotation"][0], jkf["rotation"][1], jkf["rotation"][2], jkf["rotation"][3]};
+<<<<<<< HEAD
                 if (jkf.contains("focal_length_mm")) {
                     kf.focal_length_mm = jkf["focal_length_mm"];
                 } else if (version <= 1 && jkf.contains("fov")) {
@@ -146,6 +147,11 @@ namespace lfs::sequencer {
                 } else {
                     LOG_DEBUG("Keyframe at t={} missing focal length, using default", kf.time);
                 }
+=======
+                kf.focal_length_mm = std::clamp(jkf["focal_length_mm"].get<float>(),
+                                                lfs::rendering::MIN_FOCAL_LENGTH_MM,
+                                                lfs::rendering::MAX_FOCAL_LENGTH_MM);
+>>>>>>> master
                 kf.easing = static_cast<EasingType>(jkf["easing"].get<int>());
                 keyframes_.push_back(kf);
             }

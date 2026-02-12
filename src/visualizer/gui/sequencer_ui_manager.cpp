@@ -76,7 +76,10 @@ namespace lfs::vis::gui {
                 cam.t,
                 glm::quat_cast(cam.R),
                 focal_mm);
+<<<<<<< HEAD
             state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
+=======
+>>>>>>> master
         });
 
         cmd::SequencerPlayPause::when([this](const auto&) {
