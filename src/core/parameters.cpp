@@ -43,6 +43,7 @@ namespace lfs::core {
         void OptimizationParameters::apply_step_scaling() {
             if (steps_scaler <= 0.f || steps_scaler == 1.f)
                 return;
+            LOG_INFO("Scaling training steps by factor: {}", steps_scaler);
             const auto scale = [this](size_t v) {
                 return static_cast<size_t>(std::lround(static_cast<float>(v) * steps_scaler));
             };
@@ -76,10 +77,15 @@ namespace lfs::core {
             stop_refine = unscale(stop_refine);
             refine_every = unscale(refine_every);
             sh_degree_interval = unscale(sh_degree_interval);
-            for (auto& s : eval_steps)
-                s = unscale(s);
-            for (auto& s : save_steps)
-                s = unscale(s);
+            for (auto* steps : {&eval_steps, &save_steps}) {
+                std::set<size_t> unique;
+                for (auto s : *steps) {
+                    size_t unscaled = unscale(s);
+                    if (unscaled > 0)
+                        unique.insert(unscaled);
+                }
+                steps->assign(unique.begin(), unique.end());
+            }
         }
 
         nlohmann::json OptimizationParameters::to_json() const {

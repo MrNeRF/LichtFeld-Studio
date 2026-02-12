@@ -626,8 +626,6 @@ namespace {
 
     void apply_step_scaling(lfs::core::param::TrainingParameters& params) {
         auto& opt = params.optimization;
-        if (opt.steps_scaler > 0.f && opt.steps_scaler != 1.f)
-            LOG_INFO("Scaling training steps by factor: {}", opt.steps_scaler);
         opt.apply_step_scaling();
     }
 
