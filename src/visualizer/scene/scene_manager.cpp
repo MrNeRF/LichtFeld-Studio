@@ -716,10 +716,14 @@ namespace lfs::vis {
     }
 
     namespace {
+        constexpr size_t MAX_MESH_CPU_CACHE_ENTRIES = 64;
+
         struct CachedMeshCpu {
             uint32_t generation = 0;
             core::Tensor verts_cpu;
             core::Tensor idx_cpu;
+            glm::vec3 aabb_min{0.0f};
+            glm::vec3 aabb_max{0.0f};
         };
 
         std::unordered_map<const core::MeshData*, CachedMeshCpu> g_mesh_cpu_cache;
@@ -769,6 +773,8 @@ namespace lfs::vis {
         struct CpuMeshAccessor {
             core::Tensor verts_cpu;
             core::Tensor idx_cpu;
+            glm::vec3 aabb_min{0.0f};
+            glm::vec3 aabb_max{0.0f};
 
             static std::optional<CpuMeshAccessor> from(const core::MeshData& mesh) {
                 if (!mesh.vertices.is_valid() || mesh.vertex_count() == 0)
@@ -779,18 +785,33 @@ namespace lfs::vis {
                     CpuMeshAccessor a;
                     a.verts_cpu = it->second.verts_cpu;
                     a.idx_cpu = it->second.idx_cpu;
+                    a.aabb_min = it->second.aabb_min;
+                    a.aabb_max = it->second.aabb_max;
                     return a;
                 }
+
+                if (g_mesh_cpu_cache.size() >= MAX_MESH_CPU_CACHE_ENTRIES)
+                    g_mesh_cpu_cache.clear();
 
                 CpuMeshAccessor a;
                 a.verts_cpu = mesh.vertices.to(core::Device::CPU).contiguous();
                 if (mesh.indices.is_valid() && mesh.face_count() > 0)
                     a.idx_cpu = mesh.indices.to(core::Device::CPU).contiguous();
 
+                const int64_t nv = a.verts_cpu.size(0);
+                a.aabb_min = a.aabb_max = a.vertex(0);
+                for (int64_t i = 1; i < nv; ++i) {
+                    const glm::vec3 v = a.vertex(i);
+                    a.aabb_min = glm::min(a.aabb_min, v);
+                    a.aabb_max = glm::max(a.aabb_max, v);
+                }
+
                 auto& entry = g_mesh_cpu_cache[&mesh];
                 entry.generation = mesh.generation();
                 entry.verts_cpu = a.verts_cpu;
                 entry.idx_cpu = a.idx_cpu;
+                entry.aabb_min = a.aabb_min;
+                entry.aabb_max = a.aabb_max;
                 return a;
             }
 
@@ -800,15 +821,9 @@ namespace lfs::vis {
                 return {p[0], p[1], p[2]};
             }
 
-            void computeBounds(glm::vec3& out_min, glm::vec3& out_max) const {
-                const int64_t nv = verts_cpu.size(0);
-                assert(nv > 0);
-                out_min = out_max = vertex(0);
-                for (int64_t i = 1; i < nv; ++i) {
-                    const glm::vec3 v = vertex(i);
-                    out_min = glm::min(out_min, v);
-                    out_max = glm::max(out_max, v);
-                }
+            void getBounds(glm::vec3& out_min, glm::vec3& out_max) const {
+                out_min = aabb_min;
+                out_max = aabb_max;
             }
 
             float rayIntersect(const glm::vec3& origin, const glm::vec3& dir) {
@@ -858,7 +873,7 @@ namespace lfs::vis {
                     continue;
 
                 glm::vec3 aabb_min, aabb_max;
-                accessor->computeBounds(aabb_min, aabb_max);
+                accessor->getBounds(aabb_min, aabb_max);
 
                 float aabb_t;
                 if (!rayAABBIntersect(local_origin, local_dir, aabb_min, aabb_max, aabb_t))
@@ -931,7 +946,7 @@ namespace lfs::vis {
                     continue;
 
                 glm::vec3 aabb_min, aabb_max;
-                accessor->computeBounds(aabb_min, aabb_max);
+                accessor->getBounds(aabb_min, aabb_max);
 
                 glm::vec2 screen_aabb_min(1e10f);
                 glm::vec2 screen_aabb_max(-1e10f);

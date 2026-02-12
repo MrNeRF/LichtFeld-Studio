@@ -1887,11 +1887,13 @@ namespace lfs::vis {
     }
 
     float RenderingManager::getDepthAtPixel(int x, int y) const {
-        const int viewport_width = cached_result_size_.x;
-        const int viewport_height = cached_result_size_.y;
-
+        int viewport_width = cached_result_size_.x;
+        int viewport_height = cached_result_size_.y;
         if (viewport_width <= 0 || viewport_height <= 0) {
-            return -1.0f;
+            viewport_width = last_viewport_size_.x;
+            viewport_height = last_viewport_size_.y;
+            if (viewport_width <= 0 || viewport_height <= 0)
+                return -1.0f;
         }
 
         float splat_depth = -1.0f;
