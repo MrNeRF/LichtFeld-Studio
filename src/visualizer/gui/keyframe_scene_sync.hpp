@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <core/export.hpp>
+
 #include "sequencer/sequencer_controller.hpp"
 
 namespace lfs::core {
@@ -15,7 +17,7 @@ namespace lfs::vis {
 
 namespace lfs::vis::gui {
 
-    class KeyframeSceneSync {
+    class LFS_VIS_API KeyframeSceneSync {
     public:
         KeyframeSceneSync(SequencerController& controller, VisualizerImpl* viewer);
         ~KeyframeSceneSync();

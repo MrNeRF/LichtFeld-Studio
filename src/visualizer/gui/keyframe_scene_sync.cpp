@@ -49,8 +49,6 @@ namespace lfs::vis::gui {
             if (kf.is_loop_point)
                 continue;
 
-            assert(i == visible_index && "Loop points must be at end of timeline");
-
             auto data = std::make_unique<core::KeyframeData>();
             data->keyframe_index = visible_index;
             data->time = kf.time;
