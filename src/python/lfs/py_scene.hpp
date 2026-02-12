@@ -202,6 +202,7 @@ namespace lfs::python {
         size_t keyframe_index;
         float time;
         std::tuple<float, float, float> position;
+        std::tuple<float, float, float, float> rotation;
         float focal_length_mm;
         int easing;
     };

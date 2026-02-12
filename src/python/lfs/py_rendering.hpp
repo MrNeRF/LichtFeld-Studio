@@ -9,6 +9,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <optional>
+#include <tuple>
 
 namespace nb = nanobind;
 
@@ -44,6 +45,15 @@ namespace lfs::python {
                                                                    int width, int height, float fov_degrees = 60.0f);
 
     [[nodiscard]] std::optional<PyViewInfo> get_current_view();
+
+    [[nodiscard]] std::tuple<PyTensor, PyTensor> look_at(
+        std::tuple<float, float, float> eye, std::tuple<float, float, float> target,
+        std::tuple<float, float, float> up = {0.0f, 1.0f, 0.0f});
+
+    [[nodiscard]] std::optional<PyTensor> render_at(
+        std::tuple<float, float, float> eye, std::tuple<float, float, float> target, int width, int height,
+        float fov_degrees = 60.0f, std::tuple<float, float, float> up = {0.0f, 1.0f, 0.0f},
+        const PyTensor* bg_color = nullptr);
 
     class PyRenderSettings {
     public:

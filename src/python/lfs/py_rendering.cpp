@@ -12,9 +12,12 @@
 #include "training/dataset.hpp"
 #include "visualizer/ipc/view_context.hpp"
 
+#include <cassert>
 #include <cmath>
 #include <cstring>
 #include <numbers>
+
+#include <glm/glm.hpp>
 
 namespace nb = nanobind;
 
@@ -413,6 +416,44 @@ namespace {
         return scene ? const_cast<lfs::core::SplatData*>(scene->getCombinedModel()) : nullptr;
     }
 
+    std::pair<lfs::core::Tensor, lfs::core::Tensor> compute_w2c(
+        const std::tuple<float, float, float>& eye,
+        const std::tuple<float, float, float>& target,
+        const std::tuple<float, float, float>& up) {
+        auto [ex, ey, ez] = eye;
+        auto [tx, ty, tz] = target;
+        auto [ux, uy, uz] = up;
+
+        glm::vec3 e{ex, ey, ez}, t{tx, ty, tz}, u{ux, uy, uz};
+        assert(glm::length(t - e) > 1e-6f);
+
+        glm::vec3 forward = glm::normalize(t - e);
+        glm::vec3 right_unnorm = glm::cross(u, forward);
+        assert(glm::length(right_unnorm) > 1e-6f);
+
+        glm::vec3 right = glm::normalize(right_unnorm);
+        glm::vec3 cam_up = glm::cross(forward, right);
+
+        glm::mat3 c2w(right, cam_up, forward);
+        glm::mat3 w2c_r = glm::transpose(c2w);
+        glm::vec3 w2c_t = -w2c_r * e;
+
+        auto R = lfs::core::Tensor::empty({3, 3}, lfs::core::Device::CPU, lfs::core::DataType::Float32);
+        auto T = lfs::core::Tensor::empty({3}, lfs::core::Device::CPU, lfs::core::DataType::Float32);
+        auto* r_ptr = static_cast<float*>(R.data_ptr());
+        auto* t_ptr = static_cast<float*>(T.data_ptr());
+
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                r_ptr[i * 3 + j] = w2c_r[j][i];
+
+        t_ptr[0] = w2c_t.x;
+        t_ptr[1] = w2c_t.y;
+        t_ptr[2] = w2c_t.z;
+
+        return {R.cuda(), T.cuda()};
+    }
+
 } // namespace
 
 namespace lfs::python {
@@ -509,6 +550,32 @@ namespace lfs::python {
         };
     }
 
+    std::tuple<PyTensor, PyTensor> look_at(std::tuple<float, float, float> eye,
+                                           std::tuple<float, float, float> target,
+                                           std::tuple<float, float, float> up) {
+        auto [R, T] = compute_w2c(eye, target, up);
+        return {PyTensor(std::move(R), true), PyTensor(std::move(T), true)};
+    }
+
+    std::optional<PyTensor> render_at(std::tuple<float, float, float> eye,
+                                      std::tuple<float, float, float> target, int width, int height,
+                                      float fov_degrees, std::tuple<float, float, float> up,
+                                      const PyTensor* bg_color) {
+        auto* scene = get_render_scene();
+        auto* model = get_model(scene);
+        if (!model)
+            return std::nullopt;
+
+        auto [R, T] = compute_w2c(eye, target, up);
+        auto camera = create_camera(R, T, width, height, fov_degrees);
+
+        const auto bg = bg_color ? bg_color->tensor().clone()
+                                 : core::Tensor::zeros({3}, core::Device::CUDA, core::DataType::Float32);
+
+        auto [image, alpha] = rendering::rasterize_tensor(*camera, *model, bg);
+        return PyTensor(image.permute({1, 2, 0}), true);
+    }
+
     void register_rendering(nb::module_& m) {
         nb::class_<PyViewInfo>(m, "ViewInfo")
             .def_ro("rotation", &PyViewInfo::rotation)
@@ -569,6 +636,15 @@ Returns:
 )doc");
 
         m.def("get_current_view", &get_current_view, "Get current viewport camera info (None if not available)");
+
+        m.def("look_at", &look_at, nb::arg("eye"), nb::arg("target"),
+              nb::arg("up") = std::make_tuple(0.0f, 1.0f, 0.0f),
+              "Compute (rotation, translation) camera matrices for render_view from eye/target position.");
+
+        m.def("render_at", &render_at, nb::arg("eye"), nb::arg("target"), nb::arg("width"), nb::arg("height"),
+              nb::arg("fov") = DEFAULT_FOV, nb::arg("up") = std::make_tuple(0.0f, 1.0f, 0.0f),
+              nb::arg("bg_color") = nb::none(),
+              "Render scene from eye looking at target. Returns [H,W,3] RGB tensor or None.");
 
         m.def(
             "get_render_scene", []() -> std::optional<PyScene> {

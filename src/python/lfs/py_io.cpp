@@ -14,6 +14,7 @@
 #include <nanobind/stl/vector.h>
 
 #include "core/camera.hpp"
+#include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/splat_data.hpp"
 #include "formats/ply.hpp"
@@ -270,6 +271,14 @@ namespace lfs::python {
                 return loader->getSupportedExtensions();
             },
             "Get list of supported file extensions");
+
+        m.def(
+            "save_image",
+            [](const std::filesystem::path& path, const PyTensor& image) {
+                core::save_image(path, image.tensor());
+            },
+            nb::arg("path"), nb::arg("image"),
+            "Save image tensor to file (PNG, JPG, TIFF, EXR). Accepts [H,W,C] or [C,H,W] float [0,1].");
     }
 
 } // namespace lfs::python

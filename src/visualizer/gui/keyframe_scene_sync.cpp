@@ -13,6 +13,11 @@
 #include <cassert>
 #include <format>
 
+static_assert(static_cast<uint8_t>(lfs::sequencer::EasingType::LINEAR) == 0);
+static_assert(static_cast<uint8_t>(lfs::sequencer::EasingType::EASE_IN) == 1);
+static_assert(static_cast<uint8_t>(lfs::sequencer::EasingType::EASE_OUT) == 2);
+static_assert(static_cast<uint8_t>(lfs::sequencer::EasingType::EASE_IN_OUT) == 3);
+
 namespace lfs::vis::gui {
 
     KeyframeSceneSync::KeyframeSceneSync(SequencerController& controller, VisualizerImpl* viewer)
@@ -29,16 +34,13 @@ namespace lfs::vis::gui {
             return;
 
         auto& scene = sm->getScene();
-        {
-            core::Scene::Transaction tx(scene);
-            scene.removeKeyframeNodes();
-        }
+        core::Scene::Transaction tx(scene);
+        scene.removeKeyframeNodes();
 
         const auto& timeline = controller_.timeline();
         if (timeline.empty())
             return;
 
-        core::Scene::Transaction tx(scene);
         const auto group_id = scene.addKeyframeGroup("Keyframes");
 
         size_t visible_index = 0;
@@ -46,6 +48,8 @@ namespace lfs::vis::gui {
             const auto& kf = timeline.keyframes()[i];
             if (kf.is_loop_point)
                 continue;
+
+            assert(i == visible_index && "Loop points must be at end of timeline");
 
             auto data = std::make_unique<core::KeyframeData>();
             data->keyframe_index = visible_index;

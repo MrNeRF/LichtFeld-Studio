@@ -1047,6 +1047,16 @@ def compute_screen_positions(rotation: Tensor, translation: Tensor, width: int, 
 def get_current_view() -> ViewInfo | None:
     """Get current viewport camera info (None if not available)"""
 
+def look_at(eye: tuple[float, float, float], target: tuple[float, float, float], up: tuple[float, float, float] = (0.0, 1.0, 0.0)) -> tuple[Tensor, Tensor]:
+    """
+    Compute (rotation, translation) camera matrices for render_view from eye/target position.
+    """
+
+def render_at(eye: tuple[float, float, float], target: tuple[float, float, float], width: int, height: int, fov: float = 60.0, up: tuple[float, float, float] = (0.0, 1.0, 0.0), bg_color: Tensor | None = None) -> Tensor | None:
+    """
+    Render scene from eye looking at target. Returns [H,W,3] RGB tensor or None.
+    """
+
 def get_render_scene() -> scene.Scene | None:
     """Get the current render scene (None if not available)"""
 

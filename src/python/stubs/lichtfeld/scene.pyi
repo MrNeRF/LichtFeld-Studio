@@ -157,6 +157,9 @@ class KeyframeData:
     def position(self) -> tuple[float, float, float]: ...
 
     @property
+    def rotation(self) -> tuple[float, float, float, float]: ...
+
+    @property
     def focal_length_mm(self) -> float: ...
 
     @property

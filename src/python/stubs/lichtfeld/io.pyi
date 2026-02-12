@@ -63,3 +63,8 @@ def get_supported_formats() -> list[str]:
 
 def get_supported_extensions() -> list[str]:
     """Get list of supported file extensions"""
+
+def save_image(path: str | os.PathLike, image: lichtfeld.Tensor) -> None:
+    """
+    Save image tensor to file (PNG, JPG, TIFF, EXR). Accepts [H,W,C] or [C,H,W] float [0,1].
+    """

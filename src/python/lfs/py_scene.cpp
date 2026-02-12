@@ -237,6 +237,7 @@ namespace lfs::python {
             .keyframe_index = kf.keyframe_index,
             .time = kf.time,
             .position = {kf.position.x, kf.position.y, kf.position.z},
+            .rotation = {kf.rotation.w, kf.rotation.x, kf.rotation.y, kf.rotation.z},
             .focal_length_mm = kf.focal_length_mm,
             .easing = static_cast<int>(kf.easing)};
     }
@@ -561,6 +562,7 @@ namespace lfs::python {
             .def_ro("keyframe_index", &PyKeyframeData::keyframe_index)
             .def_ro("time", &PyKeyframeData::time)
             .def_ro("position", &PyKeyframeData::position)
+            .def_ro("rotation", &PyKeyframeData::rotation)
             .def_ro("focal_length_mm", &PyKeyframeData::focal_length_mm)
             .def_ro("easing", &PyKeyframeData::easing);
 
