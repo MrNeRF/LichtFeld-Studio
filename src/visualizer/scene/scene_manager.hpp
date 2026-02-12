@@ -120,7 +120,7 @@ namespace lfs::vis {
         [[nodiscard]] const SelectionState& selectionState() const { return selection_; }
 
         // Node picking
-        [[nodiscard]] std::string pickNodeAtWorldPosition(const glm::vec3& world_pos) const;
+        [[nodiscard]] std::string pickNodeByRay(const glm::vec3& ray_origin, const glm::vec3& ray_dir) const;
         [[nodiscard]] std::vector<std::string> pickNodesInScreenRect(
             const glm::vec2& rect_min, const glm::vec2& rect_max,
             const glm::mat4& view, const glm::mat4& proj,

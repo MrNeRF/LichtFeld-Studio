@@ -91,6 +91,43 @@ namespace lfs::rendering {
         shader_->set_uniform("u_flip_splat_y", flip_splat_y);
         shader_->set_uniform("u_splat_texcoord_scale", splat_texcoord_scale);
         shader_->set_uniform("u_splat_depth_is_ndc", splat_depth_is_ndc);
+        shader_->set_uniform("u_mesh_only", false);
+
+        const GLboolean depth_was_enabled = glIsEnabled(GL_DEPTH_TEST);
+        GLint prev_depth_func = GL_LESS;
+        glGetIntegerv(GL_DEPTH_FUNC, &prev_depth_func);
+
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_ALWAYS);
+
+        glBindVertexArray(vao_.get());
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        glBindVertexArray(0);
+
+        glDepthFunc(prev_depth_func);
+        if (!depth_was_enabled)
+            glDisable(GL_DEPTH_TEST);
+
+        glActiveTexture(GL_TEXTURE0);
+
+        return {};
+    }
+
+    Result<void> DepthCompositor::presentMeshOnly(GLuint mesh_color_tex, GLuint mesh_depth_tex) {
+        if (!initialized_)
+            return std::unexpected("DepthCompositor not initialized");
+
+        ShaderScope scope(shader_);
+
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, mesh_color_tex);
+        shader_->set_uniform("u_mesh_color", 2);
+
+        glActiveTexture(GL_TEXTURE3);
+        glBindTexture(GL_TEXTURE_2D, mesh_depth_tex);
+        shader_->set_uniform("u_mesh_depth", 3);
+
+        shader_->set_uniform("u_mesh_only", true);
 
         const GLboolean depth_was_enabled = glIsEnabled(GL_DEPTH_TEST);
         GLint prev_depth_func = GL_LESS;

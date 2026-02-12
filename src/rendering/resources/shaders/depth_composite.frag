@@ -12,6 +12,7 @@ uniform float u_far_plane;
 uniform bool u_flip_splat_y;
 uniform vec2 u_splat_texcoord_scale;
 uniform bool u_splat_depth_is_ndc;
+uniform bool u_mesh_only;
 
 layout(location = 0) out vec4 frag_color;
 
@@ -30,6 +31,14 @@ float ndc_to_view_depth(float ndc_z) {
 }
 
 void main() {
+    if (u_mesh_only) {
+        vec4 mc = texture(u_mesh_color, v_texcoord);
+        float md = texture(u_mesh_depth, v_texcoord).r;
+        frag_color = mc;
+        gl_FragDepth = md < 1.0 ? md : 1.0;
+        return;
+    }
+
     vec2 splat_uv = v_texcoord * u_splat_texcoord_scale;
     if (u_flip_splat_y)
         splat_uv.y = u_splat_texcoord_scale.y - splat_uv.y;

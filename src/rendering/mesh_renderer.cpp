@@ -447,7 +447,7 @@ namespace lfs::rendering {
             glViewport(0, 0, fbo_width_, fbo_height_);
 
             if (clear_fbo) {
-                glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+                glClearColor(opts.background_color.r, opts.background_color.g, opts.background_color.b, 1.0f);
                 glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             }
         }
@@ -478,6 +478,10 @@ namespace lfs::rendering {
             pbr_shader_->set_uniform("u_light_intensity", opts.light_intensity);
             pbr_shader_->set_uniform("u_ambient", opts.ambient);
             pbr_shader_->set_uniform("u_has_vertex_colors", static_cast<int>(mesh.has_colors()));
+
+            pbr_shader_->set_uniform("u_is_selected", static_cast<int>(opts.is_selected));
+            pbr_shader_->set_uniform("u_desaturate_unselected", static_cast<int>(opts.desaturate_unselected));
+            pbr_shader_->set_uniform("u_selection_flash_intensity", opts.selection_flash_intensity);
 
             const bool shadow_active = opts.shadow_enabled && shadow_fbo_.get() && shadow_depth_texture_.get();
             pbr_shader_->set_uniform("u_shadow_enabled", static_cast<int>(shadow_active));

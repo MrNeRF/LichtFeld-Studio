@@ -127,6 +127,7 @@ namespace lfs::vis {
         bool isNearSplitter(double x) const;
         int getModifierKeys() const;
         glm::vec3 unprojectScreenPoint(double x, double y, float fallback_distance = 5.0f) const;
+        std::pair<glm::vec3, glm::vec3> computePickRay(double x, double y) const;
         input::ToolMode getCurrentToolMode() const;
 
         // Training pause/resume helpers

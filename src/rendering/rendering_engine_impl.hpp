@@ -58,6 +58,8 @@ namespace lfs::rendering {
             const RenderResult& splat_result,
             const glm::ivec2& viewport_size) override;
 
+        Result<void> presentMeshOnly() override;
+
         Result<void> presentToScreen(
             const RenderResult& result,
             const glm::ivec2& viewport_pos,

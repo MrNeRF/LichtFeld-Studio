@@ -606,9 +606,9 @@ namespace lfs::vis {
                     const float drag_dist = glm::length(node_rect_end_ - node_rect_start_);
 
                     if (drag_dist < CLICK_THRESHOLD_PX) {
-                        // Point pick
-                        const glm::vec3 world_pos = unprojectScreenPoint(x, y);
-                        const std::string picked = scene_manager->pickNodeAtWorldPosition(world_pos);
+                        // Point pick via ray-AABB intersection
+                        const auto [ray_origin, ray_dir] = computePickRay(x, y);
+                        const std::string picked = scene_manager->pickNodeByRay(ray_origin, ray_dir);
                         if (!picked.empty()) {
                             scene_manager->selectNode(picked);
                         } else {
@@ -1671,6 +1671,39 @@ namespace lfs::vis {
 
         // Transform from camera space to world space
         return glm::vec3(glm::inverse(w2c) * view_pos);
+    }
+
+    std::pair<glm::vec3, glm::vec3> InputController::computePickRay(double x, double y) const {
+        const glm::mat3 R = viewport_.getRotationMatrix();
+        const glm::vec3 camera_pos = viewport_.getTranslation();
+
+        const auto* rendering = services().renderingOrNull();
+        if (!rendering) {
+            const glm::vec3 forward = glm::normalize(R * glm::vec3(0, 0, 1));
+            return {camera_pos, forward};
+        }
+
+        const float local_x = static_cast<float>(x) - viewport_bounds_.x;
+        const float local_y = static_cast<float>(y) - viewport_bounds_.y;
+        const float width = viewport_bounds_.width;
+        const float height = viewport_bounds_.height;
+
+        const float fov_y = glm::radians(rendering->getFovDegrees());
+        const float aspect = width / height;
+        const float fov_x = 2.0f * std::atan(std::tan(fov_y / 2.0f) * aspect);
+
+        const float fx = width / (2.0f * std::tan(fov_x / 2.0f));
+        const float fy = height / (2.0f * std::tan(fov_y / 2.0f));
+        const float cx = width / 2.0f;
+        const float cy = height / 2.0f;
+
+        const glm::vec3 cam_dir = glm::normalize(glm::vec3(
+            (local_x - cx) / fx,
+            (local_y - cy) / fy,
+            1.0f));
+
+        const glm::vec3 world_dir = glm::normalize(R * cam_dir);
+        return {camera_pos, world_dir};
     }
 
     input::ToolMode InputController::getCurrentToolMode() const {

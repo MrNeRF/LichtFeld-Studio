@@ -222,6 +222,8 @@ namespace lfs::core {
         struct VisibleMesh {
             const lfs::core::MeshData* mesh;
             glm::mat4 transform;
+            NodeId node_id = NULL_NODE;
+            bool is_selected = false;
         };
         [[nodiscard]] std::vector<VisibleMesh> getVisibleMeshes() const;
         [[nodiscard]] bool hasVisibleMeshes() const;

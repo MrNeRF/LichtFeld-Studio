@@ -821,4 +821,16 @@ namespace lfs::rendering {
             splat_result.depth_is_ndc);
     }
 
+    Result<void> RenderingEngineImpl::presentMeshOnly() {
+        if (!depth_compositor_.isInitialized())
+            return std::unexpected("Depth compositor not initialized");
+
+        if (!mesh_rendered_this_frame_)
+            return {};
+
+        return depth_compositor_.presentMeshOnly(
+            mesh_renderer_.getColorTexture(),
+            mesh_renderer_.getDepthTexture());
+    }
+
 } // namespace lfs::rendering
