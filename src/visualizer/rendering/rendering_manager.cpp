@@ -1506,36 +1506,21 @@ namespace lfs::vis {
                         mesh_pos = glm::ivec2(static_cast<int>(context.viewport_region->x), gl_y);
                     }
 
+                    glViewport(mesh_pos.x, mesh_pos.y, render_size.x, render_size.y);
+
                     if (splats_presented) {
-                        glViewport(mesh_pos.x, mesh_pos.y, render_size.x, render_size.y);
                         const auto composite_result = engine_->compositeMeshAndSplat(
                             cached_result_, render_size);
                         if (!composite_result)
                             LOG_ERROR("Failed to composite: {}", composite_result.error());
                     } else {
-                        const GLuint mesh_fbo = engine_->getMeshFramebuffer();
-                        if (mesh_fbo == 0) {
-                            LOG_ERROR("Mesh framebuffer not available for blit");
-                        } else {
-                            glBindFramebuffer(GL_READ_FRAMEBUFFER, mesh_fbo);
-                            glReadBuffer(GL_COLOR_ATTACHMENT0);
-                            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+                        glClearColor(settings_.background_color.r, settings_.background_color.g,
+                                     settings_.background_color.b, 1.0f);
+                        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-                            glBlitFramebuffer(0, 0, render_size.x, render_size.y,
-                                              mesh_pos.x, mesh_pos.y,
-                                              mesh_pos.x + render_size.x,
-                                              mesh_pos.y + render_size.y,
-                                              GL_COLOR_BUFFER_BIT, GL_LINEAR);
-
-                            // Blit depth so overlays compose correctly with mesh geometry
-                            glBlitFramebuffer(0, 0, render_size.x, render_size.y,
-                                              mesh_pos.x, mesh_pos.y,
-                                              mesh_pos.x + render_size.x,
-                                              mesh_pos.y + render_size.y,
-                                              GL_DEPTH_BUFFER_BIT, GL_NEAREST);
-
-                            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                        }
+                        const auto present_result = engine_->presentMeshOnly();
+                        if (!present_result)
+                            LOG_ERROR("Failed to present mesh: {}", present_result.error());
                     }
                 }
             }
@@ -1891,6 +1876,26 @@ namespace lfs::vis {
 
         // Grid - disabled in split view and equirectangular modes
         if (settings_.show_grid && engine_ && settings_.split_view_mode == SplitViewMode::Disabled && !settings_.equirectangular) {
+            {
+                static int diag_count = 0;
+                if (diag_count < 10) {
+                    GLint vp[4];
+                    glGetIntegerv(GL_VIEWPORT, vp);
+                    const int cx = vp[0] + vp[2] / 2;
+                    const int cy = vp[1] + vp[3] / 2;
+                    float depth_val = 1.0f;
+                    glReadPixels(cx, cy, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &depth_val);
+                    GLboolean depth_mask_val;
+                    glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_mask_val);
+                    GLint depth_func_val;
+                    glGetIntegerv(GL_DEPTH_FUNC, &depth_func_val);
+                    LOG_INFO("[grid-diag] frame={} viewport=({},{},{},{}) center_depth={:.6f} depth_mask={} depth_func=0x{:X} depth_test={}",
+                             diag_count, vp[0], vp[1], vp[2], vp[3],
+                             depth_val, static_cast<int>(depth_mask_val), depth_func_val,
+                             static_cast<int>(glIsEnabled(GL_DEPTH_TEST)));
+                    ++diag_count;
+                }
+            }
             if (const auto result = engine_->renderGrid(
                     viewport,
                     static_cast<lfs::rendering::GridPlane>(settings_.grid_plane),

@@ -358,6 +358,8 @@ namespace lfs::rendering {
             const RenderResult& splat_result,
             const glm::ivec2& viewport_size) = 0;
 
+        virtual Result<void> presentMeshOnly() = 0;
+
         // Present to screen
         virtual Result<void> presentToScreen(
             const RenderResult& result,

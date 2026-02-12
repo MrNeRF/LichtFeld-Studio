@@ -146,9 +146,13 @@ namespace lfs::rendering {
         const GLboolean prev_blend = glIsEnabled(GL_BLEND);
         const GLboolean prev_depth_test = glIsEnabled(GL_DEPTH_TEST);
 
+        GLint prev_depth_func;
+        glGetIntegerv(GL_DEPTH_FUNC, &prev_depth_func);
+
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LESS);
         glDepthMask(GL_TRUE);
 
         ShaderScope s(shader_);
@@ -178,6 +182,7 @@ namespace lfs::rendering {
         glDrawArrays(GL_TRIANGLE_STRIP, 0, QUAD_VERTEX_COUNT);
 
         // Restore GL state
+        glDepthFunc(prev_depth_func);
         glDepthMask(prev_depth_mask);
         if (!prev_blend)
             glDisable(GL_BLEND);

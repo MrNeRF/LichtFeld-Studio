@@ -22,6 +22,8 @@ namespace lfs::rendering {
                                const glm::vec2& splat_texcoord_scale = glm::vec2(1.0f),
                                bool splat_depth_is_ndc = false);
 
+        Result<void> presentMeshOnly(GLuint mesh_color_tex, GLuint mesh_depth_tex);
+
     private:
         ManagedShader shader_;
         VAO vao_;
