@@ -1876,26 +1876,6 @@ namespace lfs::vis {
 
         // Grid - disabled in split view and equirectangular modes
         if (settings_.show_grid && engine_ && settings_.split_view_mode == SplitViewMode::Disabled && !settings_.equirectangular) {
-            {
-                static int diag_count = 0;
-                if (diag_count < 10) {
-                    GLint vp[4];
-                    glGetIntegerv(GL_VIEWPORT, vp);
-                    const int cx = vp[0] + vp[2] / 2;
-                    const int cy = vp[1] + vp[3] / 2;
-                    float depth_val = 1.0f;
-                    glReadPixels(cx, cy, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &depth_val);
-                    GLboolean depth_mask_val;
-                    glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_mask_val);
-                    GLint depth_func_val;
-                    glGetIntegerv(GL_DEPTH_FUNC, &depth_func_val);
-                    LOG_INFO("[grid-diag] frame={} viewport=({},{},{},{}) center_depth={:.6f} depth_mask={} depth_func=0x{:X} depth_test={}",
-                             diag_count, vp[0], vp[1], vp[2], vp[3],
-                             depth_val, static_cast<int>(depth_mask_val), depth_func_val,
-                             static_cast<int>(glIsEnabled(GL_DEPTH_TEST)));
-                    ++diag_count;
-                }
-            }
             if (const auto result = engine_->renderGrid(
                     viewport,
                     static_cast<lfs::rendering::GridPlane>(settings_.grid_plane),
@@ -1965,8 +1945,8 @@ namespace lfs::vis {
 
                 constexpr float DEPTH_BG_THRESHOLD = 0.9999f;
                 if (ndc_depth < DEPTH_BG_THRESHOLD) {
-                    const float near = lfs::rendering::DEFAULT_NEAR_PLANE;
-                    const float far = lfs::rendering::DEFAULT_FAR_PLANE;
+                    const float near = cached_result_.valid ? cached_result_.near_plane : lfs::rendering::DEFAULT_NEAR_PLANE;
+                    const float far = cached_result_.valid ? cached_result_.far_plane : lfs::rendering::DEFAULT_FAR_PLANE;
                     const float z_ndc = ndc_depth * 2.0f - 1.0f;
                     const float A = (far + near) / (far - near);
                     const float B = (2.0f * far * near) / (far - near);

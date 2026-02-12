@@ -32,6 +32,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <shared_mutex>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace lfs::vis {
 
@@ -715,6 +716,14 @@ namespace lfs::vis {
     }
 
     namespace {
+        struct CachedMeshCpu {
+            uint32_t generation = 0;
+            core::Tensor verts_cpu;
+            core::Tensor idx_cpu;
+        };
+
+        std::unordered_map<const core::MeshData*, CachedMeshCpu> g_mesh_cpu_cache;
+
         // Möller-Trumbore ray-triangle intersection, returns distance or -1
         float rayTriangleIntersect(const glm::vec3& origin, const glm::vec3& dir,
                                    const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2) {
@@ -764,25 +773,39 @@ namespace lfs::vis {
             static std::optional<CpuMeshAccessor> from(const core::MeshData& mesh) {
                 if (!mesh.vertices.is_valid() || mesh.vertex_count() == 0)
                     return std::nullopt;
+
+                auto it = g_mesh_cpu_cache.find(&mesh);
+                if (it != g_mesh_cpu_cache.end() && it->second.generation == mesh.generation()) {
+                    CpuMeshAccessor a;
+                    a.verts_cpu = it->second.verts_cpu;
+                    a.idx_cpu = it->second.idx_cpu;
+                    return a;
+                }
+
                 CpuMeshAccessor a;
                 a.verts_cpu = mesh.vertices.to(core::Device::CPU).contiguous();
                 if (mesh.indices.is_valid() && mesh.face_count() > 0)
                     a.idx_cpu = mesh.indices.to(core::Device::CPU).contiguous();
+
+                auto& entry = g_mesh_cpu_cache[&mesh];
+                entry.generation = mesh.generation();
+                entry.verts_cpu = a.verts_cpu;
+                entry.idx_cpu = a.idx_cpu;
                 return a;
             }
 
-            glm::vec3 vertex(int64_t i) {
-                auto va = verts_cpu.accessor<float, 2>();
-                return {va(i, 0), va(i, 1), va(i, 2)};
+            glm::vec3 vertex(int64_t i) const {
+                assert(i >= 0 && i < verts_cpu.size(0));
+                const float* p = verts_cpu.ptr<float>() + i * 3;
+                return {p[0], p[1], p[2]};
             }
 
-            void computeBounds(glm::vec3& out_min, glm::vec3& out_max) {
-                auto va = verts_cpu.accessor<float, 2>();
+            void computeBounds(glm::vec3& out_min, glm::vec3& out_max) const {
                 const int64_t nv = verts_cpu.size(0);
                 assert(nv > 0);
-                out_min = out_max = glm::vec3(va(0, 0), va(0, 1), va(0, 2));
+                out_min = out_max = vertex(0);
                 for (int64_t i = 1; i < nv; ++i) {
-                    const glm::vec3 v(va(i, 0), va(i, 1), va(i, 2));
+                    const glm::vec3 v = vertex(i);
                     out_min = glm::min(out_min, v);
                     out_max = glm::max(out_max, v);
                 }
@@ -809,7 +832,7 @@ namespace lfs::vis {
     } // namespace
 
     std::string SceneManager::pickNodeByRay(const glm::vec3& ray_origin, const glm::vec3& ray_dir) const {
-        float closest_t = std::numeric_limits<float>::max();
+        float closest_world_dist = std::numeric_limits<float>::max();
         std::string closest_name;
 
         for (const auto* node : scene_.getNodes()) {
@@ -818,9 +841,16 @@ namespace lfs::vis {
             if (!scene_.isNodeEffectivelyVisible(node->id))
                 continue;
 
-            const glm::mat4 world_to_local = glm::inverse(scene_.getWorldTransform(node->id));
+            const glm::mat4 local_to_world = scene_.getWorldTransform(node->id);
+            const glm::mat4 world_to_local = glm::inverse(local_to_world);
             const glm::vec3 local_origin = glm::vec3(world_to_local * glm::vec4(ray_origin, 1.0f));
             const glm::vec3 local_dir = glm::vec3(world_to_local * glm::vec4(ray_dir, 0.0f));
+
+            auto toWorldDist = [&](float local_t) {
+                const glm::vec3 local_hit = local_origin + local_t * local_dir;
+                const glm::vec3 world_hit = glm::vec3(local_to_world * glm::vec4(local_hit, 1.0f));
+                return glm::length(world_hit - ray_origin);
+            };
 
             if (node->type == core::NodeType::MESH && node->mesh) {
                 auto accessor = CpuMeshAccessor::from(*node->mesh);
@@ -835,9 +865,12 @@ namespace lfs::vis {
                     continue;
 
                 const float t_hit = accessor->rayIntersect(local_origin, local_dir);
-                if (t_hit > 0.0f && t_hit < closest_t) {
-                    closest_t = t_hit;
-                    closest_name = node->name;
+                if (t_hit > 0.0f) {
+                    const float world_dist = toWorldDist(t_hit);
+                    if (world_dist < closest_world_dist) {
+                        closest_world_dist = world_dist;
+                        closest_name = node->name;
+                    }
                 }
             } else {
                 glm::vec3 local_min, local_max;
@@ -848,8 +881,9 @@ namespace lfs::vis {
                 if (!rayAABBIntersect(local_origin, local_dir, local_min, local_max, t_hit))
                     continue;
 
-                if (t_hit < closest_t) {
-                    closest_t = t_hit;
+                const float world_dist = toWorldDist(t_hit);
+                if (world_dist < closest_world_dist) {
+                    closest_world_dist = world_dist;
                     closest_name = node->name;
                 }
             }
@@ -894,6 +928,28 @@ namespace lfs::vis {
             if (node->type == core::NodeType::MESH && node->mesh) {
                 auto accessor = CpuMeshAccessor::from(*node->mesh);
                 if (!accessor)
+                    continue;
+
+                glm::vec3 aabb_min, aabb_max;
+                accessor->computeBounds(aabb_min, aabb_max);
+
+                glm::vec2 screen_aabb_min(1e10f);
+                glm::vec2 screen_aabb_max(-1e10f);
+                bool aabb_visible = false;
+                for (int i = 0; i < BBOX_CORNERS; ++i) {
+                    const glm::vec3 corner(
+                        (i & 1) ? aabb_max.x : aabb_min.x,
+                        (i & 2) ? aabb_max.y : aabb_min.y,
+                        (i & 4) ? aabb_max.z : aabb_min.z);
+                    const glm::vec2 sp = projectToScreen(
+                        glm::vec3(world_transform * glm::vec4(corner, 1.0f)));
+                    if (sp.x > BEHIND_CAMERA + 1e5f) {
+                        screen_aabb_min = glm::min(screen_aabb_min, sp);
+                        screen_aabb_max = glm::max(screen_aabb_max, sp);
+                        aabb_visible = true;
+                    }
+                }
+                if (!aabb_visible || !rectsOverlap(rect_min, rect_max, screen_aabb_min, screen_aabb_max))
                     continue;
 
                 const int64_t nv = accessor->verts_cpu.size(0);

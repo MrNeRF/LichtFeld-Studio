@@ -1677,7 +1677,8 @@ namespace lfs::vis {
         const glm::mat3 R = viewport_.getRotationMatrix();
         const glm::vec3 camera_pos = viewport_.getTranslation();
 
-        if (!services().renderingOrNull()) {
+        const auto* rendering = services().renderingOrNull();
+        if (!rendering) {
             const glm::vec3 forward = glm::normalize(R * glm::vec3(0, 0, 1));
             return {camera_pos, forward};
         }
@@ -1687,7 +1688,7 @@ namespace lfs::vis {
         const float width = viewport_bounds_.width;
         const float height = viewport_bounds_.height;
 
-        const float fov_y = glm::radians(services().renderingOrNull()->getFovDegrees());
+        const float fov_y = glm::radians(rendering->getFovDegrees());
         const float aspect = width / height;
         const float fov_x = 2.0f * std::atan(std::tan(fov_y / 2.0f) * aspect);
 
