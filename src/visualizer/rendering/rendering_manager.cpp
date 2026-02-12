@@ -962,7 +962,7 @@ namespace lfs::vis {
     bool RenderingManager::renderPreviewFrame(SceneManager* const scene_manager,
                                               const glm::mat3& rotation,
                                               const glm::vec3& position,
-                                              const float fov,
+                                              const float focal_length_mm,
                                               const unsigned int fbo,
                                               [[maybe_unused]] const unsigned int texture,
                                               const int width, const int height) {
@@ -980,7 +980,7 @@ namespace lfs::vis {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         const lfs::rendering::RenderRequest request{
-            .viewport = {rotation, position, {width, height}, fov, false, 1.0f},
+            .viewport = {rotation, position, {width, height}, focal_length_mm, false, 1.0f},
             .scaling_modifier = settings_.scaling_modifier,
             .antialiasing = false,
             .sh_degree = 0,

@@ -22,7 +22,8 @@ namespace lfs::sequencer {
         void addKeyframe(const Keyframe& keyframe);
         void removeKeyframe(size_t index);
         void setKeyframeTime(size_t index, float new_time, bool sort = true);
-        void updateKeyframe(size_t index, const glm::vec3& position, const glm::quat& rotation, float fov);
+        void updateKeyframe(size_t index, const glm::vec3& position, const glm::quat& rotation, float focal_length_mm);
+        void setKeyframeFocalLength(size_t index, float focal_length_mm);
         void setKeyframeEasing(size_t index, EasingType easing);
         void sortKeyframes();
         void clear();

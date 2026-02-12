@@ -47,7 +47,7 @@ namespace lfs::vis {
         bool update(float delta_seconds);
 
         void addKeyframe(const sequencer::Keyframe& keyframe);
-        void updateSelectedKeyframe(const glm::vec3& position, const glm::quat& rotation, float fov);
+        void updateSelectedKeyframe(const glm::vec3& position, const glm::quat& rotation, float focal_length_mm);
         void removeSelectedKeyframe();
 
         void selectKeyframe(size_t index);

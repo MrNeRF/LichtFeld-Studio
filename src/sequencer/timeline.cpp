@@ -4,6 +4,7 @@
 #include "timeline.hpp"
 #include "core/logger.hpp"
 #include "interpolation.hpp"
+#include "rendering/render_constants.hpp"
 #include <algorithm>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -11,7 +12,7 @@
 namespace lfs::sequencer {
 
     namespace {
-        constexpr int JSON_VERSION = 1;
+        constexpr int JSON_VERSION = 2;
     } // namespace
 
     void Timeline::addKeyframe(const Keyframe& keyframe) {
@@ -34,12 +35,20 @@ namespace lfs::sequencer {
     }
 
     void Timeline::updateKeyframe(const size_t index, const glm::vec3& position,
-                                  const glm::quat& rotation, const float fov) {
+                                  const glm::quat& rotation, const float focal_length_mm) {
         if (index >= keyframes_.size())
             return;
         keyframes_[index].position = position;
         keyframes_[index].rotation = rotation;
-        keyframes_[index].fov = fov;
+        keyframes_[index].focal_length_mm = focal_length_mm;
+    }
+
+    void Timeline::setKeyframeFocalLength(const size_t index, const float focal_length_mm) {
+        if (index >= keyframes_.size())
+            return;
+        keyframes_[index].focal_length_mm = std::clamp(focal_length_mm,
+                                                       lfs::rendering::MIN_FOCAL_LENGTH_MM,
+                                                       lfs::rendering::MAX_FOCAL_LENGTH_MM);
     }
 
     void Timeline::setKeyframeEasing(const size_t index, const EasingType easing) {
@@ -90,7 +99,7 @@ namespace lfs::sequencer {
                 j["keyframes"].push_back({{"time", kf.time},
                                           {"position", {kf.position.x, kf.position.y, kf.position.z}},
                                           {"rotation", {kf.rotation.w, kf.rotation.x, kf.rotation.y, kf.rotation.z}},
-                                          {"fov", kf.fov},
+                                          {"focal_length_mm", kf.focal_length_mm},
                                           {"easing", static_cast<int>(kf.easing)}});
             }
 
@@ -124,12 +133,17 @@ namespace lfs::sequencer {
             const auto j = nlohmann::json::parse(file);
             keyframes_.clear();
 
+            const int version = j.value("version", 1);
             for (const auto& jkf : j["keyframes"]) {
                 Keyframe kf;
                 kf.time = jkf["time"];
                 kf.position = {jkf["position"][0], jkf["position"][1], jkf["position"][2]};
                 kf.rotation = {jkf["rotation"][0], jkf["rotation"][1], jkf["rotation"][2], jkf["rotation"][3]};
-                kf.fov = jkf["fov"];
+                if (jkf.contains("focal_length_mm")) {
+                    kf.focal_length_mm = jkf["focal_length_mm"];
+                } else if (version <= 1 && jkf.contains("fov")) {
+                    kf.focal_length_mm = lfs::rendering::vFovToFocalLength(jkf["fov"].get<float>());
+                }
                 kf.easing = static_cast<EasingType>(jkf["easing"].get<int>());
                 keyframes_.push_back(kf);
             }

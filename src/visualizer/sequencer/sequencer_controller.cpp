@@ -78,7 +78,7 @@ namespace lfs::vis {
         loop_kf.time = timeline_.endTime() + LOOP_KEYFRAME_OFFSET;
         loop_kf.position = first.position;
         loop_kf.rotation = first.rotation;
-        loop_kf.fov = first.fov;
+        loop_kf.focal_length_mm = first.focal_length_mm;
         loop_kf.is_loop_point = true;
         timeline_.addKeyframe(loop_kf);
     }
@@ -102,7 +102,7 @@ namespace lfs::vis {
 
         for (size_t i = 0; i < keyframes.size(); ++i) {
             if (keyframes[i].is_loop_point) {
-                timeline_.updateKeyframe(i, first.position, first.rotation, first.fov);
+                timeline_.updateKeyframe(i, first.position, first.rotation, first.focal_length_mm);
                 break;
             }
         }
@@ -167,10 +167,10 @@ namespace lfs::vis {
         timeline_.addKeyframe(keyframe);
     }
 
-    void SequencerController::updateSelectedKeyframe(const glm::vec3& position, const glm::quat& rotation, const float fov) {
+    void SequencerController::updateSelectedKeyframe(const glm::vec3& position, const glm::quat& rotation, const float focal_length_mm) {
         if (!selected_keyframe_ || *selected_keyframe_ >= timeline_.size())
             return;
-        timeline_.updateKeyframe(*selected_keyframe_, position, rotation, fov);
+        timeline_.updateKeyframe(*selected_keyframe_, position, rotation, focal_length_mm);
     }
 
     void SequencerController::removeSelectedKeyframe() {

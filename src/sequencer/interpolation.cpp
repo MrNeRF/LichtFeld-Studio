@@ -57,7 +57,7 @@ namespace lfs::sequencer {
             return {};
         }
         if (keyframes.size() == 1) {
-            return {keyframes[0].position, keyframes[0].rotation, keyframes[0].fov};
+            return {keyframes[0].position, keyframes[0].rotation, keyframes[0].focal_length_mm};
         }
 
         const float clamped_time = std::clamp(time, keyframes.front().time, keyframes.back().time);
@@ -87,7 +87,7 @@ namespace lfs::sequencer {
         return {
             catmullRom(k0.position, k1.position, k2.position, k3.position, eased_t),
             glm::slerp(k1.rotation, k2.rotation, eased_t),
-            glm::mix(k1.fov, k2.fov, eased_t)};
+            glm::mix(k1.focal_length_mm, k2.focal_length_mm, eased_t)};
     }
 
     std::vector<glm::vec3> generatePathPoints(

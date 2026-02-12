@@ -13,6 +13,7 @@ add_library(lfs_sequencer STATIC
 target_include_directories(lfs_sequencer
         PUBLIC
         ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/src/rendering/include
 )
 
 target_link_libraries(lfs_sequencer

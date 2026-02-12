@@ -248,7 +248,7 @@ namespace lfs::vis {
         bool renderPreviewFrame(SceneManager* scene_manager,
                                 const glm::mat3& camera_rotation,
                                 const glm::vec3& camera_position,
-                                float fov,
+                                float focal_length_mm,
                                 unsigned int target_fbo,
                                 unsigned int target_texture,
                                 int width, int height);

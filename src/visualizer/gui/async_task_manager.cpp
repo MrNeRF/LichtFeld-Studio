@@ -604,7 +604,7 @@ namespace lfs::vis::gui {
                     request.viewport.rotation = glm::mat3_cast(cam_state.rotation);
                     request.viewport.translation = cam_state.position;
                     request.viewport.size = {width, height};
-                    request.viewport.focal_length_mm = lfs::rendering::vFovToFocalLength(cam_state.fov);
+                    request.viewport.focal_length_mm = cam_state.focal_length_mm;
                     request.background_color = render_settings.background_color;
                     request.sh_degree = render_settings.sh_degree;
                     request.scaling_modifier = render_settings.scaling_modifier;

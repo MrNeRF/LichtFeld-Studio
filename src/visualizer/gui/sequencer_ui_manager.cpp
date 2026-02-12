@@ -50,11 +50,14 @@ namespace lfs::vis::gui {
             const float interval = ui_state_.snap_to_grid ? ui_state_.snap_interval : 1.0f;
             const float time = timeline.empty() ? 0.0f : timeline.endTime() + interval;
 
+            auto* const rm = viewer_->getRenderingManager();
+            const float focal_mm = rm ? rm->getFocalLengthMm() : lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
+
             lfs::sequencer::Keyframe kf;
             kf.time = time;
             kf.position = cam.t;
             kf.rotation = glm::quat_cast(cam.R);
-            kf.fov = lfs::sequencer::DEFAULT_FOV;
+            kf.focal_length_mm = focal_mm;
             timeline.addKeyframe(kf);
             controller_.seek(time);
         });
@@ -63,10 +66,12 @@ namespace lfs::vis::gui {
             if (!controller_.hasSelection())
                 return;
             const auto& cam = viewer_->getViewport().camera;
+            auto* const rm = viewer_->getRenderingManager();
+            const float focal_mm = rm ? rm->getFocalLengthMm() : lfs::rendering::DEFAULT_FOCAL_LENGTH_MM;
             controller_.updateSelectedKeyframe(
                 cam.t,
                 glm::quat_cast(cam.R),
-                lfs::sequencer::DEFAULT_FOV);
+                focal_mm);
         });
 
         cmd::SequencerPlayPause::when([this](const auto&) {
@@ -98,6 +103,7 @@ namespace lfs::vis::gui {
                 auto& vp = viewer_->getViewport();
                 vp.camera.R = glm::mat3_cast(state.rotation);
                 vp.camera.t = state.position;
+                rm->setFocalLength(state.focal_length_mm);
             }
         }
 
@@ -111,8 +117,8 @@ namespace lfs::vis::gui {
         constexpr float FRUSTUM_THICKNESS = 1.5f;
         constexpr float NDC_CULL_MARGIN = 1.5f;
         constexpr int PATH_SAMPLES = 20;
-        constexpr float FRUSTUM_SIZE = 0.15f;
         constexpr float FRUSTUM_DEPTH = 0.25f;
+        constexpr float SENSOR_ASPECT = rendering::SENSOR_WIDTH_35MM / rendering::SENSOR_HEIGHT_35MM;
         constexpr float HIT_RADIUS = 15.0f;
 
         const auto& timeline = controller_.timeline();
@@ -188,6 +194,10 @@ namespace lfs::vis::gui {
                 color = hovered_frustum_color;
             const float thickness = selected ? FRUSTUM_THICKNESS * 1.5f : FRUSTUM_THICKNESS;
 
+            const float half_vfov = rendering::focalLengthToVFovRad(kf.focal_length_mm) * 0.5f;
+            const float half_h = std::tan(half_vfov) * FRUSTUM_DEPTH;
+            const float half_w = half_h * SENSOR_ASPECT;
+
             const glm::mat3 rot_mat = glm::mat3_cast(kf.rotation);
             const glm::vec3 forward = rot_mat[2];
             const glm::vec3 up = -rot_mat[1];
@@ -196,10 +206,10 @@ namespace lfs::vis::gui {
             const glm::vec3 apex = kf.position;
 
             const glm::vec3 base_center = apex + forward * FRUSTUM_DEPTH;
-            const glm::vec3 tl = base_center + up * FRUSTUM_SIZE - right * FRUSTUM_SIZE;
-            const glm::vec3 tr = base_center + up * FRUSTUM_SIZE + right * FRUSTUM_SIZE;
-            const glm::vec3 bl = base_center - up * FRUSTUM_SIZE - right * FRUSTUM_SIZE;
-            const glm::vec3 br = base_center - up * FRUSTUM_SIZE + right * FRUSTUM_SIZE;
+            const glm::vec3 tl = base_center + up * half_h - right * half_w;
+            const glm::vec3 tr = base_center + up * half_h + right * half_w;
+            const glm::vec3 bl = base_center - up * half_h - right * half_w;
+            const glm::vec3 br = base_center - up * half_h + right * half_w;
 
             const ImVec2 s_tl = projectToScreen(tl);
             const ImVec2 s_tr = projectToScreen(tr);
@@ -216,7 +226,7 @@ namespace lfs::vis::gui {
             dl->AddLine(s_br, s_bl, color, thickness);
             dl->AddLine(s_bl, s_tl, color, thickness);
 
-            const glm::vec3 up_tip = base_center + up * FRUSTUM_SIZE * 1.3f;
+            const glm::vec3 up_tip = base_center + up * half_h * 1.3f;
             const ImVec2 s_up = projectToScreen(up_tip);
             dl->AddTriangleFilled(s_up, s_tl, s_tr, color);
         }
@@ -236,8 +246,11 @@ namespace lfs::vis::gui {
             const auto state = controller_.currentCameraState();
             if (isVisible(state.position)) {
                 const ImU32 playhead_color = t.error_u32();
-                constexpr float PLAYHEAD_FRUSTUM_SIZE = 0.12f;
                 constexpr float PLAYHEAD_FRUSTUM_DEPTH = 0.20f;
+
+                const float ph_half_vfov = rendering::focalLengthToVFovRad(state.focal_length_mm) * 0.5f;
+                const float ph_half_h = std::tan(ph_half_vfov) * PLAYHEAD_FRUSTUM_DEPTH;
+                const float ph_half_w = ph_half_h * SENSOR_ASPECT;
 
                 const glm::mat3 rot_mat = glm::mat3_cast(state.rotation);
                 const glm::vec3 forward = rot_mat[2];
@@ -246,10 +259,10 @@ namespace lfs::vis::gui {
 
                 const glm::vec3 apex = state.position;
                 const glm::vec3 base_center = apex + forward * PLAYHEAD_FRUSTUM_DEPTH;
-                const glm::vec3 tl = base_center + up * PLAYHEAD_FRUSTUM_SIZE - right * PLAYHEAD_FRUSTUM_SIZE;
-                const glm::vec3 tr = base_center + up * PLAYHEAD_FRUSTUM_SIZE + right * PLAYHEAD_FRUSTUM_SIZE;
-                const glm::vec3 bl = base_center - up * PLAYHEAD_FRUSTUM_SIZE - right * PLAYHEAD_FRUSTUM_SIZE;
-                const glm::vec3 br = base_center - up * PLAYHEAD_FRUSTUM_SIZE + right * PLAYHEAD_FRUSTUM_SIZE;
+                const glm::vec3 tl = base_center + up * ph_half_h - right * ph_half_w;
+                const glm::vec3 tr = base_center + up * ph_half_h + right * ph_half_w;
+                const glm::vec3 bl = base_center - up * ph_half_h - right * ph_half_w;
+                const glm::vec3 br = base_center - up * ph_half_h + right * ph_half_w;
 
                 const ImVec2 s_apex = projectToScreen(apex);
                 const ImVec2 s_tl = projectToScreen(tl);
@@ -267,7 +280,7 @@ namespace lfs::vis::gui {
                 dl->AddLine(s_br, s_bl, playhead_color, FRUSTUM_THICKNESS);
                 dl->AddLine(s_bl, s_tl, playhead_color, FRUSTUM_THICKNESS);
 
-                const glm::vec3 up_tip = base_center + up * PLAYHEAD_FRUSTUM_SIZE * 1.3f;
+                const glm::vec3 up_tip = base_center + up * ph_half_h * 1.3f;
                 const ImVec2 s_up = projectToScreen(up_tip);
                 dl->AddTriangleFilled(s_up, s_tl, s_tr, playhead_color);
             }
@@ -336,7 +349,7 @@ namespace lfs::vis::gui {
         if (changed) {
             const glm::vec3 new_pos(gizmo_matrix[3]);
             const glm::quat new_rot = glm::quat_cast(glm::mat3(gizmo_matrix));
-            controller_.timeline().updateKeyframe(*selected, new_pos, new_rot, kf->fov);
+            controller_.timeline().updateKeyframe(*selected, new_pos, new_rot, kf->focal_length_mm);
             controller_.updateLoopKeyframe();
             pip_needs_update_ = true;
         }
@@ -366,6 +379,10 @@ namespace lfs::vis::gui {
                 if (ImGui::MenuItem("Go to Keyframe")) {
                     controller_.selectKeyframe(*context_menu_keyframe_);
                     controller_.seek(timeline.keyframes()[*context_menu_keyframe_].time);
+                }
+                if (ImGui::MenuItem("Edit Focal Length...")) {
+                    panel_->openFocalLengthEdit(*context_menu_keyframe_,
+                                                timeline.keyframes()[*context_menu_keyframe_].focal_length_mm);
                 }
                 ImGui::Separator();
                 const bool translate_active = keyframe_gizmo_op_ == ImGuizmo::TRANSLATE;
@@ -475,13 +492,13 @@ namespace lfs::vis::gui {
 
         glm::mat3 cam_rot;
         glm::vec3 cam_pos;
-        float cam_fov;
+        float cam_focal_length_mm;
 
         if (is_playing) {
             const auto state = controller_.currentCameraState();
             cam_rot = glm::mat3_cast(state.rotation);
             cam_pos = state.position;
-            cam_fov = state.fov;
+            cam_focal_length_mm = state.focal_length_mm;
         } else {
             if (pip_last_keyframe_ == selected && !pip_needs_update_)
                 return;
@@ -496,10 +513,10 @@ namespace lfs::vis::gui {
 
             cam_rot = glm::mat3_cast(kf->rotation);
             cam_pos = kf->position;
-            cam_fov = kf->fov;
+            cam_focal_length_mm = kf->focal_length_mm;
         }
 
-        if (rm->renderPreviewFrame(sm, cam_rot, cam_pos, cam_fov, pip_fbo_, pip_texture_, PREVIEW_WIDTH, PREVIEW_HEIGHT)) {
+        if (rm->renderPreviewFrame(sm, cam_rot, cam_pos, cam_focal_length_mm, pip_fbo_, pip_texture_, PREVIEW_WIDTH, PREVIEW_HEIGHT)) {
             pip_last_render_time_ = now;
             if (!is_playing) {
                 pip_last_keyframe_ = selected;

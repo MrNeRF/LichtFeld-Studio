@@ -37,12 +37,15 @@ namespace lfs::vis {
         void setSnapEnabled(bool enabled) { snap_enabled_ = enabled; }
         void setSnapInterval(float interval) { snap_interval_ = interval; }
 
+        void openFocalLengthEdit(size_t index, float current_focal_mm);
+
     private:
         void renderTransportControls(const ImVec2& pos, float height);
         void renderTimeline(const ImVec2& pos, float width, float height);
         void renderTimeRuler(ImDrawList* dl, const ImVec2& pos, float width);
         void renderTimeDisplay(const ImVec2& pos, float height);
         void renderTimeEditPopup();
+        void renderFocalLengthEditPopup();
 
         void drawKeyframeMarker(ImDrawList* dl, const ImVec2& pos, bool selected, bool hovered, float time, bool is_loop_point) const;
         void drawPlayhead(ImDrawList* dl, const ImVec2& top, const ImVec2& bottom) const;
@@ -74,6 +77,11 @@ namespace lfs::vis {
         bool editing_keyframe_time_ = false;
         size_t editing_keyframe_index_ = 0;
         char time_edit_buffer_[32] = {};
+
+        // Focal length editing popup
+        bool editing_focal_length_ = false;
+        size_t editing_focal_index_ = 0;
+        char focal_edit_buffer_[32] = {};
 
         // Context menu state
         bool context_menu_open_ = false;
