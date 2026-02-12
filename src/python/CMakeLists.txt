@@ -322,7 +322,10 @@ for pyi in glob.glob(r'${CMAKE_CURRENT_BINARY_DIR}/typings/**/*.pyi', recursive=
     p = pathlib.Path(pyi)
     content = p.read_bytes().decode('utf-8').replace('\\r\\n', '\\n')
     # Add space after comma in C++ templates (e.g., VectorT<float,3> -> VectorT<float, 3>)
-    content = re.sub(r',([a-zA-Z0-9_])', r', \\1', content)
+    while True:
+        content, count = re.subn(r'(<[^>]+),([a-zA-Z0-9_])', r'\\1, \\2', content)
+        if count == 0:
+            break
     p.write_bytes(content.encode('utf-8'))
 ")
 
