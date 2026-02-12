@@ -4,14 +4,11 @@
 
 #pragma once
 
+#include "core/editor_context.hpp"
 #include <chrono>
 #include <string>
 #include <vector>
 #include <imgui.h>
-
-namespace lfs::vis {
-    class EditorContext;
-}
 
 namespace lfs::vis::gui {
 
@@ -25,7 +22,7 @@ namespace lfs::vis::gui {
         std::string id;
         std::string label;
         std::string icon_name;
-        std::string shortcut;
+        ToolType tool_type = ToolType::None;
         bool enabled = true;
         bool is_active = false;
         std::vector<PieMenuSubmode> submodes;
@@ -47,6 +44,7 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool hasSelection() const { return selected_sector_ >= 0; }
         [[nodiscard]] const std::string& getSelectedId() const;
         [[nodiscard]] const std::string& getSelectedSubmodeId() const;
+        [[nodiscard]] ToolType getSelectedToolType() const;
 
     private:
         static constexpr float INNER_RADIUS = 38.0f;
@@ -69,7 +67,6 @@ namespace lfs::vis::gui {
 
         bool open_ = false;
         ImVec2 center_{0, 0};
-        ImVec2 mouse_pos_{0, 0};
         std::vector<PieMenuItem> items_;
 
         int hovered_sector_ = -1;

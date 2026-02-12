@@ -31,20 +31,19 @@ namespace lfs::vis::gui {
             const char* id;
             const char* label;
             const char* icon;
-            const char* shortcut;
             ToolType tool_type;
         };
 
         constexpr ToolEntry TOOL_ORDER[] = {
-            {"builtin.select", "Select", "selection", "1", ToolType::Selection},
-            {"builtin.translate", "Move", "translation", "2", ToolType::Translate},
-            {"builtin.rotate", "Rotate", "rotation", "3", ToolType::Rotate},
-            {"builtin.scale", "Scale", "scaling", "4", ToolType::Scale},
-            {"builtin.mirror", "Mirror", "mirror", "5", ToolType::Mirror},
-            {"builtin.brush", "Paint", "painting", "6", ToolType::Brush},
-            {"builtin.align", "Align", "align", "7", ToolType::Align},
-            {"builtin.cropbox", "Crop Box", "cropbox", "", ToolType::None},
-            {"builtin.ellipsoid", "Crop Ellipsoid", "blob", "", ToolType::None},
+            {"builtin.select", "Select", "selection", ToolType::Selection},
+            {"builtin.translate", "Move", "translation", ToolType::Translate},
+            {"builtin.rotate", "Rotate", "rotation", ToolType::Rotate},
+            {"builtin.scale", "Scale", "scaling", ToolType::Scale},
+            {"builtin.mirror", "Mirror", "mirror", ToolType::Mirror},
+            {"builtin.brush", "Paint", "painting", ToolType::Brush},
+            {"builtin.align", "Align", "align", ToolType::Align},
+            {"builtin.cropbox", "Crop Box", "cropbox", ToolType::None},
+            {"builtin.ellipsoid", "Crop Ellipsoid", "blob", ToolType::None},
         };
         constexpr int TOOL_COUNT = sizeof(TOOL_ORDER) / sizeof(TOOL_ORDER[0]);
 
@@ -72,11 +71,12 @@ namespace lfs::vis::gui {
             {"crop.translate", "Move", "translation"},
             {"crop.rotate", "Rotate", "rotation"},
             {"crop.scale", "Scale", "scaling"},
-            {"crop.apply", "Apply", ""},
+            {"crop.apply", "Apply", "check"},
             {"crop.fit", "Fit", "arrows-maximize"},
             {"crop.fit_trim", "Fit Trim", "arrows-minimize"},
-            {"crop.invert", "Invert", ""},
+            {"crop.invert", "Invert", "contrast"},
             {"crop.reset", "Reset", "reset"},
+            {"crop.delete", "Delete", "icon/scene/trash.png"},
         };
         constexpr int CROP_COUNT = sizeof(CROP_ITEMS) / sizeof(CROP_ITEMS[0]);
 
@@ -106,7 +106,6 @@ namespace lfs::vis::gui {
 
     void PieMenu::open(ImVec2 center) {
         center_ = center;
-        mouse_pos_ = center;
         open_ = true;
         hovered_sector_ = -1;
         hovered_submode_ = -1;
@@ -149,7 +148,7 @@ namespace lfs::vis::gui {
             item.id = entry.id;
             item.label = entry.label;
             item.icon_name = entry.icon;
-            item.shortcut = entry.shortcut;
+            item.tool_type = entry.tool_type;
 
             if (entry.tool_type != ToolType::None) {
                 item.enabled = editor.isToolAvailable(entry.tool_type);
@@ -172,8 +171,6 @@ namespace lfs::vis::gui {
     }
 
     void PieMenu::onMouseMove(ImVec2 pos) {
-        mouse_pos_ = pos;
-
         const float dx = pos.x - center_.x;
         const float dy = pos.y - center_.y;
         const float dist = std::sqrt(dx * dx + dy * dy);
@@ -237,6 +234,12 @@ namespace lfs::vis::gui {
         if (selected_sector_ >= 0 && selected_sector_ < static_cast<int>(items_.size()))
             return items_[selected_sector_].id;
         return EMPTY_STRING;
+    }
+
+    ToolType PieMenu::getSelectedToolType() const {
+        if (selected_sector_ >= 0 && selected_sector_ < static_cast<int>(items_.size()))
+            return items_[selected_sector_].tool_type;
+        return ToolType::None;
     }
 
     const std::string& PieMenu::getSelectedSubmodeId() const {
