@@ -397,7 +397,7 @@ namespace {
 
     std::unique_ptr<lfs::core::Camera> create_camera(const lfs::core::Tensor& R, const lfs::core::Tensor& T, int width,
                                                      int height, float fov_degrees) {
-        const float focal = fov_to_focal(fov_degrees, width);
+        const float focal = fov_to_focal(fov_degrees, height);
         const float cx = static_cast<float>(width) / 2.0f;
         const float cy = static_cast<float>(height) / 2.0f;
 

@@ -275,7 +275,8 @@ namespace lfs::python {
         m.def(
             "save_image",
             [](const std::filesystem::path& path, const PyTensor& image) {
-                core::save_image(path, image.tensor());
+                auto t = image.tensor().contiguous().cpu();
+                core::save_image(path, std::move(t));
             },
             nb::arg("path"), nb::arg("image"),
             "Save image tensor to file (PNG, JPG, TIFF, EXR). Accepts [H,W,C] or [C,H,W] float [0,1].");
