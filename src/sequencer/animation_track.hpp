@@ -18,7 +18,7 @@ namespace lfs::sequencer {
     struct GenericKeyframe {
         float time = 0.0f;
         AnimationValue value;
-        EasingType easing = EasingType::EASE_IN_OUT;
+        EasingType easing = EasingType::LINEAR;
 
         [[nodiscard]] bool operator<(const GenericKeyframe& other) const { return time < other.time; }
     };
@@ -31,7 +31,7 @@ namespace lfs::sequencer {
         [[nodiscard]] ValueType valueType() const { return type_; }
         [[nodiscard]] const std::string& targetPath() const { return target_path_; }
 
-        void addKeyframe(float time, const AnimationValue& value, EasingType easing = EasingType::EASE_IN_OUT);
+        void addKeyframe(float time, const AnimationValue& value, EasingType easing = EasingType::LINEAR);
         void removeKeyframe(size_t index);
         void updateKeyframe(size_t index, float time, const AnimationValue& value);
 

@@ -24,7 +24,7 @@ namespace lfs::sequencer {
         glm::vec3 position{0.0f};
         glm::quat rotation = IDENTITY_ROTATION;
         float fov = DEFAULT_FOV;
-        EasingType easing = EasingType::EASE_IN_OUT;
+        EasingType easing = EasingType::LINEAR;
         bool is_loop_point = false; // Loop closure keyframe (copies first keyframe)
 
         [[nodiscard]] bool operator<(const Keyframe& other) const { return time < other.time; }

@@ -12,7 +12,6 @@ namespace lfs::sequencer {
 
     namespace {
         constexpr int JSON_VERSION = 1;
-        constexpr int DEFAULT_EASING_VALUE = 3; // EASE_IN_OUT
     } // namespace
 
     void Timeline::addKeyframe(const Keyframe& keyframe) {
@@ -130,8 +129,8 @@ namespace lfs::sequencer {
                 kf.time = jkf["time"];
                 kf.position = {jkf["position"][0], jkf["position"][1], jkf["position"][2]};
                 kf.rotation = {jkf["rotation"][0], jkf["rotation"][1], jkf["rotation"][2], jkf["rotation"][3]};
-                kf.fov = jkf.value("fov", DEFAULT_FOV);
-                kf.easing = static_cast<EasingType>(jkf.value("easing", DEFAULT_EASING_VALUE));
+                kf.fov = jkf["fov"];
+                kf.easing = static_cast<EasingType>(jkf["easing"].get<int>());
                 keyframes_.push_back(kf);
             }
 

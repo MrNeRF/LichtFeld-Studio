@@ -79,7 +79,6 @@ namespace lfs::vis {
         loop_kf.position = first.position;
         loop_kf.rotation = first.rotation;
         loop_kf.fov = first.fov;
-        loop_kf.easing = sequencer::EasingType::EASE_IN_OUT;
         loop_kf.is_loop_point = true;
         timeline_.addKeyframe(loop_kf);
     }
