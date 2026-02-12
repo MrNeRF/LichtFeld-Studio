@@ -44,15 +44,13 @@ class PluginInstaller:
 
     @staticmethod
     def _uv_env() -> dict:
-        """Return env dict with PYTHONHOME set to sys.prefix for uv subprocesses."""
+        """Return env dict with PYTHONHOME stripped so uv isn't confused by embedded Python."""
         env = os.environ.copy()
         env.pop("PYTHONHOME", None)
-        env["PYTHONHOME"] = sys.prefix
-        logger.info("uv subprocess env: PYTHONHOME=%s", sys.prefix)
         return env
 
     def ensure_venv(self) -> bool:
-        """Ensure venv path is set, cleaning up broken venvs. Actual creation is done by uv sync."""
+        """Create plugin-specific venv using uv if needed."""
         venv_path = self.plugin.info.path / ".venv"
         self.plugin.venv_path = venv_path
 
@@ -65,6 +63,26 @@ class PluginInstaller:
             logger.warning("Broken venv (missing python), removing: %s", venv_path)
             shutil.rmtree(venv_path)
 
+        # Use uv to create the venv with Python 3.12 (matching LFS's embedded Python)
+        uv = self._find_uv()
+        if not uv:
+            raise PluginDependencyError("uv not found - cannot create plugin venv")
+
+        cmd = [str(uv), "venv", str(venv_path), "--python", "3.12"]
+        logger.info("Creating venv: %s", " ".join(cmd))
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            env=self._uv_env(),
+        )
+
+        if result.returncode != 0:
+            logger.error("uv venv failed (exit %d): %s", result.returncode, result.stderr)
+            raise PluginDependencyError(f"Failed to create venv: {result.stderr}")
+
+        logger.info("Plugin venv created: %s", venv_path)
         return True
 
     DEPS_STAMP = ".deps_installed"
@@ -101,9 +119,9 @@ class PluginInstaller:
         if not uv:
             raise PluginDependencyError("uv not found")
 
-        embedded = self._get_embedded_python()
-        python_exe = str(embedded) if embedded and embedded.exists() else str(Path(sys.executable).resolve())
-        logger.info("uv sync python: %s (embedded=%s)", python_exe, embedded)
+        # Use the venv's python (created by ensure_venv)
+        venv_python = self._get_venv_python()
+        logger.info("uv sync python: %s", venv_python)
 
         cmd = [
             str(uv),
@@ -111,7 +129,7 @@ class PluginInstaller:
             "--project",
             str(plugin_path),
             "--python",
-            python_exe,
+            str(venv_python),
         ]
 
         logger.info("uv sync command: %s", " ".join(cmd))

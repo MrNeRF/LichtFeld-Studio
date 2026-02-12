@@ -133,19 +133,14 @@ namespace lfs::sequencer {
             const auto j = nlohmann::json::parse(file);
             keyframes_.clear();
 
-            const int version = j.value("version", 1);
             for (const auto& jkf : j["keyframes"]) {
                 Keyframe kf;
                 kf.time = jkf["time"];
                 kf.position = {jkf["position"][0], jkf["position"][1], jkf["position"][2]};
                 kf.rotation = {jkf["rotation"][0], jkf["rotation"][1], jkf["rotation"][2], jkf["rotation"][3]};
-                if (jkf.contains("focal_length_mm")) {
-                    kf.focal_length_mm = jkf["focal_length_mm"];
-                } else if (version <= 1 && jkf.contains("fov")) {
-                    kf.focal_length_mm = lfs::rendering::vFovToFocalLength(jkf["fov"].get<float>());
-                } else {
-                    LOG_DEBUG("Keyframe at t={} missing focal length, using default", kf.time);
-                }
+                kf.focal_length_mm = std::clamp(jkf["focal_length_mm"].get<float>(),
+                                                lfs::rendering::MIN_FOCAL_LENGTH_MM,
+                                                lfs::rendering::MAX_FOCAL_LENGTH_MM);
                 kf.easing = static_cast<EasingType>(jkf["easing"].get<int>());
                 keyframes_.push_back(kf);
             }
