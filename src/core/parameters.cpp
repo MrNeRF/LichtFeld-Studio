@@ -6,12 +6,15 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include <chrono>
+#include <cmath>
+
 #include <expected>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <iomanip>
 #include <nlohmann/json.hpp>
+#include <set>
 #include <sstream>
 
 namespace lfs::core {
@@ -36,6 +39,48 @@ namespace lfs::core {
                 }
             }
         } // namespace
+
+        void OptimizationParameters::apply_step_scaling() {
+            if (steps_scaler <= 0.f || steps_scaler == 1.f)
+                return;
+            const auto scale = [this](size_t v) {
+                return static_cast<size_t>(std::lround(static_cast<float>(v) * steps_scaler));
+            };
+            iterations = scale(iterations);
+            start_refine = scale(start_refine);
+            reset_every = scale(reset_every);
+            stop_refine = scale(stop_refine);
+            refine_every = scale(refine_every);
+            sh_degree_interval = scale(sh_degree_interval);
+
+            for (auto* steps : {&eval_steps, &save_steps}) {
+                std::set<size_t> unique;
+                for (auto s : *steps) {
+                    size_t scaled = scale(s);
+                    if (scaled > 0)
+                        unique.insert(scaled);
+                }
+                steps->assign(unique.begin(), unique.end());
+            }
+        }
+
+        void OptimizationParameters::remove_step_scaling() {
+            if (steps_scaler <= 0.f || steps_scaler == 1.f)
+                return;
+            const auto unscale = [this](size_t v) {
+                return static_cast<size_t>(std::lround(static_cast<float>(v) / steps_scaler));
+            };
+            iterations = unscale(iterations);
+            start_refine = unscale(start_refine);
+            reset_every = unscale(reset_every);
+            stop_refine = unscale(stop_refine);
+            refine_every = unscale(refine_every);
+            sh_degree_interval = unscale(sh_degree_interval);
+            for (auto& s : eval_steps)
+                s = unscale(s);
+            for (auto& s : save_steps)
+                s = unscale(s);
+        }
 
         nlohmann::json OptimizationParameters::to_json() const {
 
@@ -385,9 +430,12 @@ namespace lfs::core {
             const TrainingParameters& params,
             const std::filesystem::path& output_path) {
             try {
+                auto opt_copy = params.optimization;
+                opt_copy.remove_step_scaling();
+
                 nlohmann::json json;
                 json["dataset"] = params.dataset.to_json();
-                json["optimization"] = params.optimization.to_json();
+                json["optimization"] = opt_copy.to_json();
 
                 const auto now = std::chrono::system_clock::now();
                 const auto time_t = std::chrono::system_clock::to_time_t(now);

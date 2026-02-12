@@ -1151,6 +1151,7 @@ namespace lfs::vis {
             state::ConfigLoadFailed{.path = path, .error = result.error()}.emit();
             return;
         }
+        result->apply_step_scaling();
         parameter_manager_->importParams(*result);
     }
 

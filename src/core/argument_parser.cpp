@@ -32,17 +32,6 @@ namespace {
 
     const std::set<std::string> VALID_STRATEGIES = {"mcmc", "adc"};
 
-    void scale_steps_vector(std::vector<size_t>& steps, float scaler) {
-        std::set<size_t> unique_steps;
-        for (const auto& step : steps) {
-            size_t scaled = static_cast<size_t>(std::lround(static_cast<float>(step) * scaler));
-            if (scaled > 0) {
-                unique_steps.insert(scaled);
-            }
-        }
-        steps.assign(unique_steps.begin(), unique_steps.end());
-    }
-
     // Parse log level from string
     lfs::core::LogLevel parse_log_level(const std::string& level_str) {
         if (level_str == "trace")
@@ -637,24 +626,9 @@ namespace {
 
     void apply_step_scaling(lfs::core::param::TrainingParameters& params) {
         auto& opt = params.optimization;
-        const float scaler = opt.steps_scaler;
-
-        if (scaler > 0) {
-            LOG_INFO("Scaling training steps by factor: {}", scaler);
-
-            const auto scale = [scaler](const size_t v) {
-                return static_cast<size_t>(std::lround(static_cast<float>(v) * scaler));
-            };
-            opt.iterations = scale(opt.iterations);
-            opt.start_refine = scale(opt.start_refine);
-            opt.reset_every = scale(opt.reset_every);
-            opt.stop_refine = scale(opt.stop_refine);
-            opt.refine_every = scale(opt.refine_every);
-            opt.sh_degree_interval = scale(opt.sh_degree_interval);
-
-            scale_steps_vector(opt.eval_steps, scaler);
-            scale_steps_vector(opt.save_steps, scaler);
-        }
+        if (opt.steps_scaler > 0.f && opt.steps_scaler != 1.f)
+            LOG_INFO("Scaling training steps by factor: {}", opt.steps_scaler);
+        opt.apply_step_scaling();
     }
 
     void apply_ppisp_defaults(lfs::core::param::TrainingParameters& params) {

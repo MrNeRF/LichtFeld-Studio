@@ -128,6 +128,9 @@ namespace lfs::core {
 
             std::string config_file = "";
 
+            void apply_step_scaling();
+            void remove_step_scaling();
+
             nlohmann::json to_json() const;
             static OptimizationParameters from_json(const nlohmann::json& j);
 
