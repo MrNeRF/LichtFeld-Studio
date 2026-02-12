@@ -267,6 +267,7 @@ namespace lfs::vis {
                 const auto elapsed = std::chrono::steady_clock::now() - selection_flash_start_time_;
                 if (std::chrono::duration<float>(elapsed).count() < SELECTION_FLASH_DURATION_SEC) {
                     needs_render_.store(true);
+                    mesh_dirty_.store(true);
                     return true;
                 }
                 selection_flash_active_.store(false);
@@ -552,7 +553,7 @@ namespace lfs::vis {
         std::optional<GTComparisonContext> gt_context_;
         int gt_context_camera_id_ = -1;
 
-        std::atomic<bool> mesh_dirty_{false};
+        mutable std::atomic<bool> mesh_dirty_{false};
 
         // Gizmo state for wireframe sync
         bool cropbox_gizmo_active_ = false;

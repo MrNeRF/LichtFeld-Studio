@@ -309,6 +309,10 @@ namespace lfs::rendering {
         bool backface_culling = true;
         bool shadow_enabled = false;
         int shadow_map_resolution = 2048;
+        bool is_selected = false;
+        bool desaturate_unselected = false;
+        float selection_flash_intensity = 0.0f;
+        glm::vec3 background_color{0.0f};
     };
 
     // Main rendering engine

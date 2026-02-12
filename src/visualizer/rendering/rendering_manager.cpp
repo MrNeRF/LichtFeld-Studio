@@ -21,6 +21,7 @@
 #include "training/components/ppisp_controller.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
+#include <algorithm>
 #include <cuda_runtime.h>
 #include <glad/glad.h>
 #include <glm/gtc/type_ptr.hpp>
@@ -1458,6 +1459,15 @@ namespace lfs::vis {
                         .orthographic = settings_.orthographic,
                         .ortho_scale = settings_.ortho_scale};
 
+                    const float flash_intensity = getSelectionFlashIntensity();
+                    const bool any_selected = std::any_of(
+                                                  scene_state.meshes.begin(), scene_state.meshes.end(),
+                                                  [](const auto& vm) { return vm.is_selected; }) ||
+                                              (!scene_state.selected_node_mask.empty() &&
+                                               std::any_of(scene_state.selected_node_mask.begin(),
+                                                           scene_state.selected_node_mask.end(),
+                                                           [](bool b) { return b; }));
+
                     const lfs::rendering::MeshRenderOptions mesh_opts{
                         .wireframe_overlay = settings_.mesh_wireframe,
                         .wireframe_color = settings_.mesh_wireframe_color,
@@ -1467,15 +1477,20 @@ namespace lfs::vis {
                         .ambient = settings_.mesh_ambient,
                         .backface_culling = settings_.mesh_backface_culling,
                         .shadow_enabled = settings_.mesh_shadow_enabled,
-                        .shadow_map_resolution = settings_.mesh_shadow_resolution};
+                        .shadow_map_resolution = settings_.mesh_shadow_resolution,
+                        .desaturate_unselected = settings_.desaturate_unselected && any_selected,
+                        .selection_flash_intensity = flash_intensity,
+                        .background_color = settings_.background_color};
 
                     glEnable(GL_DEPTH_TEST);
                     glDepthFunc(GL_LESS);
 
                     engine_->resetMeshFrameState();
                     for (const auto& vm : scene_state.meshes) {
+                        auto per_mesh_opts = mesh_opts;
+                        per_mesh_opts.is_selected = vm.is_selected;
                         const auto result = engine_->renderMesh(
-                            *vm.mesh, mesh_viewport, vm.transform, mesh_opts, splats_presented);
+                            *vm.mesh, mesh_viewport, vm.transform, per_mesh_opts, splats_presented);
                         if (!result)
                             LOG_ERROR("Failed to render mesh: {}", result.error());
                     }
@@ -1887,11 +1902,6 @@ namespace lfs::vis {
     }
 
     float RenderingManager::getDepthAtPixel(int x, int y) const {
-        if (!cached_result_.valid) {
-            return -1.0f;
-        }
-
-        const lfs::core::Tensor* depth_ptr = nullptr;
         const int viewport_width = cached_result_size_.x;
         const int viewport_height = cached_result_size_.y;
 
@@ -1899,52 +1909,77 @@ namespace lfs::vis {
             return -1.0f;
         }
 
-        if (cached_result_.split_position > 0.0f && cached_result_.depth && cached_result_.depth->is_valid()) {
-            const float normalized_x = static_cast<float>(x) / static_cast<float>(viewport_width);
+        float splat_depth = -1.0f;
 
-            if (normalized_x >= cached_result_.split_position &&
-                cached_result_.depth_right && cached_result_.depth_right->is_valid()) {
-                depth_ptr = cached_result_.depth_right.get();
-            } else {
+        if (cached_result_.valid) {
+            const lfs::core::Tensor* depth_ptr = nullptr;
+
+            if (cached_result_.split_position > 0.0f && cached_result_.depth && cached_result_.depth->is_valid()) {
+                const float normalized_x = static_cast<float>(x) / static_cast<float>(viewport_width);
+
+                if (normalized_x >= cached_result_.split_position &&
+                    cached_result_.depth_right && cached_result_.depth_right->is_valid()) {
+                    depth_ptr = cached_result_.depth_right.get();
+                } else {
+                    depth_ptr = cached_result_.depth.get();
+                }
+            } else if (cached_result_.depth && cached_result_.depth->is_valid()) {
                 depth_ptr = cached_result_.depth.get();
             }
-        } else if (cached_result_.depth && cached_result_.depth->is_valid()) {
-            depth_ptr = cached_result_.depth.get();
+
+            if (depth_ptr && depth_ptr->ndim() == 3) {
+                const int depth_height = static_cast<int>(depth_ptr->size(1));
+                const int depth_width = static_cast<int>(depth_ptr->size(2));
+
+                int scaled_x = x;
+                int scaled_y = y;
+                if (depth_width != viewport_width || depth_height != viewport_height) {
+                    scaled_x = static_cast<int>(static_cast<float>(x) * depth_width / viewport_width);
+                    scaled_y = static_cast<int>(static_cast<float>(y) * depth_height / viewport_height);
+                }
+
+                if (scaled_x >= 0 && scaled_x < depth_width && scaled_y >= 0 && scaled_y < depth_height) {
+                    auto depth_cpu = depth_ptr->cpu();
+                    const float d = depth_cpu.ptr<float>()[scaled_y * depth_width + scaled_x];
+                    if (d < 1e9f) {
+                        splat_depth = d;
+                    }
+                }
+            }
         }
 
-        if (!depth_ptr) {
-            return -1.0f;
+        float mesh_depth = -1.0f;
+        if (engine_ && engine_->hasMeshRender()) {
+            const GLuint mesh_fbo = engine_->getMeshFramebuffer();
+            if (mesh_fbo != 0 && x >= 0 && x < viewport_width && y >= 0 && y < viewport_height) {
+                float ndc_depth = 1.0f;
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, mesh_fbo);
+                glReadPixels(x, viewport_height - 1 - y, 1, 1,
+                             GL_DEPTH_COMPONENT, GL_FLOAT, &ndc_depth);
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+
+                constexpr float DEPTH_BG_THRESHOLD = 0.9999f;
+                if (ndc_depth < DEPTH_BG_THRESHOLD) {
+                    const float near = lfs::rendering::DEFAULT_NEAR_PLANE;
+                    const float far = lfs::rendering::DEFAULT_FAR_PLANE;
+                    const float z_ndc = ndc_depth * 2.0f - 1.0f;
+                    const float A = (far + near) / (far - near);
+                    const float B = (2.0f * far * near) / (far - near);
+                    mesh_depth = B / (A - z_ndc);
+                }
+            }
         }
 
-        const auto& depth = *depth_ptr;
-        if (depth.ndim() != 3) {
-            return -1.0f;
+        if (splat_depth > 0.0f && mesh_depth > 0.0f) {
+            return std::min(splat_depth, mesh_depth);
         }
-
-        const int depth_height = static_cast<int>(depth.size(1));
-        const int depth_width = static_cast<int>(depth.size(2));
-
-        int scaled_x = x;
-        int scaled_y = y;
-        if (viewport_width > 0 && viewport_height > 0 &&
-            (depth_width != viewport_width || depth_height != viewport_height)) {
-            scaled_x = static_cast<int>(static_cast<float>(x) * depth_width / viewport_width);
-            scaled_y = static_cast<int>(static_cast<float>(y) * depth_height / viewport_height);
+        if (splat_depth > 0.0f) {
+            return splat_depth;
         }
-
-        if (scaled_x < 0 || scaled_x >= depth_width || scaled_y < 0 || scaled_y >= depth_height) {
-            return -1.0f;
+        if (mesh_depth > 0.0f) {
+            return mesh_depth;
         }
-
-        auto depth_cpu = depth.cpu();
-        const float* data = depth_cpu.ptr<float>();
-        const float d = data[scaled_y * depth_width + scaled_x];
-
-        if (d > 1e9f) {
-            return -1.0f;
-        }
-
-        return d;
+        return -1.0f;
     }
 
     void RenderingManager::brushSelect(float mouse_x, float mouse_y, float radius, lfs::core::Tensor& selection_out) {

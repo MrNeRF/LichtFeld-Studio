@@ -30,6 +30,10 @@ uniform bool u_shadow_enabled;
 uniform sampler2DShadow u_shadow_map;
 uniform mat4 u_light_vp;
 
+uniform bool u_is_selected;
+uniform bool u_desaturate_unselected;
+uniform float u_selection_flash_intensity;
+
 layout(location = 0) out vec4 frag_color;
 
 const float PI = 3.14159265359;
@@ -131,6 +135,15 @@ void main() {
 
     color = color / (color + vec3(1.0));
     color = pow(color, vec3(1.0 / 2.2));
+
+    if (u_desaturate_unselected && !u_is_selected) {
+        float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        color = mix(color, vec3(luma), 0.6);
+    }
+    if (u_is_selected && u_selection_flash_intensity > 0.0) {
+        vec3 flash_color = vec3(1.0, 0.95, 0.6);
+        color = mix(color, flash_color, u_selection_flash_intensity * 0.5);
+    }
 
     frag_color = vec4(color, albedo.a);
 }

@@ -401,7 +401,7 @@ namespace lfs::core {
         std::vector<VisibleMesh> result;
         for (const auto& node : nodes_) {
             if (node->type == NodeType::MESH && isNodeEffectivelyVisible(node->id) && node->mesh) {
-                result.push_back({node->mesh.get(), getWorldTransform(node->id)});
+                result.push_back({node->mesh.get(), getWorldTransform(node->id), node->id});
             }
         }
         return result;

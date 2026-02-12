@@ -714,30 +714,147 @@ namespace lfs::vis {
         return -1;
     }
 
-    std::string SceneManager::pickNodeAtWorldPosition(const glm::vec3& world_pos) const {
-        constexpr float INVALID_COORD = -1e9f;
-        if (world_pos.x <= INVALID_COORD) {
-            return "";
+    namespace {
+        // Möller-Trumbore ray-triangle intersection, returns distance or -1
+        float rayTriangleIntersect(const glm::vec3& origin, const glm::vec3& dir,
+                                   const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2) {
+            constexpr float EPS = 1e-7f;
+            const glm::vec3 e1 = v1 - v0;
+            const glm::vec3 e2 = v2 - v0;
+            const glm::vec3 h = glm::cross(dir, e2);
+            const float a = glm::dot(e1, h);
+            if (a > -EPS && a < EPS)
+                return -1.0f;
+
+            const float f = 1.0f / a;
+            const glm::vec3 s = origin - v0;
+            const float u = f * glm::dot(s, h);
+            if (u < 0.0f || u > 1.0f)
+                return -1.0f;
+
+            const glm::vec3 q = glm::cross(s, e1);
+            const float v = f * glm::dot(dir, q);
+            if (v < 0.0f || u + v > 1.0f)
+                return -1.0f;
+
+            const float t = f * glm::dot(e2, q);
+            return t > EPS ? t : -1.0f;
         }
 
-        for (const auto* node : scene_.getVisibleNodes()) {
+        bool rayAABBIntersect(const glm::vec3& origin, const glm::vec3& dir,
+                              const glm::vec3& aabb_min, const glm::vec3& aabb_max,
+                              float& t_hit_out) {
+            const glm::vec3 inv_dir = 1.0f / dir;
+            const glm::vec3 t1 = (aabb_min - origin) * inv_dir;
+            const glm::vec3 t2 = (aabb_max - origin) * inv_dir;
+            const glm::vec3 t_min_v = glm::min(t1, t2);
+            const glm::vec3 t_max_v = glm::max(t1, t2);
+            const float t_enter = std::max({t_min_v.x, t_min_v.y, t_min_v.z});
+            const float t_exit = std::min({t_max_v.x, t_max_v.y, t_max_v.z});
+            if (t_enter > t_exit || t_exit < 0.0f)
+                return false;
+            t_hit_out = t_enter >= 0.0f ? t_enter : t_exit;
+            return true;
+        }
+
+        struct CpuMeshAccessor {
+            core::Tensor verts_cpu;
+            core::Tensor idx_cpu;
+
+            static std::optional<CpuMeshAccessor> from(const core::MeshData& mesh) {
+                if (!mesh.vertices.is_valid() || mesh.vertex_count() == 0)
+                    return std::nullopt;
+                CpuMeshAccessor a;
+                a.verts_cpu = mesh.vertices.to(core::Device::CPU).contiguous();
+                if (mesh.indices.is_valid() && mesh.face_count() > 0)
+                    a.idx_cpu = mesh.indices.to(core::Device::CPU).contiguous();
+                return a;
+            }
+
+            glm::vec3 vertex(int64_t i) {
+                auto va = verts_cpu.accessor<float, 2>();
+                return {va(i, 0), va(i, 1), va(i, 2)};
+            }
+
+            void computeBounds(glm::vec3& out_min, glm::vec3& out_max) {
+                auto va = verts_cpu.accessor<float, 2>();
+                const int64_t nv = verts_cpu.size(0);
+                assert(nv > 0);
+                out_min = out_max = glm::vec3(va(0, 0), va(0, 1), va(0, 2));
+                for (int64_t i = 1; i < nv; ++i) {
+                    const glm::vec3 v(va(i, 0), va(i, 1), va(i, 2));
+                    out_min = glm::min(out_min, v);
+                    out_max = glm::max(out_max, v);
+                }
+            }
+
+            float rayIntersect(const glm::vec3& origin, const glm::vec3& dir) {
+                if (!idx_cpu.is_valid())
+                    return -1.0f;
+                auto va = verts_cpu.accessor<float, 2>();
+                auto ia = idx_cpu.accessor<int32_t, 2>();
+                const int64_t nf = idx_cpu.size(0);
+                float closest = std::numeric_limits<float>::max();
+                for (int64_t f = 0; f < nf; ++f) {
+                    const glm::vec3 v0(va(ia(f, 0), 0), va(ia(f, 0), 1), va(ia(f, 0), 2));
+                    const glm::vec3 v1(va(ia(f, 1), 0), va(ia(f, 1), 1), va(ia(f, 1), 2));
+                    const glm::vec3 v2(va(ia(f, 2), 0), va(ia(f, 2), 1), va(ia(f, 2), 2));
+                    const float t = rayTriangleIntersect(origin, dir, v0, v1, v2);
+                    if (t > 0.0f && t < closest)
+                        closest = t;
+                }
+                return closest < std::numeric_limits<float>::max() ? closest : -1.0f;
+            }
+        };
+    } // namespace
+
+    std::string SceneManager::pickNodeByRay(const glm::vec3& ray_origin, const glm::vec3& ray_dir) const {
+        float closest_t = std::numeric_limits<float>::max();
+        std::string closest_name;
+
+        for (const auto* node : scene_.getNodes()) {
             if (node->type != core::NodeType::SPLAT && node->type != core::NodeType::MESH)
                 continue;
-
-            glm::vec3 local_min, local_max;
-            if (!scene_.getNodeBounds(node->id, local_min, local_max))
+            if (!scene_.isNodeEffectivelyVisible(node->id))
                 continue;
 
             const glm::mat4 world_to_local = glm::inverse(scene_.getWorldTransform(node->id));
-            const glm::vec3 local_pos = glm::vec3(world_to_local * glm::vec4(world_pos, 1.0f));
+            const glm::vec3 local_origin = glm::vec3(world_to_local * glm::vec4(ray_origin, 1.0f));
+            const glm::vec3 local_dir = glm::vec3(world_to_local * glm::vec4(ray_dir, 0.0f));
 
-            if (local_pos.x >= local_min.x && local_pos.x <= local_max.x &&
-                local_pos.y >= local_min.y && local_pos.y <= local_max.y &&
-                local_pos.z >= local_min.z && local_pos.z <= local_max.z) {
-                return node->name;
+            if (node->type == core::NodeType::MESH && node->mesh) {
+                auto accessor = CpuMeshAccessor::from(*node->mesh);
+                if (!accessor)
+                    continue;
+
+                glm::vec3 aabb_min, aabb_max;
+                accessor->computeBounds(aabb_min, aabb_max);
+
+                float aabb_t;
+                if (!rayAABBIntersect(local_origin, local_dir, aabb_min, aabb_max, aabb_t))
+                    continue;
+
+                const float t_hit = accessor->rayIntersect(local_origin, local_dir);
+                if (t_hit > 0.0f && t_hit < closest_t) {
+                    closest_t = t_hit;
+                    closest_name = node->name;
+                }
+            } else {
+                glm::vec3 local_min, local_max;
+                if (!scene_.getNodeBounds(node->id, local_min, local_max))
+                    continue;
+
+                float t_hit;
+                if (!rayAABBIntersect(local_origin, local_dir, local_min, local_max, t_hit))
+                    continue;
+
+                if (t_hit < closest_t) {
+                    closest_t = t_hit;
+                    closest_name = node->name;
+                }
             }
         }
-        return "";
+        return closest_name;
     }
 
     std::vector<std::string> SceneManager::pickNodesInScreenRect(
@@ -766,41 +883,59 @@ namespace lfs::vis {
                      a_max.y < b_min.y || b_max.y < a_min.y);
         };
 
-        for (const auto* node : scene_.getVisibleNodes()) {
+        for (const auto* node : scene_.getNodes()) {
             if (node->type != core::NodeType::SPLAT && node->type != core::NodeType::MESH)
                 continue;
-
-            glm::vec3 local_min, local_max;
-            if (!scene_.getNodeBounds(node->id, local_min, local_max))
+            if (!scene_.isNodeEffectivelyVisible(node->id))
                 continue;
 
             const glm::mat4 world_transform = scene_.getWorldTransform(node->id);
 
-            glm::vec2 screen_min(1e10f);
-            glm::vec2 screen_max(-1e10f);
-            bool any_visible = false;
+            if (node->type == core::NodeType::MESH && node->mesh) {
+                auto accessor = CpuMeshAccessor::from(*node->mesh);
+                if (!accessor)
+                    continue;
 
-            for (int i = 0; i < BBOX_CORNERS; ++i) {
-                const glm::vec3 corner(
-                    (i & 1) ? local_max.x : local_min.x,
-                    (i & 2) ? local_max.y : local_min.y,
-                    (i & 4) ? local_max.z : local_min.z);
-                const glm::vec3 world_corner = glm::vec3(world_transform * glm::vec4(corner, 1.0f));
-                const glm::vec2 screen_pos = projectToScreen(world_corner);
-
-                if (screen_pos.x > BEHIND_CAMERA + 1e5f) {
-                    screen_min = glm::min(screen_min, screen_pos);
-                    screen_max = glm::max(screen_max, screen_pos);
-                    any_visible = true;
+                const int64_t nv = accessor->verts_cpu.size(0);
+                bool hit = false;
+                for (int64_t vi = 0; vi < nv; ++vi) {
+                    const glm::vec2 sp = projectToScreen(
+                        glm::vec3(world_transform * glm::vec4(accessor->vertex(vi), 1.0f)));
+                    if (sp.x > BEHIND_CAMERA + 1e5f &&
+                        sp.x >= rect_min.x && sp.x <= rect_max.x &&
+                        sp.y >= rect_min.y && sp.y <= rect_max.y) {
+                        hit = true;
+                        break;
+                    }
                 }
-            }
+                if (hit)
+                    result.push_back(node->name);
+            } else {
+                glm::vec3 local_min, local_max;
+                if (!scene_.getNodeBounds(node->id, local_min, local_max))
+                    continue;
 
-            if (!any_visible)
-                continue;
+                glm::vec2 screen_min(1e10f);
+                glm::vec2 screen_max(-1e10f);
+                bool any_visible = false;
 
-            // Check if the screen-space bbox overlaps with the selection rectangle
-            if (rectsOverlap(rect_min, rect_max, screen_min, screen_max)) {
-                result.push_back(node->name);
+                for (int i = 0; i < BBOX_CORNERS; ++i) {
+                    const glm::vec3 corner(
+                        (i & 1) ? local_max.x : local_min.x,
+                        (i & 2) ? local_max.y : local_min.y,
+                        (i & 4) ? local_max.z : local_min.z);
+                    const glm::vec3 world_corner = glm::vec3(world_transform * glm::vec4(corner, 1.0f));
+                    const glm::vec2 screen_pos = projectToScreen(world_corner);
+
+                    if (screen_pos.x > BEHIND_CAMERA + 1e5f) {
+                        screen_min = glm::min(screen_min, screen_pos);
+                        screen_max = glm::max(screen_max, screen_pos);
+                        any_visible = true;
+                    }
+                }
+
+                if (any_visible && rectsOverlap(rect_min, rect_max, screen_min, screen_max))
+                    result.push_back(node->name);
             }
         }
 
@@ -1680,6 +1815,9 @@ namespace lfs::vis {
         }
 
         state.meshes = scene_.getVisibleMeshes();
+        for (auto& vm : state.meshes) {
+            vm.is_selected = selection_.isNodeSelected(vm.node_id);
+        }
 
         // Get transforms and indices
         state.model_transforms = scene_.getVisibleNodeTransforms();
