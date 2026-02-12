@@ -8,6 +8,7 @@
 #include "theme/theme.hpp"
 #include "tools/tool_descriptor.hpp"
 #include "tools/unified_tool_registry.hpp"
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 

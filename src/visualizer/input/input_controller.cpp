@@ -318,10 +318,11 @@ namespace lfs::vis {
     void InputController::handleMouseButton(int button, int action, double x, double y) {
         auto* gui = services().guiOrNull();
 
-        // Handle pie menu click (tap mode)
-        if (action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_LEFT &&
-            gui && gui->gizmo().isPieMenuOpen()) {
-            gui->gizmo().onPieMenuClick({static_cast<float>(x), static_cast<float>(y)});
+        // Consume all mouse events while pie menu is open
+        if (gui && gui->gizmo().isPieMenuOpen()) {
+            if (action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_LEFT) {
+                gui->gizmo().onPieMenuClick({static_cast<float>(x), static_cast<float>(y)});
+            }
             return;
         }
 
@@ -656,9 +657,11 @@ namespace lfs::vis {
     void InputController::handleMouseMove(double x, double y) {
         auto* gui = services().guiOrNull();
 
-        // Forward to pie menu if open
+        // Forward to pie menu if open — consume event to prevent viewport interaction
         if (gui && gui->gizmo().isPieMenuOpen()) {
             gui->gizmo().onPieMenuMouseMove({static_cast<float>(x), static_cast<float>(y)});
+            last_mouse_pos_ = {x, y};
+            return;
         }
 
         // Track if we moved significantly
