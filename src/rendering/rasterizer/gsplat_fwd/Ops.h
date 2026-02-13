@@ -51,6 +51,7 @@ namespace gsplat_fwd {
         uint32_t tile_size,
         uint32_t tile_width,
         uint32_t tile_height,
+        bool wrap_x,
         bool sort,
         int32_t* tiles_per_gauss_out, // [C, N] pre-allocated output
         cudaStream_t stream = nullptr);

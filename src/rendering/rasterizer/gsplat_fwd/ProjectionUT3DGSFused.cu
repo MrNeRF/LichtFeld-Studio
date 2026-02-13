@@ -89,6 +89,7 @@ namespace gsplat_fwd {
         // shift pointers to the current camera. note that glm is colume-major.
         const vec2 focal_length = {Ks[cid * 9 + 0], Ks[cid * 9 + 4]};
         const vec2 principal_point = {Ks[cid * 9 + 2], Ks[cid * 9 + 5]};
+        const bool is_equirect = (camera_model_type == CameraModelType::EQUIRECTANGULAR);
 
         // Create rolling shutter parameter
         auto rs_params = RollingShutterParameters(
@@ -99,7 +100,7 @@ namespace gsplat_fwd {
         // Interpolate to *center* shutter pose as single per-Gaussian camera pose
         const auto shutter_pose = interpolate_shutter_pose(0.5f, rs_params);
         const vec3 mean_c = glm::rotate(shutter_pose.q, mean) + shutter_pose.t;
-        if ((mean_c.z < near_plane && camera_model_type != CameraModelType::EQUIRECTANGULAR) || mean_c.z > far_plane) {
+        if ((mean_c.z < near_plane && !is_equirect) || mean_c.z > far_plane) {
             radii[idx * 2] = 0;
             radii[idx * 2 + 1] = 0;
             return;
@@ -228,8 +229,13 @@ namespace gsplat_fwd {
         }
 
         // mask out gaussians outside the image region
-        if (mean2d.x + radius_x <= 0 || mean2d.x - radius_x >= image_width ||
-            mean2d.y + radius_y <= 0 || mean2d.y - radius_y >= image_height) {
+        if (mean2d.y + radius_y <= 0 || mean2d.y - radius_y >= image_height) {
+            radii[idx * 2] = 0;
+            radii[idx * 2 + 1] = 0;
+            return;
+        }
+        if (!is_equirect &&
+            (mean2d.x + radius_x <= 0 || mean2d.x - radius_x >= image_width)) {
             radii[idx * 2] = 0;
             radii[idx * 2 + 1] = 0;
             return;
@@ -240,7 +246,10 @@ namespace gsplat_fwd {
         radii[idx * 2 + 1] = (int32_t)radius_y;
         means2d[idx * 2] = mean2d.x;
         means2d[idx * 2 + 1] = mean2d.y;
-        depths[idx] = mean_c.z;
+        // Depth is used as the tile sort key. For equirectangular projection,
+        // z changes sign across ±90° azimuth, which causes ordering discontinuities.
+        // Use radial camera-space distance so the sort key stays positive/continuous.
+        depths[idx] = is_equirect ? glm::length(mean_c) : mean_c.z;
         conics[idx * 3] = covar2d_inv[0][0];
         conics[idx * 3 + 1] = covar2d_inv[0][1];
         conics[idx * 3 + 2] = covar2d_inv[1][1];

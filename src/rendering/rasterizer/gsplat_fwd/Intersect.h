@@ -23,6 +23,7 @@ namespace gsplat_fwd {
         uint32_t tile_size,
         uint32_t tile_width,
         uint32_t tile_height,
+        bool wrap_x,
         const int64_t* cum_tiles_per_gauss, // [C, N] or [nnz] optional (nullptr for first pass)
         // outputs
         int32_t* tiles_per_gauss, // [C, N] or [nnz] optional (for first pass)

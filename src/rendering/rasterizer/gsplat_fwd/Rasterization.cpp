@@ -180,10 +180,12 @@ namespace gsplat_fwd {
             result.compensations, stream);
 
         // Step 2: Tile intersection (output buffers sized to M)
+        const bool wrap_x = (camera_model == CameraModelType::EQUIRECTANGULAR);
         auto isect_result = intersect_tile(
             result.means2d, result.radii, result.depths,
             nullptr, nullptr,
             C, M, tile_size, tile_width, tile_height,
+            wrap_x,
             true,
             result.tiles_per_gauss, stream);
 

@@ -71,6 +71,7 @@ namespace gsplat_fwd {
         uint32_t tile_size,
         uint32_t tile_width,
         uint32_t tile_height,
+        bool wrap_x,
         bool sort,
         int32_t* tiles_per_gauss_out,
         cudaStream_t stream) {
@@ -98,6 +99,7 @@ namespace gsplat_fwd {
             nullptr, nullptr, // camera_ids, gaussian_ids (dense)
             C, N, nnz, packed,
             tile_size, tile_width, tile_height,
+            wrap_x,
             nullptr, // cum_tiles_per_gauss
             tiles_per_gauss_out,
             nullptr, nullptr, // isect_ids, flatten_ids
@@ -132,6 +134,7 @@ namespace gsplat_fwd {
             nullptr, nullptr, // camera_ids, gaussian_ids (dense)
             C, N, nnz, packed,
             tile_size, tile_width, tile_height,
+            wrap_x,
             d_cum_tiles,
             nullptr, // tiles_per_gauss (not needed in second pass)
             result.isect_ids, result.flatten_ids,

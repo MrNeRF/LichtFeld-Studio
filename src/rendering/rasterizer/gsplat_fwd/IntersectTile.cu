@@ -17,7 +17,7 @@ namespace gsplat_fwd {
 
     namespace cg = cooperative_groups;
 
-    template <typename scalar_t>
+    template <typename scalar_t, bool kWrapX>
     __global__ void intersect_tile_kernel(
         const bool packed,
         const uint32_t C,
@@ -58,15 +58,72 @@ namespace gsplat_fwd {
         float tile_x = mean2d.x / static_cast<float>(tile_size);
         float tile_y = mean2d.y / static_cast<float>(tile_size);
 
-        uint2 tile_min, tile_max;
-        tile_min.x = min(max(0, (uint32_t)floor(tile_x - tile_radius_x)), tile_width);
-        tile_min.y = min(max(0, (uint32_t)floor(tile_y - tile_radius_y)), tile_height);
-        tile_max.x = min(max(0, (uint32_t)ceil(tile_x + tile_radius_x)), tile_width);
-        tile_max.y = min(max(0, (uint32_t)ceil(tile_y + tile_radius_y)), tile_height);
+        const int32_t tile_width_i = static_cast<int32_t>(tile_width);
+        const int32_t tile_height_i = static_cast<int32_t>(tile_height);
+
+        const int32_t tile_min_y = min(max(0, static_cast<int32_t>(floorf(tile_y - tile_radius_y))), tile_height_i);
+        const int32_t tile_max_y = min(max(0, static_cast<int32_t>(ceilf(tile_y + tile_radius_y))), tile_height_i);
+
+        if (tile_min_y >= tile_max_y) {
+            if (first_pass) {
+                tiles_per_gauss[idx] = 0;
+            }
+            return;
+        }
+
+        int32_t x0 = static_cast<int32_t>(floorf(tile_x - tile_radius_x));
+        int32_t x1 = static_cast<int32_t>(ceilf(tile_x + tile_radius_x)); // exclusive
+        int32_t span_x = x1 - x0;
+
+        // Represent X coverage as the union of up to two non-overlapping intervals.
+        int32_t interval0_start = 0, interval0_end = 0;
+        int32_t interval1_start = 0, interval1_end = 0;
+
+        if constexpr (kWrapX) {
+            if (tile_width_i > 0) {
+                if (span_x >= tile_width_i) {
+                    // Covers full horizontal domain.
+                    interval0_start = 0;
+                    interval0_end = tile_width_i;
+                } else if (span_x > 0) {
+                    int32_t start = x0 % tile_width_i;
+                    if (start < 0) {
+                        start += tile_width_i;
+                    }
+                    int32_t end = start + span_x;
+                    if (end <= tile_width_i) {
+                        interval0_start = start;
+                        interval0_end = end;
+                    } else {
+                        interval0_start = start;
+                        interval0_end = tile_width_i;
+                        interval1_start = 0;
+                        interval1_end = end - tile_width_i;
+                    }
+                }
+            }
+        } else {
+            x0 = min(max(0, x0), tile_width_i);
+            x1 = min(max(0, x1), tile_width_i);
+            if (x1 > x0) {
+                interval0_start = x0;
+                interval0_end = x1;
+            }
+        }
+
+        const int32_t tile_count_x =
+            (interval0_end - interval0_start) + (interval1_end - interval1_start);
+
+        if (tile_count_x <= 0) {
+            if (first_pass) {
+                tiles_per_gauss[idx] = 0;
+            }
+            return;
+        }
 
         if (first_pass) {
             tiles_per_gauss[idx] = static_cast<int32_t>(
-                (tile_max.y - tile_min.y) * (tile_max.x - tile_min.x));
+                (tile_max_y - tile_min_y) * tile_count_x);
             return;
         }
 
@@ -82,8 +139,14 @@ namespace gsplat_fwd {
         int64_t depth_id_enc = static_cast<uint32_t>(depth_i32);
 
         int64_t cur_idx = (idx == 0) ? 0 : cum_tiles_per_gauss[idx - 1];
-        for (int32_t i = tile_min.y; i < tile_max.y; ++i) {
-            for (int32_t j = tile_min.x; j < tile_max.x; ++j) {
+        for (int32_t i = tile_min_y; i < tile_max_y; ++i) {
+            for (int32_t j = interval0_start; j < interval0_end; ++j) {
+                int64_t tile_id = i * tile_width + j;
+                isect_ids[cur_idx] = cid_enc | (tile_id << 32) | depth_id_enc;
+                flatten_ids[cur_idx] = static_cast<int32_t>(idx);
+                ++cur_idx;
+            }
+            for (int32_t j = interval1_start; j < interval1_end; ++j) {
                 int64_t tile_id = i * tile_width + j;
                 isect_ids[cur_idx] = cid_enc | (tile_id << 32) | depth_id_enc;
                 flatten_ids[cur_idx] = static_cast<int32_t>(idx);
@@ -105,6 +168,7 @@ namespace gsplat_fwd {
         uint32_t tile_size,
         uint32_t tile_width,
         uint32_t tile_height,
+        bool wrap_x,
         const int64_t* cum_tiles_per_gauss,
         int32_t* tiles_per_gauss,
         int64_t* isect_ids,
@@ -122,14 +186,25 @@ namespace gsplat_fwd {
         dim3 threads(256);
         dim3 grid((n_elements + threads.x - 1) / threads.x);
 
-        intersect_tile_kernel<float><<<grid, threads, 0, stream>>>(
-            packed,
-            C, N, nnz,
-            camera_ids, gaussian_ids,
-            means2d, radii, depths,
-            cum_tiles_per_gauss,
-            tile_size, tile_width, tile_height, tile_n_bits,
-            tiles_per_gauss, isect_ids, flatten_ids);
+        if (wrap_x) {
+            intersect_tile_kernel<float, true><<<grid, threads, 0, stream>>>(
+                packed,
+                C, N, nnz,
+                camera_ids, gaussian_ids,
+                means2d, radii, depths,
+                cum_tiles_per_gauss,
+                tile_size, tile_width, tile_height, tile_n_bits,
+                tiles_per_gauss, isect_ids, flatten_ids);
+        } else {
+            intersect_tile_kernel<float, false><<<grid, threads, 0, stream>>>(
+                packed,
+                C, N, nnz,
+                camera_ids, gaussian_ids,
+                means2d, radii, depths,
+                cum_tiles_per_gauss,
+                tile_size, tile_width, tile_height, tile_n_bits,
+                tiles_per_gauss, isect_ids, flatten_ids);
+        }
     }
 
     __global__ void intersect_offset_kernel(
