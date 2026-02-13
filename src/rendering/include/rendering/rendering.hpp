@@ -149,6 +149,7 @@ namespace lfs::rendering {
 
         // For Model3D
         const lfs::core::SplatData* model = nullptr;
+        glm::mat4 model_transform{1.0f};
 
         // For Image2D or CachedRender
         unsigned int texture_id = 0;

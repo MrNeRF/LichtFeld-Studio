@@ -124,6 +124,48 @@ namespace {
             eval_sh_channel(sh, idx, dir, 2)};
     }
 
+    struct CoeffError {
+        float mean = 0.0f;
+        float max = 0.0f;
+    };
+
+    [[nodiscard]] CoeffError compare_sh_coefficients(const CpuShData& a, const CpuShData& b,
+                                                     const size_t count, const size_t stride) {
+        assert(a.shN_ptr && b.shN_ptr);
+        assert(a.rest_coeffs == b.rest_coeffs);
+
+        const int coeffs_per_gaussian = a.rest_coeffs * 3;
+        double sum_abs = 0.0;
+        float max_abs = 0.0f;
+        size_t n = 0;
+
+        for (size_t i = 0, used = 0; used < count; i += stride, ++used) {
+            const float* pa = a.shN_ptr + i * coeffs_per_gaussian;
+            const float* pb = b.shN_ptr + i * coeffs_per_gaussian;
+            for (int j = 0; j < coeffs_per_gaussian; ++j) {
+                const float diff = std::abs(pa[j] - pb[j]);
+                sum_abs += static_cast<double>(diff);
+                max_abs = std::max(max_abs, diff);
+                ++n;
+            }
+        }
+        return {n > 0 ? static_cast<float>(sum_abs / static_cast<double>(n)) : 0.0f, max_abs};
+    }
+
+    [[nodiscard]] lfs::core::SplatData clone_splat_data(const lfs::core::SplatData& src) {
+        lfs::core::SplatData dst(
+            src.get_max_sh_degree(),
+            src.means_raw().clone(),
+            src.sh0_raw().clone(),
+            src.shN_raw().is_valid() ? src.shN_raw().clone() : lfs::core::Tensor(),
+            src.scaling_raw().clone(),
+            src.rotation_raw().clone(),
+            src.opacity_raw().clone(),
+            src.get_scene_scale());
+        dst.set_active_sh_degree(src.get_active_sh_degree());
+        return dst;
+    }
+
 } // namespace
 
 class RotatedShCorrectnessTest : public ::testing::Test {
@@ -308,4 +350,218 @@ TEST_F(RotatedShCorrectnessTest, ViewportParityWithExportUnderRotationAndNonUnif
 
     EXPECT_LT(mean_abs_error, 1e-3f);
     EXPECT_LT(max_abs_error, 5e-3f);
+}
+
+TEST_F(RotatedShCorrectnessTest, IdentityTransformPreservesShCoefficients) {
+    if (!fs::exists(bike_path)) {
+        GTEST_SKIP() << "Missing test asset: " << bike_path;
+    }
+
+    auto loaded = lfs::io::load_ply(bike_path);
+    ASSERT_TRUE(loaded.has_value()) << "Failed to load bike PLY: " << loaded.error();
+
+    lfs::core::SplatData original = std::move(loaded.value());
+    ASSERT_TRUE(original.shN().is_valid());
+
+    auto transformed = clone_splat_data(original);
+    lfs::core::transform(transformed, glm::mat4(1.0f));
+
+    const CpuShData orig_sh = to_cpu_sh(original);
+    const CpuShData xform_sh = to_cpu_sh(transformed);
+    ASSERT_EQ(orig_sh.rest_coeffs, xform_sh.rest_coeffs);
+
+    const size_t sample_count = std::min<size_t>(64, original.size());
+    const size_t stride = std::max<size_t>(1, original.size() / sample_count);
+    const auto err = compare_sh_coefficients(orig_sh, xform_sh, sample_count, stride);
+
+    EXPECT_EQ(err.max, 0.0f) << "Identity transform modified SH coefficients";
+}
+
+TEST_F(RotatedShCorrectnessTest, PureTranslationPreservesShCoefficients) {
+    if (!fs::exists(bike_path)) {
+        GTEST_SKIP() << "Missing test asset: " << bike_path;
+    }
+
+    auto loaded = lfs::io::load_ply(bike_path);
+    ASSERT_TRUE(loaded.has_value()) << "Failed to load bike PLY: " << loaded.error();
+
+    lfs::core::SplatData original = std::move(loaded.value());
+    ASSERT_TRUE(original.shN().is_valid());
+
+    const glm::mat4 translation = glm::translate(glm::mat4(1.0f), glm::vec3(5.0f, -3.0f, 7.0f));
+    auto transformed = clone_splat_data(original);
+    lfs::core::transform(transformed, translation);
+
+    const CpuShData orig_sh = to_cpu_sh(original);
+    const CpuShData xform_sh = to_cpu_sh(transformed);
+    ASSERT_EQ(orig_sh.rest_coeffs, xform_sh.rest_coeffs);
+
+    const size_t sample_count = std::min<size_t>(64, original.size());
+    const size_t stride = std::max<size_t>(1, original.size() / sample_count);
+    const auto err = compare_sh_coefficients(orig_sh, xform_sh, sample_count, stride);
+
+    EXPECT_EQ(err.max, 0.0f) << "Pure translation modified SH coefficients";
+}
+
+TEST_F(RotatedShCorrectnessTest, DcComponentInvariantUnderRotation) {
+    if (!fs::exists(bike_path)) {
+        GTEST_SKIP() << "Missing test asset: " << bike_path;
+    }
+
+    auto loaded = lfs::io::load_ply(bike_path);
+    ASSERT_TRUE(loaded.has_value()) << "Failed to load bike PLY: " << loaded.error();
+
+    lfs::core::SplatData original = std::move(loaded.value());
+    ASSERT_GT(original.size(), 0UL);
+
+    const glm::mat4 rotation = glm::rotate(
+        glm::mat4(1.0f), glm::radians(73.0f), glm::normalize(glm::vec3(0.3f, -0.5f, 0.8f)));
+    auto transformed = clone_splat_data(original);
+    lfs::core::transform(transformed, rotation);
+
+    const auto orig_sh0 = original.sh0().contiguous().to(lfs::core::Device::CPU);
+    const auto xform_sh0 = transformed.sh0().contiguous().to(lfs::core::Device::CPU);
+    const float* orig_ptr = orig_sh0.ptr<float>();
+    const float* xform_ptr = xform_sh0.ptr<float>();
+
+    const size_t sample_count = std::min<size_t>(64, original.size());
+    const size_t stride = std::max<size_t>(1, original.size() / sample_count);
+
+    for (size_t i = 0, used = 0; used < sample_count; i += stride, ++used) {
+        for (int ch = 0; ch < 3; ++ch) {
+            EXPECT_EQ(orig_ptr[i * 3 + ch], xform_ptr[i * 3 + ch])
+                << "DC coefficient changed at gaussian " << i << " channel " << ch;
+        }
+    }
+}
+
+TEST_F(RotatedShCorrectnessTest, RoundtripRotationRecoversSh) {
+    if (!fs::exists(bike_path)) {
+        GTEST_SKIP() << "Missing test asset: " << bike_path;
+    }
+
+    auto loaded = lfs::io::load_ply(bike_path);
+    ASSERT_TRUE(loaded.has_value()) << "Failed to load bike PLY: " << loaded.error();
+
+    lfs::core::SplatData original = std::move(loaded.value());
+    ASSERT_TRUE(original.shN().is_valid());
+
+    const glm::mat4 rotation = glm::rotate(
+        glm::mat4(1.0f), glm::radians(73.0f), glm::normalize(glm::vec3(0.3f, -0.5f, 0.8f)));
+    const glm::mat4 rotation_inv = glm::inverse(rotation);
+
+    auto roundtripped = clone_splat_data(original);
+    lfs::core::transform(roundtripped, rotation);
+    lfs::core::transform(roundtripped, rotation_inv);
+
+    const CpuShData orig_sh = to_cpu_sh(original);
+    const CpuShData rt_sh = to_cpu_sh(roundtripped);
+    ASSERT_EQ(orig_sh.rest_coeffs, rt_sh.rest_coeffs);
+
+    const size_t sample_count = std::min<size_t>(64, original.size());
+    const size_t stride = std::max<size_t>(1, original.size() / sample_count);
+    const auto err = compare_sh_coefficients(orig_sh, rt_sh, sample_count, stride);
+
+    EXPECT_LT(err.mean, 1e-3f) << "Roundtrip mean error too large";
+    EXPECT_LT(err.max, 5e-3f) << "Roundtrip max error too large";
+}
+
+TEST_F(RotatedShCorrectnessTest, NinetyDegreeAxisAlignedRotation) {
+    if (!fs::exists(bike_path)) {
+        GTEST_SKIP() << "Missing test asset: " << bike_path;
+    }
+
+    auto loaded = lfs::io::load_ply(bike_path);
+    ASSERT_TRUE(loaded.has_value()) << "Failed to load bike PLY: " << loaded.error();
+
+    lfs::core::SplatData original = std::move(loaded.value());
+    ASSERT_TRUE(original.shN().is_valid());
+    ASSERT_GE(original.get_max_sh_degree(), 1);
+
+    const std::array<glm::vec3, 3> axes = {
+        glm::vec3(1, 0, 0), glm::vec3(0, 1, 0), glm::vec3(0, 0, 1)};
+
+    const std::array<glm::vec3, 6> test_dirs = {
+        glm::normalize(glm::vec3(1, 0, 0)),
+        glm::normalize(glm::vec3(0, 1, 0)),
+        glm::normalize(glm::vec3(0, 0, 1)),
+        glm::normalize(glm::vec3(1, 1, 0)),
+        glm::normalize(glm::vec3(0, 1, 1)),
+        glm::normalize(glm::vec3(1, 0, 1))};
+
+    const size_t sample_count = std::min<size_t>(64, original.size());
+    const size_t stride = std::max<size_t>(1, original.size() / sample_count);
+
+    for (const auto& axis : axes) {
+        const glm::mat4 rot90 = glm::rotate(glm::mat4(1.0f), glm::radians(90.0f), axis);
+        const glm::mat3 rot3 = extract_rotation(rot90);
+        const glm::mat3 rot3_inv = glm::inverse(rot3);
+
+        auto transformed = clone_splat_data(original);
+        lfs::core::transform(transformed, rot90);
+
+        const CpuShData orig_sh = to_cpu_sh(original);
+        const CpuShData xform_sh = to_cpu_sh(transformed);
+
+        float max_abs_error = 0.0f;
+        double sum_abs_error = 0.0;
+        size_t n_compared = 0;
+
+        for (size_t i = 0, used = 0; used < sample_count; i += stride, ++used) {
+            for (const auto& dir_world : test_dirs) {
+                const glm::vec3 dir_local = glm::normalize(rot3_inv * dir_world);
+                const glm::vec3 ref = eval_sh_color(orig_sh, i, dir_local);
+                const glm::vec3 rot = eval_sh_color(xform_sh, i, dir_world);
+                const glm::vec3 diff = glm::abs(ref - rot);
+
+                max_abs_error = std::max(max_abs_error, std::max({diff.x, diff.y, diff.z}));
+                sum_abs_error += static_cast<double>(diff.x + diff.y + diff.z);
+                n_compared += 3;
+            }
+        }
+
+        const float mean_abs_error = n_compared > 0
+                                         ? static_cast<float>(sum_abs_error / static_cast<double>(n_compared))
+                                         : 0.0f;
+
+        EXPECT_LT(mean_abs_error, 1e-3f) << "90-degree rotation around axis ("
+                                         << axis.x << "," << axis.y << "," << axis.z << ")";
+        EXPECT_LT(max_abs_error, 5e-3f) << "90-degree rotation around axis ("
+                                        << axis.x << "," << axis.y << "," << axis.z << ")";
+    }
+}
+
+TEST_F(RotatedShCorrectnessTest, SequentialRotationsMatchComposed) {
+    if (!fs::exists(bike_path)) {
+        GTEST_SKIP() << "Missing test asset: " << bike_path;
+    }
+
+    auto loaded = lfs::io::load_ply(bike_path);
+    ASSERT_TRUE(loaded.has_value()) << "Failed to load bike PLY: " << loaded.error();
+
+    lfs::core::SplatData original = std::move(loaded.value());
+    ASSERT_TRUE(original.shN().is_valid());
+
+    const glm::mat4 r1 = glm::rotate(
+        glm::mat4(1.0f), glm::radians(37.0f), glm::normalize(glm::vec3(1.0f, 0.0f, 0.0f)));
+    const glm::mat4 r2 = glm::rotate(
+        glm::mat4(1.0f), glm::radians(53.0f), glm::normalize(glm::vec3(0.0f, 0.7f, 0.7f)));
+
+    auto sequential = clone_splat_data(original);
+    lfs::core::transform(sequential, r1);
+    lfs::core::transform(sequential, r2);
+
+    auto composed = clone_splat_data(original);
+    lfs::core::transform(composed, r2 * r1);
+
+    const CpuShData seq_sh = to_cpu_sh(sequential);
+    const CpuShData comp_sh = to_cpu_sh(composed);
+    ASSERT_EQ(seq_sh.rest_coeffs, comp_sh.rest_coeffs);
+
+    const size_t sample_count = std::min<size_t>(64, original.size());
+    const size_t stride = std::max<size_t>(1, original.size() / sample_count);
+    const auto err = compare_sh_coefficients(seq_sh, comp_sh, sample_count, stride);
+
+    EXPECT_LT(err.mean, 2e-3f) << "Sequential vs composed mean error too large";
+    EXPECT_LT(err.max, 1e-2f) << "Sequential vs composed max error too large";
 }

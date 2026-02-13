@@ -1615,7 +1615,8 @@ namespace lfs::vis {
         }
 
         if (settings_.split_view_mode == SplitViewMode::PLYComparison) {
-            const auto visible_nodes = scene_manager->getScene().getVisibleNodes();
+            const auto& scene = scene_manager->getScene();
+            const auto visible_nodes = scene.getVisibleNodes();
             if (visible_nodes.size() < 2) {
                 LOG_TRACE("PLY comparison needs at least 2 visible nodes, have {}", visible_nodes.size());
                 return std::nullopt;
@@ -1635,12 +1636,14 @@ namespace lfs::vis {
                 .panels = {
                     {.content_type = lfs::rendering::PanelContentType::Model3D,
                      .model = visible_nodes[left_idx]->model.get(),
+                     .model_transform = scene.getWorldTransform(visible_nodes[left_idx]->id),
                      .texture_id = 0,
                      .label = visible_nodes[left_idx]->name,
                      .start_position = 0.0f,
                      .end_position = settings_.split_position},
                     {.content_type = lfs::rendering::PanelContentType::Model3D,
                      .model = visible_nodes[right_idx]->model.get(),
+                     .model_transform = scene.getWorldTransform(visible_nodes[right_idx]->id),
                      .texture_id = 0,
                      .label = visible_nodes[right_idx]->name,
                      .start_position = settings_.split_position,

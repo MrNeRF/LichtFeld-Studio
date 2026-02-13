@@ -173,7 +173,8 @@ namespace lfs::rendering {
                 .voxel_size = request.voxel_size,
                 .gut = request.gut,
                 .show_rings = request.show_rings,
-                .ring_width = request.ring_width};
+                .ring_width = request.ring_width,
+                .model_transforms = {panel.model_transform}};
 
             std::unique_ptr<lfs::geometry::BoundingBox> temp_crop_box;
             if (request.crop_box.has_value()) {
