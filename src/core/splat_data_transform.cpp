@@ -9,13 +9,243 @@
 #include "geometry/bounding_box.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <limits>
 #include <numeric>
+#include <optional>
 #include <random>
+#include <stdexcept>
 #include <vector>
 
 namespace lfs::core {
+
+    namespace {
+
+        constexpr double SH_C1 = 0.48860251190291987;
+        constexpr double SH_C2_0 = 1.0925484305920792;
+        constexpr double SH_C2_1 = 0.94617469575755997;
+        constexpr double SH_C2_2 = 0.31539156525251999;
+        constexpr double SH_C2_3 = 0.54627421529603959;
+
+        constexpr double SH_C3_0 = 0.59004358992664352;
+        constexpr double SH_C3_1 = 2.8906114426405538;
+        constexpr double SH_C3_2 = 0.45704579946446572;
+        constexpr double SH_C3_3 = 0.3731763325901154;
+        constexpr double SH_C3_4 = 1.4453057213202769;
+
+        constexpr double SH_SOLVE_EPS = 1e-12;
+        constexpr float ROTATION_EPS = 1e-6f;
+
+        [[nodiscard]] bool has_significant_rotation(const glm::quat& q) {
+            return std::abs(std::abs(q.w) - 1.0f) > ROTATION_EPS ||
+                   std::abs(q.x) > ROTATION_EPS ||
+                   std::abs(q.y) > ROTATION_EPS ||
+                   std::abs(q.z) > ROTATION_EPS;
+        }
+
+        [[nodiscard]] int sh_band_offset_in_rest(const int band) {
+            // shN omits l=0, so l=1 starts at 0, l=2 at 3, l=3 at 8...
+            return band * band - 1;
+        }
+
+        [[nodiscard]] std::vector<glm::dvec3> fibonacci_sphere_dirs(const int count) {
+            std::vector<glm::dvec3> dirs;
+            dirs.reserve(static_cast<size_t>(count));
+            constexpr double GOLDEN_ANGLE = 2.39996322972865332;
+            for (int i = 0; i < count; ++i) {
+                const double t = (static_cast<double>(i) + 0.5) / static_cast<double>(count);
+                const double y = 1.0 - 2.0 * t;
+                const double r = std::sqrt(std::max(0.0, 1.0 - y * y));
+                const double theta = GOLDEN_ANGLE * static_cast<double>(i);
+                const double x = std::cos(theta) * r;
+                const double z = std::sin(theta) * r;
+                dirs.emplace_back(x, y, z);
+            }
+            return dirs;
+        }
+
+        [[nodiscard]] std::vector<double> eval_sh_band_basis(const int band, const glm::dvec3& dir) {
+            const double x = dir.x;
+            const double y = dir.y;
+            const double z = dir.z;
+            const double xx = x * x;
+            const double yy = y * y;
+            const double zz = z * z;
+
+            switch (band) {
+            case 1:
+                return {-SH_C1 * y, SH_C1 * z, -SH_C1 * x};
+            case 2:
+                return {
+                    SH_C2_0 * x * y,
+                    -SH_C2_0 * y * z,
+                    SH_C2_1 * zz - SH_C2_2,
+                    -SH_C2_0 * x * z,
+                    SH_C2_3 * (xx - yy)};
+            case 3:
+                return {
+                    SH_C3_0 * y * (-3.0 * xx + yy),
+                    SH_C3_1 * x * y * z,
+                    SH_C3_2 * y * (1.0 - 5.0 * zz),
+                    SH_C3_3 * z * (5.0 * zz - 3.0),
+                    SH_C3_2 * x * (1.0 - 5.0 * zz),
+                    SH_C3_4 * z * (xx - yy),
+                    SH_C3_0 * x * (-xx + 3.0 * yy)};
+            default:
+                return {};
+            }
+        }
+
+        [[nodiscard]] bool solve_linear_system(std::vector<double>& a, std::vector<double>& b, const int n, const int rhs_cols) {
+            for (int col = 0; col < n; ++col) {
+                int pivot_row = col;
+                double pivot_abs = std::abs(a[col * n + col]);
+                for (int row = col + 1; row < n; ++row) {
+                    const double candidate = std::abs(a[row * n + col]);
+                    if (candidate > pivot_abs) {
+                        pivot_abs = candidate;
+                        pivot_row = row;
+                    }
+                }
+                if (pivot_abs < SH_SOLVE_EPS) {
+                    return false;
+                }
+
+                if (pivot_row != col) {
+                    for (int k = 0; k < n; ++k) {
+                        std::swap(a[col * n + k], a[pivot_row * n + k]);
+                    }
+                    for (int k = 0; k < rhs_cols; ++k) {
+                        std::swap(b[col * rhs_cols + k], b[pivot_row * rhs_cols + k]);
+                    }
+                }
+
+                const double pivot = a[col * n + col];
+                for (int k = col; k < n; ++k) {
+                    a[col * n + k] /= pivot;
+                }
+                for (int k = 0; k < rhs_cols; ++k) {
+                    b[col * rhs_cols + k] /= pivot;
+                }
+
+                for (int row = 0; row < n; ++row) {
+                    if (row == col) {
+                        continue;
+                    }
+                    const double factor = a[row * n + col];
+                    if (std::abs(factor) < SH_SOLVE_EPS) {
+                        continue;
+                    }
+                    for (int k = col; k < n; ++k) {
+                        a[row * n + k] -= factor * a[col * n + k];
+                    }
+                    for (int k = 0; k < rhs_cols; ++k) {
+                        b[row * rhs_cols + k] -= factor * b[col * rhs_cols + k];
+                    }
+                }
+            }
+            return true;
+        }
+
+        [[nodiscard]] std::optional<std::vector<float>> compute_sh_coeff_rotation_matrix(
+            const glm::mat3& rotation_local_to_world,
+            const int band) {
+            if (band < 1 || band > 3) {
+                return std::nullopt;
+            }
+
+            const int basis_count = 2 * band + 1;
+            const auto sample_dirs = fibonacci_sphere_dirs(96);
+
+            const glm::dmat3 rot(rotation_local_to_world);
+            const glm::dmat3 rot_inv = glm::inverse(rot);
+
+            std::vector<double> wtw(static_cast<size_t>(basis_count * basis_count), 0.0);
+            std::vector<double> wtl(static_cast<size_t>(basis_count * basis_count), 0.0);
+
+            for (const auto& world_dir : sample_dirs) {
+                const glm::dvec3 local_dir = glm::normalize(rot_inv * world_dir);
+                const std::vector<double> basis_world = eval_sh_band_basis(band, world_dir);
+                const std::vector<double> basis_local = eval_sh_band_basis(band, local_dir);
+
+                for (int r = 0; r < basis_count; ++r) {
+                    for (int c = 0; c < basis_count; ++c) {
+                        wtw[r * basis_count + c] += basis_world[r] * basis_world[c];
+                        wtl[r * basis_count + c] += basis_world[r] * basis_local[c];
+                    }
+                }
+            }
+
+            std::vector<double> lhs = wtw;
+            std::vector<double> rhs = wtl; // Solves for K^T in W * K^T = L
+            if (!solve_linear_system(lhs, rhs, basis_count, basis_count)) {
+                return std::nullopt;
+            }
+
+            // Coefficient row-vectors transform as c' = c * K, where K = (K^T)^T.
+            std::vector<float> coeff_matrix(static_cast<size_t>(basis_count * basis_count), 0.0f);
+            for (int r = 0; r < basis_count; ++r) {
+                for (int c = 0; c < basis_count; ++c) {
+                    coeff_matrix[r * basis_count + c] = static_cast<float>(rhs[c * basis_count + r]);
+                }
+            }
+            return coeff_matrix;
+        }
+
+        [[nodiscard]] bool rotate_sh_coefficients(SplatData& splat_data, const glm::mat3& rotation_local_to_world) {
+            if (!splat_data.shN().is_valid() || splat_data.get_max_sh_degree() <= 0) {
+                return true;
+            }
+
+            const int available_coeffs = splat_data.shN().ndim() >= 2 ? static_cast<int>(splat_data.shN().size(1)) : 0;
+            if (available_coeffs <= 0) {
+                return true;
+            }
+
+            if (splat_data.get_max_sh_degree() > 3) {
+                return false;
+            }
+
+            const int max_band = std::min(3, splat_data.get_max_sh_degree());
+            const auto device = splat_data.shN().device();
+
+            for (int band = 1; band <= max_band; ++band) {
+                const int coeff_count = 2 * band + 1;
+                const int offset = sh_band_offset_in_rest(band);
+                if (offset + coeff_count > available_coeffs) {
+                    break;
+                }
+
+                const auto coeff_matrix = compute_sh_coeff_rotation_matrix(rotation_local_to_world, band);
+                if (!coeff_matrix.has_value()) {
+                    return false;
+                }
+
+                const Tensor coeff_matrix_tensor = Tensor::from_vector(
+                    coeff_matrix.value(),
+                    TensorShape({static_cast<size_t>(coeff_count), static_cast<size_t>(coeff_count)}),
+                    device);
+
+                const Tensor band_coeffs = splat_data.shN().slice(1, offset, offset + coeff_count).contiguous();
+                std::vector<Tensor> rotated_channels;
+                rotated_channels.reserve(3);
+
+                for (int ch = 0; ch < 3; ++ch) {
+                    const Tensor channel_coeffs = band_coeffs.slice(2, ch, ch + 1).squeeze(2);
+                    rotated_channels.push_back(channel_coeffs.mm(coeff_matrix_tensor).unsqueeze(2));
+                }
+
+                const Tensor rotated_band = Tensor::cat(rotated_channels, 2).contiguous();
+                splat_data.shN().slice(1, offset, offset + coeff_count).copy_from(rotated_band);
+            }
+
+            return true;
+        }
+
+    } // namespace
 
     SplatData& transform(SplatData& splat_data, const glm::mat4& transform_matrix) {
         LOG_TIMER("transform");
@@ -56,8 +286,10 @@ namespace lfs::core {
 
         glm::quat rotation_quat = glm::quat_cast(rot_mat);
 
-        // 3. Transform rotations (quaternions) if there's rotation
-        if (std::abs(rotation_quat.w - 1.0f) > 1e-6f) {
+        const bool has_rotation = has_significant_rotation(rotation_quat);
+
+        // 3. Transform rotations (quaternions) and SH orientation if there's rotation
+        if (has_rotation) {
             std::vector<float> rot_data = {rotation_quat.w, rotation_quat.x, rotation_quat.y, rotation_quat.z};
             auto rot_tensor = Tensor::from_vector(rot_data, TensorShape({4}), device);
 
@@ -86,6 +318,10 @@ namespace lfs::core {
                 y_new.unsqueeze(1),
                 z_new.unsqueeze(1)};
             splat_data._rotation = Tensor::cat(components, 1);
+
+            if (!rotate_sh_coefficients(splat_data, rot_mat)) {
+                throw std::runtime_error("SH rotation during transform is only supported up to degree 3.");
+            }
         }
 
         // 4. Transform scaling

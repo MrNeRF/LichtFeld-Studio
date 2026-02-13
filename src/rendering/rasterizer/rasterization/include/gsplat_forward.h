@@ -44,7 +44,9 @@ namespace lfs::rendering {
         const float* background, // [3] or nullptr
         GutRenderMode render_mode,
         float scaling_modifier,
+        const float* model_transforms, // [num_transforms, 4, 4] row-major optional
         const int* transform_indices,     // [N] optional
+        int num_transforms,
         const bool* node_visibility_mask, // optional
         int num_visibility_nodes,
         const int* visible_indices, // [M] maps output idx to gaussian idx, nullptr = all visible

@@ -73,6 +73,7 @@ namespace lfs::rendering {
         const Tensor& bg_color,
         float scaling_modifier = 1.0f,
         GutCameraModel camera_model = GutCameraModel::PINHOLE,
+        const Tensor* model_transforms = nullptr,
         const Tensor* transform_indices = nullptr,
         const std::vector<bool>& node_visibility_mask = {});
 

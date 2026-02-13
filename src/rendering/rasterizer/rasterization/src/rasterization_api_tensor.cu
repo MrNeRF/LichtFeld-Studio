@@ -122,6 +122,26 @@ namespace lfs::rendering {
         }
     };
 
+    struct PreparedModelTransforms {
+        Tensor contig;
+        const float* ptr = nullptr;
+        int count = 0;
+
+        static PreparedModelTransforms from(const Tensor* model_transforms) {
+            PreparedModelTransforms result;
+            if (model_transforms == nullptr || !model_transforms->is_valid() || model_transforms->numel() == 0) {
+                return result;
+            }
+            result.contig = model_transforms->is_contiguous() ? *model_transforms : model_transforms->contiguous();
+            if (result.contig.numel() % 16 != 0) {
+                throw std::runtime_error("model_transforms tensor must contain a multiple of 16 float values (N x 4 x 4).");
+            }
+            result.ptr = result.contig.ptr<float>();
+            result.count = static_cast<int>(result.contig.numel() / 16);
+            return result;
+        }
+    };
+
     std::tuple<Tensor, Tensor, Tensor>
     forward_wrapper_tensor(
         const Tensor& means,
@@ -213,16 +233,9 @@ namespace lfs::rendering {
         Tensor w2c_contig = w2c.is_contiguous() ? w2c : w2c.contiguous();
         Tensor cam_pos_contig = cam_position.is_contiguous() ? cam_position : cam_position.contiguous();
 
-        // Prepare model transforms array pointer
-        const float* model_transforms_ptr = nullptr;
-        Tensor model_transforms_contig;
-        int num_transforms = 0;
-        if (model_transforms != nullptr && model_transforms->is_valid() && model_transforms->numel() > 0) {
-            model_transforms_contig = model_transforms->is_contiguous() ? *model_transforms : model_transforms->contiguous();
-            model_transforms_ptr = model_transforms_contig.ptr<float>();
-            // Transforms are stored as [num_transforms, 4, 4] or flat [num_transforms * 16]
-            num_transforms = static_cast<int>(model_transforms_contig.numel() / 16);
-        }
+        const auto prepared_transforms = PreparedModelTransforms::from(model_transforms);
+        const float* model_transforms_ptr = prepared_transforms.ptr;
+        const int num_transforms = prepared_transforms.count;
 
         // Prepare transform indices pointer
         const int* transform_indices_ptr = nullptr;
@@ -892,6 +905,7 @@ namespace lfs::rendering {
         const Tensor* radial_coeffs,
         const Tensor* tangential_coeffs,
         const Tensor* background,
+        const Tensor* model_transforms,
         const Tensor* transform_indices,
         const std::vector<bool>& node_visibility_mask) {
 
@@ -943,6 +957,10 @@ namespace lfs::rendering {
         const float* const tangential_ptr = (tangential_coeffs && tangential_coeffs->is_valid()) ? tangential_coeffs->ptr<float>() : nullptr;
         const float* const bg_ptr = (background && background->is_valid()) ? background->ptr<float>() : nullptr;
 
+        const auto prepared_transforms = PreparedModelTransforms::from(model_transforms);
+        const float* model_transforms_ptr = prepared_transforms.ptr;
+        const int num_transforms = prepared_transforms.count;
+
         // Transform indices (N-sized, not filtered)
         const int* transform_indices_ptr = (transform_indices && transform_indices->is_valid())
                                                ? transform_indices->ptr<int>()
@@ -976,7 +994,9 @@ namespace lfs::rendering {
             bg_ptr,
             GutRenderMode::RGB,
             1.0f,
+            model_transforms_ptr,
             transform_indices_ptr,
+            num_transforms,
             visibility_mask.ptr,
             visibility_mask.count,
             visible_indices_ptr, // Kernel uses this for indirect indexing

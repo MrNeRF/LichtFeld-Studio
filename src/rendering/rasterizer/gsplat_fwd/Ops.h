@@ -84,6 +84,9 @@ namespace gsplat_fwd {
         uint32_t C,
         uint32_t N_total,           // Total gaussians in input arrays
         uint32_t M,                 // Visible gaussians to process
+        const float* model_transforms, // [num_transforms, 4, 4] row-major optional
+        const int* transform_indices,  // [N_total] optional
+        int num_transforms,
         const int* visible_indices, // [M] maps output idx → global gaussian idx, nullptr = all visible
         float* dirs,                // [C, M, 3] output
         cudaStream_t stream = nullptr);
@@ -235,7 +238,9 @@ namespace gsplat_fwd {
         const float* tangential_coeffs, // optional
         const float* thin_prism_coeffs, // optional
         // node visibility culling
+        const float* model_transforms,   // [num_transforms, 4, 4] row-major optional
         const int* transform_indices,     // [N_total] optional (can be nullptr)
+        int num_transforms,
         const bool* node_visibility_mask, // [num_visibility_nodes] optional (can be nullptr)
         int num_visibility_nodes,
         const int* visible_indices, // [M] maps output idx → global gaussian idx, nullptr = all visible

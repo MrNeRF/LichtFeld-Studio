@@ -225,6 +225,7 @@ namespace lfs::rendering {
         const Tensor& bg_color,
         const float scaling_modifier,
         const GutCameraModel camera_model,
+        const Tensor* model_transforms,
         const Tensor* transform_indices,
         const std::vector<bool>& node_visibility_mask) {
 
@@ -269,6 +270,7 @@ namespace lfs::rendering {
             sh_degree, width, height,
             camera_model,
             nullptr, nullptr, &bg_color,
+            model_transforms,
             transform_indices, node_visibility_mask);
 
         return {std::move(image), std::move(depth)};

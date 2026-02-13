@@ -8,15 +8,36 @@
 #include "rasterization_config.h"
 #include "utils.h"
 #include <cooperative_groups.h>
+#include <cuda/mat3_inverse.cuh>
 namespace cg = cooperative_groups;
 
 namespace lfs::rendering::kernels {
 
-    __device__ inline float3 convert_sh_to_color(
+    __device__ inline float3 mat3_mul_vec3(
+        const mat3x3& m,
+        const float3& v) {
+        return make_float3(
+            m.m11 * v.x + m.m12 * v.y + m.m13 * v.z,
+            m.m21 * v.x + m.m22 * v.y + m.m23 * v.z,
+            m.m31 * v.x + m.m32 * v.y + m.m33 * v.z);
+    }
+
+    __device__ inline bool invert_mat3(
+        const mat3x3& m,
+        mat3x3& inv) {
+        const float in[9] = {m.m11, m.m12, m.m13, m.m21, m.m22, m.m23, m.m31, m.m32, m.m33};
+        float out[9];
+        if (!lfs::cuda::invert_mat3(in, out)) {
+            return false;
+        }
+        inv = {out[0], out[1], out[2], out[3], out[4], out[5], out[6], out[7], out[8]};
+        return true;
+    }
+
+    __device__ inline float3 convert_sh_to_color_from_dir(
         const float3* sh_coefficients_0,
         const float3* sh_coefficients_rest,
-        const float3& position,
-        const float3& cam_position,
+        const float3& view_dir,
         const uint primitive_idx,
         const uint active_sh_bases,
         const uint total_bases_sh_rest) {
@@ -24,7 +45,7 @@ namespace lfs::rendering::kernels {
         float3 result = 0.5f + 0.28209479177387814f * sh_coefficients_0[primitive_idx];
         if (active_sh_bases > 1) {
             const float3* coefficients_ptr = sh_coefficients_rest + primitive_idx * total_bases_sh_rest;
-            auto [x, y, z] = normalize(position - cam_position);
+            auto [x, y, z] = normalize(view_dir);
             result = result + (-0.48860251190291987f * y) * coefficients_ptr[0] + (0.48860251190291987f * z) * coefficients_ptr[1] + (-0.48860251190291987f * x) * coefficients_ptr[2];
             if (active_sh_bases > 4) {
                 const float xx = x * x, yy = y * y, zz = z * z;
@@ -36,6 +57,23 @@ namespace lfs::rendering::kernels {
             }
         }
         return result;
+    }
+
+    __device__ inline float3 convert_sh_to_color(
+        const float3* sh_coefficients_0,
+        const float3* sh_coefficients_rest,
+        const float3& position,
+        const float3& cam_position,
+        const uint primitive_idx,
+        const uint active_sh_bases,
+        const uint total_bases_sh_rest) {
+        return convert_sh_to_color_from_dir(
+            sh_coefficients_0,
+            sh_coefficients_rest,
+            position - cam_position,
+            primitive_idx,
+            active_sh_bases,
+            total_bases_sh_rest);
     }
 
     // based on https://github.com/r4dl/StopThePop-Rasterization/blob/d8cad09919ff49b11be3d693d1e71fa792f559bb/cuda_rasterizer/stopthepop/stopthepop_common.cuh#L131

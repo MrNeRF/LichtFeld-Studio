@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include <cooperative_groups.h>
+#include <cuda/mat3_inverse.cuh>
 #include <cuda_runtime.h>
 
 #include "Common.h"
@@ -521,12 +522,32 @@ namespace gsplat_fwd {
                 compute_v_dirs ? v_dirs : nullptr);
     }
 
-    // Compute viewing directions: dir = mean - camera_position
+    // Extract the 3x3 rotation from a 4x4 row-major matrix and invert it.
+    __device__ inline bool invert_mat3_row_major(
+        const float* __restrict__ m,
+        float* __restrict__ inv_out) {
+        const float rot[9] = {m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]};
+        return lfs::cuda::invert_mat3(rot, inv_out);
+    }
+
+    __device__ inline bool has_non_identity_transform(const float* __restrict__ m) {
+        return m[0] != 1.0f || m[5] != 1.0f || m[10] != 1.0f ||
+               m[1] != 0.0f || m[2] != 0.0f ||
+               m[4] != 0.0f || m[6] != 0.0f ||
+               m[8] != 0.0f || m[9] != 0.0f ||
+               m[3] != 0.0f || m[7] != 0.0f || m[11] != 0.0f;
+    }
+
+    // Compute viewing directions for SH. When model transforms are provided,
+    // directions are mapped to local space to keep SH object-locked.
     __global__ void compute_view_dirs_kernel(
         const float* __restrict__ means,
         const float* __restrict__ viewmats,
         const uint32_t C,
-        const uint32_t M,                        // Visible gaussians to process
+        const uint32_t M,                           // Visible gaussians to process
+        const float* __restrict__ model_transforms, // [num_transforms, 4, 4] row-major optional
+        const int* __restrict__ transform_indices,  // [N_total] optional
+        const int num_transforms,
         const int* __restrict__ visible_indices, // [M] maps output idx → global gaussian idx
         float* __restrict__ dirs) {
         const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -558,11 +579,46 @@ namespace gsplat_fwd {
         const float my = means[global_n * 3 + 1];
         const float mz = means[global_n * 3 + 2];
 
+        float dir_x = mx - campos_x;
+        float dir_y = my - campos_y;
+        float dir_z = mz - campos_z;
+
+        if (model_transforms != nullptr && num_transforms > 0) {
+            const int transform_idx = transform_indices != nullptr
+                                          ? min(max(transform_indices[global_n], 0), num_transforms - 1)
+                                          : 0;
+            const float* const m = model_transforms + transform_idx * 16;
+            if (has_non_identity_transform(m)) {
+                float inv[9];
+                if (invert_mat3_row_major(m, inv)) {
+                    // Evaluate SH in local node space:
+                    // cam_local = R^-1 * (cam_world - t), dir_local = mean_local - cam_local.
+                    const float cam_rel_x = campos_x - m[3];
+                    const float cam_rel_y = campos_y - m[7];
+                    const float cam_rel_z = campos_z - m[11];
+                    const float cam_local_x = inv[0] * cam_rel_x + inv[1] * cam_rel_y + inv[2] * cam_rel_z;
+                    const float cam_local_y = inv[3] * cam_rel_x + inv[4] * cam_rel_y + inv[5] * cam_rel_z;
+                    const float cam_local_z = inv[6] * cam_rel_x + inv[7] * cam_rel_y + inv[8] * cam_rel_z;
+                    dir_x = mx - cam_local_x;
+                    dir_y = my - cam_local_y;
+                    dir_z = mz - cam_local_z;
+                } else {
+                    // Fallback to world-space direction if transform is singular.
+                    const float mean_world_x = m[0] * mx + m[1] * my + m[2] * mz + m[3];
+                    const float mean_world_y = m[4] * mx + m[5] * my + m[6] * mz + m[7];
+                    const float mean_world_z = m[8] * mx + m[9] * my + m[10] * mz + m[11];
+                    dir_x = mean_world_x - campos_x;
+                    dir_y = mean_world_y - campos_y;
+                    dir_z = mean_world_z - campos_z;
+                }
+            }
+        }
+
         // Write to compacted output
         const uint32_t out_idx = (c * M + out_n) * 3;
-        dirs[out_idx + 0] = mx - campos_x;
-        dirs[out_idx + 1] = my - campos_y;
-        dirs[out_idx + 2] = mz - campos_z;
+        dirs[out_idx + 0] = dir_x;
+        dirs[out_idx + 1] = dir_y;
+        dirs[out_idx + 2] = dir_z;
     }
 
     void compute_view_dirs(
@@ -571,6 +627,9 @@ namespace gsplat_fwd {
         const uint32_t C,
         const uint32_t N_total,
         const uint32_t M,
+        const float* model_transforms,
+        const int* transform_indices,
+        const int num_transforms,
         const int* visible_indices,
         float* dirs,
         cudaStream_t stream) {
@@ -581,7 +640,9 @@ namespace gsplat_fwd {
         const uint32_t num_blocks = (C * M + BLOCK_SIZE - 1) / BLOCK_SIZE;
 
         compute_view_dirs_kernel<<<num_blocks, BLOCK_SIZE, 0, stream>>>(
-            means, viewmats, C, M, visible_indices, dirs);
+            means, viewmats, C, M,
+            model_transforms, transform_indices, num_transforms,
+            visible_indices, dirs);
     }
 
 } // namespace gsplat_fwd

@@ -15,6 +15,7 @@
 #include <array>
 #include <cmath>
 #include <cuda_runtime.h>
+#include <exception>
 #include <functional>
 #include <glm/gtc/quaternion.hpp>
 #include <limits>
@@ -1654,7 +1655,12 @@ namespace lfs::core {
                 std::move(opacity),
                 model->get_scene_scale());
 
-            lfs::core::transform(transformed, world_transform);
+            try {
+                lfs::core::transform(transformed, world_transform);
+            } catch (const std::exception& e) {
+                LOG_ERROR("Failed to transform splat data while merging scene nodes: {}", e.what());
+                return nullptr;
+            }
 
             means_list.push_back(transformed.means_raw().clone());
             sh0_list.push_back(transformed.sh0_raw().clone());

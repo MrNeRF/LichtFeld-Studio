@@ -140,7 +140,8 @@ namespace lfs::rendering {
                                                   : GutCameraModel::PINHOLE;
                     auto render_output = gut_rasterize_tensor(
                         cam, const_cast<lfs::core::SplatData&>(model), background_,
-                        request.scaling_modifier, camera_model, transform_indices_ptr, request.node_visibility_mask);
+                        request.scaling_modifier, camera_model, model_transforms_tensor.get(),
+                        transform_indices_ptr, request.node_visibility_mask);
                     result.image = std::move(render_output.image);
                     result.depth = std::move(render_output.depth);
                 } else {
@@ -200,7 +201,7 @@ namespace lfs::rendering {
                                               : GutCameraModel::PINHOLE;
                 auto render_output = gut_rasterize_tensor(
                     cam, mutable_model, background_, request.scaling_modifier, camera_model,
-                    transform_indices_ptr, request.node_visibility_mask);
+                    model_transforms_tensor.get(), transform_indices_ptr, request.node_visibility_mask);
                 return RenderResult{
                     .image = std::move(render_output.image),
                     .depth = std::move(render_output.depth),

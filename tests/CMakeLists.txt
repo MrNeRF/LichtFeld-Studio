@@ -245,6 +245,7 @@ set(TEST_FILES
     test_mesh_data.cpp
     test_openmesh_bridge.cpp
     test_mesh_loader.cpp
+    test_rotated_sh_correctness.cpp
 )
 
 # Build test sources list

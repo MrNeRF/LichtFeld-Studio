@@ -353,9 +353,18 @@ namespace lfs::rendering::kernels::forward {
             static_cast<ushort>(screen_bounds.w));
         primitive_mean2d[primitive_idx] = mean2d;
         primitive_conic_opacity[primitive_idx] = make_float4(conic, output_opacity);
-        float3 color = convert_sh_to_color(
+        float3 view_dir = mean3d - cam_position[0];
+        if (has_transform) {
+            mat3x3 model_rot_inv{};
+            if (invert_mat3(model_rot, model_rot_inv)) {
+                // SH is object-locked: evaluate with view direction in local node space.
+                view_dir = mat3_mul_vec3(model_rot_inv, view_dir);
+            }
+        }
+
+        float3 color = convert_sh_to_color_from_dir(
             sh_coefficients_0, sh_coefficients_rest,
-            mean3d, cam_position[0],
+            view_dir,
             global_idx, active_sh_bases, total_bases_sh_rest);
 
         // Brush hit test

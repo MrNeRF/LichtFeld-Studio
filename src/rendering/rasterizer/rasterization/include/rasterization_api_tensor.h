@@ -223,6 +223,7 @@ namespace lfs::rendering {
         const Tensor* radial_coeffs = nullptr,
         const Tensor* tangential_coeffs = nullptr,
         const Tensor* background = nullptr,
+        const Tensor* model_transforms = nullptr,
         const Tensor* transform_indices = nullptr,
         const std::vector<bool>& node_visibility_mask = {});
 
