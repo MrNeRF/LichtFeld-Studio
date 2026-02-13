@@ -13,6 +13,7 @@
 
 #include "core/scene.hpp"
 #include "core/splat_data.hpp"
+#include "core/splat_data_transform.hpp"
 #include "io/exporter.hpp"
 #include "io/formats/ply.hpp"
 
@@ -226,3 +227,85 @@ TEST_F(RotatedShCorrectnessTest, ExportedPlyPreservesRotatedShAppearance) {
     EXPECT_LT(max_abs_error, 5e-3f);
 }
 
+TEST_F(RotatedShCorrectnessTest, ViewportParityWithExportUnderRotationAndNonUniformScale) {
+    if (!fs::exists(bike_path)) {
+        GTEST_SKIP() << "Missing test asset: " << bike_path;
+    }
+
+    auto loaded = lfs::io::load_ply(bike_path);
+    ASSERT_TRUE(loaded.has_value()) << "Failed to load bike PLY: " << loaded.error();
+
+    lfs::core::SplatData original = std::move(loaded.value());
+    ASSERT_GT(original.size(), 0UL);
+    ASSERT_TRUE(original.shN().is_valid());
+    ASSERT_GE(original.get_max_sh_degree(), 1);
+
+    const glm::mat4 non_uniform_scale = glm::scale(glm::mat4(1.0f), glm::vec3(1.7f, 0.6f, 1.35f));
+    const glm::mat4 rotation = glm::rotate(
+        glm::mat4(1.0f), glm::radians(31.0f), glm::normalize(glm::vec3(-0.53f, 0.41f, 0.74f)));
+    const glm::mat4 translation = glm::translate(glm::mat4(1.0f), glm::vec3(-0.35f, 0.2f, 0.85f));
+    const glm::mat4 world_transform = translation * rotation * non_uniform_scale;
+
+    lfs::core::SplatData transformed(
+        original.get_max_sh_degree(),
+        original.means_raw().clone(),
+        original.sh0_raw().clone(),
+        original.shN_raw().is_valid() ? original.shN_raw().clone() : lfs::core::Tensor(),
+        original.scaling_raw().clone(),
+        original.rotation_raw().clone(),
+        original.opacity_raw().clone(),
+        original.get_scene_scale());
+    transformed.set_active_sh_degree(original.get_active_sh_degree());
+    ASSERT_NO_THROW(lfs::core::transform(transformed, world_transform));
+
+    const CpuShData original_sh = to_cpu_sh(original);
+    const CpuShData transformed_sh = to_cpu_sh(transformed);
+    ASSERT_GE(transformed_sh.degree, 1);
+    ASSERT_GE(transformed_sh.rest_coeffs, 3);
+
+    const auto transformed_means_cpu = transformed.means().contiguous().to(lfs::core::Device::CPU);
+    const float* const transformed_means_ptr = transformed_means_cpu.ptr<float>();
+
+    const glm::mat3 rot = extract_rotation(world_transform);
+    const glm::mat3 rot_inv = glm::inverse(rot);
+
+    const std::array<glm::vec3, 5> camera_positions = {
+        glm::vec3(2.2f, -1.1f, 0.7f),
+        glm::vec3(-1.8f, 0.9f, 2.5f),
+        glm::vec3(0.3f, 2.1f, -1.4f),
+        glm::vec3(-2.6f, -1.9f, 1.2f),
+        glm::vec3(1.1f, 0.5f, 3.0f)};
+
+    const size_t sample_count = std::min<size_t>(64, original.size());
+    const size_t stride = std::max<size_t>(1, original.size() / sample_count);
+
+    float max_abs_error = 0.0f;
+    double sum_abs_error = 0.0;
+    size_t n_compared = 0;
+
+    for (size_t i = 0, used = 0; i < original.size() && used < sample_count; i += stride, ++used) {
+        const glm::vec3 mean_world(
+            transformed_means_ptr[i * 3 + 0],
+            transformed_means_ptr[i * 3 + 1],
+            transformed_means_ptr[i * 3 + 2]);
+
+        for (const auto& cam_world : camera_positions) {
+            const glm::vec3 dir_world = mean_world - cam_world;
+            const glm::vec3 dir_local_viewport = rot_inv * dir_world;
+            const glm::vec3 viewport_color = eval_sh_color(original_sh, i, dir_local_viewport);
+            const glm::vec3 export_color = eval_sh_color(transformed_sh, i, dir_world);
+            const glm::vec3 diff = glm::abs(viewport_color - export_color);
+
+            max_abs_error = std::max(max_abs_error, std::max({diff.x, diff.y, diff.z}));
+            sum_abs_error += static_cast<double>(diff.x + diff.y + diff.z);
+            n_compared += 3;
+        }
+    }
+
+    const float mean_abs_error = n_compared > 0
+                                     ? static_cast<float>(sum_abs_error / static_cast<double>(n_compared))
+                                     : 0.0f;
+
+    EXPECT_LT(mean_abs_error, 1e-3f);
+    EXPECT_LT(max_abs_error, 5e-3f);
+}

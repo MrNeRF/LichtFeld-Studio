@@ -129,7 +129,9 @@ namespace lfs::rendering::kernels::forward {
 
         // Apply model transform
         mat3x3 model_rot = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+        mat3x3 model_rot_sh = {1, 0, 0, 0, 1, 0, 0, 0, 1};
         bool has_transform = false;
+        bool has_valid_sh_rotation = false;
         if (model_transforms != nullptr && num_transforms > 0) {
             const int transform_idx = transform_indices != nullptr
                                           ? min(max(transform_indices[global_idx], 0), num_transforms - 1)
@@ -141,6 +143,22 @@ namespace lfs::rendering::kernels::forward {
                             m[8] != 0.0f || m[9] != 0.0f || m[11] != 0.0f;
             if (has_transform) {
                 model_rot = {m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]};
+
+                constexpr float ROT_SCALE_EPS = 1e-8f;
+                const float scale_x = sqrtf(model_rot.m11 * model_rot.m11 + model_rot.m21 * model_rot.m21 + model_rot.m31 * model_rot.m31);
+                const float scale_y = sqrtf(model_rot.m12 * model_rot.m12 + model_rot.m22 * model_rot.m22 + model_rot.m32 * model_rot.m32);
+                const float scale_z = sqrtf(model_rot.m13 * model_rot.m13 + model_rot.m23 * model_rot.m23 + model_rot.m33 * model_rot.m33);
+                if (scale_x > ROT_SCALE_EPS && scale_y > ROT_SCALE_EPS && scale_z > ROT_SCALE_EPS) {
+                    const float inv_scale_x = 1.0f / scale_x;
+                    const float inv_scale_y = 1.0f / scale_y;
+                    const float inv_scale_z = 1.0f / scale_z;
+                    model_rot_sh = {
+                        model_rot.m11 * inv_scale_x, model_rot.m12 * inv_scale_y, model_rot.m13 * inv_scale_z,
+                        model_rot.m21 * inv_scale_x, model_rot.m22 * inv_scale_y, model_rot.m23 * inv_scale_z,
+                        model_rot.m31 * inv_scale_x, model_rot.m32 * inv_scale_y, model_rot.m33 * inv_scale_z};
+                    has_valid_sh_rotation = true;
+                }
+
                 const float3 t = make_float3(m[3], m[7], m[11]);
                 mean3d = make_float3(
                     model_rot.m11 * mean3d.x + model_rot.m12 * mean3d.y + model_rot.m13 * mean3d.z + t.x,
@@ -354,12 +372,9 @@ namespace lfs::rendering::kernels::forward {
         primitive_mean2d[primitive_idx] = mean2d;
         primitive_conic_opacity[primitive_idx] = make_float4(conic, output_opacity);
         float3 view_dir = mean3d - cam_position[0];
-        if (has_transform) {
-            mat3x3 model_rot_inv{};
-            if (invert_mat3(model_rot, model_rot_inv)) {
-                // SH is object-locked: evaluate with view direction in local node space.
-                view_dir = mat3_mul_vec3(model_rot_inv, view_dir);
-            }
+        if (has_transform && has_valid_sh_rotation) {
+            // SH is object-locked by rotation only (matches export transform behavior).
+            view_dir = mat3_transpose_mul_vec3(model_rot_sh, view_dir);
         }
 
         float3 color = convert_sh_to_color_from_dir(
