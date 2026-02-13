@@ -138,25 +138,15 @@ namespace lfs::rendering::kernels::forward {
                                           ? min(max(transform_indices[global_idx], 0), num_transforms - 1)
                                           : 0;
             const float* const m = model_transforms + transform_idx * 16;
-            has_transform = m[0] != 1.0f || m[5] != 1.0f || m[10] != 1.0f ||
-                            m[1] != 0.0f || m[2] != 0.0f || m[3] != 0.0f ||
-                            m[4] != 0.0f || m[6] != 0.0f || m[7] != 0.0f ||
-                            m[8] != 0.0f || m[9] != 0.0f || m[11] != 0.0f;
+            has_transform = lfs::rendering::has_non_identity_transform(m);
             if (has_transform) {
                 model_rot = {m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]};
 
-                using lfs::rendering::ROT_SCALE_EPS;
-                const float scale_x = sqrtf(model_rot.m11 * model_rot.m11 + model_rot.m21 * model_rot.m21 + model_rot.m31 * model_rot.m31);
-                const float scale_y = sqrtf(model_rot.m12 * model_rot.m12 + model_rot.m22 * model_rot.m22 + model_rot.m32 * model_rot.m32);
-                const float scale_z = sqrtf(model_rot.m13 * model_rot.m13 + model_rot.m23 * model_rot.m23 + model_rot.m33 * model_rot.m33);
-                if (scale_x > ROT_SCALE_EPS && scale_y > ROT_SCALE_EPS && scale_z > ROT_SCALE_EPS) {
-                    const float inv_scale_x = 1.0f / scale_x;
-                    const float inv_scale_y = 1.0f / scale_y;
-                    const float inv_scale_z = 1.0f / scale_z;
-                    model_rot_sh = {
-                        model_rot.m11 * inv_scale_x, model_rot.m12 * inv_scale_y, model_rot.m13 * inv_scale_z,
-                        model_rot.m21 * inv_scale_x, model_rot.m22 * inv_scale_y, model_rot.m23 * inv_scale_z,
-                        model_rot.m31 * inv_scale_x, model_rot.m32 * inv_scale_y, model_rot.m33 * inv_scale_z};
+                float rot_sh[9];
+                if (lfs::rendering::extract_rotation_row_major(m, rot_sh)) {
+                    model_rot_sh = {rot_sh[0], rot_sh[1], rot_sh[2],
+                                    rot_sh[3], rot_sh[4], rot_sh[5],
+                                    rot_sh[6], rot_sh[7], rot_sh[8]};
                     has_valid_sh_rotation = true;
                 }
 
