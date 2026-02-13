@@ -240,6 +240,12 @@ class ScenePanel(Panel):
                     and not parent_is_dataset)
 
         is_selected = self._is_node_selected(node)
+        if is_keyframe and not is_selected:
+            kf = node.keyframe_data()
+            if kf:
+                seq = lf.ui.get_sequencer_state()
+                if seq and seq.selected_keyframe == kf.keyframe_index:
+                    is_selected = True
         self._visible_node_order.append(node.name)
 
         icon_size = ICON_SIZE_BASE * scale

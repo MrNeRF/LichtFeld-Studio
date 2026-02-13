@@ -60,6 +60,7 @@ namespace lfs::vis {
         bool dragging_keyframe_ = false;
         size_t dragged_keyframe_index_ = 0;
         float drag_start_time_ = 0.0f;
+        float drag_start_mouse_x_ = 0.0f;
         std::optional<size_t> hovered_keyframe_;
 
         // Multi-selection

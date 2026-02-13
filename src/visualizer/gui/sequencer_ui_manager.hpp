@@ -41,6 +41,7 @@ namespace lfs::vis {
             void renderCameraPath(const ViewportLayout& viewport);
             void renderKeyframeGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void renderContextMenu();
+            void renderKeyframeEditOverlay(const ViewportLayout& viewport);
             void initPipPreview();
             void renderKeyframePreview(const UIContext& ctx);
             void drawPipPreviewWindow(const ViewportLayout& viewport);
@@ -58,6 +59,9 @@ namespace lfs::vis {
             bool keyframe_gizmo_active_ = false;
             glm::vec3 keyframe_pos_before_drag_{0.0f};
             glm::quat keyframe_rot_before_drag_{1.0f, 0.0f, 0.0f, 0.0f};
+
+            float last_frustum_click_time_ = 0.0f;
+            std::optional<size_t> last_frustum_clicked_;
 
             static constexpr int PREVIEW_WIDTH = 320;
             static constexpr int PREVIEW_HEIGHT = 180;

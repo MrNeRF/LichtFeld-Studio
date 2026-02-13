@@ -415,6 +415,7 @@ namespace lfs::python {
         int custom_height = 1080;
         int framerate = 30;
         int quality = 18;
+        int selected_keyframe = -1;
     };
 
     using GetSequencerUIStateCallback = SequencerUIStateData* (*)();

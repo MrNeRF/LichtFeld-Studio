@@ -1532,6 +1532,9 @@ class SequencerUIState:
     @pip_preview_scale.setter
     def pip_preview_scale(self, arg: float, /) -> None: ...
 
+    @property
+    def selected_keyframe(self) -> int: ...
+
 def get_sequencer_state() -> SequencerUIState:
     """Get sequencer UI state for modification"""
 

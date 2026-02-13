@@ -281,6 +281,8 @@ namespace lfs::vis {
             s_state.playback_speed = state.playback_speed;
             s_state.follow_playback = state.follow_playback;
             s_state.pip_preview_scale = state.pip_preview_scale;
+            const auto sel = gm->sequencer().selectedKeyframe();
+            s_state.selected_keyframe = sel.has_value() ? static_cast<int>(*sel) : -1;
             return &s_state;
         });
 

@@ -90,6 +90,15 @@ namespace lfs::vis::gui {
                 rm->setFocalLength(kf->focal_length_mm);
                 rm->markDirty();
             }
+
+            auto* sm = viewer_->getSceneManager();
+            if (sm) {
+                const auto name = std::format("Keyframe {}", e.keyframe_index + 1);
+                auto& scene = sm->getScene();
+                if (scene.getNode(name)) {
+                    ui::NodeSelected{.path = name, .type = "KEYFRAME", .metadata = {}}.emit();
+                }
+            }
         });
 
         cmd::SequencerSelectKeyframe::when([this](const auto& e) {
@@ -113,6 +122,19 @@ namespace lfs::vis::gui {
                     .metadata = {}}
                     .emit();
             }
+        });
+
+        ui::RenderSettingsChanged::when([this](const auto& e) {
+            if (!e.focal_length_mm)
+                return;
+            const auto sel = controller_.selectedKeyframe();
+            if (!sel.has_value())
+                return;
+            auto& timeline = controller_.timeline();
+            if (*sel >= timeline.size())
+                return;
+            timeline.setKeyframeFocalLength(*sel, *e.focal_length_mm);
+            controller_.updateLoopKeyframe();
         });
 
         cmd::SequencerDeleteKeyframe::when([this](const auto& e) {

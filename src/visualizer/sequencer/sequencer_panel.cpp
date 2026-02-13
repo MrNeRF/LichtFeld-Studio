@@ -385,13 +385,15 @@ namespace lfs::vis {
                             selected_keyframes_.insert(i);
                         }
                     } else {
-                        // Single selection
                         selected_keyframes_.clear();
-                        controller_.selectKeyframe(i);
+                        lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = i}.emit();
                         if (!is_first) {
                             dragging_keyframe_ = true;
                             dragged_keyframe_index_ = i;
                             drag_start_time_ = keyframes[i].time;
+                            drag_start_mouse_x_ = mouse.x;
+                        } else {
+                            lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = i}.emit();
                         }
                     }
                 }
@@ -408,6 +410,9 @@ namespace lfs::vis {
                 }
                 controller_.timeline().setKeyframeTime(dragged_keyframe_index_, new_time, false);
             } else {
+                if (std::abs(mouse.x - drag_start_mouse_x_) < 3.0f) {
+                    lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = dragged_keyframe_index_}.emit();
+                }
                 controller_.timeline().sortKeyframes();
                 dragging_keyframe_ = false;
             }
@@ -456,8 +461,7 @@ namespace lfs::vis {
                     lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
                 }
                 if (ImGui::MenuItem("Go to Keyframe")) {
-                    controller_.selectKeyframe(idx);
-                    controller_.seek(keyframes[idx].time);
+                    lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = idx}.emit();
                 }
                 if (ImGui::MenuItem("Edit Time...", nullptr)) {
                     editing_keyframe_time_ = true;

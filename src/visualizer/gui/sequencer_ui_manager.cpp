@@ -95,6 +95,16 @@ namespace lfs::vis::gui {
         renderSequencerPanel(ctx, viewport);
         drawPipPreviewWindow(viewport);
         renderContextMenu();
+
+        using namespace lfs::core::events;
+        if (controller_.hasSelection() &&
+            !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
+            !ImGui::IsAnyItemActive() &&
+            ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            cmd::SequencerGoToKeyframe{.keyframe_index = *controller_.selectedKeyframe()}.emit();
+        }
+
+        renderKeyframeEditOverlay(viewport);
     }
 
     void SequencerUIManager::renderSequencerPanel(const UIContext& /*ctx*/, const ViewportLayout& viewport) {
@@ -240,7 +250,16 @@ namespace lfs::vis::gui {
 
         if (mouse_in_viewport && !ImGui::IsAnyItemHovered()) {
             if (hovered_keyframe.has_value() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver()) {
-                controller_.selectKeyframe(*hovered_keyframe);
+                const float now = static_cast<float>(ImGui::GetTime());
+                if (last_frustum_clicked_ == *hovered_keyframe &&
+                    (now - last_frustum_click_time_) < 0.3f) {
+                    lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = *hovered_keyframe}.emit();
+                    last_frustum_clicked_ = std::nullopt;
+                } else {
+                    lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = *hovered_keyframe}.emit();
+                    last_frustum_click_time_ = now;
+                    last_frustum_clicked_ = *hovered_keyframe;
+                }
             }
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                 context_menu_keyframe_ = hovered_keyframe;
@@ -381,12 +400,11 @@ namespace lfs::vis::gui {
             if (context_menu_keyframe_.has_value() && *context_menu_keyframe_ < timeline.size()) {
                 ImGui::Separator();
                 if (ImGui::MenuItem("Update to Current View", "U")) {
-                    controller_.selectKeyframe(*context_menu_keyframe_);
+                    lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = *context_menu_keyframe_}.emit();
                     lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
                 }
                 if (ImGui::MenuItem("Go to Keyframe")) {
-                    controller_.selectKeyframe(*context_menu_keyframe_);
-                    controller_.seek(timeline.keyframes()[*context_menu_keyframe_].time);
+                    lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = *context_menu_keyframe_}.emit();
                 }
                 if (ImGui::MenuItem(LOC(lichtfeld::Strings::Sequencer::EDIT_FOCAL_LENGTH))) {
                     panel_->openFocalLengthEdit(*context_menu_keyframe_,
@@ -396,11 +414,11 @@ namespace lfs::vis::gui {
                 const bool translate_active = keyframe_gizmo_op_ == ImGuizmo::TRANSLATE;
                 const bool rotate_active = keyframe_gizmo_op_ == ImGuizmo::ROTATE;
                 if (ImGui::MenuItem("Move (Translate)", nullptr, translate_active)) {
-                    controller_.selectKeyframe(*context_menu_keyframe_);
+                    lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = *context_menu_keyframe_}.emit();
                     keyframe_gizmo_op_ = translate_active ? ImGuizmo::OPERATION(0) : ImGuizmo::TRANSLATE;
                 }
                 if (ImGui::MenuItem("Rotate", nullptr, rotate_active)) {
-                    controller_.selectKeyframe(*context_menu_keyframe_);
+                    lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = *context_menu_keyframe_}.emit();
                     keyframe_gizmo_op_ = rotate_active ? ImGuizmo::OPERATION(0) : ImGuizmo::ROTATE;
                 }
                 ImGui::Separator();
@@ -426,7 +444,7 @@ namespace lfs::vis::gui {
                 ImGui::Separator();
                 const bool is_first = (*context_menu_keyframe_ == 0);
                 if (ImGui::MenuItem("Delete Keyframe", "Del", false, !is_first)) {
-                    controller_.selectKeyframe(*context_menu_keyframe_);
+                    lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = *context_menu_keyframe_}.emit();
                     controller_.removeSelectedKeyframe();
                     lfs::core::events::state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
                 }
@@ -594,6 +612,97 @@ namespace lfs::vis::gui {
         ImGui::End();
         ImGui::PopStyleVar(3);
         ImGui::PopStyleColor(2);
+    }
+
+    void SequencerUIManager::renderKeyframeEditOverlay(const ViewportLayout& viewport) {
+        const auto selected = controller_.selectedKeyframe();
+        if (!selected.has_value())
+            return;
+
+        const auto& timeline = controller_.timeline();
+        if (*selected >= timeline.size())
+            return;
+
+        const auto* kf = timeline.getKeyframe(*selected);
+        if (!kf || kf->is_loop_point)
+            return;
+
+        const auto& cam = viewer_->getViewport().camera;
+        const float pos_delta = glm::length(cam.t - kf->position);
+        const glm::quat cam_rot = glm::quat_cast(cam.R);
+        const float dot = std::min(1.0f, std::abs(glm::dot(cam_rot, kf->rotation)));
+        const float rot_delta = glm::degrees(2.0f * std::acos(dot));
+
+        constexpr float POS_THRESHOLD = 0.001f;
+        constexpr float ROT_THRESHOLD = 0.1f;
+        if (pos_delta < POS_THRESHOLD && rot_delta < ROT_THRESHOLD)
+            return;
+
+        const auto& t = theme();
+        constexpr float MARGIN = 16.0f;
+        constexpr float OVERLAY_WIDTH = 200.0f;
+        const ImVec2 window_pos(
+            viewport.pos.x + viewport.size.x - OVERLAY_WIDTH - MARGIN,
+            viewport.pos.y + MARGIN);
+
+        ImGui::SetNextWindowPos(window_pos, ImGuiCond_Always);
+        ImGui::SetNextWindowSize({OVERLAY_WIDTH, 0}, ImGuiCond_Always);
+        ImGui::SetNextWindowBgAlpha(0.9f);
+
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, toU32(t.palette.surface));
+        ImGui::PushStyleColor(ImGuiCol_Border, toU32WithAlpha(t.palette.primary, 0.6f));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, t.sizes.window_rounding);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 2.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {8.0f, 6.0f});
+
+        constexpr ImGuiWindowFlags flags =
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
+            ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_AlwaysAutoResize;
+
+        if (ImGui::Begin("##KeyframeEditOverlay", nullptr, flags)) {
+            const auto label = std::format("Editing Keyframe {}", *selected + 1);
+            ImGui::TextColored(
+                {t.palette.text.x, t.palette.text.y, t.palette.text.z, 0.9f},
+                "%s", label.c_str());
+
+            ImGui::SameLine(OVERLAY_WIDTH - 28.0f);
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, toU32WithAlpha(t.palette.text_dim, 0.3f));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, toU32WithAlpha(t.palette.text_dim, 0.5f));
+            if (ImGui::SmallButton("X##close_kf_edit")) {
+                controller_.deselectKeyframe();
+            }
+            ImGui::PopStyleColor(3);
+
+            ImGui::TextColored(
+                {t.palette.text_dim.x, t.palette.text_dim.y, t.palette.text_dim.z, 0.7f},
+                "%.3fm  %.1f\xC2\xB0", pos_delta, rot_delta);
+
+            ImGui::PushStyleColor(ImGuiCol_Button, t.primary_u32());
+            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, toU32(lighten(t.palette.primary, 0.1f)));
+            ImGui::PushStyleColor(ImGuiCol_ButtonActive, toU32(lighten(t.palette.primary, 0.2f)));
+
+            if (ImGui::Button("Apply (U)", {88, 0})) {
+                lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+            }
+
+            ImGui::PopStyleColor(3);
+
+            ImGui::SameLine();
+            if (ImGui::Button("Revert (Esc)", {88, 0})) {
+                lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = *selected}.emit();
+            }
+        }
+        ImGui::End();
+        ImGui::PopStyleVar(3);
+        ImGui::PopStyleColor(2);
+
+        if (!ImGui::IsAnyItemActive() &&
+            !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
+            ImGui::IsKeyPressed(ImGuiKey_U)) {
+            lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+        }
     }
 
 } // namespace lfs::vis::gui
