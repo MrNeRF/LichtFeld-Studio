@@ -30,6 +30,7 @@ namespace lfs::vis {
         constexpr float MAJOR_TICK_HEIGHT = 8.0f;
         constexpr float MINOR_TICK_HEIGHT = 4.0f;
         constexpr float DOUBLE_CLICK_TIME = 0.3f;
+        constexpr float DRAG_THRESHOLD_PX = 3.0f;
 
         // Loop marker (infinity symbol)
         constexpr float LOOP_MARKER_SCALE = 0.7f;
@@ -410,7 +411,7 @@ namespace lfs::vis {
                 }
                 controller_.timeline().setKeyframeTime(dragged_keyframe_index_, new_time, false);
             } else {
-                if (std::abs(mouse.x - drag_start_mouse_x_) < 3.0f) {
+                if (std::abs(mouse.x - drag_start_mouse_x_) < DRAG_THRESHOLD_PX) {
                     lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = dragged_keyframe_index_}.emit();
                 }
                 controller_.timeline().sortKeyframes();

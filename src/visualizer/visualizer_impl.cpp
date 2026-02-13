@@ -263,18 +263,24 @@ namespace lfs::vis {
                     gm->sequencer().setPlaybackSpeed(speed);
             });
 
-        // Sequencer UI state callback - provides read access to C++ state
-        // Returns a copy of the current C++ state for Python to read
-        // Note: Python modifications require calling set_sequencer_state() to persist
         python::set_sequencer_ui_state_callback([]() -> python::SequencerUIStateData* {
             auto* gm = python::get_gui_manager();
             if (!gm)
                 return nullptr;
 
-            // Return address of the actual C++ state (first 6 fields match layout)
-            // This works because SequencerUIStateData has compatible layout for the exposed fields
             auto& state = gm->getSequencerUIState();
             static python::SequencerUIStateData s_state;
+            static bool initialized = false;
+
+            if (initialized) {
+                state.show_camera_path = s_state.show_camera_path;
+                state.snap_to_grid = s_state.snap_to_grid;
+                state.snap_interval = s_state.snap_interval;
+                state.playback_speed = s_state.playback_speed;
+                state.follow_playback = s_state.follow_playback;
+                state.pip_preview_scale = s_state.pip_preview_scale;
+            }
+
             s_state.show_camera_path = state.show_camera_path;
             s_state.snap_to_grid = state.snap_to_grid;
             s_state.snap_interval = state.snap_interval;
@@ -283,6 +289,7 @@ namespace lfs::vis {
             s_state.pip_preview_scale = state.pip_preview_scale;
             const auto sel = gm->sequencer().selectedKeyframe();
             s_state.selected_keyframe = sel.has_value() ? static_cast<int>(*sel) : -1;
+            initialized = true;
             return &s_state;
         });
 

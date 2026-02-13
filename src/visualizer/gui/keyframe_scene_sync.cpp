@@ -63,6 +63,18 @@ namespace lfs::vis::gui {
         }
     }
 
+    void KeyframeSceneSync::emitNodeSelectedForKeyframe(const size_t index) {
+        auto* sm = viewer_->getSceneManager();
+        if (!sm)
+            return;
+
+        const auto name = std::format("Keyframe {}", index + 1);
+        auto& scene = sm->getScene();
+        if (scene.getNode(name)) {
+            lfs::core::events::ui::NodeSelected{.path = name, .type = "KEYFRAME", .metadata = {}}.emit();
+        }
+    }
+
     void KeyframeSceneSync::setupEvents() {
         using namespace lfs::core::events;
 
@@ -91,14 +103,7 @@ namespace lfs::vis::gui {
                 rm->markDirty();
             }
 
-            auto* sm = viewer_->getSceneManager();
-            if (sm) {
-                const auto name = std::format("Keyframe {}", e.keyframe_index + 1);
-                auto& scene = sm->getScene();
-                if (scene.getNode(name)) {
-                    ui::NodeSelected{.path = name, .type = "KEYFRAME", .metadata = {}}.emit();
-                }
-            }
+            emitNodeSelectedForKeyframe(e.keyframe_index);
         });
 
         cmd::SequencerSelectKeyframe::when([this](const auto& e) {
@@ -107,21 +112,7 @@ namespace lfs::vis::gui {
                 return;
 
             controller_.selectKeyframe(e.keyframe_index);
-
-            auto* sm = viewer_->getSceneManager();
-            if (!sm)
-                return;
-
-            const auto name = std::format("Keyframe {}", e.keyframe_index + 1);
-            auto& scene = sm->getScene();
-            const auto* node = scene.getNode(name);
-            if (node) {
-                ui::NodeSelected{
-                    .path = name,
-                    .type = "KEYFRAME",
-                    .metadata = {}}
-                    .emit();
-            }
+            emitNodeSelectedForKeyframe(e.keyframe_index);
         });
 
         ui::RenderSettingsChanged::when([this](const auto& e) {

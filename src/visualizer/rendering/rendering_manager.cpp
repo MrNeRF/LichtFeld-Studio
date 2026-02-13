@@ -988,7 +988,8 @@ namespace lfs::vis {
             .crop_box = std::nullopt,
             .point_cloud_mode = settings_.point_cloud_mode,
             .voxel_size = settings_.voxel_size,
-            .gut = false,
+            .gut = settings_.gut,
+            .equirectangular = settings_.equirectangular,
             .show_rings = false,
             .ring_width = 0.0f,
             .show_center_markers = false};

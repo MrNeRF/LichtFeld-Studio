@@ -26,6 +26,8 @@ namespace lfs::vis::gui {
         void syncToSceneGraph();
 
     private:
+        void emitNodeSelectedForKeyframe(size_t index);
+
         SequencerController& controller_;
         VisualizerImpl* viewer_;
     };

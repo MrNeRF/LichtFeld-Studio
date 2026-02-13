@@ -95,15 +95,6 @@ namespace lfs::vis::gui {
         renderSequencerPanel(ctx, viewport);
         drawPipPreviewWindow(viewport);
         renderContextMenu();
-
-        using namespace lfs::core::events;
-        if (controller_.hasSelection() &&
-            !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
-            !ImGui::IsAnyItemActive() &&
-            ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-            cmd::SequencerGoToKeyframe{.keyframe_index = *controller_.selectedKeyframe()}.emit();
-        }
-
         renderKeyframeEditOverlay(viewport);
     }
 
@@ -252,7 +243,7 @@ namespace lfs::vis::gui {
             if (hovered_keyframe.has_value() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver()) {
                 const float now = static_cast<float>(ImGui::GetTime());
                 if (last_frustum_clicked_ == *hovered_keyframe &&
-                    (now - last_frustum_click_time_) < 0.3f) {
+                    (now - last_frustum_click_time_) < ImGui::GetIO().MouseDoubleClickTime) {
                     lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = *hovered_keyframe}.emit();
                     last_frustum_clicked_ = std::nullopt;
                 } else {
@@ -630,7 +621,7 @@ namespace lfs::vis::gui {
         const auto& cam = viewer_->getViewport().camera;
         const float pos_delta = glm::length(cam.t - kf->position);
         const glm::quat cam_rot = glm::quat_cast(cam.R);
-        const float dot = std::min(1.0f, std::abs(glm::dot(cam_rot, kf->rotation)));
+        const float dot = std::clamp(std::abs(glm::dot(cam_rot, kf->rotation)), 0.0f, 1.0f);
         const float rot_delta = glm::degrees(2.0f * std::acos(dot));
 
         constexpr float POS_THRESHOLD = 0.001f;
@@ -638,9 +629,12 @@ namespace lfs::vis::gui {
         if (pos_delta < POS_THRESHOLD && rot_delta < ROT_THRESHOLD)
             return;
 
-        const auto& t = theme();
         constexpr float MARGIN = 16.0f;
         constexpr float OVERLAY_WIDTH = 200.0f;
+        constexpr float CLOSE_BTN_OFFSET = 28.0f;
+        constexpr const char* DEG_SIGN = "\xC2\xB0";
+
+        const auto& t = theme();
         const ImVec2 window_pos(
             viewport.pos.x + viewport.size.x - OVERLAY_WIDTH - MARGIN,
             viewport.pos.y + MARGIN);
@@ -666,7 +660,7 @@ namespace lfs::vis::gui {
                 {t.palette.text.x, t.palette.text.y, t.palette.text.z, 0.9f},
                 "%s", label.c_str());
 
-            ImGui::SameLine(OVERLAY_WIDTH - 28.0f);
+            ImGui::SameLine(OVERLAY_WIDTH - CLOSE_BTN_OFFSET);
             ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, toU32WithAlpha(t.palette.text_dim, 0.3f));
             ImGui::PushStyleColor(ImGuiCol_ButtonActive, toU32WithAlpha(t.palette.text_dim, 0.5f));
@@ -677,7 +671,7 @@ namespace lfs::vis::gui {
 
             ImGui::TextColored(
                 {t.palette.text_dim.x, t.palette.text_dim.y, t.palette.text_dim.z, 0.7f},
-                "%.3fm  %.1f\xC2\xB0", pos_delta, rot_delta);
+                "%.3fm  %.1f%s", pos_delta, rot_delta, DEG_SIGN);
 
             ImGui::PushStyleColor(ImGuiCol_Button, t.primary_u32());
             ImGui::PushStyleColor(ImGuiCol_ButtonHovered, toU32(lighten(t.palette.primary, 0.1f)));
@@ -698,10 +692,15 @@ namespace lfs::vis::gui {
         ImGui::PopStyleVar(3);
         ImGui::PopStyleColor(2);
 
+        using namespace lfs::core::events;
         if (!ImGui::IsAnyItemActive() &&
-            !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
-            ImGui::IsKeyPressed(ImGuiKey_U)) {
-            lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
+            !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
+            if (ImGui::IsKeyPressed(ImGuiKey_U)) {
+                cmd::SequencerUpdateKeyframe{}.emit();
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+                cmd::SequencerGoToKeyframe{.keyframe_index = *selected}.emit();
+            }
         }
     }
 
