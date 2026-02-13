@@ -268,6 +268,7 @@ namespace lfs::vis {
             if (!gm)
                 return nullptr;
 
+            assert(gm == python::get_gui_manager() && "single GUI manager expected");
             auto& state = gm->getSequencerUIState();
             static python::SequencerUIStateData s_state;
             static bool initialized = false;
