@@ -19,6 +19,7 @@
 #include "theme/theme.hpp"
 #include "visualizer_impl.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <format>
 #include <glm/gtc/type_ptr.hpp>

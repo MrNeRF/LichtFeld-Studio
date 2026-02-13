@@ -458,7 +458,7 @@ namespace lfs::vis {
                 const bool is_first = (idx == 0);
 
                 if (ImGui::MenuItem("Update to Current View", "U")) {
-                    controller_.selectKeyframe(idx);
+                    lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = idx}.emit();
                     lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
                 }
                 if (ImGui::MenuItem("Go to Keyframe")) {
