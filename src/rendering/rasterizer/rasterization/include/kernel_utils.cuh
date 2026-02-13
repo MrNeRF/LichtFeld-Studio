@@ -46,23 +46,6 @@ namespace lfs::rendering::kernels {
         return result;
     }
 
-    __device__ inline float3 convert_sh_to_color(
-        const float3* sh_coefficients_0,
-        const float3* sh_coefficients_rest,
-        const float3& position,
-        const float3& cam_position,
-        const uint primitive_idx,
-        const uint active_sh_bases,
-        const uint total_bases_sh_rest) {
-        return convert_sh_to_color_from_dir(
-            sh_coefficients_0,
-            sh_coefficients_rest,
-            position - cam_position,
-            primitive_idx,
-            active_sh_bases,
-            total_bases_sh_rest);
-    }
-
     // based on https://github.com/r4dl/StopThePop-Rasterization/blob/d8cad09919ff49b11be3d693d1e71fa792f559bb/cuda_rasterizer/stopthepop/stopthepop_common.cuh#L131
     __device__ inline bool will_primitive_contribute(
         const float2& mean,

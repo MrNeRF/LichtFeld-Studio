@@ -8,6 +8,7 @@
 #include "helper_math.h"
 #include "kernel_utils.cuh"
 #include "rasterization_config.h"
+#include "rasterizer_constants.cuh"
 #include "utils.h"
 #include <cooperative_groups.h>
 
@@ -144,7 +145,7 @@ namespace lfs::rendering::kernels::forward {
             if (has_transform) {
                 model_rot = {m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]};
 
-                constexpr float ROT_SCALE_EPS = 1e-8f;
+                using lfs::rendering::ROT_SCALE_EPS;
                 const float scale_x = sqrtf(model_rot.m11 * model_rot.m11 + model_rot.m21 * model_rot.m21 + model_rot.m31 * model_rot.m31);
                 const float scale_y = sqrtf(model_rot.m12 * model_rot.m12 + model_rot.m22 * model_rot.m22 + model_rot.m32 * model_rot.m32);
                 const float scale_z = sqrtf(model_rot.m13 * model_rot.m13 + model_rot.m23 * model_rot.m23 + model_rot.m33 * model_rot.m33);

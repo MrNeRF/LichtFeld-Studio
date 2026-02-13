@@ -8,6 +8,7 @@
 #include "Common.h"
 #include "SphericalHarmonics.h"
 #include "Utils.cuh"
+#include "rasterizer_constants.cuh"
 
 namespace gsplat_fwd {
 
@@ -525,7 +526,7 @@ namespace gsplat_fwd {
     __device__ inline bool extract_rotation_row_major(
         const float* __restrict__ m,
         float* __restrict__ rot_out) {
-        constexpr float ROT_SCALE_EPS = 1e-8f;
+        using lfs::rendering::ROT_SCALE_EPS;
         const float scale_x = sqrtf(m[0] * m[0] + m[4] * m[4] + m[8] * m[8]);
         const float scale_y = sqrtf(m[1] * m[1] + m[5] * m[5] + m[9] * m[9]);
         const float scale_z = sqrtf(m[2] * m[2] + m[6] * m[6] + m[10] * m[10]);

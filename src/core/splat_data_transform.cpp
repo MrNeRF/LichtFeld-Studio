@@ -38,6 +38,7 @@ namespace lfs::core {
 
         constexpr double SH_SOLVE_EPS = 1e-12;
         constexpr float ROTATION_EPS = 1e-6f;
+        constexpr int SH_FIT_SAMPLE_COUNT = 96;
 
         [[nodiscard]] bool has_significant_rotation(const glm::quat& q) {
             return std::abs(std::abs(q.w) - 1.0f) > ROTATION_EPS ||
@@ -99,7 +100,7 @@ namespace lfs::core {
             }
         }
 
-        [[nodiscard]] bool solve_linear_system(std::vector<double>& a, std::vector<double>& b, const int n, const int rhs_cols) {
+        [[nodiscard]] bool solve_linear_system(std::vector<double> a, std::vector<double>& b, const int n, const int rhs_cols) {
             for (int col = 0; col < n; ++col) {
                 int pivot_row = col;
                 double pivot_abs = std::abs(a[col * n + col]);
@@ -158,7 +159,7 @@ namespace lfs::core {
             }
 
             const int basis_count = 2 * band + 1;
-            const auto sample_dirs = fibonacci_sphere_dirs(96);
+            const auto sample_dirs = fibonacci_sphere_dirs(SH_FIT_SAMPLE_COUNT);
 
             const glm::dmat3 rot(rotation_local_to_world);
             const glm::dmat3 rot_inv = glm::inverse(rot);
@@ -179,9 +180,8 @@ namespace lfs::core {
                 }
             }
 
-            std::vector<double> lhs = wtw;
             std::vector<double> rhs = wtl; // Solves for K^T in W * K^T = L
-            if (!solve_linear_system(lhs, rhs, basis_count, basis_count)) {
+            if (!solve_linear_system(std::move(wtw), rhs, basis_count, basis_count)) {
                 return std::nullopt;
             }
 
@@ -230,15 +230,11 @@ namespace lfs::core {
                     device);
 
                 const Tensor band_coeffs = splat_data.shN().slice(1, offset, offset + coeff_count).contiguous();
-                std::vector<Tensor> rotated_channels;
-                rotated_channels.reserve(3);
-
-                for (int ch = 0; ch < 3; ++ch) {
-                    const Tensor channel_coeffs = band_coeffs.slice(2, ch, ch + 1).squeeze(2);
-                    rotated_channels.push_back(channel_coeffs.mm(coeff_matrix_tensor).unsqueeze(2));
-                }
-
-                const Tensor rotated_band = Tensor::cat(rotated_channels, 2).contiguous();
+                // band_coeffs: [N, coeff_count, 3] → permute to [3, N, coeff_count]
+                // matmul broadcasts coeff_matrix [cc, cc] across batch dim 3
+                const Tensor channels_first = band_coeffs.permute({2, 0, 1});
+                const Tensor rotated = channels_first.matmul(coeff_matrix_tensor);
+                const Tensor rotated_band = rotated.permute({1, 2, 0});
                 splat_data.shN().slice(1, offset, offset + coeff_count).copy_from(rotated_band);
             }
 

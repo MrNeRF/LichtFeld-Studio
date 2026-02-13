@@ -45,6 +45,7 @@ target_include_directories(gsplat_fwd
         ${CUDAToolkit_INCLUDE_DIRS}
         PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../utils
 )
 
 target_link_libraries(gsplat_fwd
