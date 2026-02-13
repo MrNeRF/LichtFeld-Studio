@@ -609,6 +609,7 @@ namespace lfs::vis::gui {
                     request.sh_degree = render_settings.sh_degree;
                     request.scaling_modifier = render_settings.scaling_modifier;
                     request.antialiasing = true;
+                    request.equirectangular = render_settings.equirectangular;
 
                     auto render_result = engine->renderGaussians(*splat_ptr, request);
                     if (!render_result.has_value() || !render_result->valid || !render_result->image) {
