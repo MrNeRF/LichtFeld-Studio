@@ -100,7 +100,14 @@ namespace gsplat_fwd {
         // Interpolate to *center* shutter pose as single per-Gaussian camera pose
         const auto shutter_pose = interpolate_shutter_pose(0.5f, rs_params);
         const vec3 mean_c = glm::rotate(shutter_pose.q, mean) + shutter_pose.t;
-        if ((mean_c.z < near_plane && !is_equirect) || mean_c.z > far_plane) {
+        if (!isfinite(mean_c.x) || !isfinite(mean_c.y) || !isfinite(mean_c.z)) {
+            radii[idx * 2] = 0;
+            radii[idx * 2 + 1] = 0;
+            return;
+        }
+        const float mean_c_dist = glm::length(mean_c);
+        const float clip_depth = is_equirect ? mean_c_dist : mean_c.z;
+        if ((mean_c.z < near_plane && !is_equirect) || clip_depth > far_plane) {
             radii[idx * 2] = 0;
             radii[idx * 2 + 1] = 0;
             return;
@@ -182,7 +189,10 @@ namespace gsplat_fwd {
         }
 
         auto [mean2d, covar2d, valid_ut] = image_gaussian_return;
-        if (!valid_ut) {
+        if (!valid_ut ||
+            !isfinite(mean2d.x) || !isfinite(mean2d.y) ||
+            !isfinite(covar2d[0][0]) || !isfinite(covar2d[0][1]) ||
+            !isfinite(covar2d[1][0]) || !isfinite(covar2d[1][1])) {
             radii[idx * 2] = 0;
             radii[idx * 2 + 1] = 0;
             return;
@@ -190,7 +200,7 @@ namespace gsplat_fwd {
 
         float compensation;
         float det = add_blur(eps2d, covar2d, compensation);
-        if (det <= 0.f) {
+        if (!isfinite(det) || det <= 0.f || !isfinite(compensation)) {
             radii[idx * 2] = 0;
             radii[idx * 2 + 1] = 0;
             return;
@@ -221,6 +231,20 @@ namespace gsplat_fwd {
         float r1 = extend * sqrtf(v1);
         float radius_x = ceilf(min(extend * sqrtf(covar2d[0][0]), r1));
         float radius_y = ceilf(min(extend * sqrtf(covar2d[1][1]), r1));
+        if (!isfinite(radius_x) || !isfinite(radius_y)) {
+            radii[idx * 2] = 0;
+            radii[idx * 2 + 1] = 0;
+            return;
+        }
+        radius_x = min(radius_x, static_cast<float>(image_width));
+        radius_y = min(radius_y, static_cast<float>(image_height));
+        if (is_equirect) {
+            const float image_height_f = static_cast<float>(image_height);
+            // Prevent a single splat from spanning both poles, which can appear
+            // as bottom-to-top wrapping.
+            const float max_pole_radius_y = 0.49f * image_height_f;
+            radius_y = min(radius_y, max_pole_radius_y);
+        }
 
         if (radius_x <= radius_clip && radius_y <= radius_clip) {
             radii[idx * 2] = 0;
@@ -249,7 +273,7 @@ namespace gsplat_fwd {
         // Depth is used as the tile sort key. For equirectangular projection,
         // z changes sign across ±90° azimuth, which causes ordering discontinuities.
         // Use radial camera-space distance so the sort key stays positive/continuous.
-        depths[idx] = is_equirect ? glm::length(mean_c) : mean_c.z;
+        depths[idx] = is_equirect ? mean_c_dist : mean_c.z;
         conics[idx * 3] = covar2d_inv[0][0];
         conics[idx * 3 + 1] = covar2d_inv[0][1];
         conics[idx * 3 + 2] = covar2d_inv[1][1];

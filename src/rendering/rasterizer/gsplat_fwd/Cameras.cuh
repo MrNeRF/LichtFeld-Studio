@@ -292,6 +292,8 @@ struct BaseCameraModel {
         ShutterType shutter_type;
     };
 
+    inline __device__ float get_wrap_period_x() const { return 0.0f; }
+
     // Function to compute the relative frame time for a given image point based
     // on the shutter type
     inline __device__ auto
@@ -1013,6 +1015,10 @@ struct EquirectangularCameraModel : BaseCameraModel<EquirectangularCameraModel> 
 
     Parameters parameters;
 
+    inline __device__ float get_wrap_period_x() const {
+        return static_cast<float>(parameters.resolution[0]);
+    }
+
     inline __device__ auto camera_ray_to_image_point(glm::fvec3 const& cam_ray, float margin_factor) const -> typename Base::ImagePointReturn {
         auto azimuth = std::atan2(cam_ray.x, cam_ray.z);
         auto elevation = std::asin(cam_ray.y / length(cam_ray));
@@ -1313,6 +1319,19 @@ world_gaussian_to_image_gaussian_unscented_transform_shutter_pose(
         image_points[i] = {image_point.x, image_point.y};
 
         image_mean += sigma_points.weights_mean[i] * image_points[i];
+    }
+
+    const float wrap_period = camera_model.get_wrap_period_x();
+    if (wrap_period > 0.0f) {
+        const float inv_period = 1.0f / wrap_period;
+        const float ref_x = image_points[0].x;
+        image_mean = glm::fvec2{0};
+        for (auto i = 0u; i < std::size(image_points); ++i) {
+            float dx = image_points[i].x - ref_x;
+            dx -= wrap_period * nearbyintf(dx * inv_period);
+            image_points[i].x = ref_x + dx;
+            image_mean += sigma_points.weights_mean[i] * image_points[i];
+        }
     }
 
     if (!valid) {
