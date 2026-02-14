@@ -296,6 +296,8 @@ namespace lfs::training {
 
         std::unique_ptr<ISparsityOptimizer> sparsity_optimizer_;
 
+        // Reused workspace for SSIM-based densification error maps (MCMC)
+        lfs::training::kernels::SSIMWorkspace densification_ssim_workspace_;
         lfs::training::kernels::MaskedFusedL1SSIMWorkspace masked_fused_workspace_;
 
         // Metrics evaluator - handles all evaluation logic

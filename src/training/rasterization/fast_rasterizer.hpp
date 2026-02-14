@@ -74,7 +74,8 @@ namespace lfs::training {
         const lfs::core::Tensor& grad_image,
         lfs::core::SplatData& gaussian_model,
         AdamOptimizer& optimizer,
-        const lfs::core::Tensor& grad_alpha_extra = {});
+        const lfs::core::Tensor& grad_alpha_extra = {},
+        const lfs::core::Tensor& pixel_error_map = {});
 
     // Convenience wrapper for inference (no backward needed)
     inline RenderOutput fast_rasterize(

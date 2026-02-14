@@ -230,6 +230,7 @@ namespace fast_lfs::rasterization {
 
     BackwardOutputs backward_raw(
         float* densification_info_ptr,
+        const float* densification_error_map_ptr,
         const float* grad_image_ptr,
         const float* grad_alpha_ptr,
         const float* image_ptr,
@@ -290,6 +291,7 @@ namespace fast_lfs::rasterization {
 
         // Optional pointer
         CHECK_CUDA_PTR_OPTIONAL(densification_info_ptr, "densification_info_ptr");
+        CHECK_CUDA_PTR_OPTIONAL(densification_error_map_ptr, "densification_error_map_ptr");
         CHECK_CUDA_PTR_OPTIONAL(grad_w2c_ptr, "grad_w2c_ptr");
 
         // Validate forward context
@@ -342,6 +344,7 @@ namespace fast_lfs::rasterization {
         try {
             // Call the actual backward implementation
             backward(
+                densification_error_map_ptr,
                 grad_image_ptr,
                 grad_alpha_ptr,
                 image_ptr,
@@ -470,7 +473,7 @@ namespace fast_lfs::rasterization {
 
             // Backward pass compiles backward kernels (also releases arena)
             backward_raw(
-                nullptr, grad_image, grad_alpha, image, alpha,
+                nullptr, nullptr, grad_image, grad_alpha, image, alpha,
                 means, scales, rotations, opacities, nullptr, w2c, cam_pos, ctx,
                 grad_means, grad_scales, grad_rotations, grad_opacities,
                 grad_sh0, nullptr, nullptr,

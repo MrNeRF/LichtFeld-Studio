@@ -49,6 +49,11 @@ namespace lfs::training {
         const size_t capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap)
                                                      : static_cast<size_t>(_splat_data->size());
         _free_mask = lfs::core::Tensor::zeros_bool({capacity}, _splat_data->means().device());
+
+        if (_params->adc_use_pixel_error && _params->gut) {
+            LOG_WARN("ADC pixel-error densification is currently only implemented for fast rasterizer mode; "
+                     "falling back to gradient score because `gut=true`.");
+        }
     }
 
     bool ADC::is_refining(int iter) const {
@@ -360,27 +365,32 @@ namespace lfs::training {
     void ADC::grow_gs(int iter) {
         lfs::core::Tensor numer = _splat_data->_densification_info[1];
         lfs::core::Tensor denom = _splat_data->_densification_info[0];
-        const lfs::core::Tensor grads = numer / denom.clamp_min(1.0f);
+        const bool use_pixel_error_score = _params->adc_use_pixel_error && !_params->gut;
+        const lfs::core::Tensor score = use_pixel_error_score
+                                            ? (numer / denom.clamp_min(1e-6f))
+                                            : (numer / denom.clamp_min(1.0f));
 
-        lfs::core::Tensor is_grad_high = grads > _params->grad_threshold;
+        lfs::core::Tensor is_score_high = use_pixel_error_score
+                                              ? (score > _params->adc_error_threshold)
+                                              : (score > _params->grad_threshold);
 
         // Exclude free slots from consideration
         const size_t current_size = static_cast<size_t>(_splat_data->size());
         if (_free_mask.is_valid() && current_size > 0) {
             auto active_free_mask = _free_mask.slice(0, 0, current_size);
             auto is_active = active_free_mask.logical_not(); // true = slot is active (not free)
-            is_grad_high = is_grad_high.logical_and(is_active);
+            is_score_high = is_score_high.logical_and(is_active);
         }
 
         // Get max along last dimension
         const lfs::core::Tensor max_values = _splat_data->get_scaling().max(-1, false);
         const lfs::core::Tensor is_small = max_values <= _params->grow_scale3d * _splat_data->get_scene_scale();
-        lfs::core::Tensor is_duplicated = is_grad_high.logical_and(is_small);
+        lfs::core::Tensor is_duplicated = is_score_high.logical_and(is_small);
 
         auto num_duplicates = static_cast<int64_t>(is_duplicated.sum_scalar());
 
         const lfs::core::Tensor is_large = is_small.logical_not();
-        lfs::core::Tensor is_split = is_grad_high.logical_and(is_large);
+        lfs::core::Tensor is_split = is_score_high.logical_and(is_large);
         auto num_split = static_cast<int64_t>(is_split.sum_scalar());
 
         // Enforce max_cap: limit growth to stay within capacity
@@ -422,7 +432,13 @@ namespace lfs::training {
             }
         }
 
-        LOG_DEBUG("grow_gs(): {} duplicates, {} splits", num_duplicates, num_split);
+        if (use_pixel_error_score) {
+            LOG_DEBUG("grow_gs(error): {} duplicates, {} splits (threshold={})",
+                      num_duplicates, num_split, _params->adc_error_threshold);
+        } else {
+            LOG_DEBUG("grow_gs(gradient): {} duplicates, {} splits (threshold={})",
+                      num_duplicates, num_split, _params->grad_threshold);
+        }
 
         // First duplicate
         if (num_duplicates > 0) {

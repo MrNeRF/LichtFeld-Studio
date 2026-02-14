@@ -1113,6 +1113,10 @@ namespace lfs::training {
                                              iter >= params_.optimization.ppisp_controller_activation_step &&
                                              ppisp_cam_idx >= 0 &&
                                              ppisp_cam_idx < ppisp_controller_pool_->num_cameras();
+            const bool use_pixel_error_densification =
+                !params_.optimization.gut &&
+                ((params_.optimization.strategy == "adc" && params_.optimization.adc_use_pixel_error) ||
+                 params_.optimization.strategy == "mcmc");
 
             // Loop over tiles (row-major order)
             for (int tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
@@ -1349,6 +1353,50 @@ namespace lfs::training {
                     lfs::core::Tensor tile_loss;
                     lfs::core::Tensor tile_grad;
                     lfs::core::Tensor tile_grad_alpha;
+                    lfs::core::Tensor tile_error_map;
+                    lfs::core::Tensor mask_tile;
+                    const bool use_ssim_error_densification = params_.optimization.strategy == "mcmc";
+
+                    if (use_pixel_error_densification) {
+                        if (use_ssim_error_densification) {
+                            lfs::core::Tensor pred_chw = corrected_image;
+                            lfs::core::Tensor gt_chw = gt_tile;
+
+                            if (pred_chw.ndim() == 3 && pred_chw.shape()[0] == 3 &&
+                                gt_chw.ndim() == 3 && gt_chw.shape()[0] == 3) {
+                                // Already CHW.
+                            } else if (pred_chw.ndim() == 3 && pred_chw.shape()[2] == 3 &&
+                                       gt_chw.ndim() == 3 && gt_chw.shape()[2] == 3) {
+                                pred_chw = pred_chw.permute({2, 0, 1}).contiguous();
+                                gt_chw = gt_chw.permute({2, 0, 1}).contiguous();
+                            } else {
+                                throw std::runtime_error("MCMC densification requires RGB tensors in CHW or HWC layout.");
+                            }
+
+                            auto [ssim_value, ssim_ctx] = lfs::training::kernels::ssim_forward(
+                                pred_chw, gt_chw, densification_ssim_workspace_, false);
+                            (void)ssim_value;
+                            (void)ssim_ctx;
+
+                            // SSIM map shape: [1, 3, H, W], convert to per-pixel error E(u)=1-SSIM(u).
+                            const lfs::core::Tensor ssim_map = densification_ssim_workspace_.ssim_map;
+                            tile_error_map = (lfs::core::Tensor::ones_like(ssim_map) - ssim_map)
+                                                 .mean({1}, false)
+                                                 .squeeze(0)
+                                                 .clamp_min(0.0f)
+                                                 .contiguous();
+                        } else {
+                            const lfs::core::Tensor abs_diff = (corrected_image - gt_tile).abs();
+                            if (abs_diff.ndim() == 3 && abs_diff.shape()[0] == 3) {
+                                tile_error_map = abs_diff.mean({0}, false);
+                            } else if (abs_diff.ndim() == 3 && abs_diff.shape()[2] == 3) {
+                                tile_error_map = abs_diff.mean({2}, false);
+                            } else {
+                                tile_error_map = abs_diff;
+                            }
+                            tile_error_map = tile_error_map.contiguous();
+                        }
+                    }
 
                     const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None &&
                                           (cam->has_mask() || (params_.optimization.use_alpha_as_mask && scene_ && scene_->imagesHaveAlpha()));
@@ -1364,10 +1412,16 @@ namespace lfs::training {
                                 params_.optimization.mask_threshold);
                         }
 
-                        lfs::core::Tensor mask_tile = mask;
+                        mask_tile = mask;
                         if (num_tiles > 1 && mask.ndim() == 2) {
                             auto tile_h = mask.slice(0, tile_y_offset, tile_y_offset + tile_height);
                             mask_tile = tile_h.slice(1, tile_x_offset, tile_x_offset + tile_width);
+                        }
+
+                        if (use_pixel_error_densification &&
+                            (params_.optimization.mask_mode == lfs::core::param::MaskMode::Segment ||
+                             params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore)) {
+                            tile_error_map = (tile_error_map * mask_tile).contiguous();
                         }
 
                         auto result = compute_photometric_loss_with_mask(
@@ -1422,7 +1476,8 @@ namespace lfs::training {
                                                   strategy_->get_model(), strategy_->get_optimizer());
                     } else {
                         fast_rasterize_backward(*fast_ctx, raster_grad, strategy_->get_model(),
-                                                strategy_->get_optimizer(), tile_grad_alpha);
+                                                strategy_->get_optimizer(), tile_grad_alpha,
+                                                use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{});
                     }
                     nvtxRangePop();
                 }

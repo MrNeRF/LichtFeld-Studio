@@ -817,9 +817,9 @@ namespace lfs::training::mcmc {
      * 4. Outputs the global index and directly gathers opacity/scales
      */
     // Block-cooperative reduction kernel (ZERO allocations, uses only shared memory)
-    // Computes sum of opacities[alive_indices] using shared memory
-    __global__ void reduce_opacities_kernel(
-        const float* __restrict__ opacities,
+    // Computes sum of sampling_weights[alive_indices] using shared memory
+    __global__ void reduce_weights_kernel(
+        const float* __restrict__ sampling_weights,
         const int64_t* __restrict__ alive_indices,
         size_t n_alive,
         float* __restrict__ partial_sums,
@@ -835,7 +835,7 @@ namespace lfs::training::mcmc {
         if (idx < n_alive) {
             int64_t global_i = alive_indices[idx];
             if (global_i >= 0 && global_i < static_cast<int64_t>(N)) {
-                sum = opacities[global_i];
+                sum = sampling_weights[global_i];
             }
         }
         sdata[tid] = sum;
@@ -909,6 +909,7 @@ namespace lfs::training::mcmc {
     }
 
     void launch_multinomial_sample_and_gather(
+        const float* sampling_weights,
         const float* opacities,
         const float* scaling_raw, // OPTIMIZATION: Takes raw scaling, kernel applies exp() inline
         const int64_t* alive_indices,
@@ -936,8 +937,8 @@ namespace lfs::training::mcmc {
         cudaMallocAsync(&d_partial_sums, blocks * sizeof(float), cuda_stream);
 
         // Launch block-level reduction
-        reduce_opacities_kernel<<<blocks, threads, shared_mem_size, cuda_stream>>>(
-            opacities, alive_indices, n_alive, d_partial_sums, N);
+        reduce_weights_kernel<<<blocks, threads, shared_mem_size, cuda_stream>>>(
+            sampling_weights, alive_indices, n_alive, d_partial_sums, N);
 
         // Final reduction on CPU (small array)
         std::vector<float> h_partial_sums(blocks);
@@ -969,7 +970,7 @@ namespace lfs::training::mcmc {
                           thrust::counting_iterator<int>(0),
                           thrust::counting_iterator<int>(n_alive),
                           thrust::device_ptr<float>(alive_probs.ptr<float>()),
-                          [=] __device__(int i) { return opacities[alive_indices[i]]; });
+                          [=] __device__(int i) { return sampling_weights[alive_indices[i]]; });
 
         // Compute cumulative sum using CUB
         void* d_temp_storage = nullptr;
@@ -1002,7 +1003,7 @@ namespace lfs::training::mcmc {
         cudaFreeAsync(d_temp_storage, cuda_stream);
     }
 
-    // Simplified multinomial kernel that samples from ALL N opacities (no alive_indices)
+    // Simplified multinomial kernel that samples from ALL N precomputed weights (no alive_indices)
     __global__ void multinomial_sample_all_kernel(
         const float* __restrict__ opacities,
         const float* __restrict__ scaling_raw, // OPTIMIZATION: Takes raw scaling, applies exp() inline
@@ -1050,9 +1051,9 @@ namespace lfs::training::mcmc {
         sampled_scales[idx * 3 + 2] = expf(scaling_raw[selected_idx * 3 + 2]);
     }
 
-    // Reduction kernel for summing all opacities (simpler version without indices)
-    __global__ void reduce_all_opacities_kernel(
-        const float* __restrict__ opacities,
+    // Reduction kernel for summing all sampling weights (simpler version without indices)
+    __global__ void reduce_all_weights_kernel(
+        const float* __restrict__ sampling_weights,
         size_t N,
         float* __restrict__ partial_sums) {
 
@@ -1064,7 +1065,7 @@ namespace lfs::training::mcmc {
         // Load data into shared memory
         float sum = 0.0f;
         if (idx < N) {
-            sum = opacities[idx];
+            sum = sampling_weights[idx];
         }
         sdata[tid] = sum;
         __syncthreads();
@@ -1084,6 +1085,7 @@ namespace lfs::training::mcmc {
     }
 
     void launch_multinomial_sample_all(
+        const float* sampling_weights,
         const float* opacities,
         const float* scaling_raw, // OPTIMIZATION: Takes raw scaling, kernel applies exp() inline
         size_t N,
@@ -1109,8 +1111,8 @@ namespace lfs::training::mcmc {
         cudaMallocAsync(&d_partial_sums, blocks * sizeof(float), cuda_stream);
 
         // Launch block-level reduction
-        reduce_all_opacities_kernel<<<blocks, threads, shared_mem_size, cuda_stream>>>(
-            opacities, N, d_partial_sums);
+        reduce_all_weights_kernel<<<blocks, threads, shared_mem_size, cuda_stream>>>(
+            sampling_weights, N, d_partial_sums);
 
         // Final reduction on CPU (small array)
         std::vector<float> h_partial_sums(blocks);
@@ -1140,10 +1142,10 @@ namespace lfs::training::mcmc {
         void* d_temp_storage = nullptr;
         size_t temp_storage_bytes = 0;
         cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes,
-                                      opacities, cumsum_buf.ptr<float>(), N, cuda_stream);
+                                      sampling_weights, cumsum_buf.ptr<float>(), N, cuda_stream);
         cudaMallocAsync(&d_temp_storage, temp_storage_bytes, cuda_stream);
         cub::DeviceScan::InclusiveSum(d_temp_storage, temp_storage_bytes,
-                                      opacities, cumsum_buf.ptr<float>(), N, cuda_stream);
+                                      sampling_weights, cumsum_buf.ptr<float>(), N, cuda_stream);
 
         // Launch sampling kernel with pre-computed cumsum
         dim3 sample_threads(256);

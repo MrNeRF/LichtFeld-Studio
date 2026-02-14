@@ -280,6 +280,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         float* grad_conic,
         float* grad_raw_opacity,
         float3* grad_color,
+        float* densification_info,
+        const float* densification_error_map,
         const uint n_buckets,
         const uint n_primitives,
         const uint width,
@@ -338,6 +340,8 @@ namespace fast_lfs::rasterization::kernels::backward {
         float3 dL_dconic_accum = {0.0f, 0.0f, 0.0f};
         float dL_draw_opacity_partial_accum = 0.0f;
         float3 dL_dcolor_accum = {0.0f, 0.0f, 0.0f};
+        float densification_weight_accum = 0.0f;
+        float densification_error_weighted_accum = 0.0f;
 
         // tile metadata
         const uint2 tile_coords = {tile_idx % grid_width, tile_idx / grid_width};
@@ -447,6 +451,13 @@ namespace fast_lfs::rasterization::kernels::backward {
 
             const float blending_weight = transmittance * alpha;
 
+            if (densification_info != nullptr && densification_error_map != nullptr) {
+                const uint pixel_idx = width * pixel_coords.y + pixel_coords.x;
+                const float pixel_error = densification_error_map[pixel_idx];
+                densification_weight_accum += blending_weight;
+                densification_error_weighted_accum += blending_weight * pixel_error;
+            }
+
             // color gradient
             const float3 dL_dcolor = blending_weight * grad_color_pixel * color_grad_factor;
             dL_dcolor_accum += dL_dcolor;
@@ -496,6 +507,11 @@ namespace fast_lfs::rasterization::kernels::backward {
             atomicAdd(&grad_color[primitive_idx].x, clamped_color.x);
             atomicAdd(&grad_color[primitive_idx].y, clamped_color.y);
             atomicAdd(&grad_color[primitive_idx].z, clamped_color.z);
+
+            if (densification_info != nullptr && densification_error_map != nullptr) {
+                atomicAdd(&densification_info[primitive_idx], densification_weight_accum);
+                atomicAdd(&densification_info[n_primitives + primitive_idx], densification_error_weighted_accum);
+            }
         }
     }
 

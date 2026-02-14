@@ -268,7 +268,7 @@ namespace lfs::training::mcmc {
     /**
      * Fused multinomial sampling + gather kernel (ZERO intermediate allocations)
      *
-     * Performs multinomial sampling from opacities[alive_indices] and directly gathers
+     * Performs multinomial sampling from sampling_weights[alive_indices] and directly gathers
      * the sampled opacities and scales, all in a single kernel launch with no intermediate
      * allocations.
      *
@@ -278,7 +278,8 @@ namespace lfs::training::mcmc {
      * 3. Maps local indices → global indices (alive_indices[local_idx])
      * 4. Directly gathers opacities and scales at sampled indices
      *
-     * @param opacities [N] - Source opacities (full array)
+     * @param sampling_weights [N] - Sampling probabilities (full array)
+     * @param opacities [N] - Source opacities used for relocation math
      * @param scaling_raw [N, 3] - Source raw scales (exp() applied inline)
      * @param alive_indices [n_alive] - Indices of alive Gaussians
      * @param n_alive - Number of alive Gaussians
@@ -291,6 +292,7 @@ namespace lfs::training::mcmc {
      * @param stream - CUDA stream
      */
     void launch_multinomial_sample_and_gather(
+        const float* sampling_weights,
         const float* opacities,
         const float* scaling_raw,
         const int64_t* alive_indices,
@@ -304,12 +306,13 @@ namespace lfs::training::mcmc {
         void* stream = nullptr);
 
     /**
-     * Fused multinomial sampling from ALL opacities (ZERO intermediate allocations)
+     * Fused multinomial sampling from ALL sampling weights (ZERO intermediate allocations)
      *
-     * Variant that samples from all N opacities (not just a subset).
+     * Variant that samples from all N weights (not just a subset).
      * Used in add_new_gs() where we sample from the full population.
      *
-     * @param opacities [N] - Source opacities (full array)
+     * @param sampling_weights [N] - Sampling probabilities (full array)
+     * @param opacities [N] - Source opacities used for relocation math
      * @param scaling_raw [N, 3] - Source raw scales (exp() applied inline)
      * @param N - Number of Gaussians
      * @param n_samples - Number of samples to draw
@@ -320,6 +323,7 @@ namespace lfs::training::mcmc {
      * @param stream - CUDA stream
      */
     void launch_multinomial_sample_all(
+        const float* sampling_weights,
         const float* opacities,
         const float* scaling_raw,
         size_t N,

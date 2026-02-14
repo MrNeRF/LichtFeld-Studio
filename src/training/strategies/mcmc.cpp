@@ -7,8 +7,10 @@
 #include "core/tensor/internal/memory_pool.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "strategy_utils.hpp"
+#include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <stdexcept>
 
 namespace lfs::training {
 
@@ -30,6 +32,51 @@ namespace lfs::training {
             param_type,
             sampled_indices.ptr<int64_t>(),
             sampled_indices.numel());
+    }
+
+    bool MCMC::use_pixel_error_weights() const {
+        return _params &&
+               !_params->gut;
+    }
+
+    void MCMC::ensure_densification_info_shape() {
+        if (!use_pixel_error_weights()) {
+            return;
+        }
+
+        const size_t n = static_cast<size_t>(_splat_data->size());
+        const auto& info = _splat_data->_densification_info;
+        if (!info.is_valid() ||
+            info.ndim() != 2 ||
+            info.shape()[0] < 2 ||
+            info.shape()[1] != n) {
+            _splat_data->_densification_info = lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
+        }
+
+        if (!_error_score_max.is_valid() ||
+            _error_score_max.ndim() != 1 ||
+            _error_score_max.numel() != n) {
+            _error_score_max = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
+            _error_score_windows = 0;
+        }
+    }
+
+    lfs::core::Tensor MCMC::get_sampling_weights(const lfs::core::Tensor& opacities) const {
+        using namespace lfs::core;
+
+        auto opacities_contig = opacities.contiguous();
+        if (!use_pixel_error_weights()) {
+            return Tensor::ones_like(opacities_contig);
+        }
+
+        if (!_error_score_max.is_valid() ||
+            _error_score_max.ndim() != 1 ||
+            _error_score_max.numel() != opacities_contig.numel()) {
+            return Tensor::ones_like(opacities_contig);
+        }
+
+        // Faithful score from Revising Densification: E_k = max_pi sum_u E_pi(u) * omega_k_pi(u).
+        return _error_score_max.clamp_min(1e-12f).contiguous();
     }
 
     int MCMC::relocate_gs() {
@@ -84,6 +131,7 @@ namespace lfs::training {
 
             // Get source tensors (contiguous)
             Tensor opacities_contig = opacities.contiguous();
+            Tensor sampling_weights = get_sampling_weights(opacities_contig);
             Tensor scaling_raw_contig = _splat_data->scaling_raw().contiguous(); // Pass raw scaling, kernel applies exp()
 
             // Allocate outputs
@@ -97,6 +145,7 @@ namespace lfs::training {
 
             // does multinomial sampling + gathering in one pass
             mcmc::launch_multinomial_sample_and_gather(
+                sampling_weights.ptr<float>(),
                 opacities_contig.ptr<float>(),
                 scaling_raw_contig.ptr<float>(), // Pass raw scaling
                 alive_indices.ptr<int64_t>(),
@@ -244,6 +293,7 @@ namespace lfs::training {
             // Get raw scaling and ensure contiguity
             auto scaling_raw_contig = _splat_data->scaling_raw().contiguous(); // Pass raw scaling, kernel applies exp()
             auto opacities_contig = opacities.contiguous();
+            auto sampling_weights = get_sampling_weights(opacities_contig);
 
             // Allocate output tensors
             sampled_idxs = Tensor::empty({n_new}, Device::CUDA, DataType::Int64);
@@ -255,6 +305,7 @@ namespace lfs::training {
 
             // Call fused CUDA kernel
             mcmc::launch_multinomial_sample_all(
+                sampling_weights.ptr<float>(),
                 opacities_contig.ptr<float>(),
                 scaling_raw_contig.ptr<float>(), // Pass raw scaling
                 N,
@@ -483,6 +534,29 @@ namespace lfs::training {
             _splat_data->increment_sh_degree();
         }
 
+        if (iter == _params->stop_refine && use_pixel_error_weights()) {
+            _splat_data->_densification_info = lfs::core::Tensor::empty({0});
+            _error_score_max = lfs::core::Tensor::empty({0});
+            _error_score_windows = 0;
+        }
+
+        if (iter < _params->stop_refine) {
+            ensure_densification_info_shape();
+
+            // One training iteration corresponds to one camera view, so info[1] is E_k^pi.
+            // Keep the max over views as the densification priority.
+            const auto& info = _splat_data->_densification_info;
+            if (info.is_valid() &&
+                info.ndim() == 2 &&
+                info.shape()[0] >= 2 &&
+                info.shape()[1] == _error_score_max.numel()) {
+                _error_score_max = _error_score_max.maximum(info[1]);
+            }
+
+            // Clear per-view accumulators; they are rebuilt by the next backward pass.
+            _splat_data->_densification_info.zero_();
+        }
+
         // Refine Gaussians
         if (is_refining(iter)) {
             // Relocate dead Gaussians
@@ -499,6 +573,27 @@ namespace lfs::training {
             }
             // Release cached pool memory to avoid bloat (important after add_new_gs)
             lfs::core::CudaMemoryPool::instance().trim_cached_memory();
+
+            if (use_pixel_error_weights()) {
+                const size_t n = static_cast<size_t>(_splat_data->size());
+
+                if (_error_score_max.numel() < n) {
+                    // Newly added Gaussians start with zero score.
+                    const size_t n_new = n - _error_score_max.numel();
+                    _error_score_max = _error_score_max.cat(
+                        lfs::core::Tensor::zeros({n_new}, _splat_data->means().device()),
+                        0);
+                }
+
+                // Follow the paper and aggregate across two densification windows.
+                ++_error_score_windows;
+                if (_error_score_windows >= 2) {
+                    _error_score_max = lfs::core::Tensor::zeros({n}, _splat_data->means().device());
+                    _error_score_windows = 0;
+                }
+
+                _splat_data->_densification_info = lfs::core::Tensor::zeros({2, n}, _splat_data->means().device());
+            }
         }
 
         // Inject noise to positions every iteration
@@ -543,6 +638,7 @@ namespace lfs::training {
         // Get indices to keep
         Tensor keep_mask = mask.logical_not();
         Tensor keep_indices = keep_mask.nonzero().squeeze(-1);
+        const size_t old_size = static_cast<size_t>(_splat_data->size());
 
         // Select only the Gaussians we want to keep
         _splat_data->means() = _splat_data->means().index_select(0, keep_indices).contiguous();
@@ -553,6 +649,13 @@ namespace lfs::training {
         _splat_data->scaling_raw() = _splat_data->scaling_raw().index_select(0, keep_indices).contiguous();
         _splat_data->rotation_raw() = _splat_data->rotation_raw().index_select(0, keep_indices).contiguous();
         _splat_data->opacity_raw() = _splat_data->opacity_raw().index_select(0, keep_indices).contiguous();
+        const auto& info = _splat_data->_densification_info;
+        if (info.is_valid() && info.ndim() == 2 && info.shape()[1] == old_size) {
+            _splat_data->_densification_info = info.index_select(1, keep_indices).contiguous();
+        }
+        if (_error_score_max.is_valid() && _error_score_max.ndim() == 1 && _error_score_max.numel() == old_size) {
+            _error_score_max = _error_score_max.index_select(0, keep_indices).contiguous();
+        }
 
         // Recreate optimizer with reduced parameters (simpler than manual state update)
         _optimizer = create_optimizer(*_splat_data, *_params);
@@ -566,6 +669,9 @@ namespace lfs::training {
         using namespace lfs::core;
 
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(optimParams);
+        if (_params->gut) {
+            throw std::runtime_error("MCMC requires the fast rasterizer (`gut=false`) for faithful pixel-error scoring.");
+        }
 
         // Pre-allocate tensor capacity if max_cap is specified
         if (_params->max_cap > 0) {
@@ -624,6 +730,9 @@ namespace lfs::training {
         _optimizer = create_optimizer(*_splat_data, *_params);
         _optimizer->allocate_gradients(_params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
         _scheduler = create_scheduler(*_params, *_optimizer);
+
+        ensure_densification_info_shape();
+        _error_score_windows = 0;
 
         LOG_INFO("MCMC strategy initialized with {} Gaussians", _splat_data->size());
     }

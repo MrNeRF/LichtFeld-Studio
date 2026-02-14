@@ -12,6 +12,7 @@
 #include <functional>
 
 void fast_lfs::rasterization::backward(
+    const float* densification_error_map,
     const float* grad_image,
     const float* grad_alpha,
     const float* image,
@@ -89,6 +90,8 @@ void fast_lfs::rasterization::backward(
         grad_conic_helper,
         grad_opacities_raw,
         grad_sh_coefficients_0, // used to store intermediate gradients
+        densification_info,
+        densification_error_map,
         n_buckets,
         n_primitives,
         width,
@@ -114,7 +117,7 @@ void fast_lfs::rasterization::backward(
         grad_sh_coefficients_0,
         grad_sh_coefficients_rest,
         grad_w2c,
-        densification_info,
+        densification_error_map == nullptr ? densification_info : nullptr,
         n_primitives,
         active_sh_bases,
         total_bases_sh_rest,

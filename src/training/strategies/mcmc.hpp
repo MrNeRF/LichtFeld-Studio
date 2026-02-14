@@ -51,7 +51,7 @@ namespace lfs::training {
         // Reserve optimizer capacity for future growth (e.g., after checkpoint load)
         void reserve_optimizer_capacity(size_t capacity) override;
 
-        // Exposed for testing (compare with legacy implementation)
+        // Exposed for testing
         int add_new_gs_test() { return add_new_gs(); }
         int add_new_gs_with_indices_test(const lfs::core::Tensor& sampled_idxs);
         int relocate_gs_test() { return relocate_gs(); }
@@ -65,6 +65,9 @@ namespace lfs::training {
         void update_optimizer_for_relocate(const lfs::core::Tensor& sampled_indices,
                                            const lfs::core::Tensor& dead_indices,
                                            ParamType param_type);
+        lfs::core::Tensor get_sampling_weights(const lfs::core::Tensor& opacities) const;
+        void ensure_densification_info_shape();
+        bool use_pixel_error_weights() const;
 
         // Member variables
         std::unique_ptr<AdamOptimizer> _optimizer;
@@ -78,6 +81,8 @@ namespace lfs::training {
         // State variables
         lfs::core::Tensor _binoms;       // [n_max, n_max] binomial coefficients
         lfs::core::Tensor _noise_buffer; // Reusable buffer for noise injection
+        lfs::core::Tensor _error_score_max;
+        int _error_score_windows = 0;
     };
 
 } // namespace lfs::training

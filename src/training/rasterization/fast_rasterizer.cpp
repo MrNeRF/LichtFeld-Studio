@@ -413,7 +413,8 @@ namespace lfs::training {
         const core::Tensor& grad_image,
         core::SplatData& gaussian_model,
         AdamOptimizer& optimizer,
-        const core::Tensor& grad_alpha_extra) {
+        const core::Tensor& grad_alpha_extra,
+        const core::Tensor& pixel_error_map) {
 
         // Compute grad_alpha from background blending: output = image + (1 - alpha) * bg
         int H, W;
@@ -459,10 +460,31 @@ namespace lfs::training {
         // densification_info has shape [2, N]
         const bool update_densification_info = gaussian_model._densification_info.ndim() == 2 &&
                                                gaussian_model._densification_info.shape()[1] >= static_cast<size_t>(n_primitives);
+        const bool use_pixel_error_densification = update_densification_info &&
+                                                   pixel_error_map.is_valid() &&
+                                                   pixel_error_map.numel() > 0;
+
+        core::Tensor error_map_2d;
+        if (use_pixel_error_densification) {
+            error_map_2d = pixel_error_map;
+            if (error_map_2d.ndim() == 3 && error_map_2d.shape()[0] == 1) {
+                error_map_2d = error_map_2d.squeeze(0);
+            }
+            if (error_map_2d.ndim() != 2 ||
+                static_cast<int>(error_map_2d.shape()[0]) != H ||
+                static_cast<int>(error_map_2d.shape()[1]) != W) {
+                throw std::runtime_error("pixel_error_map must have shape [H, W] or [1, H, W]");
+            }
+            if (error_map_2d.device() != core::Device::CUDA) {
+                error_map_2d = error_map_2d.cuda();
+            }
+            error_map_2d = error_map_2d.contiguous();
+        }
 
         // Get gradient pointers from optimizer
         auto backward_result = fast_lfs::rasterization::backward_raw(
             update_densification_info ? gaussian_model._densification_info.ptr<float>() : nullptr,
+            (use_pixel_error_densification && error_map_2d.is_valid()) ? error_map_2d.ptr<float>() : nullptr,
             grad_image.ptr<float>(),
             grad_alpha.ptr<float>(),
             ctx.image.ptr<float>(),

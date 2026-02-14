@@ -78,6 +78,7 @@ namespace fast_lfs::rasterization {
 
     BackwardOutputs backward_raw(
         float* densification_info_ptr,         // Device pointer [2*N] or nullptr
+        const float* densification_error_map_ptr, // Device pointer [H*W] or nullptr
         const float* grad_image_ptr,           // Device pointer [3*H*W]
         const float* grad_alpha_ptr,           // Device pointer [H*W]
         const float* image_ptr,                // Device pointer [3*H*W]
