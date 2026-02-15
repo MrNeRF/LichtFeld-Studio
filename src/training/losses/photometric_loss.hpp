@@ -41,6 +41,9 @@ namespace lfs::training::losses {
             const lfs::core::Tensor& gt_image,
             const Params& params);
 
+        const kernels::FusedL1SSIMWorkspace& fused_workspace() const { return fused_workspace_; }
+        const kernels::SSIMWorkspace& ssim_workspace() const { return ssim_workspace_; }
+
     private:
         // Pre-allocated SSIM workspace (eliminates 120GB allocation churn)
         lfs::training::kernels::SSIMWorkspace ssim_workspace_;

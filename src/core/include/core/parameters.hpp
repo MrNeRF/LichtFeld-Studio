@@ -112,6 +112,7 @@ namespace lfs::core {
             bool revised_opacity = false;
             bool adc_use_pixel_error = true;
             float adc_error_threshold = 0.1f;
+            bool mcmc_use_pixel_error = true;
             bool gut = false;
             bool undistort = false;
             float steps_scaler = 1.f; // Scales training step counts; values <= 0 disable scaling

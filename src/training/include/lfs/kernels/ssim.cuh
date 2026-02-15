@@ -112,6 +112,7 @@ namespace lfs::training::kernels {
     struct FusedL1SSIMWorkspace {
         // Forward pass buffers
         lfs::core::Tensor loss_map;      // [N, C, H, W] per-pixel combined loss
+        lfs::core::Tensor ssim_map;      // [N, C, H, W] per-pixel SSIM values (optional output)
         lfs::core::Tensor dm_dmu1;       // [N, C, H, W] SSIM partial derivative
         lfs::core::Tensor dm_dsigma1_sq; // [N, C, H, W] SSIM partial derivative
         lfs::core::Tensor dm_dsigma12;   // [N, C, H, W] SSIM partial derivative
@@ -129,6 +130,7 @@ namespace lfs::training::kernels {
             if (allocated_shape != shape) {
                 lfs::core::TensorShape tshape(shape);
                 loss_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                ssim_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
@@ -174,6 +176,7 @@ namespace lfs::training::kernels {
 
     struct MaskedFusedL1SSIMWorkspace {
         lfs::core::Tensor loss_map;      // [N, C, H, W]
+        lfs::core::Tensor ssim_map;      // [N, C, H, W] per-pixel SSIM values (optional output)
         lfs::core::Tensor dm_dmu1;       // [N, C, H, W]
         lfs::core::Tensor dm_dsigma1_sq; // [N, C, H, W]
         lfs::core::Tensor dm_dsigma12;   // [N, C, H, W]
@@ -187,6 +190,7 @@ namespace lfs::training::kernels {
             if (allocated_shape != shape) {
                 lfs::core::TensorShape tshape(shape);
                 loss_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
+                ssim_map = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dm_dmu1 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dm_dsigma1_sq = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);
                 dm_dsigma12 = lfs::core::Tensor::empty(tshape, lfs::core::Device::CUDA);

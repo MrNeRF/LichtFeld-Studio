@@ -466,7 +466,8 @@ namespace {
         float* __restrict__ loss_map,
         float* __restrict__ dm_dmu1,
         float* __restrict__ dm_dsigma1_sq,
-        float* __restrict__ dm_dsigma12) {
+        float* __restrict__ dm_dsigma12,
+        float* __restrict__ ssim_map) {
 
         auto block = cg::this_thread_block();
         const int bIdx = block.group_index().z;
@@ -643,6 +644,9 @@ namespace {
 
                     // Combined loss: (1-w)*L1 + w*(1-SSIM)
                     loss_map[global_idx] = l1_weight * l1_loss + ssim_weight * (1.0f - ssim_val);
+
+                    if (ssim_map)
+                        ssim_map[global_idx] = ssim_val;
 
                     if (dm_dmu1) {
                         float d_m_dmu1 = ((mu2 * 2.f * D_) / (A * B) - (mu2 * 2.f * C_) / (A * B) - (mu1 * 2.f * C_ * D_) / (A * A * B) + (mu1 * 2.f * C_ * D_) / (A * B * B));
@@ -821,7 +825,8 @@ namespace {
         float* __restrict__ loss_map,
         float* __restrict__ dm_dmu1,
         float* __restrict__ dm_dsigma1_sq,
-        float* __restrict__ dm_dsigma12) {
+        float* __restrict__ dm_dsigma12,
+        float* __restrict__ ssim_map) {
 
         auto block = cg::this_thread_block();
         const int bIdx = block.group_index().z;
@@ -1002,6 +1007,9 @@ namespace {
                     // Masked combined loss: multiply by mask
                     float combined = l1_weight * l1_loss + ssim_weight * (1.0f - ssim_val);
                     loss_map[global_idx] = combined * mask_val;
+
+                    if (ssim_map)
+                        ssim_map[global_idx] = ssim_val;
 
                     if (dm_dmu1) {
                         float d_m_dmu1 = ((mu2 * 2.f * D_) / (A * B) - (mu2 * 2.f * C_) / (A * B) - (mu1 * 2.f * C_ * D_) / (A * A * B) + (mu1 * 2.f * C_ * D_) / (A * B * B));
@@ -1562,7 +1570,8 @@ namespace lfs::training::kernels {
             workspace.loss_map.ptr<float>(),
             workspace.dm_dmu1.ptr<float>(),
             workspace.dm_dsigma1_sq.ptr<float>(),
-            workspace.dm_dsigma12.ptr<float>());
+            workspace.dm_dsigma12.ptr<float>(),
+            workspace.ssim_map.ptr<float>());
 
         // Compute mean loss (with valid padding if requested)
         lfs::core::Tensor loss_scalar;
@@ -1683,7 +1692,8 @@ namespace lfs::training::kernels {
             workspace.loss_map.ptr<float>(),
             workspace.dm_dmu1.ptr<float>(),
             workspace.dm_dsigma1_sq.ptr<float>(),
-            workspace.dm_dsigma12.ptr<float>());
+            workspace.dm_dsigma12.ptr<float>(),
+            workspace.ssim_map.ptr<float>());
 
         // Compute masked mean: sum(loss_map) / (mask_sum * C)
         // Note: loss_map already has mask applied per-pixel

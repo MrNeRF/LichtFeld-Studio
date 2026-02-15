@@ -36,7 +36,8 @@ namespace lfs::training {
 
     bool MCMC::use_pixel_error_weights() const {
         return _params &&
-               !_params->gut;
+               !_params->gut &&
+               _params->mcmc_use_pixel_error;
     }
 
     void MCMC::ensure_densification_info_shape() {
@@ -669,8 +670,8 @@ namespace lfs::training {
         using namespace lfs::core;
 
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(optimParams);
-        if (_params->gut) {
-            throw std::runtime_error("MCMC requires the fast rasterizer (`gut=false`) for faithful pixel-error scoring.");
+        if (_params->gut && _params->mcmc_use_pixel_error) {
+            throw std::runtime_error("MCMC pixel-error scoring requires the fast rasterizer (`gut=false`).");
         }
 
         // Pre-allocate tensor capacity if max_cap is specified
