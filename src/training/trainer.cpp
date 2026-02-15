@@ -1114,6 +1114,8 @@ namespace lfs::training {
             const bool use_pixel_error_densification =
                 (params_.optimization.strategy == "adc") ||
                 (params_.optimization.strategy == "mcmc");
+            const bool use_ssim_error = use_pixel_error_densification &&
+                                        (params_.optimization.strategy == "mcmc");
 
             // Loop over tiles (row-major order)
             for (int tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
@@ -1356,7 +1358,11 @@ namespace lfs::training {
                     // 1) Compute photometric loss (populates ssim_map in workspace)
                     const bool use_mask = params_.optimization.mask_mode != lfs::core::param::MaskMode::None &&
                                           (cam->has_mask() || (params_.optimization.use_alpha_as_mask && scene_ && scene_->imagesHaveAlpha()));
-                    bool used_masked_fused = false;
+                    const bool used_masked_fused =
+                        use_mask &&
+                        (params_.optimization.mask_mode == lfs::core::param::MaskMode::Segment ||
+                         params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore) &&
+                        params_.optimization.lambda_dssim > 0.0f;
                     if (use_mask) {
                         lfs::core::Tensor mask;
                         if (pipelined_mask_.is_valid() && pipelined_mask_.numel() > 0) {
@@ -1385,9 +1391,6 @@ namespace lfs::training {
                         tile_loss = result->loss;
                         tile_grad = result->grad_image;
                         tile_grad_alpha = result->grad_alpha;
-                        used_masked_fused = (params_.optimization.mask_mode == lfs::core::param::MaskMode::Segment ||
-                                             params_.optimization.mask_mode == lfs::core::param::MaskMode::Ignore) &&
-                                            params_.optimization.lambda_dssim > 0.0f;
                     } else {
                         auto result = compute_photometric_loss_with_gradient(
                             corrected_image, gt_tile, params_.optimization);
@@ -1400,11 +1403,9 @@ namespace lfs::training {
                         tile_grad = result->second;
                     }
 
-                    // 2) Extract error map from workspace's ssim_map (no extra SSIM pass)
+                    // 2) Extract error map from workspace's ssim_map
                     if (use_pixel_error_densification) {
-                        const bool use_ssim_error = params_.optimization.strategy == "mcmc";
                         if (use_ssim_error && params_.optimization.lambda_dssim > 0.0f) {
-                            // Reuse ssim_map already computed by the photometric loss
                             lfs::core::Tensor ssim_map;
                             if (used_masked_fused) {
                                 ssim_map = masked_fused_workspace_.ssim_map;
@@ -1413,13 +1414,14 @@ namespace lfs::training {
                             } else {
                                 ssim_map = photometric_loss_.ssim_workspace().ssim_map;
                             }
-                            tile_error_map = (lfs::core::Tensor::ones_like(ssim_map) - ssim_map)
+                            tile_error_map = ssim_map.neg()
+                                                 .add(1.0f)
                                                  .mean({1}, false)
                                                  .squeeze(0)
                                                  .clamp_min(0.0f)
                                                  .contiguous();
                         } else if (use_ssim_error) {
-                            // Pure L1 loss (lambda_dssim == 0) but MCMC needs SSIM error: fallback
+                            // lambda_dssim == 0 but MCMC needs SSIM error: standalone pass
                             lfs::core::Tensor pred_chw = corrected_image;
                             lfs::core::Tensor gt_chw = gt_tile;
                             if (pred_chw.ndim() == 3 && pred_chw.shape()[2] == 3 &&
@@ -1432,13 +1434,13 @@ namespace lfs::training {
                             (void)ssim_value;
                             (void)ssim_ctx;
                             const auto& fallback_ssim_map = densification_ssim_workspace_.ssim_map;
-                            tile_error_map = (lfs::core::Tensor::ones_like(fallback_ssim_map) - fallback_ssim_map)
+                            tile_error_map = fallback_ssim_map.neg()
+                                                 .add(1.0f)
                                                  .mean({1}, false)
                                                  .squeeze(0)
                                                  .clamp_min(0.0f)
                                                  .contiguous();
                         } else {
-                            // ADC: L1 error
                             const lfs::core::Tensor abs_diff = (corrected_image - gt_tile).abs();
                             if (abs_diff.ndim() == 3 && abs_diff.shape()[0] == 3) {
                                 tile_error_map = abs_diff.mean({0}, false);

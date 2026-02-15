@@ -515,7 +515,7 @@ namespace lfs::training {
             bg_color_ptr = ctx.bg_color.ptr<float>();
         }
 
-        // Optional pixel-error densification input ([H, W] or [1, H, W]).
+        // Pixel-error densification input ([H, W] or [1, H, W])
         const bool update_densification_info =
             gaussian_model._densification_info.ndim() == 2 &&
             gaussian_model._densification_info.shape()[1] >= N;
@@ -534,12 +534,12 @@ namespace lfs::training {
             }
             error_map_2d = error_map_2d.contiguous();
         }
-        float* densification_info_ptr = update_densification_info
-                                            ? gaussian_model._densification_info.ptr<float>()
-                                            : nullptr;
-        const float* pixel_error_map_ptr = (update_densification_info && error_map_2d.is_valid() && error_map_2d.numel() > 0)
-                                               ? error_map_2d.ptr<float>()
-                                               : nullptr;
+        float* const densification_info_ptr = update_densification_info
+                                                  ? gaussian_model._densification_info.ptr<float>()
+                                                  : nullptr;
+        const float* const pixel_error_map_ptr = (update_densification_info && error_map_2d.is_valid())
+                                                     ? error_map_2d.ptr<float>()
+                                                     : nullptr;
 
         // Debug: check for errors before gsplat backward
         cudaDeviceSynchronize();
@@ -719,7 +719,7 @@ namespace lfs::training {
                       cudaGetErrorString(err_post), N, K, K_dst, (void*)dst_shN);
         }
 
-        // Fallback path: if pixel-error map was not provided, keep previous grad-norm accumulation.
+        // Accumulate gradient norms when pixel-error map is not provided
         if (update_densification_info && pixel_error_map_ptr == nullptr) {
             kernels::launch_grad_norm_accumulate(
                 gaussian_model._densification_info.ptr<float>(),

@@ -117,7 +117,7 @@ namespace lfs::training {
 
             // Get source tensors (contiguous)
             Tensor opacities_contig = opacities.contiguous();
-            Tensor sampling_weights = get_sampling_weights();
+            const Tensor sampling_weights = get_sampling_weights();
             Tensor scaling_raw_contig = _splat_data->scaling_raw().contiguous(); // Pass raw scaling, kernel applies exp()
 
             // Allocate outputs
@@ -125,9 +125,8 @@ namespace lfs::training {
             sampled_opacities = Tensor::empty({n_dead}, Device::CUDA, DataType::Float32);
             sampled_scales = Tensor::empty({n_dead, 3}, Device::CUDA, DataType::Float32);
 
-            // Generate random seed
-            static uint64_t seed_counter = 0;
-            uint64_t seed = static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count()) + seed_counter++;
+            static thread_local uint64_t seed_counter = 0;
+            const uint64_t seed = static_cast<uint64_t>(std::chrono::high_resolution_clock::now().time_since_epoch().count()) + seed_counter++;
 
             // does multinomial sampling + gathering in one pass
             mcmc::launch_multinomial_sample_and_gather(
@@ -279,7 +278,7 @@ namespace lfs::training {
             // Get raw scaling and ensure contiguity
             auto scaling_raw_contig = _splat_data->scaling_raw().contiguous(); // Pass raw scaling, kernel applies exp()
             auto opacities_contig = opacities.contiguous();
-            auto sampling_weights = get_sampling_weights();
+            const auto sampling_weights = get_sampling_weights();
 
             // Allocate output tensors
             sampled_idxs = Tensor::empty({n_new}, Device::CUDA, DataType::Int64);
@@ -484,7 +483,7 @@ namespace lfs::training {
         using namespace lfs::core;
 
         // Get current learning rate from optimizer (after scheduler has updated it)
-        const float current_lr = _optimizer->get_lr() * _noise_lr;
+        const float current_lr = _optimizer->get_lr() * NOISE_LR;
 
         // Generate noise in pre-allocated buffer
         {
@@ -545,14 +544,12 @@ namespace lfs::training {
 
         // Refine Gaussians
         if (is_refining(iter)) {
-            // Relocate dead Gaussians
-            int n_relocated = relocate_gs();
+            const int n_relocated = relocate_gs();
             if (n_relocated > 0) {
                 LOG_DEBUG("MCMC: Relocated {} dead Gaussians at iteration {}", n_relocated, iter);
             }
 
-            // Add new Gaussians
-            int n_added = add_new_gs();
+            const int n_added = add_new_gs();
             if (n_added > 0) {
                 LOG_DEBUG("MCMC: Added {} new Gaussians at iteration {} (total: {})",
                           n_added, iter, _splat_data->size());

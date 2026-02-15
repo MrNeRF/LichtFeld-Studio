@@ -484,7 +484,7 @@ namespace lfs::training {
         // Get gradient pointers from optimizer
         auto backward_result = fast_lfs::rasterization::backward_raw(
             update_densification_info ? gaussian_model._densification_info.ptr<float>() : nullptr,
-            (use_pixel_error_densification && error_map_2d.is_valid()) ? error_map_2d.ptr<float>() : nullptr,
+            use_pixel_error_densification ? error_map_2d.ptr<float>() : nullptr,
             grad_image.ptr<float>(),
             grad_alpha.ptr<float>(),
             ctx.image.ptr<float>(),

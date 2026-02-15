@@ -300,7 +300,7 @@ namespace lfs::training {
         // Persistent photometric loss (workspace reuse across iterations)
         lfs::training::losses::PhotometricLoss photometric_loss_;
 
-        // Reused workspace for SSIM-based densification error maps (MCMC)
+        // Pre-allocated SSIM workspace for densification error maps, eliminates repeated allocations
         lfs::training::kernels::SSIMWorkspace densification_ssim_workspace_;
         lfs::training::kernels::MaskedFusedL1SSIMWorkspace masked_fused_workspace_;
 

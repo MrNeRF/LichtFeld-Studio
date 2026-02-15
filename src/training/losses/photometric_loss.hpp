@@ -17,7 +17,7 @@ namespace lfs::training::losses {
      * Loss = (1 - lambda_dssim) * L1 + lambda_dssim * (1 - SSIM)
      *
      * This is a libtorch-free implementation that wraps the existing CUDA SSIM kernels.
-     * OPTIMIZED: Pre-allocates SSIM workspace to eliminate 120GB allocation churn per training run.
+     * Pre-allocates SSIM workspace to avoid per-frame allocation overhead.
      */
     struct PhotometricLoss {
         struct Params {
@@ -45,7 +45,7 @@ namespace lfs::training::losses {
         const kernels::SSIMWorkspace& ssim_workspace() const { return ssim_workspace_; }
 
     private:
-        // Pre-allocated SSIM workspace (eliminates 120GB allocation churn)
+        // Pre-allocated SSIM workspace
         lfs::training::kernels::SSIMWorkspace ssim_workspace_;
 
         // Pre-allocated fused L1+SSIM workspace

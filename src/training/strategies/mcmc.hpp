@@ -74,8 +74,7 @@ namespace lfs::training {
         lfs::core::SplatData* _splat_data = nullptr; // Scene-owned
         std::unique_ptr<const lfs::core::param::OptimizationParameters> _params;
 
-        // MCMC specific parameters
-        const float _noise_lr = 5e5f;
+        static constexpr float NOISE_LR = 5e5f;
 
         // State variables
         lfs::core::Tensor _binoms;       // [n_max, n_max] binomial coefficients

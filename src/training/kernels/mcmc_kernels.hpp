@@ -266,11 +266,10 @@ namespace lfs::training::mcmc {
         void* stream = nullptr);
 
     /**
-     * Fused multinomial sampling + gather kernel (ZERO intermediate allocations)
+     * Fused multinomial sampling + gather kernel (no intermediate allocations)
      *
      * Performs multinomial sampling from sampling_weights[alive_indices] and directly gathers
-     * the sampled opacities and scales, all in a single kernel launch with no intermediate
-     * allocations.
+     * the sampled opacities and scales in a single kernel launch.
      *
      * Algorithm:
      * 1. Thread block cooperatively computes cumulative sum of probabilities
@@ -306,7 +305,7 @@ namespace lfs::training::mcmc {
         void* stream = nullptr);
 
     /**
-     * Fused multinomial sampling from ALL sampling weights (ZERO intermediate allocations)
+     * Fused multinomial sampling from all sampling weights (no intermediate allocations)
      *
      * Variant that samples from all N weights (not just a subset).
      * Used in add_new_gs() where we sample from the full population.
