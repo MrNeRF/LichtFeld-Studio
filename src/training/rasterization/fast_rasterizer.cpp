@@ -7,6 +7,7 @@
 #include "core/path_utils.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "training/kernels/grad_alpha.hpp"
+#include <cassert>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -470,11 +471,10 @@ namespace lfs::training {
             if (error_map_2d.ndim() == 3 && error_map_2d.shape()[0] == 1) {
                 error_map_2d = error_map_2d.squeeze(0);
             }
-            if (error_map_2d.ndim() != 2 ||
-                static_cast<int>(error_map_2d.shape()[0]) != H ||
-                static_cast<int>(error_map_2d.shape()[1]) != W) {
-                throw std::runtime_error("pixel_error_map must have shape [H, W] or [1, H, W]");
-            }
+            assert(error_map_2d.ndim() == 2 &&
+                   static_cast<int>(error_map_2d.shape()[0]) == H &&
+                   static_cast<int>(error_map_2d.shape()[1]) == W &&
+                   "pixel_error_map must have shape [H, W] or [1, H, W]");
             if (error_map_2d.device() != core::Device::CUDA) {
                 error_map_2d = error_map_2d.cuda();
             }

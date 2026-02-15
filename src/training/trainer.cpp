@@ -1112,9 +1112,8 @@ namespace lfs::training {
                                              ppisp_cam_idx >= 0 &&
                                              ppisp_cam_idx < ppisp_controller_pool_->num_cameras();
             const bool use_pixel_error_densification =
-                !params_.optimization.gut &&
-                ((params_.optimization.strategy == "adc" && params_.optimization.adc_use_pixel_error) ||
-                 (params_.optimization.strategy == "mcmc" && params_.optimization.mcmc_use_pixel_error));
+                (params_.optimization.strategy == "adc") ||
+                (params_.optimization.strategy == "mcmc");
 
             // Loop over tiles (row-major order)
             for (int tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
@@ -1485,7 +1484,8 @@ namespace lfs::training {
                                               ? tile_grad_alpha
                                               : lfs::core::Tensor::zeros_like(output.alpha);
                         gsplat_rasterize_backward(*gsplat_ctx, raster_grad, grad_alpha,
-                                                  strategy_->get_model(), strategy_->get_optimizer());
+                                                  strategy_->get_model(), strategy_->get_optimizer(),
+                                                  use_pixel_error_densification ? tile_error_map : lfs::core::Tensor{});
                     } else {
                         fast_rasterize_backward(*fast_ctx, raster_grad, strategy_->get_model(),
                                                 strategy_->get_optimizer(), tile_grad_alpha,

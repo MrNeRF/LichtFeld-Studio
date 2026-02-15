@@ -136,6 +136,8 @@ namespace gsplat_lfs {
         float* v_scales,
         float* v_colors,
         float* v_opacities,
+        float* densification_info,
+        const float* densification_error_map,
         cudaStream_t stream) {
         GSPLAT_CHECK_CUDA_PTR(means, "means");
         GSPLAT_CHECK_CUDA_PTR(quats, "quats");
@@ -165,7 +167,8 @@ namespace gsplat_lfs {
             tile_offsets, flatten_ids,                                  \
             render_alphas, last_ids,                                    \
             v_render_colors, v_render_alphas,                           \
-            v_means, v_quats, v_scales, v_colors, v_opacities, stream); \
+            v_means, v_quats, v_scales, v_colors, v_opacities,          \
+            densification_info, densification_error_map, stream);        \
         break;
 
         switch (channels) {
@@ -360,6 +363,8 @@ namespace gsplat_lfs {
         float* v_scales,
         float* v_opacities,
         float* v_sh_coeffs,
+        float* densification_info,
+        const float* densification_error_map,
         cudaStream_t stream) {
         // Determine output channels
         uint32_t channels = 3;
@@ -387,6 +392,7 @@ namespace gsplat_lfs {
             render_alphas, last_ids,
             v_render_colors, v_render_alphas,
             v_means, v_quats, v_scales, v_colors, v_opacities,
+            densification_info, densification_error_map,
             stream);
 
         // Backward through SH

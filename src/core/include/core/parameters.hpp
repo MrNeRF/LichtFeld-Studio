@@ -99,8 +99,6 @@ namespace lfs::core {
             int ppisp_controller_activation_step = -1; // -1 = auto (iterations - 5000)
             float ppisp_controller_lr = 2e-3f;
 
-            // mcmc strategy uses contribution-weighted per-pixel error for sampling
-
             // adc strategy specific parameters
             float prune_opacity = 0.005f;
             float grow_scale3d = 0.01f;
@@ -110,9 +108,6 @@ namespace lfs::core {
             size_t reset_every = 3'000;
             size_t pause_refine_after_reset = 0;
             bool revised_opacity = false;
-            bool adc_use_pixel_error = true;
-            float adc_error_threshold = 0.1f;
-            bool mcmc_use_pixel_error = true;
             bool gut = false;
             bool undistort = false;
             float steps_scaler = 1.f; // Scales training step counts; values <= 0 disable scaling

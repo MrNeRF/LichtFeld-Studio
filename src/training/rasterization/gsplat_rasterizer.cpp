@@ -7,6 +7,7 @@
 #include "core/logger.hpp"
 #include "gsplat/Ops.h"
 #include "training/kernels/grad_alpha.hpp"
+#include <cassert>
 #include <spdlog/spdlog.h>
 
 namespace lfs::training {
@@ -419,7 +420,8 @@ namespace lfs::training {
         const core::Tensor& grad_image,
         const core::Tensor& grad_alpha,
         core::SplatData& gaussian_model,
-        AdamOptimizer& optimizer) {
+        AdamOptimizer& optimizer,
+        const core::Tensor& pixel_error_map) {
 
         // Get arena for temporary allocations
         auto& arena = core::GlobalArenaManager::instance().get_arena();
@@ -513,6 +515,32 @@ namespace lfs::training {
             bg_color_ptr = ctx.bg_color.ptr<float>();
         }
 
+        // Optional pixel-error densification input ([H, W] or [1, H, W]).
+        const bool update_densification_info =
+            gaussian_model._densification_info.ndim() == 2 &&
+            gaussian_model._densification_info.shape()[1] >= N;
+        core::Tensor error_map_2d;
+        if (update_densification_info && pixel_error_map.is_valid() && pixel_error_map.numel() > 0) {
+            error_map_2d = pixel_error_map;
+            if (error_map_2d.ndim() == 3 && error_map_2d.shape()[0] == 1) {
+                error_map_2d = error_map_2d.squeeze(0);
+            }
+            assert(error_map_2d.ndim() == 2 &&
+                   static_cast<uint32_t>(error_map_2d.shape()[0]) == H &&
+                   static_cast<uint32_t>(error_map_2d.shape()[1]) == W &&
+                   "pixel_error_map must have shape [H, W] or [1, H, W]");
+            if (error_map_2d.device() != core::Device::CUDA) {
+                error_map_2d = error_map_2d.cuda();
+            }
+            error_map_2d = error_map_2d.contiguous();
+        }
+        float* densification_info_ptr = update_densification_info
+                                            ? gaussian_model._densification_info.ptr<float>()
+                                            : nullptr;
+        const float* pixel_error_map_ptr = (update_densification_info && error_map_2d.is_valid() && error_map_2d.numel() > 0)
+                                               ? error_map_2d.ptr<float>()
+                                               : nullptr;
+
         // Debug: check for errors before gsplat backward
         cudaDeviceSynchronize();
         auto err_pre_gsplat = cudaGetLastError();
@@ -570,6 +598,8 @@ namespace lfs::training {
             v_scales_ptr,
             v_opacities_ptr,
             v_sh_coeffs_ptr,
+            densification_info_ptr,
+            pixel_error_map_ptr,
             nullptr // stream
         );
 
@@ -689,14 +719,8 @@ namespace lfs::training {
                       cudaGetErrorString(err_post), N, K, K_dst, (void*)dst_shN);
         }
 
-        // Update densification info if available (shape is [2, N])
-        const bool update_densification_info =
-            gaussian_model._densification_info.ndim() == 2 &&
-            gaussian_model._densification_info.shape()[1] >= N;
-
-        if (update_densification_info) {
-            // Compute ||grad_means[i]||_2 and add to densification_info[i]
-            // No tensor allocations needed
+        // Fallback path: if pixel-error map was not provided, keep previous grad-norm accumulation.
+        if (update_densification_info && pixel_error_map_ptr == nullptr) {
             kernels::launch_grad_norm_accumulate(
                 gaussian_model._densification_info.ptr<float>(),
                 v_means_ptr,

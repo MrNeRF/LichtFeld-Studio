@@ -244,6 +244,8 @@ namespace gsplat_lfs {
         float* v_scales,    // [N, 3]
         float* v_colors,    // [C, N, channels]
         float* v_opacities, // [C, N]
+        float* densification_info,         // [2, N] flattened or nullptr
+        const float* densification_error_map, // [H, W] or nullptr
         cudaStream_t stream = nullptr);
 
     //=========================================================================
@@ -366,6 +368,8 @@ namespace gsplat_lfs {
         float* v_scales,    // [N, 3]
         float* v_opacities, // [N]
         float* v_sh_coeffs, // [N, K, 3]
+        float* densification_info,          // [2, N] flattened or nullptr
+        const float* densification_error_map, // [H, W] or nullptr
         cudaStream_t stream = nullptr);
 
 } // namespace gsplat_lfs

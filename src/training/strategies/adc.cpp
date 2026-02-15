@@ -27,6 +27,9 @@ namespace lfs::training {
         [[nodiscard]] inline bool has_shN_coefficients(const lfs::core::Tensor& shN) {
             return shN.is_valid() && shN.ndim() >= 2 && shN.shape()[1] > 0;
         }
+
+        // Error-based ADC densification threshold from the revising densification setup.
+        constexpr float kAdcErrorThreshold = 0.1f;
     } // anonymous namespace
 
     ADC::ADC(lfs::core::SplatData& splat_data) : _splat_data(&splat_data) {}
@@ -49,11 +52,6 @@ namespace lfs::training {
         const size_t capacity = _params->max_cap > 0 ? static_cast<size_t>(_params->max_cap)
                                                      : static_cast<size_t>(_splat_data->size());
         _free_mask = lfs::core::Tensor::zeros_bool({capacity}, _splat_data->means().device());
-
-        if (_params->adc_use_pixel_error && _params->gut) {
-            LOG_WARN("ADC pixel-error densification is currently only implemented for fast rasterizer mode; "
-                     "falling back to gradient score because `gut=true`.");
-        }
     }
 
     bool ADC::is_refining(int iter) const {
@@ -365,14 +363,8 @@ namespace lfs::training {
     void ADC::grow_gs(int iter) {
         lfs::core::Tensor numer = _splat_data->_densification_info[1];
         lfs::core::Tensor denom = _splat_data->_densification_info[0];
-        const bool use_pixel_error_score = _params->adc_use_pixel_error && !_params->gut;
-        const lfs::core::Tensor score = use_pixel_error_score
-                                            ? (numer / denom.clamp_min(1e-6f))
-                                            : (numer / denom.clamp_min(1.0f));
-
-        lfs::core::Tensor is_score_high = use_pixel_error_score
-                                              ? (score > _params->adc_error_threshold)
-                                              : (score > _params->grad_threshold);
+        const lfs::core::Tensor score = numer / denom.clamp_min(1e-6f);
+        lfs::core::Tensor is_score_high = score > kAdcErrorThreshold;
 
         // Exclude free slots from consideration
         const size_t current_size = static_cast<size_t>(_splat_data->size());
@@ -432,13 +424,8 @@ namespace lfs::training {
             }
         }
 
-        if (use_pixel_error_score) {
-            LOG_DEBUG("grow_gs(error): {} duplicates, {} splits (threshold={})",
-                      num_duplicates, num_split, _params->adc_error_threshold);
-        } else {
-            LOG_DEBUG("grow_gs(gradient): {} duplicates, {} splits (threshold={})",
-                      num_duplicates, num_split, _params->grad_threshold);
-        }
+        LOG_DEBUG("grow_gs(error): {} duplicates, {} splits (threshold={})",
+                  num_duplicates, num_split, kAdcErrorThreshold);
 
         // First duplicate
         if (num_duplicates > 0) {

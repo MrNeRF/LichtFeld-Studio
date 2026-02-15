@@ -65,9 +65,8 @@ namespace lfs::training {
         void update_optimizer_for_relocate(const lfs::core::Tensor& sampled_indices,
                                            const lfs::core::Tensor& dead_indices,
                                            ParamType param_type);
-        lfs::core::Tensor get_sampling_weights(const lfs::core::Tensor& opacities) const;
+        lfs::core::Tensor get_sampling_weights() const;
         void ensure_densification_info_shape();
-        bool use_pixel_error_weights() const;
 
         // Member variables
         std::unique_ptr<AdamOptimizer> _optimizer;

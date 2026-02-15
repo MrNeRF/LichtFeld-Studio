@@ -123,9 +123,6 @@ namespace lfs::core {
             opt_json["reset_every"] = reset_every;
             opt_json["pause_refine_after_reset"] = pause_refine_after_reset;
             opt_json["revised_opacity"] = revised_opacity;
-            opt_json["adc_use_pixel_error"] = adc_use_pixel_error;
-            opt_json["adc_error_threshold"] = adc_error_threshold;
-            opt_json["mcmc_use_pixel_error"] = mcmc_use_pixel_error;
             opt_json["gut"] = gut;
             opt_json["undistort"] = undistort;
             opt_json["steps_scaler"] = steps_scaler;
@@ -312,15 +309,6 @@ namespace lfs::core {
             }
             if (json.contains("revised_opacity")) {
                 params.revised_opacity = json["revised_opacity"];
-            }
-            if (json.contains("adc_use_pixel_error")) {
-                params.adc_use_pixel_error = json["adc_use_pixel_error"];
-            }
-            if (json.contains("adc_error_threshold")) {
-                params.adc_error_threshold = json["adc_error_threshold"];
-            }
-            if (json.contains("mcmc_use_pixel_error")) {
-                params.mcmc_use_pixel_error = json["mcmc_use_pixel_error"];
             }
             if (json.contains("steps_scaler")) {
                 params.steps_scaler = json["steps_scaler"];

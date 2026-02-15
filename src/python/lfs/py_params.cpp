@@ -176,15 +176,6 @@ namespace lfs::python {
             .bool_prop(&OptimizationParameters::revised_opacity,
                        "revised_opacity", "Revised Opacity", false,
                        "Use revised opacity calculation for ADC")
-            .bool_prop(&OptimizationParameters::adc_use_pixel_error,
-                       "adc_use_pixel_error", "ADC Pixel Error", true,
-                       "Use contribution-weighted per-pixel error for ADC densification")
-            .float_prop(&OptimizationParameters::adc_error_threshold,
-                        "adc_error_threshold", "ADC Error Threshold", 0.1f, 0.0f, 1.0f,
-                        "Threshold on average contribution-weighted pixel error for ADC growing")
-            .bool_prop(&OptimizationParameters::mcmc_use_pixel_error,
-                       "mcmc_use_pixel_error", "MCMC Pixel Error", true,
-                       "Use contribution-weighted per-pixel error for MCMC densification")
 
             // Flags
             .bool_prop(&OptimizationParameters::mip_filter,
