@@ -1112,7 +1112,6 @@ namespace lfs::training {
                                              ppisp_cam_idx >= 0 &&
                                              ppisp_cam_idx < ppisp_controller_pool_->num_cameras();
             const bool use_pixel_error_densification =
-                (params_.optimization.strategy == "adc") ||
                 (params_.optimization.strategy == "mcmc");
             const bool use_ssim_error = use_pixel_error_densification &&
                                         (params_.optimization.strategy == "mcmc");

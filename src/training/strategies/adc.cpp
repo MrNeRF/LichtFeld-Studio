@@ -27,8 +27,6 @@ namespace lfs::training {
         [[nodiscard]] inline bool has_shN_coefficients(const lfs::core::Tensor& shN) {
             return shN.is_valid() && shN.ndim() >= 2 && shN.shape()[1] > 0;
         }
-
-        constexpr float ADC_ERROR_THRESHOLD = 0.1f;
     } // anonymous namespace
 
     ADC::ADC(lfs::core::SplatData& splat_data) : _splat_data(&splat_data) {}
@@ -360,28 +358,29 @@ namespace lfs::training {
     }
 
     void ADC::grow_gs(int iter) {
-        const lfs::core::Tensor numer = _splat_data->_densification_info[1];
-        const lfs::core::Tensor denom = _splat_data->_densification_info[0];
-        const lfs::core::Tensor score = numer / denom.clamp_min(1e-6f);
-        lfs::core::Tensor is_score_high = score > ADC_ERROR_THRESHOLD;
+        lfs::core::Tensor numer = _splat_data->_densification_info[1];
+        lfs::core::Tensor denom = _splat_data->_densification_info[0];
+        const lfs::core::Tensor grads = numer / denom.clamp_min(1.0f);
+
+        lfs::core::Tensor is_grad_high = grads > _params->grad_threshold;
 
         // Exclude free slots from consideration
         const size_t current_size = static_cast<size_t>(_splat_data->size());
         if (_free_mask.is_valid() && current_size > 0) {
             auto active_free_mask = _free_mask.slice(0, 0, current_size);
             auto is_active = active_free_mask.logical_not(); // true = slot is active (not free)
-            is_score_high = is_score_high.logical_and(is_active);
+            is_grad_high = is_grad_high.logical_and(is_active);
         }
 
         // Get max along last dimension
         const lfs::core::Tensor max_values = _splat_data->get_scaling().max(-1, false);
         const lfs::core::Tensor is_small = max_values <= _params->grow_scale3d * _splat_data->get_scene_scale();
-        lfs::core::Tensor is_duplicated = is_score_high.logical_and(is_small);
+        lfs::core::Tensor is_duplicated = is_grad_high.logical_and(is_small);
 
         auto num_duplicates = static_cast<int64_t>(is_duplicated.sum_scalar());
 
         const lfs::core::Tensor is_large = is_small.logical_not();
-        lfs::core::Tensor is_split = is_score_high.logical_and(is_large);
+        lfs::core::Tensor is_split = is_grad_high.logical_and(is_large);
         auto num_split = static_cast<int64_t>(is_split.sum_scalar());
 
         // Enforce max_cap: limit growth to stay within capacity
@@ -423,8 +422,7 @@ namespace lfs::training {
             }
         }
 
-        LOG_DEBUG("grow_gs(error): {} duplicates, {} splits (threshold={})",
-                  num_duplicates, num_split, ADC_ERROR_THRESHOLD);
+        LOG_DEBUG("grow_gs(): {} duplicates, {} splits", num_duplicates, num_split);
 
         // First duplicate
         if (num_duplicates > 0) {
@@ -588,7 +586,7 @@ namespace lfs::training {
     namespace {
         constexpr uint32_t DEFAULT_MAGIC = 0x4C464446; // "LFDF"
         constexpr uint32_t DEFAULT_VERSION = 2;        // v2 adds free_mask serialization
-    }                                                  // namespace
+    } // namespace
 
     void ADC::serialize(std::ostream& os) const {
         os.write(reinterpret_cast<const char*>(&DEFAULT_MAGIC), sizeof(DEFAULT_MAGIC));
