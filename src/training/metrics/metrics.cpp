@@ -4,6 +4,7 @@
 
 #include "metrics.hpp"
 #include "../rasterization/fast_rasterizer.hpp"
+#include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
@@ -11,9 +12,138 @@
 #include <chrono>
 #include <cmath>
 #include <iostream>
+#include <memory>
 #include <numeric>
 
 namespace lfs::training {
+    namespace {
+        constexpr float MASK_EPSILON = 1e-8f;
+
+        lfs::core::Tensor normalize_mask_2d(
+            const lfs::core::Tensor& mask,
+            const lfs::core::Tensor& reference,
+            const char* metric_name) {
+            if (!mask.is_valid()) {
+                throw std::runtime_error(std::string(metric_name) + ": Mask tensor is invalid");
+            }
+
+            auto mask_2d = mask;
+            if (mask_2d.ndim() == 3 && mask_2d.shape()[0] == 1) {
+                mask_2d = mask_2d.squeeze(0);
+            }
+            if (mask_2d.ndim() != 2) {
+                throw std::runtime_error(std::string(metric_name) + ": Expected 2D mask [H, W]");
+            }
+
+            mask_2d = mask_2d.to(lfs::core::DataType::Float32);
+            if (mask_2d.device() != reference.device()) {
+                mask_2d = mask_2d.to(reference.device());
+            }
+            return mask_2d.contiguous();
+        }
+
+        lfs::core::Tensor prepare_metric_mask_2d(
+            const lfs::core::Tensor& mask,
+            const lfs::core::Tensor& reference,
+            const float mask_threshold,
+            const char* metric_name) {
+            auto mask_2d = normalize_mask_2d(mask, reference, metric_name);
+            const float threshold = (mask_threshold > 0.0f && mask_threshold < 1.0f) ? mask_threshold : 0.5f;
+            return mask_2d.ge(threshold).to(lfs::core::DataType::Float32).contiguous();
+        }
+
+        lfs::core::Tensor expand_mask_for_chw(
+            const lfs::core::Tensor& mask_2d,
+            const lfs::core::Tensor& image,
+            const char* metric_name) {
+            if (image.ndim() != 3) {
+                throw std::runtime_error(std::string(metric_name) + ": Expected image shape [C, H, W]");
+            }
+
+            const int channels = static_cast<int>(image.shape()[0]);
+            const int image_h = static_cast<int>(image.shape()[1]);
+            const int image_w = static_cast<int>(image.shape()[2]);
+            const int mask_h = static_cast<int>(mask_2d.shape()[0]);
+            const int mask_w = static_cast<int>(mask_2d.shape()[1]);
+
+            if (mask_h != image_h || mask_w != image_w) {
+                throw std::runtime_error(
+                    std::string(metric_name) + ": Mask and image dimensions mismatch");
+            }
+
+            return mask_2d.unsqueeze(0).expand({channels, mask_h, mask_w});
+        }
+
+        lfs::core::Tensor load_alpha_mask(
+            lfs::core::Camera& cam,
+            const lfs::core::param::TrainingParameters& params) {
+            [[maybe_unused]] const auto [image_w, image_h, image_channels] =
+                lfs::core::get_image_info(cam.image_path());
+            if (image_channels != 4) {
+                return {};
+            }
+
+            auto [image_data, width, height, alpha_channels] = lfs::core::load_image_with_alpha(
+                cam.image_path(), params.dataset.resize_factor, params.dataset.max_width);
+            std::unique_ptr<unsigned char, decltype(&lfs::core::free_image)> image_guard(
+                image_data, lfs::core::free_image);
+
+            if (!image_data || alpha_channels != 4) {
+                return {};
+            }
+
+            auto rgba = lfs::core::Tensor::from_blob(
+                            image_data,
+                            lfs::core::TensorShape(
+                                {static_cast<size_t>(height), static_cast<size_t>(width), static_cast<size_t>(4)}),
+                            lfs::core::Device::CPU,
+                            lfs::core::DataType::UInt8)
+                            .to(lfs::core::DataType::Float32) /
+                        255.0f;
+
+            auto alpha = rgba.permute({2, 0, 1}).contiguous().slice(0, 3, 4).squeeze(0).to(lfs::core::Device::CUDA);
+
+            if (params.optimization.invert_masks) {
+                alpha = lfs::core::Tensor::full(alpha.shape(), 1.0f, alpha.device()) - alpha;
+            }
+            if (params.optimization.mask_threshold > 0.0f && params.optimization.mask_threshold < 1.0f) {
+                const auto ones = lfs::core::Tensor::full(alpha.shape(), 1.0f, alpha.device());
+                const auto threshold_mask = alpha.ge(params.optimization.mask_threshold);
+                alpha = ones.where(threshold_mask, alpha);
+            }
+
+            if (cam.is_undistort_prepared()) {
+                const auto scaled = lfs::core::scale_undistort_params(
+                    cam.undistort_params(),
+                    static_cast<int>(alpha.shape()[1]),
+                    static_cast<int>(alpha.shape()[0]));
+                alpha = lfs::core::undistort_mask(alpha, scaled, nullptr);
+            }
+
+            return alpha.contiguous();
+        }
+
+        lfs::core::Tensor load_metric_mask(
+            lfs::core::Camera& cam,
+            const lfs::core::param::TrainingParameters& params) {
+            if (params.optimization.use_alpha_as_mask) {
+                auto alpha_mask = load_alpha_mask(cam, params);
+                if (alpha_mask.is_valid()) {
+                    return alpha_mask;
+                }
+            }
+
+            if (cam.has_mask()) {
+                return cam.load_and_get_mask(
+                    params.dataset.resize_factor,
+                    params.dataset.max_width,
+                    params.optimization.invert_masks,
+                    params.optimization.mask_threshold);
+            }
+
+            return {};
+        }
+    } // namespace
 
     // PSNR Implementation using lfs::core::Tensor
     float PSNR::compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target) const {
@@ -40,6 +170,31 @@ namespace lfs::training {
         return psnr;
     }
 
+    float PSNR::compute(const lfs::core::Tensor& pred,
+                        const lfs::core::Tensor& target,
+                        const lfs::core::Tensor& mask) const {
+        if (pred.shape() != target.shape()) {
+            throw std::runtime_error("PSNR: Prediction and target must have the same shape");
+        }
+
+        const auto mask_2d = normalize_mask_2d(mask, pred, "PSNR");
+        const auto mask_expanded = expand_mask_for_chw(mask_2d, pred, "PSNR");
+        const float mask_sum = mask_expanded.sum().item<float>();
+        if (mask_sum <= MASK_EPSILON) {
+            throw std::runtime_error("PSNR: Mask has zero weight");
+        }
+
+        auto diff = pred - target;
+        auto squared_diff = (diff * diff) * mask_expanded;
+        float mse = squared_diff.sum().item<float>() / mask_sum;
+
+        if (mse < 1e-10f) {
+            mse = 1e-10f;
+        }
+
+        return 20.0f * std::log10(data_range_ / std::sqrt(mse));
+    }
+
     // SSIM Implementation using LibTorch-free kernels
     SSIM::SSIM(bool apply_valid_padding)
         : apply_valid_padding_(apply_valid_padding) {
@@ -56,6 +211,47 @@ namespace lfs::training {
 
         // Return mean SSIM value
         return ssim_value.mean().item<float>();
+    }
+
+    float SSIM::compute(const lfs::core::Tensor& pred,
+                        const lfs::core::Tensor& target,
+                        const lfs::core::Tensor& mask) {
+        if (pred.shape() != target.shape()) {
+            throw std::runtime_error("SSIM: Prediction and target must have the same shape");
+        }
+
+        auto mask_2d = normalize_mask_2d(mask, pred, "SSIM");
+        auto ssim_map_result = kernels::ssim_forward_map(pred, target, false);
+        auto ssim_map = ssim_map_result.ssim_map;
+
+        if (apply_valid_padding_) {
+            const int h = static_cast<int>(ssim_map.shape()[2]);
+            const int w = static_cast<int>(ssim_map.shape()[3]);
+            if (h > 10 && w > 10) {
+                ssim_map = ssim_map.slice(2, 5, h - 5).slice(3, 5, w - 5);
+                mask_2d = mask_2d.slice(0, 5, h - 5).slice(1, 5, w - 5);
+            }
+        }
+
+        const int map_h = static_cast<int>(ssim_map.shape()[2]);
+        const int map_w = static_cast<int>(ssim_map.shape()[3]);
+        if (static_cast<int>(mask_2d.shape()[0]) != map_h ||
+            static_cast<int>(mask_2d.shape()[1]) != map_w) {
+            throw std::runtime_error("SSIM: Mask and SSIM map dimensions mismatch");
+        }
+
+        auto mask_expanded = mask_2d.unsqueeze(0).unsqueeze(0).expand({
+            static_cast<int>(ssim_map.shape()[0]),
+            static_cast<int>(ssim_map.shape()[1]),
+            map_h,
+            map_w});
+
+        const float mask_sum = mask_expanded.sum().item<float>();
+        if (mask_sum <= MASK_EPSILON) {
+            throw std::runtime_error("SSIM: Mask has zero weight");
+        }
+
+        return (ssim_map * mask_expanded).sum().item<float>() / mask_sum;
     }
 
     // MetricsReporter Implementation
@@ -264,6 +460,10 @@ namespace lfs::training {
 
         int image_idx = 0;
         const size_t val_dataset_size = val_dataset->size();
+        const auto mask_mode = _params.optimization.mask_mode;
+        const bool needs_metric_mask =
+            mask_mode == lfs::core::param::MaskMode::Segment ||
+            mask_mode == lfs::core::param::MaskMode::Ignore;
 
         while (auto batch_opt = val_dataloader->next()) {
             auto& batch = *batch_opt;
@@ -289,16 +489,52 @@ namespace lfs::training {
             // Clamp rendered image to [0, 1]
             r_output.image = r_output.image.clamp(0.0f, 1.0f);
 
+            lfs::core::Tensor metric_mask;
+            lfs::core::Tensor masked_gt_image;
+            lfs::core::Tensor masked_render_image;
+            if (needs_metric_mask) {
+                metric_mask = load_metric_mask(*cam, _params);
+                if (!metric_mask.is_valid()) {
+                    throw std::runtime_error(
+                        "Evaluation mask mode is enabled, but no mask could be loaded for camera: " + cam->image_name());
+                }
+                metric_mask = prepare_metric_mask_2d(
+                    metric_mask,
+                    gt_image,
+                    _params.optimization.mask_threshold,
+                    "Evaluation");
+                const auto mask_chw = expand_mask_for_chw(metric_mask, gt_image, "Evaluation");
+                masked_gt_image = gt_image * mask_chw;
+                masked_render_image = r_output.image * mask_chw;
+            }
+
+            lfs::core::Tensor save_gt_image = gt_image;
+            lfs::core::Tensor save_render_image = r_output.image;
+
             // Compute metrics
-            const float psnr = _psnr_metric->compute(r_output.image, gt_image);
-            const float ssim = _ssim_metric->compute(r_output.image, gt_image);
+            float psnr;
+            float ssim;
+            if (mask_mode == lfs::core::param::MaskMode::Segment) {
+                // Segment mode: compare rendered image against GT with masked-out pixels zeroed.
+                psnr = _psnr_metric->compute(r_output.image, masked_gt_image);
+                ssim = _ssim_metric->compute(r_output.image, masked_gt_image);
+                save_gt_image = masked_gt_image;
+            } else if (mask_mode == lfs::core::param::MaskMode::Ignore) {
+                psnr = _psnr_metric->compute(r_output.image, gt_image, metric_mask);
+                ssim = _ssim_metric->compute(r_output.image, gt_image, metric_mask);
+                save_gt_image = masked_gt_image;
+                save_render_image = masked_render_image;
+            } else {
+                psnr = _psnr_metric->compute(r_output.image, gt_image);
+                ssim = _ssim_metric->compute(r_output.image, gt_image);
+            }
 
             psnr_values.push_back(psnr);
             ssim_values.push_back(ssim);
 
             // Save side-by-side RGB images asynchronously
             if (_params.optimization.enable_save_eval_images) {
-                const std::vector<lfs::core::Tensor> rgb_images = {gt_image, r_output.image};
+                const std::vector<lfs::core::Tensor> rgb_images = {save_gt_image, save_render_image};
                 lfs::core::image_io::save_images_async(
                     eval_dir / (std::to_string(image_idx) + ".png"),
                     rgb_images,
