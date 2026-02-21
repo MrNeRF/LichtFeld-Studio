@@ -16,7 +16,13 @@ from .errors import (
     VersionNotFoundError,
 )
 from .manager import PluginManager
-from .panels import PluginManagerPanel, register_builtin_panels
+from .marketplace import (
+    MarketplacePluginEntry,
+    PluginMarketplaceCatalog,
+    get_plugin_marketplace_urls,
+    set_plugin_marketplace_urls,
+)
+from .panels import PluginManagerPanel, PluginMarketplacePanel, register_builtin_panels
 from .plugin import PluginInfo, PluginInstance, PluginState
 from .registry import RegistryClient, RegistryPluginInfo, RegistryVersionInfo
 from .settings import PluginSettings, SettingsManager
@@ -27,6 +33,8 @@ __all__ = [
     "Panel",
     "Operator",
     "PluginManager",
+    "PluginMarketplaceCatalog",
+    "MarketplacePluginEntry",
     "PluginInfo",
     "PluginState",
     "PluginInstance",
@@ -42,7 +50,10 @@ __all__ = [
     "RegistryPluginInfo",
     "RegistryVersionInfo",
     "PluginManagerPanel",
+    "PluginMarketplacePanel",
     "register_builtin_panels",
+    "get_plugin_marketplace_urls",
+    "set_plugin_marketplace_urls",
     "Capability",
     "CapabilityRegistry",
     "CapabilitySchema",
