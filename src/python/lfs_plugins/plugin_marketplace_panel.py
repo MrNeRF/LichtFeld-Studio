@@ -83,6 +83,7 @@ class PluginMarketplacePanel(Panel):
         entries, is_loading = self._catalog.snapshot()
         entries = self._with_local_plugins(entries, mgr)
         installed_lookup = self._get_installed_plugin_lookup(mgr)
+        installed_versions = self._get_installed_plugin_versions(mgr)
         installed_names = set(installed_lookup.values())
         entries = self._filter_and_sort_entries(entries, set(installed_lookup.keys()))
 
@@ -132,6 +133,7 @@ class PluginMarketplacePanel(Panel):
                         idx,
                         entries[idx],
                         installed_lookup,
+                        installed_versions,
                         installed_names,
                         install_in_progress,
                         card_w,
@@ -178,6 +180,7 @@ class PluginMarketplacePanel(Panel):
         idx: int,
         entry: MarketplacePluginEntry,
         installed_lookup: Dict[str, str],
+        installed_versions: Dict[str, str],
         installed_names: Set[str],
         install_in_progress: bool,
         card_w: float,
@@ -207,6 +210,12 @@ class PluginMarketplacePanel(Panel):
             description = self._truncate_text(entry.description or tr("plugin_marketplace.no_description"), 90)
 
             layout.text_colored(short_name, palette.text)
+            if plugin_name and plugin_state == PluginState.ACTIVE:
+                version = installed_versions.get(plugin_name, "").strip()
+                if version:
+                    version_label = version if version.lower().startswith("v") else f"v{version}"
+                    layout.same_line(spacing=6 * scale)
+                    layout.text_colored(version_label, palette.info)
             if repo_label:
                 layout.text_disabled(repo_label)
             if not is_local_only:
@@ -718,6 +727,10 @@ class PluginMarketplacePanel(Panel):
             for key in self._plugin_keys(plugin.name, plugin.path.name):
                 lookup[key] = plugin.name
         return lookup
+
+    @staticmethod
+    def _get_installed_plugin_versions(mgr) -> Dict[str, str]:
+        return {plugin.name: plugin.version for plugin in mgr.discover()}
 
     def _resolve_entry_plugin_name(
         self,
