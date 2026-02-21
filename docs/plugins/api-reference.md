@@ -9,8 +9,8 @@ Complete API reference for LichtFeld Studio plugins.
 ```python
 import lichtfeld as lf
 
-lf.register_class(cls)           # Register a Panel or Operator class
-lf.unregister_class(cls)         # Unregister a Panel or Operator class
+lf.register_class(cls)           # Register a Panel, Operator, or Menu class
+lf.unregister_class(cls)         # Unregister a Panel, Operator, or Menu class
 ```
 
 ---
@@ -24,11 +24,11 @@ from lfs_plugins.types import Panel
 | Attribute   | Type       | Default           | Description                          |
 |-------------|------------|-------------------|--------------------------------------|
 | `idname`    | `str`      | `module.qualname` | Unique panel identifier              |
-| `label`     | `str`      | `""`              | Display name                         |
+| `label`     | `str`      | `""`              | Display name (`idname` fallback when empty) |
 | `space`     | `str`      | `"FLOATING"`      | Panel space (see below)              |
 | `order`     | `int`      | `100`             | Sort order (lower = higher)          |
 | `options`   | `Set[str]` | `set()`           | `"DEFAULT_CLOSED"`, `"HIDE_HEADER"` |
-| `poll_deps` | `Set[str]` | `set()`           | `"SCENE"`, `"SELECTION"`, `"TRAINING"` — which state changes trigger `poll()` |
+| `poll_deps` | `Set[str]` | `{"SCENE","SELECTION","TRAINING"}` | Which state changes trigger `poll()` |
 
 | Method               | Returns | Description                      |
 |----------------------|---------|----------------------------------|
@@ -561,18 +561,22 @@ from lfs_plugins.manager import PluginManager
 mgr = PluginManager.instance()
 ```
 
-| Method                          | Returns            | Description                       |
-|---------------------------------|--------------------|-----------------------------------|
-| `plugins_dir`                   | `Path`             | Property. `~/.lichtfeld/plugins/` |
-| `discover()`                    | `list[PluginInfo]` | Scan for plugins                  |
-| `load(name, on_progress=None)`  | `None`             | Load a plugin                     |
-| `unload(name)`                  | `None`             | Unload a plugin                   |
-| `install(url, on_progress=None)`| `str`              | Install from GitHub URL           |
-| `uninstall(name)`               | `None`             | Remove a plugin                   |
-| `update(name, on_progress=None)`| `None`             | Update a plugin                   |
-| `get_state(name)`               | `Optional[PluginState]` | Get plugin state             |
-| `get_error(name)`               | `Optional[str]`    | Get error message                 |
-| `get_traceback(name)`           | `Optional[str]`    | Get error traceback               |
+| Method                                | Returns                    | Description                       |
+|---------------------------------------|----------------------------|-----------------------------------|
+| `plugins_dir`                         | `Path`                     | Property. `~/.lichtfeld/plugins/` |
+| `discover()`                          | `list[PluginInfo]`         | Scan for plugins                  |
+| `load(name, on_progress=None)`        | `bool`                     | Load a plugin                     |
+| `unload(name)`                        | `bool`                     | Unload a plugin                   |
+| `reload(name)`                        | `bool`                     | Hot-reload a plugin               |
+| `load_all()`                          | `dict[str, bool]`          | Load all auto-start plugins       |
+| `install(url, on_progress=None, auto_load=True)` | `str`          | Install from Git URL              |
+| `uninstall(name)`                     | `bool`                     | Remove a plugin                   |
+| `update(name, on_progress=None)`      | `bool`                     | Update a plugin                   |
+| `search(query, compatible_only=True)` | `list[RegistryPluginInfo]` | Search registry                   |
+| `check_updates()`                     | `dict[str, tuple]`         | Check installed plugin updates    |
+| `get_state(name)`                     | `Optional[PluginState]`    | Get plugin state                  |
+| `get_error(name)`                     | `Optional[str]`            | Get error message                 |
+| `get_traceback(name)`                 | `Optional[str]`            | Get error traceback               |
 
 ### PluginInfo
 
@@ -785,10 +789,11 @@ Calling `update()` with a different resolution automatically recreates the GL te
 | Method                                              | Returns | Description              |
 |-----------------------------------------------------|---------|--------------------------|
 | `begin_popup(id)`                                   | `bool`  | Start popup              |
-| `begin_popup_context_item(id='')`                   | `bool`  | Context menu popup       |
+| `begin_context_menu(id='')`                         | `bool`  | Styled context menu      |
 | `begin_popup_modal(title)`                          | `bool`  | Modal popup              |
 | `open_popup(id)`                                    | `None`  | Trigger popup open       |
-| `end_popup()` / `end_popup_modal()`                 | `None`  | End popup                |
+| `end_popup()` / `end_popup_modal()`                 | `None`  | End popup/modal          |
+| `end_context_menu()`                                | `None`  | End context menu         |
 | `close_current_popup()`                             | `None`  | Close current popup      |
 | `begin_menu(label)`                                 | `bool`  | Start menu               |
 | `end_menu()`                                        | `None`  | End menu                 |
@@ -811,8 +816,10 @@ Calling `update()` with a different resolution automatically recreates the GL te
 | `set_next_window_pos(pos, first_use=False)`                   | `None`         | Set window position   |
 | `set_next_window_size(size, first_use=False)`                 | `None`         | Set window size       |
 | `set_next_window_pos_center()`                                | `None`         | Center window         |
+| `set_next_window_pos_centered(first_use=False)`               | `None`         | Center next window (main viewport) |
 | `set_next_window_pos_viewport_center()`                       | `None`         | Viewport center       |
 | `set_next_window_focus()`                                     | `None`         | Focus next window     |
+| `set_next_window_bg_alpha(alpha)`                             | `None`         | Set next window BG alpha |
 | `push_window_style()` / `pop_window_style()`                  | `None`         | Window style stack    |
 | `push_modal_style()` / `pop_modal_style()`                    | `None`         | Modal style stack     |
 
@@ -1074,7 +1081,7 @@ Module-level shortcuts for common scene operations (equivalent to `Scene` object
 | `get_node_transform(name)`                  | `list[float]`  | 16 floats, column-major          |
 | `set_node_transform(name, matrix)`          | `None`         | Set 4x4 transform                |
 | `decompose_transform(matrix)`               | `dict`         | See keys below                   |
-| `compose_transform(translation, euler, scale)` | `list[float]` | Build 4x4 from components      |
+| `compose_transform(translation, euler_deg, scale)` | `list[float]` | Build 4x4 from components (Euler in degrees) |
 
 `decompose_transform` returns a dict with these keys:
 
@@ -1209,7 +1216,7 @@ lf.save_config_file(path: str)
 ### Undo
 
 ```python
-lf.undo.push(name: str, undo: Callable, redo: Callable)
+lf.undo.push(name: str, undo: Callable, redo: Callable, validate: Callable | None = None)
 ```
 
 ### UI Functions
@@ -1220,42 +1227,48 @@ lf.undo.push(name: str, undo: Callable, redo: Callable)
 | `lf.ui.theme()`                             | `Theme`          | Current theme              |
 | `lf.ui.context()`                           | `AppContext`     | App context                |
 | `lf.ui.request_redraw()`                    | `None`           | Request UI redraw          |
-| `lf.ui.set_language(lang)`                  | `None`           | Set UI language            |
+| `lf.ui.set_language(lang_code)`             | `None`           | Set UI language            |
+| `lf.ui.get_current_language()`              | `str`            | Active language code       |
+| `lf.ui.get_languages()`                     | `list[tuple[str, str]]` | Available languages  |
+| `lf.ui.set_theme(name)`                     | `None`           | Theme switch (`dark`/`light`) |
+| `lf.ui.get_theme()`                         | `str`            | Active theme name          |
 | `lf.ui.set_panel_enabled(idname, enabled)`  | `None`           | Toggle panel by idname     |
 | `lf.ui.is_panel_enabled(idname)`            | `bool`           | Panel enabled state        |
 | `lf.ui.get_panel_names(space='FLOATING')`   | `list[str]`      | Panel idnames for a space  |
-| `lf.ui.get_panel(idname)`                   | `dict or None`   | Panel info dict (`idname`, `label`, `order`, `enabled`, `space`) |
+| `lf.ui.get_panel(idname)`                   | `dict or None`   | Panel info (`idname`, `label`, `order`, `enabled`, `space`) |
 | `lf.ui.set_panel_label(idname, label)`      | `bool`           | Change panel display name  |
 | `lf.ui.set_panel_order(idname, order)`      | `bool`           | Change panel sort order    |
 | `lf.ui.set_panel_space(idname, space)`      | `bool`           | Move panel to a different space |
-| `lf.ui.ops.invoke(op_id)`                   | `None`           | Invoke operator            |
+| `lf.ui.ops.invoke(op_id, **kwargs)`         | `OperatorReturnValue` | Invoke operator       |
+| `lf.ui.ops.poll(op_id)`                     | `bool`           | Operator poll              |
 | `lf.ui.ops.cancel_modal()`                  | `None`           | Cancel modal operator      |
-| `lf.ui.get_active_tool()`                   | `str or None`    | Active tool ID             |
-| `lf.ui.get_active_submode()`                | `str or None`    | Active submode             |
-| `lf.ui.set_selection_mode(mode)`            | `None`           | "centers", "rectangle", etc|
-| `lf.ui.get_transform_space()`               | `str`            | "local" or "world"        |
-| `lf.ui.set_transform_space(space)`          | `None`           | Set transform space        |
-| `lf.ui.get_pivot_mode()` / `set_pivot_mode(mode)` | `str`     | Pivot mode                 |
-| `lf.ui.get_fps()`                          | `float`          | Current FPS                |
-| `lf.ui.get_gpu_memory()`                   | `(int, int)`     | (used, total) GPU memory in bytes |
-| `lf.ui.get_git_commit()`                   | `str`            | Git commit hash            |
+| `lf.ui.get_active_tool()`                   | `str`            | Active tool ID             |
+| `lf.ui.get_active_submode()`                | `str`            | Active submode             |
+| `lf.ui.set_selection_mode(mode)`            | `None`           | Set selection submode      |
+| `lf.ui.get_transform_space()`               | `int`            | Transform space enum index |
+| `lf.ui.set_transform_space(space)`          | `None`           | Set transform space index  |
+| `lf.ui.get_pivot_mode()` / `set_pivot_mode(mode)` | `int`      | Pivot mode enum index      |
+| `lf.ui.get_fps()`                           | `float`          | Current FPS                |
+| `lf.ui.get_gpu_memory()`                    | `(int, int)`     | (used, total) bytes        |
+| `lf.ui.get_git_commit()`                    | `str`            | Git commit hash            |
 
 ### File Dialogs
 
 | Function                                    | Returns          |
 |---------------------------------------------|------------------|
-| `lf.ui.open_file_dialog()`                  | `str or None`    |
-| `lf.ui.open_dataset_folder_dialog()`        | `str or None`    |
-| `lf.ui.open_ply_file_dialog(initial)`       | `str or None`    |
-| `lf.ui.open_checkpoint_file_dialog()`       | `str or None`    |
-| `lf.ui.open_json_file_dialog()`             | `str or None`    |
-| `lf.ui.open_image_file_dialog()`            | `str or None`    |
-| `lf.ui.save_file_dialog()`                  | `str or None`    |
-| `lf.ui.save_json_file_dialog()`             | `str or None`    |
-| `lf.ui.save_ply_file_dialog()`              | `str or None`    |
-| `lf.ui.save_sog_file_dialog()`              | `str or None`    |
-| `lf.ui.save_spz_file_dialog()`              | `str or None`    |
-| `lf.ui.save_html_file_dialog()`             | `str or None`    |
+| `lf.ui.open_image_dialog(start_dir='')`     | `str`            |
+| `lf.ui.open_folder_dialog(title='Select Folder', start_dir='')` | `str` |
+| `lf.ui.open_dataset_folder_dialog()`        | `str`            |
+| `lf.ui.open_ply_file_dialog(start_dir='')`  | `str`            |
+| `lf.ui.open_mesh_file_dialog(start_dir='')` | `str`            |
+| `lf.ui.open_checkpoint_file_dialog()`       | `str`            |
+| `lf.ui.open_json_file_dialog()`             | `str`            |
+| `lf.ui.open_video_file_dialog()`            | `str`            |
+| `lf.ui.save_json_file_dialog(default_name='config.json')` | `str` |
+| `lf.ui.save_ply_file_dialog(default_name='export.ply')`   | `str` |
+| `lf.ui.save_sog_file_dialog(default_name='export.sog')`   | `str` |
+| `lf.ui.save_spz_file_dialog(default_name='export.spz')`   | `str` |
+| `lf.ui.save_html_file_dialog(default_name='viewer.html')` | `str` |
 
 ### UI Hooks
 
@@ -1271,11 +1284,7 @@ Inject UI into existing panels at predefined hook points. Callbacks receive a `l
 | `lf.ui.invoke_hooks(panel, section, prepend=False)` | Invoke hooks (`prepend=True` for prepend, `False` for append) |
 | `@lf.ui.hook(panel, section, position="append")` | Decorator form of `add_hook` |
 
-**Available hook points:**
-
-| Panel | Section | Description |
-|---|---|---|
-| `"rendering"` | `"selection_groups"` | Rendering panel, between settings and tools |
+Hook points are runtime-defined. Query them with `lf.ui.get_hook_points()` instead of hard-coding.
 
 ### Tensor API
 
@@ -1283,6 +1292,8 @@ Inject UI into existing panels at predefined hook points. Callbacks receive a `l
 import lichtfeld as lf
 t = lf.Tensor
 ```
+
+The tables below list the most-used tensor APIs. For the full bound surface, see `src/python/stubs/lichtfeld/__init__.pyi`.
 
 **Creation:**
 
@@ -1329,8 +1340,8 @@ t = lf.Tensor
 | `.item()`                           | `scalar` | Extract scalar           |
 | `.sum(dim=None, keepdim=False)`     | `Tensor` | Reduce sum               |
 | `.mean(dim=None, keepdim=False)`    | `Tensor` | Reduce mean              |
-| `.max(dim=None)`                    | `Tensor` | Reduce max               |
-| `.min(dim=None)`                    | `Tensor` | Reduce min               |
+| `.max(dim=None, keepdim=False)`     | `Tensor` | Reduce max               |
+| `.min(dim=None, keepdim=False)`     | `Tensor` | Reduce min               |
 | `.reshape(shape)`                   | `Tensor` | Reshape                  |
 | `.view(shape)`                      | `Tensor` | View reshape             |
 | `.squeeze(dim=None)`                | `Tensor` | Remove size-1 dims       |
@@ -1338,6 +1349,15 @@ t = lf.Tensor
 | `.transpose(dim0, dim1)`            | `Tensor` | Swap dimensions          |
 | `.permute(dims)`                    | `Tensor` | Reorder dimensions       |
 | `.flatten(start=0, end=-1)`         | `Tensor` | Flatten range            |
+| `.expand(sizes)`                    | `Tensor` | Broadcast view           |
+| `.repeat(repeats)`                  | `Tensor` | Tile tensor              |
+| `.prod()`, `.std()`, `.var()`      | `Tensor` | Additional reductions    |
+| `.argmax()`, `.argmin()`            | `Tensor` | Index reductions         |
+| `.all()`, `.any()`                  | `Tensor` | Logical reductions       |
+| `.matmul()`, `.mm()`, `.bmm()`      | `Tensor` | Matrix products          |
+| `.masked_select()`, `.masked_fill()`| `Tensor` | Masked operations        |
+| `.zeros_like()`, `.ones_like()` etc.| `Tensor` | Like-constructors        |
+| `.from_dlpack()` / `.__dlpack__()`  | `Tensor` | DLPack interop           |
 
 **Operators:** `+`, `-`, `*`, `/`, `**`, `==`, `!=`, `<`, `>`, `<=`, `>=`, `[]` (indexing/slicing)
 
@@ -1361,13 +1381,13 @@ t = lf.Tensor
 [project]
 name = ""                    # string, required - Unique plugin identifier
 version = ""                 # string, required - Semantic version
-description = ""             # string, optional - Plugin description
+description = ""             # string, required
 authors = []                 # list[{name, email}], optional - PEP 621 authors
 dependencies = []            # list[string], optional - Python packages (PEP 508)
 
 [tool.lichtfeld]
-auto_start = true            # bool, optional - Auto-load on startup (default: true)
-hot_reload = true            # bool, optional - Support hot reload (default: true)
+auto_start = true            # bool, required
+hot_reload = true            # bool, required
 entry_point = "__init__"     # string, optional - Module to load (default: __init__)
 min_lichtfeld_version = ""   # string, optional - Minimum LichtFeld version
 author = ""                  # string, optional - Author fallback (if no [project].authors)
