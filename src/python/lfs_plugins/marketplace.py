@@ -97,10 +97,7 @@ class PluginMarketplaceCatalog:
             return list(self._entries), self._loading
 
     def _resolve_entries(self, urls: Sequence[str]) -> List[MarketplacePluginEntry]:
-        resolved: List[MarketplacePluginEntry] = []
-        for source_url in urls:
-            resolved.append(self._resolve_one(source_url))
-        return resolved
+        return [self._resolve_one(source_url) for source_url in urls]
 
     def _resolve_one(self, source_url: str) -> MarketplacePluginEntry:
         source_url = source_url.strip()
@@ -123,6 +120,8 @@ class PluginMarketplaceCatalog:
         name = repo
         description = ""
         stars = 0
+        language = ""
+        topics: Tuple[str, ...] = ()
 
         try:
             data = self._fetch_repo_metadata(owner, repo)
@@ -143,8 +142,6 @@ class PluginMarketplaceCatalog:
             )
         except Exception as exc:
             _log.debug("GitHub metadata lookup failed for %s/%s: %s", owner, repo, exc)
-            language = ""
-            topics = ()
 
         return MarketplacePluginEntry(
             source_url=source_url,
@@ -203,12 +200,6 @@ class PluginMarketplaceCatalog:
 
 
 def _clean_urls(urls: Sequence[str]) -> List[str]:
-    cleaned: List[str] = []
-    seen = set()
-    for url in urls:
-        value = str(url).strip()
-        if not value or value in seen:
-            continue
-        cleaned.append(value)
-        seen.add(value)
-    return cleaned
+    # Preserve user-defined ordering while dropping empty/duplicate values.
+    cleaned = [str(url).strip() for url in urls]
+    return [url for url in dict.fromkeys(cleaned) if url]

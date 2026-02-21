@@ -4,7 +4,6 @@
 
 import configparser
 import json
-import re
 import subprocess
 import threading
 import urllib.error
@@ -23,7 +22,6 @@ from .plugin import PluginState
 from .types import Panel
 
 MAX_OUTPUT_LINES = 100
-PLUGIN_ORIGIN_HINT_FILE = ".lfs_plugin_origin.json"
 
 
 class PluginMarketplacePanel(Panel):
@@ -85,6 +83,7 @@ class PluginMarketplacePanel(Panel):
         entries, is_loading = self._catalog.snapshot()
         entries = self._with_local_plugins(entries, mgr)
         installed_lookup = self._get_installed_plugin_lookup(mgr)
+        installed_names = set(installed_lookup.values())
         entries = self._filter_and_sort_entries(entries, set(installed_lookup.keys()))
 
         if is_loading:
@@ -133,6 +132,7 @@ class PluginMarketplacePanel(Panel):
                         idx,
                         entries[idx],
                         installed_lookup,
+                        installed_names,
                         install_in_progress,
                         card_w,
                         card_h,
@@ -178,6 +178,7 @@ class PluginMarketplacePanel(Panel):
         idx: int,
         entry: MarketplacePluginEntry,
         installed_lookup: Dict[str, str],
+        installed_names: Set[str],
         install_in_progress: bool,
         card_w: float,
         card_h: float,
@@ -193,11 +194,12 @@ class PluginMarketplacePanel(Panel):
         layout.push_style_color("ChildBg", palette.surface)
         layout.push_style_color("Border", palette.border)
 
-        plugin_name = self._resolve_entry_plugin_name(entry, installed_lookup)
+        plugin_name = self._resolve_entry_plugin_name(entry, installed_lookup, installed_names)
         plugin_state = mgr.get_state(plugin_name) if plugin_name else None
         is_installed = plugin_name is not None
         is_local = self._is_local_entry(entry)
         has_github = bool(entry.github_url)
+        is_local_only = self._is_local_only_entry(entry)
 
         if layout.begin_child(f"##plugin_card_{idx}", (card_w, card_h), border=True):
             short_name = entry.name or entry.repo or tr("plugin_marketplace.unknown_plugin")
@@ -207,7 +209,7 @@ class PluginMarketplacePanel(Panel):
             layout.text_colored(short_name, palette.text)
             if repo_label:
                 layout.text_disabled(repo_label)
-            if not (is_local and not has_github):
+            if not is_local_only:
                 layout.text_colored(f"{tr('plugin_marketplace.stars')}: {entry.stars}", palette.warning)
 
             tags = self._entry_type_tags(entry)
@@ -240,7 +242,7 @@ class PluginMarketplacePanel(Panel):
                 if disabled:
                     layout.begin_disabled()
 
-                if is_local and not has_github:
+                if is_local_only:
                     button_width = max(40.0, (avail_button_w - button_spacing) * 0.5)
                     load_label = (
                         tr("plugin_manager.button.unload")
@@ -333,21 +335,19 @@ class PluginMarketplacePanel(Panel):
                         ):
                             self._confirm_uninstall_plugin(mgr, plugin_name)
 
+                layout.spacing()
                 if has_github:
-                    layout.spacing()
                     if layout.button_styled(
                         f"{tr('plugin_marketplace.button.github')}##github_{idx}",
                         "primary",
                         (avail_button_w, button_height),
                     ):
                         lf.ui.open_url(entry.github_url)
-                else:
-                    layout.spacing()
 
                 if disabled:
                     layout.end_disabled()
             else:
-                if is_local and not has_github:
+                if is_local_only:
                     layout.spacing()
                     layout.end_child()
                     layout.pop_style_color(2)
@@ -451,14 +451,13 @@ class PluginMarketplacePanel(Panel):
         entries: List[MarketplacePluginEntry],
         installed_keys: Set[str],
     ) -> List[MarketplacePluginEntry]:
-        filtered: List[MarketplacePluginEntry] = []
+        filtered = []
         for entry in entries:
             is_installed = self._is_marketplace_entry_installed(entry, installed_keys)
             if self._install_filter_idx == 1 and not is_installed:
                 continue
             if self._install_filter_idx == 2 and is_installed:
                 continue
-
             filtered.append(entry)
 
         if self._sort_idx == 1:
@@ -522,7 +521,6 @@ class PluginMarketplacePanel(Panel):
             if mgr.get_state(name) == PluginState.ERROR:
                 err = mgr.get_error(name) or tr("plugin_manager.status.load_failed")
                 raise RuntimeError(err)
-            self._persist_plugin_origin_hint(mgr, name, url)
             self._url_plugin_names[self._normalize_url(url)] = name
             self._remember_marketplace_url(url)
             return name
@@ -547,7 +545,6 @@ class PluginMarketplacePanel(Panel):
             if mgr.get_state(name) == PluginState.ERROR:
                 err = mgr.get_error(name) or tr("plugin_manager.status.load_failed")
                 raise RuntimeError(err)
-            self._persist_plugin_origin_hint(mgr, name, clean_url)
             self._manual_url = ""
             self._url_plugin_names[self._normalize_url(clean_url)] = name
             self._remember_marketplace_url(clean_url)
@@ -674,11 +671,11 @@ class PluginMarketplacePanel(Panel):
             layout.tree_pop()
 
     def _remember_marketplace_url(self, url: str):
-        value = url.strip()
+        value = self._normalize_url(url)
         if not value:
             return
         urls = get_plugin_marketplace_urls()
-        if value in urls:
+        if any(self._normalize_url(existing) == value for existing in urls):
             return
         urls.append(value)
         set_plugin_marketplace_urls(urls)
@@ -722,9 +719,14 @@ class PluginMarketplacePanel(Panel):
                 lookup[key] = plugin.name
         return lookup
 
-    def _resolve_entry_plugin_name(self, entry: MarketplacePluginEntry, installed_lookup: Dict[str, str]):
+    def _resolve_entry_plugin_name(
+        self,
+        entry: MarketplacePluginEntry,
+        installed_lookup: Dict[str, str],
+        installed_names: Set[str],
+    ):
         by_url = self._url_plugin_names.get(self._normalize_url(entry.source_url))
-        if by_url and by_url in installed_lookup.values():
+        if by_url and by_url in installed_names:
             return by_url
         for key in self._entry_keys(entry):
             plugin_name = installed_lookup.get(key)
@@ -741,10 +743,7 @@ class PluginMarketplacePanel(Panel):
         entry: MarketplacePluginEntry,
         installed_keys: Set[str],
     ) -> bool:
-        for key in self._entry_keys(entry):
-            if key in installed_keys:
-                return True
-        return False
+        return any(key in installed_keys for key in self._entry_keys(entry))
 
     @staticmethod
     def _is_local_entry(entry: MarketplacePluginEntry) -> bool:
@@ -754,6 +753,10 @@ class PluginMarketplacePanel(Panel):
         if source.startswith(("http://", "https://", "github:")):
             return False
         return Path(source).is_absolute() or source.startswith("~")
+
+    @staticmethod
+    def _is_local_only_entry(entry: MarketplacePluginEntry) -> bool:
+        return PluginMarketplacePanel._is_local_entry(entry) and not bool(entry.github_url)
 
     def _entry_keys(self, entry: MarketplacePluginEntry) -> Set[str]:
         return self._plugin_keys(
@@ -777,151 +780,6 @@ class PluginMarketplacePanel(Panel):
 
         self._local_origin_cache[key] = info
         return info
-
-    def _persist_plugin_origin_hint(self, mgr, plugin_name: str, source_url: str):
-        if not source_url:
-            return
-        normalized = self._normalize_github_repo_url(source_url)
-        if not normalized:
-            return
-        try:
-            plugin_path = None
-            for info in mgr.discover():
-                if info.name == plugin_name:
-                    plugin_path = info.path
-                    break
-            if not plugin_path:
-                return
-            hint_path = Path(plugin_path) / PLUGIN_ORIGIN_HINT_FILE
-            hint_path.write_text(json.dumps({"source_url": normalized}), encoding="utf-8")
-        except Exception:
-            pass
-
-    @staticmethod
-    def _extract_github_url_from_hint(plugin_path: Path) -> str:
-        hint_path = plugin_path / PLUGIN_ORIGIN_HINT_FILE
-        if not hint_path.exists():
-            return ""
-        try:
-            data = json.loads(hint_path.read_text(encoding="utf-8"))
-            candidate = str(data.get("source_url", ""))
-            return PluginMarketplacePanel._normalize_github_repo_url(candidate)
-        except Exception:
-            return ""
-
-    @staticmethod
-    def _extract_github_url_from_manifest(plugin_path: Path) -> str:
-        manifest = plugin_path / "pyproject.toml"
-        if not manifest.exists():
-            return ""
-        try:
-            try:
-                import tomllib  # type: ignore
-            except Exception:
-                import tomli as tomllib  # type: ignore
-            with open(manifest, "rb") as f:
-                data = tomllib.load(f)
-            urls = data.get("project", {}).get("urls", {})
-            if isinstance(urls, dict):
-                for _, candidate in urls.items():
-                    normalized = PluginMarketplacePanel._normalize_github_repo_url(str(candidate or ""))
-                    if normalized:
-                        return normalized
-        except Exception:
-            return ""
-        return ""
-
-    @staticmethod
-    def _extract_github_url_from_local_files(plugin_path: Path) -> str:
-        # Scan shallow docs/config files only to avoid noisy third-party content.
-        candidates: List[str] = []
-        nested_candidates: List[str] = []
-        patterns = [
-            re.compile(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?"),
-            re.compile(r"git@github\.com:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?"),
-        ]
-
-        def collect_from_file(path: Path):
-            try:
-                text = path.read_text(encoding="utf-8", errors="ignore")
-            except Exception:
-                return
-            for pattern in patterns:
-                for match in pattern.findall(text):
-                    normalized = PluginMarketplacePanel._normalize_github_repo_url(match)
-                    if normalized and normalized not in candidates:
-                        candidates.append(normalized)
-
-        names = ("README", "README.md", "readme.md", "pyproject.toml", ".gitmodules")
-        for name in names:
-            p = plugin_path / name
-            if p.exists() and p.is_file():
-                collect_from_file(p)
-
-        if not candidates:
-            # One-level nested scan (e.g., plugin bundles a repo subfolder).
-            plugin_tokens = set(re.split(r"[^a-z0-9]+", plugin_path.name.lower()))
-            plugin_tokens.discard("")
-            plugin_flat = "".join(ch for ch in plugin_path.name.lower() if ch.isalnum())
-
-            def name_match_score(name: str) -> int:
-                name_tokens = set(re.split(r"[^a-z0-9]+", name.lower()))
-                name_tokens.discard("")
-                overlap = len(plugin_tokens.intersection(name_tokens))
-                name_flat = "".join(ch for ch in name.lower() if ch.isalnum())
-                if plugin_flat and name_flat and (plugin_flat in name_flat or name_flat in plugin_flat):
-                    overlap += 2
-                return overlap
-
-            for child in plugin_path.iterdir():
-                if not child.is_dir() or child.name.startswith("."):
-                    continue
-                if name_match_score(child.name) < 1:
-                    continue
-
-                nested_git_url = PluginMarketplacePanel._extract_github_url_from_git(child)
-                if nested_git_url and nested_git_url not in nested_candidates:
-                    nested_candidates.append(nested_git_url)
-
-                for name in ("README", "README.md", "readme.md", "pyproject.toml"):
-                    p = child / name
-                    if p.exists() and p.is_file():
-                        before = len(candidates)
-                        collect_from_file(p)
-                        if len(candidates) > before:
-                            nested_candidates.extend(candidates[before:])
-
-            if nested_candidates:
-                candidates = list(dict.fromkeys(nested_candidates))
-
-        if not candidates:
-            return ""
-
-        plugin_tokens = set(re.split(r"[^a-z0-9]+", plugin_path.name.lower()))
-        plugin_tokens.discard("")
-
-        def score(url: str) -> int:
-            try:
-                _, repo, _ = parse_github_url(url)
-            except Exception:
-                return -1
-            repo_tokens = set(re.split(r"[^a-z0-9]+", repo.lower()))
-            repo_tokens.discard("")
-            overlap = len(plugin_tokens.intersection(repo_tokens))
-            plugin_flat = "".join(ch for ch in plugin_path.name.lower() if ch.isalnum())
-            repo_flat = "".join(ch for ch in repo.lower() if ch.isalnum())
-            if plugin_flat and repo_flat and (plugin_flat in repo_flat or repo_flat in plugin_flat):
-                overlap += 2
-            return overlap
-
-        scored = [(score(url), url) for url in candidates]
-        best_score = max(s for s, _ in scored)
-        if best_score < 2:
-            return ""
-        for s, url in scored:
-            if s == best_score:
-                return url
-        return ""
 
     @staticmethod
     def _extract_github_url_from_git(plugin_path: Path) -> str:

@@ -17,11 +17,11 @@ class ViewMenu:
     def draw(self, layout):
         tr = lf.ui.tr
 
-        if layout.begin_menu(lf.ui.tr("menu.view.theme")):
+        if layout.begin_menu(tr("menu.view.theme")):
             is_dark = lf.ui.get_theme() == "Dark"
-            if layout.menu_item_toggle(lf.ui.tr("menu.view.theme.dark"), "", is_dark):
+            if layout.menu_item_toggle(tr("menu.view.theme.dark"), "", is_dark):
                 lf.ui.set_theme("dark")
-            if layout.menu_item_toggle(lf.ui.tr("menu.view.theme.light"), "", not is_dark):
+            if layout.menu_item_toggle(tr("menu.view.theme.light"), "", not is_dark):
                 lf.ui.set_theme("light")
             layout.end_menu()
 
