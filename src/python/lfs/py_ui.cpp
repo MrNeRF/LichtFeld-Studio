@@ -4347,20 +4347,16 @@ namespace lfs::python {
         m.def(
             "set_theme",
             [](const std::string& name) {
-                if (name == "dark" || name == "Dark") {
-                    vis::setTheme(vis::darkTheme());
-                    vis::saveThemePreference(true);
-                } else if (name == "light" || name == "Light") {
-                    vis::setTheme(vis::lightTheme());
-                    vis::saveThemePreference(false);
+                if (vis::setThemeByName(name)) {
+                    vis::saveThemePreferenceName(name);
                 }
             },
-            nb::arg("name"), "Set theme ('dark' or 'light')");
+            nb::arg("name"), "Set theme ('dark', 'light', 'gruvbox', 'catppuccin_mocha', 'catppuccin_latte', or 'nord')");
 
         m.def(
             "get_theme",
             []() -> std::string { return vis::theme().name; },
-            "Get current theme name ('Dark' or 'Light')");
+            "Get current theme name (e.g. 'Dark', 'Light', 'Gruvbox', 'Catppuccin Mocha', 'Catppuccin Latte', or 'Nord')");
 
         // Language control (for Python-driven Edit menu)
         m.def(

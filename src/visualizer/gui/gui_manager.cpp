@@ -1125,8 +1125,10 @@ namespace lfs::vis::gui {
 
     void GuiManager::applyDefaultStyle() {
         // Initialize theme system using saved preference
-        const bool is_dark = loadThemePreference();
-        setTheme(is_dark ? darkTheme() : lightTheme());
+        const std::string preferred_theme = loadThemePreferenceName();
+        if (!setThemeByName(preferred_theme)) {
+            setTheme(darkTheme());
+        }
     }
 
     void GuiManager::showWindow(const std::string& name, bool show) {

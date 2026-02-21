@@ -231,6 +231,11 @@ namespace lfs::vis {
     // Presets (loaded from JSON files with hot-reload support)
     [[nodiscard]] LFS_VIS_API const Theme& darkTheme();
     [[nodiscard]] LFS_VIS_API const Theme& lightTheme();
+    [[nodiscard]] LFS_VIS_API const Theme& gruvboxTheme();
+    [[nodiscard]] LFS_VIS_API const Theme& catppuccinMochaTheme();
+    [[nodiscard]] LFS_VIS_API const Theme& catppuccinLatteTheme();
+    [[nodiscard]] LFS_VIS_API const Theme& nordTheme();
+    LFS_VIS_API bool setThemeByName(const std::string& name); // e.g. "dark", "light", "gruvbox", "catppuccin_mocha", "catppuccin_latte", "nord"
     LFS_VIS_API void checkThemeFileChanges(); // Call periodically to hot-reload
 
     // Persistence
@@ -238,8 +243,10 @@ namespace lfs::vis {
     LFS_VIS_API bool loadTheme(Theme& t, const std::string& path);
 
     // Theme preference (for splash screen)
+    LFS_VIS_API void saveThemePreferenceName(const std::string& theme_name);
+    [[nodiscard]] LFS_VIS_API std::string loadThemePreferenceName(); // Returns a canonical theme id
     LFS_VIS_API void saveThemePreference(bool is_dark);
-    [[nodiscard]] LFS_VIS_API bool loadThemePreference(); // Returns true if dark theme
+    [[nodiscard]] LFS_VIS_API bool loadThemePreference(); // Legacy: returns true for non-light themes
 
     // Color utilities
     [[nodiscard]] LFS_VIS_API ImVec4 lighten(const ImVec4& color, float amount);

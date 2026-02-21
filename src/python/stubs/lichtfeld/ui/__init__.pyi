@@ -1659,10 +1659,14 @@ def get_invert_masks() -> bool:
     """Get whether masks are inverted"""
 
 def set_theme(name: str) -> None:
-    """Set theme ('dark' or 'light')"""
+    """
+    Set theme ('dark', 'light', 'gruvbox', 'catppuccin_mocha', 'catppuccin_latte', or 'nord')
+    """
 
 def get_theme() -> str:
-    """Get current theme name ('Dark' or 'Light')"""
+    """
+    Get current theme name (e.g. 'Dark', 'Light', 'Gruvbox', 'Catppuccin Mocha', 'Catppuccin Latte', or 'Nord')
+    """
 
 def set_language(lang_code: str) -> None:
     """Set language by code (e.g., 'en', 'de')"""

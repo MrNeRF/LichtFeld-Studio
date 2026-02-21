@@ -6,6 +6,7 @@
 #include "core/path_utils.hpp"
 #include "internal/resource_paths.hpp"
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -35,6 +36,10 @@ namespace lfs::vis {
         Theme g_current_theme;
         Theme g_dark_theme;
         Theme g_light_theme;
+        Theme g_gruvbox_theme;
+        Theme g_catppuccin_mocha_theme;
+        Theme g_catppuccin_latte_theme;
+        Theme g_nord_theme;
         float g_dpi_scale = 1.0f;
         bool g_initialized = false;
         bool g_themes_loaded = false;
@@ -42,8 +47,16 @@ namespace lfs::vis {
         // Hot-reload state
         std::filesystem::path g_dark_path;
         std::filesystem::path g_light_path;
+        std::filesystem::path g_gruvbox_path;
+        std::filesystem::path g_catppuccin_mocha_path;
+        std::filesystem::path g_catppuccin_latte_path;
+        std::filesystem::path g_nord_path;
         std::filesystem::file_time_type g_dark_mtime;
         std::filesystem::file_time_type g_light_mtime;
+        std::filesystem::file_time_type g_gruvbox_mtime;
+        std::filesystem::file_time_type g_catppuccin_mocha_mtime;
+        std::filesystem::file_time_type g_catppuccin_latte_mtime;
+        std::filesystem::file_time_type g_nord_mtime;
 
         void ensureInitialized() {
             if (!g_initialized) {
@@ -78,6 +91,40 @@ namespace lfs::vis {
                 return {j[0].get<float>(), j[1].get<float>()};
             }
             return {0.0f, 0.0f};
+        }
+
+        std::string normalizeThemeName(std::string name) {
+            std::transform(
+                name.begin(),
+                name.end(),
+                name.begin(),
+                [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+            std::replace(name.begin(), name.end(), '-', '_');
+            std::replace(name.begin(), name.end(), ' ', '_');
+
+            if (name == "gruvbox_dark") {
+                return "gruvbox";
+            }
+            if (name == "catppuccin" || name == "catppuccin_dark") {
+                return "catppuccin_mocha";
+            }
+            if (name == "catppuccin_light") {
+                return "catppuccin_latte";
+            }
+            if (name == "nord_dark") {
+                return "nord";
+            }
+            return name;
+        }
+
+        bool useLightPopupBackground(const Theme& t) {
+            // Use palette luminance instead of theme name so popup behavior stays
+            // correct even if theme names vary or are edited in JSON files.
+            constexpr float LIGHT_POPUP_BG_THRESHOLD = 0.72f;
+            const float brightness =
+                (t.palette.background.x + t.palette.background.y + t.palette.background.z) / 3.0f;
+            return brightness >= LIGHT_POPUP_BG_THRESHOLD;
         }
 
     } // namespace
@@ -173,7 +220,8 @@ namespace lfs::vis {
     ImU32 Theme::row_odd_u32() const { return toU32(palette.row_odd); }
 
     void Theme::pushContextMenuStyle() const {
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, palette.surface);
+        const ImVec4 popup_bg = useLightPopupBackground(*this) ? palette.background : palette.surface;
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, popup_bg);
         ImGui::PushStyleColor(ImGuiCol_Border, palette.border);
         ImGui::PushStyleColor(ImGuiCol_Header, withAlpha(palette.primary, context_menu.header_alpha));
         ImGui::PushStyleColor(ImGuiCol_HeaderHovered, withAlpha(palette.primary, context_menu.header_hover_alpha));
@@ -197,15 +245,17 @@ namespace lfs::vis {
         constexpr float MODAL_PADDING_Y = 15.0f;
         constexpr float TITLE_DARKEN = 0.1f;
         constexpr float TITLE_ACTIVE_DARKEN = 0.05f;
-
-        const ImVec4 popup_bg{palette.surface.x, palette.surface.y, palette.surface.z, MODAL_BG_ALPHA};
-        const ImVec4 title_bg = darken(palette.surface, isLightTheme() ? 0.0f : TITLE_DARKEN);
-        const ImVec4 title_bg_active = darken(palette.surface, isLightTheme() ? 0.0f : TITLE_ACTIVE_DARKEN);
+        const bool is_light_popup = useLightPopupBackground(*this);
+        const ImVec4 modal_surface = is_light_popup ? palette.background : palette.surface;
+        const ImVec4 popup_bg{modal_surface.x, modal_surface.y, modal_surface.z, MODAL_BG_ALPHA};
+        const ImVec4 title_bg = darken(modal_surface, is_light_popup ? 0.0f : TITLE_DARKEN);
+        const ImVec4 title_bg_active = darken(modal_surface, is_light_popup ? 0.0f : TITLE_ACTIVE_DARKEN);
 
         ImGui::PushStyleColor(ImGuiCol_WindowBg, popup_bg);
+        ImGui::PushStyleColor(ImGuiCol_PopupBg, popup_bg);
         ImGui::PushStyleColor(ImGuiCol_TitleBg, title_bg);
         ImGui::PushStyleColor(ImGuiCol_TitleBgActive, title_bg_active);
-        ImGui::PushStyleColor(ImGuiCol_Border, palette.primary);
+        ImGui::PushStyleColor(ImGuiCol_Border, palette.border);
         ImGui::PushStyleColor(ImGuiCol_Text, palette.text);
         const float dpi = g_dpi_scale;
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, MODAL_BORDER_SIZE * dpi);
@@ -215,7 +265,7 @@ namespace lfs::vis {
 
     void Theme::popModalStyle() {
         ImGui::PopStyleVar(3);
-        ImGui::PopStyleColor(5);
+        ImGui::PopStyleColor(6);
     }
 
     void setThemeDpiScale(const float scale) { g_dpi_scale = scale; }
@@ -257,16 +307,17 @@ namespace lfs::vis {
         style.GrabMinSize = s.grab_min_size;
         style.WindowTitleAlign = ImVec2(0.5f, 0.5f);
 
+        const bool is_light = g_current_theme.isLightTheme();
+        const bool is_light_popup = useLightPopupBackground(g_current_theme);
         ImVec4* const colors = style.Colors;
         colors[ImGuiCol_Text] = p.text;
         colors[ImGuiCol_TextDisabled] = p.text_dim;
         colors[ImGuiCol_WindowBg] = p.background;
         colors[ImGuiCol_ChildBg] = p.background;
-        colors[ImGuiCol_PopupBg] = p.surface;
+        colors[ImGuiCol_PopupBg] = is_light_popup ? p.background : p.surface;
         colors[ImGuiCol_Border] = p.border;
         colors[ImGuiCol_BorderShadow] = ImVec4(0, 0, 0, 0);
 
-        const bool is_light = g_current_theme.isLightTheme();
         const float frame_darken = g_current_theme.frameDarkenAmount();
         colors[ImGuiCol_FrameBg] = darken(p.surface, frame_darken);
         colors[ImGuiCol_FrameBgHovered] = is_light ? darken(p.surface, 0.08f) : p.surface_bright;
@@ -343,6 +394,13 @@ namespace lfs::vis {
             },
             .sizes = {},
             .fonts = {},
+            .menu = {},
+            .context_menu = {},
+            .viewport = {},
+            .shadows = {},
+            .vignette = {},
+            .button = {},
+            .overlay = {},
         };
 
         const Theme DEFAULT_LIGHT = {
@@ -366,6 +424,12 @@ namespace lfs::vis {
             },
             .sizes = {},
             .fonts = {},
+            .menu = {},
+            .context_menu = {},
+            .viewport = {},
+            .shadows = {},
+            .vignette = {},
+            .button = {},
             .overlay = {
                 .background = {0.95f, 0.95f, 0.96f, 1.0f},
                 .text = {0.1f, 0.1f, 0.12f, 1.0f},
@@ -375,6 +439,162 @@ namespace lfs::vis {
                 .highlight = {0.7f, 0.8f, 0.9f, 1.0f},
                 .selection = {0.5f, 0.65f, 0.85f, 1.0f},
                 .selection_flash = {0.65f, 0.78f, 0.95f, 1.0f},
+            },
+        };
+
+        const Theme DEFAULT_GRUVBOX = {
+            .name = "Gruvbox",
+            .palette = {
+                .background = {0.157f, 0.157f, 0.157f, 1.0f}, // #282828
+                .surface = {0.235f, 0.220f, 0.212f, 1.0f}, // #3c3836
+                .surface_bright = {0.314f, 0.286f, 0.271f, 1.0f}, // #504945
+                .primary = {0.514f, 0.647f, 0.596f, 1.0f}, // #83a598
+                .primary_dim = {0.271f, 0.522f, 0.533f, 1.0f}, // #458588
+                .secondary = {0.827f, 0.525f, 0.608f, 1.0f}, // #d3869b
+                .text = {0.922f, 0.859f, 0.698f, 1.0f}, // #ebdbb2
+                .text_dim = {0.573f, 0.514f, 0.455f, 1.0f}, // #928374
+                .border = {0.400f, 0.361f, 0.329f, 1.0f}, // #665c54
+                .success = {0.722f, 0.733f, 0.149f, 1.0f}, // #b8bb26
+                .warning = {0.980f, 0.741f, 0.184f, 1.0f}, // #fabd2f
+                .error = {0.984f, 0.286f, 0.204f, 1.0f}, // #fb4934
+                .info = {0.557f, 0.753f, 0.486f, 1.0f}, // #8ec07c
+                .row_even = {1.0f, 1.0f, 1.0f, 0.035f},
+                .row_odd = {0.0f, 0.0f, 0.0f, 0.14f},
+            },
+            .sizes = {},
+            .fonts = {},
+            .menu = {},
+            .context_menu = {},
+            .viewport = {},
+            .shadows = {},
+            .vignette = {},
+            .button = {},
+            .overlay = {
+                .background = {0.235f, 0.220f, 0.212f, 1.0f},
+                .text = {0.922f, 0.859f, 0.698f, 1.0f},
+                .text_dim = {0.573f, 0.514f, 0.455f, 1.0f},
+                .border = {0.514f, 0.459f, 0.424f, 1.0f}, // #82756a
+                .icon = {0.514f, 0.647f, 0.596f, 1.0f},
+                .highlight = {0.400f, 0.467f, 0.431f, 1.0f},
+                .selection = {0.271f, 0.522f, 0.533f, 1.0f},
+                .selection_flash = {0.557f, 0.753f, 0.486f, 1.0f},
+            },
+        };
+
+        const Theme DEFAULT_CATPPUCCIN_MOCHA = {
+            .name = "Catppuccin Mocha",
+            .palette = {
+                .background = {0.118f, 0.118f, 0.180f, 1.0f},
+                .surface = {0.188f, 0.196f, 0.259f, 1.0f},
+                .surface_bright = {0.271f, 0.278f, 0.353f, 1.0f},
+                .primary = {0.537f, 0.706f, 0.980f, 1.0f},
+                .primary_dim = {0.455f, 0.780f, 0.925f, 1.0f},
+                .secondary = {0.796f, 0.651f, 0.969f, 1.0f},
+                .text = {0.804f, 0.839f, 0.957f, 1.0f},
+                .text_dim = {0.651f, 0.678f, 0.784f, 1.0f},
+                .border = {0.345f, 0.353f, 0.443f, 1.0f},
+                .success = {0.651f, 0.890f, 0.631f, 1.0f},
+                .warning = {0.976f, 0.886f, 0.686f, 1.0f},
+                .error = {0.953f, 0.545f, 0.659f, 1.0f},
+                .info = {0.537f, 0.706f, 0.980f, 1.0f},
+                .row_even = {1.0f, 1.0f, 1.0f, 0.035f},
+                .row_odd = {0.0f, 0.0f, 0.0f, 0.13f},
+            },
+            .sizes = {},
+            .fonts = {},
+            .menu = {},
+            .context_menu = {},
+            .viewport = {},
+            .shadows = {},
+            .vignette = {},
+            .button = {},
+            .overlay = {
+                .background = {0.188f, 0.196f, 0.259f, 1.0f},
+                .text = {0.804f, 0.839f, 0.957f, 1.0f},
+                .text_dim = {0.651f, 0.678f, 0.784f, 1.0f},
+                .border = {0.455f, 0.780f, 0.925f, 1.0f},
+                .icon = {0.537f, 0.706f, 0.980f, 1.0f},
+                .highlight = {0.455f, 0.502f, 0.624f, 1.0f},
+                .selection = {0.345f, 0.482f, 0.757f, 1.0f},
+                .selection_flash = {0.651f, 0.890f, 0.631f, 1.0f},
+            },
+        };
+
+        const Theme DEFAULT_CATPPUCCIN_LATTE = {
+            .name = "Catppuccin Latte",
+            .palette = {
+                .background = {0.937f, 0.945f, 0.961f, 1.0f},
+                .surface = {0.902f, 0.914f, 0.937f, 1.0f},
+                .surface_bright = {0.863f, 0.878f, 0.910f, 1.0f},
+                .primary = {0.118f, 0.400f, 0.961f, 1.0f},
+                .primary_dim = {0.125f, 0.624f, 0.710f, 1.0f},
+                .secondary = {0.533f, 0.224f, 0.937f, 1.0f},
+                .text = {0.298f, 0.310f, 0.412f, 1.0f},
+                .text_dim = {0.424f, 0.435f, 0.522f, 1.0f},
+                .border = {0.675f, 0.690f, 0.741f, 1.0f},
+                .success = {0.251f, 0.627f, 0.169f, 1.0f},
+                .warning = {0.875f, 0.557f, 0.114f, 1.0f},
+                .error = {0.824f, 0.059f, 0.224f, 1.0f},
+                .info = {0.118f, 0.400f, 0.961f, 1.0f},
+                .row_even = {0.0f, 0.0f, 0.0f, 0.03f},
+                .row_odd = {0.0f, 0.0f, 0.0f, 0.08f},
+            },
+            .sizes = {},
+            .fonts = {},
+            .menu = {},
+            .context_menu = {},
+            .viewport = {},
+            .shadows = {},
+            .vignette = {},
+            .button = {},
+            .overlay = {
+                .background = {0.937f, 0.945f, 0.961f, 1.0f},
+                .text = {0.298f, 0.310f, 0.412f, 1.0f},
+                .text_dim = {0.424f, 0.435f, 0.522f, 1.0f},
+                .border = {0.675f, 0.690f, 0.741f, 1.0f},
+                .icon = {0.125f, 0.624f, 0.710f, 1.0f},
+                .highlight = {0.804f, 0.839f, 0.957f, 1.0f},
+                .selection = {0.627f, 0.729f, 0.949f, 1.0f},
+                .selection_flash = {0.745f, 0.816f, 0.969f, 1.0f},
+            },
+        };
+
+        const Theme DEFAULT_NORD = {
+            .name = "Nord",
+            .palette = {
+                .background = {0.180f, 0.204f, 0.251f, 1.0f},
+                .surface = {0.231f, 0.259f, 0.322f, 1.0f},
+                .surface_bright = {0.263f, 0.298f, 0.369f, 1.0f},
+                .primary = {0.533f, 0.753f, 0.816f, 1.0f},
+                .primary_dim = {0.369f, 0.506f, 0.675f, 1.0f},
+                .secondary = {0.706f, 0.557f, 0.678f, 1.0f},
+                .text = {0.925f, 0.937f, 0.957f, 1.0f},
+                .text_dim = {0.722f, 0.753f, 0.816f, 1.0f},
+                .border = {0.298f, 0.333f, 0.420f, 1.0f},
+                .success = {0.639f, 0.745f, 0.549f, 1.0f},
+                .warning = {0.922f, 0.796f, 0.545f, 1.0f},
+                .error = {0.749f, 0.380f, 0.416f, 1.0f},
+                .info = {0.561f, 0.737f, 0.733f, 1.0f},
+                .row_even = {1.0f, 1.0f, 1.0f, 0.032f},
+                .row_odd = {0.0f, 0.0f, 0.0f, 0.12f},
+            },
+            .sizes = {},
+            .fonts = {},
+            .menu = {},
+            .context_menu = {},
+            .viewport = {},
+            .shadows = {},
+            .vignette = {},
+            .button = {},
+            .overlay = {
+                .background = {0.231f, 0.259f, 0.322f, 1.0f},
+                .text = {0.925f, 0.937f, 0.957f, 1.0f},
+                .text_dim = {0.722f, 0.753f, 0.816f, 1.0f},
+                .border = {0.533f, 0.753f, 0.816f, 1.0f},
+                .icon = {0.561f, 0.737f, 0.733f, 1.0f},
+                .highlight = {0.369f, 0.427f, 0.518f, 1.0f},
+                .selection = {0.369f, 0.506f, 0.675f, 1.0f},
+                .selection_flash = {0.639f, 0.745f, 0.549f, 1.0f},
             },
         };
 
@@ -403,6 +623,54 @@ namespace lfs::vis {
                 g_light_path.clear();
             }
 
+            // Load gruvbox theme
+            g_gruvbox_theme = DEFAULT_GRUVBOX;
+            try {
+                g_gruvbox_path = getAssetPath("themes/gruvbox.json");
+                if (loadTheme(g_gruvbox_theme, lfs::core::path_to_utf8(g_gruvbox_path))) {
+                    g_gruvbox_mtime = std::filesystem::last_write_time(g_gruvbox_path);
+                    LOG_INFO("Loaded gruvbox theme from {}", lfs::core::path_to_utf8(g_gruvbox_path));
+                }
+            } catch (...) {
+                g_gruvbox_path.clear();
+            }
+
+            // Load Catppuccin Mocha theme
+            g_catppuccin_mocha_theme = DEFAULT_CATPPUCCIN_MOCHA;
+            try {
+                g_catppuccin_mocha_path = getAssetPath("themes/catppuccin_mocha.json");
+                if (loadTheme(g_catppuccin_mocha_theme, lfs::core::path_to_utf8(g_catppuccin_mocha_path))) {
+                    g_catppuccin_mocha_mtime = std::filesystem::last_write_time(g_catppuccin_mocha_path);
+                    LOG_INFO("Loaded catppuccin mocha theme from {}", lfs::core::path_to_utf8(g_catppuccin_mocha_path));
+                }
+            } catch (...) {
+                g_catppuccin_mocha_path.clear();
+            }
+
+            // Load Catppuccin Latte theme
+            g_catppuccin_latte_theme = DEFAULT_CATPPUCCIN_LATTE;
+            try {
+                g_catppuccin_latte_path = getAssetPath("themes/catppuccin_latte.json");
+                if (loadTheme(g_catppuccin_latte_theme, lfs::core::path_to_utf8(g_catppuccin_latte_path))) {
+                    g_catppuccin_latte_mtime = std::filesystem::last_write_time(g_catppuccin_latte_path);
+                    LOG_INFO("Loaded catppuccin latte theme from {}", lfs::core::path_to_utf8(g_catppuccin_latte_path));
+                }
+            } catch (...) {
+                g_catppuccin_latte_path.clear();
+            }
+
+            // Load nord theme
+            g_nord_theme = DEFAULT_NORD;
+            try {
+                g_nord_path = getAssetPath("themes/nord.json");
+                if (loadTheme(g_nord_theme, lfs::core::path_to_utf8(g_nord_path))) {
+                    g_nord_mtime = std::filesystem::last_write_time(g_nord_path);
+                    LOG_INFO("Loaded nord theme from {}", lfs::core::path_to_utf8(g_nord_path));
+                }
+            } catch (...) {
+                g_nord_path.clear();
+            }
+
             g_themes_loaded = true;
         }
 
@@ -424,11 +692,60 @@ namespace lfs::vis {
         return g_light_theme;
     }
 
+    const Theme& gruvboxTheme() {
+        ensureThemesLoaded();
+        return g_gruvbox_theme;
+    }
+
+    const Theme& catppuccinMochaTheme() {
+        ensureThemesLoaded();
+        return g_catppuccin_mocha_theme;
+    }
+
+    const Theme& catppuccinLatteTheme() {
+        ensureThemesLoaded();
+        return g_catppuccin_latte_theme;
+    }
+
+    const Theme& nordTheme() {
+        ensureThemesLoaded();
+        return g_nord_theme;
+    }
+
+    bool setThemeByName(const std::string& name) {
+        const std::string normalized = normalizeThemeName(name);
+        if (normalized == "dark") {
+            setTheme(darkTheme());
+            return true;
+        }
+        if (normalized == "light") {
+            setTheme(lightTheme());
+            return true;
+        }
+        if (normalized == "gruvbox") {
+            setTheme(gruvboxTheme());
+            return true;
+        }
+        if (normalized == "catppuccin_mocha") {
+            setTheme(catppuccinMochaTheme());
+            return true;
+        }
+        if (normalized == "catppuccin_latte") {
+            setTheme(catppuccinLatteTheme());
+            return true;
+        }
+        if (normalized == "nord") {
+            setTheme(nordTheme());
+            return true;
+        }
+        return false;
+    }
+
     void checkThemeFileChanges() {
         if (!g_themes_loaded)
             return;
 
-        bool current_is_dark = (g_current_theme.name == "Dark");
+        const std::string current_theme = normalizeThemeName(g_current_theme.name);
         bool reloaded = false;
 
         // Check dark theme
@@ -440,7 +757,7 @@ namespace lfs::vis {
                     g_dark_theme = t;
                     g_dark_mtime = mtime;
                     LOG_INFO("Hot-reloaded dark theme");
-                    if (current_is_dark)
+                    if (current_theme == "dark")
                         reloaded = true;
                 }
             }
@@ -455,7 +772,67 @@ namespace lfs::vis {
                     g_light_theme = t;
                     g_light_mtime = mtime;
                     LOG_INFO("Hot-reloaded light theme");
-                    if (!current_is_dark)
+                    if (current_theme == "light")
+                        reloaded = true;
+                }
+            }
+        }
+
+        // Check gruvbox theme
+        if (!g_gruvbox_path.empty() && std::filesystem::exists(g_gruvbox_path)) {
+            const auto mtime = std::filesystem::last_write_time(g_gruvbox_path);
+            if (mtime != g_gruvbox_mtime) {
+                Theme t = DEFAULT_GRUVBOX;
+                if (loadTheme(t, lfs::core::path_to_utf8(g_gruvbox_path))) {
+                    g_gruvbox_theme = t;
+                    g_gruvbox_mtime = mtime;
+                    LOG_INFO("Hot-reloaded gruvbox theme");
+                    if (current_theme == "gruvbox")
+                        reloaded = true;
+                }
+            }
+        }
+
+        // Check Catppuccin Mocha theme
+        if (!g_catppuccin_mocha_path.empty() && std::filesystem::exists(g_catppuccin_mocha_path)) {
+            const auto mtime = std::filesystem::last_write_time(g_catppuccin_mocha_path);
+            if (mtime != g_catppuccin_mocha_mtime) {
+                Theme t = DEFAULT_CATPPUCCIN_MOCHA;
+                if (loadTheme(t, lfs::core::path_to_utf8(g_catppuccin_mocha_path))) {
+                    g_catppuccin_mocha_theme = t;
+                    g_catppuccin_mocha_mtime = mtime;
+                    LOG_INFO("Hot-reloaded catppuccin mocha theme");
+                    if (current_theme == "catppuccin_mocha")
+                        reloaded = true;
+                }
+            }
+        }
+
+        // Check Catppuccin Latte theme
+        if (!g_catppuccin_latte_path.empty() && std::filesystem::exists(g_catppuccin_latte_path)) {
+            const auto mtime = std::filesystem::last_write_time(g_catppuccin_latte_path);
+            if (mtime != g_catppuccin_latte_mtime) {
+                Theme t = DEFAULT_CATPPUCCIN_LATTE;
+                if (loadTheme(t, lfs::core::path_to_utf8(g_catppuccin_latte_path))) {
+                    g_catppuccin_latte_theme = t;
+                    g_catppuccin_latte_mtime = mtime;
+                    LOG_INFO("Hot-reloaded catppuccin latte theme");
+                    if (current_theme == "catppuccin_latte")
+                        reloaded = true;
+                }
+            }
+        }
+
+        // Check nord theme
+        if (!g_nord_path.empty() && std::filesystem::exists(g_nord_path)) {
+            const auto mtime = std::filesystem::last_write_time(g_nord_path);
+            if (mtime != g_nord_mtime) {
+                Theme t = DEFAULT_NORD;
+                if (loadTheme(t, lfs::core::path_to_utf8(g_nord_path))) {
+                    g_nord_theme = t;
+                    g_nord_mtime = mtime;
+                    LOG_INFO("Hot-reloaded nord theme");
+                    if (current_theme == "nord")
                         reloaded = true;
                 }
             }
@@ -463,7 +840,9 @@ namespace lfs::vis {
 
         // Re-apply current theme if it was reloaded
         if (reloaded) {
-            setTheme(current_is_dark ? g_dark_theme : g_light_theme);
+            if (!setThemeByName(current_theme)) {
+                setTheme(darkTheme());
+            }
         }
     }
 
@@ -781,21 +1160,33 @@ namespace lfs::vis {
         }
     } // namespace
 
-    void saveThemePreference(bool is_dark) {
+    void saveThemePreferenceName(const std::string& theme_name) {
         try {
             const auto config_dir = getThemeConfigDir();
             std::filesystem::create_directories(config_dir);
             const auto pref_path = config_dir / "theme_preference";
             std::ofstream file(pref_path);
             if (file) {
-                file << (is_dark ? "dark" : "light");
+                const std::string normalized = normalizeThemeName(theme_name);
+                if (
+                    normalized == "dark" ||
+                    normalized == "light" ||
+                    normalized == "gruvbox" ||
+                    normalized == "catppuccin_mocha" ||
+                    normalized == "catppuccin_latte" ||
+                    normalized == "nord"
+                ) {
+                    file << normalized;
+                } else {
+                    file << "dark";
+                }
             }
         } catch (...) {
             // Silently ignore - not critical
         }
     }
 
-    bool loadThemePreference() {
+    std::string loadThemePreferenceName() {
         try {
             const auto config_dir = getThemeConfigDir();
             const auto pref_path = config_dir / "theme_preference";
@@ -803,13 +1194,31 @@ namespace lfs::vis {
                 std::ifstream file(pref_path);
                 std::string pref;
                 if (file >> pref) {
-                    return pref != "light";
+                    const std::string normalized = normalizeThemeName(pref);
+                    if (
+                        normalized == "dark" ||
+                        normalized == "light" ||
+                        normalized == "gruvbox" ||
+                        normalized == "catppuccin_mocha" ||
+                        normalized == "catppuccin_latte" ||
+                        normalized == "nord"
+                    ) {
+                        return normalized;
+                    }
                 }
             }
         } catch (...) {
             // Silently ignore - not critical
         }
-        return true; // Default to dark
+        return "dark";
+    }
+
+    void saveThemePreference(const bool is_dark) {
+        saveThemePreferenceName(is_dark ? "dark" : "light");
+    }
+
+    bool loadThemePreference() {
+        return loadThemePreferenceName() != "light";
     }
 
 } // namespace lfs::vis

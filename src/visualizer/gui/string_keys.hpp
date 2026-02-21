@@ -33,6 +33,10 @@ namespace lichtfeld::Strings {
             inline constexpr const char* THEME = "menu.view.theme";
             inline constexpr const char* THEME_DARK = "menu.view.theme.dark";
             inline constexpr const char* THEME_LIGHT = "menu.view.theme.light";
+            inline constexpr const char* THEME_GRUVBOX = "menu.view.theme.gruvbox";
+            inline constexpr const char* THEME_CATPPUCCIN_MOCHA = "menu.view.theme.catppuccin_mocha";
+            inline constexpr const char* THEME_CATPPUCCIN_LATTE = "menu.view.theme.catppuccin_latte";
+            inline constexpr const char* THEME_NORD = "menu.view.theme.nord";
             inline constexpr const char* DEBUG_INFO = "menu.view.debug_info";
         } // namespace View
 

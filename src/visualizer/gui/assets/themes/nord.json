@@ -1,0 +1,156 @@
+{
+  "name": "Nord",
+  "_description": "Nord-inspired professional dark theme for LichtFeld Studio",
+
+  "palette": {
+    "_info": "Colors are [R, G, B, A] with values 0.0-1.0",
+
+    "background":     [0.180, 0.204, 0.251, 1.0],
+    "_background":    "Main window background - nord0 (#2e3440)",
+
+    "surface":        [0.231, 0.259, 0.322, 1.0],
+    "_surface":       "Panel backgrounds - nord1 (#3b4252)",
+
+    "surface_bright": [0.263, 0.298, 0.369, 1.0],
+    "_surface_bright": "Hovered backgrounds - nord2 (#434c5e)",
+
+    "primary":        [0.533, 0.753, 0.816, 1.0],
+    "_primary":       "Primary accent - nord8 (#88c0d0)",
+
+    "primary_dim":    [0.369, 0.506, 0.675, 1.0],
+    "_primary_dim":   "Dimmed accent - nord10 (#5e81ac)",
+
+    "secondary":      [0.706, 0.557, 0.678, 1.0],
+    "_secondary":     "Secondary accent - nord15 (#b48ead)",
+
+    "text":           [0.925, 0.937, 0.957, 1.0],
+    "_text":          "Main text - nord6 (#eceff4)",
+
+    "text_dim":       [0.722, 0.753, 0.816, 1.0],
+    "_text_dim":      "Dim text - nord4 (#d8dee9)",
+
+    "border":         [0.298, 0.333, 0.420, 1.0],
+    "_border":        "Borders - blend of nord2/nord3",
+
+    "success":        [0.639, 0.745, 0.549, 1.0],
+    "_success":       "Success - nord14 (#a3be8c)",
+
+    "warning":        [0.922, 0.796, 0.545, 1.0],
+    "_warning":       "Warning - nord13 (#ebcb8b)",
+
+    "error":          [0.749, 0.380, 0.416, 1.0],
+    "_error":         "Error - nord11 (#bf616a)",
+
+    "info":           [0.561, 0.737, 0.733, 1.0],
+    "_info":          "Info - nord7 (#8fbcbb)",
+
+    "row_even":       [1.0, 1.0, 1.0, 0.032],
+    "_row_even":      "Scene graph even row tint",
+
+    "row_odd":        [0.0, 0.0, 0.0, 0.12],
+    "_row_odd":       "Scene graph odd row tint"
+  },
+
+  "sizes": {
+    "_info": "UI element sizes in pixels",
+
+    "window_rounding": 6.0,
+    "frame_rounding": 3.0,
+    "popup_rounding": 6.0,
+    "scrollbar_rounding": 6.0,
+    "grab_rounding": 3.0,
+    "tab_rounding": 4.0,
+
+    "border_size": 0.0,
+    "child_border_size": 1.0,
+    "popup_border_size": 1.0,
+
+    "window_padding": [8.0, 8.0],
+    "frame_padding": [6.0, 4.0],
+    "item_spacing": [8.0, 5.0],
+    "item_inner_spacing": [4.0, 4.0],
+
+    "indent_spacing": 21.0,
+    "scrollbar_size": 12.0,
+    "grab_min_size": 10.0,
+
+    "toolbar_button_size": 24.0,
+    "toolbar_padding": 6.0,
+    "toolbar_spacing": 4.0
+  },
+
+  "fonts": {
+    "regular_path": "Inter-Regular.ttf",
+    "bold_path": "Inter-SemiBold.ttf",
+    "base_size": 14.0,
+    "small_size": 12.0,
+    "large_size": 16.0,
+    "heading_size": 18.0,
+    "section_size": 13.0
+  },
+
+  "menu": {
+    "_info": "Menu bar styling - values are relative adjustments",
+
+    "bg_lighten": 0.03,
+    "hover_lighten": 0.08,
+    "active_alpha": 0.45,
+    "popup_lighten": 0.02,
+    "popup_rounding": 6.0,
+    "popup_border_size": 1.0,
+    "border_alpha": 0.55,
+    "bottom_border_darken": 0.06,
+
+    "frame_padding": [12.0, 8.0],
+    "item_spacing": [12.0, 6.0],
+    "popup_padding": [8.0, 8.0]
+  },
+
+  "viewport": {
+    "_info": "Viewport border styling",
+
+    "corner_radius": 8.0,
+    "border_size": 2.0,
+    "border_alpha": 0.35,
+    "border_darken": 0.12
+  },
+
+  "shadows": {
+    "_info": "Shadow settings for floating panels",
+
+    "enabled": true,
+    "offset": [3.0, 3.0],
+    "blur": 12.0,
+    "alpha": 0.65
+  },
+
+  "vignette": {
+    "_info": "Subtle darkening at viewport edges",
+
+    "enabled": true,
+    "intensity": 0.21,
+    "radius": 0.78,
+    "softness": 0.44
+  },
+
+  "button": {
+    "_info": "Colored button tint values (blend factor with accent color)",
+
+    "tint_normal": 0.52,
+    "tint_hover": 0.63,
+    "tint_active": 0.74
+  },
+
+  "overlay": {
+    "_info": "Overlay panel colors (help, empty state, drag-drop, progress)",
+
+    "background": [0.231, 0.259, 0.322, 1.0],
+    "text": [0.925, 0.937, 0.957, 1.0],
+    "text_dim": [0.722, 0.753, 0.816, 1.0],
+    "border": [0.533, 0.753, 0.816, 1.0],
+    "icon": [0.561, 0.737, 0.733, 1.0],
+    "highlight": [0.369, 0.427, 0.518, 1.0],
+    "selection": [0.369, 0.506, 0.675, 1.0],
+    "selection_flash": [0.639, 0.745, 0.549, 1.0]
+  }
+}
