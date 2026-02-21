@@ -23,7 +23,9 @@
     "view.debug_info": "デバッグ情報...",
     "help": "ヘルプ",
     "help.getting_started": "はじめに",
-    "help.about": "LichtFeld Studioについて"
+    "help.about": "LichtFeld Studioについて",
+    "view.python_console": "Python コンソール",
+    "view.plugin_marketplace": "プラグインマーケットプレイス"
   },
   "window": {
     "getting_started": "はじめに",
@@ -913,7 +915,10 @@
     "button.installed": "インストール済み",
     "button.github": "GitHub",
     "status.installed": "インストール済み: {}",
-    "status.install_failed": "インストール失敗"
+    "status.install_failed": "インストール失敗",
+    "local_install": "ローカルインストール",
+    "local_source": "ローカルソース: {path}",
+    "button.local": "ローカル"
   },
   "sequencer": {
     "edit_focal_length": "焦点距離を編集...",

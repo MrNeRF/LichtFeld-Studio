@@ -22,7 +22,7 @@ from .marketplace import (
     get_plugin_marketplace_urls,
     set_plugin_marketplace_urls,
 )
-from .panels import PluginManagerPanel, PluginMarketplacePanel, register_builtin_panels
+from .panels import PluginMarketplacePanel, register_builtin_panels
 from .plugin import PluginInfo, PluginInstance, PluginState
 from .registry import RegistryClient, RegistryPluginInfo, RegistryVersionInfo
 from .settings import PluginSettings, SettingsManager
@@ -49,7 +49,6 @@ __all__ = [
     "RegistryClient",
     "RegistryPluginInfo",
     "RegistryVersionInfo",
-    "PluginManagerPanel",
     "PluginMarketplacePanel",
     "register_builtin_panels",
     "get_plugin_marketplace_urls",

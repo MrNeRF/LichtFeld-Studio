@@ -100,7 +100,6 @@ class PluginManager:
         """Scan plugins directory for valid plugins."""
         if not self._plugins_dir.exists():
             self._plugins_dir.mkdir(parents=True, exist_ok=True)
-            return []
 
         plugins = []
         for entry in self._plugins_dir.iterdir():

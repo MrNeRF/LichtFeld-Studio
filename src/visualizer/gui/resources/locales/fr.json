@@ -23,7 +23,9 @@
     "view.debug_info": "Infos de Débogage...",
     "help": "Aide",
     "help.getting_started": "Démarrage",
-    "help.about": "À propos de LichtFeld Studio"
+    "help.about": "À propos de LichtFeld Studio",
+    "view.python_console": "Console Python",
+    "view.plugin_marketplace": "Marketplace des plugins"
   },
   "window": {
     "getting_started": "Démarrage",
@@ -913,7 +915,10 @@
     "button.installed": "Installé",
     "button.github": "GitHub",
     "status.installed": "Installé : {}",
-    "status.install_failed": "Échec de l'installation"
+    "status.install_failed": "Échec de l'installation",
+    "local_install": "Installation locale",
+    "local_source": "Source locale : {path}",
+    "button.local": "Local"
   },
   "sequencer": {
     "edit_focal_length": "Modifier la longueur focale...",

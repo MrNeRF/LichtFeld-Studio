@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Built-in plugin panel registration."""
 
-from .plugin_manager_panel import PluginManagerPanel
 from .plugin_marketplace_panel import PluginMarketplacePanel
 
 
@@ -17,8 +16,6 @@ def register_builtin_panels():
 
         from .training_panel import TrainingPanel
         lf.register_class(TrainingPanel)
-
-        lf.register_class(PluginManagerPanel)
 
         from .scene_panel import ScenePanel
         lf.register_class(ScenePanel)

@@ -23,7 +23,9 @@
     "view.debug_info": "디버그 정보...",
     "help": "도움말",
     "help.getting_started": "시작하기",
-    "help.about": "LichtFeld Studio 정보"
+    "help.about": "LichtFeld Studio 정보",
+    "view.python_console": "Python 콘솔",
+    "view.plugin_marketplace": "플러그인 마켓플레이스"
   },
   "window": {
     "getting_started": "시작하기",
@@ -913,7 +915,10 @@
     "button.installed": "설치됨",
     "button.github": "GitHub",
     "status.installed": "설치됨: {}",
-    "status.install_failed": "설치 실패"
+    "status.install_failed": "설치 실패",
+    "local_install": "로컬 설치",
+    "local_source": "로컬 소스: {path}",
+    "button.local": "로컬"
   },
   "sequencer": {
     "edit_focal_length": "초점 거리 편집...",

@@ -23,7 +23,9 @@
     "view.debug_info": "调试信息...",
     "help": "帮助",
     "help.getting_started": "入门指南",
-    "help.about": "关于LichtFeld Studio"
+    "help.about": "关于LichtFeld Studio",
+    "view.python_console": "Python 控制台",
+    "view.plugin_marketplace": "插件市场"
   },
   "window": {
     "getting_started": "入门指南",
@@ -913,7 +915,10 @@
     "button.installed": "已安装",
     "button.github": "GitHub",
     "status.installed": "已安装：{}",
-    "status.install_failed": "安装失败"
+    "status.install_failed": "安装失败",
+    "local_install": "本地安装",
+    "local_source": "本地来源：{path}",
+    "button.local": "本地"
   },
   "sequencer": {
     "edit_focal_length": "编辑焦距...",

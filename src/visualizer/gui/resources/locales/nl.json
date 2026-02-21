@@ -23,7 +23,9 @@
     "view.debug_info": "Debug Info...",
     "help": "Help",
     "help.getting_started": "Aan de Slag",
-    "help.about": "Over LichtFeld Studio"
+    "help.about": "Over LichtFeld Studio",
+    "view.python_console": "Python-console",
+    "view.plugin_marketplace": "Plugin-marktplaats"
   },
   "window": {
     "getting_started": "Aan de Slag",
@@ -913,7 +915,10 @@
     "button.installed": "Geïnstalleerd",
     "button.github": "GitHub",
     "status.installed": "Geïnstalleerd: {}",
-    "status.install_failed": "Installatie mislukt"
+    "status.install_failed": "Installatie mislukt",
+    "local_install": "Lokale installatie",
+    "local_source": "Lokale bron: {path}",
+    "button.local": "Lokaal"
   },
   "sequencer": {
     "edit_focal_length": "Brandpuntsafstand bewerken...",

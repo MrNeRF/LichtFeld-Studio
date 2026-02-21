@@ -22,7 +22,7 @@ GITHUB_API_URL = "https://api.github.com/repos"
 PLUGIN_MARKETPLACE_URLS: List[str] = [
     "https://github.com/shadygm/Lichtfeld-Densification-Plugin",
     "https://github.com/shadygm/Lichtfeld-ml-sharp-Plugin",
-    "https://github.com/jacobvanbeets/360_record",
+    # "https://github.com/jacobvanbeets/360_record",
     "https://github.com/jacobvanbeets/lichtfeld-depthmap-plugin"
 ]
 
@@ -38,6 +38,8 @@ class MarketplacePluginEntry:
     name: str
     description: str
     stars: int = 0
+    language: str = ""
+    topics: Tuple[str, ...] = ()
     error: str = ""
 
 
@@ -127,12 +129,22 @@ class PluginMarketplaceCatalog:
             api_name = str(data.get("name", "")).strip()
             api_description = data.get("description")
             api_stars = data.get("stargazers_count", 0)
+            api_language = data.get("language")
+            api_topics = data.get("topics")
             name = api_name or name
             description = api_description.strip() if isinstance(api_description, str) else ""
             stars = int(api_stars) if isinstance(api_stars, (int, float)) else 0
             github_url = str(data.get("html_url") or github_url)
+            language = api_language.strip() if isinstance(api_language, str) else ""
+            topics = (
+                tuple(t.strip() for t in api_topics if isinstance(t, str) and t.strip())
+                if isinstance(api_topics, list)
+                else ()
+            )
         except Exception as exc:
             _log.debug("GitHub metadata lookup failed for %s/%s: %s", owner, repo, exc)
+            language = ""
+            topics = ()
 
         return MarketplacePluginEntry(
             source_url=source_url,
@@ -142,6 +154,8 @@ class PluginMarketplaceCatalog:
             name=name,
             description=description,
             stars=stars,
+            language=language,
+            topics=topics,
         )
 
     def _fetch_repo_metadata(self, owner: str, repo: str) -> dict:
@@ -172,6 +186,8 @@ class PluginMarketplaceCatalog:
                 name=repo,
                 description="",
                 stars=0,
+                language="",
+                topics=(),
             )
         except Exception as exc:
             return MarketplacePluginEntry(

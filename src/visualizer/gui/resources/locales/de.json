@@ -23,7 +23,9 @@
     "view.debug_info": "Debug-Info...",
     "help": "Hilfe",
     "help.getting_started": "Erste Schritte",
-    "help.about": "Über LichtFeld Studio"
+    "help.about": "Über LichtFeld Studio",
+    "view.python_console": "Python-Konsole",
+    "view.plugin_marketplace": "Plugin-Marktplatz"
   },
   "window": {
     "getting_started": "Erste Schritte",
@@ -913,7 +915,10 @@
     "button.installed": "Installiert",
     "button.github": "GitHub",
     "status.installed": "Installiert: {}",
-    "status.install_failed": "Installation fehlgeschlagen"
+    "status.install_failed": "Installation fehlgeschlagen",
+    "local_install": "Lokale Installation",
+    "local_source": "Lokale Quelle: {path}",
+    "button.local": "Lokal"
   },
   "sequencer": {
     "edit_focal_length": "Brennweite bearbeiten...",
