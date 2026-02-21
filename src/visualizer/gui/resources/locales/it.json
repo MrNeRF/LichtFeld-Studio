@@ -918,7 +918,11 @@
     "status.install_failed": "Installazione non riuscita",
     "local_install": "Installazione locale",
     "local_source": "Origine locale: {path}",
-    "button.local": "Locale"
+    "button.local": "Locale",
+    "confirm_uninstall_title": "Conferma disinstallazione plugin",
+    "confirm_uninstall_message": "Vuoi davvero disinstallare \"{name}\"?",
+    "confirm_uninstall_yes": "Sì",
+    "confirm_uninstall_no": "No"
   },
   "sequencer": {
     "edit_focal_length": "Modifica lunghezza focale...",

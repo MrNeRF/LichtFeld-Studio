@@ -918,7 +918,11 @@
     "status.install_failed": "Instalacja nie powiodła się",
     "local_install": "Instalacja lokalna",
     "local_source": "Źródło lokalne: {path}",
-    "button.local": "Lokalne"
+    "button.local": "Lokalne",
+    "confirm_uninstall_title": "Potwierdz odinstalowanie wtyczki",
+    "confirm_uninstall_message": "Czy na pewno chcesz odinstalować \"{name}\"?",
+    "confirm_uninstall_yes": "Tak",
+    "confirm_uninstall_no": "Nie"
   },
   "sequencer": {
     "edit_focal_length": "Edytuj ogniskową...",

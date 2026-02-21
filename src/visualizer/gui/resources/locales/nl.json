@@ -918,7 +918,11 @@
     "status.install_failed": "Installatie mislukt",
     "local_install": "Lokale installatie",
     "local_source": "Lokale bron: {path}",
-    "button.local": "Lokaal"
+    "button.local": "Lokaal",
+    "confirm_uninstall_title": "Verwijderen van plugin bevestigen",
+    "confirm_uninstall_message": "Weet je zeker dat je \"{name}\" wilt verwijderen?",
+    "confirm_uninstall_yes": "Ja",
+    "confirm_uninstall_no": "Nee"
   },
   "sequencer": {
     "edit_focal_length": "Brandpuntsafstand bewerken...",

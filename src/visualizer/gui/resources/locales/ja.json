@@ -918,7 +918,11 @@
     "status.install_failed": "インストール失敗",
     "local_install": "ローカルインストール",
     "local_source": "ローカルソース: {path}",
-    "button.local": "ローカル"
+    "button.local": "ローカル",
+    "confirm_uninstall_title": "プラグインのアンインストールを確認",
+    "confirm_uninstall_message": "「{name}」を本当にアンインストールしますか？",
+    "confirm_uninstall_yes": "はい",
+    "confirm_uninstall_no": "いいえ"
   },
   "sequencer": {
     "edit_focal_length": "焦点距離を編集...",

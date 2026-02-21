@@ -918,7 +918,11 @@
     "status.install_failed": "安装失败",
     "local_install": "本地安装",
     "local_source": "本地来源：{path}",
-    "button.local": "本地"
+    "button.local": "本地",
+    "confirm_uninstall_title": "确认卸载插件",
+    "confirm_uninstall_message": "确定要卸载“{name}”吗？",
+    "confirm_uninstall_yes": "是",
+    "confirm_uninstall_no": "否"
   },
   "sequencer": {
     "edit_focal_length": "编辑焦距...",

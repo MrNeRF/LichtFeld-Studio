@@ -22,7 +22,7 @@ GITHUB_API_URL = "https://api.github.com/repos"
 PLUGIN_MARKETPLACE_URLS: List[str] = [
     "https://github.com/shadygm/Lichtfeld-Densification-Plugin",
     "https://github.com/shadygm/Lichtfeld-ml-sharp-Plugin",
-    # "https://github.com/jacobvanbeets/360_record",
+    "https://github.com/jacobvanbeets/360_record",
     "https://github.com/jacobvanbeets/lichtfeld-depthmap-plugin"
 ]
 

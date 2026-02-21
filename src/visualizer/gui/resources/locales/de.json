@@ -918,7 +918,11 @@
     "status.install_failed": "Installation fehlgeschlagen",
     "local_install": "Lokale Installation",
     "local_source": "Lokale Quelle: {path}",
-    "button.local": "Lokal"
+    "button.local": "Lokal",
+    "confirm_uninstall_title": "Plugin-Deinstallation bestätigen",
+    "confirm_uninstall_message": "Möchten Sie \"{name}\" wirklich deinstallieren?",
+    "confirm_uninstall_yes": "Ja",
+    "confirm_uninstall_no": "Nein"
   },
   "sequencer": {
     "edit_focal_length": "Brennweite bearbeiten...",

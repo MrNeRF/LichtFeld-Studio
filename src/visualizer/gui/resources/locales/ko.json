@@ -918,7 +918,11 @@
     "status.install_failed": "설치 실패",
     "local_install": "로컬 설치",
     "local_source": "로컬 소스: {path}",
-    "button.local": "로컬"
+    "button.local": "로컬",
+    "confirm_uninstall_title": "플러그인 제거 확인",
+    "confirm_uninstall_message": "\"{name}\" 플러그인을 정말 제거하시겠습니까?",
+    "confirm_uninstall_yes": "예",
+    "confirm_uninstall_no": "아니요"
   },
   "sequencer": {
     "edit_focal_length": "초점 거리 편집...",

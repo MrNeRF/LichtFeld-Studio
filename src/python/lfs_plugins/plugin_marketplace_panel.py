@@ -263,7 +263,7 @@ class PluginMarketplacePanel(Panel):
                         "error",
                         (button_width, button_height),
                     ):
-                        self._uninstall_plugin(mgr, plugin_name)
+                        self._confirm_uninstall_plugin(mgr, plugin_name)
                 else:
                     button_width = max(40.0, (avail_button_w - button_spacing * 2.0) / 3.0)
                     if is_local and has_github:
@@ -295,7 +295,7 @@ class PluginMarketplacePanel(Panel):
                             "error",
                             (button_width, button_height),
                         ):
-                            self._uninstall_plugin(mgr, plugin_name)
+                            self._confirm_uninstall_plugin(mgr, plugin_name)
                     else:
                         if plugin_state == PluginState.ACTIVE:
                             if layout.button_styled(
@@ -331,7 +331,7 @@ class PluginMarketplacePanel(Panel):
                             "error",
                             (button_width, button_height),
                         ):
-                            self._uninstall_plugin(mgr, plugin_name)
+                            self._confirm_uninstall_plugin(mgr, plugin_name)
 
                 if has_github:
                     layout.spacing()
@@ -625,6 +625,19 @@ class PluginMarketplacePanel(Panel):
             self._set_status(tr("plugin_manager.status.uninstalled").format(name=name))
         except Exception as e:
             self._set_status(f"{tr('plugin_manager.status.uninstall_failed')}: {e}", True)
+
+    def _confirm_uninstall_plugin(self, mgr, name: str):
+        import lichtfeld as lf
+
+        tr = lf.ui.tr
+        yes_label = tr("plugin_marketplace.confirm_uninstall_yes")
+        no_label = tr("plugin_marketplace.confirm_uninstall_no")
+        lf.ui.confirm_dialog(
+            tr("plugin_marketplace.confirm_uninstall_title"),
+            tr("plugin_marketplace.confirm_uninstall_message").format(name=name),
+            [yes_label, no_label],
+            lambda choice: self._uninstall_plugin(mgr, name) if choice == yes_label else None,
+        )
 
     def _draw_status(self, layout):
         import lichtfeld as lf
