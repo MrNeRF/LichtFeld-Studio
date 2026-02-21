@@ -54,6 +54,8 @@ class PluginMarketplacePanel(Panel):
         self._operation_in_progress = False
         self._output_lines: List[str] = []
         self._lock = threading.Lock()
+        self._pending_uninstall_name = ""
+        self._pending_uninstall_open = False
 
     def draw(self, layout):
         import lichtfeld as lf
@@ -66,6 +68,7 @@ class PluginMarketplacePanel(Panel):
         self._sync_catalog_urls()
 
         scale = layout.get_dpi_scale()
+        self._draw_uninstall_confirmation_modal(layout, mgr, scale)
 
         layout.text_colored(
             tr("plugin_marketplace.title_line"),
@@ -274,7 +277,7 @@ class PluginMarketplacePanel(Panel):
                         "error",
                         (button_width, button_height),
                     ):
-                        self._confirm_uninstall_plugin(mgr, plugin_name)
+                        self._request_uninstall_confirmation(plugin_name)
                 else:
                     button_width = max(40.0, (avail_button_w - button_spacing * 2.0) / 3.0)
                     if is_local and has_github:
@@ -306,7 +309,7 @@ class PluginMarketplacePanel(Panel):
                             "error",
                             (button_width, button_height),
                         ):
-                            self._confirm_uninstall_plugin(mgr, plugin_name)
+                            self._request_uninstall_confirmation(plugin_name)
                     else:
                         if plugin_state == PluginState.ACTIVE:
                             if layout.button_styled(
@@ -342,7 +345,7 @@ class PluginMarketplacePanel(Panel):
                             "error",
                             (button_width, button_height),
                         ):
-                            self._confirm_uninstall_plugin(mgr, plugin_name)
+                            self._request_uninstall_confirmation(plugin_name)
 
                 layout.spacing()
                 if has_github:
@@ -632,18 +635,69 @@ class PluginMarketplacePanel(Panel):
         except Exception as e:
             self._set_status(f"{tr('plugin_manager.status.uninstall_failed')}: {e}", True)
 
-    def _confirm_uninstall_plugin(self, mgr, name: str):
+    def _request_uninstall_confirmation(self, name: str):
+        if not name:
+            return
+        self._pending_uninstall_name = name
+        self._pending_uninstall_open = True
+
+    def _draw_uninstall_confirmation_modal(self, layout, mgr, scale: float):
         import lichtfeld as lf
 
         tr = lf.ui.tr
-        yes_label = tr("plugin_marketplace.confirm_uninstall_yes")
-        no_label = tr("plugin_marketplace.confirm_uninstall_no")
-        lf.ui.confirm_dialog(
-            tr("plugin_marketplace.confirm_uninstall_title"),
-            tr("plugin_marketplace.confirm_uninstall_message").format(name=name),
-            [yes_label, no_label],
-            lambda choice: self._uninstall_plugin(mgr, name) if choice == yes_label else None,
-        )
+        if not self._pending_uninstall_name and not self._pending_uninstall_open:
+            return
+
+        popup_title = tr("plugin_marketplace.confirm_uninstall_title")
+        popup_id = f"{popup_title}##plugin_marketplace_uninstall_confirm"
+
+        if self._pending_uninstall_open:
+            layout.set_next_window_pos_viewport_center(always=True)
+            layout.set_next_window_size((380 * scale, 0))
+            layout.open_popup(popup_id)
+            self._pending_uninstall_open = False
+
+        layout.push_modal_style()
+        if layout.begin_popup_modal(popup_id):
+            avail_width = layout.get_content_region_avail()[0]
+            text_width = layout.calc_text_size(
+                tr("plugin_marketplace.confirm_uninstall_message").format(name=self._pending_uninstall_name)
+            )[0]
+            layout.set_cursor_pos_x(layout.get_cursor_pos()[0] + max(0.0, (avail_width - text_width) * 0.5))
+            layout.text_wrapped(
+                tr("plugin_marketplace.confirm_uninstall_message").format(name=self._pending_uninstall_name)
+            )
+            layout.spacing()
+            layout.separator()
+            layout.spacing()
+
+            button_width = 92 * scale
+            button_spacing = 8 * scale
+            avail_width = layout.get_content_region_avail()[0]
+            total_width = button_width * 2 + button_spacing
+            layout.set_cursor_pos_x(layout.get_cursor_pos()[0] + max(0.0, (avail_width - total_width) * 0.5))
+
+            if layout.button_styled(
+                tr("plugin_marketplace.confirm_uninstall_no"),
+                "secondary",
+                (button_width, 0),
+            ) or lf.ui.is_key_pressed(lf.ui.Key.ESCAPE):
+                self._pending_uninstall_name = ""
+                layout.close_current_popup()
+
+            layout.same_line(0, button_spacing)
+            if layout.button_styled(
+                tr("plugin_marketplace.confirm_uninstall_yes"),
+                "error",
+                (button_width, 0),
+            ):
+                uninstall_name = self._pending_uninstall_name
+                self._pending_uninstall_name = ""
+                layout.close_current_popup()
+                self._uninstall_plugin(mgr, uninstall_name)
+
+            layout.end_popup_modal()
+        layout.pop_modal_style()
 
     def _draw_status(self, layout):
         import lichtfeld as lf
