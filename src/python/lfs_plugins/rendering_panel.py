@@ -34,6 +34,7 @@ class RenderingPanel(Panel):
         lf.ui.draw_console_button()
 
     def _draw_settings(self, layout):
+        tr = lf.ui.tr
         settings = lf.get_render_settings()
         if not settings:
             return
@@ -68,7 +69,7 @@ class RenderingPanel(Panel):
             layout.unindent()
 
         layout.separator()
-        if layout.collapsing_header("Selection Colors"):
+        if layout.collapsing_header(tr("main_panel.selection_colors")):
             layout.prop(settings, "selection_color_committed")
             layout.prop(settings, "selection_color_preview")
             layout.prop(settings, "selection_color_center_marker")
@@ -84,7 +85,7 @@ class RenderingPanel(Panel):
             vfov = 2.0 * math.degrees(math.atan(SENSOR_HALF_HEIGHT_MM / focal_mm))
             aspect = view.width / view.height
             hfov = 2.0 * math.degrees(math.atan(aspect * math.tan(math.radians(vfov * 0.5))))
-            layout.text_disabled(f"FOV: {hfov:.1f}° H / {vfov:.1f}° V")
+            layout.text_disabled(tr("rendering_panel.fov_format").format(hfov=hfov, vfov=vfov))
         layout.prop(settings, "sh_degree")
         layout.prop(settings, "equirectangular")
         layout.prop(settings, "gut")
@@ -106,7 +107,7 @@ class RenderingPanel(Panel):
                 layout.prop(settings, "ppisp_vignette_strength")
 
             changed, values = layout.chromaticity_diagram(
-                "Color Correction",
+                tr("main_panel.ppisp_color_balance"),
                 settings.ppisp_color_red_x,
                 settings.ppisp_color_red_y,
                 settings.ppisp_color_green_x,
@@ -128,7 +129,7 @@ class RenderingPanel(Panel):
 
             layout.prop(settings, "ppisp_gamma_multiplier")
 
-            if layout.collapsing_header("CRF"):
+            if layout.collapsing_header(tr("main_panel.ppisp_crf_advanced")):
                 layout.crf_curve_preview(
                     "##crf_preview",
                     settings.ppisp_gamma_multiplier,
@@ -152,7 +153,7 @@ class RenderingPanel(Panel):
         layout.prop(settings, "render_scale")
 
         layout.separator()
-        if layout.collapsing_header("Mesh"):
+        if layout.collapsing_header(tr("main_panel.mesh")):
             layout.prop(settings, "mesh_wireframe")
             if settings.mesh_wireframe:
                 layout.indent()

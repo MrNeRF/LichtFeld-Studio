@@ -321,10 +321,13 @@ class PluginMarketplacePanel(Panel):
         threading.Thread(target=worker, daemon=True).start()
 
     def _install_plugin_from_marketplace(self, mgr, url: str):
+        import lichtfeld as lf
+
+        tr = lf.ui.tr
         self._run_async(
             lambda cb: mgr.install(url, on_progress=cb),
-            "Installed: {}",
-            "Install failed",
+            tr("plugin_marketplace.status.installed"),
+            tr("plugin_marketplace.status.install_failed"),
         )
 
     def _draw_status(self, layout):

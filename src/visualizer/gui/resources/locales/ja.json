@@ -46,7 +46,9 @@
     "video_colmap": "COLMAPチュートリアル",
     "video_lichtfeld": "LichtFeldチュートリアル",
     "video_masks": "マスクチュートリアル",
-    "loading": "読み込み中..."
+    "loading": "読み込み中...",
+    "wiki_label": "Wiki:",
+    "watch_tooltip": "视聴: {title}"
   },
   "about": {
     "title": "LICHTFELD STUDIO",
@@ -68,7 +70,10 @@
     "repository": "リポジトリ:",
     "website": "ウェブサイト:",
     "authors": "LichtFeld Studio 開発者",
-    "license": "GPLv3の下でライセンス"
+    "license": "GPLv3の下でライセンス",
+    "build_info.property": "項目",
+    "build_info.value": "値",
+    "separator": "  |  "
   },
   "training": {
     "section.dataset": "データセット",
@@ -226,7 +231,23 @@
     "button.save_checkpoint": "チェックポイントを保存",
     "button.switch_edit_mode": "編集モード",
     "button.add": "追加",
-    "button.remove": "削除"
+    "button.remove": "削除",
+    "value.none": "(なし)",
+    "value.default": "(デフォルト)",
+    "value.not_set": "(未設定)",
+    "options.strategy.mcmc": "MCMC",
+    "options.strategy.adc": "ADC",
+    "options.tile.full": "1 (全体)",
+    "options.tile.half": "2 (半分)",
+    "options.tile.quarter": "4 (1/4)",
+    "options.mask.none": "なし",
+    "options.mask.segment": "セグメント",
+    "options.mask.ignore": "無視",
+    "options.mask.alpha_consistent": "アルファ整合",
+    "options.bg.color": "色",
+    "options.bg.modulation": "変調",
+    "options.bg.image": "画像",
+    "options.bg.random": "ランダム"
   },
   "scene": {
     "add_ply": "PLYを追加...",
@@ -272,7 +293,13 @@
     "update_keyframe": "現在のビューに更新",
     "select_in_timeline": "タイムラインで選択",
     "add_keyframe_scene": "キーフレームを追加",
-    "keyframe_easing": "イージング"
+    "keyframe_easing": "イージング",
+    "new_group_name": "新しいグループ",
+    "keyframe_easing.linear": "リニア",
+    "keyframe_easing.ease_in": "イーズイン",
+    "keyframe_easing.ease_out": "イーズアウト",
+    "keyframe_easing.ease_in_out": "イーズインアウト",
+    "keyframe_label": "キーフレーム {index}  ({time:.2f}s)"
   },
   "export": {
     "title": "エクスポート",
@@ -305,7 +332,11 @@
     "browse": "参照...",
     "apply": "適用",
     "reset": "リセット",
-    "double_click_reset": "ダブルクリックでリセット"
+    "double_click_reset": "ダブルクリックでリセット",
+    "auto": "自動",
+    "column_label": "ラベル",
+    "column_control": "コントロール",
+    "na": "N/A"
   },
   "status": {
     "ready": "準備完了",
@@ -335,7 +366,8 @@
     "empty": "空",
     "dataset": "データセット",
     "edit_mode": "編集モード",
-    "ply_models": "PLYモデル:"
+    "ply_models": "PLYモデル:",
+    "viewer": "ビューア"
   },
   "messages": {
     "no_data_loaded": "データが読み込まれていません",
@@ -410,7 +442,8 @@
     "selection_groups": "選択グループ",
     "add_group": "+ グループを追加",
     "no_selection_groups": "選択グループがありません",
-    "clear": "クリア"
+    "clear": "クリア",
+    "mesh": "メッシュ"
   },
   "toolbar": {
     "selection": "選択",
@@ -505,7 +538,11 @@
     "new_step": "新規ステップ",
     "no_save_steps": "保存ステップが設定されていません",
     "sparsity": "スパース設定",
-    "pruning_growing": "プルーニング/グロウイング"
+    "pruning_growing": "プルーニング/グロウイング",
+    "no_trainer_loaded": "トレーナーが読み込まれていません",
+    "parameters_unavailable": "パラメータが利用できません",
+    "no_dataset_loaded": "データセットが読み込まれていません",
+    "iters_per_sec": "iter/秒"
   },
   "tooltip": {
     "gut_mode": "魚眼/歪み/エクイレクタンギュラーカメラ用",
@@ -628,7 +665,12 @@
     "mode.scale": "スケール",
     "mode.align": "整列ツール",
     "mode.crop_box": "クロップボックス",
-    "mode.unknown": "不明"
+    "mode.unknown": "不明",
+    "title": "入力設定",
+    "save_hint": "カスタムバインドを保持するには保存してください",
+    "double_click_hint": "ヒント: ダブルクリック操作を割り当てるにはダブルクリック",
+    "export_dialog_title": "入力バインドをエクスポート",
+    "import_dialog_title": "入力バインドをインポート"
   },
   "debug_info": {
     "free_memory": "空き: %.2f GB",
@@ -729,7 +771,11 @@
     "file_label": "ファイル: %s",
     "visible": "表示中",
     "hidden": "非表示",
-    "mask_section": "マスク"
+    "mask_section": "マスク",
+    "no_images_loaded": "画像が読み込まれていません",
+    "no_image": "画像なし",
+    "zoom": "ズーム",
+    "fit": "フィット"
   },
   "startup": {
     "supported_by": "サポート",
@@ -845,31 +891,87 @@
     "dismiss": "閉じる"
   },
   "plugin_marketplace": {
-    "title_line": "Browse installable plugins from GitHub repositories.",
-    "warning_body": "WARNING: LFS does not directly endorse or assume responsibility for third-party extensions. Use at your own risk.",
-    "filter_label": "Filter",
-    "sort_label": "Sort",
-    "filter.all": "All",
-    "filter.installed": "Installed",
-    "filter.not_installed": "Not Installed",
-    "sort.stars_desc": "Stars: High -> Low",
-    "sort.stars_asc": "Stars: Low -> High",
-    "sort.name_asc": "Name: A -> Z",
-    "sort.name_desc": "Name: Z -> A",
-    "loading": "Fetching GitHub metadata...",
-    "no_plugins": "No marketplace plugins configured.",
-    "edit_list_hint": "Edit PLUGIN_MARKETPLACE_URLS in src/python/lfs_plugins/marketplace.py.",
-    "unknown_plugin": "Unknown Plugin",
-    "no_description": "No description provided.",
-    "stars": "Stars",
-    "invalid_link": "Invalid GitHub link",
-    "button.install": "Install",
-    "button.installed": "Installed",
-    "button.github": "GitHub"
+    "title_line": "GitHub リポジトリからインストール可能なプラグインを参照します。",
+    "warning_body": "警告: LFS は直接的な推奨や責任の負担を行いません。利用は自己責任で行ってください。",
+    "filter_label": "フィルター",
+    "sort_label": "並び替え",
+    "filter.all": "すべて",
+    "filter.installed": "インストール済み",
+    "filter.not_installed": "未インストール",
+    "sort.stars_desc": "スター: 多い -> 少ない",
+    "sort.stars_asc": "スター: 少ない -> 多い",
+    "sort.name_asc": "名前: A -> Z",
+    "sort.name_desc": "名前: Z -> A",
+    "loading": "GitHub メタデータを取得中...",
+    "no_plugins": "マーケットプレイスに設定されたプラグインがありません。",
+    "edit_list_hint": "src/python/lfs_plugins/marketplace.py の PLUGIN_MARKETPLACE_URLS を編集してください。",
+    "unknown_plugin": "不明なプラグイン",
+    "no_description": "説明はありません。",
+    "stars": "スター",
+    "invalid_link": "無効な GitHub リンク",
+    "button.install": "インストール",
+    "button.installed": "インストール済み",
+    "button.github": "GitHub",
+    "status.installed": "インストール済み: {}",
+    "status.install_failed": "インストール失敗"
   },
   "sequencer": {
     "edit_focal_length": "焦点距離を編集...",
     "edit_focal_length_title": "焦点距離を編集",
     "focal_length_mm": "焦点距離 (mm)"
+  },
+  "rendering_panel": {
+    "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V"
+  },
+  "scripts_panel": {
+    "actions": "アクション",
+    "reload_all": "すべて再読み込み",
+    "clear_all": "すべてクリア",
+    "no_scripts_loaded": "Python スクリプトが読み込まれていません。",
+    "load_hint": "--python-script <path> を使用してスクリプトを読み込んでください。",
+    "loaded_scripts": "読み込み済みスクリプト:",
+    "path": "パス",
+    "error": "エラー",
+    "reload": "再読み込み"
+  },
+  "status_bar": {
+    "gt_compare": "GT比較",
+    "camera": "Cam {cam_id}",
+    "split": "分割:",
+    "gpu": "GPU",
+    "strategy_default": "デフォルト"
+  },
+  "plugin_manager": {
+    "section.install_from_github": "GitHub からインストール",
+    "section.installed_plugins": "インストール済みプラグイン",
+    "github_url_or_shorthand": "GitHub URL または短縮形式:",
+    "supported_formats": "対応形式",
+    "working": "処理中...",
+    "output": "出力",
+    "button.install_plugin": "プラグインをインストール",
+    "button.explore_options": "オプションを探索",
+    "button.reload": "再読み込み",
+    "button.unload": "アンロード",
+    "button.load": "ロード",
+    "button.update": "更新",
+    "button.uninstall": "アンインストール",
+    "no_plugins_installed": "インストール済みプラグインはありません",
+    "version": "バージョン",
+    "description": "説明",
+    "status": "状態",
+    "status_not_loaded": "未ロード",
+    "error.enter_github_url": "GitHub URL を入力してください",
+    "status.installed": "インストール済み: {}",
+    "status.install_failed": "インストール失敗",
+    "status.loaded": "ロード済み: {name}",
+    "status.load_failed": "ロード失敗",
+    "status.unloaded": "アンロード済み: {name}",
+    "status.unload_failed": "アンロード失敗",
+    "status.reloaded": "再読み込み済み: {name}",
+    "status.reload_failed": "再読み込み失敗",
+    "status.updated": "更新済み: {name}",
+    "status.update_failed": "更新失敗",
+    "status.uninstalled": "アンインストール済み: {name}",
+    "status.uninstall_failed": "アンインストール失敗"
   }
 }

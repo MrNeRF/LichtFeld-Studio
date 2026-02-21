@@ -19,24 +19,25 @@ class ScriptsPanel(Panel):
         pass
 
     def draw(self, layout):
+        tr = lf.ui.tr
         scripts = lf.scripts.get_scripts()
 
         if layout.begin_menu_bar():
-            if layout.begin_menu("Actions"):
-                if layout.menu_item("Reload All", enabled=len(scripts) > 0):
+            if layout.begin_menu(tr("scripts_panel.actions")):
+                if layout.menu_item(tr("scripts_panel.reload_all"), enabled=len(scripts) > 0):
                     self._reload_all()
                 layout.separator()
-                if layout.menu_item("Clear All"):
+                if layout.menu_item(tr("scripts_panel.clear_all")):
                     lf.scripts.clear()
                 layout.end_menu()
             layout.end_menu_bar()
 
         if not scripts:
-            layout.text_disabled("No Python scripts loaded.")
-            layout.text_disabled("Use --python-script <path> to load scripts.")
+            layout.text_disabled(tr("scripts_panel.no_scripts_loaded"))
+            layout.text_disabled(tr("scripts_panel.load_hint"))
             return
 
-        layout.label("Loaded Scripts:")
+        layout.label(tr("scripts_panel.loaded_scripts"))
         layout.separator()
 
         for i, script in enumerate(scripts):
@@ -62,15 +63,15 @@ class ScriptsPanel(Panel):
 
             if layout.is_item_hovered():
                 layout.begin_tooltip()
-                layout.label(f"Path: {script['path']}")
+                layout.label(f"{tr('scripts_panel.path')}: {script['path']}")
                 if script["has_error"]:
                     layout.separator()
-                    layout.text_colored(f"Error: {script['error_message']}", (1.0, 0.4, 0.4, 1.0))
+                    layout.text_colored(f"{tr('scripts_panel.error')}: {script['error_message']}", (1.0, 0.4, 0.4, 1.0))
                 layout.end_tooltip()
 
             layout.same_line()
             layout.set_cursor_pos_x(layout.get_window_width() - 80)
-            if layout.small_button("Reload"):
+            if layout.small_button(tr("scripts_panel.reload")):
                 lf.scripts.set_script_error(i, "")
                 if script["enabled"]:
                     result = lf.scripts.run([script["path"]])
@@ -89,5 +90,4 @@ class ScriptsPanel(Panel):
                 for i, script in enumerate(scripts):
                     if script["enabled"]:
                         lf.scripts.set_script_error(i, result["error"])
-
 

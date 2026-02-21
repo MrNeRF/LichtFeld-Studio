@@ -46,7 +46,9 @@
     "video_colmap": "COLMAP 튜토리얼",
     "video_lichtfeld": "LichtFeld 튜토리얼",
     "video_masks": "마스크 튜토리얼",
-    "loading": "로딩 중..."
+    "loading": "로딩 중...",
+    "wiki_label": "위키:",
+    "watch_tooltip": "시청: {title}"
   },
   "about": {
     "title": "LICHTFELD STUDIO",
@@ -68,7 +70,10 @@
     "repository": "저장소:",
     "website": "웹사이트:",
     "authors": "LichtFeld Studio 개발자",
-    "license": "GPLv3 라이선스"
+    "license": "GPLv3 라이선스",
+    "build_info.property": "항목",
+    "build_info.value": "값",
+    "separator": "  |  "
   },
   "training": {
     "section.dataset": "데이터셋",
@@ -226,7 +231,23 @@
     "button.save_checkpoint": "체크포인트 저장",
     "button.switch_edit_mode": "편집 모드",
     "button.add": "추가",
-    "button.remove": "제거"
+    "button.remove": "제거",
+    "value.none": "(없음)",
+    "value.default": "(기본값)",
+    "value.not_set": "(설정 안 됨)",
+    "options.strategy.mcmc": "MCMC",
+    "options.strategy.adc": "ADC",
+    "options.tile.full": "1 (전체)",
+    "options.tile.half": "2 (절반)",
+    "options.tile.quarter": "4 (1/4)",
+    "options.mask.none": "없음",
+    "options.mask.segment": "세그먼트",
+    "options.mask.ignore": "무시",
+    "options.mask.alpha_consistent": "알파 일관",
+    "options.bg.color": "색상",
+    "options.bg.modulation": "변조",
+    "options.bg.image": "이미지",
+    "options.bg.random": "무작위"
   },
   "scene": {
     "add_ply": "PLY 추가...",
@@ -272,7 +293,13 @@
     "update_keyframe": "현재 뷰로 업데이트",
     "select_in_timeline": "타임라인에서 선택",
     "add_keyframe_scene": "키프레임 추가",
-    "keyframe_easing": "이징"
+    "keyframe_easing": "이징",
+    "new_group_name": "새 그룹",
+    "keyframe_easing.linear": "선형",
+    "keyframe_easing.ease_in": "점진적 시작",
+    "keyframe_easing.ease_out": "점진적 종료",
+    "keyframe_easing.ease_in_out": "점진적 시작/종료",
+    "keyframe_label": "키프레임 {index}  ({time:.2f}s)"
   },
   "export": {
     "title": "내보내기",
@@ -305,7 +332,11 @@
     "browse": "찾아보기...",
     "apply": "적용",
     "reset": "재설정",
-    "double_click_reset": "더블클릭하여 재설정"
+    "double_click_reset": "더블클릭하여 재설정",
+    "auto": "자동",
+    "column_label": "라벨",
+    "column_control": "컨트롤",
+    "na": "해당 없음"
   },
   "status": {
     "ready": "준비됨",
@@ -335,7 +366,8 @@
     "empty": "비어있음",
     "dataset": "데이터셋",
     "edit_mode": "편집 모드",
-    "ply_models": "PLY 모델:"
+    "ply_models": "PLY 모델:",
+    "viewer": "뷰어"
   },
   "messages": {
     "no_data_loaded": "데이터가 로드되지 않음",
@@ -410,7 +442,8 @@
     "selection_groups": "선택 그룹",
     "add_group": "+ 그룹 추가",
     "no_selection_groups": "선택 그룹 없음",
-    "clear": "지우기"
+    "clear": "지우기",
+    "mesh": "메시"
   },
   "toolbar": {
     "selection": "선택",
@@ -505,7 +538,11 @@
     "new_step": "새 단계",
     "no_save_steps": "설정된 저장 단계 없음",
     "sparsity": "희소성 설정",
-    "pruning_growing": "가지치기/성장"
+    "pruning_growing": "가지치기/성장",
+    "no_trainer_loaded": "트레이너가 로드되지 않았습니다",
+    "parameters_unavailable": "매개변수를 사용할 수 없습니다",
+    "no_dataset_loaded": "데이터셋이 로드되지 않았습니다",
+    "iters_per_sec": "iter/초"
   },
   "tooltip": {
     "gut_mode": "어안/왜곡/정거원통 카메라용",
@@ -628,7 +665,12 @@
     "mode.scale": "크기 조절",
     "mode.align": "정렬 도구",
     "mode.crop_box": "자르기 상자",
-    "mode.unknown": "알 수 없음"
+    "mode.unknown": "알 수 없음",
+    "title": "입력 설정",
+    "save_hint": "사용자 정의 바인딩을 유지하려면 저장하세요",
+    "double_click_hint": "팁: 더블 클릭 동작을 바인딩하려면 더블 클릭",
+    "export_dialog_title": "입력 바인딩 내보내기",
+    "import_dialog_title": "입력 바인딩 가져오기"
   },
   "debug_info": {
     "free_memory": "여유: %.2f GB",
@@ -729,7 +771,11 @@
     "file_label": "파일: %s",
     "visible": "표시됨",
     "hidden": "숨겨짐",
-    "mask_section": "마스크"
+    "mask_section": "마스크",
+    "no_images_loaded": "로드된 이미지가 없습니다",
+    "no_image": "이미지 없음",
+    "zoom": "줌",
+    "fit": "맞춤"
   },
   "startup": {
     "supported_by": "지원:",
@@ -845,31 +891,87 @@
     "dismiss": "닫기"
   },
   "plugin_marketplace": {
-    "title_line": "Browse installable plugins from GitHub repositories.",
-    "warning_body": "WARNING: LFS does not directly endorse or assume responsibility for third-party extensions. Use at your own risk.",
-    "filter_label": "Filter",
-    "sort_label": "Sort",
-    "filter.all": "All",
-    "filter.installed": "Installed",
-    "filter.not_installed": "Not Installed",
-    "sort.stars_desc": "Stars: High -> Low",
-    "sort.stars_asc": "Stars: Low -> High",
-    "sort.name_asc": "Name: A -> Z",
-    "sort.name_desc": "Name: Z -> A",
-    "loading": "Fetching GitHub metadata...",
-    "no_plugins": "No marketplace plugins configured.",
-    "edit_list_hint": "Edit PLUGIN_MARKETPLACE_URLS in src/python/lfs_plugins/marketplace.py.",
-    "unknown_plugin": "Unknown Plugin",
-    "no_description": "No description provided.",
-    "stars": "Stars",
-    "invalid_link": "Invalid GitHub link",
-    "button.install": "Install",
-    "button.installed": "Installed",
-    "button.github": "GitHub"
+    "title_line": "GitHub 저장소에서 설치 가능한 플러그인을 찾아보세요.",
+    "warning_body": "경고: LFS는 직접 보증하지 않으며 책임을 지지 않습니다. 사용은 본인 책임입니다.",
+    "filter_label": "필터",
+    "sort_label": "정렬",
+    "filter.all": "전체",
+    "filter.installed": "설치됨",
+    "filter.not_installed": "미설치",
+    "sort.stars_desc": "별점: 높은 순 -> 낮은 순",
+    "sort.stars_asc": "별점: 낮은 순 -> 높은 순",
+    "sort.name_asc": "이름: A -> Z",
+    "sort.name_desc": "이름: Z -> A",
+    "loading": "GitHub 메타데이터를 가져오는 중...",
+    "no_plugins": "구성된 마켓플레이스 플러그인이 없습니다.",
+    "edit_list_hint": "src/python/lfs_plugins/marketplace.py의 PLUGIN_MARKETPLACE_URLS를 수정하세요.",
+    "unknown_plugin": "알 수 없는 플러그인",
+    "no_description": "설명이 없습니다.",
+    "stars": "별점",
+    "invalid_link": "유효하지 않은 GitHub 링크",
+    "button.install": "설치",
+    "button.installed": "설치됨",
+    "button.github": "GitHub",
+    "status.installed": "설치됨: {}",
+    "status.install_failed": "설치 실패"
   },
   "sequencer": {
     "edit_focal_length": "초점 거리 편집...",
     "edit_focal_length_title": "초점 거리 편집",
     "focal_length_mm": "초점 거리 (mm)"
+  },
+  "rendering_panel": {
+    "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V"
+  },
+  "scripts_panel": {
+    "actions": "작업",
+    "reload_all": "모두 다시 로드",
+    "clear_all": "모두 지우기",
+    "no_scripts_loaded": "로드된 Python 스크립트가 없습니다.",
+    "load_hint": "스크립트를 로드하려면 --python-script <path>를 사용하세요.",
+    "loaded_scripts": "로드된 스크립트:",
+    "path": "경로",
+    "error": "오류",
+    "reload": "다시 로드"
+  },
+  "status_bar": {
+    "gt_compare": "GT 비교",
+    "camera": "Cam {cam_id}",
+    "split": "분할:",
+    "gpu": "GPU",
+    "strategy_default": "기본값"
+  },
+  "plugin_manager": {
+    "section.install_from_github": "GitHub에서 설치",
+    "section.installed_plugins": "설치된 플러그인",
+    "github_url_or_shorthand": "GitHub URL 또는 단축 형식:",
+    "supported_formats": "지원 형식",
+    "working": "작업 중...",
+    "output": "출력",
+    "button.install_plugin": "플러그인 설치",
+    "button.explore_options": "옵션 탐색",
+    "button.reload": "다시 로드",
+    "button.unload": "언로드",
+    "button.load": "로드",
+    "button.update": "업데이트",
+    "button.uninstall": "제거",
+    "no_plugins_installed": "설치된 플러그인이 없습니다",
+    "version": "버전",
+    "description": "설명",
+    "status": "상태",
+    "status_not_loaded": "로드되지 않음",
+    "error.enter_github_url": "GitHub URL을 입력하세요",
+    "status.installed": "설치됨: {}",
+    "status.install_failed": "설치 실패",
+    "status.loaded": "로드됨: {name}",
+    "status.load_failed": "로드 실패",
+    "status.unloaded": "언로드됨: {name}",
+    "status.unload_failed": "언로드 실패",
+    "status.reloaded": "다시 로드됨: {name}",
+    "status.reload_failed": "다시 로드 실패",
+    "status.updated": "업데이트됨: {name}",
+    "status.update_failed": "업데이트 실패",
+    "status.uninstalled": "제거됨: {name}",
+    "status.uninstall_failed": "제거 실패"
   }
 }

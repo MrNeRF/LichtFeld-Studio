@@ -46,7 +46,9 @@
     "video_colmap": "Samouczek COLMAP",
     "video_lichtfeld": "Samouczek LichtFeld",
     "video_masks": "Samouczek Masek",
-    "loading": "Ładowanie..."
+    "loading": "Ładowanie...",
+    "wiki_label": "Wiki:",
+    "watch_tooltip": "Obejrzyj: {title}"
   },
   "about": {
     "title": "LICHTFELD STUDIO",
@@ -68,7 +70,10 @@
     "repository": "Repozytorium:",
     "website": "Strona WWW:",
     "authors": "Autorzy LichtFeld Studio",
-    "license": "Licencjonowane na GPLv3"
+    "license": "Licencjonowane na GPLv3",
+    "build_info.property": "Wlasciwosc",
+    "build_info.value": "Wartosc",
+    "separator": "  |  "
   },
   "training": {
     "section.dataset": "Zbiór Danych",
@@ -226,7 +231,23 @@
     "button.save_checkpoint": "Zapisz Punkt Kontrolny",
     "button.switch_edit_mode": "Tryb Edycji",
     "button.add": "Dodaj",
-    "button.remove": "Usuń"
+    "button.remove": "Usuń",
+    "value.none": "(brak)",
+    "value.default": "(domyslne)",
+    "value.not_set": "(nie ustawiono)",
+    "options.strategy.mcmc": "MCMC",
+    "options.strategy.adc": "ADC",
+    "options.tile.full": "1 (Pelny)",
+    "options.tile.half": "2 (Polowa)",
+    "options.tile.quarter": "4 (Cwierc)",
+    "options.mask.none": "Brak",
+    "options.mask.segment": "Segment",
+    "options.mask.ignore": "Ignoruj",
+    "options.mask.alpha_consistent": "Spojne z alfa",
+    "options.bg.color": "Kolor",
+    "options.bg.modulation": "Modulacja",
+    "options.bg.image": "Obraz",
+    "options.bg.random": "Losowe"
   },
   "scene": {
     "add_ply": "Dodaj PLY...",
@@ -272,7 +293,13 @@
     "update_keyframe": "Aktualizuj do bieżącego widoku",
     "select_in_timeline": "Wybierz na osi czasu",
     "add_keyframe_scene": "Dodaj klatkę kluczową",
-    "keyframe_easing": "Easing"
+    "keyframe_easing": "Easing",
+    "new_group_name": "Nowa grupa",
+    "keyframe_easing.linear": "Liniowe",
+    "keyframe_easing.ease_in": "Lagodne wejscie",
+    "keyframe_easing.ease_out": "Lagodne wyjscie",
+    "keyframe_easing.ease_in_out": "Lagodne wejscie/wyjscie",
+    "keyframe_label": "Klatka kluczowa {index}  ({time:.2f}s)"
   },
   "export": {
     "title": "Eksportuj",
@@ -305,7 +332,11 @@
     "browse": "Przeglądaj...",
     "apply": "Zastosuj",
     "reset": "Resetuj",
-    "double_click_reset": "podwójne kliknięcie resetuje"
+    "double_click_reset": "podwójne kliknięcie resetuje",
+    "auto": "Auto",
+    "column_label": "Etykieta",
+    "column_control": "Sterowanie",
+    "na": "brak"
   },
   "status": {
     "ready": "Gotowy",
@@ -335,7 +366,8 @@
     "empty": "Pusty",
     "dataset": "Zbiór Danych",
     "edit_mode": "Tryb Edycji",
-    "ply_models": "Modele PLY:"
+    "ply_models": "Modele PLY:",
+    "viewer": "Podglad"
   },
   "messages": {
     "no_data_loaded": "Nie załadowano danych",
@@ -410,7 +442,8 @@
     "selection_groups": "Grupy Zaznaczenia",
     "add_group": "+ Dodaj Grupę",
     "no_selection_groups": "Brak grup zaznaczenia",
-    "clear": "Wyczyść"
+    "clear": "Wyczyść",
+    "mesh": "Siatka"
   },
   "toolbar": {
     "selection": "Zaznaczenie",
@@ -505,7 +538,11 @@
     "new_step": "Nowy Krok",
     "no_save_steps": "Nie skonfigurowano kroków zapisu",
     "sparsity": "Ustawienia Rzadkości",
-    "pruning_growing": "Przycinanie/Rozrost"
+    "pruning_growing": "Przycinanie/Rozrost",
+    "no_trainer_loaded": "Brak zaladowanego trenera",
+    "parameters_unavailable": "Parametry niedostepne",
+    "no_dataset_loaded": "Brak zaladowanego zbioru danych",
+    "iters_per_sec": "iter/s"
   },
   "tooltip": {
     "gut_mode": "Dla kamer rybie oko/zniekształconych/równokątnych",
@@ -628,7 +665,12 @@
     "mode.scale": "Skala",
     "mode.align": "Narzędzie Wyrównania",
     "mode.crop_box": "Pole Przycinania",
-    "mode.unknown": "Nieznany"
+    "mode.unknown": "Nieznany",
+    "title": "USTAWIENIA WEJSCIA",
+    "save_hint": "Zapisz, aby zachowac niestandardowe skr oty",
+    "double_click_hint": "Wskazowka: kliknij dwukrotnie, aby przypisac akcje podwojnego klikniecia",
+    "export_dialog_title": "Eksportuj przypisania wejsc",
+    "import_dialog_title": "Importuj przypisania wejsc"
   },
   "debug_info": {
     "free_memory": "Wolna: %.2f GB",
@@ -729,7 +771,11 @@
     "file_label": "Plik: %s",
     "visible": "Widoczny",
     "hidden": "Ukryty",
-    "mask_section": "MASKA"
+    "mask_section": "MASKA",
+    "no_images_loaded": "Brak zaladowanych obrazow",
+    "no_image": "Brak obrazu",
+    "zoom": "Zoom",
+    "fit": "Dopasuj"
   },
   "startup": {
     "supported_by": "Wspierane przez",
@@ -845,31 +891,87 @@
     "dismiss": "Zamknij"
   },
   "plugin_marketplace": {
-    "title_line": "Browse installable plugins from GitHub repositories.",
-    "warning_body": "WARNING: LFS does not directly endorse or assume responsibility for third-party extensions. Use at your own risk.",
-    "filter_label": "Filter",
-    "sort_label": "Sort",
-    "filter.all": "All",
-    "filter.installed": "Installed",
-    "filter.not_installed": "Not Installed",
-    "sort.stars_desc": "Stars: High -> Low",
-    "sort.stars_asc": "Stars: Low -> High",
-    "sort.name_asc": "Name: A -> Z",
-    "sort.name_desc": "Name: Z -> A",
-    "loading": "Fetching GitHub metadata...",
-    "no_plugins": "No marketplace plugins configured.",
-    "edit_list_hint": "Edit PLUGIN_MARKETPLACE_URLS in src/python/lfs_plugins/marketplace.py.",
-    "unknown_plugin": "Unknown Plugin",
-    "no_description": "No description provided.",
-    "stars": "Stars",
-    "invalid_link": "Invalid GitHub link",
-    "button.install": "Install",
-    "button.installed": "Installed",
-    "button.github": "GitHub"
+    "title_line": "Przeglądaj instalowalne wtyczki z repozytoriów GitHub.",
+    "warning_body": "OSTRZEŻENIE: LFS nie udziela bezpośredniej rekomendacji ani nie ponosi odpowiedzialności. Używasz na własne ryzyko.",
+    "filter_label": "Filtr",
+    "sort_label": "Sortowanie",
+    "filter.all": "Wszystkie",
+    "filter.installed": "Zainstalowane",
+    "filter.not_installed": "Niezainstalowane",
+    "sort.stars_desc": "Gwiazdki: malejąco",
+    "sort.stars_asc": "Gwiazdki: rosnąco",
+    "sort.name_asc": "Nazwa: A -> Z",
+    "sort.name_desc": "Nazwa: Z -> A",
+    "loading": "Pobieranie metadanych GitHub...",
+    "no_plugins": "Brak skonfigurowanych wtyczek marketplace.",
+    "edit_list_hint": "Edytuj PLUGIN_MARKETPLACE_URLS w pliku src/python/lfs_plugins/marketplace.py.",
+    "unknown_plugin": "Nieznana wtyczka",
+    "no_description": "Brak opisu.",
+    "stars": "Gwiazdki",
+    "invalid_link": "Nieprawidłowy link GitHub",
+    "button.install": "Zainstaluj",
+    "button.installed": "Zainstalowano",
+    "button.github": "GitHub",
+    "status.installed": "Zainstalowano: {}",
+    "status.install_failed": "Instalacja nie powiodła się"
   },
   "sequencer": {
     "edit_focal_length": "Edytuj ogniskową...",
     "edit_focal_length_title": "Edytuj ogniskową",
     "focal_length_mm": "Ogniskowa (mm)"
+  },
+  "rendering_panel": {
+    "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V"
+  },
+  "scripts_panel": {
+    "actions": "Akcje",
+    "reload_all": "Przeladuj wszystko",
+    "clear_all": "Wyczysc wszystko",
+    "no_scripts_loaded": "Brak zaladowanych skryptow Pythona.",
+    "load_hint": "Uzyj --python-script <sciezka>, aby zaladowac skrypty.",
+    "loaded_scripts": "Zaladowane skrypty:",
+    "path": "Sciezka",
+    "error": "Blad",
+    "reload": "Przeladuj"
+  },
+  "status_bar": {
+    "gt_compare": "Porownanie GT",
+    "camera": "Cam {cam_id}",
+    "split": "Podzial:",
+    "gpu": "GPU",
+    "strategy_default": "Domyslny"
+  },
+  "plugin_manager": {
+    "section.install_from_github": "Instaluj z GitHub",
+    "section.installed_plugins": "Zainstalowane wtyczki",
+    "github_url_or_shorthand": "URL GitHub lub skrot:",
+    "supported_formats": "Obslugiwane formaty",
+    "working": "Przetwarzanie...",
+    "output": "Wyjscie",
+    "button.install_plugin": "Zainstaluj wtyczke",
+    "button.explore_options": "Przegladaj opcje",
+    "button.reload": "Przeladuj",
+    "button.unload": "Wyladuj",
+    "button.load": "Zaladuj",
+    "button.update": "Aktualizuj",
+    "button.uninstall": "Odinstaluj",
+    "no_plugins_installed": "Brak zainstalowanych wtyczek",
+    "version": "Wersja",
+    "description": "Opis",
+    "status": "Stan",
+    "status_not_loaded": "niezaładowany",
+    "error.enter_github_url": "Wpisz URL GitHub",
+    "status.installed": "Zainstalowano: {}",
+    "status.install_failed": "Instalacja nie powiodła się",
+    "status.loaded": "Załadowano: {name}",
+    "status.load_failed": "Ładowanie nie powiodło się",
+    "status.unloaded": "Wyładowano: {name}",
+    "status.unload_failed": "Wyładowanie nie powiodło się",
+    "status.reloaded": "Przeładowano: {name}",
+    "status.reload_failed": "Przeładowanie nie powiodło się",
+    "status.updated": "Zaktualizowano: {name}",
+    "status.update_failed": "Aktualizacja nie powiodła się",
+    "status.uninstalled": "Odinstalowano: {name}",
+    "status.uninstall_failed": "Odinstalowanie nie powiodło się"
   }
 }

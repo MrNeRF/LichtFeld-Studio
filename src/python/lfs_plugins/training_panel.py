@@ -17,11 +17,7 @@ COLOR_ERROR = (0.9, 0.3, 0.3, 1.0)
 
 FULL_WIDTH = (-1, 0)
 
-TILE_MODE_ITEMS = ["1 (Full)", "2 (Half)", "4 (Quarter)"]
 SH_DEGREE_ITEMS = ["0", "1", "2", "3"]
-MASK_MODE_ITEMS = ["None", "Segment", "Ignore", "Alpha Consistent"]
-BG_MODE_ITEMS = ["Color", "Modulation", "Image", "Random"]
-STRATEGY_ITEMS = ["MCMC", "ADC"]
 
 
 def tr(key):
@@ -74,12 +70,12 @@ class TrainingPanel(Panel):
 
     def draw(self, layout):
         if not AppState.has_trainer.value:
-            layout.text_colored("No trainer loaded", COLOR_IDLE)
+            layout.text_colored(tr("training_panel.no_trainer_loaded"), COLOR_IDLE)
             return
 
         params = lf.optimization_params()
         if not params.has_params():
-            layout.text_colored("Parameters not available", COLOR_IDLE)
+            layout.text_colored(tr("training_panel.parameters_unavailable"), COLOR_IDLE)
             return
 
         state = AppState.trainer_state.value
@@ -190,8 +186,8 @@ class TrainingPanel(Panel):
         can_edit_live = state in ("ready", "running", "paused")
 
         if layout.begin_table("PyBasicParamsTable", 2):
-            layout.table_setup_column("Label", 120.0)
-            layout.table_setup_column("Control", 0.0)
+            layout.table_setup_column(tr("common.column_label"), 120.0)
+            layout.table_setup_column(tr("common.column_control"), 0.0)
 
             # -- Structural params (only before training starts) --
             layout.begin_disabled(not can_edit)
@@ -201,8 +197,12 @@ class TrainingPanel(Panel):
             layout.label(tr("training_params.strategy"))
             layout.table_next_column()
             layout.push_item_width(-1)
+            strategy_items = [
+                tr("training.options.strategy.mcmc"),
+                tr("training.options.strategy.adc"),
+            ]
             strategy_idx = 0 if params.strategy == "mcmc" else 1
-            changed, new_idx = layout.combo("##py_strategy", strategy_idx, STRATEGY_ITEMS)
+            changed, new_idx = layout.combo("##py_strategy", strategy_idx, strategy_items)
             if changed:
                 if new_idx == 1 and params.gut:
                     btn_gut = tr("training.conflict.btn_disable_gut")
@@ -266,7 +266,12 @@ class TrainingPanel(Panel):
             layout.table_next_column()
             layout.push_item_width(-1)
             tile_idx = {1: 0, 2: 1, 4: 2}.get(params.tile_mode, 0)
-            changed, new_idx = layout.combo("##py_tile_mode", tile_idx, TILE_MODE_ITEMS)
+            tile_mode_items = [
+                tr("training.options.tile.full"),
+                tr("training.options.tile.half"),
+                tr("training.options.tile.quarter"),
+            ]
+            changed, new_idx = layout.combo("##py_tile_mode", tile_idx, tile_mode_items)
             if changed:
                 params.tile_mode = [1, 2, 4][new_idx]
             layout.pop_item_width()
@@ -306,7 +311,13 @@ class TrainingPanel(Panel):
             layout.table_next_column()
             layout.push_item_width(-1)
             mask_idx = params.mask_mode.value
-            changed, new_idx = layout.combo("##py_mask_mode", mask_idx, MASK_MODE_ITEMS)
+            mask_mode_items = [
+                tr("training.options.mask.none"),
+                tr("training.options.mask.segment"),
+                tr("training.options.mask.ignore"),
+                tr("training.options.mask.alpha_consistent"),
+            ]
+            changed, new_idx = layout.combo("##py_mask_mode", mask_idx, mask_mode_items)
             if changed:
                 params.mask_mode = lf.MaskMode(new_idx)
             layout.pop_item_width()
@@ -410,7 +421,7 @@ class TrainingPanel(Panel):
                     layout.label(tr("training_params.ppisp_activation_step"))
                     layout.table_next_column()
                     is_auto = params.ppisp_controller_activation_step < 0
-                    changed, new_auto = layout.checkbox("Auto##py_ppisp_auto_step", is_auto)
+                    changed, new_auto = layout.checkbox(f"{tr('common.auto')}##py_ppisp_auto_step", is_auto)
                     if changed:
                         params.ppisp_controller_activation_step = -1 if new_auto else max(1, int(params.iterations) - 5000)
                     if not is_auto:
@@ -451,7 +462,13 @@ class TrainingPanel(Panel):
             layout.table_next_column()
             layout.push_item_width(-1)
             bg_idx = params.bg_mode.value
-            changed, new_idx = layout.combo("##py_bg_mode", bg_idx, BG_MODE_ITEMS)
+            bg_mode_items = [
+                tr("training.options.bg.color"),
+                tr("training.options.bg.modulation"),
+                tr("training.options.bg.image"),
+                tr("training.options.bg.random"),
+            ]
+            changed, new_idx = layout.combo("##py_bg_mode", bg_idx, bg_mode_items)
             if changed:
                 params.bg_mode = lf.BackgroundMode(new_idx)
             layout.pop_item_width()
@@ -476,7 +493,7 @@ class TrainingPanel(Panel):
                 layout.table_next_column()
                 layout.push_item_width(-1)
                 img_path = params.bg_image_path
-                display = os.path.basename(img_path) if img_path else "(none)"
+                display = os.path.basename(img_path) if img_path else tr("training.value.none")
                 layout.label(display)
                 layout.pop_item_width()
 
@@ -505,14 +522,14 @@ class TrainingPanel(Panel):
                 if dataset.has_params():
                     table_open = layout.begin_table("PyDatasetTable", 2)
                     if table_open:
-                        layout.table_setup_column("Label", 120.0)
-                        layout.table_setup_column("Control", 0.0)
+                        layout.table_setup_column(tr("common.column_label"), 120.0)
+                        layout.table_setup_column(tr("common.column_control"), 0.0)
 
                         data_path = dataset.data_path
-                        self._table_text(layout, tr("training.dataset.path"), os.path.basename(data_path) if data_path else "(none)")
+                        self._table_text(layout, tr("training.dataset.path"), os.path.basename(data_path) if data_path else tr("training.value.none"))
 
                         images = dataset.images
-                        self._table_text(layout, tr("training.dataset.images"), images if images else "(default)")
+                        self._table_text(layout, tr("training.dataset.images"), images if images else tr("training.value.default"))
 
                         layout.table_next_row()
                         layout.table_next_column()
@@ -521,14 +538,14 @@ class TrainingPanel(Panel):
                         if dataset_can_edit:
                             layout.push_item_width(-1)
                             resize_options = [-1, 1, 2, 4, 8]
-                            resize_labels = ["Auto", "1", "2", "4", "8"]
+                            resize_labels = [tr("common.auto"), "1", "2", "4", "8"]
                             current_idx = resize_options.index(dataset.resize_factor) if dataset.resize_factor in resize_options else 0
                             changed, new_idx = layout.combo("##py_resize_factor", current_idx, resize_labels)
                             if changed:
                                 dataset.resize_factor = resize_options[new_idx]
                             layout.pop_item_width()
                         else:
-                            layout.label("Auto" if dataset.resize_factor < 0 else str(dataset.resize_factor))
+                            layout.label(tr("common.auto") if dataset.resize_factor < 0 else str(dataset.resize_factor))
 
                         layout.table_next_row()
                         layout.table_next_column()
@@ -567,9 +584,9 @@ class TrainingPanel(Panel):
 
                         out_path = dataset.output_path
                         self._table_text(layout, tr("training.dataset.output"),
-                                       os.path.basename(out_path) if out_path else "(not set)")
+                                       os.path.basename(out_path) if out_path else tr("training.value.not_set"))
                 else:
-                    layout.label("No dataset loaded")
+                    layout.label(tr("training_panel.no_dataset_loaded"))
             finally:
                 if table_open:
                     layout.end_table()
@@ -580,8 +597,8 @@ class TrainingPanel(Panel):
             try:
                 table_open = layout.begin_table("PyOptTable", 2)
                 if table_open:
-                    layout.table_setup_column("Label", 120.0)
-                    layout.table_setup_column("Control", 0.0)
+                    layout.table_setup_column(tr("common.column_label"), 120.0)
+                    layout.table_setup_column(tr("common.column_control"), 0.0)
 
                     layout.begin_disabled(not can_edit)
                     self._table_text(layout, tr("training_params.strategy"), params.strategy.upper())
@@ -619,8 +636,8 @@ class TrainingPanel(Panel):
             try:
                 table_open = layout.begin_table("PyBilateralTable", 2)
                 if table_open:
-                    layout.table_setup_column("Label", 140.0)
-                    layout.table_setup_column("Control", 0.0)
+                    layout.table_setup_column(tr("common.column_label"), 140.0)
+                    layout.table_setup_column(tr("common.column_control"), 0.0)
                     layout.begin_disabled(not can_edit)
                     self._table_prop(layout, params, "bilateral_grid_x", tr("training.bilateral.grid_x"))
                     self._table_prop(layout, params, "bilateral_grid_y", tr("training.bilateral.grid_y"))
@@ -637,8 +654,8 @@ class TrainingPanel(Panel):
             try:
                 table_open = layout.begin_table("PyLossTable", 2)
                 if table_open:
-                    layout.table_setup_column("Label", 140.0)
-                    layout.table_setup_column("Control", 0.0)
+                    layout.table_setup_column(tr("common.column_label"), 140.0)
+                    layout.table_setup_column(tr("common.column_control"), 0.0)
                     layout.begin_disabled(not can_edit)
                     self._slider_float_row(layout, tr("training.losses.lambda_dssim"), "lambda_dssim", params, 0.0, 1.0)
                     self._input_float_prop_row(layout, tr("training.losses.opacity_reg"), "opacity_reg", params, 0.001, 0.01, "%.4f")
@@ -655,8 +672,8 @@ class TrainingPanel(Panel):
             try:
                 table_open = layout.begin_table("PyInitTable", 2)
                 if table_open:
-                    layout.table_setup_column("Label", 140.0)
-                    layout.table_setup_column("Control", 0.0)
+                    layout.table_setup_column(tr("common.column_label"), 140.0)
+                    layout.table_setup_column(tr("common.column_control"), 0.0)
                     layout.begin_disabled(not can_edit)
                     self._slider_float_row(layout, tr("training.init.init_opacity"), "init_opacity", params, 0.01, 1.0)
                     self._input_float_prop_row(layout, tr("training.init.init_scaling"), "init_scaling", params, 0.01, 0.1, "%.3f")
@@ -683,8 +700,8 @@ class TrainingPanel(Panel):
             try:
                 table_open = layout.begin_table("PyADCTable", 2)
                 if table_open:
-                    layout.table_setup_column("Label", 140.0)
-                    layout.table_setup_column("Control", 0.0)
+                    layout.table_setup_column(tr("common.column_label"), 140.0)
+                    layout.table_setup_column(tr("common.column_control"), 0.0)
                     layout.begin_disabled(not can_edit)
                     self._input_float_prop_row(layout, tr("training.thresholds.min_opacity"), "min_opacity", params, 0.001, 0.01, "%.4f", min_val=0.0)
                     self._input_float_prop_row(layout, tr("training.thresholds.prune_opacity"), "prune_opacity", params, 0.001, 0.01, "%.4f", min_val=0.0)
@@ -705,8 +722,8 @@ class TrainingPanel(Panel):
             try:
                 table_open = layout.begin_table("PySparsityTable", 2)
                 if table_open:
-                    layout.table_setup_column("Label", 140.0)
-                    layout.table_setup_column("Control", 0.0)
+                    layout.table_setup_column(tr("common.column_label"), 140.0)
+                    layout.table_setup_column(tr("common.column_control"), 0.0)
                     layout.begin_disabled(not can_edit)
                     self._input_int_row(layout, tr("training_params.sparsify_steps"), "sparsify_steps", params, 1000, 5000)
                     self._input_float_prop_row(layout, tr("training_params.init_rho"), "init_rho", params, 0.001, 0.01, "%.4f")
@@ -842,12 +859,13 @@ class TrainingPanel(Panel):
             "stopped": tr("status.stopped"),
             "error": tr("status.error"),
         }
-        layout.label(f"{tr('status.mode')}: {state_labels.get(state, 'Unknown')}")
+        unknown_state = tr("status.unknown")
+        layout.label(f"{tr('status.mode')}: {state_labels.get(state, unknown_state)}")
 
         _rate_tracker.add_sample(iteration)
         rate = _rate_tracker.get_rate()
-        layout.label(f"{tr('status.iteration')} {iteration:,} ({rate:.1f} iters/sec)")
-        layout.label(f"num Splats: {AppState.num_gaussians.value:,}")
+        layout.label(f"{tr('status.iteration')} {iteration:,} ({rate:.1f} {tr('training_panel.iters_per_sec')})")
+        layout.label(tr("progress.num_splats") % f"{AppState.num_gaussians.value:,}")
 
         max_iter = AppState.max_iterations.value
         if max_iter > 0 and iteration > 0:

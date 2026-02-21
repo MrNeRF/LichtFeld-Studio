@@ -27,6 +27,11 @@ OVERLAY_TINT = (1.0, 0.2, 0.2, 0.5)
 _instance = None
 
 
+def tr(key):
+    result = lf.ui.tr(key)
+    return result if result else key
+
+
 class ThumbnailCache:
     """LRU cache for thumbnail textures."""
 
@@ -219,7 +224,7 @@ class ImagePreviewPanel(Panel):
 
     def _get_zoom_display(self) -> str:
         if self._fit_to_window and self._current_texture:
-            return "Fit"
+            return tr("image_preview.fit")
         return f"{self._zoom * 100:.0f}%"
 
     def _format_size(self, size_bytes: int) -> str:
@@ -231,7 +236,7 @@ class ImagePreviewPanel(Panel):
 
     def _get_aspect_ratio_name(self, w: int, h: int) -> str:
         if h == 0:
-            return "N/A"
+            return tr("common.na")
         aspect = w / h
         if abs(aspect - 16 / 9) < 0.02:
             return "16:9"
@@ -251,7 +256,7 @@ class ImagePreviewPanel(Panel):
 
     def draw(self, layout):
         if not self._image_paths:
-            layout.text_colored("No images loaded", (0.6, 0.6, 0.6, 1.0))
+            layout.text_colored(tr("image_preview.no_images_loaded"), (0.6, 0.6, 0.6, 1.0))
             return
 
         theme = lf.ui.theme()
@@ -382,7 +387,7 @@ class ImagePreviewPanel(Panel):
             if not self._current_texture:
                 cw, ch = layout.get_content_region_avail()
                 layout.set_cursor_pos((cw / 2 - 40, ch / 2))
-                layout.label("No image")
+                layout.label(tr("image_preview.no_image"))
             else:
                 cw, ch = layout.get_content_region_avail()
                 display_w, display_h = self._calculate_display_size(cw, ch)
@@ -456,7 +461,7 @@ class ImagePreviewPanel(Panel):
                 layout.spacing()
 
             layout.text_colored(lf.ui.tr("image_preview.view_section"), label_color)
-            layout.label(f"Zoom: {self._get_zoom_display()}")
+            layout.label(f"{tr('image_preview.zoom')}: {self._get_zoom_display()}")
             changed, self._fit_to_window = layout.checkbox(lf.ui.tr("image_preview.fit_to_window"), self._fit_to_window)
 
             if self._has_valid_overlay():
@@ -500,8 +505,10 @@ class ImagePreviewPanel(Panel):
                         size_str = f" · {self._format_size(path.stat().st_size)}"
                 layout.label(f"{w}x{h} · {mp:.1f} MP{size_str}")
 
-            zoom_text = f"Zoom: {self._get_zoom_display()}"
-            fit_btn_width = 30 * scale
+            zoom_text = f"{tr('image_preview.zoom')}: {self._get_zoom_display()}"
+            fit_label = tr("image_preview.fit")
+            fit_text_w, _ = layout.calc_text_size(fit_label)
+            fit_btn_width = max(30 * scale, fit_text_w + 12 * scale)
             zoom_width, _ = layout.calc_text_size(zoom_text)
             right_content_width = zoom_width + fit_btn_width + padding * 3
 
@@ -509,7 +516,7 @@ class ImagePreviewPanel(Panel):
             layout.label(zoom_text)
 
             layout.same_line()
-            if layout.small_button("Fit"):
+            if layout.small_button(fit_label):
                 self._fit_to_window = True
                 self._zoom = 1.0
 

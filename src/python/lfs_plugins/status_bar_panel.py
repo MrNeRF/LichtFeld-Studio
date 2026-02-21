@@ -9,6 +9,11 @@ import lichtfeld as lf
 _ACTIVE_TRAINING_STATES = ("running", "paused")
 
 
+def tr(key):
+    result = lf.ui.tr(key)
+    return result if result else key
+
+
 def _fmt_count(n: int) -> str:
     if n >= 1_000_000:
         return f"{n / 1e6:.2f}M"
@@ -55,33 +60,33 @@ class StatusBarPanel(Panel):
         content_type = lf.ui.get_content_type()
 
         if content_type == "empty":
-            return "Empty", p.text_dim
+            return tr("mode.empty"), p.text_dim
 
         if content_type == "splat_files":
-            return "Viewer", p.info
+            return tr("mode.viewer"), p.info
 
         state = lf.trainer_state()
         strategy = lf.trainer_strategy_type()
         gut = lf.trainer_is_gut_enabled()
         method = "GUT" if gut else "3DGS"
-        strat_name = "MCMC" if strategy == "mcmc" else "Default"
+        strat_name = tr("training.options.strategy.mcmc") if strategy == "mcmc" else tr("status_bar.strategy_default")
 
         if state == "running":
-            return f"Training ({strat_name}/{method})", p.warning
+            return f"{tr('status.training')} ({strat_name}/{method})", p.warning
         if state == "paused":
-            return f"Paused ({strat_name}/{method})", p.text_dim
+            return f"{tr('status.paused')} ({strat_name}/{method})", p.text_dim
         if state == "ready":
             current_iter = lf.trainer_current_iteration()
-            base = "Resume" if current_iter > 0 else "Ready"
+            base = tr("training_panel.resume") if current_iter > 0 else tr("status.ready")
             return f"{base} ({strat_name}/{method})", p.success
         if state == "completed":
-            return f"Complete ({strat_name}/{method})", p.success
+            return f"{tr('status.complete')} ({strat_name}/{method})", p.success
         if state == "stopped":
-            return f"Stopped ({strat_name}/{method})", p.text_dim
+            return f"{tr('status.stopped')} ({strat_name}/{method})", p.text_dim
         if state == "error":
-            return f"Error ({strat_name}/{method})", p.error
+            return f"{tr('status.error')} ({strat_name}/{method})", p.error
 
-        return "Dataset", p.text_dim
+        return tr("mode.dataset"), p.text_dim
 
     def _should_show_training(self) -> bool:
         content_type = lf.ui.get_content_type()
@@ -107,7 +112,7 @@ class StatusBarPanel(Panel):
         layout.pop_style_color(2)
 
         layout.same_line(spacing=12)
-        layout.text_colored("Step", p.text_dim)
+        layout.text_colored(tr("status.step"), p.text_dim)
         layout.same_line(spacing=6)
         layout.label(f"{current_iter}/{total_iter}")
 
@@ -116,7 +121,7 @@ class StatusBarPanel(Panel):
         layout.same_line(spacing=12)
 
         loss = lf.trainer_current_loss()
-        layout.text_colored("Loss", p.text_dim)
+        layout.text_colored(tr("status.loss"), p.text_dim)
         layout.same_line(spacing=6)
         layout.label(f"{loss:.4f}")
 
@@ -126,7 +131,7 @@ class StatusBarPanel(Panel):
 
         num_splats = lf.trainer_num_splats()
         max_gaussians = lf.trainer_max_gaussians()
-        layout.text_colored("Gaussians", p.text_dim)
+        layout.text_colored(tr("status.gaussians").rstrip(":"), p.text_dim)
         layout.same_line(spacing=6)
         layout.label(f"{_fmt_count(num_splats)}/{_fmt_count(max_gaussians)}")
 
@@ -138,7 +143,7 @@ class StatusBarPanel(Panel):
         eta = lf.trainer_eta_seconds()
         layout.label(_fmt_time(elapsed))
         layout.same_line(spacing=6)
-        layout.text_colored("ETA", p.text_dim)
+        layout.text_colored(tr("status.eta"), p.text_dim)
         layout.same_line(spacing=6)
         layout.label(_fmt_time(eta))
 
@@ -153,7 +158,7 @@ class StatusBarPanel(Panel):
         layout.same_line(spacing=20)
         layout.text_colored("|", p.text_dim)
         layout.same_line()
-        layout.text_colored(f"{_fmt_count(total)} Gaussians", p.text)
+        layout.text_colored(f"{_fmt_count(total)} {tr('status.gaussians').rstrip(':')}", p.text)
 
     def _draw_split_view(self, layout, p):
         info = lf.ui.get_split_view_info()
@@ -167,13 +172,13 @@ class StatusBarPanel(Panel):
         mode = lf.ui.get_split_view_mode()
         if mode == "gt_comparison":
             cam_id = lf.ui.get_current_camera_id()
-            layout.text_colored("GT Compare", p.warning)
+            layout.text_colored(tr("status_bar.gt_compare"), p.warning)
             layout.same_line(spacing=4)
-            layout.text_colored(f"Cam {cam_id}", p.text_dim)
+            layout.text_colored(tr("status_bar.camera").format(cam_id=cam_id), p.text_dim)
         elif mode == "ply_comparison":
             left = info.get("left_name", "")
             right = info.get("right_name", "")
-            layout.text_colored("Split:", p.warning)
+            layout.text_colored(tr("status_bar.split"), p.warning)
             layout.same_line(spacing=4)
             layout.label(f"{left} | {right}")
 
@@ -186,7 +191,7 @@ class StatusBarPanel(Panel):
             layout.same_line(spacing=20)
             layout.text_colored("|", sep_color)
             layout.same_line()
-            layout.text_colored(f"WASD: {wasd_speed:.0f}", speed_color)
+            layout.text_colored(f"{tr('controls.wasd').rstrip(':')}: {wasd_speed:.0f}", speed_color)
 
         if zoom_alpha > 0:
             sep_color = (p.text_dim[0], p.text_dim[1], p.text_dim[2], zoom_alpha)
@@ -194,7 +199,7 @@ class StatusBarPanel(Panel):
             layout.same_line(spacing=20)
             layout.text_colored("|", sep_color)
             layout.same_line()
-            layout.text_colored(f"Zoom: {zoom_speed * 10:.0f}", speed_color)
+            layout.text_colored(f"{tr('controls.zoom').rstrip(':')}: {zoom_speed * 10:.0f}", speed_color)
 
     def _draw_right_section(self, layout, p):
         used, total = lf.ui.get_gpu_memory()
@@ -221,11 +226,13 @@ class StatusBarPanel(Panel):
 
         mem_text = f"{used_gb:.1f}/{total_gb:.1f}GB"
         fps_text = f"{fps:.0f}"
+        gpu_label = f"{tr('status_bar.gpu')} "
+        fps_label = f" {tr('status.fps')}"
 
-        gpu_w, _ = layout.calc_text_size("GPU ")
+        gpu_w, _ = layout.calc_text_size(gpu_label)
         mem_w, _ = layout.calc_text_size(mem_text)
         fps_w, _ = layout.calc_text_size(fps_text)
-        fps_label_w, _ = layout.calc_text_size(" FPS")
+        fps_label_w, _ = layout.calc_text_size(fps_label)
         commit_w, _ = layout.calc_text_size(git_commit)
         padding = 16
         right_width = gpu_w + mem_w + padding + fps_w + fps_label_w + padding + commit_w + padding
@@ -238,14 +245,14 @@ class StatusBarPanel(Panel):
         if target_x > cur_x:
             layout.set_cursor_pos_x(target_x)
 
-        layout.text_colored("GPU ", p.text_dim)
+        layout.text_colored(gpu_label, p.text_dim)
         layout.same_line(spacing=0)
         layout.text_colored(mem_text, mem_color)
 
         layout.same_line(spacing=16)
         layout.text_colored(fps_text, fps_color)
         layout.same_line(spacing=0)
-        layout.text_colored(" FPS", p.text_dim)
+        layout.text_colored(fps_label, p.text_dim)
 
         layout.same_line(spacing=16)
         layout.text_colored(git_commit, p.text_dim)

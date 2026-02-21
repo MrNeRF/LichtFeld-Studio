@@ -6,6 +6,11 @@ import lichtfeld as lf
 from .types import Panel
 
 
+def tr(key):
+    result = lf.ui.tr(key)
+    return result if result else key
+
+
 class InputSettingsPanel(Panel):
     """Input Settings panel - floating window for configuring keybindings."""
 
@@ -91,7 +96,7 @@ class InputSettingsPanel(Panel):
         self._rebinding_mode = None
 
     def draw(self, layout):
-        layout.text_colored("INPUT SETTINGS", (0.4, 0.6, 1.0, 1.0))
+        layout.text_colored(tr("input_settings.title"), (0.4, 0.6, 1.0, 1.0))
         layout.spacing()
         layout.separator()
         layout.spacing()
@@ -104,7 +109,7 @@ class InputSettingsPanel(Panel):
         if is_rebinding:
             layout.begin_disabled()
 
-        layout.label("Active Profile:")
+        layout.label(tr("input_settings.active_profile"))
         layout.same_line()
         changed, new_idx = layout.combo("##profile", current_idx, profiles)
         if changed and new_idx != current_idx:
@@ -116,8 +121,8 @@ class InputSettingsPanel(Panel):
         layout.spacing()
         layout.spacing()
 
-        layout.text_colored("Tool Mode", (0.6, 0.6, 0.6, 1.0))
-        layout.text_disabled("Select the tool mode to configure bindings for")
+        layout.text_colored(tr("input_settings.tool_mode"), (0.6, 0.6, 0.6, 1.0))
+        layout.text_disabled(tr("input_settings.select_tool_mode"))
         layout.spacing()
 
         mode_names = [lf.keymap.get_tool_mode_name(m) for m in self.TOOL_MODES]
@@ -136,22 +141,22 @@ class InputSettingsPanel(Panel):
         layout.spacing()
         layout.spacing()
 
-        layout.text_colored("Current Bindings", (0.6, 0.6, 0.6, 1.0))
+        layout.text_colored(tr("input_settings.current_bindings"), (0.6, 0.6, 0.6, 1.0))
         if self._selected_mode == lf.keymap.ToolMode.GLOBAL:
-            layout.text_disabled("Global bindings apply when no tool is active")
+            layout.text_disabled(tr("input_settings.global_bindings_hint"))
         else:
-            layout.text_disabled("Tool-specific bindings override global bindings")
+            layout.text_disabled(tr("input_settings.tool_bindings_hint"))
         layout.spacing()
 
         mode = self._selected_mode
 
         if layout.begin_table("bindings_table", 3):
-            layout.table_setup_column("Action", 180)
-            layout.table_setup_column("Binding", -1)
+            layout.table_setup_column(tr("input_settings.action"), 180)
+            layout.table_setup_column(tr("input_settings.binding"), -1)
             layout.table_setup_column("", 70)
             layout.table_headers_row()
 
-            self._draw_section_header(layout, "Navigation")
+            self._draw_section_header(layout, tr("input_settings.section.navigation"))
             for action in self.BINDING_SECTIONS["navigation"]:
                 self._draw_binding_row(layout, action, mode)
 
@@ -160,7 +165,7 @@ class InputSettingsPanel(Panel):
                     self._draw_binding_row(layout, action, mode)
 
             if mode in (lf.keymap.ToolMode.GLOBAL, lf.keymap.ToolMode.SELECTION, lf.keymap.ToolMode.BRUSH):
-                self._draw_section_header(layout, "Selection")
+                self._draw_section_header(layout, tr("input_settings.section.selection"))
                 for action in self.BINDING_SECTIONS["selection"]:
                     self._draw_binding_row(layout, action, mode)
 
@@ -173,16 +178,16 @@ class InputSettingsPanel(Panel):
                         self._draw_binding_row(layout, action, mode)
 
             if mode == lf.keymap.ToolMode.BRUSH:
-                self._draw_section_header(layout, "Brush")
+                self._draw_section_header(layout, tr("input_settings.section.brush"))
                 for action in self.BINDING_SECTIONS["brush"]:
                     self._draw_binding_row(layout, action, mode)
 
             if mode == lf.keymap.ToolMode.CROP_BOX:
-                self._draw_section_header(layout, "Crop Box")
+                self._draw_section_header(layout, tr("input_settings.section.crop_box"))
                 for action in self.BINDING_SECTIONS["crop_box"]:
                     self._draw_binding_row(layout, action, mode)
 
-            self._draw_section_header(layout, "Editing")
+            self._draw_section_header(layout, tr("input_settings.section.editing"))
             if mode in (lf.keymap.ToolMode.GLOBAL, lf.keymap.ToolMode.TRANSLATE,
                         lf.keymap.ToolMode.ROTATE, lf.keymap.ToolMode.SCALE):
                 self._draw_binding_row(layout, lf.keymap.Action.DELETE_NODE, mode)
@@ -193,7 +198,7 @@ class InputSettingsPanel(Panel):
                 self._draw_binding_row(layout, action, mode)
 
             if mode == lf.keymap.ToolMode.GLOBAL:
-                self._draw_section_header(layout, "View")
+                self._draw_section_header(layout, tr("input_settings.section.view"))
                 for action in self.BINDING_SECTIONS["view_global"]:
                     self._draw_binding_row(layout, action, mode)
 
@@ -204,22 +209,22 @@ class InputSettingsPanel(Panel):
         layout.spacing()
 
         layout.push_style_color("button", (0.2, 0.6, 0.2, 0.7))
-        if layout.button("Save Profile"):
+        if layout.button(tr("input_settings.save_current_profile")):
             lf.keymap.save_profile(lf.keymap.get_current_profile())
         layout.pop_style_color()
 
         layout.same_line()
 
         layout.push_style_color("button", (0.6, 0.2, 0.2, 0.7))
-        if layout.button("Reset to Default"):
+        if layout.button(tr("input_settings.reset_to_default")):
             lf.keymap.reset_to_default()
         layout.pop_style_color()
 
         layout.spacing()
 
         layout.push_style_color("button", (0.3, 0.3, 0.5, 0.7))
-        if layout.button("Export"):
-            path = lf.ui.save_file_dialog("Export Input Bindings", "json")
+        if layout.button(tr("input_settings.export")):
+            path = lf.ui.save_file_dialog(tr("input_settings.export_dialog_title"), "json")
             if path:
                 lf.keymap.export_profile(path)
         layout.pop_style_color()
@@ -227,15 +232,15 @@ class InputSettingsPanel(Panel):
         layout.same_line()
 
         layout.push_style_color("button", (0.3, 0.3, 0.5, 0.7))
-        if layout.button("Import"):
-            path = lf.ui.open_file_dialog("Import Input Bindings", "json")
+        if layout.button(tr("input_settings.import")):
+            path = lf.ui.open_file_dialog(tr("input_settings.import_dialog_title"), "json")
             if path:
                 lf.keymap.import_profile(path)
         layout.pop_style_color()
 
         layout.spacing()
-        layout.text_disabled("Save to persist custom bindings")
-        layout.text_disabled("Tip: Double-click to bind double-click action")
+        layout.text_disabled(tr("input_settings.save_hint"))
+        layout.text_disabled(tr("input_settings.double_click_hint"))
 
     def _draw_section_header(self, layout, title):
         layout.table_next_row()
@@ -257,9 +262,9 @@ class InputSettingsPanel(Panel):
         layout.table_next_column()
         if is_rebinding:
             if lf.keymap.is_waiting_for_double_click():
-                layout.text_colored("Click again for double-click...", (1.0, 0.8, 0.3, 1.0))
+                layout.text_colored(tr("input_settings.click_again_double"), (1.0, 0.8, 0.3, 1.0))
             else:
-                layout.text_colored("Press key or click...", (1.0, 0.8, 0.3, 1.0))
+                layout.text_colored(tr("input_settings.press_key_or_click"), (1.0, 0.8, 0.3, 1.0))
         else:
             desc = lf.keymap.get_trigger_description(action, mode)
             layout.text_colored(desc, (0.4, 0.6, 1.0, 1.0))
@@ -269,14 +274,14 @@ class InputSettingsPanel(Panel):
 
         if is_rebinding:
             layout.push_style_color("button", (0.6, 0.2, 0.2, 0.8))
-            if layout.button(f"Cancel##{unique_id}"):
+            if layout.button(f"{tr('input_settings.cancel')}##{unique_id}"):
                 lf.keymap.cancel_capture()
                 self._rebinding_action = None
                 self._rebinding_mode = None
             layout.pop_style_color()
         else:
             layout.push_style_color("button", (0.2, 0.4, 0.6, 0.8))
-            if layout.button(f"Rebind##{unique_id}"):
+            if layout.button(f"{tr('input_settings.rebind')}##{unique_id}"):
                 self._rebinding_action = action
                 self._rebinding_mode = mode
                 lf.keymap.start_capture(mode, action)
@@ -287,5 +292,4 @@ class InputSettingsPanel(Panel):
             if trigger is not None:
                 self._rebinding_action = None
                 self._rebinding_mode = None
-
 

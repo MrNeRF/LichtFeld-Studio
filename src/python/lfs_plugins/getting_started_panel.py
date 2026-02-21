@@ -71,7 +71,7 @@ class GettingStartedPanel(Panel):
         layout.text_colored(tr("getting_started.wiki_section"), self.LABEL_COLOR)
         layout.spacing()
 
-        layout.label("Wiki:")
+        layout.label(tr("getting_started.wiki_label"))
         layout.same_line()
         layout.text_colored(self.WIKI_URL, self.LINK_COLOR)
         if layout.is_item_hovered():
@@ -102,10 +102,9 @@ class GettingStartedPanel(Panel):
 
         if layout.is_item_hovered():
             layout.set_mouse_cursor_hand()
-            layout.set_tooltip(f"Watch: {title}")
+            layout.set_tooltip(tr("getting_started.watch_tooltip").format(title=title))
 
         layout.text_colored(title, self.LABEL_COLOR)
 
         layout.end_group()
-
 

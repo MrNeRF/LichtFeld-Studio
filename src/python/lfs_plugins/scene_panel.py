@@ -185,7 +185,7 @@ class ScenePanel(Panel):
             if layout.begin_context_menu("##ModelsMenu"):
                 if not AppState.has_trainer.value:
                     if layout.menu_item(tr("scene.add_group")):
-                        lf.add_group("New Group", "")
+                        lf.add_group(tr("scene.new_group_name"), "")
                     layout.separator()
                 layout.end_context_menu()
 
@@ -344,7 +344,7 @@ class ScenePanel(Panel):
             elif is_keyframe:
                 kf = node.keyframe_data()
                 if kf:
-                    label = f"Keyframe {kf.keyframe_index + 1}  ({kf.time:.2f}s)"
+                    label = tr("scene.keyframe_label").format(index=kf.keyframe_index + 1, time=kf.time)
 
             label_x, label_y = layout.get_cursor_screen_pos()
 
@@ -428,7 +428,7 @@ class ScenePanel(Panel):
         node_type = str(node.type).split(".")[-1]
         if can_drag and layout.begin_drag_drop_source():
             layout.set_drag_drop_payload("SCENE_NODE", node.name)
-            layout.label(tr("scene.move_node").format(node.name))
+            layout.label(tr("scene.move_node") % node.name)
             layout.end_drag_drop_source()
 
         if node_type in ("GROUP", "SPLAT", "POINTCLOUD", "MESH"):
@@ -521,7 +521,12 @@ class ScenePanel(Panel):
                     lf.ui.select_keyframe(kf.keyframe_index)
                 layout.separator()
                 if layout.begin_menu(tr("scene.keyframe_easing")):
-                    easing_names = ["Linear", "Ease In", "Ease Out", "Ease In-Out"]
+                    easing_names = [
+                        tr("scene.keyframe_easing.linear"),
+                        tr("scene.keyframe_easing.ease_in"),
+                        tr("scene.keyframe_easing.ease_out"),
+                        tr("scene.keyframe_easing.ease_in_out"),
+                    ]
                     for e_idx, e_name in enumerate(easing_names):
                         is_current = kf.easing == e_idx
                         if layout.menu_item(e_name, selected=is_current):
@@ -595,7 +600,7 @@ class ScenePanel(Panel):
 
         if node_type == "GROUP" and not AppState.has_trainer.value:
             if layout.menu_item(tr("scene.add_group_ellipsis")):
-                lf.add_group("New Group", node.name)
+                lf.add_group(tr("scene.new_group_name"), node.name)
             if layout.menu_item(tr("scene.merge_to_single_ply")):
                 lf.ui.merge_group(node.name)
             layout.separator()

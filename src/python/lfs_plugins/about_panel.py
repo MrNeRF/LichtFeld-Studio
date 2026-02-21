@@ -36,8 +36,8 @@ class AboutPanel(Panel):
         layout.spacing()
 
         if layout.begin_table("build_info", 2):
-            layout.table_setup_column("Property", 140)
-            layout.table_setup_column("Value")
+            layout.table_setup_column(tr("about.build_info.property"), 140)
+            layout.table_setup_column(tr("about.build_info.value"))
 
             self._table_row(layout, tr("about.build_info.version"), lf.build_info.version)
             self._table_row(layout, tr("about.build_info.commit"), lf.build_info.commit)
@@ -74,12 +74,13 @@ class AboutPanel(Panel):
         layout.separator()
         layout.spacing()
 
-        footer_text = tr("about.authors") + "  |  " + tr("about.license")
+        separator = tr("about.separator")
+        footer_text = tr("about.authors") + separator + tr("about.license")
         text_w, _ = layout.calc_text_size(footer_text)
         center_content(layout, text_w)
         layout.text_colored(tr("about.authors"), self.LABEL_COLOR)
         layout.same_line()
-        layout.text_colored("  |  ", (0.4, 0.4, 0.4, 1.0))
+        layout.text_colored(separator, (0.4, 0.4, 0.4, 1.0))
         layout.same_line()
         layout.text_colored(tr("about.license"), self.LABEL_COLOR)
 
@@ -89,5 +90,4 @@ class AboutPanel(Panel):
         layout.text_colored(label, self.LABEL_COLOR)
         layout.table_next_column()
         layout.label(value)
-
 

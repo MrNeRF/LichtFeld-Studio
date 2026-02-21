@@ -46,7 +46,9 @@
     "video_colmap": "COLMAP Tutorial",
     "video_lichtfeld": "LichtFeld Tutorial",
     "video_masks": "Maskers Tutorial",
-    "loading": "Laden..."
+    "loading": "Laden...",
+    "wiki_label": "Wiki:",
+    "watch_tooltip": "Bekijk: {title}"
   },
   "about": {
     "title": "LICHTFELD STUDIO",
@@ -68,7 +70,10 @@
     "repository": "Repository:",
     "website": "Website:",
     "authors": "LichtFeld Studio Auteurs",
-    "license": "Gelicenseerd onder GPLv3"
+    "license": "Gelicenseerd onder GPLv3",
+    "build_info.property": "Eigenschap",
+    "build_info.value": "Waarde",
+    "separator": "  |  "
   },
   "training": {
     "section.dataset": "Dataset",
@@ -226,7 +231,23 @@
     "button.save_checkpoint": "Controlepunt Opslaan",
     "button.switch_edit_mode": "Bewerkingsmodus",
     "button.add": "Toevoegen",
-    "button.remove": "Verwijderen"
+    "button.remove": "Verwijderen",
+    "value.none": "(geen)",
+    "value.default": "(standaard)",
+    "value.not_set": "(niet ingesteld)",
+    "options.strategy.mcmc": "MCMC",
+    "options.strategy.adc": "ADC",
+    "options.tile.full": "1 (Volledig)",
+    "options.tile.half": "2 (Half)",
+    "options.tile.quarter": "4 (Kwart)",
+    "options.mask.none": "Geen",
+    "options.mask.segment": "Segment",
+    "options.mask.ignore": "Negeren",
+    "options.mask.alpha_consistent": "Alpha-consistent",
+    "options.bg.color": "Kleur",
+    "options.bg.modulation": "Modulatie",
+    "options.bg.image": "Afbeelding",
+    "options.bg.random": "Willekeurig"
   },
   "scene": {
     "add_ply": "PLY Toevoegen...",
@@ -272,7 +293,13 @@
     "update_keyframe": "Bijwerken naar huidige weergave",
     "select_in_timeline": "Selecteer in tijdlijn",
     "add_keyframe_scene": "Keyframe toevoegen",
-    "keyframe_easing": "Easing"
+    "keyframe_easing": "Easing",
+    "new_group_name": "Nieuwe groep",
+    "keyframe_easing.linear": "Lineair",
+    "keyframe_easing.ease_in": "Langzaam in",
+    "keyframe_easing.ease_out": "Langzaam uit",
+    "keyframe_easing.ease_in_out": "Langzaam in/uit",
+    "keyframe_label": "Keyframe {index}  ({time:.2f}s)"
   },
   "export": {
     "title": "Exporteren",
@@ -305,7 +332,11 @@
     "browse": "Bladeren...",
     "apply": "Toepassen",
     "reset": "Resetten",
-    "double_click_reset": "dubbelklik om te resetten"
+    "double_click_reset": "dubbelklik om te resetten",
+    "auto": "Auto",
+    "column_label": "Label",
+    "column_control": "Besturing",
+    "na": "n.v.t."
   },
   "status": {
     "ready": "Gereed",
@@ -335,7 +366,8 @@
     "empty": "Leeg",
     "dataset": "Dataset",
     "edit_mode": "Bewerk Modus",
-    "ply_models": "PLY Modellen:"
+    "ply_models": "PLY Modellen:",
+    "viewer": "Viewer"
   },
   "messages": {
     "no_data_loaded": "Geen data geladen",
@@ -410,7 +442,8 @@
     "selection_groups": "Selectie Groepen",
     "add_group": "+ Groep Toevoegen",
     "no_selection_groups": "Geen selectie groepen",
-    "clear": "Wissen"
+    "clear": "Wissen",
+    "mesh": "Mesh"
   },
   "toolbar": {
     "selection": "Selectie",
@@ -505,7 +538,11 @@
     "new_step": "Nieuwe Stap",
     "no_save_steps": "Geen bewaar stappen geconfigureerd",
     "sparsity": "Sparsity Instellingen",
-    "pruning_growing": "Snoeien/Groeien"
+    "pruning_growing": "Snoeien/Groeien",
+    "no_trainer_loaded": "Geen trainer geladen",
+    "parameters_unavailable": "Parameters niet beschikbaar",
+    "no_dataset_loaded": "Geen dataset geladen",
+    "iters_per_sec": "iter/s"
   },
   "tooltip": {
     "gut_mode": "Voor fisheye/vervormde/equirectangulaire camera's",
@@ -628,7 +665,12 @@
     "mode.scale": "Schalen",
     "mode.align": "Uitlijn Gereedschap",
     "mode.crop_box": "Bijsnijvak",
-    "mode.unknown": "Onbekend"
+    "mode.unknown": "Onbekend",
+    "title": "INVOERINSTELLINGEN",
+    "save_hint": "Opslaan om aangepaste bindings te bewaren",
+    "double_click_hint": "Tip: dubbelklik om dubbelklikactie te binden",
+    "export_dialog_title": "Invoerbindingen exporteren",
+    "import_dialog_title": "Invoerbindingen importeren"
   },
   "debug_info": {
     "free_memory": "Vrij: %.2f GB",
@@ -729,7 +771,11 @@
     "file_label": "Bestand: %s",
     "visible": "Zichtbaar",
     "hidden": "Verborgen",
-    "mask_section": "MASKER"
+    "mask_section": "MASKER",
+    "no_images_loaded": "Geen afbeeldingen geladen",
+    "no_image": "Geen afbeelding",
+    "zoom": "Zoom",
+    "fit": "Passend"
   },
   "startup": {
     "supported_by": "Ondersteund door",
@@ -845,31 +891,87 @@
     "dismiss": "Sluiten"
   },
   "plugin_marketplace": {
-    "title_line": "Browse installable plugins from GitHub repositories.",
-    "warning_body": "WARNING: LFS does not directly endorse or assume responsibility for third-party extensions. Use at your own risk.",
+    "title_line": "Bekijk installeerbare plug-ins uit GitHub-repositories.",
+    "warning_body": "WAARSCHUWING: LFS keurt niet direct goed en neemt geen verantwoordelijkheid. Gebruik op eigen risico.",
     "filter_label": "Filter",
-    "sort_label": "Sort",
-    "filter.all": "All",
-    "filter.installed": "Installed",
-    "filter.not_installed": "Not Installed",
-    "sort.stars_desc": "Stars: High -> Low",
-    "sort.stars_asc": "Stars: Low -> High",
-    "sort.name_asc": "Name: A -> Z",
-    "sort.name_desc": "Name: Z -> A",
-    "loading": "Fetching GitHub metadata...",
-    "no_plugins": "No marketplace plugins configured.",
-    "edit_list_hint": "Edit PLUGIN_MARKETPLACE_URLS in src/python/lfs_plugins/marketplace.py.",
-    "unknown_plugin": "Unknown Plugin",
-    "no_description": "No description provided.",
-    "stars": "Stars",
-    "invalid_link": "Invalid GitHub link",
-    "button.install": "Install",
-    "button.installed": "Installed",
-    "button.github": "GitHub"
+    "sort_label": "Sorteren",
+    "filter.all": "Alle",
+    "filter.installed": "Geïnstalleerd",
+    "filter.not_installed": "Niet geïnstalleerd",
+    "sort.stars_desc": "Sterren: hoog -> laag",
+    "sort.stars_asc": "Sterren: laag -> hoog",
+    "sort.name_asc": "Naam: A -> Z",
+    "sort.name_desc": "Naam: Z -> A",
+    "loading": "GitHub-metadata ophalen...",
+    "no_plugins": "Geen marketplace-plug-ins geconfigureerd.",
+    "edit_list_hint": "Bewerk PLUGIN_MARKETPLACE_URLS in src/python/lfs_plugins/marketplace.py.",
+    "unknown_plugin": "Onbekende plug-in",
+    "no_description": "Geen beschrijving beschikbaar.",
+    "stars": "Sterren",
+    "invalid_link": "Ongeldige GitHub-link",
+    "button.install": "Installeren",
+    "button.installed": "Geïnstalleerd",
+    "button.github": "GitHub",
+    "status.installed": "Geïnstalleerd: {}",
+    "status.install_failed": "Installatie mislukt"
   },
   "sequencer": {
     "edit_focal_length": "Brandpuntsafstand bewerken...",
     "edit_focal_length_title": "Brandpuntsafstand bewerken",
     "focal_length_mm": "Brandpuntsafstand (mm)"
+  },
+  "rendering_panel": {
+    "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V"
+  },
+  "scripts_panel": {
+    "actions": "Acties",
+    "reload_all": "Alles herladen",
+    "clear_all": "Alles wissen",
+    "no_scripts_loaded": "Geen Python-scripts geladen.",
+    "load_hint": "Gebruik --python-script <pad> om scripts te laden.",
+    "loaded_scripts": "Geladen scripts:",
+    "path": "Pad",
+    "error": "Fout",
+    "reload": "Herladen"
+  },
+  "status_bar": {
+    "gt_compare": "GT-vergelijking",
+    "camera": "Cam {cam_id}",
+    "split": "Splitsing:",
+    "gpu": "GPU",
+    "strategy_default": "Standaard"
+  },
+  "plugin_manager": {
+    "section.install_from_github": "Installeren vanaf GitHub",
+    "section.installed_plugins": "Geinstalleerde plugins",
+    "github_url_or_shorthand": "GitHub-URL of verkorte vorm:",
+    "supported_formats": "Ondersteunde formaten",
+    "working": "Bezig...",
+    "output": "Uitvoer",
+    "button.install_plugin": "Plugin installeren",
+    "button.explore_options": "Opties verkennen",
+    "button.reload": "Herladen",
+    "button.unload": "Uitladen",
+    "button.load": "Laden",
+    "button.update": "Bijwerken",
+    "button.uninstall": "Verwijderen",
+    "no_plugins_installed": "Geen plugins geinstalleerd",
+    "version": "Versie",
+    "description": "Beschrijving",
+    "status": "Status",
+    "status_not_loaded": "niet geladen",
+    "error.enter_github_url": "Voer een GitHub-URL in",
+    "status.installed": "Geïnstalleerd: {}",
+    "status.install_failed": "Installatie mislukt",
+    "status.loaded": "Geladen: {name}",
+    "status.load_failed": "Laden mislukt",
+    "status.unloaded": "Ontladen: {name}",
+    "status.unload_failed": "Ontladen mislukt",
+    "status.reloaded": "Herladen: {name}",
+    "status.reload_failed": "Herladen mislukt",
+    "status.updated": "Bijgewerkt: {name}",
+    "status.update_failed": "Bijwerken mislukt",
+    "status.uninstalled": "Verwijderd: {name}",
+    "status.uninstall_failed": "Verwijderen mislukt"
   }
 }
