@@ -73,8 +73,8 @@
     "website": "Strona WWW:",
     "authors": "Autorzy LichtFeld Studio",
     "license": "Licencjonowane na GPLv3",
-    "build_info.property": "Wlasciwosc",
-    "build_info.value": "Wartosc",
+    "build_info.property": "Właściwość",
+    "build_info.value": "Wartość",
     "separator": "  |  "
   },
   "training": {
