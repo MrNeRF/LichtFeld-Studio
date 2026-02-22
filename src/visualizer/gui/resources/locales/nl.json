@@ -390,8 +390,8 @@
     "err_non_pinhole": "Activeer --gut of --undistort om te trainen met niet-pinhole camera's."
   },
   "controls": {
-    "wasd": "WASD:",
-    "zoom": "Zoom:"
+    "wasd": "WASD",
+    "zoom": "Zoom"
   },
   "preferences": {
     "title": "Voorkeuren",
@@ -483,7 +483,8 @@
     "center_markers": "Centrum Markeringen",
     "perspective": "Perspectief (O)",
     "orthographic": "Orthografisch (O)",
-    "sequencer": "Sequencer"
+    "sequencer": "Sequencer",
+    "ellipsoid": "Ellipsoid"
   },
   "transform": {
     "node": "Node: %s",
@@ -555,8 +556,6 @@
     "mip_filter": "Verminder aliasing voor sub-pixel Gaussians",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
-    "ppisp_mode_manual": "Manual",
-    "ppisp_mode_auto": "Auto (Controller)",
     "ppisp_exposure": "Adjust exposure in EV stops",
     "ppisp_gamma": "Gammacurve aanpassen",
     "ppisp_color_rgb": "Chromaticiteit verschuiven voor dit kleurkanaal",
@@ -897,32 +896,28 @@
     "dismiss": "Sluiten"
   },
   "plugin_marketplace": {
-    "title_line": "Bekijk installeerbare plug-ins uit GitHub-repositories.",
+    "title_line": "Bekijk installeerbare plug-ins uit het plugin-register.",
     "warning_body": "WAARSCHUWING: LFS keurt niet direct goed en neemt geen verantwoordelijkheid. Gebruik op eigen risico.",
     "filter_label": "Filter",
     "sort_label": "Sorteren",
     "filter.all": "Alle",
     "filter.installed": "Geïnstalleerd",
     "filter.not_installed": "Niet geïnstalleerd",
-    "sort.stars_desc": "Sterren: hoog -> laag",
-    "sort.stars_asc": "Sterren: laag -> hoog",
+    "sort.popularity_desc": "Populariteit: hoog -> laag",
+    "sort.popularity_asc": "Populariteit: laag -> hoog",
     "sort.name_asc": "Naam: A -> Z",
     "sort.name_desc": "Naam: Z -> A",
-    "loading": "GitHub-metadata ophalen...",
-    "no_plugins": "Geen marketplace-plug-ins geconfigureerd.",
-    "edit_list_hint": "Bewerk PLUGIN_MARKETPLACE_URLS in src/python/lfs_plugins/marketplace.py.",
+    "loading": "Plugin-register ophalen...",
+    "no_plugins": "Geen plugins beschikbaar.",
+    "edit_list_hint": "Controleer uw registerconfiguratie of internetverbinding.",
     "unknown_plugin": "Onbekende plug-in",
     "no_description": "Geen beschrijving beschikbaar.",
     "stars": "Sterren",
-    "invalid_link": "Ongeldige GitHub-link",
+    "downloads": "Downloads",
+    "invalid_link": "Ongeldige link",
     "button.install": "Installeren",
-    "button.installed": "Geïnstalleerd",
     "button.github": "GitHub",
-    "status.installed": "Geïnstalleerd: {}",
-    "status.install_failed": "Installatie mislukt",
     "local_install": "Lokale installatie",
-    "local_source": "Lokale bron: {path}",
-    "button.local": "Lokaal",
     "confirm_uninstall_title": "Verwijderen van plugin bevestigen",
     "confirm_uninstall_message": "Weet je zeker dat je \"{name}\" wilt verwijderen?",
     "confirm_uninstall_yes": "Ja",
@@ -985,6 +980,20 @@
     "status.updated": "Bijgewerkt: {name}",
     "status.update_failed": "Bijwerken mislukt",
     "status.uninstalled": "Verwijderd: {name}",
-    "status.uninstall_failed": "Verwijderen mislukt"
+    "status.uninstall_failed": "Verwijderen mislukt",
+    "status.unloading": "Unloading {name}...",
+    "status.uninstalling": "Uninstalling {name}..."
+  },
+  "ellipsoid": {
+    "title": "Ellipsoid",
+    "not_visible": "Ellipsoid not visible",
+    "no_selection": "No ellipsoid selected",
+    "invalid": "Invalid ellipsoid",
+    "position": "Position",
+    "rotation": "Rotation",
+    "radii": "Radii",
+    "appearance": "Appearance",
+    "line_width": "Line Width",
+    "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   }
 }

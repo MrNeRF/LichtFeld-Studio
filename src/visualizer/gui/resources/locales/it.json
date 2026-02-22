@@ -77,7 +77,7 @@
     "website": "Sito Web:",
     "authors": "Autori di LichtFeld Studio",
     "license": "Sotto licenza GPLv3",
-    "build_info.property": "Proprieta",
+    "build_info.property": "Proprietà",
     "build_info.value": "Valore",
     "separator": "  |  "
   },
@@ -390,8 +390,8 @@
     "err_non_pinhole": "Attivare --gut o --undistort per addestrare con fotocamere non-pinhole."
   },
   "controls": {
-    "wasd": "WASD:",
-    "zoom": "Zoom:"
+    "wasd": "WASD",
+    "zoom": "Zoom"
   },
   "preferences": {
     "title": "Preferenze",
@@ -483,7 +483,8 @@
     "center_markers": "Marcatori Centrali",
     "perspective": "Prospettiva (O)",
     "orthographic": "Ortografica (O)",
-    "sequencer": "Sequencer"
+    "sequencer": "Sequencer",
+    "ellipsoid": "Ellipsoid"
   },
   "transform": {
     "node": "Nodo: %s",
@@ -555,8 +556,6 @@
     "mip_filter": "Riduci aliasing per Gaussiani sub-pixel",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
-    "ppisp_mode_manual": "Manual",
-    "ppisp_mode_auto": "Auto (Controller)",
     "ppisp_exposure": "Adjust exposure in EV stops",
     "ppisp_gamma": "Regola curva gamma",
     "ppisp_color_rgb": "Sposta la cromaticità per questo canale colore",
@@ -897,32 +896,28 @@
     "dismiss": "Chiudi"
   },
   "plugin_marketplace": {
-    "title_line": "Sfoglia i plugin installabili dai repository GitHub.",
+    "title_line": "Sfoglia i plugin installabili dal registro dei plugin.",
     "warning_body": "AVVISO: LFS non approva direttamente né si assume responsabilità. Utilizzo a proprio rischio.",
     "filter_label": "Filtro",
     "sort_label": "Ordina",
     "filter.all": "Tutti",
     "filter.installed": "Installati",
     "filter.not_installed": "Non installati",
-    "sort.stars_desc": "Stelle: alto -> basso",
-    "sort.stars_asc": "Stelle: basso -> alto",
+    "sort.popularity_desc": "Popolarità: alto -> basso",
+    "sort.popularity_asc": "Popolarità: basso -> alto",
     "sort.name_asc": "Nome: A -> Z",
     "sort.name_desc": "Nome: Z -> A",
-    "loading": "Recupero metadati GitHub...",
-    "no_plugins": "Nessun plugin del marketplace configurato.",
-    "edit_list_hint": "Modifica PLUGIN_MARKETPLACE_URLS in src/python/lfs_plugins/marketplace.py.",
+    "loading": "Recupero registro dei plugin...",
+    "no_plugins": "Nessun plugin disponibile.",
+    "edit_list_hint": "Controlla la configurazione del registro o la connessione a internet.",
     "unknown_plugin": "Plugin sconosciuto",
     "no_description": "Nessuna descrizione disponibile.",
     "stars": "Stelle",
-    "invalid_link": "Link GitHub non valido",
+    "downloads": "Download",
+    "invalid_link": "Link non valido",
     "button.install": "Installa",
-    "button.installed": "Installato",
     "button.github": "GitHub",
-    "status.installed": "Installato: {}",
-    "status.install_failed": "Installazione non riuscita",
     "local_install": "Installazione locale",
-    "local_source": "Origine locale: {path}",
-    "button.local": "Locale",
     "confirm_uninstall_title": "Conferma disinstallazione plugin",
     "confirm_uninstall_message": "Vuoi davvero disinstallare \"{name}\"?",
     "confirm_uninstall_yes": "Sì",
@@ -985,6 +980,20 @@
     "status.updated": "Aggiornato: {name}",
     "status.update_failed": "Aggiornamento non riuscito",
     "status.uninstalled": "Disinstallato: {name}",
-    "status.uninstall_failed": "Disinstallazione non riuscita"
+    "status.uninstall_failed": "Disinstallazione non riuscita",
+    "status.unloading": "Unloading {name}...",
+    "status.uninstalling": "Uninstalling {name}..."
+  },
+  "ellipsoid": {
+    "title": "Ellipsoid",
+    "not_visible": "Ellipsoid not visible",
+    "no_selection": "No ellipsoid selected",
+    "invalid": "Invalid ellipsoid",
+    "position": "Position",
+    "rotation": "Rotation",
+    "radii": "Radii",
+    "appearance": "Appearance",
+    "line_width": "Line Width",
+    "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   }
 }

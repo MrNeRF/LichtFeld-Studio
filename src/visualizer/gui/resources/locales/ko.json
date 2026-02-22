@@ -390,8 +390,8 @@
     "err_non_pinhole": "비 핀홀 카메라로 학습하려면 --gut 또는 --undistort를 활성화하세요."
   },
   "controls": {
-    "wasd": "WASD:",
-    "zoom": "줌:"
+    "wasd": "WASD",
+    "zoom": "줌"
   },
   "preferences": {
     "title": "환경설정",
@@ -483,7 +483,8 @@
     "center_markers": "중심 마커",
     "perspective": "원근 투영 (O)",
     "orthographic": "직교 투영 (O)",
-    "sequencer": "시퀀서"
+    "sequencer": "시퀀서",
+    "ellipsoid": "Ellipsoid"
   },
   "transform": {
     "node": "노드: %s",
@@ -555,8 +556,6 @@
     "mip_filter": "서브픽셀 가우시안 앨리어싱 감소",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
-    "ppisp_mode_manual": "Manual",
-    "ppisp_mode_auto": "Auto (Controller)",
     "ppisp_exposure": "Adjust exposure in EV stops",
     "ppisp_gamma": "감마 곡선 조정",
     "ppisp_color_rgb": "이 색상 채널의 색도 이동",
@@ -897,32 +896,28 @@
     "dismiss": "닫기"
   },
   "plugin_marketplace": {
-    "title_line": "GitHub 저장소에서 설치 가능한 플러그인을 찾아보세요.",
+    "title_line": "플러그인 레지스트리에서 설치 가능한 플러그인을 찾아보세요.",
     "warning_body": "경고: LFS는 직접 보증하지 않으며 책임을 지지 않습니다. 사용은 본인 책임입니다.",
     "filter_label": "필터",
     "sort_label": "정렬",
     "filter.all": "전체",
     "filter.installed": "설치됨",
     "filter.not_installed": "미설치",
-    "sort.stars_desc": "별점: 높은 순 -> 낮은 순",
-    "sort.stars_asc": "별점: 낮은 순 -> 높은 순",
+    "sort.popularity_desc": "인기: 높은 순 -> 낮은 순",
+    "sort.popularity_asc": "인기: 낮은 순 -> 높은 순",
     "sort.name_asc": "이름: A -> Z",
     "sort.name_desc": "이름: Z -> A",
-    "loading": "GitHub 메타데이터를 가져오는 중...",
-    "no_plugins": "구성된 마켓플레이스 플러그인이 없습니다.",
-    "edit_list_hint": "src/python/lfs_plugins/marketplace.py의 PLUGIN_MARKETPLACE_URLS를 수정하세요.",
+    "loading": "플러그인 레지스트리를 가져오는 중...",
+    "no_plugins": "사용 가능한 플러그인이 없습니다.",
+    "edit_list_hint": "레지스트리 설정 또는 인터넷 연결을 확인하세요.",
     "unknown_plugin": "알 수 없는 플러그인",
     "no_description": "설명이 없습니다.",
     "stars": "별점",
-    "invalid_link": "유효하지 않은 GitHub 링크",
+    "downloads": "다운로드",
+    "invalid_link": "유효하지 않은 링크",
     "button.install": "설치",
-    "button.installed": "설치됨",
     "button.github": "GitHub",
-    "status.installed": "설치됨: {}",
-    "status.install_failed": "설치 실패",
     "local_install": "로컬 설치",
-    "local_source": "로컬 소스: {path}",
-    "button.local": "로컬",
     "confirm_uninstall_title": "플러그인 제거 확인",
     "confirm_uninstall_message": "\"{name}\" 플러그인을 정말 제거하시겠습니까?",
     "confirm_uninstall_yes": "예",
@@ -985,6 +980,20 @@
     "status.updated": "업데이트됨: {name}",
     "status.update_failed": "업데이트 실패",
     "status.uninstalled": "제거됨: {name}",
-    "status.uninstall_failed": "제거 실패"
+    "status.uninstall_failed": "제거 실패",
+    "status.unloading": "Unloading {name}...",
+    "status.uninstalling": "Uninstalling {name}..."
+  },
+  "ellipsoid": {
+    "title": "Ellipsoid",
+    "not_visible": "Ellipsoid not visible",
+    "no_selection": "No ellipsoid selected",
+    "invalid": "Invalid ellipsoid",
+    "position": "Position",
+    "rotation": "Rotation",
+    "radii": "Radii",
+    "appearance": "Appearance",
+    "line_width": "Line Width",
+    "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   }
 }

@@ -390,8 +390,8 @@
     "err_non_pinhole": "请启用 --gut 或 --undistort 以使用非针孔相机进行训练。"
   },
   "controls": {
-    "wasd": "WASD：",
-    "zoom": "缩放："
+    "wasd": "WASD",
+    "zoom": "缩放"
   },
   "preferences": {
     "title": "偏好设置",
@@ -483,7 +483,8 @@
     "center_markers": "中心标记",
     "perspective": "透视（O）",
     "orthographic": "正交（O）",
-    "sequencer": "序列器"
+    "sequencer": "序列器",
+    "ellipsoid": "Ellipsoid"
   },
   "transform": {
     "node": "节点：%s",
@@ -555,8 +556,6 @@
     "mip_filter": "减少亚像素高斯的锯齿",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
-    "ppisp_mode_manual": "Manual",
-    "ppisp_mode_auto": "Auto (Controller)",
     "ppisp_exposure": "Adjust exposure in EV stops",
     "ppisp_gamma": "调整伽马曲线",
     "ppisp_color_rgb": "调整该颜色通道的色度",
@@ -897,36 +896,32 @@
     "dismiss": "关闭"
   },
   "plugin_marketplace": {
-    "title_line": "浏览来自 GitHub 仓库的可安装插件。",
+    "title_line": "从插件注册表浏览可安装的插件。",
     "warning_body": "警告：LFS 不会直接背书，也不承担责任。请自行承担使用风险。",
     "filter_label": "筛选",
     "sort_label": "排序",
     "filter.all": "全部",
     "filter.installed": "已安装",
     "filter.not_installed": "未安装",
-    "sort.stars_desc": "星标：高 -> 低",
-    "sort.stars_asc": "星标：低 -> 高",
     "sort.name_asc": "名称：A -> Z",
     "sort.name_desc": "名称：Z -> A",
-    "loading": "正在获取 GitHub 元数据...",
-    "no_plugins": "未配置任何市场插件。",
-    "edit_list_hint": "请编辑 src/python/lfs_plugins/marketplace.py 中的 PLUGIN_MARKETPLACE_URLS。",
+    "loading": "正在获取插件注册表...",
+    "no_plugins": "没有可用的插件。",
+    "edit_list_hint": "请检查注册表配置或网络连接。",
     "unknown_plugin": "未知插件",
     "no_description": "未提供描述。",
     "stars": "星标",
-    "invalid_link": "无效的 GitHub 链接",
+    "invalid_link": "无效链接",
     "button.install": "安装",
-    "button.installed": "已安装",
     "button.github": "GitHub",
-    "status.installed": "已安装：{}",
-    "status.install_failed": "安装失败",
     "local_install": "本地安装",
-    "local_source": "本地来源：{path}",
-    "button.local": "本地",
     "confirm_uninstall_title": "确认卸载插件",
     "confirm_uninstall_message": "确定要卸载“{name}”吗？",
     "confirm_uninstall_yes": "是",
-    "confirm_uninstall_no": "否"
+    "confirm_uninstall_no": "否",
+    "sort.popularity_desc": "热度：高 -> 低",
+    "sort.popularity_asc": "热度：低 -> 高",
+    "downloads": "下载量"
   },
   "sequencer": {
     "edit_focal_length": "编辑焦距...",
@@ -985,6 +980,20 @@
     "status.updated": "已更新：{name}",
     "status.update_failed": "更新失败",
     "status.uninstalled": "已卸载：{name}",
-    "status.uninstall_failed": "卸载失败"
+    "status.uninstall_failed": "卸载失败",
+    "status.unloading": "Unloading {name}...",
+    "status.uninstalling": "Uninstalling {name}..."
+  },
+  "ellipsoid": {
+    "title": "Ellipsoid",
+    "not_visible": "Ellipsoid not visible",
+    "no_selection": "No ellipsoid selected",
+    "invalid": "Invalid ellipsoid",
+    "position": "Position",
+    "rotation": "Rotation",
+    "radii": "Radii",
+    "appearance": "Appearance",
+    "line_width": "Line Width",
+    "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   }
 }

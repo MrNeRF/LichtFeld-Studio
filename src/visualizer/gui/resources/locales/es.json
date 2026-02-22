@@ -390,8 +390,8 @@
     "err_non_pinhole": "Active --gut o --undistort para entrenar con cámaras no-pinhole."
   },
   "controls": {
-    "wasd": "WASD:",
-    "zoom": "Zoom:"
+    "wasd": "WASD",
+    "zoom": "Zoom"
   },
   "preferences": {
     "title": "Preferencias",
@@ -483,7 +483,8 @@
     "center_markers": "Marcadores Centrales",
     "perspective": "Perspectiva (O)",
     "orthographic": "Ortográfica (O)",
-    "sequencer": "Secuenciador"
+    "sequencer": "Secuenciador",
+    "ellipsoid": "Ellipsoid"
   },
   "transform": {
     "node": "Nodo: %s",
@@ -555,8 +556,6 @@
     "mip_filter": "Reducir aliasing para Gaussianos sub-píxel",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
-    "ppisp_mode_manual": "Manual",
-    "ppisp_mode_auto": "Auto (Controller)",
     "ppisp_exposure": "Adjust exposure in EV stops",
     "ppisp_gamma": "Ajustar curva gamma",
     "ppisp_color_rgb": "Desplazar la cromaticidad de este canal de color",
@@ -897,32 +896,28 @@
     "dismiss": "Descartar"
   },
   "plugin_marketplace": {
-    "title_line": "Explora plugins instalables desde repositorios de GitHub.",
+    "title_line": "Explora plugins instalables desde el registro de plugins.",
     "warning_body": "ADVERTENCIA: LFS no respalda directamente ni asume responsabilidad. Úsalo bajo tu propio riesgo.",
     "filter_label": "Filtro",
     "sort_label": "Ordenar",
     "filter.all": "Todos",
     "filter.installed": "Instalados",
     "filter.not_installed": "No instalados",
-    "sort.stars_desc": "Estrellas: mayor -> menor",
-    "sort.stars_asc": "Estrellas: menor -> mayor",
+    "sort.popularity_desc": "Popularidad: mayor -> menor",
+    "sort.popularity_asc": "Popularidad: menor -> mayor",
     "sort.name_asc": "Nombre: A -> Z",
     "sort.name_desc": "Nombre: Z -> A",
-    "loading": "Obteniendo metadatos de GitHub...",
-    "no_plugins": "No hay plugins del marketplace configurados.",
-    "edit_list_hint": "Edita PLUGIN_MARKETPLACE_URLS en src/python/lfs_plugins/marketplace.py.",
+    "loading": "Obteniendo registro de plugins...",
+    "no_plugins": "No hay plugins disponibles.",
+    "edit_list_hint": "Comprueba la configuración del registro o la conexión a internet.",
     "unknown_plugin": "Plugin desconocido",
     "no_description": "No hay descripción disponible.",
     "stars": "Estrellas",
-    "invalid_link": "Enlace de GitHub inválido",
+    "downloads": "Descargas",
+    "invalid_link": "Enlace inválido",
     "button.install": "Instalar",
-    "button.installed": "Instalado",
     "button.github": "GitHub",
-    "status.installed": "Instalado: {}",
-    "status.install_failed": "Error al instalar",
     "local_install": "Instalación local",
-    "local_source": "Origen local: {path}",
-    "button.local": "Local",
     "confirm_uninstall_title": "Confirmar desinstalación del plugin",
     "confirm_uninstall_message": "¿Seguro que deseas desinstalar \"{name}\"?",
     "confirm_uninstall_yes": "Sí",
@@ -985,6 +980,20 @@
     "status.updated": "Actualizado: {name}",
     "status.update_failed": "Error al actualizar",
     "status.uninstalled": "Desinstalado: {name}",
-    "status.uninstall_failed": "Error al desinstalar"
+    "status.uninstall_failed": "Error al desinstalar",
+    "status.unloading": "Unloading {name}...",
+    "status.uninstalling": "Uninstalling {name}..."
+  },
+  "ellipsoid": {
+    "title": "Ellipsoid",
+    "not_visible": "Ellipsoid not visible",
+    "no_selection": "No ellipsoid selected",
+    "invalid": "Invalid ellipsoid",
+    "position": "Position",
+    "rotation": "Rotation",
+    "radii": "Radii",
+    "appearance": "Appearance",
+    "line_width": "Line Width",
+    "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   }
 }

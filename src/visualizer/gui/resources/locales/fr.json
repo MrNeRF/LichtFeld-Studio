@@ -77,7 +77,7 @@
     "website": "Site Web :",
     "authors": "Auteurs de LichtFeld Studio",
     "license": "Sous licence GPLv3",
-    "build_info.property": "Propriete",
+    "build_info.property": "Propriété",
     "build_info.value": "Valeur",
     "separator": "  |  "
   },
@@ -390,8 +390,8 @@
     "err_non_pinhole": "Activez --gut ou --undistort pour entraîner avec des caméras non-pinhole."
   },
   "controls": {
-    "wasd": "WASD :",
-    "zoom": "Zoom :"
+    "wasd": "WASD",
+    "zoom": "Zoom"
   },
   "preferences": {
     "title": "Préférences",
@@ -483,7 +483,8 @@
     "center_markers": "Marqueurs Centraux",
     "perspective": "Perspective (O)",
     "orthographic": "Orthographique (O)",
-    "sequencer": "Séquenceur"
+    "sequencer": "Séquenceur",
+    "ellipsoid": "Ellipsoid"
   },
   "transform": {
     "node": "Nœud : %s",
@@ -555,8 +556,6 @@
     "mip_filter": "Réduire l'aliasing pour Gaussiens sub-pixel",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
-    "ppisp_mode_manual": "Manual",
-    "ppisp_mode_auto": "Auto (Controller)",
     "ppisp_exposure": "Adjust exposure in EV stops",
     "ppisp_gamma": "Ajuster courbe gamma",
     "ppisp_color_rgb": "Décaler la chromaticité pour ce canal de couleur",
@@ -897,32 +896,28 @@
     "dismiss": "Fermer"
   },
   "plugin_marketplace": {
-    "title_line": "Parcourez les plugins installables depuis des dépôts GitHub.",
+    "title_line": "Parcourez les plugins installables depuis le registre de plugins.",
     "warning_body": "AVERTISSEMENT : LFS n'approuve pas directement et n'assume aucune responsabilité. Utilisation à vos risques.",
     "filter_label": "Filtre",
     "sort_label": "Tri",
     "filter.all": "Tous",
     "filter.installed": "Installés",
     "filter.not_installed": "Non installés",
-    "sort.stars_desc": "Étoiles : élevé -> faible",
-    "sort.stars_asc": "Étoiles : faible -> élevé",
+    "sort.popularity_desc": "Popularité : élevé -> faible",
+    "sort.popularity_asc": "Popularité : faible -> élevé",
     "sort.name_asc": "Nom : A -> Z",
     "sort.name_desc": "Nom : Z -> A",
-    "loading": "Récupération des métadonnées GitHub...",
-    "no_plugins": "Aucun plugin du marketplace n'est configuré.",
-    "edit_list_hint": "Modifiez PLUGIN_MARKETPLACE_URLS dans src/python/lfs_plugins/marketplace.py.",
+    "loading": "Récupération du registre de plugins...",
+    "no_plugins": "Aucun plugin disponible.",
+    "edit_list_hint": "Vérifiez la configuration du registre ou la connexion internet.",
     "unknown_plugin": "Plugin inconnu",
     "no_description": "Aucune description fournie.",
     "stars": "Étoiles",
-    "invalid_link": "Lien GitHub invalide",
+    "downloads": "Téléchargements",
+    "invalid_link": "Lien invalide",
     "button.install": "Installer",
-    "button.installed": "Installé",
     "button.github": "GitHub",
-    "status.installed": "Installé : {}",
-    "status.install_failed": "Échec de l'installation",
     "local_install": "Installation locale",
-    "local_source": "Source locale : {path}",
-    "button.local": "Local",
     "confirm_uninstall_title": "Confirmer la désinstallation du plugin",
     "confirm_uninstall_message": "Voulez-vous vraiment désinstaller \"{name}\" ?",
     "confirm_uninstall_yes": "Oui",
@@ -985,6 +980,20 @@
     "status.updated": "Mis à jour : {name}",
     "status.update_failed": "Échec de la mise à jour",
     "status.uninstalled": "Désinstallé : {name}",
-    "status.uninstall_failed": "Échec de la désinstallation"
+    "status.uninstall_failed": "Échec de la désinstallation",
+    "status.unloading": "Unloading {name}...",
+    "status.uninstalling": "Uninstalling {name}..."
+  },
+  "ellipsoid": {
+    "title": "Ellipsoid",
+    "not_visible": "Ellipsoid not visible",
+    "no_selection": "No ellipsoid selected",
+    "invalid": "Invalid ellipsoid",
+    "position": "Position",
+    "rotation": "Rotation",
+    "radii": "Radii",
+    "appearance": "Appearance",
+    "line_width": "Line Width",
+    "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   }
 }

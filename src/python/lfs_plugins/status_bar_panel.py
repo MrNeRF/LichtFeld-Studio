@@ -14,6 +14,11 @@ def tr(key):
     return result if result else key
 
 
+def _strip_colon(s: str) -> str:
+    return s.rstrip(": \uff1a")
+
+
+
 def _fmt_count(n: int) -> str:
     if n >= 1_000_000:
         return f"{n / 1e6:.2f}M"
@@ -131,7 +136,7 @@ class StatusBarPanel(Panel):
 
         num_splats = lf.trainer_num_splats()
         max_gaussians = lf.trainer_max_gaussians()
-        layout.text_colored(tr("status.gaussians").rstrip(":"), p.text_dim)
+        layout.text_colored(_strip_colon(tr("status.gaussians")), p.text_dim)
         layout.same_line(spacing=6)
         layout.label(f"{_fmt_count(num_splats)}/{_fmt_count(max_gaussians)}")
 
@@ -158,7 +163,7 @@ class StatusBarPanel(Panel):
         layout.same_line(spacing=20)
         layout.text_colored("|", p.text_dim)
         layout.same_line()
-        layout.text_colored(f"{_fmt_count(total)} {tr('status.gaussians').rstrip(':')}", p.text)
+        layout.text_colored(f"{_fmt_count(total)} {_strip_colon(tr('status.gaussians'))}", p.text)
 
     def _draw_split_view(self, layout, p):
         info = lf.ui.get_split_view_info()
@@ -191,7 +196,7 @@ class StatusBarPanel(Panel):
             layout.same_line(spacing=20)
             layout.text_colored("|", sep_color)
             layout.same_line()
-            layout.text_colored(f"{tr('controls.wasd').rstrip(':')}: {wasd_speed:.0f}", speed_color)
+            layout.text_colored(f"{_strip_colon(tr('controls.wasd'))}: {wasd_speed:.0f}", speed_color)
 
         if zoom_alpha > 0:
             sep_color = (p.text_dim[0], p.text_dim[1], p.text_dim[2], zoom_alpha)
@@ -199,7 +204,7 @@ class StatusBarPanel(Panel):
             layout.same_line(spacing=20)
             layout.text_colored("|", sep_color)
             layout.same_line()
-            layout.text_colored(f"{tr('controls.zoom').rstrip(':')}: {zoom_speed * 10:.0f}", speed_color)
+            layout.text_colored(f"{_strip_colon(tr('controls.zoom'))}: {zoom_speed * 10:.0f}", speed_color)
 
     def _draw_right_section(self, layout, p):
         used, total = lf.ui.get_gpu_memory()

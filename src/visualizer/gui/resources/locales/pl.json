@@ -77,8 +77,8 @@
     "website": "Strona WWW:",
     "authors": "Autorzy LichtFeld Studio",
     "license": "Licencjonowane na GPLv3",
-    "build_info.property": "Wlasciwosc",
-    "build_info.value": "Wartosc",
+    "build_info.property": "Właściwość",
+    "build_info.value": "Wartość",
     "separator": "  |  "
   },
   "training": {
@@ -390,8 +390,8 @@
     "err_non_pinhole": "Włącz --gut lub --undistort, aby trenować z kamerami innymi niż pinhole."
   },
   "controls": {
-    "wasd": "WASD:",
-    "zoom": "Zoom:"
+    "wasd": "WASD",
+    "zoom": "Zoom"
   },
   "preferences": {
     "title": "Preferencje",
@@ -483,7 +483,8 @@
     "center_markers": "Znaczniki Środkowe",
     "perspective": "Perspektywa (O)",
     "orthographic": "Ortograficzna (O)",
-    "sequencer": "Sekwencer"
+    "sequencer": "Sekwencer",
+    "ellipsoid": "Ellipsoid"
   },
   "transform": {
     "node": "Węzeł: %s",
@@ -555,8 +556,6 @@
     "mip_filter": "Zmniejsz aliasing dla sub-pikselowych Gaussowskich",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
-    "ppisp_mode_manual": "Manual",
-    "ppisp_mode_auto": "Auto (Controller)",
     "ppisp_exposure": "Adjust exposure in EV stops",
     "ppisp_gamma": "Dostosuj krzywą gamma",
     "ppisp_color_rgb": "Przesuń chrominancję dla tego kanału koloru",
@@ -897,32 +896,28 @@
     "dismiss": "Zamknij"
   },
   "plugin_marketplace": {
-    "title_line": "Przeglądaj instalowalne wtyczki z repozytoriów GitHub.",
+    "title_line": "Przeglądaj instalowalne wtyczki z rejestru wtyczek.",
     "warning_body": "OSTRZEŻENIE: LFS nie udziela bezpośredniej rekomendacji ani nie ponosi odpowiedzialności. Używasz na własne ryzyko.",
     "filter_label": "Filtr",
     "sort_label": "Sortowanie",
     "filter.all": "Wszystkie",
     "filter.installed": "Zainstalowane",
     "filter.not_installed": "Niezainstalowane",
-    "sort.stars_desc": "Gwiazdki: malejąco",
-    "sort.stars_asc": "Gwiazdki: rosnąco",
+    "sort.popularity_desc": "Popularność: malejąco",
+    "sort.popularity_asc": "Popularność: rosnąco",
     "sort.name_asc": "Nazwa: A -> Z",
     "sort.name_desc": "Nazwa: Z -> A",
-    "loading": "Pobieranie metadanych GitHub...",
-    "no_plugins": "Brak skonfigurowanych wtyczek marketplace.",
-    "edit_list_hint": "Edytuj PLUGIN_MARKETPLACE_URLS w pliku src/python/lfs_plugins/marketplace.py.",
+    "loading": "Pobieranie rejestru wtyczek...",
+    "no_plugins": "Brak dostępnych wtyczek.",
+    "edit_list_hint": "Sprawdź konfigurację rejestru lub połączenie internetowe.",
     "unknown_plugin": "Nieznana wtyczka",
     "no_description": "Brak opisu.",
     "stars": "Gwiazdki",
-    "invalid_link": "Nieprawidłowy link GitHub",
+    "downloads": "Pobierania",
+    "invalid_link": "Nieprawidłowy link",
     "button.install": "Zainstaluj",
-    "button.installed": "Zainstalowano",
     "button.github": "GitHub",
-    "status.installed": "Zainstalowano: {}",
-    "status.install_failed": "Instalacja nie powiodła się",
     "local_install": "Instalacja lokalna",
-    "local_source": "Źródło lokalne: {path}",
-    "button.local": "Lokalne",
     "confirm_uninstall_title": "Potwierdz odinstalowanie wtyczki",
     "confirm_uninstall_message": "Czy na pewno chcesz odinstalować \"{name}\"?",
     "confirm_uninstall_yes": "Tak",
@@ -985,6 +980,20 @@
     "status.updated": "Zaktualizowano: {name}",
     "status.update_failed": "Aktualizacja nie powiodła się",
     "status.uninstalled": "Odinstalowano: {name}",
-    "status.uninstall_failed": "Odinstalowanie nie powiodło się"
+    "status.uninstall_failed": "Odinstalowanie nie powiodło się",
+    "status.unloading": "Unloading {name}...",
+    "status.uninstalling": "Uninstalling {name}..."
+  },
+  "ellipsoid": {
+    "title": "Ellipsoid",
+    "not_visible": "Ellipsoid not visible",
+    "no_selection": "No ellipsoid selected",
+    "invalid": "Invalid ellipsoid",
+    "position": "Position",
+    "rotation": "Rotation",
+    "radii": "Radii",
+    "appearance": "Appearance",
+    "line_width": "Line Width",
+    "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   }
 }

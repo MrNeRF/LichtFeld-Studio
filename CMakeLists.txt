@@ -16,6 +16,8 @@ cmake_minimum_required(VERSION 3.30)
 # Suppress CMake developer warnings
 set(CMAKE_SUPPRESS_DEVELOPER_WARNINGS ON CACHE BOOL "" FORCE)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Default to Release build
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     message(STATUS "No build type specified, defaulting to Release")

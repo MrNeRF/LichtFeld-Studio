@@ -54,7 +54,7 @@
     "video_masks": "マスクチュートリアル",
     "loading": "読み込み中...",
     "wiki_label": "Wiki:",
-    "watch_tooltip": "视聴: {title}"
+    "watch_tooltip": "視聴: {title}"
   },
   "about": {
     "title": "LICHTFELD STUDIO",
@@ -390,8 +390,8 @@
     "err_non_pinhole": "非ピンホールカメラで学習するには --gut または --undistort を有効にしてください。"
   },
   "controls": {
-    "wasd": "WASD:",
-    "zoom": "ズーム:"
+    "wasd": "WASD",
+    "zoom": "ズーム"
   },
   "preferences": {
     "title": "環境設定",
@@ -483,7 +483,8 @@
     "center_markers": "センターマーカー",
     "perspective": "透視投影 (O)",
     "orthographic": "平行投影 (O)",
-    "sequencer": "シーケンサー"
+    "sequencer": "シーケンサー",
+    "ellipsoid": "Ellipsoid"
   },
   "transform": {
     "node": "ノード: %s",
@@ -555,8 +556,6 @@
     "mip_filter": "サブピクセルガウシアンのエイリアシング軽減",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
-    "ppisp_mode_manual": "Manual",
-    "ppisp_mode_auto": "Auto (Controller)",
     "ppisp_exposure": "Adjust exposure in EV stops",
     "ppisp_gamma": "ガンマ曲線を調整",
     "ppisp_color_rgb": "このカラーチャンネルのクロマを調整",
@@ -897,32 +896,28 @@
     "dismiss": "閉じる"
   },
   "plugin_marketplace": {
-    "title_line": "GitHub リポジトリからインストール可能なプラグインを参照します。",
+    "title_line": "プラグインレジストリからインストール可能なプラグインを参照します。",
     "warning_body": "警告: LFS は直接的な推奨や責任の負担を行いません。利用は自己責任で行ってください。",
     "filter_label": "フィルター",
     "sort_label": "並び替え",
     "filter.all": "すべて",
     "filter.installed": "インストール済み",
     "filter.not_installed": "未インストール",
-    "sort.stars_desc": "スター: 多い -> 少ない",
-    "sort.stars_asc": "スター: 少ない -> 多い",
+    "sort.popularity_desc": "人気: 多い -> 少ない",
+    "sort.popularity_asc": "人気: 少ない -> 多い",
     "sort.name_asc": "名前: A -> Z",
     "sort.name_desc": "名前: Z -> A",
-    "loading": "GitHub メタデータを取得中...",
-    "no_plugins": "マーケットプレイスに設定されたプラグインがありません。",
-    "edit_list_hint": "src/python/lfs_plugins/marketplace.py の PLUGIN_MARKETPLACE_URLS を編集してください。",
+    "loading": "プラグインレジストリを取得中...",
+    "no_plugins": "利用可能なプラグインがありません。",
+    "edit_list_hint": "レジストリの設定またはインターネット接続を確認してください。",
     "unknown_plugin": "不明なプラグイン",
     "no_description": "説明はありません。",
     "stars": "スター",
-    "invalid_link": "無効な GitHub リンク",
+    "downloads": "ダウンロード",
+    "invalid_link": "無効なリンク",
     "button.install": "インストール",
-    "button.installed": "インストール済み",
     "button.github": "GitHub",
-    "status.installed": "インストール済み: {}",
-    "status.install_failed": "インストール失敗",
     "local_install": "ローカルインストール",
-    "local_source": "ローカルソース: {path}",
-    "button.local": "ローカル",
     "confirm_uninstall_title": "プラグインのアンインストールを確認",
     "confirm_uninstall_message": "「{name}」を本当にアンインストールしますか？",
     "confirm_uninstall_yes": "はい",
@@ -985,6 +980,20 @@
     "status.updated": "更新済み: {name}",
     "status.update_failed": "更新失敗",
     "status.uninstalled": "アンインストール済み: {name}",
-    "status.uninstall_failed": "アンインストール失敗"
+    "status.uninstall_failed": "アンインストール失敗",
+    "status.unloading": "Unloading {name}...",
+    "status.uninstalling": "Uninstalling {name}..."
+  },
+  "ellipsoid": {
+    "title": "Ellipsoid",
+    "not_visible": "Ellipsoid not visible",
+    "no_selection": "No ellipsoid selected",
+    "invalid": "Invalid ellipsoid",
+    "position": "Position",
+    "rotation": "Rotation",
+    "radii": "Radii",
+    "appearance": "Appearance",
+    "line_width": "Line Width",
+    "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   }
 }

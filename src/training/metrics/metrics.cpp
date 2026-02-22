@@ -4,40 +4,119 @@
 
 #include "metrics.hpp"
 #include "../rasterization/fast_rasterizer.hpp"
+#include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
+#include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
+#include "io/cuda/image_format_kernels.cuh"
 #include "lfs/kernels/ssim.cuh"
+#include <algorithm>
+#include <cassert>
 #include <chrono>
 #include <cmath>
 #include <iostream>
 #include <numeric>
+#include <stdexcept>
+#include <string>
 
 namespace lfs::training {
 
-    // PSNR Implementation using lfs::core::Tensor
-    float PSNR::compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target) const {
-        // Check shapes match
-        if (pred.shape() != target.shape()) {
-            throw std::runtime_error("PSNR: Prediction and target must have the same shape");
+    namespace {
+        struct TensorLayoutInfo {
+            int n;
+            int c;
+            int h;
+            int w;
+        };
+
+        TensorLayoutInfo get_layout_info(const lfs::core::Tensor& t, const char* name) {
+            if (t.ndim() == 3) {
+                return {
+                    .n = 1,
+                    .c = static_cast<int>(t.shape()[0]),
+                    .h = static_cast<int>(t.shape()[1]),
+                    .w = static_cast<int>(t.shape()[2])};
+            }
+            if (t.ndim() == 4) {
+                return {
+                    .n = static_cast<int>(t.shape()[0]),
+                    .c = static_cast<int>(t.shape()[1]),
+                    .h = static_cast<int>(t.shape()[2]),
+                    .w = static_cast<int>(t.shape()[3])};
+            }
+
+            throw std::runtime_error(std::string(name) + ": expected tensor rank 3 or 4");
         }
 
-        // Compute MSE: mean((pred - target)^2)
+        float get_non_empty_mask_sum_or_throw(const lfs::core::Tensor& mask, const char* name) {
+            const float mask_sum = mask.sum().item<float>();
+            if (!std::isfinite(mask_sum) || mask_sum <= 0.0f) {
+                throw std::runtime_error(std::string(name) + ": mask is empty or invalid");
+            }
+            return mask_sum;
+        }
+
+        void validate_mask_shape_or_throw(const lfs::core::Tensor& mask,
+                                          const TensorLayoutInfo& layout,
+                                          const char* name) {
+            if (mask.ndim() != 2) {
+                throw std::runtime_error(std::string(name) + ": expected 2D mask [H, W]");
+            }
+
+            const int mask_h = static_cast<int>(mask.shape()[0]);
+            const int mask_w = static_cast<int>(mask.shape()[1]);
+            if (mask_h != layout.h || mask_w != layout.w) {
+                throw std::runtime_error(
+                    std::string(name) + ": mask shape does not match image shape");
+            }
+        }
+        lfs::core::Tensor expand_mask(const lfs::core::Tensor& mask,
+                                      const TensorLayoutInfo& layout,
+                                      int target_ndim) {
+            assert(mask.ndim() == 2);
+            assert(target_ndim == 3 || target_ndim == 4);
+            if (target_ndim == 3) {
+                return mask.unsqueeze(0).expand({layout.c, layout.h, layout.w});
+            }
+            return mask.unsqueeze(0).unsqueeze(0).expand({layout.n, layout.c, layout.h, layout.w});
+        }
+    } // namespace
+
+    float PSNR::compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
+                        const lfs::core::Tensor& mask) const {
+        if (pred.shape() != target.shape()) {
+            throw std::runtime_error("PSNR: prediction and target must have the same shape");
+        }
+
+        const auto layout = get_layout_info(pred, "PSNR");
+
         auto diff = pred - target;
         auto squared_diff = diff * diff;
+        diff = {};
 
-        // Compute mean over all dimensions
-        float mse = squared_diff.mean().item<float>();
+        float mse;
+        if (mask.is_valid()) {
+            validate_mask_shape_or_throw(mask, layout, "PSNR");
+            const float mask_sum = get_non_empty_mask_sum_or_throw(mask, "PSNR");
 
-        // Clamp to avoid log(0)
-        if (mse < 1e-10f) {
-            mse = 1e-10f;
+            const auto expanded = expand_mask(mask, layout, pred.ndim());
+            const auto weighted_sum = (squared_diff * expanded).sum();
+
+            const float denom = mask_sum * static_cast<float>(layout.c * layout.n);
+            mse = weighted_sum.item<float>() / denom;
+        } else {
+            mse = squared_diff.mean().item<float>();
         }
 
-        // PSNR = 20 * log10(data_range / sqrt(MSE))
-        const float psnr = 20.0f * std::log10(data_range_ / std::sqrt(mse));
+        if (!std::isfinite(mse)) {
+            throw std::runtime_error("PSNR: produced non-finite MSE");
+        }
 
-        return psnr;
+        if (mse < 1e-10f)
+            mse = 1e-10f;
+
+        return 20.0f * std::log10(data_range_ / std::sqrt(mse));
     }
 
     // SSIM Implementation using LibTorch-free kernels
@@ -45,17 +124,41 @@ namespace lfs::training {
         : apply_valid_padding_(apply_valid_padding) {
     }
 
-    float SSIM::compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target) {
-        // Check shapes match
+    float SSIM::compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
+                        const lfs::core::Tensor& mask) {
         if (pred.shape() != target.shape()) {
-            throw std::runtime_error("SSIM: Prediction and target must have the same shape");
+            throw std::runtime_error("SSIM: prediction and target must have the same shape");
         }
 
-        // Use our LibTorch-free SSIM kernel
-        auto [ssim_value, ctx] = kernels::ssim_forward(pred, target, apply_valid_padding_);
+        if (mask.is_valid()) {
+            // Match masked training semantics: no valid-padding crop, masked mean over all pixels.
+            const auto layout = get_layout_info(pred, "SSIM");
+            validate_mask_shape_or_throw(mask, layout, "SSIM");
+            const float mask_sum = get_non_empty_mask_sum_or_throw(mask, "SSIM");
 
-        // Return mean SSIM value
-        return ssim_value.mean().item<float>();
+            auto map_result = kernels::ssim_forward_map(pred, target, false);
+            auto ssim_map = map_result.ssim_map;
+            assert(ssim_map.ndim() == 4);
+            assert(static_cast<int>(ssim_map.shape()[2]) == layout.h);
+            assert(static_cast<int>(ssim_map.shape()[3]) == layout.w);
+
+            const auto expanded = expand_mask(mask, layout, 4);
+            const auto weighted_sum = (ssim_map * expanded).sum();
+
+            const float denom = mask_sum * static_cast<float>(layout.c * layout.n);
+            const float masked_ssim = weighted_sum.item<float>() / denom;
+            if (!std::isfinite(masked_ssim)) {
+                throw std::runtime_error("SSIM: produced non-finite masked SSIM");
+            }
+            return masked_ssim;
+        }
+
+        auto [ssim_value, ctx] = kernels::ssim_forward(pred, target, apply_valid_padding_);
+        const float value = ssim_value.mean().item<float>();
+        if (!std::isfinite(value)) {
+            throw std::runtime_error("SSIM: produced non-finite SSIM");
+        }
+        return value;
     }
 
     // MetricsReporter Implementation
@@ -234,6 +337,70 @@ namespace lfs::training {
         return colormap.to(depth_normalized.device());
     }
 
+    lfs::core::Tensor MetricsEvaluator::load_eval_mask(lfs::core::Camera* cam,
+                                                       lfs::core::Tensor& gt_image,
+                                                       const bool alpha_as_mask) const {
+        if (cam->has_mask()) {
+            return cam->load_and_get_mask(
+                _params.dataset.resize_factor,
+                _params.dataset.max_width,
+                _params.optimization.invert_masks,
+                _params.optimization.mask_threshold);
+        }
+
+        if (!alpha_as_mask)
+            return {};
+
+        // Re-load from disk because the dataloader strips alpha to produce RGB gt_image.
+        // We need the original alpha channel as the mask, with undistortion applied consistently.
+        auto [img_data, width, height, channels] = lfs::core::load_image_with_alpha(
+            cam->image_path(), _params.dataset.resize_factor, _params.dataset.max_width);
+
+        if (!img_data || channels != 4) {
+            if (img_data)
+                lfs::core::free_image(img_data);
+            return {};
+        }
+
+        const auto H = static_cast<size_t>(height);
+        const auto W = static_cast<size_t>(width);
+
+        auto cpu_tensor = lfs::core::Tensor::from_blob(
+            img_data, lfs::core::TensorShape({H, W, 4}),
+            lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+        auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
+        lfs::core::free_image(img_data);
+
+        auto rgb = lfs::core::Tensor::zeros(
+            lfs::core::TensorShape({3, H, W}),
+            lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+        auto mask = lfs::core::Tensor::zeros(
+            lfs::core::TensorShape({H, W}),
+            lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+
+        lfs::io::cuda::launch_uint8_rgba_split_to_float32_rgb_and_alpha(
+            gpu_uint8.ptr<uint8_t>(), rgb.ptr<float>(), mask.ptr<float>(),
+            H, W, nullptr);
+        gpu_uint8 = lfs::core::Tensor();
+
+        if (_params.optimization.invert_masks)
+            lfs::io::cuda::launch_mask_invert(mask.ptr<float>(), H, W, nullptr);
+        if (_params.optimization.mask_threshold > 0)
+            lfs::io::cuda::launch_mask_threshold(
+                mask.ptr<float>(), H, W, _params.optimization.mask_threshold, nullptr);
+
+        if (cam->is_undistort_prepared()) {
+            const auto scaled = lfs::core::scale_undistort_params(
+                cam->undistort_params(),
+                static_cast<int>(W), static_cast<int>(H));
+            rgb = lfs::core::undistort_image(rgb, scaled, nullptr);
+            mask = lfs::core::undistort_mask(mask, scaled, nullptr);
+        }
+
+        gt_image = std::move(rgb);
+        return mask;
+    }
+
     auto MetricsEvaluator::make_dataloader(std::shared_ptr<CameraDataset> dataset, const int workers) const {
         return create_dataloader_from_dataset(dataset, workers);
     }
@@ -241,7 +408,8 @@ namespace lfs::training {
     EvalMetrics MetricsEvaluator::evaluate(const int iteration,
                                            const lfs::core::SplatData& splatData,
                                            std::shared_ptr<CameraDataset> val_dataset,
-                                           lfs::core::Tensor& background) {
+                                           lfs::core::Tensor& background,
+                                           const bool images_have_alpha) {
         if (!_params.optimization.enable_eval) {
             throw std::runtime_error("Evaluation is not enabled");
         }
@@ -264,6 +432,12 @@ namespace lfs::training {
 
         int image_idx = 0;
         const size_t val_dataset_size = val_dataset->size();
+        size_t skipped_images = 0;
+        size_t evaluated_images = 0;
+
+        const auto mask_mode = _params.optimization.mask_mode;
+        const bool use_masking = mask_mode == lfs::core::param::MaskMode::Segment || mask_mode == lfs::core::param::MaskMode::Ignore;
+        const bool alpha_as_mask = _params.optimization.use_alpha_as_mask && images_have_alpha;
 
         while (auto batch_opt = val_dataloader->next()) {
             auto& batch = *batch_opt;
@@ -271,34 +445,71 @@ namespace lfs::training {
             lfs::core::Camera* cam = camera_with_image.camera;
             lfs::core::Tensor gt_image = std::move(camera_with_image.image);
 
-            // Ensure gt_image is on CUDA
             if (gt_image.device() != lfs::core::Device::CUDA) {
                 gt_image = gt_image.to(lfs::core::Device::CUDA);
             }
 
-            // Rasterize with same mip_filter setting as training
+            lfs::core::Tensor mask;
+            if (use_masking) {
+                try {
+                    mask = load_eval_mask(cam, gt_image, alpha_as_mask);
+                } catch (const std::exception& e) {
+                    LOG_WARN("Eval: skipping camera '{}' (failed to load mask: {})", cam->image_name(), e.what());
+                    skipped_images++;
+                    continue;
+                }
+
+                if (!mask.is_valid()) {
+                    LOG_WARN("Eval: skipping camera '{}' (masking enabled but no mask available)", cam->image_name());
+                    skipped_images++;
+                    continue;
+                }
+            }
+
             auto& splatData_mutable = const_cast<lfs::core::SplatData&>(splatData);
             auto rasterize_result = fast_rasterize_forward(*cam, splatData_mutable, background,
-                                                           0, 0, 0, 0, // no tiling
+                                                           0, 0, 0, 0,
                                                            _params.optimization.mip_filter);
             if (!rasterize_result) {
                 throw std::runtime_error("Evaluation rasterization failed: " + rasterize_result.error());
             }
             RenderOutput r_output = std::move(rasterize_result->first);
-
-            // Clamp rendered image to [0, 1]
             r_output.image = r_output.image.clamp(0.0f, 1.0f);
 
-            // Compute metrics
-            const float psnr = _psnr_metric->compute(r_output.image, gt_image);
-            const float ssim = _ssim_metric->compute(r_output.image, gt_image);
+            float psnr = 0.0f;
+            float ssim = 0.0f;
+            try {
+                psnr = _psnr_metric->compute(r_output.image, gt_image, mask);
+                ssim = _ssim_metric->compute(r_output.image, gt_image, mask);
+            } catch (const std::exception& e) {
+                LOG_WARN("Eval: skipping camera '{}' (metric computation failed: {})", cam->image_name(), e.what());
+                skipped_images++;
+                continue;
+            }
+
+            if (!std::isfinite(psnr) || !std::isfinite(ssim)) {
+                LOG_WARN("Eval: skipping camera '{}' (non-finite metric values: PSNR={}, SSIM={})",
+                         cam->image_name(), psnr, ssim);
+                skipped_images++;
+                continue;
+            }
 
             psnr_values.push_back(psnr);
             ssim_values.push_back(ssim);
+            evaluated_images++;
 
-            // Save side-by-side RGB images asynchronously
             if (_params.optimization.enable_save_eval_images) {
-                const std::vector<lfs::core::Tensor> rgb_images = {gt_image, r_output.image};
+                auto gt_vis = gt_image;
+                auto render_vis = r_output.image;
+                if (mask.is_valid()) {
+                    const int C = static_cast<int>(gt_image.shape()[0]);
+                    const int H = static_cast<int>(mask.shape()[0]);
+                    const int W = static_cast<int>(mask.shape()[1]);
+                    auto mask_3d = mask.unsqueeze(0).expand({C, H, W});
+                    gt_vis = gt_image * mask_3d;
+                    render_vis = r_output.image * mask_3d;
+                }
+                const std::vector<lfs::core::Tensor> rgb_images = {gt_vis, render_vis};
                 lfs::core::image_io::save_images_async(
                     eval_dir / (std::to_string(image_idx) + ".png"),
                     rgb_images,
@@ -325,7 +536,15 @@ namespace lfs::training {
             result.psnr = std::accumulate(psnr_values.begin(), psnr_values.end(), 0.0f) / psnr_values.size();
             result.ssim = std::accumulate(ssim_values.begin(), ssim_values.end(), 0.0f) / ssim_values.size();
         }
-        result.elapsed_time = elapsed / val_dataset_size;
+        const size_t elapsed_denom = evaluated_images > 0 ? evaluated_images : std::max<size_t>(val_dataset_size, 1);
+        result.elapsed_time = elapsed / static_cast<float>(elapsed_denom);
+
+        if (skipped_images > 0) {
+            LOG_WARN("Eval: skipped {} / {} images due to mask/metric failures", skipped_images, val_dataset_size);
+        }
+        if (evaluated_images == 0) {
+            LOG_WARN("Eval: no images were successfully evaluated at iteration {}", iteration);
+        }
 
         // Add metrics to reporter
         _reporter->add_metrics(result);

@@ -390,8 +390,8 @@
     "err_non_pinhole": "Aktivieren Sie --gut oder --undistort, um mit Nicht-Pinhole-Kameras zu trainieren."
   },
   "controls": {
-    "wasd": "WASD:",
-    "zoom": "Zoom:"
+    "wasd": "WASD",
+    "zoom": "Zoom"
   },
   "preferences": {
     "title": "Einstellungen",
@@ -483,7 +483,8 @@
     "center_markers": "Mittelpunktmarkierungen",
     "perspective": "Perspektive (O)",
     "orthographic": "Orthografisch (O)",
-    "sequencer": "Sequenzer"
+    "sequencer": "Sequenzer",
+    "ellipsoid": "Ellipsoid"
   },
   "transform": {
     "node": "Knoten: %s",
@@ -555,8 +556,6 @@
     "mip_filter": "Aliasing für Sub-Pixel-Gaussians reduzieren",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
-    "ppisp_mode_manual": "Manual",
-    "ppisp_mode_auto": "Auto (Controller)",
     "ppisp_exposure": "Adjust exposure in EV stops",
     "ppisp_gamma": "Gammakurve anpassen",
     "ppisp_color_rgb": "Chromatizität für diesen Farbkanal verschieben",
@@ -897,32 +896,28 @@
     "dismiss": "Schließen"
   },
   "plugin_marketplace": {
-    "title_line": "Durchsuchen Sie installierbare Plugins aus GitHub-Repositories.",
+    "title_line": "Durchsuchen Sie installierbare Plugins aus der Plugin-Registry.",
     "warning_body": "WARNUNG: LFS spricht keine direkte Empfehlung aus und übernimmt keine Verantwortung. Nutzung auf eigenes Risiko.",
     "filter_label": "Filter",
     "sort_label": "Sortierung",
     "filter.all": "Alle",
     "filter.installed": "Installiert",
     "filter.not_installed": "Nicht installiert",
-    "sort.stars_desc": "Sterne: Hoch -> Niedrig",
-    "sort.stars_asc": "Sterne: Niedrig -> Hoch",
+    "sort.popularity_desc": "Beliebtheit: Hoch -> Niedrig",
+    "sort.popularity_asc": "Beliebtheit: Niedrig -> Hoch",
     "sort.name_asc": "Name: A -> Z",
     "sort.name_desc": "Name: Z -> A",
-    "loading": "GitHub-Metadaten werden geladen...",
-    "no_plugins": "Keine Marketplace-Plugins konfiguriert.",
-    "edit_list_hint": "Bearbeiten Sie PLUGIN_MARKETPLACE_URLS in src/python/lfs_plugins/marketplace.py.",
+    "loading": "Plugin-Registry wird geladen...",
+    "no_plugins": "Keine Plugins verfügbar.",
+    "edit_list_hint": "Überprüfen Sie Ihre Registry-Konfiguration oder Internetverbindung.",
     "unknown_plugin": "Unbekanntes Plugin",
     "no_description": "Keine Beschreibung verfügbar.",
     "stars": "Sterne",
-    "invalid_link": "Ungültiger GitHub-Link",
+    "downloads": "Downloads",
+    "invalid_link": "Ungültiger Link",
     "button.install": "Installieren",
-    "button.installed": "Installiert",
     "button.github": "GitHub",
-    "status.installed": "Installiert: {}",
-    "status.install_failed": "Installation fehlgeschlagen",
     "local_install": "Lokale Installation",
-    "local_source": "Lokale Quelle: {path}",
-    "button.local": "Lokal",
     "confirm_uninstall_title": "Plugin-Deinstallation bestätigen",
     "confirm_uninstall_message": "Möchten Sie \"{name}\" wirklich deinstallieren?",
     "confirm_uninstall_yes": "Ja",
@@ -985,6 +980,20 @@
     "status.updated": "Aktualisiert: {name}",
     "status.update_failed": "Aktualisierung fehlgeschlagen",
     "status.uninstalled": "Deinstalliert: {name}",
-    "status.uninstall_failed": "Deinstallation fehlgeschlagen"
+    "status.uninstall_failed": "Deinstallation fehlgeschlagen",
+    "status.unloading": "Unloading {name}...",
+    "status.uninstalling": "Uninstalling {name}..."
+  },
+  "ellipsoid": {
+    "title": "Ellipsoid",
+    "not_visible": "Ellipsoid not visible",
+    "no_selection": "No ellipsoid selected",
+    "invalid": "Invalid ellipsoid",
+    "position": "Position",
+    "rotation": "Rotation",
+    "radii": "Radii",
+    "appearance": "Appearance",
+    "line_width": "Line Width",
+    "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   }
 }
