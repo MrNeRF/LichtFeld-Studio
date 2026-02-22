@@ -856,6 +856,8 @@ namespace lfs::io {
                 static_cast<int>(i),
                 static_cast<int>(img.camera_id));
 
+            camera->precompute_undistortion();
+
             cameras.push_back(std::move(camera));
         }
 

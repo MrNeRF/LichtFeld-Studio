@@ -148,12 +148,14 @@ namespace lfs::core {
           _cam_position(std::move(other._cam_position)),
           _cached_mask(std::move(other._cached_mask)),
           _mask_loaded(other._mask_loaded),
+          _undistort_precomputed(other._undistort_precomputed),
           _undistort_prepared(other._undistort_prepared),
           _undistort_params(other._undistort_params),
           _stream(other._stream) {
         // Take ownership of the stream
         other._stream = nullptr;
         other._mask_loaded = false;
+        other._undistort_precomputed = false;
         other._undistort_prepared = false;
     }
 
@@ -188,6 +190,7 @@ namespace lfs::core {
             _cam_position = std::move(other._cam_position);
             _cached_mask = std::move(other._cached_mask);
             _mask_loaded = other._mask_loaded;
+            _undistort_precomputed = other._undistort_precomputed;
             _undistort_prepared = other._undistort_prepared;
             _undistort_params = other._undistort_params;
 
@@ -195,6 +198,7 @@ namespace lfs::core {
             _stream = other._stream;
             other._stream = nullptr;
             other._mask_loaded = false;
+            other._undistort_precomputed = false;
             other._undistort_prepared = false;
         }
         return *this;
@@ -414,8 +418,8 @@ namespace lfs::core {
         return _cached_mask;
     }
 
-    void Camera::prepare_undistortion(float blank_pixels) {
-        if (_undistort_prepared)
+    void Camera::precompute_undistortion(float blank_pixels) {
+        if (_undistort_precomputed)
             return;
         if (!has_distortion())
             return;
@@ -425,6 +429,17 @@ namespace lfs::core {
             _camera_width, _camera_height,
             _radial_distortion, _tangential_distortion,
             _camera_model_type, blank_pixels);
+
+        _undistort_precomputed = true;
+    }
+
+    void Camera::prepare_undistortion(float blank_pixels) {
+        if (_undistort_prepared)
+            return;
+
+        precompute_undistortion(blank_pixels);
+        if (!_undistort_precomputed)
+            return;
 
         _focal_x = _undistort_params.dst_fx;
         _focal_y = _undistort_params.dst_fy;

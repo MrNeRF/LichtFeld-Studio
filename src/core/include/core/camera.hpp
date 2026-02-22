@@ -108,6 +108,8 @@ namespace lfs::core {
         float FoVx() const noexcept { return _FoVx; }
         float FoVy() const noexcept { return _FoVy; }
 
+        void precompute_undistortion(float blank_pixels = 0.0f);
+        bool is_undistort_precomputed() const noexcept { return _undistort_precomputed; }
         void prepare_undistortion(float blank_pixels = 0.0f);
         bool is_undistort_prepared() const noexcept { return _undistort_prepared; }
         bool has_distortion() const noexcept;
@@ -150,6 +152,7 @@ namespace lfs::core {
         bool _mask_loaded = false;
 
         // Undistortion state
+        bool _undistort_precomputed = false;
         bool _undistort_prepared = false;
         UndistortParams _undistort_params{};
 
