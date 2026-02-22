@@ -26,8 +26,6 @@ namespace lfs::training {
         }
 
         float compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target) const;
-        float compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
-                      const lfs::core::Tensor& mask) const;
 
     private:
         const float data_range_;
@@ -39,8 +37,6 @@ namespace lfs::training {
         SSIM(bool apply_valid_padding = true);
 
         float compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target);
-        float compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
-                      const lfs::core::Tensor& mask);
 
     private:
         bool apply_valid_padding_;
