@@ -4,9 +4,11 @@
 
 #include "metrics.hpp"
 #include "../rasterization/fast_rasterizer.hpp"
+#include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
+#include "io/cuda/image_format_kernels.cuh"
 #include "lfs/kernels/ssim.cuh"
 #include <chrono>
 #include <cmath>
@@ -241,7 +243,8 @@ namespace lfs::training {
     EvalMetrics MetricsEvaluator::evaluate(const int iteration,
                                            const lfs::core::SplatData& splatData,
                                            std::shared_ptr<CameraDataset> val_dataset,
-                                           lfs::core::Tensor& background) {
+                                           lfs::core::Tensor& background,
+                                           const bool images_have_alpha) {
         if (!_params.optimization.enable_eval) {
             throw std::runtime_error("Evaluation is not enabled");
         }
@@ -265,38 +268,106 @@ namespace lfs::training {
         int image_idx = 0;
         const size_t val_dataset_size = val_dataset->size();
 
+        const auto mask_mode = _params.optimization.mask_mode;
+        const bool use_masking = mask_mode != lfs::core::param::MaskMode::None;
+        const bool alpha_as_mask = _params.optimization.use_alpha_as_mask && images_have_alpha;
+
         while (auto batch_opt = val_dataloader->next()) {
             auto& batch = *batch_opt;
             auto camera_with_image = batch[0].data;
             lfs::core::Camera* cam = camera_with_image.camera;
             lfs::core::Tensor gt_image = std::move(camera_with_image.image);
 
-            // Ensure gt_image is on CUDA
             if (gt_image.device() != lfs::core::Device::CUDA) {
                 gt_image = gt_image.to(lfs::core::Device::CUDA);
             }
 
-            // Rasterize with same mip_filter setting as training
+            // Load mask for this camera
+            lfs::core::Tensor mask;
+            if (use_masking) {
+                if (cam->has_mask()) {
+                    mask = cam->load_and_get_mask(
+                        _params.dataset.resize_factor,
+                        _params.dataset.max_width,
+                        _params.optimization.invert_masks,
+                        _params.optimization.mask_threshold);
+                } else if (alpha_as_mask) {
+                    auto [img_data, width, height, channels] = lfs::core::load_image_with_alpha(
+                        cam->image_path(), _params.dataset.resize_factor, _params.dataset.max_width);
+                    if (img_data && channels == 4) {
+                        const auto H = static_cast<size_t>(height);
+                        const auto W = static_cast<size_t>(width);
+
+                        auto cpu_tensor = lfs::core::Tensor::from_blob(
+                            img_data, lfs::core::TensorShape({H, W, 4}),
+                            lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+                        auto gpu_uint8 = cpu_tensor.to(lfs::core::Device::CUDA);
+                        lfs::core::free_image(img_data);
+
+                        auto rgb = lfs::core::Tensor::zeros(
+                            lfs::core::TensorShape({3, H, W}),
+                            lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+                        mask = lfs::core::Tensor::zeros(
+                            lfs::core::TensorShape({H, W}),
+                            lfs::core::Device::CUDA, lfs::core::DataType::Float32);
+
+                        lfs::io::cuda::launch_uint8_rgba_split_to_float32_rgb_and_alpha(
+                            gpu_uint8.ptr<uint8_t>(), rgb.ptr<float>(), mask.ptr<float>(),
+                            H, W, nullptr);
+                        gpu_uint8 = lfs::core::Tensor();
+
+                        if (_params.optimization.invert_masks) {
+                            lfs::io::cuda::launch_mask_invert(mask.ptr<float>(), H, W, nullptr);
+                        }
+                        if (_params.optimization.mask_threshold > 0) {
+                            lfs::io::cuda::launch_mask_threshold(
+                                mask.ptr<float>(), H, W, _params.optimization.mask_threshold, nullptr);
+                        }
+
+                        if (cam->is_undistort_prepared()) {
+                            const auto scaled = lfs::core::scale_undistort_params(
+                                cam->undistort_params(),
+                                static_cast<int>(W), static_cast<int>(H));
+                            rgb = lfs::core::undistort_image(rgb, scaled, nullptr);
+                            mask = lfs::core::undistort_mask(mask, scaled, nullptr);
+                        }
+
+                        gt_image = std::move(rgb);
+                    } else {
+                        lfs::core::free_image(img_data);
+                    }
+                }
+            }
+
+            // Rasterize
             auto& splatData_mutable = const_cast<lfs::core::SplatData&>(splatData);
             auto rasterize_result = fast_rasterize_forward(*cam, splatData_mutable, background,
-                                                           0, 0, 0, 0, // no tiling
+                                                           0, 0, 0, 0,
                                                            _params.optimization.mip_filter);
             if (!rasterize_result) {
                 throw std::runtime_error("Evaluation rasterization failed: " + rasterize_result.error());
             }
             RenderOutput r_output = std::move(rasterize_result->first);
-
-            // Clamp rendered image to [0, 1]
             r_output.image = r_output.image.clamp(0.0f, 1.0f);
 
-            // Compute metrics
+            // Apply mask to both images
+            if (mask.is_valid()) {
+                assert(mask.ndim() == 2);
+                const int C = static_cast<int>(gt_image.shape()[0]);
+                const int H = static_cast<int>(mask.shape()[0]);
+                const int W = static_cast<int>(mask.shape()[1]);
+                assert(gt_image.shape()[1] == static_cast<size_t>(H) && gt_image.shape()[2] == static_cast<size_t>(W));
+                auto mask_3d = mask.unsqueeze(0).expand({C, H, W});
+                gt_image = gt_image * mask_3d;
+                r_output.image = r_output.image * mask_3d;
+            }
+
             const float psnr = _psnr_metric->compute(r_output.image, gt_image);
             const float ssim = _ssim_metric->compute(r_output.image, gt_image);
 
             psnr_values.push_back(psnr);
             ssim_values.push_back(ssim);
 
-            // Save side-by-side RGB images asynchronously
             if (_params.optimization.enable_save_eval_images) {
                 const std::vector<lfs::core::Tensor> rgb_images = {gt_image, r_output.image};
                 lfs::core::image_io::save_images_async(

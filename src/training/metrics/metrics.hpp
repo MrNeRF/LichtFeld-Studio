@@ -107,7 +107,8 @@ namespace lfs::training {
         EvalMetrics evaluate(const int iteration,
                              const lfs::core::SplatData& splatData,
                              std::shared_ptr<CameraDataset> val_dataset,
-                             lfs::core::Tensor& background);
+                             lfs::core::Tensor& background,
+                             bool images_have_alpha = false);
 
         // Save final report
         void save_report() const {

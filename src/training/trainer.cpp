@@ -1671,10 +1671,12 @@ namespace lfs::training {
                 // Clean evaluation - let the evaluator handle everything
                 if (evaluator_->is_enabled() && evaluator_->should_evaluate(iter)) {
                     evaluator_->print_evaluation_header(iter);
+                    const bool alpha_available = scene_ && scene_->imagesHaveAlpha();
                     auto metrics = evaluator_->evaluate(iter,
                                                         strategy_->get_model(),
                                                         val_dataset_,
-                                                        background_);
+                                                        background_,
+                                                        alpha_available);
                     LOG_INFO("{}", metrics.to_string());
                 }
 
