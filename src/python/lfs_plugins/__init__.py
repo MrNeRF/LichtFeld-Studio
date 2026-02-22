@@ -19,8 +19,6 @@ from .manager import PluginManager
 from .marketplace import (
     MarketplacePluginEntry,
     PluginMarketplaceCatalog,
-    get_plugin_marketplace_urls,
-    set_plugin_marketplace_urls,
 )
 from .panels import PluginMarketplacePanel, register_builtin_panels
 from .plugin import PluginInfo, PluginInstance, PluginState
@@ -51,8 +49,6 @@ __all__ = [
     "RegistryVersionInfo",
     "PluginMarketplacePanel",
     "register_builtin_panels",
-    "get_plugin_marketplace_urls",
-    "set_plugin_marketplace_urls",
     "Capability",
     "CapabilityRegistry",
     "CapabilitySchema",
