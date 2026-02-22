@@ -25,7 +25,8 @@ namespace lfs::training {
         explicit PSNR(const float data_range = 1.0f) : data_range_(data_range) {
         }
 
-        float compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target) const;
+        float compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
+                      const lfs::core::Tensor& mask = {}) const;
 
     private:
         const float data_range_;
@@ -36,7 +37,8 @@ namespace lfs::training {
     public:
         SSIM(bool apply_valid_padding = true);
 
-        float compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target);
+        float compute(const lfs::core::Tensor& pred, const lfs::core::Tensor& target,
+                      const lfs::core::Tensor& mask = {});
 
     private:
         bool apply_valid_padding_;
@@ -44,11 +46,11 @@ namespace lfs::training {
 
     // Evaluation result structure (no LPIPS)
     struct EvalMetrics {
-        float psnr;
-        float ssim;
-        float elapsed_time;
-        int num_gaussians;
-        int iteration;
+        float psnr = 0.0f;
+        float ssim = 0.0f;
+        float elapsed_time = 0.0f;
+        int num_gaussians = 0;
+        int iteration = 0;
 
         [[nodiscard]] std::string to_string() const {
             std::stringstream ss;
@@ -132,6 +134,8 @@ namespace lfs::training {
         std::unique_ptr<MetricsReporter> _reporter;
 
         // Helper functions
+        lfs::core::Tensor load_eval_mask(lfs::core::Camera* cam, lfs::core::Tensor& gt_image,
+                                         bool alpha_as_mask) const;
         lfs::core::Tensor apply_depth_colormap(const lfs::core::Tensor& depth_normalized) const;
 
         // Create dataloader from dataset

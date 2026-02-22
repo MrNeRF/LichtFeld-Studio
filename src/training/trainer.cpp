@@ -542,7 +542,7 @@ namespace lfs::training {
                 return std::unexpected(result.error());
             }
 
-            // Prepare undistortion for all cameras with distortion
+            // Apply undistortion to camera intrinsics (params already precomputed at load time)
             if (params.optimization.undistort) {
                 int prepared = 0;
                 for (auto& cam : train_dataset_->get_cameras()) {
