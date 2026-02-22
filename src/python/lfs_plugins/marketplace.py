@@ -7,13 +7,15 @@ from __future__ import annotations
 import json
 import logging
 import threading
+import time
 import urllib.request
 from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Dict, List, Set, Tuple
 
 _log = logging.getLogger(__name__)
 
 GITHUB_TIMEOUT_SEC = 10
+REFRESH_RETRY_COOLDOWN_SEC = 30
 GITHUB_API_URL = "https://api.github.com/repos"
 
 CURATED_PLUGIN_URLS: Tuple[str, ...] = (
@@ -50,6 +52,7 @@ class PluginMarketplaceCatalog:
         self._entries: List[MarketplacePluginEntry] = _build_curated_fallback()
         self._loading = False
         self._loaded_once = False
+        self._last_attempt: float = 0.0
 
     def refresh_async(self, force: bool = False) -> None:
         """Fetch registry entries in a background thread and merge with curated list."""
@@ -58,25 +61,31 @@ class PluginMarketplaceCatalog:
                 return
             if self._loaded_once and not force:
                 return
+            now = time.monotonic()
+            if not force and self._last_attempt > 0 and (now - self._last_attempt) < REFRESH_RETRY_COOLDOWN_SEC:
+                return
             self._loading = True
+            self._last_attempt = now
 
         def worker():
             from .manager import PluginManager
 
             mgr = PluginManager.instance()
             registry_entries: List[MarketplacePluginEntry] = []
+            registry_ok = False
             try:
                 for info in mgr.search(""):
                     registry_entries.append(_from_registry(info))
-            except Exception:
-                pass
+                registry_ok = True
+            except Exception as exc:
+                _log.debug("Registry search failed: %s", exc)
 
             curated_resolved = _resolve_curated_from_github()
             merged = _merge_entries(registry_entries, curated_resolved)
             with self._lock:
                 self._entries = merged
                 self._loading = False
-                self._loaded_once = True
+                self._loaded_once = registry_ok
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -87,6 +96,8 @@ class PluginMarketplaceCatalog:
 
 
 def _entry_key(owner: str, repo: str) -> str:
+    if not owner or not repo:
+        return ""
     return f"{owner}/{repo}".lower()
 
 
@@ -100,7 +111,7 @@ def _from_registry(info) -> MarketplacePluginEntry:
             owner, repo, _ = parse_github_url(info.repository)
             github_url = f"https://github.com/{owner}/{repo}"
         except Exception:
-            github_url = info.repository or ""
+            pass
     return MarketplacePluginEntry(
         source_url=info.repository or "",
         github_url=github_url,
@@ -204,24 +215,31 @@ def _fetch_repo_metadata(owner: str, repo: str) -> dict:
     return json.loads(raw)
 
 
+def _unique_key(entry: MarketplacePluginEntry) -> str:
+    key = _entry_key(entry.owner, entry.repo)
+    if key:
+        return key
+    return entry.registry_id or entry.source_url or ""
+
+
 def _merge_entries(
     registry: List[MarketplacePluginEntry],
     curated: List[MarketplacePluginEntry],
 ) -> List[MarketplacePluginEntry]:
     """Registry entries take priority; curated entries fill gaps."""
-    seen: Dict[str, bool] = {}
+    seen: Set[str] = set()
     merged: List[MarketplacePluginEntry] = []
 
     for entry in registry:
-        key = _entry_key(entry.owner, entry.repo)
+        key = _unique_key(entry)
         if key and key not in seen:
-            seen[key] = True
+            seen.add(key)
             merged.append(entry)
 
     for entry in curated:
-        key = _entry_key(entry.owner, entry.repo)
+        key = _unique_key(entry)
         if key and key not in seen:
-            seen[key] = True
+            seen.add(key)
             merged.append(entry)
 
     return merged

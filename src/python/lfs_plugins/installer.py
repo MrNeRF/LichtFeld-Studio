@@ -411,6 +411,18 @@ def parse_github_url(url: str) -> Tuple[str, str, Optional[str]]:
     return owner, repo, branch
 
 
+def normalize_repo_name(repo: str) -> str:
+    """Apply the same prefix/suffix stripping that clone_from_url uses."""
+    repo_lower = repo.lower()
+    if repo_lower.startswith("lichtfeld-plugin-"):
+        return repo[17:]
+    if repo_lower.startswith("lfs-plugin-"):
+        return repo[11:]
+    if repo_lower.startswith("lichtfeld-") and repo_lower.endswith("-plugin"):
+        return repo[10:-7]
+    return repo
+
+
 def clone_from_url(
     url: str,
     plugins_dir: Path,
@@ -429,17 +441,7 @@ def clone_from_url(
     owner, repo, branch = parse_github_url(url)
     clone_url = f"https://github.com/{owner}/{repo}.git"
 
-    # Determine plugin name from repo (case-insensitive prefix removal)
-    repo_lower = repo.lower()
-    if repo_lower.startswith("lichtfeld-plugin-"):
-        plugin_name = repo[17:]  # len("lichtfeld-plugin-")
-    elif repo_lower.startswith("lfs-plugin-"):
-        plugin_name = repo[11:]  # len("lfs-plugin-")
-    elif repo_lower.startswith("lichtfeld-") and repo_lower.endswith("-plugin"):
-        # Handle LichtFeld-X-Plugin pattern
-        plugin_name = repo[10:-7]  # Remove "LichtFeld-" and "-Plugin"
-    else:
-        plugin_name = repo
+    plugin_name = normalize_repo_name(repo)
 
     plugins_dir.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(tempfile.mkdtemp(prefix=f".{repo}-", dir=plugins_dir))

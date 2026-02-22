@@ -386,8 +386,8 @@
     "err_non_pinhole": "非ピンホールカメラで学習するには --gut または --undistort を有効にしてください。"
   },
   "controls": {
-    "wasd": "WASD:",
-    "zoom": "ズーム:"
+    "wasd": "WASD",
+    "zoom": "ズーム"
   },
   "preferences": {
     "title": "環境設定",
@@ -479,7 +479,8 @@
     "center_markers": "センターマーカー",
     "perspective": "透視投影 (O)",
     "orthographic": "平行投影 (O)",
-    "sequencer": "シーケンサー"
+    "sequencer": "シーケンサー",
+    "ellipsoid": "Ellipsoid"
   },
   "transform": {
     "node": "ノード: %s",
@@ -551,8 +552,6 @@
     "mip_filter": "サブピクセルガウシアンのエイリアシング軽減",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
-    "ppisp_mode_manual": "Manual",
-    "ppisp_mode_auto": "Auto (Controller)",
     "ppisp_exposure": "Adjust exposure in EV stops",
     "ppisp_gamma": "ガンマ曲線を調整",
     "ppisp_color_rgb": "このカラーチャンネルのクロマを調整",
@@ -977,6 +976,20 @@
     "status.updated": "更新済み: {name}",
     "status.update_failed": "更新失敗",
     "status.uninstalled": "アンインストール済み: {name}",
-    "status.uninstall_failed": "アンインストール失敗"
+    "status.uninstall_failed": "アンインストール失敗",
+    "status.unloading": "Unloading {name}...",
+    "status.uninstalling": "Uninstalling {name}..."
+  },
+  "ellipsoid": {
+    "title": "Ellipsoid",
+    "not_visible": "Ellipsoid not visible",
+    "no_selection": "No ellipsoid selected",
+    "invalid": "Invalid ellipsoid",
+    "position": "Position",
+    "rotation": "Rotation",
+    "radii": "Radii",
+    "appearance": "Appearance",
+    "line_width": "Line Width",
+    "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   }
 }

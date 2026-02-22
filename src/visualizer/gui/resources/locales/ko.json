@@ -386,8 +386,8 @@
     "err_non_pinhole": "비 핀홀 카메라로 학습하려면 --gut 또는 --undistort를 활성화하세요."
   },
   "controls": {
-    "wasd": "WASD:",
-    "zoom": "줌:"
+    "wasd": "WASD",
+    "zoom": "줌"
   },
   "preferences": {
     "title": "환경설정",
@@ -479,7 +479,8 @@
     "center_markers": "중심 마커",
     "perspective": "원근 투영 (O)",
     "orthographic": "직교 투영 (O)",
-    "sequencer": "시퀀서"
+    "sequencer": "시퀀서",
+    "ellipsoid": "Ellipsoid"
   },
   "transform": {
     "node": "노드: %s",
@@ -551,8 +552,6 @@
     "mip_filter": "서브픽셀 가우시안 앨리어싱 감소",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
-    "ppisp_mode_manual": "Manual",
-    "ppisp_mode_auto": "Auto (Controller)",
     "ppisp_exposure": "Adjust exposure in EV stops",
     "ppisp_gamma": "감마 곡선 조정",
     "ppisp_color_rgb": "이 색상 채널의 색도 이동",
@@ -977,6 +976,20 @@
     "status.updated": "업데이트됨: {name}",
     "status.update_failed": "업데이트 실패",
     "status.uninstalled": "제거됨: {name}",
-    "status.uninstall_failed": "제거 실패"
+    "status.uninstall_failed": "제거 실패",
+    "status.unloading": "Unloading {name}...",
+    "status.uninstalling": "Uninstalling {name}..."
+  },
+  "ellipsoid": {
+    "title": "Ellipsoid",
+    "not_visible": "Ellipsoid not visible",
+    "no_selection": "No ellipsoid selected",
+    "invalid": "Invalid ellipsoid",
+    "position": "Position",
+    "rotation": "Rotation",
+    "radii": "Radii",
+    "appearance": "Appearance",
+    "line_width": "Line Width",
+    "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   }
 }

@@ -85,7 +85,7 @@ class PluginMarketplacePanel(Panel):
         installed_lookup = self._get_installed_plugin_lookup(mgr)
         installed_versions = self._get_installed_plugin_versions(mgr)
         installed_names = set(installed_lookup.values())
-        entries = self._filter_and_sort_entries(entries, set(installed_lookup.keys()))
+        entries = self._filter_and_sort_entries(entries, set(installed_lookup.keys()), installed_names)
 
         if is_loading:
             layout.text_disabled(tr("plugin_marketplace.loading"))
@@ -153,9 +153,11 @@ class PluginMarketplacePanel(Panel):
         self._discover_cache = None
 
     def _get_discovered_plugins(self, mgr) -> List[PluginInfo]:
-        if self._discover_cache is None:
-            self._discover_cache = mgr.discover()
-        return self._discover_cache
+        cache = self._discover_cache
+        if cache is None:
+            cache = mgr.discover()
+            self._discover_cache = cache
+        return cache
 
     def _draw_manual_install_controls(self, layout, mgr, scale: float):
         import lichtfeld as lf
@@ -217,162 +219,20 @@ class PluginMarketplacePanel(Panel):
 
         card_id = entry.registry_id or entry.name or str(idx)
         if layout.begin_child(f"##plugin_card_{card_id}", (card_w, card_h), border=True):
-            short_name = entry.name or entry.repo or tr("plugin_marketplace.unknown_plugin")
-            repo_label = f"{entry.owner}/{entry.repo}" if entry.owner and entry.repo else entry.repo
-            description = self._truncate_text(entry.description or tr("plugin_marketplace.no_description"), 90)
-
-            layout.text_colored(short_name, palette.text)
-            if plugin_name and plugin_state == PluginState.ACTIVE:
-                version = installed_versions.get(plugin_name, "").strip()
-                if version:
-                    version_label = version if version.lower().startswith("v") else f"v{version}"
-                    layout.same_line(spacing=6 * scale)
-                    layout.text_colored(version_label, palette.info)
-            if repo_label:
-                layout.text_disabled(repo_label)
-            if not is_local_only:
-                metrics = []
-                if entry.stars > 0:
-                    metrics.append(f"{tr('plugin_marketplace.stars')}: {entry.stars}")
-                if entry.downloads > 0:
-                    metrics.append(f"{tr('plugin_marketplace.downloads')}: {entry.downloads}")
-                if metrics:
-                    layout.text_colored("  |  ".join(metrics), palette.warning)
-
-            tags = self._entry_type_tags(entry)
-            if tags:
-                layout.text_disabled("  |  ".join(tags[:3]))
-            if is_local:
-                layout.text_colored(tr("plugin_marketplace.local_install"), palette.info)
-
-            if is_installed:
-                state_str = plugin_state.value if plugin_state else tr("plugin_manager.status_not_loaded")
-                layout.text_colored(
-                    f"{tr('plugin_manager.status')}: {state_str}",
-                    palette.success if plugin_state == PluginState.ACTIVE else palette.text_dim,
-                )
-
-            if entry.error:
-                layout.text_colored(tr("plugin_marketplace.invalid_link"), palette.error)
-            else:
-                layout.text_wrapped(description)
-
-            layout.spacing()
-            layout.separator()
-            layout.spacing()
+            self._draw_card_info(
+                layout, entry, plugin_name, plugin_state,
+                is_installed, is_local, is_local_only, installed_versions, scale,
+            )
 
             button_spacing = 6 * scale
             button_height = 25 * scale
             avail_button_w, _ = layout.get_content_region_avail()
             if is_installed:
-                disabled = install_in_progress
-                if disabled:
-                    layout.begin_disabled()
-
-                if is_local_only:
-                    button_width = max(40.0, (avail_button_w - button_spacing) * 0.5)
-                    load_label = (
-                        tr("plugin_manager.button.unload")
-                        if plugin_state == PluginState.ACTIVE
-                        else tr("plugin_manager.button.load")
-                    )
-                    load_style = "warning" if plugin_state == PluginState.ACTIVE else "success"
-                    if layout.button_styled(
-                        f"{load_label}##loadtoggle_{idx}",
-                        load_style,
-                        (button_width, button_height),
-                    ):
-                        if plugin_state == PluginState.ACTIVE:
-                            self._unload_plugin(mgr, plugin_name)
-                        else:
-                            self._load_plugin(mgr, plugin_name)
-                    layout.same_line(spacing=button_spacing)
-                    if layout.button_styled(
-                        f"{tr('plugin_manager.button.uninstall')}##uninstall_{idx}",
-                        "error",
-                        (button_width, button_height),
-                    ):
-                        self._request_uninstall_confirmation(plugin_name)
-                else:
-                    button_width = max(40.0, (avail_button_w - button_spacing * 2.0) / 3.0)
-                    if is_local and has_github:
-                        load_label = (
-                            tr("plugin_manager.button.unload")
-                            if plugin_state == PluginState.ACTIVE
-                            else tr("plugin_manager.button.load")
-                        )
-                        load_style = "warning" if plugin_state == PluginState.ACTIVE else "success"
-                        if layout.button_styled(
-                            f"{load_label}##loadtoggle_{idx}",
-                            load_style,
-                            (button_width, button_height),
-                        ):
-                            if plugin_state == PluginState.ACTIVE:
-                                self._unload_plugin(mgr, plugin_name)
-                            else:
-                                self._load_plugin(mgr, plugin_name)
-                        layout.same_line(spacing=button_spacing)
-                        if layout.button_styled(
-                            f"{tr('plugin_manager.button.update')}##update_{idx}",
-                            "primary",
-                            (button_width, button_height),
-                        ):
-                            self._update_plugin(mgr, plugin_name)
-                        layout.same_line(spacing=button_spacing)
-                        if layout.button_styled(
-                            f"{tr('plugin_manager.button.uninstall')}##uninstall_{idx}",
-                            "error",
-                            (button_width, button_height),
-                        ):
-                            self._request_uninstall_confirmation(plugin_name)
-                    else:
-                        if plugin_state == PluginState.ACTIVE:
-                            if layout.button_styled(
-                                f"{tr('plugin_manager.button.reload')}##reload_{idx}",
-                                "primary",
-                                (button_width, button_height),
-                            ):
-                                self._reload_plugin(mgr, plugin_name)
-                            layout.same_line(spacing=button_spacing)
-                            if layout.button_styled(
-                                f"{tr('plugin_manager.button.unload')}##unload_{idx}",
-                                "warning",
-                                (button_width, button_height),
-                            ):
-                                self._unload_plugin(mgr, plugin_name)
-                        else:
-                            if layout.button_styled(
-                                f"{tr('plugin_manager.button.load')}##load_{idx}",
-                                "success",
-                                (button_width, button_height),
-                            ):
-                                self._load_plugin(mgr, plugin_name)
-                            layout.same_line(spacing=button_spacing)
-                            if layout.button_styled(
-                                f"{tr('plugin_manager.button.update')}##update_{idx}",
-                                "primary",
-                                (button_width, button_height),
-                            ):
-                                self._update_plugin(mgr, plugin_name)
-                        layout.same_line(spacing=button_spacing)
-                        if layout.button_styled(
-                            f"{tr('plugin_manager.button.uninstall')}##uninstall_{idx}",
-                            "error",
-                            (button_width, button_height),
-                        ):
-                            self._request_uninstall_confirmation(plugin_name)
-
-                layout.spacing()
-                if has_github:
-                    if layout.button_styled(
-                        f"{tr('plugin_marketplace.button.github')}##github_{idx}",
-                        "primary",
-                        (avail_button_w, button_height),
-                    ):
-                        lf.ui.open_url(entry.github_url)
-
-                if disabled:
-                    layout.end_disabled()
+                self._draw_card_buttons_installed(
+                    layout, mgr, idx, entry, plugin_name, plugin_state,
+                    is_local, has_github, is_local_only, install_in_progress,
+                    avail_button_w, button_spacing, button_height, scale,
+                )
             else:
                 if is_local_only:
                     layout.spacing()
@@ -381,33 +241,215 @@ class PluginMarketplacePanel(Panel):
                     layout.pop_style_var()
                     return
 
-                button_width = max(40.0, (avail_button_w - button_spacing) * 0.5)
-                disable_install = install_in_progress or bool(entry.error)
-
-                if disable_install:
-                    layout.begin_disabled()
-                if layout.button_styled(
-                    f"{tr('plugin_marketplace.button.install')}##install_{idx}",
-                    "success",
-                    (button_width, button_height),
-                ):
-                    if not disable_install:
-                        self._install_plugin_from_marketplace(mgr, entry)
-                if disable_install:
-                    layout.end_disabled()
-
-                layout.same_line(spacing=button_spacing)
-                if has_github:
-                    if layout.button_styled(
-                        f"{tr('plugin_marketplace.button.github')}##github_{idx}",
-                        "primary",
-                        (button_width, button_height),
-                    ):
-                        lf.ui.open_url(entry.github_url)
+                self._draw_card_buttons_not_installed(
+                    layout, mgr, idx, entry, install_in_progress,
+                    has_github, avail_button_w, button_spacing, button_height, scale,
+                )
         layout.end_child()
 
         layout.pop_style_color(2)
         layout.pop_style_var()
+
+    def _draw_card_info(
+        self, layout, entry, plugin_name, plugin_state,
+        is_installed, is_local, is_local_only, installed_versions, scale,
+    ):
+        import lichtfeld as lf
+
+        tr = lf.ui.tr
+        palette = lf.ui.theme().palette
+
+        short_name = entry.name or entry.repo or tr("plugin_marketplace.unknown_plugin")
+        repo_label = f"{entry.owner}/{entry.repo}" if entry.owner and entry.repo else entry.repo
+        description = self._truncate_text(entry.description or tr("plugin_marketplace.no_description"), 90)
+
+        layout.text_colored(short_name, palette.text)
+        if plugin_name and plugin_state == PluginState.ACTIVE:
+            version = installed_versions.get(plugin_name, "").strip()
+            if version:
+                version_label = version if version.lower().startswith("v") else f"v{version}"
+                layout.same_line(spacing=6 * scale)
+                layout.text_colored(version_label, palette.info)
+        if repo_label:
+            layout.text_disabled(repo_label)
+        if not is_local_only:
+            metrics = []
+            if entry.stars > 0:
+                metrics.append(f"{tr('plugin_marketplace.stars')}: {entry.stars}")
+            if entry.downloads > 0:
+                metrics.append(f"{tr('plugin_marketplace.downloads')}: {entry.downloads}")
+            if metrics:
+                layout.text_colored("  |  ".join(metrics), palette.warning)
+
+        tags = self._entry_type_tags(entry)
+        if tags:
+            layout.text_disabled("  |  ".join(tags[:3]))
+        if is_local:
+            layout.text_colored(tr("plugin_marketplace.local_install"), palette.info)
+
+        if is_installed:
+            state_str = plugin_state.value if plugin_state else tr("plugin_manager.status_not_loaded")
+            layout.text_colored(
+                f"{tr('plugin_manager.status')}: {state_str}",
+                palette.success if plugin_state == PluginState.ACTIVE else palette.text_dim,
+            )
+
+        if entry.error:
+            layout.text_colored(tr("plugin_marketplace.invalid_link"), palette.error)
+        else:
+            layout.text_wrapped(description)
+
+        layout.spacing()
+        layout.separator()
+        layout.spacing()
+
+    def _draw_card_buttons_installed(
+        self, layout, mgr, idx, entry, plugin_name, plugin_state,
+        is_local, has_github, is_local_only, install_in_progress,
+        avail_button_w, button_spacing, button_height, scale,
+    ):
+        import lichtfeld as lf
+
+        tr = lf.ui.tr
+        disabled = install_in_progress
+        if disabled:
+            layout.begin_disabled()
+
+        if is_local_only:
+            button_width = max(40.0, (avail_button_w - button_spacing) * 0.5)
+            load_label = (
+                tr("plugin_manager.button.unload")
+                if plugin_state == PluginState.ACTIVE
+                else tr("plugin_manager.button.load")
+            )
+            load_style = "warning" if plugin_state == PluginState.ACTIVE else "success"
+            if layout.button_styled(
+                f"{load_label}##loadtoggle_{idx}",
+                load_style,
+                (button_width, button_height),
+            ):
+                if plugin_state == PluginState.ACTIVE:
+                    self._unload_plugin(mgr, plugin_name)
+                else:
+                    self._load_plugin(mgr, plugin_name)
+            layout.same_line(spacing=button_spacing)
+            if layout.button_styled(
+                f"{tr('plugin_manager.button.uninstall')}##uninstall_{idx}",
+                "error",
+                (button_width, button_height),
+            ):
+                self._request_uninstall_confirmation(plugin_name)
+        else:
+            button_width = max(40.0, (avail_button_w - button_spacing * 2.0) / 3.0)
+            if is_local and has_github:
+                load_label = (
+                    tr("plugin_manager.button.unload")
+                    if plugin_state == PluginState.ACTIVE
+                    else tr("plugin_manager.button.load")
+                )
+                load_style = "warning" if plugin_state == PluginState.ACTIVE else "success"
+                if layout.button_styled(
+                    f"{load_label}##loadtoggle_{idx}",
+                    load_style,
+                    (button_width, button_height),
+                ):
+                    if plugin_state == PluginState.ACTIVE:
+                        self._unload_plugin(mgr, plugin_name)
+                    else:
+                        self._load_plugin(mgr, plugin_name)
+                layout.same_line(spacing=button_spacing)
+                if layout.button_styled(
+                    f"{tr('plugin_manager.button.update')}##update_{idx}",
+                    "primary",
+                    (button_width, button_height),
+                ):
+                    self._update_plugin(mgr, plugin_name)
+                layout.same_line(spacing=button_spacing)
+                if layout.button_styled(
+                    f"{tr('plugin_manager.button.uninstall')}##uninstall_{idx}",
+                    "error",
+                    (button_width, button_height),
+                ):
+                    self._request_uninstall_confirmation(plugin_name)
+            else:
+                if plugin_state == PluginState.ACTIVE:
+                    if layout.button_styled(
+                        f"{tr('plugin_manager.button.reload')}##reload_{idx}",
+                        "primary",
+                        (button_width, button_height),
+                    ):
+                        self._reload_plugin(mgr, plugin_name)
+                    layout.same_line(spacing=button_spacing)
+                    if layout.button_styled(
+                        f"{tr('plugin_manager.button.unload')}##unload_{idx}",
+                        "warning",
+                        (button_width, button_height),
+                    ):
+                        self._unload_plugin(mgr, plugin_name)
+                else:
+                    if layout.button_styled(
+                        f"{tr('plugin_manager.button.load')}##load_{idx}",
+                        "success",
+                        (button_width, button_height),
+                    ):
+                        self._load_plugin(mgr, plugin_name)
+                    layout.same_line(spacing=button_spacing)
+                    if layout.button_styled(
+                        f"{tr('plugin_manager.button.update')}##update_{idx}",
+                        "primary",
+                        (button_width, button_height),
+                    ):
+                        self._update_plugin(mgr, plugin_name)
+                layout.same_line(spacing=button_spacing)
+                if layout.button_styled(
+                    f"{tr('plugin_manager.button.uninstall')}##uninstall_{idx}",
+                    "error",
+                    (button_width, button_height),
+                ):
+                    self._request_uninstall_confirmation(plugin_name)
+
+        layout.spacing()
+        if has_github:
+            if layout.button_styled(
+                f"{tr('plugin_marketplace.button.github')}##github_{idx}",
+                "primary",
+                (avail_button_w, button_height),
+            ):
+                lf.ui.open_url(entry.github_url)
+
+        if disabled:
+            layout.end_disabled()
+
+    def _draw_card_buttons_not_installed(
+        self, layout, mgr, idx, entry, install_in_progress,
+        has_github, avail_button_w, button_spacing, button_height, scale,
+    ):
+        import lichtfeld as lf
+
+        tr = lf.ui.tr
+        button_width = max(40.0, (avail_button_w - button_spacing) * 0.5)
+        disable_install = install_in_progress or bool(entry.error)
+
+        if disable_install:
+            layout.begin_disabled()
+        if layout.button_styled(
+            f"{tr('plugin_marketplace.button.install')}##install_{idx}",
+            "success",
+            (button_width, button_height),
+        ):
+            if not disable_install:
+                self._install_plugin_from_marketplace(mgr, entry)
+        if disable_install:
+            layout.end_disabled()
+
+        layout.same_line(spacing=button_spacing)
+        if has_github:
+            if layout.button_styled(
+                f"{tr('plugin_marketplace.button.github')}##github_{idx}",
+                "primary",
+                (button_width, button_height),
+            ):
+                lf.ui.open_url(entry.github_url)
 
     def _draw_marketplace_controls(self, layout, mgr, scale: float):
         import lichtfeld as lf
@@ -470,10 +512,11 @@ class PluginMarketplacePanel(Panel):
         self,
         entries: List[MarketplacePluginEntry],
         installed_keys: Set[str],
+        installed_names: Set[str],
     ) -> List[MarketplacePluginEntry]:
         filtered = []
         for entry in entries:
-            is_installed = self._is_marketplace_entry_installed(entry, installed_keys)
+            is_installed = self._is_marketplace_entry_installed(entry, installed_keys, installed_names)
             if self._install_filter_idx == 1 and not is_installed:
                 continue
             if self._install_filter_idx == 2 and is_installed:
@@ -548,8 +591,10 @@ class PluginMarketplacePanel(Panel):
             if mgr.get_state(name) == PluginState.ERROR:
                 err = mgr.get_error(name) or tr("plugin_manager.status.load_failed")
                 raise RuntimeError(err)
-            with self._lock:
-                self._url_plugin_names[self._normalize_url(entry.source_url)] = name
+            norm_url = self._normalize_url(entry.source_url)
+            if norm_url:
+                with self._lock:
+                    self._url_plugin_names[norm_url] = name
             self._invalidate_discover_cache()
             return name
 
@@ -610,10 +655,10 @@ class PluginMarketplacePanel(Panel):
         tr = lf.ui.tr
 
         def do_unload(on_progress):
-            on_progress(f"Unloading {name}...")
-            mgr.unload(name)
+            on_progress(tr("plugin_manager.status.unloading").format(name=name))
+            if not mgr.unload(name):
+                raise RuntimeError(tr("plugin_manager.status.unload_failed"))
             self._invalidate_discover_cache()
-            return True
 
         self._run_async(
             do_unload,
@@ -663,10 +708,10 @@ class PluginMarketplacePanel(Panel):
         tr = lf.ui.tr
 
         def do_uninstall(on_progress):
-            on_progress(f"Uninstalling {name}...")
-            mgr.uninstall(name)
+            on_progress(tr("plugin_manager.status.uninstalling").format(name=name))
+            if not mgr.uninstall(name):
+                raise RuntimeError(tr("plugin_manager.status.uninstall_failed"))
             self._invalidate_discover_cache()
-            return True
 
         self._run_async(
             do_uninstall,
@@ -821,8 +866,11 @@ class PluginMarketplacePanel(Panel):
         installed_lookup: Dict[str, str],
         installed_names: Set[str],
     ):
-        with self._lock:
-            by_url = self._url_plugin_names.get(self._normalize_url(entry.source_url))
+        norm_url = self._normalize_url(entry.source_url)
+        by_url = None
+        if norm_url:
+            with self._lock:
+                by_url = self._url_plugin_names.get(norm_url)
         if by_url and by_url in installed_names:
             return by_url
         for key in self._entry_keys(entry):
@@ -839,8 +887,16 @@ class PluginMarketplacePanel(Panel):
         self,
         entry: MarketplacePluginEntry,
         installed_keys: Set[str],
+        installed_names: Set[str],
     ) -> bool:
-        return any(key in installed_keys for key in self._entry_keys(entry))
+        if any(key in installed_keys for key in self._entry_keys(entry)):
+            return True
+        norm_url = self._normalize_url(entry.source_url)
+        if not norm_url:
+            return False
+        with self._lock:
+            by_url = self._url_plugin_names.get(norm_url)
+        return by_url is not None and by_url in installed_names
 
     @staticmethod
     def _is_local_entry(entry: MarketplacePluginEntry) -> bool:
@@ -856,9 +912,13 @@ class PluginMarketplacePanel(Panel):
         return PluginMarketplacePanel._is_local_entry(entry) and not bool(entry.github_url)
 
     def _entry_keys(self, entry: MarketplacePluginEntry) -> Set[str]:
+        from .installer import normalize_repo_name
+
+        normalized_repo = normalize_repo_name(entry.repo) if entry.repo else ""
         return self._plugin_keys(
             entry.repo,
             entry.name,
+            normalized_repo,
             f"{entry.owner}-{entry.repo}" if entry.owner and entry.repo else "",
             f"{entry.owner}_{entry.repo}" if entry.owner and entry.repo else "",
         )

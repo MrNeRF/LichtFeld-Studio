@@ -386,8 +386,8 @@
     "err_non_pinhole": "Enable --gut or --undistort to train on cameras with non-pinhole model."
   },
   "controls": {
-    "wasd": "WASD:",
-    "zoom": "Zoom:"
+    "wasd": "WASD",
+    "zoom": "Zoom"
   },
   "preferences": {
     "title": "Preferences",
@@ -954,6 +954,8 @@
     "status.reload_failed": "Reload failed",
     "status.updated": "Updated: {name}",
     "status.update_failed": "Update failed",
+    "status.unloading": "Unloading {name}...",
+    "status.uninstalling": "Uninstalling {name}...",
     "status.uninstalled": "Uninstalled: {name}",
     "status.uninstall_failed": "Uninstall failed"
   },

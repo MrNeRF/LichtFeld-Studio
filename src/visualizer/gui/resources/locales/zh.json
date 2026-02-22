@@ -386,8 +386,8 @@
     "err_non_pinhole": "请启用 --gut 或 --undistort 以使用非针孔相机进行训练。"
   },
   "controls": {
-    "wasd": "WASD：",
-    "zoom": "缩放："
+    "wasd": "WASD",
+    "zoom": "缩放"
   },
   "preferences": {
     "title": "偏好设置",
@@ -479,7 +479,8 @@
     "center_markers": "中心标记",
     "perspective": "透视（O）",
     "orthographic": "正交（O）",
-    "sequencer": "序列器"
+    "sequencer": "序列器",
+    "ellipsoid": "Ellipsoid"
   },
   "transform": {
     "node": "节点：%s",
@@ -551,8 +552,6 @@
     "mip_filter": "减少亚像素高斯的锯齿",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
-    "ppisp_mode_manual": "Manual",
-    "ppisp_mode_auto": "Auto (Controller)",
     "ppisp_exposure": "Adjust exposure in EV stops",
     "ppisp_gamma": "调整伽马曲线",
     "ppisp_color_rgb": "调整该颜色通道的色度",
@@ -977,6 +976,20 @@
     "status.updated": "已更新：{name}",
     "status.update_failed": "更新失败",
     "status.uninstalled": "已卸载：{name}",
-    "status.uninstall_failed": "卸载失败"
+    "status.uninstall_failed": "卸载失败",
+    "status.unloading": "Unloading {name}...",
+    "status.uninstalling": "Uninstalling {name}..."
+  },
+  "ellipsoid": {
+    "title": "Ellipsoid",
+    "not_visible": "Ellipsoid not visible",
+    "no_selection": "No ellipsoid selected",
+    "invalid": "Invalid ellipsoid",
+    "position": "Position",
+    "rotation": "Rotation",
+    "radii": "Radii",
+    "appearance": "Appearance",
+    "line_width": "Line Width",
+    "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   }
 }

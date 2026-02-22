@@ -386,8 +386,8 @@
     "err_non_pinhole": "Aktivieren Sie --gut oder --undistort, um mit Nicht-Pinhole-Kameras zu trainieren."
   },
   "controls": {
-    "wasd": "WASD:",
-    "zoom": "Zoom:"
+    "wasd": "WASD",
+    "zoom": "Zoom"
   },
   "preferences": {
     "title": "Einstellungen",
@@ -479,7 +479,8 @@
     "center_markers": "Mittelpunktmarkierungen",
     "perspective": "Perspektive (O)",
     "orthographic": "Orthografisch (O)",
-    "sequencer": "Sequenzer"
+    "sequencer": "Sequenzer",
+    "ellipsoid": "Ellipsoid"
   },
   "transform": {
     "node": "Knoten: %s",
@@ -551,8 +552,6 @@
     "mip_filter": "Aliasing für Sub-Pixel-Gaussians reduzieren",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
-    "ppisp_mode_manual": "Manual",
-    "ppisp_mode_auto": "Auto (Controller)",
     "ppisp_exposure": "Adjust exposure in EV stops",
     "ppisp_gamma": "Gammakurve anpassen",
     "ppisp_color_rgb": "Chromatizität für diesen Farbkanal verschieben",
@@ -977,6 +976,20 @@
     "status.updated": "Aktualisiert: {name}",
     "status.update_failed": "Aktualisierung fehlgeschlagen",
     "status.uninstalled": "Deinstalliert: {name}",
-    "status.uninstall_failed": "Deinstallation fehlgeschlagen"
+    "status.uninstall_failed": "Deinstallation fehlgeschlagen",
+    "status.unloading": "Unloading {name}...",
+    "status.uninstalling": "Uninstalling {name}..."
+  },
+  "ellipsoid": {
+    "title": "Ellipsoid",
+    "not_visible": "Ellipsoid not visible",
+    "no_selection": "No ellipsoid selected",
+    "invalid": "Invalid ellipsoid",
+    "position": "Position",
+    "rotation": "Rotation",
+    "radii": "Radii",
+    "appearance": "Appearance",
+    "line_width": "Line Width",
+    "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   }
 }

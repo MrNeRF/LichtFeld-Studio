@@ -1,0 +1,25 @@
+CompileFlags:
+  CompilationDatabase: build/
+  Add:
+    - -ferror-limit=0
+
+Diagnostics:
+  UnusedIncludes: Strict
+  Suppress:
+    - typecheck_expression_not_modifiable_lvalue
+  ClangTidy:
+    Add:
+      - modernize-*
+      - bugprone-*
+      - performance-*
+    Remove:
+      - modernize-use-trailing-return-type
+      - modernize-avoid-c-arrays
+
+InlayHints:
+  Enabled: Yes
+  ParameterNames: Yes
+  DeducedTypes: Yes
+
+Hover:
+  ShowAKA: Yes

@@ -386,8 +386,8 @@
     "err_non_pinhole": "Activeer --gut of --undistort om te trainen met niet-pinhole camera's."
   },
   "controls": {
-    "wasd": "WASD:",
-    "zoom": "Zoom:"
+    "wasd": "WASD",
+    "zoom": "Zoom"
   },
   "preferences": {
     "title": "Voorkeuren",
@@ -479,7 +479,8 @@
     "center_markers": "Centrum Markeringen",
     "perspective": "Perspectief (O)",
     "orthographic": "Orthografisch (O)",
-    "sequencer": "Sequencer"
+    "sequencer": "Sequencer",
+    "ellipsoid": "Ellipsoid"
   },
   "transform": {
     "node": "Node: %s",
@@ -551,8 +552,6 @@
     "mip_filter": "Verminder aliasing voor sub-pixel Gaussians",
     "appearance_correction": "PPISP Correction",
     "ppisp_mode": "Mode",
-    "ppisp_mode_manual": "Manual",
-    "ppisp_mode_auto": "Auto (Controller)",
     "ppisp_exposure": "Adjust exposure in EV stops",
     "ppisp_gamma": "Gammacurve aanpassen",
     "ppisp_color_rgb": "Chromaticiteit verschuiven voor dit kleurkanaal",
@@ -977,6 +976,20 @@
     "status.updated": "Bijgewerkt: {name}",
     "status.update_failed": "Bijwerken mislukt",
     "status.uninstalled": "Verwijderd: {name}",
-    "status.uninstall_failed": "Verwijderen mislukt"
+    "status.uninstall_failed": "Verwijderen mislukt",
+    "status.unloading": "Unloading {name}...",
+    "status.uninstalling": "Uninstalling {name}..."
+  },
+  "ellipsoid": {
+    "title": "Ellipsoid",
+    "not_visible": "Ellipsoid not visible",
+    "no_selection": "No ellipsoid selected",
+    "invalid": "Invalid ellipsoid",
+    "position": "Position",
+    "rotation": "Rotation",
+    "radii": "Radii",
+    "appearance": "Appearance",
+    "line_width": "Line Width",
+    "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   }
 }
