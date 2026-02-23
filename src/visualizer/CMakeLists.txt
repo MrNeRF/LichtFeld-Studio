@@ -94,7 +94,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Sequencer (camera animation)
         sequencer/sequencer_controller.cpp
-        sequencer/sequencer_panel.cpp
+        sequencer/rml_sequencer_panel.cpp
 
         # Operator system (Blender-style)
         operator/operator_context.cpp
@@ -289,6 +289,14 @@ file(GLOB SCENE_ICON_FILES "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/icon/scene/*.
 foreach (ICON_FILE ${SCENE_ICON_FILES})
     get_filename_component(ICON_NAME ${ICON_FILE} NAME)
     configure_file(${ICON_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/scene/${ICON_NAME}" COPYONLY)
+endforeach ()
+
+# Copy sequencer icon files (used by RmlUI sequencer panel)
+file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/sequencer")
+file(GLOB SEQUENCER_ICON_FILES "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/icon/sequencer/*.png")
+foreach (ICON_FILE ${SEQUENCER_ICON_FILES})
+    get_filename_component(ICON_NAME ${ICON_FILE} NAME)
+    configure_file(${ICON_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/sequencer/${ICON_NAME}" COPYONLY)
 endforeach ()
 
 # Copy RmlUI resources

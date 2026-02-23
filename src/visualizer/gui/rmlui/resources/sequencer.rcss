@@ -1,0 +1,211 @@
+body {
+    display: block;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    width: 100%;
+    height: 100%;
+}
+
+#panel {
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 8dp;
+    box-sizing: border-box;
+}
+
+#transport {
+    display: inline-block;
+    width: 152dp;
+    height: 100%;
+    vertical-align: middle;
+    padding-top: 18dp;
+    box-sizing: border-box;
+}
+
+.transport-btn {
+    display: inline-block;
+    width: 20dp;
+    height: 20dp;
+    margin-right: 4dp;
+    border-radius: 10dp;
+    vertical-align: middle;
+}
+
+.transport-btn:hover {
+    background-color: rgba(255, 255, 255, 30);
+}
+
+.transport-btn:active {
+    background-color: rgba(255, 255, 255, 50);
+}
+
+.transport-btn.active {
+    background-color: rgba(100, 160, 255, 80);
+}
+
+.transport-icon {
+    display: block;
+    width: 16dp;
+    height: 16dp;
+    margin: 2dp;
+    image-color: #cdd6f4;
+}
+
+#timeline {
+    display: inline-block;
+    height: 100%;
+    vertical-align: middle;
+    position: relative;
+}
+
+#ruler {
+    display: block;
+    width: 100%;
+    height: 16dp;
+    position: relative;
+    overflow: visible;
+}
+
+.ruler-tick {
+    display: block;
+    position: absolute;
+    top: 0;
+    width: 1dp;
+    background-color: rgba(160, 160, 180, 120);
+}
+
+.ruler-tick.major {
+    height: 8dp;
+    background-color: rgba(160, 160, 180, 180);
+}
+
+.ruler-tick.minor {
+    height: 4dp;
+    top: 4dp;
+    background-color: rgba(160, 160, 180, 80);
+}
+
+.ruler-label {
+    display: block;
+    position: absolute;
+    top: 0;
+    font-size: 12dp;
+    color: rgba(200, 210, 230, 220);
+}
+
+#track-area {
+    display: block;
+    width: 100%;
+    height: 28dp;
+    position: relative;
+    margin-top: 4dp;
+}
+
+#track-bar {
+    display: block;
+    position: absolute;
+    left: 0;
+    top: 2dp;
+    width: 100%;
+    height: 24dp;
+    border-radius: 4dp;
+}
+
+#hint {
+    display: block;
+    position: absolute;
+    top: 4dp;
+    left: 0;
+    width: 100%;
+    text-align: center;
+    font-size: 11dp;
+}
+
+#keyframes {
+    display: block;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+}
+
+.keyframe {
+    display: block;
+    position: absolute;
+    width: 12dp;
+    height: 12dp;
+    top: 8dp;
+    margin-left: -6dp;
+    transform: rotate(45deg);
+    border-radius: 1dp;
+}
+
+.keyframe:hover {
+    opacity: 0.85;
+}
+
+.keyframe.selected {
+    border-width: 1dp;
+}
+
+.keyframe.loop-point {
+    transform: none;
+    border-radius: 6dp;
+    width: 10dp;
+    height: 10dp;
+    top: 9dp;
+    margin-left: -5dp;
+}
+
+#playhead {
+    display: block;
+    position: absolute;
+    top: 0;
+    width: 0;
+    height: 100%;
+}
+
+#playhead-handle {
+    display: block;
+    position: absolute;
+    top: -12dp;
+    left: -5dp;
+    width: 10dp;
+    height: 10dp;
+    background-color: #ff4444;
+    border-radius: 2dp;
+    transform: rotate(45deg);
+}
+
+#playhead-line {
+    display: block;
+    position: absolute;
+    top: -6dp;
+    left: -1dp;
+    width: 2dp;
+    height: 40dp;
+}
+
+#time-display {
+    display: inline-block;
+    width: 100dp;
+    height: 100%;
+    vertical-align: middle;
+    text-align: right;
+    padding-right: 8dp;
+    box-sizing: border-box;
+}
+
+#current-time {
+    display: block;
+    font-size: 13dp;
+    margin-top: 24dp;
+}
+
+#duration {
+    display: block;
+    font-size: 11dp;
+}

@@ -1,0 +1,46 @@
+<rml>
+<head>
+    <link type="text/rcss" href="sequencer.rcss"/>
+</head>
+<body id="body">
+    <div id="panel">
+        <div id="transport">
+            <div id="btn-skip-back" class="transport-btn">
+                <img class="transport-icon" src="../icon/sequencer/skip-back.png" />
+            </div>
+            <div id="btn-stop" class="transport-btn">
+                <img class="transport-icon" src="../icon/sequencer/stop.png" />
+            </div>
+            <div id="btn-play" class="transport-btn">
+                <img id="play-icon" class="transport-icon" src="../icon/sequencer/play.png" />
+            </div>
+            <div id="btn-skip-forward" class="transport-btn">
+                <img class="transport-icon" src="../icon/sequencer/skip-forward.png" />
+            </div>
+            <div id="btn-loop" class="transport-btn">
+                <img class="transport-icon" src="../icon/sequencer/loop.png" />
+            </div>
+            <div id="btn-add" class="transport-btn">
+                <img class="transport-icon" src="../icon/sequencer/plus.png" />
+            </div>
+        </div>
+        <div id="timeline">
+            <div id="ruler"></div>
+            <div id="track-area">
+                <div id="track-bar">
+                    <span id="hint"></span>
+                </div>
+                <div id="keyframes"></div>
+                <div id="playhead">
+                    <div id="playhead-handle"></div>
+                    <div id="playhead-line"></div>
+                </div>
+            </div>
+        </div>
+        <div id="time-display">
+            <span id="current-time">0:00.00</span>
+            <span id="duration"></span>
+        </div>
+    </div>
+</body>
+</rml>

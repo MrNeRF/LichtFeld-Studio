@@ -29,10 +29,11 @@
 
 namespace lfs::vis::gui {
 
-    SequencerUIManager::SequencerUIManager(VisualizerImpl* viewer, panels::SequencerUIState& ui_state)
+    SequencerUIManager::SequencerUIManager(VisualizerImpl* viewer, panels::SequencerUIState& ui_state,
+                                           gui::RmlUIManager* rml_manager)
         : viewer_(viewer),
           ui_state_(ui_state),
-          panel_(std::make_unique<SequencerPanel>(controller_)),
+          panel_(std::make_unique<RmlSequencerPanel>(controller_, rml_manager)),
           scene_sync_(std::make_unique<KeyframeSceneSync>(controller_, viewer)) {}
 
     SequencerUIManager::~SequencerUIManager() = default;
@@ -42,6 +43,8 @@ namespace lfs::vis::gui {
         pip_texture_ = {};
         pip_depth_rbo_ = {};
         pip_initialized_ = false;
+        if (panel_)
+            panel_->destroyGLResources();
     }
 
     void SequencerUIManager::setupEvents() {

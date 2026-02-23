@@ -9,8 +9,8 @@
 #include "gui/sequencer_ui_state.hpp"
 #include "gui/ui_context.hpp"
 #include "rendering/gl_resources.hpp"
+#include "sequencer/rml_sequencer_panel.hpp"
 #include "sequencer/sequencer_controller.hpp"
-#include "sequencer/sequencer_panel.hpp"
 #include <chrono>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -25,7 +25,8 @@ namespace lfs::vis {
 
         class SequencerUIManager {
         public:
-            SequencerUIManager(VisualizerImpl* viewer, panels::SequencerUIState& ui_state);
+            SequencerUIManager(VisualizerImpl* viewer, panels::SequencerUIState& ui_state,
+                               gui::RmlUIManager* rml_manager);
             ~SequencerUIManager();
 
             void setupEvents();
@@ -49,7 +50,7 @@ namespace lfs::vis {
             VisualizerImpl* viewer_;
             panels::SequencerUIState& ui_state_;
             SequencerController controller_;
-            std::unique_ptr<SequencerPanel> panel_;
+            std::unique_ptr<RmlSequencerPanel> panel_;
             std::unique_ptr<KeyframeSceneSync> scene_sync_;
 
             bool context_menu_open_ = false;

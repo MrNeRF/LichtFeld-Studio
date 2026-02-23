@@ -58,7 +58,7 @@ namespace lfs::vis::gui {
 
     GuiManager::GuiManager(VisualizerImpl* viewer)
         : viewer_(viewer),
-          sequencer_ui_(viewer, sequencer_ui_state_),
+          sequencer_ui_(viewer, sequencer_ui_state_, &rmlui_manager_),
           gizmo_manager_(viewer),
           async_tasks_(viewer) {
 
