@@ -4,6 +4,7 @@
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor_trace.hpp"
+#include "internal/cuda_stream_context.hpp"
 #include "internal/lazy_config.hpp"
 #include "internal/lazy_executor.hpp"
 #include "internal/lazy_ir.hpp"
@@ -77,26 +78,26 @@ namespace lfs::core {
             result.device_ = args.device;
             result.dtype_ = args.dtype;
             result.id_ = next_id_++;
+            result.state_->stream = getCurrentCUDAStream();
 
             size_t bytes = result.shape_.elements() * dtype_size(result.dtype_);
             internal::telemetry_record_materialization(bytes);
 
             if (bytes == 0) {
-                // Create a dummy allocation to hold a valid shared_ptr
-                // We allocate 1 byte even though we don't need it
                 if (result.device_ == Device::CUDA) {
-                    void* dummy = CudaMemoryPool::instance().allocate(1, nullptr);
-                    result.data_owner_ = std::shared_ptr<void>(dummy, [](void* p) {
-                        CudaMemoryPool::instance().deallocate(p, nullptr);
+                    cudaStream_t s = result.stream();
+                    void* dummy = CudaMemoryPool::instance().allocate(1, s);
+                    result.data_owner_ = std::shared_ptr<void>(dummy, [s](void* p) {
+                        CudaMemoryPool::instance().deallocate(p, s);
                     });
                 } else {
                     void* dummy = nullptr;
                     if (args.use_pinned) {
                         dummy = PinnedMemoryAllocator::instance().allocate(1);
-                        cudaStream_t stream = result.stream();
-                        result.data_owner_ = std::shared_ptr<void>(dummy, [stream](void* p) {
+                        cudaStream_t s = result.stream();
+                        result.data_owner_ = std::shared_ptr<void>(dummy, [s](void* p) {
                             if (p)
-                                PinnedMemoryAllocator::instance().deallocate(p, stream);
+                                PinnedMemoryAllocator::instance().deallocate(p, s);
                         });
                     } else {
                         dummy = std::malloc(1);
@@ -105,20 +106,21 @@ namespace lfs::core {
                         });
                     }
                 }
-                result.data_ = nullptr; // Empty tensor has no usable data
+                result.data_ = nullptr;
                 return result;
             }
 
             if (result.device_ == Device::CUDA) {
-                void* ptr = CudaMemoryPool::instance().allocate(bytes, nullptr);
+                cudaStream_t s = result.stream();
+                void* ptr = CudaMemoryPool::instance().allocate(bytes, s);
                 if (!ptr) {
                     throw std::runtime_error(std::format(
                         "CUDA out of memory: failed to allocate {} bytes ({:.2f} GB). "
                         "Try reducing max_cap, sh_degree, or image resolution.",
                         bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
                 }
-                result.data_owner_ = std::shared_ptr<void>(ptr, [](void* p) {
-                    CudaMemoryPool::instance().deallocate(p, nullptr);
+                result.data_owner_ = std::shared_ptr<void>(ptr, [s](void* p) {
+                    CudaMemoryPool::instance().deallocate(p, s);
                 });
                 result.data_ = result.data_owner_.get();
                 result.compute_alignment(); // Compute alignment flags once
@@ -134,18 +136,16 @@ namespace lfs::core {
                 void* ptr = nullptr;
 
                 if (args.use_pinned) {
-                    // Use pinned memory for fast GPU transfers (2-3x faster PCIe bandwidth)
-                    // Limited by OS (typically 2-4 GB total)
                     ptr = PinnedMemoryAllocator::instance().allocate(bytes);
                     if (!ptr) {
                         throw std::runtime_error(std::format(
                             "Out of memory: failed to allocate {} bytes ({:.2f} GB) of pinned memory.",
                             bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
                     }
-                    cudaStream_t stream = result.stream();
-                    result.data_owner_ = std::shared_ptr<void>(ptr, [stream](void* p) {
+                    cudaStream_t s = result.stream();
+                    result.data_owner_ = std::shared_ptr<void>(ptr, [s](void* p) {
                         if (p)
-                            PinnedMemoryAllocator::instance().deallocate(p, stream);
+                            PinnedMemoryAllocator::instance().deallocate(p, s);
                     });
                 } else {
                     // Use regular malloc for CPU memory
@@ -262,23 +262,24 @@ namespace lfs::core {
             result.device_ = args.device;
             result.dtype_ = args.dtype;
             result.id_ = next_id_++;
+            result.state_->stream = getCurrentCUDAStream();
 
             size_t bytes = count * dtype_size(result.dtype_);
 
             if (result.device_ == Device::CUDA) {
-                void* ptr = CudaMemoryPool::instance().allocate(bytes, nullptr);
+                cudaStream_t s = result.stream();
+                void* ptr = CudaMemoryPool::instance().allocate(bytes, s);
                 if (!ptr) {
                     throw std::runtime_error(std::format(
                         "CUDA out of memory: failed to allocate {} bytes ({:.2f} GB). "
                         "Try reducing max_cap, sh_degree, or image resolution.",
                         bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
                 }
-                result.data_owner_ = std::shared_ptr<void>(ptr, [](void* p) {
-                    CudaMemoryPool::instance().deallocate(p, nullptr);
+                result.data_owner_ = std::shared_ptr<void>(ptr, [s](void* p) {
+                    CudaMemoryPool::instance().deallocate(p, s);
                 });
                 result.data_ = result.data_owner_.get();
 
-                // Record tensor allocation for profiling
                 CudaMemoryPool::instance().record_tensor(
                     result.data_,
                     result.shape().dims(),
@@ -299,17 +300,16 @@ namespace lfs::core {
                     cudaMemcpy(result.data_, data.data(), bytes, cudaMemcpyHostToDevice);
                 }
             } else {
-                // Use pinned memory for CPU tensors
                 void* ptr = PinnedMemoryAllocator::instance().allocate(bytes);
                 if (!ptr) {
                     throw std::runtime_error(std::format(
                         "Out of memory: failed to allocate {} bytes ({:.2f} GB) of pinned memory.",
                         bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
                 }
-                cudaStream_t stream = result.stream();
-                result.data_owner_ = std::shared_ptr<void>(ptr, [stream](void* p) {
+                cudaStream_t s = result.stream();
+                result.data_owner_ = std::shared_ptr<void>(ptr, [s](void* p) {
                     if (p)
-                        PinnedMemoryAllocator::instance().deallocate(p, stream);
+                        PinnedMemoryAllocator::instance().deallocate(p, s);
                 });
                 result.data_ = result.data_owner_.get();
 
@@ -568,7 +568,7 @@ namespace lfs::core {
             size_t min_dim = std::min(m, n);
 
             if (result.device_ == Device::CUDA) {
-                tensor_ops::launch_eye(result.ptr<float>(), m, n, nullptr);
+                tensor_ops::launch_eye(result.ptr<float>(), m, n, result.stream());
                 // No sync - tensor operation
             } else {
                 float* data = result.ptr<float>();
@@ -766,7 +766,7 @@ namespace lfs::core {
                 auto result = Tensor::empty(TensorShape(out_shape), device_, dtype_);
 
                 LOG_DEBUG("[COLUMN REDUCE] M={}, N={}, op={}", M, N, static_cast<int>(op));
-                tensor_ops::launch_column_reduce(ptr<float>(), result.ptr<float>(), M, N, op, nullptr);
+                tensor_ops::launch_column_reduce(ptr<float>(), result.ptr<float>(), M, N, op, result.stream());
                 internal::lazy_ir_record_reduce(*this, result, op_name);
                 return result;
             }
@@ -973,7 +973,7 @@ namespace lfs::core {
                 input->shape_.dims().data(), input->shape_.rank(),
                 axes.data(), axes.size(),
                 args.keepdim, op,
-                input->dtype_, nullptr);
+                input->dtype_, result.stream());
             // No sync - tensor operation
         } else {
             // CPU implementation
@@ -1989,14 +1989,14 @@ namespace lfs::core {
                 float* dst = result.ptr<float>();
 
                 // Use our optimized kernel
-                tensor_ops::launch_clamp_fused(src, dst, min_val, max_val, numel(), nullptr);
+                tensor_ops::launch_clamp_fused(src, dst, min_val, max_val, numel(), result.stream());
             } else if (dtype_ == DataType::Int32) {
                 // Fallback: copy then clamp for int
                 cudaMemcpy(result.data_, data_ptr(), bytes(), cudaMemcpyDeviceToDevice);
                 tensor_ops::launch_clamp_scalar_int(result.ptr<int>(),
                                                     static_cast<int>(min_val),
                                                     static_cast<int>(max_val),
-                                                    numel(), nullptr);
+                                                    numel(), result.stream());
             }
         } else {
             // CPU: simple loop

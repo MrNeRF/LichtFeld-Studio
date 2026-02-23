@@ -250,6 +250,7 @@ set(TEST_FILES
     test_openmesh_bridge.cpp
     test_mesh_loader.cpp
     test_rotated_sh_correctness.cpp
+    test_tensor_stream.cpp
 )
 
 # Build test sources list

@@ -52,24 +52,24 @@ namespace lfs::core {
                     tensor_ops::launch_broadcast_strided_bool(
                         src.ptr<unsigned char>(), result.ptr<unsigned char>(),
                         src_dims.data(), src_strides.data(), target_dims.data(),
-                        src_dims.size(), target_dims.size(), result.numel(), 0);
+                        src_dims.size(), target_dims.size(), result.numel(), result.stream());
                 } else {
                     tensor_ops::launch_broadcast_bool(
                         src.ptr<unsigned char>(), result.ptr<unsigned char>(),
                         src_dims.data(), target_dims.data(),
-                        src_dims.size(), target_dims.size(), result.numel(), 0);
+                        src_dims.size(), target_dims.size(), result.numel(), result.stream());
                 }
             } else if (src.dtype() == DataType::Float32) {
                 if (strided) {
                     tensor_ops::launch_broadcast_strided(
                         src.ptr<float>(), result.ptr<float>(),
                         src_dims.data(), src_strides.data(), target_dims.data(),
-                        src_dims.size(), target_dims.size(), result.numel(), 0);
+                        src_dims.size(), target_dims.size(), result.numel(), result.stream());
                 } else {
                     tensor_ops::launch_broadcast(
                         src.ptr<float>(), result.ptr<float>(),
                         src_dims.data(), target_dims.data(),
-                        src_dims.size(), target_dims.size(), result.numel(), 0);
+                        src_dims.size(), target_dims.size(), result.numel(), result.stream());
                 }
             } else {
                 LOG_ERROR("Unsupported dtype for CUDA broadcast: {}", dtype_name(src.dtype()));

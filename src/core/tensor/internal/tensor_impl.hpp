@@ -371,6 +371,7 @@ namespace lfs::core {
         void propagate_view_meta(Tensor& view) const {
             const_cast<Tensor*>(this)->ensure_storage_meta();
             view.storage_meta_ = storage_meta_;
+            view.state_->stream = state_->stream;
 #ifndef NDEBUG
             view.view_generation_snapshot_ =
                 storage_meta_->generation.load(std::memory_order_relaxed);
@@ -455,21 +456,21 @@ namespace lfs::core {
                     if (out_dtype == DataType::Bool) {
                         tensor_ops::launch_scalar_op_generic(
                             ptr<int>(), scalar_int, result.ptr<unsigned char>(),
-                            numel(), op, nullptr);
+                            numel(), op, result.stream());
                     } else if (out_dtype == DataType::Int32) {
                         tensor_ops::launch_scalar_op_generic(
                             ptr<int>(), scalar_int, result.ptr<int>(),
-                            numel(), op, nullptr);
+                            numel(), op, result.stream());
                     }
                 } else { // Float32
                     if (out_dtype == DataType::Bool) {
                         tensor_ops::launch_scalar_op_generic(
                             ptr<float>(), scalar, result.ptr<unsigned char>(),
-                            numel(), op, nullptr);
+                            numel(), op, result.stream());
                     } else {
                         tensor_ops::launch_scalar_op_generic(
                             ptr<float>(), scalar, result.ptr<float>(),
-                            numel(), op, nullptr);
+                            numel(), op, result.stream());
                     }
                 }
                 // No sync needed - operations are async
@@ -514,7 +515,7 @@ namespace lfs::core {
             if (device_ == Device::CUDA) {
                 tensor_ops::launch_scalar_op_generic(
                     ptr<float>(), scalar, ptr<float>(),
-                    numel(), op, nullptr);
+                    numel(), op, stream());
                 // No sync - tensor operation
             } else {
                 // CPU implementation
@@ -549,7 +550,7 @@ namespace lfs::core {
             if (device_ == Device::CUDA) {
                 tensor_ops::launch_binary_op_generic(
                     ptr<SrcT>(), other.ptr<SrcT>(), ptr<SrcT>(),
-                    numel(), op, nullptr);
+                    numel(), op, stream());
                 // No sync - tensor operation
             } else {
                 // CPU implementation
@@ -863,11 +864,15 @@ namespace lfs::core {
         }
 
         static Tensor empty_like(const Tensor& other) {
-            return empty(other.shape(), other.device(), other.dtype());
+            auto result = empty(other.shape(), other.device(), other.dtype());
+            result.set_stream(other.stream());
+            return result;
         }
 
         static Tensor full_like(const Tensor& other, float value) {
-            return full(other.shape(), value, other.device(), other.dtype());
+            auto result = full(other.shape(), value, other.device(), other.dtype());
+            result.set_stream(other.stream());
+            return result;
         }
 
         // ============= COMBINING TENSORS =============
