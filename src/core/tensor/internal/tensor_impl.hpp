@@ -266,6 +266,10 @@ namespace lfs::core {
         RandomGenerator& operator=(const RandomGenerator&) = delete;
     };
 
+    struct StorageMeta {
+        std::atomic<uint64_t> generation{0};
+    };
+
 } // namespace lfs::core
 
 // Include expression template declarations (forward declarations only)
@@ -309,6 +313,11 @@ namespace lfs::core {
         DataType dtype_ = DataType::Float32;
         bool is_view_ = false;
 
+        std::shared_ptr<StorageMeta> storage_meta_;
+#ifndef NDEBUG
+        uint64_t view_generation_snapshot_ = 0;
+#endif
+
         mutable size_t id_ = 0;
         static std::atomic<size_t> next_id_;
         static inline bool profiling_enabled_ = false;
@@ -334,6 +343,38 @@ namespace lfs::core {
                 state_->is_aligned_16 = false;
                 state_->is_aligned_128 = false;
             }
+        }
+
+        void init_storage_meta() {
+            storage_meta_ = std::make_shared<StorageMeta>();
+        }
+
+        void ensure_storage_meta() {
+            if (!storage_meta_) {
+                storage_meta_ = std::make_shared<StorageMeta>();
+            }
+        }
+
+        void bump_storage_generation() {
+            if (storage_meta_) {
+                storage_meta_->generation.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+
+        void assert_view_not_stale() const {
+#ifndef NDEBUG
+            assert(!is_view_ || !storage_meta_ ||
+                   view_generation_snapshot_ == storage_meta_->generation.load(std::memory_order_relaxed));
+#endif
+        }
+
+        void propagate_view_meta(Tensor& view) const {
+            const_cast<Tensor*>(this)->ensure_storage_meta();
+            view.storage_meta_ = storage_meta_;
+#ifndef NDEBUG
+            view.view_generation_snapshot_ =
+                storage_meta_->generation.load(std::memory_order_relaxed);
+#endif
         }
 
         // Generic functor-based binary operation (zero enum overhead)
@@ -642,10 +683,10 @@ namespace lfs::core {
             // For contiguous tensors, we can create a view with the new shape
             Tensor view(data_, new_shape, device_, dtype_);
             view.data_owner_ = data_owner_;
-            view.storage_offset_ = storage_offset_; // Preserve storage offset
+            view.storage_offset_ = storage_offset_;
             view.is_view_ = true;
-            view.is_contiguous_ = true; // Reshaped contiguous tensor is still contiguous
-            // Strides are automatically set to contiguous by constructor
+            view.is_contiguous_ = true;
+            propagate_view_meta(view);
             return view;
         }
 
@@ -869,7 +910,7 @@ namespace lfs::core {
             if (!is_valid()) {
                 return nullptr;
             }
-            // Account for storage offset (important for sliced/strided tensors)
+            assert_view_not_stale();
             char* data_ptr = static_cast<char*>(data_) + storage_offset_ * dtype_size(dtype_);
             return static_cast<T*>(static_cast<void*>(data_ptr));
         }
@@ -881,18 +922,18 @@ namespace lfs::core {
             if (!is_valid()) {
                 return nullptr;
             }
-            // Account for storage offset (important for sliced/strided tensors)
+            assert_view_not_stale();
             const char* data_ptr = static_cast<const char*>(data_) + storage_offset_ * dtype_size(dtype_);
             return static_cast<const T*>(static_cast<const void*>(data_ptr));
         }
 
-        // Pointer to tensor data (accounts for storage_offset)
         void* data_ptr() {
             internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Interop);
             materialize_if_deferred();
             if (!is_valid()) {
                 return nullptr;
             }
+            assert_view_not_stale();
             return static_cast<char*>(data_) + storage_offset_ * dtype_size(dtype_);
         }
         const void* data_ptr() const {
@@ -901,6 +942,7 @@ namespace lfs::core {
             if (!is_valid()) {
                 return nullptr;
             }
+            assert_view_not_stale();
             return static_cast<const char*>(data_) + storage_offset_ * dtype_size(dtype_);
         }
 
@@ -1965,6 +2007,7 @@ namespace lfs::core {
     private:
         Tensor* tensor_;
         size_t row_index_;
+        mutable float cuda_staging_ = 0.0f;
 
     public:
         TensorRowProxy(Tensor* tensor, size_t row_index)

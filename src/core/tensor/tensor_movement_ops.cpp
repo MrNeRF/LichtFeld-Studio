@@ -153,8 +153,8 @@ namespace lfs::core {
                 // Copy storage offset
                 view.storage_offset_ = storage_offset_;
 
-                // After transpose, usually non-contiguous
                 view.is_contiguous_ = check_contiguous(view.shape_, view.strides_);
+                propagate_view_meta(view);
 
                 return view;
             }

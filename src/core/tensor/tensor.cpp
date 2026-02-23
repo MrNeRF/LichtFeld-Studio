@@ -214,15 +214,15 @@ namespace lfs::core {
           data_owner_(nullptr), // Non-owning
           state_(std::make_shared<TensorState>()),
           shape_(shape),
-          strides_(shape.strides()), // Initialize to contiguous strides
+          strides_(shape.strides()),
           storage_offset_(0),
           is_contiguous_(true),
           device_(device),
           dtype_(dtype),
-          is_view_(true), // This is a view
+          is_view_(true),
           id_(next_id_++) {
 
-        compute_alignment(); // Compute alignment flags
+        compute_alignment();
 
         if (profiling_enabled_) {
             LOG_DEBUG("Created tensor #{} (non-owning view): shape={}, device={}, dtype={}",
@@ -232,16 +232,20 @@ namespace lfs::core {
 
     // ============= Copy Constructor - SHALLOW COPY (LibTorch behavior) =============
     Tensor::Tensor(const Tensor& other)
-        : data_(other.data_),             // Share the pointer
-          data_owner_(other.data_owner_), // Share ownership via shared_ptr!
+        : data_(other.data_),
+          data_owner_(other.data_owner_),
           state_(std::make_shared<TensorState>(*other.state_)),
           shape_(other.shape_),
-          strides_(other.strides_), // Copy stride information
+          strides_(other.strides_),
           storage_offset_(other.storage_offset_),
           is_contiguous_(other.is_contiguous_),
           device_(other.device_),
           dtype_(other.dtype_),
           is_view_(other.is_view_),
+          storage_meta_(other.storage_meta_),
+#ifndef NDEBUG
+          view_generation_snapshot_(other.view_generation_snapshot_),
+#endif
           id_(next_id_++) {
 
         if (profiling_enabled_) {
@@ -298,17 +302,19 @@ namespace lfs::core {
             return *this;
         }
 
-        // Otherwise do shallow copy - share data via shared_ptr (LibTorch behavior)
         data_ = other.data_;
-        data_owner_ = other.data_owner_; // shared_ptr handles refcounting automatically
+        data_owner_ = other.data_owner_;
         shape_ = other.shape_;
-        strides_ = other.strides_; // Copy stride information
+        strides_ = other.strides_;
         storage_offset_ = other.storage_offset_;
         is_contiguous_ = other.is_contiguous_;
         device_ = other.device_;
         dtype_ = other.dtype_;
         is_view_ = other.is_view_;
-        // Runtime state is copied to preserve Tensor value semantics for metadata.
+        storage_meta_ = other.storage_meta_;
+#ifndef NDEBUG
+        view_generation_snapshot_ = other.view_generation_snapshot_;
+#endif
         if (state_ && other.state_ &&
             state_->capacity != other.state_->capacity &&
             state_->capacity > 1000000) {
@@ -339,6 +345,10 @@ namespace lfs::core {
           device_(other.device_),
           dtype_(other.dtype_),
           is_view_(std::exchange(other.is_view_, false)),
+          storage_meta_(std::move(other.storage_meta_)),
+#ifndef NDEBUG
+          view_generation_snapshot_(other.view_generation_snapshot_),
+#endif
           id_(other.id_) {
 
         if (!state_) {
@@ -394,7 +404,6 @@ namespace lfs::core {
                 return *this;
             }
 
-            // Normal move assignment - transfer ownership
             data_ = std::exchange(other.data_, nullptr);
             data_owner_ = std::move(other.data_owner_);
             state_ = std::move(other.state_);
@@ -405,6 +414,10 @@ namespace lfs::core {
             device_ = other.device_;
             dtype_ = other.dtype_;
             is_view_ = std::exchange(other.is_view_, false);
+            storage_meta_ = std::move(other.storage_meta_);
+#ifndef NDEBUG
+            view_generation_snapshot_ = other.view_generation_snapshot_;
+#endif
             id_ = other.id_;
             if (!state_) {
                 state_ = std::make_shared<TensorState>();
@@ -2472,7 +2485,8 @@ namespace lfs::core {
             }
         }
 
-        // Update tensor state with new buffer
+        bump_storage_generation();
+
         data_ = new_data;
         data_owner_ = std::shared_ptr<void>(new_data, [device = device_](void* ptr) {
             if (device == Device::CUDA) {
@@ -2481,8 +2495,9 @@ namespace lfs::core {
                 std::free(ptr);
             }
         });
+        init_storage_meta();
         state_->capacity = new_capacity;
-        state_->logical_size = current_rows; // Set to actual current size (from shape_[0])
+        state_->logical_size = current_rows;
 
         // Explicitly release old buffer AFTER copy is complete
         // This ensures we don't have both buffers alive at the same time
@@ -2529,11 +2544,9 @@ namespace lfs::core {
         const size_t total_elements = capacity * row_size;
         const size_t total_bytes = total_elements * sizeof(float);
 
-        // Handle zero-size tensors (shN with sh-degree 0 has shape [N, 0, 3])
         if (total_bytes == 0) {
             Tensor t;
             t.data_ = nullptr;
-            // Dummy owner allows reserve() to recognize this as owning tensor
             static char dummy_owner = 0;
             t.data_owner_ = std::shared_ptr<void>(&dummy_owner, [](void*) {});
             t.shape_ = shape;

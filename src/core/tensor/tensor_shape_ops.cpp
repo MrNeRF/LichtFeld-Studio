@@ -147,6 +147,7 @@ namespace lfs::core {
             expected_stride *= new_dims[i];
         }
         view.is_contiguous_ = is_contiguous_result;
+        propagate_view_meta(view);
 
         return view;
     }
@@ -256,6 +257,7 @@ namespace lfs::core {
             Tensor view(new_data, TensorShape(new_shape), device_, dtype_);
             view.data_owner_ = data_owner_;
             view.is_view_ = true;
+            propagate_view_meta(view);
             return view;
         } else {
             return copy_slice(starts, ends, new_shape);
@@ -326,6 +328,7 @@ namespace lfs::core {
             expected_stride *= view.shape_[i];
         }
         view.is_contiguous_ = still_contiguous;
+        propagate_view_meta(view);
 
         return view;
     }

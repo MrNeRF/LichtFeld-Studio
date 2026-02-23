@@ -30,10 +30,8 @@ namespace lfs::core {
         size_t linear_idx = row_index_ * tensor_->stride(0) + col_index * tensor_->stride(1);
 
         if (tensor_->device() != Device::CPU) {
-            thread_local static float cuda_read_value = 0.0f;
-
             cudaError_t err = cudaMemcpy(
-                &cuda_read_value,
+                &cuda_staging_,
                 tensor_->ptr<float>() + linear_idx,
                 sizeof(float),
                 cudaMemcpyDeviceToHost);
@@ -43,7 +41,7 @@ namespace lfs::core {
                     std::string("CUDA memcpy failed in TensorRowProxy::operator[]: ") + cudaGetErrorString(err));
             }
 
-            return cuda_read_value;
+            return cuda_staging_;
         }
 
         return tensor_->ptr<float>()[linear_idx];

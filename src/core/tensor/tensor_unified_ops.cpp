@@ -71,7 +71,7 @@ namespace lfs::core {
         switch (op) {
         case LoadOp::Empty: {
             result.shape_ = args.shape;
-            result.strides_ = args.shape.strides(); // Initialize to contiguous strides
+            result.strides_ = args.shape.strides();
             result.storage_offset_ = 0;
             result.is_contiguous_ = true;
             result.device_ = args.device;
