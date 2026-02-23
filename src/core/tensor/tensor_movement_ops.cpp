@@ -125,6 +125,13 @@ namespace lfs::core {
                     return {};
                 }
 
+                if (state_ && state_->has_deferred_expr) {
+                    std::vector<int> axes(shape_.rank());
+                    std::iota(axes.begin(), axes.end(), 0);
+                    std::swap(axes[dim1], axes[dim2]);
+                    return permute(std::span<const int>(axes));
+                }
+
                 // ZERO-COPY TRANSPOSE: Just swap stride metadata!
                 Tensor view;
                 view.data_ = data_;

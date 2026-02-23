@@ -75,6 +75,7 @@ namespace lfs::core {
             result.id_ = next_id_++;
 
             size_t bytes = result.shape_.elements() * dtype_size(result.dtype_);
+            internal::telemetry_record_materialization(bytes);
 
             if (bytes == 0) {
                 // Create a dummy allocation to hold a valid shared_ptr
@@ -88,7 +89,7 @@ namespace lfs::core {
                     void* dummy = nullptr;
                     if (args.use_pinned) {
                         dummy = PinnedMemoryAllocator::instance().allocate(1);
-                        cudaStream_t stream = result.stream_;
+                        cudaStream_t stream = result.stream();
                         result.data_owner_ = std::shared_ptr<void>(dummy, [stream](void* p) {
                             if (p)
                                 PinnedMemoryAllocator::instance().deallocate(p, stream);
@@ -137,7 +138,7 @@ namespace lfs::core {
                             "Out of memory: failed to allocate {} bytes ({:.2f} GB) of pinned memory.",
                             bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
                     }
-                    cudaStream_t stream = result.stream_;
+                    cudaStream_t stream = result.stream();
                     result.data_owner_ = std::shared_ptr<void>(ptr, [stream](void* p) {
                         if (p)
                             PinnedMemoryAllocator::instance().deallocate(p, stream);
@@ -301,7 +302,7 @@ namespace lfs::core {
                         "Out of memory: failed to allocate {} bytes ({:.2f} GB) of pinned memory.",
                         bytes, bytes / (1024.0 * 1024.0 * 1024.0)));
                 }
-                cudaStream_t stream = result.stream_;
+                cudaStream_t stream = result.stream();
                 result.data_owner_ = std::shared_ptr<void>(ptr, [stream](void* p) {
                     if (p)
                         PinnedMemoryAllocator::instance().deallocate(p, stream);
@@ -1534,32 +1535,32 @@ namespace lfs::core {
         // 4. First tensor must have enough capacity for the total size
         // Check if in-place optimization is possible
         LOG_DEBUG("  In-place check: tensors[0] id={}, data_ptr={}, capacity={}, shape[0]={}, total_needed={}",
-                  tensors[0].id_, tensors[0].data_, tensors[0].capacity_, tensors[0].shape()[0], total_size_along_dim);
+                  tensors[0].id_, tensors[0].data_, tensors[0].capacity(), tensors[0].shape()[0], total_size_along_dim);
         if (tensors.size() > 1) {
             LOG_DEBUG("  tensors[1] id={}, data_ptr={}, capacity={}, shape[0]={}",
-                      tensors[1].id_, tensors[1].data_, tensors[1].capacity_, tensors[1].shape()[0]);
+                      tensors[1].id_, tensors[1].data_, tensors[1].capacity(), tensors[1].shape()[0]);
         }
 
         // IN-PLACE OPTIMIZATION: Reuse pre-allocated capacity when available
         // FIXED: Move assignment operator now properly transfers capacity_ and logical_size_
         if (resolved_dim == 0 &&
             tensors[0].data_owner_ &&
-            tensors[0].capacity_ > 0 &&
-            tensors[0].capacity_ >= total_size_along_dim) {
+            tensors[0].capacity() > 0 &&
+            tensors[0].capacity() >= total_size_along_dim) {
 
             LOG_DEBUG("  ✓ IN-PLACE OPTIMIZATION: Reusing buffer");
             // IN-PLACE PATH: Reuse first tensor's pre-allocated buffer
             // IMPORTANT: Use logical_size_ (actual current size) not shape_[0] which may be stale after reserve()
-            const size_t first_size = (tensors[0].capacity_ > 0 && tensors[0].logical_size_ > 0)
-                                          ? tensors[0].logical_size_
+            const size_t first_size = (tensors[0].capacity() > 0 && tensors[0].logical_size() > 0)
+                                          ? tensors[0].logical_size()
                                           : first_shape[0];
             const size_t row_size = tensors[0].numel() / first_shape[0]; // elements per "row" based on CURRENT shape
             const size_t element_size = dtype_size(first_dtype);
 
             LOG_DEBUG("Tensor::cat() IN-PLACE: growing tensor #{} from {} to {} rows (capacity {})",
-                      tensors[0].id_, first_size, total_size_along_dim, tensors[0].capacity_);
+                      tensors[0].id_, first_size, total_size_along_dim, tensors[0].capacity());
             LOG_DEBUG("  first_shape[0]={}, logical_size={}, numel={}, row_size={}, element_size={}",
-                      first_shape[0], tensors[0].logical_size_, tensors[0].numel(), row_size, element_size);
+                      first_shape[0], tensors[0].logical_size(), tensors[0].numel(), row_size, element_size);
             LOG_DEBUG("  Buffer offset calculation: first_size={} * row_size={} * element_size={} = {} bytes",
                       first_size, row_size, element_size, first_size * row_size * element_size);
 
@@ -1573,15 +1574,16 @@ namespace lfs::core {
             result.dtype_ = first_dtype;
             result.data_ = tensors[0].data_;
             result.data_owner_ = tensors[0].data_owner_; // Share ownership
-            result.capacity_ = tensors[0].capacity_;
-            result.logical_size_ = total_size_along_dim;
+            result.state_ = std::make_shared<Tensor::TensorState>(*tensors[0].state_);
+            result.state_->capacity = tensors[0].capacity();
+            result.state_->logical_size = total_size_along_dim;
             result.is_view_ = false;             // Not a view, it owns the data (via shared_ptr)
-            result.stream_ = tensors[0].stream_; // Inherit stream from first tensor
+            result.set_stream(tensors[0].stream()); // Inherit stream from first tensor
             result.compute_alignment();          // Compute alignment flags
             result.id_ = Tensor::next_id_++;
 
             LOG_DEBUG("  Result tensor: id={}, data_ptr={}, capacity={}, logical_size={}",
-                      result.id_, result.data_, result.capacity_, result.logical_size_);
+                      result.id_, result.data_, result.capacity(), result.logical_size());
 
             // Copy additional tensors into the reserved space
             if (first_device == Device::CUDA) {
@@ -1649,7 +1651,7 @@ namespace lfs::core {
             }
 
             LOG_DEBUG("  ← Returning IN-PLACE result: id={}, data_ptr={}, capacity={}",
-                      result.id_, result.data_ptr(), result.capacity_);
+                      result.id_, result.data_ptr(), result.capacity());
             return result;
         }
 
@@ -1657,7 +1659,7 @@ namespace lfs::core {
         LOG_DEBUG("  → SLOW PATH: Allocating new buffer");
         auto result = Tensor::empty(TensorShape(result_dims), first_device, first_dtype);
         LOG_DEBUG("  Created new tensor: id={}, data_ptr={}, capacity={}",
-                  result.id_, result.data_ptr(), result.capacity_);
+                  result.id_, result.data_ptr(), result.capacity());
 
         size_t element_size = dtype_size(first_dtype);
 
@@ -1688,7 +1690,7 @@ namespace lfs::core {
             }
 
             LOG_DEBUG("  ← Returning SLOW PATH result: id={}, data_ptr={}, capacity={}",
-                      result.id_, result.data_ptr(), result.capacity_);
+                      result.id_, result.data_ptr(), result.capacity());
             return result;
         }
 

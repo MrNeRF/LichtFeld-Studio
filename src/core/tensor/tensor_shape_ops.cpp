@@ -93,6 +93,36 @@ namespace lfs::core {
             resolved_axes[i] = resolved;
         }
 
+        std::vector<size_t> new_dims(rank);
+        std::vector<size_t> new_strides(rank);
+
+        for (size_t i = 0; i < rank; ++i) {
+            new_dims[i] = shape_[resolved_axes[i]];
+            new_strides[i] = strides_[resolved_axes[i]];
+        }
+
+        if (state_ && state_->has_deferred_expr) {
+            std::vector<int> deferred_axes(rank);
+            for (size_t i = 0; i < rank; ++i) {
+                deferred_axes[i] = resolved_axes[i];
+            }
+            const uint64_t source_id = lazy_expr_id();
+            Tensor source = *this;
+            TensorShape deferred_shape(new_dims);
+            std::vector<uint64_t> deferred_inputs;
+            if (source_id != 0) {
+                deferred_inputs.push_back(source_id);
+            }
+            return make_deferred_expr_tensor(
+                deferred_shape, device_, dtype_,
+                [source = std::move(source), deferred_axes = std::move(deferred_axes)]() mutable {
+                    Tensor materialized = source;
+                    materialized.materialize_if_deferred();
+                    return materialized.permute(std::span<const int>(deferred_axes));
+                },
+                std::move(deferred_inputs));
+        }
+
         // ZERO-COPY PERMUTE: Create a view with permuted dimensions and strides
         Tensor view;
         view.data_ = data_;
@@ -102,15 +132,6 @@ namespace lfs::core {
         view.is_view_ = true;
         view.id_ = profiling_enabled_ ? next_id_++ : 0; // Only increment ID when profiling
         view.storage_offset_ = storage_offset_;
-
-        // Permute shape and strides together (single allocation, single loop)
-        std::vector<size_t> new_dims(rank);
-        std::vector<size_t> new_strides(rank);
-
-        for (size_t i = 0; i < rank; ++i) {
-            new_dims[i] = shape_[resolved_axes[i]];
-            new_strides[i] = strides_[resolved_axes[i]];
-        }
 
         view.shape_ = TensorShape(new_dims);
         view.strides_ = std::move(new_strides);
@@ -207,6 +228,25 @@ namespace lfs::core {
             new_shape.push_back(ends[i] - starts[i]);
         }
 
+        if (state_ && state_->has_deferred_expr) {
+            std::vector<std::pair<int, int>> deferred_ranges(ranges.begin(), ranges.end());
+            const uint64_t source_id = lazy_expr_id();
+            Tensor source = *this;
+            TensorShape deferred_shape(new_shape);
+            std::vector<uint64_t> deferred_inputs;
+            if (source_id != 0) {
+                deferred_inputs.push_back(source_id);
+            }
+            return make_deferred_expr_tensor(
+                deferred_shape, device_, dtype_,
+                [source = std::move(source), deferred_ranges = std::move(deferred_ranges)]() mutable {
+                    Tensor materialized = source;
+                    materialized.materialize_if_deferred();
+                    return materialized.slice(std::span<const std::pair<int, int>>(deferred_ranges));
+                },
+                std::move(deferred_inputs));
+        }
+
         bool is_contiguous = is_contiguous_slice(starts, ends);
 
         if (is_contiguous) {
@@ -237,6 +277,27 @@ namespace lfs::core {
             return {};
         }
 
+        std::vector<size_t> new_dims = shape_.dims();
+        new_dims[dim] = end - start;
+
+        if (state_ && state_->has_deferred_expr) {
+            const uint64_t source_id = lazy_expr_id();
+            Tensor source = *this;
+            TensorShape deferred_shape(new_dims);
+            std::vector<uint64_t> deferred_inputs;
+            if (source_id != 0) {
+                deferred_inputs.push_back(source_id);
+            }
+            return make_deferred_expr_tensor(
+                deferred_shape, device_, dtype_,
+                [source = std::move(source), dim, start, end]() mutable {
+                    Tensor materialized = source;
+                    materialized.materialize_if_deferred();
+                    return materialized.slice(dim, start, end);
+                },
+                std::move(deferred_inputs));
+        }
+
         // ZERO-COPY SLICE: Adjust offset and shape - NO DATA COPYING!
         Tensor view;
         view.data_ = data_;
@@ -251,8 +312,6 @@ namespace lfs::core {
         view.storage_offset_ = storage_offset_ + start * strides_[dim];
 
         // Adjust shape for the sliced dimension
-        std::vector<size_t> new_dims = shape_.dims();
-        new_dims[dim] = end - start;
         view.shape_ = TensorShape(new_dims);
 
         // Check if strides match the new shape's expected contiguous layout

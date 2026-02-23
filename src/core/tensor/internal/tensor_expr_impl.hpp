@@ -8,17 +8,32 @@
 
 #include "tensor_expr.hpp"
 #include "tensor_functors.hpp" // For ops::compose
+#include "lazy_config.hpp"
+#include "lazy_ir.hpp"
 #include <cuda_fp16.h>
+#include <typeinfo>
 
 namespace lfs::core {
 
     template <typename Derived>
     Tensor TensorExpr<Derived>::eval() const {
+        if (internal::lazy_mode_enabled()) {
+            internal::telemetry_record_eager_fallback(1);
+        }
         return derived().eval_impl();
     }
 
     template <typename Derived>
     TensorExpr<Derived>::operator Tensor() const {
+        if (internal::lazy_mode_enabled()) {
+            auto expr = derived();
+            const TensorShape shape = expr.shape_impl();
+            const Device device = expr.device_impl();
+            const DataType dtype = expr.dtype_impl();
+            return Tensor::make_deferred_expr_tensor(
+                shape, device, dtype,
+                [expr = std::move(expr)]() mutable { return expr.eval(); });
+        }
         return eval();
     }
 
@@ -75,6 +90,9 @@ namespace lfs::core {
                     }
                 }
 
+                if (internal::lazy_ir_active()) {
+                    internal::lazy_ir_record_unary(input_tensor, result, typeid(UnaryOp).name());
+                }
                 return result;
             }
         };
@@ -156,6 +174,9 @@ namespace lfs::core {
                     }
                 }
 
+                if (internal::lazy_ir_active()) {
+                    internal::lazy_ir_record_unary(input_tensor, result, typeid(UnaryOp).name());
+                }
                 return result;
             }
         };
@@ -203,6 +224,9 @@ namespace lfs::core {
             }
         }
 
+        if (internal::lazy_ir_active()) {
+            internal::lazy_ir_record_unary(base, result, typeid(OuterOp).name());
+        }
         return result;
     }
 
@@ -479,6 +503,9 @@ namespace lfs::core {
                     }
                 }
 
+                if (internal::lazy_ir_active()) {
+                    internal::lazy_ir_record_binary(left_tensor, right_tensor, result, typeid(BinaryOp).name());
+                }
                 return result;
             }
         };
@@ -747,6 +774,9 @@ namespace lfs::core {
                     }
                 }
 
+                if (internal::lazy_ir_active()) {
+                    internal::lazy_ir_record_binary(left_tensor, right_tensor, result, typeid(BinaryOp).name());
+                }
                 return result;
             }
         };
@@ -783,6 +813,9 @@ namespace lfs::core {
             }
         }
 
+        if (internal::lazy_ir_active()) {
+            internal::lazy_ir_record_scalar_unary(input_tensor, result, typeid(ScalarUnaryOp).name());
+        }
         return result;
     }
 
@@ -802,7 +835,11 @@ namespace lfs::core {
         }
 
         // Use existing take() implementation (already optimized with thrust::gather)
-        return input_tensor.flatten().take(indices_tensor).reshape(shape_);
+        Tensor result = input_tensor.flatten().take(indices_tensor).reshape(shape_);
+        if (internal::lazy_ir_active()) {
+            internal::lazy_ir_record_permutation(input_tensor, indices_tensor, result, "permutation");
+        }
+        return result;
     }
 
     // ============================================================================
@@ -850,7 +887,11 @@ namespace lfs::core {
             }
         }
 
-        return result.reshape(shape_);
+        Tensor reshaped = result.reshape(shape_);
+        if (internal::lazy_ir_active()) {
+            internal::lazy_ir_record_permutation(input_tensor, indices_tensor, reshaped, typeid(UnaryOp).name());
+        }
+        return reshaped;
     }
 
 } // namespace lfs::core

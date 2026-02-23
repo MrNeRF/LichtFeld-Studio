@@ -132,7 +132,7 @@ namespace lfs::core {
         if (device_ == Device::CUDA) {
             // Use kernel-based generation with advancing seed
             uint64_t seed = RandomGenerator::instance().get_next_cuda_seed();
-            tensor_ops::launch_uniform(ptr<float>(), n, low, high, seed, stream_);
+            tensor_ops::launch_uniform(ptr<float>(), n, low, high, seed, stream());
             // No sync - in-place operation returns *this
         } else {
             // CPU uses stateful generator

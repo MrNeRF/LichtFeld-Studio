@@ -463,4 +463,26 @@ namespace lfs::core::tensor_ops {
 
     LFS_CORE_API bool has_nan_or_inf_gpu(const float* data, size_t n, cudaStream_t stream = nullptr);
 
+    // ============= Fused Affine Transform =============
+    LFS_CORE_API void launch_fused_affine_transform(const float* input, float* output,
+                                                    size_t n, float a, float b,
+                                                    cudaStream_t stream = nullptr);
+
+    // ============= Fused Pointwise Chain =============
+    static constexpr int FUSED_POINTWISE_MAX_OPS = 16;
+
+    struct FusedPointwiseOp {
+        uint8_t kind;
+        float scalar;
+    };
+
+    struct FusedPointwiseOpChain {
+        FusedPointwiseOp ops[FUSED_POINTWISE_MAX_OPS];
+        int num_ops;
+    };
+
+    LFS_CORE_API void launch_fused_pointwise_chain(const float* input, float* output,
+                                                   size_t n, const FusedPointwiseOpChain& chain,
+                                                   cudaStream_t stream = nullptr);
+
 } // namespace lfs::core::tensor_ops
