@@ -41,8 +41,7 @@
 #include "config.h"
 #include <cuda_runtime.h>
 
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
+#include "visualizer/input/key_codes.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -910,63 +909,63 @@ namespace lfs::python {
     } // namespace
 
     namespace {
-        std::string glfw_key_to_type_string(int key) {
-            if (key >= GLFW_KEY_A && key <= GLFW_KEY_Z) {
-                return std::string("KEY_") + static_cast<char>('A' + (key - GLFW_KEY_A));
+        std::string key_to_type_string(int key) {
+            if (key >= lfs::vis::input::KEY_A && key <= lfs::vis::input::KEY_Z) {
+                return std::string("KEY_") + static_cast<char>('A' + (key - lfs::vis::input::KEY_A));
             }
-            if (key >= GLFW_KEY_0 && key <= GLFW_KEY_9) {
-                return std::string("KEY_") + static_cast<char>('0' + (key - GLFW_KEY_0));
+            if (key >= lfs::vis::input::KEY_0 && key <= lfs::vis::input::KEY_9) {
+                return std::string("KEY_") + static_cast<char>('0' + (key - lfs::vis::input::KEY_0));
             }
             switch (key) {
-            case GLFW_KEY_SPACE: return "SPACE";
-            case GLFW_KEY_ESCAPE: return "ESC";
-            case GLFW_KEY_ENTER: return "RET";
-            case GLFW_KEY_TAB: return "TAB";
-            case GLFW_KEY_BACKSPACE: return "BACK_SPACE";
-            case GLFW_KEY_DELETE: return "DEL";
-            case GLFW_KEY_LEFT: return "LEFT_ARROW";
-            case GLFW_KEY_RIGHT: return "RIGHT_ARROW";
-            case GLFW_KEY_UP: return "UP_ARROW";
-            case GLFW_KEY_DOWN: return "DOWN_ARROW";
-            case GLFW_KEY_HOME: return "HOME";
-            case GLFW_KEY_END: return "END";
-            case GLFW_KEY_PAGE_UP: return "PAGE_UP";
-            case GLFW_KEY_PAGE_DOWN: return "PAGE_DOWN";
-            case GLFW_KEY_LEFT_SHIFT:
-            case GLFW_KEY_RIGHT_SHIFT: return "LEFT_SHIFT";
-            case GLFW_KEY_LEFT_CONTROL:
-            case GLFW_KEY_RIGHT_CONTROL: return "LEFT_CTRL";
-            case GLFW_KEY_LEFT_ALT:
-            case GLFW_KEY_RIGHT_ALT: return "LEFT_ALT";
-            case GLFW_KEY_F1: return "F1";
-            case GLFW_KEY_F2: return "F2";
-            case GLFW_KEY_F3: return "F3";
-            case GLFW_KEY_F4: return "F4";
-            case GLFW_KEY_F5: return "F5";
-            case GLFW_KEY_F6: return "F6";
-            case GLFW_KEY_F7: return "F7";
-            case GLFW_KEY_F8: return "F8";
-            case GLFW_KEY_F9: return "F9";
-            case GLFW_KEY_F10: return "F10";
-            case GLFW_KEY_F11: return "F11";
-            case GLFW_KEY_F12: return "F12";
+            case lfs::vis::input::KEY_SPACE: return "SPACE";
+            case lfs::vis::input::KEY_ESCAPE: return "ESC";
+            case lfs::vis::input::KEY_ENTER: return "RET";
+            case lfs::vis::input::KEY_TAB: return "TAB";
+            case lfs::vis::input::KEY_BACKSPACE: return "BACK_SPACE";
+            case lfs::vis::input::KEY_DELETE: return "DEL";
+            case lfs::vis::input::KEY_LEFT: return "LEFT_ARROW";
+            case lfs::vis::input::KEY_RIGHT: return "RIGHT_ARROW";
+            case lfs::vis::input::KEY_UP: return "UP_ARROW";
+            case lfs::vis::input::KEY_DOWN: return "DOWN_ARROW";
+            case lfs::vis::input::KEY_HOME: return "HOME";
+            case lfs::vis::input::KEY_END: return "END";
+            case lfs::vis::input::KEY_PAGE_UP: return "PAGE_UP";
+            case lfs::vis::input::KEY_PAGE_DOWN: return "PAGE_DOWN";
+            case lfs::vis::input::KEY_LEFT_SHIFT:
+            case lfs::vis::input::KEY_RIGHT_SHIFT: return "LEFT_SHIFT";
+            case lfs::vis::input::KEY_LEFT_CONTROL:
+            case lfs::vis::input::KEY_RIGHT_CONTROL: return "LEFT_CTRL";
+            case lfs::vis::input::KEY_LEFT_ALT:
+            case lfs::vis::input::KEY_RIGHT_ALT: return "LEFT_ALT";
+            case lfs::vis::input::KEY_F1: return "F1";
+            case lfs::vis::input::KEY_F2: return "F2";
+            case lfs::vis::input::KEY_F3: return "F3";
+            case lfs::vis::input::KEY_F4: return "F4";
+            case lfs::vis::input::KEY_F5: return "F5";
+            case lfs::vis::input::KEY_F6: return "F6";
+            case lfs::vis::input::KEY_F7: return "F7";
+            case lfs::vis::input::KEY_F8: return "F8";
+            case lfs::vis::input::KEY_F9: return "F9";
+            case lfs::vis::input::KEY_F10: return "F10";
+            case lfs::vis::input::KEY_F11: return "F11";
+            case lfs::vis::input::KEY_F12: return "F12";
             default: return "NONE";
             }
         }
 
-        std::string glfw_button_to_type_string(int button) {
+        std::string button_to_type_string(int button) {
             switch (button) {
-            case GLFW_MOUSE_BUTTON_LEFT: return "LEFTMOUSE";
-            case GLFW_MOUSE_BUTTON_RIGHT: return "RIGHTMOUSE";
-            case GLFW_MOUSE_BUTTON_MIDDLE: return "MIDDLEMOUSE";
+            case static_cast<int>(lfs::vis::input::AppMouseButton::LEFT): return "LEFTMOUSE";
+            case static_cast<int>(lfs::vis::input::AppMouseButton::RIGHT): return "RIGHTMOUSE";
+            case static_cast<int>(lfs::vis::input::AppMouseButton::MIDDLE): return "MIDDLEMOUSE";
             default: return "MOUSE";
             }
         }
 
         std::string action_to_value_string(int action) {
             switch (action) {
-            case GLFW_PRESS: return "PRESS";
-            case GLFW_RELEASE: return "RELEASE";
+            case lfs::vis::input::ACTION_PRESS: return "PRESS";
+            case lfs::vis::input::ACTION_RELEASE: return "RELEASE";
             default: return "NOTHING";
             }
         }
@@ -976,15 +975,15 @@ namespace lfs::python {
         PyEvent py_event;
 
         if (const auto* mouse_btn = event.as<vis::MouseButtonEvent>()) {
-            py_event.type = glfw_button_to_type_string(mouse_btn->button);
+            py_event.type = button_to_type_string(mouse_btn->button);
             py_event.value = action_to_value_string(mouse_btn->action);
             py_event.mouse_x = mouse_btn->position.x;
             py_event.mouse_y = mouse_btn->position.y;
             py_event.mouse_region_x = mouse_btn->position.x;
             py_event.mouse_region_y = mouse_btn->position.y;
-            py_event.shift = (mouse_btn->mods & GLFW_MOD_SHIFT) != 0;
-            py_event.ctrl = (mouse_btn->mods & GLFW_MOD_CONTROL) != 0;
-            py_event.alt = (mouse_btn->mods & GLFW_MOD_ALT) != 0;
+            py_event.shift = (mouse_btn->mods & lfs::vis::input::MOD_SHIFT) != 0;
+            py_event.ctrl = (mouse_btn->mods & lfs::vis::input::MOD_CTRL) != 0;
+            py_event.alt = (mouse_btn->mods & lfs::vis::input::MOD_ALT) != 0;
         } else if (const auto* mouse_move = event.as<vis::MouseMoveEvent>()) {
             py_event.type = "MOUSEMOVE";
             py_event.value = "NOTHING";
@@ -1000,12 +999,12 @@ namespace lfs::python {
             py_event.scroll_x = scroll->xoffset;
             py_event.scroll_y = scroll->yoffset;
         } else if (const auto* key = event.as<vis::KeyEvent>()) {
-            py_event.type = glfw_key_to_type_string(key->key);
+            py_event.type = key_to_type_string(key->key);
             py_event.value = action_to_value_string(key->action);
             py_event.key_code = key->key;
-            py_event.shift = (key->mods & GLFW_MOD_SHIFT) != 0;
-            py_event.ctrl = (key->mods & GLFW_MOD_CONTROL) != 0;
-            py_event.alt = (key->mods & GLFW_MOD_ALT) != 0;
+            py_event.shift = (key->mods & lfs::vis::input::MOD_SHIFT) != 0;
+            py_event.ctrl = (key->mods & lfs::vis::input::MOD_CTRL) != 0;
+            py_event.alt = (key->mods & lfs::vis::input::MOD_ALT) != 0;
         } else {
             py_event.type = "NONE";
             py_event.value = "NOTHING";
@@ -3390,7 +3389,8 @@ namespace lfs::python {
                                  {0, 0}, {u1, v1}, t, {0, 0, 0, 0});
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def("image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def(
+                "image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);
@@ -4613,87 +4613,87 @@ namespace lfs::python {
             .def_ro("over_gui", &ModalEvent::over_gui, "Whether mouse is over a GUI element");
 
         auto key = m.def_submodule("key", "Key codes");
-        key.attr("SPACE") = GLFW_KEY_SPACE;
-        key.attr("APOSTROPHE") = GLFW_KEY_APOSTROPHE;
-        key.attr("COMMA") = GLFW_KEY_COMMA;
-        key.attr("MINUS") = GLFW_KEY_MINUS;
-        key.attr("PERIOD") = GLFW_KEY_PERIOD;
-        key.attr("SLASH") = GLFW_KEY_SLASH;
-        key.attr("NUM_0") = GLFW_KEY_0;
-        key.attr("NUM_1") = GLFW_KEY_1;
-        key.attr("NUM_2") = GLFW_KEY_2;
-        key.attr("NUM_3") = GLFW_KEY_3;
-        key.attr("NUM_4") = GLFW_KEY_4;
-        key.attr("NUM_5") = GLFW_KEY_5;
-        key.attr("NUM_6") = GLFW_KEY_6;
-        key.attr("NUM_7") = GLFW_KEY_7;
-        key.attr("NUM_8") = GLFW_KEY_8;
-        key.attr("NUM_9") = GLFW_KEY_9;
-        key.attr("A") = GLFW_KEY_A;
-        key.attr("B") = GLFW_KEY_B;
-        key.attr("C") = GLFW_KEY_C;
-        key.attr("D") = GLFW_KEY_D;
-        key.attr("E") = GLFW_KEY_E;
-        key.attr("F") = GLFW_KEY_F;
-        key.attr("G") = GLFW_KEY_G;
-        key.attr("H") = GLFW_KEY_H;
-        key.attr("I") = GLFW_KEY_I;
-        key.attr("J") = GLFW_KEY_J;
-        key.attr("K") = GLFW_KEY_K;
-        key.attr("L") = GLFW_KEY_L;
-        key.attr("M") = GLFW_KEY_M;
-        key.attr("N") = GLFW_KEY_N;
-        key.attr("O") = GLFW_KEY_O;
-        key.attr("P") = GLFW_KEY_P;
-        key.attr("Q") = GLFW_KEY_Q;
-        key.attr("R") = GLFW_KEY_R;
-        key.attr("S") = GLFW_KEY_S;
-        key.attr("T") = GLFW_KEY_T;
-        key.attr("U") = GLFW_KEY_U;
-        key.attr("V") = GLFW_KEY_V;
-        key.attr("W") = GLFW_KEY_W;
-        key.attr("X") = GLFW_KEY_X;
-        key.attr("Y") = GLFW_KEY_Y;
-        key.attr("Z") = GLFW_KEY_Z;
-        key.attr("ESCAPE") = GLFW_KEY_ESCAPE;
-        key.attr("ENTER") = GLFW_KEY_ENTER;
-        key.attr("TAB") = GLFW_KEY_TAB;
-        key.attr("BACKSPACE") = GLFW_KEY_BACKSPACE;
-        key.attr("INSERT") = GLFW_KEY_INSERT;
-        key.attr("DELETE") = GLFW_KEY_DELETE;
-        key.attr("RIGHT") = GLFW_KEY_RIGHT;
-        key.attr("LEFT") = GLFW_KEY_LEFT;
-        key.attr("DOWN") = GLFW_KEY_DOWN;
-        key.attr("UP") = GLFW_KEY_UP;
-        key.attr("F1") = GLFW_KEY_F1;
-        key.attr("F2") = GLFW_KEY_F2;
-        key.attr("F3") = GLFW_KEY_F3;
-        key.attr("F4") = GLFW_KEY_F4;
-        key.attr("F5") = GLFW_KEY_F5;
-        key.attr("F6") = GLFW_KEY_F6;
-        key.attr("F7") = GLFW_KEY_F7;
-        key.attr("F8") = GLFW_KEY_F8;
-        key.attr("F9") = GLFW_KEY_F9;
-        key.attr("F10") = GLFW_KEY_F10;
-        key.attr("F11") = GLFW_KEY_F11;
-        key.attr("F12") = GLFW_KEY_F12;
-        key.attr("KP_ENTER") = GLFW_KEY_KP_ENTER;
+        key.attr("SPACE") = lfs::vis::input::KEY_SPACE;
+        key.attr("APOSTROPHE") = lfs::vis::input::KEY_APOSTROPHE;
+        key.attr("COMMA") = lfs::vis::input::KEY_COMMA;
+        key.attr("MINUS") = lfs::vis::input::KEY_MINUS;
+        key.attr("PERIOD") = lfs::vis::input::KEY_PERIOD;
+        key.attr("SLASH") = lfs::vis::input::KEY_SLASH;
+        key.attr("NUM_0") = lfs::vis::input::KEY_0;
+        key.attr("NUM_1") = lfs::vis::input::KEY_1;
+        key.attr("NUM_2") = lfs::vis::input::KEY_2;
+        key.attr("NUM_3") = lfs::vis::input::KEY_3;
+        key.attr("NUM_4") = lfs::vis::input::KEY_4;
+        key.attr("NUM_5") = lfs::vis::input::KEY_5;
+        key.attr("NUM_6") = lfs::vis::input::KEY_6;
+        key.attr("NUM_7") = lfs::vis::input::KEY_7;
+        key.attr("NUM_8") = lfs::vis::input::KEY_8;
+        key.attr("NUM_9") = lfs::vis::input::KEY_9;
+        key.attr("A") = lfs::vis::input::KEY_A;
+        key.attr("B") = lfs::vis::input::KEY_B;
+        key.attr("C") = lfs::vis::input::KEY_C;
+        key.attr("D") = lfs::vis::input::KEY_D;
+        key.attr("E") = lfs::vis::input::KEY_E;
+        key.attr("F") = lfs::vis::input::KEY_F;
+        key.attr("G") = lfs::vis::input::KEY_G;
+        key.attr("H") = lfs::vis::input::KEY_H;
+        key.attr("I") = lfs::vis::input::KEY_I;
+        key.attr("J") = lfs::vis::input::KEY_J;
+        key.attr("K") = lfs::vis::input::KEY_K;
+        key.attr("L") = lfs::vis::input::KEY_L;
+        key.attr("M") = lfs::vis::input::KEY_M;
+        key.attr("N") = lfs::vis::input::KEY_N;
+        key.attr("O") = lfs::vis::input::KEY_O;
+        key.attr("P") = lfs::vis::input::KEY_P;
+        key.attr("Q") = lfs::vis::input::KEY_Q;
+        key.attr("R") = lfs::vis::input::KEY_R;
+        key.attr("S") = lfs::vis::input::KEY_S;
+        key.attr("T") = lfs::vis::input::KEY_T;
+        key.attr("U") = lfs::vis::input::KEY_U;
+        key.attr("V") = lfs::vis::input::KEY_V;
+        key.attr("W") = lfs::vis::input::KEY_W;
+        key.attr("X") = lfs::vis::input::KEY_X;
+        key.attr("Y") = lfs::vis::input::KEY_Y;
+        key.attr("Z") = lfs::vis::input::KEY_Z;
+        key.attr("ESCAPE") = lfs::vis::input::KEY_ESCAPE;
+        key.attr("ENTER") = lfs::vis::input::KEY_ENTER;
+        key.attr("TAB") = lfs::vis::input::KEY_TAB;
+        key.attr("BACKSPACE") = lfs::vis::input::KEY_BACKSPACE;
+        key.attr("INSERT") = lfs::vis::input::KEY_INSERT;
+        key.attr("DELETE") = lfs::vis::input::KEY_DELETE;
+        key.attr("RIGHT") = lfs::vis::input::KEY_RIGHT;
+        key.attr("LEFT") = lfs::vis::input::KEY_LEFT;
+        key.attr("DOWN") = lfs::vis::input::KEY_DOWN;
+        key.attr("UP") = lfs::vis::input::KEY_UP;
+        key.attr("F1") = lfs::vis::input::KEY_F1;
+        key.attr("F2") = lfs::vis::input::KEY_F2;
+        key.attr("F3") = lfs::vis::input::KEY_F3;
+        key.attr("F4") = lfs::vis::input::KEY_F4;
+        key.attr("F5") = lfs::vis::input::KEY_F5;
+        key.attr("F6") = lfs::vis::input::KEY_F6;
+        key.attr("F7") = lfs::vis::input::KEY_F7;
+        key.attr("F8") = lfs::vis::input::KEY_F8;
+        key.attr("F9") = lfs::vis::input::KEY_F9;
+        key.attr("F10") = lfs::vis::input::KEY_F10;
+        key.attr("F11") = lfs::vis::input::KEY_F11;
+        key.attr("F12") = lfs::vis::input::KEY_F12;
+        key.attr("KP_ENTER") = lfs::vis::input::KEY_KP_ENTER;
 
         auto mouse = m.def_submodule("mouse", "Mouse buttons");
-        mouse.attr("LEFT") = GLFW_MOUSE_BUTTON_LEFT;
-        mouse.attr("RIGHT") = GLFW_MOUSE_BUTTON_RIGHT;
-        mouse.attr("MIDDLE") = GLFW_MOUSE_BUTTON_MIDDLE;
+        mouse.attr("LEFT") = static_cast<int>(lfs::vis::input::AppMouseButton::LEFT);
+        mouse.attr("RIGHT") = static_cast<int>(lfs::vis::input::AppMouseButton::RIGHT);
+        mouse.attr("MIDDLE") = static_cast<int>(lfs::vis::input::AppMouseButton::MIDDLE);
 
         auto mod = m.def_submodule("mod", "Modifier keys");
-        mod.attr("SHIFT") = GLFW_MOD_SHIFT;
-        mod.attr("CONTROL") = GLFW_MOD_CONTROL;
-        mod.attr("ALT") = GLFW_MOD_ALT;
-        mod.attr("SUPER") = GLFW_MOD_SUPER;
+        mod.attr("SHIFT") = lfs::vis::input::MOD_SHIFT;
+        mod.attr("CONTROL") = lfs::vis::input::MOD_CTRL;
+        mod.attr("ALT") = lfs::vis::input::MOD_ALT;
+        mod.attr("SUPER") = lfs::vis::input::MOD_SUPER;
 
         auto action = m.def_submodule("action", "Action values");
-        action.attr("PRESS") = GLFW_PRESS;
-        action.attr("RELEASE") = GLFW_RELEASE;
-        action.attr("REPEAT") = GLFW_REPEAT;
+        action.attr("PRESS") = lfs::vis::input::ACTION_PRESS;
+        action.attr("RELEASE") = lfs::vis::input::ACTION_RELEASE;
+        action.attr("REPEAT") = lfs::vis::input::ACTION_REPEAT;
 
         m.def(
             "set_modal_event_callback", [](nb::callable cb) {

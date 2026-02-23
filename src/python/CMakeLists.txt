@@ -203,7 +203,6 @@ target_link_libraries(lfs_py PRIVATE
     ${CMAKE_DL_LIBS}
     imgui::imgui
     implot::implot
-    glfw
 )
 
 target_include_directories(lfs_py PRIVATE

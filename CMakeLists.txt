@@ -229,7 +229,7 @@ find_package(TBB REQUIRED)
 find_package(Threads REQUIRED)
 find_package(OpenGL REQUIRED)
 find_package(glad REQUIRED)
-find_package(glfw3 REQUIRED)
+find_package(SDL3 REQUIRED)
 find_package(glm REQUIRED)
 find_package(imgui REQUIRED)
 find_package(implot REQUIRED)
@@ -387,7 +387,7 @@ target_link_libraries(${PROJECT_NAME}
         taywee::args
         OpenImageIO::OpenImageIO
         glad::glad
-        glfw
+        SDL3::SDL3
 )
 
 # Copy nvImageCodec shared libraries next to executable for easy deployment

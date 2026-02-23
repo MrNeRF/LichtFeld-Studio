@@ -19,8 +19,6 @@
 #include "gui/utils/drag_drop_native.hpp"
 #include "windows/disk_space_error_dialog.hpp"
 #include "windows/video_extractor_dialog.hpp"
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
 #include <filesystem>
 #include <memory>
 #include <optional>

@@ -196,12 +196,12 @@ namespace lfs::python {
         // Mouse state
         double x, y;
         double delta_x, delta_y;
-        int button; // GLFW_MOUSE_BUTTON_*
-        int action; // GLFW_PRESS, GLFW_RELEASE
+        int button;
+        int action;
 
         // Key state
         int key;
-        int mods; // GLFW_MOD_SHIFT, etc.
+        int mods;
 
         // Scroll
         double scroll_x, scroll_y;
