@@ -108,6 +108,13 @@ namespace lfs::core {
         LFS_CORE_API void lazy_executor_set_pointwise_fusion_override_for_testing(std::optional<bool> enabled);
         LFS_CORE_API bool lazy_executor_pointwise_fusion_enabled_for_testing();
 
+        // Consume a pending pointwise fusion recipe for producer fusion (e.g. fused transform-reduce).
+        // Returns true if a recipe was found and consumed. Writes to out_source and out_ops.
+        LFS_CORE_API bool lazy_executor_try_consume_pointwise_fusion(
+            uint64_t node_id, Tensor* out_source, std::vector<LazyPointwiseOp>* out_ops);
+
+        LFS_CORE_API void lazy_executor_diagnostics_counters_increment_fused();
+
     } // namespace internal
 
 } // namespace lfs::core

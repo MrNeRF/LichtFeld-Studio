@@ -782,4 +782,32 @@ namespace lfs::core::internal {
         return lazy_executor_pointwise_fusion_enabled();
     }
 
+    void lazy_executor_diagnostics_counters_increment_fused() {
+        lazy_executor_diagnostics_counters().fused_launches.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    bool lazy_executor_try_consume_pointwise_fusion(
+        uint64_t node_id, Tensor* out_source, std::vector<LazyPointwiseOp>* out_ops) {
+        assert(out_source != nullptr);
+        assert(out_ops != nullptr);
+
+        if (node_id == 0 || !lazy_executor_pointwise_fusion_enabled()) {
+            return false;
+        }
+
+        auto& registry = pointwise_fusion_registry();
+        std::lock_guard<std::mutex> lock(registry.mutex);
+        prune_expired_pointwise_fusions_locked(registry);
+
+        const auto it = registry.by_node_id.find(node_id);
+        if (it == registry.by_node_id.end()) {
+            return false;
+        }
+
+        *out_source = std::move(it->second.source);
+        *out_ops = std::move(it->second.ops);
+        registry.by_node_id.erase(it);
+        return true;
+    }
+
 } // namespace lfs::core::internal

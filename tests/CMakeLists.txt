@@ -225,6 +225,7 @@ set(TEST_FILES
     test_tensor_struct_init.cpp
     test_tensor_lazy_runtime.cpp
     test_tensor_lazy_ir.cpp
+    test_fusion_performance.cpp
     test_torch_conversion.cpp
     test_fastgs_kernels.cpp
     test_fastgs_fuzz.cpp

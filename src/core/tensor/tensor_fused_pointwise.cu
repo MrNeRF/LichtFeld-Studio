@@ -1,8 +1,12 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "internal/gpu_config.hpp"
+#include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
+#include "internal/warp_reduce.cuh"
 #include <cassert>
+#include <cfloat>
 #include <cuda_runtime.h>
 
 namespace lfs::core::tensor_ops {
@@ -148,6 +152,141 @@ namespace lfs::core::tensor_ops {
             const int grid = static_cast<int>((n + BLOCK_SIZE - 1) / BLOCK_SIZE);
             pointwise_chain_scalar_kernel<<<grid, BLOCK_SIZE, 0, stream>>>(input, output, n, chain);
         }
+    }
+
+    // ============= Fused Transform-Reduce Kernels =============
+
+    namespace {
+
+        __device__ __forceinline__ float reduce_identity(int reduce_op_int) {
+            switch (reduce_op_int) {
+            case 0: return 0.0f;     // Sum
+            case 1: return 0.0f;     // Mean (accumulates like sum)
+            case 2: return -FLT_MAX; // Max
+            case 3: return FLT_MAX;  // Min
+            default: return 0.0f;
+            }
+        }
+
+        __device__ __forceinline__ float reduce_combine(float a, float b, int reduce_op_int) {
+            switch (reduce_op_int) {
+            case 0: return a + b;
+            case 1: return a + b;
+            case 2: return fmaxf(a, b);
+            case 3: return fminf(a, b);
+            default: return a + b;
+            }
+        }
+
+        __device__ __forceinline__ float block_reduce_op(float val, int reduce_op_int) {
+            switch (reduce_op_int) {
+            case 0: return warp_ops::block_reduce_sum(val);
+            case 1: return warp_ops::block_reduce_sum(val);
+            case 2: return warp_ops::block_reduce_max(val);
+            case 3: return warp_ops::block_reduce_min(val);
+            default: return warp_ops::block_reduce_sum(val);
+            }
+        }
+
+        __global__ void fused_transform_reduce_stage1_kernel(
+            const float* __restrict__ input,
+            float* __restrict__ partial_results,
+            size_t n,
+            FusedPointwiseOpChain chain,
+            int reduce_op_int) {
+
+            const float identity = reduce_identity(reduce_op_int);
+            float acc = identity;
+
+            const bool is_aligned = (reinterpret_cast<uintptr_t>(input) % 16) == 0;
+            const size_t total_threads = static_cast<size_t>(gridDim.x) * blockDim.x;
+
+            if (is_aligned) {
+                const size_t vec_n = n / 4;
+                for (size_t vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
+                     vec_idx < vec_n;
+                     vec_idx += total_threads) {
+                    float4 vals = reinterpret_cast<const float4*>(input)[vec_idx];
+                    acc = reduce_combine(acc, apply_chain(vals.x, chain), reduce_op_int);
+                    acc = reduce_combine(acc, apply_chain(vals.y, chain), reduce_op_int);
+                    acc = reduce_combine(acc, apply_chain(vals.z, chain), reduce_op_int);
+                    acc = reduce_combine(acc, apply_chain(vals.w, chain), reduce_op_int);
+                }
+                // Handle tail elements
+                const size_t tail_start = vec_n * 4;
+                for (size_t i = tail_start + blockIdx.x * blockDim.x + threadIdx.x;
+                     i < n;
+                     i += total_threads) {
+                    acc = reduce_combine(acc, apply_chain(input[i], chain), reduce_op_int);
+                }
+            } else {
+                for (size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+                     i < n;
+                     i += total_threads) {
+                    acc = reduce_combine(acc, apply_chain(input[i], chain), reduce_op_int);
+                }
+            }
+
+            acc = block_reduce_op(acc, reduce_op_int);
+
+            if (threadIdx.x == 0) {
+                partial_results[blockIdx.x] = acc;
+            }
+        }
+
+        __global__ void fused_reduce_stage2_kernel(
+            const float* __restrict__ partial_results,
+            float* __restrict__ output,
+            int num_partials,
+            int reduce_op_int) {
+
+            const float identity = reduce_identity(reduce_op_int);
+            float acc = identity;
+
+            for (int i = threadIdx.x; i < num_partials; i += blockDim.x) {
+                acc = reduce_combine(acc, partial_results[i], reduce_op_int);
+            }
+
+            acc = block_reduce_op(acc, reduce_op_int);
+
+            if (threadIdx.x == 0) {
+                output[0] = acc;
+            }
+        }
+
+    } // namespace
+
+    void launch_fused_transform_reduce(const float* input, float* output, size_t n,
+                                       const FusedPointwiseOpChain& chain,
+                                       ReduceOp reduce_op, cudaStream_t stream) {
+        if (n == 0)
+            return;
+        assert(input != nullptr);
+        assert(output != nullptr);
+        assert(chain.num_ops > 0 && chain.num_ops <= FUSED_POINTWISE_MAX_OPS);
+
+        const int reduce_op_int = static_cast<int>(reduce_op);
+        assert(reduce_op_int >= 0 && reduce_op_int <= 3);
+
+        const auto& gpu = GPUConfig::get();
+        const int grid_size = gpu.optimal_grid_size(BLOCK_SIZE);
+
+        float* partial = nullptr;
+        cudaMallocAsync(&partial, grid_size * sizeof(float), stream);
+        assert(partial != nullptr);
+
+        fused_transform_reduce_stage1_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
+            input, partial, n, chain, reduce_op_int);
+
+        fused_reduce_stage2_kernel<<<1, BLOCK_SIZE, 0, stream>>>(
+            partial, output, grid_size, reduce_op_int);
+
+        if (reduce_op == ReduceOp::Mean) {
+            const float scale = 1.0f / static_cast<float>(n);
+            launch_fused_affine_transform(output, output, 1, scale, 0.0f, stream);
+        }
+
+        cudaFreeAsync(partial, stream);
     }
 
 } // namespace lfs::core::tensor_ops

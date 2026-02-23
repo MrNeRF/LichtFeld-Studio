@@ -4,6 +4,8 @@
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/tensor_trace.hpp"
+#include "internal/lazy_config.hpp"
+#include "internal/lazy_executor.hpp"
 #include "internal/memory_pool.hpp"
 #include "internal/tensor_broadcast.hpp"
 #include "internal/tensor_functors.hpp"
@@ -632,6 +634,62 @@ namespace lfs::core {
         debug::OpTraceGuard trace(op_name, *this);
 
         validate_unary_op();
+
+        // Fused transform-reduce: consume pending pointwise chain
+        if (internal::lazy_mode_enabled() && dtype_ == DataType::Float32 &&
+            device_ == Device::CUDA && has_lazy_expr() &&
+            (op == ReduceOp::Sum || op == ReduceOp::Mean ||
+             op == ReduceOp::Max || op == ReduceOp::Min)) {
+            bool is_full_reduce = args.axes.empty();
+            if (!is_full_reduce) {
+                std::vector<int> sorted_axes = args.axes;
+                for (auto& ax : sorted_axes) {
+                    if (ax < 0)
+                        ax += static_cast<int>(shape_.rank());
+                }
+                std::sort(sorted_axes.begin(), sorted_axes.end());
+                sorted_axes.erase(std::unique(sorted_axes.begin(), sorted_axes.end()), sorted_axes.end());
+                is_full_reduce = sorted_axes.size() == shape_.rank();
+            }
+            if (is_full_reduce) {
+                Tensor fused_source;
+                std::vector<internal::LazyPointwiseOp> fused_ops;
+                if (internal::lazy_executor_try_consume_pointwise_fusion(
+                        lazy_expr_id(), &fused_source, &fused_ops) &&
+                    fused_source.is_valid() &&
+                    fused_source.device() == Device::CUDA &&
+                    fused_source.is_contiguous() &&
+                    fused_source.dtype() == DataType::Float32 &&
+                    static_cast<int>(fused_ops.size()) <= tensor_ops::FUSED_POINTWISE_MAX_OPS) {
+                    tensor_ops::FusedPointwiseOpChain chain{};
+                    chain.num_ops = static_cast<int>(fused_ops.size());
+                    for (int i = 0; i < chain.num_ops; ++i) {
+                        chain.ops[i].kind = static_cast<uint8_t>(fused_ops[i].kind);
+                        chain.ops[i].scalar = fused_ops[i].scalar;
+                    }
+
+                    const size_t n = fused_source.numel();
+                    auto result = Tensor::empty(TensorShape(args.keepdim
+                                                                ? std::vector<size_t>(shape_.rank(), 1)
+                                                                : std::vector<size_t>{}),
+                                                Device::CUDA, DataType::Float32);
+
+                    tensor_ops::launch_fused_transform_reduce(
+                        fused_source.ptr<float>(), result.ptr<float>(), n,
+                        chain, op, fused_source.stream());
+
+                    internal::telemetry_record_eager_fallback(1);
+                    internal::lazy_executor_diagnostics_counters_increment_fused();
+                    return result;
+                }
+            }
+        }
+
+        // Materialize deferred tensors before the reduce kernels capture raw shape/data pointers.
+        // data_ptr() triggers materialization which std::moves internal state; if shape pointers
+        // were captured before that move, they dangle. Materializing up front is safe and cheap
+        // (no-op for already-materialized tensors).
+        const_cast<Tensor*>(this)->materialize_if_deferred();
 
         // FAST PATH: 2D dim=0 reduction (column sums) - use specialized kernel
         // This is faster than transpose+contiguous+reduce because it avoids the copy
@@ -1577,9 +1635,9 @@ namespace lfs::core {
             result.state_ = std::make_shared<Tensor::TensorState>(*tensors[0].state_);
             result.state_->capacity = tensors[0].capacity();
             result.state_->logical_size = total_size_along_dim;
-            result.is_view_ = false;             // Not a view, it owns the data (via shared_ptr)
+            result.is_view_ = false;                // Not a view, it owns the data (via shared_ptr)
             result.set_stream(tensors[0].stream()); // Inherit stream from first tensor
-            result.compute_alignment();          // Compute alignment flags
+            result.compute_alignment();             // Compute alignment flags
             result.id_ = Tensor::next_id_++;
 
             LOG_DEBUG("  Result tensor: id={}, data_ptr={}, capacity={}, logical_size={}",

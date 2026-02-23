@@ -485,4 +485,8 @@ namespace lfs::core::tensor_ops {
                                                    size_t n, const FusedPointwiseOpChain& chain,
                                                    cudaStream_t stream = nullptr);
 
+    LFS_CORE_API void launch_fused_transform_reduce(const float* input, float* output, size_t n,
+                                                    const FusedPointwiseOpChain& chain,
+                                                    ReduceOp reduce_op, cudaStream_t stream = nullptr);
+
 } // namespace lfs::core::tensor_ops
