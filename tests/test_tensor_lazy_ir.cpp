@@ -28,6 +28,8 @@ namespace {
             internal::lazy_executor_set_debug_dump_override_for_testing(std::nullopt);
             internal::lazy_executor_clear_debug_dump_cache_for_testing();
             internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
+            internal::lazy_executor_set_size_heuristic_override_for_testing(false);
+            internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
             Tensor::reset_lazy_telemetry();
         }
 
@@ -39,6 +41,8 @@ namespace {
             internal::lazy_executor_set_debug_dump_override_for_testing(std::nullopt);
             internal::lazy_executor_clear_debug_dump_cache_for_testing();
             internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
+            internal::lazy_executor_set_size_heuristic_override_for_testing(std::nullopt);
+            internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
             Tensor::reset_lazy_telemetry();
         }
     };
@@ -1959,4 +1963,96 @@ TEST(TensorLazyRuntimeTest, ReduceParityAcrossModes) {
             }
         }
     }
+}
+
+// ============= PR14: Size Heuristic Tests =============
+
+TEST(TensorLazyIrTest, SizeHeuristicSkipsDeferralForTinyTensors) {
+    LazyRuntimeGuard guard(LazyMode::On);
+    internal::lazy_executor_set_size_heuristic_override_for_testing(true);
+
+    // 8 floats = 32 bytes, well below 4096 threshold
+    auto tiny = Tensor::ones({8}, Device::CPU, DataType::Float32).add(1.0f);
+
+    auto values = tiny.to_vector();
+    ASSERT_EQ(values.size(), 8u);
+    for (float v : values) {
+        EXPECT_FLOAT_EQ(v, 2.0f);
+    }
+
+    const auto snapshot = Tensor::lazy_telemetry_snapshot();
+    EXPECT_GE(snapshot.eager_fallback_size_heuristic, 1u);
+}
+
+TEST(TensorLazyIrTest, SizeHeuristicAllowsDeferralForLargeTensors) {
+    LazyRuntimeGuard guard(LazyMode::On);
+    internal::lazy_executor_set_size_heuristic_override_for_testing(true);
+
+    // 100K floats = 400KB, well above 4096 threshold — deferred
+    const auto before = Tensor::lazy_telemetry_snapshot();
+    auto large = Tensor::ones({100000}, Device::CPU, DataType::Float32).add(1.0f);
+
+    const auto after = Tensor::lazy_telemetry_snapshot();
+    EXPECT_EQ(after.eager_fallback_size_heuristic - before.eager_fallback_size_heuristic, 0u);
+
+    auto values = large.to_vector();
+    ASSERT_EQ(values.size(), 100000u);
+    EXPECT_FLOAT_EQ(values[0], 2.0f);
+}
+
+TEST(TensorLazyIrTest, SizeHeuristicDisabledByOverride) {
+    LazyRuntimeGuard guard(LazyMode::On);
+    internal::lazy_executor_set_size_heuristic_override_for_testing(false);
+
+    // With heuristic disabled, even tiny tensors should be deferred
+    auto tiny = Tensor::ones({8}, Device::CPU, DataType::Float32).add(1.0f);
+
+    auto values = tiny.to_vector();
+    ASSERT_EQ(values.size(), 8u);
+    for (float v : values) {
+        EXPECT_FLOAT_EQ(v, 2.0f);
+    }
+
+    const auto snapshot = Tensor::lazy_telemetry_snapshot();
+    EXPECT_EQ(snapshot.eager_fallback_size_heuristic, 0u);
+}
+
+TEST(TensorLazyIrTest, SizeHeuristicCustomThreshold) {
+    LazyRuntimeGuard guard(LazyMode::On);
+    internal::lazy_executor_set_size_heuristic_override_for_testing(true);
+    internal::lazy_executor_set_size_threshold_override_for_testing(size_t{256});
+
+    EXPECT_EQ(internal::lazy_executor_size_heuristic_threshold(), 256u);
+
+    // 64 floats = 256 bytes → at boundary → should defer (>= threshold)
+    const auto before_boundary = Tensor::lazy_telemetry_snapshot();
+    auto at_boundary = Tensor::ones({64}, Device::CPU, DataType::Float32).add(1.0f);
+    const auto after_boundary = Tensor::lazy_telemetry_snapshot();
+    EXPECT_EQ(after_boundary.eager_fallback_size_heuristic - before_boundary.eager_fallback_size_heuristic, 0u);
+    EXPECT_FLOAT_EQ(at_boundary.to_vector()[0], 2.0f);
+
+    // 63 floats = 252 bytes → below threshold → heuristic triggers eager
+    const auto before_below = Tensor::lazy_telemetry_snapshot();
+    auto below = Tensor::ones({63}, Device::CPU, DataType::Float32).add(1.0f);
+    const auto after_below = Tensor::lazy_telemetry_snapshot();
+    EXPECT_GE(after_below.eager_fallback_size_heuristic - before_below.eager_fallback_size_heuristic, 1u);
+    EXPECT_FLOAT_EQ(below.to_vector()[0], 2.0f);
+}
+
+TEST(TensorLazyIrTest, SizeHeuristicSmallTensorCorrectness) {
+    LazyRuntimeGuard guard(LazyMode::On);
+    internal::lazy_executor_set_size_heuristic_override_for_testing(true);
+
+    // Chained ops on small tensor — heuristic triggers eager at each step
+    auto a = Tensor::full({4}, 3.0f, Device::CPU, DataType::Float32);
+    auto b = a.add(2.0f).mul(0.5f);
+
+    auto values = b.to_vector();
+    ASSERT_EQ(values.size(), 4u);
+    for (float v : values) {
+        EXPECT_FLOAT_EQ(v, 2.5f);
+    }
+
+    const auto snapshot = Tensor::lazy_telemetry_snapshot();
+    EXPECT_GE(snapshot.eager_fallback_size_heuristic, 2u);
 }

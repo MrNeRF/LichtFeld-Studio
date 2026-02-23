@@ -125,6 +125,12 @@ namespace lfs::core {
         LFS_CORE_API void lazy_executor_diagnostics_counters_increment_fused();
         LFS_CORE_API void lazy_executor_diagnostics_counters_increment_fused_reduce();
 
+        // Size heuristic gate: skip deferral for tiny tensors where overhead dominates.
+        LFS_CORE_API void lazy_executor_set_size_heuristic_override_for_testing(std::optional<bool> enabled);
+        LFS_CORE_API void lazy_executor_set_size_threshold_override_for_testing(std::optional<size_t> threshold);
+        LFS_CORE_API size_t lazy_executor_size_heuristic_threshold();
+        LFS_CORE_API bool lazy_size_heuristic_should_defer(size_t byte_count);
+
     } // namespace internal
 
 } // namespace lfs::core

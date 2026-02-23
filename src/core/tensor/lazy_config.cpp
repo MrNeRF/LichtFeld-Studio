@@ -21,6 +21,8 @@ namespace lfs::core::internal {
             std::atomic<uint64_t> eager_fallback_mutation{0};
             std::atomic<uint64_t> eager_fallback_interop{0};
             std::atomic<uint64_t> eager_fallback_other{0};
+            std::atomic<uint64_t> eager_fallback_size_heuristic{0};
+            std::atomic<uint64_t> stateful_op_eager{0};
             std::atomic<uint64_t> kernel_launches{0};
             std::atomic<uint64_t> allocated_bytes{0};
         };
@@ -168,6 +170,8 @@ namespace lfs::core::internal {
         telemetry.eager_fallback_mutation.store(0, std::memory_order_relaxed);
         telemetry.eager_fallback_interop.store(0, std::memory_order_relaxed);
         telemetry.eager_fallback_other.store(0, std::memory_order_relaxed);
+        telemetry.eager_fallback_size_heuristic.store(0, std::memory_order_relaxed);
+        telemetry.stateful_op_eager.store(0, std::memory_order_relaxed);
         telemetry.kernel_launches.store(0, std::memory_order_relaxed);
         telemetry.allocated_bytes.store(0, std::memory_order_relaxed);
     }
@@ -183,6 +187,8 @@ namespace lfs::core::internal {
             telemetry.eager_fallback_mutation.load(std::memory_order_relaxed),
             telemetry.eager_fallback_interop.load(std::memory_order_relaxed),
             telemetry.eager_fallback_other.load(std::memory_order_relaxed),
+            telemetry.eager_fallback_size_heuristic.load(std::memory_order_relaxed),
+            telemetry.stateful_op_eager.load(std::memory_order_relaxed),
             telemetry.kernel_launches.load(std::memory_order_relaxed),
             telemetry.allocated_bytes.load(std::memory_order_relaxed)};
     }
@@ -214,6 +220,9 @@ namespace lfs::core::internal {
         case LazyFallbackReason::Interop:
             telemetry.eager_fallback_interop.fetch_add(count, std::memory_order_relaxed);
             break;
+        case LazyFallbackReason::SizeHeuristic:
+            telemetry.eager_fallback_size_heuristic.fetch_add(count, std::memory_order_relaxed);
+            break;
         case LazyFallbackReason::Other:
         case LazyFallbackReason::Unspecified:
         default:
@@ -224,6 +233,10 @@ namespace lfs::core::internal {
 
     void telemetry_record_kernel_launch(uint64_t count) {
         lazy_runtime_state().telemetry.kernel_launches.fetch_add(count, std::memory_order_relaxed);
+    }
+
+    void telemetry_record_stateful_op_eager(uint64_t count) {
+        lazy_runtime_state().telemetry.stateful_op_eager.fetch_add(count, std::memory_order_relaxed);
     }
 
 } // namespace lfs::core::internal

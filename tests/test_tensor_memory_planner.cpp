@@ -25,6 +25,8 @@ namespace {
             internal::lazy_executor_clear_debug_dump_cache_for_testing();
             internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
             internal::lazy_executor_set_memory_planner_override_for_testing(std::nullopt);
+            internal::lazy_executor_set_size_heuristic_override_for_testing(false);
+            internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
             Tensor::reset_lazy_telemetry();
         }
 
@@ -37,6 +39,8 @@ namespace {
             internal::lazy_executor_clear_debug_dump_cache_for_testing();
             internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
             internal::lazy_executor_set_memory_planner_override_for_testing(std::nullopt);
+            internal::lazy_executor_set_size_heuristic_override_for_testing(std::nullopt);
+            internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
             Tensor::reset_lazy_telemetry();
         }
     };

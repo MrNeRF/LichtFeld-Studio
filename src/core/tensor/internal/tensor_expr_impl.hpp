@@ -7,6 +7,7 @@
 // It should be included at the END of tensor.hpp, after Tensor class is fully defined
 
 #include "lazy_config.hpp"
+#include "lazy_executor.hpp"
 #include "lazy_ir.hpp"
 #include "tensor_expr.hpp"
 #include "tensor_functors.hpp" // For ops::compose
@@ -30,6 +31,14 @@ namespace lfs::core {
             const TensorShape shape = expr.shape_impl();
             const Device device = expr.device_impl();
             const DataType dtype = expr.dtype_impl();
+
+            const size_t bytes = shape.elements() * dtype_size(dtype);
+            if (!internal::lazy_size_heuristic_should_defer(bytes)) {
+                internal::LazyFallbackReasonScope scope(internal::LazyFallbackReason::SizeHeuristic);
+                internal::telemetry_record_eager_fallback(1);
+                return expr.eval();
+            }
+
             return Tensor::make_deferred_expr_tensor(
                 shape, device, dtype,
                 [expr = std::move(expr)]() mutable { return expr.eval(); });

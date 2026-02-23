@@ -329,6 +329,8 @@ namespace lfs::core {
         }
 
         case LoadOp::Random: {
+            if (internal::lazy_mode_enabled() || internal::lazy_mode_shadow_enabled())
+                internal::telemetry_record_stateful_op_eager();
             auto [low, high] = std::get<std::pair<float, float>>(args.args);
             result = load(LoadOp::Empty, args);
             if (!result.is_valid() || result.numel() == 0)
@@ -368,6 +370,8 @@ namespace lfs::core {
         }
 
         case LoadOp::Normal: {
+            if (internal::lazy_mode_enabled() || internal::lazy_mode_shadow_enabled())
+                internal::telemetry_record_stateful_op_eager();
             auto [mean, std] = std::get<std::pair<float, float>>(args.args);
             result = load(LoadOp::Empty, args);
             if (!result.is_valid() || result.numel() == 0)
@@ -398,6 +402,8 @@ namespace lfs::core {
         }
 
         case LoadOp::Randint: {
+            if (internal::lazy_mode_enabled() || internal::lazy_mode_shadow_enabled())
+                internal::telemetry_record_stateful_op_eager();
             auto [low, high] = std::get<std::pair<int, int>>(args.args);
             result = load(LoadOp::Empty, args);
             if (!result.is_valid() || result.numel() == 0)
@@ -467,6 +473,8 @@ namespace lfs::core {
         }
 
         case LoadOp::Bernoulli: {
+            if (internal::lazy_mode_enabled() || internal::lazy_mode_shadow_enabled())
+                internal::telemetry_record_stateful_op_eager();
             float p = std::get<float>(args.args);
             result = load(LoadOp::Empty, args);
             if (!result.is_valid() || result.numel() == 0)

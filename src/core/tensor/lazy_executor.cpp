@@ -106,8 +106,21 @@ namespace lfs::core::internal {
             return state;
         }
 
+        struct LazyExecutorSizeHeuristicState {
+            std::atomic<int> override_enabled{-1};       // -1 unset, 0 false, 1 true
+            std::atomic<int64_t> override_threshold{-1}; // -1 unset
+            std::atomic<bool> has_cached_env{false};
+            std::atomic<bool> cached_enabled{true};
+            std::atomic<size_t> cached_threshold{4096};
+        };
+
         LazyExecutorMemoryPlannerState& lazy_executor_memory_planner_state() {
             static LazyExecutorMemoryPlannerState state;
+            return state;
+        }
+
+        LazyExecutorSizeHeuristicState& lazy_executor_size_heuristic_state() {
+            static LazyExecutorSizeHeuristicState state;
             return state;
         }
 
@@ -934,6 +947,81 @@ namespace lfs::core::internal {
 
     bool lazy_executor_memory_planner_enabled_for_testing() {
         return lazy_executor_memory_planner_enabled();
+    }
+
+    void lazy_executor_set_size_heuristic_override_for_testing(std::optional<bool> enabled) {
+        auto& state = lazy_executor_size_heuristic_state();
+        if (enabled.has_value()) {
+            state.override_enabled.store(*enabled ? 1 : 0, std::memory_order_release);
+            return;
+        }
+        state.override_enabled.store(-1, std::memory_order_release);
+    }
+
+    void lazy_executor_set_size_threshold_override_for_testing(std::optional<size_t> threshold) {
+        auto& state = lazy_executor_size_heuristic_state();
+        if (threshold.has_value()) {
+            state.override_threshold.store(static_cast<int64_t>(*threshold), std::memory_order_release);
+            return;
+        }
+        state.override_threshold.store(-1, std::memory_order_release);
+    }
+
+    size_t lazy_executor_size_heuristic_threshold() {
+        auto& state = lazy_executor_size_heuristic_state();
+
+        const int64_t override_threshold = state.override_threshold.load(std::memory_order_acquire);
+        if (override_threshold >= 0) {
+            return static_cast<size_t>(override_threshold);
+        }
+
+        if (!state.has_cached_env.load(std::memory_order_acquire)) {
+            const char* env_threshold = std::getenv("TENSOR_LAZY_SIZE_THRESHOLD");
+            if (env_threshold) {
+                const std::string normalized = trim_ascii_lower(env_threshold);
+                if (!normalized.empty()) {
+                    char* end = nullptr;
+                    const unsigned long parsed = std::strtoul(normalized.c_str(), &end, 10);
+                    if (end != normalized.c_str() && parsed > 0) {
+                        state.cached_threshold.store(static_cast<size_t>(parsed), std::memory_order_release);
+                    }
+                }
+            }
+
+            const char* env_enabled = std::getenv("TENSOR_LAZY_SIZE_HEURISTIC");
+            if (env_enabled) {
+                state.cached_enabled.store(
+                    parse_debug_dump_bool(env_enabled, true), std::memory_order_release);
+            }
+
+            state.has_cached_env.store(true, std::memory_order_release);
+        }
+
+        return state.cached_threshold.load(std::memory_order_acquire);
+    }
+
+    bool lazy_size_heuristic_should_defer(size_t byte_count) {
+        auto& state = lazy_executor_size_heuristic_state();
+
+        const int override_enabled = state.override_enabled.load(std::memory_order_acquire);
+        if (override_enabled == 0) {
+            return true;
+        }
+
+        bool enabled;
+        if (override_enabled == 1) {
+            enabled = true;
+        } else {
+            // Trigger env caching via threshold() call
+            lazy_executor_size_heuristic_threshold();
+            enabled = state.cached_enabled.load(std::memory_order_acquire);
+        }
+
+        if (!enabled) {
+            return true;
+        }
+
+        return byte_count >= lazy_executor_size_heuristic_threshold();
     }
 
     bool lazy_executor_try_consume_pointwise_fusion(

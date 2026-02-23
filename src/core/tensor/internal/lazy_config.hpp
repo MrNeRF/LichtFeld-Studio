@@ -25,6 +25,8 @@ namespace lfs::core {
         uint64_t eager_fallback_mutation = 0;
         uint64_t eager_fallback_interop = 0;
         uint64_t eager_fallback_other = 0;
+        uint64_t eager_fallback_size_heuristic = 0;
+        uint64_t stateful_op_eager = 0;
         uint64_t kernel_launches = 0;
         uint64_t allocated_bytes = 0;
     };
@@ -37,7 +39,8 @@ namespace lfs::core {
             DeviceTransfer = 2,
             Mutation = 3,
             Interop = 4,
-            Other = 5
+            Other = 5,
+            SizeHeuristic = 6
         };
 
         class LFS_CORE_API LazyFallbackReasonScope {
@@ -70,6 +73,7 @@ namespace lfs::core {
         LFS_CORE_API void telemetry_record_materialization(uint64_t bytes);
         LFS_CORE_API void telemetry_record_eager_fallback(uint64_t count = 1);
         LFS_CORE_API void telemetry_record_kernel_launch(uint64_t count = 1);
+        LFS_CORE_API void telemetry_record_stateful_op_eager(uint64_t count = 1);
 
     } // namespace internal
 
