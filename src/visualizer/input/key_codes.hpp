@@ -115,11 +115,11 @@ namespace lfs::vis::input {
     constexpr int KEY_RIGHT_SUPER = 347;
     constexpr int KEY_MENU = 348;
 
-    constexpr int MOD_NONE = 0;
-    constexpr int MOD_SHIFT = 0x0001;
-    constexpr int MOD_CTRL = 0x0002;
-    constexpr int MOD_ALT = 0x0004;
-    constexpr int MOD_SUPER = 0x0008;
+    constexpr int KEYMOD_NONE = 0;
+    constexpr int KEYMOD_SHIFT = 0x0001;
+    constexpr int KEYMOD_CTRL = 0x0002;
+    constexpr int KEYMOD_ALT = 0x0004;
+    constexpr int KEYMOD_SUPER = 0x0008;
 
     enum class AppMouseButton : int {
         LEFT = 0,

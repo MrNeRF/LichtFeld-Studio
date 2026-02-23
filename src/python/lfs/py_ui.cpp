@@ -981,9 +981,9 @@ namespace lfs::python {
             py_event.mouse_y = mouse_btn->position.y;
             py_event.mouse_region_x = mouse_btn->position.x;
             py_event.mouse_region_y = mouse_btn->position.y;
-            py_event.shift = (mouse_btn->mods & lfs::vis::input::MOD_SHIFT) != 0;
-            py_event.ctrl = (mouse_btn->mods & lfs::vis::input::MOD_CTRL) != 0;
-            py_event.alt = (mouse_btn->mods & lfs::vis::input::MOD_ALT) != 0;
+            py_event.shift = (mouse_btn->mods & lfs::vis::input::KEYMOD_SHIFT) != 0;
+            py_event.ctrl = (mouse_btn->mods & lfs::vis::input::KEYMOD_CTRL) != 0;
+            py_event.alt = (mouse_btn->mods & lfs::vis::input::KEYMOD_ALT) != 0;
         } else if (const auto* mouse_move = event.as<vis::MouseMoveEvent>()) {
             py_event.type = "MOUSEMOVE";
             py_event.value = "NOTHING";
@@ -1002,9 +1002,9 @@ namespace lfs::python {
             py_event.type = key_to_type_string(key->key);
             py_event.value = action_to_value_string(key->action);
             py_event.key_code = key->key;
-            py_event.shift = (key->mods & lfs::vis::input::MOD_SHIFT) != 0;
-            py_event.ctrl = (key->mods & lfs::vis::input::MOD_CTRL) != 0;
-            py_event.alt = (key->mods & lfs::vis::input::MOD_ALT) != 0;
+            py_event.shift = (key->mods & lfs::vis::input::KEYMOD_SHIFT) != 0;
+            py_event.ctrl = (key->mods & lfs::vis::input::KEYMOD_CTRL) != 0;
+            py_event.alt = (key->mods & lfs::vis::input::KEYMOD_ALT) != 0;
         } else {
             py_event.type = "NONE";
             py_event.value = "NOTHING";
@@ -4685,10 +4685,10 @@ namespace lfs::python {
         mouse.attr("MIDDLE") = static_cast<int>(lfs::vis::input::AppMouseButton::MIDDLE);
 
         auto mod = m.def_submodule("mod", "Modifier keys");
-        mod.attr("SHIFT") = lfs::vis::input::MOD_SHIFT;
-        mod.attr("CONTROL") = lfs::vis::input::MOD_CTRL;
-        mod.attr("ALT") = lfs::vis::input::MOD_ALT;
-        mod.attr("SUPER") = lfs::vis::input::MOD_SUPER;
+        mod.attr("SHIFT") = lfs::vis::input::KEYMOD_SHIFT;
+        mod.attr("CONTROL") = lfs::vis::input::KEYMOD_CTRL;
+        mod.attr("ALT") = lfs::vis::input::KEYMOD_ALT;
+        mod.attr("SUPER") = lfs::vis::input::KEYMOD_SUPER;
 
         auto action = m.def_submodule("action", "Action values");
         action.attr("PRESS") = lfs::vis::input::ACTION_PRESS;

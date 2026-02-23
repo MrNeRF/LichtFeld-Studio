@@ -866,6 +866,8 @@ namespace lfs::vis {
         python::ensure_initialized();
         python::preload_user_plugins_async();
 
+        window_manager_->showWindow();
+
         fully_initialized = true;
         return true;
     }

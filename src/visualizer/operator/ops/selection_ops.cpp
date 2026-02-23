@@ -208,9 +208,9 @@ namespace lfs::vis::op {
                 if (polygon_points_.size() >= 3) {
                     polygon_closed_ = true;
                     // Update selection op based on current modifiers
-                    if (ke->mods & input::MOD_SHIFT) {
+                    if (ke->mods & input::KEYMOD_SHIFT) {
                         op_ = SelectionOp::Add;
-                    } else if (ke->mods & input::MOD_CTRL) {
+                    } else if (ke->mods & input::KEYMOD_CTRL) {
                         op_ = SelectionOp::Remove;
                     } else {
                         op_ = SelectionOp::Replace;

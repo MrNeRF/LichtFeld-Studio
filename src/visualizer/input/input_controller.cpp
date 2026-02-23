@@ -234,11 +234,11 @@ namespace lfs::vis {
         SDL_Keymod m = SDL_GetModState();
         int mods = 0;
         if (m & SDL_KMOD_CTRL)
-            mods |= input::MOD_CTRL;
+            mods |= input::KEYMOD_CTRL;
         if (m & SDL_KMOD_SHIFT)
-            mods |= input::MOD_SHIFT;
+            mods |= input::KEYMOD_SHIFT;
         if (m & SDL_KMOD_ALT)
-            mods |= input::MOD_ALT;
+            mods |= input::KEYMOD_ALT;
         return mods;
     }
 
@@ -767,8 +767,8 @@ namespace lfs::vis {
 
         // Brush radius adjustment for selection/brush tools
         const int mods = getModifierKeys();
-        const bool ctrl = (mods & input::MOD_CTRL) != 0;
-        const bool shift = (mods & input::MOD_SHIFT) != 0;
+        const bool ctrl = (mods & input::KEYMOD_CTRL) != 0;
+        const bool shift = (mods & input::KEYMOD_SHIFT) != 0;
         if ((ctrl || shift) && !op::operators().hasModalOperator()) {
             if (selection_tool_ && selection_tool_->isEnabled()) {
                 const float scale = (yoff > 0) ? 1.1f : 0.9f;

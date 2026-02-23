@@ -55,9 +55,9 @@ namespace lfs::vis::tools {
                 return SelectionOp::Replace;
         }
         // Fallback
-        if (mods & input::MOD_CTRL)
+        if (mods & input::KEYMOD_CTRL)
             return SelectionOp::Remove;
-        if (mods & input::MOD_SHIFT)
+        if (mods & input::KEYMOD_SHIFT)
             return SelectionOp::Add;
         return SelectionOp::Replace;
     }
@@ -307,9 +307,9 @@ namespace lfs::vis::tools {
 
         int mods = 0;
         if (shift)
-            mods |= input::MOD_SHIFT;
+            mods |= input::KEYMOD_SHIFT;
         if (ctrl)
-            mods |= input::MOD_CTRL;
+            mods |= input::KEYMOD_CTRL;
 
         if (mods != 0) {
             const auto op = getOpFromModifiers(mods);

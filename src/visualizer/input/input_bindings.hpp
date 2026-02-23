@@ -109,11 +109,11 @@ namespace lfs::vis::input {
     };
 
     enum Modifier : int {
-        MODIFIER_NONE = MOD_NONE,
-        MODIFIER_SHIFT = MOD_SHIFT,
-        MODIFIER_CTRL = MOD_CTRL,
-        MODIFIER_ALT = MOD_ALT,
-        MODIFIER_SUPER = MOD_SUPER,
+        MODIFIER_NONE = KEYMOD_NONE,
+        MODIFIER_SHIFT = KEYMOD_SHIFT,
+        MODIFIER_CTRL = KEYMOD_CTRL,
+        MODIFIER_ALT = KEYMOD_ALT,
+        MODIFIER_SUPER = KEYMOD_SUPER,
     };
 
     enum class MouseButton {

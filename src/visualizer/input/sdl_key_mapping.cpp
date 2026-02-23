@@ -89,15 +89,15 @@ namespace lfs::vis::input {
     }
 
     int sdlModsToAppMods(SDL_Keymod sdl_mods) {
-        int mods = MOD_NONE;
+        int mods = KEYMOD_NONE;
         if (sdl_mods & SDL_KMOD_SHIFT)
-            mods |= MOD_SHIFT;
+            mods |= KEYMOD_SHIFT;
         if (sdl_mods & SDL_KMOD_CTRL)
-            mods |= MOD_CTRL;
+            mods |= KEYMOD_CTRL;
         if (sdl_mods & SDL_KMOD_ALT)
-            mods |= MOD_ALT;
+            mods |= KEYMOD_ALT;
         if (sdl_mods & SDL_KMOD_GUI)
-            mods |= MOD_SUPER;
+            mods |= KEYMOD_SUPER;
         return mods;
     }
 
