@@ -50,6 +50,7 @@ namespace lfs::core {
             uint64_t node_id = 0;
             std::string op_name;
             std::vector<uint64_t> input_ids;
+            size_t buffer_bytes = 0;
         };
 
         struct LazyExecutionPlanDebug {
@@ -69,6 +70,9 @@ namespace lfs::core {
             uint64_t fused_reduce_launches = 0;
             uint64_t max_registry_entries = 0;
             uint64_t max_context_cache_entries = 0;
+            uint64_t early_releases = 0;
+            uint64_t early_release_bytes = 0;
+            uint64_t peak_cache_bytes = 0;
         };
 
         // Build topological execution plan metadata for a root tensor.
@@ -108,6 +112,10 @@ namespace lfs::core {
         // Pointwise fusion scaffold gate (on by default in lazy mode).
         LFS_CORE_API void lazy_executor_set_pointwise_fusion_override_for_testing(std::optional<bool> enabled);
         LFS_CORE_API bool lazy_executor_pointwise_fusion_enabled_for_testing();
+
+        // Memory planner gate (on by default in lazy mode).
+        LFS_CORE_API void lazy_executor_set_memory_planner_override_for_testing(std::optional<bool> enabled);
+        LFS_CORE_API bool lazy_executor_memory_planner_enabled_for_testing();
 
         // Consume a pending pointwise fusion recipe for producer fusion (e.g. fused transform-reduce).
         // Returns true if a recipe was found and consumed. Writes to out_source and out_ops.

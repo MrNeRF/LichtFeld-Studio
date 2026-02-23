@@ -36,6 +36,7 @@ namespace lfs::core {
             Device device = static_cast<Device>(0);
             DataType dtype = static_cast<DataType>(0);
             std::string shape;
+            size_t buffer_bytes = 0;
         };
 
         LFS_CORE_API bool lazy_ir_active();

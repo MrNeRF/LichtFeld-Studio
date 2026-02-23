@@ -251,6 +251,7 @@ set(TEST_FILES
     test_mesh_loader.cpp
     test_rotated_sh_correctness.cpp
     test_tensor_stream.cpp
+    test_tensor_memory_planner.cpp
 )
 
 # Build test sources list

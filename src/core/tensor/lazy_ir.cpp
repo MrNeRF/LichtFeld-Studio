@@ -22,6 +22,7 @@ namespace lfs::core::internal {
             Device device = static_cast<Device>(0);
             DataType dtype = static_cast<DataType>(0);
             std::string shape;
+            size_t buffer_bytes = 0;
         };
 
         struct LazyIrRuntime {
@@ -43,6 +44,7 @@ namespace lfs::core::internal {
                                       std::vector<uint64_t> inputs,
                                       const Tensor& tensor) {
             const uint64_t node_id = runtime.next_node_id++;
+            const size_t bytes = tensor.shape().elements() * dtype_size(tensor.dtype());
             runtime.nodes.emplace(node_id, LazyExprNode{
                                                node_id,
                                                kind,
@@ -50,7 +52,8 @@ namespace lfs::core::internal {
                                                std::move(inputs),
                                                tensor.device(),
                                                tensor.dtype(),
-                                               tensor.shape().str()});
+                                               tensor.shape().str(),
+                                               bytes});
             runtime.tensor_to_node[tensor_id] = node_id;
             telemetry_record_expr_node(1);
             return node_id;
@@ -75,7 +78,8 @@ namespace lfs::core::internal {
                 node.input_ids,
                 node.device,
                 node.dtype,
-                node.shape};
+                node.shape,
+                node.buffer_bytes};
         }
 
     } // namespace

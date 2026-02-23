@@ -587,6 +587,45 @@ Added storage generation counter to detect stale views after base tensor realloc
 
 **Tests:** 22 new tests pass, 167 existing view/memory/capacity tests pass, 170 broader tensor tests pass, 30 expression template tests pass.
 
+### PR11: Stream Consistency Pass (2026-02-23)
+
+Replaced implicit nullptr-stream launches with explicit stream propagation. Added PyTorch-compatible thread-local stream context.
+
+**Changes:**
+- `src/core/tensor/internal/cuda_stream_context.hpp` — simplified to pure RAII `CUDAStreamGuard`, exports `getCurrentCUDAStream()`/`setCurrentCUDAStream()`
+- `src/core/tensor/cuda_stream_context.cpp` — NEW: thread-local stream management implementation
+- `src/core/tensor/tensor_matrix_ops.cpp` — matmul kernels use `result.stream()` instead of `nullptr`
+- `src/core/tensor/tensor_broadcast.cpp` — broadcast operations propagate stream
+- `src/core/tensor/tensor_unified_ops.cpp` — extensive stream propagation for load/store ops
+- Factory functions (`empty`, `zeros`, `ones`, `full`, `rand`, `randn`) pick up thread-local stream
+- View operations preserve parent tensor's stream
+- `tests/test_tensor_stream.cpp` — NEW: 11 tests (default stream, factory pickup, view inheritance, ordering, guard restore, in-place ops)
+
+**Tests:** 11 new stream tests pass, existing regression suites green.
+
+### PR12: Memory Planner Integration — Early Cache Release (2026-02-23)
+
+Added liveness-driven early cache release to `execute_topological_nodes()`. During lazy execution, intermediates are now freed from the context cache as soon as their last consumer executes, letting `SizeBucketedPool` recycle GPU memory for subsequent allocations. No new allocation paths or materializer signature changes.
+
+**Mechanism:**
+- `compute_release_schedule()` builds a step→[dead_node_ids] map from the plan topology. Skips internal fused nodes and the root. O(N*M) where N=nodes, M=avg inputs.
+- After each execution step, dead entries are erased from `cached_materializations`. When erased, `shared_ptr<void>` refcount drops → pool dealloc → memory available for reuse.
+- Gated by `lazy_executor_memory_planner_enabled()` (on by default, same pattern as fusion gate).
+
+**Measured impact** (from diagnostics dump on test workloads):
+- 5-node reshape chain: `ctx_peak=2` (down from 5), 4 early releases, peak 48 bytes vs 120 naive
+- 10-step 1MB chain: `peak_cache_bytes=1048576` vs 10485760 naive (10x reduction)
+
+**Changes:**
+- `src/core/tensor/internal/lazy_ir.hpp` — added `buffer_bytes` to `LazyExprDebugInfo`
+- `src/core/tensor/lazy_ir.cpp` — added `buffer_bytes` to `LazyExprNode`, computed in `register_node_locked`, propagated in `to_debug_info`
+- `src/core/tensor/internal/lazy_executor.hpp` — added `buffer_bytes` to `LazyPlanNodeDebug`, added `early_releases`/`early_release_bytes`/`peak_cache_bytes` to `LazyExecutorDiagnosticsSnapshot`, added memory planner gate API
+- `src/core/tensor/lazy_executor.cpp` — `compute_release_schedule()`, `LazyExecutorMemoryPlannerState`, early release in `execute_topological_nodes()` via `try_release_dead`/`track_cache_insert` lambdas, diagnostics tracking, memory planner gate, extended debug dump line
+- `tests/test_tensor_memory_planner.cpp` — NEW: 6 tests (liveness computation, early release fires, peak bytes reduction, root not released, multi-step chain releases, fusion coexistence)
+- `tests/CMakeLists.txt` — added new test file
+
+**Tests:** 6 new TensorMemoryPlannerTest pass, 76 existing TensorLazy{Runtime,Ir}Test pass, 141 regression tests pass.
+
 ### Next active step
 
-1. PR11: Stream consistency pass.
+1. PR13: Stateful op rules.

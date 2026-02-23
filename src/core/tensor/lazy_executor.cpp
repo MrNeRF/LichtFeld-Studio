@@ -62,6 +62,9 @@ namespace lfs::core::internal {
             std::atomic<uint64_t> fused_reduce_launches{0};
             std::atomic<uint64_t> max_registry_entries{0};
             std::atomic<uint64_t> max_context_cache_entries{0};
+            std::atomic<uint64_t> early_releases{0};
+            std::atomic<uint64_t> early_release_bytes{0};
+            std::atomic<uint64_t> peak_cache_bytes{0};
         };
 
         struct LazyExecutorDebugDumpState {
@@ -71,6 +74,10 @@ namespace lfs::core::internal {
         };
 
         struct LazyExecutorPointwiseFusionState {
+            std::atomic<int> override_enabled{-1}; // -1 unset, 0 false, 1 true
+        };
+
+        struct LazyExecutorMemoryPlannerState {
             std::atomic<int> override_enabled{-1}; // -1 unset, 0 false, 1 true
         };
 
@@ -96,6 +103,11 @@ namespace lfs::core::internal {
 
         LazyExecutorPointwiseFusionState& lazy_executor_pointwise_fusion_state() {
             static LazyExecutorPointwiseFusionState state;
+            return state;
+        }
+
+        LazyExecutorMemoryPlannerState& lazy_executor_memory_planner_state() {
+            static LazyExecutorMemoryPlannerState state;
             return state;
         }
 
@@ -176,6 +188,15 @@ namespace lfs::core::internal {
             return true;
         }
 
+        bool lazy_executor_memory_planner_enabled() {
+            const int override_enabled = lazy_executor_memory_planner_state()
+                                             .override_enabled.load(std::memory_order_acquire);
+            if (override_enabled == 0 || override_enabled == 1) {
+                return override_enabled == 1;
+            }
+            return true;
+        }
+
         void prune_expired_materializers_locked(DeferredMaterializerRegistry& registry) {
             for (auto it = registry.by_node_id.begin(); it != registry.by_node_id.end();) {
                 if (it->second.owner.expired()) {
@@ -243,6 +264,59 @@ namespace lfs::core::internal {
             }
         }
 
+        void record_early_release(size_t bytes) {
+            auto& counters = lazy_executor_diagnostics_counters();
+            counters.early_releases.fetch_add(1, std::memory_order_relaxed);
+            counters.early_release_bytes.fetch_add(
+                static_cast<uint64_t>(bytes), std::memory_order_relaxed);
+        }
+
+        void record_peak_cache_bytes(size_t bytes) {
+            record_relaxed_max(lazy_executor_diagnostics_counters().peak_cache_bytes,
+                               static_cast<uint64_t>(bytes));
+        }
+
+        // Maps execution step index → list of node_ids to release from cache after that step.
+        std::unordered_map<size_t, std::vector<uint64_t>>
+        compute_release_schedule(const LazyExecutionPlanDebug& plan,
+                                 const std::unordered_set<uint64_t>& internal_fused_nodes) {
+            std::unordered_map<size_t, std::vector<uint64_t>> schedule;
+            if (plan.topo_nodes.empty() || !plan.has_root) {
+                return schedule;
+            }
+
+            // Build step index for each node_id.
+            std::unordered_map<uint64_t, size_t> node_step;
+            node_step.reserve(plan.topo_nodes.size());
+            for (size_t i = 0; i < plan.topo_nodes.size(); ++i) {
+                node_step[plan.topo_nodes[i].node_id] = i;
+            }
+
+            // For each node, find the last step that consumes it as input.
+            std::unordered_map<uint64_t, size_t> last_consumer_step;
+            for (size_t step = 0; step < plan.topo_nodes.size(); ++step) {
+                if (internal_fused_nodes.find(plan.topo_nodes[step].node_id) != internal_fused_nodes.end()) {
+                    continue;
+                }
+                for (uint64_t input_id : plan.topo_nodes[step].input_ids) {
+                    last_consumer_step[input_id] = step;
+                }
+            }
+
+            // Invert: step → [node_ids to release].
+            for (const auto& [node_id, step] : last_consumer_step) {
+                if (internal_fused_nodes.find(node_id) != internal_fused_nodes.end()) {
+                    continue;
+                }
+                if (node_id == plan.root_node_id) {
+                    continue;
+                }
+                schedule[step].push_back(node_id);
+            }
+
+            return schedule;
+        }
+
         LazyExecutorDiagnosticsSnapshot diagnostics_delta(const LazyExecutorDiagnosticsSnapshot& before,
                                                           const LazyExecutorDiagnosticsSnapshot& after) {
             return LazyExecutorDiagnosticsSnapshot{
@@ -254,7 +328,10 @@ namespace lfs::core::internal {
                 after.fused_launches - before.fused_launches,
                 after.fused_reduce_launches - before.fused_reduce_launches,
                 after.max_registry_entries,
-                after.max_context_cache_entries};
+                after.max_context_cache_entries,
+                after.early_releases - before.early_releases,
+                after.early_release_bytes - before.early_release_bytes,
+                after.peak_cache_bytes};
         }
 
         struct PointwiseFusionRecipe {
@@ -473,13 +550,52 @@ namespace lfs::core::internal {
             const auto recipes = collect_pointwise_fusion_recipes_for_plan(plan);
             const auto internal_nodes = collect_internal_fused_nodes(plan, recipes);
 
-            for (const auto& node : plan.topo_nodes) {
+            const bool memory_planner_active = lazy_executor_memory_planner_enabled();
+            std::unordered_map<size_t, std::vector<uint64_t>> release_schedule;
+            std::unordered_map<uint64_t, size_t> node_bytes_map;
+            if (memory_planner_active) {
+                release_schedule = compute_release_schedule(plan, internal_nodes);
+                for (const auto& n : plan.topo_nodes) {
+                    node_bytes_map[n.node_id] = n.buffer_bytes;
+                }
+            }
+
+            size_t current_cache_bytes = 0;
+
+            auto track_cache_insert = [&](size_t bytes) {
+                if (!memory_planner_active)
+                    return;
+                current_cache_bytes += bytes;
+                record_peak_cache_bytes(current_cache_bytes);
+            };
+
+            auto try_release_dead = [&](size_t step) {
+                if (!memory_planner_active)
+                    return;
+                const auto it = release_schedule.find(step);
+                if (it == release_schedule.end())
+                    return;
+                for (uint64_t dead_id : it->second) {
+                    if (active_context->cached_materializations.erase(dead_id)) {
+                        const size_t dead_bytes = node_bytes_map[dead_id];
+                        record_early_release(dead_bytes);
+                        if (current_cache_bytes >= dead_bytes)
+                            current_cache_bytes -= dead_bytes;
+                    }
+                }
+            };
+
+            for (size_t step = 0; step < plan.topo_nodes.size(); ++step) {
+                const auto& node = plan.topo_nodes[step];
+
                 if (internal_nodes.find(node.node_id) != internal_nodes.end()) {
+                    try_release_dead(step);
                     continue;
                 }
 
                 Tensor cached;
                 if (lazy_executor_lookup_cached_materialization(node.node_id, cached)) {
+                    try_release_dead(step);
                     continue;
                 }
 
@@ -488,17 +604,19 @@ namespace lfs::core::internal {
                     Tensor fused_materialized;
                     if (execute_pointwise_fusion_recipe(recipe_it->second, fused_materialized) &&
                         fused_materialized.is_valid()) {
-                        // Keep fallback telemetry behavior aligned with expression eval paths.
                         telemetry_record_eager_fallback(1);
                         record_executed_node();
                         record_fused_launch();
                         lazy_executor_cache_materialization(node.node_id, fused_materialized);
+                        track_cache_insert(node.buffer_bytes);
+                        try_release_dead(step);
                         continue;
                     }
                 }
 
                 std::function<Tensor()> materializer;
                 if (!lookup_registered_materializer(node.node_id, materializer)) {
+                    try_release_dead(step);
                     continue;
                 }
 
@@ -506,7 +624,9 @@ namespace lfs::core::internal {
                 Tensor materialized = materializer();
                 if (materialized.is_valid()) {
                     lazy_executor_cache_materialization(node.node_id, materialized);
+                    track_cache_insert(node.buffer_bytes);
                 }
+                try_release_dead(step);
             }
         }
 
@@ -637,14 +757,14 @@ namespace lfs::core::internal {
         const auto topo = lazy_ir_collect_topological_subgraph(root_id);
         for (const auto& node : topo) {
             plan.topo_nodes.push_back(
-                LazyPlanNodeDebug{node.node_id, node.op_name, node.input_ids});
+                LazyPlanNodeDebug{node.node_id, node.op_name, node.input_ids, node.buffer_bytes});
         }
 
         if (plan.topo_nodes.empty()) {
             const auto root_info = lazy_ir_node_info(root_id);
             if (root_info.has_value()) {
-                plan.topo_nodes.push_back(
-                    LazyPlanNodeDebug{root_info->node_id, root_info->op_name, root_info->input_ids});
+                plan.topo_nodes.push_back(LazyPlanNodeDebug{
+                    root_info->node_id, root_info->op_name, root_info->input_ids, root_info->buffer_bytes});
             }
         }
         return plan;
@@ -673,7 +793,7 @@ namespace lfs::core::internal {
             const auto diagnostics_after = lazy_executor_diagnostics_snapshot_for_testing();
             const auto delta = diagnostics_delta(diagnostics_before, diagnostics_after);
             LOG_INFO(
-                "lazy-exec root={} source={} planned={} executed={} fused={} cache_hit={} cache_miss={} root_fallback={} reg_peak={} ctx_peak={} result_valid={}",
+                "lazy-exec root={} source={} planned={} executed={} fused={} cache_hit={} cache_miss={} root_fallback={} reg_peak={} ctx_peak={} early_rel={} early_rel_bytes={} peak_cache_bytes={} result_valid={}",
                 plan.root_node_id,
                 root_source,
                 delta.planned_nodes,
@@ -684,6 +804,9 @@ namespace lfs::core::internal {
                 delta.root_fallbacks,
                 delta.max_registry_entries,
                 delta.max_context_cache_entries,
+                delta.early_releases,
+                delta.early_release_bytes,
+                delta.peak_cache_bytes,
                 result.is_valid());
         };
 
@@ -738,6 +861,9 @@ namespace lfs::core::internal {
         diagnostics.fused_reduce_launches.store(0, std::memory_order_relaxed);
         diagnostics.max_registry_entries.store(0, std::memory_order_relaxed);
         diagnostics.max_context_cache_entries.store(0, std::memory_order_relaxed);
+        diagnostics.early_releases.store(0, std::memory_order_relaxed);
+        diagnostics.early_release_bytes.store(0, std::memory_order_relaxed);
+        diagnostics.peak_cache_bytes.store(0, std::memory_order_relaxed);
     }
 
     LazyExecutorDiagnosticsSnapshot lazy_executor_diagnostics_snapshot_for_testing() {
@@ -751,7 +877,10 @@ namespace lfs::core::internal {
             diagnostics.fused_launches.load(std::memory_order_relaxed),
             diagnostics.fused_reduce_launches.load(std::memory_order_relaxed),
             diagnostics.max_registry_entries.load(std::memory_order_relaxed),
-            diagnostics.max_context_cache_entries.load(std::memory_order_relaxed)};
+            diagnostics.max_context_cache_entries.load(std::memory_order_relaxed),
+            diagnostics.early_releases.load(std::memory_order_relaxed),
+            diagnostics.early_release_bytes.load(std::memory_order_relaxed),
+            diagnostics.peak_cache_bytes.load(std::memory_order_relaxed)};
     }
 
     void lazy_executor_set_debug_dump_override_for_testing(std::optional<bool> enabled) {
@@ -792,6 +921,19 @@ namespace lfs::core::internal {
 
     void lazy_executor_diagnostics_counters_increment_fused_reduce() {
         lazy_executor_diagnostics_counters().fused_reduce_launches.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void lazy_executor_set_memory_planner_override_for_testing(std::optional<bool> enabled) {
+        auto& state = lazy_executor_memory_planner_state();
+        if (enabled.has_value()) {
+            state.override_enabled.store(*enabled ? 1 : 0, std::memory_order_release);
+            return;
+        }
+        state.override_enabled.store(-1, std::memory_order_release);
+    }
+
+    bool lazy_executor_memory_planner_enabled_for_testing() {
+        return lazy_executor_memory_planner_enabled();
     }
 
     bool lazy_executor_try_consume_pointwise_fusion(
