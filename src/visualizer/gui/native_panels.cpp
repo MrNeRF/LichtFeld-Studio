@@ -155,6 +155,9 @@ namespace lfs::vis::gui::native_panels {
         : gui_(gui) {}
 
     bool PythonOverlayPanel::poll(const PanelDrawContext& ctx) {
+        if (gui_ && gui_->isStartupVisible()) {
+            return false;
+        }
         return ctx.viewport && ctx.viewport->size.x > 0 && ctx.viewport->size.y > 0 &&
                python::has_viewport_draw_handlers();
     }

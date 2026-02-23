@@ -96,14 +96,7 @@ namespace lfs::vis {
 
     using namespace lfs::core::events;
 
-    GTTextureCache::GTTextureCache() {
-        try {
-            constexpr lfs::io::NvCodecImageLoader::Options OPTS{.device_id = 0, .decoder_pool_size = 2};
-            nvcodec_loader_ = std::make_unique<lfs::io::NvCodecImageLoader>(OPTS);
-        } catch (...) {
-            nvcodec_loader_ = nullptr;
-        }
-    }
+    GTTextureCache::GTTextureCache() = default;
 
     GTTextureCache::~GTTextureCache() {
         clear();
@@ -139,6 +132,15 @@ namespace lfs::vis {
 
         auto& entry = texture_cache_[cam_id];
         entry.last_access = std::chrono::steady_clock::now();
+
+        if (!nvcodec_loader_ && is_jpeg) {
+            try {
+                constexpr lfs::io::NvCodecImageLoader::Options OPTS{.device_id = 0, .decoder_pool_size = 2};
+                nvcodec_loader_ = std::make_unique<lfs::io::NvCodecImageLoader>(OPTS);
+            } catch (...) {
+                nvcodec_loader_ = nullptr;
+            }
+        }
 
         TextureInfo info{};
         if (nvcodec_loader_ && is_jpeg) {

@@ -23,7 +23,6 @@
 
 #include "python/runner.hpp"
 #include "visualizer/gui/panels/python_scripts_panel.hpp"
-
 #include <cstdlib>
 #include <cuda_runtime.h>
 #include <rasterization_api.h>
@@ -212,6 +211,7 @@ namespace lfs::app {
                 LOG_INFO("GPU: {} (SM {}.{}, {} MB)", prop.name, prop.major, prop.minor,
                          prop.totalGlobalMem / (1024 * 1024));
             }
+
             LOG_INFO("Initializing CUDA...");
             fast_lfs::rasterization::warmup_kernels();
         }

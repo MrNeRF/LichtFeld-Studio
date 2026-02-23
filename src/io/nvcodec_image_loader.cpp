@@ -12,10 +12,12 @@
 
 #include <algorithm>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <cuda.h> // For CUcontext, cuCtxGetCurrent, cuCtxSetCurrent
 #include <cuda_runtime.h>
 #include <fstream>
+#include <mutex>
 #include <nvimgcodec.h>
 #include <sstream>
 #include <stdexcept>
@@ -206,6 +208,52 @@ namespace lfs::io {
                 }
             }
 #endif
+        }
+
+        bool should_run_nvimgcodec_diagnostics() {
+            const char* flag = std::getenv("LFS_NVCODEC_DIAGNOSTICS");
+            if (!flag || !*flag) {
+                return false;
+            }
+            return std::strcmp(flag, "0") != 0;
+        }
+
+        bool check_nvimgcodec_availability_fast() {
+            int device_count = 0;
+            cudaError_t err = cudaGetDeviceCount(&device_count);
+            if (err != cudaSuccess || device_count == 0) {
+                return false;
+            }
+
+            const auto extensions_dir = lfs::core::getExtensionsDir();
+            std::string extensions_path_str;
+            const char* extensions_path_ptr = nullptr;
+
+            if (!extensions_dir.empty() && std::filesystem::exists(extensions_dir)) {
+                extensions_path_str = lfs::core::path_to_utf8(extensions_dir);
+                extensions_path_ptr = extensions_path_str.c_str();
+            }
+
+            nvimgcodecInstance_t test_instance = nullptr;
+            const nvimgcodecInstanceCreateInfo_t create_info{
+                NVIMGCODEC_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+                sizeof(nvimgcodecInstanceCreateInfo_t),
+                nullptr,
+                1, // load_builtin_modules
+                extensions_path_ptr ? 1 : 0,
+                extensions_path_ptr,
+                0,
+                nullptr,
+                0,
+                0};
+
+            const auto status = nvimgcodecInstanceCreate(&test_instance, &create_info);
+            if (status != NVIMGCODEC_STATUS_SUCCESS || !test_instance) {
+                return false;
+            }
+
+            nvimgcodecInstanceDestroy(test_instance);
+            return true;
         }
 
         // Comprehensive availability check with diagnostics
@@ -456,8 +504,16 @@ namespace lfs::io {
     NvCodecImageLoader::~NvCodecImageLoader() = default;
 
     bool NvCodecImageLoader::is_available() {
-        // Run comprehensive diagnostics - this will log all relevant info
-        return check_nvimgcodec_availability_with_diagnostics();
+        static std::once_flag once;
+        static bool available = false;
+        std::call_once(once, [] {
+            if (should_run_nvimgcodec_diagnostics()) {
+                available = check_nvimgcodec_availability_with_diagnostics();
+            } else {
+                available = check_nvimgcodec_availability_fast();
+            }
+        });
+        return available;
     }
 
     std::vector<uint8_t> NvCodecImageLoader::read_file(const std::filesystem::path& path) {

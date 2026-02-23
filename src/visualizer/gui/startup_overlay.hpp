@@ -23,6 +23,7 @@ namespace lfs::vis::gui {
 
     private:
         bool visible_ = true;
+        int shown_frames_ = 0;
 
         rendering::Texture logo_light_texture_;
         rendering::Texture logo_dark_texture_;

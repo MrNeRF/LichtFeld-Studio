@@ -27,6 +27,7 @@
 #include "tools/builtin_tools.hpp"
 #include "tools/selection_tool.hpp"
 #include <cassert>
+#include <chrono>
 #include <iostream>
 #include <stdexcept>
 #ifdef WIN32
@@ -592,15 +593,11 @@ namespace lfs::vis {
     }
 
     bool VisualizerImpl::initialize() {
-        // Track if we're fully initialized
         static bool fully_initialized = false;
         if (fully_initialized) {
             LOG_TRACE("Already fully initialized");
             return true;
         }
-
-        // Initialize Python early so signal bridge is ready before trainer creation
-        python::ensure_initialized();
 
         // Initialize window first and ensure it has proper size
         if (!window_initialized_) {
@@ -609,15 +606,12 @@ namespace lfs::vis {
             }
             window_initialized_ = true;
 
-            // Poll events to get actual window dimensions
             window_manager_->pollEvents();
             window_manager_->updateWindowSize();
 
-            // Update viewport with actual window size
             viewport_.windowSize = window_manager_->getWindowSize();
             viewport_.frameBufferSize = window_manager_->getFramebufferSize();
 
-            // Validate we got reasonable dimensions
             if (viewport_.windowSize.x <= 0 || viewport_.windowSize.y <= 0) {
                 LOG_WARN("Window manager returned invalid size, using options fallback: {}x{}",
                          options_.width, options_.height);
@@ -629,14 +623,31 @@ namespace lfs::vis {
                       viewport_.windowSize.x, viewport_.windowSize.y);
         }
 
-        // Initialize GUI (sets up ImGui callbacks)
+        // Initialize rendering early so we can show a frame before font atlas build
+        if (!rendering_manager_->isInitialized()) {
+            rendering_manager_->setInitialViewportSize(viewport_.windowSize);
+            rendering_manager_->initialize();
+        }
+
+        // Render one frame (grid + background) before the expensive GUI/font init
+        {
+            RenderingManager::RenderContext ctx{
+                .viewport = viewport_,
+                .settings = rendering_manager_->getSettings(),
+                .viewport_region = nullptr,
+                .has_focus = false,
+                .scene_manager = scene_manager_.get()};
+            rendering_manager_->renderFrame(ctx, scene_manager_.get());
+            window_manager_->swapBuffers();
+        }
+
+        // Initialize GUI (sets up ImGui, builds font atlas)
         if (!gui_initialized_) {
             gui_manager_->init();
             gui_initialized_ = true;
         }
 
-        // Create simplified input controller AFTER ImGui is initialized
-        // NOTE: InputController uses services() for TrainerManager, RenderingManager, GuiManager
+        // InputController requires ImGui to be initialized
         if (!input_controller_) {
             input_controller_ = std::make_unique<InputController>(
                 window_manager_->getWindow(), viewport_);
@@ -644,14 +655,7 @@ namespace lfs::vis {
             python::set_keymap_bindings(&input_controller_->getBindings());
         }
 
-        // Initialize rendering with proper viewport dimensions
-        if (!rendering_manager_->isInitialized()) {
-            // Pass viewport dimensions to rendering manager
-            rendering_manager_->setInitialViewportSize(viewport_.windowSize);
-            rendering_manager_->initialize();
-        }
-
-        // Initialize tools AFTER rendering is initialized (only once!)
+        // Initialize tools AFTER rendering is initialized
         if (!tools_initialized_) {
             initializeTools();
         }
@@ -855,9 +859,11 @@ namespace lfs::vis {
                 });
         }
 
-        // Initialize selection service in SceneManager (needs RenderingManager)
         if (scene_manager_)
             scene_manager_->initSelectionService();
+
+        python::ensure_initialized();
+        python::preload_user_plugins_async();
 
         fully_initialized = true;
         return true;
@@ -921,6 +927,7 @@ namespace lfs::vis {
     }
 
     void VisualizerImpl::render() {
+
         // Calculate delta time for input updates
         static auto last_frame_time = std::chrono::high_resolution_clock::now();
         auto now = std::chrono::high_resolution_clock::now();

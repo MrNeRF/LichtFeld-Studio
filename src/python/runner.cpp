@@ -5,10 +5,13 @@
 #include "runner.hpp"
 #include "package_manager.hpp"
 
+#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <string>
+#include <string_view>
 #include <thread>
 
 #include <core/executable_path.hpp>
@@ -38,6 +41,9 @@ namespace lfs::python {
 
     static std::function<void(const std::string&, bool)> g_output_callback;
     static std::mutex g_output_mutex;
+    static std::mutex g_plugin_init_mutex;
+    static std::atomic<bool> g_python_bridge_ready{false};
+    static std::atomic<bool> g_plugin_preload_scheduled{false};
 
     // Python C extension for capturing output
     static PyObject* capture_write(PyObject* self, PyObject* args) {
@@ -157,103 +163,205 @@ _add_dll_dirs()
 #endif
     }
 
-    static void ensure_plugins_loaded() {
-        if (are_plugins_loaded())
-            return;
-        mark_plugins_loaded();
-
-        add_dll_directories();
-
-        LOG_INFO("Attempting to import lichtfeld module...");
-        PyObject* lf = PyImport_ImportModule("lichtfeld");
-        if (!lf) {
-            LOG_ERROR("Failed to import lichtfeld: {}", extract_python_error());
-            return;
-        }
-        LOG_INFO("lichtfeld module imported successfully");
-
-        PyObject* lfs_plugins = PyImport_ImportModule("lfs_plugins");
-        if (lfs_plugins) {
-            PyObject* register_fn = PyObject_GetAttrString(lfs_plugins, "register_builtin_panels");
-            if (register_fn) {
-                PyObject* result = PyObject_CallNoArgs(register_fn);
-                if (!result) {
-                    PyErr_Print();
-                    LOG_ERROR("Failed to register builtin panels");
-                } else {
-                    Py_DECREF(result);
-                }
-                Py_DECREF(register_fn);
+    namespace {
+        bool env_flag_enabled(const char* name, const bool default_value) {
+            const char* value = std::getenv(name);
+            if (!value || !*value) {
+                return default_value;
             }
-            Py_DECREF(lfs_plugins);
+
+            const std::string_view text(value);
+            if (text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "yes") {
+                return true;
+            }
+            if (text == "0" || text == "false" || text == "FALSE" || text == "off" || text == "no") {
+                return false;
+            }
+            return default_value;
         }
 
-        // Initialize signal bridge after lfs_plugins.ui.state is available
-        // Note: signals is registered as lichtfeld.ui.signals
-        PyObject* ui_module = PyObject_GetAttrString(lf, "ui");
-        if (ui_module) {
-            PyObject* signals = PyObject_GetAttrString(ui_module, "signals");
-            if (signals) {
-                PyObject* init_fn = PyObject_GetAttrString(signals, "init");
-                if (init_fn) {
-                    PyObject* result = PyObject_CallNoArgs(init_fn);
+        bool ensure_python_bridge_ready_locked() {
+            if (g_python_bridge_ready.load(std::memory_order_acquire)) {
+                return true;
+            }
+
+            add_dll_directories();
+
+            LOG_INFO("Attempting to import lichtfeld module...");
+            PyObject* lf = PyImport_ImportModule("lichtfeld");
+            if (!lf) {
+                LOG_ERROR("Failed to import lichtfeld: {}", extract_python_error());
+                return false;
+            }
+            LOG_INFO("lichtfeld module imported successfully");
+
+            PyObject* lfs_plugins = PyImport_ImportModule("lfs_plugins");
+            if (lfs_plugins) {
+                PyObject* register_fn = PyObject_GetAttrString(lfs_plugins, "register_builtin_panels");
+                if (register_fn) {
+                    PyObject* result = PyObject_CallNoArgs(register_fn);
                     if (!result) {
                         PyErr_Print();
-                        LOG_ERROR("Failed to initialize signal bridge");
+                        LOG_ERROR("Failed to register builtin panels");
                     } else {
                         Py_DECREF(result);
                     }
-                    Py_DECREF(init_fn);
-                } else {
-                    LOG_ERROR("signals.init function not found");
+                    Py_DECREF(register_fn);
                 }
-                Py_DECREF(signals);
-            } else {
-                LOG_ERROR("signals submodule not found in lichtfeld.ui");
+                Py_DECREF(lfs_plugins);
             }
-            Py_DECREF(ui_module);
-        } else {
-            LOG_ERROR("ui submodule not found in lichtfeld module");
+
+            // Initialize signal bridge after lfs_plugins.ui.state is available
+            // Note: signals is registered as lichtfeld.ui.signals
+            PyObject* ui_module = PyObject_GetAttrString(lf, "ui");
+            if (ui_module) {
+                PyObject* signals = PyObject_GetAttrString(ui_module, "signals");
+                if (signals) {
+                    PyObject* init_fn = PyObject_GetAttrString(signals, "init");
+                    if (init_fn) {
+                        PyObject* result = PyObject_CallNoArgs(init_fn);
+                        if (!result) {
+                            PyErr_Print();
+                            LOG_ERROR("Failed to initialize signal bridge");
+                        } else {
+                            Py_DECREF(result);
+                        }
+                        Py_DECREF(init_fn);
+                    } else {
+                        LOG_ERROR("signals.init function not found");
+                    }
+                    Py_DECREF(signals);
+                } else {
+                    LOG_ERROR("signals submodule not found in lichtfeld.ui");
+                }
+                Py_DECREF(ui_module);
+            } else {
+                LOG_ERROR("ui submodule not found in lichtfeld module");
+            }
+
+            Py_DECREF(lf);
+            g_python_bridge_ready.store(true, std::memory_order_release);
+            return true;
         }
 
-        PyObject* plugins = PyObject_GetAttrString(lf, "plugins");
-        if (plugins) {
-            PyObject* load_all = PyObject_GetAttrString(plugins, "load_all");
-            if (load_all) {
-                PyObject* results = PyObject_CallNoArgs(load_all);
-                if (results && PyDict_Check(results)) {
-                    PyObject* key;
-                    PyObject* value;
-                    Py_ssize_t pos = 0;
-                    while (PyDict_Next(results, &pos, &key, &value)) {
-                        const char* name = PyUnicode_AsUTF8(key);
-                        if (PyObject_IsTrue(value)) {
-                            LOG_INFO("Loaded plugin: {}", name ? name : "<unknown>");
-                        } else {
-                            LOG_ERROR("Failed to load plugin: {}", name ? name : "<unknown>");
-                            PyObject* get_traceback = PyObject_GetAttrString(plugins, "get_traceback");
-                            if (get_traceback) {
-                                PyObject* tb = PyObject_CallOneArg(get_traceback, key);
-                                if (tb && !Py_IsNone(tb) && PyUnicode_Check(tb)) {
-                                    LOG_ERROR("Traceback:\n{}", PyUnicode_AsUTF8(tb));
+        std::vector<std::string> discover_enabled_plugins_locked() {
+            std::vector<std::string> names;
+
+            PyObject* lf = PyImport_ImportModule("lichtfeld");
+            if (!lf) {
+                LOG_ERROR("Failed to import lichtfeld for plugin discovery: {}", extract_python_error());
+                return names;
+            }
+
+            PyObject* plugins = PyObject_GetAttrString(lf, "plugins");
+            if (!plugins) {
+                Py_DECREF(lf);
+                return names;
+            }
+
+            PyObject* discover = PyObject_GetAttrString(plugins, "discover");
+            if (!discover) {
+                Py_DECREF(plugins);
+                Py_DECREF(lf);
+                return names;
+            }
+
+            PyObject* discovered = PyObject_CallNoArgs(discover);
+            if (!discovered) {
+                PyErr_Print();
+                Py_DECREF(discover);
+                Py_DECREF(plugins);
+                Py_DECREF(lf);
+                return names;
+            }
+
+            PyObject* settings_mod = PyImport_ImportModule("lfs_plugins.settings");
+            PyObject* settings_mgr = nullptr;
+            if (settings_mod) {
+                PyObject* cls = PyObject_GetAttrString(settings_mod, "SettingsManager");
+                if (cls) {
+                    PyObject* instance = PyObject_CallMethod(cls, "instance", nullptr);
+                    if (instance) {
+                        settings_mgr = instance;
+                    }
+                    Py_DECREF(cls);
+                }
+                Py_DECREF(settings_mod);
+            }
+
+            PyObject* iter = PyObject_GetIter(discovered);
+            if (iter) {
+                PyObject* item;
+                while ((item = PyIter_Next(iter)) != nullptr) {
+                    PyObject* name_attr = PyObject_GetAttrString(item, "name");
+                    if (name_attr && PyUnicode_Check(name_attr)) {
+                        const char* plugin_name = PyUnicode_AsUTF8(name_attr);
+                        bool enabled = false;
+                        if (settings_mgr && plugin_name) {
+                            PyObject* prefs = PyObject_CallMethod(settings_mgr, "get", "s", plugin_name);
+                            if (prefs) {
+                                PyObject* val = PyObject_CallMethod(prefs, "get", "sO",
+                                                                    "load_on_startup", Py_False);
+                                if (val) {
+                                    enabled = PyObject_IsTrue(val);
+                                    Py_DECREF(val);
                                 }
-                                Py_XDECREF(tb);
-                                Py_DECREF(get_traceback);
+                                Py_DECREF(prefs);
                             }
                         }
+                        if (enabled && plugin_name) {
+                            names.emplace_back(plugin_name);
+                        }
                     }
-                } else if (!results) {
-                    PyErr_Print();
-                    LOG_ERROR("Plugin load_all() failed");
+                    Py_XDECREF(name_attr);
+                    Py_DECREF(item);
                 }
-                Py_XDECREF(results);
-                Py_DECREF(load_all);
+                Py_DECREF(iter);
             }
+
+            Py_XDECREF(settings_mgr);
+            Py_DECREF(discovered);
+            Py_DECREF(discover);
             Py_DECREF(plugins);
+            Py_DECREF(lf);
+            return names;
         }
 
-        Py_DECREF(lf);
-    }
+        bool load_single_plugin_locked(const std::string& name) {
+            PyObject* lf = PyImport_ImportModule("lichtfeld");
+            if (!lf)
+                return false;
+
+            PyObject* plugins = PyObject_GetAttrString(lf, "plugins");
+            if (!plugins) {
+                Py_DECREF(lf);
+                return false;
+            }
+
+            PyObject* py_name = PyUnicode_FromString(name.c_str());
+            PyObject* result = PyObject_CallMethod(plugins, "load", "O", py_name);
+            const bool success = result && PyObject_IsTrue(result);
+
+            if (!success) {
+                PyObject* get_traceback = PyObject_GetAttrString(plugins, "get_traceback");
+                if (get_traceback) {
+                    PyObject* tb = PyObject_CallOneArg(get_traceback, py_name);
+                    if (tb && !Py_IsNone(tb) && PyUnicode_Check(tb)) {
+                        LOG_ERROR("Plugin '{}' traceback:\n{}", name, PyUnicode_AsUTF8(tb));
+                    }
+                    Py_XDECREF(tb);
+                    Py_DECREF(get_traceback);
+                }
+            }
+
+            Py_XDECREF(result);
+            Py_DECREF(py_name);
+            Py_DECREF(plugins);
+            Py_DECREF(lf);
+            return success;
+        }
+
+    } // namespace
 
     std::filesystem::path get_user_packages_dir() {
         return PackageManager::instance().site_packages_dir();
@@ -329,12 +437,61 @@ _add_dll_dirs()
                 }
             }
 
-            ensure_plugins_loaded();
+            {
+                std::lock_guard lock(g_plugin_init_mutex);
+                ensure_python_bridge_ready_locked();
+            }
 
             set_main_thread_state(PyEval_SaveThread());
             set_gil_state_ready(true);
             LOG_DEBUG("GIL released, external_init={}", !g_we_initialized_python);
         });
+    }
+
+    void ensure_plugins_loaded() {
+        ensure_initialized();
+        if (!can_acquire_gil()) {
+            LOG_WARN("Python GIL state not ready, skipping plugin load");
+            return;
+        }
+
+        std::vector<std::string> to_load;
+        {
+            const GilAcquire gil;
+            std::lock_guard lock(g_plugin_init_mutex);
+            if (!ensure_python_bridge_ready_locked()) {
+                return;
+            }
+            if (are_plugins_loaded()) {
+                return;
+            }
+            to_load = discover_enabled_plugins_locked();
+            mark_plugins_loaded();
+        }
+
+        for (const auto& name : to_load) {
+            const GilAcquire gil;
+            if (load_single_plugin_locked(name)) {
+                LOG_INFO("Loaded plugin: {}", name);
+            } else {
+                LOG_ERROR("Failed to load plugin: {}", name);
+            }
+        }
+    }
+
+    void preload_user_plugins_async() {
+        if (!env_flag_enabled("LFS_PLUGIN_AUTOLOAD", true)) {
+            return;
+        }
+
+        bool expected = false;
+        if (!g_plugin_preload_scheduled.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            return;
+        }
+
+        std::thread([]() {
+            ensure_plugins_loaded();
+        }).detach();
     }
 
     bool start_debugpy(const int port) {
@@ -929,6 +1086,7 @@ def _lfs_format_code(code):
 
     bool has_capability(const std::string& name) {
         ensure_initialized();
+        ensure_plugins_loaded();
         const GilAcquire gil;
         bool result = false;
 
@@ -962,6 +1120,7 @@ def _lfs_format_code(code):
     std::vector<CapabilityInfo> list_capabilities() {
         std::vector<CapabilityInfo> result;
         ensure_initialized();
+        ensure_plugins_loaded();
         const GilAcquire gil;
 
         PyObject* lfs_plugins = PyImport_ImportModule("lfs_plugins");

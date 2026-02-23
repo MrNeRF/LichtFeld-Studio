@@ -285,33 +285,34 @@ namespace lfs::vis::gui {
                 return std::filesystem::exists(path) && std::filesystem::file_size(path) >= MIN_FONT_FILE_SIZE;
             };
 
-            // Load font with optional CJK glyph merging (Japanese + Korean)
-            const auto load_font_with_cjk =
+            // Latin-only font loader for bold/heading/small/section
+            const auto load_font_latin_only =
                 [&](const std::filesystem::path& path, const float size) -> ImFont* {
                 if (!is_font_valid(path)) {
                     LOG_WARN("Font file invalid: {}", lfs::core::path_to_utf8(path));
                     return nullptr;
                 }
-
-                // Load base font (Latin characters)
                 const std::string path_utf8 = lfs::core::path_to_utf8(path);
-                ImFont* font = io.Fonts->AddFontFromFileTTF(path_utf8.c_str(), size);
+                return io.Fonts->AddFontFromFileTTF(path_utf8.c_str(), size);
+            };
+
+            // Full CJK font loader — only used for the regular font (fallback for all styles)
+            const auto load_font_with_cjk =
+                [&](const std::filesystem::path& path, const float size) -> ImFont* {
+                ImFont* font = load_font_latin_only(path, size);
                 if (!font)
                     return nullptr;
 
-                // Merge Japanese + Chinese glyphs if available (NotoSansJP contains both)
                 if (is_font_valid(japanese_path)) {
                     ImFontConfig config;
                     config.MergeMode = true;
                     const std::string japanese_path_utf8 = lfs::core::path_to_utf8(japanese_path);
                     io.Fonts->AddFontFromFileTTF(japanese_path_utf8.c_str(), size, &config,
                                                  io.Fonts->GetGlyphRangesJapanese());
-                    // Chinese glyphs are also in NotoSansJP, just need to load the ranges
                     io.Fonts->AddFontFromFileTTF(japanese_path_utf8.c_str(), size, &config,
-                                                 io.Fonts->GetGlyphRangesChineseFull());
+                                                 io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
                 }
 
-                // Merge Korean glyphs if available
                 if (is_font_valid(korean_path)) {
                     ImFontConfig config;
                     config.MergeMode = true;
@@ -324,10 +325,10 @@ namespace lfs::vis::gui {
             };
 
             font_regular_ = load_font_with_cjk(regular_path, t.fonts.base_size * xscale);
-            font_bold_ = load_font_with_cjk(bold_path, t.fonts.base_size * xscale);
-            font_heading_ = load_font_with_cjk(bold_path, t.fonts.heading_size * xscale);
-            font_small_ = load_font_with_cjk(regular_path, t.fonts.small_size * xscale);
-            font_section_ = load_font_with_cjk(bold_path, t.fonts.section_size * xscale);
+            font_bold_ = load_font_latin_only(bold_path, t.fonts.base_size * xscale);
+            font_heading_ = load_font_latin_only(bold_path, t.fonts.heading_size * xscale);
+            font_small_ = load_font_latin_only(regular_path, t.fonts.small_size * xscale);
+            font_section_ = load_font_latin_only(bold_path, t.fonts.section_size * xscale);
 
             // Monospace font at multiple sizes for crisp scaling
             const auto monospace_path = lfs::vis::getAssetPath("fonts/JetBrainsMono-Regular.ttf");
@@ -396,6 +397,9 @@ namespace lfs::vis::gui {
             ImFont* const fallback = io.Fonts->AddFontDefault();
             font_regular_ = font_bold_ = font_heading_ = font_small_ = font_section_ = fallback;
         }
+
+        io.Fonts->Build();
+        ImGui_ImplOpenGL3_CreateFontsTexture();
 
         setFileSelectedCallback([this](const std::filesystem::path& path, const bool is_dataset) {
             window_states_["file_browser"] = false;
@@ -543,6 +547,7 @@ namespace lfs::vis::gui {
 
         // Start frame
         ImGui_ImplOpenGL3_NewFrame();
+
         ImGui_ImplGlfw_NewFrame();
 
         // Check mouse state before ImGui::NewFrame() updates WantCaptureMouse
@@ -646,7 +651,6 @@ namespace lfs::vis::gui {
 
         auto& reg = PanelRegistry::instance();
 
-        // Right panel and docked Python console
         panel_layout_.renderRightPanel(ctx, draw_ctx, show_main_panel_, ui_hidden_, window_states_, focus_panel_name_);
 
         python::set_viewport_bounds(viewport_layout_.pos.x, viewport_layout_.pos.y,
@@ -673,7 +677,6 @@ namespace lfs::vis::gui {
 
         // Notification popups are rendered via PyModalRegistry (draw_modals in Python bridge)
 
-        // End frame
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
@@ -1136,9 +1139,10 @@ namespace lfs::vis::gui {
     }
 
     bool GuiManager::needsAnimationFrame() const {
-        if (video_extractor_dialog_ && video_extractor_dialog_->isVideoPlaying()) {
+        if (startup_overlay_.isVisible())
             return true;
-        }
+        if (video_extractor_dialog_ && video_extractor_dialog_->isVideoPlaying())
+            return true;
         return false;
     }
 
@@ -1149,6 +1153,7 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::requestExitConfirmation() {
+        startup_overlay_.dismiss();
         lfs::core::events::cmd::RequestExit{}.emit();
     }
 

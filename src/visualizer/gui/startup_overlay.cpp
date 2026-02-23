@@ -169,11 +169,14 @@ namespace lfs::vis::gui {
         ImGui::SetNextWindowPos(overlay_pos);
         ImGui::SetNextWindowSize({overlay_width, overlay_height});
 
+        bool overlay_item_active = false;
+        bool overlay_focused = false;
         if (ImGui::Begin("##StartupOverlay", nullptr,
                          ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                              ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
                              ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
                              ImGuiWindowFlags_NoCollapse)) {
+            overlay_focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 
             ImDrawList* draw_list = ImGui::GetWindowDrawList();
             const ImVec2 window_pos = ImGui::GetWindowPos();
@@ -199,7 +202,6 @@ namespace lfs::vis::gui {
                                     {x, y}, {x + core11_w, y + core11_h});
                 y += core11_h + GAP_CORE11_SOCIAL;
             }
-
             {
                 const float social_x = window_center_x - social_row_width * 0.5f;
                 const float text_y = y + (SOCIAL_ICON_SIZE - discord_label_size.y) * 0.5f;
@@ -225,6 +227,7 @@ namespace lfs::vis::gui {
                 if (ImGui::InvisibleButton("##discord_link", {discord_hit_w, SOCIAL_ICON_SIZE})) {
                     openURL("https://discord.gg/NqwTqVYVmj");
                 }
+                overlay_item_active |= ImGui::IsItemActive();
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                     draw_list->AddLine({social_x + discord_icon_w + SOCIAL_ICON_TEXT_GAP, text_y + discord_label_size.y},
@@ -252,6 +255,7 @@ namespace lfs::vis::gui {
                 if (ImGui::InvisibleButton("##x_link", {x_hit_w, SOCIAL_ICON_SIZE})) {
                     openURL("https://x.com/janusch_patas");
                 }
+                overlay_item_active |= ImGui::IsItemActive();
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                     draw_list->AddLine({x_start + x_icon_w + SOCIAL_ICON_TEXT_GAP, text_y + x_label_size.y},
@@ -277,6 +281,7 @@ namespace lfs::vis::gui {
                 if (ImGui::InvisibleButton("##donate_link", {donate_hit_w, SOCIAL_ICON_SIZE})) {
                     openURL("https://lichtfeld.io/#support-the-project");
                 }
+                overlay_item_active |= ImGui::IsItemActive();
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
                     draw_list->AddLine({donate_start + SOCIAL_ICON_SIZE + SOCIAL_ICON_TEXT_GAP, text_y + donate_label_size.y},
@@ -321,6 +326,7 @@ namespace lfs::vis::gui {
                 }
                 ImGui::EndCombo();
             }
+            overlay_item_active |= ImGui::IsItemActive();
 
             y += lang_row_height + GAP_LANG_HINT;
 
@@ -343,10 +349,11 @@ namespace lfs::vis::gui {
                                 ImGui::IsKeyPressed(ImGuiKey_Space) ||
                                 ImGui::IsKeyPressed(ImGuiKey_Enter);
 
+        ++shown_frames_;
         const bool any_popup_open = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-        const bool any_item_active = ImGui::IsAnyItemActive();
-        if (!any_popup_open && !any_item_active && !drag_hovering && (mouse_action || key_action)) {
-            visible_ = false;
+        if (shown_frames_ > 2 && !any_popup_open && !overlay_item_active && !drag_hovering) {
+            if (!overlay_focused || mouse_action || key_action)
+                visible_ = false;
         }
     }
 

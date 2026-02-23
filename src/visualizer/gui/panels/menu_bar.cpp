@@ -26,8 +26,13 @@ using namespace lichtfeld::Strings;
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 
+#include <atomic>
 #include <cfloat>
+#include <chrono>
 #include <cstdlib>
+#include <mutex>
+#include <thread>
+#include <vector>
 
 #include "python/gil.hpp"
 #include "python/runner.hpp"
@@ -131,7 +136,33 @@ namespace lfs::vis::gui {
 
     namespace {
         MenuBar* g_menu_bar_instance = nullptr;
-    }
+        std::mutex g_menu_entries_mutex;
+        std::vector<python::MenuBarEntry> g_menu_entries;
+        std::atomic<bool> g_menu_entries_ready{false};
+        std::atomic<bool> g_menu_entries_loading{false};
+
+        void start_menu_entry_preload_once() {
+            bool expected = false;
+            if (!g_menu_entries_loading.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+                return;
+            }
+
+            std::thread([] {
+                auto entries = python::get_menu_bar_entries();
+                {
+                    std::lock_guard lock(g_menu_entries_mutex);
+                    g_menu_entries = std::move(entries);
+                }
+                g_menu_entries_ready.store(true, std::memory_order_release);
+                g_menu_entries_loading.store(false, std::memory_order_release);
+            }).detach();
+        }
+
+        std::vector<python::MenuBarEntry> copy_menu_entries() {
+            std::lock_guard lock(g_menu_entries_mutex);
+            return g_menu_entries;
+        }
+    } // namespace
 
     void MenuBar::render() {
         const auto& t = theme();
@@ -160,9 +191,13 @@ namespace lfs::vis::gui {
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, t.menu.frame_padding);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, t.menu.item_spacing);
 
+        if (!g_menu_entries_ready.load(std::memory_order_acquire)) {
+            start_menu_entry_preload_once();
+        }
+
         if (ImGui::BeginMainMenuBar()) {
-            if (python::has_menu_bar_entries()) {
-                auto entries = python::get_menu_bar_entries();
+            if (g_menu_entries_ready.load(std::memory_order_acquire)) {
+                auto entries = copy_menu_entries();
                 for (const auto& entry : entries) {
                     if (ImGui::BeginMenu(LOC(entry.label.c_str()))) {
                         python::draw_menu_bar_entry(entry.idname);
