@@ -187,6 +187,13 @@ namespace lfs::vis {
             }
             break;
 
+        case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+            if (window_) {
+                const float scale = SDL_GetWindowDisplayScale(window_);
+                lfs::core::events::internal::DisplayScaleChanged{.scale = scale}.emit();
+            }
+            break;
+
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
         case SDL_EVENT_MOUSE_BUTTON_UP: {
             if (!input_controller_)
@@ -214,24 +221,26 @@ namespace lfs::vis {
             if (!input_controller_)
                 break;
             const int key = input::sdlKeycodeToAppKey(event.key.key);
-            const int action = event.key.down ? input::ACTION_PRESS
-                                              : input::ACTION_RELEASE;
+            const int action = event.key.down
+                                   ? (event.key.repeat ? input::ACTION_REPEAT : input::ACTION_PRESS)
+                                   : input::ACTION_RELEASE;
             const int mods = input::sdlModsToAppMods(event.key.mod);
             input_controller_->handleKey(key, action, mods);
             break;
         }
 
-        case SDL_EVENT_DROP_FILE: {
-            if (!input_controller_)
-                break;
+        case SDL_EVENT_DROP_FILE:
             if (event.drop.data) {
-                LOG_INFO("SDL drop: {}", event.drop.data);
-                std::vector<std::string> files;
-                files.emplace_back(event.drop.data);
-                input_controller_->handleFileDrop(files);
+                pending_drop_files_.emplace_back(event.drop.data);
             }
             break;
-        }
+
+        case SDL_EVENT_DROP_COMPLETE:
+            if (input_controller_ && !pending_drop_files_.empty()) {
+                input_controller_->handleFileDrop(pending_drop_files_);
+                pending_drop_files_.clear();
+            }
+            break;
 
         default:
             break;

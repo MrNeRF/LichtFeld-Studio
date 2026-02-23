@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <string>
+#include <vector>
 
 struct SDL_Window;
 struct SDL_GLContextState;
@@ -71,6 +72,7 @@ namespace lfs::vis {
         static void* callback_handler_;
         InputController* input_controller_ = nullptr;
         mutable std::atomic<bool> needs_redraw_{false};
+        std::vector<std::string> pending_drop_files_;
     };
 
 } // namespace lfs::vis

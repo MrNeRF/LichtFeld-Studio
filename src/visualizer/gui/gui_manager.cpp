@@ -1000,6 +1000,13 @@ namespace lfs::vis::gui {
             }
         });
 
+        internal::DisplayScaleChanged::when([this](const auto& e) {
+            const float scale = std::clamp(e.scale, 1.0f, 4.0f);
+            lfs::python::set_shared_dpi_scale(scale);
+            lfs::vis::setThemeDpiScale(scale);
+            LOG_INFO("Display scale changed to {:.2f}", scale);
+        });
+
         state::DiskSpaceSaveFailed::when([this](const auto& e) {
             // Non-disk-space errors are handled by notification_bridge.cpp
             if (!e.is_disk_space_error)
