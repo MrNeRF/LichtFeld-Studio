@@ -1615,3 +1615,348 @@ TEST(TensorLazyRuntimeTest, NonFullReduceFallback) {
         EXPECT_NEAR(v, 32.0f * 3.0f, 1e-3f);
     }
 }
+
+// ============= PR9: Reduction Integration Tests =============
+
+TEST(TensorLazyRuntimeTest, FusedReduceProdGPU) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    float unfused_val;
+    {
+        LazyRuntimeGuard guard(LazyMode::On);
+        internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
+        auto x = Tensor::full({512}, 1.01f, Device::CUDA, DataType::Float32);
+        auto result = x.add(0.01f).prod();
+        unfused_val = result.to(Device::CPU).to_vector()[0];
+    }
+
+    float fused_val;
+    {
+        LazyRuntimeGuard guard(LazyMode::On);
+        internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
+        internal::lazy_executor_reset_diagnostics_for_testing();
+        auto x = Tensor::full({512}, 1.01f, Device::CUDA, DataType::Float32);
+        auto result = x.add(0.01f).prod();
+        fused_val = result.to(Device::CPU).to_vector()[0];
+
+        const auto diagnostics = internal::lazy_executor_diagnostics_snapshot_for_testing();
+        EXPECT_GT(diagnostics.fused_launches, 0u);
+    }
+
+    EXPECT_NEAR(fused_val, unfused_val, std::abs(unfused_val) * 1e-4f);
+}
+
+TEST(TensorLazyRuntimeTest, FusedSegmentedReduceSumGPU) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    std::vector<float> unfused_result;
+    {
+        LazyRuntimeGuard guard(LazyMode::On);
+        internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
+        auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
+        auto result = x.add(1.0f).sum({1});
+        unfused_result = result.to(Device::CPU).to_vector();
+    }
+
+    std::vector<float> fused_result;
+    {
+        LazyRuntimeGuard guard(LazyMode::On);
+        internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
+        internal::lazy_executor_reset_diagnostics_for_testing();
+        auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
+        auto result = x.add(1.0f).sum({1});
+        fused_result = result.to(Device::CPU).to_vector();
+
+        const auto diagnostics = internal::lazy_executor_diagnostics_snapshot_for_testing();
+        EXPECT_GT(diagnostics.fused_reduce_launches, 0u);
+    }
+
+    ASSERT_EQ(fused_result.size(), unfused_result.size());
+    ASSERT_EQ(fused_result.size(), 32u);
+    for (size_t i = 0; i < fused_result.size(); ++i) {
+        EXPECT_NEAR(fused_result[i], unfused_result[i], std::abs(unfused_result[i]) * 1e-5f);
+    }
+}
+
+TEST(TensorLazyRuntimeTest, FusedSegmentedReduceMeanGPU) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    std::vector<float> unfused_result;
+    {
+        LazyRuntimeGuard guard(LazyMode::On);
+        internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
+        auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
+        auto result = x.add(1.0f).mean({1});
+        unfused_result = result.to(Device::CPU).to_vector();
+    }
+
+    std::vector<float> fused_result;
+    {
+        LazyRuntimeGuard guard(LazyMode::On);
+        internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
+        auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
+        auto result = x.add(1.0f).mean({1});
+        fused_result = result.to(Device::CPU).to_vector();
+    }
+
+    ASSERT_EQ(fused_result.size(), unfused_result.size());
+    for (size_t i = 0; i < fused_result.size(); ++i) {
+        EXPECT_NEAR(fused_result[i], unfused_result[i], std::abs(unfused_result[i]) * 1e-5f);
+    }
+}
+
+TEST(TensorLazyRuntimeTest, FusedSegmentedReduceMaxGPU) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    std::vector<float> unfused_result;
+    {
+        LazyRuntimeGuard guard(LazyMode::On);
+        internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
+        auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::CUDA).reshape({32, 64});
+        auto result = x.add(1.0f).max({1});
+        unfused_result = result.to(Device::CPU).to_vector();
+    }
+
+    std::vector<float> fused_result;
+    {
+        LazyRuntimeGuard guard(LazyMode::On);
+        internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
+        auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::CUDA).reshape({32, 64});
+        auto result = x.add(1.0f).max({1});
+        fused_result = result.to(Device::CPU).to_vector();
+    }
+
+    ASSERT_EQ(fused_result.size(), unfused_result.size());
+    for (size_t i = 0; i < fused_result.size(); ++i) {
+        EXPECT_NEAR(fused_result[i], unfused_result[i], 1e-3f);
+    }
+}
+
+TEST(TensorLazyRuntimeTest, FusedSegmentedReduceMinGPU) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    std::vector<float> unfused_result;
+    {
+        LazyRuntimeGuard guard(LazyMode::On);
+        internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
+        auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::CUDA).reshape({32, 64});
+        auto result = x.mul(0.5f).min({1});
+        unfused_result = result.to(Device::CPU).to_vector();
+    }
+
+    std::vector<float> fused_result;
+    {
+        LazyRuntimeGuard guard(LazyMode::On);
+        internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
+        auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::CUDA).reshape({32, 64});
+        auto result = x.mul(0.5f).min({1});
+        fused_result = result.to(Device::CPU).to_vector();
+    }
+
+    ASSERT_EQ(fused_result.size(), unfused_result.size());
+    for (size_t i = 0; i < fused_result.size(); ++i) {
+        EXPECT_NEAR(fused_result[i], unfused_result[i], 1e-3f);
+    }
+}
+
+TEST(TensorLazyRuntimeTest, FusedSegmentedReduceProdGPU) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    std::vector<float> unfused_result;
+    {
+        LazyRuntimeGuard guard(LazyMode::On);
+        internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
+        auto x = Tensor::full({8, 16}, 1.05f, Device::CUDA, DataType::Float32);
+        auto result = x.add(0.01f).prod({1});
+        unfused_result = result.to(Device::CPU).to_vector();
+    }
+
+    std::vector<float> fused_result;
+    {
+        LazyRuntimeGuard guard(LazyMode::On);
+        internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
+        auto x = Tensor::full({8, 16}, 1.05f, Device::CUDA, DataType::Float32);
+        auto result = x.add(0.01f).prod({1});
+        fused_result = result.to(Device::CPU).to_vector();
+    }
+
+    ASSERT_EQ(fused_result.size(), unfused_result.size());
+    for (size_t i = 0; i < fused_result.size(); ++i) {
+        EXPECT_NEAR(fused_result[i], unfused_result[i], std::abs(unfused_result[i]) * 1e-4f);
+    }
+}
+
+TEST(TensorLazyRuntimeTest, FusedSegmentedReduceKeepdimGPU) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    LazyRuntimeGuard guard(LazyMode::On);
+    internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
+
+    auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
+    auto result = x.add(1.0f).sum({1}, true);
+
+    ASSERT_EQ(result.shape().rank(), 2u);
+    EXPECT_EQ(result.shape()[0], 32u);
+    EXPECT_EQ(result.shape()[1], 1u);
+
+    auto cpu_result = result.to(Device::CPU).to_vector();
+    ASSERT_EQ(cpu_result.size(), 32u);
+    for (float v : cpu_result) {
+        EXPECT_NEAR(v, 64.0f * 3.0f, 1e-2f);
+    }
+}
+
+TEST(TensorLazyRuntimeTest, FusedSegmentedReduceUnaryChainGPU) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    std::vector<float> unfused_result;
+    {
+        LazyRuntimeGuard guard(LazyMode::On);
+        internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
+        auto x = Tensor::full({16, 128}, 4.0f, Device::CUDA, DataType::Float32);
+        auto result = x.abs().sqrt().sum({1});
+        unfused_result = result.to(Device::CPU).to_vector();
+    }
+
+    std::vector<float> fused_result;
+    {
+        LazyRuntimeGuard guard(LazyMode::On);
+        internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
+        auto x = Tensor::full({16, 128}, 4.0f, Device::CUDA, DataType::Float32);
+        auto result = x.abs().sqrt().sum({1});
+        fused_result = result.to(Device::CPU).to_vector();
+    }
+
+    ASSERT_EQ(fused_result.size(), unfused_result.size());
+    for (size_t i = 0; i < fused_result.size(); ++i) {
+        EXPECT_NEAR(fused_result[i], unfused_result[i], std::abs(unfused_result[i]) * 1e-5f);
+    }
+}
+
+TEST(TensorLazyRuntimeTest, FusedSegmentedReduceDiagnosticsGPU) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    LazyRuntimeGuard guard(LazyMode::On);
+    internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
+    internal::lazy_executor_reset_diagnostics_for_testing();
+
+    const auto before = internal::lazy_executor_diagnostics_snapshot_for_testing();
+
+    auto x = Tensor::full({32, 64}, 1.0f, Device::CUDA, DataType::Float32);
+    auto result = x.add(1.0f).sum({1});
+    auto val = result.to(Device::CPU).to_vector();
+
+    const auto after = internal::lazy_executor_diagnostics_snapshot_for_testing();
+    EXPECT_GT(after.fused_reduce_launches - before.fused_reduce_launches, 0u);
+    EXPECT_GT(after.fused_launches - before.fused_launches, 0u);
+}
+
+TEST(TensorLazyRuntimeTest, NonLastDimReduceFallback) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    LazyRuntimeGuard guard(LazyMode::On);
+    internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
+    internal::lazy_executor_reset_diagnostics_for_testing();
+
+    auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
+    auto result = x.add(1.0f).sum({0});
+
+    auto cpu_result = result.to(Device::CPU).to_vector();
+    ASSERT_EQ(cpu_result.size(), 64u);
+    for (float v : cpu_result) {
+        EXPECT_NEAR(v, 32.0f * 3.0f, 1e-2f);
+    }
+
+    const auto diagnostics = internal::lazy_executor_diagnostics_snapshot_for_testing();
+    EXPECT_EQ(diagnostics.fused_reduce_launches, 0u);
+}
+
+TEST(TensorLazyIrTest, LazyReduceIRNodeRecorded) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    LazyRuntimeGuard guard(LazyMode::On);
+    internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
+
+    auto x = Tensor::full({4096}, 2.0f, Device::CUDA, DataType::Float32);
+    auto result = x.add(1.0f).sum();
+
+    ASSERT_TRUE(result.has_lazy_expr());
+    const auto info = result.lazy_expr_info();
+    ASSERT_TRUE(info.has_value());
+    EXPECT_EQ(info->op_kind, internal::LazyOpKind::Reduce);
+}
+
+TEST(TensorLazyRuntimeTest, ReduceParityAcrossModes) {
+    if (!has_cuda_device()) {
+        GTEST_SKIP() << "CUDA device required";
+    }
+
+    struct TestCase {
+        std::vector<size_t> shape;
+        std::vector<int> axes;
+        bool keepdim;
+    };
+
+    std::vector<TestCase> cases = {
+        {{64}, {}, false},
+        {{32, 64}, {1}, false},
+        {{32, 64}, {1}, true},
+        {{8, 16, 32}, {2}, false},
+        {{128}, {0}, false},
+    };
+
+    auto reduce_op_list = {ReduceOp::Sum, ReduceOp::Mean, ReduceOp::Max, ReduceOp::Min, ReduceOp::Prod};
+
+    for (const auto& tc : cases) {
+        for (auto op : reduce_op_list) {
+            std::vector<float> off_result;
+            {
+                LazyRuntimeGuard guard(LazyMode::Off);
+                auto x = Tensor::full(TensorShape(tc.shape), 1.5f, Device::CUDA, DataType::Float32);
+                auto result = x.add(0.5f).reduce(op, {tc.axes, tc.keepdim});
+                off_result = result.to(Device::CPU).to_vector();
+            }
+
+            std::vector<float> on_result;
+            {
+                LazyRuntimeGuard guard(LazyMode::On);
+                internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
+                auto x = Tensor::full(TensorShape(tc.shape), 1.5f, Device::CUDA, DataType::Float32);
+                auto result = x.add(0.5f).reduce(op, {tc.axes, tc.keepdim});
+                on_result = result.to(Device::CPU).to_vector();
+            }
+
+            ASSERT_EQ(off_result.size(), on_result.size())
+                << "Shape/axes/keepdim mismatch for op=" << static_cast<int>(op);
+            for (size_t i = 0; i < off_result.size(); ++i) {
+                const float tol = std::max(std::abs(off_result[i]) * 1e-4f, 1e-5f);
+                EXPECT_NEAR(on_result[i], off_result[i], tol)
+                    << "op=" << static_cast<int>(op)
+                    << " shape_rank=" << tc.shape.size()
+                    << " i=" << i;
+            }
+        }
+    }
+}

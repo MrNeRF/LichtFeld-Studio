@@ -799,6 +799,483 @@ TEST_F(FusionBenchmarkTest, ComplexChain_6Ops) {
 }
 
 // ============================================================================
+// Fused Transform-Reduce Benchmarks
+// ============================================================================
+
+TEST_F(FusionBenchmarkTest, FusedFullReduce_ChainSum) {
+    print_separator("FUSED TRANSFORM-REDUCE: chain → sum() (full reduce)");
+
+    std::cout << "\nPattern: x * 2.0 + 1.0 → sum()" << std::endl;
+    std::cout << "Expected: 3× speedup (single fused kernel vs 3 separate kernels)\n"
+              << std::endl;
+
+    const int iterations = 100;
+    std::vector<std::tuple<std::string, std::vector<size_t>>> test_cases = {
+        {"100K elements", {102400}},
+        {"1M elements", {1048576}},
+        {"4M elements", {4194304}},
+    };
+
+    for (const auto& [name, shape] : test_cases) {
+        auto x = Tensor::randn(TensorShape(shape), Device::CUDA);
+        std::vector<int64_t> torch_shape(shape.begin(), shape.end());
+        auto x_t = torch::randn(torch_shape, torch::kCUDA);
+
+        cudaMemcpy(const_cast<float*>(x_t.data_ptr<float>()),
+                   x.ptr<float>(),
+                   x.numel() * sizeof(float),
+                   cudaMemcpyDeviceToDevice);
+
+        double total_custom = 0.0;
+        double total_torch = 0.0;
+
+        Tensor result_custom;
+        torch::Tensor result_torch;
+
+        for (int i = 0; i < iterations; ++i) {
+            {
+                Timer timer;
+                result_custom = (x * 2.0f + 1.0f).sum();
+                cudaDeviceSynchronize();
+                total_custom += timer.elapsed_ms();
+            }
+
+            {
+                Timer timer;
+                result_torch = (x_t * 2.0f + 1.0f).sum();
+                cudaDeviceSynchronize();
+                total_torch += timer.elapsed_ms();
+            }
+        }
+
+        // Full-reduce sums large element counts; ULP at magnitude ~N is significant
+        bool verified = tensors_equal(result_custom, result_torch, 1.0f);
+
+        BenchmarkResult result{
+            name,
+            total_custom / iterations,
+            total_torch / iterations,
+            total_torch / total_custom,
+            verified};
+        result.print();
+    }
+}
+
+TEST_F(FusionBenchmarkTest, FusedSegmentedReduce_ChainSum) {
+    print_separator("FUSED TRANSFORM-REDUCE: chain → sum({-1}) (segmented)");
+
+    std::cout << "\nPattern: x * 2.0 + 1.0 → sum({-1})" << std::endl;
+    std::cout << "Expected: 3× speedup (single fused kernel vs 3 separate kernels)\n"
+              << std::endl;
+
+    const int iterations = 100;
+    std::vector<std::tuple<std::string, std::vector<size_t>>> test_cases = {
+        {"[1024, 1024]", {1024, 1024}},
+        {"[2048, 512]", {2048, 512}},
+        {"[4096, 256]", {4096, 256}},
+        {"[256, 256, 64]", {256, 256, 64}},
+    };
+
+    for (const auto& [name, shape] : test_cases) {
+        auto x = Tensor::randn(TensorShape(shape), Device::CUDA);
+        std::vector<int64_t> torch_shape(shape.begin(), shape.end());
+        auto x_t = torch::randn(torch_shape, torch::kCUDA);
+
+        cudaMemcpy(const_cast<float*>(x_t.data_ptr<float>()),
+                   x.ptr<float>(),
+                   x.numel() * sizeof(float),
+                   cudaMemcpyDeviceToDevice);
+
+        double total_custom = 0.0;
+        double total_torch = 0.0;
+
+        Tensor result_custom;
+        torch::Tensor result_torch;
+
+        for (int i = 0; i < iterations; ++i) {
+            {
+                Timer timer;
+                result_custom = (x * 2.0f + 1.0f).sum({-1});
+                cudaDeviceSynchronize();
+                total_custom += timer.elapsed_ms();
+            }
+
+            {
+                Timer timer;
+                result_torch = (x_t * 2.0f + 1.0f).sum(-1);
+                cudaDeviceSynchronize();
+                total_torch += timer.elapsed_ms();
+            }
+        }
+
+        bool verified = tensors_equal(result_custom, result_torch, 1e-3f);
+
+        BenchmarkResult result{
+            name,
+            total_custom / iterations,
+            total_torch / iterations,
+            total_torch / total_custom,
+            verified};
+        result.print();
+    }
+}
+
+TEST_F(FusionBenchmarkTest, FusedSegmentedReduce_AllOps) {
+    print_separator("FUSED TRANSFORM-REDUCE: chain → reduce({-1}) (all reduction ops)");
+
+    std::cout << "\nShape: [2048, 1024]" << std::endl;
+    std::cout << "Tests all supported reduction ops with fused pointwise chain\n"
+              << std::endl;
+
+    const int iterations = 100;
+    const std::vector<size_t> shape = {2048, 1024};
+    std::vector<int64_t> torch_shape(shape.begin(), shape.end());
+
+    // Sum
+    {
+        auto x = Tensor::randn(TensorShape(shape), Device::CUDA);
+        auto x_t = torch::randn(torch_shape, torch::kCUDA);
+        cudaMemcpy(const_cast<float*>(x_t.data_ptr<float>()), x.ptr<float>(),
+                   x.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
+
+        double total_custom = 0.0, total_torch = 0.0;
+        Tensor rc;
+        torch::Tensor rt;
+
+        for (int i = 0; i < iterations; ++i) {
+            {
+                Timer t;
+                rc = (x * 2.0f + 1.0f).sum({-1});
+                cudaDeviceSynchronize();
+                total_custom += t.elapsed_ms();
+            }
+            {
+                Timer t;
+                rt = (x_t * 2.0f + 1.0f).sum(-1);
+                cudaDeviceSynchronize();
+                total_torch += t.elapsed_ms();
+            }
+        }
+
+        BenchmarkResult{"Sum:  x*2+1 → sum({-1})", total_custom / iterations,
+                        total_torch / iterations, total_torch / total_custom,
+                        tensors_equal(rc, rt, 1e-3f)}
+            .print();
+    }
+
+    // Mean
+    {
+        auto x = Tensor::randn(TensorShape(shape), Device::CUDA);
+        auto x_t = torch::randn(torch_shape, torch::kCUDA);
+        cudaMemcpy(const_cast<float*>(x_t.data_ptr<float>()), x.ptr<float>(),
+                   x.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
+
+        double total_custom = 0.0, total_torch = 0.0;
+        Tensor rc;
+        torch::Tensor rt;
+
+        for (int i = 0; i < iterations; ++i) {
+            {
+                Timer t;
+                rc = (x * 2.0f + 1.0f).mean({-1});
+                cudaDeviceSynchronize();
+                total_custom += t.elapsed_ms();
+            }
+            {
+                Timer t;
+                rt = (x_t * 2.0f + 1.0f).mean(-1);
+                cudaDeviceSynchronize();
+                total_torch += t.elapsed_ms();
+            }
+        }
+
+        BenchmarkResult{"Mean: x*2+1 → mean({-1})", total_custom / iterations,
+                        total_torch / iterations, total_torch / total_custom,
+                        tensors_equal(rc, rt)}
+            .print();
+    }
+
+    // Max
+    {
+        auto x = Tensor::randn(TensorShape(shape), Device::CUDA);
+        auto x_t = torch::randn(torch_shape, torch::kCUDA);
+        cudaMemcpy(const_cast<float*>(x_t.data_ptr<float>()), x.ptr<float>(),
+                   x.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
+
+        double total_custom = 0.0, total_torch = 0.0;
+        Tensor rc;
+        torch::Tensor rt;
+
+        for (int i = 0; i < iterations; ++i) {
+            {
+                Timer t;
+                rc = (x * 2.0f + 1.0f).max({-1});
+                cudaDeviceSynchronize();
+                total_custom += t.elapsed_ms();
+            }
+            {
+                Timer t;
+                rt = std::get<0>((x_t * 2.0f + 1.0f).max(-1));
+                cudaDeviceSynchronize();
+                total_torch += t.elapsed_ms();
+            }
+        }
+
+        BenchmarkResult{"Max:  x*2+1 → max({-1})", total_custom / iterations,
+                        total_torch / iterations, total_torch / total_custom,
+                        tensors_equal(rc, rt)}
+            .print();
+    }
+
+    // Min
+    {
+        auto x = Tensor::randn(TensorShape(shape), Device::CUDA);
+        auto x_t = torch::randn(torch_shape, torch::kCUDA);
+        cudaMemcpy(const_cast<float*>(x_t.data_ptr<float>()), x.ptr<float>(),
+                   x.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
+
+        double total_custom = 0.0, total_torch = 0.0;
+        Tensor rc;
+        torch::Tensor rt;
+
+        for (int i = 0; i < iterations; ++i) {
+            {
+                Timer t;
+                rc = (x * 2.0f + 1.0f).min({-1});
+                cudaDeviceSynchronize();
+                total_custom += t.elapsed_ms();
+            }
+            {
+                Timer t;
+                rt = std::get<0>((x_t * 2.0f + 1.0f).min(-1));
+                cudaDeviceSynchronize();
+                total_torch += t.elapsed_ms();
+            }
+        }
+
+        BenchmarkResult{"Min:  x*2+1 → min({-1})", total_custom / iterations,
+                        total_torch / iterations, total_torch / total_custom,
+                        tensors_equal(rc, rt)}
+            .print();
+    }
+
+    // Prod (values near 1.0 to avoid overflow)
+    {
+        auto x = Tensor::randn(TensorShape(shape), Device::CUDA);
+        auto x_t = torch::randn(torch_shape, torch::kCUDA);
+        cudaMemcpy(const_cast<float*>(x_t.data_ptr<float>()), x.ptr<float>(),
+                   x.numel() * sizeof(float), cudaMemcpyDeviceToDevice);
+
+        double total_custom = 0.0, total_torch = 0.0;
+        Tensor rc;
+        torch::Tensor rt;
+
+        for (int i = 0; i < iterations; ++i) {
+            {
+                Timer t;
+                rc = (x.abs() * 0.001f + 0.999f).prod({-1});
+                cudaDeviceSynchronize();
+                total_custom += t.elapsed_ms();
+            }
+            {
+                Timer t;
+                rt = (x_t.abs() * 0.001f + 0.999f).prod(-1);
+                cudaDeviceSynchronize();
+                total_torch += t.elapsed_ms();
+            }
+        }
+
+        BenchmarkResult{"Prod: abs(x)*0.001+0.999 → prod({-1})", total_custom / iterations,
+                        total_torch / iterations, total_torch / total_custom,
+                        tensors_equal(rc, rt, 1e-2f)}
+            .print();
+    }
+}
+
+// ============================================================================
+// Real-World Fused Transform-Reduce Patterns
+// ============================================================================
+
+TEST_F(FusionBenchmarkTest, RealWorld_MSELoss) {
+    print_separator("REAL-WORLD: MSE Loss (pred - target).square().mean()");
+
+    std::cout << "\nPattern: (pred - target).square().mean()" << std::endl;
+    std::cout << "3 ops fused into single reduce kernel\n"
+              << std::endl;
+
+    const int iterations = 100;
+    std::vector<std::tuple<std::string, std::vector<size_t>>> test_cases = {
+        {"[1024, 512]", {1024, 512}},
+        {"[4096, 1024]", {4096, 1024}},
+    };
+
+    for (const auto& [name, shape] : test_cases) {
+        auto pred = Tensor::randn(TensorShape(shape), Device::CUDA);
+        auto target = Tensor::randn(TensorShape(shape), Device::CUDA);
+
+        std::vector<int64_t> torch_shape(shape.begin(), shape.end());
+        auto pred_t = torch::randn(torch_shape, torch::kCUDA);
+        auto target_t = torch::randn(torch_shape, torch::kCUDA);
+
+        cudaMemcpy(const_cast<float*>(pred_t.data_ptr<float>()),
+                   pred.ptr<float>(),
+                   pred.numel() * sizeof(float),
+                   cudaMemcpyDeviceToDevice);
+        cudaMemcpy(const_cast<float*>(target_t.data_ptr<float>()),
+                   target.ptr<float>(),
+                   target.numel() * sizeof(float),
+                   cudaMemcpyDeviceToDevice);
+
+        double total_custom = 0.0;
+        double total_torch = 0.0;
+
+        Tensor result_custom;
+        torch::Tensor result_torch;
+
+        for (int i = 0; i < iterations; ++i) {
+            {
+                Timer timer;
+                result_custom = (pred - target).square().mean();
+                cudaDeviceSynchronize();
+                total_custom += timer.elapsed_ms();
+            }
+
+            {
+                Timer timer;
+                result_torch = (pred_t - target_t).square().mean();
+                cudaDeviceSynchronize();
+                total_torch += timer.elapsed_ms();
+            }
+        }
+
+        bool verified = tensors_equal(result_custom, result_torch);
+
+        BenchmarkResult result{
+            name,
+            total_custom / iterations,
+            total_torch / iterations,
+            total_torch / total_custom,
+            verified};
+        result.print();
+    }
+}
+
+TEST_F(FusionBenchmarkTest, RealWorld_L2NormPerRow) {
+    print_separator("REAL-WORLD: L2 Norm per Row x.square().sum({-1}).sqrt()");
+
+    std::cout << "\nPattern: x.square().sum({-1}).sqrt()" << std::endl;
+    std::cout << "square+sum fused, sqrt on reduced output\n"
+              << std::endl;
+
+    const int iterations = 100;
+    std::vector<std::tuple<std::string, std::vector<size_t>>> test_cases = {
+        {"[100000, 3]  (positions)", {100000, 3}},
+        {"[100000, 48] (SH coefficients)", {100000, 48}},
+        {"[2048, 1024]", {2048, 1024}},
+    };
+
+    for (const auto& [name, shape] : test_cases) {
+        auto x = Tensor::randn(TensorShape(shape), Device::CUDA);
+        std::vector<int64_t> torch_shape(shape.begin(), shape.end());
+        auto x_t = torch::randn(torch_shape, torch::kCUDA);
+
+        cudaMemcpy(const_cast<float*>(x_t.data_ptr<float>()),
+                   x.ptr<float>(),
+                   x.numel() * sizeof(float),
+                   cudaMemcpyDeviceToDevice);
+
+        double total_custom = 0.0;
+        double total_torch = 0.0;
+
+        Tensor result_custom;
+        torch::Tensor result_torch;
+
+        for (int i = 0; i < iterations; ++i) {
+            {
+                Timer timer;
+                result_custom = x.square().sum({-1}).sqrt();
+                cudaDeviceSynchronize();
+                total_custom += timer.elapsed_ms();
+            }
+
+            {
+                Timer timer;
+                result_torch = x_t.square().sum(-1).sqrt();
+                cudaDeviceSynchronize();
+                total_torch += timer.elapsed_ms();
+            }
+        }
+
+        bool verified = tensors_equal(result_custom, result_torch);
+
+        BenchmarkResult result{
+            name,
+            total_custom / iterations,
+            total_torch / iterations,
+            total_torch / total_custom,
+            verified};
+        result.print();
+    }
+}
+
+TEST_F(FusionBenchmarkTest, RealWorld_GaussianActivationReduce) {
+    print_separator("REAL-WORLD: Gaussian Activation + Reduce (-x.abs()).exp().sum({-1})");
+
+    std::cout << "\nPattern: (-x.abs()).exp().sum({-1})" << std::endl;
+    std::cout << "3 unary ops + segmented sum in one pass\n"
+              << std::endl;
+
+    const int iterations = 100;
+    std::vector<std::tuple<std::string, std::vector<size_t>>> test_cases = {
+        {"[100000, 16]", {100000, 16}},
+        {"[500000, 3]", {500000, 3}},
+    };
+
+    for (const auto& [name, shape] : test_cases) {
+        auto x = Tensor::randn(TensorShape(shape), Device::CUDA);
+        std::vector<int64_t> torch_shape(shape.begin(), shape.end());
+        auto x_t = torch::randn(torch_shape, torch::kCUDA);
+
+        cudaMemcpy(const_cast<float*>(x_t.data_ptr<float>()),
+                   x.ptr<float>(),
+                   x.numel() * sizeof(float),
+                   cudaMemcpyDeviceToDevice);
+
+        double total_custom = 0.0;
+        double total_torch = 0.0;
+
+        Tensor result_custom;
+        torch::Tensor result_torch;
+
+        for (int i = 0; i < iterations; ++i) {
+            {
+                Timer timer;
+                result_custom = (-x.abs()).exp().sum({-1});
+                cudaDeviceSynchronize();
+                total_custom += timer.elapsed_ms();
+            }
+
+            {
+                Timer timer;
+                result_torch = (-x_t.abs()).exp().sum(-1);
+                cudaDeviceSynchronize();
+                total_torch += timer.elapsed_ms();
+            }
+        }
+
+        bool verified = tensors_equal(result_custom, result_torch);
+
+        BenchmarkResult result{
+            name,
+            total_custom / iterations,
+            total_torch / iterations,
+            total_torch / total_custom,
+            verified};
+        result.print();
+    }
+}
+
+// ============================================================================
 // Summary Test
 // ============================================================================
 

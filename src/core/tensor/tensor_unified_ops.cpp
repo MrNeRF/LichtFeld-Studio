@@ -6,12 +6,14 @@
 #include "core/tensor_trace.hpp"
 #include "internal/lazy_config.hpp"
 #include "internal/lazy_executor.hpp"
+#include "internal/lazy_ir.hpp"
 #include "internal/memory_pool.hpp"
 #include "internal/tensor_broadcast.hpp"
 #include "internal/tensor_functors.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstring>
 #include <cuda_runtime.h>
@@ -639,7 +641,8 @@ namespace lfs::core {
         if (internal::lazy_mode_enabled() && dtype_ == DataType::Float32 &&
             device_ == Device::CUDA && has_lazy_expr() &&
             (op == ReduceOp::Sum || op == ReduceOp::Mean ||
-             op == ReduceOp::Max || op == ReduceOp::Min)) {
+             op == ReduceOp::Max || op == ReduceOp::Min ||
+             op == ReduceOp::Prod)) {
             bool is_full_reduce = args.axes.empty();
             if (!is_full_reduce) {
                 std::vector<int> sorted_axes = args.axes;
@@ -680,6 +683,62 @@ namespace lfs::core {
 
                     internal::telemetry_record_eager_fallback(1);
                     internal::lazy_executor_diagnostics_counters_increment_fused();
+                    internal::lazy_executor_diagnostics_counters_increment_fused_reduce();
+                    internal::lazy_ir_record_reduce(*this, result, op_name);
+                    return result;
+                }
+            }
+        }
+
+        // Fused segmented transform-reduce: last-dim reduction with producer pointwise chain
+        if (internal::lazy_mode_enabled() && dtype_ == DataType::Float32 &&
+            device_ == Device::CUDA && has_lazy_expr() &&
+            (op == ReduceOp::Sum || op == ReduceOp::Mean ||
+             op == ReduceOp::Max || op == ReduceOp::Min ||
+             op == ReduceOp::Prod) &&
+            args.axes.size() == 1 && shape_.rank() >= 2) {
+            int dim = args.axes[0];
+            if (dim < 0)
+                dim += static_cast<int>(shape_.rank());
+            if (dim == static_cast<int>(shape_.rank()) - 1) {
+                Tensor fused_source;
+                std::vector<internal::LazyPointwiseOp> fused_ops;
+                if (internal::lazy_executor_try_consume_pointwise_fusion(
+                        lazy_expr_id(), &fused_source, &fused_ops) &&
+                    fused_source.is_valid() &&
+                    fused_source.device() == Device::CUDA &&
+                    fused_source.is_contiguous() &&
+                    fused_source.dtype() == DataType::Float32 &&
+                    static_cast<int>(fused_ops.size()) <= tensor_ops::FUSED_POINTWISE_MAX_OPS) {
+                    tensor_ops::FusedPointwiseOpChain chain{};
+                    chain.num_ops = static_cast<int>(fused_ops.size());
+                    for (int i = 0; i < chain.num_ops; ++i) {
+                        chain.ops[i].kind = static_cast<uint8_t>(fused_ops[i].kind);
+                        chain.ops[i].scalar = fused_ops[i].scalar;
+                    }
+
+                    const size_t segment_size = fused_source.shape()[fused_source.shape().rank() - 1];
+                    const size_t num_segments = fused_source.numel() / segment_size;
+                    assert(segment_size > 0);
+                    assert(num_segments > 0);
+
+                    std::vector<size_t> out_shape;
+                    for (size_t i = 0; i < shape_.rank() - 1; ++i) {
+                        out_shape.push_back(shape_[i]);
+                    }
+                    if (args.keepdim) {
+                        out_shape.push_back(1);
+                    }
+
+                    auto result = Tensor::empty(TensorShape(out_shape), Device::CUDA, DataType::Float32);
+                    tensor_ops::launch_fused_segmented_transform_reduce(
+                        fused_source.ptr<float>(), result.ptr<float>(),
+                        num_segments, segment_size, chain, op, fused_source.stream());
+
+                    internal::telemetry_record_eager_fallback(1);
+                    internal::lazy_executor_diagnostics_counters_increment_fused();
+                    internal::lazy_executor_diagnostics_counters_increment_fused_reduce();
+                    internal::lazy_ir_record_reduce(*this, result, op_name);
                     return result;
                 }
             }
@@ -708,6 +767,7 @@ namespace lfs::core {
 
                 LOG_DEBUG("[COLUMN REDUCE] M={}, N={}, op={}", M, N, static_cast<int>(op));
                 tensor_ops::launch_column_reduce(ptr<float>(), result.ptr<float>(), M, N, op, nullptr);
+                internal::lazy_ir_record_reduce(*this, result, op_name);
                 return result;
             }
         }
@@ -1275,6 +1335,7 @@ namespace lfs::core {
             }
         }
 
+        internal::lazy_ir_record_reduce(*input, result, op_name);
         return result;
     }
 

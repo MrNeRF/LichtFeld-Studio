@@ -59,6 +59,7 @@ namespace lfs::core::internal {
             std::atomic<uint64_t> cache_misses{0};
             std::atomic<uint64_t> root_fallbacks{0};
             std::atomic<uint64_t> fused_launches{0};
+            std::atomic<uint64_t> fused_reduce_launches{0};
             std::atomic<uint64_t> max_registry_entries{0};
             std::atomic<uint64_t> max_context_cache_entries{0};
         };
@@ -251,6 +252,7 @@ namespace lfs::core::internal {
                 after.cache_misses - before.cache_misses,
                 after.root_fallbacks - before.root_fallbacks,
                 after.fused_launches - before.fused_launches,
+                after.fused_reduce_launches - before.fused_reduce_launches,
                 after.max_registry_entries,
                 after.max_context_cache_entries};
         }
@@ -733,6 +735,7 @@ namespace lfs::core::internal {
         diagnostics.cache_misses.store(0, std::memory_order_relaxed);
         diagnostics.root_fallbacks.store(0, std::memory_order_relaxed);
         diagnostics.fused_launches.store(0, std::memory_order_relaxed);
+        diagnostics.fused_reduce_launches.store(0, std::memory_order_relaxed);
         diagnostics.max_registry_entries.store(0, std::memory_order_relaxed);
         diagnostics.max_context_cache_entries.store(0, std::memory_order_relaxed);
     }
@@ -746,6 +749,7 @@ namespace lfs::core::internal {
             diagnostics.cache_misses.load(std::memory_order_relaxed),
             diagnostics.root_fallbacks.load(std::memory_order_relaxed),
             diagnostics.fused_launches.load(std::memory_order_relaxed),
+            diagnostics.fused_reduce_launches.load(std::memory_order_relaxed),
             diagnostics.max_registry_entries.load(std::memory_order_relaxed),
             diagnostics.max_context_cache_entries.load(std::memory_order_relaxed)};
     }
@@ -784,6 +788,10 @@ namespace lfs::core::internal {
 
     void lazy_executor_diagnostics_counters_increment_fused() {
         lazy_executor_diagnostics_counters().fused_launches.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    void lazy_executor_diagnostics_counters_increment_fused_reduce() {
+        lazy_executor_diagnostics_counters().fused_reduce_launches.fetch_add(1, std::memory_order_relaxed);
     }
 
     bool lazy_executor_try_consume_pointwise_fusion(

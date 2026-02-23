@@ -289,8 +289,7 @@ namespace lfs::training {
                                                                           static_cast<int>(mask_2d.shape()[1])});
                 const Tensor mask_sum = mask_expanded.sum() + EPSILON;
 
-                const Tensor l1_diff = (rendered - gt_image).abs();
-                const Tensor masked_l1 = (l1_diff * mask_expanded).sum() / mask_sum;
+                const Tensor masked_l1 = ((rendered - gt_image).abs() * mask_expanded).sum() / mask_sum;
                 const Tensor sign_diff = (rendered - gt_image).sign();
                 grad = sign_diff * mask_expanded / mask_sum;
                 loss = masked_l1;

@@ -44,13 +44,13 @@ namespace lfs::core::internal {
                                       const Tensor& tensor) {
             const uint64_t node_id = runtime.next_node_id++;
             runtime.nodes.emplace(node_id, LazyExprNode{
-                                              node_id,
-                                              kind,
-                                              std::string(op_name),
-                                              std::move(inputs),
-                                              tensor.device(),
-                                              tensor.dtype(),
-                                              tensor.shape().str()});
+                                               node_id,
+                                               kind,
+                                               std::string(op_name),
+                                               std::move(inputs),
+                                               tensor.device(),
+                                               tensor.dtype(),
+                                               tensor.shape().str()});
             runtime.tensor_to_node[tensor_id] = node_id;
             telemetry_record_expr_node(1);
             return node_id;
@@ -225,6 +225,21 @@ namespace lfs::core::internal {
             ensure_leaf_node_locked(runtime, input),
             ensure_leaf_node_locked(runtime, indices)};
         register_node_locked(runtime, output.debug_id(), LazyOpKind::Permutation, op_name, std::move(inputs), output);
+    }
+
+    void lazy_ir_record_reduce(const Tensor& input,
+                               const Tensor& output,
+                               std::string_view op_name) {
+        if (!lazy_ir_active()) {
+            return;
+        }
+        if (output.debug_id() == 0) {
+            return;
+        }
+        auto& runtime = lazy_ir_runtime();
+        std::lock_guard<std::mutex> lock(runtime.mutex);
+        std::vector<uint64_t> inputs = {ensure_leaf_node_locked(runtime, input)};
+        register_node_locked(runtime, output.debug_id(), LazyOpKind::Reduce, op_name, std::move(inputs), output);
     }
 
     uint64_t lazy_ir_record_deferred(const Tensor& output,

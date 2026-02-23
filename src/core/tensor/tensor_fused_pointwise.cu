@@ -164,6 +164,7 @@ namespace lfs::core::tensor_ops {
             case 1: return 0.0f;     // Mean (accumulates like sum)
             case 2: return -FLT_MAX; // Max
             case 3: return FLT_MAX;  // Min
+            case 4: return 1.0f;     // Prod
             default: return 0.0f;
             }
         }
@@ -174,6 +175,7 @@ namespace lfs::core::tensor_ops {
             case 1: return a + b;
             case 2: return fmaxf(a, b);
             case 3: return fminf(a, b);
+            case 4: return a * b;
             default: return a + b;
             }
         }
@@ -184,6 +186,7 @@ namespace lfs::core::tensor_ops {
             case 1: return warp_ops::block_reduce_sum(val);
             case 2: return warp_ops::block_reduce_max(val);
             case 3: return warp_ops::block_reduce_min(val);
+            case 4: return warp_ops::block_reduce_prod(val);
             default: return warp_ops::block_reduce_sum(val);
             }
         }
@@ -266,7 +269,7 @@ namespace lfs::core::tensor_ops {
         assert(chain.num_ops > 0 && chain.num_ops <= FUSED_POINTWISE_MAX_OPS);
 
         const int reduce_op_int = static_cast<int>(reduce_op);
-        assert(reduce_op_int >= 0 && reduce_op_int <= 3);
+        assert(reduce_op_int >= 0 && reduce_op_int <= 4);
 
         const auto& gpu = GPUConfig::get();
         const int grid_size = gpu.optimal_grid_size(BLOCK_SIZE);
@@ -287,6 +290,77 @@ namespace lfs::core::tensor_ops {
         }
 
         cudaFreeAsync(partial, stream);
+    }
+
+    // ============= Fused Segmented Transform-Reduce (Last-Dim) =============
+
+    namespace {
+
+        __global__ void fused_segmented_transform_reduce_kernel(
+            const float* __restrict__ input,
+            float* __restrict__ output,
+            size_t num_segments,
+            size_t segment_size,
+            FusedPointwiseOpChain chain,
+            int reduce_op_int) {
+
+            for (size_t seg = blockIdx.x; seg < num_segments; seg += gridDim.x) {
+                const float* seg_input = input + seg * segment_size;
+                const float identity = reduce_identity(reduce_op_int);
+                float acc = identity;
+
+                const bool is_aligned = (reinterpret_cast<uintptr_t>(seg_input) % 16) == 0;
+
+                if (is_aligned && segment_size >= 4) {
+                    const size_t vec_n = segment_size / 4;
+                    for (size_t vec_idx = threadIdx.x; vec_idx < vec_n; vec_idx += blockDim.x) {
+                        float4 vals = reinterpret_cast<const float4*>(seg_input)[vec_idx];
+                        acc = reduce_combine(acc, apply_chain(vals.x, chain), reduce_op_int);
+                        acc = reduce_combine(acc, apply_chain(vals.y, chain), reduce_op_int);
+                        acc = reduce_combine(acc, apply_chain(vals.z, chain), reduce_op_int);
+                        acc = reduce_combine(acc, apply_chain(vals.w, chain), reduce_op_int);
+                    }
+                    const size_t tail_start = vec_n * 4;
+                    for (size_t i = tail_start + threadIdx.x; i < segment_size; i += blockDim.x) {
+                        acc = reduce_combine(acc, apply_chain(seg_input[i], chain), reduce_op_int);
+                    }
+                } else {
+                    for (size_t i = threadIdx.x; i < segment_size; i += blockDim.x) {
+                        acc = reduce_combine(acc, apply_chain(seg_input[i], chain), reduce_op_int);
+                    }
+                }
+
+                acc = block_reduce_op(acc, reduce_op_int);
+
+                if (threadIdx.x == 0) {
+                    if (reduce_op_int == 1) { // Mean
+                        acc *= (1.0f / static_cast<float>(segment_size));
+                    }
+                    output[seg] = acc;
+                }
+            }
+        }
+
+    } // namespace
+
+    void launch_fused_segmented_transform_reduce(
+        const float* input, float* output,
+        size_t num_segments, size_t segment_size,
+        const FusedPointwiseOpChain& chain,
+        ReduceOp reduce_op, cudaStream_t stream) {
+
+        if (num_segments == 0 || segment_size == 0)
+            return;
+        assert(input != nullptr);
+        assert(output != nullptr);
+        assert(chain.num_ops > 0 && chain.num_ops <= FUSED_POINTWISE_MAX_OPS);
+
+        const int reduce_op_int = static_cast<int>(reduce_op);
+        assert(reduce_op_int >= 0 && reduce_op_int <= 4);
+
+        const int grid_size = static_cast<int>(std::min(num_segments, size_t(2048)));
+        fused_segmented_transform_reduce_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
+            input, output, num_segments, segment_size, chain, reduce_op_int);
     }
 
 } // namespace lfs::core::tensor_ops

@@ -498,7 +498,7 @@ namespace lfs::training {
         lfs::core::Tensor is_prune = _splat_data->get_opacity() < _params->prune_opacity;
 
         auto rotation_raw = _splat_data->rotation_raw();
-        is_prune = is_prune.logical_or((rotation_raw * rotation_raw).sum(-1, false) < 1e-8f);
+        is_prune = is_prune.logical_or(rotation_raw.square().sum(-1, false) < 1e-8f);
 
         // Check for too large Gaussians
         if (iter > _params->reset_every) {
@@ -586,7 +586,7 @@ namespace lfs::training {
     namespace {
         constexpr uint32_t DEFAULT_MAGIC = 0x4C464446; // "LFDF"
         constexpr uint32_t DEFAULT_VERSION = 2;        // v2 adds free_mask serialization
-    } // namespace
+    }                                                  // namespace
 
     void ADC::serialize(std::ostream& os) const {
         os.write(reinterpret_cast<const char*>(&DEFAULT_MAGIC), sizeof(DEFAULT_MAGIC));

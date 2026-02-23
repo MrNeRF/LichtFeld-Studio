@@ -66,6 +66,7 @@ namespace lfs::core {
             uint64_t cache_misses = 0;
             uint64_t root_fallbacks = 0;
             uint64_t fused_launches = 0;
+            uint64_t fused_reduce_launches = 0;
             uint64_t max_registry_entries = 0;
             uint64_t max_context_cache_entries = 0;
         };
@@ -114,6 +115,7 @@ namespace lfs::core {
             uint64_t node_id, Tensor* out_source, std::vector<LazyPointwiseOp>* out_ops);
 
         LFS_CORE_API void lazy_executor_diagnostics_counters_increment_fused();
+        LFS_CORE_API void lazy_executor_diagnostics_counters_increment_fused_reduce();
 
     } // namespace internal
 

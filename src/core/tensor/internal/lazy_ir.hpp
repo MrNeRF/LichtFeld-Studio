@@ -24,7 +24,8 @@ namespace lfs::core {
             Binary = 2,
             ScalarUnary = 3,
             Permutation = 4,
-            Deferred = 5
+            Deferred = 5,
+            Reduce = 6
         };
 
         struct LazyExprDebugInfo {
@@ -60,6 +61,9 @@ namespace lfs::core {
                                                      const Tensor& indices,
                                                      const Tensor& output,
                                                      std::string_view op_name);
+        LFS_CORE_API void lazy_ir_record_reduce(const Tensor& input,
+                                                const Tensor& output,
+                                                std::string_view op_name);
         LFS_CORE_API uint64_t lazy_ir_record_deferred(const Tensor& output,
                                                       std::string_view op_name = "deferred_expr",
                                                       const std::vector<uint64_t>& input_ids = {});
