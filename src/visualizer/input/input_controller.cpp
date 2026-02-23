@@ -213,7 +213,10 @@ namespace lfs::vis {
         if (sdl_key == SDLK_UNKNOWN)
             return false;
         const SDL_Scancode scancode = SDL_GetScancodeFromKey(sdl_key, nullptr);
+        if (scancode == SDL_SCANCODE_UNKNOWN)
+            return false;
         const bool* state = SDL_GetKeyboardState(nullptr);
+        assert(scancode < SDL_SCANCODE_COUNT);
         return state[scancode];
     }
 
