@@ -18,7 +18,7 @@ def register_builtin_panels():
         lf.register_class(TrainingPanel)
 
         from .scene_panel import ScenePanel
-        lf.register_class(ScenePanel)
+        lf.ui.register_rml_panel(ScenePanel)
 
         from .toolbar import GizmoToolbar, UtilityToolbar
         lf.register_class(UtilityToolbar)

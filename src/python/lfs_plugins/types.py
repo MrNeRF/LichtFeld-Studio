@@ -121,6 +121,32 @@ class Panel:
         pass
 
 
+class RmlPanel:
+    """Base class for Python panels using RmlUI DOM."""
+
+    idname: str = ""
+    label: str = ""
+    space: str = "SCENE_HEADER"
+    order: int = 0
+    rml_template: str = ""
+
+    @classmethod
+    def _class_id(cls) -> str:
+        return f"{cls.__module__}.{cls.__qualname__}"
+
+    def on_load(self, doc):
+        """Called once when the RmlUI document is loaded."""
+        pass
+
+    def on_update(self, doc):
+        """Called each frame after the host renders."""
+        pass
+
+    def on_scene_changed(self, doc):
+        """Called when scene_generation changes."""
+        pass
+
+
 class Menu:
     """Base class for menu definitions."""
 

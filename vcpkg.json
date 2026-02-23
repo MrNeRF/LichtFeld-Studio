@@ -46,6 +46,7 @@
       ]
     },
     "nanobind",
-    "assimp"
+    "assimp",
+    "rmlui"
   ]
 }

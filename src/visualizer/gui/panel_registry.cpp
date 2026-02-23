@@ -24,6 +24,9 @@ namespace lfs::vis::gui {
         assert(info.panel);
         assert(!info.idname.empty());
 
+        if (disabled_overrides_.contains(info.idname))
+            info.enabled = false;
+
         for (auto& p : panels_) {
             if (p.idname == info.idname) {
                 p = std::move(info);
@@ -330,6 +333,17 @@ namespace lfs::vis::gui {
         for (auto& p : panels_) {
             if (p.idname == idname) {
                 p.enabled = enabled;
+                return;
+            }
+        }
+    }
+
+    void PanelRegistry::set_panel_disabled_override(const std::string& idname) {
+        std::lock_guard lock(mutex_);
+        disabled_overrides_.insert(idname);
+        for (auto& p : panels_) {
+            if (p.idname == idname) {
+                p.enabled = false;
                 return;
             }
         }

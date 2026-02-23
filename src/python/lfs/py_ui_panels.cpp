@@ -3,9 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "py_rml.hpp"
 #include "py_ui.hpp"
 #include "python/python_runtime.hpp"
 #include "python_panel_adapter.hpp"
+#include "rml_python_panel_adapter.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 
 #include <algorithm>
@@ -178,6 +180,70 @@ namespace lfs::python {
         adapters_.clear();
     }
 
+    void PyPanelRegistry::register_rml_panel(nb::object panel_class, void* rml_manager) {
+        std::lock_guard lock(mutex_);
+
+        if (!panel_class.is_valid()) {
+            LOG_ERROR("register_rml_panel: invalid panel_class");
+            return;
+        }
+
+        std::string label = "RmlUI Panel";
+        std::string idname;
+        PanelSpace space = PanelSpace::SceneHeader;
+        int order = 0;
+        std::string rml_template;
+
+        try {
+            idname = nb::hasattr(panel_class, "idname")
+                         ? nb::cast<std::string>(panel_class.attr("idname"))
+                         : get_class_id(panel_class);
+            if (nb::hasattr(panel_class, "label"))
+                label = nb::cast<std::string>(panel_class.attr("label"));
+            if (nb::hasattr(panel_class, "space")) {
+                std::string space_str = nb::cast<std::string>(panel_class.attr("space"));
+                if (auto ps = parse_panel_space(space_str))
+                    space = *ps;
+            }
+            if (nb::hasattr(panel_class, "order"))
+                order = nb::cast<int>(panel_class.attr("order"));
+            if (nb::hasattr(panel_class, "rml_template"))
+                rml_template = nb::cast<std::string>(panel_class.attr("rml_template"));
+        } catch (const std::exception& e) {
+            LOG_ERROR("register_rml_panel: failed to extract attributes: {}", e.what());
+            return;
+        }
+
+        if (rml_template.empty()) {
+            LOG_ERROR("register_rml_panel: rml_template not set for '{}'", label);
+            return;
+        }
+
+        nb::object instance;
+        try {
+            instance = panel_class();
+        } catch (const std::exception& e) {
+            LOG_ERROR("register_rml_panel: failed to create instance for '{}': {}", label, e.what());
+            return;
+        }
+
+        auto adapter = std::make_shared<gui::RmlPythonPanelAdapter>(
+            rml_manager, std::move(instance), idname, rml_template);
+
+        gui::PanelInfo info;
+        info.panel = adapter;
+        info.label = label;
+        info.idname = idname;
+        info.space = to_gui_space(space);
+        info.order = order;
+        info.is_native = false;
+
+        gui::PanelRegistry::instance().register_panel(std::move(info));
+        rml_adapters_[idname] = std::move(adapter);
+
+        LOG_INFO("RmlUI panel '{}' registered", label);
+    }
+
     void register_ui_panels(nb::module_& m) {
         nb::enum_<PanelSpace>(m, "PanelSpace")
             .value("SIDE_PANEL", PanelSpace::SidePanel)
@@ -193,6 +259,19 @@ namespace lfs::python {
             [](nb::object cls) { PyPanelRegistry::instance().register_panel(cls); },
             nb::arg("cls"),
             "Register a panel class for rendering in the UI");
+
+        m.def(
+            "register_rml_panel",
+            [](nb::object cls) {
+                auto* mgr = lfs::python::get_rml_manager();
+                if (!mgr) {
+                    LOG_ERROR("register_rml_panel: RmlUI manager not available");
+                    return;
+                }
+                PyPanelRegistry::instance().register_rml_panel(cls, mgr);
+            },
+            nb::arg("cls"),
+            "Register an RmlUI panel class");
 
         m.def(
             "unregister_panel",

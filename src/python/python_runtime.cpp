@@ -141,6 +141,8 @@ namespace lfs::python {
 
         void* g_view_context_state{nullptr};
         float g_shared_dpi_scale{DEFAULT_DPI_SCALE};
+        void* g_rml_manager{nullptr};
+        RmlPanelHostOps g_rml_panel_host_ops{};
 
         // Viewport bounds (set by gui_manager each frame)
         // Protected by mutex for multi-field atomicity
@@ -560,6 +562,22 @@ namespace lfs::python {
 
     float get_shared_dpi_scale() {
         return g_shared_dpi_scale;
+    }
+
+    void set_rml_manager(void* manager) {
+        g_rml_manager = manager;
+    }
+
+    void* get_rml_manager() {
+        return g_rml_manager;
+    }
+
+    void set_rml_panel_host_ops(const RmlPanelHostOps& ops) {
+        g_rml_panel_host_ops = ops;
+    }
+
+    const RmlPanelHostOps& get_rml_panel_host_ops() {
+        return g_rml_panel_host_ops;
     }
 
     void set_ensure_initialized_callback(EnsureInitializedCallback cb) {

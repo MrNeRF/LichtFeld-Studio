@@ -1,0 +1,12 @@
+<rml>
+<head>
+    <link type="text/rcss" href="scene_tree.rcss"/>
+</head>
+<body id="body">
+    <input id="filter-input" type="text" placeholder="Filter..." />
+    <div id="tree-container">
+    </div>
+    <div id="context-menu" class="context-menu">
+    </div>
+</body>
+</rml>

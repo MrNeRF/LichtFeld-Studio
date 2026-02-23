@@ -12,6 +12,7 @@
 #include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/panels/menu_bar.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/sequencer_ui_manager.hpp"
 #include "gui/sequencer_ui_state.hpp"
 #include "gui/startup_overlay.hpp"
@@ -158,6 +159,9 @@ namespace lfs::vis {
             // Native drag-drop handler
             NativeDragDrop drag_drop_;
             bool drag_drop_hovering_ = false;
+
+            // RmlUI integration
+            RmlUIManager rmlui_manager_;
 
             // Native panel wrapper storage (registered with PanelRegistry)
             std::vector<std::shared_ptr<IPanel>> native_panel_storage_;

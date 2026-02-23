@@ -526,6 +526,24 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void set_shared_dpi_scale(float scale);
     LFS_PYTHON_RUNTIME_API float get_shared_dpi_scale();
 
+    LFS_PYTHON_RUNTIME_API void set_rml_manager(void* manager);
+    LFS_PYTHON_RUNTIME_API void* get_rml_manager();
+
+    // RmlPanelHost opaque operations — function pointers set by the exe
+    // to avoid linking RmlUI code into the Python module (.so)
+    struct PanelDrawContext;
+
+    struct RmlPanelHostOps {
+        void* (*create)(void* manager, const char* context_name, const char* rml_path);
+        void (*destroy)(void* host);
+        void (*draw)(void* host, const void* draw_ctx);
+        void* (*get_document)(void* host);
+        bool (*is_loaded)(void* host);
+    };
+
+    LFS_PYTHON_RUNTIME_API void set_rml_panel_host_ops(const RmlPanelHostOps& ops);
+    LFS_PYTHON_RUNTIME_API const RmlPanelHostOps& get_rml_panel_host_ops();
+
     // Exit popup state - thread-safe flag for window close callback
     LFS_PYTHON_RUNTIME_API bool is_exit_popup_open();
     LFS_PYTHON_RUNTIME_API void set_exit_popup_open(bool open);

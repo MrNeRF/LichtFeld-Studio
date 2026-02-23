@@ -15,6 +15,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace lfs::core {
@@ -136,6 +137,7 @@ namespace lfs::vis::gui {
         std::vector<std::string> get_panel_names(PanelSpace space) const;
         std::optional<PanelSummary> get_panel(const std::string& idname);
         void set_panel_enabled(const std::string& idname, bool enabled);
+        void set_panel_disabled_override(const std::string& idname);
         bool is_panel_enabled(const std::string& idname) const;
         bool set_panel_label(const std::string& idname, const std::string& new_label);
         bool set_panel_order(const std::string& idname, int new_order);
@@ -155,6 +157,7 @@ namespace lfs::vis::gui {
         mutable std::mutex mutex_;
         mutable std::mutex poll_mutex_;
         std::vector<PanelInfo> panels_;
+        std::unordered_set<std::string> disabled_overrides_;
         mutable std::unordered_map<std::string, PollCacheEntry> poll_cache_;
     };
 

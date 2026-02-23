@@ -20,6 +20,7 @@
 #include "gui/panel_registry.hpp"
 #include "gui/panels/mesh2splat_panel.hpp"
 #include "gui/panels/python_console_panel.hpp"
+#include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/windows_utils.hpp"
@@ -427,6 +428,29 @@ namespace lfs::vis::gui {
             }
         });
 
+        rmlui_manager_.init(viewer_->getWindow(), xscale);
+        lfs::python::set_rml_manager(&rmlui_manager_);
+
+        lfs::python::RmlPanelHostOps ops{};
+        ops.create = [](void* mgr, const char* name, const char* rml) -> void* {
+            return new RmlPanelHost(static_cast<RmlUIManager*>(mgr),
+                                    std::string(name), std::string(rml));
+        };
+        ops.destroy = [](void* host) {
+            delete static_cast<RmlPanelHost*>(host);
+        };
+        ops.draw = [](void* host, const void* ctx) {
+            static_cast<RmlPanelHost*>(host)->draw(
+                *static_cast<const PanelDrawContext*>(ctx));
+        };
+        ops.get_document = [](void* host) -> void* {
+            return static_cast<RmlPanelHost*>(host)->getDocument();
+        };
+        ops.is_loaded = [](void* host) -> bool {
+            return static_cast<RmlPanelHost*>(host)->isDocumentLoaded();
+        };
+        lfs::python::set_rml_panel_host_ops(ops);
+
         registerNativePanels();
     }
 
@@ -439,6 +463,8 @@ namespace lfs::vis::gui {
         video_extraction_thread_.reset();
 
         async_tasks_.shutdown();
+
+        rmlui_manager_.shutdown();
 
         sequencer_ui_.destroyGLResources();
         startup_overlay_.destroyTextures();

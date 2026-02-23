@@ -25,7 +25,8 @@ namespace nb = nanobind;
 
 namespace lfs::vis::gui {
     struct UIContext;
-}
+    class IPanel;
+} // namespace lfs::vis::gui
 
 namespace lfs::vis::op {
     struct ModalEvent;
@@ -643,11 +644,14 @@ namespace lfs::python {
 
     class PythonPanelAdapter;
 
+    namespace gui = lfs::vis::gui;
+
     class PyPanelRegistry {
     public:
         static PyPanelRegistry& instance();
 
         void register_panel(nb::object panel_class);
+        void register_rml_panel(nb::object panel_class, void* rml_manager);
         void unregister_panel(nb::object panel_class);
         void unregister_all();
 
@@ -659,6 +663,7 @@ namespace lfs::python {
 
         mutable std::mutex mutex_;
         std::unordered_map<std::string, std::shared_ptr<PythonPanelAdapter>> adapters_;
+        std::unordered_map<std::string, std::shared_ptr<gui::IPanel>> rml_adapters_;
     };
 
     // Theme palette wrapper (read-only)

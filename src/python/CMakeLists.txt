@@ -170,6 +170,8 @@ nanobind_add_module(
     lfs/py_pipeline.cpp
     lfs/py_prop_registry.cpp
     lfs/py_signals.cpp
+    lfs/py_rml.cpp
+    lfs/rml_python_panel_adapter.cpp
 )
 
 set_target_properties(lfs_py PROPERTIES

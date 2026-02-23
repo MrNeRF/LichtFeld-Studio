@@ -243,6 +243,7 @@ find_package(OpenImageIO REQUIRED)
 find_package(Boost REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(assimp REQUIRED)
+find_package(RmlUi CONFIG REQUIRED)
 
 # TORCH_CUDA_ARCH_LIST is already defined by Torch
 # use it here as the global default CUDA architecture list too

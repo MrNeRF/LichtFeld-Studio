@@ -8,6 +8,7 @@ from . import (
     mod as mod,
     mouse as mouse,
     ops as ops,
+    rml as rml,
     signals as signals
 )
 import lichtfeld
@@ -205,6 +206,9 @@ class PanelSpace(enum.Enum):
 
 def register_panel(cls: object) -> None:
     """Register a panel class for rendering in the UI"""
+
+def register_rml_panel(cls: object) -> None:
+    """Register an RmlUI panel class"""
 
 def unregister_panel(cls: object) -> None:
     """Unregister a panel class"""

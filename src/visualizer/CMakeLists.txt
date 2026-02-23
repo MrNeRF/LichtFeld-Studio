@@ -127,6 +127,13 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/panels/menu_bar.hpp
         gui/utils/windows_utils.cpp
         gui/utils/drag_drop_native.cpp
+
+        # RmlUI integration
+        gui/rmlui/rmlui_system_interface.cpp
+        gui/rmlui/rmlui_render_interface.cpp
+        gui/rmlui/rmlui_manager.cpp
+        gui/rmlui/rml_panel_host.cpp
+        gui/rmlui/stb_font_engine.cpp
 )
 
 # Set include directories
@@ -167,6 +174,47 @@ target_link_libraries(lfs_visualizer
         ${OPENGL_LIBRARIES}
         vterm
 )
+
+# RmlUI: on Linux, lfs_visualizer is STATIC and gets linked into both the
+# exe and the Python .so, which would duplicate librmlui.a globals and cause
+# crashes.  Wrap the static libraries in a small shared library so there is
+# exactly one copy of RmlUI in the process.
+find_package(RmlUi CONFIG REQUIRED)
+
+if(NOT WIN32)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/lfs_rmlui_stub.cpp" "")
+    add_library(lfs_rmlui SHARED "${CMAKE_CURRENT_BINARY_DIR}/lfs_rmlui_stub.cpp")
+
+    target_link_libraries(lfs_rmlui PRIVATE
+        -Wl,--whole-archive
+        $<TARGET_FILE:RmlUi::Core>
+        $<TARGET_FILE:RmlUi::Debugger>
+        -Wl,--no-whole-archive
+        Freetype::Freetype
+    )
+
+    get_target_property(_rmlui_includes RmlUi::Core INTERFACE_INCLUDE_DIRECTORIES)
+    if(_rmlui_includes)
+        target_include_directories(lfs_rmlui PUBLIC ${_rmlui_includes})
+    endif()
+    target_compile_definitions(lfs_rmlui PUBLIC RMLUI_STATIC_LIB)
+
+    if(TARGET Freetype::Freetype)
+        get_target_property(_ft_includes Freetype::Freetype INTERFACE_INCLUDE_DIRECTORIES)
+        if(_ft_includes)
+            target_include_directories(lfs_rmlui PUBLIC ${_ft_includes})
+        endif()
+    endif()
+
+    set_target_properties(lfs_rmlui PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
+
+    target_link_libraries(lfs_visualizer PRIVATE lfs_rmlui)
+else()
+    target_link_libraries(lfs_visualizer PRIVATE RmlUi::RmlUi)
+endif()
 
 # Set C++ standard
 target_compile_features(lfs_visualizer PUBLIC cxx_std_23)
@@ -233,6 +281,22 @@ file(GLOB ICON_FILES "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/icon/*.png")
 foreach (ICON_FILE ${ICON_FILES})
     get_filename_component(ICON_NAME ${ICON_FILE} NAME)
     configure_file(${ICON_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/${ICON_NAME}" COPYONLY)
+endforeach ()
+
+# Copy scene icon files (used by RmlUI scene panel)
+file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/scene")
+file(GLOB SCENE_ICON_FILES "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/icon/scene/*.png")
+foreach (ICON_FILE ${SCENE_ICON_FILES})
+    get_filename_component(ICON_NAME ${ICON_FILE} NAME)
+    configure_file(${ICON_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/scene/${ICON_NAME}" COPYONLY)
+endforeach ()
+
+# Copy RmlUI resources
+file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui")
+file(GLOB RMLUI_RESOURCE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/gui/rmlui/resources/*")
+foreach (RMLUI_FILE ${RMLUI_RESOURCE_FILES})
+    get_filename_component(RMLUI_NAME ${RMLUI_FILE} NAME)
+    configure_file(${RMLUI_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/${RMLUI_NAME}" COPYONLY)
 endforeach ()
 
 # Copy locale files
