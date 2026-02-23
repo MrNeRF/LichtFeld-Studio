@@ -1,0 +1,5 @@
+{
+  "name": "libsystemd",
+  "version": "0",
+  "description": "Use system-installed libsystemd-dev"
+}
