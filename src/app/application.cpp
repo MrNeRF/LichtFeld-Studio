@@ -245,34 +245,24 @@ namespace lfs::app {
 
             viewer->setParameters(*params);
 
-            if (!params->view_paths.empty()) {
-                LOG_INFO("Loading {} splat file(s)", params->view_paths.size());
-                if (const auto result = viewer->loadPLY(params->view_paths[0]); !result) {
-                    LOG_ERROR("Failed to load {}: {}", lfs::core::path_to_utf8(params->view_paths[0]), result.error());
+            for (const auto& vp : params->view_paths) {
+                if (!std::filesystem::exists(vp)) {
+                    LOG_ERROR("File not found: {}", lfs::core::path_to_utf8(vp));
                     return 1;
                 }
-                for (size_t i = 1; i < params->view_paths.size(); ++i) {
-                    if (const auto result = viewer->addSplatFile(params->view_paths[i]); !result) {
-                        LOG_ERROR("Failed to load {}: {}", lfs::core::path_to_utf8(params->view_paths[i]), result.error());
-                        return 1;
-                    }
-                }
-                if (params->view_paths.size() > 1) {
-                    viewer->consolidateModels();
-                }
-            } else if (params->import_cameras_path) {
+            }
+            if (!params->dataset.data_path.empty() && !std::filesystem::exists(params->dataset.data_path)) {
+                LOG_ERROR("Dataset not found: {}", lfs::core::path_to_utf8(params->dataset.data_path));
+                return 1;
+            }
+
+            if (params->import_cameras_path) {
                 LOG_INFO("Importing COLMAP cameras: {}", lfs::core::path_to_utf8(*params->import_cameras_path));
                 lfs::core::events::cmd::ImportColmapCameras{.sparse_path = *params->import_cameras_path}.emit();
             } else if (params->resume_checkpoint) {
                 LOG_INFO("Loading checkpoint: {}", lfs::core::path_to_utf8(*params->resume_checkpoint));
                 if (const auto result = viewer->loadCheckpointForTraining(*params->resume_checkpoint); !result) {
                     LOG_ERROR("Failed to load checkpoint: {}", result.error());
-                    return 1;
-                }
-            } else if (!params->dataset.data_path.empty()) {
-                LOG_INFO("Loading dataset: {}", lfs::core::path_to_utf8(params->dataset.data_path));
-                if (const auto result = viewer->loadDataset(params->dataset.data_path); !result) {
-                    LOG_ERROR("Failed to load dataset: {}", result.error());
                     return 1;
                 }
             }

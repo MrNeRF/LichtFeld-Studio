@@ -195,6 +195,11 @@ namespace lfs::vis::gui {
             start_menu_entry_preload_once();
         }
 
+        if (python::are_plugins_loaded() && !g_menu_entries_ready.load(std::memory_order_acquire)) {
+            g_menu_entries_loading.store(false, std::memory_order_release);
+            start_menu_entry_preload_once();
+        }
+
         if (ImGui::BeginMainMenuBar()) {
             if (g_menu_entries_ready.load(std::memory_order_acquire)) {
                 auto entries = copy_menu_entries();

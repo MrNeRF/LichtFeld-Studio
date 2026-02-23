@@ -44,6 +44,7 @@ namespace lfs::python {
     static std::mutex g_plugin_init_mutex;
     static std::atomic<bool> g_python_bridge_ready{false};
     static std::atomic<bool> g_plugin_preload_scheduled{false};
+    static std::thread g_plugin_preload_thread;
 
     // Python C extension for capturing output
     static PyObject* capture_write(PyObject* self, PyObject* args) {
@@ -275,6 +276,22 @@ _add_dll_dirs()
                 return names;
             }
 
+            // Pre-register all discovered plugins so load() skips re-discovery
+            PyObject* mgr_mod = PyImport_ImportModule("lfs_plugins.manager");
+            if (mgr_mod) {
+                PyObject* mgr_cls = PyObject_GetAttrString(mgr_mod, "PluginManager");
+                if (mgr_cls) {
+                    PyObject* mgr = PyObject_CallMethod(mgr_cls, "instance", nullptr);
+                    if (mgr) {
+                        PyObject* result = PyObject_CallMethod(mgr, "pre_register", "O", discovered);
+                        Py_XDECREF(result);
+                        Py_DECREF(mgr);
+                    }
+                    Py_DECREF(mgr_cls);
+                }
+                Py_DECREF(mgr_mod);
+            }
+
             PyObject* settings_mod = PyImport_ImportModule("lfs_plugins.settings");
             PyObject* settings_mgr = nullptr;
             if (settings_mod) {
@@ -460,13 +477,14 @@ _add_dll_dirs()
             const GilAcquire gil;
             std::lock_guard lock(g_plugin_init_mutex);
             if (!ensure_python_bridge_ready_locked()) {
+                LOG_WARN("Python bridge not ready, skipping plugin load");
                 return;
             }
             if (are_plugins_loaded()) {
                 return;
             }
             to_load = discover_enabled_plugins_locked();
-            mark_plugins_loaded();
+            LOG_INFO("Plugin autoload: {} plugin(s) enabled for startup", to_load.size());
         }
 
         for (const auto& name : to_load) {
@@ -477,6 +495,8 @@ _add_dll_dirs()
                 LOG_ERROR("Failed to load plugin: {}", name);
             }
         }
+
+        mark_plugins_loaded();
     }
 
     void preload_user_plugins_async() {
@@ -489,9 +509,9 @@ _add_dll_dirs()
             return;
         }
 
-        std::thread([]() {
+        g_plugin_preload_thread = std::thread([]() {
             ensure_plugins_loaded();
-        }).detach();
+        });
     }
 
     bool start_debugpy(const int port) {
@@ -524,7 +544,15 @@ _add_dll_dirs()
         return true;
     }
 
+    void join_plugin_preload() {
+        if (g_plugin_preload_thread.joinable()) {
+            g_plugin_preload_thread.join();
+        }
+    }
+
     void finalize() {
+        join_plugin_preload();
+
         if (!Py_IsInitialized()) {
             return;
         }

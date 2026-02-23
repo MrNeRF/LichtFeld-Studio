@@ -918,6 +918,33 @@ namespace lfs::vis {
             performReset();
         }
 
+        if (!gui_frame_rendered_) {
+            // Wait for at least one GUI frame to render before loading data
+        } else if (!pending_view_paths_.empty()) {
+            auto paths = std::exchange(pending_view_paths_, {});
+            LOG_INFO("Loading {} splat file(s)", paths.size());
+            if (const auto result = data_loader_->loadPLY(paths[0]); !result) {
+                LOG_ERROR("Failed to load {}: {}", lfs::core::path_to_utf8(paths[0]), result.error());
+            } else {
+                for (size_t i = 1; i < paths.size(); ++i) {
+                    try {
+                        data_loader_->addSplatFileToScene(paths[i]);
+                    } catch (const std::exception& e) {
+                        LOG_ERROR("Failed to add {}: {}", lfs::core::path_to_utf8(paths[i]), e.what());
+                    }
+                }
+                if (paths.size() > 1) {
+                    scene_manager_->consolidateNodeModels();
+                }
+            }
+        } else if (!pending_dataset_path_.empty()) {
+            auto path = std::exchange(pending_dataset_path_, {});
+            LOG_INFO("Loading dataset: {}", lfs::core::path_to_utf8(path));
+            if (const auto result = data_loader_->loadDataset(path); !result) {
+                LOG_ERROR("Failed to load dataset: {}", result.error());
+            }
+        }
+
         // Auto-start training if --train flag was passed
         if (pending_auto_train_ && trainer_manager_ && trainer_manager_->canStart()) {
             pending_auto_train_ = false;
@@ -999,6 +1026,7 @@ namespace lfs::vis {
         window_manager_->swapBuffers();
 
         python::flush_signals();
+        gui_frame_rendered_ = true;
 
         // Render-on-demand: VSync handles frame pacing, waitEvents saves CPU when idle
         const bool is_training = trainer_manager_ && trainer_manager_->isRunning();
@@ -1099,6 +1127,8 @@ namespace lfs::vis {
             parameter_manager_->setSessionDefaults(params);
         }
         pending_auto_train_ = params.optimization.auto_train;
+        pending_view_paths_ = params.view_paths;
+        pending_dataset_path_ = params.dataset.data_path;
     }
 
     std::expected<void, std::string> VisualizerImpl::loadPLY(const std::filesystem::path& path) {
@@ -1146,7 +1176,12 @@ namespace lfs::vis {
         }
 
         LOG_INFO("Loading checkpoint for training: {}", lfs::core::path_to_utf8(path));
-        return data_loader_->loadCheckpointForTraining(path);
+        auto result = data_loader_->loadCheckpointForTraining(path);
+        if (result) {
+            pending_view_paths_.clear();
+            pending_dataset_path_.clear();
+        }
+        return result;
     }
 
     void VisualizerImpl::consolidateModels() {

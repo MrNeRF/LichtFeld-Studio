@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Plugin manager for discovery, loading, and lifecycle."""
 
+import builtins
 import importlib.machinery
 import importlib.util
 import logging
@@ -9,6 +10,7 @@ import sys
 import tarfile
 import tempfile
 import threading
+import time
 import traceback
 import types
 import urllib.request
@@ -110,6 +112,13 @@ class PluginManager:
                     _log.warning("Skipping invalid plugin '%s': %s", entry.name, e)
         return plugins
 
+    def pre_register(self, discovered: List[PluginInfo]) -> None:
+        """Pre-register discovered plugins so load() skips re-discovery."""
+        with self._plugins_lock:
+            for info in discovered:
+                if info.name not in self._plugins:
+                    self._plugins[info.name] = PluginInstance(info=info)
+
     def _parse_manifest(self, plugin_dir: Path) -> PluginInfo:
         """Parse pyproject.toml manifest."""
         with open(plugin_dir / "pyproject.toml", "rb") as f:
@@ -161,20 +170,35 @@ class PluginManager:
         self._check_version_compatibility(plugin, name)
 
         try:
+            t0 = time.monotonic()
             plugin.state = PluginState.INSTALLING
             installer = PluginInstaller(plugin)
             installer.ensure_venv()
+            t_venv = time.monotonic()
             progress_fn = on_progress or (lambda msg: _log.info("  [%s] %s", name, msg))
             installer.install_dependencies(progress_fn)
+            t_deps = time.monotonic()
 
             plugin.state = PluginState.LOADING
             self._load_module(plugin)
+            t_module = time.monotonic()
 
             if hasattr(plugin.module, "on_load"):
                 plugin.module.on_load()
+            t_onload = time.monotonic()
 
             plugin.state = PluginState.ACTIVE
             self._update_file_mtimes(plugin)
+
+            _log.info(
+                "load(%s) timing: venv=%.0fms deps=%.0fms module=%.0fms on_load=%.0fms total=%.0fms",
+                name,
+                (t_venv - t0) * 1000,
+                (t_deps - t_venv) * 1000,
+                (t_module - t_deps) * 1000,
+                (t_onload - t_module) * 1000,
+                (t_onload - t0) * 1000,
+            )
 
             for cb in self._on_plugin_loaded:
                 try:
@@ -199,6 +223,9 @@ class PluginManager:
         current = Version(LICHTFELD_VERSION)
         if current < required:
             raise PluginVersionError(f"Plugin '{name}' requires LichtFeld >= {required}, but you have {current}")
+
+    _SLOW_IMPORT_THRESHOLD_MS = 100
+    _SLOW_TOTAL_THRESHOLD_MS = 500
 
     def _load_module(self, plugin: PluginInstance):
         """Import plugin module with persistent venv path."""
@@ -232,7 +259,7 @@ class PluginManager:
         sys.modules[module_name] = module
 
         try:
-            exec(code, module.__dict__)
+            self._exec_with_import_audit(code, module, plugin.info.name)
         except Exception:
             sys.modules.pop(module_name, None)
             # Clean up paths on failure
@@ -242,6 +269,41 @@ class PluginManager:
             plugin.sys_paths = []
             raise
         plugin.module = module
+
+    def _exec_with_import_audit(self, code, module, plugin_name: str):
+        """Execute plugin code while tracking slow top-level imports."""
+        slow_imports: list[tuple[str, float]] = []
+        original_import = builtins.__import__
+        depth = 0
+
+        def _auditing_import(name, *args, **kwargs):
+            nonlocal depth
+            already_loaded = name in sys.modules
+            if already_loaded or depth > 0:
+                return original_import(name, *args, **kwargs)
+            depth += 1
+            t = time.monotonic()
+            try:
+                return original_import(name, *args, **kwargs)
+            finally:
+                elapsed_ms = (time.monotonic() - t) * 1000
+                depth -= 1
+                if elapsed_ms >= self._SLOW_IMPORT_THRESHOLD_MS:
+                    slow_imports.append((name, elapsed_ms))
+
+        t0 = time.monotonic()
+        builtins.__import__ = _auditing_import
+        try:
+            exec(code, module.__dict__)
+        finally:
+            builtins.__import__ = original_import
+
+        total_ms = (time.monotonic() - t0) * 1000
+        if total_ms >= self._SLOW_TOTAL_THRESHOLD_MS:
+            lines = [f"Plugin '{plugin_name}' module load took {total_ms:.0f}ms — defer heavy imports to speed up startup:"]
+            for name, ms in sorted(slow_imports, key=lambda x: -x[1]):
+                lines.append(f"  {name}: {ms:.0f}ms")
+            _log.warning("\n".join(lines))
 
     def _get_venv_site_packages(self, plugin: PluginInstance) -> Optional[Path]:
         """Get site-packages path for plugin venv."""
@@ -391,6 +453,7 @@ class PluginManager:
         from .settings import SettingsManager
 
         discovered = self.discover()
+        self.pre_register(discovered)
         _log.info("load_all: discovered %d plugins: %s", len(discovered), [p.name for p in discovered])
         results = {}
         for info in discovered:

@@ -196,6 +196,9 @@ namespace lfs::vis {
         bool tools_initialized_ = false;
         bool pending_auto_train_ = false;
         bool pending_reset_ = false;
+        bool gui_frame_rendered_ = false;
+        std::vector<std::filesystem::path> pending_view_paths_;
+        std::filesystem::path pending_dataset_path_;
     };
 
 } // namespace lfs::vis
