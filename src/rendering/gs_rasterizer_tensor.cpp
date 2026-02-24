@@ -5,7 +5,6 @@
 #include "gs_rasterizer_tensor.hpp"
 #include "core/logger.hpp"
 #include "rasterization_api_tensor.h"
-#include <glm/glm.hpp>
 
 namespace lfs::rendering {
 
@@ -66,41 +65,8 @@ namespace lfs::rendering {
 
         constexpr float NEAR_PLANE = 0.01f;
 
-        // Build world-to-camera transform matrix [4, 4]
-        // w2c = [R | t]
-        //       [0 | 1]
-        const auto& R = viewpoint_camera.R(); // [3, 3] rotation
-        const auto& T = viewpoint_camera.T(); // [3] translation
-
-        // Create w2c matrix [4, 4] on CPU
-        std::vector<float> w2c_data(16, 0.0f);
-
-        // Copy rotation (first 3x3)
-        auto R_cpu = R.cpu();
-        const float* R_ptr = R_cpu.ptr<float>();
-        for (int i = 0; i < 3; i++) {
-            for (int j = 0; j < 3; j++) {
-                w2c_data[i * 4 + j] = R_ptr[i * 3 + j];
-            }
-        }
-
-        // Copy translation (last column of first 3 rows)
-        auto T_cpu = T.cpu();
-        const float* T_ptr = T_cpu.ptr<float>();
-        w2c_data[0 * 4 + 3] = T_ptr[0];
-        w2c_data[1 * 4 + 3] = T_ptr[1];
-        w2c_data[2 * 4 + 3] = T_ptr[2];
-
-        // Set last row [0, 0, 0, 1]
-        w2c_data[3 * 4 + 3] = 1.0f;
-
-        Tensor w2c = Tensor::from_vector(w2c_data, {4, 4}, lfs::core::Device::CPU).cuda();
-
-        // Camera position is -R^T @ t
-        // We can compute this from the existing R and T
-        auto R_t = R.transpose(0, 1);                 // R^T
-        auto T_expanded = T.unsqueeze(1);             // [3, 1]
-        auto cam_pos = -R_t.mm(T_expanded).squeeze(); // [3]
+        const auto& w2c = viewpoint_camera.world_view_transform();
+        const auto& cam_pos = viewpoint_camera.cam_position();
 
         // Get model data
         const auto& means = gaussian_model.means_raw();
@@ -110,27 +76,29 @@ namespace lfs::rendering {
         const auto& sh0 = gaussian_model.sh0_raw();
         const auto& shN = gaussian_model.shN_raw();
 
-        constexpr int DEBUG_LOG_INTERVAL = 300;
-        static int frame_count = 0;
-        if (frame_count++ % DEBUG_LOG_INTERVAL == 0) {
-            const auto means_cpu = means.cpu();
-            const auto scales_cpu = scales_raw.cpu();
-            const auto opacities_cpu = opacities_raw.cpu();
-            const auto cam_cpu = cam_pos.cpu();
+        if (lfs::core::Logger::get().is_enabled(lfs::core::LogLevel::Debug)) {
+            constexpr int DEBUG_LOG_INTERVAL = 300;
+            static int frame_count = 0;
+            if (frame_count++ % DEBUG_LOG_INTERVAL == 0) {
+                const auto means_cpu = means.cpu();
+                const auto scales_cpu = scales_raw.cpu();
+                const auto opacities_cpu = opacities_raw.cpu();
+                const auto cam_cpu = cam_pos.cpu();
 
-            LOG_DEBUG("Rasterizer stats (frame {}): {} gaussians", frame_count, means.size(0));
-            LOG_DEBUG("  means x:[{:.3f},{:.3f}] y:[{:.3f},{:.3f}] z:[{:.3f},{:.3f}]",
-                      means_cpu.slice(1, 0, 1).min().item(), means_cpu.slice(1, 0, 1).max().item(),
-                      means_cpu.slice(1, 1, 2).min().item(), means_cpu.slice(1, 1, 2).max().item(),
-                      means_cpu.slice(1, 2, 3).min().item(), means_cpu.slice(1, 2, 3).max().item());
-            LOG_DEBUG("  scales log:[{:.3f},{:.3f}] exp:[{:.6f},{:.3f}]",
-                      scales_cpu.min().item(), scales_cpu.max().item(),
-                      scales_cpu.exp().min().item(), scales_cpu.exp().max().item());
-            LOG_DEBUG("  opacity logit:[{:.3f},{:.3f}] sigmoid:[{:.4f},{:.4f}]",
-                      opacities_cpu.min().item(), opacities_cpu.max().item(),
-                      opacities_cpu.sigmoid().min().item(), opacities_cpu.sigmoid().max().item());
-            LOG_DEBUG("  camera:[{:.3f},{:.3f},{:.3f}]",
-                      cam_cpu.ptr<float>()[0], cam_cpu.ptr<float>()[1], cam_cpu.ptr<float>()[2]);
+                LOG_DEBUG("Rasterizer stats (frame {}): {} gaussians", frame_count, means.size(0));
+                LOG_DEBUG("  means x:[{:.3f},{:.3f}] y:[{:.3f},{:.3f}] z:[{:.3f},{:.3f}]",
+                          means_cpu.slice(1, 0, 1).min().item(), means_cpu.slice(1, 0, 1).max().item(),
+                          means_cpu.slice(1, 1, 2).min().item(), means_cpu.slice(1, 1, 2).max().item(),
+                          means_cpu.slice(1, 2, 3).min().item(), means_cpu.slice(1, 2, 3).max().item());
+                LOG_DEBUG("  scales log:[{:.3f},{:.3f}] exp:[{:.6f},{:.3f}]",
+                          scales_cpu.min().item(), scales_cpu.max().item(),
+                          scales_cpu.exp().min().item(), scales_cpu.exp().max().item());
+                LOG_DEBUG("  opacity logit:[{:.3f},{:.3f}] sigmoid:[{:.4f},{:.4f}]",
+                          opacities_cpu.min().item(), opacities_cpu.max().item(),
+                          opacities_cpu.sigmoid().min().item(), opacities_cpu.sigmoid().max().item());
+                LOG_DEBUG("  camera:[{:.3f},{:.3f},{:.3f}]",
+                          cam_cpu.ptr<float>()[0], cam_cpu.ptr<float>()[1], cam_cpu.ptr<float>()[2]);
+            }
         }
 
         // Get deleted mask (use passed parameter or from model)
@@ -226,21 +194,7 @@ namespace lfs::rendering {
         const int height = camera.camera_height();
         const int sh_degree = model.get_active_sh_degree();
 
-        // Build w2c matrix [4,4] = [R|t; 0|1]
-        const auto R_cpu = camera.R().cpu();
-        const auto T_cpu = camera.T().cpu();
-        const float* R_ptr = R_cpu.ptr<float>();
-        const float* T_ptr = T_cpu.ptr<float>();
-
-        std::vector<float> w2c_data(16, 0.0f);
-        for (int i = 0; i < 3; ++i) {
-            for (int j = 0; j < 3; ++j) {
-                w2c_data[i * 4 + j] = R_ptr[i * 3 + j];
-            }
-            w2c_data[i * 4 + 3] = T_ptr[i];
-        }
-        w2c_data[15] = 1.0f;
-        const Tensor w2c = Tensor::from_vector(w2c_data, {4, 4}, lfs::core::Device::CPU).cuda();
+        const auto& w2c = camera.world_view_transform();
 
         // Equirectangular uses image dimensions in K; pinhole uses focal lengths
         const std::vector<float> K_data = (camera_model == GutCameraModel::EQUIRECTANGULAR)
