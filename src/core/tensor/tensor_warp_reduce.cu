@@ -1519,7 +1519,12 @@ namespace lfs::core::tensor_ops {
                               size_t M, size_t N, ReduceOp op, cudaStream_t stream) {
         constexpr int BLOCK = 256;
         int grid_x = (N + BLOCK - 1) / BLOCK;
-        int grid_y = (M > 512) ? min((int)((M + 127) / 128), 8) : 1;
+        int grid_y = 1;
+        if (M > 512) {
+            int sm_count = GPUConfig::get().sm_count;
+            int target = std::max(1, sm_count * 2 / std::max(grid_x, 1));
+            grid_y = std::min((int)((M + 127) / 128), target);
+        }
         dim3 grid(grid_x, grid_y);
 
         switch (op) {

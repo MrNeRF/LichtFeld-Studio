@@ -356,10 +356,10 @@ namespace lfs::io {
             __cpuid(cpuInfo, 7);
             has_avx2 = (cpuInfo[1] & (1 << 5)) != 0;
 #elif defined(__GNUC__) || defined(__clang__)
-            __builtin_cpu_init();
-            has_avx2 = __builtin_cpu_supports("avx2");
+                __builtin_cpu_init();
+                has_avx2 = __builtin_cpu_supports("avx2");
 #else
-            has_avx2 = false;
+                has_avx2 = false;
 #endif
         });
 
@@ -681,7 +681,8 @@ namespace lfs::io {
             return names;
         }
 
-        Result<void> write_ply_binary(const PointCloud& pc, const std::filesystem::path& output_path) {
+        Result<void> write_ply_binary(const PointCloud& pc, const std::filesystem::path& output_path,
+                                      bool binary = true) {
             if (!pc.means.is_valid() || pc.means.ndim() != 2 || pc.means.size(1) != 3) {
                 return make_error(ErrorCode::INTERNAL_ERROR, "PointCloud.means must be [N,3]", output_path);
             }
@@ -780,7 +781,7 @@ namespace lfs::io {
             }
 
             std::ostream out_stream(&fb);
-            ply.write(out_stream, true);
+            ply.write(out_stream, binary);
 
             if (!out_stream.good()) {
                 return make_error(ErrorCode::WRITE_FAILURE, "Write failed", output_path);
@@ -939,18 +940,33 @@ namespace lfs::io {
                               options.output_path.parent_path());
         }
 
+        if (options.progress_callback) {
+            if (!options.progress_callback(0.1f, "Preparing data"))
+                return make_error(ErrorCode::INTERNAL_ERROR, "Export cancelled", options.output_path);
+        }
+
         if (options.async) {
             cleanup_finished_saves();
             const std::lock_guard lock(g_save_mutex);
             g_save_futures.emplace_back(
-                std::async(std::launch::async, [pc = point_cloud, path = options.output_path]() {
-                    if (const auto result = write_ply_binary(pc, path); !result) {
+                std::async(std::launch::async, [pc = point_cloud, opts = options]() {
+                    if (const auto result = write_ply_binary(pc, opts.output_path, opts.binary); !result) {
                         LOG_ERROR("PLY save failed: {}", result.error().format());
                     }
                 }));
         } else {
-            if (const auto result = write_ply_binary(point_cloud, options.output_path); !result) {
+            if (options.progress_callback) {
+                if (!options.progress_callback(0.5f, "Writing PLY"))
+                    return make_error(ErrorCode::INTERNAL_ERROR, "Export cancelled", options.output_path);
+            }
+
+            if (const auto result = write_ply_binary(point_cloud, options.output_path, options.binary);
+                !result) {
                 return std::unexpected(result.error());
+            }
+
+            if (options.progress_callback) {
+                options.progress_callback(1.0f, "Done");
             }
         }
         return {};

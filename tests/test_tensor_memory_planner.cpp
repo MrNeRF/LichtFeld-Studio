@@ -16,9 +16,11 @@ namespace {
     public:
         LazyTestGuard() {
             internal::clear_lazy_ir_for_testing();
+            internal::lazy_executor_set_size_heuristic_override_for_testing(false);
             Tensor::reset_lazy_telemetry();
         }
         ~LazyTestGuard() {
+            internal::lazy_executor_set_size_heuristic_override_for_testing(std::nullopt);
             internal::clear_lazy_ir_for_testing();
             Tensor::reset_lazy_telemetry();
         }

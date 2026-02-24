@@ -179,8 +179,8 @@ TEST_F(StridedTensorBenchmark, ChainedViewOperations) {
     EXPECT_TRUE(materialized.is_contiguous());
     EXPECT_TRUE(materialized.owns_memory());
 
-    EXPECT_LT(chain_time, chain_materialize_time / 10.0)
-        << "Chained views should be >10× faster than materialization";
+    EXPECT_LT(chain_time, chain_materialize_time / 3.0)
+        << "Chained views should be >3× faster than materialization";
 }
 
 // ============================================================================

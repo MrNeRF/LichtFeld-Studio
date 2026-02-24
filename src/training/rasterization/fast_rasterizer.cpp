@@ -462,7 +462,10 @@ namespace lfs::training {
         }
 
         if (grad_alpha_extra.is_valid() && grad_alpha_extra.numel() > 0) {
-            grad_alpha.add_(grad_alpha_extra);
+            auto extra = (grad_alpha_extra.ndim() == 3 && grad_alpha_extra.shape()[0] == 1)
+                             ? grad_alpha_extra.squeeze(0)
+                             : grad_alpha_extra;
+            grad_alpha.add_(extra);
         }
 
         const int n_primitives = static_cast<int>(ctx.means.shape()[0]);

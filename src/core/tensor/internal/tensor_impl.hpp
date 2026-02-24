@@ -578,11 +578,19 @@ namespace lfs::core {
             if (require_same_shape && shape_ != other.shape()) {
                 throw std::runtime_error("Shape mismatch: " + shape_.str() + " vs " + other.shape_.str());
             }
-            // Check if broadcasting is valid (even when require_same_shape is false)
             if (!require_same_shape && shape_ != other.shape()) {
-                // Compute broadcast shape and validate
-                auto bcast_shape = broadcast_shape(other.shape());
-                if (bcast_shape.rank() == 0 || bcast_shape.elements() == 0) {
+                const auto& a = shape_.dims();
+                const auto& b = other.shape_.dims();
+                size_t max_rank = std::max(a.size(), b.size());
+                bool compatible = true;
+                for (size_t i = 0; i < max_rank && compatible; ++i) {
+                    size_t da = (i < a.size()) ? a[a.size() - 1 - i] : 1;
+                    size_t db = (i < b.size()) ? b[b.size() - 1 - i] : 1;
+                    if (da == 0 && db == 0)
+                        continue;
+                    compatible = (da == db || da == 1 || db == 1) && da != 0 && db != 0;
+                }
+                if (!compatible) {
                     throw std::runtime_error("Incompatible shapes for broadcasting: " + shape_.str() + " vs " + other.shape_.str());
                 }
             }
