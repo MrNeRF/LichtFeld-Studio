@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core/tensor_fwd.hpp"
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cassert>
@@ -315,9 +316,7 @@ namespace lfs::core {
         bool is_view_ = false;
 
         std::shared_ptr<StorageMeta> storage_meta_;
-#ifndef NDEBUG
         uint64_t view_generation_snapshot_ = 0;
-#endif
 
         mutable size_t id_ = 0;
         static std::atomic<size_t> next_id_;
@@ -363,20 +362,18 @@ namespace lfs::core {
         }
 
         void assert_view_not_stale() const {
-#ifndef NDEBUG
-            assert(!is_view_ || !storage_meta_ ||
-                   view_generation_snapshot_ == storage_meta_->generation.load(std::memory_order_relaxed));
-#endif
+            if (is_view_ && storage_meta_ &&
+                view_generation_snapshot_ != storage_meta_->generation.load(std::memory_order_relaxed)) {
+                throw std::runtime_error("Attempted to access a stale tensor view after storage reallocation");
+            }
         }
 
         void propagate_view_meta(Tensor& view) const {
             const_cast<Tensor*>(this)->ensure_storage_meta();
             view.storage_meta_ = storage_meta_;
             view.state_->stream = state_->stream;
-#ifndef NDEBUG
             view.view_generation_snapshot_ =
                 storage_meta_->generation.load(std::memory_order_relaxed);
-#endif
         }
 
         // Generic functor-based binary operation (zero enum overhead)
@@ -608,9 +605,11 @@ namespace lfs::core {
             auto broadcast_shape = lhs.broadcast_shape(rhs.shape());
 
             // Create and return the binary expression with promoted dtype
-            return BinaryExpr<TensorLeaf, TensorLeaf, Op>(
+            Tensor result = BinaryExpr<TensorLeaf, TensorLeaf, Op>(
                 TensorLeaf(lhs), TensorLeaf(rhs), op,
                 broadcast_shape, lhs.device(), result_dtype);
+            link_deferred_result_to_inputs(result, {lhs.lazy_expr_id(), rhs.lazy_expr_id()});
+            return result;
         }
 
         // Helper for comparison operations with automatic type promotion
@@ -630,9 +629,11 @@ namespace lfs::core {
             auto broadcast_shape = lhs.broadcast_shape(rhs.shape());
 
             // Return Bool tensor (comparison result)
-            return BinaryExpr<TensorLeaf, TensorLeaf, Op>(
+            Tensor result = BinaryExpr<TensorLeaf, TensorLeaf, Op>(
                 TensorLeaf(lhs), TensorLeaf(rhs), op,
                 broadcast_shape, lhs.device(), DataType::Bool);
+            link_deferred_result_to_inputs(result, {lhs.lazy_expr_id(), rhs.lazy_expr_id()});
+            return result;
         }
 
         void validate_unary_op() const {
@@ -653,6 +654,32 @@ namespace lfs::core {
         // Helper to ensure tensor is on same device
         Tensor ensure_same_device(const Tensor& other) const {
             return (other.device() == device_) ? other : other.to(device_);
+        }
+
+        static void link_deferred_result_to_inputs(Tensor& result,
+                                                   std::initializer_list<uint64_t> candidate_input_ids) {
+            if (!internal::lazy_mode_enabled() || !result.is_valid() || !result.has_lazy_expr()) {
+                return;
+            }
+            const uint64_t result_node_id = result.lazy_expr_id();
+            if (result_node_id == 0) {
+                return;
+            }
+
+            std::vector<uint64_t> input_ids;
+            input_ids.reserve(candidate_input_ids.size());
+            for (uint64_t input_id : candidate_input_ids) {
+                if (input_id == 0) {
+                    continue;
+                }
+                if (std::find(input_ids.begin(), input_ids.end(), input_id) == input_ids.end()) {
+                    input_ids.push_back(input_id);
+                }
+            }
+
+            if (!input_ids.empty()) {
+                internal::lazy_ir_set_node_inputs(result_node_id, input_ids);
+            }
         }
 
         // Helper to create view with shared ownership
@@ -994,7 +1021,6 @@ namespace lfs::core {
         }
         size_t debug_id() const { return id_; }
 
-        // CRITICAL: Check data presence, not any flag
         bool is_valid() const {
             return static_cast<bool>(data_owner_) || is_view_ || (state_ && state_->has_deferred_expr);
         }
@@ -1158,8 +1184,10 @@ namespace lfs::core {
                 return Tensor();                                         \
             return Tensor::empty(shape_, device_, dtype_);               \
         }                                                                \
-        return UnaryExpr<TensorLeaf, ops::op_type>(                      \
+        Tensor result = UnaryExpr<TensorLeaf, ops::op_type>(             \
             TensorLeaf(*this), ops::op_type{}, shape_, device_, dtype_); \
+        link_deferred_result_to_inputs(result, {lazy_expr_id()});        \
+        return result;                                                    \
     }
 
 #define LFS_DEFINE_UNARY_OP_FUSABLE(name, op_type, fusion_kind)                           \
@@ -1171,6 +1199,7 @@ namespace lfs::core {
         }                                                                                 \
         Tensor result = UnaryExpr<TensorLeaf, ops::op_type>(                              \
             TensorLeaf(*this), ops::op_type{}, shape_, device_, dtype_);                  \
+        link_deferred_result_to_inputs(result, {lazy_expr_id()});                          \
         if (internal::lazy_mode_enabled() && dtype_ == DataType::Float32 &&               \
             result.is_valid() && result.has_lazy_expr()) {                                \
             const uint64_t result_node_id = result.lazy_expr_id();                        \
@@ -1195,8 +1224,10 @@ namespace lfs::core {
                 return Tensor();                                                 \
             return Tensor::empty(shape_, device_, DataType::Bool);               \
         }                                                                        \
-        return UnaryExpr<TensorLeaf, ops::op_type>(                              \
+        Tensor result = UnaryExpr<TensorLeaf, ops::op_type>(                     \
             TensorLeaf(*this), ops::op_type{}, shape_, device_, DataType::Bool); \
+        link_deferred_result_to_inputs(result, {lazy_expr_id()});                \
+        return result;                                                            \
     }
 
         // Arithmetic unary operations
@@ -1307,6 +1338,7 @@ namespace lfs::core {
         Tensor result = UnaryExpr<TensorLeaf, ops::scalar_right_op<ops::op_type, float>>( \
             TensorLeaf(*this), ops::scalar_right_op<ops::op_type, float>(scalar_value),   \
             shape_, device_, dtype_);                                                     \
+        link_deferred_result_to_inputs(result, {lazy_expr_id()});                         \
         if (internal::lazy_mode_enabled() && dtype_ == DataType::Float32 &&               \
             result.is_valid() && result.has_lazy_expr()) {                                \
             const uint64_t result_node_id = result.lazy_expr_id();                        \
@@ -1331,9 +1363,11 @@ namespace lfs::core {
                 return Tensor();                                                                     \
             return Tensor::empty(shape_, device_, dtype_);                                           \
         }                                                                                            \
-        return UnaryExpr<TensorLeaf, ops::scalar_right_op<ops::op_type, float>>(                     \
+        Tensor result = UnaryExpr<TensorLeaf, ops::scalar_right_op<ops::op_type, float>>(            \
             TensorLeaf(*this), ops::scalar_right_op<ops::op_type, float>(static_cast<float>(other)), \
             shape_, device_, dtype_);                                                                \
+        link_deferred_result_to_inputs(result, {lazy_expr_id()});                                    \
+        return result;                                                                                \
     }
 
         LFS_DEFINE_SCALAR_BINARY_OP_FUSABLE(add, add_op, AddScalar)
@@ -1569,7 +1603,7 @@ namespace lfs::core {
         // Scalar reduce operations - use direct CUB path for CUDA Float32 contiguous tensors
         float sum_scalar() const {
             if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
-                return tensor_ops::direct_sum_scalar(ptr<float>(), numel(), nullptr);
+                return tensor_ops::direct_sum_scalar(ptr<float>(), numel(), stream());
             }
             auto result = sum();
             if (dtype_ == DataType::Bool) {
@@ -1580,21 +1614,21 @@ namespace lfs::core {
 
         float mean_scalar() const {
             if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
-                return tensor_ops::direct_mean_scalar(ptr<float>(), numel(), nullptr);
+                return tensor_ops::direct_mean_scalar(ptr<float>(), numel(), stream());
             }
             return mean().item();
         }
 
         float min_scalar() const {
             if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
-                return tensor_ops::direct_min_scalar(ptr<float>(), numel(), nullptr);
+                return tensor_ops::direct_min_scalar(ptr<float>(), numel(), stream());
             }
             return min().item();
         }
 
         float max_scalar() const {
             if (device_ == Device::CUDA && dtype_ == DataType::Float32 && is_contiguous_) {
-                return tensor_ops::direct_max_scalar(ptr<float>(), numel(), nullptr);
+                return tensor_ops::direct_max_scalar(ptr<float>(), numel(), stream());
             }
             return max().item();
         }
@@ -2014,6 +2048,9 @@ namespace lfs::core {
         Tensor* tensor_;
         size_t row_index_;
         mutable float cuda_staging_ = 0.0f;
+        mutable size_t cuda_staging_linear_idx_ = 0;
+        mutable bool cuda_staging_pending_write_ = false;
+        void flush_cuda_staging() const;
 
     public:
         TensorRowProxy(Tensor* tensor, size_t row_index)
@@ -2025,6 +2062,7 @@ namespace lfs::core {
                     std::to_string(tensor_->shape()[0]));
             }
         }
+        ~TensorRowProxy();
 
         // 2D Access: tensor[i][j]
         float& operator[](size_t col_index);
@@ -2040,6 +2078,7 @@ namespace lfs::core {
             if (!tensor_ || !tensor_->is_valid()) {
                 throw std::runtime_error("TensorRowProxy::item_as(): invalid tensor pointer");
             }
+            flush_cuda_staging();
 
             // Handle 2D tensors with shape [N, 1] (like nonzero() output)
             if (tensor_->shape().rank() == 2 && tensor_->shape()[1] == 1) {

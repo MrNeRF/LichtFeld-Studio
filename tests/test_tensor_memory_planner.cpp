@@ -50,9 +50,7 @@ namespace {
 TEST(TensorMemoryPlannerTest, LivenessComputationLinearChain) {
     LazyRuntimeGuard guard(LazyMode::On);
 
-    // Shape operations (reshape, permute, slice) track IR input_ids.
-    // Expression template ops (add, mul) do not.
-    // Build a chain using shape ops to get a proper multi-node plan.
+    // Shape operations should carry explicit IR dependencies through deferred chaining.
     auto a = Tensor::ones({2, 3}, Device::CPU, DataType::Float32).add(1.0f);
     ASSERT_TRUE(a.has_lazy_expr());
     auto b = a.reshape({3, 2});
@@ -91,6 +89,46 @@ TEST(TensorMemoryPlannerTest, LivenessComputationLinearChain) {
     EXPECT_EQ(last_consumer_step[a_id], node_step[b_id]);
     EXPECT_EQ(last_consumer_step[b_id], node_step[c_id]);
     EXPECT_EQ(last_consumer_step[c_id], node_step[d.lazy_expr_id()]);
+}
+
+TEST(TensorMemoryPlannerTest, LivenessComputationPointwiseChain) {
+    LazyRuntimeGuard guard(LazyMode::On);
+
+    auto a = Tensor::ones({64}, Device::CPU, DataType::Float32).add(1.0f);
+    auto b = a.mul(2.0f);
+    auto c = b.abs();
+    auto d = c.sub(3.0f);
+    ASSERT_TRUE(d.has_lazy_expr());
+
+    const auto plan = internal::lazy_planner_build_plan_for_tensor(d);
+    ASSERT_TRUE(plan.has_root);
+    ASSERT_GE(plan.topo_nodes.size(), 4u);
+
+    std::unordered_map<uint64_t, size_t> node_step;
+    std::unordered_map<uint64_t, size_t> last_consumer_step;
+    for (size_t step = 0; step < plan.topo_nodes.size(); ++step) {
+        node_step[plan.topo_nodes[step].node_id] = step;
+        for (uint64_t input_id : plan.topo_nodes[step].input_ids) {
+            last_consumer_step[input_id] = step;
+        }
+    }
+
+    const uint64_t a_id = a.lazy_expr_id();
+    const uint64_t b_id = b.lazy_expr_id();
+    const uint64_t c_id = c.lazy_expr_id();
+    const uint64_t d_id = d.lazy_expr_id();
+    ASSERT_NE(a_id, 0u);
+    ASSERT_NE(b_id, 0u);
+    ASSERT_NE(c_id, 0u);
+    ASSERT_NE(d_id, 0u);
+    ASSERT_TRUE(node_step.count(a_id));
+    ASSERT_TRUE(node_step.count(b_id));
+    ASSERT_TRUE(node_step.count(c_id));
+    ASSERT_TRUE(node_step.count(d_id));
+
+    EXPECT_EQ(last_consumer_step[a_id], node_step[b_id]);
+    EXPECT_EQ(last_consumer_step[b_id], node_step[c_id]);
+    EXPECT_EQ(last_consumer_step[c_id], node_step[d_id]);
 }
 
 TEST(TensorMemoryPlannerTest, EarlyReleaseFiresForLinearChain) {

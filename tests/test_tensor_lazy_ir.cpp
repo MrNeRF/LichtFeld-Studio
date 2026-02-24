@@ -196,6 +196,56 @@ TEST(TensorLazyIrTest, OnModePlannerTopologyIsDeterministic) {
     }
 }
 
+TEST(TensorLazyIrTest, OnModePlannerTopologicalOrderRespectsPointwiseDependencies) {
+    LazyRuntimeGuard guard(LazyMode::On);
+
+    auto a = Tensor::ones({32}, Device::CPU, DataType::Float32).add(1.0f);
+    auto b = a.mul(2.0f);
+    auto c = b.abs();
+    auto d = c.sub(3.0f);
+
+    ASSERT_TRUE(a.has_lazy_expr());
+    ASSERT_TRUE(b.has_lazy_expr());
+    ASSERT_TRUE(c.has_lazy_expr());
+    ASSERT_TRUE(d.has_lazy_expr());
+
+    const uint64_t a_id = a.lazy_expr_id();
+    const uint64_t b_id = b.lazy_expr_id();
+    const uint64_t c_id = c.lazy_expr_id();
+    const uint64_t d_id = d.lazy_expr_id();
+    ASSERT_NE(a_id, 0u);
+    ASSERT_NE(b_id, 0u);
+    ASSERT_NE(c_id, 0u);
+    ASSERT_NE(d_id, 0u);
+
+    const auto plan = internal::lazy_planner_build_plan_for_tensor(d);
+    ASSERT_TRUE(plan.has_root);
+    ASSERT_EQ(plan.root_node_id, d_id);
+
+    std::unordered_map<uint64_t, size_t> node_index;
+    std::unordered_map<uint64_t, std::vector<uint64_t>> node_inputs;
+    for (size_t i = 0; i < plan.topo_nodes.size(); ++i) {
+        node_index[plan.topo_nodes[i].node_id] = i;
+        node_inputs[plan.topo_nodes[i].node_id] = plan.topo_nodes[i].input_ids;
+    }
+
+    ASSERT_TRUE(node_index.count(a_id));
+    ASSERT_TRUE(node_index.count(b_id));
+    ASSERT_TRUE(node_index.count(c_id));
+    ASSERT_TRUE(node_index.count(d_id));
+
+    EXPECT_LT(node_index[a_id], node_index[b_id]);
+    EXPECT_LT(node_index[b_id], node_index[c_id]);
+    EXPECT_LT(node_index[c_id], node_index[d_id]);
+
+    ASSERT_EQ(node_inputs[b_id].size(), 1u);
+    ASSERT_EQ(node_inputs[c_id].size(), 1u);
+    ASSERT_EQ(node_inputs[d_id].size(), 1u);
+    EXPECT_EQ(node_inputs[b_id][0], a_id);
+    EXPECT_EQ(node_inputs[c_id][0], b_id);
+    EXPECT_EQ(node_inputs[d_id][0], c_id);
+}
+
 TEST(TensorLazyIrTest, OnModePlannerSharedSubgraphVisibleAcrossPlans) {
     LazyRuntimeGuard guard(LazyMode::On);
 
@@ -404,10 +454,13 @@ TEST(TensorLazyIrTest, OnModePointwiseFusionReducesLaunchesWithParity) {
 TEST(TensorLazyIrTest, OnModeOverheadBenchmarkGuardrailVsOffMode) {
     auto run_benchmark = [](LazyMode mode) {
         LazyRuntimeGuard guard(mode);
+        internal::lazy_executor_set_size_heuristic_override_for_testing(true);
+        internal::lazy_executor_set_size_threshold_override_for_testing(size_t{4096});
 
-        constexpr int warmup_iters = 6;
-        constexpr int timed_iters = 24;
-        constexpr size_t numel = 1u << 17;
+        // Tiny tensor benchmark: validates PR14 heuristic target rather than planner throughput.
+        constexpr int warmup_iters = 32;
+        constexpr int timed_iters = 256;
+        constexpr size_t numel = 1u << 8; // 1024 bytes (Float32), below default 4096-byte threshold
         volatile float sink = 0.0f;
 
         for (int i = 0; i < warmup_iters; ++i) {
@@ -432,10 +485,12 @@ TEST(TensorLazyIrTest, OnModeOverheadBenchmarkGuardrailVsOffMode) {
         struct Result {
             double avg_us = 0.0;
             internal::LazyExecutorDiagnosticsSnapshot diagnostics;
+            LazyTelemetrySnapshot telemetry;
         };
         Result result;
         result.avg_us = avg_us;
         result.diagnostics = internal::lazy_executor_diagnostics_snapshot_for_testing();
+        result.telemetry = Tensor::lazy_telemetry_snapshot();
 
         EXPECT_GT(sink, 0.0f);
         return result;
@@ -451,10 +506,11 @@ TEST(TensorLazyIrTest, OnModeOverheadBenchmarkGuardrailVsOffMode) {
               << " on_avg_us=" << on.avg_us
               << " ratio=" << ratio << std::endl;
 
-    // Wide guardrail to catch catastrophic regressions while tolerating host variance.
-    EXPECT_LT(ratio, 3.0);
-    EXPECT_GT(on.diagnostics.planned_nodes, 0u);
-    EXPECT_GT(on.diagnostics.executed_nodes, 0u);
+    // Tiny-tensor guardrail: on-mode should stay close to off-mode via eager size heuristic.
+    EXPECT_LT(ratio, 1.5);
+    EXPECT_GT(on.telemetry.eager_fallback_size_heuristic, 0u);
+    EXPECT_EQ(on.diagnostics.planned_nodes, 0u);
+    EXPECT_EQ(on.diagnostics.executed_nodes, 0u);
 }
 
 TEST(TensorLazyIrTest, OnModeRegistryGrowthGuardrailInLongCreateDropLoop) {

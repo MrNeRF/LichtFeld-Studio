@@ -204,7 +204,42 @@ TEST_F(TensorRowProxyTest, MultipleReadsFromSameProxy) {
     EXPECT_FLOAT_EQ(v2, 3.0f);
 }
 
-#ifndef NDEBUG
+TEST_F(TensorRowProxyTest, CudaDoubleSubscriptAssignmentPersists) {
+    t_[0][1] = 42.0f;
+    t_[1][2] = -7.5f;
+
+    auto cpu = t_.to(Device::CPU);
+    auto values = cpu.to_vector();
+    ASSERT_EQ(values.size(), 6u);
+    EXPECT_FLOAT_EQ(values[1], 42.0f);  // [0][1]
+    EXPECT_FLOAT_EQ(values[5], -7.5f);  // [1][2]
+}
+
+TEST_F(TensorRowProxyTest, CudaProxyFlushesAcrossMultipleElementWrites) {
+    {
+        auto row0 = t_[0];
+        row0[0] = 10.0f;
+        row0[1] = 20.0f;
+        row0[2] = 30.0f;
+    } // flush pending staged write for the last element
+
+    auto cpu = t_.to(Device::CPU);
+    auto values = cpu.to_vector();
+    ASSERT_EQ(values.size(), 6u);
+    EXPECT_FLOAT_EQ(values[0], 10.0f);
+    EXPECT_FLOAT_EQ(values[1], 20.0f);
+    EXPECT_FLOAT_EQ(values[2], 30.0f);
+}
+
+TEST_F(TensorRowProxyTest, CudaConstSubscriptSeesPendingWrite) {
+    auto row0 = t_[0];
+    row0[1] = 55.0f;
+
+    const auto& row0_const = row0;
+    const float read_back = row0_const[1];
+    EXPECT_FLOAT_EQ(read_back, 55.0f);
+}
+
 TEST_F(TensorStorageVersionTest, StaleViewDetectedOnReserve) {
     auto with_capacity = Tensor::zeros({10, 3}, Device::CUDA);
     auto view = with_capacity.slice(0, 0, 5);
@@ -212,12 +247,11 @@ TEST_F(TensorStorageVersionTest, StaleViewDetectedOnReserve) {
     // Reserve causes reallocation => bumps generation
     with_capacity.reserve(1000);
 
-    // Accessing stale view should trigger assertion in debug
-    EXPECT_DEATH(
+    // Accessing stale view should fail safely in all build types.
+    EXPECT_THROW(
         { [[maybe_unused]] auto p = view.ptr<float>(); },
-        "");
+        std::runtime_error);
 }
-#endif
 
 // CPU variant tests
 

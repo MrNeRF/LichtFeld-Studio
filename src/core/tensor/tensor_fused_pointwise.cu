@@ -1,13 +1,19 @@
 /* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
+#include "core/cuda_debug.hpp"
 #include "internal/gpu_config.hpp"
+#include "internal/lazy_executor.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
 #include "internal/warp_reduce.cuh"
 #include <cassert>
 #include <cfloat>
 #include <cuda_runtime.h>
+
+static_assert(static_cast<uint8_t>(lfs::core::internal::LazyPointwiseOpKind::AddScalar) == 0);
+static_assert(static_cast<uint8_t>(lfs::core::internal::LazyPointwiseOpKind::Abs) == 10);
+static_assert(static_cast<uint8_t>(lfs::core::internal::LazyPointwiseOpKind::Round) == 24);
 
 namespace lfs::core::tensor_ops {
 
@@ -275,7 +281,7 @@ namespace lfs::core::tensor_ops {
         const int grid_size = gpu.optimal_grid_size(BLOCK_SIZE);
 
         float* partial = nullptr;
-        cudaMallocAsync(&partial, grid_size * sizeof(float), stream);
+        CHECK_CUDA(cudaMallocAsync(&partial, grid_size * sizeof(float), stream));
         assert(partial != nullptr);
 
         fused_transform_reduce_stage1_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(

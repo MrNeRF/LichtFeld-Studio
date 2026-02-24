@@ -5,6 +5,7 @@
 
 #include "internal/lazy_config.hpp"
 #include "internal/tensor_impl.hpp"
+#include <algorithm>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -163,6 +164,33 @@ namespace lfs::core::internal {
 
         visit(visit, root_node_id);
         return topo;
+    }
+
+    bool lazy_ir_set_node_inputs(uint64_t node_id, const std::vector<uint64_t>& input_ids) {
+        if (!lazy_ir_active() || node_id == 0) {
+            return false;
+        }
+
+        std::vector<uint64_t> deduped_inputs;
+        deduped_inputs.reserve(input_ids.size());
+        for (uint64_t input_id : input_ids) {
+            if (input_id == 0) {
+                continue;
+            }
+            if (std::find(deduped_inputs.begin(), deduped_inputs.end(), input_id) == deduped_inputs.end()) {
+                deduped_inputs.push_back(input_id);
+            }
+        }
+
+        auto& runtime = lazy_ir_runtime();
+        std::lock_guard<std::mutex> lock(runtime.mutex);
+        const auto it = runtime.nodes.find(node_id);
+        if (it == runtime.nodes.end()) {
+            return false;
+        }
+
+        it->second.input_ids = std::move(deduped_inputs);
+        return true;
     }
 
     void lazy_ir_record_unary(const Tensor& input,

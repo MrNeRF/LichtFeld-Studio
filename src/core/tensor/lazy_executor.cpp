@@ -3,6 +3,7 @@
 
 #include "internal/lazy_executor.hpp"
 
+#include "internal/cuda_stream_context.hpp"
 #include "core/logger.hpp"
 #include "internal/lazy_config.hpp"
 #include "internal/lazy_ir.hpp"
@@ -500,10 +501,11 @@ namespace lfs::core::internal {
                 if (source.device() == Device::CUDA) {
                     const float* in_ptr = source.ptr<float>();
                     assert(in_ptr != nullptr);
+                    CUDAStreamGuard guard(source.stream());
                     Tensor out = Tensor::empty(source.shape(), Device::CUDA, DataType::Float32);
                     float* out_ptr = out.ptr<float>();
                     assert(out_ptr != nullptr);
-                    tensor_ops::launch_fused_affine_transform(in_ptr, out_ptr, n, a, b, source.stream());
+                    tensor_ops::launch_fused_affine_transform(in_ptr, out_ptr, n, a, b, out.stream());
                     materialized = std::move(out);
                     return true;
                 }
@@ -533,10 +535,11 @@ namespace lfs::core::internal {
             if (source.device() == Device::CUDA) {
                 const float* in_ptr = source.ptr<float>();
                 assert(in_ptr != nullptr);
+                CUDAStreamGuard guard(source.stream());
                 Tensor out = Tensor::empty(source.shape(), Device::CUDA, DataType::Float32);
                 float* out_ptr = out.ptr<float>();
                 assert(out_ptr != nullptr);
-                tensor_ops::launch_fused_pointwise_chain(in_ptr, out_ptr, n, chain, source.stream());
+                tensor_ops::launch_fused_pointwise_chain(in_ptr, out_ptr, n, chain, out.stream());
                 materialized = std::move(out);
                 return true;
             }

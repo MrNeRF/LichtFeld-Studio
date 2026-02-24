@@ -47,6 +47,8 @@ namespace lfs::core {
         LFS_CORE_API std::optional<LazyExprDebugInfo> tensor_lazy_expr_info(const Tensor& tensor);
         LFS_CORE_API std::optional<LazyExprDebugInfo> lazy_ir_node_info(uint64_t node_id);
         LFS_CORE_API std::vector<LazyExprDebugInfo> lazy_ir_collect_topological_subgraph(uint64_t root_node_id);
+        // Update an existing node's dependency edges. Used to wire deferred pointwise chains.
+        LFS_CORE_API bool lazy_ir_set_node_inputs(uint64_t node_id, const std::vector<uint64_t>& input_ids);
 
         LFS_CORE_API void lazy_ir_record_unary(const Tensor& input,
                                                const Tensor& output,

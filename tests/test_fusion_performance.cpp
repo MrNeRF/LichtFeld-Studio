@@ -306,6 +306,31 @@ TEST(TensorFusionPerformanceTest, MixedUnaryChain) {
     }
 }
 
+TEST(TensorFusionPerformanceTest, BroadcastChain) {
+    printf("\n[fusion-perf] === Broadcast chain: ((x + b) * 1.25 - 0.5).sigmoid() ===\n");
+    print_header();
+
+    const TensorShape shape = {2048, 1024};
+    const Tensor lfs_bias = Tensor::rand({1, 1024}, Device::CUDA, DataType::Float32);
+    auto torch_bias = torch::zeros({1, 1024}, torch::kCUDA);
+    cudaMemcpy(torch_bias.data_ptr<float>(),
+               lfs_bias.ptr<float>(),
+               lfs_bias.numel() * sizeof(float),
+               cudaMemcpyDeviceToDevice);
+    cudaDeviceSynchronize();
+
+    auto lfs_fn = [lfs_bias](const Tensor& x) {
+        return x.add(lfs_bias).mul(1.25f).sub(0.5f).sigmoid();
+    };
+    auto torch_fn = [torch_bias](const torch::Tensor& x) {
+        return ((x + torch_bias) * 1.25f - 0.5f).sigmoid();
+    };
+
+    const auto r = run_benchmark(shape, lfs_fn, torch_fn);
+    print_row("BroadcastChain 2048x1024 + [1x1024]", r);
+    EXPECT_TRUE(r.all_verified());
+}
+
 TEST(TensorFusionPerformanceTest, TransformReduceSum) {
     printf("\n[fusion-perf] === Transform-reduce: x.add(1).mul(2).sum() ===\n");
     print_header();
