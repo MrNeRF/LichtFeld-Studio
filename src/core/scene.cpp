@@ -9,7 +9,6 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data_transform.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
 
 #include <algorithm>
 #include <array>
@@ -303,7 +302,7 @@ namespace lfs::core {
         training_model_node_.clear();
 
         cudaDeviceSynchronize();
-        lfs::core::CudaMemoryPool::instance().trim_cached_memory();
+        lfs::core::Tensor::trim_memory_pool();
         lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
 
         notifyMutation(MutationType::CLEARED);

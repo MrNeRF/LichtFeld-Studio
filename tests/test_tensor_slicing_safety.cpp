@@ -152,11 +152,11 @@ TEST_F(TensorSlicingSafetyTest, MultipleSlicesShareBuffer) {
     Tensor slice2 = full.slice(0, 250, 750);  // [250:750]
     Tensor slice3 = full.slice(0, 500, 1000); // [500:1000]
 
-    // All should share same base pointer
-    void* base_ptr = full.data_ptr();
-    EXPECT_EQ(slice1.data_ptr(), base_ptr);
-    EXPECT_EQ(slice2.data_ptr(), base_ptr);
-    EXPECT_EQ(slice3.data_ptr(), base_ptr);
+    // All should share same underlying storage
+    void* base_ptr = full.storage_ptr();
+    EXPECT_EQ(slice1.storage_ptr(), base_ptr);
+    EXPECT_EQ(slice2.storage_ptr(), base_ptr);
+    EXPECT_EQ(slice3.storage_ptr(), base_ptr);
 
     // Modify through slice1
     slice1.fill_(10.0f);
@@ -206,13 +206,9 @@ TEST_F(TensorSlicingSafetyTest, SliceOutOfBounds) {
     const size_t N = 1000;
     Tensor full = Tensor::zeros({N, 3}, Device::CUDA);
 
-    // Attempt to slice beyond bounds
-    // Should either clamp or throw - verify it doesn't crash
-    EXPECT_NO_THROW({
-        Tensor slice = full.slice(0, 0, 2000); // end > size
-        // If it succeeds, verify it clamped to actual size
-        EXPECT_LE(slice.shape()[0], N);
-    }) << "Slicing out of bounds should not crash!";
+    // Slicing beyond bounds returns an invalid (empty) tensor
+    Tensor slice = full.slice(0, 0, 2000);
+    EXPECT_FALSE(slice.is_valid());
 }
 
 /**

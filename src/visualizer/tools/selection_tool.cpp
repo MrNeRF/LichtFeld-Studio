@@ -5,11 +5,13 @@
 #include "tools/selection_tool.hpp"
 #include "core/tensor.hpp"
 #include "input/input_bindings.hpp"
+#include "input/key_codes.hpp"
+#include "input/sdl_key_mapping.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "theme/theme.hpp"
-#include <GLFW/glfw3.h>
+#include <SDL3/SDL.h>
 #include <cmath>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -31,9 +33,9 @@ namespace lfs::vis::tools {
 
     void SelectionTool::update([[maybe_unused]] const ToolContext& ctx) {
         if (isEnabled()) {
-            double mx, my;
-            glfwGetCursorPos(ctx.getWindow(), &mx, &my);
-            last_mouse_pos_ = glm::vec2(static_cast<float>(mx), static_cast<float>(my));
+            float mx, my;
+            SDL_GetMouseState(&mx, &my);
+            last_mouse_pos_ = glm::vec2(mx, my);
 
             if (depth_filter_enabled_) {
                 updateSelectionCropBox(ctx);
@@ -53,9 +55,9 @@ namespace lfs::vis::tools {
                 return SelectionOp::Replace;
         }
         // Fallback
-        if (mods & GLFW_MOD_CONTROL)
+        if (mods & input::KEYMOD_CTRL)
             return SelectionOp::Remove;
-        if (mods & GLFW_MOD_SHIFT)
+        if (mods & input::KEYMOD_SHIFT)
             return SelectionOp::Add;
         return SelectionOp::Replace;
     }
@@ -299,17 +301,15 @@ namespace lfs::vis::tools {
 
         // Modifier indicator
         const char* mod_suffix = "";
-        GLFWwindow* const win = tool_context_->getWindow();
-        const bool shift = glfwGetKey(win, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
-                           glfwGetKey(win, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS;
-        const bool ctrl = glfwGetKey(win, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
-                          glfwGetKey(win, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS;
+        const SDL_Keymod km = SDL_GetModState();
+        const bool shift = (km & SDL_KMOD_SHIFT) != 0;
+        const bool ctrl = (km & SDL_KMOD_CTRL) != 0;
 
         int mods = 0;
         if (shift)
-            mods |= GLFW_MOD_SHIFT;
+            mods |= input::KEYMOD_SHIFT;
         if (ctrl)
-            mods |= GLFW_MOD_CONTROL;
+            mods |= input::KEYMOD_CTRL;
 
         if (mods != 0) {
             const auto op = getOpFromModifiers(mods);

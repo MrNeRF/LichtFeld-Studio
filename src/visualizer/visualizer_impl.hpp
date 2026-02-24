@@ -26,8 +26,7 @@
 #include <optional>
 #include <string>
 
-// Forward declaration for GLFW
-struct GLFWwindow;
+struct SDL_Window;
 
 namespace lfs::vis {
     class SceneManager;
@@ -62,7 +61,7 @@ namespace lfs::vis {
         // Component access
         TrainerManager* getTrainerManager() { return trainer_manager_.get(); }
         SceneManager* getSceneManager() { return scene_manager_.get(); }
-        ::GLFWwindow* getWindow() const { return window_manager_->getWindow(); }
+        SDL_Window* getWindow() const { return window_manager_->getWindow(); }
         WindowManager* getWindowManager() { return window_manager_.get(); }
         RenderingManager* getRenderingManager() { return rendering_manager_.get(); }
         gui::GuiManager* getGuiManager() { return gui_manager_.get(); }

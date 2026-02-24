@@ -5,13 +5,13 @@
 #include "align_ops.hpp"
 #include "core/services.hpp"
 #include "gui/gui_manager.hpp"
+#include "input/key_codes.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer_impl.hpp"
-#include <GLFW/glfw3.h>
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace lfs::vis::op {
@@ -64,15 +64,15 @@ namespace lfs::vis::op {
 
         if (event->type == ModalEvent::Type::MOUSE_BUTTON) {
             const auto* mb = event->as<MouseButtonEvent>();
-            if (!mb || mb->action != GLFW_PRESS) {
+            if (!mb || mb->action != lfs::vis::input::ACTION_PRESS) {
                 return OperatorResult::RUNNING_MODAL;
             }
 
-            if (mb->button == GLFW_MOUSE_BUTTON_RIGHT) {
+            if (mb->button == static_cast<int>(lfs::vis::input::AppMouseButton::RIGHT)) {
                 return OperatorResult::CANCELLED;
             }
 
-            if (mb->button == GLFW_MOUSE_BUTTON_LEFT) {
+            if (mb->button == static_cast<int>(lfs::vis::input::AppMouseButton::LEFT)) {
                 const glm::vec3 world_pos = unprojectScreenPoint(mb->position.x, mb->position.y);
                 if (world_pos.x <= -1e9f) {
                     return OperatorResult::RUNNING_MODAL;
@@ -95,7 +95,7 @@ namespace lfs::vis::op {
 
         if (event->type == ModalEvent::Type::KEY) {
             const auto* ke = event->as<KeyEvent>();
-            if (ke && ke->key == GLFW_KEY_ESCAPE && ke->action == GLFW_PRESS) {
+            if (ke && ke->key == lfs::vis::input::KEY_ESCAPE && ke->action == lfs::vis::input::ACTION_PRESS) {
                 return OperatorResult::CANCELLED;
             }
         }

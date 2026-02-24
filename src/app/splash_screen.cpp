@@ -7,10 +7,8 @@
 #include "core/path_utils.hpp"
 #include "visualizer/theme/theme.hpp"
 
-// clang-format off
+#include <SDL3/SDL.h>
 #include <glad/glad.h>
-#include <GLFW/glfw3.h>
-// clang-format on
 
 #include <stb_image.h>
 
@@ -279,40 +277,46 @@ void main() {
         }
 
         // Task still running - show splash
-        if (!glfwInit()) {
+        if (!SDL_Init(SDL_INIT_VIDEO)) {
             worker.join();
             return result;
         }
 
-        GLFWmonitor* const monitor = glfwGetPrimaryMonitor();
-        const GLFWvidmode* const mode = glfwGetVideoMode(monitor);
-        int monitor_x, monitor_y;
-        glfwGetMonitorPos(monitor, &monitor_x, &monitor_y);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-        glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-        glfwWindowHint(GLFW_FLOATING, GLFW_TRUE);
-
-        const int xpos = monitor_x + (mode->width - SPLASH_WIDTH) / 2;
-        const int ypos = monitor_y + (mode->height - SPLASH_HEIGHT) / 2;
-
-        GLFWwindow* const window = glfwCreateWindow(SPLASH_WIDTH, SPLASH_HEIGHT, "LichtFeld Studio", nullptr, nullptr);
+        SDL_Window* const window = SDL_CreateWindow(
+            "LichtFeld Studio", SPLASH_WIDTH, SPLASH_HEIGHT,
+            SDL_WINDOW_OPENGL | SDL_WINDOW_BORDERLESS | SDL_WINDOW_ALWAYS_ON_TOP);
         if (!window) {
-            glfwTerminate();
+            SDL_Quit();
             worker.join();
             return result;
         }
 
-        glfwSetWindowPos(window, xpos, ypos);
-        glfwMakeContextCurrent(window);
-        glfwSwapInterval(1);
+        // Center on primary display
+        const SDL_DisplayID display = SDL_GetPrimaryDisplay();
+        SDL_Rect bounds{};
+        SDL_GetDisplayBounds(display, &bounds);
+        SDL_SetWindowPosition(window,
+                              bounds.x + (bounds.w - SPLASH_WIDTH) / 2,
+                              bounds.y + (bounds.h - SPLASH_HEIGHT) / 2);
 
-        if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) {
-            glfwDestroyWindow(window);
-            glfwTerminate();
+        SDL_GLContext gl_ctx = SDL_GL_CreateContext(window);
+        if (!gl_ctx) {
+            SDL_DestroyWindow(window);
+            SDL_Quit();
+            worker.join();
+            return result;
+        }
+        SDL_GL_MakeCurrent(window, gl_ctx);
+        SDL_GL_SetSwapInterval(1);
+
+        if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(SDL_GL_GetProcAddress))) {
+            SDL_GL_DestroyContext(gl_ctx);
+            SDL_DestroyWindow(window);
+            SDL_Quit();
             worker.join();
             return result;
         }
@@ -334,16 +338,22 @@ void main() {
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-        const double start_time = glfwGetTime();
+        const auto start_time = std::chrono::steady_clock::now();
+        bool splash_running = true;
 
-        while (!glfwWindowShouldClose(window) && !done) {
-            const float elapsed = static_cast<float>(glfwGetTime() - start_time);
+        while (splash_running && !done) {
+            SDL_Event ev;
+            while (SDL_PollEvent(&ev)) {
+                if (ev.type == SDL_EVENT_QUIT || ev.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
+                    splash_running = false;
+            }
+            const auto now = std::chrono::steady_clock::now();
+            const float elapsed = std::chrono::duration<float>(now - start_time).count();
             glClear(GL_COLOR_BUFFER_BIT);
             drawImage(logo, textured_program, 0.5f, LOGO_Y);
             drawImage(loading_text, textured_program, 0.5f, TEXT_Y);
             drawSpinner(spinner, elapsed, 0.5f, SPINNER_Y);
-            glfwSwapBuffers(window);
-            glfwPollEvents();
+            SDL_GL_SwapWindow(window);
         }
 
         worker.join();
@@ -352,9 +362,9 @@ void main() {
         freeImage(loading_text);
         freeSpinner(spinner);
         glDeleteProgram(textured_program);
-        glfwDestroyWindow(window);
-        glfwDefaultWindowHints();
-        glfwTerminate();
+        SDL_GL_DestroyContext(gl_ctx);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
 
         return result;
     }

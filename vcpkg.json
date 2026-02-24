@@ -16,15 +16,15 @@
     },
     "freetype",
     "glad",
-    "glfw3",
+    "sdl3",
     "glm",
     "gtest",
     {
       "name": "imgui",
       "features": [
         "docking-experimental",
-        "glfw-binding",
-        "opengl3-binding"
+        "opengl3-binding",
+        "sdl3-binding"
       ]
     },
     "implot",

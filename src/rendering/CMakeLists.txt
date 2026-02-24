@@ -45,7 +45,6 @@ target_link_libraries(lfs_rendering
         lfs_rasterizer
         glm::glm
         glad::glad
-        glfw
         ${OPENGL_LIBRARIES}
         CUDA::cudart
         spdlog::spdlog

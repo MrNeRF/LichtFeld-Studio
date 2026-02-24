@@ -54,8 +54,18 @@ namespace lfs::core {
          * @return True if shapes can be broadcast together, false otherwise
          */
         inline bool can_broadcast(std::span<const size_t> a, std::span<const size_t> b) {
-            auto result = shape(a, b);
-            return !result.empty();
+            size_t max_rank = std::max(a.size(), b.size());
+            for (size_t i = 0; i < max_rank; ++i) {
+                size_t dim_a = (i < a.size()) ? a[a.size() - 1 - i] : 1;
+                size_t dim_b = (i < b.size()) ? b[b.size() - 1 - i] : 1;
+                if (dim_a == 0 && dim_b == 0)
+                    continue;
+                if (dim_a == 0 || dim_b == 0)
+                    return false;
+                if (dim_a != dim_b && dim_a != 1 && dim_b != 1)
+                    return false;
+            }
+            return true;
         }
 
         /**

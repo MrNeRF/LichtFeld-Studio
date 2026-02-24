@@ -4,7 +4,6 @@
 
 #include "mcmc.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "strategy_utils.hpp"
 #include <algorithm>
@@ -62,7 +61,7 @@ namespace lfs::training {
             return Tensor::ones({n}, _splat_data->means().device());
         }
 
-        return _error_score_max.clamp_min(1e-12f).contiguous();
+        return _error_score_max.clamp_min(1e-12f);
     }
 
     int MCMC::relocate_gs() {
@@ -147,8 +146,8 @@ namespace lfs::training {
         Tensor ratios;
         {
             LOG_TIMER("relocate_count_occurrences");
-            ratios = Tensor::ones_like(opacities, DataType::Int32);
-            ratios = ratios.index_add_(0, sampled_idxs, Tensor::ones({sampled_idxs.numel()}, Device::CUDA, DataType::Int32));
+            auto ones_N = _ones_int32.slice(0, 0, opacities.numel()).clone();
+            ratios = ones_N.index_add_(0, sampled_idxs, _ones_int32.slice(0, 0, sampled_idxs.numel()));
             ratios = ratios.index_select(0, sampled_idxs).contiguous();
 
             // Clamp ratios to [1, n_max]
@@ -180,7 +179,7 @@ namespace lfs::training {
         {
             LOG_TIMER("relocate_compute_raw_values");
             new_opacities = new_opacities.clamp(_params->min_opacity, 1.0f - 1e-7f);
-            new_opacity_raw = (new_opacities / (Tensor::ones_like(new_opacities) - new_opacities)).log();
+            new_opacity_raw = new_opacities.logit(1e-7f);
 
             if (_splat_data->opacity_raw().ndim() == 2) {
                 new_opacity_raw = new_opacity_raw.unsqueeze(-1);
@@ -301,18 +300,18 @@ namespace lfs::training {
                 sampled_scales.ptr<float>());
         }
 
-        // Count occurrences (ratio starts at 0, add 1 for each occurrence, then add 1 more)
+        // Count occurrences as int32 to avoid float->int conversions in the hot path.
         Tensor ratios;
         {
             LOG_TIMER("add_new_count_occurrences");
-            ratios = Tensor::zeros({opacities.numel()}, Device::CUDA, DataType::Float32);
-            ratios = ratios.index_add_(0, sampled_idxs, Tensor::ones({sampled_idxs.numel()}, Device::CUDA));
-            ratios = ratios.index_select(0, sampled_idxs) + Tensor::ones_like(ratios.index_select(0, sampled_idxs));
+            ratios = _ones_int32.slice(0, 0, opacities.numel()).clone();
+            ratios = ratios.index_add_(0, sampled_idxs, _ones_int32.slice(0, 0, sampled_idxs.numel()));
+            ratios = ratios.index_select(0, sampled_idxs);
 
-            // Clamp and convert to int32
+            // Clamp in int32 domain
             const int n_max = static_cast<int>(_binoms.shape()[0]);
-            ratios = ratios.clamp(1.0f, static_cast<float>(n_max));
-            ratios = ratios.to(DataType::Int32).contiguous();
+            ratios = ratios.clamp(1, n_max);
+            ratios = ratios.contiguous();
         }
 
         // Allocate output tensors and call CUDA kernel
@@ -339,7 +338,7 @@ namespace lfs::training {
         {
             LOG_TIMER("add_new_compute_raw_values");
             new_opacities = new_opacities.clamp(_params->min_opacity, 1.0f - 1e-7f);
-            new_opacity_raw = (new_opacities / (Tensor::ones_like(new_opacities) - new_opacities)).log();
+            new_opacity_raw = new_opacities.logit(1e-7f);
             new_scaling_raw = new_scales.log();
 
             if (_splat_data->opacity_raw().ndim() == 2) {
@@ -404,15 +403,21 @@ namespace lfs::training {
         auto sampled_opacities = opacities.index_select(0, sampled_idxs_i64);
         auto sampled_scales = _splat_data->get_scaling().index_select(0, sampled_idxs_i64);
 
-        // Count occurrences
-        auto ratios = Tensor::zeros({static_cast<size_t>(_splat_data->size())}, Device::CUDA, DataType::Float32);
-        ratios.index_add_(0, sampled_idxs_i64, Tensor::ones_like(sampled_idxs_i64).to(DataType::Float32));
-        ratios = ratios.index_select(0, sampled_idxs_i64) + 1.0f;
+        // Ensure cached ones buffer covers current model size
+        const size_t required = _splat_data->size();
+        if (!_ones_int32.is_valid() || _ones_int32.numel() < required) {
+            _ones_int32 = Tensor::ones({required}, Device::CUDA, DataType::Int32);
+        }
 
-        // Clamp and convert to int
+        // Count occurrences in int32 and keep +1 baseline.
+        auto ratios = _ones_int32.slice(0, 0, required).clone();
+        ratios.index_add_(0, sampled_idxs_i64, _ones_int32.slice(0, 0, sampled_idxs_i64.numel()));
+        ratios = ratios.index_select(0, sampled_idxs_i64);
+
+        // Clamp in int32 domain
         const int n_max = static_cast<int>(_binoms.shape()[0]);
-        ratios = ratios.clamp(1.0f, static_cast<float>(n_max));
-        ratios = ratios.to(DataType::Int32).contiguous();
+        ratios = ratios.clamp(1, n_max);
+        ratios = ratios.contiguous();
 
         // Call the CUDA relocation function
         Tensor new_opacities, new_scales;
@@ -437,7 +442,7 @@ namespace lfs::training {
         {
             LOG_TIMER("add_new_compute_raw_values");
             new_opacities = new_opacities.clamp(_params->min_opacity, 1.0f - 1e-7f);
-            new_opacity_raw = (new_opacities / (Tensor::ones_like(new_opacities) - new_opacities)).log();
+            new_opacity_raw = new_opacities.logit(1e-7f);
             new_scaling_raw = new_scales.log();
 
             if (_splat_data->opacity_raw().ndim() == 2) {
@@ -555,7 +560,7 @@ namespace lfs::training {
                           n_added, iter, _splat_data->size());
             }
             // Release cached pool memory to avoid bloat (important after add_new_gs)
-            lfs::core::CudaMemoryPool::instance().trim_cached_memory();
+            lfs::core::Tensor::trim_memory_pool();
 
             const size_t n = static_cast<size_t>(_splat_data->size());
 
@@ -600,9 +605,11 @@ namespace lfs::training {
     void MCMC::remove_gaussians(const lfs::core::Tensor& mask) {
         using namespace lfs::core;
 
-        // Convert bool to int32 for sum
-        Tensor mask_int = mask.to(DataType::Int32);
-        int n_remove = mask_int.sum().item<int>();
+        // Get indices to keep
+        Tensor keep_mask = mask.logical_not();
+        Tensor keep_indices = keep_mask.nonzero().squeeze(-1);
+        const size_t old_size = static_cast<size_t>(_splat_data->size());
+        const int n_remove = static_cast<int>(old_size - keep_indices.numel());
 
         LOG_INFO("MCMC::remove_gaussians called: mask size={}, n_remove={}, current size={}",
                  mask.numel(), n_remove, _splat_data->size());
@@ -613,11 +620,6 @@ namespace lfs::training {
         }
 
         LOG_DEBUG("MCMC: Removing {} Gaussians", n_remove);
-
-        // Get indices to keep
-        Tensor keep_mask = mask.logical_not();
-        Tensor keep_indices = keep_mask.nonzero().squeeze(-1);
-        const size_t old_size = static_cast<size_t>(_splat_data->size());
 
         // Select only the Gaussians we want to keep
         _splat_data->means() = _splat_data->means().index_select(0, keep_indices).contiguous();
@@ -702,6 +704,10 @@ namespace lfs::training {
             }
         }
         _binoms = Tensor::from_vector(binoms_data, TensorShape({static_cast<size_t>(n_max), static_cast<size_t>(n_max)}), Device::CUDA);
+
+        if (_params->max_cap > 0) {
+            _ones_int32 = Tensor::ones({static_cast<size_t>(_params->max_cap)}, Device::CUDA, DataType::Int32);
+        }
 
         _optimizer = create_optimizer(*_splat_data, *_params);
         _optimizer->allocate_gradients(_params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);

@@ -5,26 +5,17 @@
 #include "window_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
-#include "python/python_runtime.hpp"
-// clang-format off
-// GLAD must be included before GLFW
+#include "input/input_controller.hpp"
+#include "input/sdl_key_mapping.hpp"
+#include <SDL3/SDL.h>
 #include <glad/glad.h>
-#include <GLFW/glfw3.h>
-// clang-format on
+#include <imgui_impl_sdl3.h>
 #include <iostream>
+#include <imgui.h>
 
 namespace lfs::vis {
 
     void* WindowManager::callback_handler_ = nullptr;
-
-    static void window_focus_callback(GLFWwindow*, int focused) {
-        if (!focused) {
-            lfs::core::events::internal::WindowFocusLost{}.emit();
-            LOG_DEBUG("Window lost focus");
-        } else {
-            LOG_DEBUG("Window gained focus");
-        }
-    }
 
     WindowManager::WindowManager(const std::string& title, const int width, const int height,
                                  const int monitor_x, const int monitor_y,
@@ -37,35 +28,37 @@ namespace lfs::vis {
     }
 
     WindowManager::~WindowManager() {
-        if (window_) {
-            glfwDestroyWindow(window_);
+        if (gl_context_) {
+            SDL_GL_DestroyContext(gl_context_);
         }
-        glfwTerminate();
+        if (window_) {
+            SDL_DestroyWindow(window_);
+        }
+        SDL_Quit();
     }
 
     bool WindowManager::init() {
-        if (!glfwInit()) {
-            std::cerr << "Failed to initialize GLFW!" << std::endl;
+        if (!SDL_Init(SDL_INIT_VIDEO)) {
+            std::cerr << "Failed to initialize SDL: " << SDL_GetError() << std::endl;
             return false;
         }
 
-        glfwWindowHint(GLFW_SAMPLES, 8);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-        glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GLFW_FALSE);
-        glfwWindowHint(GLFW_DEPTH_BITS, 24);
+        SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
+        SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 8);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
 
-        window_ = glfwCreateWindow(
+        window_ = SDL_CreateWindow(
+            title_.c_str(),
             window_size_.x,
             window_size_.y,
-            title_.c_str(),
-            nullptr,
-            nullptr);
+            SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_HIDDEN);
 
         if (!window_) {
-            std::cerr << "Failed to create GLFW window!" << std::endl;
-            glfwTerminate();
+            std::cerr << "Failed to create SDL window: " << SDL_GetError() << std::endl;
+            SDL_Quit();
             return false;
         }
 
@@ -73,24 +66,27 @@ namespace lfs::vis {
         if (monitor_size_.x > 0 && monitor_size_.y > 0) {
             const int xpos = monitor_pos_.x + (monitor_size_.x - window_size_.x) / 2;
             const int ypos = monitor_pos_.y + (monitor_size_.y - window_size_.y) / 2;
-            glfwSetWindowPos(window_, xpos, ypos);
+            SDL_SetWindowPosition(window_, xpos, ypos);
         }
 
-        glfwMakeContextCurrent(window_);
+        gl_context_ = SDL_GL_CreateContext(window_);
+        if (!gl_context_) {
+            std::cerr << "Failed to create GL context: " << SDL_GetError() << std::endl;
+            SDL_DestroyWindow(window_);
+            window_ = nullptr;
+            SDL_Quit();
+            return false;
+        }
+        SDL_GL_MakeCurrent(window_, gl_context_);
 
-        if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+        if (!gladLoadGLLoader((GLADloadproc)SDL_GL_GetProcAddress)) {
             std::cerr << "GLAD init failed" << std::endl;
-            glfwTerminate();
+            SDL_Quit();
             return false;
         }
 
-        // Set window focus callback
-        glfwSetWindowFocusCallback(window_, window_focus_callback);
+        SDL_GL_SetSwapInterval(1);
 
-        // Enable VSync for smooth frame delivery and reduced GPU load
-        glfwSwapInterval(1);
-
-        // Set up OpenGL state
         glEnable(GL_LINE_SMOOTH);
         glDepthFunc(GL_LEQUAL);
         glEnable(GL_BLEND);
@@ -98,64 +94,157 @@ namespace lfs::vis {
         glBlendEquation(GL_FUNC_ADD);
         glEnable(GL_PROGRAM_POINT_SIZE);
 
-        // Clear to dark background immediately
         glClearColor(0.11f, 0.11f, 0.14f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glfwSwapBuffers(window_);
-        glfwPollEvents();
+        SDL_GL_SwapWindow(window_);
 
         return true;
     }
 
     void WindowManager::showWindow() {
         if (window_) {
-            glfwShowWindow(window_);
-            glfwFocusWindow(window_);
+            SDL_ShowWindow(window_);
+            SDL_RaiseWindow(window_);
         }
     }
 
     void WindowManager::updateWindowSize() {
         int winW, winH, fbW, fbH;
-        glfwGetWindowSize(window_, &winW, &winH);
-        glfwGetFramebufferSize(window_, &fbW, &fbH);
+        SDL_GetWindowSize(window_, &winW, &winH);
+        SDL_GetWindowSizeInPixels(window_, &fbW, &fbH);
         window_size_ = glm::ivec2(winW, winH);
         framebuffer_size_ = glm::ivec2(fbW, fbH);
         glViewport(0, 0, fbW, fbH);
     }
 
     void WindowManager::swapBuffers() {
-        glfwSwapBuffers(window_);
+        SDL_GL_SwapWindow(window_);
     }
 
     void WindowManager::pollEvents() {
-        glfwPollEvents();
+        const bool imgui_ready = ImGui::GetCurrentContext() != nullptr;
+        SDL_Event event;
+        while (SDL_PollEvent(&event)) {
+            if (imgui_ready)
+                ImGui_ImplSDL3_ProcessEvent(&event);
+            processEvent(event);
+        }
     }
 
     void WindowManager::waitEvents(double timeout_seconds) {
-        glfwWaitEventsTimeout(timeout_seconds);
+        const bool imgui_ready = ImGui::GetCurrentContext() != nullptr;
+        SDL_Event event;
+        const int timeout_ms = static_cast<int>(timeout_seconds * 1000.0);
+        if (SDL_WaitEventTimeout(&event, timeout_ms)) {
+            if (imgui_ready)
+                ImGui_ImplSDL3_ProcessEvent(&event);
+            processEvent(event);
+            while (SDL_PollEvent(&event)) {
+                if (imgui_ready)
+                    ImGui_ImplSDL3_ProcessEvent(&event);
+                processEvent(event);
+            }
+        }
     }
 
     bool WindowManager::shouldClose() const {
-        return glfwWindowShouldClose(window_);
+        return should_close_;
     }
 
     void WindowManager::cancelClose() {
-        glfwSetWindowShouldClose(window_, false);
+        should_close_ = false;
     }
 
     void WindowManager::requestRedraw() {
-        // Set a flag that we need a redraw
         needs_redraw_ = true;
-        // Post an empty event to wake up the event loop
-        glfwPostEmptyEvent();
+        SDL_Event event{};
+        event.type = SDL_EVENT_USER;
+        SDL_PushEvent(&event);
     }
 
     bool WindowManager::needsRedraw() const {
         bool result = needs_redraw_;
         if (result) {
-            needs_redraw_ = false; // Reset the flag
+            needs_redraw_ = false;
         }
         return result;
+    }
+
+    void WindowManager::processEvent(const SDL_Event& event) {
+        switch (event.type) {
+        case SDL_EVENT_QUIT:
+            should_close_ = true;
+            break;
+
+        case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+            should_close_ = true;
+            break;
+
+        case SDL_EVENT_WINDOW_FOCUS_LOST:
+            lfs::core::events::internal::WindowFocusLost{}.emit();
+            if (input_controller_) {
+                input_controller_->onWindowFocusLost();
+            }
+            break;
+
+        case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+            if (window_) {
+                const float scale = SDL_GetWindowDisplayScale(window_);
+                lfs::core::events::internal::DisplayScaleChanged{.scale = scale}.emit();
+            }
+            break;
+
+        case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        case SDL_EVENT_MOUSE_BUTTON_UP: {
+            if (!input_controller_)
+                break;
+            const int button = input::sdlMouseButtonToApp(event.button.button);
+            const int action = (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) ? input::ACTION_PRESS : input::ACTION_RELEASE;
+            input_controller_->handleMouseButton(button, action, event.button.x, event.button.y);
+            break;
+        }
+
+        case SDL_EVENT_MOUSE_MOTION:
+            if (input_controller_) {
+                input_controller_->handleMouseMove(event.motion.x, event.motion.y);
+            }
+            break;
+
+        case SDL_EVENT_MOUSE_WHEEL:
+            if (input_controller_) {
+                input_controller_->handleScroll(event.wheel.x, event.wheel.y);
+            }
+            break;
+
+        case SDL_EVENT_KEY_DOWN:
+        case SDL_EVENT_KEY_UP: {
+            if (!input_controller_)
+                break;
+            const int key = input::sdlKeycodeToAppKey(event.key.key);
+            const int action = event.key.down
+                                   ? (event.key.repeat ? input::ACTION_REPEAT : input::ACTION_PRESS)
+                                   : input::ACTION_RELEASE;
+            const int mods = input::sdlModsToAppMods(event.key.mod);
+            input_controller_->handleKey(key, action, mods);
+            break;
+        }
+
+        case SDL_EVENT_DROP_FILE:
+            if (event.drop.data) {
+                pending_drop_files_.emplace_back(event.drop.data);
+            }
+            break;
+
+        case SDL_EVENT_DROP_COMPLETE:
+            if (input_controller_ && !pending_drop_files_.empty()) {
+                input_controller_->handleFileDrop(pending_drop_files_);
+                pending_drop_files_.clear();
+            }
+            break;
+
+        default:
+            break;
+        }
     }
 
     void WindowManager::toggleFullscreen() {
@@ -163,33 +252,14 @@ namespace lfs::vis {
             return;
 
         if (is_fullscreen_) {
-            glfwSetWindowMonitor(window_, nullptr,
-                                 windowed_pos_.x, windowed_pos_.y,
-                                 windowed_size_.x, windowed_size_.y,
-                                 GLFW_DONT_CARE);
+            SDL_SetWindowFullscreen(window_, false);
+            SDL_SetWindowPosition(window_, windowed_pos_.x, windowed_pos_.y);
+            SDL_SetWindowSize(window_, windowed_size_.x, windowed_size_.y);
             is_fullscreen_ = false;
         } else {
-            glfwGetWindowPos(window_, &windowed_pos_.x, &windowed_pos_.y);
-            glfwGetWindowSize(window_, &windowed_size_.x, &windowed_size_.y);
-
-            GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-            int monitor_count = 0;
-            GLFWmonitor** const monitors = glfwGetMonitors(&monitor_count);
-            const int cx = windowed_pos_.x + windowed_size_.x / 2;
-            const int cy = windowed_pos_.y + windowed_size_.y / 2;
-
-            for (int i = 0; i < monitor_count; ++i) {
-                int mx = 0, my = 0;
-                glfwGetMonitorPos(monitors[i], &mx, &my);
-                const auto* const mode = glfwGetVideoMode(monitors[i]);
-                if (cx >= mx && cx < mx + mode->width && cy >= my && cy < my + mode->height) {
-                    monitor = monitors[i];
-                    break;
-                }
-            }
-
-            const auto* const mode = glfwGetVideoMode(monitor);
-            glfwSetWindowMonitor(window_, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+            SDL_GetWindowPosition(window_, &windowed_pos_.x, &windowed_pos_.y);
+            SDL_GetWindowSize(window_, &windowed_size_.x, &windowed_size_.y);
+            SDL_SetWindowFullscreen(window_, true);
             is_fullscreen_ = true;
         }
 

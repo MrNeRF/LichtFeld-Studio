@@ -3,7 +3,7 @@
 
 #include "core/logger.hpp"
 #include "core/pinned_memory_allocator.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor.hpp"
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <cstdlib>
 #include <cuda_runtime.h>
@@ -41,7 +41,7 @@ private:
 
         // Trim custom CUDA memory pool
         try {
-            lfs::core::CudaMemoryPool::instance().trim();
+            lfs::core::Tensor::trim_memory_pool();
         } catch (...) {
             std::cerr << "[CLEANUP] Exception while trimming custom pool" << std::endl;
         }

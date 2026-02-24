@@ -550,6 +550,38 @@ namespace lfs::training::kernels {
             src, dst, C, H, W);
     }
 
+    // ==================== HWC to CHW Permute ====================
+    // Converts [H, W, C] to [C, H, W] layout
+    __global__ void permute_hwc_to_chw_kernel(
+        const float* __restrict__ src, // [H, W, C]
+        float* __restrict__ dst,       // [C, H, W]
+        int C, int H, int W) {
+        int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        int total = H * W;
+        if (idx >= total) {
+            return;
+        }
+
+        int dst_hw = H * W;
+        int src_base = idx * C;
+        for (int c = 0; c < C; ++c) {
+            dst[c * dst_hw + idx] = src[src_base + c];
+        }
+    }
+
+    void launch_permute_hwc_to_chw(
+        const float* src,
+        float* dst,
+        int C, int H, int W,
+        cudaStream_t stream) {
+        int total = H * W;
+        constexpr int threads = 256;
+        int blocks = (total + threads - 1) / threads;
+
+        permute_hwc_to_chw_kernel<<<blocks, threads, 0, stream>>>(
+            src, dst, C, H, W);
+    }
+
     // ==================== 1HW to HW Squeeze ====================
     // Removes leading dimension of 1: [1, H, W] -> [H, W]
     // This is just a copy since memory layout is the same

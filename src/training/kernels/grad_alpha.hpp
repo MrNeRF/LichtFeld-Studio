@@ -261,6 +261,25 @@ namespace lfs::training::kernels {
         cudaStream_t stream = nullptr);
 
     /**
+     * @brief Permute HWC to CHW layout
+     *
+     * Converts [H, W, C] tensor to [C, H, W] layout.
+     * Used to materialize gsplat arena outputs into reusable CHW tensors.
+     *
+     * @param src Source tensor [H, W, C]
+     * @param dst Destination tensor [C, H, W]
+     * @param C Number of channels
+     * @param H Height
+     * @param W Width
+     * @param stream CUDA stream
+     */
+    void launch_permute_hwc_to_chw(
+        const float* src,
+        float* dst,
+        int C, int H, int W,
+        cudaStream_t stream = nullptr);
+
+    /**
      * @brief Squeeze 1HW to HW
      *
      * Removes leading dimension of 1: [1, H, W] -> [H, W].

@@ -1071,6 +1071,10 @@ NB_MODULE(lichtfeld, m) {
     // Icon loading for Python UI
     m.def(
         "load_icon", [](const std::string& name) -> uint64_t {
+            static std::unordered_map<std::string, uint64_t> cache;
+            auto it = cache.find(name);
+            if (it != cache.end())
+                return it->second;
             try {
                 const auto path = lfs::vis::getAssetPath("icon/" + name + ".png");
                 const auto [data, width, height, channels] = lfs::core::load_image_with_alpha(path);
@@ -1078,7 +1082,9 @@ NB_MODULE(lichtfeld, m) {
                 const auto result = lfs::python::create_gl_texture(data, width, height, channels);
                 lfs::core::free_image(data);
 
-                return static_cast<uint64_t>(result.texture_id);
+                const auto tex_id = static_cast<uint64_t>(result.texture_id);
+                cache[name] = tex_id;
+                return tex_id;
             } catch (const std::exception& e) {
                 LOG_WARN("Failed to load icon {}: {}", name, e.what());
                 return 0;

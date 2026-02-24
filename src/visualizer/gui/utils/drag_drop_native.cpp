@@ -7,20 +7,16 @@
 
 // Platform detection and native includes
 #ifdef _WIN32
-#define GLFW_EXPOSE_NATIVE_WIN32
-#include <GLFW/glfw3.h>
-#include <GLFW/glfw3native.h>
+#include <SDL3/SDL.h>
 #include <oleidl.h>
 #include <shellapi.h>
 #include <shlobj.h>
 #elif defined(__linux__)
-#define GLFW_EXPOSE_NATIVE_X11
-#include <GLFW/glfw3.h>
-#include <GLFW/glfw3native.h>
+#include <SDL3/SDL.h>
 #include <X11/Xatom.h>
 #include <X11/Xlib.h>
 #else
-#include <GLFW/glfw3.h>
+#include <SDL3/SDL.h>
 #endif
 
 namespace lfs::vis::gui {
@@ -142,13 +138,14 @@ namespace lfs::vis::gui {
         bool ole_initialized = false;
     };
 
-    bool NativeDragDrop::init(GLFWwindow* window) {
+    bool NativeDragDrop::init(SDL_Window* window) {
         if (initialized_)
             return true;
         window_ = window;
 
         platform_data_ = new PlatformData();
-        platform_data_->hwnd = glfwGetWin32Window(window);
+        platform_data_->hwnd = (HWND)SDL_GetPointerProperty(
+            SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
 
         if (!platform_data_->hwnd) {
             LOG_ERROR("Failed to get Win32 window handle");
@@ -163,7 +160,7 @@ namespace lfs::vis::gui {
         }
         platform_data_->ole_initialized = true;
 
-        // Revoke any existing drop target (GLFW may have registered one)
+        // Revoke any existing drop target (a previous init call may have registered one)
         RevokeDragDrop(platform_data_->hwnd);
 
         // Create and register our drop target
@@ -230,14 +227,17 @@ namespace lfs::vis::gui {
         Window source_window = 0;
     };
 
-    bool NativeDragDrop::init(GLFWwindow* window) {
+    bool NativeDragDrop::init(SDL_Window* window) {
         if (initialized_)
             return true;
         window_ = window;
 
         platform_data_ = new PlatformData();
-        platform_data_->display = glfwGetX11Display();
-        platform_data_->xwindow = glfwGetX11Window(window);
+        SDL_PropertiesID props = SDL_GetWindowProperties(window);
+        platform_data_->display =
+            (Display*)SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr);
+        platform_data_->xwindow =
+            (Window)SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
 
         if (!platform_data_->display || !platform_data_->xwindow) {
             LOG_ERROR("Failed to get X11 display/window");
@@ -300,7 +300,7 @@ namespace lfs::vis::gui {
             extracted.push_back(event);
         }
 
-        // Restore events for GLFW to process (reverse order preserves queue ordering)
+        // Restore events for SDL to process (reverse order preserves queue ordering)
         for (auto it = extracted.rbegin(); it != extracted.rend(); ++it) {
             XPutBackEvent(dpy, &*it);
         }
@@ -313,7 +313,7 @@ namespace lfs::vis::gui {
 
     struct NativeDragDrop::PlatformData {};
 
-    bool NativeDragDrop::init(GLFWwindow* window) {
+    bool NativeDragDrop::init(SDL_Window* window) {
         window_ = window;
         LOG_WARN("Native drag-drop not implemented for this platform");
         return false;

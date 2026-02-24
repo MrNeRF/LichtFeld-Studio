@@ -500,17 +500,45 @@ namespace lfs::core::tensor_ops {
         }
     }
 
-    /**
-     * @brief SPECIALIZED kernel for TINY segments (< 32 elements)
-     *
-     * For very small segments, using a whole block per segment is wasteful.
-     * This kernel has each THREAD process an entire segment sequentially.
-     * Much more efficient when segment_size < 32!
-     *
-     * Example: 65K segments of 16 elements each
-     * - Each thread: reduces 1 complete segment (16 elements)
-     * - grid-stride loop for segments > num_threads
-     */
+    __global__ void warp_medium_segment_reduce_prod_kernel(
+        const float* __restrict__ input,
+        float* __restrict__ output,
+        size_t num_segments,
+        size_t segment_size) {
+        const int warp_id = threadIdx.x / 32;
+        const int lane = threadIdx.x % 32;
+        const int warps_per_block = blockDim.x / 32;
+        const bool can_vectorize = (segment_size % 4) == 0;
+
+        for (size_t seg_idx = blockIdx.x * warps_per_block + warp_id;
+             seg_idx < num_segments;
+             seg_idx += gridDim.x * warps_per_block) {
+            const float* segment_start = input + seg_idx * segment_size;
+
+            float val = 1.0f;
+            if (can_vectorize) {
+                const size_t num_float4s = segment_size / 4;
+                for (size_t base = 0; base < num_float4s; base += 32) {
+                    size_t idx = base + lane;
+                    if (idx < num_float4s) {
+                        float4 v = reinterpret_cast<const float4*>(segment_start)[idx];
+                        val *= v.x * v.y * v.z * v.w;
+                    }
+                }
+            } else {
+                for (size_t i = lane; i < segment_size; i += 32) {
+                    val *= segment_start[i];
+                }
+            }
+
+            val = warp_ops::warp_reduce_prod(val);
+
+            if (lane == 0) {
+                output[seg_idx] = val;
+            }
+        }
+    }
+
     __global__ void warp_tiny_segment_reduce_sum_kernel(
         const float* __restrict__ input,
         float* __restrict__ output,
@@ -649,12 +677,27 @@ namespace lfs::core::tensor_ops {
         }
     }
 
-    /**
-     * @brief OPTIMIZED segmented max reduction with grid-stride loop
-     *
-     * Uses grid-stride loop to process MULTIPLE segments per block.
-     * Much more efficient for medium segments (32-500K elements).
-     */
+    __global__ void warp_tiny_segment_reduce_prod_kernel(
+        const float* __restrict__ input,
+        float* __restrict__ output,
+        size_t num_segments,
+        size_t segment_size) {
+        size_t global_tid = blockIdx.x * blockDim.x + threadIdx.x;
+        size_t stride = blockDim.x * gridDim.x;
+
+        for (size_t seg_idx = global_tid; seg_idx < num_segments; seg_idx += stride) {
+            const float* segment_start = input + seg_idx * segment_size;
+
+            float prod_val = 1.0f;
+#pragma unroll 8
+            for (size_t i = 0; i < segment_size; ++i) {
+                prod_val *= segment_start[i];
+            }
+
+            output[seg_idx] = prod_val;
+        }
+    }
+
     __global__ void warp_segmented_reduce_max_kernel(
         const float* __restrict__ input,
         float* __restrict__ output,
@@ -686,6 +729,21 @@ namespace lfs::core::tensor_ops {
         for (size_t seg_idx = blockIdx.x; seg_idx < num_segments; seg_idx += gridDim.x) {
             const float* segment_start = input + seg_idx * segment_size;
             float result = warp_ops::vectorized_segment_reduce_min(segment_start, segment_size);
+
+            if (threadIdx.x == 0) {
+                output[seg_idx] = result;
+            }
+        }
+    }
+
+    __global__ void warp_segmented_reduce_prod_kernel(
+        const float* __restrict__ input,
+        float* __restrict__ output,
+        size_t num_segments,
+        size_t segment_size) {
+        for (size_t seg_idx = blockIdx.x; seg_idx < num_segments; seg_idx += gridDim.x) {
+            const float* segment_start = input + seg_idx * segment_size;
+            float result = warp_ops::vectorized_segment_reduce_prod(segment_start, segment_size);
 
             if (threadIdx.x == 0) {
                 output[seg_idx] = result;
@@ -1116,6 +1174,10 @@ namespace lfs::core::tensor_ops {
                 warp_tiny_segment_reduce_min_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                     input, output, num_segments, segment_size);
                 break;
+            case ReduceOp::Prod:
+                warp_tiny_segment_reduce_prod_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
+                    input, output, num_segments, segment_size);
+                break;
             default:
                 break;
             }
@@ -1150,6 +1212,10 @@ namespace lfs::core::tensor_ops {
                 warp_medium_segment_reduce_min_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                     input, output, num_segments, segment_size);
                 break;
+            case ReduceOp::Prod:
+                warp_medium_segment_reduce_prod_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
+                    input, output, num_segments, segment_size);
+                break;
             default:
                 break;
             }
@@ -1177,6 +1243,10 @@ namespace lfs::core::tensor_ops {
             break;
         case ReduceOp::Min:
             warp_segmented_reduce_min_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
+                input, output, num_segments, segment_size);
+            break;
+        case ReduceOp::Prod:
+            warp_segmented_reduce_prod_kernel<<<grid_size, BLOCK_SIZE, 0, stream>>>(
                 input, output, num_segments, segment_size);
             break;
         default:
@@ -1449,7 +1519,12 @@ namespace lfs::core::tensor_ops {
                               size_t M, size_t N, ReduceOp op, cudaStream_t stream) {
         constexpr int BLOCK = 256;
         int grid_x = (N + BLOCK - 1) / BLOCK;
-        int grid_y = (M > 512) ? min((int)((M + 127) / 128), 8) : 1;
+        int grid_y = 1;
+        if (M > 512) {
+            int sm_count = GPUConfig::get().sm_count;
+            int target = std::max(1, sm_count * 2 / std::max(grid_x, 1));
+            grid_y = std::min((int)((M + 127) / 128), target);
+        }
         dim3 grid(grid_x, grid_y);
 
         switch (op) {

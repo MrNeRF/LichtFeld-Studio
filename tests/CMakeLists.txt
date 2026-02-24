@@ -223,6 +223,9 @@ set(TEST_FILES
     test_tensor_cat_bug.cpp
     test_tensor_slicing_safety.cpp
     test_tensor_struct_init.cpp
+    test_tensor_lazy_ir.cpp
+    test_tensor_lazy_stateful_ops.cpp
+    test_fusion_performance.cpp
     test_torch_conversion.cpp
     test_fastgs_kernels.cpp
     test_fastgs_fuzz.cpp
@@ -233,6 +236,7 @@ set(TEST_FILES
     test_fastgs_analytical_gradients.cpp
     test_background_image.cpp
     test_operator_return_value.cpp
+    test_tensor_storage_version.cpp
     test_modal_registry_regression.cpp
     # test_property_schema_thread_safety.cpp  # Disabled: API mismatch after merge
     # test_property_system.cpp  # Disabled: API mismatch after merge
@@ -246,6 +250,8 @@ set(TEST_FILES
     test_openmesh_bridge.cpp
     test_mesh_loader.cpp
     test_rotated_sh_correctness.cpp
+    test_tensor_stream.cpp
+    test_tensor_memory_planner.cpp
 )
 
 # Build test sources list

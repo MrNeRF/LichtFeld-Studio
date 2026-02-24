@@ -24,7 +24,7 @@
 #include "tools/selection_tool.hpp"
 #include "tools/unified_tool_registry.hpp"
 #include "visualizer_impl.hpp"
-#include <GLFW/glfw3.h>
+#include <SDL3/SDL.h>
 #include <array>
 #include <cassert>
 #include <glm/gtc/type_ptr.hpp>
@@ -1230,9 +1230,11 @@ namespace lfs::vis::gui {
                 } else {
                     viewport_gizmo_dragging_ = true;
                     vp.camera.startRotateAroundCenter(capture_mouse_pos, time);
-                    if (GLFWwindow* const window = glfwGetCurrentContext()) {
-                        glfwGetCursorPos(window, &gizmo_drag_start_cursor_.x, &gizmo_drag_start_cursor_.y);
-                        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+                    if (SDL_Window* const window = SDL_GL_GetCurrentWindow()) {
+                        float fx, fy;
+                        SDL_GetMouseState(&fx, &fy);
+                        gizmo_drag_start_cursor_ = {fx, fy};
+                        SDL_SetWindowRelativeMouseMode(window, true);
                     }
                 }
             }
@@ -1245,9 +1247,11 @@ namespace lfs::vis::gui {
                     vp.camera.endRotateAroundCenter();
                     viewport_gizmo_dragging_ = false;
 
-                    if (GLFWwindow* const window = glfwGetCurrentContext()) {
-                        glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
-                        glfwSetCursorPos(window, gizmo_drag_start_cursor_.x, gizmo_drag_start_cursor_.y);
+                    if (SDL_Window* const window = SDL_GL_GetCurrentWindow()) {
+                        SDL_SetWindowRelativeMouseMode(window, false);
+                        SDL_WarpMouseInWindow(window,
+                                              static_cast<float>(gizmo_drag_start_cursor_.x),
+                                              static_cast<float>(gizmo_drag_start_cursor_.y));
                     }
                 }
             }

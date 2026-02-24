@@ -159,7 +159,7 @@ namespace lfs::python {
         // Point Cloud Mode
         add_bool(&Proxy::point_cloud_mode, "point_cloud_mode", "Point Cloud Mode",
                  "Render as point cloud instead of splats", false);
-        add_float(&Proxy::voxel_size, "voxel_size", "Point Size", "Point size in point cloud mode", 0.03, 0.001, 0.1);
+        add_float(&Proxy::voxel_size, "voxel_size", "Point Size", "Point size in point cloud mode", 0.01, 0.001, 0.1);
 
         // Selection Colors
         add_color3(&Proxy::selection_color_committed, "selection_color_committed", "Committed",

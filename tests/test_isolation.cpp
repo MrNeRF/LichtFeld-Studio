@@ -3,7 +3,6 @@
 
 // Standalone timing test - compile with our build system
 #include "core/tensor.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
 #include <chrono>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>

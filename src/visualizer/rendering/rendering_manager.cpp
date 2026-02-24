@@ -9,7 +9,6 @@
 #include "core/mesh_data.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
 #include "geometry/euclidean_transform.hpp"
 #include "rendering/cuda_kernels.hpp"
 #include "rendering/rasterizer/rasterization/include/rasterization_api_tensor.h"

@@ -17,7 +17,6 @@
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/exporter.hpp"
 #include "io/filesystem_utils.hpp"
@@ -40,6 +39,7 @@
 #include <expected>
 #include <memory>
 #include <nvtx3/nvToolsExt.h>
+#include <thread>
 
 namespace lfs::training {
 
@@ -284,15 +284,12 @@ namespace lfs::training {
                 }
             } else {
                 // Pure L1 with mask (no SSIM)
-                const Tensor mask_expanded = mask_2d.unsqueeze(0).expand({static_cast<int>(rendered.shape()[0]),
-                                                                          static_cast<int>(mask_2d.shape()[0]),
-                                                                          static_cast<int>(mask_2d.shape()[1])});
-                const Tensor mask_sum = mask_expanded.sum() + EPSILON;
-
-                const Tensor l1_diff = (rendered - gt_image).abs();
-                const Tensor masked_l1 = (l1_diff * mask_expanded).sum() / mask_sum;
-                const Tensor sign_diff = (rendered - gt_image).sign();
-                grad = sign_diff * mask_expanded / mask_sum;
+                const Tensor mask_3d = mask_2d.unsqueeze(0);
+                const Tensor mask_sum = mask_2d.sum() * static_cast<float>(rendered.shape()[0]) + EPSILON;
+                const Tensor diff = rendered - gt_image;
+                const Tensor masked_l1 = (diff.abs() * mask_3d).sum() / mask_sum;
+                const Tensor sign_diff = diff.sign();
+                grad = sign_diff * mask_3d / mask_sum;
                 loss = masked_l1;
             }
 
@@ -755,7 +752,7 @@ namespace lfs::training {
         val_dataset_.reset();
 
         // Release GPU memory pools back to system
-        lfs::core::CudaMemoryPool::instance().trim_cached_memory();
+        lfs::core::Tensor::trim_memory_pool();
         lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
         cudaDeviceSynchronize();
         LOG_DEBUG("GPU memory released");
@@ -924,7 +921,7 @@ namespace lfs::training {
             bg_mix_buffer_ = lfs::core::Tensor::empty({3}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
         }
 
-        cudaMemcpyAsync(bg_mix_buffer_.ptr<float>(), result, sizeof(result), cudaMemcpyHostToDevice, nullptr);
+        cudaMemcpyAsync(bg_mix_buffer_.ptr<float>(), result, sizeof(result), cudaMemcpyHostToDevice, bg_mix_buffer_.stream());
         return bg_mix_buffer_;
     }
 
@@ -965,8 +962,7 @@ namespace lfs::training {
             channels,
             src_h, src_w,
             height, width,
-            nullptr // default stream
-        );
+            resized.stream());
 
         // Cache the resized image
         bg_image_cache_[cache_key] = resized;
@@ -989,7 +985,7 @@ namespace lfs::training {
             random_bg_buffer_.ptr<float>(),
             height, width,
             static_cast<uint64_t>(iteration),
-            nullptr);
+            random_bg_buffer_.stream());
 
         return random_bg_buffer_;
     }
@@ -1098,7 +1094,12 @@ namespace lfs::training {
             const int tile_height = full_height / tile_rows;
             const int num_tiles = tile_rows * tile_cols;
 
-            core::Tensor loss_tensor_gpu = core::Tensor::zeros({1}, core::Device::CUDA);
+            if (!loss_accumulator_.is_valid()) {
+                loss_accumulator_ = core::Tensor::zeros({1}, core::Device::CUDA);
+            } else {
+                loss_accumulator_.zero_();
+            }
+            auto& loss_tensor_gpu = loss_accumulator_;
             RenderOutput r_output;
             int tiles_processed = 0;
 
@@ -1848,12 +1849,19 @@ namespace lfs::training {
 
             LOG_DEBUG("Starting training iterations");
             while (iter <= params_.optimization.iterations) {
-                lfs::core::CudaMemoryPool::instance().set_iteration(iter);
+                lfs::core::Tensor::set_memory_pool_iteration(iter);
 
                 if (stop_token.stop_requested() || stop_requested_.load())
                     break;
-                if (callback_busy_.load())
-                    cudaStreamSynchronize(callback_stream_);
+                if (callback_busy_.load(std::memory_order_acquire)) {
+                    const cudaError_t callback_status = cudaStreamQuery(callback_stream_);
+                    if (callback_status == cudaSuccess) {
+                        callback_busy_.store(false, std::memory_order_release);
+                    } else if (callback_status != cudaErrorNotReady) {
+                        LOG_WARN("Callback stream query failed: {}", cudaGetErrorString(callback_status));
+                        callback_busy_.store(false, std::memory_order_release);
+                    }
+                }
 
                 lfs::core::Camera* cam = nullptr;
                 lfs::core::Tensor gt_image;
@@ -1877,7 +1885,7 @@ namespace lfs::training {
                         cudaGetLastError();
 
                         lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
-                        lfs::core::CudaMemoryPool::instance().trim_cached_memory();
+                        lfs::core::Tensor::trim_memory_pool();
 
                         cudaDeviceSynchronize();
                         cudaGetLastError();
@@ -1903,8 +1911,8 @@ namespace lfs::training {
                 }
 
                 // Launch callback for async progress update (except first iteration)
-                if (iter > 1 && callback_) {
-                    callback_busy_ = true;
+                if (iter > 1 && callback_ && !callback_busy_.load(std::memory_order_acquire)) {
+                    callback_busy_.store(true, std::memory_order_release);
                     auto err = cudaLaunchHostFunc(
                         callback_stream_,
                         [](void* self) {
@@ -1912,12 +1920,12 @@ namespace lfs::training {
                             if (trainer->callback_) {
                                 trainer->callback_();
                             }
-                            trainer->callback_busy_ = false;
+                            trainer->callback_busy_.store(false, std::memory_order_release);
                         },
                         this);
                     if (err != cudaSuccess) {
                         LOG_WARN("Failed to launch callback: {}", cudaGetErrorString(err));
-                        callback_busy_ = false;
+                        callback_busy_.store(false, std::memory_order_release);
                     }
                 }
 

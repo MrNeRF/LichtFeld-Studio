@@ -71,7 +71,7 @@ namespace lfs::vis {
         int grid_plane = 1;
         float grid_opacity = 0.5f;
         bool point_cloud_mode = false;
-        float voxel_size = 0.03f;
+        float voxel_size = 0.01f;
         bool show_rings = false;
         float ring_width = 0.01f;
         bool show_center_markers = false;

@@ -74,7 +74,7 @@ namespace lfs::training {
             auto diff = opa_sigmoid_ - z_ + u_;
 
             // ||diff||^2 = sum(diff^2) - stays on GPU as scalar tensor
-            auto diff_sq_sum = (diff * diff).sum();
+            auto diff_sq_sum = diff.square().sum();
 
             // loss = 0.5 * rho * ||diff||^2 - GPU scalar
             auto loss_tensor = diff_sq_sum * (0.5f * config_.init_rho);

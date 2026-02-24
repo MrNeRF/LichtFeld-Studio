@@ -111,6 +111,57 @@ TEST_F(StrideBugTest, IndexPut_NonContiguousSlice) {
     EXPECT_FLOAT_EQ(tensor[1][3], 0.0f) << "Element [1][3] should not be affected";
 }
 
+TEST_F(StrideBugTest, TensorRowProxyToTensor_NonContiguousSlice) {
+    ASSERT_FALSE(sliced_tensor_.is_contiguous());
+
+    Tensor row = sliced_tensor_[1];
+    ASSERT_EQ(row.shape(), TensorShape({3}));
+
+    auto row_vals = row.to(Device::CPU).to_vector();
+    ASSERT_EQ(row_vals.size(), 3u);
+    EXPECT_FLOAT_EQ(row_vals[0], 5.0f);
+    EXPECT_FLOAT_EQ(row_vals[1], 6.0f);
+    EXPECT_FLOAT_EQ(row_vals[2], 7.0f);
+}
+
+TEST_F(StrideBugTest, TensorRowProxyAssignment_NonContiguousSlice) {
+    ASSERT_FALSE(sliced_tensor_.is_contiguous());
+
+    Tensor row = sliced_tensor_[1];
+    auto target_row = sliced_tensor_[2];
+    target_row = row;
+
+    EXPECT_FLOAT_EQ(base_tensor_[2][0], 5.0f);
+    EXPECT_FLOAT_EQ(base_tensor_[2][1], 6.0f);
+    EXPECT_FLOAT_EQ(base_tensor_[2][2], 7.0f);
+    EXPECT_FLOAT_EQ(base_tensor_[2][3], 12.0f) << "Column outside sliced view must stay unchanged";
+}
+
+TEST_F(StrideBugTest, CUDA_IndexPut_NonContiguousSliceWithNonContiguousInt64Indices) {
+    auto tensor = Tensor::zeros({4, 4}, Device::CUDA, DataType::Float32);
+    auto slice = tensor.slice(0, 0, 3).slice(1, 0, 3);
+    ASSERT_FALSE(slice.is_contiguous());
+
+    auto row_idx_full = Tensor::from_vector(std::vector<int>{0, 9, 1, 9, 2, 9}, {3, 2}, Device::CUDA)
+                            .to(DataType::Int64);
+    auto col_idx_full = Tensor::from_vector(std::vector<int>{0, 9, 1, 9, 2, 9}, {3, 2}, Device::CUDA)
+                            .to(DataType::Int64);
+    auto vals_full = Tensor::from_vector(std::vector<float>{10.0f, 0.0f, 20.0f, 0.0f, 30.0f, 0.0f}, {3, 2}, Device::CUDA);
+
+    auto row_idx = row_idx_full.slice(1, 0, 1).squeeze(1);
+    auto col_idx = col_idx_full.slice(1, 0, 1).squeeze(1);
+    auto vals = vals_full.slice(1, 0, 1).squeeze(1);
+
+    slice.index_put_({row_idx, col_idx}, vals);
+
+    auto cpu = tensor.to(Device::CPU);
+    EXPECT_FLOAT_EQ(cpu[0][0], 10.0f);
+    EXPECT_FLOAT_EQ(cpu[1][1], 20.0f);
+    EXPECT_FLOAT_EQ(cpu[2][2], 30.0f);
+    EXPECT_FLOAT_EQ(cpu[0][3], 0.0f);
+    EXPECT_FLOAT_EQ(cpu[1][3], 0.0f);
+}
+
 // ============= nonzero Tests =============
 
 TEST_F(StrideBugTest, Nonzero_NonContiguousSlice) {

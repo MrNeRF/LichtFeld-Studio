@@ -176,6 +176,17 @@ namespace lfs::rendering {
         bool mesh_rendered_this_frame_ = false;
 
         ManagedShader quad_shader_;
+
+        // Cache the last uploaded frame payload to avoid redundant CUDA->GL uploads
+        // when presenting the exact same render result repeatedly (idle cached frames).
+        std::shared_ptr<const Tensor> last_presented_image_;
+        std::shared_ptr<const Tensor> last_presented_depth_;
+        unsigned int last_presented_external_depth_texture_ = 0;
+        bool last_presented_depth_is_ndc_ = false;
+        float last_presented_near_plane_ = 0.0f;
+        float last_presented_far_plane_ = 0.0f;
+        bool last_presented_orthographic_ = false;
+        bool has_present_upload_cache_ = false;
     };
 
 } // namespace lfs::rendering

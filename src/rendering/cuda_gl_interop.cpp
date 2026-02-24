@@ -4,16 +4,13 @@
 
 #include "config.h"
 
-// clang-format off
-// CRITICAL: GLAD must be included before GLFW to avoid OpenGL header conflicts
 #include <glad/glad.h>
-#include <GLFW/glfw3.h>
-// clang-format on
 
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
 #include "cuda_gl_interop.hpp"
+#include "image_layout.hpp"
+#include <cassert>
 #include <format>
 
 #ifdef CUDA_GL_INTEROP_ENABLED
@@ -90,7 +87,7 @@ namespace lfs::rendering {
         LOG_TRACE("Resize non-interop texture: {}x{} -> {}x{}",
                   allocated_width_, allocated_height_, alloc_width, alloc_height);
 
-        lfs::core::CudaMemoryPool::instance().trim_cached_memory();
+        lfs::core::Tensor::trim_memory_pool();
 
         auto result = init(alloc_width, alloc_height);
         if (result) {
@@ -416,7 +413,7 @@ namespace lfs::rendering {
         LOG_TRACE("Resize interop texture: {}x{} -> {}x{}",
                   allocated_width_, allocated_height_, alloc_width, alloc_height);
 
-        lfs::core::CudaMemoryPool::instance().trim_cached_memory();
+        lfs::core::Tensor::trim_memory_pool();
 
         auto result = init(alloc_width, alloc_height);
         if (result) {
@@ -436,25 +433,29 @@ namespace lfs::rendering {
             return std::unexpected("Texture not initialized");
         }
 
-        // Ensure tensor is CUDA, float32, and [H, W, C] format
+        // Ensure tensor is CUDA and 3D image tensor
         if (image.device() != lfs::core::Device::CUDA) {
             LOG_ERROR("Image must be on CUDA");
             return std::unexpected("Image must be on CUDA");
         }
         if (image.ndim() != 3) {
-            LOG_ERROR("Image must be [H, W, C], got {} dimensions", image.ndim());
-            return std::unexpected("Image must be [H, W, C]");
-        }
-        if (image.size(2) != 3 && image.size(2) != 4) {
-            LOG_ERROR("Image must have 3 or 4 channels, got {}", image.size(2));
-            return std::unexpected("Image must have 3 or 4 channels");
+            LOG_ERROR("Image must be rank-3 tensor, got {} dimensions", image.ndim());
+            return std::unexpected("Image must be rank-3 tensor");
         }
 
-        const int h = image.size(0);
-        const int w = image.size(1);
-        const int c = image.size(2);
+        const auto layout = detectImageLayout(image);
+        if (layout == ImageLayout::Unknown) {
+            LOG_ERROR("Image must be HWC or CHW with 3/4 channels, got shape [{}, {}, {}]",
+                      image.size(0), image.size(1), image.size(2));
+            return std::unexpected("Image must be HWC or CHW with 3/4 channels");
+        }
 
-        LOG_TRACE("updateFromTensor: {}x{}x{}, texture {}x{}", h, w, c, width_, height_);
+        const int h = imageHeight(image, layout);
+        const int w = imageWidth(image, layout);
+        const int c = imageChannels(image, layout);
+
+        LOG_TRACE("updateFromTensor: {}x{}x{} ({}) texture {}x{}",
+                  h, w, c, layout == ImageLayout::HWC ? "HWC" : "CHW", width_, height_);
 
         // Resize if needed
         if (auto result = resize(w, h); !result) {
@@ -490,63 +491,29 @@ namespace lfs::rendering {
                                                cudaGetErrorString(err)));
         }
 
-        // Convert to RGBA uint8 using cached tensors to avoid per-frame allocations
-        const bool need_alpha = (c == 3);
-        const size_t sh = static_cast<size_t>(h);
-        const size_t sw = static_cast<size_t>(w);
+        // Create surface object for direct kernel writes
+        cudaResourceDesc res_desc = {};
+        res_desc.resType = cudaResourceTypeArray;
+        res_desc.res.array.array = cuda_array;
 
-        // Ensure cached RGBA buffer has correct size
-        if (!cached_rgba_.is_valid() ||
-            cached_rgba_.size(0) != sh ||
-            cached_rgba_.size(1) != sw ||
-            cached_rgba_.device() != image.device()) {
-            cached_rgba_ = Tensor::empty({sh, sw, 4}, image.device(), image.dtype());
-        }
-
-        // Ensure cached uint8 buffer has correct size
-        if (!cached_uint8_.is_valid() ||
-            cached_uint8_.size(0) != sh ||
-            cached_uint8_.size(1) != sw) {
-            cached_uint8_ = Tensor::empty({sh, sw, 4}, image.device(), lfs::core::DataType::UInt8);
-        }
-
-        // Build RGBA: copy RGB channels and set alpha
-        if (need_alpha) {
-            LOG_TIMER_TRACE("CudaGLInteropTextureImpl<true>::channels");
-            // Copy RGB into first 3 channels of cached RGBA
-            cached_rgba_.slice(2, 0, 3).copy_(image);
-            // Set alpha channel to 1.0
-            cached_rgba_.slice(2, 3, 4).fill_(1.0f);
-        } else {
-            cached_rgba_.copy_(image);
-        }
-
-        // Convert to uint8: clamp, scale, and convert in-place to cached buffer
-        if (cached_rgba_.dtype() != lfs::core::DataType::UInt8) {
-            LOG_TIMER_TRACE("Converted image to uint8");
-            cached_uint8_.copy_((cached_rgba_.clamp(0.0f, 1.0f) * 255.0f).to(lfs::core::DataType::UInt8));
-        }
-
-        const Tensor& rgba_image =
-            (cached_rgba_.dtype() == lfs::core::DataType::UInt8) ? cached_rgba_ : cached_uint8_;
-
-        // Copy to CUDA array
-        err = cudaMemcpy2DToArray(
-            cuda_array,
-            0, 0, // offset
-            rgba_image.ptr<uint8_t>(),
-            w * 4, // pitch (RGBA = 4 bytes per pixel)
-            w * 4, // width in bytes
-            h,     // height
-            cudaMemcpyDeviceToDevice);
-
+        cudaSurfaceObject_t surface = 0;
+        err = cudaCreateSurfaceObject(&surface, &res_desc);
         if (err != cudaSuccess) {
-            LOG_ERROR("Failed to copy to CUDA array: {}", cudaGetErrorString(err));
-            return std::unexpected(std::format("Failed to copy to CUDA array: {}",
+            LOG_ERROR("Failed to create surface object: {}", cudaGetErrorString(err));
+            return std::unexpected(std::format("Failed to create surface object: {}",
                                                cudaGetErrorString(err)));
         }
 
-        // cudaGraphicsUnmapResources provides sync; explicit sync would block on VSync
+        struct SurfaceGuard {
+            cudaSurfaceObject_t surf;
+            ~SurfaceGuard() { cudaDestroySurfaceObject(surf); }
+        } surface_guard{surface};
+
+        const Tensor img = image.contiguous();
+        assert(img.dtype() == lfs::core::DataType::Float32);
+        // Stream 0: map/unmap use stream 0, and unmap provides implicit sync
+        launchFloatImageToRGBA8Surface(img.ptr<float>(), surface, w, h, c, layout == ImageLayout::CHW, 0);
+
         LOG_TRACE("Updated texture from CUDA tensor");
         return {};
     }
@@ -732,14 +699,14 @@ namespace lfs::rendering {
             int img_width, img_height;
 
             if (cuda_image.ndim() == 3) {
-                if (cuda_image.size(2) == 3 || cuda_image.size(2) == 4) {
-                    // [H, W, C] format
-                    img_height = cuda_image.size(0);
-                    img_width = cuda_image.size(1);
+                const auto layout = detectImageLayout(cuda_image);
+                if (layout != ImageLayout::Unknown) {
+                    img_height = imageHeight(cuda_image, layout);
+                    img_width = imageWidth(cuda_image, layout);
                 } else {
-                    // [C, H, W] format
-                    img_height = cuda_image.size(1);
-                    img_width = cuda_image.size(2);
+                    LOG_ERROR("Unsupported image layout: shape=[{}, {}, {}]",
+                              cuda_image.size(0), cuda_image.size(1), cuda_image.size(2));
+                    use_interop_ = false;
                 }
             } else {
                 LOG_ERROR("Unexpected tensor dimensions: {}", cuda_image.ndim());

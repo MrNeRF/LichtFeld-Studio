@@ -471,5 +471,42 @@ namespace lfs::core {
             return block_reduce_min(val);
         }
 
+        template <typename T>
+        __device__ T vectorized_segment_reduce_prod(const T* segment_start, size_t segment_size) {
+            T val = T(1);
+            if constexpr (std::is_same_v<T, float>) {
+                bool is_aligned = (reinterpret_cast<uintptr_t>(segment_start) % 16) == 0;
+
+                size_t stride = blockDim.x * 4;
+                for (size_t base = 0; base < segment_size; base += stride) {
+                    size_t vec_idx = threadIdx.x;
+                    size_t idx = base + vec_idx * 4;
+
+                    if (is_aligned && idx + 3 < segment_size) {
+                        float4 vals = reinterpret_cast<const float4*>(segment_start)[base / 4 + vec_idx];
+                        val *= vals.x * vals.y * vals.z * vals.w;
+                    } else if (idx < segment_size) {
+                        for (size_t i = idx; i < segment_size && i < idx + 4; ++i) {
+                            val *= segment_start[i];
+                        }
+                    }
+                }
+            } else {
+                size_t stride = blockDim.x * 4;
+                for (size_t base = 0; base < segment_size; base += stride) {
+                    size_t vec_idx = threadIdx.x;
+                    size_t idx = base + vec_idx * 4;
+
+                    if (idx < segment_size) {
+                        for (size_t i = idx; i < segment_size && i < idx + 4; ++i) {
+                            val *= segment_start[i];
+                        }
+                    }
+                }
+            }
+
+            return block_reduce_prod(val);
+        }
+
     } // namespace warp_ops
 } // namespace lfs::core

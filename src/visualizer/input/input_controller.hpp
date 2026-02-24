@@ -9,10 +9,12 @@
 #include "input/input_bindings.hpp"
 #include "input/input_types.hpp"
 #include "internal/viewport.hpp"
-#include <GLFW/glfw3.h>
 #include <chrono>
 #include <glm/glm.hpp>
 #include <memory>
+
+struct SDL_Window;
+struct SDL_Cursor;
 
 namespace lfs::vis {
 
@@ -26,10 +28,9 @@ namespace lfs::vis {
 
     class InputController {
     public:
-        InputController(GLFWwindow* window, Viewport& viewport);
+        InputController(SDL_Window* window, Viewport& viewport);
         ~InputController();
 
-        // Setup - MUST be called AFTER ImGui is initialized!
         void initialize();
 
         // Set brush tool
@@ -85,32 +86,15 @@ namespace lfs::vis {
         [[nodiscard]] glm::vec2 getNodeRectStart() const { return node_rect_start_; }
         [[nodiscard]] glm::vec2 getNodeRectEnd() const { return node_rect_end_; }
 
-        void handleFileDrop(const std::vector<std::string>& paths);
-
-    private:
-        // Store original ImGui callbacks so we can chain
-        struct {
-            GLFWmousebuttonfun mouse_button = nullptr;
-            GLFWcursorposfun cursor_pos = nullptr;
-            GLFWscrollfun scroll = nullptr;
-            GLFWkeyfun key = nullptr;
-            GLFWdropfun drop = nullptr;
-            GLFWwindowfocusfun focus = nullptr;
-        } imgui_callbacks_;
-
-        // Our callbacks that chain to ImGui
-        static void mouseButtonCallback(GLFWwindow* w, int button, int action, int mods);
-        static void cursorPosCallback(GLFWwindow* w, double x, double y);
-        static void scrollCallback(GLFWwindow* w, double xoff, double yoff);
-        static void keyCallback(GLFWwindow* w, int key, int scancode, int action, int mods);
-        static void dropCallback(GLFWwindow* w, int count, const char** paths);
-        static void windowFocusCallback(GLFWwindow* w, int focused);
-
-        // Internal handlers
+        // Event handlers (called by WindowManager)
         void handleMouseButton(int button, int action, double x, double y);
         void handleMouseMove(double x, double y);
         void handleScroll(double xoff, double yoff);
         void handleKey(int key, int action, int mods);
+        void handleFileDrop(const std::vector<std::string>& paths);
+        void onWindowFocusLost();
+
+    private:
         void handleGoToCamView(const lfs::core::events::cmd::GoToCamView& event);
         void handleFocusSelection();
 
@@ -126,6 +110,8 @@ namespace lfs::vis {
         void publishCameraMove();
         bool isNearSplitter(double x) const;
         int getModifierKeys() const;
+        bool isKeyPressed(int app_key) const;
+        bool isMouseButtonPressed(int app_button) const;
         glm::vec3 unprojectScreenPoint(double x, double y, float fallback_distance = 5.0f) const;
         std::pair<glm::vec3, glm::vec3> computePickRay(double x, double y) const;
         input::ToolMode getCurrentToolMode() const;
@@ -136,7 +122,7 @@ namespace lfs::vis {
         void checkCameraMovementTimeout();
 
         // Core state
-        GLFWwindow* window_;
+        SDL_Window* window_;
         Viewport& viewport_;
 
         // Input bindings for customizable hotkeys
@@ -205,8 +191,8 @@ namespace lfs::vis {
             Hand
         };
         CursorType current_cursor_ = CursorType::Default;
-        GLFWcursor* resize_cursor_ = nullptr;
-        GLFWcursor* hand_cursor_ = nullptr;
+        SDL_Cursor* resize_cursor_ = nullptr;
+        SDL_Cursor* hand_cursor_ = nullptr;
 
         // Double-click detection
         static constexpr double DOUBLE_CLICK_TIME = 0.3;

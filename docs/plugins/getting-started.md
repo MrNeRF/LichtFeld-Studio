@@ -470,7 +470,7 @@ The `Event` object is passed to `invoke()` and `modal()`:
 | `alt`            | `bool`  | Alt held                                 |
 | `pressure`       | `float` | Tablet pressure (1.0 for mouse)          |
 | `over_gui`       | `bool`  | True if mouse is over a GUI element      |
-| `key_code`       | `int`   | Raw GLFW key code                        |
+| `key_code`       | `int`   | Key code (see `key_codes.hpp`)           |
 
 ### Example: simple execute-only operator
 

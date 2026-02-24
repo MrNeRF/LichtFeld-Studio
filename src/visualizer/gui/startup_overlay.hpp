@@ -18,6 +18,7 @@ namespace lfs::vis::gui {
         void render(const ViewportLayout& viewport, ImFont* font_small, bool drag_hovering);
         void dismiss() { visible_ = false; }
         [[nodiscard]] bool isVisible() const { return visible_; }
+        [[nodiscard]] bool needsAnimationFrame() const { return visible_ && shown_frames_ < 3; }
 
         static void openURL(const char* url);
 

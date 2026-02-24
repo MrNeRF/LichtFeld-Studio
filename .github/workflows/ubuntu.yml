@@ -75,6 +75,8 @@ jobs:
 
           apt-get install -y git curl unzip cmake gcc-14 g++-14 ccache ninja-build \
             zip tar pkg-config python3 python3-dev libxinerama-dev libxcursor-dev xorg-dev libglu1-mesa-dev \
+            libwayland-dev libxkbcommon-dev libegl-dev libdecor-0-dev libibus-1.0-dev libdbus-1-dev \
+            libsystemd-dev \
             nasm autoconf autoconf-archive automake libtool
 
           update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100 \

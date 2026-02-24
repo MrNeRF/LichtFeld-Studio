@@ -7,6 +7,7 @@
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
 #include "gs_rasterizer_tensor.hpp"
+#include "image_layout.hpp"
 
 #include <cstring>
 #include <print>
@@ -673,27 +674,60 @@ namespace lfs::rendering {
         }
 
         if (renderer.isInteropEnabled() && result.image.device() == lfs::core::Device::CUDA) {
-            const auto image_hwc = result.image.permute({1, 2, 0}).contiguous();
-
-            if (image_hwc.size(0) == static_cast<size_t>(viewport_size.y) &&
-                image_hwc.size(1) == static_cast<size_t>(viewport_size.x)) {
-                if (auto upload_result = renderer.uploadFromCUDA(image_hwc, viewport_size.x, viewport_size.y);
-                    !upload_result) {
-                    return upload_result;
+            if (result.image.ndim() != 3) {
+                LOG_WARN("Unsupported CUDA image rank for interop upload: {}", result.image.ndim());
+            } else {
+                const auto layout = detectImageLayout(result.image);
+                size_t image_h = 0;
+                size_t image_w = 0;
+                if (layout != ImageLayout::Unknown) {
+                    image_h = imageHeight(result.image, layout);
+                    image_w = imageWidth(result.image, layout);
+                } else {
+                    LOG_WARN("Unsupported CUDA image layout for interop upload: shape=[{}, {}, {}]",
+                             result.image.size(0), result.image.size(1), result.image.size(2));
                 }
-                applyDepthParams(result, renderer, viewport_size);
-                return {};
+
+                if (image_h == static_cast<size_t>(viewport_size.y) &&
+                    image_w == static_cast<size_t>(viewport_size.x)) {
+                    if (auto upload_result = renderer.uploadFromCUDA(result.image, viewport_size.x, viewport_size.y);
+                        !upload_result) {
+                        return upload_result;
+                    }
+                    applyDepthParams(result, renderer, viewport_size);
+                    return {};
+                }
+
+                if (image_h > 0 && image_w > 0) {
+                    LOG_WARN("Dimension mismatch: image {}x{}, expected {}x{}",
+                             image_w, image_h, viewport_size.x, viewport_size.y);
+                }
             }
-            LOG_WARN("Dimension mismatch: image {}x{}, expected {}x{}",
-                     image_hwc.size(1), image_hwc.size(0), viewport_size.x, viewport_size.y);
         }
 
         // CPU fallback
-        const auto image = (result.image * 255.0f)
-                               .cpu()
-                               .to(lfs::core::DataType::UInt8)
-                               .permute({1, 2, 0})
-                               .contiguous();
+        if (result.image.ndim() != 3) {
+            LOG_ERROR("CPU upload requires rank-3 image tensor, got {}", result.image.ndim());
+            return std::unexpected("CPU upload requires rank-3 image tensor");
+        }
+
+        const auto cpu_layout = detectImageLayout(result.image);
+        if (cpu_layout == ImageLayout::Unknown) {
+            LOG_ERROR("CPU upload unsupported image layout: shape=[{}, {}, {}]",
+                      result.image.size(0), result.image.size(1), result.image.size(2));
+            return std::unexpected("CPU upload unsupported image layout");
+        }
+
+        Tensor image_hwc = (cpu_layout == ImageLayout::HWC)
+                               ? result.image
+                               : result.image.permute({1, 2, 0}).contiguous();
+        if (image_hwc.size(2) == 4) {
+            image_hwc = image_hwc.slice(2, 0, 3).contiguous();
+        }
+        if (image_hwc.dtype() != lfs::core::DataType::UInt8) {
+            image_hwc = (image_hwc.clamp(0.0f, 1.0f) * 255.0f).to(lfs::core::DataType::UInt8);
+        }
+        const auto image = image_hwc.cpu().contiguous();
 
         if (image.size(0) != static_cast<size_t>(viewport_size.y) ||
             image.size(1) != static_cast<size_t>(viewport_size.x) ||

@@ -305,6 +305,26 @@ TEST_F(TensorIndexingAdvancedTest, IndexPutVectorOfTensors) {
     compare_tensors(t_custom, t_torch, 1e-5f, 1e-7f, "IndexPutVectorOfTensors");
 }
 
+TEST_F(TensorIndexingAdvancedTest, IndexPutVectorOfTensorsInt64CUDA) {
+    auto t_custom = Tensor::zeros({3, 3}, Device::CUDA);
+    auto t_torch = torch::zeros({3, 3}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+
+    auto row_idx_custom = Tensor::from_vector({0, -1, 1}, {3}, Device::CUDA).to(DataType::Int64);
+    auto col_idx_custom = Tensor::from_vector({1, 0, -1}, {3}, Device::CUDA).to(DataType::Int64);
+
+    auto row_idx_torch = torch::tensor({0, -1, 1}, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
+    auto col_idx_torch = torch::tensor({1, 0, -1}, torch::TensorOptions().dtype(torch::kInt64).device(torch::kCUDA));
+
+    auto values_custom = Tensor::from_vector({10.0f, 20.0f, 30.0f}, {3}, Device::CUDA);
+    auto values_torch = torch::tensor({10.0f, 20.0f, 30.0f}, torch::TensorOptions().dtype(torch::kFloat32).device(torch::kCUDA));
+
+    std::vector<Tensor> indices_custom{row_idx_custom, col_idx_custom};
+    t_custom.index_put_(indices_custom, values_custom);
+    t_torch.index_put_({row_idx_torch, col_idx_torch}, values_torch);
+
+    compare_tensors(t_custom, t_torch, 1e-5f, 1e-7f, "IndexPutVectorOfTensorsInt64CUDA");
+}
+
 // ============= Boundary Mode Tests =============
 
 TEST_F(TensorIndexingAdvancedTest, IndexSelectWithClampMode) {
