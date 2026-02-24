@@ -448,7 +448,6 @@ namespace lfs::core {
 
     // Scatter Operations
     Tensor& Tensor::scatter_(int dim, const Tensor& idx, const Tensor& src, ScatterMode mode) {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Mutation);
         materialize_if_deferred();
         if (mode == ScatterMode::Add) {
             return index_add_(dim, idx, src);
@@ -610,7 +609,6 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::index_copy_(int dim, const Tensor& idx, const Tensor& src) {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Mutation);
         materialize_if_deferred();
         if (!is_valid() || !idx.is_valid() || !src.is_valid())
             return *this;
@@ -676,7 +674,6 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::index_add_(int dim, const Tensor& idx, const Tensor& src) {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Mutation);
         materialize_if_deferred();
         if (!is_valid() || !idx.is_valid() || !src.is_valid())
             return *this;
@@ -931,7 +928,6 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::index_put_(const Tensor& idx, const Tensor& vals) {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Mutation);
         materialize_if_deferred();
         if (!is_valid() || !idx.is_valid() || !vals.is_valid())
             return *this;
@@ -1087,7 +1083,6 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::index_put_(const std::vector<Tensor>& indices, const Tensor& vals) {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Mutation);
         materialize_if_deferred();
         if (!is_valid() || !vals.is_valid())
             return *this;
@@ -1733,7 +1728,6 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::append_gather(const Tensor& indices) {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Mutation);
         materialize_if_deferred();
         if (!is_valid() || !indices.is_valid()) {
             LOG_ERROR("append_gather: invalid tensor");
@@ -1858,7 +1852,6 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::append_zeros(size_t n_rows) {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Mutation);
         materialize_if_deferred();
         LOG_DEBUG("append_zeros: n_rows={}", n_rows);
 

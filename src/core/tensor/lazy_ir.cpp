@@ -86,7 +86,7 @@ namespace lfs::core::internal {
     } // namespace
 
     bool lazy_ir_active() {
-        return lazy_mode_enabled() || lazy_mode_shadow_enabled();
+        return true;
     }
 
     void clear_lazy_ir_for_testing() {

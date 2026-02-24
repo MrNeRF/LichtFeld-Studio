@@ -329,8 +329,6 @@ namespace lfs::core {
         }
 
         case LoadOp::Random: {
-            if (internal::lazy_mode_enabled() || internal::lazy_mode_shadow_enabled())
-                internal::telemetry_record_stateful_op_eager();
             auto [low, high] = std::get<std::pair<float, float>>(args.args);
             result = load(LoadOp::Empty, args);
             if (!result.is_valid() || result.numel() == 0)
@@ -371,8 +369,6 @@ namespace lfs::core {
         }
 
         case LoadOp::Normal: {
-            if (internal::lazy_mode_enabled() || internal::lazy_mode_shadow_enabled())
-                internal::telemetry_record_stateful_op_eager();
             auto [mean, std] = std::get<std::pair<float, float>>(args.args);
             result = load(LoadOp::Empty, args);
             if (!result.is_valid() || result.numel() == 0)
@@ -403,8 +399,6 @@ namespace lfs::core {
         }
 
         case LoadOp::Randint: {
-            if (internal::lazy_mode_enabled() || internal::lazy_mode_shadow_enabled())
-                internal::telemetry_record_stateful_op_eager();
             auto [low, high] = std::get<std::pair<int, int>>(args.args);
             result = load(LoadOp::Empty, args);
             if (!result.is_valid() || result.numel() == 0)
@@ -475,8 +469,6 @@ namespace lfs::core {
         }
 
         case LoadOp::Bernoulli: {
-            if (internal::lazy_mode_enabled() || internal::lazy_mode_shadow_enabled())
-                internal::telemetry_record_stateful_op_eager();
             float p = std::get<float>(args.args);
             result = load(LoadOp::Empty, args);
             if (!result.is_valid() || result.numel() == 0)
@@ -648,7 +640,7 @@ namespace lfs::core {
         validate_unary_op();
 
         // Fused transform-reduce: consume pending pointwise chain
-        if (internal::lazy_mode_enabled() && dtype_ == DataType::Float32 &&
+        if (dtype_ == DataType::Float32 &&
             device_ == Device::CUDA && has_lazy_expr() &&
             (op == ReduceOp::Sum || op == ReduceOp::Mean ||
              op == ReduceOp::Max || op == ReduceOp::Min ||
@@ -695,7 +687,6 @@ namespace lfs::core {
                         fused_source.ptr<float>(), result.ptr<float>(), n,
                         chain, op, result.stream());
 
-                    internal::telemetry_record_eager_fallback(1);
                     internal::lazy_executor_diagnostics_counters_increment_fused();
                     internal::lazy_executor_diagnostics_counters_increment_fused_reduce();
                     internal::lazy_ir_record_reduce(*this, result, op_name);
@@ -705,7 +696,7 @@ namespace lfs::core {
         }
 
         // Fused segmented transform-reduce: last-dim reduction with producer pointwise chain
-        if (internal::lazy_mode_enabled() && dtype_ == DataType::Float32 &&
+        if (dtype_ == DataType::Float32 &&
             device_ == Device::CUDA && has_lazy_expr() &&
             (op == ReduceOp::Sum || op == ReduceOp::Mean ||
              op == ReduceOp::Max || op == ReduceOp::Min ||
@@ -753,7 +744,6 @@ namespace lfs::core {
                         fused_source.ptr<float>(), result.ptr<float>(),
                         num_segments, segment_size, chain, op, result.stream());
 
-                    internal::telemetry_record_eager_fallback(1);
                     internal::lazy_executor_diagnostics_counters_increment_fused();
                     internal::lazy_executor_diagnostics_counters_increment_fused_reduce();
                     internal::lazy_ir_record_reduce(*this, result, op_name);

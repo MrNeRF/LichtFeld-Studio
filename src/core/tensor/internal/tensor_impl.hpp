@@ -658,7 +658,7 @@ namespace lfs::core {
 
         static void link_deferred_result_to_inputs(Tensor& result,
                                                    std::initializer_list<uint64_t> candidate_input_ids) {
-            if (!internal::lazy_mode_enabled() || !result.is_valid() || !result.has_lazy_expr()) {
+            if (!result.is_valid() || !result.has_lazy_expr()) {
                 return;
             }
             const uint64_t result_node_id = result.lazy_expr_id();
@@ -916,10 +916,6 @@ namespace lfs::core {
         }
 
         static void enable_profiling(bool enable) { profiling_enabled_ = enable; }
-        static LazyMode lazy_mode() { return internal::current_lazy_mode(); }
-        static const char* lazy_mode_name() { return internal::lazy_mode_name(lazy_mode()); }
-        static bool lazy_enabled() { return internal::lazy_mode_enabled(); }
-        static bool lazy_shadow_enabled() { return internal::lazy_mode_shadow_enabled(); }
         static LazyTelemetrySnapshot lazy_telemetry_snapshot() {
             return internal::lazy_telemetry_snapshot();
         }
@@ -938,7 +934,6 @@ namespace lfs::core {
         // Data access - FIXED: Handle invalid tensors safely
         template <typename T>
         T* ptr() {
-            internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::HostRead);
             materialize_if_deferred();
             if (!is_valid()) {
                 return nullptr;
@@ -950,7 +945,6 @@ namespace lfs::core {
 
         template <typename T>
         const T* ptr() const {
-            internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::HostRead);
             materialize_if_deferred();
             if (!is_valid()) {
                 return nullptr;
@@ -961,7 +955,6 @@ namespace lfs::core {
         }
 
         void* data_ptr() {
-            internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Interop);
             materialize_if_deferred();
             if (!is_valid()) {
                 return nullptr;
@@ -970,7 +963,6 @@ namespace lfs::core {
             return static_cast<char*>(data_) + storage_offset_ * dtype_size(dtype_);
         }
         const void* data_ptr() const {
-            internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Interop);
             materialize_if_deferred();
             if (!is_valid()) {
                 return nullptr;
@@ -981,7 +973,6 @@ namespace lfs::core {
 
         // Base of allocation (for memory management only)
         void* storage_ptr() {
-            internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Interop);
             materialize_if_deferred();
             if (!is_valid()) {
                 return nullptr;
@@ -989,7 +980,6 @@ namespace lfs::core {
             return data_;
         }
         const void* storage_ptr() const {
-            internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Interop);
             materialize_if_deferred();
             if (!is_valid()) {
                 return nullptr;
@@ -1187,7 +1177,7 @@ namespace lfs::core {
         Tensor result = UnaryExpr<TensorLeaf, ops::op_type>(             \
             TensorLeaf(*this), ops::op_type{}, shape_, device_, dtype_); \
         link_deferred_result_to_inputs(result, {lazy_expr_id()});        \
-        return result;                                                    \
+        return result;                                                   \
     }
 
 #define LFS_DEFINE_UNARY_OP_FUSABLE(name, op_type, fusion_kind)                           \
@@ -1199,8 +1189,8 @@ namespace lfs::core {
         }                                                                                 \
         Tensor result = UnaryExpr<TensorLeaf, ops::op_type>(                              \
             TensorLeaf(*this), ops::op_type{}, shape_, device_, dtype_);                  \
-        link_deferred_result_to_inputs(result, {lazy_expr_id()});                          \
-        if (internal::lazy_mode_enabled() && dtype_ == DataType::Float32 &&               \
+        link_deferred_result_to_inputs(result, {lazy_expr_id()});                         \
+        if (dtype_ == DataType::Float32 &&                                                \
             result.is_valid() && result.has_lazy_expr()) {                                \
             const uint64_t result_node_id = result.lazy_expr_id();                        \
             if (result_node_id != 0 && result.state_) {                                   \
@@ -1227,7 +1217,7 @@ namespace lfs::core {
         Tensor result = UnaryExpr<TensorLeaf, ops::op_type>(                     \
             TensorLeaf(*this), ops::op_type{}, shape_, device_, DataType::Bool); \
         link_deferred_result_to_inputs(result, {lazy_expr_id()});                \
-        return result;                                                            \
+        return result;                                                           \
     }
 
         // Arithmetic unary operations
@@ -1339,7 +1329,7 @@ namespace lfs::core {
             TensorLeaf(*this), ops::scalar_right_op<ops::op_type, float>(scalar_value),   \
             shape_, device_, dtype_);                                                     \
         link_deferred_result_to_inputs(result, {lazy_expr_id()});                         \
-        if (internal::lazy_mode_enabled() && dtype_ == DataType::Float32 &&               \
+        if (dtype_ == DataType::Float32 &&                                                \
             result.is_valid() && result.has_lazy_expr()) {                                \
             const uint64_t result_node_id = result.lazy_expr_id();                        \
             if (result_node_id != 0 && result.state_) {                                   \
@@ -1367,7 +1357,7 @@ namespace lfs::core {
             TensorLeaf(*this), ops::scalar_right_op<ops::op_type, float>(static_cast<float>(other)), \
             shape_, device_, dtype_);                                                                \
         link_deferred_result_to_inputs(result, {lazy_expr_id()});                                    \
-        return result;                                                                                \
+        return result;                                                                               \
     }
 
         LFS_DEFINE_SCALAR_BINARY_OP_FUSABLE(add, add_op, AddScalar)
@@ -1652,7 +1642,6 @@ namespace lfs::core {
 
         template <typename T>
         T item() const {
-            internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::HostRead);
             materialize_if_deferred();
             if (!is_valid()) {
                 throw std::runtime_error("item<T>() called on invalid tensor");

@@ -105,7 +105,7 @@ namespace lfs::core {
         const uint64_t lazy_node_id = lazy_expr_id();
         Tensor materialized;
 
-        if (internal::lazy_mode_enabled() && lazy_node_id != 0) {
+        if (lazy_node_id != 0) {
             Tensor cached_materialized;
             if (internal::lazy_executor_lookup_cached_materialization(lazy_node_id, cached_materialized)) {
                 materialized = std::move(cached_materialized);
@@ -125,11 +125,7 @@ namespace lfs::core {
             state_->deferred_materializer = {};
 
             try {
-                if (internal::lazy_mode_enabled()) {
-                    materialized = internal::lazy_planner_execute_plan_for_tensor(*this, materializer);
-                } else {
-                    materialized = materializer();
-                }
+                materialized = internal::lazy_planner_execute_plan_for_tensor(*this, materializer);
             } catch (...) {
                 state_->deferred_materializer = std::move(materializer);
                 state_->materializing_deferred_expr = false;
@@ -137,7 +133,7 @@ namespace lfs::core {
             }
             state_->materializing_deferred_expr = false;
 
-            if (internal::lazy_mode_enabled() && lazy_node_id != 0) {
+            if (lazy_node_id != 0) {
                 internal::lazy_executor_cache_materialization(lazy_node_id, materialized);
             }
         }
@@ -491,7 +487,6 @@ namespace lfs::core {
 
     // ============= Contiguous (materializes non-contiguous tensors) =============
     Tensor Tensor::contiguous() const {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Other);
         materialize_if_deferred();
         if (!is_valid()) {
             LOG_ERROR("Cannot make invalid tensor contiguous");
@@ -693,7 +688,6 @@ namespace lfs::core {
 
     // ============= Device Transfer =============
     Tensor Tensor::to(Device device, cudaStream_t stream) const {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::DeviceTransfer);
         materialize_if_deferred();
         const char* op_name = (device == Device::CUDA) ? "to_cuda" : "to_cpu";
         debug::OpTraceGuard trace(op_name, *this);
@@ -753,8 +747,7 @@ namespace lfs::core {
                         shape_.rank(),
                         numel(),
                         dtype_,
-                        transfer_stream
-                    );
+                        transfer_stream);
 
                     // NO SYNC: Let CUDA runtime handle synchronization when data is accessed
                     // The pinned memory (src) is hopefully safe because:
@@ -790,8 +783,7 @@ namespace lfs::core {
                     shape_.rank(),
                     numel(),
                     dtype_,
-                    transfer_stream
-                );
+                    transfer_stream);
 
                 // Free metadata immediately (kernel has already captured the data)
                 // NO SYNC: Kernel launches asynchronously for better PCIe overlap
@@ -928,7 +920,6 @@ namespace lfs::core {
 
     // ============= Type Conversion =============
     Tensor Tensor::to(DataType dtype) const {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Other);
         materialize_if_deferred();
         if (!is_valid()) {
             LOG_ERROR("Cannot convert invalid tensor to different dtype");
@@ -1271,7 +1262,6 @@ namespace lfs::core {
     // ============= In-place Operations =============
 
     Tensor& Tensor::zero_() {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Mutation);
         materialize_if_deferred();
         if (!is_valid() || numel() == 0) {
             return *this;
@@ -1290,7 +1280,6 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::fill_(float value) {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Mutation);
         materialize_if_deferred();
         if (!is_valid() || numel() == 0) {
             return *this;
@@ -1392,7 +1381,6 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::fill_(float value, cudaStream_t stream) {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Mutation);
         materialize_if_deferred();
         if (!is_valid() || numel() == 0) {
             return *this;
@@ -1449,7 +1437,6 @@ namespace lfs::core {
     }
 
     Tensor& Tensor::copy_from(const Tensor& other) {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Mutation);
         materialize_if_deferred();
         if (!is_valid() || !other.is_valid()) {
             LOG_ERROR("Invalid tensors for copy_from");
@@ -1909,7 +1896,6 @@ namespace lfs::core {
     }
 
     float Tensor::item() const {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::HostRead);
         materialize_if_deferred();
         if (!is_valid() || numel() != 1) {
             LOG_ERROR("item() requires a valid single-element tensor");
@@ -1990,7 +1976,6 @@ namespace lfs::core {
     }
 
     std::vector<float> Tensor::debug_values(size_t max_values) const {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::HostRead);
         materialize_if_deferred();
         std::vector<float> values;
 
@@ -2020,7 +2005,6 @@ namespace lfs::core {
     }
 
     std::vector<float> Tensor::to_vector() const {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::HostRead);
         materialize_if_deferred();
         if (!is_valid()) {
             LOG_ERROR("to_vector on invalid tensor");
@@ -2083,7 +2067,6 @@ namespace lfs::core {
     }
 
     std::vector<int64_t> Tensor::to_vector_int64() const {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::HostRead);
         materialize_if_deferred();
         LOG_DEBUG("to_vector_int64() called");
         LOG_DEBUG("  dtype: {}", dtype_name(dtype_));
@@ -2124,7 +2107,6 @@ namespace lfs::core {
     }
 
     std::vector<int> Tensor::to_vector_int() const {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::HostRead);
         materialize_if_deferred();
         if (!is_valid()) {
             LOG_ERROR("to_vector_int on invalid tensor");
@@ -2165,7 +2147,6 @@ namespace lfs::core {
     }
 
     std::vector<bool> Tensor::to_vector_bool() const {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::HostRead);
         materialize_if_deferred();
         if (!is_valid()) {
             LOG_ERROR("to_vector_bool only supports valid bool tensors");
@@ -2202,7 +2183,6 @@ namespace lfs::core {
     }
 
     std::vector<uint8_t> Tensor::to_vector_uint8() const {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::HostRead);
         materialize_if_deferred();
         if (!is_valid()) {
             LOG_ERROR("to_vector_uint8 on invalid tensor");
@@ -2428,7 +2408,6 @@ namespace lfs::core {
     // ============= Capacity Management =============
 
     void Tensor::reserve(size_t new_capacity) {
-        internal::LazyFallbackReasonScope fallback_scope(internal::LazyFallbackReason::Mutation);
         materialize_if_deferred();
         // Validate tensor state
         if (!data_owner_) {

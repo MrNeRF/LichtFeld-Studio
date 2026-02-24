@@ -3,8 +3,8 @@
 
 #include "internal/lazy_executor.hpp"
 
-#include "internal/cuda_stream_context.hpp"
 #include "core/logger.hpp"
+#include "internal/cuda_stream_context.hpp"
 #include "internal/lazy_config.hpp"
 #include "internal/lazy_ir.hpp"
 #include "internal/tensor_impl.hpp"
@@ -620,7 +620,6 @@ namespace lfs::core::internal {
                     Tensor fused_materialized;
                     if (execute_pointwise_fusion_recipe(recipe_it->second, fused_materialized) &&
                         fused_materialized.is_valid()) {
-                        telemetry_record_eager_fallback(1);
                         record_executed_node();
                         record_fused_launch();
                         lazy_executor_cache_materialization(node.node_id, fused_materialized);
@@ -757,10 +756,7 @@ namespace lfs::core::internal {
 
     LazyExecutionPlanDebug lazy_planner_build_plan_for_tensor(const Tensor& output) {
         LazyExecutionPlanDebug plan;
-        plan.planner_enabled = lazy_mode_enabled();
-        if (!plan.planner_enabled) {
-            return plan;
-        }
+        plan.planner_enabled = true;
 
         const uint64_t root_id = output.lazy_expr_id();
         if (root_id == 0) {

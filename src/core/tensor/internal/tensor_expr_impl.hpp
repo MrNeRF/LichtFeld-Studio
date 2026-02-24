@@ -18,32 +18,24 @@ namespace lfs::core {
 
     template <typename Derived>
     Tensor TensorExpr<Derived>::eval() const {
-        if (internal::lazy_mode_enabled()) {
-            internal::telemetry_record_eager_fallback(1);
-        }
         return derived().eval_impl();
     }
 
     template <typename Derived>
     TensorExpr<Derived>::operator Tensor() const {
-        if (internal::lazy_mode_enabled()) {
-            auto expr = derived();
-            const TensorShape shape = expr.shape_impl();
-            const Device device = expr.device_impl();
-            const DataType dtype = expr.dtype_impl();
+        auto expr = derived();
+        const TensorShape shape = expr.shape_impl();
+        const Device device = expr.device_impl();
+        const DataType dtype = expr.dtype_impl();
 
-            const size_t bytes = shape.elements() * dtype_size(dtype);
-            if (!internal::lazy_size_heuristic_should_defer(bytes)) {
-                internal::LazyFallbackReasonScope scope(internal::LazyFallbackReason::SizeHeuristic);
-                internal::telemetry_record_eager_fallback(1);
-                return expr.eval();
-            }
-
-            return Tensor::make_deferred_expr_tensor(
-                shape, device, dtype,
-                [expr = std::move(expr)]() mutable { return expr.eval(); });
+        const size_t bytes = shape.elements() * dtype_size(dtype);
+        if (!internal::lazy_size_heuristic_should_defer(bytes)) {
+            return expr.eval();
         }
-        return eval();
+
+        return Tensor::make_deferred_expr_tensor(
+            shape, device, dtype,
+            [expr = std::move(expr)]() mutable { return expr.eval(); });
     }
 
     // ============================================================================
