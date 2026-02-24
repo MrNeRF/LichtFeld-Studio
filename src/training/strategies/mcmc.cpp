@@ -4,7 +4,6 @@
 
 #include "mcmc.hpp"
 #include "core/logger.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
 #include "kernels/mcmc_kernels.hpp"
 #include "strategy_utils.hpp"
 #include <algorithm>
@@ -561,7 +560,7 @@ namespace lfs::training {
                           n_added, iter, _splat_data->size());
             }
             // Release cached pool memory to avoid bloat (important after add_new_gs)
-            lfs::core::CudaMemoryPool::instance().trim_cached_memory();
+            lfs::core::Tensor::trim_memory_pool();
 
             const size_t n = static_cast<size_t>(_splat_data->size());
 

@@ -4,6 +4,7 @@
 #pragma once
 
 #include "allocation_profiler.hpp"
+#include "core/export.hpp"
 #include "core/logger.hpp"
 #include "deferred_free_queue.hpp"
 #include "gpu_slab_allocator.hpp"
@@ -26,12 +27,9 @@ namespace lfs::core {
                                        Direct };
 
     // Multi-tier CUDA memory pool: slab (≤256KB), bucketed (≤16GB), cudaMallocAsync.
-    class CudaMemoryPool {
+    class LFS_CORE_API CudaMemoryPool {
     public:
-        static CudaMemoryPool& instance() {
-            static CudaMemoryPool pool;
-            return pool;
-        }
+        static CudaMemoryPool& instance();
 
         void shutdown() {
             bool expected = false;

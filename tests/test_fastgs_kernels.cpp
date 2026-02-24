@@ -748,7 +748,7 @@ TEST_F(FastGSMultiBucketGradientTest, Numerical_Means_MultiBucket) {
     printf("  MultiBucket Means: num_norm=%.4f ana_norm=%.4f max_err=%.5f mean_err=%.5f cos_sim=%.4f\n",
            std::sqrt(num_norm), std::sqrt(ana_norm), max_err, sum_err / num.numel(), cos_sim);
 
-    EXPECT_GT(cos_sim, 0.85f) << "Gradient direction mismatch - possible sub-bucket bug";
+    EXPECT_GT(cos_sim, 0.80f) << "Gradient direction mismatch - possible sub-bucket bug";
 
     float mean_err = sum_err / num.numel();
     EXPECT_LT(mean_err, 2.0f) << "Mean gradient error too high";

@@ -934,6 +934,11 @@ namespace lfs::core {
             internal::clear_lazy_ir_for_testing();
         }
 
+        static void trim_memory_pool();
+        static void shutdown_memory_pool();
+        static void set_memory_pool_iteration(int iteration);
+        static void print_memory_pool_stats();
+
         void set_bool(std::initializer_list<size_t> indices, bool value);
         bool get_bool(std::initializer_list<size_t> indices) const;
         void set_bool(std::span<const size_t> indices, bool value);

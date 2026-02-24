@@ -5,6 +5,7 @@
 #include "core/path_utils.hpp"
 #include "core/tensor_trace.hpp"
 #include "internal/lazy_executor.hpp"
+#include "internal/memory_pool.hpp"
 #include "internal/tensor_broadcast.hpp"
 #include "internal/tensor_impl.hpp"
 #include "internal/tensor_ops.hpp"
@@ -431,6 +432,27 @@ namespace lfs::core {
             }
         }
         return *this;
+    }
+
+    CudaMemoryPool& CudaMemoryPool::instance() {
+        static CudaMemoryPool pool;
+        return pool;
+    }
+
+    void Tensor::trim_memory_pool() {
+        CudaMemoryPool::instance().trim_cached_memory();
+    }
+
+    void Tensor::shutdown_memory_pool() {
+        CudaMemoryPool::instance().shutdown();
+    }
+
+    void Tensor::set_memory_pool_iteration(int iteration) {
+        CudaMemoryPool::instance().set_iteration(iteration);
+    }
+
+    void Tensor::print_memory_pool_stats() {
+        CudaMemoryPool::instance().print_stats();
     }
 
     // ============= Destructor =============

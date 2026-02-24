@@ -17,7 +17,6 @@
 #include "core/path_utils.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
 #include "io/cache_image_loader.hpp"
 #include "io/exporter.hpp"
 #include "io/filesystem_utils.hpp"
@@ -753,7 +752,7 @@ namespace lfs::training {
         val_dataset_.reset();
 
         // Release GPU memory pools back to system
-        lfs::core::CudaMemoryPool::instance().trim_cached_memory();
+        lfs::core::Tensor::trim_memory_pool();
         lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
         cudaDeviceSynchronize();
         LOG_DEBUG("GPU memory released");
@@ -1850,7 +1849,7 @@ namespace lfs::training {
 
             LOG_DEBUG("Starting training iterations");
             while (iter <= params_.optimization.iterations) {
-                lfs::core::CudaMemoryPool::instance().set_iteration(iter);
+                lfs::core::Tensor::set_memory_pool_iteration(iter);
 
                 if (stop_token.stop_requested() || stop_requested_.load())
                     break;
@@ -1886,7 +1885,7 @@ namespace lfs::training {
                         cudaGetLastError();
 
                         lfs::core::GlobalArenaManager::instance().get_arena().full_reset();
-                        lfs::core::CudaMemoryPool::instance().trim_cached_memory();
+                        lfs::core::Tensor::trim_memory_pool();
 
                         cudaDeviceSynchronize();
                         cudaGetLastError();

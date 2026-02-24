@@ -5,7 +5,6 @@
 #include "adc.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
 #include "core/tensor/internal/tensor_serialization.hpp"
 #include "kernels/densification_kernels.hpp"
 #include "optimizer/render_output.hpp"
@@ -565,7 +564,7 @@ namespace lfs::training {
             prune_gs(iter);
 
             // Trim memory pools after densification to release temporary allocations
-            lfs::core::CudaMemoryPool::instance().trim_cached_memory();
+            lfs::core::Tensor::trim_memory_pool();
 
             _splat_data->_densification_info = lfs::core::Tensor::zeros(
                 {2, static_cast<size_t>(_splat_data->size())},

@@ -14,7 +14,7 @@
 #include "core/path_utils.hpp"
 #include "core/pinned_memory_allocator.hpp"
 #include "core/scene.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
+#include "core/tensor.hpp"
 #include "io/cache_image_loader.hpp"
 #include "rendering/framebuffer_factory.hpp"
 #include "training/trainer.hpp"
@@ -124,12 +124,12 @@ namespace lfs::app {
                     }
                     LOG_INFO("Resumed from iteration {}", *ckpt_result);
 
-                    core::CudaMemoryPool::instance().trim_cached_memory();
+                    core::Tensor::trim_memory_pool();
 
                     if (const auto result = trainer->train(); !result) {
                         LOG_ERROR("Training error: {}", result.error());
                         if (!params->python_scripts.empty()) {
-                            core::CudaMemoryPool::instance().shutdown();
+                            core::Tensor::shutdown_memory_pool();
                             core::PinnedMemoryAllocator::instance().shutdown();
                             python::finalize();
                             std::_Exit(1);
@@ -161,12 +161,12 @@ namespace lfs::app {
                         return 1;
                     }
 
-                    core::CudaMemoryPool::instance().trim_cached_memory();
+                    core::Tensor::trim_memory_pool();
 
                     if (const auto result = trainer->train(); !result) {
                         LOG_ERROR("Training error: {}", result.error());
                         if (!params->python_scripts.empty()) {
-                            core::CudaMemoryPool::instance().shutdown();
+                            core::Tensor::shutdown_memory_pool();
                             core::PinnedMemoryAllocator::instance().shutdown();
                             python::finalize();
                             std::_Exit(1);
@@ -178,7 +178,7 @@ namespace lfs::app {
                 LOG_INFO("Headless training completed");
             }
 
-            core::CudaMemoryPool::instance().shutdown();
+            core::Tensor::shutdown_memory_pool();
             core::PinnedMemoryAllocator::instance().shutdown();
 
             if (!params->python_scripts.empty()) {
@@ -270,7 +270,7 @@ namespace lfs::app {
             viewer->run();
             viewer.reset();
 
-            core::CudaMemoryPool::instance().shutdown();
+            core::Tensor::shutdown_memory_pool();
             core::PinnedMemoryAllocator::instance().shutdown();
 
             python::finalize();

@@ -4,7 +4,6 @@
 // Include internal memory pool header for stress testing
 // This allows us to properly release cached memory when testing for leaks
 #include "core/tensor.hpp"
-#include "core/tensor/internal/memory_pool.hpp"
 #include <algorithm>
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <chrono>
@@ -63,7 +62,7 @@ protected:
         // Warm up allocator (slab init is lazy, ~288MB)
         { auto _ = Tensor::empty({1}, Device::CUDA); }
         cudaDeviceSynchronize();
-        CudaMemoryPool::instance().trim_cached_memory();
+        Tensor::trim_memory_pool();
 
         // Record initial memory after warmup
         cudaMemGetInfo(&initial_free_mem_, &total_mem_);
@@ -83,7 +82,7 @@ protected:
         }
 
         // Clear tensor library's memory pool cache
-        CudaMemoryPool::instance().trim_cached_memory();
+        Tensor::trim_memory_pool();
 
         // Give the system a moment to actually free memory
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -148,7 +147,7 @@ TEST_F(TensorStressTest, MaxMemoryAllocation) {
     c10::cuda::CUDACachingAllocator::emptyCache();
 
     // Clear tensor library's memory pool cache
-    CudaMemoryPool::instance().trim_cached_memory();
+    Tensor::trim_memory_pool();
     cudaDeviceSynchronize();
 
     // Memory should be freed
@@ -175,7 +174,7 @@ TEST_F(TensorStressTest, RapidAllocationDeallocation) {
     c10::cuda::CUDACachingAllocator::emptyCache();
 
     // Clear tensor library's memory pool cache
-    CudaMemoryPool::instance().trim_cached_memory();
+    Tensor::trim_memory_pool();
     cudaDeviceSynchronize();
 
     // Check memory is stable
