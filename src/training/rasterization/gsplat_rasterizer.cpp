@@ -8,8 +8,9 @@
 #include "gsplat/Ops.h"
 #include "training/kernels/grad_alpha.hpp"
 #include <cassert>
+#include <cuda_runtime.h>
 #include <spdlog/spdlog.h>
-#include <vector>
+#include <array>
 
 namespace lfs::training {
 
@@ -66,14 +67,7 @@ namespace lfs::training {
             k12 = static_cast<float>(tile_y_offset);
         }
 
-        std::vector<float> K_host = {
-            k00, 0.0f, k02,
-            0.0f, k11, k12,
-            0.0f, 0.0f, 1.0f};
-        core::Tensor K_tensor = core::Tensor::from_vector(
-            K_host,
-            core::TensorShape({1, 3, 3}),
-            core::Device::CUDA);
+        core::Tensor K_tensor;
 
         // Get Gaussian parameters (activated), preserving existing contiguous storage where possible.
         auto ensure_contiguous = [](core::Tensor t) -> core::Tensor {
@@ -93,6 +87,26 @@ namespace lfs::training {
                 opacities = opacities.contiguous();
             }
         }
+
+        const cudaStream_t fwd_stream = means.stream();
+
+        // Keep K tensor cached and update values in-place to avoid per-call allocations.
+        thread_local core::Tensor cached_K_tensor;
+        if (!cached_K_tensor.is_valid() || cached_K_tensor.numel() != 9) {
+            cached_K_tensor = core::Tensor::empty({1, 3, 3}, core::Device::CUDA, core::DataType::Float32);
+        }
+        cached_K_tensor.set_stream(fwd_stream);
+        const std::array<float, 9> K_host = {
+            k00, 0.0f, k02,
+            0.0f, k11, k12,
+            0.0f, 0.0f, 1.0f};
+        cudaMemcpyAsync(
+            cached_K_tensor.ptr<float>(),
+            K_host.data(),
+            sizeof(float) * K_host.size(),
+            cudaMemcpyHostToDevice,
+            fwd_stream);
+        K_tensor = cached_K_tensor;
 
         // Get raw pointers
         const float* means_ptr = means.ptr<float>();
@@ -132,34 +146,37 @@ namespace lfs::training {
         const float* thin_prism_ptr = nullptr;
 
         // Helper to copy tensor to CUDA
-        auto to_cuda = [](const core::Tensor& t) {
-            return t.to(core::Device::CUDA).contiguous();
+        auto to_cuda_contiguous = [](core::Tensor t) {
+            if (t.device() != core::Device::CUDA) {
+                t = t.to(core::Device::CUDA);
+            }
+            return t.is_contiguous() ? t : t.contiguous();
         };
 
         switch (camera_model) {
         case CameraModelType::THIN_PRISM_FISHEYE:
             if (radial_dist.is_valid() && radial_dist.numel() == 4) {
-                radial_cuda = to_cuda(radial_dist);
+                radial_cuda = to_cuda_contiguous(radial_dist);
                 radial_ptr = radial_cuda.ptr<float>();
             }
             if (tangential_dist.is_valid() && tangential_dist.numel() == 4) {
-                thin_prism_cuda = to_cuda(tangential_dist);
+                thin_prism_cuda = to_cuda_contiguous(tangential_dist);
                 thin_prism_ptr = thin_prism_cuda.ptr<float>();
             }
             break;
         case CameraModelType::FISHEYE:
             if (radial_dist.is_valid() && radial_dist.numel() >= 4) {
-                radial_cuda = to_cuda(radial_dist.numel() == 4 ? radial_dist : radial_dist.slice(0, 0, 4));
+                radial_cuda = to_cuda_contiguous(radial_dist.numel() == 4 ? radial_dist : radial_dist.slice(0, 0, 4));
                 radial_ptr = radial_cuda.ptr<float>();
             }
             break;
         case CameraModelType::PINHOLE:
             if (radial_dist.is_valid() && radial_dist.numel() > 0) {
-                radial_cuda = to_cuda(radial_dist.numel() == 6 ? radial_dist : radial_dist.slice(0, 0, std::min(radial_dist.numel(), size_t(6))));
+                radial_cuda = to_cuda_contiguous(radial_dist.numel() == 6 ? radial_dist : radial_dist.slice(0, 0, std::min(radial_dist.numel(), size_t(6))));
                 radial_ptr = radial_cuda.ptr<float>();
             }
             if (tangential_dist.is_valid() && tangential_dist.numel() >= 2) {
-                tangential_cuda = to_cuda(tangential_dist.numel() == 2 ? tangential_dist : tangential_dist.slice(0, 0, 2));
+                tangential_cuda = to_cuda_contiguous(tangential_dist.numel() == 2 ? tangential_dist : tangential_dist.slice(0, 0, 2));
                 tangential_ptr = tangential_cuda.ptr<float>();
             }
             break;
@@ -262,8 +279,6 @@ namespace lfs::training {
             .flatten_ids = nullptr,
             .n_isects = 0};
 
-        const cudaStream_t fwd_stream = means.stream();
-
         // Call raw pointer forward API
         gsplat_lfs::rasterize_from_world_with_sh_fwd(
             means_ptr,
@@ -339,16 +354,67 @@ namespace lfs::training {
             break;
         }
 
-        // Convert from [1, H, W, C] to [C, H, W] format
-        // IMPORTANT: squeeze(0).permute({2,0,1}).contiguous() copies data out of arena
+        // Convert from [1, H, W, C] arena views to reusable CHW buffers.
+        thread_local core::Tensor cached_image_chw;
+        thread_local core::Tensor cached_alpha_chw;
+        thread_local core::Tensor cached_depth_chw;
+
         if (final_image.is_valid() && final_image.numel() > 0) {
-            render_output.image = final_image.squeeze(0).permute({2, 0, 1}).contiguous();
+            auto image_hwc = final_image.squeeze(0); // [H, W, C]
+            if (!image_hwc.is_contiguous()) {
+                image_hwc = image_hwc.contiguous();
+            }
+
+            const size_t image_channels = image_hwc.shape()[2];
+            const core::TensorShape image_shape = {image_channels, static_cast<size_t>(H), static_cast<size_t>(W)};
+            if (!cached_image_chw.is_valid() || cached_image_chw.shape() != image_shape) {
+                cached_image_chw = core::Tensor::empty(image_shape, core::Device::CUDA, core::DataType::Float32);
+            }
+            cached_image_chw.set_stream(fwd_stream);
+
+            kernels::launch_permute_hwc_to_chw(
+                image_hwc.ptr<float>(),
+                cached_image_chw.ptr<float>(),
+                static_cast<int>(image_channels),
+                static_cast<int>(H),
+                static_cast<int>(W),
+                fwd_stream);
+
+            render_output.image = cached_image_chw;
         }
 
-        render_output.alpha = render_alphas_tensor.squeeze(0).permute({2, 0, 1}).contiguous();
+        const core::TensorShape alpha_shape = {1UL, static_cast<size_t>(H), static_cast<size_t>(W)};
+        if (!cached_alpha_chw.is_valid() || cached_alpha_chw.shape() != alpha_shape) {
+            cached_alpha_chw = core::Tensor::empty(alpha_shape, core::Device::CUDA, core::DataType::Float32);
+        }
+        cached_alpha_chw.set_stream(fwd_stream);
+        cudaMemcpyAsync(
+            cached_alpha_chw.ptr<float>(),
+            render_alphas_ptr_out,
+            static_cast<size_t>(H) * static_cast<size_t>(W) * sizeof(float),
+            cudaMemcpyDeviceToDevice,
+            fwd_stream);
+        render_output.alpha = cached_alpha_chw;
 
         if (final_depth.is_valid() && final_depth.numel() > 0) {
-            render_output.depth = final_depth.squeeze(0).permute({2, 0, 1}).contiguous();
+            auto depth_hwc = final_depth.squeeze(0); // [H, W, 1]
+            if (!depth_hwc.is_contiguous()) {
+                depth_hwc = depth_hwc.contiguous();
+            }
+
+            const core::TensorShape depth_shape = {1UL, static_cast<size_t>(H), static_cast<size_t>(W)};
+            if (!cached_depth_chw.is_valid() || cached_depth_chw.shape() != depth_shape) {
+                cached_depth_chw = core::Tensor::empty(depth_shape, core::Device::CUDA, core::DataType::Float32);
+            }
+            cached_depth_chw.set_stream(fwd_stream);
+            cudaMemcpyAsync(
+                cached_depth_chw.ptr<float>(),
+                depth_hwc.ptr<float>(),
+                static_cast<size_t>(H) * static_cast<size_t>(W) * sizeof(float),
+                cudaMemcpyDeviceToDevice,
+                fwd_stream);
+
+            render_output.depth = cached_depth_chw;
         }
 
         // NOTE: Background image blending is now handled inside gsplat kernel directly
@@ -543,7 +609,9 @@ namespace lfs::training {
             if (error_map_2d.device() != core::Device::CUDA) {
                 error_map_2d = error_map_2d.cuda();
             }
-            error_map_2d = error_map_2d.contiguous();
+            if (!error_map_2d.is_contiguous()) {
+                error_map_2d = error_map_2d.contiguous();
+            }
         }
         float* const densification_info_ptr = update_densification_info
                                                   ? gaussian_model._densification_info.ptr<float>()

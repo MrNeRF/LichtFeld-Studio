@@ -435,13 +435,14 @@ namespace lfs::training {
 
         thread_local core::Tensor cached_grad_alpha;
         thread_local int cached_ga_h = 0, cached_ga_w = 0;
-        if (cached_ga_h != H || cached_ga_w != W) {
+        if (!cached_grad_alpha.is_valid() || cached_ga_h != H || cached_ga_w != W) {
             cached_grad_alpha = core::Tensor::empty({static_cast<size_t>(H), static_cast<size_t>(W)}, core::Device::CUDA);
             cached_ga_h = H;
             cached_ga_w = W;
         }
         auto& grad_alpha = cached_grad_alpha;
-        const cudaStream_t stream = grad_alpha.stream();
+        const cudaStream_t stream = grad_image.stream();
+        grad_alpha.set_stream(stream);
 
         // Use background image kernel if available, otherwise use solid color kernel
         if (ctx.bg_image.is_valid() && !ctx.bg_image.is_empty() && is_chw_layout) {
@@ -489,7 +490,9 @@ namespace lfs::training {
             if (error_map_2d.device() != core::Device::CUDA) {
                 error_map_2d = error_map_2d.cuda();
             }
-            error_map_2d = error_map_2d.contiguous();
+            if (!error_map_2d.is_contiguous()) {
+                error_map_2d = error_map_2d.contiguous();
+            }
         }
 
         // Get gradient pointers from optimizer

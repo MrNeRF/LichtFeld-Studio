@@ -1854,8 +1854,15 @@ namespace lfs::training {
 
                 if (stop_token.stop_requested() || stop_requested_.load())
                     break;
-                while (callback_busy_.load(std::memory_order_acquire))
-                    std::this_thread::yield();
+                if (callback_busy_.load(std::memory_order_acquire)) {
+                    const cudaError_t callback_status = cudaStreamQuery(callback_stream_);
+                    if (callback_status == cudaSuccess) {
+                        callback_busy_.store(false, std::memory_order_release);
+                    } else if (callback_status != cudaErrorNotReady) {
+                        LOG_WARN("Callback stream query failed: {}", cudaGetErrorString(callback_status));
+                        callback_busy_.store(false, std::memory_order_release);
+                    }
+                }
 
                 lfs::core::Camera* cam = nullptr;
                 lfs::core::Tensor gt_image;
@@ -1905,8 +1912,8 @@ namespace lfs::training {
                 }
 
                 // Launch callback for async progress update (except first iteration)
-                if (iter > 1 && callback_) {
-                    callback_busy_ = true;
+                if (iter > 1 && callback_ && !callback_busy_.load(std::memory_order_acquire)) {
+                    callback_busy_.store(true, std::memory_order_release);
                     auto err = cudaLaunchHostFunc(
                         callback_stream_,
                         [](void* self) {
@@ -1914,12 +1921,12 @@ namespace lfs::training {
                             if (trainer->callback_) {
                                 trainer->callback_();
                             }
-                            trainer->callback_busy_ = false;
+                            trainer->callback_busy_.store(false, std::memory_order_release);
                         },
                         this);
                     if (err != cudaSuccess) {
                         LOG_WARN("Failed to launch callback: {}", cudaGetErrorString(err));
-                        callback_busy_ = false;
+                        callback_busy_.store(false, std::memory_order_release);
                     }
                 }
 

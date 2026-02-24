@@ -33,6 +33,8 @@ namespace {
 class VRAMResizeTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        // Warm up allocator (slab init is lazy, ~288MB)
+        { auto _ = Tensor::empty({1}, Device::CUDA); }
         forceMemoryCleanup();
         auto [used, total] = getGPUMemoryMB();
         baseline_vram_mb_ = used;

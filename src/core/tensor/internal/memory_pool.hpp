@@ -295,11 +295,11 @@ namespace lfs::core {
         }
 
         void trim_cached_memory() {
-#if CUDART_VERSION >= 12080
             cudaDeviceSynchronize();
             DeferredFreeQueue::instance().flush();
             SizeBucketedPool::instance().trim_cache();
 
+#if CUDART_VERSION >= 12080
             int device;
             cudaGetDevice(&device);
             cudaMemPool_t pool;

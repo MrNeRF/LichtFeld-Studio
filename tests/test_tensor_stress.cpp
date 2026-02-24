@@ -60,7 +60,12 @@ protected:
     void SetUp() override {
         ASSERT_TRUE(torch::cuda::is_available()) << "CUDA is not available for testing";
 
-        // Record initial memory
+        // Warm up allocator (slab init is lazy, ~288MB)
+        { auto _ = Tensor::empty({1}, Device::CUDA); }
+        cudaDeviceSynchronize();
+        CudaMemoryPool::instance().trim_cached_memory();
+
+        // Record initial memory after warmup
         cudaMemGetInfo(&initial_free_mem_, &total_mem_);
         gen_.seed(42);
 

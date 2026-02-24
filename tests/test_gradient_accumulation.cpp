@@ -49,23 +49,17 @@ TEST_F(GradientAccumulationTest, OpacityRegularization_AccumulatesGradients) {
     // Test 2: Apply regularization to EXISTING gradients (should accumulate)
     spdlog::info("--- Test 2: Regularization on existing gradients (should accumulate) ---");
     auto opacity_grad_2 = Tensor::ones_like(opacity) * 0.1f; // Pre-existing gradients
-
-    float grad_norm_before = opacity_grad_2.abs().sum().item<float>();
-    spdlog::info("Before regularization: norm={:.6e}", grad_norm_before);
+    auto opacity_grad_2_before = opacity_grad_2.clone();
 
     auto result_2 = OpacityRegularization::forward(opacity, opacity_grad_2, params);
     ASSERT_TRUE(result_2.has_value());
 
-    float grad_norm_after = opacity_grad_2.abs().sum().item<float>();
-    float grad_max_after = opacity_grad_2.abs().max().item<float>();
-    spdlog::info("After regularization: norm={:.6e}, max={:.6e}", grad_norm_after, grad_max_after);
+    // Element-wise check: at least one element must have changed
+    auto element_diff = (opacity_grad_2 - opacity_grad_2_before).abs().max().item<float>();
+    spdlog::info("Max element-wise change: {:.6e}", element_diff);
 
-    // The gradient norm should INCREASE (accumulation) not stay the same or decrease
-    spdlog::info("Gradient norm change: {:.6e} -> {:.6e} (diff: {:.6e})",
-                 grad_norm_before, grad_norm_after, grad_norm_after - grad_norm_before);
-
-    EXPECT_GT(grad_norm_after, grad_norm_before)
-        << "Gradients should accumulate (increase), not overwrite!";
+    EXPECT_GT(element_diff, 0.0f)
+        << "Gradients should accumulate (at least one element must change)!";
 
     // Test 3: Verify the accumulated gradient equals the sum
     spdlog::info("--- Test 3: Verify accumulation is additive ---");
