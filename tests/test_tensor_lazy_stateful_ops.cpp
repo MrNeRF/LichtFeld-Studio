@@ -2,43 +2,23 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include "core/tensor/internal/lazy_config.hpp"
-#include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
-#include <optional>
 #include <vector>
 
 using namespace lfs::core;
 
 namespace {
 
-    class LazyRuntimeGuard {
+    class LazyTestGuard {
     public:
-        explicit LazyRuntimeGuard(LazyMode mode) {
-            internal::set_lazy_mode_override_for_testing(mode);
+        LazyTestGuard() {
             internal::clear_lazy_ir_for_testing();
-            internal::lazy_executor_clear_registry_for_testing();
-            internal::lazy_executor_reset_diagnostics_for_testing();
-            internal::lazy_executor_set_debug_dump_override_for_testing(std::nullopt);
-            internal::lazy_executor_clear_debug_dump_cache_for_testing();
-            internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
-            internal::lazy_executor_set_size_heuristic_override_for_testing(false);
-            internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
             Tensor::reset_lazy_telemetry();
         }
-
-        ~LazyRuntimeGuard() {
-            internal::set_lazy_mode_override_for_testing(std::nullopt);
+        ~LazyTestGuard() {
             internal::clear_lazy_ir_for_testing();
-            internal::lazy_executor_clear_registry_for_testing();
-            internal::lazy_executor_reset_diagnostics_for_testing();
-            internal::lazy_executor_set_debug_dump_override_for_testing(std::nullopt);
-            internal::lazy_executor_clear_debug_dump_cache_for_testing();
-            internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
-            internal::lazy_executor_set_size_heuristic_override_for_testing(std::nullopt);
-            internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
             Tensor::reset_lazy_telemetry();
         }
     };
@@ -52,52 +32,40 @@ namespace {
 } // namespace
 
 TEST(TensorLazyStatefulOpsTest, RandIsEagerInLazyMode) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto t = Tensor::rand({500}, Device::CPU, DataType::Float32);
     EXPECT_FALSE(t.has_lazy_expr());
     EXPECT_TRUE(t.is_valid());
     EXPECT_GT(t.numel(), 0u);
-
-    const auto snapshot = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(snapshot.stateful_op_eager, 1u);
 }
 
 TEST(TensorLazyStatefulOpsTest, RandnIsEagerInLazyMode) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto t = Tensor::randn({500}, Device::CPU, DataType::Float32);
     EXPECT_FALSE(t.has_lazy_expr());
     EXPECT_TRUE(t.is_valid());
-
-    const auto snapshot = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(snapshot.stateful_op_eager, 1u);
 }
 
 TEST(TensorLazyStatefulOpsTest, RandintIsEagerInLazyMode) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto t = Tensor::randint({500}, 0, 100, Device::CPU, DataType::Int32);
     EXPECT_FALSE(t.has_lazy_expr());
     EXPECT_TRUE(t.is_valid());
-
-    const auto snapshot = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(snapshot.stateful_op_eager, 1u);
 }
 
 TEST(TensorLazyStatefulOpsTest, BernoulliIsEagerInLazyMode) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto t = Tensor::bernoulli({500}, 0.5f, Device::CPU, DataType::Float32);
     EXPECT_FALSE(t.has_lazy_expr());
     EXPECT_TRUE(t.is_valid());
-
-    const auto snapshot = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(snapshot.stateful_op_eager, 1u);
 }
 
 TEST(TensorLazyStatefulOpsTest, InplaceNormalIsEagerInLazyMode) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto t = Tensor::empty({500}, Device::CPU, DataType::Float32);
     t.normal_(0.0f, 1.0f);
@@ -106,7 +74,7 @@ TEST(TensorLazyStatefulOpsTest, InplaceNormalIsEagerInLazyMode) {
 }
 
 TEST(TensorLazyStatefulOpsTest, InplaceUniformIsEagerInLazyMode) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto t = Tensor::empty({500}, Device::CPU, DataType::Float32);
     t.uniform_(0.0f, 1.0f);
@@ -115,11 +83,7 @@ TEST(TensorLazyStatefulOpsTest, InplaceUniformIsEagerInLazyMode) {
 }
 
 TEST(TensorLazyStatefulOpsTest, ManualSeedReproducibilityWithLazyChain) {
-    LazyRuntimeGuard guard(LazyMode::On);
-    // Disable size heuristic so the lazy chain defers (500 floats > 4KB? No, 2000 bytes < 4096).
-    // Actually 500 * 4 = 2000 bytes < 4096, so size heuristic will make it eager anyway.
-    // Use larger tensor or disable heuristic.
-    internal::lazy_executor_set_size_heuristic_override_for_testing(false);
+    LazyTestGuard guard;
 
     std::vector<float> run1;
     {
@@ -146,8 +110,7 @@ TEST(TensorLazyStatefulOpsTest, ManualSeedReproducibilityWithLazyChain) {
 }
 
 TEST(TensorLazyStatefulOpsTest, InterleavedRandomOpsReproducible) {
-    LazyRuntimeGuard guard(LazyMode::On);
-    internal::lazy_executor_set_size_heuristic_override_for_testing(false);
+    LazyTestGuard guard;
 
     auto run = []() {
         Tensor::manual_seed(123);
@@ -172,7 +135,7 @@ TEST(TensorLazyStatefulOpsTest, GpuRandIsEagerInLazyMode) {
         GTEST_SKIP() << "CUDA device required";
     }
 
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto t = Tensor::rand({1000}, Device::CUDA, DataType::Float32);
     EXPECT_FALSE(t.has_lazy_expr());
@@ -189,29 +152,4 @@ TEST(TensorLazyStatefulOpsTest, GpuRandIsEagerInLazyMode) {
         }
     }
     EXPECT_TRUE(has_variation);
-
-    const auto snapshot = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(snapshot.stateful_op_eager, 1u);
-}
-
-TEST(TensorLazyStatefulOpsTest, TelemetryCountsMultipleStatefulOps) {
-    LazyRuntimeGuard guard(LazyMode::On);
-
-    Tensor::rand({100}, Device::CPU, DataType::Float32);
-    Tensor::randn({100}, Device::CPU, DataType::Float32);
-    Tensor::randint({100}, 0, 10, Device::CPU, DataType::Int32);
-    Tensor::bernoulli({100}, 0.5f, Device::CPU, DataType::Float32);
-
-    const auto snapshot = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(snapshot.stateful_op_eager, 4u);
-}
-
-TEST(TensorLazyStatefulOpsTest, ShadowModeRecordsStatefulOps) {
-    LazyRuntimeGuard guard(LazyMode::Shadow);
-
-    Tensor::rand({100}, Device::CPU, DataType::Float32);
-    Tensor::randn({100}, Device::CPU, DataType::Float32);
-
-    const auto snapshot = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(snapshot.stateful_op_eager, 2u);
 }

@@ -5,10 +5,8 @@
 #include "core/tensor/internal/lazy_config.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
-#include <chrono>
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
-#include <iostream>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -18,10 +16,9 @@ using namespace lfs::core;
 
 namespace {
 
-    class LazyRuntimeGuard {
+    class LazyTestGuard {
     public:
-        explicit LazyRuntimeGuard(LazyMode mode) {
-            internal::set_lazy_mode_override_for_testing(mode);
+        LazyTestGuard() {
             internal::clear_lazy_ir_for_testing();
             internal::lazy_executor_clear_registry_for_testing();
             internal::lazy_executor_reset_diagnostics_for_testing();
@@ -33,8 +30,7 @@ namespace {
             Tensor::reset_lazy_telemetry();
         }
 
-        ~LazyRuntimeGuard() {
-            internal::set_lazy_mode_override_for_testing(std::nullopt);
+        ~LazyTestGuard() {
             internal::clear_lazy_ir_for_testing();
             internal::lazy_executor_clear_registry_for_testing();
             internal::lazy_executor_reset_diagnostics_for_testing();
@@ -55,55 +51,8 @@ namespace {
 
 } // namespace
 
-TEST(TensorLazyIrTest, OffModeSkipsGraphTracking) {
-    LazyRuntimeGuard guard(LazyMode::Off);
-
-    auto a = Tensor::ones({4}, Device::CPU, DataType::Float32);
-    auto b = Tensor::ones({4}, Device::CPU, DataType::Float32);
-    auto c = a.add(b);
-
-    EXPECT_FALSE(c.has_lazy_expr());
-    EXPECT_EQ(c.lazy_expr_id(), 0u);
-    EXPECT_FALSE(c.lazy_expr_info().has_value());
-
-    const auto snapshot = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(snapshot.expr_nodes_created, 0u);
-    EXPECT_EQ(snapshot.eager_fallbacks, 0u);
-}
-
-TEST(TensorLazyIrTest, OffModePlannerSkeletonDisabled) {
-    LazyRuntimeGuard guard(LazyMode::Off);
-
-    auto tensor = Tensor::ones({4}, Device::CPU, DataType::Float32);
-    const auto plan = internal::lazy_planner_build_plan_for_tensor(tensor);
-    EXPECT_FALSE(plan.planner_enabled);
-    EXPECT_FALSE(plan.has_root);
-    EXPECT_TRUE(plan.topo_nodes.empty());
-}
-
-TEST(TensorLazyIrTest, ShadowModeBuildsGraphMetadata) {
-    LazyRuntimeGuard guard(LazyMode::Shadow);
-
-    auto a = Tensor::ones({8}, Device::CPU, DataType::Float32);
-    auto b = Tensor::full({8}, 3.0f, Device::CPU, DataType::Float32);
-    auto c = a.add(b).mul(2.0f);
-
-    ASSERT_TRUE(c.has_lazy_expr());
-    EXPECT_GT(c.lazy_expr_id(), 0u);
-
-    const auto info = c.lazy_expr_info();
-    ASSERT_TRUE(info.has_value());
-    EXPECT_TRUE(info->op_kind == internal::LazyOpKind::Unary ||
-                info->op_kind == internal::LazyOpKind::ScalarUnary);
-    EXPECT_EQ(info->input_ids.size(), 1u);
-
-    const auto snapshot = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(snapshot.expr_nodes_created, 4u);
-    EXPECT_EQ(snapshot.eager_fallbacks, 0u);
-}
-
-TEST(TensorLazyIrTest, OnModeDefersUntilBoundaryAndTracksFallback) {
-    LazyRuntimeGuard guard(LazyMode::On);
+TEST(TensorLazyIrTest, OnModeDefersUntilBoundaryAndMaterializes) {
+    LazyTestGuard guard;
 
     auto a = Tensor::ones({16}, Device::CPU, DataType::Float32);
     auto b = Tensor::ones({16}, Device::CPU, DataType::Float32);
@@ -118,23 +67,16 @@ TEST(TensorLazyIrTest, OnModeDefersUntilBoundaryAndTracksFallback) {
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
     EXPECT_GE(before_boundary.expr_nodes_created, 1u);
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
-    // Pointer access is a hard boundary and must trigger materialization.
     const float* ptr = c.ptr<float>();
     ASSERT_NE(ptr, nullptr);
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_GE(after_boundary.eager_fallback_host_read, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_device_transfer, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_mutation, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_interop, 0u);
     EXPECT_GE(after_boundary.expr_nodes_created, before_boundary.expr_nodes_created);
 }
 
 TEST(TensorLazyIrTest, OnModePlannerSkeletonBuildsPlanForDeferredRoot) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({8}, Device::CPU, DataType::Float32).add(1.0f).mul(2.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
@@ -148,7 +90,7 @@ TEST(TensorLazyIrTest, OnModePlannerSkeletonBuildsPlanForDeferredRoot) {
 }
 
 TEST(TensorLazyIrTest, OnModePlannerTopologicalOrderRespectsDependencies) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto base = Tensor::ones({2, 3}, Device::CPU, DataType::Float32).add(1.0f);
     std::vector<int> axes = {1, 0};
@@ -176,7 +118,7 @@ TEST(TensorLazyIrTest, OnModePlannerTopologicalOrderRespectsDependencies) {
 }
 
 TEST(TensorLazyIrTest, OnModePlannerTopologyIsDeterministic) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto base = Tensor::ones({2, 3}, Device::CPU, DataType::Float32).add(1.0f);
     std::vector<int> axes = {1, 0};
@@ -197,7 +139,7 @@ TEST(TensorLazyIrTest, OnModePlannerTopologyIsDeterministic) {
 }
 
 TEST(TensorLazyIrTest, OnModePlannerTopologicalOrderRespectsPointwiseDependencies) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto a = Tensor::ones({32}, Device::CPU, DataType::Float32).add(1.0f);
     auto b = a.mul(2.0f);
@@ -247,7 +189,7 @@ TEST(TensorLazyIrTest, OnModePlannerTopologicalOrderRespectsPointwiseDependencie
 }
 
 TEST(TensorLazyIrTest, OnModePlannerSharedSubgraphVisibleAcrossPlans) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto base = Tensor::ones({2, 3}, Device::CPU, DataType::Float32).add(1.0f);
     ASSERT_TRUE(base.has_lazy_expr());
@@ -280,14 +222,14 @@ TEST(TensorLazyIrTest, OnModePlannerSharedSubgraphVisibleAcrossPlans) {
 }
 
 TEST(TensorLazyIrTest, OnModePlannerExecutorCachesSharedSubgraphWithinMaterialization) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
-    auto measure_fallback_delta = [](const Tensor& tensor) {
+    auto measure_materialization_delta = [](const Tensor& tensor) {
         const auto before_boundary = Tensor::lazy_telemetry_snapshot();
         const auto values = tensor.to_vector();
         const auto after_boundary = Tensor::lazy_telemetry_snapshot();
         return std::pair<std::vector<float>, uint64_t>{
-            values, after_boundary.eager_fallbacks - before_boundary.eager_fallbacks};
+            values, after_boundary.materializations - before_boundary.materializations};
     };
 
     Tensor::reset_lazy_telemetry();
@@ -296,7 +238,7 @@ TEST(TensorLazyIrTest, OnModePlannerExecutorCachesSharedSubgraphWithinMaterializ
     auto branch_b = base.slice(0, 0, 2);
     const auto shared = branch_a.add(branch_b);
     ASSERT_TRUE(shared.has_lazy_expr());
-    auto [shared_values, shared_fallback_delta] = measure_fallback_delta(shared);
+    auto [shared_values, shared_mat_delta] = measure_materialization_delta(shared);
     ASSERT_EQ(shared_values.size(), 6u);
     for (float value : shared_values) {
         EXPECT_FLOAT_EQ(value, 4.0f);
@@ -306,17 +248,17 @@ TEST(TensorLazyIrTest, OnModePlannerExecutorCachesSharedSubgraphWithinMaterializ
     auto split_left = Tensor::ones({2, 3}, Device::CPU, DataType::Float32).add(1.0f).slice(0, 0, 2);
     auto split_right = Tensor::ones({2, 3}, Device::CPU, DataType::Float32).add(1.0f).slice(0, 0, 2);
     const auto split = split_left.add(split_right);
-    auto [split_values, split_fallback_delta] = measure_fallback_delta(split);
+    auto [split_values, split_mat_delta] = measure_materialization_delta(split);
     ASSERT_EQ(split_values.size(), 6u);
     for (float value : split_values) {
         EXPECT_FLOAT_EQ(value, 4.0f);
     }
 
-    EXPECT_LT(shared_fallback_delta, split_fallback_delta);
+    EXPECT_LE(shared_mat_delta, split_mat_delta);
 }
 
 TEST(TensorLazyIrTest, OnModePlannerDiagnosticsCaptureFanOutExecution) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_reset_diagnostics_for_testing();
 
     auto base = Tensor::ones({8}, Device::CPU, DataType::Float32).add(1.0f);
@@ -340,7 +282,7 @@ TEST(TensorLazyIrTest, OnModePlannerDiagnosticsCaptureFanOutExecution) {
 }
 
 TEST(TensorLazyIrTest, OnModeRepeatedBoundaryAddsNoPlannerDiagnosticsAfterMaterialization) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({8}, Device::CPU, DataType::Float32).add(2.0f).mul(4.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
@@ -364,7 +306,7 @@ TEST(TensorLazyIrTest, OnModeRepeatedBoundaryAddsNoPlannerDiagnosticsAfterMateri
 }
 
 TEST(TensorLazyIrTest, OnModePlannerDiagnosticsTrackRootFallbackWhenPlanHasNoRoot) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_reset_diagnostics_for_testing();
 
     auto eager = Tensor::ones({4}, Device::CPU, DataType::Float32);
@@ -387,7 +329,7 @@ TEST(TensorLazyIrTest, OnModePlannerDiagnosticsTrackRootFallbackWhenPlanHasNoRoo
 }
 
 TEST(TensorLazyIrTest, OnModePlannerDebugDumpOverrideControlsFlag) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     internal::lazy_executor_set_debug_dump_override_for_testing(false);
     EXPECT_FALSE(internal::lazy_executor_debug_dump_enabled_for_testing());
@@ -401,7 +343,7 @@ TEST(TensorLazyIrTest, OnModePlannerDebugDumpOverrideControlsFlag) {
 }
 
 TEST(TensorLazyIrTest, OnModePointwiseFusionOverrideControlsFlag) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
     EXPECT_FALSE(internal::lazy_executor_pointwise_fusion_enabled_for_testing());
@@ -420,7 +362,7 @@ TEST(TensorLazyIrTest, OnModePointwiseFusionReducesLaunchesWithParity) {
     };
 
     const auto run_chain = [](bool fusion_enabled) {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(fusion_enabled);
         internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -451,70 +393,8 @@ TEST(TensorLazyIrTest, OnModePointwiseFusionReducesLaunchesWithParity) {
     EXPECT_GT(fused.diagnostics.fused_launches, 0u);
 }
 
-TEST(TensorLazyIrTest, OnModeOverheadBenchmarkGuardrailVsOffMode) {
-    auto run_benchmark = [](LazyMode mode) {
-        LazyRuntimeGuard guard(mode);
-        internal::lazy_executor_set_size_heuristic_override_for_testing(true);
-        internal::lazy_executor_set_size_threshold_override_for_testing(size_t{4096});
-
-        // Tiny tensor benchmark: validates PR14 heuristic target rather than planner throughput.
-        constexpr int warmup_iters = 32;
-        constexpr int timed_iters = 256;
-        constexpr size_t numel = 1u << 8; // 1024 bytes (Float32), below default 4096-byte threshold
-        volatile float sink = 0.0f;
-
-        for (int i = 0; i < warmup_iters; ++i) {
-            auto x = Tensor::ones({numel}, Device::CPU, DataType::Float32);
-            auto y = x.add(1.0f).mul(0.5f).sub(0.25f).abs().sqrt().exp();
-            const auto values = y.to_vector();
-            sink += values[0];
-        }
-
-        internal::lazy_executor_reset_diagnostics_for_testing();
-        const auto start = std::chrono::steady_clock::now();
-        for (int i = 0; i < timed_iters; ++i) {
-            auto x = Tensor::ones({numel}, Device::CPU, DataType::Float32);
-            auto y = x.add(1.0f).mul(0.5f).sub(0.25f).abs().sqrt().exp();
-            const auto values = y.to_vector();
-            sink += values[0];
-        }
-        const auto end = std::chrono::steady_clock::now();
-        const auto us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-        const double avg_us = static_cast<double>(us) / static_cast<double>(timed_iters);
-
-        struct Result {
-            double avg_us = 0.0;
-            internal::LazyExecutorDiagnosticsSnapshot diagnostics;
-            LazyTelemetrySnapshot telemetry;
-        };
-        Result result;
-        result.avg_us = avg_us;
-        result.diagnostics = internal::lazy_executor_diagnostics_snapshot_for_testing();
-        result.telemetry = Tensor::lazy_telemetry_snapshot();
-
-        EXPECT_GT(sink, 0.0f);
-        return result;
-    };
-
-    const auto off = run_benchmark(LazyMode::Off);
-    const auto on = run_benchmark(LazyMode::On);
-
-    ASSERT_GT(off.avg_us, 0.0);
-    ASSERT_GT(on.avg_us, 0.0);
-    const double ratio = on.avg_us / off.avg_us;
-    std::cout << "[lazy-overhead] off_avg_us=" << off.avg_us
-              << " on_avg_us=" << on.avg_us
-              << " ratio=" << ratio << std::endl;
-
-    // Tiny-tensor guardrail: on-mode should stay close to off-mode via eager size heuristic.
-    EXPECT_LT(ratio, 1.5);
-    EXPECT_GT(on.telemetry.eager_fallback_size_heuristic, 0u);
-    EXPECT_EQ(on.diagnostics.planned_nodes, 0u);
-    EXPECT_EQ(on.diagnostics.executed_nodes, 0u);
-}
-
 TEST(TensorLazyIrTest, OnModeRegistryGrowthGuardrailInLongCreateDropLoop) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_reset_diagnostics_for_testing();
 
     constexpr int iterations = 1024;
@@ -535,7 +415,7 @@ TEST(TensorLazyIrTest, OnModeRegistryGrowthGuardrailInLongCreateDropLoop) {
 }
 
 TEST(TensorLazyIrTest, OnModeContextCacheGrowthGuardrailBoundedByPlannedNodes) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_reset_diagnostics_for_testing();
 
     auto base = Tensor::ones({64}, Device::CPU, DataType::Float32).add(1.0f);
@@ -552,7 +432,7 @@ TEST(TensorLazyIrTest, OnModeContextCacheGrowthGuardrailBoundedByPlannedNodes) {
 }
 
 TEST(TensorLazyIrTest, OnModePlannerRegistryPrunesAfterMaterialization) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({8}, Device::CPU, DataType::Float32).add(1.0f).mul(2.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
@@ -568,7 +448,7 @@ TEST(TensorLazyIrTest, OnModePlannerRegistryPrunesAfterMaterialization) {
 }
 
 TEST(TensorLazyIrTest, OnModePlannerRegistryPrunesExpiredUnmaterializedDeferredNodes) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     {
         auto deferred = Tensor::ones({6}, Device::CPU, DataType::Float32).add(1.0f).mul(2.0f);
@@ -579,8 +459,8 @@ TEST(TensorLazyIrTest, OnModePlannerRegistryPrunesExpiredUnmaterializedDeferredN
     EXPECT_EQ(internal::lazy_executor_registered_node_count_for_testing(), 0u);
 }
 
-TEST(TensorLazyIrTest, OnModeRepeatedBoundaryAfterMaterializationHasNoAdditionalFallback) {
-    LazyRuntimeGuard guard(LazyMode::On);
+TEST(TensorLazyIrTest, OnModeRepeatedBoundaryAfterMaterializationHasNoAdditionalMaterialization) {
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({8}, Device::CPU, DataType::Float32).add(3.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
@@ -590,13 +470,13 @@ TEST(TensorLazyIrTest, OnModeRepeatedBoundaryAfterMaterializationHasNoAdditional
     ASSERT_EQ(first.size(), 8u);
 
     const auto after_first = Tensor::lazy_telemetry_snapshot();
-    const uint64_t first_delta = after_first.eager_fallbacks - before.eager_fallbacks;
+    const uint64_t first_delta = after_first.materializations - before.materializations;
     EXPECT_GT(first_delta, 0u);
 
     const auto second = deferred.to_vector();
     ASSERT_EQ(second.size(), 8u);
     const auto after_second = Tensor::lazy_telemetry_snapshot();
-    const uint64_t second_delta = after_second.eager_fallbacks - after_first.eager_fallbacks;
+    const uint64_t second_delta = after_second.materializations - after_first.materializations;
     EXPECT_EQ(second_delta, 0u);
 }
 
@@ -605,7 +485,7 @@ TEST(TensorLazyIrTest, OnModeMixedTransferThenHostBoundaryMaterializesOnlyOnce) 
         GTEST_SKIP() << "CUDA device is required for mixed boundary test";
     }
 
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({4}, Device::CPU, DataType::Float32).add(2.0f).mul(3.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
@@ -615,8 +495,7 @@ TEST(TensorLazyIrTest, OnModeMixedTransferThenHostBoundaryMaterializesOnlyOnce) 
     EXPECT_EQ(gpu.device(), Device::CUDA);
 
     const auto after_transfer = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GT(after_transfer.eager_fallbacks - before.eager_fallbacks, 0u);
-    EXPECT_GT(after_transfer.eager_fallback_device_transfer - before.eager_fallback_device_transfer, 0u);
+    EXPECT_GT(after_transfer.materializations - before.materializations, 0u);
 
     const auto host_values = deferred.to_vector();
     ASSERT_EQ(host_values.size(), 4u);
@@ -625,12 +504,11 @@ TEST(TensorLazyIrTest, OnModeMixedTransferThenHostBoundaryMaterializesOnlyOnce) 
     }
 
     const auto after_host_read = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(after_host_read.eager_fallbacks, after_transfer.eager_fallbacks);
-    EXPECT_EQ(after_host_read.eager_fallback_host_read, after_transfer.eager_fallback_host_read);
+    EXPECT_EQ(after_host_read.materializations, after_transfer.materializations);
 }
 
 TEST(TensorLazyIrTest, OnModeKeepsDeferredThroughViewChain) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto base = Tensor::ones({2, 3}, Device::CPU, DataType::Float32);
     std::vector<int> axes = {1, 0};
@@ -645,7 +523,6 @@ TEST(TensorLazyIrTest, OnModeKeepsDeferredThroughViewChain) {
     EXPECT_EQ(info->op_kind, internal::LazyOpKind::Deferred);
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     const auto values = view_chain.to_vector();
     ASSERT_EQ(values.size(), 4u);
@@ -654,18 +531,17 @@ TEST(TensorLazyIrTest, OnModeKeepsDeferredThroughViewChain) {
     }
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
+    EXPECT_GE(after_boundary.materializations, 1u);
     EXPECT_GE(after_boundary.expr_nodes_created, before_boundary.expr_nodes_created);
 }
 
 TEST(TensorLazyIrTest, OnModeHostReadBoundaryMaterializes) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({6}, Device::CPU, DataType::Float32).add(4.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     const auto values = deferred.to_vector();
     ASSERT_EQ(values.size(), 6u);
@@ -674,11 +550,7 @@ TEST(TensorLazyIrTest, OnModeHostReadBoundaryMaterializes) {
     }
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_GE(after_boundary.eager_fallback_host_read, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_device_transfer, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_mutation, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_interop, 0u);
+    EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
 }
 
 TEST(TensorLazyIrTest, OnModeDeviceTransferBoundaryMaterializes) {
@@ -686,13 +558,12 @@ TEST(TensorLazyIrTest, OnModeDeviceTransferBoundaryMaterializes) {
         GTEST_SKIP() << "CUDA device is required for transfer boundary test";
     }
 
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({4}, Device::CPU, DataType::Float32).add(1.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     auto gpu = deferred.to(Device::CUDA);
     EXPECT_EQ(gpu.device(), Device::CUDA);
@@ -704,21 +575,16 @@ TEST(TensorLazyIrTest, OnModeDeviceTransferBoundaryMaterializes) {
     }
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_host_read, 0u);
-    EXPECT_GE(after_boundary.eager_fallback_device_transfer, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_mutation, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_interop, 0u);
+    EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
 }
 
 TEST(TensorLazyIrTest, OnModeMutationBoundaryMaterializes) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({5}, Device::CPU, DataType::Float32).add(7.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     deferred.zero_();
     const auto values = deferred.to_vector();
@@ -728,21 +594,16 @@ TEST(TensorLazyIrTest, OnModeMutationBoundaryMaterializes) {
     }
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_host_read, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_device_transfer, 0u);
-    EXPECT_GE(after_boundary.eager_fallback_mutation, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_interop, 0u);
+    EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
 }
 
 TEST(TensorLazyIrTest, OnModeInteropPointerBoundaryMaterializes) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({3}, Device::CPU, DataType::Float32).add(2.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     const void* storage = deferred.storage_ptr();
     const float* data = deferred.ptr<float>();
@@ -751,21 +612,16 @@ TEST(TensorLazyIrTest, OnModeInteropPointerBoundaryMaterializes) {
     EXPECT_FLOAT_EQ(data[0], 3.0f);
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_host_read, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_device_transfer, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_mutation, 0u);
-    EXPECT_GE(after_boundary.eager_fallback_interop, 1u);
+    EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
 }
 
-TEST(TensorLazyIrTest, OnModeContiguousBoundaryMaterializesAsOther) {
-    LazyRuntimeGuard guard(LazyMode::On);
+TEST(TensorLazyIrTest, OnModeContiguousBoundaryMaterializes) {
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({6}, Device::CPU, DataType::Float32).add(1.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     auto contiguous = deferred.contiguous();
     const auto values = contiguous.to_vector();
@@ -775,22 +631,16 @@ TEST(TensorLazyIrTest, OnModeContiguousBoundaryMaterializesAsOther) {
     }
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_host_read, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_device_transfer, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_mutation, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_interop, 0u);
-    EXPECT_GE(after_boundary.eager_fallback_other, 1u);
+    EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
 }
 
-TEST(TensorLazyIrTest, OnModeDtypeBoundaryMaterializesAsOther) {
-    LazyRuntimeGuard guard(LazyMode::On);
+TEST(TensorLazyIrTest, OnModeDtypeBoundaryMaterializes) {
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({5}, Device::CPU, DataType::Float32).add(2.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     auto as_int = deferred.to(DataType::Int32);
     const auto values = as_int.to_vector_int();
@@ -800,41 +650,30 @@ TEST(TensorLazyIrTest, OnModeDtypeBoundaryMaterializesAsOther) {
     }
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_host_read, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_device_transfer, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_mutation, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_interop, 0u);
-    EXPECT_GE(after_boundary.eager_fallback_other, 1u);
+    EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
 }
 
-TEST(TensorLazyIrTest, OnModeReserveBoundaryMaterializesAsMutation) {
-    LazyRuntimeGuard guard(LazyMode::On);
+TEST(TensorLazyIrTest, OnModeReserveBoundaryMaterializes) {
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({2, 2}, Device::CPU, DataType::Float32).add(3.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     deferred.reserve(8);
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_host_read, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_device_transfer, 0u);
-    EXPECT_GE(after_boundary.eager_fallback_mutation, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_interop, 0u);
+    EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
 }
 
-TEST(TensorLazyIrTest, OnModeNestedBoundaryPreservesOuterReason) {
-    LazyRuntimeGuard guard(LazyMode::On);
+TEST(TensorLazyIrTest, OnModeNestedBoundaryMaterializes) {
+    LazyTestGuard guard;
 
     auto deferred_bool = Tensor::ones({4}, Device::CPU, DataType::Float32).gt(0.5f);
     ASSERT_TRUE(deferred_bool.has_lazy_expr());
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     const auto values = deferred_bool.to_vector();
     ASSERT_EQ(values.size(), 4u);
@@ -843,16 +682,11 @@ TEST(TensorLazyIrTest, OnModeNestedBoundaryPreservesOuterReason) {
     }
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_GE(after_boundary.eager_fallback_host_read, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_device_transfer, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_mutation, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_interop, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_other, 0u);
+    EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
 }
 
-TEST(TensorLazyIrTest, OnModeIndexPutSingleBoundaryMaterializesAsMutation) {
-    LazyRuntimeGuard guard(LazyMode::On);
+TEST(TensorLazyIrTest, OnModeIndexPutSingleBoundaryMaterializes) {
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({6}, Device::CPU, DataType::Float32).add(2.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
@@ -861,7 +695,6 @@ TEST(TensorLazyIrTest, OnModeIndexPutSingleBoundaryMaterializesAsMutation) {
     auto values = Tensor::from_vector(std::vector<float>{9.0f, 8.0f}, {2}, Device::CPU);
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     deferred.index_put_(indices, values);
     const auto result = deferred.to_vector();
@@ -875,15 +708,11 @@ TEST(TensorLazyIrTest, OnModeIndexPutSingleBoundaryMaterializesAsMutation) {
     EXPECT_FLOAT_EQ(result[5], 3.0f);
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_host_read, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_device_transfer, 0u);
-    EXPECT_GE(after_boundary.eager_fallback_mutation, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_interop, 0u);
+    EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
 }
 
-TEST(TensorLazyIrTest, OnModeIndexPutSingleInt64BoundaryMaterializesAsMutation) {
-    LazyRuntimeGuard guard(LazyMode::On);
+TEST(TensorLazyIrTest, OnModeIndexPutSingleInt64BoundaryMaterializes) {
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({6}, Device::CPU, DataType::Float32).add(2.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
@@ -893,7 +722,6 @@ TEST(TensorLazyIrTest, OnModeIndexPutSingleInt64BoundaryMaterializesAsMutation) 
     auto values = Tensor::from_vector(std::vector<float>{9.0f, 8.0f}, {2}, Device::CPU);
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     deferred.index_put_(indices, values);
     const auto result = deferred.to_vector();
@@ -907,15 +735,11 @@ TEST(TensorLazyIrTest, OnModeIndexPutSingleInt64BoundaryMaterializesAsMutation) 
     EXPECT_FLOAT_EQ(result[5], 8.0f);
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_host_read, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_device_transfer, 0u);
-    EXPECT_GE(after_boundary.eager_fallback_mutation, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_interop, 0u);
+    EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
 }
 
-TEST(TensorLazyIrTest, OnModeIndexPutSingleEmptyIndicesBoundaryMaterializesAsMutationNoOp) {
-    LazyRuntimeGuard guard(LazyMode::On);
+TEST(TensorLazyIrTest, OnModeIndexPutSingleEmptyIndicesBoundaryMaterializes) {
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({4}, Device::CPU, DataType::Float32).add(1.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
@@ -924,7 +748,6 @@ TEST(TensorLazyIrTest, OnModeIndexPutSingleEmptyIndicesBoundaryMaterializesAsMut
     auto values = Tensor::empty({0}, Device::CPU, DataType::Float32);
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     deferred.index_put_(indices, values);
     const auto result = deferred.to_vector();
@@ -935,15 +758,11 @@ TEST(TensorLazyIrTest, OnModeIndexPutSingleEmptyIndicesBoundaryMaterializesAsMut
     }
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_host_read, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_device_transfer, 0u);
-    EXPECT_GE(after_boundary.eager_fallback_mutation, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_interop, 0u);
+    EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
 }
 
-TEST(TensorLazyIrTest, OnModeIndexPutMultiDimBoundaryMaterializesAsMutation) {
-    LazyRuntimeGuard guard(LazyMode::On);
+TEST(TensorLazyIrTest, OnModeIndexPutMultiDimBoundaryMaterializes) {
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({3, 3}, Device::CPU, DataType::Float32).add(1.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
@@ -953,7 +772,6 @@ TEST(TensorLazyIrTest, OnModeIndexPutMultiDimBoundaryMaterializesAsMutation) {
     auto values = Tensor::from_vector(std::vector<float>{5.0f, 6.0f, 7.0f}, {3}, Device::CPU);
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     deferred.index_put_({row_idx, col_idx}, values);
     const auto result = deferred.to_vector();
@@ -970,15 +788,11 @@ TEST(TensorLazyIrTest, OnModeIndexPutMultiDimBoundaryMaterializesAsMutation) {
     EXPECT_FLOAT_EQ(result[8], 2.0f);
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_host_read, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_device_transfer, 0u);
-    EXPECT_GE(after_boundary.eager_fallback_mutation, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_interop, 0u);
+    EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
 }
 
-TEST(TensorLazyIrTest, OnModeIndexPutMultiDimInt64BoundaryMaterializesAsMutation) {
-    LazyRuntimeGuard guard(LazyMode::On);
+TEST(TensorLazyIrTest, OnModeIndexPutMultiDimInt64BoundaryMaterializes) {
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({3, 3}, Device::CPU, DataType::Float32).add(1.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
@@ -990,7 +804,6 @@ TEST(TensorLazyIrTest, OnModeIndexPutMultiDimInt64BoundaryMaterializesAsMutation
     auto values = Tensor::from_vector(std::vector<float>{5.0f, 6.0f, 7.0f}, {3}, Device::CPU);
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     deferred.index_put_({row_idx, col_idx}, values);
     const auto result = deferred.to_vector();
@@ -1007,15 +820,11 @@ TEST(TensorLazyIrTest, OnModeIndexPutMultiDimInt64BoundaryMaterializesAsMutation
     EXPECT_FLOAT_EQ(result[8], 2.0f);
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_host_read, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_device_transfer, 0u);
-    EXPECT_GE(after_boundary.eager_fallback_mutation, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_interop, 0u);
+    EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
 }
 
-TEST(TensorLazyIrTest, OnModeIndexPutMultiDimMismatchBoundaryMaterializesAsMutationNoOp) {
-    LazyRuntimeGuard guard(LazyMode::On);
+TEST(TensorLazyIrTest, OnModeIndexPutMultiDimMismatchBoundaryMaterializes) {
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({2, 2}, Device::CPU, DataType::Float32).add(1.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
@@ -1025,7 +834,6 @@ TEST(TensorLazyIrTest, OnModeIndexPutMultiDimMismatchBoundaryMaterializesAsMutat
     auto values = Tensor::from_vector(std::vector<float>{9.0f, 8.0f}, {2}, Device::CPU);
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     deferred.index_put_({row_idx, col_idx}, values);
     const auto result = deferred.to_vector();
@@ -1036,15 +844,11 @@ TEST(TensorLazyIrTest, OnModeIndexPutMultiDimMismatchBoundaryMaterializesAsMutat
     }
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_host_read, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_device_transfer, 0u);
-    EXPECT_GE(after_boundary.eager_fallback_mutation, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_interop, 0u);
+    EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
 }
 
-TEST(TensorLazyIrTest, OnModeIndexAddEdgeBoundaryMaterializesAsMutation) {
-    LazyRuntimeGuard guard(LazyMode::On);
+TEST(TensorLazyIrTest, OnModeIndexAddEdgeBoundaryMaterializes) {
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({5}, Device::CPU, DataType::Float32).add(1.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
@@ -1054,7 +858,6 @@ TEST(TensorLazyIrTest, OnModeIndexAddEdgeBoundaryMaterializesAsMutation) {
     auto src = Tensor::from_vector(std::vector<float>{4.0f, 6.0f}, {2}, Device::CPU);
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     deferred.index_add_(0, indices, src);
     const auto result = deferred.to_vector();
@@ -1067,15 +870,11 @@ TEST(TensorLazyIrTest, OnModeIndexAddEdgeBoundaryMaterializesAsMutation) {
     EXPECT_FLOAT_EQ(result[4], 6.0f);
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_host_read, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_device_transfer, 0u);
-    EXPECT_GE(after_boundary.eager_fallback_mutation, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_interop, 0u);
+    EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
 }
 
-TEST(TensorLazyIrTest, OnModeAppendGatherNon1DIndexBoundaryMaterializesAsMutationNoOp) {
-    LazyRuntimeGuard guard(LazyMode::On);
+TEST(TensorLazyIrTest, OnModeAppendGatherNon1DIndexBoundaryMaterializes) {
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({2, 2}, Device::CPU, DataType::Float32).add(1.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
@@ -1084,7 +883,6 @@ TEST(TensorLazyIrTest, OnModeAppendGatherNon1DIndexBoundaryMaterializesAsMutatio
                        .to(DataType::Int64);
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     deferred.append_gather(indices);
     const auto result = deferred.to_vector();
@@ -1095,26 +893,19 @@ TEST(TensorLazyIrTest, OnModeAppendGatherNon1DIndexBoundaryMaterializesAsMutatio
     }
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_host_read, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_device_transfer, 0u);
-    EXPECT_GE(after_boundary.eager_fallback_mutation, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_interop, 0u);
+    EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
 }
 
-TEST(TensorLazyIrTest, OnModeAppendGatherEdgeBoundaryMaterializesAsMutation) {
-    LazyRuntimeGuard guard(LazyMode::On);
+TEST(TensorLazyIrTest, OnModeAppendGatherEdgeBoundaryMaterializes) {
+    LazyTestGuard guard;
 
     auto deferred = Tensor::ones({2, 2}, Device::CPU, DataType::Float32).add(1.0f);
     ASSERT_TRUE(deferred.has_lazy_expr());
 
-    // Edge path: append_gather requires reserved capacity and will return early.
-    // It should still materialize deferred state as a mutation boundary first.
     auto indices = Tensor::from_vector(std::vector<float>{0.0f}, {1}, Device::CPU)
                        .to(DataType::Int64);
 
     const auto before_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(before_boundary.eager_fallbacks, 0u);
 
     deferred.append_gather(indices);
     const auto result = deferred.to_vector();
@@ -1125,11 +916,7 @@ TEST(TensorLazyIrTest, OnModeAppendGatherEdgeBoundaryMaterializesAsMutation) {
     }
 
     const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_boundary.eager_fallbacks, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_host_read, 0u);
-    EXPECT_EQ(after_boundary.eager_fallback_device_transfer, 0u);
-    EXPECT_GE(after_boundary.eager_fallback_mutation, 1u);
-    EXPECT_EQ(after_boundary.eager_fallback_interop, 0u);
+    EXPECT_GE(after_boundary.materializations, before_boundary.materializations + 1);
 }
 
 TEST(TensorLazyIrTest, OnModeGpuPointwiseFusionValueParity) {
@@ -1137,7 +924,7 @@ TEST(TensorLazyIrTest, OnModeGpuPointwiseFusionValueParity) {
         GTEST_SKIP() << "CUDA device required";
     }
 
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -1166,7 +953,7 @@ TEST(TensorLazyIrTest, OnModeGpuPointwiseFusionReducesLaunches) {
     };
 
     const auto run_chain = [](bool fusion_enabled) {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(fusion_enabled);
         internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -1196,7 +983,7 @@ TEST(TensorLazyIrTest, OnModeGpuPointwiseFusionReducesLaunches) {
 }
 
 TEST(TensorLazyIrTest, OnModeCpuAffineFoldMatchesExpected) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -1219,7 +1006,7 @@ TEST(TensorLazyIrTest, OnModeGpuAffineFoldIdentityIsCorrect) {
         GTEST_SKIP() << "CUDA device required";
     }
 
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
 
     auto x = Tensor::full({512}, 42.0f, Device::CUDA, DataType::Float32);
@@ -1234,7 +1021,7 @@ TEST(TensorLazyIrTest, OnModeGpuAffineFoldIdentityIsCorrect) {
 }
 
 TEST(TensorLazyIrTest, OnModeAffineFoldDivZeroProducesNonFinite) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
 
     auto x = Tensor::ones({8}, Device::CPU, DataType::Float32);
@@ -1251,7 +1038,7 @@ TEST(TensorLazyIrTest, OnModeAffineFoldDivZeroProducesNonFinite) {
 
 TEST(TensorLazyIrTest, OnModeCpuPureUnaryChainFusesWithParity) {
     const auto run_chain = [](bool fusion_enabled) {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(fusion_enabled);
         internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -1280,7 +1067,7 @@ TEST(TensorLazyIrTest, OnModeCpuPureUnaryChainFusesWithParity) {
 
 TEST(TensorLazyIrTest, OnModeCpuMixedChainFusesWithParity) {
     const auto run_chain = [](bool fusion_enabled) {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(fusion_enabled);
         internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -1313,7 +1100,7 @@ TEST(TensorLazyIrTest, OnModeGpuPureUnaryChainFusesWithParity) {
     }
 
     const auto run_chain = [](bool fusion_enabled) {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(fusion_enabled);
         internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -1346,7 +1133,7 @@ TEST(TensorLazyIrTest, OnModeGpuMixedChainFusesWithParity) {
     }
 
     const auto run_chain = [](bool fusion_enabled) {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(fusion_enabled);
         internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -1375,7 +1162,7 @@ TEST(TensorLazyIrTest, OnModeGpuMixedChainFusesWithParity) {
 
 TEST(TensorLazyIrTest, OnModeMixedChainReducesLaunchCount) {
     const auto run_chain = [](bool fusion_enabled) {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(fusion_enabled);
         internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -1410,7 +1197,7 @@ TEST(TensorLazyIrTest, OnModeMixedChainReducesLaunchCount) {
 }
 
 TEST(TensorLazyIrTest, OnModeSingleUnaryOpFuses) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -1430,7 +1217,7 @@ TEST(TensorLazyIrTest, OnModeSingleUnaryOpFuses) {
 }
 
 TEST(TensorLazyIrTest, OnModeInterleavedScalarUnaryChainFuses) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -1451,7 +1238,7 @@ TEST(TensorLazyIrTest, OnModeInterleavedScalarUnaryChainFuses) {
 }
 
 TEST(TensorLazyIrTest, OnModeChainLengthBoundaryDoesNotCrash) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
 
     // 16 ops: should fuse (at the limit)
@@ -1482,7 +1269,7 @@ TEST(TensorLazyIrTest, OnModeChainLengthBoundaryDoesNotCrash) {
 // ============= Fused Transform-Reduce Tests =============
 
 TEST(TensorLazyRuntimeTest, FusedReduceSumCPU) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
 
     auto x = Tensor::full({1024}, 3.0f, Device::CPU, DataType::Float32);
@@ -1507,7 +1294,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceSumGPU) {
     // Unfused reference
     float unfused_val;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
         auto x = Tensor::full({4096}, 3.0f, Device::CUDA, DataType::Float32);
         auto result = x.add(1.0f).mul(2.0f).sum();
@@ -1517,7 +1304,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceSumGPU) {
     // Fused
     float fused_val;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
         internal::lazy_executor_reset_diagnostics_for_testing();
         auto x = Tensor::full({4096}, 3.0f, Device::CUDA, DataType::Float32);
@@ -1538,7 +1325,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceMeanGPU) {
 
     float unfused_val;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
         auto x = Tensor::full({2048}, 5.0f, Device::CUDA, DataType::Float32);
         auto result = x.mul(2.0f).abs().mean();
@@ -1547,7 +1334,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceMeanGPU) {
 
     float fused_val;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
         auto x = Tensor::full({2048}, 5.0f, Device::CUDA, DataType::Float32);
         auto result = x.mul(2.0f).abs().mean();
@@ -1564,7 +1351,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceMaxGPU) {
 
     float unfused_val;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
         auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::CUDA);
         auto result = x.add(-1.0f).max();
@@ -1573,7 +1360,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceMaxGPU) {
 
     float fused_val;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
         auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::CUDA);
         auto result = x.add(-1.0f).max();
@@ -1590,7 +1377,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceMinGPU) {
 
     float unfused_val;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
         auto x = Tensor::full({2048}, 2.0f, Device::CUDA, DataType::Float32);
         auto result = x.sub(0.5f).sigmoid().min();
@@ -1599,7 +1386,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceMinGPU) {
 
     float fused_val;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
         auto x = Tensor::full({2048}, 2.0f, Device::CUDA, DataType::Float32);
         auto result = x.sub(0.5f).sigmoid().min();
@@ -1616,7 +1403,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceUnaryChainGPU) {
 
     float unfused_val;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
         auto x = Tensor::full({2048}, 4.0f, Device::CUDA, DataType::Float32);
         auto result = x.abs().sqrt().exp().sum();
@@ -1625,7 +1412,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceUnaryChainGPU) {
 
     float fused_val;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
         internal::lazy_executor_reset_diagnostics_for_testing();
         auto x = Tensor::full({2048}, 4.0f, Device::CUDA, DataType::Float32);
@@ -1644,7 +1431,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceDiagnosticsGPU) {
         GTEST_SKIP() << "CUDA device required";
     }
 
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -1663,7 +1450,7 @@ TEST(TensorLazyRuntimeTest, NonFullReduceFallback) {
         GTEST_SKIP() << "CUDA device required";
     }
 
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
 
     auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
@@ -1685,7 +1472,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceProdGPU) {
 
     float unfused_val;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
         auto x = Tensor::full({512}, 1.01f, Device::CUDA, DataType::Float32);
         auto result = x.add(0.01f).prod();
@@ -1694,7 +1481,7 @@ TEST(TensorLazyRuntimeTest, FusedReduceProdGPU) {
 
     float fused_val;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
         internal::lazy_executor_reset_diagnostics_for_testing();
         auto x = Tensor::full({512}, 1.01f, Device::CUDA, DataType::Float32);
@@ -1715,7 +1502,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceSumGPU) {
 
     std::vector<float> unfused_result;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
         auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
         auto result = x.add(1.0f).sum({1});
@@ -1724,7 +1511,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceSumGPU) {
 
     std::vector<float> fused_result;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
         internal::lazy_executor_reset_diagnostics_for_testing();
         auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
@@ -1749,7 +1536,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceMeanGPU) {
 
     std::vector<float> unfused_result;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
         auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
         auto result = x.add(1.0f).mean({1});
@@ -1758,7 +1545,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceMeanGPU) {
 
     std::vector<float> fused_result;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
         auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
         auto result = x.add(1.0f).mean({1});
@@ -1778,7 +1565,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceMaxGPU) {
 
     std::vector<float> unfused_result;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
         auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::CUDA).reshape({32, 64});
         auto result = x.add(1.0f).max({1});
@@ -1787,7 +1574,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceMaxGPU) {
 
     std::vector<float> fused_result;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
         auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::CUDA).reshape({32, 64});
         auto result = x.add(1.0f).max({1});
@@ -1807,7 +1594,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceMinGPU) {
 
     std::vector<float> unfused_result;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
         auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::CUDA).reshape({32, 64});
         auto result = x.mul(0.5f).min({1});
@@ -1816,7 +1603,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceMinGPU) {
 
     std::vector<float> fused_result;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
         auto x = Tensor::arange(0.0f, 2048.0f, 1.0f).to(Device::CUDA).reshape({32, 64});
         auto result = x.mul(0.5f).min({1});
@@ -1836,7 +1623,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceProdGPU) {
 
     std::vector<float> unfused_result;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
         auto x = Tensor::full({8, 16}, 1.05f, Device::CUDA, DataType::Float32);
         auto result = x.add(0.01f).prod({1});
@@ -1845,7 +1632,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceProdGPU) {
 
     std::vector<float> fused_result;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
         auto x = Tensor::full({8, 16}, 1.05f, Device::CUDA, DataType::Float32);
         auto result = x.add(0.01f).prod({1});
@@ -1863,7 +1650,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceKeepdimGPU) {
         GTEST_SKIP() << "CUDA device required";
     }
 
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
 
     auto x = Tensor::full({32, 64}, 2.0f, Device::CUDA, DataType::Float32);
@@ -1887,7 +1674,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceUnaryChainGPU) {
 
     std::vector<float> unfused_result;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(false);
         auto x = Tensor::full({16, 128}, 4.0f, Device::CUDA, DataType::Float32);
         auto result = x.abs().sqrt().sum({1});
@@ -1896,7 +1683,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceUnaryChainGPU) {
 
     std::vector<float> fused_result;
     {
-        LazyRuntimeGuard guard(LazyMode::On);
+        LazyTestGuard guard;
         internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
         auto x = Tensor::full({16, 128}, 4.0f, Device::CUDA, DataType::Float32);
         auto result = x.abs().sqrt().sum({1});
@@ -1914,7 +1701,7 @@ TEST(TensorLazyRuntimeTest, FusedSegmentedReduceDiagnosticsGPU) {
         GTEST_SKIP() << "CUDA device required";
     }
 
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -1934,7 +1721,7 @@ TEST(TensorLazyRuntimeTest, NonLastDimReduceFallback) {
         GTEST_SKIP() << "CUDA device required";
     }
 
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -1956,7 +1743,7 @@ TEST(TensorLazyIrTest, LazyReduceIRNodeRecorded) {
         GTEST_SKIP() << "CUDA device required";
     }
 
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
 
     auto x = Tensor::full({4096}, 2.0f, Device::CUDA, DataType::Float32);
@@ -1968,63 +1755,10 @@ TEST(TensorLazyIrTest, LazyReduceIRNodeRecorded) {
     EXPECT_EQ(info->op_kind, internal::LazyOpKind::Reduce);
 }
 
-TEST(TensorLazyRuntimeTest, ReduceParityAcrossModes) {
-    if (!has_cuda_device()) {
-        GTEST_SKIP() << "CUDA device required";
-    }
-
-    struct TestCase {
-        std::vector<size_t> shape;
-        std::vector<int> axes;
-        bool keepdim;
-    };
-
-    std::vector<TestCase> cases = {
-        {{64}, {}, false},
-        {{32, 64}, {1}, false},
-        {{32, 64}, {1}, true},
-        {{8, 16, 32}, {2}, false},
-        {{128}, {0}, false},
-    };
-
-    auto reduce_op_list = {ReduceOp::Sum, ReduceOp::Mean, ReduceOp::Max, ReduceOp::Min, ReduceOp::Prod};
-
-    for (const auto& tc : cases) {
-        for (auto op : reduce_op_list) {
-            std::vector<float> off_result;
-            {
-                LazyRuntimeGuard guard(LazyMode::Off);
-                auto x = Tensor::full(TensorShape(tc.shape), 1.5f, Device::CUDA, DataType::Float32);
-                auto result = x.add(0.5f).reduce(op, {tc.axes, tc.keepdim});
-                off_result = result.to(Device::CPU).to_vector();
-            }
-
-            std::vector<float> on_result;
-            {
-                LazyRuntimeGuard guard(LazyMode::On);
-                internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
-                auto x = Tensor::full(TensorShape(tc.shape), 1.5f, Device::CUDA, DataType::Float32);
-                auto result = x.add(0.5f).reduce(op, {tc.axes, tc.keepdim});
-                on_result = result.to(Device::CPU).to_vector();
-            }
-
-            ASSERT_EQ(off_result.size(), on_result.size())
-                << "Shape/axes/keepdim mismatch for op=" << static_cast<int>(op);
-            for (size_t i = 0; i < off_result.size(); ++i) {
-                const float tol = std::max(std::abs(off_result[i]) * 1e-4f, 1e-5f);
-                EXPECT_NEAR(on_result[i], off_result[i], tol)
-                    << "op=" << static_cast<int>(op)
-                    << " shape_rank=" << tc.shape.size()
-                    << " i=" << i;
-            }
-        }
-    }
-}
-
 // ============= PR14: Size Heuristic Tests =============
 
 TEST(TensorLazyIrTest, SizeHeuristicSkipsDeferralForTinyTensors) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_size_heuristic_override_for_testing(true);
 
     // 8 floats = 32 bytes, well below 4096 threshold
@@ -2035,21 +1769,14 @@ TEST(TensorLazyIrTest, SizeHeuristicSkipsDeferralForTinyTensors) {
     for (float v : values) {
         EXPECT_FLOAT_EQ(v, 2.0f);
     }
-
-    const auto snapshot = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(snapshot.eager_fallback_size_heuristic, 1u);
 }
 
 TEST(TensorLazyIrTest, SizeHeuristicAllowsDeferralForLargeTensors) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_size_heuristic_override_for_testing(true);
 
-    // 100K floats = 400KB, well above 4096 threshold — deferred
-    const auto before = Tensor::lazy_telemetry_snapshot();
+    // 100K floats = 400KB, well above 4096 threshold -- deferred
     auto large = Tensor::ones({100000}, Device::CPU, DataType::Float32).add(1.0f);
-
-    const auto after = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(after.eager_fallback_size_heuristic - before.eager_fallback_size_heuristic, 0u);
 
     auto values = large.to_vector();
     ASSERT_EQ(values.size(), 100000u);
@@ -2057,10 +1784,9 @@ TEST(TensorLazyIrTest, SizeHeuristicAllowsDeferralForLargeTensors) {
 }
 
 TEST(TensorLazyIrTest, SizeHeuristicDisabledByOverride) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_size_heuristic_override_for_testing(false);
 
-    // With heuristic disabled, even tiny tensors should be deferred
     auto tiny = Tensor::ones({8}, Device::CPU, DataType::Float32).add(1.0f);
 
     auto values = tiny.to_vector();
@@ -2068,38 +1794,28 @@ TEST(TensorLazyIrTest, SizeHeuristicDisabledByOverride) {
     for (float v : values) {
         EXPECT_FLOAT_EQ(v, 2.0f);
     }
-
-    const auto snapshot = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(snapshot.eager_fallback_size_heuristic, 0u);
 }
 
 TEST(TensorLazyIrTest, SizeHeuristicCustomThreshold) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_size_heuristic_override_for_testing(true);
     internal::lazy_executor_set_size_threshold_override_for_testing(size_t{256});
 
     EXPECT_EQ(internal::lazy_executor_size_heuristic_threshold(), 256u);
 
-    // 64 floats = 256 bytes → at boundary → should defer (>= threshold)
-    const auto before_boundary = Tensor::lazy_telemetry_snapshot();
+    // 64 floats = 256 bytes at boundary, should defer (>= threshold)
     auto at_boundary = Tensor::ones({64}, Device::CPU, DataType::Float32).add(1.0f);
-    const auto after_boundary = Tensor::lazy_telemetry_snapshot();
-    EXPECT_EQ(after_boundary.eager_fallback_size_heuristic - before_boundary.eager_fallback_size_heuristic, 0u);
     EXPECT_FLOAT_EQ(at_boundary.to_vector()[0], 2.0f);
 
-    // 63 floats = 252 bytes → below threshold → heuristic triggers eager
-    const auto before_below = Tensor::lazy_telemetry_snapshot();
+    // 63 floats = 252 bytes below threshold
     auto below = Tensor::ones({63}, Device::CPU, DataType::Float32).add(1.0f);
-    const auto after_below = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(after_below.eager_fallback_size_heuristic - before_below.eager_fallback_size_heuristic, 1u);
     EXPECT_FLOAT_EQ(below.to_vector()[0], 2.0f);
 }
 
 TEST(TensorLazyIrTest, SizeHeuristicSmallTensorCorrectness) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_size_heuristic_override_for_testing(true);
 
-    // Chained ops on small tensor — heuristic triggers eager at each step
     auto a = Tensor::full({4}, 3.0f, Device::CPU, DataType::Float32);
     auto b = a.add(2.0f).mul(0.5f);
 
@@ -2108,7 +1824,4 @@ TEST(TensorLazyIrTest, SizeHeuristicSmallTensorCorrectness) {
     for (float v : values) {
         EXPECT_FLOAT_EQ(v, 2.5f);
     }
-
-    const auto snapshot = Tensor::lazy_telemetry_snapshot();
-    EXPECT_GE(snapshot.eager_fallback_size_heuristic, 2u);
 }

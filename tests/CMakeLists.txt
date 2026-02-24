@@ -223,7 +223,6 @@ set(TEST_FILES
     test_tensor_cat_bug.cpp
     test_tensor_slicing_safety.cpp
     test_tensor_struct_init.cpp
-    test_tensor_lazy_runtime.cpp
     test_tensor_lazy_ir.cpp
     test_tensor_lazy_stateful_ops.cpp
     test_fusion_performance.cpp

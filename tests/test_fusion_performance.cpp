@@ -2,7 +2,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include "core/tensor/internal/lazy_config.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
 #include <chrono>
@@ -16,27 +15,18 @@ using namespace lfs::core;
 
 namespace {
 
-    class LazyRuntimeGuard {
+    class LazyTestGuard {
     public:
-        explicit LazyRuntimeGuard(LazyMode mode) {
-            internal::set_lazy_mode_override_for_testing(mode);
+        LazyTestGuard() {
             internal::clear_lazy_ir_for_testing();
             internal::lazy_executor_clear_registry_for_testing();
             internal::lazy_executor_reset_diagnostics_for_testing();
-            internal::lazy_executor_set_debug_dump_override_for_testing(std::nullopt);
-            internal::lazy_executor_clear_debug_dump_cache_for_testing();
-            internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
             Tensor::reset_lazy_telemetry();
         }
-
-        ~LazyRuntimeGuard() {
-            internal::set_lazy_mode_override_for_testing(std::nullopt);
+        ~LazyTestGuard() {
             internal::clear_lazy_ir_for_testing();
             internal::lazy_executor_clear_registry_for_testing();
             internal::lazy_executor_reset_diagnostics_for_testing();
-            internal::lazy_executor_set_debug_dump_override_for_testing(std::nullopt);
-            internal::lazy_executor_clear_debug_dump_cache_for_testing();
-            internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
             Tensor::reset_lazy_telemetry();
         }
     };
@@ -126,9 +116,9 @@ namespace {
         Tensor fused_out, eager_out;
         torch::Tensor torch_out;
 
-        // LFS fused (lazy mode + fusion on)
+        // LFS fused (lazy + pointwise fusion)
         {
-            LazyRuntimeGuard guard(LazyMode::On);
+            LazyTestGuard guard;
             internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
 
             for (int i = 0; i < kWarmup; ++i) {
@@ -145,9 +135,9 @@ namespace {
             result.lfs_fused_us = std::chrono::duration_cast<std::chrono::microseconds>(end - start).count() / static_cast<double>(kIters);
         }
 
-        // LFS eager (lazy mode off)
+        // LFS eager (lazy without fusion)
         {
-            LazyRuntimeGuard guard(LazyMode::Off);
+            LazyTestGuard guard;
 
             for (int i = 0; i < kWarmup; ++i) {
                 auto y = lfs_fn(lfs_input).contiguous();
@@ -210,7 +200,7 @@ namespace {
         torch::Tensor torch_out;
 
         {
-            LazyRuntimeGuard guard(LazyMode::On);
+            LazyTestGuard guard;
             internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
 
             for (int i = 0; i < kWarmup; ++i) {
@@ -228,7 +218,7 @@ namespace {
         }
 
         {
-            LazyRuntimeGuard guard(LazyMode::Off);
+            LazyTestGuard guard;
             for (int i = 0; i < kWarmup; ++i) {
                 auto y = lfs_fn(lfs_a, lfs_b).contiguous();
                 cudaDeviceSynchronize();

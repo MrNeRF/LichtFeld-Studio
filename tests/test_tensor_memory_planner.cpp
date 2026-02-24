@@ -2,11 +2,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/tensor.hpp"
-#include "core/tensor/internal/lazy_config.hpp"
 #include "core/tensor/internal/lazy_executor.hpp"
 #include "core/tensor/internal/lazy_ir.hpp"
 #include <gtest/gtest.h>
-#include <optional>
 #include <span>
 #include <unordered_map>
 
@@ -14,33 +12,14 @@ using namespace lfs::core;
 
 namespace {
 
-    class LazyRuntimeGuard {
+    class LazyTestGuard {
     public:
-        explicit LazyRuntimeGuard(LazyMode mode) {
-            internal::set_lazy_mode_override_for_testing(mode);
+        LazyTestGuard() {
             internal::clear_lazy_ir_for_testing();
-            internal::lazy_executor_clear_registry_for_testing();
-            internal::lazy_executor_reset_diagnostics_for_testing();
-            internal::lazy_executor_set_debug_dump_override_for_testing(std::nullopt);
-            internal::lazy_executor_clear_debug_dump_cache_for_testing();
-            internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
-            internal::lazy_executor_set_memory_planner_override_for_testing(std::nullopt);
-            internal::lazy_executor_set_size_heuristic_override_for_testing(false);
-            internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
             Tensor::reset_lazy_telemetry();
         }
-
-        ~LazyRuntimeGuard() {
-            internal::set_lazy_mode_override_for_testing(std::nullopt);
+        ~LazyTestGuard() {
             internal::clear_lazy_ir_for_testing();
-            internal::lazy_executor_clear_registry_for_testing();
-            internal::lazy_executor_reset_diagnostics_for_testing();
-            internal::lazy_executor_set_debug_dump_override_for_testing(std::nullopt);
-            internal::lazy_executor_clear_debug_dump_cache_for_testing();
-            internal::lazy_executor_set_pointwise_fusion_override_for_testing(std::nullopt);
-            internal::lazy_executor_set_memory_planner_override_for_testing(std::nullopt);
-            internal::lazy_executor_set_size_heuristic_override_for_testing(std::nullopt);
-            internal::lazy_executor_set_size_threshold_override_for_testing(std::nullopt);
             Tensor::reset_lazy_telemetry();
         }
     };
@@ -48,7 +27,7 @@ namespace {
 } // namespace
 
 TEST(TensorMemoryPlannerTest, LivenessComputationLinearChain) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     // Shape operations should carry explicit IR dependencies through deferred chaining.
     auto a = Tensor::ones({2, 3}, Device::CPU, DataType::Float32).add(1.0f);
@@ -92,7 +71,7 @@ TEST(TensorMemoryPlannerTest, LivenessComputationLinearChain) {
 }
 
 TEST(TensorMemoryPlannerTest, LivenessComputationPointwiseChain) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
 
     auto a = Tensor::ones({64}, Device::CPU, DataType::Float32).add(1.0f);
     auto b = a.mul(2.0f);
@@ -132,7 +111,7 @@ TEST(TensorMemoryPlannerTest, LivenessComputationPointwiseChain) {
 }
 
 TEST(TensorMemoryPlannerTest, EarlyReleaseFiresForLinearChain) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_memory_planner_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -155,7 +134,7 @@ TEST(TensorMemoryPlannerTest, EarlyReleaseFiresForLinearChain) {
 }
 
 TEST(TensorMemoryPlannerTest, PeakCacheBytesReducedVsNaive) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_memory_planner_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -179,7 +158,7 @@ TEST(TensorMemoryPlannerTest, PeakCacheBytesReducedVsNaive) {
 }
 
 TEST(TensorMemoryPlannerTest, RootNodeNotReleasedEarly) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_memory_planner_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -207,7 +186,7 @@ TEST(TensorMemoryPlannerTest, RootNodeNotReleasedEarly) {
 }
 
 TEST(TensorMemoryPlannerTest, MultiConsumerNodeReleasedAfterLastConsumer) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_memory_planner_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
 
@@ -234,7 +213,7 @@ TEST(TensorMemoryPlannerTest, MultiConsumerNodeReleasedAfterLastConsumer) {
 }
 
 TEST(TensorMemoryPlannerTest, FusionAndEarlyReleaseCoexist) {
-    LazyRuntimeGuard guard(LazyMode::On);
+    LazyTestGuard guard;
     internal::lazy_executor_set_pointwise_fusion_override_for_testing(true);
     internal::lazy_executor_set_memory_planner_override_for_testing(true);
     internal::lazy_executor_reset_diagnostics_for_testing();
