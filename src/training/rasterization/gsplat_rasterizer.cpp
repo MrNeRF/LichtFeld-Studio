@@ -9,6 +9,7 @@
 #include "training/kernels/grad_alpha.hpp"
 #include <cassert>
 #include <spdlog/spdlog.h>
+#include <vector>
 
 namespace lfs::training {
 
@@ -41,29 +42,56 @@ namespace lfs::training {
 
         const float* viewmat_ptr = viewpoint_camera.world_view_transform_ptr();
 
-        // Adjust K matrix principal point (cx, cy) for tile offset
-        core::Tensor K_tensor;
-        if (tile_x_offset != 0 || tile_y_offset != 0) {
-            auto K_cpu = viewpoint_camera.K().cpu().contiguous();
-            auto K_acc = K_cpu.accessor<float, 3>();
-            K_acc(0, 0, 2) -= static_cast<float>(tile_x_offset);
-            K_acc(0, 1, 2) -= static_cast<float>(tile_y_offset);
-            K_tensor = K_cpu.to(core::Device::CUDA).contiguous();
-        } else {
-            K_tensor = viewpoint_camera.K().contiguous();
+        // Convert from lfs::core::CameraModelType (enum class) to global CameraModelType (plain enum) for CUDA kernels
+        const ::CameraModelType camera_model = static_cast<::CameraModelType>(
+            static_cast<int>(viewpoint_camera.camera_model_type()));
+
+        // Build K directly from intrinsics to avoid extra CUDA->CPU->CUDA roundtrips.
+        const auto [fx, fy, cx, cy] = viewpoint_camera.get_intrinsics();
+        float k00 = fx;
+        float k11 = fy;
+        float k02 = cx - static_cast<float>(tile_x_offset);
+        float k12 = cy - static_cast<float>(tile_y_offset);
+
+        // For equirectangular cameras in tile mode, encode tile info in K matrix.
+        // The CUDA kernels read these values as:
+        //   K[0][0] (focal_length.x) = full_image_width
+        //   K[1][1] (focal_length.y) = full_image_height
+        //   K[0][2] (principal_point.x) = tile_x_offset
+        //   K[1][2] (principal_point.y) = tile_y_offset
+        if (camera_model == CameraModelType::EQUIRECTANGULAR) {
+            k00 = static_cast<float>(full_image_width);
+            k11 = static_cast<float>(full_image_height);
+            k02 = static_cast<float>(tile_x_offset);
+            k12 = static_cast<float>(tile_y_offset);
         }
 
-        // Get Gaussian parameters (activated) - ensure contiguous
-        auto means = gaussian_model.get_means().contiguous();
-        auto opacities = gaussian_model.get_opacity().contiguous(); // [N] sigmoid applied
-        auto scales = gaussian_model.get_scaling().contiguous();    // [N, 3] exp applied
-        auto quats = gaussian_model.get_rotation().contiguous();    // [N, 4] normalized
-        auto sh_coeffs = gaussian_model.get_shs().contiguous();     // [N, K, 3]
+        std::vector<float> K_host = {
+            k00, 0.0f, k02,
+            0.0f, k11, k12,
+            0.0f, 0.0f, 1.0f};
+        core::Tensor K_tensor = core::Tensor::from_vector(
+            K_host,
+            core::TensorShape({1, 3, 3}),
+            core::Device::CUDA);
+
+        // Get Gaussian parameters (activated), preserving existing contiguous storage where possible.
+        auto ensure_contiguous = [](core::Tensor t) -> core::Tensor {
+            return t.is_contiguous() ? t : t.contiguous();
+        };
+        auto means = ensure_contiguous(gaussian_model.get_means());
+        auto opacities = ensure_contiguous(gaussian_model.get_opacity()); // [N] sigmoid applied
+        auto scales = ensure_contiguous(gaussian_model.get_scaling());    // [N, 3] exp applied
+        auto quats = ensure_contiguous(gaussian_model.get_rotation());    // [N, 4] normalized
+        auto sh_coeffs = ensure_contiguous(gaussian_model.get_shs());     // [N, K, 3]
         const uint32_t sh_degree = static_cast<uint32_t>(gaussian_model.get_active_sh_degree());
 
         // Squeeze opacities if needed
         if (opacities.ndim() == 2 && opacities.shape()[1] == 1) {
             opacities = opacities.squeeze(-1);
+            if (!opacities.is_contiguous()) {
+                opacities = opacities.contiguous();
+            }
         }
 
         // Get raw pointers
@@ -93,26 +121,6 @@ namespace lfs::training {
         constexpr float radius_clip = 0.0f;
         constexpr uint32_t tile_size = 16;
         const bool calc_compensations = antialiased;
-        // Convert from lfs::core::CameraModelType (enum class) to global CameraModelType (plain enum) for CUDA kernels
-        const ::CameraModelType camera_model = static_cast<::CameraModelType>(
-            static_cast<int>(viewpoint_camera.camera_model_type()));
-
-        // For equirectangular cameras in tile mode, encode tile info in K matrix.
-        // The CUDA kernels read these values as:
-        //   K[0][0] (focal_length.x) = full_image_width
-        //   K[1][1] (focal_length.y) = full_image_height
-        //   K[0][2] (principal_point.x) = tile_x_offset
-        //   K[1][2] (principal_point.y) = tile_y_offset
-        // This avoids changing all function interfaces for a camera-specific fix.
-        if (camera_model == CameraModelType::EQUIRECTANGULAR) {
-            auto K_cpu = viewpoint_camera.K().cpu().contiguous();
-            auto K_acc = K_cpu.accessor<float, 3>();
-            K_acc(0, 0, 0) = static_cast<float>(full_image_width);
-            K_acc(0, 1, 1) = static_cast<float>(full_image_height);
-            K_acc(0, 0, 2) = static_cast<float>(tile_x_offset);
-            K_acc(0, 1, 2) = static_cast<float>(tile_y_offset);
-            K_tensor = K_cpu.to(core::Device::CUDA).contiguous();
-        }
         const float* K_ptr = K_tensor.ptr<float>();
 
         // Distortion coefficients
@@ -254,6 +262,8 @@ namespace lfs::training {
             .flatten_ids = nullptr,
             .n_isects = 0};
 
+        const cudaStream_t fwd_stream = means.stream();
+
         // Call raw pointer forward API
         gsplat_lfs::rasterize_from_world_with_sh_fwd(
             means_ptr,
@@ -288,7 +298,7 @@ namespace lfs::training {
             tangential_ptr,
             thin_prism_ptr,
             result,
-            nullptr);
+            fwd_stream);
 
         // Build RenderOutput - wrap raw pointers in tensor views
         RenderOutput render_output;
@@ -432,6 +442,7 @@ namespace lfs::training {
         const uint32_t H = ctx.image_height;
         const uint32_t W = ctx.image_width;
         const uint32_t channels = ctx.channels;
+        const cudaStream_t stream = ctx.means.stream();
 
         // Calculate sizes for arena allocation
         auto align = [](size_t size, size_t alignment = 128) {
@@ -469,11 +480,11 @@ namespace lfs::training {
         auto* v_sh_coeffs_ptr = reinterpret_cast<float*>(bwd_ptr);
 
         // Zero the gradient buffers
-        cudaMemsetAsync(v_means_ptr, 0, N * 3 * sizeof(float), nullptr);
-        cudaMemsetAsync(v_quats_ptr, 0, N * 4 * sizeof(float), nullptr);
-        cudaMemsetAsync(v_scales_ptr, 0, N * 3 * sizeof(float), nullptr);
-        cudaMemsetAsync(v_opacities_ptr, 0, N * sizeof(float), nullptr);
-        cudaMemsetAsync(v_sh_coeffs_ptr, 0, N * K * 3 * sizeof(float), nullptr);
+        cudaMemsetAsync(v_means_ptr, 0, N * 3 * sizeof(float), stream);
+        cudaMemsetAsync(v_quats_ptr, 0, N * 4 * sizeof(float), stream);
+        cudaMemsetAsync(v_scales_ptr, 0, N * 3 * sizeof(float), stream);
+        cudaMemsetAsync(v_opacities_ptr, 0, N * sizeof(float), stream);
+        cudaMemsetAsync(v_sh_coeffs_ptr, 0, N * K * 3 * sizeof(float), stream);
 
         // Prepare grad_render_colors [1, H, W, channels] - permute from CHW to HWC using custom kernel
         // This avoids memory pool allocation from tensor permute().contiguous()
@@ -483,9 +494,9 @@ namespace lfs::training {
                 grad_image.ptr<float>(),
                 v_render_colors_ptr,
                 static_cast<int>(channels), static_cast<int>(H), static_cast<int>(W),
-                nullptr);
+                stream);
         } else {
-            cudaMemsetAsync(v_render_colors_ptr, 0, H * W * channels * sizeof(float), nullptr);
+            cudaMemsetAsync(v_render_colors_ptr, 0, H * W * channels * sizeof(float), stream);
         }
 
         // Prepare grad_render_alphas [H, W] - squeeze from [1, H, W] using custom kernel
@@ -496,9 +507,9 @@ namespace lfs::training {
                 grad_alpha.ptr<float>(),
                 v_render_alphas_ptr,
                 static_cast<int>(H), static_cast<int>(W),
-                nullptr);
+                stream);
         } else {
-            cudaMemsetAsync(v_render_alphas_ptr, 0, H * W * sizeof(float), nullptr);
+            cudaMemsetAsync(v_render_alphas_ptr, 0, H * W * sizeof(float), stream);
         }
 
         UnscentedTransformParameters ut_params;
@@ -540,13 +551,6 @@ namespace lfs::training {
         const float* const pixel_error_map_ptr = (update_densification_info && error_map_2d.is_valid())
                                                      ? error_map_2d.ptr<float>()
                                                      : nullptr;
-
-        // Debug: check for errors before gsplat backward
-        cudaDeviceSynchronize();
-        auto err_pre_gsplat = cudaGetLastError();
-        if (err_pre_gsplat != cudaSuccess) {
-            LOG_ERROR("CUDA error BEFORE gsplat backward: {}", cudaGetErrorString(err_pre_gsplat));
-        }
 
         // Call backward with raw pointers
         gsplat_lfs::rasterize_from_world_with_sh_bwd(
@@ -600,15 +604,8 @@ namespace lfs::training {
             v_sh_coeffs_ptr,
             densification_info_ptr,
             pixel_error_map_ptr,
-            nullptr // stream
+            stream
         );
-
-        // Debug: check for errors after gsplat backward
-        cudaDeviceSynchronize();
-        auto err_post_gsplat = cudaGetLastError();
-        if (err_post_gsplat != cudaSuccess) {
-            LOG_ERROR("CUDA error AFTER gsplat backward: {}", cudaGetErrorString(err_post_gsplat));
-        }
 
         // ============ Chain rule for activation functions ============
         // gsplat backward returns gradients w.r.t. activated parameters
@@ -617,23 +614,11 @@ namespace lfs::training {
 
         // Scales: exp(raw) -> v_scales_raw = v_scales * exp(raw_scales) = v_scales * scales
         // In-place: v_scales_ptr *= scales
-        kernels::launch_exp_backward(v_scales_ptr, ctx.scales.ptr<float>(), N, nullptr);
-
-        cudaDeviceSynchronize();
-        auto err_exp = cudaGetLastError();
-        if (err_exp != cudaSuccess) {
-            LOG_ERROR("CUDA error AFTER exp_backward: {}", cudaGetErrorString(err_exp));
-        }
+        kernels::launch_exp_backward(v_scales_ptr, ctx.scales.ptr<float>(), N, stream);
 
         // Opacities: sigmoid(raw) -> v_opacities_raw = v_opacities * sigmoid * (1 - sigmoid)
         // In-place: v_opacities_ptr *= sigmoid * (1 - sigmoid)
-        kernels::launch_sigmoid_backward(v_opacities_ptr, ctx.opacities.ptr<float>(), N, nullptr);
-
-        cudaDeviceSynchronize();
-        auto err_sigmoid = cudaGetLastError();
-        if (err_sigmoid != cudaSuccess) {
-            LOG_ERROR("CUDA error AFTER sigmoid_backward: {}", cudaGetErrorString(err_sigmoid));
-        }
+        kernels::launch_sigmoid_backward(v_opacities_ptr, ctx.opacities.ptr<float>(), N, stream);
 
         // Quaternions: normalize(raw) -> need Jacobian of normalization
         // v_raw = (v_activated - q_norm * dot(q_norm, v_activated)) / ||q_raw||
@@ -644,13 +629,7 @@ namespace lfs::training {
             ctx.quats.ptr<float>(),
             raw_quats.ptr<float>(),
             N,
-            nullptr);
-
-        cudaDeviceSynchronize();
-        auto err_quat = cudaGetLastError();
-        if (err_quat != cudaSuccess) {
-            LOG_ERROR("CUDA error AFTER quat_normalize_backward: {}", cudaGetErrorString(err_quat));
-        }
+            stream);
 
         // ============ Accumulate gradients into optimizer using CUDA kernels ============
         // This avoids any tensor operations that might allocate from memory pool
@@ -660,28 +639,28 @@ namespace lfs::training {
             optimizer.get_grad(ParamType::Means).ptr<float>(),
             v_means_ptr,
             N * 3,
-            nullptr);
+            stream);
 
         // Scales: [N, 3] -> [N, 3]
         kernels::launch_grad_accumulate(
             optimizer.get_grad(ParamType::Scaling).ptr<float>(),
             v_scales_ptr,
             N * 3,
-            nullptr);
+            stream);
 
         // Rotations: [N, 4] -> [N, 4]
         kernels::launch_grad_accumulate(
             optimizer.get_grad(ParamType::Rotation).ptr<float>(),
             v_quats_ptr,
             N * 4,
-            nullptr);
+            stream);
 
         // Opacities: [N] -> [N, 1] (same memory layout)
         kernels::launch_grad_accumulate_unsqueeze(
             optimizer.get_grad(ParamType::Opacity).ptr<float>(),
             v_opacities_ptr,
             N,
-            nullptr);
+            stream);
 
         // SH coefficients: [N, K, 3] -> sh0 [N, 1, 3] + shN [N, K_dst, 3]
         // K is active SH coeffs, K_dst is the full buffer width (max_sh_degree^2 - 1)
@@ -695,13 +674,6 @@ namespace lfs::training {
             }
         }
 
-        // Debug: sync and check for errors before SH kernel
-        cudaDeviceSynchronize();
-        auto err_pre = cudaGetLastError();
-        if (err_pre != cudaSuccess) {
-            LOG_ERROR("CUDA error BEFORE SH kernel: {}", cudaGetErrorString(err_pre));
-        }
-
         kernels::launch_grad_accumulate_sh(
             optimizer.get_grad(ParamType::Sh0).ptr<float>(),
             dst_shN,
@@ -709,15 +681,7 @@ namespace lfs::training {
             N,
             K,     // K_src: active SH coefficients
             K_dst, // K_dst: destination buffer width
-            nullptr);
-
-        // Debug: sync and check for errors after SH kernel
-        cudaDeviceSynchronize();
-        auto err_post = cudaGetLastError();
-        if (err_post != cudaSuccess) {
-            LOG_ERROR("CUDA error AFTER SH kernel: {} (N={}, K={}, K_dst={}, dst_shN={})",
-                      cudaGetErrorString(err_post), N, K, K_dst, (void*)dst_shN);
-        }
+            stream);
 
         // Accumulate gradient norms when pixel-error map is not provided
         if (update_densification_info && pixel_error_map_ptr == nullptr) {
@@ -725,13 +689,7 @@ namespace lfs::training {
                 gaussian_model._densification_info.ptr<float>(),
                 v_means_ptr,
                 N,
-                nullptr);
-
-            cudaDeviceSynchronize();
-            auto err_dens = cudaGetLastError();
-            if (err_dens != cudaSuccess) {
-                LOG_ERROR("CUDA error AFTER grad_norm_accumulate: {}", cudaGetErrorString(err_dens));
-            }
+                stream);
         }
 
         // Free internally allocated buffers from forward
@@ -742,22 +700,8 @@ namespace lfs::training {
             cudaFree(ctx.flatten_ids_ptr);
         }
 
-        // Extra sync after cudaFree to catch any lingering errors
-        cudaDeviceSynchronize();
-        auto err_free = cudaGetLastError();
-        if (err_free != cudaSuccess) {
-            LOG_ERROR("CUDA error AFTER cudaFree: {}", cudaGetErrorString(err_free));
-        }
-
         // End arena frame to release memory from forward pass
         arena.end_frame(ctx.frame_id);
-
-        // Final final sync
-        cudaDeviceSynchronize();
-        auto err_arena = cudaGetLastError();
-        if (err_arena != cudaSuccess) {
-            LOG_ERROR("CUDA error AFTER end_frame: {}", cudaGetErrorString(err_arena));
-        }
     }
 
 } // namespace lfs::training

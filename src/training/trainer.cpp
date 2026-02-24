@@ -40,6 +40,7 @@
 #include <expected>
 #include <memory>
 #include <nvtx3/nvToolsExt.h>
+#include <thread>
 
 namespace lfs::training {
 
@@ -284,14 +285,12 @@ namespace lfs::training {
                 }
             } else {
                 // Pure L1 with mask (no SSIM)
-                const Tensor mask_expanded = mask_2d.unsqueeze(0).expand({static_cast<int>(rendered.shape()[0]),
-                                                                          static_cast<int>(mask_2d.shape()[0]),
-                                                                          static_cast<int>(mask_2d.shape()[1])});
-                const Tensor mask_sum = mask_expanded.sum() + EPSILON;
-
-                const Tensor masked_l1 = ((rendered - gt_image).abs() * mask_expanded).sum() / mask_sum;
-                const Tensor sign_diff = (rendered - gt_image).sign();
-                grad = sign_diff * mask_expanded / mask_sum;
+                const Tensor mask_3d = mask_2d.unsqueeze(0);
+                const Tensor mask_sum = mask_2d.sum() * static_cast<float>(rendered.shape()[0]) + EPSILON;
+                const Tensor diff = rendered - gt_image;
+                const Tensor masked_l1 = (diff.abs() * mask_3d).sum() / mask_sum;
+                const Tensor sign_diff = diff.sign();
+                grad = sign_diff * mask_3d / mask_sum;
                 loss = masked_l1;
             }
 
@@ -923,7 +922,7 @@ namespace lfs::training {
             bg_mix_buffer_ = lfs::core::Tensor::empty({3}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
         }
 
-        cudaMemcpyAsync(bg_mix_buffer_.ptr<float>(), result, sizeof(result), cudaMemcpyHostToDevice, nullptr);
+        cudaMemcpyAsync(bg_mix_buffer_.ptr<float>(), result, sizeof(result), cudaMemcpyHostToDevice, bg_mix_buffer_.stream());
         return bg_mix_buffer_;
     }
 
@@ -964,8 +963,7 @@ namespace lfs::training {
             channels,
             src_h, src_w,
             height, width,
-            nullptr // default stream
-        );
+            resized.stream());
 
         // Cache the resized image
         bg_image_cache_[cache_key] = resized;
@@ -988,7 +986,7 @@ namespace lfs::training {
             random_bg_buffer_.ptr<float>(),
             height, width,
             static_cast<uint64_t>(iteration),
-            nullptr);
+            random_bg_buffer_.stream());
 
         return random_bg_buffer_;
     }
@@ -1097,7 +1095,12 @@ namespace lfs::training {
             const int tile_height = full_height / tile_rows;
             const int num_tiles = tile_rows * tile_cols;
 
-            core::Tensor loss_tensor_gpu = core::Tensor::zeros({1}, core::Device::CUDA);
+            if (!loss_accumulator_.is_valid()) {
+                loss_accumulator_ = core::Tensor::zeros({1}, core::Device::CUDA);
+            } else {
+                loss_accumulator_.zero_();
+            }
+            auto& loss_tensor_gpu = loss_accumulator_;
             RenderOutput r_output;
             int tiles_processed = 0;
 
@@ -1851,8 +1854,8 @@ namespace lfs::training {
 
                 if (stop_token.stop_requested() || stop_requested_.load())
                     break;
-                if (callback_busy_.load())
-                    cudaStreamSynchronize(callback_stream_);
+                while (callback_busy_.load(std::memory_order_acquire))
+                    std::this_thread::yield();
 
                 lfs::core::Camera* cam = nullptr;
                 lfs::core::Tensor gt_image;

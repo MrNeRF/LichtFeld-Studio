@@ -178,15 +178,15 @@ Success criteria:
 - launch count drop >= 50% on targeted chain benchmark
 - correctness parity
 
-### PR8: Fusion V2 (broadcast + where)
-Goal: fuse common broadcasted pipelines.
+### PR8: Fusion V2 (scalar + unary pointwise chain extension)
+Goal: extend V1 scalar fusion to mixed scalar+unary chains on CPU/CUDA.
 Success criteria:
-- broadcast-heavy benchmarks show 1.5x+ speedups
+- mixed unary/scalar chains fuse with parity and reduced launches
 
 ### PR9: Reduction integration
 Goal: make reductions graph-native boundaries with producer fusion.
 Success criteria:
-- reduction parity across dims/keepdim/dtypes
+- parity for covered fused paths (CUDA Float32 full + last-dim segmented), with correct fallback elsewhere
 
 ### PR10: Alias/view/in-place correctness hardening
 Goal: enforce versioning, copy-on-write only when needed, mutation barriers.
@@ -213,6 +213,12 @@ Goal: eager fallback for tiny workloads and staged enablement.
 Success criteria:
 - no small-tensor regression > 5%
 - large-chain gains preserved
+
+### PR15: Broadcast + where fusion (pending)
+Goal: fuse broadcast-heavy and ternary (`where`) chains in the lazy executor.
+Success criteria:
+- broadcast-heavy benchmarks show 1.5x+ speedups
+- where-heavy pipelines reduce launches with parity
 
 ## 7. Test Plan (Must Add)
 
@@ -626,6 +632,35 @@ Added liveness-driven early cache release to `execute_topological_nodes()`. Duri
 
 **Tests:** 6 new TensorMemoryPlannerTest pass, 76 existing TensorLazy{Runtime,Ir}Test pass, 141 regression tests pass.
 
+### PR13: Stateful Op Rules (2026-02-24)
+
+**Goal:** Codify that RNG/stateful ops must never be deferred, with telemetry to verify.
+
+**Changes:**
+- `src/core/tensor/internal/lazy_config.hpp` — added `stateful_op_eager` to `LazyTelemetrySnapshot`, declared `telemetry_record_stateful_op_eager()`
+- `src/core/tensor/lazy_config.cpp` — wired atomic counter into reset/snapshot
+- `src/core/tensor/tensor_unified_ops.cpp` — record telemetry in `LoadOp::Random`, `Normal`, `Randint`, `Bernoulli`
+- `tests/test_tensor_lazy_stateful_ops.cpp` — NEW: 11 tests (eager checks, seed reproducibility, GPU variant, telemetry counts, shadow mode)
+- `tests/CMakeLists.txt` — registered new test file
+
+**Tests:** 11 TensorLazyStatefulOpsTest pass.
+
+### PR14: Size Heuristic for Tiny Tensors (2026-02-24)
+
+**Goal:** Skip deferral for tensors below 4096 bytes where overhead dominates.
+
+**Changes:**
+- `src/core/tensor/internal/lazy_config.hpp` — added `SizeHeuristic = 6` to `LazyFallbackReason`, `eager_fallback_size_heuristic` to telemetry
+- `src/core/tensor/lazy_config.cpp` — wired counter and fallback recording
+- `src/core/tensor/internal/lazy_executor.hpp` — declared size heuristic API
+- `src/core/tensor/lazy_executor.cpp` — implemented `LazyExecutorSizeHeuristicState`, env vars `TENSOR_LAZY_SIZE_HEURISTIC`/`TENSOR_LAZY_SIZE_THRESHOLD`
+- `src/core/tensor/internal/tensor_expr_impl.hpp` — size check in `operator Tensor()` before deferral
+- `tests/test_tensor_lazy_ir.cpp` — 5 new size heuristic tests, `LazyRuntimeGuard` disables heuristic by default
+- `tests/test_tensor_memory_planner.cpp` — `LazyRuntimeGuard` updated
+- `tests/test_tensor_lazy_stateful_ops.cpp` — `LazyRuntimeGuard` updated
+
+**Tests:** 5 SizeHeuristic tests pass, 87 full lazy suite pass, 113 regression tests pass.
+
 ### Next active step
 
-1. PR13: Stateful op rules.
+Complete PR15 (broadcast + where fusion), then widen reduction fusion coverage beyond CUDA Float32 before production rollout.

@@ -79,6 +79,7 @@ namespace lfs::training {
         // State variables
         lfs::core::Tensor _binoms;       // [n_max, n_max] binomial coefficients
         lfs::core::Tensor _noise_buffer; // Reusable buffer for noise injection
+        lfs::core::Tensor _ones_int32;   // [max_cap] cached ones for ratio counting
         lfs::core::Tensor _error_score_max;
         int _error_score_windows = 0;
     };

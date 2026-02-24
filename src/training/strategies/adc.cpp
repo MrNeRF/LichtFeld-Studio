@@ -59,8 +59,12 @@ namespace lfs::training {
     }
 
     void ADC::remove_gaussians(const lfs::core::Tensor& mask) {
-        int mask_sum = mask.to(lfs::core::DataType::Int32).sum().template item<int>();
+        if (!mask.is_valid() || mask.numel() == 0) {
+            LOG_DEBUG("No Gaussians to remove");
+            return;
+        }
 
+        int mask_sum = mask.to(lfs::core::DataType::Int32).sum().template item<int>();
         if (mask_sum == 0) {
             LOG_DEBUG("No Gaussians to remove");
             return;
