@@ -22,7 +22,7 @@ namespace lfs::vis::gui {
             shutdown();
     }
 
-    bool RmlUIManager::init(GLFWwindow* window, float dp_ratio) {
+    bool RmlUIManager::init(SDL_Window* window, float dp_ratio) {
         assert(!initialized_);
         assert(window);
         assert(dp_ratio >= 1.0f);

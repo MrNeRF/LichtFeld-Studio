@@ -5,14 +5,16 @@
 #include "gui/rmlui/rmlui_system_interface.hpp"
 #include "core/logger.hpp"
 
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
+#include <SDL3/SDL_clipboard.h>
+#include <SDL3/SDL_timer.h>
 
 namespace lfs::vis::gui {
 
-    RmlSystemInterface::RmlSystemInterface(GLFWwindow* window) : window_(window) {}
+    RmlSystemInterface::RmlSystemInterface(SDL_Window* window) : window_(window) {}
 
-    double RmlSystemInterface::GetElapsedTime() { return glfwGetTime(); }
+    double RmlSystemInterface::GetElapsedTime() {
+        return static_cast<double>(SDL_GetTicks()) / 1000.0;
+    }
 
     bool RmlSystemInterface::LogMessage(Rml::Log::Type type, const Rml::String& message) {
         switch (type) {
@@ -34,15 +36,14 @@ namespace lfs::vis::gui {
     }
 
     void RmlSystemInterface::SetClipboardText(const Rml::String& text) {
-        if (window_)
-            glfwSetClipboardString(window_, text.c_str());
+        SDL_SetClipboardText(text.c_str());
     }
 
     void RmlSystemInterface::GetClipboardText(Rml::String& text) {
-        if (window_) {
-            const char* clipboard = glfwGetClipboardString(window_);
-            if (clipboard)
-                text = clipboard;
+        char* clipboard = SDL_GetClipboardText();
+        if (clipboard) {
+            text = clipboard;
+            SDL_free(clipboard);
         }
     }
 

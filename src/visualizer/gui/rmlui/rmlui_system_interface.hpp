@@ -6,13 +6,13 @@
 
 #include <RmlUi/Core/SystemInterface.h>
 
-struct GLFWwindow;
+struct SDL_Window;
 
 namespace lfs::vis::gui {
 
     class RmlSystemInterface final : public Rml::SystemInterface {
     public:
-        explicit RmlSystemInterface(GLFWwindow* window);
+        explicit RmlSystemInterface(SDL_Window* window);
 
         double GetElapsedTime() override;
         bool LogMessage(Rml::Log::Type type, const Rml::String& message) override;
@@ -20,7 +20,7 @@ namespace lfs::vis::gui {
         void GetClipboardText(Rml::String& text) override;
 
     private:
-        GLFWwindow* window_;
+        SDL_Window* window_;
     };
 
 } // namespace lfs::vis::gui

@@ -8,7 +8,7 @@
 #include <string>
 #include <unordered_map>
 
-struct GLFWwindow;
+struct SDL_Window;
 
 namespace Rml {
     class Context;
@@ -25,7 +25,7 @@ namespace lfs::vis::gui {
         RmlUIManager();
         ~RmlUIManager();
 
-        bool init(GLFWwindow* window, float dp_ratio = 1.0f);
+        bool init(SDL_Window* window, float dp_ratio = 1.0f);
         void shutdown();
 
         float getDpRatio() const { return dp_ratio_; }
