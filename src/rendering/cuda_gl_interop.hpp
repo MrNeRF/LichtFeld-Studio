@@ -23,6 +23,13 @@ namespace lfs {
         float* output,
         int num_points,
         cudaStream_t stream);
+
+    // Fused float->RGBA8 conversion writing directly to GL surface
+    void launchFloatImageToRGBA8Surface(
+        const float* input,
+        cudaSurfaceObject_t output,
+        int width, int height, int channels, bool is_chw,
+        cudaStream_t stream);
 #endif
 } // namespace lfs
 
@@ -90,11 +97,6 @@ namespace lfs::rendering {
         bool is_registered_ = false;
         bool is_depth_format_ = false;  // True if R32F, false if RGBA8
         bool external_texture_ = false; // True if texture is externally owned (don't delete)
-
-        // Cached tensors for format conversion (avoid per-frame allocations)
-        mutable Tensor cached_alpha_;
-        mutable Tensor cached_rgba_;
-        mutable Tensor cached_uint8_;
 
     public:
         CudaGLInteropTextureImpl();

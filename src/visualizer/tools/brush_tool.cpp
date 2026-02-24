@@ -22,9 +22,8 @@ namespace lfs::vis::tools {
 
     void BrushTool::update([[maybe_unused]] const ToolContext& ctx) {
         if (isEnabled()) {
-            double mx, my;
-            glfwGetCursorPos(ctx.getWindow(), &mx, &my);
-            last_mouse_pos_ = glm::vec2(static_cast<float>(mx), static_cast<float>(my));
+            const ImVec2 mouse = ImGui::GetMousePos();
+            last_mouse_pos_ = glm::vec2(mouse.x, mouse.y);
         }
     }
 

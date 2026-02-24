@@ -76,11 +76,11 @@ namespace lfs::rendering {
         std::vector<float> w2c_data(16, 0.0f);
 
         // Copy rotation (first 3x3)
+        auto R_cpu = R.cpu();
+        const float* R_ptr = R_cpu.ptr<float>();
         for (int i = 0; i < 3; i++) {
             for (int j = 0; j < 3; j++) {
-                // Access tensor data through CPU copy
-                auto R_cpu = R.cpu();
-                w2c_data[i * 4 + j] = R_cpu.ptr<float>()[i * 3 + j];
+                w2c_data[i * 4 + j] = R_ptr[i * 3 + j];
             }
         }
 
@@ -199,24 +199,17 @@ namespace lfs::rendering {
             ortho_scale,
             mip_filter);
 
-        // Manually blend the background since the forward pass does not support it
-        // bg_color is [3], need to make it [3, 1, 1]
-        Tensor bg = bg_color.unsqueeze(1).unsqueeze(2); // [3, 1, 1]
-
-        // blended_image = image + (1.0 - alpha) * bg
-        // Note: Tensor - Tensor works, but float - Tensor doesn't
-        Tensor one_tensor = Tensor::ones_like(alpha);
-        Tensor one_minus_alpha = one_tensor - alpha; // 1.0 - alpha
-        Tensor blended_image = image + one_minus_alpha * bg;
-
-        // Clamp to [0, 1] range
-        blended_image = blended_image.clamp(0.0f, 1.0f);
+        // Blend background in-place: image += (1 - alpha) * bg
+        Tensor bg = bg_color.unsqueeze(1).unsqueeze(2); // [3, 1, 1] view
+        alpha.mul_(-1.0f).add_(1.0f);                   // alpha → (1 - alpha) in-place
+        image.add_(alpha * bg);                         // 1 broadcast temp [3,H,W]
+        image.clamp_(0.0f, 1.0f);
 
         LOG_TRACE("Tensor rasterization completed: {}x{}",
                   viewpoint_camera.camera_width(),
                   viewpoint_camera.camera_height());
 
-        return {std::move(blended_image), std::move(depth)};
+        return {std::move(image), std::move(depth)};
     }
 
     GutRenderOutput gut_rasterize_tensor(

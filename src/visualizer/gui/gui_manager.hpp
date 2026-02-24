@@ -19,8 +19,6 @@
 #include "gui/utils/drag_drop_native.hpp"
 #include "windows/disk_space_error_dialog.hpp"
 #include "windows/video_extractor_dialog.hpp"
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -86,6 +84,7 @@ namespace lfs::vis {
             bool isCapturingInput() const;
             bool isModalWindowOpen() const;
             [[nodiscard]] bool isStartupVisible() const { return startup_overlay_.isVisible(); }
+            void dismissStartupOverlay();
             void captureKey(int key, int mods);
             void captureMouseButton(int button, int mods);
 

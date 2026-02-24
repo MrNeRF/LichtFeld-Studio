@@ -22,8 +22,6 @@
 using namespace lichtfeld::Strings;
 
 #include <glad/glad.h>
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
 #include <imgui.h>
 
 #include <atomic>

@@ -4,11 +4,7 @@
 
 #pragma once
 
-// clang-format off
-// GLAD must be included before GLFW
 #include <glad/glad.h>
-#include <GLFW/glfw3.h>
-// clang-format on
 
 #include "core/logger.hpp"
 #include <filesystem>

@@ -97,7 +97,7 @@ from lfs_plugins.types import Event
 | `alt`            | `bool`  | Alt modifier                                   |
 | `pressure`       | `float` | Tablet pressure (1.0 for mouse)                |
 | `over_gui`       | `bool`  | Mouse is over GUI element                      |
-| `key_code`       | `int`   | Raw GLFW key code                              |
+| `key_code`       | `int`   | Key code (see `key_codes.hpp`)                 |
 
 ---
 

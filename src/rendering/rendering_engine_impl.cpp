@@ -114,6 +114,14 @@ namespace lfs::rendering {
     void RenderingEngineImpl::shutdown() {
         LOG_DEBUG("Shutting down rendering engine");
         quad_shader_ = ManagedShader();
+        last_presented_image_.reset();
+        last_presented_depth_.reset();
+        last_presented_external_depth_texture_ = 0;
+        last_presented_depth_is_ndc_ = false;
+        last_presented_near_plane_ = 0.0f;
+        last_presented_far_plane_ = 0.0f;
+        last_presented_orthographic_ = false;
+        has_present_upload_cache_ = false;
         screen_renderer_.reset();
         split_view_renderer_.reset();
         viewport_gizmo_.shutdown();
@@ -418,20 +426,54 @@ namespace lfs::rendering {
         LOG_TRACE("Presenting to screen at ({}, {}) size {}x{}",
                   viewport_pos.x, viewport_pos.y, viewport_size.x, viewport_size.y);
 
-        RenderingPipeline::RenderResult internal_result;
-        internal_result.image = *result.image;
-        internal_result.depth = result.depth ? *result.depth : Tensor();
-        internal_result.valid = true;
-        internal_result.depth_is_ndc = result.depth_is_ndc;
-        internal_result.external_depth_texture = result.external_depth_texture;
-        internal_result.near_plane = result.near_plane;
-        internal_result.far_plane = result.far_plane;
-        internal_result.orthographic = result.orthographic;
+        // Pointer-identity cache: renderGaussians() creates a new shared_ptr per frame,
+        // so distinct renders always have distinct pointers. Same pointer == same content.
+        const bool same_image_ptr = (last_presented_image_.get() == result.image.get());
+        const bool same_depth_ptr = (!result.depth && !last_presented_depth_) ||
+                                    (result.depth && last_presented_depth_.get() == result.depth.get());
+        const bool same_depth_tex = (last_presented_external_depth_texture_ == result.external_depth_texture);
+        const bool same_depth_mode = (last_presented_depth_is_ndc_ == result.depth_is_ndc);
+        const bool same_near = (last_presented_near_plane_ == result.near_plane);
+        const bool same_far = (last_presented_far_plane_ == result.far_plane);
+        const bool same_projection = (last_presented_orthographic_ == result.orthographic);
 
-        if (auto upload_result = RenderingPipeline::uploadToScreen(internal_result, *screen_renderer_, viewport_size);
-            !upload_result) {
-            LOG_ERROR("Failed to upload to screen: {}", upload_result.error());
-            return upload_result;
+        const bool needs_upload = !has_present_upload_cache_ ||
+                                  !same_image_ptr ||
+                                  !same_depth_ptr ||
+                                  !same_depth_tex ||
+                                  !same_depth_mode ||
+                                  !same_near ||
+                                  !same_far ||
+                                  !same_projection;
+
+        if (needs_upload) {
+            RenderingPipeline::RenderResult internal_result;
+            internal_result.image = *result.image;
+            internal_result.depth = result.depth ? *result.depth : Tensor();
+            internal_result.valid = true;
+            internal_result.depth_is_ndc = result.depth_is_ndc;
+            internal_result.external_depth_texture = result.external_depth_texture;
+            internal_result.near_plane = result.near_plane;
+            internal_result.far_plane = result.far_plane;
+            internal_result.orthographic = result.orthographic;
+
+            if (auto upload_result = RenderingPipeline::uploadToScreen(internal_result, *screen_renderer_, viewport_size);
+                !upload_result) {
+                has_present_upload_cache_ = false;
+                LOG_ERROR("Failed to upload to screen: {}", upload_result.error());
+                return upload_result;
+            }
+
+            last_presented_image_ = result.image;
+            last_presented_depth_ = result.depth;
+            last_presented_external_depth_texture_ = result.external_depth_texture;
+            last_presented_depth_is_ndc_ = result.depth_is_ndc;
+            last_presented_near_plane_ = result.near_plane;
+            last_presented_far_plane_ = result.far_plane;
+            last_presented_orthographic_ = result.orthographic;
+            has_present_upload_cache_ = true;
+        } else {
+            LOG_TRACE("Skipping screen upload (unchanged frame payload)");
         }
 
         return screen_renderer_->render(quad_shader_);

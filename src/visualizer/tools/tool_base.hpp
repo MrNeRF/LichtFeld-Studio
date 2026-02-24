@@ -9,8 +9,7 @@
 #include <string>
 #include <string_view>
 
-// Forward declaration for GLFW
-struct GLFWwindow;
+struct SDL_Window;
 
 namespace lfs::vis {
     // Forward declarations
@@ -52,7 +51,7 @@ namespace lfs::vis {
     // Concrete context passed to tools for accessing visualizer resources
     class ToolContext {
     public:
-        ToolContext(RenderingManager* rm, SceneManager* sm, const Viewport* vp, GLFWwindow* win)
+        ToolContext(RenderingManager* rm, SceneManager* sm, const Viewport* vp, SDL_Window* win)
             : rendering_manager(rm),
               scene_manager(sm),
               viewport(vp),
@@ -62,7 +61,7 @@ namespace lfs::vis {
         RenderingManager* getRenderingManager() const { return rendering_manager; }
         SceneManager* getSceneManager() const { return scene_manager; }
         const Viewport& getViewport() const { return *viewport; }
-        GLFWwindow* getWindow() const { return window; }
+        SDL_Window* getWindow() const { return window; }
         const ViewportBounds& getViewportBounds() const { return viewport_bounds_; }
 
         // Update viewport bounds (called by GUI manager)
@@ -83,7 +82,7 @@ namespace lfs::vis {
         RenderingManager* rendering_manager;
         SceneManager* scene_manager;
         const Viewport* viewport;
-        GLFWwindow* window;
+        SDL_Window* window;
         ViewportBounds viewport_bounds_;
     };
 

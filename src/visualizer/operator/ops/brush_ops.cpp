@@ -6,13 +6,13 @@
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "gui/gui_manager.hpp"
+#include "input/key_codes.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer_impl.hpp"
-#include <GLFW/glfw3.h>
 
 namespace lfs::vis::op {
 
@@ -115,7 +115,7 @@ namespace lfs::vis::op {
                 return OperatorResult::RUNNING_MODAL;
             }
 
-            if (mb->button == GLFW_MOUSE_BUTTON_LEFT && mb->action == GLFW_RELEASE) {
+            if (mb->button == static_cast<int>(input::AppMouseButton::LEFT) && mb->action == input::ACTION_RELEASE) {
                 if (mode_ == BrushMode::Select) {
                     finalizeSelectionStroke(ctx);
                 } else {
@@ -125,14 +125,14 @@ namespace lfs::vis::op {
                 return OperatorResult::FINISHED;
             }
 
-            if (mb->button == GLFW_MOUSE_BUTTON_RIGHT && mb->action == GLFW_PRESS) {
+            if (mb->button == static_cast<int>(input::AppMouseButton::RIGHT) && mb->action == input::ACTION_PRESS) {
                 return OperatorResult::CANCELLED;
             }
         }
 
         if (event->type == ModalEvent::Type::KEY) {
             const auto* ke = event->as<KeyEvent>();
-            if (ke && ke->key == GLFW_KEY_ESCAPE && ke->action == GLFW_PRESS) {
+            if (ke && ke->key == input::KEY_ESCAPE && ke->action == input::ACTION_PRESS) {
                 return OperatorResult::CANCELLED;
             }
         }

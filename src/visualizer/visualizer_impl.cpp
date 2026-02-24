@@ -540,8 +540,8 @@ namespace lfs::vis {
             if (gui_manager_) {
                 gui_manager_->setForceExit(true);
             }
-            if (window_manager_ && window_manager_->getWindow()) {
-                glfwSetWindowShouldClose(window_manager_->getWindow(), GLFW_TRUE);
+            if (window_manager_) {
+                window_manager_->requestClose();
             }
         });
 
@@ -652,6 +652,7 @@ namespace lfs::vis {
             input_controller_ = std::make_unique<InputController>(
                 window_manager_->getWindow(), viewport_);
             input_controller_->initialize();
+            window_manager_->setInputController(input_controller_.get());
             python::set_keymap_bindings(&input_controller_->getBindings());
         }
 
@@ -864,6 +865,8 @@ namespace lfs::vis {
 
         python::ensure_initialized();
         python::preload_user_plugins_async();
+
+        window_manager_->showWindow();
 
         fully_initialized = true;
         return true;

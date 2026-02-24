@@ -6,6 +6,7 @@
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "gui/gui_manager.hpp"
+#include "input/key_codes.hpp"
 #include "internal/viewport.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
@@ -15,7 +16,6 @@
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer_impl.hpp"
-#include <GLFW/glfw3.h>
 #include <cuda_runtime.h>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -135,7 +135,7 @@ namespace lfs::vis::op {
             }
 
             if (mode_ == SelectionMode::Polygon) {
-                if (mb->button == GLFW_MOUSE_BUTTON_LEFT && mb->action == GLFW_PRESS) {
+                if (mb->button == static_cast<int>(input::AppMouseButton::LEFT) && mb->action == input::ACTION_PRESS) {
                     const glm::vec2 new_point(static_cast<float>(mb->position.x),
                                               static_cast<float>(mb->position.y));
 
@@ -161,7 +161,7 @@ namespace lfs::vis::op {
                     return OperatorResult::RUNNING_MODAL;
                 }
 
-                if (mb->button == GLFW_MOUSE_BUTTON_RIGHT && mb->action == GLFW_PRESS) {
+                if (mb->button == static_cast<int>(input::AppMouseButton::RIGHT) && mb->action == input::ACTION_PRESS) {
                     if (polygon_points_.size() > 1) {
                         polygon_points_.pop_back();
                         polygon_closed_ = false;
@@ -176,7 +176,7 @@ namespace lfs::vis::op {
                 return OperatorResult::RUNNING_MODAL;
             }
 
-            if (mb->button == GLFW_MOUSE_BUTTON_LEFT && mb->action == GLFW_RELEASE) {
+            if (mb->button == static_cast<int>(input::AppMouseButton::LEFT) && mb->action == input::ACTION_RELEASE) {
                 clearPreview(ctx);
 
                 if (mode_ == SelectionMode::Rectangle) {
@@ -189,28 +189,28 @@ namespace lfs::vis::op {
                 return OperatorResult::FINISHED;
             }
 
-            if (mb->button == GLFW_MOUSE_BUTTON_RIGHT && mb->action == GLFW_PRESS) {
+            if (mb->button == static_cast<int>(input::AppMouseButton::RIGHT) && mb->action == input::ACTION_PRESS) {
                 return OperatorResult::CANCELLED;
             }
         }
 
         if (event->type == ModalEvent::Type::KEY) {
             const auto* ke = event->as<KeyEvent>();
-            if (!ke || ke->action != GLFW_PRESS) {
+            if (!ke || ke->action != input::ACTION_PRESS) {
                 return OperatorResult::RUNNING_MODAL;
             }
 
-            if (ke->key == GLFW_KEY_ESCAPE) {
+            if (ke->key == input::KEY_ESCAPE) {
                 return OperatorResult::CANCELLED;
             }
 
-            if (mode_ == SelectionMode::Polygon && ke->key == GLFW_KEY_ENTER) {
+            if (mode_ == SelectionMode::Polygon && ke->key == input::KEY_ENTER) {
                 if (polygon_points_.size() >= 3) {
                     polygon_closed_ = true;
                     // Update selection op based on current modifiers
-                    if (ke->mods & GLFW_MOD_SHIFT) {
+                    if (ke->mods & input::KEYMOD_SHIFT) {
                         op_ = SelectionOp::Add;
-                    } else if (ke->mods & GLFW_MOD_CONTROL) {
+                    } else if (ke->mods & input::KEYMOD_CTRL) {
                         op_ = SelectionOp::Remove;
                     } else {
                         op_ = SelectionOp::Replace;

@@ -6,6 +6,8 @@
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "gui/gui_manager.hpp"
+#include "input/key_codes.hpp"
+#include "input/sdl_key_mapping.hpp"
 #include "io/loader.hpp"
 #include "operator/operator_context.hpp"
 #include "operator/operator_id.hpp"
@@ -18,7 +20,7 @@
 #include "tools/selection_tool.hpp"
 #include "tools/tool_base.hpp"
 #include "training/training_manager.hpp"
-#include <GLFW/glfw3.h>
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <format>
 #include <limits>
@@ -127,7 +129,7 @@ namespace lfs::vis {
 
     InputController* InputController::instance_ = nullptr;
 
-    InputController::InputController(GLFWwindow* window, Viewport& viewport)
+    InputController::InputController(SDL_Window* window, Viewport& viewport)
         : window_(window),
           viewport_(viewport) {
         cmd::GoToCamView::when([this](const auto& e) { handleGoToCamView(e); });
@@ -155,43 +157,34 @@ namespace lfs::vis {
 
         // Clean up cursor resources
         if (resize_cursor_) {
-            glfwDestroyCursor(resize_cursor_);
+            SDL_DestroyCursor(resize_cursor_);
             resize_cursor_ = nullptr;
         }
         if (hand_cursor_) {
-            glfwDestroyCursor(hand_cursor_);
+            SDL_DestroyCursor(hand_cursor_);
             hand_cursor_ = nullptr;
         }
 
         // Reset cursor to default before destruction
         if (window_ && current_cursor_ != CursorType::Default) {
-            glfwSetCursor(window_, nullptr);
+            SDL_SetCursor(SDL_GetDefaultCursor());
         }
     }
 
     void InputController::initialize() {
-        // Must be called after ImGui_ImplGlfw_InitForOpenGL
         instance_ = this;
 
-        // Store ImGui's callbacks so we can chain to them
-        imgui_callbacks_.mouse_button = glfwSetMouseButtonCallback(window_, mouseButtonCallback);
-        imgui_callbacks_.cursor_pos = glfwSetCursorPosCallback(window_, cursorPosCallback);
-        imgui_callbacks_.scroll = glfwSetScrollCallback(window_, scrollCallback);
-        imgui_callbacks_.key = glfwSetKeyCallback(window_, keyCallback);
-        imgui_callbacks_.drop = glfwSetDropCallback(window_, dropCallback);
-        imgui_callbacks_.focus = glfwSetWindowFocusCallback(window_, windowFocusCallback);
-
         // Get initial mouse position
-        double x, y;
-        glfwGetCursorPos(window_, &x, &y);
-        last_mouse_pos_ = {x, y};
+        float fx, fy;
+        SDL_GetMouseState(&fx, &fy);
+        last_mouse_pos_ = {fx, fy};
 
         // Initialize frame timer
         last_frame_time_ = std::chrono::high_resolution_clock::now();
 
         // Create cursors
-        resize_cursor_ = glfwCreateStandardCursor(GLFW_HRESIZE_CURSOR);
-        hand_cursor_ = glfwCreateStandardCursor(GLFW_HAND_CURSOR);
+        resize_cursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_EW_RESIZE);
+        hand_cursor_ = SDL_CreateSystemCursor(SDL_SYSTEM_CURSOR_POINTER);
 
         refreshMovementKeyCache();
         bindings_.setOnBindingsChanged([this]() { refreshMovementKeyCache(); });
@@ -208,95 +201,45 @@ namespace lfs::vis {
         movement_keys_.down = bindings_.getKeyForAction(input::Action::CAMERA_MOVE_DOWN);
     }
 
-    // Static callbacks - chain to ImGui then handle ourselves
-    void InputController::mouseButtonCallback(GLFWwindow* w, int button, int action, int mods) {
-        // Let ImGui handle first
-        if (instance_ && instance_->imgui_callbacks_.mouse_button) {
-            instance_->imgui_callbacks_.mouse_button(w, button, action, mods);
-        }
-
-        // Then handle for camera
-        if (instance_) {
-            double x, y;
-            glfwGetCursorPos(w, &x, &y);
-            instance_->handleMouseButton(button, action, x, y);
+    void InputController::onWindowFocusLost() {
+        if (current_cursor_ != CursorType::Default) {
+            SDL_SetCursor(SDL_GetDefaultCursor());
+            current_cursor_ = CursorType::Default;
         }
     }
 
-    void InputController::cursorPosCallback(GLFWwindow* w, double x, double y) {
-        // Let ImGui handle first
-        if (instance_ && instance_->imgui_callbacks_.cursor_pos) {
-            instance_->imgui_callbacks_.cursor_pos(w, x, y);
-        }
+    bool InputController::isKeyPressed(int app_key) const {
+        const SDL_Keycode sdl_key = input::appKeyToSdlKeycode(app_key);
+        if (sdl_key == SDLK_UNKNOWN)
+            return false;
+        const SDL_Scancode scancode = SDL_GetScancodeFromKey(sdl_key, nullptr);
+        if (scancode == SDL_SCANCODE_UNKNOWN)
+            return false;
+        const bool* state = SDL_GetKeyboardState(nullptr);
+        assert(scancode < SDL_SCANCODE_COUNT);
+        return state[scancode];
+    }
 
-        // Then handle for camera
-        if (instance_) {
-            instance_->handleMouseMove(x, y);
+    bool InputController::isMouseButtonPressed(int app_button) const {
+        SDL_MouseButtonFlags buttons = SDL_GetMouseState(nullptr, nullptr);
+        switch (app_button) {
+        case static_cast<int>(input::AppMouseButton::LEFT): return (buttons & SDL_BUTTON_LMASK) != 0;
+        case static_cast<int>(input::AppMouseButton::RIGHT): return (buttons & SDL_BUTTON_RMASK) != 0;
+        case static_cast<int>(input::AppMouseButton::MIDDLE): return (buttons & SDL_BUTTON_MMASK) != 0;
+        default: return false;
         }
     }
 
-    void InputController::scrollCallback(GLFWwindow* w, double xoff, double yoff) {
-        // Let ImGui handle first
-        if (instance_ && instance_->imgui_callbacks_.scroll) {
-            instance_->imgui_callbacks_.scroll(w, xoff, yoff);
-        }
-
-        // Then handle for camera
-        if (instance_) {
-            instance_->handleScroll(xoff, yoff);
-        }
-    }
-
-    void InputController::keyCallback(GLFWwindow* w, int key, int scancode, int action, int mods) {
-        // Let ImGui handle first
-        if (instance_ && instance_->imgui_callbacks_.key) {
-            instance_->imgui_callbacks_.key(w, key, scancode, action, mods);
-        }
-
-        // Then handle for camera
-        if (instance_) {
-            instance_->handleKey(key, action, mods);
-        }
-    }
-
-    void InputController::dropCallback(GLFWwindow* w, int count, const char** paths) {
-        LOG_INFO("GLFW drop callback: {} file(s)", count);
-
-        // Let ImGui handle first (though it probably doesn't use this)
-        if (instance_ && instance_->imgui_callbacks_.drop) {
-            instance_->imgui_callbacks_.drop(w, count, paths);
-        }
-
-        // Then handle file drops
-        if (instance_) {
-            std::vector<std::string> files(paths, paths + count);
-            instance_->handleFileDrop(files);
-        } else {
-            LOG_ERROR("InputController instance not available for drop callback");
-        }
-    }
-
-    void InputController::windowFocusCallback(GLFWwindow* w, int focused) {
-        // Let ImGui handle first
-        if (instance_ && instance_->imgui_callbacks_.focus) {
-            instance_->imgui_callbacks_.focus(w, focused);
-        }
-
-        // Reset states on focus loss
-        if (!focused) {
-            if (instance_) {
-                instance_->drag_mode_ = DragMode::None;
-                std::fill(std::begin(instance_->keys_movement_),
-                          std::end(instance_->keys_movement_), false);
-                instance_->hovered_camera_id_ = -1; // Reset hovered camera
-
-                if (instance_->current_cursor_ != CursorType::Default) {
-                    glfwSetCursor(instance_->window_, nullptr);
-                    instance_->current_cursor_ = CursorType::Default;
-                }
-            }
-            lfs::core::events::internal::WindowFocusLost{}.emit();
-        }
+    int InputController::getModifierKeys() const {
+        SDL_Keymod m = SDL_GetModState();
+        int mods = 0;
+        if (m & SDL_KMOD_CTRL)
+            mods |= input::KEYMOD_CTRL;
+        if (m & SDL_KMOD_SHIFT)
+            mods |= input::KEYMOD_SHIFT;
+        if (m & SDL_KMOD_ALT)
+            mods |= input::KEYMOD_ALT;
+        return mods;
     }
 
     bool InputController::isNearSplitter(double x) const {
@@ -320,14 +263,14 @@ namespace lfs::vis {
 
         // Consume all mouse events while pie menu is open
         if (gui && gui->gizmo().isPieMenuOpen()) {
-            if (action == GLFW_PRESS && button == GLFW_MOUSE_BUTTON_LEFT) {
+            if (action == input::ACTION_PRESS && button == static_cast<int>(input::AppMouseButton::LEFT)) {
                 gui->gizmo().onPieMenuClick({static_cast<float>(x), static_cast<float>(y)});
             }
             return;
         }
 
         // Forward to GUI for mouse capture (rebinding)
-        if (action == GLFW_PRESS && gui && gui->isCapturingInput()) {
+        if (action == input::ACTION_PRESS && gui && gui->isCapturingInput()) {
             gui->captureMouseButton(button, getModifierKeys());
             return;
         }
@@ -338,7 +281,7 @@ namespace lfs::vis {
         }
 
         // Check for splitter drag FIRST
-        if (button == GLFW_MOUSE_BUTTON_LEFT && action == GLFW_PRESS) {
+        if (button == static_cast<int>(input::AppMouseButton::LEFT) && action == input::ACTION_PRESS) {
             // Check for double-click on camera frustum
             auto now = std::chrono::steady_clock::now();
             auto time_since_last = std::chrono::duration<double>(now - last_click_time_).count();
@@ -376,15 +319,15 @@ namespace lfs::vis {
                 drag_mode_ = DragMode::Splitter;
                 splitter_start_pos_ = services().renderingOrNull()->getSettings().split_position;
                 splitter_start_x_ = x;
-                glfwSetCursor(window_, resize_cursor_);
+                SDL_SetCursor(resize_cursor_);
                 LOG_TRACE("Started splitter drag");
                 return;
             }
         }
 
-        if (action == GLFW_RELEASE && drag_mode_ == DragMode::Splitter) {
+        if (action == input::ACTION_RELEASE && drag_mode_ == DragMode::Splitter) {
             drag_mode_ = DragMode::None;
-            glfwSetCursor(window_, nullptr); // Reset cursor
+            SDL_SetCursor(SDL_GetDefaultCursor());
             LOG_TRACE("Ended splitter drag");
             return;
         }
@@ -423,7 +366,7 @@ namespace lfs::vis {
             bound_action = bindings_.getActionForMouseButton(tool_mode, mouse_btn, mods, false);
         }
 
-        if (action == GLFW_PRESS) {
+        if (action == input::ACTION_PRESS) {
             // Block if hovering over GUI window
             if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
                 return;
@@ -450,7 +393,7 @@ namespace lfs::vis {
                 viewport_.camera.initScreenPos(glm::vec2(x, y));
                 drag_mode_ = DragMode::Orbit;
                 drag_button_ = button;
-                viewport_.camera.startRotateAroundCenter(glm::vec2(x, y), static_cast<float>(glfwGetTime()));
+                viewport_.camera.startRotateAroundCenter(glm::vec2(x, y), static_cast<float>(SDL_GetTicks() / 1000.0));
                 break;
 
             case input::Action::CAMERA_SET_PIVOT: {
@@ -573,7 +516,7 @@ namespace lfs::vis {
                 const bool has_node_binding = (pick_action == input::Action::NODE_PICK ||
                                                drag_action == input::Action::NODE_RECT_SELECT);
 
-                if (!over_gui && !over_gizmo && button == GLFW_MOUSE_BUTTON_LEFT && tool_context_ &&
+                if (!over_gui && !over_gizmo && button == static_cast<int>(input::AppMouseButton::LEFT) && tool_context_ &&
                     !ImGuizmo::IsOver() && !ImGuizmo::IsUsing() && has_node_binding) {
                     is_node_rect_dragging_ = true;
                     node_rect_start_ = glm::vec2(static_cast<float>(x), static_cast<float>(y));
@@ -581,7 +524,7 @@ namespace lfs::vis {
                 }
                 break;
             }
-        } else if (action == GLFW_RELEASE) {
+        } else if (action == input::ACTION_RELEASE) {
             bool was_dragging = false;
 
             if (drag_mode_ == DragMode::Pan) {
@@ -608,7 +551,7 @@ namespace lfs::vis {
             }
 
             // Node picking on release
-            if (is_node_rect_dragging_ && button == GLFW_MOUSE_BUTTON_LEFT && tool_context_) {
+            if (is_node_rect_dragging_ && button == static_cast<int>(input::AppMouseButton::LEFT) && tool_context_) {
                 is_node_rect_dragging_ = false;
                 auto* scene_manager = tool_context_->getSceneManager();
                 if (scene_manager) {
@@ -723,7 +666,7 @@ namespace lfs::vis {
 
                         // Change cursor to hand
                         if (current_cursor_ != CursorType::Hand) {
-                            glfwSetCursor(window_, hand_cursor_);
+                            SDL_SetCursor(hand_cursor_);
                             current_cursor_ = CursorType::Hand;
                         }
                     }
@@ -733,7 +676,7 @@ namespace lfs::vis {
                         hovered_camera_id_ = -1;
                         LOG_TRACE("No longer hovering over camera");
                         if (current_cursor_ == CursorType::Hand) {
-                            glfwSetCursor(window_, nullptr);
+                            SDL_SetCursor(SDL_GetDefaultCursor());
                             current_cursor_ = CursorType::Default;
                         }
                     }
@@ -744,7 +687,7 @@ namespace lfs::vis {
             if (hovered_camera_id_ != -1) {
                 hovered_camera_id_ = -1;
                 if (current_cursor_ == CursorType::Hand) {
-                    glfwSetCursor(window_, nullptr);
+                    SDL_SetCursor(SDL_GetDefaultCursor());
                     current_cursor_ = CursorType::Default;
                 }
             }
@@ -759,12 +702,11 @@ namespace lfs::vis {
                                   !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow));
         }
 
-        // Only call glfwSetCursor when state actually changes
         if (should_show_resize && current_cursor_ != CursorType::Resize) {
-            glfwSetCursor(window_, resize_cursor_);
+            SDL_SetCursor(resize_cursor_);
             current_cursor_ = CursorType::Resize;
         } else if (!should_show_resize && current_cursor_ == CursorType::Resize) {
-            glfwSetCursor(window_, nullptr);
+            SDL_SetCursor(SDL_GetDefaultCursor());
             current_cursor_ = CursorType::Default;
         }
 
@@ -800,7 +742,7 @@ namespace lfs::vis {
                 viewport_.camera.rotate(pos);
                 break;
             case DragMode::Orbit: {
-                float current_time = static_cast<float>(glfwGetTime());
+                float current_time = static_cast<float>(SDL_GetTicks() / 1000.0);
                 viewport_.camera.updateRotateAroundCenter(pos, current_time);
                 break;
             }
@@ -814,8 +756,9 @@ namespace lfs::vis {
     }
 
     void InputController::handleScroll([[maybe_unused]] double xoff, double yoff) {
-        double mouse_x, mouse_y;
-        glfwGetCursorPos(window_, &mouse_x, &mouse_y);
+        float fx, fy;
+        SDL_GetMouseState(&fx, &fy);
+        double mouse_x = fx, mouse_y = fy;
 
         // Dispatch to modal operators first - if consumed, don't continue
         if (dispatchScrollToModals(xoff, yoff, mouse_x, mouse_y, getModifierKeys())) {
@@ -824,8 +767,8 @@ namespace lfs::vis {
 
         // Brush radius adjustment for selection/brush tools
         const int mods = getModifierKeys();
-        const bool ctrl = (mods & GLFW_MOD_CONTROL) != 0;
-        const bool shift = (mods & GLFW_MOD_SHIFT) != 0;
+        const bool ctrl = (mods & input::KEYMOD_CTRL) != 0;
+        const bool shift = (mods & input::KEYMOD_SHIFT) != 0;
         if ((ctrl || shift) && !op::operators().hasModalOperator()) {
             if (selection_tool_ && selection_tool_->isEnabled()) {
                 const float scale = (yoff > 0) ? 1.1f : 0.9f;
@@ -876,14 +819,14 @@ namespace lfs::vis {
 
     void InputController::handleKey(int key, int action, [[maybe_unused]] int mods) {
         // Track modifier keys (always, even if GUI has focus)
-        if (key == GLFW_KEY_LEFT_CONTROL || key == GLFW_KEY_RIGHT_CONTROL) {
-            key_ctrl_pressed_ = (action != GLFW_RELEASE);
+        if (key == input::KEY_LEFT_CONTROL || key == input::KEY_RIGHT_CONTROL) {
+            key_ctrl_pressed_ = (action != input::ACTION_RELEASE);
         }
-        if (key == GLFW_KEY_LEFT_ALT || key == GLFW_KEY_RIGHT_ALT) {
-            key_alt_pressed_ = (action != GLFW_RELEASE);
+        if (key == input::KEY_LEFT_ALT || key == input::KEY_RIGHT_ALT) {
+            key_alt_pressed_ = (action != input::ACTION_RELEASE);
         }
-        if (key == GLFW_KEY_R) {
-            key_r_pressed_ = (action != GLFW_RELEASE);
+        if (key == input::KEY_R) {
+            key_r_pressed_ = (action != input::ACTION_RELEASE);
         }
 
         if (lfs::python::has_keyboard_capture_request()) {
@@ -891,8 +834,9 @@ namespace lfs::vis {
         }
 
         // Dispatch to modal operators first - if consumed, don't continue
-        double mx, my;
-        glfwGetCursorPos(window_, &mx, &my);
+        float mx_f, my_f;
+        SDL_GetMouseState(&mx_f, &my_f);
+        double mx = mx_f, my = my_f;
         if (dispatchKeyToModals(key, 0, action, mods, mx, my)) {
             return;
         }
@@ -900,21 +844,21 @@ namespace lfs::vis {
         auto* gui = services().guiOrNull();
 
         // Forward to GUI for key capture (rebinding)
-        if (action == GLFW_PRESS && gui && gui->isCapturingInput()) {
+        if (action == input::ACTION_PRESS && gui && gui->isCapturingInput()) {
             gui->captureKey(key, mods);
             return;
         }
 
         // Handle pie menu key release and escape
         if (gui && gui->gizmo().isPieMenuOpen()) {
-            if (action == GLFW_RELEASE) {
+            if (action == input::ACTION_RELEASE) {
                 const auto pie_key = bindings_.getKeyForAction(input::Action::PIE_MENU, getCurrentToolMode());
                 if (pie_key >= 0 && key == pie_key) {
                     gui->gizmo().onPieMenuKeyRelease();
                     return;
                 }
             }
-            if (action == GLFW_PRESS && key == GLFW_KEY_ESCAPE) {
+            if (action == input::ACTION_PRESS && key == input::KEY_ESCAPE) {
                 gui->gizmo().closePieMenu();
                 return;
             }
@@ -924,14 +868,14 @@ namespace lfs::vis {
         const bool imgui_wants_keyboard =
             ImGui::IsAnyItemActive() || wants_text_input || ImGui::GetIO().WantCaptureKeyboard;
 
-        if (action != GLFW_PRESS && action != GLFW_REPEAT)
+        if (action != input::ACTION_PRESS && action != input::ACTION_REPEAT)
             return;
 
         const auto tool_mode = getCurrentToolMode();
         const auto bound_action = bindings_.getActionForKey(tool_mode, key, mods);
 
         // Camera navigation bypasses ImGui keyboard capture (except text input)
-        if (action == GLFW_PRESS && !wants_text_input) {
+        if (action == input::ACTION_PRESS && !wants_text_input) {
             if (bound_action == input::Action::CAMERA_NEXT_VIEW ||
                 bound_action == input::Action::CAMERA_PREV_VIEW) {
                 const auto* trainer = services().trainerOrNull();
@@ -953,7 +897,7 @@ namespace lfs::vis {
             return;
 
         // Only speed controls support key repeat
-        if (action == GLFW_REPEAT) {
+        if (action == input::ACTION_REPEAT) {
             if (bound_action != input::Action::CAMERA_SPEED_UP &&
                 bound_action != input::Action::CAMERA_SPEED_DOWN &&
                 bound_action != input::Action::ZOOM_SPEED_UP &&
@@ -1155,9 +1099,9 @@ namespace lfs::vis {
 
             case input::Action::PIE_MENU:
                 if (gui) {
-                    double px, py;
-                    glfwGetCursorPos(window_, &px, &py);
-                    gui->gizmo().openPieMenu({static_cast<float>(px), static_cast<float>(py)});
+                    float px, py;
+                    SDL_GetMouseState(&px, &py);
+                    gui->gizmo().openPieMenu({px, py});
                 }
                 return;
 
@@ -1171,7 +1115,7 @@ namespace lfs::vis {
             return;
 
         // Use cached movement key bindings
-        const bool pressed = (action != GLFW_RELEASE);
+        const bool pressed = (action != input::ACTION_RELEASE);
         if (key == movement_keys_.forward) {
             keys_movement_[0] = pressed;
         } else if (key == movement_keys_.left) {
@@ -1189,7 +1133,7 @@ namespace lfs::vis {
 
     void InputController::update(float delta_time) {
         const bool drag_button_released = drag_button_ >= 0 &&
-                                          glfwGetMouseButton(window_, drag_button_) != GLFW_PRESS;
+                                          !isMouseButtonPressed(drag_button_);
 
         // Handle missed mouse release events (e.g., outside window)
         if (drag_mode_ == DragMode::Orbit && drag_button_released) {
@@ -1204,10 +1148,10 @@ namespace lfs::vis {
         }
 
         if (drag_mode_ == DragMode::Splitter &&
-            glfwGetMouseButton(window_, GLFW_MOUSE_BUTTON_LEFT) != GLFW_PRESS) {
+            !isMouseButtonPressed(static_cast<int>(input::AppMouseButton::LEFT))) {
             drag_mode_ = DragMode::None;
             drag_button_ = -1;
-            glfwSetCursor(window_, nullptr);
+            SDL_SetCursor(SDL_GetDefaultCursor());
         }
 
         if (drag_mode_ == DragMode::Brush && drag_button_released) {
@@ -1217,22 +1161,22 @@ namespace lfs::vis {
 
         // Sync movement key states with actual keyboard (using cached keys)
         const auto& mk = movement_keys_;
-        if (keys_movement_[0] && (mk.forward < 0 || glfwGetKey(window_, mk.forward) != GLFW_PRESS)) {
+        if (keys_movement_[0] && (mk.forward < 0 || !isKeyPressed(mk.forward))) {
             keys_movement_[0] = false;
         }
-        if (keys_movement_[1] && (mk.left < 0 || glfwGetKey(window_, mk.left) != GLFW_PRESS)) {
+        if (keys_movement_[1] && (mk.left < 0 || !isKeyPressed(mk.left))) {
             keys_movement_[1] = false;
         }
-        if (keys_movement_[2] && (mk.backward < 0 || glfwGetKey(window_, mk.backward) != GLFW_PRESS)) {
+        if (keys_movement_[2] && (mk.backward < 0 || !isKeyPressed(mk.backward))) {
             keys_movement_[2] = false;
         }
-        if (keys_movement_[3] && (mk.right < 0 || glfwGetKey(window_, mk.right) != GLFW_PRESS)) {
+        if (keys_movement_[3] && (mk.right < 0 || !isKeyPressed(mk.right))) {
             keys_movement_[3] = false;
         }
-        if (keys_movement_[4] && (mk.down < 0 || glfwGetKey(window_, mk.down) != GLFW_PRESS)) {
+        if (keys_movement_[4] && (mk.down < 0 || !isKeyPressed(mk.down))) {
             keys_movement_[4] = false;
         }
-        if (keys_movement_[5] && (mk.up < 0 || glfwGetKey(window_, mk.up) != GLFW_PRESS)) {
+        if (keys_movement_[5] && (mk.up < 0 || !isKeyPressed(mk.up))) {
             keys_movement_[5] = false;
         }
 
@@ -1641,23 +1585,6 @@ namespace lfs::vis {
                 LOG_INFO("Camera movement stopped - resuming training temporarily");
             }
         }
-    }
-
-    int InputController::getModifierKeys() const {
-        int mods = 0;
-        if (glfwGetKey(window_, GLFW_KEY_LEFT_CONTROL) == GLFW_PRESS ||
-            glfwGetKey(window_, GLFW_KEY_RIGHT_CONTROL) == GLFW_PRESS) {
-            mods |= GLFW_MOD_CONTROL;
-        }
-        if (glfwGetKey(window_, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS ||
-            glfwGetKey(window_, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) {
-            mods |= GLFW_MOD_SHIFT;
-        }
-        if (glfwGetKey(window_, GLFW_KEY_LEFT_ALT) == GLFW_PRESS ||
-            glfwGetKey(window_, GLFW_KEY_RIGHT_ALT) == GLFW_PRESS) {
-            mods |= GLFW_MOD_ALT;
-        }
-        return mods;
     }
 
     glm::vec3 InputController::unprojectScreenPoint(double x, double y, float fallback_distance) const {

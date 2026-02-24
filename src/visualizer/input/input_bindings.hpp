@@ -5,8 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
-#define GLFW_INCLUDE_NONE
-#include <GLFW/glfw3.h>
+#include "input/key_codes.hpp"
 #include <chrono>
 #include <filesystem>
 #include <functional>
@@ -109,19 +108,18 @@ namespace lfs::vis::input {
         PIE_MENU,
     };
 
-    // Using MODIFIER_ prefix to avoid Windows macro conflicts
     enum Modifier : int {
-        MODIFIER_NONE = 0,
-        MODIFIER_SHIFT = GLFW_MOD_SHIFT,
-        MODIFIER_CTRL = GLFW_MOD_CONTROL,
-        MODIFIER_ALT = GLFW_MOD_ALT,
-        MODIFIER_SUPER = GLFW_MOD_SUPER,
+        MODIFIER_NONE = KEYMOD_NONE,
+        MODIFIER_SHIFT = KEYMOD_SHIFT,
+        MODIFIER_CTRL = KEYMOD_CTRL,
+        MODIFIER_ALT = KEYMOD_ALT,
+        MODIFIER_SUPER = KEYMOD_SUPER,
     };
 
     enum class MouseButton {
-        LEFT = GLFW_MOUSE_BUTTON_LEFT,
-        RIGHT = GLFW_MOUSE_BUTTON_RIGHT,
-        MIDDLE = GLFW_MOUSE_BUTTON_MIDDLE,
+        LEFT = static_cast<int>(AppMouseButton::LEFT),
+        RIGHT = static_cast<int>(AppMouseButton::RIGHT),
+        MIDDLE = static_cast<int>(AppMouseButton::MIDDLE),
     };
 
     struct KeyTrigger {

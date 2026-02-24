@@ -371,59 +371,59 @@ namespace lfs::vis::input {
             {MouseDragTrigger{MouseButton::RIGHT, MODIFIER_NONE}, Action::CAMERA_PAN, "Pan"},
             {MouseScrollTrigger{MODIFIER_NONE}, Action::CAMERA_ZOOM, "Zoom"},
             {MouseButtonTrigger{MouseButton::RIGHT, MODIFIER_NONE, true}, Action::CAMERA_SET_PIVOT, "Set pivot"},
-            {KeyTrigger{GLFW_KEY_W, MODIFIER_NONE, true}, Action::CAMERA_MOVE_FORWARD, "Forward"},
-            {KeyTrigger{GLFW_KEY_S, MODIFIER_NONE, true}, Action::CAMERA_MOVE_BACKWARD, "Backward"},
-            {KeyTrigger{GLFW_KEY_A, MODIFIER_NONE, true}, Action::CAMERA_MOVE_LEFT, "Left"},
-            {KeyTrigger{GLFW_KEY_D, MODIFIER_NONE, true}, Action::CAMERA_MOVE_RIGHT, "Right"},
-            {KeyTrigger{GLFW_KEY_H, MODIFIER_NONE}, Action::CAMERA_RESET_HOME, "Home"},
-            {KeyTrigger{GLFW_KEY_F, MODIFIER_NONE}, Action::CAMERA_FOCUS_SELECTION, "Focus selection"},
-            {KeyTrigger{GLFW_KEY_RIGHT, MODIFIER_NONE, true}, Action::CAMERA_NEXT_VIEW, "Next view"},
-            {KeyTrigger{GLFW_KEY_LEFT, MODIFIER_NONE, true}, Action::CAMERA_PREV_VIEW, "Prev view"},
-            {KeyTrigger{GLFW_KEY_EQUAL, MODIFIER_CTRL}, Action::CAMERA_SPEED_UP, "Speed up"},
-            {KeyTrigger{GLFW_KEY_MINUS, MODIFIER_CTRL}, Action::CAMERA_SPEED_DOWN, "Speed down"},
-            {KeyTrigger{GLFW_KEY_KP_ADD, MODIFIER_CTRL}, Action::CAMERA_SPEED_UP, "Speed up"},
-            {KeyTrigger{GLFW_KEY_KP_SUBTRACT, MODIFIER_CTRL}, Action::CAMERA_SPEED_DOWN, "Speed down"},
-            {KeyTrigger{GLFW_KEY_EQUAL, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::ZOOM_SPEED_UP, "Zoom speed up"},
-            {KeyTrigger{GLFW_KEY_MINUS, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::ZOOM_SPEED_DOWN, "Zoom speed down"},
-            {KeyTrigger{GLFW_KEY_KP_ADD, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::ZOOM_SPEED_UP, "Zoom speed up"},
-            {KeyTrigger{GLFW_KEY_KP_SUBTRACT, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::ZOOM_SPEED_DOWN, "Zoom speed down"},
+            {KeyTrigger{KEY_W, MODIFIER_NONE, true}, Action::CAMERA_MOVE_FORWARD, "Forward"},
+            {KeyTrigger{KEY_S, MODIFIER_NONE, true}, Action::CAMERA_MOVE_BACKWARD, "Backward"},
+            {KeyTrigger{KEY_A, MODIFIER_NONE, true}, Action::CAMERA_MOVE_LEFT, "Left"},
+            {KeyTrigger{KEY_D, MODIFIER_NONE, true}, Action::CAMERA_MOVE_RIGHT, "Right"},
+            {KeyTrigger{KEY_H, MODIFIER_NONE}, Action::CAMERA_RESET_HOME, "Home"},
+            {KeyTrigger{KEY_F, MODIFIER_NONE}, Action::CAMERA_FOCUS_SELECTION, "Focus selection"},
+            {KeyTrigger{KEY_RIGHT, MODIFIER_NONE, true}, Action::CAMERA_NEXT_VIEW, "Next view"},
+            {KeyTrigger{KEY_LEFT, MODIFIER_NONE, true}, Action::CAMERA_PREV_VIEW, "Prev view"},
+            {KeyTrigger{KEY_EQUAL, MODIFIER_CTRL}, Action::CAMERA_SPEED_UP, "Speed up"},
+            {KeyTrigger{KEY_MINUS, MODIFIER_CTRL}, Action::CAMERA_SPEED_DOWN, "Speed down"},
+            {KeyTrigger{KEY_KP_ADD, MODIFIER_CTRL}, Action::CAMERA_SPEED_UP, "Speed up"},
+            {KeyTrigger{KEY_KP_SUBTRACT, MODIFIER_CTRL}, Action::CAMERA_SPEED_DOWN, "Speed down"},
+            {KeyTrigger{KEY_EQUAL, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::ZOOM_SPEED_UP, "Zoom speed up"},
+            {KeyTrigger{KEY_MINUS, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::ZOOM_SPEED_DOWN, "Zoom speed down"},
+            {KeyTrigger{KEY_KP_ADD, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::ZOOM_SPEED_UP, "Zoom speed up"},
+            {KeyTrigger{KEY_KP_SUBTRACT, MODIFIER_CTRL | MODIFIER_SHIFT}, Action::ZOOM_SPEED_DOWN, "Zoom speed down"},
             // View
-            {KeyTrigger{GLFW_KEY_V, MODIFIER_NONE}, Action::TOGGLE_SPLIT_VIEW, "Split view"},
-            {KeyTrigger{GLFW_KEY_G, MODIFIER_NONE}, Action::TOGGLE_GT_COMPARISON, "GT comparison"},
-            {KeyTrigger{GLFW_KEY_T, MODIFIER_NONE}, Action::CYCLE_PLY, "Cycle PLY"},
+            {KeyTrigger{KEY_V, MODIFIER_NONE}, Action::TOGGLE_SPLIT_VIEW, "Split view"},
+            {KeyTrigger{KEY_G, MODIFIER_NONE}, Action::TOGGLE_GT_COMPARISON, "GT comparison"},
+            {KeyTrigger{KEY_T, MODIFIER_NONE}, Action::CYCLE_PLY, "Cycle PLY"},
             // Depth
-            {KeyTrigger{GLFW_KEY_F, MODIFIER_CTRL}, Action::TOGGLE_DEPTH_MODE, "Depth filter"},
+            {KeyTrigger{KEY_F, MODIFIER_CTRL}, Action::TOGGLE_DEPTH_MODE, "Depth filter"},
             {MouseScrollTrigger{MODIFIER_ALT}, Action::DEPTH_ADJUST_FAR, "Depth far"},
             {MouseScrollTrigger{MODIFIER_ALT | MODIFIER_CTRL}, Action::DEPTH_ADJUST_SIDE, "Depth side"},
             // Editing (Delete is mode-specific, added below)
-            {KeyTrigger{GLFW_KEY_Z, MODIFIER_CTRL}, Action::UNDO, "Undo"},
-            {KeyTrigger{GLFW_KEY_Y, MODIFIER_CTRL}, Action::REDO, "Redo"},
-            {KeyTrigger{GLFW_KEY_I, MODIFIER_CTRL}, Action::INVERT_SELECTION, "Invert"},
-            {KeyTrigger{GLFW_KEY_D, MODIFIER_CTRL}, Action::DESELECT_ALL, "Deselect"},
-            {KeyTrigger{GLFW_KEY_A, MODIFIER_CTRL}, Action::SELECT_ALL, "Select all"},
-            {KeyTrigger{GLFW_KEY_C, MODIFIER_CTRL}, Action::COPY_SELECTION, "Copy"},
-            {KeyTrigger{GLFW_KEY_V, MODIFIER_CTRL}, Action::PASTE_SELECTION, "Paste"},
+            {KeyTrigger{KEY_Z, MODIFIER_CTRL}, Action::UNDO, "Undo"},
+            {KeyTrigger{KEY_Y, MODIFIER_CTRL}, Action::REDO, "Redo"},
+            {KeyTrigger{KEY_I, MODIFIER_CTRL}, Action::INVERT_SELECTION, "Invert"},
+            {KeyTrigger{KEY_D, MODIFIER_CTRL}, Action::DESELECT_ALL, "Deselect"},
+            {KeyTrigger{KEY_A, MODIFIER_CTRL}, Action::SELECT_ALL, "Select all"},
+            {KeyTrigger{KEY_C, MODIFIER_CTRL}, Action::COPY_SELECTION, "Copy"},
+            {KeyTrigger{KEY_V, MODIFIER_CTRL}, Action::PASTE_SELECTION, "Paste"},
             // Tools
-            {KeyTrigger{GLFW_KEY_B, MODIFIER_NONE}, Action::CYCLE_BRUSH_MODE, "Brush mode"},
-            {KeyTrigger{GLFW_KEY_T, MODIFIER_CTRL}, Action::CYCLE_SELECTION_VIS, "Sel vis"},
-            {KeyTrigger{GLFW_KEY_ENTER, MODIFIER_NONE}, Action::APPLY_CROP_BOX, "Apply/confirm"},
-            {KeyTrigger{GLFW_KEY_ESCAPE, MODIFIER_NONE}, Action::CANCEL_POLYGON, "Cancel"},
+            {KeyTrigger{KEY_B, MODIFIER_NONE}, Action::CYCLE_BRUSH_MODE, "Brush mode"},
+            {KeyTrigger{KEY_T, MODIFIER_CTRL}, Action::CYCLE_SELECTION_VIS, "Sel vis"},
+            {KeyTrigger{KEY_ENTER, MODIFIER_NONE}, Action::APPLY_CROP_BOX, "Apply/confirm"},
+            {KeyTrigger{KEY_ESCAPE, MODIFIER_NONE}, Action::CANCEL_POLYGON, "Cancel"},
             // Selection
             {MouseDragTrigger{MouseButton::LEFT, MODIFIER_NONE}, Action::SELECTION_REPLACE, "Select"},
             {MouseDragTrigger{MouseButton::LEFT, MODIFIER_SHIFT}, Action::SELECTION_ADD, "Add sel"},
             {MouseDragTrigger{MouseButton::LEFT, MODIFIER_CTRL}, Action::SELECTION_REMOVE, "Remove sel"},
-            {KeyTrigger{GLFW_KEY_1, MODIFIER_CTRL}, Action::SELECT_MODE_CENTERS, "Centers"},
-            {KeyTrigger{GLFW_KEY_2, MODIFIER_CTRL}, Action::SELECT_MODE_RECTANGLE, "Rectangle"},
-            {KeyTrigger{GLFW_KEY_3, MODIFIER_CTRL}, Action::SELECT_MODE_POLYGON, "Polygon"},
-            {KeyTrigger{GLFW_KEY_4, MODIFIER_CTRL}, Action::SELECT_MODE_LASSO, "Lasso"},
-            {KeyTrigger{GLFW_KEY_5, MODIFIER_CTRL}, Action::SELECT_MODE_RINGS, "Rings"},
+            {KeyTrigger{KEY_1, MODIFIER_CTRL}, Action::SELECT_MODE_CENTERS, "Centers"},
+            {KeyTrigger{KEY_2, MODIFIER_CTRL}, Action::SELECT_MODE_RECTANGLE, "Rectangle"},
+            {KeyTrigger{KEY_3, MODIFIER_CTRL}, Action::SELECT_MODE_POLYGON, "Polygon"},
+            {KeyTrigger{KEY_4, MODIFIER_CTRL}, Action::SELECT_MODE_LASSO, "Lasso"},
+            {KeyTrigger{KEY_5, MODIFIER_CTRL}, Action::SELECT_MODE_RINGS, "Rings"},
             // UI
-            {KeyTrigger{GLFW_KEY_F12, MODIFIER_NONE}, Action::TOGGLE_UI, "Hide UI"},
-            {KeyTrigger{GLFW_KEY_F11, MODIFIER_NONE}, Action::TOGGLE_FULLSCREEN, "Fullscreen"},
+            {KeyTrigger{KEY_F12, MODIFIER_NONE}, Action::TOGGLE_UI, "Hide UI"},
+            {KeyTrigger{KEY_F11, MODIFIER_NONE}, Action::TOGGLE_FULLSCREEN, "Fullscreen"},
             // Sequencer
-            {KeyTrigger{GLFW_KEY_K, MODIFIER_NONE}, Action::SEQUENCER_ADD_KEYFRAME, "Add keyframe"},
-            {KeyTrigger{GLFW_KEY_U, MODIFIER_NONE}, Action::SEQUENCER_UPDATE_KEYFRAME, "Update keyframe"},
-            {KeyTrigger{GLFW_KEY_SPACE, MODIFIER_NONE}, Action::SEQUENCER_PLAY_PAUSE, "Play/Pause"},
+            {KeyTrigger{KEY_K, MODIFIER_NONE}, Action::SEQUENCER_ADD_KEYFRAME, "Add keyframe"},
+            {KeyTrigger{KEY_U, MODIFIER_NONE}, Action::SEQUENCER_UPDATE_KEYFRAME, "Update keyframe"},
+            {KeyTrigger{KEY_SPACE, MODIFIER_NONE}, Action::SEQUENCER_PLAY_PAUSE, "Play/Pause"},
         };
 
         constexpr ToolMode ALL_MODES[] = {
@@ -464,7 +464,7 @@ namespace lfs::vis::input {
             ToolMode::SCALE,
         };
         for (const auto mode : DELETE_NODE_MODES) {
-            profile.bindings.push_back({mode, KeyTrigger{GLFW_KEY_DELETE, MODIFIER_NONE}, Action::DELETE_NODE, "Delete node"});
+            profile.bindings.push_back({mode, KeyTrigger{KEY_DELETE, MODIFIER_NONE}, Action::DELETE_NODE, "Delete node"});
         }
 
         constexpr ToolMode DELETE_GAUSSIANS_MODES[] = {
@@ -474,21 +474,21 @@ namespace lfs::vis::input {
             ToolMode::CROP_BOX,
         };
         for (const auto mode : DELETE_GAUSSIANS_MODES) {
-            profile.bindings.push_back({mode, KeyTrigger{GLFW_KEY_DELETE, MODIFIER_NONE}, Action::DELETE_SELECTED, "Delete Gaussians"});
+            profile.bindings.push_back({mode, KeyTrigger{KEY_DELETE, MODIFIER_NONE}, Action::DELETE_SELECTED, "Delete Gaussians"});
         }
 
         // Tool shortcuts (GLOBAL mode only, number keys 1-7)
-        profile.bindings.push_back({ToolMode::GLOBAL, KeyTrigger{GLFW_KEY_1}, Action::TOOL_SELECT, "Select"});
-        profile.bindings.push_back({ToolMode::GLOBAL, KeyTrigger{GLFW_KEY_2}, Action::TOOL_TRANSLATE, "Translate"});
-        profile.bindings.push_back({ToolMode::GLOBAL, KeyTrigger{GLFW_KEY_3}, Action::TOOL_ROTATE, "Rotate"});
-        profile.bindings.push_back({ToolMode::GLOBAL, KeyTrigger{GLFW_KEY_4}, Action::TOOL_SCALE, "Scale"});
-        profile.bindings.push_back({ToolMode::GLOBAL, KeyTrigger{GLFW_KEY_5}, Action::TOOL_MIRROR, "Mirror"});
-        profile.bindings.push_back({ToolMode::GLOBAL, KeyTrigger{GLFW_KEY_6}, Action::TOOL_BRUSH, "Brush"});
-        profile.bindings.push_back({ToolMode::GLOBAL, KeyTrigger{GLFW_KEY_7}, Action::TOOL_ALIGN, "Align"});
+        profile.bindings.push_back({ToolMode::GLOBAL, KeyTrigger{KEY_1}, Action::TOOL_SELECT, "Select"});
+        profile.bindings.push_back({ToolMode::GLOBAL, KeyTrigger{KEY_2}, Action::TOOL_TRANSLATE, "Translate"});
+        profile.bindings.push_back({ToolMode::GLOBAL, KeyTrigger{KEY_3}, Action::TOOL_ROTATE, "Rotate"});
+        profile.bindings.push_back({ToolMode::GLOBAL, KeyTrigger{KEY_4}, Action::TOOL_SCALE, "Scale"});
+        profile.bindings.push_back({ToolMode::GLOBAL, KeyTrigger{KEY_5}, Action::TOOL_MIRROR, "Mirror"});
+        profile.bindings.push_back({ToolMode::GLOBAL, KeyTrigger{KEY_6}, Action::TOOL_BRUSH, "Brush"});
+        profile.bindings.push_back({ToolMode::GLOBAL, KeyTrigger{KEY_7}, Action::TOOL_ALIGN, "Align"});
 
         // Pie menu (all modes)
         for (const auto mode : ALL_MODES) {
-            profile.bindings.push_back({mode, KeyTrigger{GLFW_KEY_GRAVE_ACCENT}, Action::PIE_MENU, "Pie Menu"});
+            profile.bindings.push_back({mode, KeyTrigger{KEY_GRAVE_ACCENT}, Action::PIE_MENU, "Pie Menu"});
         }
 
         return profile;
@@ -566,94 +566,94 @@ namespace lfs::vis::input {
 
     std::string getKeyName(const int key) {
         switch (key) {
-        case GLFW_KEY_A: return "A";
-        case GLFW_KEY_B: return "B";
-        case GLFW_KEY_C: return "C";
-        case GLFW_KEY_D: return "D";
-        case GLFW_KEY_E: return "E";
-        case GLFW_KEY_F: return "F";
-        case GLFW_KEY_G: return "G";
-        case GLFW_KEY_H: return "H";
-        case GLFW_KEY_I: return "I";
-        case GLFW_KEY_J: return "J";
-        case GLFW_KEY_K: return "K";
-        case GLFW_KEY_L: return "L";
-        case GLFW_KEY_M: return "M";
-        case GLFW_KEY_N: return "N";
-        case GLFW_KEY_O: return "O";
-        case GLFW_KEY_P: return "P";
-        case GLFW_KEY_Q: return "Q";
-        case GLFW_KEY_R: return "R";
-        case GLFW_KEY_S: return "S";
-        case GLFW_KEY_T: return "T";
-        case GLFW_KEY_U: return "U";
-        case GLFW_KEY_V: return "V";
-        case GLFW_KEY_W: return "W";
-        case GLFW_KEY_X: return "X";
-        case GLFW_KEY_Y: return "Y";
-        case GLFW_KEY_Z: return "Z";
-        case GLFW_KEY_0: return "0";
-        case GLFW_KEY_1: return "1";
-        case GLFW_KEY_2: return "2";
-        case GLFW_KEY_3: return "3";
-        case GLFW_KEY_4: return "4";
-        case GLFW_KEY_5: return "5";
-        case GLFW_KEY_6: return "6";
-        case GLFW_KEY_7: return "7";
-        case GLFW_KEY_8: return "8";
-        case GLFW_KEY_9: return "9";
-        case GLFW_KEY_SPACE: return "Space";
-        case GLFW_KEY_ENTER: return "Enter";
-        case GLFW_KEY_ESCAPE: return "Escape";
-        case GLFW_KEY_TAB: return "Tab";
-        case GLFW_KEY_BACKSPACE: return "Backspace";
-        case GLFW_KEY_DELETE: return "Delete";
-        case GLFW_KEY_HOME: return "Home";
-        case GLFW_KEY_END: return "End";
-        case GLFW_KEY_PAGE_UP: return "Page Up";
-        case GLFW_KEY_PAGE_DOWN: return "Page Down";
-        case GLFW_KEY_LEFT: return "Left";
-        case GLFW_KEY_RIGHT: return "Right";
-        case GLFW_KEY_UP: return "Up";
-        case GLFW_KEY_DOWN: return "Down";
-        case GLFW_KEY_F1: return "F1";
-        case GLFW_KEY_F2: return "F2";
-        case GLFW_KEY_F3: return "F3";
-        case GLFW_KEY_F4: return "F4";
-        case GLFW_KEY_F5: return "F5";
-        case GLFW_KEY_F6: return "F6";
-        case GLFW_KEY_F7: return "F7";
-        case GLFW_KEY_F8: return "F8";
-        case GLFW_KEY_F9: return "F9";
-        case GLFW_KEY_F10: return "F10";
-        case GLFW_KEY_F11: return "F11";
-        case GLFW_KEY_F12: return "F12";
-        case GLFW_KEY_MINUS: return "-";
-        case GLFW_KEY_EQUAL: return "=";
-        case GLFW_KEY_LEFT_BRACKET: return "[";
-        case GLFW_KEY_RIGHT_BRACKET: return "]";
-        case GLFW_KEY_BACKSLASH: return "\\";
-        case GLFW_KEY_SEMICOLON: return ";";
-        case GLFW_KEY_APOSTROPHE: return "'";
-        case GLFW_KEY_GRAVE_ACCENT: return "`";
-        case GLFW_KEY_COMMA: return ",";
-        case GLFW_KEY_PERIOD: return ".";
-        case GLFW_KEY_SLASH: return "/";
-        case GLFW_KEY_KP_ADD: return "Num+";
-        case GLFW_KEY_KP_SUBTRACT: return "Num-";
-        case GLFW_KEY_KP_MULTIPLY: return "Num*";
-        case GLFW_KEY_KP_DIVIDE: return "Num/";
-        case GLFW_KEY_KP_ENTER: return "NumEnter";
-        case GLFW_KEY_KP_0: return "Num0";
-        case GLFW_KEY_KP_1: return "Num1";
-        case GLFW_KEY_KP_2: return "Num2";
-        case GLFW_KEY_KP_3: return "Num3";
-        case GLFW_KEY_KP_4: return "Num4";
-        case GLFW_KEY_KP_5: return "Num5";
-        case GLFW_KEY_KP_6: return "Num6";
-        case GLFW_KEY_KP_7: return "Num7";
-        case GLFW_KEY_KP_8: return "Num8";
-        case GLFW_KEY_KP_9: return "Num9";
+        case KEY_A: return "A";
+        case KEY_B: return "B";
+        case KEY_C: return "C";
+        case KEY_D: return "D";
+        case KEY_E: return "E";
+        case KEY_F: return "F";
+        case KEY_G: return "G";
+        case KEY_H: return "H";
+        case KEY_I: return "I";
+        case KEY_J: return "J";
+        case KEY_K: return "K";
+        case KEY_L: return "L";
+        case KEY_M: return "M";
+        case KEY_N: return "N";
+        case KEY_O: return "O";
+        case KEY_P: return "P";
+        case KEY_Q: return "Q";
+        case KEY_R: return "R";
+        case KEY_S: return "S";
+        case KEY_T: return "T";
+        case KEY_U: return "U";
+        case KEY_V: return "V";
+        case KEY_W: return "W";
+        case KEY_X: return "X";
+        case KEY_Y: return "Y";
+        case KEY_Z: return "Z";
+        case KEY_0: return "0";
+        case KEY_1: return "1";
+        case KEY_2: return "2";
+        case KEY_3: return "3";
+        case KEY_4: return "4";
+        case KEY_5: return "5";
+        case KEY_6: return "6";
+        case KEY_7: return "7";
+        case KEY_8: return "8";
+        case KEY_9: return "9";
+        case KEY_SPACE: return "Space";
+        case KEY_ENTER: return "Enter";
+        case KEY_ESCAPE: return "Escape";
+        case KEY_TAB: return "Tab";
+        case KEY_BACKSPACE: return "Backspace";
+        case KEY_DELETE: return "Delete";
+        case KEY_HOME: return "Home";
+        case KEY_END: return "End";
+        case KEY_PAGE_UP: return "Page Up";
+        case KEY_PAGE_DOWN: return "Page Down";
+        case KEY_LEFT: return "Left";
+        case KEY_RIGHT: return "Right";
+        case KEY_UP: return "Up";
+        case KEY_DOWN: return "Down";
+        case KEY_F1: return "F1";
+        case KEY_F2: return "F2";
+        case KEY_F3: return "F3";
+        case KEY_F4: return "F4";
+        case KEY_F5: return "F5";
+        case KEY_F6: return "F6";
+        case KEY_F7: return "F7";
+        case KEY_F8: return "F8";
+        case KEY_F9: return "F9";
+        case KEY_F10: return "F10";
+        case KEY_F11: return "F11";
+        case KEY_F12: return "F12";
+        case KEY_MINUS: return "-";
+        case KEY_EQUAL: return "=";
+        case KEY_LEFT_BRACKET: return "[";
+        case KEY_RIGHT_BRACKET: return "]";
+        case KEY_BACKSLASH: return "\\";
+        case KEY_SEMICOLON: return ";";
+        case KEY_APOSTROPHE: return "'";
+        case KEY_GRAVE_ACCENT: return "`";
+        case KEY_COMMA: return ",";
+        case KEY_PERIOD: return ".";
+        case KEY_SLASH: return "/";
+        case KEY_KP_ADD: return "Num+";
+        case KEY_KP_SUBTRACT: return "Num-";
+        case KEY_KP_MULTIPLY: return "Num*";
+        case KEY_KP_DIVIDE: return "Num/";
+        case KEY_KP_ENTER: return "NumEnter";
+        case KEY_KP_0: return "Num0";
+        case KEY_KP_1: return "Num1";
+        case KEY_KP_2: return "Num2";
+        case KEY_KP_3: return "Num3";
+        case KEY_KP_4: return "Num4";
+        case KEY_KP_5: return "Num5";
+        case KEY_KP_6: return "Num6";
+        case KEY_KP_7: return "Num7";
+        case KEY_KP_8: return "Num8";
+        case KEY_KP_9: return "Num9";
         default: return "Key" + std::to_string(key);
         }
     }
@@ -705,15 +705,15 @@ namespace lfs::vis::input {
         if (!capture_state_.active)
             return;
 
-        if (key == GLFW_KEY_ESCAPE) {
+        if (key == KEY_ESCAPE) {
             cancelCapture();
             return;
         }
 
-        if (key == GLFW_KEY_LEFT_SHIFT || key == GLFW_KEY_RIGHT_SHIFT ||
-            key == GLFW_KEY_LEFT_CONTROL || key == GLFW_KEY_RIGHT_CONTROL ||
-            key == GLFW_KEY_LEFT_ALT || key == GLFW_KEY_RIGHT_ALT ||
-            key == GLFW_KEY_LEFT_SUPER || key == GLFW_KEY_RIGHT_SUPER) {
+        if (key == KEY_LEFT_SHIFT || key == KEY_RIGHT_SHIFT ||
+            key == KEY_LEFT_CONTROL || key == KEY_RIGHT_CONTROL ||
+            key == KEY_LEFT_ALT || key == KEY_RIGHT_ALT ||
+            key == KEY_LEFT_SUPER || key == KEY_RIGHT_SUPER) {
             return;
         }
 

@@ -43,13 +43,13 @@
 #include "tools/brush_tool.hpp"
 #include "tools/selection_tool.hpp"
 #include "visualizer_impl.hpp"
-#include <GLFW/glfw3.h>
+#include <SDL3/SDL.h>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <format>
-#include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include <imgui_impl_sdl3.h>
 #include <imgui_internal.h>
 #include <ImGuizmo.h>
 
@@ -233,7 +233,7 @@ namespace lfs::vis::gui {
         io.ConfigWindowsMoveFromTitleBarOnly = true;
 
         // Platform/Renderer initialization
-        ImGui_ImplGlfw_InitForOpenGL(viewer_->getWindow(), true);
+        ImGui_ImplSDL3_InitForOpenGL(viewer_->getWindow(), SDL_GL_GetCurrentContext());
         ImGui_ImplOpenGL3_Init("#version 430");
 
         // Initialize localization system
@@ -245,8 +245,7 @@ namespace lfs::vis::gui {
             LOG_INFO("Localization initialized with language: {}", loc.getCurrentLanguageName());
         }
 
-        float xscale, yscale;
-        glfwGetWindowContentScale(viewer_->getWindow(), &xscale, &yscale);
+        float xscale = SDL_GetWindowDisplayScale(viewer_->getWindow());
 
         // Clamping / safety net for weird DPI values
         // Support up to 4.0x scale for high-DPI displays (e.g., 6K monitors)
@@ -261,8 +260,11 @@ namespace lfs::vis::gui {
             const auto icon_path = lfs::vis::getAssetPath("lichtfeld-icon.png");
             const auto [data, width, height, channels] = lfs::core::load_image_with_alpha(icon_path);
 
-            GLFWimage image{width, height, data};
-            glfwSetWindowIcon(viewer_->getWindow(), 1, &image);
+            SDL_Surface* icon_surface = SDL_CreateSurfaceFrom(width, height, SDL_PIXELFORMAT_RGBA32, data, width * 4);
+            if (icon_surface) {
+                SDL_SetWindowIcon(viewer_->getWindow(), icon_surface);
+                SDL_DestroySurface(icon_surface);
+            }
             lfs::core::free_image(data);
         } catch (const std::exception& e) {
             LOG_WARN("Could not load application icon: {}", e.what());
@@ -416,7 +418,7 @@ namespace lfs::vis::gui {
         startup_overlay_.loadTextures();
 
         if (!drag_drop_.init(viewer_->getWindow())) {
-            LOG_WARN("Native drag-drop initialization failed, falling back to GLFW");
+            LOG_WARN("Native drag-drop initialization failed, drag-drop will use SDL events only");
         }
         drag_drop_.setFileDropCallback([this](const std::vector<std::string>& paths) {
             LOG_INFO("Files dropped via native drag-drop: {} file(s)", paths.size());
@@ -446,7 +448,7 @@ namespace lfs::vis::gui {
 
         if (ImGui::GetCurrentContext()) {
             ImGui_ImplOpenGL3_Shutdown();
-            ImGui_ImplGlfw_Shutdown();
+            ImGui_ImplSDL3_Shutdown();
             ImPlot::DestroyContext();
             ImGui::DestroyContext();
         }
@@ -548,7 +550,7 @@ namespace lfs::vis::gui {
         // Start frame
         ImGui_ImplOpenGL3_NewFrame();
 
-        ImGui_ImplGlfw_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
 
         // Check mouse state before ImGui::NewFrame() updates WantCaptureMouse
         ImVec2 mouse_pos = ImGui::GetMousePos();
@@ -689,10 +691,11 @@ namespace lfs::vis::gui {
 
         // Update and Render additional Platform Windows (for multi-viewport)
         if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) {
-            GLFWwindow* backup_current_context = glfwGetCurrentContext();
+            SDL_Window* backup_window = SDL_GL_GetCurrentWindow();
+            SDL_GLContext backup_context = SDL_GL_GetCurrentContext();
             ImGui::UpdatePlatformWindows();
             ImGui::RenderPlatformWindowsDefault();
-            glfwMakeContextCurrent(backup_current_context);
+            SDL_GL_MakeCurrent(backup_window, backup_context);
 
             // Clean up GL state after multi-viewport rendering too
             glBindVertexArray(0);
@@ -997,6 +1000,13 @@ namespace lfs::vis::gui {
             }
         });
 
+        internal::DisplayScaleChanged::when([this](const auto& e) {
+            const float scale = std::clamp(e.scale, 1.0f, 4.0f);
+            lfs::python::set_shared_dpi_scale(scale);
+            lfs::vis::setThemeDpiScale(scale);
+            LOG_INFO("Display scale changed to {:.2f}", scale);
+        });
+
         state::DiskSpaceSaveFailed::when([this](const auto& e) {
             // Non-disk-space errors are handled by notification_bridge.cpp
             if (!e.is_disk_space_error)
@@ -1139,11 +1149,15 @@ namespace lfs::vis::gui {
     }
 
     bool GuiManager::needsAnimationFrame() const {
-        if (startup_overlay_.isVisible())
+        if (startup_overlay_.needsAnimationFrame())
             return true;
         if (video_extractor_dialog_ && video_extractor_dialog_->isVideoPlaying())
             return true;
         return false;
+    }
+
+    void GuiManager::dismissStartupOverlay() {
+        startup_overlay_.dismiss();
     }
 
     void GuiManager::setFileSelectedCallback(std::function<void(const std::filesystem::path&, bool)> callback) {

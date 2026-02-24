@@ -6,7 +6,10 @@
 
 #ifdef CUDA_GL_INTEROP_ENABLED
 
+#include <cassert>
 #include <cuda_runtime.h>
+
+#include "core/cuda_debug.hpp"
 
 namespace lfs {
 
@@ -57,6 +60,61 @@ namespace lfs {
 
         writeInterleavedPosColorKernel<<<blocks, threads, 0, stream>>>(
             positions, colors, output, num_points);
+        CUDA_KERNEL_CHECK("writeInterleavedPosColorKernel");
+    }
+
+    __global__ void floatImageToRGBA8SurfaceKernel(
+        const float* __restrict__ input,
+        cudaSurfaceObject_t output,
+        int width, int height, int channels, bool is_chw) {
+
+        const int x = blockIdx.x * blockDim.x + threadIdx.x;
+        const int y = blockIdx.y * blockDim.y + threadIdx.y;
+        if (x >= width || y >= height)
+            return;
+
+        float r, g, b, a;
+        if (is_chw) {
+            const int hw = height * width;
+            const int idx = y * width + x;
+            r = input[idx];
+            g = input[hw + idx];
+            b = input[2 * hw + idx];
+            a = (channels == 4) ? input[3 * hw + idx] : 1.0f;
+        } else {
+            const int base = (y * width + x) * channels;
+            r = input[base];
+            g = input[base + 1];
+            b = input[base + 2];
+            a = (channels == 4) ? input[base + 3] : 1.0f;
+        }
+
+        uchar4 pixel;
+        pixel.x = static_cast<unsigned char>(fminf(fmaxf(r, 0.0f), 1.0f) * 255.0f + 0.5f);
+        pixel.y = static_cast<unsigned char>(fminf(fmaxf(g, 0.0f), 1.0f) * 255.0f + 0.5f);
+        pixel.z = static_cast<unsigned char>(fminf(fmaxf(b, 0.0f), 1.0f) * 255.0f + 0.5f);
+        pixel.w = static_cast<unsigned char>(fminf(fmaxf(a, 0.0f), 1.0f) * 255.0f + 0.5f);
+
+        surf2Dwrite(pixel, output, x * static_cast<int>(sizeof(uchar4)), y);
+    }
+
+    void launchFloatImageToRGBA8Surface(
+        const float* input,
+        cudaSurfaceObject_t output,
+        int width, int height, int channels, bool is_chw,
+        cudaStream_t stream) {
+
+        assert(input != nullptr);
+        assert(width > 0 && height > 0);
+        assert(channels == 3 || channels == 4);
+
+        dim3 block(16, 16);
+        dim3 grid((width + block.x - 1) / block.x,
+                  (height + block.y - 1) / block.y);
+
+        floatImageToRGBA8SurfaceKernel<<<grid, block, 0, stream>>>(
+            input, output, width, height, channels, is_chw);
+        CUDA_KERNEL_CHECK("floatImageToRGBA8SurfaceKernel");
     }
 
 } // namespace lfs

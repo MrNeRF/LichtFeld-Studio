@@ -74,6 +74,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # Input handling
         input/input_controller.cpp
         input/input_bindings.cpp
+        input/sdl_key_mapping.cpp
 
         # Training integration
         training/training_state.cpp
@@ -152,7 +153,7 @@ target_link_libraries(lfs_visualizer
         lfs_python_utils
         lfs_sequencer
         glad::glad
-        glfw
+        SDL3::SDL3
         imgui::imgui
         implot::implot
         imguizmo::imguizmo
