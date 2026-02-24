@@ -5,6 +5,7 @@
 #include "core/tensor_fwd.hpp"
 #include <array>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <concepts>
 #include <cstring>
