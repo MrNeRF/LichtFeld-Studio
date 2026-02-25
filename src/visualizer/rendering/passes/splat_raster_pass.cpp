@@ -20,8 +20,6 @@
 namespace lfs::vis {
 
     namespace {
-        constexpr int GPU_ALIGNMENT = 16;
-
         lfs::training::PPISPRenderOverrides toRenderOverrides(const PPISPOverrides& ov) {
             lfs::training::PPISPRenderOverrides r;
             r.exposure_offset = ov.exposure_offset;
@@ -115,10 +113,6 @@ namespace lfs::vis {
                                           const FrameContext& ctx, FrameResources& res) {
         LOG_TIMER_TRACE("SplatRasterPass::renderToTexture");
         assert(ctx.model && ctx.model->size() > 0);
-        if (!ctx.model || ctx.model->size() == 0) {
-            res.render_texture_valid = false;
-            return;
-        }
 
         const auto& settings = ctx.settings;
 

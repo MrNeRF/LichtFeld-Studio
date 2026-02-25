@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "overlay_pass.hpp"
+#include "../rendering_manager.hpp"
 #include "core/logger.hpp"
 #include "scene/scene_manager.hpp"
 #include <cassert>
@@ -111,10 +112,10 @@ namespace lfs::vis {
             const float time_since_set = ctx.viewport.camera.getSecondsSincePivotSet();
             const bool animation_active = time_since_set < PIVOT_DURATION_SEC;
 
-            if (animation_active && res.set_pivot_animation) {
+            if (animation_active && res.manager) {
                 const auto remaining_ms = static_cast<int>((PIVOT_DURATION_SEC - time_since_set) * 1000.0f);
-                res.set_pivot_animation(std::chrono::steady_clock::now() +
-                                        std::chrono::milliseconds(remaining_ms));
+                res.manager->setPivotAnimationEndTime(std::chrono::steady_clock::now() +
+                                                      std::chrono::milliseconds(remaining_ms));
             }
 
             if (settings.show_pivot || animation_active) {
@@ -192,14 +193,14 @@ namespace lfs::vis {
                         if (cam_id != ctx.pick.hovered_camera_id) {
                             LOG_DEBUG("Camera hover changed: {} -> {}", ctx.pick.hovered_camera_id, cam_id);
                             res.hovered_camera_id = cam_id;
-                            if (res.mark_dirty)
-                                res.mark_dirty(DirtyFlag::OVERLAY);
+                            if (res.manager)
+                                res.manager->markDirty(DirtyFlag::OVERLAY);
                         }
                     } else if (ctx.pick.hovered_camera_id != -1) {
                         LOG_DEBUG("Camera hover lost (was ID: {})", ctx.pick.hovered_camera_id);
                         res.hovered_camera_id = -1;
-                        if (res.mark_dirty)
-                            res.mark_dirty(DirtyFlag::OVERLAY);
+                        if (res.manager)
+                            res.manager->markDirty(DirtyFlag::OVERLAY);
                     }
                 }
             }

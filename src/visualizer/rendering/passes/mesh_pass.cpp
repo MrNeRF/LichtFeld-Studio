@@ -11,12 +11,10 @@
 
 namespace lfs::vis {
 
-    bool MeshPass::shouldExecute(DirtyMask frame_dirty, const FrameContext& ctx) const {
+    bool MeshPass::shouldExecute(DirtyMask, const FrameContext& ctx) const {
         if (!ctx.scene_manager)
             return false;
-        if (ctx.scene_state.meshes.empty())
-            return false;
-        return (frame_dirty & sensitivity()) != 0;
+        return !ctx.scene_state.meshes.empty();
     }
 
     void MeshPass::execute(lfs::rendering::RenderingEngine& engine,

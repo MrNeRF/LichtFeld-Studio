@@ -38,10 +38,6 @@
 
 namespace lfs::vis {
 
-    namespace {
-        constexpr int GPU_ALIGNMENT = 16; // 16-pixel alignment for GPU texture efficiency
-    }                                     // namespace
-
     using namespace lfs::core::events;
 
     GTTextureCache::GTTextureCache() = default;
@@ -903,8 +899,7 @@ namespace lfs::vis {
             .gt_context = gt_context_,
             .hovered_gaussian_id = hovered_gaussian_id_,
             .hovered_camera_id = hovered_camera_id_,
-            .mark_dirty = [this](DirtyMask flags) { markDirty(flags); },
-            .set_pivot_animation = [this](auto end_time) { setPivotAnimationEndTime(end_time); }};
+            .manager = this};
 
         // Pre-render splats at GT dimensions; pass loop skips via splat_pre_rendered guard
         if (frame_ctx.settings.split_view_mode == SplitViewMode::GTComparison &&

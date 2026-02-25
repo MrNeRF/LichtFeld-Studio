@@ -9,7 +9,6 @@
 #include "rendering_types.hpp"
 #include "scene/scene_render_state.hpp"
 #include <chrono>
-#include <functional>
 #include <optional>
 #include <rendering/rendering.hpp>
 
@@ -20,6 +19,7 @@ namespace lfs::core {
 
 namespace lfs::vis {
 
+    class RenderingManager;
     class SceneManager;
 
     struct BrushState {
@@ -85,8 +85,7 @@ namespace lfs::vis {
         bool pick_consumed = false;
         SplitViewInfo split_info;
 
-        std::function<void(DirtyMask)> mark_dirty;
-        std::function<void(std::chrono::steady_clock::time_point)> set_pivot_animation;
+        RenderingManager* manager = nullptr;
     };
 
     class RenderPass {

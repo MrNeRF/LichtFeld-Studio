@@ -12,6 +12,8 @@
 
 namespace lfs::vis {
 
+    constexpr int GPU_ALIGNMENT = 16;
+
     enum class SplitViewMode {
         Disabled,
         PLYComparison,
