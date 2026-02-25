@@ -1,0 +1,55 @@
+<rml>
+<head>
+    <link type="text/rcss" href="statusbar.rcss"/>
+</head>
+<body id="body">
+    <div id="status-left">
+        <span id="mode-text"></span>
+        <div id="training-section" class="hidden">
+            <span class="separator">|</span>
+            <div id="progress-container">
+                <div id="progress-fill"></div>
+                <span id="progress-text"></span>
+            </div>
+            <span id="step-label" class="dim"></span>
+            <span id="step-value"></span>
+            <span class="separator">|</span>
+            <span id="loss-label" class="dim"></span>
+            <span id="loss-value"></span>
+            <span class="separator">|</span>
+            <span id="gaussians-label" class="dim"></span>
+            <span id="gaussians-value"></span>
+            <span class="separator">|</span>
+            <span id="time-value"></span>
+            <span id="eta-label" class="dim"></span>
+            <span id="eta-value"></span>
+        </div>
+        <div id="splat-section" class="hidden">
+            <span class="separator">|</span>
+            <span id="splat-text"></span>
+        </div>
+        <div id="split-section" class="hidden">
+            <span class="separator">|</span>
+            <span id="split-mode"></span>
+            <span id="split-detail" class="dim"></span>
+        </div>
+        <div id="wasd-section" class="hidden">
+            <span class="separator wasd-sep">|</span>
+            <span id="wasd-text"></span>
+        </div>
+        <div id="zoom-section" class="hidden">
+            <span class="separator zoom-sep">|</span>
+            <span id="zoom-text"></span>
+        </div>
+    </div>
+    <div id="status-right">
+        <img id="gpu-icon" src="" />
+        <span id="lfs-mem"></span>
+        <span class="separator thin">|</span>
+        <span id="gpu-mem"></span>
+        <span id="fps-value"></span>
+        <span id="fps-label" class="dim"></span>
+        <span id="git-commit" class="dim"></span>
+    </div>
+</body>
+</rml>

@@ -7,6 +7,7 @@
 #include "gui/gui_manager.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
+#include "gui/rml_status_bar.hpp"
 #include "gui/sequencer_ui_manager.hpp"
 #include "gui/startup_overlay.hpp"
 #include "gui/windows/file_browser.hpp"
@@ -178,6 +179,13 @@ namespace lfs::vis::gui::native_panels {
         python::invoke_viewport_overlay(glm::value_ptr(view), glm::value_ptr(proj),
                                         vp_pos, vp_size, cam_pos, cam_fwd,
                                         ImGui::GetBackgroundDrawList());
+    }
+
+    RmlStatusBarPanel::RmlStatusBarPanel(RmlStatusBar* sb)
+        : status_bar_(sb) {}
+
+    void RmlStatusBarPanel::draw(const PanelDrawContext& ctx) {
+        status_bar_->draw(ctx);
     }
 
 } // namespace lfs::vis::gui::native_panels

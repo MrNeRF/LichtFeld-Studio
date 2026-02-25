@@ -432,6 +432,7 @@ namespace lfs::vis::gui {
         lfs::python::set_rml_manager(&rmlui_manager_);
 
         startup_overlay_.init(&rmlui_manager_);
+        rml_status_bar_.init(&rmlui_manager_);
 
         lfs::python::RmlPanelHostOps ops{};
         ops.create = [](void* mgr, const char* name, const char* rml) -> void* {
@@ -473,6 +474,7 @@ namespace lfs::vis::gui {
 
         async_tasks_.shutdown();
 
+        rml_status_bar_.shutdown();
         startup_overlay_.shutdown();
         rmlui_manager_.shutdown();
 
@@ -574,6 +576,11 @@ namespace lfs::vis::gui {
         reg_panel("native.startup_overlay", "Startup Overlay",
                   make_panel(StartupOverlayPanel(&startup_overlay_, &drag_drop_hovering_)),
                   PanelSpace::ViewportOverlay, 1000);
+
+        reg_panel("native.status_bar", "##StatusBar",
+                  make_panel(RmlStatusBarPanel(&rml_status_bar_)),
+                  PanelSpace::StatusBar, 0);
+        reg.set_panel_disabled_override("lfs.status_bar");
     }
 
     void GuiManager::render() {

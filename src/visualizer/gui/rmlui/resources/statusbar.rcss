@@ -1,0 +1,152 @@
+div {
+    display: block;
+}
+
+body {
+    font-family: Inter;
+    font-size: 14dp;
+    width: 100%;
+    display: flex;
+    flex-direction: row;
+    align-items: stretch;
+    padding: 0;
+    margin: 0;
+    background-color: transparent;
+    overflow: hidden;
+}
+
+#status-left {
+    flex: 1;
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    overflow: hidden;
+}
+
+#status-right {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+#training-section,
+#splat-section,
+#split-section,
+#wasd-section,
+#zoom-section {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+}
+
+.hidden {
+    display: none;
+}
+
+#training-section.hidden,
+#splat-section.hidden,
+#split-section.hidden,
+#wasd-section.hidden,
+#zoom-section.hidden {
+    display: none;
+}
+
+/* Within-training separators: 12dp each side */
+.separator {
+    margin: 0 12dp;
+}
+
+/* Section-level separator in training: 20dp left, 12dp right */
+#training-section > .separator:first-child {
+    margin-left: 20dp;
+}
+
+/* Section-level separators for non-training sections: 20dp left, 6dp right */
+#splat-section > .separator:first-child,
+#split-section > .separator:first-child {
+    margin-left: 20dp;
+    margin-right: 6dp;
+}
+
+.separator.wasd-sep,
+.separator.zoom-sep {
+    margin-left: 20dp;
+    margin-right: 6dp;
+}
+
+/* Thin separator in right section */
+.separator.thin {
+    margin: 0 2dp;
+}
+
+#progress-container {
+    position: relative;
+    width: 120dp;
+    height: 16dp;
+    overflow: hidden;
+    border-radius: 2dp;
+}
+
+#progress-fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    width: 0%;
+}
+
+#progress-text {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    text-align: center;
+    line-height: 16dp;
+}
+
+#gpu-icon {
+    width: 14dp;
+    height: 14dp;
+    margin-right: 4dp;
+}
+
+#lfs-mem {
+    margin-right: 0;
+}
+
+#gpu-mem {
+    margin-right: 0;
+}
+
+#fps-value {
+    margin-left: 16dp;
+}
+
+#fps-label {
+    margin-left: 0;
+}
+
+#git-commit {
+    margin-left: 16dp;
+}
+
+#step-label {
+    margin-left: 12dp;
+    margin-right: 6dp;
+}
+
+#loss-label,
+#gaussians-label {
+    margin-right: 6dp;
+}
+
+#eta-label {
+    margin-left: 6dp;
+    margin-right: 6dp;
+}
+
+#split-detail {
+    margin-left: 4dp;
+}

@@ -42,6 +42,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/layout_state.cpp
         gui/async_task_manager.cpp
         gui/startup_overlay.cpp
+        gui/rml_status_bar.cpp
+        gui/gpu_memory_query.cpp
         gui/sequencer_ui_manager.cpp
         gui/keyframe_scene_sync.cpp
         gui/gizmo_transform.cpp

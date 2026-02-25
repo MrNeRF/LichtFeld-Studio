@@ -15,6 +15,7 @@ namespace lfs::vis::gui {
     class GuiManager;
     class SequencerUIManager;
     class PanelLayoutManager;
+    class RmlStatusBar;
 
 } // namespace lfs::vis::gui
 
@@ -149,6 +150,15 @@ namespace lfs::vis::gui::native_panels {
 
     private:
         GuiManager* gui_;
+    };
+
+    class RmlStatusBarPanel : public IPanel {
+    public:
+        explicit RmlStatusBarPanel(RmlStatusBar* sb);
+        void draw(const PanelDrawContext& ctx) override;
+
+    private:
+        RmlStatusBar* status_bar_;
     };
 
 } // namespace lfs::vis::gui::native_panels

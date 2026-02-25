@@ -214,6 +214,7 @@ namespace lfs::vis::gui {
                     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {PADDING, 3.0f});
                     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {6.0f, 0.0f});
                     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+                    ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, {1.0f, 1.0f});
 
                     if (ImGui::Begin("##StatusBar", nullptr, FLAGS)) {
                         ImGui::GetWindowDrawList()->AddLine(
@@ -223,7 +224,7 @@ namespace lfs::vis::gui {
                     }
                     ImGui::End();
 
-                    ImGui::PopStyleVar(4);
+                    ImGui::PopStyleVar(5);
                     ImGui::PopStyleColor(2);
                     break;
                 }
