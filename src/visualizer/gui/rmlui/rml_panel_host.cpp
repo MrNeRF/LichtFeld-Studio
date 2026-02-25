@@ -14,8 +14,10 @@
 #include "theme/theme.hpp"
 
 #include <RmlUi/Core.h>
+#include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Factory.h>
 #include <RmlUi/Core/Input.h>
+#include <SDL3/SDL_keyboard.h>
 #include <cassert>
 #include <filesystem>
 #include <format>
@@ -23,6 +25,53 @@
 #include <imgui.h>
 
 namespace lfs::vis::gui {
+
+    static std::mutex s_text_mutex;
+    static std::vector<uint32_t> s_text_queue;
+
+    void RmlPanelHost::pushTextInput(const std::string& text) {
+        std::lock_guard lock(s_text_mutex);
+        for (size_t i = 0; i < text.size();) {
+            uint32_t cp = 0;
+            auto c = static_cast<unsigned char>(text[i]);
+            if (c < 0x80) {
+                cp = c;
+                i += 1;
+            } else if ((c >> 5) == 0x06) {
+                cp = (c & 0x1F) << 6;
+                if (i + 1 < text.size())
+                    cp |= static_cast<unsigned char>(text[i + 1]) & 0x3F;
+                i += 2;
+            } else if ((c >> 4) == 0x0E) {
+                cp = (c & 0x0F) << 12;
+                if (i + 1 < text.size())
+                    cp |= (static_cast<unsigned char>(text[i + 1]) & 0x3F) << 6;
+                if (i + 2 < text.size())
+                    cp |= static_cast<unsigned char>(text[i + 2]) & 0x3F;
+                i += 3;
+            } else if ((c >> 3) == 0x1E) {
+                cp = (c & 0x07) << 18;
+                if (i + 1 < text.size())
+                    cp |= (static_cast<unsigned char>(text[i + 1]) & 0x3F) << 12;
+                if (i + 2 < text.size())
+                    cp |= (static_cast<unsigned char>(text[i + 2]) & 0x3F) << 6;
+                if (i + 3 < text.size())
+                    cp |= static_cast<unsigned char>(text[i + 3]) & 0x3F;
+                i += 4;
+            } else {
+                i += 1;
+                continue;
+            }
+            s_text_queue.push_back(cp);
+        }
+    }
+
+    std::vector<uint32_t> RmlPanelHost::drainTextInput() {
+        std::lock_guard lock(s_text_mutex);
+        std::vector<uint32_t> result;
+        result.swap(s_text_queue);
+        return result;
+    }
 
     namespace {
         std::string colorToRml(const ImVec4& c) {
@@ -174,8 +223,8 @@ namespace lfs::vis::gui {
 
         return std::format(
             "body {{ color: {0}; background-color: {2}; }}\n"
-            "#filter-input {{ color: {0}; background-color: {2}; border-width: 1dp; border-color: {5}; }}\n"
-            "#filter-input:focus {{ border-color: {4}; }}\n"
+            "#search-container {{ background-color: {2}; border-color: {5}; }}\n"
+            "#filter-input {{ color: {0}; }}\n"
             ".tree-row.even {{ background-color: {6}; }}\n"
             ".tree-row.odd {{ background-color: {7}; }}\n"
             ".tree-row:hover {{ background-color: {3}; }}\n"
@@ -210,14 +259,17 @@ namespace lfs::vis::gui {
 
         if (base_rcss_.empty()) {
             try {
-                auto rcss_path = lfs::vis::getAssetPath(
-                    std::filesystem::path(rml_path_).replace_extension(".rcss").string());
+                auto rcss_name = std::filesystem::path(rml_path_).replace_extension(".rcss").string();
+                auto rcss_path = lfs::vis::getAssetPath(rcss_name);
                 std::ifstream f(rcss_path);
                 if (f) {
                     base_rcss_.assign(std::istreambuf_iterator<char>(f),
                                       std::istreambuf_iterator<char>());
+                } else {
+                    LOG_ERROR("RmlUI: failed to open RCSS at {}", rcss_path.string());
                 }
-            } catch (...) {
+            } catch (const std::exception& e) {
+                LOG_ERROR("RmlUI: RCSS not found: {}", e.what());
             }
         }
 
@@ -306,40 +358,68 @@ namespace lfs::vis::gui {
 
         bool hovered = local_x >= 0 && local_y >= 0 && local_x < logical_w && local_y < logical_h;
 
-        if (!hovered)
-            return;
+        if (hovered) {
+            rml_context_->ProcessMouseMove(static_cast<int>(local_x * dp_ratio),
+                                           static_cast<int>(local_y * dp_ratio), 0);
 
-        rml_context_->ProcessMouseMove(static_cast<int>(local_x * dp_ratio),
-                                       static_cast<int>(local_y * dp_ratio), 0);
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                rml_context_->ProcessMouseButtonDown(0, 0);
+            if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+                rml_context_->ProcessMouseButtonUp(0, 0);
 
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-            rml_context_->ProcessMouseButtonDown(0, 0);
-        if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
-            rml_context_->ProcessMouseButtonUp(0, 0);
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                rml_context_->ProcessMouseButtonDown(1, 0);
+            if (ImGui::IsMouseReleased(ImGuiMouseButton_Right))
+                rml_context_->ProcessMouseButtonUp(1, 0);
 
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
-            rml_context_->ProcessMouseButtonDown(1, 0);
-        if (ImGui::IsMouseReleased(ImGuiMouseButton_Right))
-            rml_context_->ProcessMouseButtonUp(1, 0);
+            float wheel = io.MouseWheel;
+            if (wheel != 0.0f)
+                rml_context_->ProcessMouseWheel(Rml::Vector2f(0, -wheel), 0);
 
-        float wheel = io.MouseWheel;
-        if (wheel != 0.0f)
-            rml_context_->ProcessMouseWheel(Rml::Vector2f(0, -wheel), 0);
-
-        int mods = buildRmlModifiers();
-        for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
-            auto imgui_key = static_cast<ImGuiKey>(k);
-            auto rml_key = imguiKeyToRml(imgui_key);
-            if (rml_key == Rml::Input::KI_UNKNOWN)
-                continue;
-            if (ImGui::IsKeyPressed(imgui_key, false))
-                rml_context_->ProcessKeyDown(rml_key, mods);
-            if (ImGui::IsKeyReleased(imgui_key))
-                rml_context_->ProcessKeyUp(rml_key, mods);
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                auto* focused = rml_context_->GetFocusElement();
+                bool want_text = focused && focused->GetTagName() == "input";
+                if (want_text != has_text_focus_) {
+                    has_text_focus_ = want_text;
+                    auto* win = manager_->getWindow();
+                    if (has_text_focus_)
+                        SDL_StartTextInput(win);
+                    else
+                        SDL_StopTextInput(win);
+                }
+            }
+        } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            if (has_text_focus_) {
+                drainTextInput();
+                has_text_focus_ = false;
+                SDL_StopTextInput(manager_->getWindow());
+            }
         }
 
-        for (int i = 0; i < io.InputQueueCharacters.Size; ++i) {
-            rml_context_->ProcessTextInput(static_cast<Rml::Character>(io.InputQueueCharacters[i]));
+        bool forward_keys = has_text_focus_ || hovered;
+        if (has_text_focus_) {
+            io.WantCaptureKeyboard = true;
+            io.WantTextInput = true;
+        }
+
+        if (forward_keys) {
+            int mods = buildRmlModifiers();
+            for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
+                auto imgui_key = static_cast<ImGuiKey>(k);
+                auto rml_key = imguiKeyToRml(imgui_key);
+                if (rml_key == Rml::Input::KI_UNKNOWN)
+                    continue;
+                if (ImGui::IsKeyPressed(imgui_key, false))
+                    rml_context_->ProcessKeyDown(rml_key, mods);
+                if (ImGui::IsKeyReleased(imgui_key))
+                    rml_context_->ProcessKeyUp(rml_key, mods);
+            }
+        }
+
+        if (has_text_focus_) {
+            auto chars = drainTextInput();
+            for (uint32_t cp : chars)
+                rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
         }
     }
 

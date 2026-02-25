@@ -460,11 +460,15 @@ namespace lfs::python {
 
     uint64_t ApplicationSceneContext::generation() const { return generation_.load(); }
 
+    void ApplicationSceneContext::bump() { generation_.fetch_add(1); }
+
     void set_application_scene(core::Scene* scene) { g_app_scene_context.set(scene); }
 
     core::Scene* get_application_scene() { return g_app_scene_context.get(); }
 
     uint64_t get_scene_generation() { return g_app_scene_context.generation(); }
+
+    void bump_scene_generation() { g_app_scene_context.bump(); }
 
     void set_gil_state_ready(const bool ready) { g_gil_state_ready.store(ready, std::memory_order_release); }
     bool is_gil_state_ready() { return g_gil_state_ready.load(std::memory_order_acquire); }

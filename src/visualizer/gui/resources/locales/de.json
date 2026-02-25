@@ -305,7 +305,8 @@
     "keyframe_easing.ease_in": "Langsam ein",
     "keyframe_easing.ease_out": "Langsam aus",
     "keyframe_easing.ease_in_out": "Langsam ein/aus",
-    "keyframe_label": "Schluesselbild {index}  ({time:.2f}s)"
+    "keyframe_label": "Schluesselbild {index}  ({time:.2f}s)",
+    "search": "Suchen"
   },
   "export": {
     "title": "Exportieren",

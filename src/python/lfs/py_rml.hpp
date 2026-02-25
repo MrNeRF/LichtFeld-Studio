@@ -51,9 +51,13 @@ namespace lfs::python {
 
         // DOM mutation
         nb::object append_child(const std::string& tag_name);
+        nb::object append_child_element(PyRmlElement& child);
+        nb::object insert_before(const std::string& tag_name, PyRmlElement& ref_child);
+        nb::object insert_before_element(PyRmlElement& child, PyRmlElement& ref_child);
         void remove_child(PyRmlElement& child);
         void set_inner_rml(const std::string& rml);
         std::string get_inner_rml();
+        void set_text(const std::string& text);
 
         // Attributes
         void set_attribute(const std::string& name, const std::string& value);
@@ -124,6 +128,7 @@ namespace lfs::python {
         explicit PyEventListener(nb::callable cb) : callback_(std::move(cb)) {}
 
         void ProcessEvent(Rml::Event& event) override;
+        void OnDetach(Rml::Element*) override { delete this; }
 
     private:
         nb::callable callback_;

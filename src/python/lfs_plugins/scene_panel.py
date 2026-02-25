@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Scene Graph Panel - RmlUI DOM implementation."""
+"""Scene Graph Panel - RmlUI DOM implementation with retained-mode event delegation."""
 
 from pathlib import Path
 import lichtfeld as lf
@@ -112,7 +112,7 @@ class ScenePanel(RmlPanel):
         self._committed_node_order = []
         self._prev_selected = set()
         self._scroll_to_node = None
-        self._force_open_ids = set()
+        self._collapsed_ids = set()
         self._rename_node = None
         self._rename_buffer = ""
         self._row_index = 0
@@ -127,6 +127,23 @@ class ScenePanel(RmlPanel):
         self.container = doc.get_element_by_id("tree-container")
         self.filter_input = doc.get_element_by_id("filter-input")
         self._context_menu = doc.get_element_by_id("context-menu")
+
+        if self.filter_input:
+            self.filter_input.set_attribute("placeholder", tr("scene.search"))
+            self.filter_input.add_event_listener("change", self._on_filter_change)
+
+        if self.container:
+            self.container.add_event_listener("click", self._on_tree_click)
+            self.container.add_event_listener("dblclick", self._on_tree_dblclick)
+            self.container.add_event_listener("mousedown", self._on_tree_mousedown)
+            self.container.add_event_listener("dragstart", self._on_tree_dragstart)
+            self.container.add_event_listener("dragover", self._on_tree_dragover)
+            self.container.add_event_listener("dragout", self._on_tree_dragout)
+            self.container.add_event_listener("dragdrop", self._on_tree_dragdrop)
+            self.container.add_event_listener("dragend", self._on_tree_dragend)
+
+        if self._context_menu:
+            self._context_menu.add_event_listener("click", self._on_context_menu_click)
 
         body = doc.get_element_by_id("body")
         if body:
@@ -145,6 +162,217 @@ class ScenePanel(RmlPanel):
             if current:
                 self._scroll_to_node = next(iter(current))
                 self._do_scroll()
+
+    # -- DOM traversal helpers --
+
+    def _find_row_from_target(self, target):
+        el = target
+        while el is not None:
+            if el.is_class_set("tree-row"):
+                return el
+            el = el.parent()
+        return None
+
+    # -- Delegated event handlers --
+
+    def _on_tree_click(self, event):
+        target = event.target()
+        if target is None:
+            return
+
+        if target.has_attribute("data-action"):
+            event.stop_propagation()
+            action = target.get_attribute("data-action")
+            node_name = target.get_attribute("data-node", "")
+            self._handle_inline_action(action, node_name)
+            return
+
+        if target.is_class_set("expand-toggle"):
+            event.stop_propagation()
+            target_id = target.get_attribute("data-target", "")
+            self._toggle_expand(target_id, target)
+            return
+
+        el = target
+        while el is not None and el != self.container:
+            if el.is_class_set("section-header"):
+                event.stop_propagation()
+                self._toggle_models_section()
+                return
+            el = el.parent()
+
+        row = self._find_row_from_target(target)
+        if row:
+            event.stop_propagation()
+            node_name = row.get_attribute("data-node", "")
+            if node_name:
+                self._handle_click(node_name)
+
+    def _on_tree_dblclick(self, event):
+        target = event.target()
+        if target is None:
+            return
+        if target.has_attribute("data-action") or target.is_class_set("expand-toggle"):
+            return
+        row = self._find_row_from_target(target)
+        if not row:
+            return
+        event.stop_propagation()
+        node_name = row.get_attribute("data-node", "")
+        node_type = row.get_attribute("data-type", "")
+        if not node_name:
+            return
+        scene = lf.get_scene()
+        if not scene:
+            return
+        node = scene.get_node(node_name)
+        if not node:
+            return
+        if node_type == "CAMERA":
+            lf.ui.go_to_camera_view(node.camera_uid)
+        elif node_type == "KEYFRAME":
+            kf = node.keyframe_data()
+            if kf:
+                lf.ui.go_to_keyframe(kf.keyframe_index)
+
+    def _on_tree_mousedown(self, event):
+        button = int(event.get_parameter("button", "0"))
+        if button != 1:
+            return
+        target = event.target()
+        if target is None:
+            return
+        row = self._find_row_from_target(target)
+        if not row:
+            return
+        event.stop_propagation()
+        node_name = row.get_attribute("data-node", "")
+        if not node_name:
+            return
+        mouse_x = event.get_parameter("mouse_x", "0")
+        mouse_y = event.get_parameter("mouse_y", "0")
+        if node_name not in self._selected_nodes:
+            lf.select_node(node_name)
+            self._selected_nodes = {node_name}
+            self._click_anchor = node_name
+            self._update_selection_display()
+        self._show_context_menu(node_name, mouse_x, mouse_y)
+
+    def _on_tree_dragstart(self, event):
+        row = self._find_row_from_target(event.target())
+        if row:
+            self._drag_source = row.get_attribute("data-node", "")
+
+    def _on_tree_dragend(self, event):
+        self._drag_source = None
+        if self.container:
+            for row in self.container.query_selector_all(".drop-target"):
+                row.set_class("drop-target", False)
+
+    def _on_tree_dragover(self, event):
+        row = self._find_row_from_target(event.target())
+        if row:
+            target_name = row.get_attribute("data-node", "")
+            if self._drag_source and target_name != self._drag_source:
+                row.set_class("drop-target", True)
+
+    def _on_tree_dragout(self, event):
+        row = self._find_row_from_target(event.target())
+        if row:
+            row.set_class("drop-target", False)
+
+    def _on_tree_dragdrop(self, event):
+        row = self._find_row_from_target(event.target())
+        if row and self._drag_source:
+            target_name = row.get_attribute("data-node", "")
+            if self._drag_source != target_name:
+                lf.reparent_node(self._drag_source, target_name)
+                self._drag_source = None
+                self._rebuild_tree()
+
+    def _on_context_menu_click(self, event):
+        target = event.target()
+        if target is None:
+            return
+        el = target
+        while el is not None and el != self._context_menu:
+            if el.is_class_set("context-menu-item"):
+                action = el.get_attribute("data-action", "")
+                if action:
+                    event.stop_propagation()
+                    self._hide_context_menu()
+                    self._execute_action(action)
+                return
+            el = el.parent()
+
+    # -- Inline action handlers --
+
+    def _handle_inline_action(self, action, node_name):
+        scene = lf.get_scene()
+        if not scene:
+            return
+        if action == "toggle-vis":
+            node = scene.get_node(node_name)
+            if node:
+                new_visible = not node.visible
+                lf.set_node_visibility(node_name, new_visible)
+                self._update_vis_icon(node_name, new_visible)
+        elif action == "toggle-train":
+            node = scene.get_node(node_name)
+            if node:
+                node.training_enabled = not node.training_enabled
+                self._rebuild_tree()
+        elif action == "delete-node":
+            lf.remove_node(node_name, False)
+
+    def _update_vis_icon(self, node_name, visible):
+        if not self.container:
+            return
+        row = self.container.query_selector(f'[data-node="{node_name}"]')
+        if not row:
+            return
+        vis = row.query_selector("[data-action='toggle-vis']")
+        if not vis:
+            return
+        if visible:
+            vis.set_class_names("row-icon icon-vis-on")
+            vis.set_attribute("src", f"{ICON_PATH}/visible.png")
+        else:
+            vis.set_class_names("row-icon icon-vis-off")
+            vis.set_attribute("src", f"{ICON_PATH}/hidden.png")
+
+    def _toggle_expand(self, target_id, toggle_el):
+        if not self.doc or not target_id:
+            return
+        try:
+            nid = int(target_id.replace("children-", ""))
+        except ValueError:
+            return
+        children_elem = self.doc.get_element_by_id(target_id)
+        if children_elem is None:
+            return
+        if nid in self._collapsed_ids:
+            self._collapsed_ids.discard(nid)
+            children_elem.set_class("collapsed", False)
+            toggle_el.set_inner_rml("\u25BC")
+        else:
+            self._collapsed_ids.add(nid)
+            children_elem.set_class("collapsed", True)
+            toggle_el.set_inner_rml("\u25B6")
+
+    def _toggle_models_section(self):
+        if not self.doc:
+            return
+        content = self.doc.get_element_by_id("models-content")
+        header = self.doc.get_element_by_id("models-header")
+        if content:
+            self._models_collapsed = not self._models_collapsed
+            content.set_class("collapsed", self._models_collapsed)
+            if header:
+                arrow = "\u25BC" if not self._models_collapsed else "\u25B6"
+                scene = lf.get_scene()
+                count = sum(1 for n in scene.get_nodes() if n.parent_id == -1) if scene else 0
+                header.set_inner_rml(f'{arrow} {tr("scene.models").format(count)}')
 
     # -- Keyboard handling --
 
@@ -180,6 +408,11 @@ class ScenePanel(RmlPanel):
 
     def _on_body_click(self, event):
         self._hide_context_menu()
+
+    def _on_filter_change(self, event):
+        if self.filter_input:
+            self._filter_text = self.filter_input.get_attribute("value") or ""
+        self._rebuild_tree()
 
     # -- Tree building --
 
@@ -221,8 +454,7 @@ class ScenePanel(RmlPanel):
         self.container.set_inner_rml(html)
         self._committed_node_order = self._visible_node_order
 
-        self._attach_click_handlers(scene)
-        self._attach_section_header()
+        self._setup_rename_input()
         self._do_scroll()
 
     def _build_node_html(self, scene, node, depth):
@@ -261,17 +493,14 @@ class ScenePanel(RmlPanel):
         row = f'<div class="tree-row {parity}{selected_cls}" data-node="{node.name}" data-id="{node.id}" data-type="{node_type}"{drag_attr}{indent_style}>'
         row += '<span class="row-content">'
 
-        # 1. Grip icon (draggable nodes)
         if draggable:
             row += f'<img class="row-icon icon-grip" src="{ICON_PATH}/grip.png" />'
 
-        # 2. Visibility icon
         if node.visible:
             row += f'<img class="row-icon icon-vis-on" src="{ICON_PATH}/visible.png" data-action="toggle-vis" data-node="{node.name}" />'
         else:
             row += f'<img class="row-icon icon-vis-off" src="{ICON_PATH}/hidden.png" data-action="toggle-vis" data-node="{node.name}" />'
 
-        # 3. Training toggle (cameras only)
         if is_camera:
             tooltip = tr("scene.training_enabled_tooltip") if node.training_enabled else tr("scene.training_disabled_tooltip")
             if node.training_enabled:
@@ -279,16 +508,15 @@ class ScenePanel(RmlPanel):
             else:
                 row += f'<span class="action-icon train-off" data-action="toggle-train" data-node="{node.name}" title="{tooltip}">\u25cb</span>'
 
-        # 4. Trash icon (deletable nodes)
         if deletable:
             row += f'<img class="row-icon icon-trash" src="{ICON_PATH}/trash.png" data-action="delete-node" data-node="{node.name}" />'
 
-        # 5. Node type icon
         row += _type_icon_html(node_type)
 
-        # 6. Expand toggle + name (arrow appears right before the label, like ImGui tree_node_ex)
         if has_children:
-            row += f'<span class="expand-toggle" data-target="children-{node.id}">\u25BC</span>'
+            collapsed = node.id in self._collapsed_ids
+            arrow = "\u25B6" if collapsed else "\u25BC"
+            row += f'<span class="expand-toggle" data-target="children-{node.id}">{arrow}</span>'
         else:
             row += '<span class="leaf-spacer"></span>'
 
@@ -314,11 +542,9 @@ class ScenePanel(RmlPanel):
 
         row += '</span></div>'
 
-        # Children
         if has_children:
-            collapsed_cls = ""
-            if node.id in self._force_open_ids:
-                self._force_open_ids.discard(node.id)
+            collapsed = node.id in self._collapsed_ids
+            collapsed_cls = " collapsed" if collapsed else ""
             row += f'<div class="tree-children{collapsed_cls}" id="children-{node.id}">'
             for child_id in node.children:
                 child = scene.get_node_by_id(child_id)
@@ -328,193 +554,13 @@ class ScenePanel(RmlPanel):
 
         return row
 
-    # -- Event handler attachment --
-
-    def _attach_click_handlers(self, scene):
-        if not self.container:
+    def _setup_rename_input(self):
+        if not self._rename_node or not self.doc:
             return
-
-        rows = self.container.query_selector_all(".tree-row")
-        for row_elem in rows:
-            node_name = row_elem.get_attribute("data-node")
-            node_type = row_elem.get_attribute("data-type")
-            if not node_name:
-                continue
-
-            row_elem.add_event_listener("click", self._make_click_handler(node_name))
-            row_elem.add_event_listener("contextmenu", self._make_context_handler(node_name))
-            row_elem.add_event_listener("dblclick", self._make_dblclick_handler(node_name, node_type))
-
-            row_elem.add_event_listener("dragover", self._make_dragover_handler(row_elem))
-            row_elem.add_event_listener("dragout", self._make_dragout_handler(row_elem))
-            row_elem.add_event_listener("dragdrop", self._make_dragdrop_handler(node_name))
-
-            if row_elem.has_attribute("drag"):
-                row_elem.add_event_listener("dragstart", self._make_dragstart_handler(node_name))
-                row_elem.add_event_listener("dragend", self._on_dragend)
-
-        # Rename input handlers
-        if self._rename_node and self.doc:
-            rename_el = self.doc.get_element_by_id("rename-input")
-            if rename_el:
-                rename_el.focus()
-                rename_el.add_event_listener("keydown", self._on_rename_keydown)
-
-        toggles = self.container.query_selector_all(".expand-toggle")
-        for toggle in toggles:
-            target_id = toggle.get_attribute("data-target")
-            if target_id:
-                toggle.add_event_listener("click", self._make_toggle_handler(target_id, toggle))
-
-        vis_icons = self.container.query_selector_all("[data-action='toggle-vis']")
-        for icon in vis_icons:
-            name = icon.get_attribute("data-node")
-            if name:
-                icon.add_event_listener("click", self._make_vis_handler(name))
-
-        train_icons = self.container.query_selector_all("[data-action='toggle-train']")
-        for icon in train_icons:
-            name = icon.get_attribute("data-node")
-            if name:
-                icon.add_event_listener("click", self._make_train_handler(name, scene))
-
-        trash_icons = self.container.query_selector_all("[data-action='delete-node']")
-        for icon in trash_icons:
-            name = icon.get_attribute("data-node")
-            if name:
-                icon.add_event_listener("click", self._make_trash_handler(name))
-
-    def _attach_section_header(self):
-        if not self.doc:
-            return
-        header = self.doc.get_element_by_id("models-header")
-        if header:
-            header.add_event_listener("click", self._on_toggle_models)
-
-    # -- Handler factories --
-
-    def _on_toggle_models(self, event):
-        event.stop_propagation()
-        if not self.doc:
-            return
-        content = self.doc.get_element_by_id("models-content")
-        header = self.doc.get_element_by_id("models-header")
-        if content:
-            self._models_collapsed = not self._models_collapsed
-            content.set_class("collapsed", self._models_collapsed)
-            if header:
-                arrow = "\u25BC" if not self._models_collapsed else "\u25B6"
-                scene = lf.get_scene()
-                count = sum(1 for n in scene.get_nodes() if n.parent_id == -1) if scene else 0
-                header.set_inner_rml(f'{arrow} {tr("scene.models").format(count)}')
-
-    def _make_click_handler(self, node_name):
-        def handler(event):
-            event.stop_propagation()
-            self._handle_click(node_name)
-        return handler
-
-    def _make_context_handler(self, node_name):
-        def handler(event):
-            event.stop_propagation()
-            mouse_x = event.get_parameter("mouse_x", "0")
-            mouse_y = event.get_parameter("mouse_y", "0")
-            if node_name not in self._selected_nodes:
-                lf.select_node(node_name)
-                self._selected_nodes = {node_name}
-                self._click_anchor = node_name
-                self._update_selection_display()
-            self._show_context_menu(node_name, mouse_x, mouse_y)
-        return handler
-
-    def _make_dblclick_handler(self, node_name, node_type):
-        def handler(event):
-            event.stop_propagation()
-            scene = lf.get_scene()
-            if not scene:
-                return
-            node = scene.get_node(node_name)
-            if not node:
-                return
-            if node_type == "CAMERA":
-                lf.ui.go_to_camera_view(node.camera_uid)
-            elif node_type == "KEYFRAME":
-                kf = node.keyframe_data()
-                if kf:
-                    lf.ui.go_to_keyframe(kf.keyframe_index)
-        return handler
-
-    def _make_toggle_handler(self, target_id, toggle_elem):
-        def handler(event):
-            event.stop_propagation()
-            if not self.doc:
-                return
-            children_elem = self.doc.get_element_by_id(target_id)
-            if children_elem is not None:
-                now_collapsed = not children_elem.is_class_set("collapsed")
-                children_elem.set_class("collapsed", now_collapsed)
-                toggle_elem.set_inner_rml("\u25B6" if now_collapsed else "\u25BC")
-        return handler
-
-    def _make_vis_handler(self, name):
-        def handler(event):
-            event.stop_propagation()
-            scene = lf.get_scene()
-            if scene:
-                node = scene.get_node(name)
-                if node:
-                    lf.set_node_visibility(name, not node.visible)
-                    self._rebuild_tree()
-        return handler
-
-    def _make_train_handler(self, name, scene):
-        def handler(event):
-            event.stop_propagation()
-            node = scene.get_node(name)
-            if node:
-                node.training_enabled = not node.training_enabled
-                self._rebuild_tree()
-        return handler
-
-    def _make_trash_handler(self, name):
-        def handler(event):
-            event.stop_propagation()
-            lf.remove_node(name, False)
-        return handler
-
-    # -- Drag-drop --
-
-    def _make_dragstart_handler(self, node_name):
-        def handler(event):
-            self._drag_source = node_name
-        return handler
-
-    def _on_dragend(self, event):
-        self._drag_source = None
-        if not self.container:
-            return
-        for row in self.container.query_selector_all(".drop-target"):
-            row.set_class("drop-target", False)
-
-    def _make_dragover_handler(self, row_elem):
-        def handler(event):
-            target_name = row_elem.get_attribute("data-node")
-            if self._drag_source and target_name != self._drag_source:
-                row_elem.set_class("drop-target", True)
-        return handler
-
-    def _make_dragout_handler(self, row_elem):
-        def handler(event):
-            row_elem.set_class("drop-target", False)
-        return handler
-
-    def _make_dragdrop_handler(self, target_name):
-        def handler(event):
-            if self._drag_source and self._drag_source != target_name:
-                lf.reparent_node(self._drag_source, target_name)
-                self._drag_source = None
-                self._rebuild_tree()
-        return handler
+        rename_el = self.doc.get_element_by_id("rename-input")
+        if rename_el:
+            rename_el.focus()
+            rename_el.add_event_listener("keydown", self._on_rename_keydown)
 
     # -- Rename --
 
@@ -545,6 +591,7 @@ class ScenePanel(RmlPanel):
     # -- Selection --
 
     def _handle_click(self, node_name):
+        self._hide_context_menu()
         ctrl = lf.ui.is_ctrl_down()
         shift = lf.ui.is_shift_down()
 
@@ -628,10 +675,6 @@ class ScenePanel(RmlPanel):
         self._context_menu.set_property("top", f"{mouse_y}px")
         self._context_menu.set_class("visible", True)
         self._context_menu_node = node_name
-
-        items = self._context_menu.query_selector_all(".context-menu-item")
-        for item in items:
-            item.add_event_listener("click", self._make_menu_action(item.get_attribute("data-action")))
 
     def _build_single_context_html(self, scene, node, node_type, is_deletable, can_drag):
         html = ""
@@ -761,13 +804,6 @@ class ScenePanel(RmlPanel):
             html += f'<div class="context-menu-item" data-action="delete_selected">{tr("scene.delete")} ({len(deletable)})</div>'
 
         return html
-
-    def _make_menu_action(self, action_str):
-        def handler(event):
-            event.stop_propagation()
-            self._hide_context_menu()
-            self._execute_action(action_str)
-        return handler
 
     def _hide_context_menu(self):
         if self._context_menu:

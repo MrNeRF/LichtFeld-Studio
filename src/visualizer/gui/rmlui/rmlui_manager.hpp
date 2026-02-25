@@ -35,12 +35,14 @@ namespace lfs::vis::gui {
         void destroyContext(const std::string& name);
 
         RmlRenderInterface* getRenderInterface() const { return render_interface_.get(); }
+        SDL_Window* getWindow() const { return window_; }
 
     private:
         std::unique_ptr<RmlSystemInterface> system_interface_;
         std::unique_ptr<RmlRenderInterface> render_interface_;
         std::unique_ptr<StbFontEngine> font_engine_;
         std::unordered_map<std::string, Rml::Context*> contexts_;
+        SDL_Window* window_ = nullptr;
         float dp_ratio_ = 1.0f;
         bool initialized_ = false;
     };

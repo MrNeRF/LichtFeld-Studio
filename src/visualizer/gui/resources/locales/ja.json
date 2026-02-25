@@ -305,7 +305,8 @@
     "keyframe_easing.ease_in": "イーズイン",
     "keyframe_easing.ease_out": "イーズアウト",
     "keyframe_easing.ease_in_out": "イーズインアウト",
-    "keyframe_label": "キーフレーム {index}  ({time:.2f}s)"
+    "keyframe_label": "キーフレーム {index}  ({time:.2f}s)",
+    "search": "検索"
   },
   "export": {
     "title": "エクスポート",

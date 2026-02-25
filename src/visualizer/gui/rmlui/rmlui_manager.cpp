@@ -28,6 +28,7 @@ namespace lfs::vis::gui {
         assert(dp_ratio >= 1.0f);
 
         dp_ratio_ = dp_ratio;
+        window_ = window;
 
         system_interface_ = std::make_unique<RmlSystemInterface>(window);
         render_interface_ = std::make_unique<RmlRenderInterface>();

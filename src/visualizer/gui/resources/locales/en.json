@@ -305,7 +305,8 @@
     "keyframe_easing.ease_in": "Ease In",
     "keyframe_easing.ease_out": "Ease Out",
     "keyframe_easing.ease_in_out": "Ease In-Out",
-    "keyframe_label": "Keyframe {index}  ({time:.2f}s)"
+    "keyframe_label": "Keyframe {index}  ({time:.2f}s)",
+    "search": "Search"
   },
   "export": {
     "title": "Export",

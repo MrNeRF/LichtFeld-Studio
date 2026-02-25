@@ -320,7 +320,10 @@ namespace lfs::vis {
         const auto& p = lfs::vis::theme().palette;
 
         if (count == 0) {
-            el_keyframes_->SetInnerRML("");
+            while (!keyframe_elements_.empty()) {
+                el_keyframes_->RemoveChild(keyframe_elements_.back());
+                keyframe_elements_.pop_back();
+            }
             if (el_hint_)
                 el_hint_->SetInnerRML("Position camera and press K to add keyframes");
             return;
@@ -329,10 +332,20 @@ namespace lfs::vis {
         if (el_hint_)
             el_hint_->SetInnerRML("");
 
-        std::string html;
-        html.reserve(count * 128);
+        while (keyframe_elements_.size() < count) {
+            auto new_elem = document_->CreateElement("div");
+            assert(new_elem);
+            Rml::Element* raw = new_elem.get();
+            el_keyframes_->AppendChild(std::move(new_elem));
+            keyframe_elements_.push_back(raw);
+        }
+        while (keyframe_elements_.size() > count) {
+            el_keyframes_->RemoveChild(keyframe_elements_.back());
+            keyframe_elements_.pop_back();
+        }
 
         for (size_t i = 0; i < count; ++i) {
+            auto* el = keyframe_elements_[i];
             const float x = timeToX(keyframes[i].time, 0.0f, timeline_width);
             const bool selected = controller_.selectedKeyframe() == i ||
                                   selected_keyframes_.contains(i);
@@ -343,22 +356,13 @@ namespace lfs::vis {
             if (selected)
                 fill = lighten(base, 0.2f);
 
-            const auto bg = colorToRml(fill);
-            const auto border_col = selected ? colorToRml(p.text) : bg;
-
-            std::string classes = "keyframe";
-            if (is_loop)
-                classes += " loop-point";
-            if (selected)
-                classes += " selected";
-
-            html += std::format(
-                "<div class=\"{}\" style=\"left: {:.1f}dp; background-color: {}; "
-                "border-color: {};\" />",
-                classes, x, bg, border_col);
+            el->SetClassNames("keyframe");
+            el->SetClass("loop-point", is_loop);
+            el->SetClass("selected", selected);
+            el->SetProperty("left", std::format("{:.1f}dp", x));
+            el->SetProperty("background-color", colorToRml(fill));
+            el->SetProperty("border-color", selected ? colorToRml(p.text) : colorToRml(fill));
         }
-
-        el_keyframes_->SetInnerRML(html);
     }
 
     void RmlSequencerPanel::rebuildRuler() {

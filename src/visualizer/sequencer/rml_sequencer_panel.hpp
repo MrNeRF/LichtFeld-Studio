@@ -104,6 +104,9 @@ namespace lfs::vis {
         Rml::Element* el_btn_loop_ = nullptr;
         Rml::Element* el_timeline_ = nullptr;
 
+        // Keyframe element pool
+        std::vector<Rml::Element*> keyframe_elements_;
+
         // Dirty tracking
         size_t last_keyframe_count_ = 0;
         float last_zoom_level_ = -1.0f;

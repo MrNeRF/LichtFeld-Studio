@@ -305,7 +305,8 @@
     "keyframe_easing.ease_in": "Ingresso morbido",
     "keyframe_easing.ease_out": "Uscita morbida",
     "keyframe_easing.ease_in_out": "Ingresso/Uscita morbidi",
-    "keyframe_label": "Fotogramma chiave {index}  ({time:.2f}s)"
+    "keyframe_label": "Fotogramma chiave {index}  ({time:.2f}s)",
+    "search": "Cerca"
   },
   "export": {
     "title": "Esporta",

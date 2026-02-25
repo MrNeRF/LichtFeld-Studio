@@ -305,7 +305,8 @@
     "keyframe_easing.ease_in": "Acceleration douce",
     "keyframe_easing.ease_out": "Deceleration douce",
     "keyframe_easing.ease_in_out": "Acceleration/Deceleration douce",
-    "keyframe_label": "Image cle {index}  ({time:.2f}s)"
+    "keyframe_label": "Image cle {index}  ({time:.2f}s)",
+    "search": "Rechercher"
   },
   "export": {
     "title": "Exporter",

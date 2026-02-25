@@ -11,6 +11,33 @@
 
 namespace lfs::python {
 
+    namespace {
+        std::unordered_map<Rml::ElementDocument*, std::vector<Rml::ElementPtr>> s_held_elements;
+    } // namespace
+
+    Rml::ElementPtr extractHeldElement(Rml::ElementDocument* doc, Rml::Element* raw) {
+        auto it = s_held_elements.find(doc);
+        if (it == s_held_elements.end())
+            return nullptr;
+        auto& vec = it->second;
+        for (auto vi = vec.begin(); vi != vec.end(); ++vi) {
+            if (vi->get() == raw) {
+                auto ptr = std::move(*vi);
+                vec.erase(vi);
+                return ptr;
+            }
+        }
+        return nullptr;
+    }
+
+    void storeHeldElement(Rml::ElementDocument* doc, Rml::ElementPtr elem) {
+        s_held_elements[doc].push_back(std::move(elem));
+    }
+
+    void clearHeldElements(Rml::ElementDocument* doc) {
+        s_held_elements.erase(doc);
+    }
+
     // --- PyRmlEvent ---
 
     std::string PyRmlEvent::type() const { return event_->GetType(); }
@@ -89,6 +116,43 @@ namespace lfs::python {
         return nb::cast(PyRmlElement(raw));
     }
 
+    nb::object PyRmlElement::append_child_element(PyRmlElement& child) {
+        auto* doc = elem_->GetOwnerDocument();
+        assert(doc);
+        auto held = extractHeldElement(doc, child.raw());
+        if (!held) {
+            LOG_ERROR("append_child: element not in holding area");
+            return nb::none();
+        }
+        Rml::Element* raw = held.get();
+        elem_->AppendChild(std::move(held));
+        return nb::cast(PyRmlElement(raw));
+    }
+
+    nb::object PyRmlElement::insert_before(const std::string& tag_name, PyRmlElement& ref_child) {
+        auto* doc = elem_->GetOwnerDocument();
+        assert(doc);
+        auto new_elem = doc->CreateElement(tag_name);
+        if (!new_elem)
+            return nb::none();
+        Rml::Element* raw = new_elem.get();
+        elem_->InsertBefore(std::move(new_elem), ref_child.raw());
+        return nb::cast(PyRmlElement(raw));
+    }
+
+    nb::object PyRmlElement::insert_before_element(PyRmlElement& child, PyRmlElement& ref_child) {
+        auto* doc = elem_->GetOwnerDocument();
+        assert(doc);
+        auto held = extractHeldElement(doc, child.raw());
+        if (!held) {
+            LOG_ERROR("insert_before: element not in holding area");
+            return nb::none();
+        }
+        Rml::Element* raw = held.get();
+        elem_->InsertBefore(std::move(held), ref_child.raw());
+        return nb::cast(PyRmlElement(raw));
+    }
+
     void PyRmlElement::remove_child(PyRmlElement& child) {
         elem_->RemoveChild(child.raw());
     }
@@ -96,6 +160,8 @@ namespace lfs::python {
     void PyRmlElement::set_inner_rml(const std::string& rml) { elem_->SetInnerRML(rml); }
 
     std::string PyRmlElement::get_inner_rml() { return elem_->GetInnerRML(); }
+
+    void PyRmlElement::set_text(const std::string& text) { elem_->SetInnerRML(text); }
 
     void PyRmlElement::set_attribute(const std::string& name, const std::string& value) {
         elem_->SetAttribute(name, value);
@@ -165,15 +231,8 @@ namespace lfs::python {
         if (!elem)
             return nb::none();
         Rml::Element* raw = elem.get();
-        // Caller must append to DOM to transfer ownership; keep alive via document
-        // Store in a temporary holding area - element is owned by document once appended
-        // For now, we return a wrapper. The ElementPtr is moved into a unique_ptr holder.
-        // RmlUI requires AppendChild to take ownership, so we need a different approach:
-        // create, return raw ptr, and let append_child handle ownership transfer.
-        // Actually, CreateElement returns ElementPtr (unique_ptr). We need to hold it
-        // until append_child is called. Use a simpler approach: create via append_child.
-        (void)raw;
-        return nb::none(); // Not used directly - use append_child on parent instead
+        storeHeldElement(doc_, std::move(elem));
+        return nb::cast(PyRmlElement(raw));
     }
 
     nb::object PyRmlDocument::create_text_node(const std::string& text) {
@@ -181,8 +240,8 @@ namespace lfs::python {
         if (!node)
             return nb::none();
         Rml::Element* raw = node.get();
-        (void)raw;
-        return nb::none();
+        storeHeldElement(doc_, std::move(node));
+        return nb::cast(PyRmlElement(raw));
     }
 
     void PyRmlDocument::show() { doc_->Show(); }
@@ -210,11 +269,18 @@ namespace lfs::python {
 
     void RmlDocumentRegistry::register_document(const std::string& name,
                                                 Rml::ElementDocument* doc) {
+        auto it = documents_.find(name);
+        if (it != documents_.end())
+            clearHeldElements(it->second);
         documents_[name] = doc;
     }
 
     void RmlDocumentRegistry::unregister_document(const std::string& name) {
-        documents_.erase(name);
+        auto it = documents_.find(name);
+        if (it != documents_.end()) {
+            clearHeldElements(it->second);
+            documents_.erase(it);
+        }
     }
 
     Rml::ElementDocument* RmlDocumentRegistry::get_document(const std::string& name) {
@@ -243,9 +309,15 @@ namespace lfs::python {
             .def("children", &PyRmlElement::children)
             .def("num_children", &PyRmlElement::num_children)
             .def("append_child", &PyRmlElement::append_child, nb::arg("tag_name"))
+            .def("append_child", &PyRmlElement::append_child_element, nb::arg("child"))
+            .def("insert_before", &PyRmlElement::insert_before, nb::arg("tag_name"),
+                 nb::arg("ref_child"))
+            .def("insert_before", &PyRmlElement::insert_before_element, nb::arg("child"),
+                 nb::arg("ref_child"))
             .def("remove_child", &PyRmlElement::remove_child)
             .def("set_inner_rml", &PyRmlElement::set_inner_rml)
             .def("get_inner_rml", &PyRmlElement::get_inner_rml)
+            .def("set_text", &PyRmlElement::set_text)
             .def("set_attribute", &PyRmlElement::set_attribute)
             .def("get_attribute", &PyRmlElement::get_attribute, nb::arg("name"),
                  nb::arg("default_val") = "")

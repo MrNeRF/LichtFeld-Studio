@@ -300,13 +300,20 @@ foreach (ICON_FILE ${SEQUENCER_ICON_FILES})
     configure_file(${ICON_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/sequencer/${ICON_NAME}" COPYONLY)
 endforeach ()
 
-# Copy RmlUI resources
+# Copy RmlUI resources (re-copy on every build so edits are picked up)
 file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui")
 file(GLOB RMLUI_RESOURCE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/gui/rmlui/resources/*")
 foreach (RMLUI_FILE ${RMLUI_RESOURCE_FILES})
     get_filename_component(RMLUI_NAME ${RMLUI_FILE} NAME)
     configure_file(${RMLUI_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/${RMLUI_NAME}" COPYONLY)
 endforeach ()
+add_custom_target(copy_rmlui_resources ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${RMLUI_RESOURCE_FILES}
+        "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/"
+    COMMENT "Syncing RmlUI resources"
+)
+add_dependencies(lfs_visualizer copy_rmlui_resources)
 
 # Copy locale files
 file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/locales")

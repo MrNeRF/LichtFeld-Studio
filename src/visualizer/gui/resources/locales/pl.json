@@ -305,7 +305,8 @@
     "keyframe_easing.ease_in": "Lagodne wejscie",
     "keyframe_easing.ease_out": "Lagodne wyjscie",
     "keyframe_easing.ease_in_out": "Lagodne wejscie/wyjscie",
-    "keyframe_label": "Klatka kluczowa {index}  ({time:.2f}s)"
+    "keyframe_label": "Klatka kluczowa {index}  ({time:.2f}s)",
+    "search": "Szukaj"
   },
   "export": {
     "title": "Eksportuj",

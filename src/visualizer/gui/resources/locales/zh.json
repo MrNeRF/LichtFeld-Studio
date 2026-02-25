@@ -305,7 +305,8 @@
     "keyframe_easing.ease_in": "缓入",
     "keyframe_easing.ease_out": "缓出",
     "keyframe_easing.ease_in_out": "缓入缓出",
-    "keyframe_label": "关键帧 {index}  ({time:.2f}s)"
+    "keyframe_label": "关键帧 {index}  ({time:.2f}s)",
+    "search": "搜索"
   },
   "export": {
     "title": "导出",

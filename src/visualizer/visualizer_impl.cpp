@@ -474,6 +474,7 @@ namespace lfs::vis {
 
         // Window redraw requests on scene/mode changes
         state::SceneChanged::when([this](const auto&) {
+            python::bump_scene_generation();
             if (window_manager_) {
                 window_manager_->requestRedraw();
             }

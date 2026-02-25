@@ -7,7 +7,9 @@
 #include "gui/panel_registry.hpp"
 #include <core/export.hpp>
 #include <glad/glad.h>
+#include <mutex>
 #include <string>
+#include <vector>
 #include <imgui.h>
 
 namespace Rml {
@@ -33,7 +35,10 @@ namespace lfs::vis::gui {
         Rml::Context* getContext() { return rml_context_; }
         bool isDocumentLoaded() const { return document_ != nullptr; }
 
+        static void pushTextInput(const std::string& text);
+
     private:
+        static std::vector<uint32_t> drainTextInput();
         void initFBO(int width, int height);
         void destroyFBO();
         void forwardInput(float panel_x, float panel_y);
@@ -48,6 +53,7 @@ namespace lfs::vis::gui {
 
         std::string base_rcss_;
         ImVec4 last_synced_text_{};
+        bool has_text_focus_ = false;
 
         GLuint fbo_ = 0;
         GLuint fbo_texture_ = 0;

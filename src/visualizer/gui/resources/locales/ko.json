@@ -305,7 +305,8 @@
     "keyframe_easing.ease_in": "점진적 시작",
     "keyframe_easing.ease_out": "점진적 종료",
     "keyframe_easing.ease_in_out": "점진적 시작/종료",
-    "keyframe_label": "키프레임 {index}  ({time:.2f}s)"
+    "keyframe_label": "키프레임 {index}  ({time:.2f}s)",
+    "search": "검색"
   },
   "export": {
     "title": "내보내기",

@@ -5,6 +5,7 @@
 #include "window_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "gui/rmlui/rml_panel_host.hpp"
 #include "input/input_controller.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include <SDL3/SDL.h>
@@ -228,6 +229,11 @@ namespace lfs::vis {
             input_controller_->handleKey(key, action, mods);
             break;
         }
+
+        case SDL_EVENT_TEXT_INPUT:
+            if (event.text.text)
+                gui::RmlPanelHost::pushTextInput(event.text.text);
+            break;
 
         case SDL_EVENT_DROP_FILE:
             if (event.drop.data) {
