@@ -58,14 +58,13 @@ namespace lfs::vis::gui::native_panels {
         return dialog_->isOpen();
     }
 
-    StartupOverlayPanel::StartupOverlayPanel(StartupOverlay* overlay, ImFont* font, const bool* drag_hovering)
+    StartupOverlayPanel::StartupOverlayPanel(StartupOverlay* overlay, const bool* drag_hovering)
         : overlay_(overlay),
-          font_(font),
           drag_hovering_(drag_hovering) {}
 
     void StartupOverlayPanel::draw(const PanelDrawContext& ctx) {
         if (ctx.viewport)
-            overlay_->render(*ctx.viewport, font_, drag_hovering_ ? *drag_hovering_ : false);
+            overlay_->render(*ctx.viewport, drag_hovering_ ? *drag_hovering_ : false);
     }
 
     bool StartupOverlayPanel::poll(const PanelDrawContext& ctx) {

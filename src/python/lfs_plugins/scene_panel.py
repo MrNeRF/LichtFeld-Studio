@@ -121,9 +121,11 @@ class ScenePanel(RmlPanel):
         self._last_scene_gen = 0
         self._drag_source = None
         self._models_collapsed = False
+        self._last_lang = ""
 
     def on_load(self, doc):
         self.doc = doc
+        self._last_lang = lf.ui.get_current_language()
         self.container = doc.get_element_by_id("tree-container")
         self.filter_input = doc.get_element_by_id("filter-input")
         self._context_menu = doc.get_element_by_id("context-menu")
@@ -154,6 +156,13 @@ class ScenePanel(RmlPanel):
         self._rebuild_tree()
 
     def on_update(self, doc):
+        cur_lang = lf.ui.get_current_language()
+        if cur_lang != self._last_lang:
+            self._last_lang = cur_lang
+            if self.filter_input:
+                self.filter_input.set_attribute("placeholder", tr("scene.search"))
+            self._rebuild_tree()
+
         current = set(lf.get_selected_node_names())
         if current != self._prev_selected:
             self._prev_selected = current

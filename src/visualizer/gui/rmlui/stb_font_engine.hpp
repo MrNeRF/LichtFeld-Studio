@@ -9,6 +9,7 @@
 #include <RmlUi/Core/FontMetrics.h>
 #include <stb_truetype.h>
 
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -67,6 +68,14 @@ namespace lfs::vis::gui {
             float x_advance;
         };
 
+        struct GlyphAtlas {
+            FontFace* face = nullptr;
+            int atlas_w = 0, atlas_h = 0;
+            std::vector<unsigned char> atlas_pixels;
+            Rml::CallbackTextureSource texture_source;
+            std::unordered_map<uint32_t, PackedGlyph> glyphs;
+        };
+
         struct FontInstance {
             FontFace* face = nullptr;
             int size_px = 0;
@@ -76,15 +85,21 @@ namespace lfs::vis::gui {
             Rml::CallbackTextureSource texture_source;
             std::unordered_map<uint32_t, PackedGlyph> glyphs;
             int version = 1;
+            std::vector<std::unique_ptr<GlyphAtlas>> fallback_atlases;
+            std::unordered_map<uint32_t, FontFace*> pending_fallback;
         };
 
         FontFace* findFace(const Rml::String& family, Rml::Style::FontStyle style,
                            Rml::Style::FontWeight weight);
+        FontFace* findFallbackFace(uint32_t cp) const;
         bool buildAtlas(FontInstance& inst);
+        bool buildFallbackAtlas(GlyphAtlas& atlas, int size_px,
+                                const std::vector<uint32_t>& codepoints);
+        void flushPendingFallbacks(FontInstance& inst);
 
         std::vector<std::unique_ptr<FontFace>> faces_;
         std::vector<std::unique_ptr<FontInstance>> instances_;
-        FontFace* fallback_face_ = nullptr;
+        std::vector<FontFace*> fallback_faces_;
     };
 
 } // namespace lfs::vis::gui

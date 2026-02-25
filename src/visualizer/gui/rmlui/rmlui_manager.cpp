@@ -56,6 +56,20 @@ namespace lfs::vis::gui {
             } else {
                 LOG_WARN("RmlUI: failed to load Inter-SemiBold.ttf");
             }
+
+            const auto jp_path = lfs::vis::getAssetPath("fonts/NotoSansJP-Regular.ttf");
+            if (Rml::LoadFontFace(jp_path.string(), true)) {
+                LOG_INFO("RmlUI: loaded font {}", jp_path.string());
+            } else {
+                LOG_WARN("RmlUI: failed to load NotoSansJP-Regular.ttf");
+            }
+
+            const auto kr_path = lfs::vis::getAssetPath("fonts/NotoSansKR-Regular.ttf");
+            if (Rml::LoadFontFace(kr_path.string(), true)) {
+                LOG_INFO("RmlUI: loaded font {}", kr_path.string());
+            } else {
+                LOG_WARN("RmlUI: failed to load NotoSansKR-Regular.ttf");
+            }
         } catch (const std::exception& e) {
             LOG_WARN("RmlUI: font not found: {}", e.what());
         }

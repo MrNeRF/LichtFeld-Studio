@@ -35,6 +35,18 @@ namespace lfs::vis::gui {
         return true;
     }
 
+    void RmlSystemInterface::JoinPath(Rml::String& translated_path,
+                                      const Rml::String& document_path,
+                                      const Rml::String& path) {
+#ifndef _WIN32
+        if (!path.empty() && path[0] == '/') {
+            translated_path = path;
+            return;
+        }
+#endif
+        Rml::SystemInterface::JoinPath(translated_path, document_path, path);
+    }
+
     void RmlSystemInterface::SetClipboardText(const Rml::String& text) {
         SDL_SetClipboardText(text.c_str());
     }

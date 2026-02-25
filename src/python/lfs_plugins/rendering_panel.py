@@ -44,6 +44,39 @@ DEP_MAP = {
     "mesh_shadow_enabled": "dep-mesh_shadow_enabled",
 }
 
+LOCALE_KEY = {
+    "show_coord_axes": "main_panel.show_coord_axes",
+    "show_pivot": "main_panel.show_pivot",
+    "show_grid": "main_panel.show_grid",
+    "show_camera_frustums": "main_panel.camera_frustums",
+    "point_cloud_mode": "main_panel.point_cloud_mode",
+    "desaturate_unselected": "main_panel.desaturate_unselected",
+    "desaturate_cropping": "main_panel.desaturate_cropping",
+    "equirectangular": "main_panel.equirectangular",
+    "gut": "main_panel.gut_mode",
+    "mip_filter": "main_panel.mip_filter",
+    "axes_size": "main_panel.axes_size",
+    "grid_opacity": "main_panel.grid_opacity",
+    "focal_length_mm": "main_panel.focal_length",
+    "render_scale": "main_panel.render_scale",
+    "sh_degree": "main_panel.sh_degree",
+    "grid_plane": "main_panel.plane",
+    "background_color": "main_panel.color",
+    "selection_color_committed": "main_panel.committed",
+    "selection_color_preview": "main_panel.preview",
+    "selection_color_center_marker": "main_panel.center_marker",
+}
+
+
+def _prop_label(prop_id, settings):
+    key = LOCALE_KEY.get(prop_id)
+    if key:
+        label = lf.ui.tr(key)
+        if label:
+            return label
+    info = settings.prop_info(prop_id)
+    return info.get("name", prop_id)
+
 
 def _color_to_hex(c):
     r = int(c[0] * 255)
@@ -80,37 +113,30 @@ class RenderingPanel(RmlPanel):
         self._slider_user_vals = {}
         self._color_edit_prop = None
         self._color_picker_needs_pos = False
+        self._last_lang = ""
 
-    def on_load(self, doc):
-        settings = lf.get_render_settings()
-        if not settings:
-            return
-
+    def _populate_labels(self, doc, settings):
         tr = lf.ui.tr
 
         for prop_id in BOOL_PROPS:
-            info = settings.prop_info(prop_id)
             text_el = doc.get_element_by_id(f"text-{prop_id}")
             if text_el:
-                text_el.set_inner_rml(info.get("name", prop_id))
+                text_el.set_inner_rml(_prop_label(prop_id, settings))
 
         for prop_id in SLIDER_PROPS:
-            info = settings.prop_info(prop_id)
             label_el = doc.get_element_by_id(f"label-{prop_id}")
             if label_el:
-                label_el.set_inner_rml(info.get("name", prop_id))
+                label_el.set_inner_rml(_prop_label(prop_id, settings))
 
         for prop_id in SELECT_PROPS:
-            info = settings.prop_info(prop_id)
             label_el = doc.get_element_by_id(f"label-{prop_id}")
             if label_el:
-                label_el.set_inner_rml(info.get("name", prop_id))
+                label_el.set_inner_rml(_prop_label(prop_id, settings))
 
         for prop_id in COLOR_PROPS:
-            info = settings.prop_info(prop_id)
             label_el = doc.get_element_by_id(f"label-{prop_id}")
             if label_el:
-                label_el.set_inner_rml(info.get("name", prop_id))
+                label_el.set_inner_rml(_prop_label(prop_id, settings))
 
         hdr_sel = doc.get_element_by_id("text-hdr-selection_colors")
         if hdr_sel:
@@ -119,6 +145,14 @@ class RenderingPanel(RmlPanel):
         hdr_mesh = doc.get_element_by_id("text-hdr-mesh")
         if hdr_mesh:
             hdr_mesh.set_inner_rml(tr("main_panel.mesh"))
+
+    def on_load(self, doc):
+        settings = lf.get_render_settings()
+        if not settings:
+            return
+
+        self._last_lang = lf.ui.get_current_language()
+        self._populate_labels(doc, settings)
 
         body = doc.get_element_by_id("body")
         if body:
@@ -129,6 +163,11 @@ class RenderingPanel(RmlPanel):
         settings = lf.get_render_settings()
         if not settings:
             return
+
+        cur_lang = lf.ui.get_current_language()
+        if cur_lang != self._last_lang:
+            self._last_lang = cur_lang
+            self._populate_labels(doc, settings)
 
         for prop_id in BOOL_PROPS:
             el = doc.get_element_by_id(f"cb-{prop_id}")

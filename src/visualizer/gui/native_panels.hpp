@@ -6,8 +6,6 @@
 
 #include "gui/panel_registry.hpp"
 
-struct ImFont;
-
 namespace lfs::vis::gui {
 
     class FileBrowser;
@@ -58,13 +56,12 @@ namespace lfs::vis::gui::native_panels {
 
     class StartupOverlayPanel : public IPanel {
     public:
-        StartupOverlayPanel(StartupOverlay* overlay, ImFont* font, const bool* drag_hovering);
+        StartupOverlayPanel(StartupOverlay* overlay, const bool* drag_hovering);
         void draw(const PanelDrawContext& ctx) override;
         bool poll(const PanelDrawContext& ctx) override;
 
     private:
         StartupOverlay* overlay_;
-        ImFont* font_;
         const bool* drag_hovering_;
     };
 

@@ -41,7 +41,7 @@ namespace lfs::vis::gui {
     void StbFontEngine::Shutdown() {
         instances_.clear();
         faces_.clear();
-        fallback_face_ = nullptr;
+        fallback_faces_.clear();
     }
 
     bool StbFontEngine::LoadFontFace(const Rml::String& file_name, int face_index,
@@ -89,7 +89,7 @@ namespace lfs::vis::gui {
         face->fallback = fallback_face;
 
         if (fallback_face)
-            fallback_face_ = face.get();
+            fallback_faces_.push_back(face.get());
 
         LOG_INFO("StbFontEngine: loaded '{}' family='{}' weight={}", file_name, face->family,
                  static_cast<int>(weight));
@@ -119,10 +119,18 @@ namespace lfs::vis::gui {
         face->fallback = fallback_face;
 
         if (fallback_face)
-            fallback_face_ = face.get();
+            fallback_faces_.push_back(face.get());
 
         faces_.push_back(std::move(face));
         return true;
+    }
+
+    StbFontEngine::FontFace* StbFontEngine::findFallbackFace(uint32_t cp) const {
+        for (auto* f : fallback_faces_) {
+            if (stbtt_FindGlyphIndex(&f->info, static_cast<int>(cp)) != 0)
+                return f;
+        }
+        return nullptr;
     }
 
     StbFontEngine::FontFace* StbFontEngine::findFace(const Rml::String& family,
@@ -145,8 +153,8 @@ namespace lfs::vis::gui {
             }
         }
 
-        if (!best)
-            best = fallback_face_;
+        if (!best && !fallback_faces_.empty())
+            best = fallback_faces_.front();
 
         return best;
     }
@@ -240,6 +248,141 @@ namespace lfs::vis::gui {
             else
                 atlas_h *= 2;
         }
+    }
+
+    bool StbFontEngine::buildFallbackAtlas(GlyphAtlas& atlas, int size_px,
+                                           const std::vector<uint32_t>& codepoints) {
+        assert(atlas.face);
+        if (codepoints.empty())
+            return true;
+
+        const int num_glyphs = static_cast<int>(codepoints.size());
+        std::vector<int> cp_array(codepoints.begin(), codepoints.end());
+
+        int atlas_w = ATLAS_INITIAL_SIZE;
+        int atlas_h = ATLAS_INITIAL_SIZE;
+
+        for (;;) {
+            std::vector<unsigned char> pixels(static_cast<size_t>(atlas_w * atlas_h));
+            stbtt_pack_context pack_ctx;
+
+            if (!stbtt_PackBegin(&pack_ctx, pixels.data(), atlas_w, atlas_h, 0, GLYPH_PADDING,
+                                 nullptr))
+                return false;
+
+            stbtt_PackSetOversampling(&pack_ctx, OVERSAMPLE_H, OVERSAMPLE_V);
+
+            std::vector<stbtt_packedchar> packed(static_cast<size_t>(num_glyphs));
+            stbtt_pack_range range{};
+            range.font_size = static_cast<float>(size_px);
+            range.array_of_unicode_codepoints = cp_array.data();
+            range.num_chars = num_glyphs;
+            range.chardata_for_range = packed.data();
+
+            int result =
+                stbtt_PackFontRanges(&pack_ctx, atlas.face->ttf_data.data(), 0, &range, 1);
+            stbtt_PackEnd(&pack_ctx);
+
+            if (result) {
+                atlas.atlas_w = atlas_w;
+                atlas.atlas_h = atlas_h;
+                atlas.atlas_pixels = std::move(pixels);
+                atlas.glyphs.clear();
+
+                float inv_w = 1.0f / static_cast<float>(atlas_w);
+                float inv_h = 1.0f / static_cast<float>(atlas_h);
+
+                for (int i = 0; i < num_glyphs; ++i) {
+                    const auto& pc = packed[static_cast<size_t>(i)];
+                    if (pc.x0 == 0 && pc.x1 == 0)
+                        continue;
+
+                    PackedGlyph g{};
+                    g.u0 = static_cast<float>(pc.x0) * inv_w;
+                    g.v0 = static_cast<float>(pc.y0) * inv_h;
+                    g.u1 = static_cast<float>(pc.x1) * inv_w;
+                    g.v1 = static_cast<float>(pc.y1) * inv_h;
+                    g.x_offset = pc.xoff;
+                    g.y_offset = pc.yoff;
+                    g.x_offset2 = pc.xoff2;
+                    g.y_offset2 = pc.yoff2;
+                    g.x_advance = pc.xadvance;
+                    atlas.glyphs[codepoints[static_cast<size_t>(i)]] = g;
+                }
+
+                auto* raw = &atlas;
+                atlas.texture_source = Rml::CallbackTextureSource(
+                    [raw](const Rml::CallbackTextureInterface& iface) -> bool {
+                        const int w = raw->atlas_w;
+                        const int h = raw->atlas_h;
+                        std::vector<Rml::byte> rgba(static_cast<size_t>(w * h * 4));
+                        for (int j = 0; j < w * h; ++j) {
+                            rgba[static_cast<size_t>(j * 4 + 0)] = 255;
+                            rgba[static_cast<size_t>(j * 4 + 1)] = 255;
+                            rgba[static_cast<size_t>(j * 4 + 2)] = 255;
+                            rgba[static_cast<size_t>(j * 4 + 3)] =
+                                raw->atlas_pixels[static_cast<size_t>(j)];
+                        }
+                        return iface.GenerateTexture(
+                            Rml::Span<const Rml::byte>(rgba.data(), rgba.size()),
+                            Rml::Vector2i(w, h));
+                    });
+
+                return true;
+            }
+
+            if (atlas_w >= ATLAS_MAX_SIZE && atlas_h >= ATLAS_MAX_SIZE) {
+                LOG_ERROR("StbFontEngine: fallback atlas overflow at {}x{}", atlas_w, atlas_h);
+                return false;
+            }
+
+            if (atlas_w <= atlas_h)
+                atlas_w *= 2;
+            else
+                atlas_h *= 2;
+        }
+    }
+
+    void StbFontEngine::flushPendingFallbacks(FontInstance& inst) {
+        if (inst.pending_fallback.empty())
+            return;
+
+        std::unordered_map<FontFace*, std::vector<uint32_t>> by_face;
+        for (auto& [cp, face] : inst.pending_fallback)
+            by_face[face].push_back(cp);
+        inst.pending_fallback.clear();
+
+        for (auto& [face, cps] : by_face) {
+            GlyphAtlas* atlas = nullptr;
+            for (auto& fa : inst.fallback_atlases) {
+                if (fa->face == face) {
+                    atlas = fa.get();
+                    break;
+                }
+            }
+
+            std::vector<uint32_t> all_cps;
+            if (atlas) {
+                for (auto& [cp, _] : atlas->glyphs)
+                    all_cps.push_back(cp);
+            }
+            for (auto cp : cps)
+                all_cps.push_back(cp);
+
+            std::sort(all_cps.begin(), all_cps.end());
+            all_cps.erase(std::unique(all_cps.begin(), all_cps.end()), all_cps.end());
+
+            if (!atlas) {
+                auto new_atlas = std::make_unique<GlyphAtlas>();
+                new_atlas->face = face;
+                atlas = new_atlas.get();
+                inst.fallback_atlases.push_back(std::move(new_atlas));
+            }
+
+            buildFallbackAtlas(*atlas, inst.size_px, all_cps);
+        }
+
+        ++inst.version;
     }
 
     Rml::FontFaceHandle StbFontEngine::GetFontFaceHandle(const Rml::String& family,
@@ -353,9 +496,32 @@ namespace lfs::vis::gui {
             if (it != inst->glyphs.end()) {
                 width += it->second.x_advance;
             } else {
-                int advance = 0, lsb = 0;
-                stbtt_GetCodepointHMetrics(&inst->face->info, static_cast<int>(cp), &advance, &lsb);
-                width += static_cast<float>(advance) * scale;
+                bool found = false;
+                for (auto& fa : inst->fallback_atlases) {
+                    auto fb_it = fa->glyphs.find(cp);
+                    if (fb_it != fa->glyphs.end()) {
+                        width += fb_it->second.x_advance;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    FontFace* fb_face = findFallbackFace(cp);
+                    if (fb_face) {
+                        inst->pending_fallback[cp] = fb_face;
+                        float fb_scale = stbtt_ScaleForPixelHeight(
+                            &fb_face->info, static_cast<float>(inst->size_px));
+                        int advance = 0, lsb = 0;
+                        stbtt_GetCodepointHMetrics(&fb_face->info, static_cast<int>(cp),
+                                                   &advance, &lsb);
+                        width += static_cast<float>(advance) * fb_scale;
+                    } else {
+                        int advance = 0, lsb = 0;
+                        stbtt_GetCodepointHMetrics(&inst->face->info, static_cast<int>(cp),
+                                                   &advance, &lsb);
+                        width += static_cast<float>(advance) * scale;
+                    }
+                }
             }
 
             if (prev_cp != 0 && ctx.font_kerning != Rml::Style::FontKerning::None) {
@@ -384,6 +550,8 @@ namespace lfs::vis::gui {
         if (str.empty())
             return 0;
 
+        flushPendingFallbacks(*inst);
+
         Rml::ColourbPremultiplied final_colour = colour;
         if (opacity < 1.0f) {
             final_colour.alpha =
@@ -400,7 +568,9 @@ namespace lfs::vis::gui {
         if (!texture)
             return 0;
 
-        Rml::Mesh mesh;
+        Rml::Mesh primary_mesh;
+        std::unordered_map<size_t, Rml::Mesh> fb_meshes;
+
         float cursor_x = position.x;
         float baseline_y = position.y;
 
@@ -446,47 +616,68 @@ namespace lfs::vis::gui {
                 cursor_x += static_cast<float>(kern) * scale;
             }
 
+            auto emit_quad = [&](Rml::Mesh& m, const PackedGlyph& g) {
+                int base_idx = static_cast<int>(m.vertices.size());
+                m.vertices.push_back(Rml::Vertex{
+                    Rml::Vector2f(cursor_x + g.x_offset, baseline_y + g.y_offset),
+                    final_colour, Rml::Vector2f(g.u0, g.v0)});
+                m.vertices.push_back(Rml::Vertex{
+                    Rml::Vector2f(cursor_x + g.x_offset2, baseline_y + g.y_offset),
+                    final_colour, Rml::Vector2f(g.u1, g.v0)});
+                m.vertices.push_back(Rml::Vertex{
+                    Rml::Vector2f(cursor_x + g.x_offset2, baseline_y + g.y_offset2),
+                    final_colour, Rml::Vector2f(g.u1, g.v1)});
+                m.vertices.push_back(Rml::Vertex{
+                    Rml::Vector2f(cursor_x + g.x_offset, baseline_y + g.y_offset2),
+                    final_colour, Rml::Vector2f(g.u0, g.v1)});
+                m.indices.push_back(base_idx);
+                m.indices.push_back(base_idx + 1);
+                m.indices.push_back(base_idx + 2);
+                m.indices.push_back(base_idx);
+                m.indices.push_back(base_idx + 2);
+                m.indices.push_back(base_idx + 3);
+            };
+
             auto it = inst->glyphs.find(cp);
             if (it != inst->glyphs.end()) {
-                const PackedGlyph& g = it->second;
-
-                float qx0 = cursor_x + g.x_offset;
-                float qy0 = baseline_y + g.y_offset;
-                float qx1 = cursor_x + g.x_offset2;
-                float qy1 = baseline_y + g.y_offset2;
-
-                int base_idx = static_cast<int>(mesh.vertices.size());
-
-                mesh.vertices.push_back(Rml::Vertex{
-                    Rml::Vector2f(qx0, qy0), final_colour, Rml::Vector2f(g.u0, g.v0)});
-                mesh.vertices.push_back(Rml::Vertex{
-                    Rml::Vector2f(qx1, qy0), final_colour, Rml::Vector2f(g.u1, g.v0)});
-                mesh.vertices.push_back(Rml::Vertex{
-                    Rml::Vector2f(qx1, qy1), final_colour, Rml::Vector2f(g.u1, g.v1)});
-                mesh.vertices.push_back(Rml::Vertex{
-                    Rml::Vector2f(qx0, qy1), final_colour, Rml::Vector2f(g.u0, g.v1)});
-
-                mesh.indices.push_back(base_idx);
-                mesh.indices.push_back(base_idx + 1);
-                mesh.indices.push_back(base_idx + 2);
-                mesh.indices.push_back(base_idx);
-                mesh.indices.push_back(base_idx + 2);
-                mesh.indices.push_back(base_idx + 3);
-
-                cursor_x += g.x_advance;
+                emit_quad(primary_mesh, it->second);
+                cursor_x += it->second.x_advance;
                 ++glyph_count;
             } else {
-                int advance = 0, lsb = 0;
-                stbtt_GetCodepointHMetrics(&inst->face->info, static_cast<int>(cp), &advance, &lsb);
-                cursor_x += static_cast<float>(advance) * scale;
+                bool found = false;
+                for (size_t fi = 0; fi < inst->fallback_atlases.size(); ++fi) {
+                    auto fb_it = inst->fallback_atlases[fi]->glyphs.find(cp);
+                    if (fb_it != inst->fallback_atlases[fi]->glyphs.end()) {
+                        emit_quad(fb_meshes[fi], fb_it->second);
+                        cursor_x += fb_it->second.x_advance;
+                        ++glyph_count;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    int advance = 0, lsb = 0;
+                    stbtt_GetCodepointHMetrics(&inst->face->info, static_cast<int>(cp), &advance,
+                                               &lsb);
+                    cursor_x += static_cast<float>(advance) * scale;
+                }
             }
 
             cursor_x += ctx.letter_spacing;
             prev_cp = cp;
         }
 
-        if (mesh)
-            mesh_list.push_back(Rml::TexturedMesh{std::move(mesh), texture});
+        if (primary_mesh)
+            mesh_list.push_back(Rml::TexturedMesh{std::move(primary_mesh), texture});
+
+        for (auto& [fi, mesh] : fb_meshes) {
+            if (mesh) {
+                Rml::Texture fb_tex =
+                    inst->fallback_atlases[fi]->texture_source.GetTexture(render_manager);
+                if (fb_tex)
+                    mesh_list.push_back(Rml::TexturedMesh{std::move(mesh), fb_tex});
+            }
+        }
 
         return static_cast<int>(std::ceil(cursor_x - position.x));
     }
