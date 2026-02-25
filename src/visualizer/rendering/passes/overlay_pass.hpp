@@ -13,9 +13,12 @@ namespace lfs::vis {
         OverlayPass() = default;
 
         [[nodiscard]] const char* name() const override { return "OverlayPass"; }
-        [[nodiscard]] DirtyMask sensitivity() const override { return 0; }
+        [[nodiscard]] DirtyMask sensitivity() const override {
+            return DirtyFlag::OVERLAY | DirtyFlag::CAMERA | DirtyFlag::VIEWPORT | DirtyFlag::SPLATS;
+        }
 
-        [[nodiscard]] bool shouldExecute(DirtyMask /*frame_dirty*/, const FrameContext& /*ctx*/) const override {
+        // Must run every frame — GL double buffering requires overlay redraw
+        [[nodiscard]] bool shouldExecute(DirtyMask, const FrameContext&) const override {
             return true;
         }
 

@@ -13,9 +13,13 @@ namespace lfs::vis {
         PresentPass() = default;
 
         [[nodiscard]] const char* name() const override { return "PresentPass"; }
-        [[nodiscard]] DirtyMask sensitivity() const override { return 0; }
+        [[nodiscard]] DirtyMask sensitivity() const override {
+            return DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::VIEWPORT |
+                   DirtyFlag::SELECTION | DirtyFlag::BACKGROUND | DirtyFlag::PPISP;
+        }
 
-        [[nodiscard]] bool shouldExecute(DirtyMask /*frame_dirty*/, const FrameContext& /*ctx*/) const override {
+        // Must run every frame — GL double buffering requires redraw to backbuffer
+        [[nodiscard]] bool shouldExecute(DirtyMask, const FrameContext&) const override {
             return true;
         }
 

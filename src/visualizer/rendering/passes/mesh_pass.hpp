@@ -13,8 +13,12 @@ namespace lfs::vis {
         MeshPass() = default;
 
         [[nodiscard]] const char* name() const override { return "MeshPass"; }
+
+        static constexpr DirtyMask MESH_GEOMETRY_MASK =
+            DirtyFlag::MESH | DirtyFlag::CAMERA | DirtyFlag::VIEWPORT;
+
         [[nodiscard]] DirtyMask sensitivity() const override {
-            return DirtyFlag::MESH | DirtyFlag::CAMERA | DirtyFlag::VIEWPORT;
+            return MESH_GEOMETRY_MASK | DirtyFlag::SPLATS | DirtyFlag::SELECTION | DirtyFlag::BACKGROUND;
         }
 
         [[nodiscard]] bool shouldExecute(DirtyMask frame_dirty, const FrameContext& ctx) const override;

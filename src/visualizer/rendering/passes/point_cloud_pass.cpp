@@ -135,37 +135,16 @@ namespace lfs::vis {
         const lfs::rendering::RenderRequest pc_request{
             .viewport = viewport_data,
             .scaling_modifier = ctx.settings.scaling_modifier,
-            .antialiasing = false,
             .mip_filter = ctx.settings.mip_filter,
             .sh_degree = 0,
             .background_color = ctx.settings.background_color,
             .crop_box = crop_box,
             .point_cloud_mode = true,
             .voxel_size = ctx.settings.voxel_size,
-            .gut = false,
             .equirectangular = ctx.settings.equirectangular,
-            .show_rings = false,
-            .ring_width = 0.0f,
-            .show_center_markers = false,
             .model_transforms = {point_cloud_transform},
-            .transform_indices = nullptr,
-            .selection_mask = nullptr,
-            .output_screen_positions = false,
-            .brush_active = false,
-            .brush_x = 0.0f,
-            .brush_y = 0.0f,
-            .brush_radius = 0.0f,
-            .brush_add_mode = true,
-            .brush_selection_tensor = nullptr,
-            .brush_saturation_mode = false,
-            .brush_saturation_amount = 0.0f,
-            .selection_mode_rings = false,
             .crop_inverse = crop_inverse,
-            .crop_desaturate = crop_desaturate,
-            .selected_node_mask = {},
-            .hovered_depth_id = nullptr,
-            .highlight_gaussian_id = -1,
-            .far_plane = lfs::rendering::DEFAULT_FAR_PLANE};
+            .crop_desaturate = crop_desaturate};
 
         auto render_result = engine.renderPointCloud(*point_cloud_to_render, pc_request);
         if (render_result) {

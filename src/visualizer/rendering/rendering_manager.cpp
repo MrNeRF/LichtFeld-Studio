@@ -4,6 +4,7 @@
 
 #include "rendering_manager.hpp"
 #include "core/camera.hpp"
+#include "core/cuda_debug.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
@@ -55,7 +56,6 @@ namespace lfs::vis {
                 glDeleteTextures(1, &entry.texture_id);
             }
         }
-        glFinish();
         texture_cache_.clear();
     }
 
@@ -120,9 +120,7 @@ namespace lfs::vis {
         const auto oldest = std::min_element(texture_cache_.begin(), texture_cache_.end(),
                                              [](const auto& a, const auto& b) { return a.second.last_access < b.second.last_access; });
 
-        if (oldest->second.interop_texture) {
-            glFinish();
-        } else if (oldest->second.texture_id != 0) {
+        if (!oldest->second.interop_texture && oldest->second.texture_id != 0) {
             glDeleteTextures(1, &oldest->second.texture_id);
         }
         texture_cache_.erase(oldest);
@@ -703,8 +701,7 @@ namespace lfs::vis {
             initialize();
         }
 
-        // Sync selection group colors to GPU constant memory
-        if (scene_manager) {
+        if (scene_manager && (dirty_mask_.load(std::memory_order_relaxed) & DirtyFlag::SELECTION)) {
             for (const auto& group : scene_manager->getScene().getSelectionGroups()) {
                 lfs::rendering::config::setSelectionGroupColor(
                     group.id, make_float3(group.color.x, group.color.y, group.color.z));
@@ -909,6 +906,7 @@ namespace lfs::vis {
             .mark_dirty = [this](DirtyMask flags) { markDirty(flags); },
             .set_pivot_animation = [this](auto end_time) { setPivotAnimationEndTime(end_time); }};
 
+        // Pre-render splats at GT dimensions; pass loop skips via splat_pre_rendered guard
         if (frame_ctx.settings.split_view_mode == SplitViewMode::GTComparison &&
             resources.gt_context && resources.gt_context->valid() &&
             (!resources.render_texture_valid || (frame_dirty & splat_raster_pass_->sensitivity()))) {
@@ -982,8 +980,9 @@ namespace lfs::vis {
                 }
 
                 if (scaled_x >= 0 && scaled_x < depth_width && scaled_y >= 0 && scaled_y < depth_height) {
-                    auto depth_cpu = depth_ptr->cpu();
-                    const float d = depth_cpu.ptr<float>()[scaled_y * depth_width + scaled_x];
+                    float d;
+                    const float* gpu_ptr = depth_ptr->ptr<float>() + scaled_y * depth_width + scaled_x;
+                    CHECK_CUDA(cudaMemcpy(&d, gpu_ptr, sizeof(float), cudaMemcpyDeviceToHost));
                     if (d < 1e9f) {
                         splat_depth = d;
                     }
@@ -1051,18 +1050,14 @@ namespace lfs::vis {
         lfs::core::Tensor crop_t, crop_min, crop_max;
         bool crop_inverse = false;
 
-        const auto& cropboxes = sm->buildRenderState().cropboxes;
+        const auto& cropboxes = sm->getScene().getVisibleCropBoxes();
         if (!cropboxes.empty() && cropboxes[0].data) {
             const auto& cb = cropboxes[0];
             const glm::mat4 inv_transform = glm::inverse(cb.world_transform);
             const float* const t_ptr = glm::value_ptr(inv_transform);
-            crop_t = lfs::core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4}, lfs::core::Device::CPU).cuda();
-            crop_min = lfs::core::Tensor::from_vector(
-                           {cb.data->min.x, cb.data->min.y, cb.data->min.z}, {3}, lfs::core::Device::CPU)
-                           .cuda();
-            crop_max = lfs::core::Tensor::from_vector(
-                           {cb.data->max.x, cb.data->max.y, cb.data->max.z}, {3}, lfs::core::Device::CPU)
-                           .cuda();
+            crop_t = lfs::core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4});
+            crop_min = lfs::core::Tensor::from_vector({cb.data->min.x, cb.data->min.y, cb.data->min.z}, {3});
+            crop_max = lfs::core::Tensor::from_vector({cb.data->max.x, cb.data->max.y, cb.data->max.z}, {3});
             crop_inverse = cb.data->inverse;
         }
 
@@ -1074,10 +1069,8 @@ namespace lfs::vis {
             const auto& el = ellipsoids[0];
             const glm::mat4 inv_transform = glm::inverse(el.world_transform);
             const float* const t_ptr = glm::value_ptr(inv_transform);
-            ellip_t = lfs::core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4}, lfs::core::Device::CPU).cuda();
-            ellip_radii = lfs::core::Tensor::from_vector(
-                              {el.data->radii.x, el.data->radii.y, el.data->radii.z}, {3}, lfs::core::Device::CPU)
-                              .cuda();
+            ellip_t = lfs::core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4});
+            ellip_radii = lfs::core::Tensor::from_vector({el.data->radii.x, el.data->radii.y, el.data->radii.z}, {3});
             ellipsoid_inverse = el.data->inverse;
         }
 

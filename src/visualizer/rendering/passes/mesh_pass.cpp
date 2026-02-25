@@ -16,11 +16,7 @@ namespace lfs::vis {
             return false;
         if (ctx.scene_state.meshes.empty())
             return false;
-        // Compositing depends on both mesh and splat output, so trigger on either
-        constexpr DirtyMask composite_sensitivity =
-            DirtyFlag::MESH | DirtyFlag::CAMERA | DirtyFlag::VIEWPORT |
-            DirtyFlag::SPLATS | DirtyFlag::SELECTION | DirtyFlag::BACKGROUND;
-        return (frame_dirty & composite_sensitivity) != 0;
+        return (frame_dirty & sensitivity()) != 0;
     }
 
     void MeshPass::execute(lfs::rendering::RenderingEngine& engine,
@@ -31,7 +27,7 @@ namespace lfs::vis {
             return;
 
         const auto& scene_state = ctx.scene_state;
-        const bool mesh_dirty = (ctx.frame_dirty & sensitivity()) != 0;
+        const bool mesh_dirty = (ctx.frame_dirty & MESH_GEOMETRY_MASK) != 0;
 
         if (mesh_dirty) {
             const lfs::rendering::ViewportData mesh_viewport{

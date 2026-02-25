@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "splat_raster_pass.hpp"
+#include "core/cuda_debug.hpp"
 #include "core/logger.hpp"
 #include "core/splat_data.hpp"
 #include "geometry/euclidean_transform.hpp"
@@ -89,6 +90,10 @@ namespace lfs::vis {
             glDeleteRenderbuffers(1, &render_depth_rbo_);
         if (d_hovered_depth_id_)
             cudaFree(d_hovered_depth_id_);
+        if (h_hovered_depth_id_)
+            cudaFreeHost(h_hovered_depth_id_);
+        if (readback_event_)
+            cudaEventDestroy(readback_event_);
     }
 
     bool SplatRasterPass::shouldExecute(DirtyMask frame_dirty, const FrameContext& ctx) const {
@@ -233,12 +238,24 @@ namespace lfs::vis {
         const bool need_hovered_output = (ctx.brush.selection_mode == lfs::rendering::SelectionMode::Rings) && ctx.brush.active;
         if (need_hovered_output) {
             if (d_hovered_depth_id_ == nullptr) {
-                auto err = cudaMalloc(&d_hovered_depth_id_, sizeof(unsigned long long));
-                assert(err == cudaSuccess);
+                CHECK_CUDA(cudaMalloc(&d_hovered_depth_id_, sizeof(unsigned long long)));
             }
-            constexpr unsigned long long init_val = 0xFFFFFFFFFFFFFFFFULL;
-            auto err = cudaMemcpy(d_hovered_depth_id_, &init_val, sizeof(unsigned long long), cudaMemcpyHostToDevice);
-            assert(err == cudaSuccess);
+            if (h_hovered_depth_id_ == nullptr) {
+                CHECK_CUDA(cudaMallocHost(&h_hovered_depth_id_, sizeof(unsigned long long)));
+            }
+            if (readback_event_ == nullptr) {
+                CHECK_CUDA(cudaEventCreate(&readback_event_));
+            }
+
+            // Poll previous async readback
+            if (readback_pending_) {
+                if (cudaEventQuery(readback_event_) == cudaSuccess) {
+                    last_hovered_result_ = *h_hovered_depth_id_;
+                    readback_pending_ = false;
+                }
+            }
+
+            CHECK_CUDA(cudaMemsetAsync(d_hovered_depth_id_, 0xFF, sizeof(unsigned long long)));
             request.hovered_depth_id = d_hovered_depth_id_;
         }
 
@@ -338,13 +355,17 @@ namespace lfs::vis {
             res.cached_result = *render_result;
 
             if (need_hovered_output) {
-                unsigned long long hovered_depth_id;
-                auto memcpy_err = cudaMemcpy(&hovered_depth_id, d_hovered_depth_id_, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
-                assert(memcpy_err == cudaSuccess);
-                if (hovered_depth_id == 0xFFFFFFFFFFFFFFFFULL) {
+                // Start async readback — result available next frame
+                CHECK_CUDA(cudaMemcpyAsync(h_hovered_depth_id_, d_hovered_depth_id_,
+                                           sizeof(unsigned long long), cudaMemcpyDeviceToHost));
+                CHECK_CUDA(cudaEventRecord(readback_event_));
+                readback_pending_ = true;
+
+                // Use previous frame's result
+                if (last_hovered_result_ == 0xFFFFFFFFFFFFFFFFULL) {
                     res.hovered_gaussian_id = -1;
                 } else {
-                    res.hovered_gaussian_id = static_cast<int>(hovered_depth_id & 0xFFFFFFFF);
+                    res.hovered_gaussian_id = static_cast<int>(last_hovered_result_ & 0xFFFFFFFF);
                 }
             }
 

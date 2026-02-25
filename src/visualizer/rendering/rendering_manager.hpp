@@ -27,9 +27,6 @@ namespace lfs::vis {
     class SplatRasterPass;
     class OverlayPass;
     class PointCloudPass;
-} // namespace lfs::vis
-
-namespace lfs::vis {
 
     // GT Image Cache for efficient GPU-resident texture management
     class GTTextureCache {
@@ -108,14 +105,15 @@ namespace lfs::vis {
 
         [[nodiscard]] bool pollDirtyState() {
             if (pivot_animation_active_.load() &&
-                std::chrono::steady_clock::now() < pivot_animation_end_time_) {
+                std::chrono::steady_clock::now() < from_ns(pivot_animation_end_ns_.load(std::memory_order_acquire))) {
                 dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
                 return true;
             }
             pivot_animation_active_.store(false);
 
             if (selection_flash_active_.load()) {
-                const auto elapsed = std::chrono::steady_clock::now() - selection_flash_start_time_;
+                const auto elapsed = std::chrono::steady_clock::now() -
+                                     from_ns(selection_flash_start_ns_.load(std::memory_order_acquire));
                 if (std::chrono::duration<float>(elapsed).count() < SELECTION_FLASH_DURATION_SEC) {
                     dirty_mask_.fetch_or(DirtyFlag::SPLATS | DirtyFlag::MESH, std::memory_order_relaxed);
                     return true;
@@ -131,12 +129,12 @@ namespace lfs::vis {
         }
 
         void setPivotAnimationEndTime(const std::chrono::steady_clock::time_point end_time) {
-            pivot_animation_end_time_ = end_time;
+            pivot_animation_end_ns_.store(to_ns(end_time), std::memory_order_release);
             pivot_animation_active_.store(true);
         }
 
         void triggerSelectionFlash() {
-            selection_flash_start_time_ = std::chrono::steady_clock::now();
+            selection_flash_start_ns_.store(to_ns(std::chrono::steady_clock::now()), std::memory_order_release);
             selection_flash_active_.store(true);
             markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH);
         }
@@ -147,7 +145,8 @@ namespace lfs::vis {
             if (!selection_flash_active_.load())
                 return 0.0f;
             const float t = std::chrono::duration<float>(
-                                std::chrono::steady_clock::now() - selection_flash_start_time_)
+                                std::chrono::steady_clock::now() -
+                                from_ns(selection_flash_start_ns_.load(std::memory_order_acquire)))
                                 .count() /
                             SELECTION_FLASH_DURATION_SEC;
             if (t >= 1.0f)
@@ -294,6 +293,13 @@ namespace lfs::vis {
         void setEllipsoidGizmoActive(bool active) { ellipsoid_gizmo_active_ = active; }
 
     private:
+        static int64_t to_ns(std::chrono::steady_clock::time_point tp) {
+            return std::chrono::duration_cast<std::chrono::nanoseconds>(tp.time_since_epoch()).count();
+        }
+        static std::chrono::steady_clock::time_point from_ns(int64_t ns) {
+            return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(ns));
+        }
+
         void doFullRender(const RenderContext& context, SceneManager* scene_manager, const lfs::core::SplatData* model);
         void setupEventHandlers();
 
@@ -316,12 +322,12 @@ namespace lfs::vis {
         std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};
 
         std::atomic<bool> pivot_animation_active_{false};
-        std::chrono::steady_clock::time_point pivot_animation_end_time_;
+        std::atomic<int64_t> pivot_animation_end_ns_{0};
         lfs::rendering::RenderResult cached_result_;
 
         // Selection flash animation
         mutable std::atomic<bool> selection_flash_active_{false};
-        std::chrono::steady_clock::time_point selection_flash_start_time_;
+        std::atomic<int64_t> selection_flash_start_ns_{0};
         static constexpr float SELECTION_FLASH_DURATION_SEC = 0.5f;
 
         std::atomic<bool> overlay_animation_active_{false};
