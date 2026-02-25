@@ -8,11 +8,9 @@
 
 namespace lfs::vis {
 
-    class RenderingManager;
-
     class SplitViewPass final : public RenderPass {
     public:
-        explicit SplitViewPass(RenderingManager& mgr) : mgr_(mgr) {}
+        SplitViewPass() = default;
 
         [[nodiscard]] const char* name() const override { return "SplitViewPass"; }
         [[nodiscard]] DirtyMask sensitivity() const override {
@@ -26,7 +24,8 @@ namespace lfs::vis {
                      FrameResources& res) override;
 
     private:
-        RenderingManager& mgr_;
+        [[nodiscard]] std::optional<lfs::rendering::SplitViewRequest>
+        buildSplitViewRequest(const FrameContext& ctx, const FrameResources& res);
     };
 
 } // namespace lfs::vis

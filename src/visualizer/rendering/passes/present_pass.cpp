@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "present_pass.hpp"
-#include "../rendering_manager.hpp"
 #include "core/logger.hpp"
 #include <glad/glad.h>
 

@@ -5,14 +5,14 @@
 #pragma once
 
 #include "../render_pass.hpp"
+#include <glm/glm.hpp>
 
 namespace lfs::vis {
 
-    class RenderingManager;
-
     class SplatRasterPass final : public RenderPass {
     public:
-        explicit SplatRasterPass(RenderingManager& mgr) : mgr_(mgr) {}
+        SplatRasterPass() = default;
+        ~SplatRasterPass() override;
 
         [[nodiscard]] const char* name() const override { return "SplatRasterPass"; }
         [[nodiscard]] DirtyMask sensitivity() const override {
@@ -26,12 +26,16 @@ namespace lfs::vis {
                      const FrameContext& ctx,
                      FrameResources& res) override;
 
-        void renderToTexture(const RenderingManager::RenderContext& context,
-                             SceneManager* scene_manager,
-                             const lfs::core::SplatData* model);
-
     private:
-        RenderingManager& mgr_;
+        void renderToTexture(lfs::rendering::RenderingEngine& engine,
+                             const FrameContext& ctx, FrameResources& res);
+
+        unsigned int render_fbo_ = 0;
+        unsigned int render_depth_rbo_ = 0;
+        glm::ivec2 texture_size_{0, 0};
+        glm::ivec2 depth_buffer_size_{0, 0};
+
+        unsigned long long* d_hovered_depth_id_ = nullptr;
     };
 
 } // namespace lfs::vis

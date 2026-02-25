@@ -8,11 +8,9 @@
 
 namespace lfs::vis {
 
-    class RenderingManager;
-
     class MeshPass final : public RenderPass {
     public:
-        explicit MeshPass(RenderingManager& mgr) : mgr_(mgr) {}
+        MeshPass() = default;
 
         [[nodiscard]] const char* name() const override { return "MeshPass"; }
         [[nodiscard]] DirtyMask sensitivity() const override {
@@ -24,9 +22,6 @@ namespace lfs::vis {
         void execute(lfs::rendering::RenderingEngine& engine,
                      const FrameContext& ctx,
                      FrameResources& res) override;
-
-    private:
-        RenderingManager& mgr_;
     };
 
 } // namespace lfs::vis

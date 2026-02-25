@@ -8,11 +8,9 @@
 
 namespace lfs::vis {
 
-    class RenderingManager;
-
     class PresentPass final : public RenderPass {
     public:
-        explicit PresentPass(RenderingManager& mgr) : mgr_(mgr) {}
+        PresentPass() = default;
 
         [[nodiscard]] const char* name() const override { return "PresentPass"; }
         [[nodiscard]] DirtyMask sensitivity() const override { return DirtyFlag::ALL; }
@@ -24,9 +22,6 @@ namespace lfs::vis {
         void execute(lfs::rendering::RenderingEngine& engine,
                      const FrameContext& ctx,
                      FrameResources& res) override;
-
-    private:
-        RenderingManager& mgr_;
     };
 
 } // namespace lfs::vis

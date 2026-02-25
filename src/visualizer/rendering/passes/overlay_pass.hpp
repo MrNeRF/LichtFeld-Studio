@@ -8,11 +8,9 @@
 
 namespace lfs::vis {
 
-    class RenderingManager;
-
     class OverlayPass final : public RenderPass {
     public:
-        explicit OverlayPass(RenderingManager& mgr) : mgr_(mgr) {}
+        OverlayPass() = default;
 
         [[nodiscard]] const char* name() const override { return "OverlayPass"; }
         [[nodiscard]] DirtyMask sensitivity() const override { return DirtyFlag::ALL; }
@@ -25,10 +23,9 @@ namespace lfs::vis {
                      const FrameContext& ctx,
                      FrameResources& res) override;
 
-        void renderOverlays(const RenderingManager::RenderContext& context);
-
     private:
-        RenderingManager& mgr_;
+        void renderOverlays(lfs::rendering::RenderingEngine& engine,
+                            const FrameContext& ctx, FrameResources& res);
     };
 
 } // namespace lfs::vis

@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "mesh_pass.hpp"
-#include "../rendering_manager.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "scene/scene_manager.hpp"
@@ -12,7 +11,9 @@
 namespace lfs::vis {
 
     bool MeshPass::shouldExecute(DirtyMask /*frame_dirty*/, const FrameContext& ctx) const {
-        return ctx.scene_manager != nullptr;
+        if (!ctx.scene_manager)
+            return false;
+        return !ctx.scene_state.meshes.empty();
     }
 
     void MeshPass::execute(lfs::rendering::RenderingEngine& engine,
@@ -21,7 +22,7 @@ namespace lfs::vis {
         if (res.split_view_executed)
             return;
 
-        const auto scene_state = ctx.scene_manager->buildRenderState();
+        const auto& scene_state = ctx.scene_state;
         const bool has_meshes = !scene_state.meshes.empty();
         if (!has_meshes)
             return;
@@ -30,14 +31,14 @@ namespace lfs::vis {
 
         if (mesh_dirty) {
             const lfs::rendering::ViewportData mesh_viewport{
-                .rotation = ctx.ctx.viewport.getRotationMatrix(),
-                .translation = ctx.ctx.viewport.getTranslation(),
+                .rotation = ctx.viewport.getRotationMatrix(),
+                .translation = ctx.viewport.getTranslation(),
                 .size = ctx.render_size,
                 .focal_length_mm = ctx.settings.focal_length_mm,
                 .orthographic = ctx.settings.orthographic,
                 .ortho_scale = ctx.settings.ortho_scale};
 
-            const float flash_intensity = mgr_.getSelectionFlashIntensity();
+            const float flash_intensity = ctx.selection_flash_intensity;
             const bool any_selected = std::any_of(
                                           scene_state.meshes.begin(), scene_state.meshes.end(),
                                           [](const auto& vm) { return vm.is_selected; }) ||

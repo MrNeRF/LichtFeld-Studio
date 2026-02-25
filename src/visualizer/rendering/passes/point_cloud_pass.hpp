@@ -5,14 +5,15 @@
 #pragma once
 
 #include "../render_pass.hpp"
+#include "core/point_cloud.hpp"
+#include <glm/glm.hpp>
+#include <memory>
 
 namespace lfs::vis {
 
-    class RenderingManager;
-
     class PointCloudPass final : public RenderPass {
     public:
-        explicit PointCloudPass(RenderingManager& mgr) : mgr_(mgr) {}
+        PointCloudPass() = default;
 
         [[nodiscard]] const char* name() const override { return "PointCloudPass"; }
         [[nodiscard]] DirtyMask sensitivity() const override {
@@ -25,8 +26,15 @@ namespace lfs::vis {
                      const FrameContext& ctx,
                      FrameResources& res) override;
 
+        void resetCache();
+
     private:
-        RenderingManager& mgr_;
+        std::unique_ptr<lfs::core::PointCloud> cached_filtered_point_cloud_;
+        const lfs::core::PointCloud* cached_source_point_cloud_ = nullptr;
+        glm::mat4 cached_cropbox_transform_{1.0f};
+        glm::vec3 cached_cropbox_min_{0.0f};
+        glm::vec3 cached_cropbox_max_{0.0f};
+        bool cached_cropbox_inverse_ = false;
     };
 
 } // namespace lfs::vis

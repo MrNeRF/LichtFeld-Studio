@@ -2790,7 +2790,8 @@ namespace lfs::vis {
             node->transform_dirty = true;
         }
 
-        services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
+        if (auto* rm = services().renderingOrNull())
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
 
         LOG_INFO("Fit '{}' to '{}': center({:.2f},{:.2f},{:.2f}) size({:.2f},{:.2f},{:.2f})",
                  cropbox_node->name, target_node->name, center.x, center.y, center.z,

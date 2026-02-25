@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "point_cloud_pass.hpp"
-#include "../rendering_manager.hpp"
 #include "core/logger.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
@@ -28,11 +27,11 @@ namespace lfs::vis {
 
         assert(ctx.scene_manager);
 
-        const auto scene_state = ctx.scene_manager->buildRenderState();
+        const auto& scene_state = ctx.scene_state;
 
-        if (!scene_state.point_cloud && mgr_.cached_source_point_cloud_) {
-            mgr_.cached_filtered_point_cloud_.reset();
-            mgr_.cached_source_point_cloud_ = nullptr;
+        if (!scene_state.point_cloud && cached_source_point_cloud_) {
+            cached_filtered_point_cloud_.reset();
+            cached_source_point_cloud_ = nullptr;
         }
 
         if (!scene_state.point_cloud || scene_state.point_cloud->size() == 0)
@@ -44,12 +43,12 @@ namespace lfs::vis {
             if (!cb.data || (!cb.data->enabled && !ctx.settings.show_crop_box))
                 continue;
 
-            const bool cache_valid = mgr_.cached_filtered_point_cloud_ &&
-                                     mgr_.cached_source_point_cloud_ == scene_state.point_cloud &&
-                                     mgr_.cached_cropbox_transform_ == cb.world_transform &&
-                                     mgr_.cached_cropbox_min_ == cb.data->min &&
-                                     mgr_.cached_cropbox_max_ == cb.data->max &&
-                                     mgr_.cached_cropbox_inverse_ == cb.data->inverse;
+            const bool cache_valid = cached_filtered_point_cloud_ &&
+                                     cached_source_point_cloud_ == scene_state.point_cloud &&
+                                     cached_cropbox_transform_ == cb.world_transform &&
+                                     cached_cropbox_min_ == cb.data->min &&
+                                     cached_cropbox_max_ == cb.data->max &&
+                                     cached_cropbox_inverse_ == cb.data->inverse;
 
             if (!cache_valid) {
                 const auto& means = scene_state.point_cloud->means;
@@ -80,21 +79,21 @@ namespace lfs::vis {
 
                 const auto indices = mask.nonzero().squeeze(1);
                 if (indices.size(0) > 0) {
-                    mgr_.cached_filtered_point_cloud_ = std::make_unique<lfs::core::PointCloud>(
+                    cached_filtered_point_cloud_ = std::make_unique<lfs::core::PointCloud>(
                         means.index_select(0, indices), colors.index_select(0, indices));
                 } else {
-                    mgr_.cached_filtered_point_cloud_.reset();
+                    cached_filtered_point_cloud_.reset();
                 }
 
-                mgr_.cached_source_point_cloud_ = scene_state.point_cloud;
-                mgr_.cached_cropbox_transform_ = cb.world_transform;
-                mgr_.cached_cropbox_min_ = cb.data->min;
-                mgr_.cached_cropbox_max_ = cb.data->max;
-                mgr_.cached_cropbox_inverse_ = cb.data->inverse;
+                cached_source_point_cloud_ = scene_state.point_cloud;
+                cached_cropbox_transform_ = cb.world_transform;
+                cached_cropbox_min_ = cb.data->min;
+                cached_cropbox_max_ = cb.data->max;
+                cached_cropbox_inverse_ = cb.data->inverse;
             }
 
-            if (mgr_.cached_filtered_point_cloud_) {
-                point_cloud_to_render = mgr_.cached_filtered_point_cloud_.get();
+            if (cached_filtered_point_cloud_) {
+                point_cloud_to_render = cached_filtered_point_cloud_.get();
             } else {
                 return;
             }
@@ -109,8 +108,8 @@ namespace lfs::vis {
         }
 
         const lfs::rendering::ViewportData viewport_data{
-            .rotation = ctx.ctx.viewport.getRotationMatrix(),
-            .translation = ctx.ctx.viewport.getTranslation(),
+            .rotation = ctx.viewport.getRotationMatrix(),
+            .translation = ctx.viewport.getTranslation(),
             .size = ctx.render_size,
             .focal_length_mm = ctx.settings.focal_length_mm,
             .orthographic = ctx.settings.orthographic,
@@ -186,6 +185,11 @@ namespace lfs::vis {
         } else {
             LOG_ERROR("Failed to render point cloud: {}", render_result.error());
         }
+    }
+
+    void PointCloudPass::resetCache() {
+        cached_filtered_point_cloud_.reset();
+        cached_source_point_cloud_ = nullptr;
     }
 
 } // namespace lfs::vis

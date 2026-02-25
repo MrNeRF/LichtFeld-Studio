@@ -5,21 +5,72 @@
 #pragma once
 
 #include "dirty_flags.hpp"
-#include "rendering_manager.hpp"
+#include "internal/viewport.hpp"
+#include "rendering_types.hpp"
+#include "scene/scene_render_state.hpp"
+#include <chrono>
+#include <functional>
+#include <optional>
 #include <rendering/rendering.hpp>
+
+namespace lfs::core {
+    class Tensor;
+    class SplatData;
+} // namespace lfs::core
 
 namespace lfs::vis {
 
     class SceneManager;
+    class GTTextureCache;
+
+    struct BrushState {
+        bool active = false;
+        float x = 0, y = 0, radius = 0;
+        bool add_mode = true;
+        lfs::core::Tensor* selection_tensor = nullptr;
+        lfs::core::Tensor* preview_selection = nullptr;
+        bool saturation_mode = false;
+        float saturation_amount = 0;
+        lfs::rendering::SelectionMode selection_mode{};
+        bool output_screen_positions = false;
+    };
+
+    struct GizmoState {
+        bool cropbox_active = false;
+        glm::vec3 cropbox_min{0}, cropbox_max{0};
+        glm::mat4 cropbox_transform{1};
+        bool ellipsoid_active = false;
+        glm::vec3 ellipsoid_radii{1};
+        glm::mat4 ellipsoid_transform{1};
+    };
+
+    struct PickState {
+        bool requested = false;
+        glm::vec2 pos{-1};
+        int hovered_camera_id = -1;
+    };
 
     struct FrameContext {
-        const RenderingManager::RenderContext& ctx;
-        SceneManager* scene_manager;
-        const lfs::core::SplatData* model;
+        const Viewport& viewport;
+        const ViewportRegion* viewport_region = nullptr;
+        bool has_focus = false;
+
+        SceneManager* scene_manager = nullptr;
+        const lfs::core::SplatData* model = nullptr;
+        SceneRenderState scene_state;
+
         RenderSettings settings;
         glm::ivec2 render_size;
         glm::ivec2 viewport_pos;
         DirtyMask frame_dirty = 0;
+
+        BrushState brush;
+        GizmoState gizmo;
+        PickState pick;
+        int current_camera_id = -1;
+        int hovered_gaussian_id = -1;
+        float selection_flash_intensity = 0;
+        unsigned int cached_render_texture = 0;
     };
 
     struct FrameResources {
@@ -33,8 +84,14 @@ namespace lfs::vis {
         int gt_context_camera_id = -1;
 
         GTTextureCache* gt_texture_cache = nullptr;
-        unsigned long long* d_hovered_depth_id = nullptr;
-        std::unique_ptr<lfs::core::PointCloud>* cached_filtered_pc = nullptr;
+
+        int hovered_gaussian_id = -1;
+        int hovered_camera_id = -1;
+        bool pick_consumed = false;
+        SplitViewInfo split_info;
+
+        std::function<void(DirtyMask)> mark_dirty;
+        std::function<void(std::chrono::steady_clock::time_point)> set_pivot_animation;
     };
 
     class RenderPass {

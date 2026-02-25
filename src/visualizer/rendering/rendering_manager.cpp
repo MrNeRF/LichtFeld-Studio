@@ -23,6 +23,7 @@
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_pipeline.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene/scene_render_state.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller.hpp"
 #include "training/trainer.hpp"
@@ -240,13 +241,14 @@ namespace lfs::vis {
 
     // RenderingManager Implementation
     RenderingManager::RenderingManager() {
-        passes_.push_back(std::make_unique<SplitViewPass>(*this));
-        passes_.push_back(std::make_unique<SplatRasterPass>(*this));
+        passes_.push_back(std::make_unique<SplitViewPass>());
+        passes_.push_back(std::make_unique<SplatRasterPass>());
         splat_raster_pass_ = static_cast<SplatRasterPass*>(passes_.back().get());
-        passes_.push_back(std::make_unique<PointCloudPass>(*this));
-        passes_.push_back(std::make_unique<MeshPass>(*this));
-        passes_.push_back(std::make_unique<PresentPass>(*this));
-        passes_.push_back(std::make_unique<OverlayPass>(*this));
+        passes_.push_back(std::make_unique<PointCloudPass>());
+        point_cloud_pass_ = static_cast<PointCloudPass*>(passes_.back().get());
+        passes_.push_back(std::make_unique<PresentPass>());
+        passes_.push_back(std::make_unique<MeshPass>());
+        passes_.push_back(std::make_unique<OverlayPass>());
         overlay_pass_ = static_cast<OverlayPass*>(passes_.back().get());
         setupEventHandlers();
     }
@@ -254,10 +256,6 @@ namespace lfs::vis {
     RenderingManager::~RenderingManager() {
         if (cached_render_texture_ > 0) {
             glDeleteTextures(1, &cached_render_texture_);
-        }
-        if (d_hovered_depth_id_ != nullptr) {
-            cudaFree(d_hovered_depth_id_);
-            d_hovered_depth_id_ = nullptr;
         }
     }
 
@@ -420,15 +418,15 @@ namespace lfs::vis {
         });
 
         state::SceneChanged::when([this](const auto&) {
-            cached_filtered_point_cloud_.reset();
-            cached_source_point_cloud_ = nullptr;
+            if (point_cloud_pass_)
+                point_cloud_pass_->resetCache();
             markDirty();
         });
 
         state::SceneCleared::when([this](const auto&) {
             cached_result_ = {};
-            cached_filtered_point_cloud_.reset();
-            cached_source_point_cloud_ = nullptr;
+            if (point_cloud_pass_)
+                point_cloud_pass_->resetCache();
             render_texture_valid_ = false;
             gt_texture_cache_.clear();
             if (engine_) {
@@ -795,7 +793,7 @@ namespace lfs::vis {
                 }
 
                 if (gt_context_ && !render_texture_valid_) {
-                    splat_raster_pass_->renderToTexture(context, scene_manager, model);
+                    dirty_mask_.fetch_or(DirtyFlag::SPLATS, std::memory_order_relaxed);
                 }
             }
         } else {
@@ -860,14 +858,47 @@ namespace lfs::vis {
 
         const DirtyMask frame_dirty = dirty_mask_.exchange(0);
 
+        SceneRenderState scene_state;
+        if (scene_manager) {
+            scene_state = scene_manager->buildRenderState();
+        }
+
         const FrameContext frame_ctx{
-            .ctx = context,
+            .viewport = context.viewport,
+            .viewport_region = context.viewport_region,
+            .has_focus = context.has_focus,
             .scene_manager = scene_manager,
             .model = model,
+            .scene_state = std::move(scene_state),
             .settings = settings_,
             .render_size = render_size,
             .viewport_pos = viewport_pos,
-            .frame_dirty = frame_dirty};
+            .frame_dirty = frame_dirty,
+            .brush = {.active = brush_active_,
+                      .x = brush_x_,
+                      .y = brush_y_,
+                      .radius = brush_radius_,
+                      .add_mode = brush_add_mode_,
+                      .selection_tensor = brush_selection_tensor_,
+                      .preview_selection = preview_selection_,
+                      .saturation_mode = brush_saturation_mode_,
+                      .saturation_amount = brush_saturation_amount_,
+                      .selection_mode = selection_mode_,
+                      .output_screen_positions = output_screen_positions_},
+            .gizmo = {.cropbox_active = cropbox_gizmo_active_,
+                      .cropbox_min = pending_cropbox_min_,
+                      .cropbox_max = pending_cropbox_max_,
+                      .cropbox_transform = pending_cropbox_transform_,
+                      .ellipsoid_active = ellipsoid_gizmo_active_,
+                      .ellipsoid_radii = pending_ellipsoid_radii_,
+                      .ellipsoid_transform = pending_ellipsoid_transform_},
+            .pick = {.requested = pick_requested_,
+                     .pos = pending_pick_pos_,
+                     .hovered_camera_id = hovered_camera_id_},
+            .current_camera_id = current_camera_id_,
+            .hovered_gaussian_id = hovered_gaussian_id_,
+            .selection_flash_intensity = getSelectionFlashIntensity(),
+            .cached_render_texture = cached_render_texture_};
 
         FrameResources resources{
             .cached_result = cached_result_,
@@ -877,8 +908,16 @@ namespace lfs::vis {
             .gt_context = gt_context_,
             .gt_context_camera_id = gt_context_camera_id_,
             .gt_texture_cache = &gt_texture_cache_,
-            .d_hovered_depth_id = d_hovered_depth_id_,
-            .cached_filtered_pc = &cached_filtered_point_cloud_};
+            .hovered_gaussian_id = hovered_gaussian_id_,
+            .hovered_camera_id = hovered_camera_id_,
+            .mark_dirty = [this](DirtyMask flags) { markDirty(flags); },
+            .set_pivot_animation = [this](auto end_time) { setPivotAnimationEndTime(end_time); }};
+
+        // GT comparison pre-render: ensure render texture is valid before SplitViewPass runs
+        if (frame_ctx.settings.split_view_mode == SplitViewMode::GTComparison &&
+            resources.gt_context && resources.gt_context->valid() && !resources.render_texture_valid) {
+            splat_raster_pass_->execute(*engine_, frame_ctx, resources);
+        }
 
         for (auto& pass : passes_) {
             if (pass->shouldExecute(frame_dirty, frame_ctx)) {
@@ -887,157 +926,23 @@ namespace lfs::vis {
             }
         }
 
-        // Clear split info if split view didn't execute
-        if (!resources.split_view_executed) {
-            std::lock_guard<std::mutex> lock(split_info_mutex_);
-            current_split_info_ = SplitViewInfo{};
-        }
-
+        // Write-back from FrameResources to manager state
         cached_result_ = resources.cached_result;
         cached_result_size_ = resources.cached_result_size;
         render_texture_valid_ = resources.render_texture_valid;
+        hovered_gaussian_id_ = resources.hovered_gaussian_id;
+        hovered_camera_id_ = resources.hovered_camera_id;
+        if (resources.pick_consumed)
+            pick_requested_ = false;
+
+        {
+            std::lock_guard<std::mutex> lock(split_info_mutex_);
+            current_split_info_ = resources.split_view_executed ? resources.split_info : SplitViewInfo{};
+        }
 
         if (count_frame) {
             framerate_controller_.endFrame();
         }
-    }
-
-    std::optional<lfs::rendering::SplitViewRequest>
-    RenderingManager::createSplitViewRequest(const RenderContext& context, SceneManager* scene_manager) {
-        if (settings_.split_view_mode == SplitViewMode::Disabled || !scene_manager) {
-            return std::nullopt;
-        }
-
-        // Get render size
-        glm::ivec2 render_size = context.viewport.windowSize;
-        if (context.viewport_region) {
-            render_size = glm::ivec2(
-                static_cast<int>(context.viewport_region->width),
-                static_cast<int>(context.viewport_region->height));
-        }
-
-        lfs::rendering::ViewportData viewport_data{
-            .rotation = context.viewport.getRotationMatrix(),
-            .translation = context.viewport.getTranslation(),
-            .size = render_size,
-            .focal_length_mm = settings_.focal_length_mm,
-            .orthographic = settings_.orthographic,
-            .ortho_scale = settings_.ortho_scale};
-
-        // Crop box from scene graph (single source of truth)
-        std::optional<lfs::rendering::BoundingBox> crop_box;
-        if (settings_.use_crop_box || settings_.show_crop_box) {
-            const auto& cropboxes = scene_manager->getScene().getVisibleCropBoxes();
-            if (!cropboxes.empty() && cropboxes[0].data) {
-                const auto& cb = cropboxes[0];
-                crop_box = lfs::rendering::BoundingBox{
-                    .min = cb.data->min,
-                    .max = cb.data->max,
-                    .transform = glm::inverse(cb.world_transform)};
-            }
-        }
-
-        if (settings_.split_view_mode == SplitViewMode::GTComparison) {
-            if (!gt_context_ || !gt_context_->valid() || !render_texture_valid_) {
-                return std::nullopt;
-            }
-
-            auto letterbox_viewport = viewport_data;
-            letterbox_viewport.size = render_size;
-
-            const auto disabled_uids = scene_manager->getScene().getTrainingDisabledCameraUids();
-            const bool cam_disabled = current_camera_id_ >= 0 && disabled_uids.count(current_camera_id_) > 0;
-            std::string gt_label = cam_disabled ? "Ground Truth (Excluded from Training)" : "Ground Truth";
-
-            return lfs::rendering::SplitViewRequest{
-                .panels = {{.content_type = lfs::rendering::PanelContentType::Image2D,
-                            .texture_id = gt_context_->gt_texture_id,
-                            .label = std::move(gt_label),
-                            .start_position = 0.0f,
-                            .end_position = settings_.split_position},
-                           {.content_type = lfs::rendering::PanelContentType::CachedRender,
-                            .texture_id = cached_render_texture_,
-                            .label = "Rendered",
-                            .start_position = settings_.split_position,
-                            .end_position = 1.0f}},
-                .viewport = letterbox_viewport,
-                .scaling_modifier = settings_.scaling_modifier,
-                .antialiasing = settings_.antialiasing,
-                .mip_filter = settings_.mip_filter,
-                .sh_degree = settings_.sh_degree,
-                .background_color = settings_.background_color,
-                .crop_box = crop_box,
-                .point_cloud_mode = settings_.point_cloud_mode,
-                .voxel_size = settings_.voxel_size,
-                .gut = settings_.gut,
-                .equirectangular = settings_.equirectangular,
-                .show_rings = settings_.show_rings,
-                .ring_width = settings_.ring_width,
-                .show_dividers = true,
-                .divider_color = glm::vec4(1.0f, 0.85f, 0.0f, 1.0f),
-                .show_labels = true,
-                .left_texcoord_scale = gt_context_->gt_texcoord_scale,
-                .right_texcoord_scale = gt_context_->render_texcoord_scale,
-                .flip_left_y = gt_context_->gt_needs_flip,
-                .letterbox = true,
-                .content_size = gt_context_->dimensions};
-        }
-
-        if (settings_.split_view_mode == SplitViewMode::PLYComparison) {
-            const auto& scene = scene_manager->getScene();
-            const auto visible_nodes = scene.getVisibleNodes();
-            if (visible_nodes.size() < 2) {
-                LOG_TRACE("PLY comparison needs at least 2 visible nodes, have {}", visible_nodes.size());
-                return std::nullopt;
-            }
-
-            // Calculate which pair to show
-            size_t left_idx = settings_.split_view_offset % visible_nodes.size();
-            size_t right_idx = (settings_.split_view_offset + 1) % visible_nodes.size();
-
-            LOG_TRACE("Creating PLY comparison split view: {} vs {}",
-                      visible_nodes[left_idx]->name, visible_nodes[right_idx]->name);
-
-            // PLY comparison uses exact viewport-sized framebuffers, so scale is 1.0
-            const glm::vec2 texcoord_scale(1.0f, 1.0f);
-
-            return lfs::rendering::SplitViewRequest{
-                .panels = {
-                    {.content_type = lfs::rendering::PanelContentType::Model3D,
-                     .model = visible_nodes[left_idx]->model.get(),
-                     .model_transform = scene.getWorldTransform(visible_nodes[left_idx]->id),
-                     .texture_id = 0,
-                     .label = visible_nodes[left_idx]->name,
-                     .start_position = 0.0f,
-                     .end_position = settings_.split_position},
-                    {.content_type = lfs::rendering::PanelContentType::Model3D,
-                     .model = visible_nodes[right_idx]->model.get(),
-                     .model_transform = scene.getWorldTransform(visible_nodes[right_idx]->id),
-                     .texture_id = 0,
-                     .label = visible_nodes[right_idx]->name,
-                     .start_position = settings_.split_position,
-                     .end_position = 1.0f}},
-                .viewport = viewport_data,
-                .scaling_modifier = settings_.scaling_modifier,
-                .antialiasing = settings_.antialiasing,
-                .mip_filter = settings_.mip_filter,
-                .sh_degree = settings_.sh_degree,
-                .background_color = settings_.background_color,
-                .crop_box = crop_box,
-                .point_cloud_mode = settings_.point_cloud_mode,
-                .voxel_size = settings_.voxel_size,
-                .gut = settings_.gut,
-                .equirectangular = settings_.equirectangular,
-                .show_rings = settings_.show_rings,
-                .ring_width = settings_.ring_width,
-                .show_dividers = true,
-                .divider_color = glm::vec4(1.0f, 0.85f, 0.0f, 1.0f),
-                .show_labels = true,
-                .left_texcoord_scale = texcoord_scale,
-                .right_texcoord_scale = texcoord_scale};
-        }
-
-        return std::nullopt;
     }
 
     float RenderingManager::getDepthAtPixel(int x, int y) const {
