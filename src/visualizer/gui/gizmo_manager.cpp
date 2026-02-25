@@ -926,7 +926,7 @@ namespace lfs::vis::gui {
                 gizmo_ops::applyTranslation(gizmo_context_, scene, new_pivot_world);
             }
 
-            render_manager->markDirty();
+            render_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
         }
 
         if (!is_using && cropbox_gizmo_active_) {
@@ -1095,7 +1095,7 @@ namespace lfs::vis::gui {
                 gizmo_ops::applyTranslation(gizmo_context_, scene, new_pivot_world);
             }
 
-            render_manager->markDirty();
+            render_manager->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
         }
 
         if (!is_using && ellipsoid_gizmo_active_) {
@@ -1226,7 +1226,7 @@ namespace lfs::vis::gui {
                         .opacity = settings.grid_opacity}
                         .emit();
 
-                    rendering_manager->markDirty();
+                    rendering_manager->markDirty(DirtyFlag::CAMERA);
                 } else {
                     viewport_gizmo_dragging_ = true;
                     vp.camera.startRotateAroundCenter(capture_mouse_pos, time);
@@ -1242,7 +1242,7 @@ namespace lfs::vis::gui {
             if (viewport_gizmo_dragging_) {
                 if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                     vp.camera.updateRotateAroundCenter(capture_mouse_pos, time);
-                    rendering_manager->markDirty();
+                    rendering_manager->markDirty(DirtyFlag::CAMERA);
                 } else {
                     vp.camera.endRotateAroundCenter();
                     viewport_gizmo_dragging_ = false;
@@ -1314,7 +1314,7 @@ namespace lfs::vis::gui {
             node->cropbox->flash_intensity = 1.0f - static_cast<float>(elapsed_ms) / DURATION_MS;
         }
         sm->getScene().invalidateCache();
-        rm->markDirty();
+        rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
     }
 
     void GizmoManager::deactivateAllTools() {

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "dirty_flags.hpp"
 #include "framerate_controller.hpp"
 #include "internal/viewport.hpp"
 #include "io/nvcodec_image_loader.hpp"
@@ -17,9 +18,13 @@
 #include <mutex>
 #include <optional>
 #include <unordered_map>
+#include <vector>
 
 namespace lfs::vis {
+    class RenderPass;
     class SceneManager;
+    class SplatRasterPass;
+    class OverlayPass;
 } // namespace lfs::vis
 
 namespace lfs::vis {
@@ -254,28 +259,30 @@ namespace lfs::vis {
                                 int width, int height);
 
         void markDirty();
+        void markDirty(DirtyMask flags);
 
         [[nodiscard]] bool needsRender() const {
             if (pivot_animation_active_.load() &&
                 std::chrono::steady_clock::now() < pivot_animation_end_time_) {
+                dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
                 return true;
             }
             pivot_animation_active_.store(false);
 
-            // Selection flash: continuous rendering while active
             if (selection_flash_active_.load()) {
                 const auto elapsed = std::chrono::steady_clock::now() - selection_flash_start_time_;
                 if (std::chrono::duration<float>(elapsed).count() < SELECTION_FLASH_DURATION_SEC) {
-                    needs_render_.store(true);
-                    mesh_dirty_.store(true);
+                    dirty_mask_.fetch_or(DirtyFlag::SPLATS | DirtyFlag::MESH, std::memory_order_relaxed);
                     return true;
                 }
                 selection_flash_active_.store(false);
             }
 
-            if (overlay_animation_active_.load())
+            if (overlay_animation_active_.load()) {
+                dirty_mask_.fetch_or(DirtyFlag::OVERLAY, std::memory_order_relaxed);
                 return true;
-            return needs_render_.load();
+            }
+            return dirty_mask_.load(std::memory_order_relaxed) != 0;
         }
 
         void setPivotAnimationEndTime(const std::chrono::steady_clock::time_point end_time) {
@@ -286,7 +293,7 @@ namespace lfs::vis {
         void triggerSelectionFlash() {
             selection_flash_start_time_ = std::chrono::steady_clock::now();
             selection_flash_active_.store(true);
-            markDirty();
+            markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH);
         }
 
         void setOverlayAnimationActive(const bool active) { overlay_animation_active_.store(active); }
@@ -328,7 +335,7 @@ namespace lfs::vis {
         // Current camera tracking for GT comparison
         void setCurrentCameraId(int cam_id) {
             current_camera_id_ = cam_id;
-            markDirty();
+            markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::PPISP);
         }
         int getCurrentCameraId() const { return current_camera_id_; }
 
@@ -403,11 +410,11 @@ namespace lfs::vis {
         void setPreviewSelection(lfs::core::Tensor* preview, bool add_mode = true) {
             preview_selection_ = preview;
             brush_add_mode_ = add_mode;
-            markDirty();
+            markDirty(DirtyFlag::SELECTION);
         }
         void clearPreviewSelection() {
             preview_selection_ = nullptr;
-            markDirty();
+            markDirty(DirtyFlag::SELECTION);
         }
 
         // Selection mode for brush tool
@@ -442,10 +449,15 @@ namespace lfs::vis {
         void setEllipsoidGizmoActive(bool active) { ellipsoid_gizmo_active_ = active; }
 
     private:
+        friend class OverlayPass;
+        friend class SplatRasterPass;
+        friend class MeshPass;
+        friend class PresentPass;
+        friend class PointCloudPass;
+        friend class SplitViewPass;
+
         void doFullRender(const RenderContext& context, SceneManager* scene_manager, const lfs::core::SplatData* model);
-        void renderOverlays(const RenderContext& context);
         void setupEventHandlers();
-        void renderToTexture(const RenderContext& context, SceneManager* scene_manager, const lfs::core::SplatData* model);
 
         std::optional<lfs::rendering::SplitViewRequest> createSplitViewRequest(
             const RenderContext& context,
@@ -453,6 +465,9 @@ namespace lfs::vis {
 
         // Core components
         std::unique_ptr<lfs::rendering::RenderingEngine> engine_;
+        std::vector<std::unique_ptr<RenderPass>> passes_;
+        SplatRasterPass* splat_raster_pass_ = nullptr;
+        OverlayPass* overlay_pass_ = nullptr;
         FramerateController framerate_controller_;
 
         // GT texture cache
@@ -462,8 +477,9 @@ namespace lfs::vis {
         unsigned int cached_render_texture_ = 0;
         bool render_texture_valid_ = false;
 
-        // State tracking
-        mutable std::atomic<bool> needs_render_{true};
+        // Granular dirty tracking
+        mutable std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};
+
         mutable std::atomic<bool> pivot_animation_active_{false};
         std::chrono::steady_clock::time_point pivot_animation_end_time_;
         lfs::rendering::RenderResult cached_result_;
@@ -552,8 +568,6 @@ namespace lfs::vis {
 
         std::optional<GTComparisonContext> gt_context_;
         int gt_context_camera_id_ = -1;
-
-        mutable std::atomic<bool> mesh_dirty_{false};
 
         // Gizmo state for wireframe sync
         bool cropbox_gizmo_active_ = false;

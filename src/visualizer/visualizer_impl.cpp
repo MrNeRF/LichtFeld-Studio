@@ -705,7 +705,7 @@ namespace lfs::vis {
                 viewport_.camera.setPivot(target);
 
                 if (rendering_manager_)
-                    rendering_manager_->markDirty();
+                    rendering_manager_->markDirty(DirtyFlag::CAMERA);
             });
 
             vis::set_set_fov_callback([this](float fov_degrees) {
@@ -971,7 +971,7 @@ namespace lfs::vis {
         if (python::has_frame_callback()) {
             python::tick_frame_callback(delta_time);
             if (rendering_manager_) {
-                rendering_manager_->markDirty();
+                rendering_manager_->markDirty(DirtyFlag::ALL);
             }
         }
 
@@ -1109,14 +1109,14 @@ namespace lfs::vis {
     void VisualizerImpl::undo() {
         op::undoHistory().undo();
         if (rendering_manager_) {
-            rendering_manager_->markDirty();
+            rendering_manager_->markDirty(DirtyFlag::ALL);
         }
     }
 
     void VisualizerImpl::redo() {
         op::undoHistory().redo();
         if (rendering_manager_) {
-            rendering_manager_->markDirty();
+            rendering_manager_->markDirty(DirtyFlag::ALL);
         }
     }
 
@@ -1256,7 +1256,7 @@ namespace lfs::vis {
         auto result = python::invoke_capability(name, args);
 
         if (result.success && rendering_manager_) {
-            rendering_manager_->markDirty();
+            rendering_manager_->markDirty(DirtyFlag::ALL);
         }
 
         return {result.success, result.result_json, result.error};

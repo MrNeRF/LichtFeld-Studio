@@ -87,7 +87,7 @@ namespace lfs::vis::tools {
                 rm->setOutputScreenPositions(enabled);
                 rm->clearBrushState();
                 rm->clearPreviewSelection();
-                rm->markDirty();
+                rm->markDirty(DirtyFlag::SELECTION);
             }
         }
     }
@@ -104,7 +104,7 @@ namespace lfs::vis::tools {
         if (tool_context_) {
             if (auto* const rm = tool_context_->getRenderingManager()) {
                 rm->clearPreviewSelection();
-                rm->markDirty();
+                rm->markDirty(DirtyFlag::SELECTION);
             }
         }
         resetPolygon();

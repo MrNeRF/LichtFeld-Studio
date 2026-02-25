@@ -107,7 +107,7 @@ namespace lfs::vis::gui {
         if (auto* const rm = viewer_->getRenderingManager()) {
             rm->setOverlayAnimationActive(is_playing);
             if (is_playing && ui_state_.follow_playback) {
-                rm->markDirty();
+                rm->markDirty(DirtyFlag::CAMERA);
                 const auto state = controller_.currentCameraState();
                 auto& vp = viewer_->getViewport();
                 vp.camera.R = glm::mat3_cast(state.rotation);

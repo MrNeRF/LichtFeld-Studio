@@ -100,7 +100,7 @@ namespace lfs::vis::gui {
 
             if (auto* rm = viewer_->getRenderingManager()) {
                 rm->setFocalLength(kf->focal_length_mm);
-                rm->markDirty();
+                rm->markDirty(DirtyFlag::CAMERA);
             }
 
             emitNodeSelectedForKeyframe(e.keyframe_index);

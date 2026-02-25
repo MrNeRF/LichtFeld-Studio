@@ -67,7 +67,7 @@ namespace lfs::vis::tools {
             if (rm) {
                 rm->setOutputScreenPositions(enabled);
                 if (enabled)
-                    rm->markDirty();
+                    rm->markDirty(DirtyFlag::SELECTION);
             }
         }
     }

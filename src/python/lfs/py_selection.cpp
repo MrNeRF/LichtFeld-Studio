@@ -284,7 +284,7 @@ namespace lfs::python {
             "set_output_screen_positions", [](bool enable) {
                 if (auto* rm = get_rm()) {
                     rm->setOutputScreenPositions(enable);
-                    rm->markDirty();
+                    rm->markDirty(vis::DirtyFlag::SELECTION);
                 }
             },
             nb::arg("enable"), "Enable/disable screen positions output during rendering");
@@ -513,7 +513,7 @@ namespace lfs::python {
                     current = core::cuda::selection_grow(current, model->means(), radius, group_id);
                 scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(current)));
                 if (auto* rm = get_rm())
-                    rm->markDirty();
+                    rm->markDirty(vis::DirtyFlag::SELECTION);
             },
             nb::arg("radius"), nb::arg("iterations") = 1, "Grow selection by radius (scene units). Uses spatial hashing, O(N).");
 
@@ -534,7 +534,7 @@ namespace lfs::python {
                     current = core::cuda::selection_shrink(current, model->means(), radius);
                 scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(current)));
                 if (auto* rm = get_rm())
-                    rm->markDirty();
+                    rm->markDirty(vis::DirtyFlag::SELECTION);
             },
             nb::arg("radius"), nb::arg("iterations") = 1, "Shrink selection by radius (scene units). Uses spatial hashing, O(N).");
 
@@ -551,7 +551,7 @@ namespace lfs::python {
                 auto mask = core::cuda::select_by_opacity(model->opacity_raw(), min_opacity, max_opacity, group_id);
                 scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(mask)));
                 if (auto* rm = get_rm())
-                    rm->markDirty();
+                    rm->markDirty(vis::DirtyFlag::SELECTION);
             },
             nb::arg("min_opacity") = 0.0f, nb::arg("max_opacity") = 1.0f, "Select gaussians by activated opacity range [min, max].");
 
@@ -568,7 +568,7 @@ namespace lfs::python {
                 auto mask = core::cuda::select_by_scale(model->scaling_raw(), max_scale, group_id);
                 scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(mask)));
                 if (auto* rm = get_rm())
-                    rm->markDirty();
+                    rm->markDirty(vis::DirtyFlag::SELECTION);
             },
             nb::arg("max_scale"), "Select gaussians with max activated scale <= threshold.");
 
