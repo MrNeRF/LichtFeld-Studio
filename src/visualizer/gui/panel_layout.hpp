@@ -41,9 +41,19 @@ namespace lfs::vis::gui {
 
         float getRightPanelWidth() const { return right_panel_width_; }
         float getScenePanelRatio() const { return scene_panel_ratio_; }
+        void setScenePanelRatio(float r) { scene_panel_ratio_ = std::clamp(r, 0.15f, 0.85f); }
+        void adjustScenePanelRatio(float delta_y);
         float getPythonConsoleWidth() const { return python_console_width_; }
         bool isShowSequencer() const { return show_sequencer_; }
         void setShowSequencer(bool v) { show_sequencer_ = v; }
+
+        const std::string& getActiveTab() const { return active_tab_idname_; }
+        void setActiveTab(const std::string& idname) { active_tab_idname_ = idname; }
+
+        static constexpr float SPLITTER_H = 6.0f;
+        static constexpr float TAB_BAR_H = 28.0f;
+        static constexpr float STATUS_BAR_HEIGHT = 22.0f;
+        static constexpr float PANEL_GAP = 2.0f;
 
     private:
         void renderDockedPythonConsole(const UIContext& ctx, float panel_x, float panel_h);
@@ -58,13 +68,12 @@ namespace lfs::vis::gui {
         bool python_console_hovering_edge_ = false;
 
         bool show_sequencer_ = false;
+        std::string active_tab_idname_;
 
         static constexpr float RIGHT_PANEL_MIN_RATIO = 0.01f;
         static constexpr float RIGHT_PANEL_MAX_RATIO = 0.99f;
         static constexpr float PYTHON_CONSOLE_MIN_WIDTH = 200.0f;
         static constexpr float PYTHON_CONSOLE_MAX_RATIO = 0.5f;
-        static constexpr float STATUS_BAR_HEIGHT = 22.0f;
-        static constexpr float PANEL_GAP = 2.0f;
     };
 
 } // namespace lfs::vis::gui

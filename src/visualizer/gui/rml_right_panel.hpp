@@ -1,0 +1,75 @@
+/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#pragma once
+
+#include "gui/rmlui/rml_fbo.hpp"
+#include <functional>
+#include <string>
+#include <vector>
+#include <imgui.h>
+
+namespace Rml {
+    class Context;
+    class ElementDocument;
+    class Element;
+} // namespace Rml
+
+namespace lfs::vis::gui {
+
+    class RmlUIManager;
+
+    struct TabSnapshot {
+        std::string idname;
+        std::string label;
+    };
+
+    struct RightPanelLayout {
+        ImVec2 pos{0, 0};
+        ImVec2 size{0, 0};
+        float scene_h = 0;
+        float splitter_h = 6.0f;
+    };
+
+    class RmlRightPanel {
+    public:
+        void init(RmlUIManager* mgr);
+        void shutdown();
+
+        void processInput(const RightPanelLayout& layout);
+        void render(const RightPanelLayout& layout,
+                    const std::vector<TabSnapshot>& tabs,
+                    const std::string& active_tab);
+
+        bool wantsInput() const { return wants_input_; }
+
+        std::function<void(const std::string&)> on_tab_changed;
+        std::function<void(float)> on_splitter_delta;
+
+    private:
+        void updateTheme();
+        std::string generateThemeRCSS() const;
+        void rebuildTabs(const std::vector<TabSnapshot>& tabs, const std::string& active_tab);
+
+        RmlUIManager* rml_manager_ = nullptr;
+        Rml::Context* rml_context_ = nullptr;
+        Rml::ElementDocument* document_ = nullptr;
+
+        Rml::Element* splitter_el_ = nullptr;
+        Rml::Element* tab_bar_el_ = nullptr;
+
+        RmlFBO fbo_;
+
+        std::string last_theme_;
+        std::string base_rcss_;
+        bool wants_input_ = false;
+
+        std::vector<TabSnapshot> last_tabs_;
+        std::string last_active_tab_;
+
+        bool splitter_dragging_ = false;
+        float drag_start_y_ = 0;
+    };
+
+} // namespace lfs::vis::gui

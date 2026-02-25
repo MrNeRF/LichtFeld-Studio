@@ -440,6 +440,13 @@ namespace lfs::vis::gui {
 
         startup_overlay_.init(&rmlui_manager_);
         rml_shell_frame_.init(&rmlui_manager_);
+        rml_right_panel_.init(&rmlui_manager_);
+        rml_right_panel_.on_tab_changed = [this](const std::string& idname) {
+            panel_layout_.setActiveTab(idname);
+        };
+        rml_right_panel_.on_splitter_delta = [this](float delta_y) {
+            panel_layout_.adjustScenePanelRatio(delta_y);
+        };
         rml_viewport_overlay_.init(&rmlui_manager_);
         rml_menu_bar_.init(&rmlui_manager_);
         rml_status_bar_.init(&rmlui_manager_);
@@ -487,6 +494,7 @@ namespace lfs::vis::gui {
         rml_status_bar_.shutdown();
         rml_menu_bar_.shutdown();
         rml_viewport_overlay_.shutdown();
+        rml_right_panel_.shutdown();
         rml_shell_frame_.shutdown();
         startup_overlay_.shutdown();
         rmlui_manager_.shutdown();
@@ -726,6 +734,34 @@ namespace lfs::vis::gui {
             draw_ctx.is_training = cc->snapshot().is_running;
 
         auto& reg = PanelRegistry::instance();
+
+        if (show_main_panel_ && !ui_hidden_) {
+            const auto* mvp2 = ImGui::GetMainViewport();
+            constexpr float SBH = PanelLayoutManager::STATUS_BAR_HEIGHT;
+            const float rpw = panel_layout_.getRightPanelWidth();
+            const float ph = mvp2->WorkSize.y - SBH;
+            const float dpi = python::get_shared_dpi_scale();
+            const float splitter_h = PanelLayoutManager::SPLITTER_H * dpi;
+            const float avail_h = ph - 16.0f;
+            const float scene_h = std::max(80.0f * dpi,
+                                           avail_h * panel_layout_.getScenePanelRatio() - splitter_h * 0.5f);
+
+            RightPanelLayout rp_layout;
+            rp_layout.pos = {mvp2->WorkPos.x + mvp2->WorkSize.x - rpw, mvp2->WorkPos.y};
+            rp_layout.size = {rpw, ph};
+            rp_layout.scene_h = scene_h + 8.0f;
+            rp_layout.splitter_h = splitter_h;
+
+            rml_right_panel_.processInput(rp_layout);
+
+            const auto main_tabs = reg.get_panels_for_space(PanelSpace::MainPanelTab);
+            std::vector<TabSnapshot> tab_snaps;
+            tab_snaps.reserve(main_tabs.size());
+            for (const auto& t : main_tabs)
+                tab_snaps.push_back({t.idname, t.label});
+
+            rml_right_panel_.render(rp_layout, tab_snaps, panel_layout_.getActiveTab());
+        }
 
         panel_layout_.renderRightPanel(ctx, draw_ctx, show_main_panel_, ui_hidden_, window_states_, focus_panel_name_);
 

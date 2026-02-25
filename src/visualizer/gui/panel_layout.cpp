@@ -7,6 +7,7 @@
 #include "python/python_runtime.hpp"
 #include "theme/theme.hpp"
 #include "visualizer_impl.hpp"
+#include <algorithm>
 #include <imgui.h>
 
 namespace lfs::vis::gui {
@@ -106,9 +107,9 @@ namespace lfs::vis::gui {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, {0, 0, 0, 0});
             const float avail_h = ImGui::GetContentRegionAvail().y;
             const float dpi = lfs::python::get_shared_dpi_scale();
-            constexpr float SPLITTER_H = 6.0f;
             constexpr float MIN_H = 80.0f;
             const float splitter_h = SPLITTER_H * dpi;
+            const float tab_bar_h = TAB_BAR_H * dpi;
             const float min_h = MIN_H * dpi;
 
             const float scene_h = std::max(min_h, avail_h * scene_panel_ratio_ - splitter_h * 0.5f);
@@ -117,46 +118,45 @@ namespace lfs::vis::gui {
             }
             ImGui::EndChild();
 
-            ImGui::PushStyleColor(ImGuiCol_Button, withAlpha(t.palette.border, 0.4f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonHovered, withAlpha(t.palette.info, 0.6f));
-            ImGui::PushStyleColor(ImGuiCol_ButtonActive, withAlpha(t.palette.info, 0.8f));
-            ImGui::Button("##SceneSplitter", {-1, splitter_h});
-            if (ImGui::IsItemActive()) {
-                scene_panel_ratio_ = std::clamp(scene_panel_ratio_ + ImGui::GetIO().MouseDelta.y / avail_h, 0.15f, 0.85f);
-            }
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-            }
-            ImGui::PopStyleColor(3);
+            ImGui::Dummy({0, splitter_h + tab_bar_h});
 
             auto& reg = PanelRegistry::instance();
             const auto main_tabs = reg.get_panels_for_space(PanelSpace::MainPanelTab);
-            if (ImGui::BeginTabBar("##MainPanelTabs")) {
+
+            if (!focus_panel_name.empty()) {
                 for (const auto& tab : main_tabs) {
-                    ImGuiTabItemFlags flags = ImGuiTabItemFlags_None;
                     if (focus_panel_name == tab.label || focus_panel_name == tab.idname) {
-                        flags = ImGuiTabItemFlags_SetSelected;
+                        active_tab_idname_ = tab.idname;
                         focus_panel_name.clear();
-                    }
-                    const std::string tab_label = tab.label + "##" + tab.idname;
-                    if (ImGui::BeginTabItem(tab_label.c_str(), nullptr, flags)) {
-                        const std::string child_id = "##" + tab.idname + "Panel";
-                        if (ImGui::BeginChild(child_id.c_str(), {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
-                            reg.draw_single_panel(tab.idname, draw_ctx);
-                            reg.draw_child_panels(tab.idname, draw_ctx);
-                            reg.draw_panels(PanelSpace::SidePanel, draw_ctx);
-                        }
-                        ImGui::EndChild();
-                        ImGui::EndTabItem();
+                        break;
                     }
                 }
-                ImGui::EndTabBar();
             }
+
+            if (active_tab_idname_.empty() && !main_tabs.empty())
+                active_tab_idname_ = main_tabs[0].idname;
+
+            const std::string child_id = "##" + active_tab_idname_ + "Panel";
+            if (ImGui::BeginChild(child_id.c_str(), {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
+                reg.draw_single_panel(active_tab_idname_, draw_ctx);
+                reg.draw_child_panels(active_tab_idname_, draw_ctx);
+                reg.draw_panels(PanelSpace::SidePanel, draw_ctx);
+            }
+            ImGui::EndChild();
             ImGui::PopStyleColor();
         }
         ImGui::End();
         ImGui::PopStyleVar();
         ImGui::PopStyleColor();
+    }
+
+    void PanelLayoutManager::adjustScenePanelRatio(float delta_y) {
+        const auto* const vp = ImGui::GetMainViewport();
+        const float panel_h = vp->WorkSize.y - STATUS_BAR_HEIGHT;
+        const float padding = 16.0f;
+        const float avail_h = panel_h - padding;
+        if (avail_h > 0)
+            scene_panel_ratio_ = std::clamp(scene_panel_ratio_ + delta_y / avail_h, 0.15f, 0.85f);
     }
 
     ViewportLayout PanelLayoutManager::computeViewportLayout(bool show_main_panel, bool ui_hidden,
