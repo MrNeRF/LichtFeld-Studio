@@ -541,6 +541,8 @@ namespace lfs::python {
         void (*draw)(void* host, const void* draw_ctx);
         void* (*get_document)(void* host);
         bool (*is_loaded)(void* host);
+        void (*set_height_mode)(void* host, int mode);
+        float (*get_content_height)(void* host);
     };
 
     LFS_PYTHON_RUNTIME_API void set_rml_panel_host_ops(const RmlPanelHostOps& ops);

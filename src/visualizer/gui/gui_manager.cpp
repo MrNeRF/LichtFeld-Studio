@@ -451,6 +451,13 @@ namespace lfs::vis::gui {
         ops.is_loaded = [](void* host) -> bool {
             return static_cast<RmlPanelHost*>(host)->isDocumentLoaded();
         };
+        ops.set_height_mode = [](void* host, int mode) {
+            static_cast<RmlPanelHost*>(host)->setHeightMode(
+                static_cast<HeightMode>(mode));
+        };
+        ops.get_content_height = [](void* host) -> float {
+            return static_cast<RmlPanelHost*>(host)->getContentHeight();
+        };
         lfs::python::set_rml_panel_host_ops(ops);
 
         registerNativePanels();

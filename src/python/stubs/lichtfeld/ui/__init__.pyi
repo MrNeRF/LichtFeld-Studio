@@ -767,6 +767,9 @@ class UILayout:
     def color_edit4(self, label: str, color: tuple[float, float, float, float]) -> tuple[bool, tuple[float, float, float, float]]:
         """Draw an RGBA color editor, returns (changed, color)"""
 
+    def color_picker3(self, label: str, color: tuple[float, float, float]) -> tuple[bool, tuple[float, float, float]]:
+        """Draw a full RGB color picker widget, returns (changed, color)"""
+
     def color_button(self, label: str, color: object, size: tuple[float, float] = (0.0, 0.0)) -> bool:
         """Draw a color swatch button, returns True if clicked"""
 
@@ -904,6 +907,9 @@ class UILayout:
 
     def get_cursor_screen_pos(self) -> tuple[float, float]:
         """Get cursor position in screen coordinates as (x, y)"""
+
+    def get_mouse_pos(self) -> tuple[float, float]:
+        """Get mouse position in screen coordinates as (x, y)"""
 
     def get_window_pos(self) -> tuple[float, float]:
         """Get window position in screen coordinates as (x, y)"""

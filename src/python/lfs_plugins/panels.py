@@ -12,7 +12,7 @@ def register_builtin_panels():
 
         # Main panel tabs (Rendering must be first)
         from .rendering_panel import RenderingPanel
-        lf.register_class(RenderingPanel)
+        lf.ui.register_rml_panel(RenderingPanel)
 
         from .training_panel import TrainingPanel
         lf.register_class(TrainingPanel)

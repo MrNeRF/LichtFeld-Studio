@@ -193,6 +193,7 @@ namespace lfs::python {
         PanelSpace space = PanelSpace::SceneHeader;
         int order = 0;
         std::string rml_template;
+        int height_mode = 0;
 
         try {
             idname = nb::hasattr(panel_class, "idname")
@@ -209,6 +210,11 @@ namespace lfs::python {
                 order = nb::cast<int>(panel_class.attr("order"));
             if (nb::hasattr(panel_class, "rml_template"))
                 rml_template = nb::cast<std::string>(panel_class.attr("rml_template"));
+            if (nb::hasattr(panel_class, "rml_height_mode")) {
+                std::string mode_str = nb::cast<std::string>(panel_class.attr("rml_height_mode"));
+                if (mode_str == "content")
+                    height_mode = 1;
+            }
         } catch (const std::exception& e) {
             LOG_ERROR("register_rml_panel: failed to extract attributes: {}", e.what());
             return;
@@ -228,7 +234,7 @@ namespace lfs::python {
         }
 
         auto adapter = std::make_shared<gui::RmlPythonPanelAdapter>(
-            rml_manager, std::move(instance), idname, rml_template);
+            rml_manager, std::move(instance), idname, rml_template, height_mode);
 
         gui::PanelInfo info;
         info.panel = adapter;

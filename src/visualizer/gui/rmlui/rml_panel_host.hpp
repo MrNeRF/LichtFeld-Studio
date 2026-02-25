@@ -21,6 +21,9 @@ namespace lfs::vis::gui {
 
     class RmlUIManager;
 
+    enum class HeightMode { Fill,
+                            Content };
+
     class LFS_VIS_API RmlPanelHost {
     public:
         RmlPanelHost(RmlUIManager* manager, std::string context_name, std::string rml_path);
@@ -30,6 +33,10 @@ namespace lfs::vis::gui {
         RmlPanelHost& operator=(const RmlPanelHost&) = delete;
 
         void draw(const PanelDrawContext& ctx);
+
+        void setHeightMode(HeightMode mode) { height_mode_ = mode; }
+        HeightMode getHeightMode() const { return height_mode_; }
+        float getContentHeight() const { return last_content_height_; }
 
         Rml::ElementDocument* getDocument() { return document_; }
         Rml::Context* getContext() { return rml_context_; }
@@ -50,6 +57,9 @@ namespace lfs::vis::gui {
         std::string rml_path_;
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
+
+        HeightMode height_mode_ = HeightMode::Fill;
+        float last_content_height_ = 0.0f;
 
         std::string base_rcss_;
         ImVec4 last_synced_text_{};

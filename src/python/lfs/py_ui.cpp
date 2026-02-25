@@ -2140,6 +2140,15 @@ namespace lfs::python {
         return {changed, {c[0], c[1], c[2], c[3]}};
     }
 
+    std::tuple<bool, std::tuple<float, float, float>> PyUILayout::color_picker3(
+        const std::string& label, std::tuple<float, float, float> color) {
+        float c[3] = {std::get<0>(color), std::get<1>(color), std::get<2>(color)};
+        bool changed = ImGui::ColorPicker3(label.c_str(), c,
+                                           ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_DisplayHex |
+                                               ImGuiColorEditFlags_InputRGB | ImGuiColorEditFlags_PickerHueBar);
+        return {changed, {c[0], c[1], c[2]}};
+    }
+
     bool PyUILayout::color_button(const std::string& label, nb::object color,
                                   std::tuple<float, float> size) {
         return ImGui::ColorButton(label.c_str(), tuple_to_imvec4(color), 0,
@@ -2414,6 +2423,11 @@ namespace lfs::python {
 
     std::tuple<float, float> PyUILayout::get_cursor_screen_pos() const {
         const ImVec2 pos = ImGui::GetCursorScreenPos();
+        return {pos.x, pos.y};
+    }
+
+    std::tuple<float, float> PyUILayout::get_mouse_pos() const {
+        const ImVec2 pos = ImGui::GetIO().MousePos;
         return {pos.x, pos.y};
     }
 
@@ -3284,6 +3298,7 @@ namespace lfs::python {
             // Color
             .def("color_edit3", &PyUILayout::color_edit3, nb::arg("label"), nb::arg("color"), "Draw an RGB color editor, returns (changed, color)")
             .def("color_edit4", &PyUILayout::color_edit4, nb::arg("label"), nb::arg("color"), "Draw an RGBA color editor, returns (changed, color)")
+            .def("color_picker3", &PyUILayout::color_picker3, nb::arg("label"), nb::arg("color"), "Draw a full RGB color picker widget, returns (changed, color)")
             .def("color_button", &PyUILayout::color_button, nb::arg("label"), nb::arg("color"),
                  nb::arg("size") = std::make_tuple(0.0f, 0.0f), "Draw a color swatch button, returns True if clicked")
             // Selection
@@ -3349,6 +3364,7 @@ namespace lfs::python {
             .def("set_scroll_here_y", &PyUILayout::set_scroll_here_y, nb::arg("center_y_ratio") = 0.5f, "Scroll to current cursor Y position")
             // ImDrawList for custom row backgrounds
             .def("get_cursor_screen_pos", &PyUILayout::get_cursor_screen_pos, "Get cursor position in screen coordinates as (x, y)")
+            .def("get_mouse_pos", &PyUILayout::get_mouse_pos, "Get mouse position in screen coordinates as (x, y)")
             .def("get_window_pos", &PyUILayout::get_window_pos, "Get window position in screen coordinates as (x, y)")
             .def("get_window_width", &PyUILayout::get_window_width, "Get current window width in pixels")
             .def("get_text_line_height", &PyUILayout::get_text_line_height, "Get height of a single text line in pixels")

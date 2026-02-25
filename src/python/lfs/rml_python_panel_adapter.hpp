@@ -17,7 +17,8 @@ namespace lfs::vis::gui {
     class RmlPythonPanelAdapter : public IPanel {
     public:
         RmlPythonPanelAdapter(void* manager, nb::object panel_instance,
-                              const std::string& context_name, const std::string& rml_path);
+                              const std::string& context_name, const std::string& rml_path,
+                              int height_mode = 0);
         ~RmlPythonPanelAdapter() override;
 
         void draw(const PanelDrawContext& ctx) override;
@@ -29,6 +30,9 @@ namespace lfs::vis::gui {
         std::string rml_path_;
         nb::object panel_instance_;
         bool loaded_ = false;
+        bool has_draw_imgui_ = false;
+        bool draw_imgui_checked_ = false;
+        int height_mode_ = 0;
         uint64_t last_scene_gen_ = 0;
     };
 

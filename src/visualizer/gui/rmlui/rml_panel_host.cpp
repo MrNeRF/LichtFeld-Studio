@@ -19,6 +19,7 @@
 #include <RmlUi/Core/Input.h>
 #include <SDL3/SDL_keyboard.h>
 #include <cassert>
+#include <cmath>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -244,7 +245,21 @@ namespace lfs::vis::gui {
             ".section-header {{ color: {0}; }}\n"
             ".section-header:hover {{ background-color: {3}; }}\n"
             ".empty-message {{ color: {1}; }}\n"
-            ".row-icon {{ image-color: {0}; }}\n",
+            ".row-icon {{ image-color: {0}; }}\n"
+            ".setting-label {{ color: {0}; }}\n"
+            ".slider-value {{ color: {1}; }}\n"
+            ".text-disabled {{ color: {1}; }}\n"
+            ".section-arrow {{ color: {1}; }}\n"
+            ".separator {{ background-color: {5}; }}\n"
+            ".color-swatch {{ border-color: {5}; }}\n"
+            ".color-hex {{ color: {0}; background-color: {2}; border-color: {5}; }}\n"
+            ".color-hex:focus {{ border-color: {4}; }}\n"
+            "select {{ color: {0}; background-color: {2}; border-color: {5}; }}\n"
+            "select:hover {{ border-color: {4}; }}\n"
+            "selectbox {{ background-color: {2}; border-color: {5}; }}\n"
+            "selectbox option:hover {{ background-color: {4}; }}\n"
+            "input[type=\"range\"] slidertrack {{ background-color: {2}; border-color: {5}; }}\n"
+            "input[type=\"range\"] sliderbar {{ background-color: {4}; }}\n",
             text, text_dim, surface, surface_bright, primary, border, row_even, row_odd);
     }
 
@@ -289,10 +304,9 @@ namespace lfs::vis::gui {
 
         const float dp_ratio = manager_->getDpRatio();
         const int w = static_cast<int>(avail_w * dp_ratio);
-        const int h = static_cast<int>(avail_h * dp_ratio);
 
         if (!rml_context_) {
-            rml_context_ = manager_->createContext(context_name_, w, h);
+            rml_context_ = manager_->createContext(context_name_, w, 100);
             if (!rml_context_)
                 return;
 
@@ -311,6 +325,23 @@ namespace lfs::vis::gui {
             return;
 
         syncThemeProperties();
+
+        int h;
+        float display_h;
+        if (height_mode_ == HeightMode::Content) {
+            const int layout_h = static_cast<int>(10000.0f * dp_ratio);
+            rml_context_->SetDimensions(Rml::Vector2i(w, layout_h));
+            rml_context_->Update();
+
+            auto* wrap = document_->GetElementById("content-wrap");
+            const float content_h = wrap ? wrap->GetOffsetHeight() : 100.0f;
+            h = std::max(1, static_cast<int>(std::ceil(content_h)));
+            display_h = static_cast<float>(h) / dp_ratio;
+            last_content_height_ = display_h;
+        } else {
+            h = static_cast<int>(avail_h * dp_ratio);
+            display_h = avail_h;
+        }
 
         rml_context_->SetDimensions(Rml::Vector2i(w, h));
         rml_context_->Update();
@@ -340,7 +371,7 @@ namespace lfs::vis::gui {
         glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
 
         ImGui::Image(static_cast<ImTextureID>(static_cast<uintptr_t>(fbo_texture_)),
-                     ImVec2(avail_w, avail_h), ImVec2(0, 1), ImVec2(1, 0));
+                     ImVec2(avail_w, display_h), ImVec2(0, 1), ImVec2(1, 0));
     }
 
     void RmlPanelHost::forwardInput(float panel_x, float panel_y) {

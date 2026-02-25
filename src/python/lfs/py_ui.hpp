@@ -363,6 +363,8 @@ namespace lfs::python {
                                                                       std::tuple<float, float, float> color);
         std::tuple<bool, std::tuple<float, float, float, float>> color_edit4(const std::string& label,
                                                                              std::tuple<float, float, float, float> color);
+        std::tuple<bool, std::tuple<float, float, float>> color_picker3(const std::string& label,
+                                                                        std::tuple<float, float, float> color);
         bool color_button(const std::string& label, nb::object color,
                           std::tuple<float, float> size = {0, 0});
 
@@ -433,6 +435,7 @@ namespace lfs::python {
         void capture_mouse_from_app(bool capture = true);
         void set_scroll_here_y(float center_y_ratio = 0.5f);
         std::tuple<float, float> get_cursor_screen_pos() const;
+        std::tuple<float, float> get_mouse_pos() const;
         std::tuple<float, float> get_window_pos() const;
         float get_window_width() const;
         float get_text_line_height() const;
