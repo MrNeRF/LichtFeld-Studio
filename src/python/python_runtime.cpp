@@ -143,6 +143,8 @@ namespace lfs::python {
         float g_shared_dpi_scale{DEFAULT_DPI_SCALE};
         void* g_rml_manager{nullptr};
         RmlPanelHostOps g_rml_panel_host_ops{};
+        RmlDocRegisterCallback g_rml_doc_register_cb{nullptr};
+        RmlDocUnregisterCallback g_rml_doc_unregister_cb{nullptr};
 
         // Viewport bounds (set by gui_manager each frame)
         // Protected by mutex for multi-field atomicity
@@ -582,6 +584,22 @@ namespace lfs::python {
 
     const RmlPanelHostOps& get_rml_panel_host_ops() {
         return g_rml_panel_host_ops;
+    }
+
+    void set_rml_doc_registry_callbacks(RmlDocRegisterCallback reg_cb,
+                                        RmlDocUnregisterCallback unreg_cb) {
+        g_rml_doc_register_cb = reg_cb;
+        g_rml_doc_unregister_cb = unreg_cb;
+    }
+
+    void register_rml_document(const char* name, void* doc) {
+        if (g_rml_doc_register_cb)
+            g_rml_doc_register_cb(name, doc);
+    }
+
+    void unregister_rml_document(const char* name) {
+        if (g_rml_doc_unregister_cb)
+            g_rml_doc_unregister_cb(name);
     }
 
     void set_ensure_initialized_callback(EnsureInitializedCallback cb) {

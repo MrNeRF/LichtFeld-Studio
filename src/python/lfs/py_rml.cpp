@@ -4,6 +4,7 @@
 
 #include "py_rml.hpp"
 #include "core/logger.hpp"
+#include "python/python_runtime.hpp"
 
 #include <RmlUi/Core.h>
 #include <cassert>
@@ -330,6 +331,7 @@ namespace lfs::python {
             .def("set_property", &PyRmlElement::set_property)
             .def("remove_property", &PyRmlElement::remove_property)
             .def("add_event_listener", &PyRmlElement::add_event_listener)
+            .def("set_id", &PyRmlElement::set_id)
             .def_prop_rw("id", &PyRmlElement::id, &PyRmlElement::set_id)
             .def_prop_ro("tag_name", &PyRmlElement::tag_name)
             .def_prop_rw("scroll_left", &PyRmlElement::scroll_left,
@@ -355,6 +357,15 @@ namespace lfs::python {
                 return nb::none();
             return nb::cast(PyRmlDocument(doc));
         });
+
+        set_rml_doc_registry_callbacks(
+            [](const char* name, void* doc) {
+                RmlDocumentRegistry::instance().register_document(
+                    name, static_cast<Rml::ElementDocument*>(doc));
+            },
+            [](const char* name) {
+                RmlDocumentRegistry::instance().unregister_document(name);
+            });
     }
 
 } // namespace lfs::python

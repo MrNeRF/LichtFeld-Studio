@@ -440,6 +440,7 @@ namespace lfs::vis::gui {
 
         startup_overlay_.init(&rmlui_manager_);
         rml_shell_frame_.init(&rmlui_manager_);
+        rml_viewport_overlay_.init(&rmlui_manager_);
         rml_menu_bar_.init(&rmlui_manager_);
         rml_status_bar_.init(&rmlui_manager_);
 
@@ -485,6 +486,7 @@ namespace lfs::vis::gui {
 
         rml_status_bar_.shutdown();
         rml_menu_bar_.shutdown();
+        rml_viewport_overlay_.shutdown();
         rml_shell_frame_.shutdown();
         startup_overlay_.shutdown();
         rmlui_manager_.shutdown();
@@ -736,7 +738,10 @@ namespace lfs::vis::gui {
         gizmo_manager_.updateToolState(ctx, ui_hidden_);
         gizmo_manager_.updateCropFlash();
 
+        rml_viewport_overlay_.setViewportBounds(viewport_layout_.pos, viewport_layout_.size);
+        rml_viewport_overlay_.processInput();
         reg.draw_panels(PanelSpace::ViewportOverlay, draw_ctx);
+        rml_viewport_overlay_.render();
 
         // Recompute viewport layout
         viewport_layout_ = panel_layout_.computeViewportLayout(

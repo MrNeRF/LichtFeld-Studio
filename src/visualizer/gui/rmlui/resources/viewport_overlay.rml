@@ -1,0 +1,11 @@
+<rml>
+<head>
+    <link type="text/rcss" href="viewport_overlay.rcss"/>
+</head>
+<body id="overlay-body">
+    <div id="utility-toolbar" class="toolbar-container toolbar-vertical"></div>
+    <div id="gizmo-toolbar" class="toolbar-container toolbar-horizontal"></div>
+    <div id="submode-toolbar" class="subtoolbar-container toolbar-horizontal hidden"></div>
+    <div id="pivot-toolbar" class="subtoolbar-container toolbar-horizontal hidden"></div>
+</body>
+</rml>

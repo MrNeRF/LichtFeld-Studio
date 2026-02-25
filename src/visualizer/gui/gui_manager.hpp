@@ -15,6 +15,7 @@
 #include "gui/rml_menu_bar.hpp"
 #include "gui/rml_shell_frame.hpp"
 #include "gui/rml_status_bar.hpp"
+#include "gui/rml_viewport_overlay.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/sequencer_ui_manager.hpp"
 #include "gui/sequencer_ui_state.hpp"
@@ -158,6 +159,7 @@ namespace lfs::vis {
 
             StartupOverlay startup_overlay_;
             RmlShellFrame rml_shell_frame_;
+            RmlViewportOverlay rml_viewport_overlay_;
             RmlMenuBar rml_menu_bar_;
             RmlStatusBar rml_status_bar_;
 

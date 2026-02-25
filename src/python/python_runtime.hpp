@@ -548,6 +548,14 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API void set_rml_panel_host_ops(const RmlPanelHostOps& ops);
     LFS_PYTHON_RUNTIME_API const RmlPanelHostOps& get_rml_panel_host_ops();
 
+    using RmlDocRegisterCallback = void (*)(const char* name, void* doc);
+    using RmlDocUnregisterCallback = void (*)(const char* name);
+
+    LFS_PYTHON_RUNTIME_API void set_rml_doc_registry_callbacks(RmlDocRegisterCallback reg_cb,
+                                                               RmlDocUnregisterCallback unreg_cb);
+    LFS_PYTHON_RUNTIME_API void register_rml_document(const char* name, void* doc);
+    LFS_PYTHON_RUNTIME_API void unregister_rml_document(const char* name);
+
     // Exit popup state - thread-safe flag for window close callback
     LFS_PYTHON_RUNTIME_API bool is_exit_popup_open();
     LFS_PYTHON_RUNTIME_API void set_exit_popup_open(bool open);
