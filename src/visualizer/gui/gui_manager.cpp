@@ -421,6 +421,7 @@ namespace lfs::vis::gui {
 
         initMenuBar();
         menu_bar_->setFonts(buildFontSet());
+        menu_bar_->setRmlMenuBar(&rml_menu_bar_);
 
         if (!drag_drop_.init(viewer_->getWindow())) {
             LOG_WARN("Native drag-drop initialization failed, drag-drop will use SDL events only");
@@ -438,6 +439,7 @@ namespace lfs::vis::gui {
         lfs::python::set_rml_manager(&rmlui_manager_);
 
         startup_overlay_.init(&rmlui_manager_);
+        rml_menu_bar_.init(&rmlui_manager_);
         rml_status_bar_.init(&rmlui_manager_);
 
         lfs::python::RmlPanelHostOps ops{};
@@ -481,6 +483,7 @@ namespace lfs::vis::gui {
         async_tasks_.shutdown();
 
         rml_status_bar_.shutdown();
+        rml_menu_bar_.shutdown();
         startup_overlay_.shutdown();
         rmlui_manager_.shutdown();
 

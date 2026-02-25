@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/tensor_trace.hpp"
 #include "core/training_snapshot.hpp"
+#include "gui/rml_menu_bar.hpp"
 #include "python/python_runtime.hpp"
 #ifdef WIN32
 #include <shellapi.h>
@@ -177,17 +178,25 @@ namespace lfs::vis::gui {
         if (fonts_.regular)
             ImGui::PushFont(fonts_.regular);
 
-        ImGui::PushStyleColor(ImGuiCol_MenuBarBg, t.menu_background());
-        ImGui::PushStyleColor(ImGuiCol_Header, t.menu_active());
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, t.menu_hover());
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, t.menu_active());
+        static constexpr ImVec4 TRANSPARENT = {0, 0, 0, 0};
+
+        // Bar background and text: transparent (RmlUi provides visuals)
+        ImGui::PushStyleColor(ImGuiCol_MenuBarBg, TRANSPARENT);
+        ImGui::PushStyleColor(ImGuiCol_Text, TRANSPARENT);
+        ImGui::PushStyleColor(ImGuiCol_Header, TRANSPARENT);
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, TRANSPARENT);
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, TRANSPARENT);
+
+        // Popup styles: keep opaque so dropdowns remain visible
         ImGui::PushStyleColor(ImGuiCol_PopupBg, t.menu_popup_background());
         ImGui::PushStyleColor(ImGuiCol_Border, t.menu_border());
+
         ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, t.menu.popup_rounding);
         ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, t.menu.popup_border_size);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, t.menu.popup_padding);
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, t.menu.frame_padding);
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, t.menu.item_spacing);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, {1.0f, 1.0f});
 
         if (!g_menu_entries_ready.load(std::memory_order_acquire)) {
             start_menu_entry_preload_once();
@@ -199,25 +208,44 @@ namespace lfs::vis::gui {
         }
 
         if (ImGui::BeginMainMenuBar()) {
+            // Collect labels and draw RmlUi background
+            int active_idx = -1;
+
             if (g_menu_entries_ready.load(std::memory_order_acquire)) {
                 auto entries = copy_menu_entries();
-                for (const auto& entry : entries) {
-                    if (ImGui::BeginMenu(LOC(entry.label.c_str()))) {
-                        python::draw_menu_bar_entry(entry.idname);
+
+                std::vector<std::string> labels;
+                labels.reserve(entries.size());
+                for (const auto& entry : entries)
+                    labels.emplace_back(LOC(entry.label.c_str()));
+
+                if (rml_menu_bar_) {
+                    rml_menu_bar_->updateLabels(labels);
+                    rml_menu_bar_->draw();
+                }
+
+                for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
+                    if (ImGui::BeginMenu(labels[i].c_str())) {
+                        active_idx = i;
+                        ImGui::PushStyleColor(ImGuiCol_Text, t.palette.text);
+                        python::draw_menu_bar_entry(entries[i].idname);
+                        ImGui::PopStyleColor();
                         ImGui::EndMenu();
                     }
                 }
+            } else if (rml_menu_bar_) {
+                rml_menu_bar_->updateLabels({});
+                rml_menu_bar_->draw();
             }
 
-            const float h = ImGui::GetWindowHeight();
-            ImGui::GetWindowDrawList()->AddLine({0, h - 1}, {ImGui::GetWindowWidth(), h - 1},
-                                                t.menu_bottom_border_u32(), 1.0f);
+            if (rml_menu_bar_)
+                rml_menu_bar_->setActiveIndex(active_idx);
 
             ImGui::EndMainMenuBar();
         }
 
-        ImGui::PopStyleVar(5);
-        ImGui::PopStyleColor(6);
+        ImGui::PopStyleVar(6);
+        ImGui::PopStyleColor(7);
         if (fonts_.regular)
             ImGui::PopFont();
 

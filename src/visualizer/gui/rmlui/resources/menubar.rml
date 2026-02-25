@@ -1,0 +1,9 @@
+<rml>
+<head>
+    <link type="text/rcss" href="menubar.rcss"/>
+</head>
+<body id="body">
+    <div id="menu-items"></div>
+    <div id="bottom-border"></div>
+</body>
+</rml>

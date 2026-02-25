@@ -14,6 +14,8 @@
 
 namespace lfs::vis::gui {
 
+    class RmlMenuBar;
+
     class MenuBar {
     public:
         MenuBar();
@@ -21,6 +23,7 @@ namespace lfs::vis::gui {
 
         void render();
         void setFonts(const FontSet& fonts) { fonts_ = fonts; }
+        void setRmlMenuBar(RmlMenuBar* bar) { rml_menu_bar_ = bar; }
 
         void setOnShowPythonConsole(std::function<void()> callback);
 
@@ -60,6 +63,7 @@ namespace lfs::vis::gui {
         bool plugin_status_is_error_ = false;
 
         FontSet fonts_;
+        RmlMenuBar* rml_menu_bar_ = nullptr;
         std::unordered_map<std::string, Thumbnail> thumbnails_;
     };
 
