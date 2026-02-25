@@ -1,0 +1,499 @@
+/* Shared widget component styles
+ * Included by all RmlUi panels via rml_theme::applyTheme().
+ * Colors here are defaults — theme RCSS overrides them dynamically. */
+
+div {
+    display: block;
+}
+
+/* ── Scrollbars ─────────────────────────────────────────── */
+
+scrollbarvertical {
+    width: 12dp;
+}
+
+scrollbarvertical slidertrack {
+    background-color: rgba(30, 30, 46, 128);
+}
+
+scrollbarvertical sliderbar {
+    background-color: rgba(108, 112, 134, 160);
+}
+
+scrollbarvertical sliderbar:hover {
+    background-color: rgba(137, 180, 250, 200);
+}
+
+scrollbarhorizontal {
+    height: 12dp;
+}
+
+scrollbarhorizontal slidertrack {
+    background-color: rgba(30, 30, 46, 128);
+}
+
+scrollbarhorizontal sliderbar {
+    background-color: rgba(108, 112, 134, 160);
+}
+
+scrollbarhorizontal sliderbar:hover {
+    background-color: rgba(137, 180, 250, 200);
+}
+
+/* ── Form: Checkbox ─────────────────────────────────────── */
+
+input[type="checkbox"] {
+    width: 13dp;
+    height: 13dp;
+    border-width: 1dp;
+    border-color: #585b70;
+    margin: 0 6dp 0 0;
+    padding: 0;
+}
+
+input[type="checkbox"]:checked {
+    background-color: #94e2d5;
+    border-color: #94e2d5;
+}
+
+/* ── Form: Range Slider ─────────────────────────────────── */
+
+input[type="range"] slidertrack {
+    height: 4dp;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+}
+
+input[type="range"] sliderbar {
+    width: 12dp;
+    height: 12dp;
+    background-color: #89b4fa;
+}
+
+input[type="range"] sliderbar:hover {
+    background-color: #b4d0fb;
+}
+
+input[type="range"] sliderarrowdec,
+input[type="range"] sliderarrowinc {
+    width: 0;
+}
+
+/* ── Form: Text Input ───────────────────────────────────── */
+
+input[type="text"] {
+    font-size: 13dp;
+    color: #cdd6f4;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+    padding: 2dp 4dp;
+}
+
+input[type="text"]:focus {
+    border-color: #89b4fa;
+}
+
+/* ── Form: Select ───────────────────────────────────────── */
+
+select {
+    font-size: 13dp;
+    color: #cdd6f4;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+    padding: 2dp 6dp;
+    min-width: 80dp;
+}
+
+select:hover {
+    border-color: #89b4fa;
+}
+
+selectbox {
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+}
+
+selectbox option {
+    padding: 2dp 6dp;
+    font-size: 13dp;
+}
+
+selectbox option:hover {
+    background-color: #89b4fa;
+}
+
+/* ── Progress ───────────────────────────────────────────── */
+
+progress {
+    display: block;
+    height: 16dp;
+    width: 100%;
+    box-sizing: border-box;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+}
+
+progress fill {
+    background-color: #89b4fa;
+}
+
+.progress__text {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 11dp;
+    color: #cdd6f4;
+}
+
+/* ── Setting Row Layout ─────────────────────────────────── */
+
+.setting-row {
+    display: flex;
+    align-items: center;
+    padding: 1dp 0;
+    min-height: 20dp;
+}
+
+.setting-label {
+    display: flex;
+    align-items: center;
+    color: #cdd6f4;
+    font-size: 13dp;
+}
+
+.prop-label {
+    min-width: 80dp;
+    text-align: right;
+    font-size: 13dp;
+    color: #cdd6f4;
+    margin-left: 4dp;
+    flex-shrink: 0;
+}
+
+.setting-slider {
+    flex: 1;
+    min-width: 60dp;
+}
+
+.slider-value {
+    display: inline-block;
+    width: 45dp;
+    text-align: right;
+    font-size: 12dp;
+    color: #a6adc8;
+    margin-left: 4dp;
+    flex-shrink: 0;
+}
+
+/* ── Collapsible Section ────────────────────────────────── */
+
+.section-header {
+    display: flex;
+    align-items: center;
+    padding: 3dp 0;
+    font-weight: bold;
+    color: #cdd6f4;
+    cursor: pointer;
+    font-size: 13dp;
+}
+
+.section-header:hover {
+    background-color: #313244;
+}
+
+.section-arrow {
+    display: inline-block;
+    width: 14dp;
+    font-size: 12dp;
+    color: #cdd6f4;
+    margin-right: 4dp;
+    text-align: center;
+}
+
+.section-content.collapsed {
+    display: none;
+}
+
+/* ── Color Controls ─────────────────────────────────────── */
+
+.color-swatch {
+    width: 18dp;
+    height: 18dp;
+    border-width: 1dp;
+    border-color: #45475a;
+    cursor: pointer;
+    margin-right: 4dp;
+    flex-shrink: 0;
+}
+
+.color-comp {
+    display: inline-block;
+    width: 44dp;
+    font-size: 12dp;
+    color: #a6adc8;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+    padding: 1dp 4dp;
+    margin-right: 2dp;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.color-hex {
+    width: 70dp;
+    font-size: 12dp;
+    padding: 2dp 4dp;
+    color: #cdd6f4;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+    display: none;
+}
+
+.color-hex.visible {
+    display: inline-block;
+}
+
+.color-hex:focus {
+    border-color: #89b4fa;
+}
+
+/* ── Context Menu ───────────────────────────────────────── */
+
+.context-menu {
+    display: none;
+    position: absolute;
+    z-index: 100;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+    padding: 4dp 0;
+    min-width: 150dp;
+}
+
+.context-menu.visible {
+    display: block;
+}
+
+.context-menu-item {
+    display: block;
+    padding: 4dp 12dp;
+    cursor: pointer;
+    color: #cdd6f4;
+    font-size: 13dp;
+}
+
+.context-menu-item:hover {
+    background-color: #89b4fa;
+    color: #ffffff;
+}
+
+.context-menu-item.active {
+    font-weight: bold;
+}
+
+.context-menu-item.submenu-item {
+    padding-left: 20dp;
+    font-size: 12dp;
+}
+
+.context-menu-label {
+    display: block;
+    padding: 4dp 12dp;
+    color: #a6adc8;
+    font-size: 12dp;
+}
+
+.context-menu-separator {
+    display: block;
+    height: 1dp;
+    margin: 2dp 4dp;
+    background-color: #45475a;
+}
+
+/* ── Buttons ────────────────────────────────────────────── */
+
+.btn {
+    display: inline-block;
+    padding: 4dp 12dp;
+    font-size: 13dp;
+    color: #cdd6f4;
+    background-color: #45475a;
+    border-width: 1dp;
+    border-color: #585b70;
+    cursor: pointer;
+    text-align: center;
+}
+
+.btn:hover {
+    background-color: #585b70;
+}
+
+.btn:active {
+    background-color: #313244;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.btn--primary {
+    background-color: #89b4fa;
+    border-color: #89b4fa;
+    color: #1e1e2e;
+}
+
+.btn--primary:hover {
+    background-color: #b4d0fb;
+    border-color: #b4d0fb;
+}
+
+.btn--primary:active {
+    background-color: #74a8f9;
+    border-color: #74a8f9;
+}
+
+.btn--success {
+    background-color: #a6e3a1;
+    border-color: #a6e3a1;
+    color: #1e1e2e;
+}
+
+.btn--success:hover {
+    background-color: #c0eabc;
+    border-color: #c0eabc;
+}
+
+.btn--success:active {
+    background-color: #8cda86;
+    border-color: #8cda86;
+}
+
+.btn--warning {
+    background-color: #f9e2af;
+    border-color: #f9e2af;
+    color: #1e1e2e;
+}
+
+.btn--warning:hover {
+    background-color: #faebc4;
+    border-color: #faebc4;
+}
+
+.btn--warning:active {
+    background-color: #f7d99a;
+    border-color: #f7d99a;
+}
+
+.btn--error {
+    background-color: #f38ba8;
+    border-color: #f38ba8;
+    color: #1e1e2e;
+}
+
+.btn--error:hover {
+    background-color: #f6a8be;
+    border-color: #f6a8be;
+}
+
+.btn--error:active {
+    background-color: #f06e92;
+    border-color: #f06e92;
+}
+
+.btn--secondary {
+    background-color: transparent;
+    border-color: #585b70;
+    color: #cdd6f4;
+}
+
+.btn--secondary:hover {
+    background-color: #313244;
+}
+
+.btn--secondary:active {
+    background-color: #45475a;
+}
+
+/* ── Icon Button ────────────────────────────────────────── */
+
+.icon-btn {
+    display: inline-block;
+    padding: 4dp;
+    background-color: transparent;
+    border-width: 0;
+    cursor: pointer;
+}
+
+.icon-btn:hover {
+    background-color: rgba(88, 91, 112, 77);
+}
+
+.icon-btn:active {
+    background-color: rgba(88, 91, 112, 128);
+}
+
+.icon-btn.selected {
+    background-color: #89b4fa;
+}
+
+.icon-btn.selected:hover {
+    background-color: #b4d0fb;
+}
+
+.icon-btn img {
+    width: 20dp;
+    height: 20dp;
+    image-color: rgba(255, 255, 255, 230);
+}
+
+.icon-btn.selected img {
+    image-color: rgba(30, 30, 46, 255);
+}
+
+.icon-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+/* ── Utilities ──────────────────────────────────────────── */
+
+.separator {
+    height: 1dp;
+    margin: 4dp 0;
+    background-color: #45475a;
+}
+
+.hidden {
+    display: none;
+}
+
+.collapsed {
+    display: none;
+}
+
+.indent {
+    margin-left: 20dp;
+}
+
+.text-disabled {
+    color: #a6adc8;
+    font-size: 12dp;
+    padding: 0 0 0 2dp;
+}
+
+.empty-message {
+    display: block;
+    padding: 8dp 6dp;
+    color: #a6adc8;
+    font-size: 13dp;
+}

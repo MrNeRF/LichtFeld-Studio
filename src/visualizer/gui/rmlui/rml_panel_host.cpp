@@ -173,28 +173,7 @@ namespace lfs::vis::gui {
             ".node-name.training-disabled {{ color: {1}; }}\n"
             ".node-count {{ color: {1}; }}\n"
             ".rename-input {{ color: {0}; background-color: {2}; border-width: 1dp; border-color: {4}; }}\n"
-            ".context-menu {{ background-color: {2}; border-width: 1dp; border-color: {5}; }}\n"
-            ".context-menu-item {{ color: {0}; }}\n"
-            ".context-menu-item:hover {{ background-color: {4}; }}\n"
-            ".context-menu-separator {{ background-color: {5}; }}\n"
-            ".section-header {{ color: {0}; }}\n"
-            ".section-header:hover {{ background-color: {3}; }}\n"
-            ".empty-message {{ color: {1}; }}\n"
-            ".row-icon {{ image-color: {0}; }}\n"
-            ".setting-label {{ color: {0}; }}\n"
-            ".slider-value {{ color: {1}; }}\n"
-            ".text-disabled {{ color: {1}; }}\n"
-            ".section-arrow {{ color: {1}; }}\n"
-            ".separator {{ background-color: {5}; }}\n"
-            ".color-swatch {{ border-color: {5}; }}\n"
-            ".color-hex {{ color: {0}; background-color: {2}; border-color: {5}; }}\n"
-            ".color-hex:focus {{ border-color: {4}; }}\n"
-            "select {{ color: {0}; background-color: {2}; border-color: {5}; }}\n"
-            "select:hover {{ border-color: {4}; }}\n"
-            "selectbox {{ background-color: {2}; border-color: {5}; }}\n"
-            "selectbox option:hover {{ background-color: {4}; }}\n"
-            "input[type=\"range\"] slidertrack {{ background-color: {2}; border-color: {5}; }}\n"
-            "input[type=\"range\"] sliderbar {{ background-color: {4}; }}\n",
+            ".row-icon {{ image-color: {0}; }}\n",
             text, text_dim, surface, surface_bright, primary, border, row_even, row_odd);
     }
 

@@ -1,40 +1,5 @@
-/* Scene tree panel styles */
-
-div {
-    display: block;
-}
-
-scrollbarvertical {
-    width: 12dp;
-}
-
-scrollbarvertical slidertrack {
-    background-color: rgba(30, 30, 46, 128);
-}
-
-scrollbarvertical sliderbar {
-    background-color: rgba(108, 112, 134, 160);
-}
-
-scrollbarvertical sliderbar:hover {
-    background-color: rgba(137, 180, 250, 200);
-}
-
-scrollbarhorizontal {
-    height: 12dp;
-}
-
-scrollbarhorizontal slidertrack {
-    background-color: rgba(30, 30, 46, 128);
-}
-
-scrollbarhorizontal sliderbar {
-    background-color: rgba(108, 112, 134, 160);
-}
-
-scrollbarhorizontal sliderbar:hover {
-    background-color: rgba(137, 180, 250, 200);
-}
+/* Scene tree panel — panel-specific styles only.
+ * Shared widget styles are in components.rcss (auto-included via applyTheme). */
 
 body {
     font-family: Inter;
@@ -280,80 +245,9 @@ body {
     border-color: #89b4fa;
 }
 
-/* Context menu popup */
-.context-menu {
-    display: none;
-    position: absolute;
-    z-index: 100;
-    background-color: #313244;
-    border-width: 1dp;
-    border-color: #45475a;
-    padding: 4dp 0;
-    min-width: 150dp;
-}
-
-.context-menu.visible {
-    display: block;
-}
-
-.context-menu-item {
-    display: block;
-    padding: 4dp 12dp;
-    cursor: pointer;
-    color: #cdd6f4;
-    font-size: 13dp;
-}
-
-.context-menu-item:hover {
-    background-color: #89b4fa;
-    color: #ffffff;
-}
-
-.context-menu-item.active {
-    font-weight: bold;
-}
-
-.context-menu-item.submenu-item {
-    padding-left: 20dp;
-    font-size: 12dp;
-}
-
-.context-menu-label {
-    display: block;
-    padding: 4dp 12dp;
-    color: #a6adc8;
-    font-size: 12dp;
-}
-
-.context-menu-separator {
-    display: block;
-    height: 1dp;
-    margin: 2dp 4dp;
-    background-color: #45475a;
-}
-
-/* Section headers */
+/* Scene tree overrides section-header to block display with different padding */
 .section-header {
     display: block;
     padding: 4dp 6dp;
-    font-weight: bold;
-    color: #cdd6f4;
-    cursor: pointer;
     font-size: 14dp;
-}
-
-.section-header:hover {
-    background-color: #313244;
-}
-
-.collapsed {
-    display: none;
-}
-
-/* Empty state */
-.empty-message {
-    display: block;
-    padding: 8dp 6dp;
-    color: #a6adc8;
-    font-size: 13dp;
 }
