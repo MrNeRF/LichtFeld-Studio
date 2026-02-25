@@ -77,6 +77,7 @@ namespace lfs::vis {
         bool render_texture_valid = false;
         bool splats_presented = false;
         bool split_view_executed = false;
+        bool splat_pre_rendered = false;
         std::optional<GTComparisonContext> gt_context;
 
         int hovered_gaussian_id = -1;

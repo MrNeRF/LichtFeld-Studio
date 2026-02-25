@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/training_manager.hpp"
+#include <cassert>
 #include <shared_mutex>
 
 namespace lfs::vis {
@@ -44,12 +45,11 @@ namespace lfs::vis {
         if (result) {
             res.cached_result = *result;
             res.cached_result_size = ctx.render_size;
+            res.split_view_executed = true;
         } else {
             LOG_ERROR("Failed to render split view: {}", result.error());
             res.cached_result_size = {0, 0};
         }
-
-        res.split_view_executed = true;
     }
 
     std::optional<lfs::rendering::SplitViewRequest>
@@ -133,6 +133,8 @@ namespace lfs::vis {
 
             size_t left_idx = settings.split_view_offset % visible_nodes.size();
             size_t right_idx = (settings.split_view_offset + 1) % visible_nodes.size();
+            assert(visible_nodes[left_idx]->model);
+            assert(visible_nodes[right_idx]->model);
 
             LOG_TRACE("Creating PLY comparison split view: {} vs {}",
                       visible_nodes[left_idx]->name, visible_nodes[right_idx]->name);

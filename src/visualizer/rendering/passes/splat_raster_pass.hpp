@@ -17,7 +17,7 @@ namespace lfs::vis {
         [[nodiscard]] const char* name() const override { return "SplatRasterPass"; }
         [[nodiscard]] DirtyMask sensitivity() const override {
             return DirtyFlag::SPLATS | DirtyFlag::SELECTION | DirtyFlag::CAMERA |
-                   DirtyFlag::VIEWPORT | DirtyFlag::BACKGROUND;
+                   DirtyFlag::VIEWPORT | DirtyFlag::BACKGROUND | DirtyFlag::PPISP;
         }
 
         [[nodiscard]] bool shouldExecute(DirtyMask frame_dirty, const FrameContext& ctx) const override;

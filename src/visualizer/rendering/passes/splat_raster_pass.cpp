@@ -11,6 +11,7 @@
 #include "training/components/ppisp_controller.hpp"
 #include "training/trainer.hpp"
 #include "training/training_manager.hpp"
+#include <cassert>
 #include <cuda_runtime.h>
 #include <glad/glad.h>
 #include <shared_mutex>
@@ -99,7 +100,7 @@ namespace lfs::vis {
     void SplatRasterPass::execute(lfs::rendering::RenderingEngine& engine,
                                   const FrameContext& ctx,
                                   FrameResources& res) {
-        if (res.split_view_executed)
+        if (res.split_view_executed || res.splat_pre_rendered)
             return;
 
         renderToTexture(engine, ctx, res);
@@ -108,6 +109,7 @@ namespace lfs::vis {
     void SplatRasterPass::renderToTexture(lfs::rendering::RenderingEngine& engine,
                                           const FrameContext& ctx, FrameResources& res) {
         LOG_TIMER_TRACE("SplatRasterPass::renderToTexture");
+        assert(ctx.model && ctx.model->size() > 0);
         if (!ctx.model || ctx.model->size() == 0) {
             res.render_texture_valid = false;
             return;
@@ -150,9 +152,13 @@ namespace lfs::vis {
 
         GLint current_fbo;
         glGetIntegerv(GL_FRAMEBUFFER_BINDING, &current_fbo);
+        GLint saved_viewport[4];
+        glGetIntegerv(GL_VIEWPORT, saved_viewport);
+        const GLboolean scissor_was_enabled = glIsEnabled(GL_SCISSOR_TEST);
 
         glBindFramebuffer(GL_FRAMEBUFFER, render_fbo_);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ctx.cached_render_texture, 0);
+        glDisable(GL_SCISSOR_TEST);
 
         if (alloc_size != depth_buffer_size_) {
             glBindRenderbuffer(GL_RENDERBUFFER, render_depth_rbo_);
@@ -227,14 +233,16 @@ namespace lfs::vis {
         const bool need_hovered_output = (ctx.brush.selection_mode == lfs::rendering::SelectionMode::Rings) && ctx.brush.active;
         if (need_hovered_output) {
             if (d_hovered_depth_id_ == nullptr) {
-                cudaMalloc(&d_hovered_depth_id_, sizeof(unsigned long long));
+                auto err = cudaMalloc(&d_hovered_depth_id_, sizeof(unsigned long long));
+                assert(err == cudaSuccess);
             }
             constexpr unsigned long long init_val = 0xFFFFFFFFFFFFFFFFULL;
-            cudaMemcpy(d_hovered_depth_id_, &init_val, sizeof(unsigned long long), cudaMemcpyHostToDevice);
+            auto err = cudaMemcpy(d_hovered_depth_id_, &init_val, sizeof(unsigned long long), cudaMemcpyHostToDevice);
+            assert(err == cudaSuccess);
             request.hovered_depth_id = d_hovered_depth_id_;
         }
 
-        if (settings.use_crop_box || settings.show_crop_box) {
+        if ((settings.use_crop_box || settings.show_crop_box) && ctx.scene_manager) {
             const auto& cropboxes = scene_state.cropboxes;
             const size_t idx = (scene_state.selected_cropbox_index >= 0)
                                    ? static_cast<size_t>(scene_state.selected_cropbox_index)
@@ -252,7 +260,7 @@ namespace lfs::vis {
             }
         }
 
-        if (settings.use_ellipsoid || settings.show_ellipsoid) {
+        if ((settings.use_ellipsoid || settings.show_ellipsoid) && ctx.scene_manager) {
             const auto& scene = ctx.scene_manager->getScene();
             const auto visible_ellipsoids = scene.getVisibleEllipsoids();
             const core::NodeId selected_ellipsoid_id = ctx.scene_manager->getSelectedNodeEllipsoidId();
@@ -331,7 +339,8 @@ namespace lfs::vis {
 
             if (need_hovered_output) {
                 unsigned long long hovered_depth_id;
-                cudaMemcpy(&hovered_depth_id, d_hovered_depth_id_, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+                auto memcpy_err = cudaMemcpy(&hovered_depth_id, d_hovered_depth_id_, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+                assert(memcpy_err == cudaSuccess);
                 if (hovered_depth_id == 0xFFFFFFFFFFFFFFFFULL) {
                     res.hovered_gaussian_id = -1;
                 } else {
@@ -354,6 +363,9 @@ namespace lfs::vis {
         }
 
         glBindFramebuffer(GL_FRAMEBUFFER, current_fbo);
+        glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
+        if (scissor_was_enabled)
+            glEnable(GL_SCISSOR_TEST);
     }
 
 } // namespace lfs::vis

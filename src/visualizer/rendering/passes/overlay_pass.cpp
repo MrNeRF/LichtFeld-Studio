@@ -5,6 +5,7 @@
 #include "overlay_pass.hpp"
 #include "core/logger.hpp"
 #include "scene/scene_manager.hpp"
+#include <cassert>
 #include <glad/glad.h>
 
 namespace lfs::vis {

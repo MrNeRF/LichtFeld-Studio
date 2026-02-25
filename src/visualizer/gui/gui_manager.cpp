@@ -298,16 +298,11 @@ namespace lfs::vis::gui {
                 return io.Fonts->AddFontFromFileTTF(path_utf8.c_str(), size);
             };
 
-            // Full CJK font loader — only used for the regular font (fallback for all styles)
-            const auto load_font_with_cjk =
-                [&](const std::filesystem::path& path, const float size) -> ImFont* {
-                ImFont* font = load_font_latin_only(path, size);
-                if (!font)
-                    return nullptr;
-
+            const auto merge_cjk = [&](const float size) {
                 if (is_font_valid(japanese_path)) {
                     ImFontConfig config;
                     config.MergeMode = true;
+                    config.OversampleH = 1;
                     const std::string japanese_path_utf8 = lfs::core::path_to_utf8(japanese_path);
                     io.Fonts->AddFontFromFileTTF(japanese_path_utf8.c_str(), size, &config,
                                                  io.Fonts->GetGlyphRangesJapanese());
@@ -318,19 +313,27 @@ namespace lfs::vis::gui {
                 if (is_font_valid(korean_path)) {
                     ImFontConfig config;
                     config.MergeMode = true;
+                    config.OversampleH = 1;
                     const std::string korean_path_utf8 = lfs::core::path_to_utf8(korean_path);
                     io.Fonts->AddFontFromFileTTF(korean_path_utf8.c_str(), size, &config,
                                                  io.Fonts->GetGlyphRangesKorean());
                 }
+            };
 
+            const auto load_font_with_cjk =
+                [&](const std::filesystem::path& path, const float size) -> ImFont* {
+                ImFont* font = load_font_latin_only(path, size);
+                if (!font)
+                    return nullptr;
+                merge_cjk(size);
                 return font;
             };
 
             font_regular_ = load_font_with_cjk(regular_path, t.fonts.base_size * xscale);
-            font_bold_ = load_font_latin_only(bold_path, t.fonts.base_size * xscale);
-            font_heading_ = load_font_latin_only(bold_path, t.fonts.heading_size * xscale);
-            font_small_ = load_font_latin_only(regular_path, t.fonts.small_size * xscale);
-            font_section_ = load_font_latin_only(bold_path, t.fonts.section_size * xscale);
+            font_bold_ = load_font_with_cjk(bold_path, t.fonts.base_size * xscale);
+            font_heading_ = load_font_with_cjk(bold_path, t.fonts.heading_size * xscale);
+            font_small_ = load_font_with_cjk(regular_path, t.fonts.small_size * xscale);
+            font_section_ = load_font_with_cjk(bold_path, t.fonts.section_size * xscale);
 
             // Monospace font at multiple sizes for crisp scaling
             const auto monospace_path = lfs::vis::getAssetPath("fonts/JetBrainsMono-Regular.ttf");
@@ -400,7 +403,10 @@ namespace lfs::vis::gui {
             font_regular_ = font_bold_ = font_heading_ = font_small_ = font_section_ = fallback;
         }
 
-        io.Fonts->Build();
+        io.Fonts->TexDesiredWidth = 2048;
+        if (!io.Fonts->Build()) {
+            LOG_ERROR("Font atlas build failed — CJK glyphs may be missing");
+        }
         ImGui_ImplOpenGL3_CreateFontsTexture();
 
         setFileSelectedCallback([this](const std::filesystem::path& path, const bool is_dataset) {

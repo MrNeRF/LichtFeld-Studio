@@ -7,6 +7,7 @@
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"
 #include "scene/scene_manager.hpp"
+#include <cassert>
 #include <glad/glad.h>
 
 namespace lfs::vis {
@@ -53,19 +54,20 @@ namespace lfs::vis {
             if (!cache_valid) {
                 const auto& means = scene_state.point_cloud->means;
                 const auto& colors = scene_state.point_cloud->colors;
-                const size_t num_points = scene_state.point_cloud->size();
                 const glm::mat4 m = glm::inverse(cb.world_transform);
                 const auto device = means.device();
 
-                const auto transform = lfs::core::Tensor::from_vector(
-                    {m[0][0], m[1][0], m[2][0], m[3][0],
-                     m[0][1], m[1][1], m[2][1], m[3][1],
-                     m[0][2], m[1][2], m[2][2], m[3][2],
-                     m[0][3], m[1][3], m[2][3], m[3][3]},
-                    {4, 4}, device);
+                // R (3x3) and t (3,) from the inverse transform — avoids homogeneous expansion
+                const auto R = lfs::core::Tensor::from_vector(
+                    {m[0][0], m[1][0], m[2][0],
+                     m[0][1], m[1][1], m[2][1],
+                     m[0][2], m[1][2], m[2][2]},
+                    {3, 3}, device);
+                const auto t = lfs::core::Tensor::from_vector(
+                    {m[3][0], m[3][1], m[3][2]}, {1, 3}, device);
 
-                const auto ones = lfs::core::Tensor::ones({num_points, 1}, device);
-                const auto local_pos = transform.mm(means.cat(ones, 1).t()).t();
+                // local_pos = means @ R + t  — shape [N, 3], no homogeneous coords
+                const auto local_pos = means.mm(R) + t;
 
                 const auto x = local_pos.slice(1, 0, 1).squeeze(1);
                 const auto y = local_pos.slice(1, 1, 2).squeeze(1);
@@ -126,7 +128,7 @@ namespace lfs::vis {
                 .max = cb.data->max,
                 .transform = glm::inverse(cb.world_transform)};
             crop_inverse = cb.data->inverse;
-            crop_desaturate = ctx.settings.show_crop_box && ctx.settings.desaturate_cropping;
+            crop_desaturate = ctx.settings.show_crop_box && !ctx.settings.use_crop_box && ctx.settings.desaturate_cropping;
             break;
         }
 

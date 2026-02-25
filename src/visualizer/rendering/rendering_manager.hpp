@@ -106,7 +106,7 @@ namespace lfs::vis {
         void markDirty();
         void markDirty(DirtyMask flags);
 
-        [[nodiscard]] bool pollDirtyState() const {
+        [[nodiscard]] bool pollDirtyState() {
             if (pivot_animation_active_.load() &&
                 std::chrono::steady_clock::now() < pivot_animation_end_time_) {
                 dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
@@ -313,9 +313,9 @@ namespace lfs::vis {
         bool render_texture_valid_ = false;
 
         // Granular dirty tracking
-        mutable std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};
+        std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};
 
-        mutable std::atomic<bool> pivot_animation_active_{false};
+        std::atomic<bool> pivot_animation_active_{false};
         std::chrono::steady_clock::time_point pivot_animation_end_time_;
         lfs::rendering::RenderResult cached_result_;
 
@@ -324,7 +324,7 @@ namespace lfs::vis {
         std::chrono::steady_clock::time_point selection_flash_start_time_;
         static constexpr float SELECTION_FLASH_DURATION_SEC = 0.5f;
 
-        mutable std::atomic<bool> overlay_animation_active_{false};
+        std::atomic<bool> overlay_animation_active_{false};
 
         size_t last_model_ptr_ = 0;
         std::chrono::steady_clock::time_point last_training_render_;

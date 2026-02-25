@@ -6,19 +6,27 @@
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "scene/scene_manager.hpp"
+#include <cassert>
 #include <glad/glad.h>
 
 namespace lfs::vis {
 
-    bool MeshPass::shouldExecute(DirtyMask /*frame_dirty*/, const FrameContext& ctx) const {
+    bool MeshPass::shouldExecute(DirtyMask frame_dirty, const FrameContext& ctx) const {
         if (!ctx.scene_manager)
             return false;
-        return !ctx.scene_state.meshes.empty();
+        if (ctx.scene_state.meshes.empty())
+            return false;
+        // Compositing depends on both mesh and splat output, so trigger on either
+        constexpr DirtyMask composite_sensitivity =
+            DirtyFlag::MESH | DirtyFlag::CAMERA | DirtyFlag::VIEWPORT |
+            DirtyFlag::SPLATS | DirtyFlag::SELECTION | DirtyFlag::BACKGROUND;
+        return (frame_dirty & composite_sensitivity) != 0;
     }
 
     void MeshPass::execute(lfs::rendering::RenderingEngine& engine,
                            const FrameContext& ctx,
                            FrameResources& res) {
+        assert(ctx.scene_manager);
         if (res.split_view_executed)
             return;
 

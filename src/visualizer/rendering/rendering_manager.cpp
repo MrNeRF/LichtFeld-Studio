@@ -909,10 +909,11 @@ namespace lfs::vis {
             .mark_dirty = [this](DirtyMask flags) { markDirty(flags); },
             .set_pivot_animation = [this](auto end_time) { setPivotAnimationEndTime(end_time); }};
 
-        // GT comparison pre-render: ensure render texture is valid before SplitViewPass runs
         if (frame_ctx.settings.split_view_mode == SplitViewMode::GTComparison &&
-            resources.gt_context && resources.gt_context->valid() && !resources.render_texture_valid) {
+            resources.gt_context && resources.gt_context->valid() &&
+            (!resources.render_texture_valid || (frame_dirty & splat_raster_pass_->sensitivity()))) {
             splat_raster_pass_->execute(*engine_, frame_ctx, resources);
+            resources.splat_pre_rendered = true;
         }
 
         for (auto& pass : passes_) {
