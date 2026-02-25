@@ -1033,7 +1033,7 @@ namespace lfs::vis {
 
         // Render-on-demand: VSync handles frame pacing, waitEvents saves CPU when idle
         const bool is_training = trainer_manager_ && trainer_manager_->isRunning();
-        const bool needs_render = rendering_manager_->needsRender();
+        const bool needs_render = rendering_manager_->pollDirtyState();
         const bool continuous_input = input_controller_ && input_controller_->isContinuousInputActive();
         const bool has_python_animation = python::has_frame_callback();
         const bool has_python_overlay = python::has_viewport_draw_handlers();

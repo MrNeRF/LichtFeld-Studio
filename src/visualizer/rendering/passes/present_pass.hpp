@@ -13,7 +13,7 @@ namespace lfs::vis {
         PresentPass() = default;
 
         [[nodiscard]] const char* name() const override { return "PresentPass"; }
-        [[nodiscard]] DirtyMask sensitivity() const override { return DirtyFlag::ALL; }
+        [[nodiscard]] DirtyMask sensitivity() const override { return 0; }
 
         [[nodiscard]] bool shouldExecute(DirtyMask /*frame_dirty*/, const FrameContext& /*ctx*/) const override {
             return true;

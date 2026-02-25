@@ -12,11 +12,6 @@ namespace lfs::vis {
     void OverlayPass::execute(lfs::rendering::RenderingEngine& engine,
                               const FrameContext& ctx,
                               FrameResources& res) {
-        renderOverlays(engine, ctx, res);
-    }
-
-    void OverlayPass::renderOverlays(lfs::rendering::RenderingEngine& engine,
-                                     const FrameContext& ctx, FrameResources& res) {
         const auto& settings = ctx.settings;
 
         if (ctx.render_size.x <= 0 || ctx.render_size.y <= 0)

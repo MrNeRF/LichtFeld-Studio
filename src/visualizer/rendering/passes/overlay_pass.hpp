@@ -13,7 +13,7 @@ namespace lfs::vis {
         OverlayPass() = default;
 
         [[nodiscard]] const char* name() const override { return "OverlayPass"; }
-        [[nodiscard]] DirtyMask sensitivity() const override { return DirtyFlag::ALL; }
+        [[nodiscard]] DirtyMask sensitivity() const override { return 0; }
 
         [[nodiscard]] bool shouldExecute(DirtyMask /*frame_dirty*/, const FrameContext& /*ctx*/) const override {
             return true;
@@ -22,10 +22,6 @@ namespace lfs::vis {
         void execute(lfs::rendering::RenderingEngine& engine,
                      const FrameContext& ctx,
                      FrameResources& res) override;
-
-    private:
-        void renderOverlays(lfs::rendering::RenderingEngine& engine,
-                            const FrameContext& ctx, FrameResources& res);
     };
 
 } // namespace lfs::vis

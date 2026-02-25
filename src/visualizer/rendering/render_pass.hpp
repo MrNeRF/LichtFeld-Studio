@@ -21,7 +21,6 @@ namespace lfs::core {
 namespace lfs::vis {
 
     class SceneManager;
-    class GTTextureCache;
 
     struct BrushState {
         bool active = false;
@@ -53,7 +52,6 @@ namespace lfs::vis {
     struct FrameContext {
         const Viewport& viewport;
         const ViewportRegion* viewport_region = nullptr;
-        bool has_focus = false;
 
         SceneManager* scene_manager = nullptr;
         const lfs::core::SplatData* model = nullptr;
@@ -77,13 +75,9 @@ namespace lfs::vis {
         lfs::rendering::RenderResult cached_result;
         glm::ivec2 cached_result_size{0};
         bool render_texture_valid = false;
-        unsigned int cached_render_texture = 0;
         bool splats_presented = false;
         bool split_view_executed = false;
         std::optional<GTComparisonContext> gt_context;
-        int gt_context_camera_id = -1;
-
-        GTTextureCache* gt_texture_cache = nullptr;
 
         int hovered_gaussian_id = -1;
         int hovered_camera_id = -1;

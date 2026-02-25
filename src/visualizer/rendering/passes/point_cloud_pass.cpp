@@ -165,7 +165,7 @@ namespace lfs::vis {
             .highlight_gaussian_id = -1,
             .far_plane = lfs::rendering::DEFAULT_FAR_PLANE};
 
-        auto render_result = engine.renderPointCloud(*scene_state.point_cloud, pc_request);
+        auto render_result = engine.renderPointCloud(*point_cloud_to_render, pc_request);
         if (render_result) {
             res.cached_result = *render_result;
             res.cached_result_size = ctx.render_size;

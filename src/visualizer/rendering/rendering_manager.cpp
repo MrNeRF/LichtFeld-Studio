@@ -866,7 +866,6 @@ namespace lfs::vis {
         const FrameContext frame_ctx{
             .viewport = context.viewport,
             .viewport_region = context.viewport_region,
-            .has_focus = context.has_focus,
             .scene_manager = scene_manager,
             .model = model,
             .scene_state = std::move(scene_state),
@@ -904,10 +903,7 @@ namespace lfs::vis {
             .cached_result = cached_result_,
             .cached_result_size = cached_result_size_,
             .render_texture_valid = render_texture_valid_,
-            .cached_render_texture = cached_render_texture_,
             .gt_context = gt_context_,
-            .gt_context_camera_id = gt_context_camera_id_,
-            .gt_texture_cache = &gt_texture_cache_,
             .hovered_gaussian_id = hovered_gaussian_id_,
             .hovered_camera_id = hovered_camera_id_,
             .mark_dirty = [this](DirtyMask flags) { markDirty(flags); },

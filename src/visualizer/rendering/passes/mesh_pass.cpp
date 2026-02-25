@@ -23,10 +23,6 @@ namespace lfs::vis {
             return;
 
         const auto& scene_state = ctx.scene_state;
-        const bool has_meshes = !scene_state.meshes.empty();
-        if (!has_meshes)
-            return;
-
         const bool mesh_dirty = (ctx.frame_dirty & sensitivity()) != 0;
 
         if (mesh_dirty) {

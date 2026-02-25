@@ -106,7 +106,7 @@ namespace lfs::vis {
         void markDirty();
         void markDirty(DirtyMask flags);
 
-        [[nodiscard]] bool needsRender() const {
+        [[nodiscard]] bool pollDirtyState() const {
             if (pivot_animation_active_.load() &&
                 std::chrono::steady_clock::now() < pivot_animation_end_time_) {
                 dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
