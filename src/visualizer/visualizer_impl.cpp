@@ -706,7 +706,7 @@ namespace lfs::vis {
                 viewport_.camera.setPivot(target);
 
                 if (rendering_manager_)
-                    rendering_manager_->markDirty();
+                    rendering_manager_->markDirty(DirtyFlag::CAMERA);
             });
 
             vis::set_set_fov_callback([this](float fov_degrees) {
@@ -972,7 +972,7 @@ namespace lfs::vis {
         if (python::has_frame_callback()) {
             python::tick_frame_callback(delta_time);
             if (rendering_manager_) {
-                rendering_manager_->markDirty();
+                rendering_manager_->markDirty(DirtyFlag::ALL);
             }
         }
 
@@ -1034,7 +1034,7 @@ namespace lfs::vis {
 
         // Render-on-demand: VSync handles frame pacing, waitEvents saves CPU when idle
         const bool is_training = trainer_manager_ && trainer_manager_->isRunning();
-        const bool needs_render = rendering_manager_->needsRender();
+        const bool needs_render = rendering_manager_->pollDirtyState();
         const bool continuous_input = input_controller_ && input_controller_->isContinuousInputActive();
         const bool has_python_animation = python::has_frame_callback();
         const bool has_python_overlay = python::has_viewport_draw_handlers();
@@ -1110,14 +1110,14 @@ namespace lfs::vis {
     void VisualizerImpl::undo() {
         op::undoHistory().undo();
         if (rendering_manager_) {
-            rendering_manager_->markDirty();
+            rendering_manager_->markDirty(DirtyFlag::ALL);
         }
     }
 
     void VisualizerImpl::redo() {
         op::undoHistory().redo();
         if (rendering_manager_) {
-            rendering_manager_->markDirty();
+            rendering_manager_->markDirty(DirtyFlag::ALL);
         }
     }
 
@@ -1257,7 +1257,7 @@ namespace lfs::vis {
         auto result = python::invoke_capability(name, args);
 
         if (result.success && rendering_manager_) {
-            rendering_manager_->markDirty();
+            rendering_manager_->markDirty(DirtyFlag::ALL);
         }
 
         return {result.success, result.result_json, result.error};

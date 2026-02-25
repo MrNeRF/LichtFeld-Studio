@@ -28,6 +28,12 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # Rendering
         rendering/rendering_manager.cpp
         rendering/framerate_controller.cpp
+        rendering/passes/overlay_pass.cpp
+        rendering/passes/splat_raster_pass.cpp
+        rendering/passes/mesh_pass.cpp
+        rendering/passes/present_pass.cpp
+        rendering/passes/point_cloud_pass.cpp
+        rendering/passes/split_view_pass.cpp
 
         # Theme system
         theme/theme.cpp

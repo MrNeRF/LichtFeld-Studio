@@ -40,7 +40,7 @@ namespace lfs::vis {
         auto new_mask = std::make_shared<core::Tensor>(applyModeLogic(selection, mode));
         scene.setSelectionMask(new_mask);
 
-        rendering_manager_->markDirty();
+        rendering_manager_->markDirty(DirtyFlag::SELECTION);
 
         return {true, static_cast<size_t>(new_mask->to(core::DataType::Float32).sum_scalar()), ""};
     }
@@ -67,7 +67,7 @@ namespace lfs::vis {
         auto new_mask = std::make_shared<core::Tensor>(applyModeLogic(selection, mode));
         scene.setSelectionMask(new_mask);
 
-        rendering_manager_->markDirty();
+        rendering_manager_->markDirty(DirtyFlag::SELECTION);
 
         return {true, static_cast<size_t>(new_mask->to(core::DataType::Float32).sum_scalar()), ""};
     }
@@ -97,7 +97,7 @@ namespace lfs::vis {
         auto new_mask = std::make_shared<core::Tensor>(applyModeLogic(mask, mode));
         scene.setSelectionMask(new_mask);
 
-        rendering_manager_->markDirty();
+        rendering_manager_->markDirty(DirtyFlag::SELECTION);
 
         return {true, static_cast<size_t>(new_mask->to(core::DataType::Float32).sum_scalar()), ""};
     }
@@ -166,7 +166,7 @@ namespace lfs::vis {
 
         rendering_manager_->clearPreviewSelection();
         rendering_manager_->clearBrushState();
-        rendering_manager_->markDirty();
+        rendering_manager_->markDirty(DirtyFlag::SELECTION);
 
         return {true, static_cast<size_t>(new_selection->to(core::DataType::Float32).sum_scalar()), ""};
     }

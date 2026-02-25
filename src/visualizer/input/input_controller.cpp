@@ -804,7 +804,7 @@ namespace lfs::vis {
                     const float scale_factor = 1.0f + delta * ORTHO_ZOOM_FACTOR;
                     settings.ortho_scale = std::clamp(settings.ortho_scale * scale_factor, 1.0f, 10000.0f);
                     services().renderingOrNull()->updateSettings(settings);
-                    services().renderingOrNull()->markDirty();
+                    services().renderingOrNull()->markDirty(DirtyFlag::CAMERA);
                 } else {
                     viewport_.camera.zoom(delta);
                 }
@@ -1532,7 +1532,7 @@ namespace lfs::vis {
 
     void InputController::publishCameraMove() {
         if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty();
+            services().renderingOrNull()->markDirty(DirtyFlag::CAMERA);
         }
 
         // Throttle event emission

@@ -4,18 +4,27 @@
 
 #include "rendering_manager.hpp"
 #include "core/camera.hpp"
+#include "core/cuda_debug.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/mesh_data.hpp"
 #include "core/path_utils.hpp"
 #include "core/splat_data.hpp"
 #include "geometry/euclidean_transform.hpp"
+#include "passes/mesh_pass.hpp"
+#include "passes/overlay_pass.hpp"
+#include "passes/point_cloud_pass.hpp"
+#include "passes/present_pass.hpp"
+#include "passes/splat_raster_pass.hpp"
+#include "passes/split_view_pass.hpp"
+#include "render_pass.hpp"
 #include "rendering/cuda_kernels.hpp"
 #include "rendering/rasterizer/rasterization/include/rasterization_api_tensor.h"
 #include "rendering/rasterizer/rasterization/include/rasterization_config.h"
 #include "rendering/rendering.hpp"
 #include "rendering/rendering_pipeline.hpp"
 #include "scene/scene_manager.hpp"
+#include "scene/scene_render_state.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller.hpp"
 #include "training/trainer.hpp"
@@ -28,70 +37,6 @@
 #include <stdexcept>
 
 namespace lfs::vis {
-
-    namespace {
-        constexpr int GPU_ALIGNMENT = 16; // 16-pixel alignment for GPU texture efficiency
-
-        lfs::training::PPISPRenderOverrides toRenderOverrides(const PPISPOverrides& ov) {
-            lfs::training::PPISPRenderOverrides r;
-            r.exposure_offset = ov.exposure_offset;
-            r.vignette_enabled = ov.vignette_enabled;
-            r.vignette_strength = ov.vignette_strength;
-            r.wb_temperature = ov.wb_temperature;
-            r.wb_tint = ov.wb_tint;
-            r.color_red_x = ov.color_red_x;
-            r.color_red_y = ov.color_red_y;
-            r.color_green_x = ov.color_green_x;
-            r.color_green_y = ov.color_green_y;
-            r.color_blue_x = ov.color_blue_x;
-            r.color_blue_y = ov.color_blue_y;
-            r.gamma_multiplier = ov.gamma_multiplier;
-            r.gamma_red = ov.gamma_red;
-            r.gamma_green = ov.gamma_green;
-            r.gamma_blue = ov.gamma_blue;
-            r.crf_toe = ov.crf_toe;
-            r.crf_shoulder = ov.crf_shoulder;
-            return r;
-        }
-
-        lfs::core::Tensor applyStandaloneAppearance(const lfs::core::Tensor& rgb, SceneManager& scene_mgr,
-                                                    const int camera_uid, const PPISPOverrides& overrides,
-                                                    const bool use_controller = true) {
-            auto* ppisp = scene_mgr.getAppearancePPISP();
-            if (!ppisp) {
-                return rgb;
-            }
-
-            const bool was_hwc = (rgb.ndim() == 3 && rgb.shape()[2] == 3);
-            const auto input = was_hwc ? rgb.permute({2, 0, 1}).contiguous() : rgb;
-            const bool is_training_camera = (camera_uid >= 0 && camera_uid < ppisp->num_frames());
-            const bool has_controller = use_controller && scene_mgr.hasAppearanceController();
-
-            lfs::core::Tensor result;
-
-            if (has_controller) {
-                auto* pool = scene_mgr.getAppearanceControllerPool();
-                const int controller_idx = camera_uid >= 0 ? camera_uid % pool->num_cameras() : 0;
-                const auto params = pool->predict(controller_idx, input.unsqueeze(0), 1.0f);
-                result = overrides.isIdentity()
-                             ? ppisp->apply_with_controller_params(input, params, 0)
-                             : ppisp->apply_with_controller_params_and_overrides(input, params, 0,
-                                                                                 toRenderOverrides(overrides));
-            } else if (is_training_camera) {
-                result = overrides.isIdentity() ? ppisp->apply(input, camera_uid, camera_uid)
-                                                : ppisp->apply_with_overrides(input, camera_uid, camera_uid,
-                                                                              toRenderOverrides(overrides));
-            } else {
-                const int fallback_camera = ppisp->any_camera_id();
-                const int fallback_frame = ppisp->any_frame_uid();
-                result = overrides.isIdentity() ? ppisp->apply(input, fallback_camera, fallback_frame)
-                                                : ppisp->apply_with_overrides(input, fallback_camera, fallback_frame,
-                                                                              toRenderOverrides(overrides));
-            }
-
-            return (was_hwc && result.is_valid()) ? result.permute({1, 2, 0}).contiguous() : result;
-        }
-    } // namespace
 
     using namespace lfs::core::events;
 
@@ -107,7 +52,6 @@ namespace lfs::vis {
                 glDeleteTextures(1, &entry.texture_id);
             }
         }
-        glFinish();
         texture_cache_.clear();
     }
 
@@ -172,9 +116,7 @@ namespace lfs::vis {
         const auto oldest = std::min_element(texture_cache_.begin(), texture_cache_.end(),
                                              [](const auto& a, const auto& b) { return a.second.last_access < b.second.last_access; });
 
-        if (oldest->second.interop_texture) {
-            glFinish();
-        } else if (oldest->second.texture_id != 0) {
+        if (!oldest->second.interop_texture && oldest->second.texture_id != 0) {
             glDeleteTextures(1, &oldest->second.texture_id);
         }
         texture_cache_.erase(oldest);
@@ -293,16 +235,21 @@ namespace lfs::vis {
 
     // RenderingManager Implementation
     RenderingManager::RenderingManager() {
+        passes_.push_back(std::make_unique<SplitViewPass>());
+        passes_.push_back(std::make_unique<SplatRasterPass>());
+        splat_raster_pass_ = static_cast<SplatRasterPass*>(passes_.back().get());
+        passes_.push_back(std::make_unique<PointCloudPass>());
+        point_cloud_pass_ = static_cast<PointCloudPass*>(passes_.back().get());
+        passes_.push_back(std::make_unique<PresentPass>());
+        passes_.push_back(std::make_unique<MeshPass>());
+        passes_.push_back(std::make_unique<OverlayPass>());
+        overlay_pass_ = static_cast<OverlayPass*>(passes_.back().get());
         setupEventHandlers();
     }
 
     RenderingManager::~RenderingManager() {
         if (cached_render_texture_ > 0) {
             glDeleteTextures(1, &cached_render_texture_);
-        }
-        if (d_hovered_depth_id_ != nullptr) {
-            cudaFree(d_hovered_depth_id_);
-            d_hovered_depth_id_ = nullptr;
         }
     }
 
@@ -347,7 +294,7 @@ namespace lfs::vis {
             }
 
             settings_.split_view_offset = 0; // Reset when toggling
-            markDirty();
+            markDirty(DirtyFlag::SPLIT_VIEW);
         });
 
         cmd::ToggleGTComparison::when([this](const auto&) {
@@ -368,7 +315,7 @@ namespace lfs::vis {
                     settings_.split_view_mode = SplitViewMode::GTComparison;
                     is_now_enabled = true;
                 }
-                markDirty();
+                markDirty(DirtyFlag::SPLIT_VIEW);
             }
 
             // Emit events outside the lock to avoid deadlock
@@ -384,7 +331,7 @@ namespace lfs::vis {
             LOG_DEBUG("Current camera ID set to: {}", event.cam_id);
 
             if (settings_.split_view_mode == SplitViewMode::GTComparison && event.cam_id >= 0) {
-                markDirty();
+                markDirty(DirtyFlag::SPLIT_VIEW);
             }
         });
 
@@ -393,7 +340,7 @@ namespace lfs::vis {
             std::lock_guard<std::mutex> lock(settings_mutex_);
             settings_.split_position = event.position;
             LOG_TRACE("Split position changed to: {}", event.position);
-            markDirty();
+            markDirty(DirtyFlag::SPLIT_VIEW);
         });
 
         // Listen for settings changes
@@ -423,16 +370,15 @@ namespace lfs::vis {
                 settings_.equirectangular = *event.equirectangular;
                 LOG_TRACE("Equirectangular rendering: {}", settings_.equirectangular ? "enabled" : "disabled");
             }
-            markDirty();
+            markDirty(DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::BACKGROUND);
         });
 
         // Window resize
         ui::WindowResized::when([this](const auto&) {
             LOG_DEBUG("Window resized, clearing render cache");
-            markDirty();
+            markDirty(DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
             cached_result_ = {};
             last_viewport_size_ = glm::ivec2(0, 0);
-            render_texture_valid_ = false;
             gt_texture_cache_.clear();
         });
 
@@ -444,7 +390,7 @@ namespace lfs::vis {
             settings_.grid_opacity = event.opacity;
             LOG_TRACE("Grid settings updated - enabled: {}, plane: {}, opacity: {}",
                       event.enabled, event.plane, event.opacity);
-            markDirty();
+            markDirty(DirtyFlag::OVERLAY);
         });
 
         ui::NodeSelected::when([this](const auto&) { triggerSelectionFlash(); });
@@ -466,15 +412,15 @@ namespace lfs::vis {
         });
 
         state::SceneChanged::when([this](const auto&) {
-            cached_filtered_point_cloud_.reset();
-            cached_source_point_cloud_ = nullptr;
+            if (point_cloud_pass_)
+                point_cloud_pass_->resetCache();
             markDirty();
         });
 
         state::SceneCleared::when([this](const auto&) {
             cached_result_ = {};
-            cached_filtered_point_cloud_.reset();
-            cached_source_point_cloud_ = nullptr;
+            if (point_cloud_pass_)
+                point_cloud_pass_->resetCache();
             render_texture_valid_ = false;
             gt_texture_cache_.clear();
             if (engine_) {
@@ -487,13 +433,13 @@ namespace lfs::vis {
 
         // PLY visibility changes
         cmd::SetPLYVisibility::when([this](const auto&) {
-            markDirty();
+            markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
         });
 
         // PLY added/removed
         state::PLYAdded::when([this](const auto&) {
             LOG_DEBUG("PLY added, marking render dirty");
-            markDirty();
+            markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
         });
 
         state::PLYRemoved::when([this](const auto&) {
@@ -512,21 +458,21 @@ namespace lfs::vis {
                 }
             }
 
-            markDirty();
+            markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY | DirtyFlag::SPLIT_VIEW);
         });
 
         // Crop box changes (scene graph is source of truth, this just handles enable flag)
         ui::CropBoxChanged::when([this](const auto& event) {
             std::lock_guard<std::mutex> lock(settings_mutex_);
             settings_.use_crop_box = event.enabled;
-            markDirty();
+            markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
         });
 
         // Ellipsoid changes (scene graph is source of truth, this just handles enable flag)
         ui::EllipsoidChanged::when([this](const auto& event) {
             std::lock_guard<std::mutex> lock(settings_mutex_);
             settings_.use_ellipsoid = event.enabled;
-            markDirty();
+            markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
         });
 
         // Point cloud mode changes
@@ -537,15 +483,25 @@ namespace lfs::vis {
             LOG_DEBUG("Point cloud mode: {}, voxel size: {}",
                       event.enabled ? "enabled" : "disabled", event.voxel_size);
             cached_result_ = {};
-            markDirty();
+            markDirty(DirtyFlag::SPLATS);
         });
     }
 
     void RenderingManager::markDirty() {
-        needs_render_.store(true);
-        render_texture_valid_ = false;
-        mesh_dirty_.store(true);
-        LOG_TRACE("Render marked dirty");
+        markDirty(DirtyFlag::ALL);
+    }
+
+    void RenderingManager::markDirty(const DirtyMask flags) {
+        dirty_mask_.fetch_or(flags, std::memory_order_relaxed);
+
+        constexpr DirtyMask SPLAT_INVALIDATING =
+            DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::VIEWPORT |
+            DirtyFlag::SELECTION | DirtyFlag::BACKGROUND | DirtyFlag::PPISP | DirtyFlag::SPLIT_VIEW;
+
+        if (flags & SPLAT_INVALIDATING)
+            render_texture_valid_ = false;
+
+        LOG_TRACE("Render marked dirty (flags: 0x{:x})", flags);
     }
 
     void RenderingManager::updateSettings(const RenderSettings& new_settings) {
@@ -595,7 +551,7 @@ namespace lfs::vis {
         }
 
         settings_.orthographic = enabled;
-        needs_render_.store(true);
+        markDirty(DirtyFlag::CAMERA);
     }
 
     float RenderingManager::getFovDegrees() const {
@@ -613,7 +569,7 @@ namespace lfs::vis {
         settings_.focal_length_mm = std::clamp(focal_mm,
                                                lfs::rendering::MIN_FOCAL_LENGTH_MM,
                                                lfs::rendering::MAX_FOCAL_LENGTH_MM);
-        markDirty();
+        markDirty(DirtyFlag::CAMERA);
     }
 
     float RenderingManager::getScalingModifier() const {
@@ -624,18 +580,18 @@ namespace lfs::vis {
     void RenderingManager::setScalingModifier(const float s) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         settings_.scaling_modifier = s;
-        markDirty();
+        markDirty(DirtyFlag::SPLATS);
     }
 
     void RenderingManager::syncSelectionGroupColor(const int group_id, const glm::vec3& color) {
         lfs::rendering::config::setSelectionGroupColor(group_id, make_float3(color.x, color.y, color.z));
-        markDirty();
+        markDirty(DirtyFlag::SELECTION);
     }
 
     void RenderingManager::advanceSplitOffset() {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         settings_.split_view_offset++;
-        markDirty();
+        markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::SPLATS);
     }
 
     SplitViewInfo RenderingManager::getSplitViewInfo() const {
@@ -691,275 +647,6 @@ namespace lfs::vis {
         return hovered_camera_id_; // Return current value
     }
 
-    void RenderingManager::renderToTexture(const RenderContext& context, SceneManager* scene_manager, const lfs::core::SplatData* model) {
-        LOG_TIMER_TRACE("RenderingManager::renderToTexture");
-        if (!model || model->size() == 0) {
-            render_texture_valid_ = false;
-            return;
-        }
-
-        glm::ivec2 viewport_size = context.viewport.windowSize;
-        if (context.viewport_region) {
-            viewport_size = glm::ivec2(
-                static_cast<int>(context.viewport_region->width),
-                static_cast<int>(context.viewport_region->height));
-        }
-
-        const float scale = std::clamp(settings_.render_scale, 0.25f, 1.0f);
-        glm::ivec2 render_size(
-            static_cast<int>(viewport_size.x * scale),
-            static_cast<int>(viewport_size.y * scale));
-
-        if (settings_.split_view_mode == SplitViewMode::GTComparison && gt_context_ && gt_context_->valid()) {
-            render_size = gt_context_->dimensions;
-        }
-
-        const glm::ivec2 alloc_size(
-            ((render_size.x + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT,
-            ((render_size.y + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT);
-
-        static glm::ivec2 texture_size{0, 0};
-        if (alloc_size != texture_size) {
-            glBindTexture(GL_TEXTURE_2D, cached_render_texture_);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, alloc_size.x, alloc_size.y,
-                         0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-            LOG_DEBUG("Render texture resize: {}x{} -> {}x{}", texture_size.x, texture_size.y, alloc_size.x, alloc_size.y);
-            texture_size = alloc_size;
-        }
-
-        static GLuint render_fbo = 0;
-        static GLuint render_depth_rbo = 0;
-        static glm::ivec2 depth_buffer_size{0, 0};
-
-        if (render_fbo == 0) {
-            glGenFramebuffers(1, &render_fbo);
-            glGenRenderbuffers(1, &render_depth_rbo);
-        }
-
-        GLint current_fbo;
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &current_fbo);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, render_fbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, cached_render_texture_, 0);
-
-        if (alloc_size != depth_buffer_size) {
-            glBindRenderbuffer(GL_RENDERBUFFER, render_depth_rbo);
-            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, alloc_size.x, alloc_size.y);
-            LOG_DEBUG("Depth buffer resize: {}x{}", alloc_size.x, alloc_size.y);
-            depth_buffer_size = alloc_size;
-        }
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, render_depth_rbo);
-
-        const GLenum fb_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-        if (fb_status != GL_FRAMEBUFFER_COMPLETE) {
-            LOG_ERROR("FBO incomplete: 0x{:x}", fb_status);
-            glBindFramebuffer(GL_FRAMEBUFFER, current_fbo);
-            render_texture_valid_ = false;
-            return;
-        }
-
-        glViewport(0, 0, render_size.x, render_size.y);
-        glClearColor(settings_.background_color.r, settings_.background_color.g, settings_.background_color.b, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        lfs::rendering::ViewportData viewport_data{
-            .rotation = context.viewport.getRotationMatrix(),
-            .translation = context.viewport.getTranslation(),
-            .size = render_size,
-            .focal_length_mm = settings_.focal_length_mm,
-            .orthographic = settings_.orthographic,
-            .ortho_scale = settings_.ortho_scale};
-
-        // Build render state from scene (single source of truth)
-        lfs::vis::SceneRenderState scene_state;
-        if (scene_manager) {
-            scene_state = scene_manager->buildRenderState();
-        }
-
-        lfs::rendering::RenderRequest request{
-            .viewport = viewport_data,
-            .scaling_modifier = settings_.scaling_modifier,
-            .antialiasing = settings_.antialiasing,
-            .mip_filter = settings_.mip_filter,
-            .sh_degree = settings_.sh_degree,
-            .background_color = settings_.background_color,
-            .crop_box = std::nullopt,
-            .point_cloud_mode = settings_.point_cloud_mode,
-            .voxel_size = settings_.voxel_size,
-            .gut = settings_.gut,
-            .equirectangular = settings_.equirectangular,
-            .show_rings = settings_.show_rings,
-            .ring_width = settings_.ring_width,
-            .show_center_markers = settings_.show_center_markers,
-            .model_transforms = std::move(scene_state.model_transforms),
-            .transform_indices = scene_state.transform_indices,
-            .selection_mask = scene_state.selection_mask,
-            .output_screen_positions = output_screen_positions_,
-            .brush_active = brush_active_,
-            .brush_x = brush_x_,
-            .brush_y = brush_y_,
-            .brush_radius = brush_radius_,
-            .brush_add_mode = brush_add_mode_,
-            .brush_selection_tensor = preview_selection_ ? preview_selection_ : brush_selection_tensor_,
-            .brush_saturation_mode = brush_saturation_mode_,
-            .brush_saturation_amount = brush_saturation_amount_,
-            .selection_mode_rings = (selection_mode_ == lfs::rendering::SelectionMode::Rings),
-            .selected_node_mask = (settings_.desaturate_unselected || getSelectionFlashIntensity() > 0.0f)
-                                      ? std::move(scene_state.selected_node_mask)
-                                      : std::vector<bool>{},
-            .node_visibility_mask = std::move(scene_state.node_visibility_mask),
-            .desaturate_unselected = settings_.desaturate_unselected,
-            .selection_flash_intensity = getSelectionFlashIntensity(),
-            .hovered_depth_id = nullptr,
-            .highlight_gaussian_id = (selection_mode_ == lfs::rendering::SelectionMode::Rings) ? hovered_gaussian_id_ : -1,
-            .far_plane = settings_.depth_clip_enabled ? settings_.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE,
-            .orthographic = settings_.orthographic,
-            .ortho_scale = settings_.ortho_scale};
-
-        // Ring mode hover preview: allocate device buffer if needed
-        const bool need_hovered_output = (selection_mode_ == lfs::rendering::SelectionMode::Rings) && brush_active_;
-        if (need_hovered_output) {
-            if (d_hovered_depth_id_ == nullptr) {
-                cudaMalloc(&d_hovered_depth_id_, sizeof(unsigned long long));
-            }
-            // Initialize to max value (atomicMin finds minimum)
-            constexpr unsigned long long init_val = 0xFFFFFFFFFFFFFFFFULL;
-            cudaMemcpy(d_hovered_depth_id_, &init_val, sizeof(unsigned long long), cudaMemcpyHostToDevice);
-            request.hovered_depth_id = d_hovered_depth_id_;
-        }
-
-        // Crop box from scene graph (single source of truth)
-        if (settings_.use_crop_box || settings_.show_crop_box) {
-            const auto& cropboxes = scene_state.cropboxes;
-            const size_t idx = (scene_state.selected_cropbox_index >= 0)
-                                   ? static_cast<size_t>(scene_state.selected_cropbox_index)
-                                   : 0;
-
-            if (idx < cropboxes.size() && cropboxes[idx].data) {
-                const auto& cb = cropboxes[idx];
-                request.crop_box = lfs::rendering::BoundingBox{
-                    .min = cb.data->min,
-                    .max = cb.data->max,
-                    .transform = glm::inverse(cb.world_transform)};
-                request.crop_inverse = cb.data->inverse;
-                request.crop_desaturate = settings_.show_crop_box && !settings_.use_crop_box && settings_.desaturate_cropping;
-                request.crop_parent_node_index = scene_manager->getScene().getVisibleNodeIndex(cb.parent_splat_id);
-            }
-        }
-
-        // Ellipsoid from scene graph
-        if (settings_.use_ellipsoid || settings_.show_ellipsoid) {
-            const auto& scene = scene_manager->getScene();
-            const auto visible_ellipsoids = scene.getVisibleEllipsoids();
-            const core::NodeId selected_ellipsoid_id = scene_manager->getSelectedNodeEllipsoidId();
-            for (const auto& el : visible_ellipsoids) {
-                if (!el.data)
-                    continue;
-                if (selected_ellipsoid_id != core::NULL_NODE && el.node_id != selected_ellipsoid_id)
-                    continue;
-                request.ellipsoid = lfs::rendering::Ellipsoid{
-                    .radii = el.data->radii,
-                    .transform = glm::inverse(el.world_transform)};
-                request.ellipsoid_inverse = el.data->inverse;
-                request.ellipsoid_desaturate = settings_.show_ellipsoid && !settings_.use_ellipsoid && settings_.desaturate_cropping;
-                request.ellipsoid_parent_node_index = scene.getVisibleNodeIndex(el.parent_splat_id);
-                break;
-            }
-        }
-
-        // Add depth filter (Selection tool only - separate from crop box)
-        // Depth filter always desaturates outside, never actually filters
-        if (settings_.depth_filter_enabled) {
-            request.depth_filter = lfs::rendering::BoundingBox{
-                .min = settings_.depth_filter_min,
-                .max = settings_.depth_filter_max,
-                .transform = settings_.depth_filter_transform.inv().toMat4()};
-        }
-
-        // Lock only during CUDA rasterization to minimize training blocking
-        std::optional<std::shared_lock<std::shared_mutex>> render_lock;
-        if (const auto* tm = scene_manager ? scene_manager->getTrainerManager() : nullptr) {
-            if (const auto* trainer = tm->getTrainer()) {
-                render_lock.emplace(trainer->getRenderMutex());
-            }
-        }
-
-        auto render_result = engine_->renderGaussians(*model, request);
-
-        // Apply PPISP correction if enabled via checkbox
-        if (render_result && render_result->image && settings_.apply_appearance_correction) {
-            bool applied = false;
-
-            // Try trainer's PPISP first (has per-frame params and knows training cameras)
-            if (const auto* tm = scene_manager ? scene_manager->getTrainerManager() : nullptr) {
-                if (const auto* trainer = tm->getTrainer(); trainer && trainer->hasPPISP()) {
-                    lfs::training::PPISPViewportOverrides trainer_overrides{};
-                    if (settings_.ppisp_mode == RenderSettings::PPISPMode::MANUAL) {
-                        trainer_overrides.exposure_offset = settings_.ppisp_overrides.exposure_offset;
-                        trainer_overrides.vignette_enabled = settings_.ppisp_overrides.vignette_enabled;
-                        trainer_overrides.vignette_strength = settings_.ppisp_overrides.vignette_strength;
-                        trainer_overrides.wb_temperature = settings_.ppisp_overrides.wb_temperature;
-                        trainer_overrides.wb_tint = settings_.ppisp_overrides.wb_tint;
-                        trainer_overrides.gamma_multiplier = settings_.ppisp_overrides.gamma_multiplier;
-                    }
-                    const bool use_controller = (settings_.ppisp_mode == RenderSettings::PPISPMode::AUTO);
-                    auto corrected = trainer->applyPPISPForViewport(
-                        *render_result->image, current_camera_id_, trainer_overrides, use_controller);
-                    render_result->image = std::make_shared<lfs::core::Tensor>(std::move(corrected));
-                    applied = true;
-                }
-            }
-
-            if (!applied && scene_manager) {
-                if (scene_manager->hasAppearanceModel()) {
-                    const auto& overrides = (settings_.ppisp_mode == RenderSettings::PPISPMode::MANUAL)
-                                                ? settings_.ppisp_overrides
-                                                : PPISPOverrides{};
-                    const bool use_controller = (settings_.ppisp_mode == RenderSettings::PPISPMode::AUTO);
-                    auto corrected = applyStandaloneAppearance(
-                        *render_result->image, *scene_manager, current_camera_id_, overrides, use_controller);
-                    if (corrected.is_valid()) {
-                        render_result->image = std::make_shared<lfs::core::Tensor>(std::move(corrected));
-                    }
-                }
-            }
-        }
-
-        render_lock.reset();
-
-        if (render_result) {
-            cached_result_ = *render_result;
-
-            // Copy packed depth+id back and extract gaussian ID
-            if (need_hovered_output) {
-                cudaMemcpy(&hovered_depth_id_, d_hovered_depth_id_, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
-                // Extract gaussian ID from lower 32 bits; -1 if no hit (max value)
-                if (hovered_depth_id_ == 0xFFFFFFFFFFFFFFFFULL) {
-                    hovered_gaussian_id_ = -1;
-                } else {
-                    hovered_gaussian_id_ = static_cast<int>(hovered_depth_id_ & 0xFFFFFFFF);
-                }
-            }
-
-            // Store the actual size at which this result was rendered
-            cached_result_size_ = render_size;
-
-            // For GT comparison, present to the bound FBO to fill cached_render_texture_
-            if (settings_.split_view_mode == SplitViewMode::GTComparison) {
-                const auto present_result = engine_->presentToScreen(cached_result_, glm::ivec2(0), render_size);
-                render_texture_valid_ = present_result.has_value();
-            } else {
-                render_texture_valid_ = true;
-            }
-        } else {
-            LOG_ERROR("Failed to render gaussians: {}", render_result.error());
-            render_texture_valid_ = false;
-            cached_result_size_ = {0, 0};
-        }
-
-        glBindFramebuffer(GL_FRAMEBUFFER, current_fbo);
-    }
-
     bool RenderingManager::renderPreviewFrame(SceneManager* const scene_manager,
                                               const glm::mat3& rotation,
                                               const glm::vec3& position,
@@ -1010,8 +697,7 @@ namespace lfs::vis {
             initialize();
         }
 
-        // Sync selection group colors to GPU constant memory
-        if (scene_manager) {
+        if (scene_manager && (dirty_mask_.load(std::memory_order_relaxed) & DirtyFlag::SELECTION)) {
             for (const auto& group : scene_manager->getScene().getSelectionGroups()) {
                 lfs::rendering::config::setSelectionGroupColor(
                     group.id, make_float3(group.color.x, group.color.y, group.color.z));
@@ -1035,50 +721,39 @@ namespace lfs::vis {
             return;
         }
 
-        // Track viewport size changes
         if (current_size != last_viewport_size_) {
             LOG_DEBUG("Viewport resize: {}x{} -> {}x{}", last_viewport_size_.x, last_viewport_size_.y,
                       current_size.x, current_size.y);
-            needs_render_.store(true);
-            mesh_dirty_.store(true);
+            markDirty(DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
             last_viewport_size_ = current_size;
         }
 
         const lfs::core::SplatData* const model = scene_manager ? scene_manager->getModelForRendering() : nullptr;
         const size_t model_ptr = reinterpret_cast<size_t>(model);
 
-        // Render mutex acquired in renderToTexture() during CUDA rasterization only
-
         if (model_ptr != last_model_ptr_) {
             LOG_DEBUG("Model ptr changed: {} -> {}, size={}", last_model_ptr_, model_ptr, model ? model->size() : 0);
-            needs_render_.store(true);
-            render_texture_valid_ = false;
+            markDirty(DirtyFlag::ALL);
             last_model_ptr_ = model_ptr;
             cached_result_ = {};
         }
 
-        bool split_view_active = settings_.split_view_mode != SplitViewMode::Disabled;
-        bool should_render = false;
-        const bool needs_render_now = needs_render_.load();
         const bool is_training = scene_manager && scene_manager->hasDataset() &&
                                  scene_manager->getTrainerManager() &&
                                  scene_manager->getTrainerManager()->isRunning();
 
-        // Invalidate render cache periodically during training
         if (is_training) {
             const auto now = std::chrono::steady_clock::now();
             const auto interval = std::chrono::duration<float>(
                 framerate_controller_.getSettings().training_frame_refresh_time_sec);
             if (now - last_training_render_ > interval) {
-                should_render = true;
-                render_texture_valid_ = false;
+                markDirty(DirtyFlag::SPLATS);
                 last_training_render_ = now;
             }
         }
 
         if (settings_.split_view_mode == SplitViewMode::GTComparison) {
             if (current_camera_id_ < 0) {
-                split_view_active = false;
                 gt_context_.reset();
                 gt_context_camera_id_ = -1;
             } else if (model) {
@@ -1111,7 +786,7 @@ namespace lfs::vis {
                 }
 
                 if (gt_context_ && !render_texture_valid_) {
-                    renderToTexture(context, scene_manager, model);
+                    dirty_mask_.fetch_or(DirtyFlag::SPLATS, std::memory_order_relaxed);
                 }
             }
         } else {
@@ -1121,18 +796,16 @@ namespace lfs::vis {
             }
         }
 
-        if (!cached_result_.image || needs_render_now || split_view_active) {
-            should_render = true;
-            needs_render_.store(false);
-        }
+        if (!cached_result_.image)
+            dirty_mask_.fetch_or(DirtyFlag::ALL, std::memory_order_relaxed);
+        if (settings_.split_view_mode != SplitViewMode::Disabled)
+            dirty_mask_.fetch_or(DirtyFlag::SPLIT_VIEW, std::memory_order_relaxed);
 
         glViewport(0, 0, context.viewport.frameBufferSize.x, context.viewport.frameBufferSize.y);
 
-        // Clear full framebuffer first to avoid artifacts in gaps between UI elements
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // Set viewport region with scissor clipping (Y flipped for OpenGL)
         if (context.viewport_region) {
             const GLint x = static_cast<GLint>(context.viewport_region->x);
             const GLint y = context.viewport.frameBufferSize.y - static_cast<GLint>(context.viewport_region->y + context.viewport_region->height);
@@ -1143,34 +816,7 @@ namespace lfs::vis {
             glEnable(GL_SCISSOR_TEST);
         }
 
-        const bool mesh_needs_render = mesh_dirty_.load();
-        if (should_render || !model || mesh_needs_render) {
-            doFullRender(context, scene_manager, model);
-        } else if (cached_result_.image && cached_result_size_.x > 0 && cached_result_size_.y > 0) {
-            // Use cached result - display at current viewport size (upscaling if needed)
-            glm::ivec2 viewport_pos(0, 0);
-            glm::ivec2 display_size = current_size;
-
-            if (context.viewport_region) {
-                const int gl_y = context.viewport.frameBufferSize.y - static_cast<int>(context.viewport_region->y) - static_cast<int>(context.viewport_region->height);
-                viewport_pos = glm::ivec2(static_cast<int>(context.viewport_region->x), gl_y);
-                display_size = glm::ivec2(static_cast<int>(context.viewport_region->width),
-                                          static_cast<int>(context.viewport_region->height));
-            } else {
-                glViewport(viewport_pos.x, viewport_pos.y, display_size.x, display_size.y);
-            }
-            glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
-            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-            engine_->presentToScreen(cached_result_, viewport_pos, cached_result_size_);
-
-            // Re-composite mesh if present from previous frame
-            if (engine_->hasMeshRender()) {
-                glViewport(viewport_pos.x, viewport_pos.y, display_size.x, display_size.y);
-                engine_->compositeMeshAndSplat(cached_result_, display_size);
-            }
-
-            renderOverlays(context);
-        }
+        doFullRender(context, scene_manager, model);
 
         if (context.viewport_region) {
             glDisable(GL_SCISSOR_TEST);
@@ -1188,706 +834,104 @@ namespace lfs::vis {
         LOG_TRACE("Render #{}, pick_requested: {}", render_count_, pick_requested_);
 
         glm::ivec2 render_size = context.viewport.windowSize;
+        glm::ivec2 viewport_pos(0, 0);
         if (context.viewport_region) {
             render_size = glm::ivec2(
                 static_cast<int>(context.viewport_region->width),
                 static_cast<int>(context.viewport_region->height));
+            const int gl_y = context.viewport.frameBufferSize.y -
+                             static_cast<int>(context.viewport_region->y) -
+                             static_cast<int>(context.viewport_region->height);
+            viewport_pos = glm::ivec2(static_cast<int>(context.viewport_region->x), gl_y);
         }
 
         glClearColor(settings_.background_color.r, settings_.background_color.g,
                      settings_.background_color.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Check for split view
-        if (auto split_request = createSplitViewRequest(context, scene_manager)) {
-            // Update split info
-            {
-                std::lock_guard<std::mutex> lock(split_info_mutex_);
-                current_split_info_.enabled = true;
-                if (split_request->panels.size() >= 2) {
-                    current_split_info_.left_name = split_request->panels[0].label;
-                    current_split_info_.right_name = split_request->panels[1].label;
-                }
-            }
+        const DirtyMask frame_dirty = dirty_mask_.exchange(0);
 
-            std::optional<std::shared_lock<std::shared_mutex>> render_lock;
-            if (const auto* tm = scene_manager ? scene_manager->getTrainerManager() : nullptr) {
-                if (const auto* trainer = tm->getTrainer()) {
-                    render_lock.emplace(trainer->getRenderMutex());
-                }
-            }
-
-            auto result = engine_->renderSplitView(*split_request);
-            render_lock.reset();
-
-            if (result) {
-                cached_result_ = *result;
-                // Store viewport size for coordinate calculations in getDepthAtPixel
-                cached_result_size_ = render_size;
-            } else {
-                LOG_ERROR("Failed to render split view: {}", result.error());
-                cached_result_size_ = {0, 0};
-            }
-
-            renderOverlays(context);
-            if (count_frame) {
-                framerate_controller_.endFrame();
-            }
-            return;
+        SceneRenderState scene_state;
+        if (scene_manager) {
+            scene_state = scene_manager->buildRenderState();
         }
 
-        // Clear split info if not in split view
+        const FrameContext frame_ctx{
+            .viewport = context.viewport,
+            .viewport_region = context.viewport_region,
+            .scene_manager = scene_manager,
+            .model = model,
+            .scene_state = std::move(scene_state),
+            .settings = settings_,
+            .render_size = render_size,
+            .viewport_pos = viewport_pos,
+            .frame_dirty = frame_dirty,
+            .brush = {.active = brush_active_,
+                      .x = brush_x_,
+                      .y = brush_y_,
+                      .radius = brush_radius_,
+                      .add_mode = brush_add_mode_,
+                      .selection_tensor = brush_selection_tensor_,
+                      .preview_selection = preview_selection_,
+                      .saturation_mode = brush_saturation_mode_,
+                      .saturation_amount = brush_saturation_amount_,
+                      .selection_mode = selection_mode_,
+                      .output_screen_positions = output_screen_positions_},
+            .gizmo = {.cropbox_active = cropbox_gizmo_active_,
+                      .cropbox_min = pending_cropbox_min_,
+                      .cropbox_max = pending_cropbox_max_,
+                      .cropbox_transform = pending_cropbox_transform_,
+                      .ellipsoid_active = ellipsoid_gizmo_active_,
+                      .ellipsoid_radii = pending_ellipsoid_radii_,
+                      .ellipsoid_transform = pending_ellipsoid_transform_},
+            .pick = {.requested = pick_requested_,
+                     .pos = pending_pick_pos_,
+                     .hovered_camera_id = hovered_camera_id_},
+            .current_camera_id = current_camera_id_,
+            .hovered_gaussian_id = hovered_gaussian_id_,
+            .selection_flash_intensity = getSelectionFlashIntensity(),
+            .cached_render_texture = cached_render_texture_};
+
+        FrameResources resources{
+            .cached_result = cached_result_,
+            .cached_result_size = cached_result_size_,
+            .render_texture_valid = render_texture_valid_,
+            .gt_context = gt_context_,
+            .hovered_gaussian_id = hovered_gaussian_id_,
+            .hovered_camera_id = hovered_camera_id_,
+            .manager = this};
+
+        // Pre-render splats at GT dimensions; pass loop skips via splat_pre_rendered guard
+        if (frame_ctx.settings.split_view_mode == SplitViewMode::GTComparison &&
+            resources.gt_context && resources.gt_context->valid() &&
+            (!resources.render_texture_valid || (frame_dirty & splat_raster_pass_->sensitivity()))) {
+            splat_raster_pass_->execute(*engine_, frame_ctx, resources);
+            resources.splat_pre_rendered = true;
+        }
+
+        for (auto& pass : passes_) {
+            if (pass->shouldExecute(frame_dirty, frame_ctx)) {
+                LOG_TRACE("Executing pass: {}", pass->name());
+                pass->execute(*engine_, frame_ctx, resources);
+            }
+        }
+
+        // Write-back from FrameResources to manager state
+        cached_result_ = resources.cached_result;
+        cached_result_size_ = resources.cached_result_size;
+        render_texture_valid_ = resources.render_texture_valid;
+        hovered_gaussian_id_ = resources.hovered_gaussian_id;
+        hovered_camera_id_ = resources.hovered_camera_id;
+        if (resources.pick_consumed)
+            pick_requested_ = false;
+
         {
             std::lock_guard<std::mutex> lock(split_info_mutex_);
-            current_split_info_ = SplitViewInfo{};
+            current_split_info_ = resources.split_view_executed ? resources.split_info : SplitViewInfo{};
         }
 
-        bool splats_presented = false;
-
-        const auto scene_state = scene_manager ? scene_manager->buildRenderState()
-                                               : SceneRenderState{};
-
-        // For non-split view, render to texture first (for potential reuse)
-        if (model && model->size() > 0) {
-            renderToTexture(context, scene_manager, model);
-
-            if (render_texture_valid_ && cached_result_size_.x > 0 && cached_result_size_.y > 0) {
-                glm::ivec2 viewport_pos(0, 0);
-                if (context.viewport_region) {
-                    const int gl_y = context.viewport.frameBufferSize.y - static_cast<int>(context.viewport_region->y) - static_cast<int>(context.viewport_region->height);
-                    viewport_pos = glm::ivec2(static_cast<int>(context.viewport_region->x), gl_y);
-                }
-
-                glViewport(viewport_pos.x, viewport_pos.y, render_size.x, render_size.y);
-                glClearColor(settings_.background_color.r, settings_.background_color.g,
-                             settings_.background_color.b, 1.0f);
-                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-                const auto present_result = engine_->presentToScreen(
-                    cached_result_,
-                    viewport_pos,
-                    cached_result_size_);
-                if (present_result) {
-                    splats_presented = true;
-                } else {
-                    LOG_ERROR("Failed to present render result: {}", present_result.error());
-                }
-            }
-        } else if (scene_manager) {
-            // Invalidate point cloud cache if source removed
-            if (!scene_state.point_cloud && cached_source_point_cloud_) {
-                cached_filtered_point_cloud_.reset();
-                cached_source_point_cloud_ = nullptr;
-            }
-
-            if (scene_state.point_cloud && scene_state.point_cloud->size() > 0) {
-                const lfs::core::PointCloud* point_cloud_to_render = scene_state.point_cloud;
-
-                // Apply cropbox filter (GPU-accelerated, cached)
-                for (const auto& cb : scene_state.cropboxes) {
-                    if (!cb.data || (!cb.data->enabled && !settings_.show_crop_box))
-                        continue;
-
-                    const bool cache_valid = cached_filtered_point_cloud_ &&
-                                             cached_source_point_cloud_ == scene_state.point_cloud &&
-                                             cached_cropbox_transform_ == cb.world_transform &&
-                                             cached_cropbox_min_ == cb.data->min &&
-                                             cached_cropbox_max_ == cb.data->max &&
-                                             cached_cropbox_inverse_ == cb.data->inverse;
-
-                    if (!cache_valid) {
-                        const auto& means = scene_state.point_cloud->means;
-                        const auto& colors = scene_state.point_cloud->colors;
-                        const size_t num_points = scene_state.point_cloud->size();
-                        const glm::mat4 m = glm::inverse(cb.world_transform);
-                        const auto device = means.device();
-
-                        // GLM column-major -> row-major for tensor matmul
-                        const auto transform = lfs::core::Tensor::from_vector({m[0][0], m[1][0], m[2][0], m[3][0],
-                                                                               m[0][1], m[1][1], m[2][1], m[3][1],
-                                                                               m[0][2], m[1][2], m[2][2], m[3][2],
-                                                                               m[0][3], m[1][3], m[2][3], m[3][3]},
-                                                                              {4, 4}, device);
-
-                        // Transform and filter on GPU
-                        const auto ones = lfs::core::Tensor::ones({num_points, 1}, device);
-                        const auto local_pos = transform.mm(means.cat(ones, 1).t()).t();
-
-                        const auto x = local_pos.slice(1, 0, 1).squeeze(1);
-                        const auto y = local_pos.slice(1, 1, 2).squeeze(1);
-                        const auto z = local_pos.slice(1, 2, 3).squeeze(1);
-
-                        auto mask = (x >= cb.data->min.x) && (x <= cb.data->max.x) &&
-                                    (y >= cb.data->min.y) && (y <= cb.data->max.y) &&
-                                    (z >= cb.data->min.z) && (z <= cb.data->max.z);
-                        if (cb.data->inverse)
-                            mask = mask.logical_not();
-
-                        const auto indices = mask.nonzero().squeeze(1);
-                        if (indices.size(0) > 0) {
-                            cached_filtered_point_cloud_ = std::make_unique<lfs::core::PointCloud>(
-                                means.index_select(0, indices), colors.index_select(0, indices));
-                        } else {
-                            cached_filtered_point_cloud_.reset();
-                        }
-
-                        cached_source_point_cloud_ = scene_state.point_cloud;
-                        cached_cropbox_transform_ = cb.world_transform;
-                        cached_cropbox_min_ = cb.data->min;
-                        cached_cropbox_max_ = cb.data->max;
-                        cached_cropbox_inverse_ = cb.data->inverse;
-                    }
-
-                    if (cached_filtered_point_cloud_) {
-                        point_cloud_to_render = cached_filtered_point_cloud_.get();
-                    } else {
-                        if (count_frame) {
-                            framerate_controller_.endFrame();
-                        }
-                        return;
-                    }
-                    break;
-                }
-
-                LOG_TRACE("Rendering point cloud with {} points", point_cloud_to_render->size());
-
-                // Get point cloud transform from scene state
-                glm::mat4 point_cloud_transform(1.0f);
-                if (!scene_state.model_transforms.empty()) {
-                    point_cloud_transform = scene_state.model_transforms[0];
-                }
-
-                lfs::rendering::ViewportData viewport_data{
-                    .rotation = context.viewport.getRotationMatrix(),
-                    .translation = context.viewport.getTranslation(),
-                    .size = render_size,
-                    .focal_length_mm = settings_.focal_length_mm,
-                    .orthographic = settings_.orthographic,
-                    .ortho_scale = settings_.ortho_scale};
-
-                // Build crop box from scene state for GPU-based desaturation
-                std::optional<lfs::rendering::BoundingBox> crop_box;
-                bool crop_inverse = false;
-                bool crop_desaturate = false;
-                for (const auto& cb : scene_state.cropboxes) {
-                    if (!cb.data || (!cb.data->enabled && !settings_.show_crop_box))
-                        continue;
-
-                    crop_box = lfs::rendering::BoundingBox{
-                        .min = cb.data->min,
-                        .max = cb.data->max,
-                        .transform = glm::inverse(cb.world_transform)};
-                    crop_inverse = cb.data->inverse;
-                    crop_desaturate = settings_.show_crop_box && settings_.desaturate_cropping;
-                    break;
-                }
-
-                lfs::rendering::RenderRequest pc_request{
-                    .viewport = viewport_data,
-                    .scaling_modifier = settings_.scaling_modifier,
-                    .antialiasing = false,
-                    .mip_filter = settings_.mip_filter,
-                    .sh_degree = 0,
-                    .background_color = settings_.background_color,
-                    .crop_box = crop_box,
-                    .point_cloud_mode = true,
-                    .voxel_size = settings_.voxel_size,
-                    .gut = false,
-                    .equirectangular = settings_.equirectangular,
-                    .show_rings = false,
-                    .ring_width = 0.0f,
-                    .show_center_markers = false,
-                    .model_transforms = {point_cloud_transform},
-                    .transform_indices = nullptr,
-                    .selection_mask = nullptr,
-                    .output_screen_positions = false,
-                    .brush_active = false,
-                    .brush_x = 0.0f,
-                    .brush_y = 0.0f,
-                    .brush_radius = 0.0f,
-                    .brush_add_mode = true,
-                    .brush_selection_tensor = nullptr,
-                    .brush_saturation_mode = false,
-                    .brush_saturation_amount = 0.0f,
-                    .selection_mode_rings = false,
-                    .crop_inverse = crop_inverse,
-                    .crop_desaturate = crop_desaturate,
-                    .selected_node_mask = {},
-                    .hovered_depth_id = nullptr,
-                    .highlight_gaussian_id = -1,
-                    .far_plane = lfs::rendering::DEFAULT_FAR_PLANE};
-
-                auto render_result = engine_->renderPointCloud(*scene_state.point_cloud, pc_request);
-                if (render_result) {
-                    cached_result_ = *render_result;
-
-                    glm::ivec2 actual_image_size(0, 0);
-                    if (cached_result_.image) {
-                        const auto& img = *cached_result_.image;
-                        actual_image_size = glm::ivec2(img.size(2), img.size(1)); // [C, H, W] -> (W, H)
-                    }
-
-                    glm::ivec2 viewport_pos(0, 0);
-                    if (context.viewport_region) {
-                        const int gl_y = context.viewport.frameBufferSize.y - static_cast<int>(context.viewport_region->y) - static_cast<int>(context.viewport_region->height);
-                        viewport_pos = glm::ivec2(static_cast<int>(context.viewport_region->x), gl_y);
-                    }
-
-                    glViewport(viewport_pos.x, viewport_pos.y, render_size.x, render_size.y);
-                    glClearColor(settings_.background_color.r, settings_.background_color.g,
-                                 settings_.background_color.b, 1.0f);
-                    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-                    const auto present_result = engine_->presentToScreen(cached_result_, viewport_pos, actual_image_size);
-                    if (present_result) {
-                        splats_presented = true;
-                    } else {
-                        LOG_ERROR("Failed to present point cloud: {}", present_result.error());
-                    }
-                } else {
-                    LOG_ERROR("Failed to render point cloud: {}", render_result.error());
-                }
-            }
-        }
-
-        if (scene_manager && engine_) {
-            if (!scene_state.meshes.empty()) {
-                if (mesh_dirty_.load()) {
-                    const lfs::rendering::ViewportData mesh_viewport{
-                        .rotation = context.viewport.getRotationMatrix(),
-                        .translation = context.viewport.getTranslation(),
-                        .size = render_size,
-                        .focal_length_mm = settings_.focal_length_mm,
-                        .orthographic = settings_.orthographic,
-                        .ortho_scale = settings_.ortho_scale};
-
-                    const float flash_intensity = getSelectionFlashIntensity();
-                    const bool any_selected = std::any_of(
-                                                  scene_state.meshes.begin(), scene_state.meshes.end(),
-                                                  [](const auto& vm) { return vm.is_selected; }) ||
-                                              (!scene_state.selected_node_mask.empty() &&
-                                               std::any_of(scene_state.selected_node_mask.begin(),
-                                                           scene_state.selected_node_mask.end(),
-                                                           [](bool b) { return b; }));
-
-                    const lfs::rendering::MeshRenderOptions mesh_opts{
-                        .wireframe_overlay = settings_.mesh_wireframe,
-                        .wireframe_color = settings_.mesh_wireframe_color,
-                        .wireframe_width = settings_.mesh_wireframe_width,
-                        .light_dir = settings_.mesh_light_dir,
-                        .light_intensity = settings_.mesh_light_intensity,
-                        .ambient = settings_.mesh_ambient,
-                        .backface_culling = settings_.mesh_backface_culling,
-                        .shadow_enabled = settings_.mesh_shadow_enabled,
-                        .shadow_map_resolution = settings_.mesh_shadow_resolution,
-                        .desaturate_unselected = settings_.desaturate_unselected && any_selected,
-                        .selection_flash_intensity = flash_intensity,
-                        .background_color = settings_.background_color};
-
-                    glEnable(GL_DEPTH_TEST);
-                    glDepthFunc(GL_LESS);
-
-                    engine_->resetMeshFrameState();
-                    for (const auto& vm : scene_state.meshes) {
-                        auto per_mesh_opts = mesh_opts;
-                        per_mesh_opts.is_selected = vm.is_selected;
-                        const auto result = engine_->renderMesh(
-                            *vm.mesh, mesh_viewport, vm.transform, per_mesh_opts, splats_presented);
-                        if (!result)
-                            LOG_ERROR("Failed to render mesh: {}", result.error());
-                    }
-                    mesh_dirty_.store(false);
-                }
-
-                if (engine_->hasMeshRender()) {
-                    glm::ivec2 mesh_pos(0, 0);
-                    if (context.viewport_region) {
-                        const int gl_y = context.viewport.frameBufferSize.y -
-                                         static_cast<int>(context.viewport_region->y) -
-                                         static_cast<int>(context.viewport_region->height);
-                        mesh_pos = glm::ivec2(static_cast<int>(context.viewport_region->x), gl_y);
-                    }
-
-                    glViewport(mesh_pos.x, mesh_pos.y, render_size.x, render_size.y);
-
-                    if (splats_presented) {
-                        const auto composite_result = engine_->compositeMeshAndSplat(
-                            cached_result_, render_size);
-                        if (!composite_result)
-                            LOG_ERROR("Failed to composite: {}", composite_result.error());
-                    } else {
-                        glClearColor(settings_.background_color.r, settings_.background_color.g,
-                                     settings_.background_color.b, 1.0f);
-                        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-                        const auto present_result = engine_->presentMeshOnly();
-                        if (!present_result)
-                            LOG_ERROR("Failed to present mesh: {}", present_result.error());
-                    }
-                }
-            }
-        }
-
-        // Always render overlays
-        renderOverlays(context);
         if (count_frame) {
             framerate_controller_.endFrame();
-        }
-    }
-
-    std::optional<lfs::rendering::SplitViewRequest>
-    RenderingManager::createSplitViewRequest(const RenderContext& context, SceneManager* scene_manager) {
-        if (settings_.split_view_mode == SplitViewMode::Disabled || !scene_manager) {
-            return std::nullopt;
-        }
-
-        // Get render size
-        glm::ivec2 render_size = context.viewport.windowSize;
-        if (context.viewport_region) {
-            render_size = glm::ivec2(
-                static_cast<int>(context.viewport_region->width),
-                static_cast<int>(context.viewport_region->height));
-        }
-
-        lfs::rendering::ViewportData viewport_data{
-            .rotation = context.viewport.getRotationMatrix(),
-            .translation = context.viewport.getTranslation(),
-            .size = render_size,
-            .focal_length_mm = settings_.focal_length_mm,
-            .orthographic = settings_.orthographic,
-            .ortho_scale = settings_.ortho_scale};
-
-        // Crop box from scene graph (single source of truth)
-        std::optional<lfs::rendering::BoundingBox> crop_box;
-        if (settings_.use_crop_box || settings_.show_crop_box) {
-            const auto& cropboxes = scene_manager->getScene().getVisibleCropBoxes();
-            if (!cropboxes.empty() && cropboxes[0].data) {
-                const auto& cb = cropboxes[0];
-                crop_box = lfs::rendering::BoundingBox{
-                    .min = cb.data->min,
-                    .max = cb.data->max,
-                    .transform = glm::inverse(cb.world_transform)};
-            }
-        }
-
-        if (settings_.split_view_mode == SplitViewMode::GTComparison) {
-            if (!gt_context_ || !gt_context_->valid() || !render_texture_valid_) {
-                return std::nullopt;
-            }
-
-            auto letterbox_viewport = viewport_data;
-            letterbox_viewport.size = render_size;
-
-            const auto disabled_uids = scene_manager->getScene().getTrainingDisabledCameraUids();
-            const bool cam_disabled = current_camera_id_ >= 0 && disabled_uids.count(current_camera_id_) > 0;
-            std::string gt_label = cam_disabled ? "Ground Truth (Excluded from Training)" : "Ground Truth";
-
-            return lfs::rendering::SplitViewRequest{
-                .panels = {{.content_type = lfs::rendering::PanelContentType::Image2D,
-                            .texture_id = gt_context_->gt_texture_id,
-                            .label = std::move(gt_label),
-                            .start_position = 0.0f,
-                            .end_position = settings_.split_position},
-                           {.content_type = lfs::rendering::PanelContentType::CachedRender,
-                            .texture_id = cached_render_texture_,
-                            .label = "Rendered",
-                            .start_position = settings_.split_position,
-                            .end_position = 1.0f}},
-                .viewport = letterbox_viewport,
-                .scaling_modifier = settings_.scaling_modifier,
-                .antialiasing = settings_.antialiasing,
-                .mip_filter = settings_.mip_filter,
-                .sh_degree = settings_.sh_degree,
-                .background_color = settings_.background_color,
-                .crop_box = crop_box,
-                .point_cloud_mode = settings_.point_cloud_mode,
-                .voxel_size = settings_.voxel_size,
-                .gut = settings_.gut,
-                .equirectangular = settings_.equirectangular,
-                .show_rings = settings_.show_rings,
-                .ring_width = settings_.ring_width,
-                .show_dividers = true,
-                .divider_color = glm::vec4(1.0f, 0.85f, 0.0f, 1.0f),
-                .show_labels = true,
-                .left_texcoord_scale = gt_context_->gt_texcoord_scale,
-                .right_texcoord_scale = gt_context_->render_texcoord_scale,
-                .flip_left_y = gt_context_->gt_needs_flip,
-                .letterbox = true,
-                .content_size = gt_context_->dimensions};
-        }
-
-        if (settings_.split_view_mode == SplitViewMode::PLYComparison) {
-            const auto& scene = scene_manager->getScene();
-            const auto visible_nodes = scene.getVisibleNodes();
-            if (visible_nodes.size() < 2) {
-                LOG_TRACE("PLY comparison needs at least 2 visible nodes, have {}", visible_nodes.size());
-                return std::nullopt;
-            }
-
-            // Calculate which pair to show
-            size_t left_idx = settings_.split_view_offset % visible_nodes.size();
-            size_t right_idx = (settings_.split_view_offset + 1) % visible_nodes.size();
-
-            LOG_TRACE("Creating PLY comparison split view: {} vs {}",
-                      visible_nodes[left_idx]->name, visible_nodes[right_idx]->name);
-
-            // PLY comparison uses exact viewport-sized framebuffers, so scale is 1.0
-            const glm::vec2 texcoord_scale(1.0f, 1.0f);
-
-            return lfs::rendering::SplitViewRequest{
-                .panels = {
-                    {.content_type = lfs::rendering::PanelContentType::Model3D,
-                     .model = visible_nodes[left_idx]->model.get(),
-                     .model_transform = scene.getWorldTransform(visible_nodes[left_idx]->id),
-                     .texture_id = 0,
-                     .label = visible_nodes[left_idx]->name,
-                     .start_position = 0.0f,
-                     .end_position = settings_.split_position},
-                    {.content_type = lfs::rendering::PanelContentType::Model3D,
-                     .model = visible_nodes[right_idx]->model.get(),
-                     .model_transform = scene.getWorldTransform(visible_nodes[right_idx]->id),
-                     .texture_id = 0,
-                     .label = visible_nodes[right_idx]->name,
-                     .start_position = settings_.split_position,
-                     .end_position = 1.0f}},
-                .viewport = viewport_data,
-                .scaling_modifier = settings_.scaling_modifier,
-                .antialiasing = settings_.antialiasing,
-                .mip_filter = settings_.mip_filter,
-                .sh_degree = settings_.sh_degree,
-                .background_color = settings_.background_color,
-                .crop_box = crop_box,
-                .point_cloud_mode = settings_.point_cloud_mode,
-                .voxel_size = settings_.voxel_size,
-                .gut = settings_.gut,
-                .equirectangular = settings_.equirectangular,
-                .show_rings = settings_.show_rings,
-                .ring_width = settings_.ring_width,
-                .show_dividers = true,
-                .divider_color = glm::vec4(1.0f, 0.85f, 0.0f, 1.0f),
-                .show_labels = true,
-                .left_texcoord_scale = texcoord_scale,
-                .right_texcoord_scale = texcoord_scale};
-        }
-
-        return std::nullopt;
-    }
-
-    void RenderingManager::renderOverlays(const RenderContext& context) {
-        glm::ivec2 render_size = context.viewport.windowSize;
-        if (context.viewport_region) {
-            render_size = glm::ivec2(
-                static_cast<int>(context.viewport_region->width),
-                static_cast<int>(context.viewport_region->height));
-        }
-
-        if (render_size.x <= 0 || render_size.y <= 0) {
-            return;
-        }
-
-        lfs::rendering::ViewportData viewport{
-            .rotation = context.viewport.getRotationMatrix(),
-            .translation = context.viewport.getTranslation(),
-            .size = render_size,
-            .focal_length_mm = settings_.focal_length_mm,
-            .orthographic = settings_.orthographic,
-            .ortho_scale = settings_.ortho_scale};
-
-        // Render wireframe overlays before grid
-        if (settings_.show_crop_box && engine_ && context.scene_manager) {
-            const auto visible_cropboxes = context.scene_manager->getScene().getVisibleCropBoxes();
-            const core::NodeId selected_cropbox_id = context.scene_manager->getSelectedNodeCropBoxId();
-
-            for (const auto& cb : visible_cropboxes) {
-                if (!cb.data)
-                    continue;
-
-                const bool is_selected = (cb.node_id == selected_cropbox_id);
-
-                // Use pending state for selected cropbox during gizmo manipulation
-                const bool use_pending = is_selected && cropbox_gizmo_active_;
-                const glm::vec3 box_min = use_pending ? pending_cropbox_min_ : cb.data->min;
-                const glm::vec3 box_max = use_pending ? pending_cropbox_max_ : cb.data->max;
-                const glm::mat4 box_transform = use_pending ? pending_cropbox_transform_ : cb.world_transform;
-
-                const lfs::rendering::BoundingBox box{
-                    .min = box_min,
-                    .max = box_max,
-                    .transform = glm::inverse(box_transform)};
-
-                const glm::vec3 base_color = cb.data->inverse
-                                                 ? glm::vec3(1.0f, 0.2f, 0.2f)
-                                                 : cb.data->color;
-                const float flash = is_selected ? cb.data->flash_intensity : 0.0f;
-                constexpr float FLASH_LINE_BOOST = 4.0f;
-                const glm::vec3 color = glm::mix(base_color, glm::vec3(1.0f), flash);
-                const float line_width = cb.data->line_width + flash * FLASH_LINE_BOOST;
-
-                auto bbox_result = engine_->renderBoundingBox(box, viewport, color, line_width);
-                if (!bbox_result) {
-                    LOG_WARN("Failed to render bounding box: {}", bbox_result.error());
-                }
-            }
-        }
-
-        // Render ellipsoid wireframe overlays
-        if (settings_.show_ellipsoid && engine_ && context.scene_manager) {
-            const auto visible_ellipsoids = context.scene_manager->getScene().getVisibleEllipsoids();
-            const core::NodeId selected_ellipsoid_id = context.scene_manager->getSelectedNodeEllipsoidId();
-
-            for (const auto& el : visible_ellipsoids) {
-                if (!el.data)
-                    continue;
-
-                const bool is_selected = (el.node_id == selected_ellipsoid_id);
-
-                // Use pending state for selected ellipsoid during gizmo manipulation
-                const glm::vec3 radii = (is_selected && ellipsoid_gizmo_active_)
-                                            ? pending_ellipsoid_radii_
-                                            : el.data->radii;
-                const glm::mat4 transform = (is_selected && ellipsoid_gizmo_active_)
-                                                ? pending_ellipsoid_transform_
-                                                : el.world_transform;
-
-                const lfs::rendering::Ellipsoid ellipsoid{
-                    .radii = radii,
-                    .transform = transform};
-
-                const glm::vec3 base_color = el.data->inverse
-                                                 ? glm::vec3(1.0f, 0.2f, 0.2f)
-                                                 : el.data->color;
-                const float flash = is_selected ? el.data->flash_intensity : 0.0f;
-                constexpr float FLASH_LINE_BOOST = 4.0f;
-                const glm::vec3 color = glm::mix(base_color, glm::vec3(1.0f), flash);
-                const float line_width = el.data->line_width + flash * FLASH_LINE_BOOST;
-
-                auto ellipsoid_result = engine_->renderEllipsoid(ellipsoid, viewport, color, line_width);
-                if (!ellipsoid_result) {
-                    LOG_WARN("Failed to render ellipsoid: {}", ellipsoid_result.error());
-                }
-            }
-        }
-
-        // Coordinate axes
-        if (settings_.show_coord_axes && engine_) {
-            auto axes_result = engine_->renderCoordinateAxes(viewport, settings_.axes_size, settings_.axes_visibility, settings_.equirectangular);
-            if (!axes_result) {
-                LOG_WARN("Failed to render coordinate axes: {}", axes_result.error());
-            }
-        }
-
-        // Pivot point ripple animation
-        if (engine_) {
-            constexpr float PIVOT_DURATION_SEC = 0.5f;
-            constexpr float PIVOT_SIZE_PX = 50.0f;
-
-            const float time_since_set = context.viewport.camera.getSecondsSincePivotSet();
-            const bool animation_active = time_since_set < PIVOT_DURATION_SEC;
-
-            if (animation_active) {
-                const auto remaining_ms = static_cast<int>((PIVOT_DURATION_SEC - time_since_set) * 1000.0f);
-                setPivotAnimationEndTime(std::chrono::steady_clock::now() +
-                                         std::chrono::milliseconds(remaining_ms));
-            }
-
-            if (settings_.show_pivot || animation_active) {
-                const float opacity = settings_.show_pivot ? 1.0f : 1.0f - std::clamp(time_since_set / PIVOT_DURATION_SEC, 0.0f, 1.0f);
-
-                if (auto result = engine_->renderPivot(viewport, context.viewport.camera.getPivot(),
-                                                       PIVOT_SIZE_PX, opacity);
-                    !result) {
-                    LOG_WARN("Pivot render failed: {}", result.error());
-                }
-            }
-        }
-
-        // Camera frustums - read directly from scene nodes (no trainer dependency)
-        if (settings_.show_camera_frustums && engine_ && context.scene_manager) {
-            auto cameras = context.scene_manager->getScene().getVisibleCameras();
-
-            if (!cameras.empty()) {
-                int highlight_index = -1;
-                if (hovered_camera_id_ >= 0) {
-                    for (size_t i = 0; i < cameras.size(); ++i) {
-                        if (cameras[i]->uid() == hovered_camera_id_) {
-                            highlight_index = static_cast<int>(i);
-                            break;
-                        }
-                    }
-                }
-
-                glm::mat4 scene_transform(1.0f);
-                auto visible_transforms = context.scene_manager->getScene().getVisibleNodeTransforms();
-                if (!visible_transforms.empty()) {
-                    scene_transform = visible_transforms[0];
-                }
-
-                LOG_TRACE("Rendering {} camera frustums with scale {}, highlighted index: {} (ID: {})",
-                          cameras.size(), settings_.camera_frustum_scale, highlight_index, hovered_camera_id_);
-
-                auto disabled_uids = context.scene_manager->getScene().getTrainingDisabledCameraUids();
-
-                std::unordered_set<int> selected_uids;
-                for (const auto& name : context.scene_manager->getSelectedNodeNames()) {
-                    const auto* node = context.scene_manager->getScene().getNode(name);
-                    if (node && node->type == core::NodeType::CAMERA && node->camera_uid >= 0)
-                        selected_uids.insert(node->camera_uid);
-                }
-
-                auto frustum_result = engine_->renderCameraFrustumsWithHighlight(
-                    cameras, viewport,
-                    settings_.camera_frustum_scale,
-                    settings_.train_camera_color,
-                    settings_.eval_camera_color,
-                    highlight_index,
-                    scene_transform,
-                    settings_.equirectangular,
-                    disabled_uids,
-                    selected_uids);
-
-                if (!frustum_result) {
-                    LOG_ERROR("Failed to render camera frustums: {}", frustum_result.error());
-                }
-
-                if (pick_requested_ && context.viewport_region) {
-                    pick_requested_ = false;
-
-                    auto pick_result = engine_->pickCameraFrustum(
-                        cameras,
-                        pending_pick_pos_,
-                        glm::vec2(context.viewport_region->x, context.viewport_region->y),
-                        glm::vec2(context.viewport_region->width, context.viewport_region->height),
-                        viewport,
-                        settings_.camera_frustum_scale,
-                        scene_transform);
-
-                    if (pick_result) {
-                        int cam_id = *pick_result;
-                        if (cam_id != hovered_camera_id_) {
-                            int old_hover = hovered_camera_id_;
-                            hovered_camera_id_ = cam_id;
-                            markDirty();
-                            LOG_DEBUG("Camera hover changed: {} -> {}", old_hover, cam_id);
-                        }
-                    } else if (hovered_camera_id_ != -1) {
-                        int old_hover = hovered_camera_id_;
-                        hovered_camera_id_ = -1;
-                        markDirty();
-                        LOG_DEBUG("Camera hover lost (was ID: {})", old_hover);
-                    }
-                }
-            }
-        }
-
-        // Grid - disabled in split view and equirectangular modes
-        if (settings_.show_grid && engine_ && settings_.split_view_mode == SplitViewMode::Disabled && !settings_.equirectangular) {
-            if (const auto result = engine_->renderGrid(
-                    viewport,
-                    static_cast<lfs::rendering::GridPlane>(settings_.grid_plane),
-                    settings_.grid_opacity);
-                !result) {
-                LOG_WARN("Grid render failed: {}", result.error());
-            }
         }
     }
 
@@ -1931,8 +975,9 @@ namespace lfs::vis {
                 }
 
                 if (scaled_x >= 0 && scaled_x < depth_width && scaled_y >= 0 && scaled_y < depth_height) {
-                    auto depth_cpu = depth_ptr->cpu();
-                    const float d = depth_cpu.ptr<float>()[scaled_y * depth_width + scaled_x];
+                    float d;
+                    const float* gpu_ptr = depth_ptr->ptr<float>() + scaled_y * depth_width + scaled_x;
+                    CHECK_CUDA(cudaMemcpy(&d, gpu_ptr, sizeof(float), cudaMemcpyDeviceToHost));
                     if (d < 1e9f) {
                         splat_depth = d;
                     }
@@ -2000,18 +1045,14 @@ namespace lfs::vis {
         lfs::core::Tensor crop_t, crop_min, crop_max;
         bool crop_inverse = false;
 
-        const auto& cropboxes = sm->buildRenderState().cropboxes;
+        const auto& cropboxes = sm->getScene().getVisibleCropBoxes();
         if (!cropboxes.empty() && cropboxes[0].data) {
             const auto& cb = cropboxes[0];
             const glm::mat4 inv_transform = glm::inverse(cb.world_transform);
             const float* const t_ptr = glm::value_ptr(inv_transform);
-            crop_t = lfs::core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4}, lfs::core::Device::CPU).cuda();
-            crop_min = lfs::core::Tensor::from_vector(
-                           {cb.data->min.x, cb.data->min.y, cb.data->min.z}, {3}, lfs::core::Device::CPU)
-                           .cuda();
-            crop_max = lfs::core::Tensor::from_vector(
-                           {cb.data->max.x, cb.data->max.y, cb.data->max.z}, {3}, lfs::core::Device::CPU)
-                           .cuda();
+            crop_t = lfs::core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4});
+            crop_min = lfs::core::Tensor::from_vector({cb.data->min.x, cb.data->min.y, cb.data->min.z}, {3});
+            crop_max = lfs::core::Tensor::from_vector({cb.data->max.x, cb.data->max.y, cb.data->max.z}, {3});
             crop_inverse = cb.data->inverse;
         }
 
@@ -2023,10 +1064,8 @@ namespace lfs::vis {
             const auto& el = ellipsoids[0];
             const glm::mat4 inv_transform = glm::inverse(el.world_transform);
             const float* const t_ptr = glm::value_ptr(inv_transform);
-            ellip_t = lfs::core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4}, lfs::core::Device::CPU).cuda();
-            ellip_radii = lfs::core::Tensor::from_vector(
-                              {el.data->radii.x, el.data->radii.y, el.data->radii.z}, {3}, lfs::core::Device::CPU)
-                              .cuda();
+            ellip_t = lfs::core::Tensor::from_vector(std::vector<float>(t_ptr, t_ptr + 16), {4, 4});
+            ellip_radii = lfs::core::Tensor::from_vector({el.data->radii.x, el.data->radii.y, el.data->radii.z}, {3});
             ellipsoid_inverse = el.data->inverse;
         }
 
@@ -2052,7 +1091,7 @@ namespace lfs::vis {
         brush_selection_tensor_ = selection_tensor;
         brush_saturation_mode_ = saturation_mode;
         brush_saturation_amount_ = saturation_amount;
-        markDirty();
+        markDirty(DirtyFlag::SELECTION);
     }
 
     void RenderingManager::clearBrushState() {
@@ -2065,7 +1104,7 @@ namespace lfs::vis {
         brush_saturation_amount_ = 0.0f;
         hovered_gaussian_id_ = -1;
         preview_selection_ = nullptr;
-        markDirty();
+        markDirty(DirtyFlag::SELECTION);
     }
 
     void RenderingManager::setRectPreview(float x0, float y0, float x1, float y1, bool add_mode) {
@@ -2125,7 +1164,7 @@ namespace lfs::vis {
             num_gaussians,
             nullptr);
 
-        markDirty();
+        markDirty(DirtyFlag::SPLATS);
     }
 
 } // namespace lfs::vis

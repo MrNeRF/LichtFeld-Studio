@@ -87,7 +87,7 @@ namespace lfs::vis::op {
         }
 
         if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty();
+            services().renderingOrNull()->markDirty(DirtyFlag::SELECTION);
         }
 
         return OperatorResult::RUNNING_MODAL;
@@ -123,7 +123,7 @@ namespace lfs::vis::op {
             // Polygon mode: no action on mouse move (click-based, not drag-based)
 
             if (services().renderingOrNull()) {
-                services().renderingOrNull()->markDirty();
+                services().renderingOrNull()->markDirty(DirtyFlag::SELECTION);
             }
             return OperatorResult::RUNNING_MODAL;
         }
@@ -145,7 +145,7 @@ namespace lfs::vis::op {
                             polygon_closed_ = true;
                             updatePolygonPreview(ctx);
                             if (services().renderingOrNull()) {
-                                services().renderingOrNull()->markDirty();
+                                services().renderingOrNull()->markDirty(DirtyFlag::SELECTION);
                             }
                             return OperatorResult::RUNNING_MODAL;
                         }
@@ -155,7 +155,7 @@ namespace lfs::vis::op {
                         polygon_points_.push_back(new_point);
                         updatePolygonPreview(ctx);
                         if (services().renderingOrNull()) {
-                            services().renderingOrNull()->markDirty();
+                            services().renderingOrNull()->markDirty(DirtyFlag::SELECTION);
                         }
                     }
                     return OperatorResult::RUNNING_MODAL;
@@ -167,7 +167,7 @@ namespace lfs::vis::op {
                         polygon_closed_ = false;
                         updatePolygonPreview(ctx);
                         if (services().renderingOrNull()) {
-                            services().renderingOrNull()->markDirty();
+                            services().renderingOrNull()->markDirty(DirtyFlag::SELECTION);
                         }
                         return OperatorResult::RUNNING_MODAL;
                     }
@@ -245,7 +245,7 @@ namespace lfs::vis::op {
             rm->clearPreviewSelection();
             rm->clearBrushState();
             rm->clearPolygonPreview();
-            rm->markDirty();
+            rm->markDirty(DirtyFlag::SELECTION);
         }
     }
 
@@ -598,7 +598,7 @@ namespace lfs::vis::op {
             rm->clearBrushState();
             rm->clearPolygonPreview();
             rm->clearLassoPreview();
-            rm->markDirty();
+            rm->markDirty(DirtyFlag::SELECTION);
         }
     }
 

@@ -74,7 +74,7 @@ namespace lfs::vis::op {
         }
 
         if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty();
+            services().renderingOrNull()->markDirty(DirtyFlag::SELECTION);
         }
 
         return OperatorResult::RUNNING_MODAL;
@@ -104,7 +104,7 @@ namespace lfs::vis::op {
             last_stroke_pos_ = glm::vec2(static_cast<float>(x), static_cast<float>(y));
 
             if (services().renderingOrNull()) {
-                services().renderingOrNull()->markDirty();
+                services().renderingOrNull()->markDirty(DirtyFlag::SELECTION);
             }
             return OperatorResult::RUNNING_MODAL;
         }
@@ -163,7 +163,7 @@ namespace lfs::vis::op {
         saturation_node_name_.clear();
 
         if (auto* rm = services().renderingOrNull()) {
-            rm->markDirty();
+            rm->markDirty(DirtyFlag::SELECTION);
         }
     }
 
@@ -319,7 +319,7 @@ namespace lfs::vis::op {
     void BrushStrokeOperator::clearBrushState() {
         if (auto* rm = services().renderingOrNull()) {
             rm->clearBrushState();
-            rm->markDirty();
+            rm->markDirty(DirtyFlag::SELECTION);
         }
     }
 

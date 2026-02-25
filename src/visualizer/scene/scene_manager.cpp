@@ -647,7 +647,7 @@ namespace lfs::vis {
         selection_.clearNodeSelection();
         python::invalidate_poll_caches(1);
         if (auto* rm = services().renderingOrNull())
-            rm->markDirty();
+            rm->markDirty(DirtyFlag::SELECTION);
         LOG_TRACE("Cleared node selection");
     }
 
@@ -1305,7 +1305,7 @@ namespace lfs::vis {
     void SceneManager::syncCropBoxToRenderSettings() {
         // Scene graph is single source of truth - just trigger re-render
         if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty();
+            services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
         }
     }
 
@@ -1348,7 +1348,7 @@ namespace lfs::vis {
 
     void SceneManager::syncEllipsoidToRenderSettings() {
         if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty();
+            services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
         }
     }
 
@@ -2108,7 +2108,7 @@ namespace lfs::vis {
             if (!pointcloud_node_names.empty()) {
                 scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
                 if (services().renderingOrNull()) {
-                    services().renderingOrNull()->markDirty();
+                    services().renderingOrNull()->markDirty(DirtyFlag::SPLATS);
                 }
             }
             return;
@@ -2263,7 +2263,7 @@ namespace lfs::vis {
             if (!pointcloud_node_names.empty()) {
                 scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
                 if (services().renderingOrNull()) {
-                    services().renderingOrNull()->markDirty();
+                    services().renderingOrNull()->markDirty(DirtyFlag::SPLATS);
                 }
             }
             return;
@@ -2314,7 +2314,7 @@ namespace lfs::vis {
     size_t SceneManager::applyDeleted() {
         const size_t removed = scene_.applyDeleted();
         if (removed > 0 && services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty();
+            services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
         }
         return removed;
     }
@@ -2679,7 +2679,7 @@ namespace lfs::vis {
             auto settings = rm->getSettings();
             settings.use_crop_box = false;
             rm->updateSettings(settings);
-            rm->markDirty();
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
         }
 
         scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
@@ -2717,7 +2717,7 @@ namespace lfs::vis {
             auto settings = rm->getSettings();
             settings.use_ellipsoid = false;
             rm->updateSettings(settings);
-            rm->markDirty();
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
         }
 
         scene_.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
@@ -2790,7 +2790,8 @@ namespace lfs::vis {
             node->transform_dirty = true;
         }
 
-        services().renderingOrNull()->markDirty();
+        if (auto* rm = services().renderingOrNull())
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
 
         LOG_INFO("Fit '{}' to '{}': center({:.2f},{:.2f},{:.2f}) size({:.2f},{:.2f},{:.2f})",
                  cropbox_node->name, target_node->name, center.x, center.y, center.z,
@@ -2869,7 +2870,7 @@ namespace lfs::vis {
         }
 
         if (auto* rm = services().renderingOrNull()) {
-            rm->markDirty();
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::OVERLAY);
         }
 
         LOG_INFO("Fit ellipsoid '{}' to '{}': center({:.2f},{:.2f},{:.2f}) radii({:.2f},{:.2f},{:.2f})",
@@ -3278,7 +3279,7 @@ namespace lfs::vis {
             op::undoHistory().push(std::move(entry));
 
             if (auto* rm = services().renderingOrNull())
-                rm->markDirty();
+                rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
         }
     }
 
@@ -3301,7 +3302,7 @@ namespace lfs::vis {
         op::undoHistory().push(std::move(entry));
 
         if (auto* rm = services().renderingOrNull())
-            rm->markDirty();
+            rm->markDirty(DirtyFlag::SELECTION);
     }
 
     void SceneManager::deselectAllGaussians() {
@@ -3317,7 +3318,7 @@ namespace lfs::vis {
         op::undoHistory().push(std::move(entry));
 
         if (auto* rm = services().renderingOrNull())
-            rm->markDirty();
+            rm->markDirty(DirtyFlag::SELECTION);
     }
 
     void SceneManager::selectAllGaussians() {
@@ -3363,7 +3364,7 @@ namespace lfs::vis {
         }
 
         if (auto* rm = services().renderingOrNull())
-            rm->markDirty();
+            rm->markDirty(DirtyFlag::SELECTION);
     }
 
     void SceneManager::copySelectionToClipboard() {
@@ -3390,7 +3391,7 @@ namespace lfs::vis {
             addToSelection(name);
 
         if (auto* rm = services().renderingOrNull())
-            rm->markDirty();
+            rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
     }
 
     void SceneManager::selectRect(float x0, float y0, float x1, float y1, const std::string& mode) {

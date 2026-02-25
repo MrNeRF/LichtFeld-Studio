@@ -72,7 +72,7 @@ namespace lfs::vis {
         // Helper methods
         void requestRender() const {
             if (rendering_manager) {
-                rendering_manager->markDirty();
+                rendering_manager->markDirty(DirtyFlag::ALL);
             }
         }
 

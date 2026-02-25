@@ -50,7 +50,7 @@ namespace lfs::vis::op {
         captureTransformsBefore(ctx);
 
         if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty();
+            services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
         }
 
         return OperatorResult::RUNNING_MODAL;
@@ -82,7 +82,7 @@ namespace lfs::vis::op {
                 services().setAlignPickedPoints(picked_points_);
 
                 if (services().renderingOrNull()) {
-                    services().renderingOrNull()->markDirty();
+                    services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
                 }
 
                 if (picked_points_.size() == 3) {
@@ -108,7 +108,7 @@ namespace lfs::vis::op {
         transforms_before_.clear();
         services().clearAlignPickedPoints();
         if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty();
+            services().renderingOrNull()->markDirty(DirtyFlag::OVERLAY);
         }
     }
 
@@ -190,7 +190,7 @@ namespace lfs::vis::op {
         undoHistory().push(std::move(entry));
 
         if (services().renderingOrNull()) {
-            services().renderingOrNull()->markDirty();
+            services().renderingOrNull()->markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY);
         }
     }
 
