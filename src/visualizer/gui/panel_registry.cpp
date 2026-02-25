@@ -207,9 +207,8 @@ namespace lfs::vis::gui {
                         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings |
                         ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoFocusOnAppearing;
 
-                    const auto& t = theme();
-                    ImGui::PushStyleColor(ImGuiCol_WindowBg, withAlpha(t.palette.background, 0.95f));
-                    ImGui::PushStyleColor(ImGuiCol_Border, withAlpha(t.palette.border, 0.6f));
+                    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+                    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0, 0, 0, 0));
                     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
                     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {PADDING, 3.0f});
                     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {6.0f, 0.0f});
@@ -217,9 +216,6 @@ namespace lfs::vis::gui {
                     ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, {1.0f, 1.0f});
 
                     if (ImGui::Begin("##StatusBar", nullptr, FLAGS)) {
-                        ImGui::GetWindowDrawList()->AddLine(
-                            bar_pos, {bar_pos.x + bar_size.x, bar_pos.y},
-                            toU32(withAlpha(t.palette.surface_bright, 0.4f)), 1.0f);
                         snap.panel->draw(ctx);
                     }
                     ImGui::End();

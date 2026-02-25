@@ -82,7 +82,7 @@ namespace lfs::vis::gui {
             ImGuiWindowFlags_NoTitleBar;
 
         const auto& t = theme();
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, withAlpha(t.palette.surface, 0.95f));
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {8.0f, 8.0f});
 
         constexpr float EDGE_GRAB_W = 8.0f;

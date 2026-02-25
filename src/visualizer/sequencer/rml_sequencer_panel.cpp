@@ -9,6 +9,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/string_keys.hpp"
@@ -17,14 +18,12 @@
 #include "theme/theme.hpp"
 
 #include <RmlUi/Core.h>
-#include <RmlUi/Core/Factory.h>
 #include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <format>
-#include <fstream>
 #include <imgui.h>
 
 namespace lfs::vis {
@@ -53,24 +52,10 @@ namespace lfs::vis {
             return std::format("{}s", secs);
         }
 
-        std::string colorToRml(const ImVec4& c) {
-            const auto r = static_cast<int>(c.x * 255.0f);
-            const auto g = static_cast<int>(c.y * 255.0f);
-            const auto b = static_cast<int>(c.z * 255.0f);
-            const auto a = static_cast<int>(c.w * 255.0f);
-            return std::format("rgba({},{},{},{})", r, g, b, a);
-        }
-
-        std::string colorToRmlWithAlpha(const ImVec4& c, const float alpha) {
-            const auto r = static_cast<int>(c.x * 255.0f);
-            const auto g = static_cast<int>(c.y * 255.0f);
-            const auto b = static_cast<int>(c.z * 255.0f);
-            const auto a = static_cast<int>(alpha * 255.0f);
-            return std::format("rgba({},{},{},{})", r, g, b, a);
-        }
-
     } // namespace
 
+    using gui::rml_theme::colorToRml;
+    using gui::rml_theme::colorToRmlAlpha;
     using namespace panel_config;
 
     RmlSequencerPanel::RmlSequencerPanel(SequencerController& controller, gui::RmlUIManager* rml_manager)
@@ -79,12 +64,10 @@ namespace lfs::vis {
         assert(rml_manager_);
     }
 
-    RmlSequencerPanel::~RmlSequencerPanel() {
-        destroyFBO();
-    }
+    RmlSequencerPanel::~RmlSequencerPanel() = default;
 
     void RmlSequencerPanel::destroyGLResources() {
-        destroyFBO();
+        fbo_.destroy();
     }
 
     void RmlSequencerPanel::initContext(const int width, const int height) {
@@ -129,72 +112,17 @@ namespace lfs::vis {
         }
     }
 
-    void RmlSequencerPanel::initFBO(const int width, const int height) {
-        if (fbo_ && fbo_width_ == width && fbo_height_ == height)
-            return;
-
-        destroyFBO();
-
-        fbo_width_ = width;
-        fbo_height_ = height;
-
-        glGenFramebuffers(1, &fbo_);
-        glGenTextures(1, &fbo_texture_);
-        glGenRenderbuffers(1, &fbo_depth_stencil_);
-
-        glBindTexture(GL_TEXTURE_2D, fbo_texture_);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glBindTexture(GL_TEXTURE_2D, 0);
-
-        glBindRenderbuffer(GL_RENDERBUFFER, fbo_depth_stencil_);
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width, height);
-        glBindRenderbuffer(GL_RENDERBUFFER, 0);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fbo_texture_, 0);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, fbo_depth_stencil_);
-
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            LOG_ERROR("Sequencer panel FBO incomplete");
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            destroyFBO();
-            return;
-        }
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    }
-
-    void RmlSequencerPanel::destroyFBO() {
-        if (fbo_texture_) {
-            glDeleteTextures(1, &fbo_texture_);
-            fbo_texture_ = 0;
-        }
-        if (fbo_depth_stencil_) {
-            glDeleteRenderbuffers(1, &fbo_depth_stencil_);
-            fbo_depth_stencil_ = 0;
-        }
-        if (fbo_) {
-            glDeleteFramebuffers(1, &fbo_);
-            fbo_ = 0;
-        }
-        fbo_width_ = 0;
-        fbo_height_ = 0;
-    }
-
     std::string RmlSequencerPanel::generateThemeRCSS() const {
         const auto& p = lfs::vis::theme().palette;
         const auto& t = lfs::vis::theme();
 
-        const auto surface_alpha = colorToRmlWithAlpha(p.surface, 0.95f);
-        const auto border = colorToRmlWithAlpha(p.border, 0.4f);
+        const auto surface_alpha = colorToRmlAlpha(p.surface, 0.95f);
+        const auto border = colorToRmlAlpha(p.border, 0.4f);
         const auto text = colorToRml(p.text);
         const auto text_dim = colorToRml(p.text_dim);
-        const auto text_dim_half = colorToRmlWithAlpha(p.text_dim, 0.5f);
-        const auto bg_alpha = colorToRmlWithAlpha(p.background, 0.8f);
-        const auto border_dim = colorToRmlWithAlpha(p.border, 0.3f);
+        const auto text_dim_half = colorToRmlAlpha(p.text_dim, 0.5f);
+        const auto bg_alpha = colorToRmlAlpha(p.background, 0.8f);
+        const auto border_dim = colorToRmlAlpha(p.border, 0.3f);
         const auto error = colorToRml(p.error);
         const int rounding = static_cast<int>(t.sizes.window_rounding);
 
@@ -233,22 +161,10 @@ namespace lfs::vis {
             return;
         last_synced_text_ = p.text;
 
-        if (base_rcss_.empty()) {
-            try {
-                auto rcss_path = lfs::vis::getAssetPath("rmlui/sequencer.rcss");
-                std::ifstream f(rcss_path);
-                if (f) {
-                    base_rcss_.assign(std::istreambuf_iterator<char>(f),
-                                      std::istreambuf_iterator<char>());
-                }
-            } catch (...) {
-            }
-        }
+        if (base_rcss_.empty())
+            base_rcss_ = gui::rml_theme::loadBaseRCSS("rmlui/sequencer.rcss");
 
-        const std::string combined = base_rcss_ + "\n" + generateThemeRCSS();
-        auto sheet = Rml::Factory::InstanceStyleSheetString(combined);
-        if (sheet)
-            document_->SetStyleSheetContainer(std::move(sheet));
+        gui::rml_theme::applyTheme(document_, base_rcss_, generateThemeRCSS());
     }
 
     void RmlSequencerPanel::updateButtonStates() {
@@ -481,26 +397,22 @@ namespace lfs::vis {
         rml_context_->SetDimensions(Rml::Vector2i(w, h));
         rml_context_->Update();
 
-        initFBO(w, h);
-        if (!fbo_)
+        fbo_.ensure(w, h);
+        if (!fbo_.valid())
             return;
 
         auto* render_iface = rml_manager_->getRenderInterface();
         assert(render_iface);
-        render_iface->SetViewport(fbo_width_, fbo_height_);
+        render_iface->SetViewport(w, h);
 
         GLint prev_fbo = 0;
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        fbo_.bind(&prev_fbo);
 
         render_iface->BeginFrame();
         rml_context_->Render();
         render_iface->EndFrame();
 
-        glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
+        fbo_.unbind(prev_fbo);
 
         constexpr ImGuiWindowFlags PANEL_FLAGS =
             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
@@ -515,8 +427,7 @@ namespace lfs::vis {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
 
         if (ImGui::Begin("##RmlSequencerPanel", nullptr, PANEL_FLAGS)) {
-            ImGui::Image(static_cast<ImTextureID>(static_cast<uintptr_t>(fbo_texture_)),
-                         ImVec2(panel_width, HEIGHT), ImVec2(0, 1), ImVec2(1, 0));
+            fbo_.blitAsImage(panel_width, HEIGHT);
 
             const float content_height = HEIGHT - 2.0f * INNER_PADDING;
             const float timeline_width = panel_size.x - 2.0f * INNER_PADDING -

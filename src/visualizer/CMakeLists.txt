@@ -49,6 +49,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/async_task_manager.cpp
         gui/startup_overlay.cpp
         gui/rml_menu_bar.cpp
+        gui/rml_shell_frame.cpp
         gui/rml_status_bar.cpp
         gui/gpu_memory_query.cpp
         gui/sequencer_ui_manager.cpp
@@ -142,7 +143,9 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/rmlui_system_interface.cpp
         gui/rmlui/rmlui_render_interface.cpp
         gui/rmlui/rmlui_manager.cpp
+        gui/rmlui/rml_fbo.cpp
         gui/rmlui/rml_panel_host.cpp
+        gui/rmlui/rml_theme.cpp
         gui/rmlui/stb_font_engine.cpp
 )
 

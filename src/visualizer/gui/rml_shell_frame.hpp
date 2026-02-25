@@ -6,7 +6,7 @@
 
 #include "gui/rmlui/rml_fbo.hpp"
 #include <string>
-#include <vector>
+#include <imgui.h>
 
 namespace Rml {
     class Context;
@@ -18,33 +18,37 @@ namespace lfs::vis::gui {
 
     class RmlUIManager;
 
-    class RmlMenuBar {
+    struct ShellRegions {
+        ImVec2 menu_pos{0, 0};
+        ImVec2 menu_size{0, 0};
+        ImVec2 right_panel_pos{0, 0};
+        ImVec2 right_panel_size{0, 0};
+        ImVec2 status_pos{0, 0};
+        ImVec2 status_size{0, 0};
+    };
+
+    class RmlShellFrame {
     public:
         void init(RmlUIManager* mgr);
         void shutdown();
-        void draw();
-        void updateLabels(const std::vector<std::string>& labels);
-        void setActiveIndex(int index);
+        void render(const ShellRegions& regions);
 
     private:
         void updateTheme();
-        void rebuildLabels();
         std::string generateThemeRCSS() const;
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
 
+        Rml::Element* menu_region_ = nullptr;
+        Rml::Element* right_panel_region_ = nullptr;
+        Rml::Element* status_region_ = nullptr;
+
         RmlFBO fbo_;
 
         std::string last_theme_;
         std::string base_rcss_;
-
-        std::vector<std::string> current_labels_;
-        int active_index_ = -1;
-
-        Rml::Element* menu_items_ = nullptr;
-        Rml::Element* bottom_border_ = nullptr;
     };
 
 } // namespace lfs::vis::gui

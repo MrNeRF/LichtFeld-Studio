@@ -5,7 +5,7 @@
 #pragma once
 
 #include "gui/panel_layout.hpp"
-#include <glad/glad.h>
+#include "gui/rmlui/rml_fbo.hpp"
 #include <string>
 
 namespace Rml {
@@ -31,8 +31,6 @@ namespace lfs::vis::gui {
         static void openURL(const char* url);
 
     private:
-        void initFBO(int w, int h);
-        void destroyFBO();
         void populateLanguages();
         void updateTheme();
         void updateLocalizedText();
@@ -46,10 +44,7 @@ namespace lfs::vis::gui {
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
 
-        GLuint fbo_ = 0;
-        GLuint fbo_texture_ = 0;
-        GLuint fbo_depth_stencil_ = 0;
-        int fbo_w_ = 0, fbo_h_ = 0;
+        RmlFBO fbo_;
 
         std::string last_theme_;
 

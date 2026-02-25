@@ -3,8 +3,8 @@
 
 #pragma once
 
+#include "gui/rmlui/rml_fbo.hpp"
 #include "sequencer_controller.hpp"
-#include <glad/glad.h>
 #include <optional>
 #include <set>
 #include <string>
@@ -60,8 +60,6 @@ namespace lfs::vis {
 
     private:
         void initContext(int width, int height);
-        void initFBO(int width, int height);
-        void destroyFBO();
 
         void syncTheme();
         std::string generateThemeRCSS() const;
@@ -121,11 +119,7 @@ namespace lfs::vis {
         float cached_panel_y_ = 0.0f;
         float cached_panel_width_ = 0.0f;
 
-        GLuint fbo_ = 0;
-        GLuint fbo_texture_ = 0;
-        GLuint fbo_depth_stencil_ = 0;
-        int fbo_width_ = 0;
-        int fbo_height_ = 0;
+        gui::RmlFBO fbo_;
 
         // Interaction state
         bool dragging_playhead_ = false;

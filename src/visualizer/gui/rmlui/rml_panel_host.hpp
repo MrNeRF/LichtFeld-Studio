@@ -5,8 +5,8 @@
 #pragma once
 
 #include "gui/panel_registry.hpp"
+#include "gui/rmlui/rml_fbo.hpp"
 #include <core/export.hpp>
-#include <glad/glad.h>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -46,8 +46,6 @@ namespace lfs::vis::gui {
 
     private:
         static std::vector<uint32_t> drainTextInput();
-        void initFBO(int width, int height);
-        void destroyFBO();
         void forwardInput(float panel_x, float panel_y);
         void syncThemeProperties();
         std::string generateThemeRCSS() const;
@@ -65,11 +63,7 @@ namespace lfs::vis::gui {
         ImVec4 last_synced_text_{};
         bool has_text_focus_ = false;
 
-        GLuint fbo_ = 0;
-        GLuint fbo_texture_ = 0;
-        GLuint fbo_depth_stencil_ = 0;
-        int fbo_width_ = 0;
-        int fbo_height_ = 0;
+        RmlFBO fbo_;
     };
 
 } // namespace lfs::vis::gui

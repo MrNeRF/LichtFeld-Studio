@@ -6,8 +6,8 @@
 
 #include "gui/gpu_memory_query.hpp"
 #include "gui/panel_registry.hpp"
+#include "gui/rmlui/rml_fbo.hpp"
 #include <chrono>
-#include <glad/glad.h>
 #include <string>
 
 namespace Rml {
@@ -27,8 +27,6 @@ namespace lfs::vis::gui {
         void draw(const PanelDrawContext& ctx);
 
     private:
-        void initFBO(int w, int h);
-        void destroyFBO();
         void cacheElements();
         void updateContent(const PanelDrawContext& ctx);
         void updateTheme();
@@ -38,10 +36,7 @@ namespace lfs::vis::gui {
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
 
-        GLuint fbo_ = 0;
-        GLuint fbo_texture_ = 0;
-        GLuint fbo_depth_stencil_ = 0;
-        int fbo_w_ = 0, fbo_h_ = 0;
+        RmlFBO fbo_;
 
         std::string last_theme_;
         std::string base_rcss_;

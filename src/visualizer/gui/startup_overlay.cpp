@@ -11,6 +11,7 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "gui/rmlui/rml_panel_host.hpp"
+#include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/string_keys.hpp"
@@ -20,7 +21,6 @@
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Elements/ElementFormControlSelect.h>
-#include <RmlUi/Core/Factory.h>
 #include <RmlUi/Core/Input.h>
 #include <algorithm>
 #include <cassert>
@@ -28,7 +28,6 @@
 #include <cstdlib>
 #include <filesystem>
 #include <format>
-#include <fstream>
 #include <imgui.h>
 
 #ifdef _WIN32
@@ -38,23 +37,8 @@
 
 namespace lfs::vis::gui {
 
-    namespace {
-        std::string colorToRml(const ImVec4& c) {
-            const auto r = static_cast<int>(c.x * 255.0f);
-            const auto g = static_cast<int>(c.y * 255.0f);
-            const auto b = static_cast<int>(c.z * 255.0f);
-            const auto a = static_cast<int>(c.w * 255.0f);
-            return std::format("rgba({},{},{},{})", r, g, b, a);
-        }
-
-        std::string colorToRmlAlpha(const ImVec4& c, float alpha) {
-            const auto r = static_cast<int>(c.x * 255.0f);
-            const auto g = static_cast<int>(c.y * 255.0f);
-            const auto b = static_cast<int>(c.z * 255.0f);
-            const auto a = static_cast<int>(alpha * 255.0f);
-            return std::format("rgba({},{},{},{})", r, g, b, a);
-        }
-    } // namespace
+    using rml_theme::colorToRml;
+    using rml_theme::colorToRmlAlpha;
 
     class LinkClickListener final : public Rml::EventListener {
     public:
@@ -150,7 +134,7 @@ namespace lfs::vis::gui {
     }
 
     void StartupOverlay::shutdown() {
-        destroyFBO();
+        fbo_.destroy();
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("startup_overlay");
         rml_context_ = nullptr;
@@ -257,77 +241,8 @@ namespace lfs::vis::gui {
             }
         }
 
-        std::string base_rcss;
-        try {
-            auto rcss_path = lfs::vis::getAssetPath("rmlui/startup.rcss");
-            std::ifstream f(rcss_path);
-            if (f) {
-                base_rcss.assign(std::istreambuf_iterator<char>(f),
-                                 std::istreambuf_iterator<char>());
-            }
-        } catch (const std::exception& e) {
-            LOG_ERROR("StartupOverlay: RCSS not found: {}", e.what());
-        }
-
-        const std::string combined = base_rcss + "\n" + generateThemeRCSS();
-        auto sheet = Rml::Factory::InstanceStyleSheetString(combined);
-        if (sheet)
-            document_->SetStyleSheetContainer(std::move(sheet));
-    }
-
-    void StartupOverlay::initFBO(int w, int h) {
-        if (fbo_ && fbo_w_ == w && fbo_h_ == h)
-            return;
-
-        destroyFBO();
-        fbo_w_ = w;
-        fbo_h_ = h;
-
-        glGenFramebuffers(1, &fbo_);
-        glGenTextures(1, &fbo_texture_);
-        glGenRenderbuffers(1, &fbo_depth_stencil_);
-
-        glBindTexture(GL_TEXTURE_2D, fbo_texture_);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glBindTexture(GL_TEXTURE_2D, 0);
-
-        glBindRenderbuffer(GL_RENDERBUFFER, fbo_depth_stencil_);
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
-        glBindRenderbuffer(GL_RENDERBUFFER, 0);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fbo_texture_, 0);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
-                                  fbo_depth_stencil_);
-
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            LOG_ERROR("StartupOverlay: FBO incomplete");
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            destroyFBO();
-            return;
-        }
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    }
-
-    void StartupOverlay::destroyFBO() {
-        if (fbo_texture_) {
-            glDeleteTextures(1, &fbo_texture_);
-            fbo_texture_ = 0;
-        }
-        if (fbo_depth_stencil_) {
-            glDeleteRenderbuffers(1, &fbo_depth_stencil_);
-            fbo_depth_stencil_ = 0;
-        }
-        if (fbo_) {
-            glDeleteFramebuffers(1, &fbo_);
-            fbo_ = 0;
-        }
-        fbo_w_ = 0;
-        fbo_h_ = 0;
+        auto base_rcss = rml_theme::loadBaseRCSS("rmlui/startup.rcss");
+        rml_theme::applyTheme(document_, base_rcss, generateThemeRCSS());
     }
 
     void StartupOverlay::forwardInput(float overlay_x, float overlay_y,
@@ -378,8 +293,8 @@ namespace lfs::vis::gui {
         rml_context_->SetDimensions(Rml::Vector2i(ctx_w, ctx_h));
         rml_context_->Update();
 
-        initFBO(ctx_w, ctx_h);
-        if (!fbo_)
+        fbo_.ensure(ctx_w, ctx_h);
+        if (!fbo_.valid())
             return;
 
         forwardInput(viewport.pos.x, viewport.pos.y, viewport.size.x, viewport.size.y);
@@ -389,17 +304,13 @@ namespace lfs::vis::gui {
         render->SetViewport(ctx_w, ctx_h);
 
         GLint prev_fbo = 0;
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        fbo_.bind(&prev_fbo);
 
         render->BeginFrame();
         rml_context_->Render();
         render->EndFrame();
 
-        glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
+        fbo_.unbind(prev_fbo);
 
         ImGui::SetNextWindowPos(viewport.pos);
         ImGui::SetNextWindowSize(viewport.size);
@@ -413,8 +324,7 @@ namespace lfs::vis::gui {
                              ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
                              ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus |
                              ImGuiWindowFlags_NoFocusOnAppearing)) {
-            ImGui::Image(static_cast<ImTextureID>(static_cast<uintptr_t>(fbo_texture_)),
-                         ImVec2(viewport.size.x, viewport.size.y), ImVec2(0, 1), ImVec2(1, 0));
+            fbo_.blitAsImage(viewport.size.x, viewport.size.y);
         }
         ImGui::End();
         ImGui::PopStyleColor(1);

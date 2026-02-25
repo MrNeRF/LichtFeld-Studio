@@ -8,6 +8,7 @@
 
 #include "gui/rml_menu_bar.hpp"
 #include "core/logger.hpp"
+#include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
 #include "internal/resource_paths.hpp"
@@ -15,35 +16,15 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
-#include <RmlUi/Core/Factory.h>
 #include <cassert>
 #include <format>
-#include <fstream>
 #include <imgui.h>
 
 namespace lfs::vis::gui {
 
     namespace {
-        std::string colorToRml(const ImVec4& c) {
-            const auto r = static_cast<int>(c.x * 255.0f);
-            const auto g = static_cast<int>(c.y * 255.0f);
-            const auto b = static_cast<int>(c.z * 255.0f);
-            const auto a = static_cast<int>(c.w * 255.0f);
-            return std::format("rgba({},{},{},{})", r, g, b, a);
-        }
-
         ImVec4 darkenImVec4(const ImVec4& c, float amount) {
             return {c.x - amount, c.y - amount, c.z - amount, c.w};
-        }
-
-        void setPremultipliedBlend(const ImDrawList*, const ImDrawCmd*) {
-            glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA,
-                                GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
-        }
-
-        void restoreStandardBlend(const ImDrawList*, const ImDrawCmd*) {
-            glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
-                                GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
         }
     } // namespace
 
@@ -77,7 +58,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlMenuBar::shutdown() {
-        destroyFBO();
+        fbo_.destroy();
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("menu_bar");
         rml_context_ = nullptr;
@@ -123,6 +104,7 @@ namespace lfs::vis::gui {
     }
 
     std::string RmlMenuBar::generateThemeRCSS() const {
+        using rml_theme::colorToRml;
         const auto& t = lfs::vis::theme();
 
         const auto bg = colorToRml(t.menu_background());
@@ -148,23 +130,10 @@ namespace lfs::vis::gui {
             return;
         last_theme_ = t.name;
 
-        if (base_rcss_.empty()) {
-            try {
-                auto rcss_path = lfs::vis::getAssetPath("rmlui/menubar.rcss");
-                std::ifstream f(rcss_path);
-                if (f) {
-                    base_rcss_.assign(std::istreambuf_iterator<char>(f),
-                                      std::istreambuf_iterator<char>());
-                }
-            } catch (const std::exception& e) {
-                LOG_ERROR("RmlMenuBar: RCSS not found: {}", e.what());
-            }
-        }
+        if (base_rcss_.empty())
+            base_rcss_ = rml_theme::loadBaseRCSS("rmlui/menubar.rcss");
 
-        const std::string combined = base_rcss_ + "\n" + generateThemeRCSS();
-        auto sheet = Rml::Factory::InstanceStyleSheetString(combined);
-        if (sheet)
-            document_->SetStyleSheetContainer(std::move(sheet));
+        rml_theme::applyTheme(document_, base_rcss_, generateThemeRCSS());
     }
 
     void RmlMenuBar::draw() {
@@ -186,8 +155,8 @@ namespace lfs::vis::gui {
         document_->SetProperty("height", std::format("{}px", h));
         rml_context_->Update();
 
-        initFBO(w, h);
-        if (!fbo_)
+        fbo_.ensure(w, h);
+        if (!fbo_.valid())
             return;
 
         auto* render = rml_manager_->getRenderInterface();
@@ -195,80 +164,15 @@ namespace lfs::vis::gui {
         render->SetViewport(w, h);
 
         GLint prev_fbo = 0;
-        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prev_fbo);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        fbo_.bind(&prev_fbo);
 
         render->BeginFrame();
         rml_context_->Render();
         render->EndFrame();
 
-        glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
+        fbo_.unbind(prev_fbo);
 
-        auto* dl = ImGui::GetWindowDrawList();
-        dl->AddCallback(setPremultipliedBlend, nullptr);
-        const ImVec2 p0 = win_pos;
-        const ImVec2 p1 = {win_pos.x + win_size.x, win_pos.y + win_size.y};
-        dl->AddImage(static_cast<ImTextureID>(static_cast<uintptr_t>(fbo_texture_)),
-                     p0, p1, {0, 1}, {1, 0});
-        dl->AddCallback(restoreStandardBlend, nullptr);
-    }
-
-    void RmlMenuBar::initFBO(int w, int h) {
-        if (fbo_ && fbo_w_ == w && fbo_h_ == h)
-            return;
-
-        destroyFBO();
-        fbo_w_ = w;
-        fbo_h_ = h;
-
-        glGenFramebuffers(1, &fbo_);
-        glGenTextures(1, &fbo_texture_);
-        glGenRenderbuffers(1, &fbo_depth_stencil_);
-
-        glBindTexture(GL_TEXTURE_2D, fbo_texture_);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-        glBindTexture(GL_TEXTURE_2D, 0);
-
-        glBindRenderbuffer(GL_RENDERBUFFER, fbo_depth_stencil_);
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
-        glBindRenderbuffer(GL_RENDERBUFFER, 0);
-
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fbo_texture_, 0);
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
-                                  fbo_depth_stencil_);
-
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            LOG_ERROR("RmlMenuBar: FBO incomplete");
-            glBindFramebuffer(GL_FRAMEBUFFER, 0);
-            destroyFBO();
-            return;
-        }
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    }
-
-    void RmlMenuBar::destroyFBO() {
-        if (fbo_texture_) {
-            glDeleteTextures(1, &fbo_texture_);
-            fbo_texture_ = 0;
-        }
-        if (fbo_depth_stencil_) {
-            glDeleteRenderbuffers(1, &fbo_depth_stencil_);
-            fbo_depth_stencil_ = 0;
-        }
-        if (fbo_) {
-            glDeleteFramebuffers(1, &fbo_);
-            fbo_ = 0;
-        }
-        fbo_w_ = 0;
-        fbo_h_ = 0;
+        fbo_.blitToDrawList(ImGui::GetWindowDrawList(), win_pos, win_size);
     }
 
 } // namespace lfs::vis::gui

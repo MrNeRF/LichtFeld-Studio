@@ -439,6 +439,7 @@ namespace lfs::vis::gui {
         lfs::python::set_rml_manager(&rmlui_manager_);
 
         startup_overlay_.init(&rmlui_manager_);
+        rml_shell_frame_.init(&rmlui_manager_);
         rml_menu_bar_.init(&rmlui_manager_);
         rml_status_bar_.init(&rmlui_manager_);
 
@@ -484,6 +485,7 @@ namespace lfs::vis::gui {
 
         rml_status_bar_.shutdown();
         rml_menu_bar_.shutdown();
+        rml_shell_frame_.shutdown();
         startup_overlay_.shutdown();
         rmlui_manager_.shutdown();
 
@@ -670,6 +672,27 @@ namespace lfs::vis::gui {
         ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
 
         ImGui::End();
+
+        if (!ui_hidden_) {
+            const auto* mvp = ImGui::GetMainViewport();
+            constexpr float STATUS_BAR_H = 22.0f;
+            const float panel_h = mvp->WorkSize.y - STATUS_BAR_H;
+
+            ShellRegions shell_regions;
+            shell_regions.menu_pos = mvp->Pos;
+            shell_regions.menu_size = {mvp->Size.x, mvp->WorkPos.y - mvp->Pos.y};
+
+            if (show_main_panel_) {
+                const float rpw = panel_layout_.getRightPanelWidth();
+                shell_regions.right_panel_pos = {mvp->WorkPos.x + mvp->WorkSize.x - rpw, mvp->WorkPos.y};
+                shell_regions.right_panel_size = {rpw, panel_h};
+            }
+
+            shell_regions.status_pos = {mvp->WorkPos.x, mvp->WorkPos.y + mvp->WorkSize.y - STATUS_BAR_H};
+            shell_regions.status_size = {mvp->WorkSize.x, STATUS_BAR_H};
+
+            rml_shell_frame_.render(shell_regions);
+        }
 
         // Update editor context state for this frame
         auto& editor_ctx = viewer_->getEditorContext();
