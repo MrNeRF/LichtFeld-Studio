@@ -159,6 +159,7 @@ namespace lfs::vis::gui::rml_theme {
                    ".section-arrow {{ color: {1}; }}\n"
                    ".separator {{ background-color: {5}; }}\n"
                    ".text-disabled {{ color: {1}; }}\n"
+                   ".section-label {{ color: {1}; }}\n"
                    ".empty-message {{ color: {1}; }}\n"
                    ".color-swatch {{ border-color: {5}; }}\n"
                    ".color-comp {{ color: {1}; background-color: {2}; border-color: {5}; }}\n"

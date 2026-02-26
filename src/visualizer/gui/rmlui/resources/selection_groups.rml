@@ -1,9 +1,9 @@
 <rml>
 <head>
+  <link type="text/template" href="docked_panel.rml"/>
   <link type="text/rcss" href="selection_groups.rcss"/>
 </head>
-<body id="body">
-<div id="content-wrap">
+<body template="docked-panel">
 
   <div class="section-header" id="hdr-groups">
     <span class="section-arrow" id="arrow-groups">&#x25BC;</span>
@@ -18,6 +18,5 @@
   <div id="context-menu" class="context-menu">
   </div>
 
-</div>
 </body>
 </rml>

@@ -135,8 +135,16 @@ class RmlPanel:
         return f"{cls.__module__}.{cls.__qualname__}"
 
     def on_load(self, doc):
-        """Called once when the RmlUI document is loaded."""
-        pass
+        """Called once when the RmlUI document is loaded.
+
+        Auto-wires the close button for floating panels using the
+        shared floating_window.rml template.
+        """
+        import lichtfeld as lf
+        close_btn = doc.get_element_by_id("close-btn")
+        if close_btn and self.idname:
+            close_btn.add_event_listener(
+                "click", lambda _ev: lf.ui.set_panel_enabled(self.idname, False))
 
     def on_update(self, doc):
         """Called each frame after the host renders."""

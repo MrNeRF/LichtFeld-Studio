@@ -2,13 +2,6 @@
  * Shared widget styles are in components.rcss (auto-included via applyTheme). */
 
 body {
-    font-family: Inter;
-    font-size: 14dp;
-    color: #cdd6f4;
-    left: 0;
-    right: 0;
-    top: 0;
-    height: auto;
     padding: 2dp 6dp;
 }
 

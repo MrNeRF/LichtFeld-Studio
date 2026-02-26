@@ -74,13 +74,11 @@ class GettingStartedPanel(RmlPanel):
         self._handle = model.get_handle()
 
     def on_load(self, doc):
+        super().on_load(doc)
+
         self._ready_lock = threading.Lock()
         self._ready_queue = []
         self._thumb_card_map = {}
-
-        close_btn = doc.get_element_by_id("close-btn")
-        if close_btn:
-            close_btn.add_event_listener("click", lambda _ev: lf.ui.set_panel_enabled(self.idname, False))
 
         for elem_id, _title_key, url in self.VIDEO_CARDS:
             el = doc.get_element_by_id(elem_id)

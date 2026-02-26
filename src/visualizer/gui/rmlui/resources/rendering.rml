@@ -1,9 +1,9 @@
 <rml>
 <head>
+  <link type="text/template" href="docked_panel.rml"/>
   <link type="text/rcss" href="rendering.rcss"/>
 </head>
-<body id="body" data-model="rendering">
-<div id="content-wrap">
+<body template="docked-panel" data-model="rendering">
 
   <!-- Background Color -->
   <div class="setting-row">
@@ -366,13 +366,11 @@
             data-event-click="toggle_console">{{label_console}}</button>
   </div>
 
-</div>
-
-<div id="color-picker-popup" class="color-picker-popup">
-  <color-picker id="color-picker-el"
-    data-attr-red="picker_r" data-attr-green="picker_g" data-attr-blue="picker_b"
-    data-event-change="picker_change" />
-</div>
+  <div id="color-picker-popup" class="color-picker-popup">
+    <color-picker id="color-picker-el"
+      data-attr-red="picker_r" data-attr-green="picker_g" data-attr-blue="picker_b"
+      data-event-change="picker_change" />
+  </div>
 
 </body>
 </rml>

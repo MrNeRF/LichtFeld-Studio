@@ -6,6 +6,49 @@ div {
     display: block;
 }
 
+body {
+    font-family: Inter;
+    font-size: 13dp;
+}
+
+body.docked-panel {
+    font-size: 14dp;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: auto;
+}
+
+/* ── Floating Window Chrome ─────────────────────────────── */
+
+#window-frame {
+    border-width: 1dp;
+}
+
+#title-bar {
+    height: 28dp;
+    display: flex;
+    align-items: center;
+    padding: 0 8dp;
+}
+
+#title-text {
+    flex: 1;
+    font-size: 13dp;
+}
+
+#close-btn {
+    font-size: 16dp;
+    cursor: pointer;
+    padding: 0 4dp;
+}
+
+#content-wrap {
+    display: flex;
+    flex-direction: column;
+    padding: 8dp 12dp;
+}
+
 /* ── Scrollbars ─────────────────────────────────────────── */
 
 scrollbarvertical {
@@ -329,6 +372,24 @@ progress fill {
     height: 1dp;
     margin: 2dp 4dp;
     background-color: #45475a;
+}
+
+/* ── Shared Panel Content ──────────────────────────────── */
+
+.panel-title {
+    font-size: 16dp;
+    font-weight: bold;
+    margin-bottom: 6dp;
+}
+
+.description {
+    margin-bottom: 10dp;
+}
+
+.section-label {
+    font-size: 12dp;
+    margin-bottom: 4dp;
+    margin-top: 6dp;
 }
 
 /* ── Buttons ────────────────────────────────────────────── */

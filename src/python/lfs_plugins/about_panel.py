@@ -56,9 +56,7 @@ class AboutPanel(RmlPanel):
         self._handle = model.get_handle()
 
     def on_load(self, doc):
-        close_btn = doc.get_element_by_id("close-btn")
-        if close_btn:
-            close_btn.add_event_listener("click", lambda _ev: lf.ui.set_panel_enabled(self.idname, False))
+        super().on_load(doc)
 
         repo_el = doc.get_element_by_id("link-repo")
         if repo_el:

@@ -1,9 +1,8 @@
 <rml>
 <head>
+  <link type="text/template" href="docked_panel.rml"/>
   <link type="text/rcss" href="transform_controls.rcss"/>
 </head>
-<body id="body">
-<div id="content-wrap">
-</div>
+<body template="docked-panel">
 </body>
 </rml>

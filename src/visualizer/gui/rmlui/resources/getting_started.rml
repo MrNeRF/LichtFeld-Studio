@@ -1,14 +1,9 @@
 <rml>
 <head>
+  <link type="text/template" href="floating_window.rml"/>
   <link type="text/rcss" href="getting_started.rcss"/>
 </head>
-<body id="body" data-model="getting_started">
-<div id="window-frame">
-  <div id="title-bar">
-    <span id="title-text">{{panel_label}}</span>
-    <span id="close-btn">&#xD7;</span>
-  </div>
-  <div id="content-wrap">
+<body template="floating-window" data-model="getting_started">
 
   <span class="panel-title">{{title}}</span>
   <div class="separator"></div>
@@ -58,7 +53,5 @@
 
   <span id="wiki-section" class="section-label wiki-link">{{wiki_section}}</span>
 
-  </div>
-</div>
 </body>
 </rml>

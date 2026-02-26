@@ -1,9 +1,9 @@
 <rml>
 <head>
+  <link type="text/template" href="docked_panel.rml"/>
   <link type="text/rcss" href="training.rcss"/>
 </head>
-<body id="body" data-model="training">
-<div id="content-wrap">
+<body template="docked-panel" data-model="training">
 
   <!-- No trainer / no params messages -->
   <span class="status-text status-muted" data-if="show_no_trainer">{{label_no_trainer}}</span>
@@ -516,6 +516,5 @@
   </div>
 
   </div>
-</div>
 </body>
 </rml>

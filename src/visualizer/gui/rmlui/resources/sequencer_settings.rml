@@ -1,9 +1,9 @@
 <rml>
 <head>
+  <link type="text/template" href="docked_panel.rml"/>
   <link type="text/rcss" href="sequencer_settings.rcss"/>
 </head>
-<body id="body" data-model="sequencer_settings">
-<div id="content-wrap">
+<body template="docked-panel" data-model="sequencer_settings">
 
   <div class="section-header" data-event-click="toggle_section('seq_main')">
     <span class="section-arrow">{{sec_seq_main_arrow}}</span>
@@ -132,6 +132,5 @@
     <button class="btn btn--primary btn--full" data-event-click="export_video" data-class-disabled="!has_keyframes">Export Video...</button>
   </div>
 
-</div>
 </body>
 </rml>

@@ -1,0 +1,16 @@
+<template name="floating-window" content="content">
+<head>
+  <link type="text/rcss" href="components.rcss"/>
+</head>
+<body>
+<div id="window-frame">
+  <div id="title-bar">
+    <span id="title-text">{{panel_label}}</span>
+    <span id="close-btn">&#xD7;</span>
+  </div>
+  <div id="content-wrap">
+    <div id="content"></div>
+  </div>
+</div>
+</body>
+</template>
