@@ -76,9 +76,9 @@ namespace lfs::vis::gui {
         const auto& t = lfs::vis::theme();
         const auto& p = t.palette;
 
-        const auto tab_bg = colorToRml(p.surface);
-        const auto tab_active = colorToRml(p.primary_dim);
-        const auto tab_hover = colorToRml(p.surface_bright);
+        const auto tab_hover = colorToRmlAlpha(p.surface_bright, 0.5f);
+        const auto tab_active_bg = colorToRmlAlpha(p.surface_bright, 0.4f);
+        const auto tab_accent = colorToRml(p.primary);
         const auto tab_text = colorToRml(p.text);
         const auto tab_text_dim = colorToRml(p.text_dim);
         const auto splitter_bg = colorToRmlAlpha(p.border, 0.4f);
@@ -93,17 +93,18 @@ namespace lfs::vis::gui {
             "#splitter {{ background-color: {}; }}\n"
             "#splitter:hover {{ background-color: {}; }}\n"
             "#splitter.dragging {{ background-color: {}; }}\n"
-            ".tab {{ background-color: {}; color: {}; }}\n"
+            ".tab {{ background-color: transparent; color: {}; }}\n"
             ".tab:hover {{ background-color: {}; }}\n"
-            ".tab.active {{ background-color: {}; color: {}; }}\n"
+            ".tab.active {{ background-color: {}; color: {}; "
+            "border-bottom-width: 2dp; border-bottom-color: {}; }}\n"
             "#left-border {{ background-color: {}; }}\n"
             "#tab-separator {{ background-color: {}; }}\n"
             "#resize-handle:hover {{ background-color: {}; }}\n"
             "#resize-handle.dragging {{ background-color: {}; }}\n",
             splitter_bg, splitter_hover, splitter_active,
-            tab_bg, tab_text_dim,
+            tab_text_dim,
             tab_hover,
-            tab_active, tab_text,
+            tab_active_bg, tab_text, tab_accent,
             border_color,
             separator_color,
             resize_hover,

@@ -110,13 +110,13 @@ namespace lfs::vis::gui {
         constexpr ImGuiWindowFlags TAB_FLAGS =
             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
             ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDocking |
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoFocusOnAppearing |
-            ImGuiWindowFlags_NoScrollbar;
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoFocusOnAppearing;
 
         ImGui::SetNextWindowPos({panel_x, tab_content_y}, ImGuiCond_Always);
         ImGui::SetNextWindowSize({right_panel_width_, tab_content_h}, ImGuiCond_Always);
         ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
         ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, ImVec4(0, 0, 0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {PAD, 0});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
 
@@ -127,7 +127,7 @@ namespace lfs::vis::gui {
         }
         ImGui::End();
         ImGui::PopStyleVar(2);
-        ImGui::PopStyleColor(2);
+        ImGui::PopStyleColor(3);
     }
 
     void PanelLayoutManager::adjustScenePanelRatio(float delta_y) {

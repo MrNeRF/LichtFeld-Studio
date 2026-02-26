@@ -990,7 +990,7 @@ namespace lfs::vis::gui {
             const float r = t.viewport.corner_radius;
             if (r > 0.0f) {
                 auto* const dl = ImGui::GetBackgroundDrawList();
-                const ImU32 bg = toU32(t.palette.background);
+                const ImU32 bg = toU32(t.menu_background());
                 const float x1 = viewport_layout_.pos.x, y1 = viewport_layout_.pos.y;
                 const float x2 = x1 + viewport_layout_.size.x, y2 = y1 + viewport_layout_.size.y;
 
@@ -1007,6 +1007,16 @@ namespace lfs::vis::gui {
                 maskCorner({x2, y1}, {x2 - r, y1}, {x2 - r, y1 + r}, IM_PI * 1.5f, IM_PI * 2.0f);
                 maskCorner({x1, y2}, {x1 + r, y2}, {x1 + r, y2 - r}, IM_PI * 0.5f, IM_PI);
                 maskCorner({x2, y2}, {x2, y2 - r}, {x2 - r, y2 - r}, 0.0f, IM_PI * 0.5f);
+
+                if (show_main_panel_) {
+                    const float rpw = panel_layout_.getRightPanelWidth();
+                    auto* mvp = ImGui::GetMainViewport();
+                    const float px = mvp->WorkPos.x + mvp->WorkSize.x - rpw;
+                    const float py1 = mvp->WorkPos.y;
+                    const float py2 = py1 + mvp->WorkSize.y - PanelLayoutManager::STATUS_BAR_HEIGHT;
+                    maskCorner({px, py1}, {px, py1 + r}, {px + r, py1 + r}, IM_PI, IM_PI * 1.5f);
+                    maskCorner({px, py2}, {px + r, py2}, {px + r, py2 - r}, IM_PI * 0.5f, IM_PI);
+                }
 
                 if (t.viewport.border_size > 0.0f) {
                     dl->AddRect({x1, y1}, {x2, y2}, t.viewport_border_u32(), r,

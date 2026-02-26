@@ -17,12 +17,7 @@ body {
 }
 
 #left-border {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 1dp;
-    height: 100%;
-    pointer-events: none;
+    display: none;
 }
 
 #splitter {

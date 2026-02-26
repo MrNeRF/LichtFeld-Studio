@@ -26,5 +26,5 @@ body {
 }
 
 #bottom-border {
-    height: 1dp;
+    display: none;
 }

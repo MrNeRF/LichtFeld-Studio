@@ -65,21 +65,15 @@ namespace lfs::vis::gui {
 
     std::string RmlShellFrame::generateThemeRCSS() const {
         using rml_theme::colorToRml;
-        using rml_theme::colorToRmlAlpha;
         const auto& t = lfs::vis::theme();
-        const auto& p = t.palette;
 
-        const auto menu_bg = colorToRml(t.menu_background());
-        const auto panel_bg = colorToRmlAlpha(p.surface, 0.95f);
-        const auto status_bg = colorToRmlAlpha(p.background, 0.95f);
-        const auto border = colorToRmlAlpha(p.border, 0.6f);
-        const auto top_line = colorToRmlAlpha(p.surface_bright, 0.4f);
+        const auto shell_bg = colorToRml(t.menu_background());
 
         return std::format(
             "#menu-region {{ background-color: {}; }}\n"
             "#right-panel-region {{ background-color: {}; }}\n"
-            "#status-region {{ background-color: {}; border-color: {}; }}\n",
-            menu_bg, panel_bg, status_bg, top_line);
+            "#status-region {{ background-color: {}; }}\n",
+            shell_bg, shell_bg, shell_bg);
     }
 
     void RmlShellFrame::updateTheme() {
