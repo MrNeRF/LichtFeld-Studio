@@ -404,6 +404,7 @@
     "scene_panel": "Panneau de Scène",
     "show_console": "Afficher la Console Système",
     "hide_console": "Masquer la Console Système",
+    "console": "Console",
     "background": "Arrière-plan",
     "color": "Couleur",
     "show_coord_axes": "Afficher les Axes de Coordonnées",

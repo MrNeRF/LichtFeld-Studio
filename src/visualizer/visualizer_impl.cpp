@@ -239,6 +239,21 @@ namespace lfs::vis {
                     .sequencer_controller = nullptr,
                     .fonts = {}};
                 gui::panels::DrawSystemConsoleButton(ctx); },
+            .toggle_system_console = []() {
+                auto* gm = python::get_gui_manager();
+                if (!gm)
+                    return;
+                auto* viewer = gm->getViewer();
+                if (!viewer)
+                    return;
+                gui::UIContext ctx{
+                    .viewer = viewer,
+                    .file_browser = nullptr,
+                    .window_states = gm->getWindowStates(),
+                    .editor = python::get_editor_context(),
+                    .sequencer_controller = nullptr,
+                    .fonts = {}};
+                gui::panels::ToggleSystemConsole(ctx); },
         });
 
         // Sequencer timeline callbacks

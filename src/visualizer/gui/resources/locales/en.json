@@ -404,6 +404,7 @@
     "scene_panel": "Scene Panel",
     "show_console": "Show system Console",
     "hide_console": "Hide system Console",
+    "console": "Console",
     "background": "Background",
     "color": "Color",
     "show_coord_axes": "Show Coordinate Axes",

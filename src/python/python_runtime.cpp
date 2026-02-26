@@ -410,6 +410,11 @@ namespace lfs::python {
             g_section_draw_callbacks.draw_console_button();
     }
 
+    void toggle_system_console() {
+        if (g_section_draw_callbacks.toggle_system_console)
+            g_section_draw_callbacks.toggle_system_console();
+    }
+
     void set_sequencer_ui_state_callback(GetSequencerUIStateCallback cb) {
         g_get_sequencer_ui_state_cb = cb;
     }

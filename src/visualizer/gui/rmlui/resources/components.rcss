@@ -507,6 +507,12 @@ chromaticity-diagram {
     display: inline-block;
 }
 
+color-picker {
+    width: 200dp;
+    height: 160dp;
+    display: block;
+}
+
 crf-curve {
     height: 120dp;
     display: block;

@@ -1598,6 +1598,12 @@ def draw_tools_section() -> None:
 def draw_console_button() -> None:
     """Draw system console button (C++ implementation)"""
 
+def toggle_system_console() -> None:
+    """Toggle system console visibility"""
+
+def is_windows_platform() -> bool:
+    """Returns true on Windows"""
+
 def get_pivot_mode() -> int:
     """Get pivot mode (0=Origin, 1=Bounds)"""
 

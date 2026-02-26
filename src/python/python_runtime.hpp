@@ -395,11 +395,13 @@ namespace lfs::python {
     struct SectionDrawCallbacks {
         DrawSectionCallback draw_tools_section = nullptr;
         DrawSectionCallback draw_console_button = nullptr;
+        DrawSectionCallback toggle_system_console = nullptr;
     };
 
     LFS_PYTHON_RUNTIME_API void set_section_draw_callbacks(const SectionDrawCallbacks& callbacks);
     LFS_PYTHON_RUNTIME_API void draw_tools_section();
     LFS_PYTHON_RUNTIME_API void draw_console_button();
+    LFS_PYTHON_RUNTIME_API void toggle_system_console();
 
     // Sequencer UI state access (for Python modification)
     // Must match layout of vis::gui::panels::SequencerUIState

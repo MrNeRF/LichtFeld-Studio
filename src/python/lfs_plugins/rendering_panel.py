@@ -128,8 +128,19 @@ class RenderingPanel(RmlPanel):
     def __init__(self):
         self._handle = None
         self._color_edit_prop = None
-        self._color_picker_needs_pos = False
         self._collapsed = set()
+        self._popup_el = None
+        self._doc = None
+        self._picker_click_handled = False
+
+    def on_load(self, doc):
+        self._doc = doc
+        self._popup_el = doc.get_element_by_id("color-picker-popup")
+        if self._popup_el:
+            self._popup_el.add_event_listener("click", self._on_popup_click)
+        body = doc.get_element_by_id("body")
+        if body:
+            body.add_event_listener("click", self._on_body_click)
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("rendering")
@@ -196,9 +207,27 @@ class RenderingPanel(RmlPanel):
                             lambda n=sec: "\u25B6" if n in self._collapsed else "\u25BC")
 
         model.bind_func("fov_display", self._compute_fov)
+
+        model.bind_func("picker_r",
+                         lambda: float(getattr(s(), self._color_edit_prop, (0, 0, 0))[0])
+                         if self._color_edit_prop and s() else 0.0)
+        model.bind_func("picker_g",
+                         lambda: float(getattr(s(), self._color_edit_prop, (0, 0, 0))[1])
+                         if self._color_edit_prop and s() else 0.0)
+        model.bind_func("picker_b",
+                         lambda: float(getattr(s(), self._color_edit_prop, (0, 0, 0))[2])
+                         if self._color_edit_prop and s() else 0.0)
+
+        model.bind_func("is_windows", lambda: lf.ui.is_windows_platform())
+        model.bind_func("label_console",
+                         lambda: lf.ui.tr("main_panel.console") or "Console")
+
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_event("color_click", self._on_color_click)
         model.bind_event("chrom_change", self._on_chrom_change)
+        model.bind_event("picker_change", self._on_picker_change)
+        model.bind_event("toggle_console",
+                         lambda h, e, a: lf.ui.toggle_system_console())
 
         self._handle = model.get_handle()
 
@@ -221,31 +250,8 @@ class RenderingPanel(RmlPanel):
     def on_unload(self, doc):
         doc.remove_data_model("rendering")
         self._handle = None
-
-    def draw_imgui(self, layout):
-        settings = lf.get_render_settings()
-        if not settings:
-            return
-
-        if self._color_picker_needs_pos:
-            layout.set_next_window_pos(layout.get_mouse_pos())
-            layout.open_popup("##color_picker")
-            self._color_picker_needs_pos = False
-
-        if self._color_edit_prop and layout.begin_popup("##color_picker"):
-            prop_id = self._color_edit_prop
-            val = getattr(settings, prop_id)
-            changed, new_color = layout.color_picker3("##picker", val)
-            if changed:
-                setattr(settings, prop_id, new_color)
-                if self._handle:
-                    self._handle.dirty_all()
-            layout.end_popup()
-        elif self._color_edit_prop:
-            self._color_edit_prop = None
-
-        layout.separator()
-        lf.ui.draw_console_button()
+        self._popup_el = None
+        self._doc = None
 
     def _set_color_hex(self, prop_id, hex_val):
         s = lf.get_render_settings()
@@ -281,14 +287,46 @@ class RenderingPanel(RmlPanel):
         handle.dirty(f"sec_{name}_arrow")
 
     def _on_color_click(self, handle, event, args):
-        if not args:
+        if not args or not self._popup_el:
             return
+        self._picker_click_handled = True
         prop_id = str(args[0])
         if self._color_edit_prop == prop_id:
-            self._color_edit_prop = None
-        else:
-            self._color_edit_prop = prop_id
-            self._color_picker_needs_pos = True
+            self._hide_picker()
+            return
+        self._color_edit_prop = prop_id
+        mx = event.get_parameter("mouse_x", "0")
+        my = event.get_parameter("mouse_y", "0")
+        self._popup_el.set_property("left", f"{mx}px")
+        self._popup_el.set_property("top", f"{int(float(my)) + 2}px")
+        self._popup_el.set_class("visible", True)
+        handle.dirty("picker_r")
+        handle.dirty("picker_g")
+        handle.dirty("picker_b")
+
+    def _on_picker_change(self, handle, event, args):
+        s = lf.get_render_settings()
+        if not s or not event or not self._color_edit_prop:
+            return
+        r = float(event.get_parameter("red", "0"))
+        g = float(event.get_parameter("green", "0"))
+        b = float(event.get_parameter("blue", "0"))
+        setattr(s, self._color_edit_prop, (r, g, b))
+        handle.dirty_all()
+
+    def _on_popup_click(self, event):
+        event.stop_propagation()
+
+    def _on_body_click(self, event):
+        if self._picker_click_handled:
+            self._picker_click_handled = False
+            return
+        self._hide_picker()
+
+    def _hide_picker(self):
+        self._color_edit_prop = None
+        if self._popup_el:
+            self._popup_el.set_class("visible", False)
 
     def _set_ppisp_mode(self, v):
         s = lf.get_render_settings()

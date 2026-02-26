@@ -5,6 +5,7 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "core/logger.hpp"
 #include "gui/rmlui/elements/chromaticity_element.hpp"
+#include "gui/rmlui/elements/color_picker_element.hpp"
 #include "gui/rmlui/elements/crf_curve_element.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
@@ -48,8 +49,10 @@ namespace lfs::vis::gui {
         }
 
         static Rml::ElementInstancerGeneric<ChromaticityElement> chromaticity_instancer;
+        static Rml::ElementInstancerGeneric<ColorPickerElement> color_picker_instancer;
         static Rml::ElementInstancerGeneric<CRFCurveElement> crf_curve_instancer;
         Rml::Factory::RegisterElementInstancer("chromaticity-diagram", &chromaticity_instancer);
+        Rml::Factory::RegisterElementInstancer("color-picker", &color_picker_instancer);
         Rml::Factory::RegisterElementInstancer("crf-curve", &crf_curve_instancer);
 
         try {

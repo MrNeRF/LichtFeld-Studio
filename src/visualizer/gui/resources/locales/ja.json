@@ -404,6 +404,7 @@
     "scene_panel": "シーンパネル",
     "show_console": "システムコンソールを表示",
     "hide_console": "システムコンソールを非表示",
+    "console": "コンソール",
     "background": "背景",
     "color": "色",
     "show_coord_axes": "座標軸を表示",

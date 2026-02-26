@@ -404,6 +404,7 @@
     "scene_panel": "场景面板",
     "show_console": "显示系统控制台",
     "hide_console": "隐藏系统控制台",
+    "console": "控制台",
     "background": "背景",
     "color": "颜色",
     "show_coord_axes": "显示坐标轴",

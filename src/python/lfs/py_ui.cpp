@@ -4385,6 +4385,19 @@ namespace lfs::python {
         m.def("draw_console_button", &draw_console_button,
               "Draw system console button (C++ implementation)");
 
+        m.def("toggle_system_console", &toggle_system_console,
+              "Toggle system console visibility");
+
+        m.def(
+            "is_windows_platform", []() -> bool {
+#ifdef WIN32
+                return true;
+#else
+                return false;
+#endif
+            },
+            "Returns true on Windows");
+
         m.def("get_pivot_mode", &get_pivot_mode, "Get pivot mode (0=Origin, 1=Bounds)");
 
         m.def("set_pivot_mode", &set_pivot_mode, nb::arg("mode"), "Set pivot mode (0=Origin, 1=Bounds)");

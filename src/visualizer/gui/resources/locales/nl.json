@@ -404,6 +404,7 @@
     "scene_panel": "Scène Paneel",
     "show_console": "Toon systeem Console",
     "hide_console": "Verberg systeem Console",
+    "console": "Console",
     "background": "Achtergrond",
     "color": "Kleur",
     "show_coord_axes": "Toon Coördinaat Assen",

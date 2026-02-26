@@ -404,6 +404,7 @@
     "scene_panel": "씬 패널",
     "show_console": "시스템 콘솔 표시",
     "hide_console": "시스템 콘솔 숨기기",
+    "console": "콘솔",
     "background": "배경",
     "color": "색상",
     "show_coord_axes": "좌표축 표시",
