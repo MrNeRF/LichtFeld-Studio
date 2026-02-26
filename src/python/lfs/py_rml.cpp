@@ -7,10 +7,14 @@
 #include "python/python_runtime.hpp"
 
 #include <RmlUi/Core.h>
+#include <RmlUi/Core/Context.h>
 #include <cassert>
+#include <cmath>
 #include <nanobind/stl/optional.h>
 
 namespace lfs::python {
+
+    void register_builtin_transforms(Rml::DataModelConstructor& ctor);
 
     namespace {
         std::unordered_map<Rml::ElementDocument*, std::vector<Rml::ElementPtr>> s_held_elements;
@@ -37,6 +41,48 @@ namespace lfs::python {
 
     void clearHeldElements(Rml::ElementDocument* doc) {
         s_held_elements.erase(doc);
+    }
+
+    nb::object variant_to_python(const Rml::Variant& v) {
+        switch (v.GetType()) {
+        case Rml::Variant::BOOL: return nb::cast(v.Get<bool>());
+        case Rml::Variant::INT: return nb::cast(v.Get<int>());
+        case Rml::Variant::INT64: return nb::cast(v.Get<int64_t>());
+        case Rml::Variant::UINT: return nb::cast(v.Get<unsigned int>());
+        case Rml::Variant::UINT64: return nb::cast(v.Get<uint64_t>());
+        case Rml::Variant::FLOAT: return nb::cast(v.Get<float>());
+        case Rml::Variant::DOUBLE: return nb::cast(v.Get<double>());
+        case Rml::Variant::STRING: return nb::cast(v.Get<Rml::String>());
+        default: return nb::none();
+        }
+    }
+
+    Rml::Variant python_to_variant(const nb::handle& obj) {
+        if (obj.is_none())
+            return {};
+        if (nb::isinstance<nb::bool_>(obj))
+            return Rml::Variant(nb::cast<bool>(obj));
+        if (nb::isinstance<nb::int_>(obj))
+            return Rml::Variant(nb::cast<int>(obj));
+        if (nb::isinstance<nb::float_>(obj))
+            return Rml::Variant(nb::cast<double>(obj));
+        if (nb::isinstance<nb::str>(obj))
+            return Rml::Variant(nb::cast<std::string>(obj));
+        return {};
+    }
+
+    // --- PyRmlContext ---
+
+    nb::object PyRmlContext::create_data_model(const std::string& name) {
+        auto ctor = ctx_->CreateDataModel(name);
+        if (!ctor)
+            return nb::none();
+        register_builtin_transforms(ctor);
+        return nb::cast(PyDataModelConstructor(std::move(ctor)));
+    }
+
+    bool PyRmlContext::remove_data_model(const std::string& name) {
+        return ctx_->RemoveDataModel(name);
     }
 
     // --- PyRmlEvent ---
@@ -250,6 +296,160 @@ namespace lfs::python {
     std::string PyRmlDocument::title() { return doc_->GetTitle(); }
     void PyRmlDocument::set_title(const std::string& t) { doc_->SetTitle(t); }
 
+    nb::object PyRmlDocument::create_data_model(const std::string& name) {
+        auto* ctx = doc_->GetContext();
+        assert(ctx);
+        auto ctor = ctx->CreateDataModel(name);
+        if (!ctor)
+            return nb::none();
+        register_builtin_transforms(ctor);
+        return nb::cast(PyDataModelConstructor(std::move(ctor)));
+    }
+
+    bool PyRmlDocument::remove_data_model(const std::string& name) {
+        auto* ctx = doc_->GetContext();
+        assert(ctx);
+        return ctx->RemoveDataModel(name);
+    }
+
+    // --- PyDataModelHandle ---
+
+    void PyDataModelHandle::dirty(const std::string& name) {
+        handle_.DirtyVariable(name);
+    }
+
+    void PyDataModelHandle::dirty_all() {
+        handle_.DirtyAllVariables();
+    }
+
+    bool PyDataModelHandle::is_dirty(const std::string& name) {
+        return handle_.IsVariableDirty(name);
+    }
+
+    // --- PyDataModelConstructor ---
+
+    void PyDataModelConstructor::bind(const std::string& name, nb::callable getter,
+                                      nb::object setter) {
+        nb::callable get_cb = nb::borrow<nb::callable>(getter);
+        prevent_gc_.push_back(nb::object(get_cb));
+
+        Rml::DataGetFunc get_func = [get_cb](Rml::Variant& out) {
+            nb::gil_scoped_acquire gil;
+            try {
+                nb::object result = get_cb();
+                out = python_to_variant(result);
+            } catch (const std::exception& e) {
+                LOG_ERROR("Data model getter error: {}", e.what());
+            }
+        };
+
+        Rml::DataSetFunc set_func;
+        if (!setter.is_none()) {
+            nb::callable set_cb = nb::borrow<nb::callable>(setter);
+            prevent_gc_.push_back(nb::object(set_cb));
+
+            set_func = [set_cb](const Rml::Variant& in) {
+                nb::gil_scoped_acquire gil;
+                try {
+                    set_cb(variant_to_python(in));
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Data model setter error: {}", e.what());
+                }
+            };
+        }
+
+        ctor_.BindFunc(name, std::move(get_func), std::move(set_func));
+    }
+
+    void PyDataModelConstructor::bind_func(const std::string& name, nb::callable getter) {
+        bind(name, std::move(getter), nb::none());
+    }
+
+    void PyDataModelConstructor::bind_event(const std::string& name, nb::callable callback) {
+        nb::callable cb = nb::borrow<nb::callable>(callback);
+        prevent_gc_.push_back(nb::object(cb));
+
+        ctor_.BindEventCallback(
+            name, [cb](Rml::DataModelHandle handle, Rml::Event& event,
+                       const Rml::VariantList& args) {
+                nb::gil_scoped_acquire gil;
+                try {
+                    nb::list py_args;
+                    for (const auto& arg : args)
+                        py_args.append(variant_to_python(arg));
+                    cb(PyDataModelHandle(handle), PyRmlEvent(&event), py_args);
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Data model event error: {}", e.what());
+                }
+            });
+    }
+
+    void PyDataModelConstructor::register_transform(const std::string& name, nb::callable func) {
+        nb::callable cb = nb::borrow<nb::callable>(func);
+        prevent_gc_.push_back(nb::object(cb));
+
+        ctor_.RegisterTransformFunc(
+            name, [cb](const Rml::VariantList& args) -> Rml::Variant {
+                nb::gil_scoped_acquire gil;
+                try {
+                    nb::list py_args;
+                    for (const auto& arg : args)
+                        py_args.append(variant_to_python(arg));
+                    nb::object result = cb(*py_args);
+                    return python_to_variant(result);
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Data model transform error: {}", e.what());
+                    return {};
+                }
+            });
+    }
+
+    PyDataModelHandle PyDataModelConstructor::get_handle() {
+        return PyDataModelHandle(ctor_.GetModelHandle());
+    }
+
+    void register_builtin_transforms(Rml::DataModelConstructor& ctor) {
+        ctor.RegisterTransformFunc("format_float",
+                                   [](const Rml::VariantList& args) -> Rml::Variant {
+                                       if (args.empty())
+                                           return {};
+                                       double val = args[0].Get<double>();
+                                       int precision = args.size() > 1 ? args[1].Get<int>() : 2;
+                                       char buf[64];
+                                       std::snprintf(buf, sizeof(buf), "%.*f", precision, val);
+                                       return Rml::Variant(Rml::String(buf));
+                                   });
+
+        ctor.RegisterTransformFunc("format_int",
+                                   [](const Rml::VariantList& args) -> Rml::Variant {
+                                       if (args.empty())
+                                           return {};
+                                       return Rml::Variant(
+                                           Rml::String(std::to_string(args[0].Get<int>())));
+                                   });
+
+        ctor.RegisterTransformFunc("format_percent",
+                                   [](const Rml::VariantList& args) -> Rml::Variant {
+                                       if (args.empty())
+                                           return {};
+                                       double val = args[0].Get<double>() * 100.0;
+                                       char buf[64];
+                                       std::snprintf(buf, sizeof(buf), "%.0f%%", val);
+                                       return Rml::Variant(Rml::String(buf));
+                                   });
+
+        ctor.RegisterTransformFunc("to_degrees",
+                                   [](const Rml::VariantList& args) -> Rml::Variant {
+                                       if (args.empty())
+                                           return {};
+                                       double rad = args[0].Get<double>();
+                                       double deg = rad * 180.0 / M_PI;
+                                       char buf[64];
+                                       std::snprintf(buf, sizeof(buf), "%.1f\xC2\xB0", deg);
+                                       return Rml::Variant(Rml::String(buf));
+                                   });
+    }
+
     // --- PyEventListener ---
 
     void PyEventListener::ProcessEvent(Rml::Event& event) {
@@ -293,6 +493,10 @@ namespace lfs::python {
 
     void register_rml_bindings(nb::module_& m) {
         auto rml = m.def_submodule("rml", "RmlUI DOM API");
+
+        nb::class_<PyRmlContext>(rml, "RmlContext")
+            .def("create_data_model", &PyRmlContext::create_data_model, nb::arg("name"))
+            .def("remove_data_model", &PyRmlContext::remove_data_model, nb::arg("name"));
 
         nb::class_<PyRmlEvent>(rml, "RmlEvent")
             .def("type", &PyRmlEvent::type)
@@ -349,7 +553,25 @@ namespace lfs::python {
             .def("create_text_node", &PyRmlDocument::create_text_node)
             .def("show", &PyRmlDocument::show)
             .def("hide", &PyRmlDocument::hide)
+            .def("create_data_model", &PyRmlDocument::create_data_model, nb::arg("name"))
+            .def("remove_data_model", &PyRmlDocument::remove_data_model, nb::arg("name"))
             .def_prop_rw("title", &PyRmlDocument::title, &PyRmlDocument::set_title);
+
+        nb::class_<PyDataModelHandle>(rml, "DataModelHandle")
+            .def("dirty", &PyDataModelHandle::dirty, nb::arg("name"))
+            .def("dirty_all", &PyDataModelHandle::dirty_all)
+            .def("is_dirty", &PyDataModelHandle::is_dirty, nb::arg("name"));
+
+        nb::class_<PyDataModelConstructor>(rml, "DataModelConstructor")
+            .def("bind", &PyDataModelConstructor::bind, nb::arg("name"), nb::arg("getter"),
+                 nb::arg("setter") = nb::none())
+            .def("bind_func", &PyDataModelConstructor::bind_func, nb::arg("name"),
+                 nb::arg("getter"))
+            .def("bind_event", &PyDataModelConstructor::bind_event, nb::arg("name"),
+                 nb::arg("callback"))
+            .def("register_transform", &PyDataModelConstructor::register_transform,
+                 nb::arg("name"), nb::arg("func"))
+            .def("get_handle", &PyDataModelConstructor::get_handle);
 
         rml.def("get_document", [](const std::string& name) -> nb::object {
             auto* doc = RmlDocumentRegistry::instance().get_document(name);

@@ -51,8 +51,17 @@ namespace lfs::vis::gui::rml_theme {
         return cached;
     }
 
+    namespace {
+        ImVec4 blend(const ImVec4& base, const ImVec4& accent, float factor) {
+            return {base.x + (accent.x - base.x) * factor,
+                    base.y + (accent.y - base.y) * factor,
+                    base.z + (accent.z - base.z) * factor, 1.0f};
+        }
+    } // namespace
+
     std::string generateComponentsThemeRCSS() {
-        const auto& p = lfs::vis::theme().palette;
+        const auto& t = lfs::vis::theme();
+        const auto& p = t.palette;
         const auto text = colorToRml(p.text);
         const auto text_dim = colorToRml(p.text_dim);
         const auto surface = colorToRml(p.surface);
@@ -60,44 +69,118 @@ namespace lfs::vis::gui::rml_theme {
         const auto primary = colorToRml(p.primary);
         const auto border = colorToRml(p.border);
 
-        return std::format(
-            "input[type=\"checkbox\"] {{ border-color: {5}; }}\n"
-            "input[type=\"checkbox\"]:checked {{ background-color: {4}; border-color: {4}; }}\n"
-            "input[type=\"range\"] slidertrack {{ background-color: {2}; border-color: {5}; }}\n"
-            "input[type=\"range\"] sliderbar {{ background-color: {4}; }}\n"
-            "input[type=\"text\"] {{ color: {0}; background-color: {2}; border-color: {5}; }}\n"
-            "input[type=\"text\"]:focus {{ border-color: {4}; }}\n"
-            "select {{ color: {0}; background-color: {2}; border-color: {5}; }}\n"
-            "select:hover {{ border-color: {4}; }}\n"
-            "selectbox {{ background-color: {2}; border-color: {5}; }}\n"
-            "selectbox option:hover {{ background-color: {4}; }}\n"
-            "progress {{ background-color: {2}; border-color: {5}; }}\n"
-            "progress fill {{ background-color: {4}; }}\n"
-            ".progress__text {{ color: {0}; }}\n"
-            ".setting-label {{ color: {0}; }}\n"
-            ".prop-label {{ color: {0}; }}\n"
-            ".slider-value {{ color: {1}; }}\n"
-            ".section-header {{ color: {0}; }}\n"
-            ".section-header:hover {{ background-color: {3}; }}\n"
-            ".section-arrow {{ color: {1}; }}\n"
-            ".separator {{ background-color: {5}; }}\n"
-            ".text-disabled {{ color: {1}; }}\n"
-            ".empty-message {{ color: {1}; }}\n"
-            ".color-swatch {{ border-color: {5}; }}\n"
-            ".color-comp {{ color: {1}; background-color: {2}; border-color: {5}; }}\n"
-            ".color-hex {{ color: {0}; background-color: {2}; border-color: {5}; }}\n"
-            ".color-hex:focus {{ border-color: {4}; }}\n"
-            ".context-menu {{ background-color: {2}; border-color: {5}; }}\n"
-            ".context-menu-item {{ color: {0}; }}\n"
-            ".context-menu-item:hover {{ background-color: {4}; }}\n"
-            ".context-menu-separator {{ background-color: {5}; }}\n"
-            ".btn {{ color: {0}; background-color: {3}; border-color: {5}; }}\n"
-            ".btn:hover {{ background-color: {5}; }}\n"
-            ".btn:active {{ background-color: {2}; }}\n"
-            ".btn--secondary {{ background-color: transparent; border-color: {5}; color: {0}; }}\n"
-            ".btn--secondary:hover {{ background-color: {2}; }}\n"
-            ".icon-btn.selected {{ background-color: {4}; }}\n",
-            text, text_dim, surface, surface_bright, primary, border);
+        std::string check_path;
+        try {
+            check_path = lfs::vis::getAssetPath("icon/check.png").string();
+        } catch (...) {}
+
+        const float tn = t.button.tint_normal;
+        const float th = t.button.tint_hover;
+        const float ta = t.button.tint_active;
+
+        const auto btn_primary = colorToRml(blend(p.surface, p.primary, tn));
+        const auto btn_primary_h = colorToRml(blend(p.surface, p.primary, th));
+        const auto btn_primary_a = colorToRml(blend(p.surface, p.primary, ta));
+        const auto btn_success = colorToRml(blend(p.surface, p.success, tn));
+        const auto btn_success_h = colorToRml(blend(p.surface, p.success, th));
+        const auto btn_success_a = colorToRml(blend(p.surface, p.success, ta));
+        const auto btn_warning = colorToRml(blend(p.surface, p.warning, tn));
+        const auto btn_warning_h = colorToRml(blend(p.surface, p.warning, th));
+        const auto btn_warning_a = colorToRml(blend(p.surface, p.warning, ta));
+        const auto btn_error = colorToRml(blend(p.surface, p.error, tn));
+        const auto btn_error_h = colorToRml(blend(p.surface, p.error, th));
+        const auto btn_error_a = colorToRml(blend(p.surface, p.error, ta));
+
+        const auto success = colorToRml(p.success);
+        const auto warning = colorToRml(p.warning);
+        const auto error = colorToRml(p.error);
+        const auto info = colorToRml(p.info);
+        const auto header_bg = colorToRmlAlpha(p.primary, 0.25f);
+        const auto header_hover = colorToRmlAlpha(p.primary, 0.5f);
+        const int rounding = static_cast<int>(t.sizes.frame_rounding);
+        const int row_pad_y = static_cast<int>(t.sizes.item_spacing.y * 0.5f);
+        const int indent = static_cast<int>(t.sizes.indent_spacing);
+        const int inner_gap = static_cast<int>(t.sizes.item_inner_spacing.x);
+        const int fp_x = static_cast<int>(t.sizes.frame_padding.x);
+        const int fp_y = static_cast<int>(t.sizes.frame_padding.y);
+
+        const auto check_decorator =
+            check_path.empty()
+                ? std::string{}
+                : std::format("input[type=\"checkbox\"]:checked {{ decorator: image({}); }}\n", check_path);
+
+        return check_decorator +
+               std::format(
+                   "input[type=\"checkbox\"] {{ border-color: {5}; }}\n"
+                   "input[type=\"checkbox\"]:checked {{ background-color: {4}; border-color: {4}; }}\n"
+                   "input[type=\"range\"] slidertrack {{ background-color: {2}; border-color: {5}; }}\n"
+                   "input[type=\"range\"] sliderbar {{ background-color: {4}; }}\n"
+                   "input[type=\"text\"] {{ color: {0}; background-color: {2}; border-color: {5}; }}\n"
+                   "input[type=\"text\"]:focus {{ border-color: {4}; }}\n"
+                   "select {{ color: {0}; background-color: {2}; border-color: {5}; }}\n"
+                   "select:hover {{ border-color: {4}; }}\n"
+                   "selectbox {{ background-color: {2}; border-color: {5}; }}\n"
+                   "selectbox option:hover {{ background-color: {4}; }}\n"
+                   "progress {{ background-color: {2}; border-color: {5}; }}\n"
+                   "progress fill {{ background-color: {4}; }}\n"
+                   ".progress__text {{ color: {0}; }}\n"
+                   ".setting-label {{ color: {0}; }}\n"
+                   ".prop-label {{ color: {0}; }}\n"
+                   ".slider-value {{ color: {1}; }}\n"
+                   ".section-header {{ color: {0}; background-color: {6}; }}\n"
+                   ".section-header:hover {{ background-color: {7}; }}\n"
+                   ".section-arrow {{ color: {1}; }}\n"
+                   ".separator {{ background-color: {5}; }}\n"
+                   ".text-disabled {{ color: {1}; }}\n"
+                   ".empty-message {{ color: {1}; }}\n"
+                   ".color-swatch {{ border-color: {5}; }}\n"
+                   ".color-comp {{ color: {1}; background-color: {2}; border-color: {5}; }}\n"
+                   ".color-hex {{ color: {0}; background-color: {2}; border-color: {5}; }}\n"
+                   ".color-hex:focus {{ border-color: {4}; }}\n"
+                   ".context-menu {{ background-color: {2}; border-color: {5}; }}\n"
+                   ".context-menu-item {{ color: {0}; }}\n"
+                   ".context-menu-item:hover {{ background-color: {4}; }}\n"
+                   ".context-menu-separator {{ background-color: {5}; }}\n"
+                   ".btn {{ color: {0}; background-color: {3}; border-color: {5}; border-radius: {8}dp; }}\n"
+                   ".btn:hover {{ background-color: {5}; }}\n"
+                   ".btn:active {{ background-color: {2}; }}\n"
+                   ".btn--secondary {{ background-color: transparent; border-color: {5}; color: {0}; }}\n"
+                   ".btn--secondary:hover {{ background-color: {2}; }}\n"
+                   ".icon-btn.selected {{ background-color: {4}; }}\n",
+                   text, text_dim, surface, surface_bright, primary, border,
+                   header_bg, header_hover, rounding) +
+               std::format(
+                   ".btn--primary {{ background-color: {0}; border-color: {0}; color: {6}; }}\n"
+                   ".btn--primary:hover {{ background-color: {1}; border-color: {1}; }}\n"
+                   ".btn--primary:active {{ background-color: {2}; border-color: {2}; }}\n"
+                   ".btn--success {{ background-color: {3}; border-color: {3}; color: {6}; }}\n"
+                   ".btn--success:hover {{ background-color: {4}; border-color: {4}; }}\n"
+                   ".btn--success:active {{ background-color: {5}; border-color: {5}; }}\n",
+                   btn_primary, btn_primary_h, btn_primary_a,
+                   btn_success, btn_success_h, btn_success_a, text) +
+               std::format(
+                   ".btn--warning {{ background-color: {0}; border-color: {0}; color: {6}; }}\n"
+                   ".btn--warning:hover {{ background-color: {1}; border-color: {1}; }}\n"
+                   ".btn--warning:active {{ background-color: {2}; border-color: {2}; }}\n"
+                   ".btn--error {{ background-color: {3}; border-color: {3}; color: {6}; }}\n"
+                   ".btn--error:hover {{ background-color: {4}; border-color: {4}; }}\n"
+                   ".btn--error:active {{ background-color: {5}; border-color: {5}; }}\n",
+                   btn_warning, btn_warning_h, btn_warning_a,
+                   btn_error, btn_error_h, btn_error_a, text) +
+               std::format(
+                   ".status-success {{ color: {0}; }}\n"
+                   ".status-error {{ color: {1}; }}\n"
+                   ".status-muted {{ color: {2}; }}\n"
+                   ".status-info {{ color: {3}; }}\n",
+                   success, error, text_dim, info) +
+               std::format(
+                   ".setting-row {{ padding: {0}dp 0; }}\n"
+                   ".indent {{ margin-left: {1}dp; }}\n"
+                   ".prop-label {{ margin-right: {2}dp; }}\n"
+                   "input[type=\"text\"] {{ padding: {4}dp {3}dp; }}\n"
+                   "select {{ padding: {4}dp {3}dp; }}\n"
+                   ".btn--full {{ padding: {4}dp {3}dp; }}\n",
+                   row_pad_y, indent, inner_gap, fp_x, fp_y);
     }
 
     void applyTheme(Rml::ElementDocument* doc, const std::string& base_rcss,

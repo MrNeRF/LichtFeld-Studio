@@ -1,5 +1,7 @@
 /* Training panel — panel-specific styles only.
- * Shared widget styles are in components.rcss (auto-included via applyTheme). */
+ * Shared widget styles are in components.rcss (auto-included via applyTheme).
+ * Spacing values (row padding, indent, frame padding) come from theme CSS.
+ * Layout: label LEFT, control RIGHT (matching ImGui layout.prop() convention). */
 
 body {
     font-family: Inter;
@@ -9,5 +11,23 @@ body {
     right: 0;
     top: 0;
     height: auto;
-    padding: 2dp 6dp;
+    padding: 6dp;
+}
+
+.prop-label {
+    min-width: 120dp;
+    text-align: left;
+    margin-left: 0;
+}
+
+select {
+    flex: 1;
+}
+
+.number-input {
+    flex: 1;
+}
+
+.setting-slider {
+    flex: 1;
 }

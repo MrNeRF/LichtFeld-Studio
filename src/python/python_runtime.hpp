@@ -543,6 +543,8 @@ namespace lfs::python {
         bool (*is_loaded)(void* host);
         void (*set_height_mode)(void* host, int mode);
         float (*get_content_height)(void* host);
+        bool (*ensure_context)(void* host);
+        void* (*get_context)(void* host);
     };
 
     LFS_PYTHON_RUNTIME_API void set_rml_panel_host_ops(const RmlPanelHostOps& ops);

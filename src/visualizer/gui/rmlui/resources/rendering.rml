@@ -2,140 +2,140 @@
 <head>
   <link type="text/rcss" href="rendering.rcss"/>
 </head>
-<body id="body">
+<body id="body" data-model="rendering">
 <div id="content-wrap">
 
   <!-- Background Color -->
-  <div class="setting-row" id="row-background_color">
-    <span class="color-comp" id="rc-background_color"></span>
-    <span class="color-comp" id="gc-background_color"></span>
-    <span class="color-comp" id="bc-background_color"></span>
-    <div class="color-swatch" id="swatch-background_color" data-prop="background_color"></div>
-    <input type="text" id="hex-background_color" class="color-hex" data-prop="background_color" />
-    <span class="prop-label" id="label-background_color"></span>
+  <div class="setting-row">
+    <span class="color-comp">{{background_color_r}}</span>
+    <span class="color-comp">{{background_color_g}}</span>
+    <span class="color-comp">{{background_color_b}}</span>
+    <div class="color-swatch" id="swatch-background_color" data-event-click="color_click('background_color')"></div>
+    <input type="text" class="color-hex" data-value="background_color_hex" />
+    <span class="prop-label">{{label_background_color}}</span>
   </div>
 
   <!-- Show Coordinate Axes -->
-  <div class="setting-row" id="row-show_coord_axes">
-    <label class="setting-label" id="label-show_coord_axes">
-      <input type="checkbox" id="cb-show_coord_axes" data-prop="show_coord_axes" />
-      <span id="text-show_coord_axes"></span>
+  <div class="setting-row">
+    <label class="setting-label">
+      <input type="checkbox" data-checked="show_coord_axes" />
+      <span>{{label_show_coord_axes}}</span>
     </label>
   </div>
-  <div class="indent" id="dep-show_coord_axes">
+  <div class="indent" data-if="show_coord_axes">
     <div class="setting-row">
-      <input type="range" id="slider-axes_size" class="setting-slider" data-prop="axes_size" min="0.5" max="10" step="0.01" />
-      <span class="slider-value" id="val-axes_size"></span>
-      <span class="prop-label" id="label-axes_size"></span>
+      <input type="range" class="setting-slider" data-value="axes_size" min="0.5" max="10" step="0.01" />
+      <span class="slider-value">{{axes_size | format_float(3)}}</span>
+      <span class="prop-label">{{label_axes_size}}</span>
     </div>
   </div>
 
   <!-- Show Pivot -->
-  <div class="setting-row" id="row-show_pivot">
+  <div class="setting-row">
     <label class="setting-label">
-      <input type="checkbox" id="cb-show_pivot" data-prop="show_pivot" />
-      <span id="text-show_pivot"></span>
+      <input type="checkbox" data-checked="show_pivot" />
+      <span>{{label_show_pivot}}</span>
     </label>
   </div>
 
   <!-- Show Grid -->
-  <div class="setting-row" id="row-show_grid">
+  <div class="setting-row">
     <label class="setting-label">
-      <input type="checkbox" id="cb-show_grid" data-prop="show_grid" />
-      <span id="text-show_grid"></span>
+      <input type="checkbox" data-checked="show_grid" />
+      <span>{{label_show_grid}}</span>
     </label>
   </div>
-  <div class="indent" id="dep-show_grid">
+  <div class="indent" data-if="show_grid">
     <div class="setting-row">
-      <select id="sel-grid_plane" data-prop="grid_plane">
+      <select data-value="grid_plane">
         <option value="0">YZ (Right)</option>
         <option value="1">XZ (Top)</option>
         <option value="2">XY (Front)</option>
       </select>
-      <span class="prop-label" id="label-grid_plane"></span>
+      <span class="prop-label">{{label_grid_plane}}</span>
     </div>
     <div class="setting-row">
-      <input type="range" id="slider-grid_opacity" class="setting-slider" data-prop="grid_opacity" min="0" max="1" step="0.01" />
-      <span class="slider-value" id="val-grid_opacity"></span>
-      <span class="prop-label" id="label-grid_opacity"></span>
+      <input type="range" class="setting-slider" data-value="grid_opacity" min="0" max="1" step="0.01" />
+      <span class="slider-value">{{grid_opacity | format_float(3)}}</span>
+      <span class="prop-label">{{label_grid_opacity}}</span>
     </div>
   </div>
 
   <!-- Camera Frustums -->
-  <div class="setting-row" id="row-show_camera_frustums">
+  <div class="setting-row">
     <label class="setting-label">
-      <input type="checkbox" id="cb-show_camera_frustums" data-prop="show_camera_frustums" />
-      <span id="text-show_camera_frustums"></span>
+      <input type="checkbox" data-checked="show_camera_frustums" />
+      <span>{{label_show_camera_frustums}}</span>
     </label>
   </div>
-  <div class="indent" id="dep-show_camera_frustums">
+  <div class="indent" data-if="show_camera_frustums">
     <div class="setting-row">
-      <input type="range" id="slider-camera_frustum_scale" class="setting-slider" data-prop="camera_frustum_scale" min="0.01" max="10" step="0.01" />
-      <span class="slider-value" id="val-camera_frustum_scale"></span>
-      <span class="prop-label" id="label-camera_frustum_scale"></span>
+      <input type="range" class="setting-slider" data-value="camera_frustum_scale" min="0.01" max="10" step="0.01" />
+      <span class="slider-value">{{camera_frustum_scale | format_float(3)}}</span>
+      <span class="prop-label">{{label_camera_frustum_scale}}</span>
     </div>
   </div>
 
   <!-- Point Cloud Mode -->
-  <div class="setting-row" id="row-point_cloud_mode">
+  <div class="setting-row">
     <label class="setting-label">
-      <input type="checkbox" id="cb-point_cloud_mode" data-prop="point_cloud_mode" />
-      <span id="text-point_cloud_mode"></span>
+      <input type="checkbox" data-checked="point_cloud_mode" />
+      <span>{{label_point_cloud_mode}}</span>
     </label>
   </div>
-  <div class="indent" id="dep-point_cloud_mode">
+  <div class="indent" data-if="point_cloud_mode">
     <div class="setting-row">
-      <input type="range" id="slider-voxel_size" class="setting-slider" data-prop="voxel_size" min="0.001" max="0.1" step="0.001" />
-      <span class="slider-value" id="val-voxel_size"></span>
-      <span class="prop-label" id="label-voxel_size"></span>
+      <input type="range" class="setting-slider" data-value="voxel_size" min="0.001" max="0.1" step="0.001" />
+      <span class="slider-value">{{voxel_size | format_float(3)}}</span>
+      <span class="prop-label">{{label_voxel_size}}</span>
     </div>
   </div>
 
   <div class="separator"></div>
 
-  <!-- Selection Colors (collapsible, starts expanded) -->
-  <div class="section-header" id="hdr-selection_colors" data-section="selection_colors">
-    <span class="section-arrow">&#x25BC;</span>
-    <span id="text-hdr-selection_colors"></span>
+  <!-- Selection Colors (collapsible) -->
+  <div class="section-header" data-event-click="toggle_section('selection_colors')">
+    <span class="section-arrow">{{sec_selection_colors_arrow}}</span>
+    <span>{{label_hdr_selection_colors}}</span>
   </div>
-  <div class="section-content" id="sec-selection_colors">
+  <div class="section-content" data-class-collapsed="sec_selection_colors_collapsed">
     <div class="setting-row">
-      <span class="color-comp" id="rc-selection_color_committed"></span>
-      <span class="color-comp" id="gc-selection_color_committed"></span>
-      <span class="color-comp" id="bc-selection_color_committed"></span>
-      <div class="color-swatch" id="swatch-selection_color_committed" data-prop="selection_color_committed"></div>
-      <input type="text" id="hex-selection_color_committed" class="color-hex" data-prop="selection_color_committed" />
-      <span class="prop-label" id="label-selection_color_committed"></span>
+      <span class="color-comp">{{selection_color_committed_r}}</span>
+      <span class="color-comp">{{selection_color_committed_g}}</span>
+      <span class="color-comp">{{selection_color_committed_b}}</span>
+      <div class="color-swatch" id="swatch-selection_color_committed" data-event-click="color_click('selection_color_committed')"></div>
+      <input type="text" class="color-hex" data-value="selection_color_committed_hex" />
+      <span class="prop-label">{{label_selection_color_committed}}</span>
     </div>
     <div class="setting-row">
-      <span class="color-comp" id="rc-selection_color_preview"></span>
-      <span class="color-comp" id="gc-selection_color_preview"></span>
-      <span class="color-comp" id="bc-selection_color_preview"></span>
-      <div class="color-swatch" id="swatch-selection_color_preview" data-prop="selection_color_preview"></div>
-      <input type="text" id="hex-selection_color_preview" class="color-hex" data-prop="selection_color_preview" />
-      <span class="prop-label" id="label-selection_color_preview"></span>
+      <span class="color-comp">{{selection_color_preview_r}}</span>
+      <span class="color-comp">{{selection_color_preview_g}}</span>
+      <span class="color-comp">{{selection_color_preview_b}}</span>
+      <div class="color-swatch" id="swatch-selection_color_preview" data-event-click="color_click('selection_color_preview')"></div>
+      <input type="text" class="color-hex" data-value="selection_color_preview_hex" />
+      <span class="prop-label">{{label_selection_color_preview}}</span>
     </div>
     <div class="setting-row">
-      <span class="color-comp" id="rc-selection_color_center_marker"></span>
-      <span class="color-comp" id="gc-selection_color_center_marker"></span>
-      <span class="color-comp" id="bc-selection_color_center_marker"></span>
-      <div class="color-swatch" id="swatch-selection_color_center_marker" data-prop="selection_color_center_marker"></div>
-      <input type="text" id="hex-selection_color_center_marker" class="color-hex" data-prop="selection_color_center_marker" />
-      <span class="prop-label" id="label-selection_color_center_marker"></span>
+      <span class="color-comp">{{selection_color_center_marker_r}}</span>
+      <span class="color-comp">{{selection_color_center_marker_g}}</span>
+      <span class="color-comp">{{selection_color_center_marker_b}}</span>
+      <div class="color-swatch" id="swatch-selection_color_center_marker" data-event-click="color_click('selection_color_center_marker')"></div>
+      <input type="text" class="color-hex" data-value="selection_color_center_marker_hex" />
+      <span class="prop-label">{{label_selection_color_center_marker}}</span>
     </div>
   </div>
 
   <!-- Desaturation -->
   <div class="setting-row">
     <label class="setting-label">
-      <input type="checkbox" id="cb-desaturate_unselected" data-prop="desaturate_unselected" />
-      <span id="text-desaturate_unselected"></span>
+      <input type="checkbox" data-checked="desaturate_unselected" />
+      <span>{{label_desaturate_unselected}}</span>
     </label>
   </div>
   <div class="setting-row">
     <label class="setting-label">
-      <input type="checkbox" id="cb-desaturate_cropping" data-prop="desaturate_cropping" />
-      <span id="text-desaturate_cropping"></span>
+      <input type="checkbox" data-checked="desaturate_cropping" />
+      <span>{{label_desaturate_cropping}}</span>
     </label>
   </div>
 
@@ -143,112 +143,112 @@
 
   <!-- Focal Length -->
   <div class="setting-row">
-    <input type="range" id="slider-focal_length_mm" class="setting-slider" data-prop="focal_length_mm" min="10" max="200" step="0.1" />
-    <span class="slider-value" id="val-focal_length_mm"></span>
-    <span class="prop-label" id="label-focal_length_mm"></span>
+    <input type="range" class="setting-slider" data-value="focal_length_mm" min="10" max="200" step="0.1" />
+    <span class="slider-value">{{focal_length_mm | format_float(1)}}</span>
+    <span class="prop-label">{{label_focal_length_mm}}</span>
   </div>
   <div class="setting-row">
-    <span class="text-disabled" id="fov-display"></span>
+    <span class="text-disabled">{{fov_display}}</span>
   </div>
 
   <!-- SH Degree -->
   <div class="setting-row">
-    <select id="sel-sh_degree" data-prop="sh_degree">
+    <select data-value="sh_degree">
       <option value="0">0</option>
       <option value="1">1</option>
       <option value="2">2</option>
       <option value="3">3</option>
     </select>
-    <span class="prop-label" id="label-sh_degree"></span>
+    <span class="prop-label">{{label_sh_degree}}</span>
   </div>
 
   <!-- Equirectangular / GUT -->
   <div class="setting-row">
     <label class="setting-label">
-      <input type="checkbox" id="cb-equirectangular" data-prop="equirectangular" />
-      <span id="text-equirectangular"></span>
+      <input type="checkbox" data-checked="equirectangular" />
+      <span>{{label_equirectangular}}</span>
     </label>
   </div>
   <div class="setting-row">
     <label class="setting-label">
-      <input type="checkbox" id="cb-gut" data-prop="gut" />
-      <span id="text-gut"></span>
+      <input type="checkbox" data-checked="gut" />
+      <span>{{label_gut}}</span>
     </label>
   </div>
 
   <!-- Mip Filter / Render Scale -->
   <div class="setting-row">
     <label class="setting-label">
-      <input type="checkbox" id="cb-mip_filter" data-prop="mip_filter" />
-      <span id="text-mip_filter"></span>
+      <input type="checkbox" data-checked="mip_filter" />
+      <span>{{label_mip_filter}}</span>
     </label>
   </div>
   <div class="setting-row">
-    <input type="range" id="slider-render_scale" class="setting-slider" data-prop="render_scale" min="0.25" max="1" step="0.01" />
-    <span class="slider-value" id="val-render_scale"></span>
-    <span class="prop-label" id="label-render_scale"></span>
+    <input type="range" class="setting-slider" data-value="render_scale" min="0.25" max="1" step="0.01" />
+    <span class="slider-value">{{render_scale | format_float(2)}}</span>
+    <span class="prop-label">{{label_render_scale}}</span>
   </div>
 
   <div class="separator"></div>
 
-  <!-- Mesh (collapsible, starts expanded) -->
-  <div class="section-header" id="hdr-mesh" data-section="mesh">
-    <span class="section-arrow">&#x25BC;</span>
-    <span id="text-hdr-mesh"></span>
+  <!-- Mesh (collapsible) -->
+  <div class="section-header" data-event-click="toggle_section('mesh')">
+    <span class="section-arrow">{{sec_mesh_arrow}}</span>
+    <span>{{label_hdr_mesh}}</span>
   </div>
-  <div class="section-content" id="sec-mesh">
+  <div class="section-content" data-class-collapsed="sec_mesh_collapsed">
     <div class="setting-row">
       <label class="setting-label">
-        <input type="checkbox" id="cb-mesh_wireframe" data-prop="mesh_wireframe" />
-        <span id="text-mesh_wireframe"></span>
+        <input type="checkbox" data-checked="mesh_wireframe" />
+        <span>{{label_mesh_wireframe}}</span>
       </label>
     </div>
-    <div class="indent" id="dep-mesh_wireframe">
+    <div class="indent" data-if="mesh_wireframe">
       <div class="setting-row">
-        <span class="color-comp" id="rc-mesh_wireframe_color"></span>
-        <span class="color-comp" id="gc-mesh_wireframe_color"></span>
-        <span class="color-comp" id="bc-mesh_wireframe_color"></span>
-        <div class="color-swatch" id="swatch-mesh_wireframe_color" data-prop="mesh_wireframe_color"></div>
-        <input type="text" id="hex-mesh_wireframe_color" class="color-hex" data-prop="mesh_wireframe_color" />
-        <span class="prop-label" id="label-mesh_wireframe_color"></span>
+        <span class="color-comp">{{mesh_wireframe_color_r}}</span>
+        <span class="color-comp">{{mesh_wireframe_color_g}}</span>
+        <span class="color-comp">{{mesh_wireframe_color_b}}</span>
+        <div class="color-swatch" id="swatch-mesh_wireframe_color" data-event-click="color_click('mesh_wireframe_color')"></div>
+        <input type="text" class="color-hex" data-value="mesh_wireframe_color_hex" />
+        <span class="prop-label">{{label_mesh_wireframe_color}}</span>
       </div>
       <div class="setting-row">
-        <input type="range" id="slider-mesh_wireframe_width" class="setting-slider" data-prop="mesh_wireframe_width" min="0.5" max="5" step="0.01" />
-        <span class="slider-value" id="val-mesh_wireframe_width"></span>
-        <span class="prop-label" id="label-mesh_wireframe_width"></span>
+        <input type="range" class="setting-slider" data-value="mesh_wireframe_width" min="0.5" max="5" step="0.01" />
+        <span class="slider-value">{{mesh_wireframe_width | format_float(2)}}</span>
+        <span class="prop-label">{{label_mesh_wireframe_width}}</span>
       </div>
     </div>
     <div class="setting-row">
-      <input type="range" id="slider-mesh_light_intensity" class="setting-slider" data-prop="mesh_light_intensity" min="0" max="5" step="0.01" />
-      <span class="slider-value" id="val-mesh_light_intensity"></span>
-      <span class="prop-label" id="label-mesh_light_intensity"></span>
+      <input type="range" class="setting-slider" data-value="mesh_light_intensity" min="0" max="5" step="0.01" />
+      <span class="slider-value">{{mesh_light_intensity | format_float(2)}}</span>
+      <span class="prop-label">{{label_mesh_light_intensity}}</span>
     </div>
     <div class="setting-row">
-      <input type="range" id="slider-mesh_ambient" class="setting-slider" data-prop="mesh_ambient" min="0" max="1" step="0.01" />
-      <span class="slider-value" id="val-mesh_ambient"></span>
-      <span class="prop-label" id="label-mesh_ambient"></span>
+      <input type="range" class="setting-slider" data-value="mesh_ambient" min="0" max="1" step="0.01" />
+      <span class="slider-value">{{mesh_ambient | format_float(2)}}</span>
+      <span class="prop-label">{{label_mesh_ambient}}</span>
     </div>
     <div class="setting-row">
       <label class="setting-label">
-        <input type="checkbox" id="cb-mesh_backface_culling" data-prop="mesh_backface_culling" />
-        <span id="text-mesh_backface_culling"></span>
+        <input type="checkbox" data-checked="mesh_backface_culling" />
+        <span>{{label_mesh_backface_culling}}</span>
       </label>
     </div>
     <div class="setting-row">
       <label class="setting-label">
-        <input type="checkbox" id="cb-mesh_shadow_enabled" data-prop="mesh_shadow_enabled" />
-        <span id="text-mesh_shadow_enabled"></span>
+        <input type="checkbox" data-checked="mesh_shadow_enabled" />
+        <span>{{label_mesh_shadow_enabled}}</span>
       </label>
     </div>
-    <div class="indent" id="dep-mesh_shadow_enabled">
+    <div class="indent" data-if="mesh_shadow_enabled">
       <div class="setting-row">
-        <select id="sel-mesh_shadow_resolution" data-prop="mesh_shadow_resolution">
+        <select data-value="mesh_shadow_resolution">
           <option value="512">512</option>
           <option value="1024">1024</option>
           <option value="2048">2048</option>
           <option value="4096">4096</option>
         </select>
-        <span class="prop-label" id="label-mesh_shadow_resolution"></span>
+        <span class="prop-label">{{label_mesh_shadow_resolution}}</span>
       </div>
     </div>
   </div>

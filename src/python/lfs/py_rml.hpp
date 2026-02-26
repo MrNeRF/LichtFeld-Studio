@@ -8,6 +8,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include <RmlUi/Core/DataModelHandle.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Event.h>
@@ -21,7 +22,22 @@
 
 namespace nb = nanobind;
 
+namespace Rml {
+    class Context;
+} // namespace Rml
+
 namespace lfs::python {
+
+    class PyRmlContext {
+    public:
+        explicit PyRmlContext(Rml::Context* ctx) : ctx_(ctx) { assert(ctx_); }
+
+        nb::object create_data_model(const std::string& name);
+        bool remove_data_model(const std::string& name);
+
+    private:
+        Rml::Context* ctx_;
+    };
 
     class PyRmlEvent {
     public:
@@ -117,10 +133,40 @@ namespace lfs::python {
         std::string title();
         void set_title(const std::string& t);
 
+        nb::object create_data_model(const std::string& name);
+        bool remove_data_model(const std::string& name);
+
         Rml::ElementDocument* raw_doc() { return doc_; }
 
     private:
         Rml::ElementDocument* doc_;
+    };
+
+    class PyDataModelHandle {
+    public:
+        explicit PyDataModelHandle(Rml::DataModelHandle handle) : handle_(handle) {}
+
+        void dirty(const std::string& name);
+        void dirty_all();
+        bool is_dirty(const std::string& name);
+
+    private:
+        Rml::DataModelHandle handle_;
+    };
+
+    class PyDataModelConstructor {
+    public:
+        explicit PyDataModelConstructor(Rml::DataModelConstructor ctor) : ctor_(std::move(ctor)) {}
+
+        void bind(const std::string& name, nb::callable getter, nb::object setter);
+        void bind_func(const std::string& name, nb::callable getter);
+        void bind_event(const std::string& name, nb::callable callback);
+        void register_transform(const std::string& name, nb::callable func);
+        PyDataModelHandle get_handle();
+
+    private:
+        Rml::DataModelConstructor ctor_;
+        std::vector<nb::object> prevent_gc_;
     };
 
     class PyEventListener : public Rml::EventListener {

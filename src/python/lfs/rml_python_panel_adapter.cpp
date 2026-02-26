@@ -26,6 +26,22 @@ namespace lfs::vis::gui {
 
     RmlPythonPanelAdapter::~RmlPythonPanelAdapter() {
         if (host_) {
+            if (loaded_ && lfs::python::can_acquire_gil()) {
+                const lfs::python::GilAcquire gil;
+                if (nb::hasattr(panel_instance_, "on_unload")) {
+                    try {
+                        const auto& ops = lfs::python::get_rml_panel_host_ops();
+                        auto* doc = static_cast<Rml::ElementDocument*>(
+                            ops.get_document(host_));
+                        if (doc) {
+                            auto py_doc = lfs::python::PyRmlDocument(doc);
+                            panel_instance_.attr("on_unload")(py_doc);
+                        }
+                    } catch (const std::exception& e) {
+                        LOG_ERROR("RmlPanel on_unload error: {}", e.what());
+                    }
+                }
+            }
             const auto& ops = lfs::python::get_rml_panel_host_ops();
             assert(ops.destroy);
             ops.destroy(host_);
@@ -43,6 +59,29 @@ namespace lfs::vis::gui {
 
             if (height_mode_ != 0 && ops.set_height_mode)
                 ops.set_height_mode(host_, height_mode_);
+        }
+
+        if (!model_bound_ && ops.ensure_context && ops.get_context && lfs::python::can_acquire_gil()) {
+            const lfs::python::GilAcquire gil;
+            has_bind_model_ = nb::hasattr(panel_instance_, "on_bind_model");
+            if (!draw_imgui_checked_) {
+                has_draw_imgui_ = nb::hasattr(panel_instance_, "draw_imgui");
+                draw_imgui_checked_ = true;
+            }
+
+            if (has_bind_model_) {
+                if (ops.ensure_context(host_)) {
+                    auto* rml_ctx = static_cast<Rml::Context*>(ops.get_context(host_));
+                    assert(rml_ctx);
+                    try {
+                        auto py_ctx = lfs::python::PyRmlContext(rml_ctx);
+                        panel_instance_.attr("on_bind_model")(py_ctx);
+                    } catch (const std::exception& e) {
+                        LOG_ERROR("RmlPanel on_bind_model error: {}", e.what());
+                    }
+                }
+            }
+            model_bound_ = true;
         }
 
         ops.draw(host_, &ctx);

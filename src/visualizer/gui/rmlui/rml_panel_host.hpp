@@ -33,6 +33,7 @@ namespace lfs::vis::gui {
         RmlPanelHost& operator=(const RmlPanelHost&) = delete;
 
         void draw(const PanelDrawContext& ctx);
+        bool ensureContext();
 
         void setHeightMode(HeightMode mode) { height_mode_ = mode; }
         HeightMode getHeightMode() const { return height_mode_; }

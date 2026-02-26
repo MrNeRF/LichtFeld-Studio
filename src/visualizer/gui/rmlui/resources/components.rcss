@@ -197,15 +197,16 @@ progress fill {
 .section-header {
     display: flex;
     align-items: center;
-    padding: 3dp 0;
+    padding: 3dp 4dp;
     font-weight: bold;
     color: #cdd6f4;
     cursor: pointer;
     font-size: 13dp;
+    background-color: rgba(137, 180, 250, 64);
 }
 
 .section-header:hover {
-    background-color: #313244;
+    background-color: rgba(137, 180, 250, 128);
 }
 
 .section-arrow {
@@ -323,7 +324,7 @@ progress fill {
 
 .btn {
     display: inline-block;
-    padding: 4dp 12dp;
+    padding: 2dp 8dp;
     font-size: 13dp;
     color: #cdd6f4;
     background-color: #45475a;
@@ -511,7 +512,7 @@ progress fill {
 .btn--full {
     display: block;
     width: 100%;
-    margin-bottom: 4dp;
+    margin-bottom: 2dp;
     box-sizing: border-box;
 }
 

@@ -35,15 +35,6 @@ COLOR_PROPS = [
     "mesh_wireframe_color",
 ]
 
-DEP_MAP = {
-    "show_coord_axes": "dep-show_coord_axes",
-    "show_grid": "dep-show_grid",
-    "show_camera_frustums": "dep-show_camera_frustums",
-    "point_cloud_mode": "dep-point_cloud_mode",
-    "mesh_wireframe": "dep-mesh_wireframe",
-    "mesh_shadow_enabled": "dep-mesh_shadow_enabled",
-}
-
 LOCALE_KEY = {
     "show_coord_axes": "main_panel.show_coord_axes",
     "show_pivot": "main_panel.show_pivot",
@@ -65,24 +56,34 @@ LOCALE_KEY = {
     "selection_color_committed": "main_panel.committed",
     "selection_color_preview": "main_panel.preview",
     "selection_color_center_marker": "main_panel.center_marker",
+    "mesh_wireframe": "main_panel.mesh_wireframe",
+    "mesh_wireframe_color": "main_panel.mesh_wireframe_color",
+    "mesh_wireframe_width": "main_panel.mesh_wireframe_width",
+    "mesh_light_intensity": "main_panel.mesh_light_intensity",
+    "mesh_ambient": "main_panel.mesh_ambient",
+    "mesh_backface_culling": "main_panel.mesh_backface_culling",
+    "mesh_shadow_enabled": "main_panel.mesh_shadow_enabled",
+    "mesh_shadow_resolution": "main_panel.mesh_shadow_resolution",
+    "camera_frustum_scale": "main_panel.camera_frustum_scale",
+    "voxel_size": "main_panel.voxel_size",
 }
 
 
-def _prop_label(prop_id, settings):
+def _prop_label(prop_id):
     key = LOCALE_KEY.get(prop_id)
     if key:
         label = lf.ui.tr(key)
         if label:
             return label
-    info = settings.prop_info(prop_id)
-    return info.get("name", prop_id)
+    s = lf.get_render_settings()
+    if s:
+        info = s.prop_info(prop_id)
+        return info.get("name", prop_id)
+    return prop_id
 
 
 def _color_to_hex(c):
-    r = int(c[0] * 255)
-    g = int(c[1] * 255)
-    b = int(c[2] * 255)
-    return f"#{r:02x}{g:02x}{b:02x}"
+    return f"#{int(c[0]*255):02x}{int(c[1]*255):02x}{int(c[2]*255):02x}"
 
 
 def _hex_to_color(h):
@@ -90,10 +91,7 @@ def _hex_to_color(h):
     if len(h) != 6:
         return None
     try:
-        r = int(h[0:2], 16) / 255.0
-        g = int(h[2:4], 16) / 255.0
-        b = int(h[4:6], 16) / 255.0
-        return (r, g, b)
+        return (int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0, int(h[4:6], 16) / 255.0)
     except ValueError:
         return None
 
@@ -107,143 +105,85 @@ class RenderingPanel(RmlPanel):
     rml_height_mode = "content"
 
     def __init__(self):
-        self._els = {}
-        self._sections = {}
-        self._hex_visible = set()
-        self._slider_user_vals = {}
+        self._handle = None
         self._color_edit_prop = None
         self._color_picker_needs_pos = False
-        self._last_lang = ""
+        self._collapsed = set()
 
-    def _populate_labels(self, doc, settings):
-        tr = lf.ui.tr
-
-        for prop_id in BOOL_PROPS:
-            text_el = doc.get_element_by_id(f"text-{prop_id}")
-            if text_el:
-                text_el.set_inner_rml(_prop_label(prop_id, settings))
-
-        for prop_id in SLIDER_PROPS:
-            label_el = doc.get_element_by_id(f"label-{prop_id}")
-            if label_el:
-                label_el.set_inner_rml(_prop_label(prop_id, settings))
-
-        for prop_id in SELECT_PROPS:
-            label_el = doc.get_element_by_id(f"label-{prop_id}")
-            if label_el:
-                label_el.set_inner_rml(_prop_label(prop_id, settings))
-
-        for prop_id in COLOR_PROPS:
-            label_el = doc.get_element_by_id(f"label-{prop_id}")
-            if label_el:
-                label_el.set_inner_rml(_prop_label(prop_id, settings))
-
-        hdr_sel = doc.get_element_by_id("text-hdr-selection_colors")
-        if hdr_sel:
-            hdr_sel.set_inner_rml(tr("main_panel.selection_colors"))
-
-        hdr_mesh = doc.get_element_by_id("text-hdr-mesh")
-        if hdr_mesh:
-            hdr_mesh.set_inner_rml(tr("main_panel.mesh"))
-
-    def on_load(self, doc):
-        settings = lf.get_render_settings()
-        if not settings:
+    def on_bind_model(self, ctx):
+        model = ctx.create_data_model("rendering")
+        if model is None:
             return
 
-        self._last_lang = lf.ui.get_current_language()
-        self._populate_labels(doc, settings)
+        s = lf.get_render_settings
 
-        body = doc.get_element_by_id("body")
-        if body:
-            body.add_event_listener("change", self._on_change)
-            body.add_event_listener("click", self._on_click)
+        for prop_id in BOOL_PROPS:
+            model.bind(prop_id,
+                       lambda p=prop_id: getattr(s(), p, False),
+                       lambda v, p=prop_id: setattr(s(), p, v) if s() else None)
+
+        for prop_id in SLIDER_PROPS:
+            model.bind(prop_id,
+                       lambda p=prop_id: float(getattr(s(), p, 0.0)),
+                       lambda v, p=prop_id: setattr(s(), p, float(v)) if s() else None)
+
+        for prop_id in SELECT_PROPS:
+            model.bind(prop_id,
+                       lambda p=prop_id: str(getattr(s(), p, "")),
+                       lambda v, p=prop_id: setattr(s(), p, v) if s() else None)
+
+        all_props = BOOL_PROPS + SLIDER_PROPS + SELECT_PROPS + COLOR_PROPS
+        for prop_id in all_props:
+            model.bind_func(f"label_{prop_id}", lambda p=prop_id: _prop_label(p))
+
+        for prop_id in COLOR_PROPS:
+            model.bind_func(f"{prop_id}_r",
+                            lambda p=prop_id: f"R:{int(getattr(s(), p, (0,0,0))[0]*255):>3d}")
+            model.bind_func(f"{prop_id}_g",
+                            lambda p=prop_id: f"G:{int(getattr(s(), p, (0,0,0))[1]*255):>3d}")
+            model.bind_func(f"{prop_id}_b",
+                            lambda p=prop_id: f"B:{int(getattr(s(), p, (0,0,0))[2]*255):>3d}")
+            model.bind(f"{prop_id}_hex",
+                       lambda p=prop_id: _color_to_hex(getattr(s(), p, (0,0,0))),
+                       lambda v, p=prop_id: self._set_color_hex(p, v))
+
+        model.bind_func("label_hdr_selection_colors",
+                         lambda: lf.ui.tr("main_panel.selection_colors") or "Selection Colors")
+        model.bind_func("label_hdr_mesh",
+                         lambda: lf.ui.tr("main_panel.mesh") or "Mesh")
+
+        for sec in ["selection_colors", "mesh"]:
+            model.bind(f"sec_{sec}_collapsed",
+                       lambda n=sec: n in self._collapsed)
+            model.bind_func(f"sec_{sec}_arrow",
+                            lambda n=sec: "\u25B6" if n in self._collapsed else "\u25BC")
+
+        model.bind_func("fov_display", self._compute_fov)
+
+        model.bind_event("toggle_section", self._on_toggle_section)
+        model.bind_event("color_click", self._on_color_click)
+
+        self._handle = model.get_handle()
 
     def on_update(self, doc):
-        settings = lf.get_render_settings()
-        if not settings:
+        s = lf.get_render_settings()
+        if not s:
             return
 
-        cur_lang = lf.ui.get_current_language()
-        if cur_lang != self._last_lang:
-            self._last_lang = cur_lang
-            self._populate_labels(doc, settings)
-
-        for prop_id in BOOL_PROPS:
-            el = doc.get_element_by_id(f"cb-{prop_id}")
-            if el:
-                val = getattr(settings, prop_id)
-                if val:
-                    el.set_attribute("checked", "")
-                else:
-                    el.remove_attribute("checked")
-
-            if prop_id in DEP_MAP:
-                dep = doc.get_element_by_id(DEP_MAP[prop_id])
-                if dep:
-                    val = getattr(settings, prop_id)
-                    if val:
-                        dep.set_class("hidden", False)
-                    else:
-                        dep.set_class("hidden", True)
-
-        for prop_id in SLIDER_PROPS:
-            val = getattr(settings, prop_id)
-            user_val = self._slider_user_vals.get(prop_id)
-            if user_val is None or abs(val - user_val) > 1e-6:
-                el = doc.get_element_by_id(f"slider-{prop_id}")
-                if el:
-                    el.set_attribute("value", f"{val:.4g}")
-                self._slider_user_vals.pop(prop_id, None)
-            val_el = doc.get_element_by_id(f"val-{prop_id}")
-            if val_el:
-                val_el.set_inner_rml(f"{val:.3f}")
-
-        for prop_id in SELECT_PROPS:
-            el = doc.get_element_by_id(f"sel-{prop_id}")
-            if el:
-                val = getattr(settings, prop_id)
-                el.set_attribute("value", str(val))
-
         for prop_id in COLOR_PROPS:
-            val = getattr(settings, prop_id)
-            r = int(val[0] * 255)
-            g = int(val[1] * 255)
-            b = int(val[2] * 255)
-
-            r_el = doc.get_element_by_id(f"rc-{prop_id}")
-            if r_el:
-                r_el.set_inner_rml(f"R:{r:>3d}")
-            g_el = doc.get_element_by_id(f"gc-{prop_id}")
-            if g_el:
-                g_el.set_inner_rml(f"G:{g:>3d}")
-            b_el = doc.get_element_by_id(f"bc-{prop_id}")
-            if b_el:
-                b_el.set_inner_rml(f"B:{b:>3d}")
-
             swatch = doc.get_element_by_id(f"swatch-{prop_id}")
             if swatch:
+                val = getattr(s, prop_id)
+                r, g, b = int(val[0] * 255), int(val[1] * 255), int(val[2] * 255)
                 swatch.set_property("background-color", f"rgb({r},{g},{b})")
 
-            hex_el = doc.get_element_by_id(f"hex-{prop_id}")
-            if hex_el:
-                hex_el.set_attribute("value", _color_to_hex(val))
+    def on_scene_changed(self, doc):
+        if self._handle:
+            self._handle.dirty_all()
 
-        view = lf.get_current_view()
-        fov_el = doc.get_element_by_id("fov-display")
-        if fov_el:
-            if view and view.width > 0 and view.height > 0:
-                focal_mm = settings.focal_length_mm
-                vfov = 2.0 * math.degrees(math.atan(SENSOR_HALF_HEIGHT_MM / focal_mm))
-                aspect = view.width / view.height
-                hfov = 2.0 * math.degrees(
-                    math.atan(aspect * math.tan(math.radians(vfov * 0.5)))
-                )
-                fov_el.set_inner_rml(
-                    lf.ui.tr("rendering_panel.fov_format").format(hfov=hfov, vfov=vfov)
-                )
-            else:
-                fov_el.set_inner_rml("")
+    def on_unload(self, doc):
+        doc.remove_data_model("rendering")
+        self._handle = None
 
     def draw_imgui(self, layout):
         settings = lf.get_render_settings()
@@ -263,6 +203,8 @@ class RenderingPanel(RmlPanel):
             changed, new_color = layout.color_picker3("##picker", val)
             if changed:
                 setattr(settings, prop_id, new_color)
+                if self._handle:
+                    self._handle.dirty_all()
             layout.end_popup()
         elif self._color_edit_prop:
             self._color_edit_prop = None
@@ -338,75 +280,45 @@ class RenderingPanel(RmlPanel):
         lf.ui.draw_tools_section()
         lf.ui.draw_console_button()
 
-    def _on_change(self, event):
-        settings = lf.get_render_settings()
-        if not settings:
+    def _set_color_hex(self, prop_id, hex_val):
+        s = lf.get_render_settings()
+        if not s:
             return
+        color = _hex_to_color(hex_val)
+        if color:
+            setattr(s, prop_id, color)
 
-        target = event.target()
-        if not target:
+    def _compute_fov(self):
+        s = lf.get_render_settings()
+        view = lf.get_current_view()
+        if not s or not view or view.width <= 0 or view.height <= 0:
+            return ""
+        focal_mm = s.focal_length_mm
+        vfov = 2.0 * math.degrees(math.atan(SENSOR_HALF_HEIGHT_MM / focal_mm))
+        aspect = view.width / view.height
+        hfov = 2.0 * math.degrees(math.atan(aspect * math.tan(math.radians(vfov * 0.5))))
+        fmt = lf.ui.tr("rendering_panel.fov_format")
+        if fmt:
+            return fmt.format(hfov=hfov, vfov=vfov)
+        return f"H:{hfov:.1f}\u00b0 V:{vfov:.1f}\u00b0"
+
+    def _on_toggle_section(self, handle, event, args):
+        if not args:
             return
+        name = str(args[0])
+        if name in self._collapsed:
+            self._collapsed.discard(name)
+        else:
+            self._collapsed.add(name)
+        handle.dirty(f"sec_{name}_collapsed")
+        handle.dirty(f"sec_{name}_arrow")
 
-        prop_id = target.get_attribute("data-prop")
-        if not prop_id:
+    def _on_color_click(self, handle, event, args):
+        if not args:
             return
-
-        tag = target.get_attribute("id") or ""
-
-        if tag.startswith("cb-"):
-            val = target.has_attribute("checked")
-            setattr(settings, prop_id, val)
-        elif tag.startswith("slider-"):
-            try:
-                val = float(target.get_attribute("value"))
-                setattr(settings, prop_id, val)
-                self._slider_user_vals[prop_id] = val
-            except (ValueError, TypeError):
-                pass
-        elif tag.startswith("sel-"):
-            val = target.get_attribute("value")
-            if val is not None:
-                setattr(settings, prop_id, val)
-        elif tag.startswith("hex-"):
-            hex_val = target.get_attribute("value")
-            if hex_val:
-                color = _hex_to_color(hex_val)
-                if color:
-                    setattr(settings, prop_id, color)
-
-    def _on_click(self, event):
-        target = event.target()
-        if not target:
-            return
-
-        body = event.current_target()
-
-        el = target
-        while el:
-            cls = el.get_class_names()
-
-            if "section-header" in cls:
-                section_name = el.get_attribute("data-section")
-                if section_name and body:
-                    sec_el = body.get_element_by_id(f"sec-{section_name}")
-                    if sec_el:
-                        is_collapsed = sec_el.is_class_set("collapsed")
-                        sec_el.set_class("collapsed", not is_collapsed)
-                        arrow = el.query_selector(".section-arrow")
-                        if arrow:
-                            arrow.set_inner_rml(
-                                "\u25BC" if is_collapsed else "\u25B6"
-                            )
-                return
-
-            if "color-swatch" in cls:
-                prop_id = el.get_attribute("data-prop")
-                if prop_id:
-                    if self._color_edit_prop == prop_id:
-                        self._color_edit_prop = None
-                    else:
-                        self._color_edit_prop = prop_id
-                        self._color_picker_needs_pos = True
-                return
-
-            el = el.parent()
+        prop_id = str(args[0])
+        if self._color_edit_prop == prop_id:
+            self._color_edit_prop = None
+        else:
+            self._color_edit_prop = prop_id
+            self._color_picker_needs_pos = True

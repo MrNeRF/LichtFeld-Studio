@@ -30,6 +30,8 @@ namespace lfs::vis::gui {
         std::string rml_path_;
         nb::object panel_instance_;
         bool loaded_ = false;
+        bool model_bound_ = false;
+        bool has_bind_model_ = false;
         bool has_draw_imgui_ = false;
         bool draw_imgui_checked_ = false;
         int height_mode_ = 0;

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Training Panel - RmlUI implementation with hybrid ImGui fallback."""
+"""Training Panel - RmlUI with native data binding."""
 
 import os
 import time
@@ -42,63 +42,169 @@ class IterationRateTracker:
 
 _rate_tracker = IterationRateTracker()
 
-CTRL_SECTIONS = ["ctrl-ready", "ctrl-running", "ctrl-paused",
-                 "ctrl-completed", "ctrl-stopped", "ctrl-error", "ctrl-stopping"]
-
-STATE_TO_CTRL = {
-    "ready": "ctrl-ready",
-    "running": "ctrl-running",
-    "paused": "ctrl-paused",
-    "completed": "ctrl-completed",
-    "stopped": "ctrl-stopped",
-    "error": "ctrl-error",
-    "stopping": "ctrl-stopping",
+LOCALE_KEYS = {
+    "hdr_basic_params": "training.section.basic_params",
+    "hdr_advanced_params": "training.section.advanced_params",
+    "hdr_dataset": "training.section.dataset",
+    "hdr_optimization": "training.section.optimization",
+    "hdr_bilateral": "training.section.bilateral_grid",
+    "hdr_losses": "training.section.losses",
+    "hdr_init": "training.section.initialization",
+    "hdr_adc": "training_panel.pruning_growing",
+    "hdr_sparsity": "training_panel.sparsity",
+    "hdr_save_steps": "training_panel.save_steps",
+    "strategy": "training_params.strategy",
+    "iterations": "training_params.iterations",
+    "max_cap": "training_params.max_gaussians",
+    "sh_degree": "training_params.sh_degree",
+    "tile_mode": "training_params.tile_mode",
+    "steps_scaler": "training_params.steps_scaler",
+    "bilateral_grid": "training_params.bilateral_grid",
+    "mask_mode": "training_params.mask_mode",
+    "invert_masks": "training_params.invert_masks",
+    "use_alpha_as_mask": "training_params.use_alpha_as_mask",
+    "sparsity": "training_params.sparsity",
+    "gut": "training_params.gut",
+    "undistort": "training_params.undistort",
+    "mip_filter": "training_params.mip_filter",
+    "ppisp": "training_params.ppisp",
+    "ppisp_controller": "training_params.ppisp_controller",
+    "ppisp_auto": "common.auto",
+    "ppisp_activation_step": "training_params.ppisp_activation_step",
+    "ppisp_controller_lr": "training_params.ppisp_controller_lr",
+    "ppisp_freeze_gaussians": "training_params.ppisp_freeze_gaussians",
+    "bg_mode": "training_params.bg_mode",
+    "bg_color": "training_params.bg_color",
+    "bg_image": "training_params.bg_image",
+    "dataset_path": "training.dataset.path",
+    "dataset_images": "training.dataset.images",
+    "resize_factor": "training.dataset.resize_factor",
+    "max_width": "training.dataset.max_width",
+    "cpu_cache": "training.dataset.cpu_cache",
+    "fs_cache": "training.dataset.fs_cache",
+    "dataset_output": "training.dataset.output",
+    "no_dataset": "training_panel.no_dataset_loaded",
+    "opt_strategy": "training_params.strategy",
+    "lr_header": "training.opt.learning_rates",
+    "means_lr": "training.opt.lr.position",
+    "shs_lr": "training.opt.lr.sh_coeff",
+    "opacity_lr": "training.opt.lr.opacity",
+    "scaling_lr": "training.opt.lr.scaling",
+    "rotation_lr": "training.opt.lr.rotation",
+    "refinement_header": "training.section.refinement",
+    "refine_every": "training.refinement.refine_every",
+    "start_refine": "training.refinement.start_refine",
+    "stop_refine": "training.refinement.stop_refine",
+    "grad_threshold": "training.refinement.gradient_thr",
+    "reset_every": "training.refinement.reset_every",
+    "sh_degree_interval": "training.refinement.sh_upgrade_every",
+    "bilateral_grid_x": "training.bilateral.grid_x",
+    "bilateral_grid_y": "training.bilateral.grid_y",
+    "bilateral_grid_w": "training.bilateral.grid_w",
+    "bilateral_grid_lr": "training.bilateral.learning_rate",
+    "lambda_dssim": "training.losses.lambda_dssim",
+    "opacity_reg": "training.losses.opacity_reg",
+    "scale_reg": "training.losses.scale_reg",
+    "tv_loss_weight": "training.losses.tv_loss_weight",
+    "init_opacity": "training.init.init_opacity",
+    "init_scaling": "training.init.init_scaling",
+    "random_init": "training.init.random_init",
+    "init_num_pts": "training.init.num_points",
+    "init_extent": "training.init.extent",
+    "min_opacity": "training.thresholds.min_opacity",
+    "prune_opacity": "training.thresholds.prune_opacity",
+    "grow_scale3d": "training.thresholds.grow_scale_3d",
+    "grow_scale2d": "training.thresholds.grow_scale_2d",
+    "prune_scale3d": "training.thresholds.prune_scale_3d",
+    "prune_scale2d": "training.thresholds.prune_scale_2d",
+    "pause_refine_after_reset": "training.thresholds.pause_after_reset",
+    "revised_opacity": "training.thresholds.revised_opacity",
+    "sparsify_steps": "training_params.sparsify_steps",
+    "init_rho": "training_params.init_rho",
+    "prune_ratio": "training_params.prune_ratio",
+    "no_trainer": "training_panel.no_trainer_loaded",
+    "no_params": "training_panel.parameters_unavailable",
+    "no_save_steps": "training_panel.no_save_steps",
+    "save_checkpoint": "training_panel.save_checkpoint",
+    "checkpoint_saved": "training_panel.checkpoint_saved",
+    "add": "common.add",
+    "bg_browse": "training_params.bg_image_browse",
+    "bg_clear": "training_params.bg_image_clear",
 }
 
-BOOL_PROPS = {
-    "cb-bilateral_grid": "use_bilateral_grid",
-    "cb-invert_masks": "invert_masks",
-    "cb-use_alpha_as_mask": "use_alpha_as_mask",
-    "cb-sparsity": "enable_sparsity",
-    "cb-gut": "gut",
-    "cb-undistort": "undistort",
-    "cb-mip_filter": "mip_filter",
-    "cb-ppisp": "ppisp",
-    "cb-ppisp_use_controller": "ppisp_use_controller",
-    "cb-ppisp_freeze_gaussians": "ppisp_freeze_gaussians",
-    "cb-random": "random",
-    "cb-revised_opacity": "revised_opacity",
-}
-
-DATASET_BOOL_PROPS = {
-    "cb-cpu_cache": "use_cpu_cache",
-    "cb-fs_cache": "use_fs_cache",
-}
-
-NUM_PROPS_ON_PARAMS = [
-    "iterations", "max_cap", "steps_scaler",
-    "means_lr", "shs_lr", "opacity_lr", "scaling_lr", "rotation_lr",
-    "refine_every", "start_refine", "stop_refine", "grad_threshold",
-    "reset_every", "sh_degree_interval",
-    "bilateral_grid_x", "bilateral_grid_y", "bilateral_grid_w", "bilateral_grid_lr",
-    "opacity_reg", "scale_reg", "tv_loss_weight",
-    "init_opacity", "init_scaling", "init_num_pts", "init_extent",
-    "min_opacity", "prune_opacity", "grow_scale3d", "grow_scale2d",
-    "prune_scale3d", "prune_scale2d", "pause_refine_after_reset",
-    "sparsify_steps", "init_rho", "prune_ratio",
-    "ppisp_controller_lr",
+PARAM_BOOL_PROPS = [
+    "use_bilateral_grid", "invert_masks", "use_alpha_as_mask",
+    "enable_sparsity", "gut", "undistort", "mip_filter",
+    "ppisp", "ppisp_use_controller", "ppisp_freeze_gaussians",
+    "random", "revised_opacity",
 ]
 
-SLIDER_PROPS_ON_PARAMS = [
-    "lambda_dssim", "init_opacity", "prune_ratio",
+DATASET_BOOL_PROPS = ["use_cpu_cache", "use_fs_cache"]
+
+# (prop, type, format, min, max)
+NUM_PROP_DEFS = [
+    ("iterations", int, "%d", 1, None),
+    ("max_cap", int, "%d", 1, None),
+    ("steps_scaler", float, "%.2f", 0.01, None),
+    ("means_lr", float, "%.6f", 0, None),
+    ("shs_lr", float, "%.4f", 0, None),
+    ("opacity_lr", float, "%.4f", 0, None),
+    ("scaling_lr", float, "%.4f", 0, None),
+    ("rotation_lr", float, "%.4f", 0, None),
+    ("refine_every", int, "%d", 1, None),
+    ("start_refine", int, "%d", 0, None),
+    ("stop_refine", int, "%d", 0, None),
+    ("grad_threshold", float, "%.6f", 0, None),
+    ("reset_every", int, "%d", 1, None),
+    ("sh_degree_interval", int, "%d", 1, None),
+    ("bilateral_grid_x", int, "%d", 1, None),
+    ("bilateral_grid_y", int, "%d", 1, None),
+    ("bilateral_grid_w", int, "%d", 1, None),
+    ("bilateral_grid_lr", float, "%.6f", 0, None),
+    ("opacity_reg", float, "%.4f", 0, None),
+    ("scale_reg", float, "%.4f", 0, None),
+    ("tv_loss_weight", float, "%.1f", 0, None),
+    ("init_scaling", float, "%.3f", 0.001, None),
+    ("init_num_pts", int, "%d", 1, None),
+    ("init_extent", float, "%.1f", 0.1, None),
+    ("min_opacity", float, "%.4f", 0, None),
+    ("prune_opacity", float, "%.4f", 0, None),
+    ("grow_scale3d", float, "%.4f", 0, None),
+    ("grow_scale2d", float, "%.3f", 0, None),
+    ("prune_scale3d", float, "%.3f", 0, None),
+    ("prune_scale2d", float, "%.3f", 0, None),
+    ("pause_refine_after_reset", int, "%d", 0, None),
+    ("sparsify_steps", int, "%d", 1, None),
+    ("init_rho", float, "%.4f", 0, None),
+    ("ppisp_controller_lr", float, "%.5f", 0, None),
 ]
+
+SLIDER_PROPS = ["lambda_dssim", "init_opacity", "prune_ratio"]
+
+DIRECT_SET_PROPS = {
+    "iterations", "max_cap", "means_lr", "shs_lr",
+    "opacity_lr", "scaling_lr", "rotation_lr", "ppisp_controller_lr",
+}
+
+RENDER_SYNC = {
+    "gut": "gut",
+    "mip_filter": "mip_filter",
+    "ppisp": "apply_appearance_correction",
+}
+
+SECTIONS = [
+    "basic_params", "advanced_params", "dataset", "optimization",
+    "bilateral", "losses", "init", "adc", "sparsity", "save_steps",
+]
+
+INITIALLY_COLLAPSED = {
+    "advanced_params", "dataset", "optimization", "bilateral",
+    "losses", "init", "adc", "sparsity", "save_steps",
+}
 
 
 def _color_to_hex(c):
-    r = int(c[0] * 255)
-    g = int(c[1] * 255)
-    b = int(c[2] * 255)
-    return f"#{r:02x}{g:02x}{b:02x}"
+    return f"#{int(c[0]*255):02x}{int(c[1]*255):02x}{int(c[2]*255):02x}"
 
 
 def _hex_to_color(h):
@@ -106,10 +212,7 @@ def _hex_to_color(h):
     if len(h) != 6:
         return None
     try:
-        r = int(h[0:2], 16) / 255.0
-        g = int(h[2:4], 16) / 255.0
-        b = int(h[4:6], 16) / 255.0
-        return (r, g, b)
+        return (int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0, int(h[4:6], 16) / 255.0)
     except ValueError:
         return None
 
@@ -123,439 +226,351 @@ class TrainingPanel(RmlPanel):
     rml_height_mode = "content"
 
     def __init__(self):
+        self._handle = None
         self._checkpoint_saved_time = 0.0
         self._new_save_step = 7000
         self._auto_scaled_for_cameras = 0
-        self._last_lang = ""
+        self._last_state = ""
         self._last_save_steps = []
         self._color_edit_prop = None
         self._color_picker_needs_pos = False
-        self._slider_user_vals = {}
+        self._collapsed = set(INITIALLY_COLLAPSED)
 
-    def on_load(self, doc):
-        self._last_lang = lf.ui.get_current_language()
-        self._populate_labels(doc)
-        self._populate_select_options(doc)
+    def on_bind_model(self, ctx):
+        model = ctx.create_data_model("training")
+        if model is None:
+            return
 
-        body = doc.get_element_by_id("body")
-        if body:
-            body.add_event_listener("change", self._on_change)
-            body.add_event_listener("click", self._on_click)
+        p = lf.optimization_params
+        d = lf.dataset_params
 
-    def _populate_labels(self, doc):
-        def _set(el_id, text):
-            el = doc.get_element_by_id(el_id)
-            if el:
-                el.set_inner_rml(text)
+        self._bind_labels(model)
+        self._bind_sections(model)
+        self._bind_visibility(model, p, d)
+        self._bind_disabled(model, p)
+        self._bind_bool_props(model, p)
+        self._bind_dataset_bools(model, d)
+        self._bind_select_props(model, p, d)
+        self._bind_num_props(model, p, d)
+        self._bind_slider_props(model, p)
+        self._bind_color(model, p)
+        self._bind_status(model, p)
+        self._bind_display(model, p, d)
+        self._bind_events(model)
+        self._handle = model.get_handle()
 
-        _set("text-hdr-basic_params", tr("training.section.basic_params"))
-        _set("text-hdr-advanced_params", tr("training.section.advanced_params"))
-        _set("text-hdr-dataset", tr("training.section.dataset"))
-        _set("text-hdr-optimization", tr("training.section.optimization"))
-        _set("text-hdr-bilateral", tr("training.section.bilateral_grid"))
-        _set("text-hdr-losses", tr("training.section.losses"))
-        _set("text-hdr-init", tr("training.section.initialization"))
-        _set("text-hdr-adc", tr("training_panel.pruning_growing"))
-        _set("text-hdr-sparsity", tr("training_panel.sparsity"))
-        _set("text-hdr-save_steps", tr("training_panel.save_steps"))
+    def _bind_labels(self, model):
+        for label_id, key in LOCALE_KEYS.items():
+            model.bind_func(f"label_{label_id}", lambda k=key: tr(k))
 
-        _set("label-strategy", tr("training_params.strategy"))
-        _set("label-iterations", tr("training_params.iterations"))
-        _set("label-max_cap", tr("training_params.max_gaussians"))
-        _set("label-sh_degree", tr("training_params.sh_degree"))
-        _set("label-tile_mode", tr("training_params.tile_mode"))
-        _set("label-steps_scaler", tr("training_params.steps_scaler"))
+        model.bind_func("label_reset", lambda: tr("training_panel.reset"))
+        model.bind_func("label_clear", lambda: tr("training_panel.clear"))
+        model.bind_func("label_pause", lambda: tr("training_panel.pause"))
+        model.bind_func("label_resume", lambda: tr("training_panel.resume"))
+        model.bind_func("label_stop", lambda: tr("training_panel.stop"))
+        model.bind_func("label_switch_edit", lambda: tr("training_panel.switch_edit_mode"))
+        model.bind_func("label_status_completed", lambda: tr("status.complete"))
+        model.bind_func("label_status_stopped", lambda: tr("status.stopped"))
+        model.bind_func("label_status_error", lambda: tr("status.error"))
+        model.bind_func("label_status_stopping", lambda: tr("status.stopping"))
 
-        _set("text-bilateral_grid", tr("training_params.bilateral_grid"))
-        _set("label-mask_mode", tr("training_params.mask_mode"))
-        _set("text-invert_masks", tr("training_params.invert_masks"))
-        _set("text-use_alpha_as_mask", tr("training_params.use_alpha_as_mask"))
-        _set("text-sparsity", tr("training_params.sparsity"))
-        _set("text-gut", tr("training_params.gut"))
-        _set("text-undistort", tr("training_params.undistort"))
-        _set("text-mip_filter", tr("training_params.mip_filter"))
-        _set("text-ppisp", tr("training_params.ppisp"))
-        _set("text-ppisp_controller", tr("training_params.ppisp_controller"))
-        _set("text-ppisp_auto_step", tr("common.auto"))
-        _set("label-ppisp_activation_step", tr("training_params.ppisp_activation_step"))
-        _set("label-ppisp_controller_lr", tr("training_params.ppisp_controller_lr"))
-        _set("text-ppisp_freeze_gaussians", tr("training_params.ppisp_freeze_gaussians"))
-        _set("label-bg_mode", tr("training_params.bg_mode"))
-        _set("label-bg_color", tr("training_params.bg_color"))
-        _set("label-bg_image", tr("training_params.bg_image"))
+        def _btn_start():
+            it = AppState.iteration.value
+            return tr("training_panel.resume_training") if it > 0 else tr("training_panel.start_training")
+        model.bind_func("btn_start", _btn_start)
 
-        _set("label-dataset_path", tr("training.dataset.path"))
-        _set("label-dataset_images", tr("training.dataset.images"))
-        _set("label-resize_factor", tr("training.dataset.resize_factor"))
-        _set("label-max_width", tr("training.dataset.max_width"))
-        _set("text-cpu_cache", tr("training.dataset.cpu_cache"))
-        _set("text-fs_cache", tr("training.dataset.fs_cache"))
-        _set("label-dataset_output", tr("training.dataset.output"))
-        _set("dataset-no-data", tr("training_panel.no_dataset_loaded"))
+    def _bind_sections(self, model):
+        for sec in SECTIONS:
+            model.bind(f"sec_{sec}_collapsed",
+                       lambda n=sec: n in self._collapsed)
+            model.bind_func(f"sec_{sec}_arrow",
+                            lambda n=sec: "\u25B6" if n in self._collapsed else "\u25BC")
 
-        _set("label-opt_strategy", tr("training_params.strategy"))
-        _set("text-lr-header", tr("training.opt.learning_rates"))
-        _set("label-means_lr", tr("training.opt.lr.position"))
-        _set("label-shs_lr", tr("training.opt.lr.sh_coeff"))
-        _set("label-opacity_lr", tr("training.opt.lr.opacity"))
-        _set("label-scaling_lr", tr("training.opt.lr.scaling"))
-        _set("label-rotation_lr", tr("training.opt.lr.rotation"))
-        _set("text-refinement-header", tr("training.section.refinement"))
-        _set("label-refine_every", tr("training.refinement.refine_every"))
-        _set("label-start_refine", tr("training.refinement.start_refine"))
-        _set("label-stop_refine", tr("training.refinement.stop_refine"))
-        _set("label-grad_threshold", tr("training.refinement.gradient_thr"))
-        _set("label-reset_every", tr("training.refinement.reset_every"))
-        _set("label-sh_degree_interval", tr("training.refinement.sh_upgrade_every"))
+    def _bind_visibility(self, model, p, d):
+        def _state():
+            return AppState.trainer_state.value
+        def _iteration():
+            return AppState.iteration.value
 
-        _set("label-bilateral_grid_x", tr("training.bilateral.grid_x"))
-        _set("label-bilateral_grid_y", tr("training.bilateral.grid_y"))
-        _set("label-bilateral_grid_w", tr("training.bilateral.grid_w"))
-        _set("label-bilateral_grid_lr", tr("training.bilateral.learning_rate"))
+        model.bind_func("show_no_trainer",
+                         lambda: not AppState.has_trainer.value)
+        model.bind_func("show_no_params",
+                         lambda: AppState.has_trainer.value and not (p() and p().has_params()))
+        model.bind_func("show_main",
+                         lambda: AppState.has_trainer.value and p() is not None and p().has_params())
 
-        _set("label-lambda_dssim", tr("training.losses.lambda_dssim"))
-        _set("label-opacity_reg", tr("training.losses.opacity_reg"))
-        _set("label-scale_reg", tr("training.losses.scale_reg"))
-        _set("label-tv_loss_weight", tr("training.losses.tv_loss_weight"))
+        for state_name in ["ready", "running", "paused", "completed", "stopped", "error", "stopping"]:
+            model.bind_func(f"show_ctrl_{state_name}",
+                            lambda s=state_name: _state() == s)
 
-        _set("label-init_opacity", tr("training.init.init_opacity"))
-        _set("label-init_scaling", tr("training.init.init_scaling"))
-        _set("text-random_init", tr("training.init.random_init"))
-        _set("label-init_num_pts", tr("training.init.num_points"))
-        _set("label-init_extent", tr("training.init.extent"))
+        model.bind_func("show_reset_ready",
+                         lambda: _state() == "ready" and _iteration() > 0)
+        model.bind_func("show_checkpoint",
+                         lambda: _state() in ("running", "paused"))
+        model.bind_func("show_checkpoint_saved",
+                         lambda: _state() in ("running", "paused") and
+                                 time.time() - self._checkpoint_saved_time < 2.0)
 
-        _set("label-min_opacity", tr("training.thresholds.min_opacity"))
-        _set("label-prune_opacity", tr("training.thresholds.prune_opacity"))
-        _set("label-grow_scale3d", tr("training.thresholds.grow_scale_3d"))
-        _set("label-grow_scale2d", tr("training.thresholds.grow_scale_2d"))
-        _set("label-prune_scale3d", tr("training.thresholds.prune_scale_3d"))
-        _set("label-prune_scale2d", tr("training.thresholds.prune_scale_2d"))
-        _set("label-pause_refine_after_reset", tr("training.thresholds.pause_after_reset"))
-        _set("text-revised_opacity", tr("training.thresholds.revised_opacity"))
+        model.bind_func("dep_mask_mode",
+                         lambda: p() is not None and p().has_params() and p().mask_mode.value != 0)
+        model.bind_func("dep_ppisp",
+                         lambda: p() is not None and p().has_params() and p().ppisp)
+        model.bind_func("dep_ppisp_controller",
+                         lambda: p() is not None and p().has_params() and p().ppisp_use_controller)
+        model.bind_func("dep_ppisp_manual_step",
+                         lambda: p() is not None and p().has_params() and
+                                 p().ppisp_controller_activation_step >= 0)
+        model.bind_func("dep_bg_color",
+                         lambda: p() is not None and p().has_params() and p().bg_mode.value in (0, 1))
+        model.bind_func("dep_bg_image",
+                         lambda: p() is not None and p().has_params() and p().bg_mode.value == 2)
+        model.bind_func("has_bg_clear",
+                         lambda: p() is not None and p().has_params() and bool(p().bg_image_path))
+        model.bind_func("dep_bilateral",
+                         lambda: p() is not None and p().has_params() and p().use_bilateral_grid)
+        model.bind_func("dep_adc",
+                         lambda: p() is not None and p().has_params() and p().strategy == "adc")
+        model.bind_func("dep_sparsity",
+                         lambda: p() is not None and p().has_params() and p().enable_sparsity)
+        model.bind_func("dep_random",
+                         lambda: p() is not None and p().has_params() and p().random)
+        model.bind_func("show_progress",
+                         lambda: AppState.max_iterations.value > 0 and _iteration() > 0)
+        model.bind_func("has_dataset",
+                         lambda: d() is not None and d().has_params())
+        model.bind_func("show_dataset_no_data",
+                         lambda: d() is None or not d().has_params())
 
-        _set("label-sparsify_steps", tr("training_params.sparsify_steps"))
-        _set("label-init_rho", tr("training_params.init_rho"))
-        _set("label-prune_ratio", tr("training_params.prune_ratio"))
+        model.bind_func("save_edit_mode",
+                         lambda: _state() == "ready" and _iteration() == 0)
+        model.bind_func("save_readonly_mode",
+                         lambda: _state() != "ready" or _iteration() != 0)
+        model.bind_func("no_save_steps",
+                         lambda: _state() == "ready" and _iteration() == 0 and
+                                 p() is not None and p().has_params() and not list(p().save_steps))
+        model.bind_func("no_save_steps_ro",
+                         lambda: (_state() != "ready" or _iteration() != 0) and
+                                 p() is not None and p().has_params() and not list(p().save_steps))
+        model.bind_func("has_save_steps",
+                         lambda: p() is not None and p().has_params() and bool(list(p().save_steps)))
 
-        _set("msg-no-trainer", tr("training_panel.no_trainer_loaded"))
-        _set("msg-no-params", tr("training_panel.parameters_unavailable"))
+    def _bind_disabled(self, model, p):
+        model.bind_func("struct_disabled",
+                         lambda: not (AppState.trainer_state.value == "ready" and
+                                      AppState.iteration.value == 0))
+        model.bind_func("live_disabled",
+                         lambda: AppState.trainer_state.value not in ("ready", "running", "paused"))
+        model.bind_func("adv_disabled",
+                         lambda: not (AppState.trainer_state.value == "ready" and
+                                      AppState.iteration.value == 0))
+        model.bind_func("gut_disabled",
+                         lambda: p() is not None and p().has_params() and p().strategy == "adc")
+        model.bind_func("dataset_disabled",
+                         lambda: not (lf.dataset_params() is not None and
+                                      lf.dataset_params().has_params() and
+                                      lf.dataset_params().can_edit()))
 
-        _set("status-completed", tr("status.complete"))
-        _set("status-stopped", tr("status.stopped"))
-        _set("status-error-label", tr("status.error"))
-        _set("status-stopping-label", tr("status.stopping"))
-        _set("no-save-steps", tr("training_panel.no_save_steps"))
-        _set("no-save-steps-ro", tr("training_panel.no_save_steps"))
+    def _bind_bool_props(self, model, p):
+        for prop in PARAM_BOOL_PROPS:
+            model.bind(prop,
+                       lambda pr=prop: getattr(p(), pr, False) if p() and p().has_params() else False,
+                       lambda v, pr=prop: self._set_bool_prop(pr, v))
 
-        _set("btn-save-checkpoint", tr("training_panel.save_checkpoint"))
-        _set("checkpoint-saved", tr("training_panel.checkpoint_saved"))
-        _set("btn-add-step", tr("common.add"))
-        _set("btn-bg-browse", tr("training_params.bg_image_browse"))
-        _set("btn-bg-clear", tr("training_params.bg_image_clear"))
+        model.bind("ppisp_auto_step",
+                    lambda: p() is not None and p().has_params() and
+                            p().ppisp_controller_activation_step < 0,
+                    lambda v: self._set_ppisp_auto_step(v))
 
-    def _populate_select_options(self, doc):
-        def _set_option_text(sel_id, values):
-            el = doc.get_element_by_id(sel_id)
-            if not el:
-                return
-            rml = ""
-            for val, text in values:
-                rml += f'<option value="{val}">{text}</option>'
-            el.set_inner_rml(rml)
+    def _bind_dataset_bools(self, model, d):
+        def _set_dataset_bool(v, pr):
+            dp = d()
+            if dp and dp.has_params():
+                try:
+                    setattr(dp, pr, v)
+                except RuntimeError:
+                    pass
 
-        _set_option_text("sel-strategy", [
-            ("mcmc", tr("training.options.strategy.mcmc")),
-            ("adc", tr("training.options.strategy.adc")),
-        ])
-        _set_option_text("sel-tile_mode", [
-            ("1", tr("training.options.tile.full")),
-            ("2", tr("training.options.tile.half")),
-            ("4", tr("training.options.tile.quarter")),
-        ])
-        _set_option_text("sel-mask_mode", [
-            ("0", tr("training.options.mask.none")),
-            ("1", tr("training.options.mask.segment")),
-            ("2", tr("training.options.mask.ignore")),
-            ("3", tr("training.options.mask.alpha_consistent")),
-        ])
-        _set_option_text("sel-bg_mode", [
-            ("0", tr("training.options.bg.color")),
-            ("1", tr("training.options.bg.modulation")),
-            ("2", tr("training.options.bg.image")),
-            ("3", tr("training.options.bg.random")),
-        ])
-        _set_option_text("sel-resize_factor", [
-            ("-1", tr("common.auto")),
-            ("1", "1"),
-            ("2", "2"),
-            ("4", "4"),
-            ("8", "8"),
-        ])
+        for prop in DATASET_BOOL_PROPS:
+            model.bind(prop,
+                       lambda pr=prop: getattr(d(), pr, False) if d() and d().has_params() else False,
+                       lambda v, pr=prop: _set_dataset_bool(v, pr))
+
+    def _bind_select_props(self, model, p, d):
+        model.bind("strategy",
+                    lambda: p().strategy if p() and p().has_params() else "mcmc",
+                    lambda v: self._set_strategy(v))
+        model.bind("sh_degree_str",
+                    lambda: str(p().sh_degree) if p() and p().has_params() else "0",
+                    lambda v: self._set_int_param("sh_degree", v))
+        model.bind("tile_mode_str",
+                    lambda: str(p().tile_mode) if p() and p().has_params() else "1",
+                    lambda v: self._set_int_param("tile_mode", v))
+        model.bind("mask_mode_str",
+                    lambda: str(p().mask_mode.value) if p() and p().has_params() else "0",
+                    lambda v: self._set_mask_mode(v))
+        model.bind("bg_mode_str",
+                    lambda: str(p().bg_mode.value) if p() and p().has_params() else "0",
+                    lambda v: self._set_bg_mode(v))
+        model.bind("resize_factor_str",
+                    lambda: str(d().resize_factor) if d() and d().has_params() else "-1",
+                    lambda v: self._set_resize_factor(v))
+
+    def _bind_num_props(self, model, p, d):
+        for prop, dtype, fmt, min_v, max_v in NUM_PROP_DEFS:
+            model.bind(
+                f"{prop}_str",
+                lambda pr=prop, f=fmt: f % getattr(p(), pr, 0) if p() and p().has_params() else "",
+                lambda v, pr=prop, dt=dtype, mn=min_v, mx=max_v: self._set_num_prop(pr, v, dt, mn, mx))
+
+        model.bind("ppisp_activation_step_str",
+                    lambda: str(p().ppisp_controller_activation_step)
+                            if p() and p().has_params() and p().ppisp_controller_activation_step >= 0
+                            else "",
+                    lambda v: self._set_ppisp_activation_step(v))
+
+        model.bind("max_width_str",
+                    lambda: "%d" % d().max_width if d() and d().has_params() else "",
+                    lambda v: self._set_max_width(v))
+
+        model.bind("new_step_str",
+                    lambda: str(self._new_save_step),
+                    lambda v: self._set_new_step_val(v))
+
+    def _bind_slider_props(self, model, p):
+        for prop in SLIDER_PROPS:
+            model.bind(
+                prop,
+                lambda pr=prop: float(getattr(p(), pr, 0.0))
+                                if p() and p().has_params() else 0.0,
+                lambda v, pr=prop: self._set_slider_prop(pr, v))
+
+    def _bind_color(self, model, p):
+        def _bg():
+            return getattr(p(), "bg_color", (0, 0, 0)) if p() and p().has_params() else (0, 0, 0)
+
+        model.bind_func("bg_color_r", lambda: f"R:{int(_bg()[0]*255):>3d}")
+        model.bind_func("bg_color_g", lambda: f"G:{int(_bg()[1]*255):>3d}")
+        model.bind_func("bg_color_b", lambda: f"B:{int(_bg()[2]*255):>3d}")
+        model.bind("bg_color_hex",
+                    lambda: _color_to_hex(_bg()),
+                    lambda v: self._set_bg_color_hex(v))
+
+    def _bind_status(self, model, p):
+        def _status_mode():
+            state = AppState.trainer_state.value
+            it = AppState.iteration.value
+            labels = {
+                "idle": tr("training_panel.idle"),
+                "ready": tr("status.ready") if it == 0 else tr("training_panel.resume"),
+                "running": tr("training_panel.running"),
+                "paused": tr("status.paused"),
+                "stopping": tr("status.stopping"),
+                "completed": tr("status.complete"),
+                "stopped": tr("status.stopped"),
+                "error": tr("status.error"),
+            }
+            return f"{tr('status.mode')}: {labels.get(state, tr('status.unknown'))}"
+
+        def _status_iteration():
+            it = AppState.iteration.value
+            _rate_tracker.add_sample(it)
+            rate = _rate_tracker.get_rate()
+            return f"{tr('status.iteration')} {it:,} ({rate:.1f} {tr('training_panel.iters_per_sec')})"
+
+        def _status_gaussians():
+            return tr("progress.num_splats") % f"{AppState.num_gaussians.value:,}"
+
+        def _progress_text():
+            it = AppState.iteration.value
+            mx = AppState.max_iterations.value
+            return f"{it:,}/{mx:,}" if mx > 0 else ""
+
+        def _error_message():
+            return lf.trainer_error() or ""
+
+        model.bind_func("status_mode", _status_mode)
+        model.bind_func("status_iteration", _status_iteration)
+        model.bind_func("status_gaussians", _status_gaussians)
+        model.bind_func("progress_text", _progress_text)
+        model.bind_func("error_message", _error_message)
+
+        model.bind_func("save_steps_display",
+                         lambda: ", ".join(str(s) for s in p().save_steps)
+                                 if p() and p().has_params() else "")
+
+    def _bind_display(self, model, p, d):
+        model.bind_func("opt_strategy_display",
+                         lambda: p().strategy.upper() if p() and p().has_params() else "")
+
+        model.bind_func("dataset_path_display",
+                         lambda: os.path.basename(d().data_path) if d() and d().has_params() and d().data_path
+                                 else tr("training.value.none"))
+        model.bind_func("dataset_images_display",
+                         lambda: d().images if d() and d().has_params() and d().images
+                                 else tr("training.value.default"))
+        model.bind_func("dataset_output_display",
+                         lambda: os.path.basename(d().output_path) if d() and d().has_params() and d().output_path
+                                 else tr("training.value.not_set"))
+        model.bind_func("bg_image_path_display",
+                         lambda: os.path.basename(p().bg_image_path) if p() and p().has_params() and p().bg_image_path
+                                 else tr("training.value.none"))
+
+    def _bind_events(self, model):
+        model.bind_event("toggle_section", self._on_toggle_section)
+        model.bind_event("color_click", self._on_color_click)
+        model.bind_event("action", self._on_action)
 
     def on_update(self, doc):
-        if not AppState.has_trainer.value:
-            self._set_visible(doc, "msg-no-trainer", True)
-            self._set_visible(doc, "main-content", False)
-            self._set_visible(doc, "msg-no-params", False)
+        if not self._handle:
             return
-
-        params = lf.optimization_params()
-        if not params.has_params():
-            self._set_visible(doc, "msg-no-trainer", False)
-            self._set_visible(doc, "msg-no-params", True)
-            self._set_visible(doc, "main-content", False)
-            return
-
-        self._set_visible(doc, "msg-no-trainer", False)
-        self._set_visible(doc, "msg-no-params", False)
-        self._set_visible(doc, "main-content", True)
-
-        cur_lang = lf.ui.get_current_language()
-        if cur_lang != self._last_lang:
-            self._last_lang = cur_lang
-            self._populate_labels(doc)
-            self._populate_select_options(doc)
 
         state = AppState.trainer_state.value
-        iteration = AppState.iteration.value
+        if state != self._last_state:
+            self._last_state = state
+            self._handle.dirty_all()
+        else:
+            self._handle.dirty("status_mode")
+            self._handle.dirty("status_iteration")
+            self._handle.dirty("status_gaussians")
+            self._handle.dirty("progress_text")
+            self._handle.dirty("show_progress")
+            self._handle.dirty("show_checkpoint_saved")
+            self._handle.dirty("btn_start")
 
-        if state == "ready" and iteration == 0:
-            self._try_auto_scale_steps(params)
+        if state == "ready" and AppState.iteration.value == 0:
+            params = lf.optimization_params()
+            if params and params.has_params():
+                self._try_auto_scale_steps(params)
 
-        self._update_controls(doc, state, iteration)
-        self._update_basic_params(doc, state, iteration, params)
-        self._update_advanced_params(doc, state, iteration, params)
-        self._update_status(doc, state, iteration)
+        self._update_progress(doc)
+        self._update_save_steps(doc)
+        self._update_color_swatch(doc)
 
-    def _update_controls(self, doc, state, iteration):
-        active_ctrl = STATE_TO_CTRL.get(state)
-        for section_id in CTRL_SECTIONS:
-            self._set_visible(doc, section_id, section_id == active_ctrl)
+    def _update_progress(self, doc):
+        it = AppState.iteration.value
+        mx = AppState.max_iterations.value
+        if mx > 0 and it > 0:
+            prog = doc.get_element_by_id("training-progress")
+            if prog:
+                prog.set_attribute("value", str(it / mx))
 
-        if state == "ready":
-            btn = doc.get_element_by_id("btn-start")
-            if btn:
-                label = tr("training_panel.resume_training") if iteration > 0 else tr("training_panel.start_training")
-                btn.set_inner_rml(label)
-            self._set_visible(doc, "btn-reset-ready", iteration > 0)
-            btn_reset = doc.get_element_by_id("btn-reset-ready")
-            if btn_reset:
-                btn_reset.set_inner_rml(tr("training_panel.reset"))
-            btn_clear = doc.get_element_by_id("btn-clear-ready")
-            if btn_clear:
-                btn_clear.set_inner_rml(tr("training_panel.clear"))
+    def _update_save_steps(self, doc):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return
 
-        elif state == "running":
-            btn = doc.get_element_by_id("btn-pause")
-            if btn:
-                btn.set_inner_rml(tr("training_panel.pause"))
-
-        elif state == "paused":
-            self._set_btn_text(doc, "btn-resume", tr("training_panel.resume"))
-            self._set_btn_text(doc, "btn-reset-paused", tr("training_panel.reset"))
-            self._set_btn_text(doc, "btn-stop", tr("training_panel.stop"))
-
-        elif state in ("completed", "stopped"):
-            prefix = "completed" if state == "completed" else "stopped"
-            self._set_btn_text(doc, f"btn-switch-edit{'' if state == 'completed' else '-stopped'}", tr("training_panel.switch_edit_mode"))
-            self._set_btn_text(doc, f"btn-reset-{prefix}", tr("training_panel.reset"))
-            self._set_btn_text(doc, f"btn-clear-{prefix}", tr("training_panel.clear"))
-
-        elif state == "error":
-            error_msg = lf.trainer_error()
-            el = doc.get_element_by_id("error-message")
-            if el:
-                el.set_inner_rml(error_msg or "")
-            self._set_btn_text(doc, "btn-reset-error", tr("training_panel.reset"))
-            self._set_btn_text(doc, "btn-clear-error", tr("training_panel.clear"))
-
-        show_checkpoint = state in ("running", "paused")
-        self._set_visible(doc, "btn-save-checkpoint", show_checkpoint)
-        show_saved = show_checkpoint and (time.time() - self._checkpoint_saved_time < 2.0)
-        self._set_visible(doc, "checkpoint-saved", show_saved)
-
-    def _update_basic_params(self, doc, state, iteration, params):
-        can_edit = (state == "ready") and (iteration == 0)
-        can_edit_live = state in ("ready", "running", "paused")
-
-        self._set_disabled(doc, "struct-params", not can_edit)
-        self._set_disabled(doc, "live-params", not can_edit_live)
-
-        el = doc.get_element_by_id("sel-strategy")
-        if el:
-            el.set_attribute("value", params.strategy)
-
-        self._set_num_value(doc, "num-iterations", int(params.iterations), "%d")
-        self._set_num_value(doc, "num-max_cap", params.max_cap, "%d")
-
-        el = doc.get_element_by_id("sel-sh_degree")
-        if el:
-            el.set_attribute("value", str(params.sh_degree))
-
-        el = doc.get_element_by_id("sel-tile_mode")
-        if el:
-            el.set_attribute("value", str(params.tile_mode))
-
-        self._set_num_value(doc, "num-steps_scaler", params.steps_scaler, "%.2f")
-
-        for cb_id, prop in BOOL_PROPS.items():
-            el = doc.get_element_by_id(cb_id)
-            if el:
-                val = getattr(params, prop, False)
-                if val:
-                    el.set_attribute("checked", "")
-                else:
-                    el.remove_attribute("checked")
-
-        el = doc.get_element_by_id("sel-mask_mode")
-        if el:
-            el.set_attribute("value", str(params.mask_mode.value))
-        self._set_visible(doc, "dep-mask_mode", params.mask_mode.value != 0)
-
-        gut_disabled = params.strategy == "adc"
-        row_gut = doc.get_element_by_id("row-gut")
-        if row_gut:
-            row_gut.set_class("disabled-overlay", gut_disabled)
-
-        self._set_visible(doc, "dep-ppisp", params.ppisp)
-        self._set_visible(doc, "dep-ppisp_controller", params.ppisp_use_controller)
-
-        is_auto = params.ppisp_controller_activation_step < 0
-        auto_cb = doc.get_element_by_id("cb-ppisp_auto_step")
-        if auto_cb:
-            if is_auto:
-                auto_cb.set_attribute("checked", "")
-            else:
-                auto_cb.remove_attribute("checked")
-        self._set_visible(doc, "dep-ppisp_manual_step", not is_auto)
-        if not is_auto:
-            self._set_num_value(doc, "num-ppisp_controller_activation_step",
-                                params.ppisp_controller_activation_step, "%d")
-
-        el = doc.get_element_by_id("sel-bg_mode")
-        if el:
-            el.set_attribute("value", str(params.bg_mode.value))
-
-        bg_mode_val = params.bg_mode.value
-        self._set_visible(doc, "dep-bg_color", bg_mode_val in (0, 1))
-        self._set_visible(doc, "dep-bg_image", bg_mode_val == 2)
-
-        if bg_mode_val in (0, 1):
-            c = params.bg_color
-            r, g, b = int(c[0] * 255), int(c[1] * 255), int(c[2] * 255)
-            self._set_text(doc, "rc-bg_color", f"R:{r:>3d}")
-            self._set_text(doc, "gc-bg_color", f"G:{g:>3d}")
-            self._set_text(doc, "bc-bg_color", f"B:{b:>3d}")
-            swatch = doc.get_element_by_id("swatch-bg_color")
-            if swatch:
-                swatch.set_property("background-color", f"rgb({r},{g},{b})")
-            hex_el = doc.get_element_by_id("hex-bg_color")
-            if hex_el:
-                hex_el.set_attribute("value", _color_to_hex(c))
-
-        if bg_mode_val == 2:
-            img_path = params.bg_image_path
-            display = os.path.basename(img_path) if img_path else tr("training.value.none")
-            self._set_text(doc, "bg-image-path", display)
-            self._set_visible(doc, "btn-bg-clear", bool(img_path))
-
-    def _update_advanced_params(self, doc, state, iteration, params):
-        can_edit = (state == "ready") and (iteration == 0)
-        self._set_disabled(doc, "optimization-params", not can_edit)
-        self._set_disabled(doc, "bilateral-params", not can_edit)
-        self._set_disabled(doc, "losses-params", not can_edit)
-        self._set_disabled(doc, "init-params", not can_edit)
-        self._set_disabled(doc, "adc-params", not can_edit)
-        self._set_disabled(doc, "sparsity-params", not can_edit)
-
-        self._set_text(doc, "opt-strategy", params.strategy.upper())
-
-        for prop_id in NUM_PROPS_ON_PARAMS:
-            val = params.get(prop_id)
-            if val is None:
-                val = getattr(params, prop_id, None)
-            if val is None:
-                continue
-            el = doc.get_element_by_id(f"num-{prop_id}")
-            if el:
-                fmt = el.get_attribute("data-fmt") or ""
-                if fmt:
-                    el.set_attribute("value", fmt % val)
-
-        for prop_id in SLIDER_PROPS_ON_PARAMS:
-            val = params.get(prop_id)
-            if val is None:
-                continue
-            user_val = self._slider_user_vals.get(prop_id)
-            if user_val is None or abs(float(val) - user_val) > 1e-6:
-                el = doc.get_element_by_id(f"slider-{prop_id}")
-                if el:
-                    el.set_attribute("value", f"{val:.4g}")
-                self._slider_user_vals.pop(prop_id, None)
-            val_el = doc.get_element_by_id(f"val-{prop_id}")
-            if val_el:
-                val_el.set_inner_rml(f"{float(val):.3f}")
-
-        self._set_visible(doc, "dep-bilateral", params.use_bilateral_grid)
-        self._set_visible(doc, "dep-adc", params.strategy == "adc")
-        self._set_visible(doc, "dep-sparsity", params.enable_sparsity)
-        self._set_visible(doc, "dep-random", params.random)
-
-        dataset = lf.dataset_params()
-        has_dataset = dataset.has_params()
-        dataset_can_edit = dataset.can_edit() if has_dataset else False
-
-        self._set_visible(doc, "dataset-content", has_dataset)
-        self._set_visible(doc, "dataset-no-data", not has_dataset)
-
-        if has_dataset:
-            self._set_disabled(doc, "dataset-content", not dataset_can_edit)
-
-            data_path = dataset.data_path
-            self._set_text(doc, "dataset-path",
-                           os.path.basename(data_path) if data_path else tr("training.value.none"))
-
-            images = dataset.images
-            self._set_text(doc, "dataset-images",
-                           images if images else tr("training.value.default"))
-
-            el = doc.get_element_by_id("sel-resize_factor")
-            if el:
-                el.set_attribute("value", str(dataset.resize_factor))
-
-            self._set_num_value(doc, "num-max_width", dataset.max_width, "%d")
-
-            for cb_id, prop in DATASET_BOOL_PROPS.items():
-                el = doc.get_element_by_id(cb_id)
-                if el:
-                    val = getattr(dataset, prop, False)
-                    if val:
-                        el.set_attribute("checked", "")
-                    else:
-                        el.remove_attribute("checked")
-
-            out_path = dataset.output_path
-            self._set_text(doc, "dataset-output",
-                           os.path.basename(out_path) if out_path else tr("training.value.not_set"))
-
-        self._update_save_steps(doc, params, can_edit)
-
-    def _update_save_steps(self, doc, params, can_edit):
-        self._set_visible(doc, "save-steps-edit", can_edit)
-        self._set_visible(doc, "save-steps-readonly", not can_edit)
+        state = AppState.trainer_state.value
+        can_edit = state == "ready" and AppState.iteration.value == 0
+        if not can_edit:
+            return
 
         steps = list(params.save_steps)
-
-        if can_edit:
-            if steps != self._last_save_steps:
-                self._last_save_steps = steps[:]
-                self._rebuild_save_steps_dom(doc, steps)
-            self._set_visible(doc, "no-save-steps", not steps)
-        else:
-            if steps:
-                self._set_text(doc, "save-steps-display", ", ".join(str(s) for s in steps))
-            self._set_visible(doc, "save-steps-display", bool(steps))
-            self._set_visible(doc, "no-save-steps-ro", not steps)
+        if steps != self._last_save_steps:
+            self._last_save_steps = steps[:]
+            self._rebuild_save_steps_dom(doc, steps)
+            self._handle.dirty("no_save_steps")
+            self._handle.dirty("has_save_steps")
+            self._handle.dirty("save_steps_display")
 
     def _rebuild_save_steps_dom(self, doc, steps):
         container = doc.get_element_by_id("save-steps-list")
@@ -570,43 +585,29 @@ class TrainingPanel(RmlPanel):
             inp.set_attribute("type", "text")
             inp.set_class_names("number-input")
             inp.set_attribute("value", str(step))
-            inp.set_attribute("data-step-idx", str(i))
+            inp.add_event_listener("change", lambda e, idx=i: self._on_step_edit(idx, e))
             btn = row.append_child("button")
             btn.set_class_names("btn btn--secondary")
-            btn.set_attribute("data-action", "remove_step")
-            btn.set_attribute("data-step-idx", str(i))
             btn.set_inner_rml(tr("common.remove"))
+            btn.add_event_listener("click", lambda e, idx=i: self._on_step_remove(idx))
 
-    def _update_status(self, doc, state, iteration):
-        state_labels = {
-            "idle": tr("training_panel.idle"),
-            "ready": tr("status.ready") if iteration == 0 else tr("training_panel.resume"),
-            "running": tr("training_panel.running"),
-            "paused": tr("status.paused"),
-            "stopping": tr("status.stopping"),
-            "completed": tr("status.complete"),
-            "stopped": tr("status.stopped"),
-            "error": tr("status.error"),
-        }
-        self._set_text(doc, "status-mode",
-                        f"{tr('status.mode')}: {state_labels.get(state, tr('status.unknown'))}")
+    def _update_color_swatch(self, doc):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return
+        swatch = doc.get_element_by_id("swatch-bg_color")
+        if swatch:
+            c = params.bg_color
+            r, g, b = int(c[0] * 255), int(c[1] * 255), int(c[2] * 255)
+            swatch.set_property("background-color", f"rgb({r},{g},{b})")
 
-        _rate_tracker.add_sample(iteration)
-        rate = _rate_tracker.get_rate()
-        self._set_text(doc, "status-iteration",
-                        f"{tr('status.iteration')} {iteration:,} ({rate:.1f} {tr('training_panel.iters_per_sec')})")
-        self._set_text(doc, "status-gaussians",
-                        tr("progress.num_splats") % f"{AppState.num_gaussians.value:,}")
+    def on_scene_changed(self, doc):
+        if self._handle:
+            self._handle.dirty_all()
 
-        max_iter = AppState.max_iterations.value
-        show_progress = max_iter > 0 and iteration > 0
-        self._set_visible(doc, "progress-wrapper", show_progress)
-        if show_progress:
-            frac = iteration / max_iter
-            prog = doc.get_element_by_id("training-progress")
-            if prog:
-                prog.set_attribute("value", str(frac))
-            self._set_text(doc, "progress-text", f"{iteration:,}/{max_iter:,}")
+    def on_unload(self, doc):
+        doc.remove_data_model("training")
+        self._handle = None
 
     def draw_imgui(self, layout):
         params = lf.optimization_params()
@@ -627,6 +628,8 @@ class TrainingPanel(RmlPanel):
                 rs = lf.get_render_settings()
                 if rs and prop_id == "bg_color":
                     rs.set("background_color", new_color)
+                if self._handle:
+                    self._handle.dirty_all()
             layout.end_popup()
         elif self._color_edit_prop:
             self._color_edit_prop = None
@@ -645,308 +648,194 @@ class TrainingPanel(RmlPanel):
             loss_label = f"{tr('status.loss')}: {loss_data[-1]:.4f}"
             layout.plot_lines(loss_label, loss_data, min_val, max_val, (-1, 60))
 
-    def _on_change(self, event):
-        target = event.target()
-        if not target:
-            return
+    # ── Setters ────────────────────────────────────────────
 
-        tag = target.get_attribute("id") or ""
-        prop = target.get_attribute("data-prop") or ""
-
-        if tag.startswith("cb-"):
-            self._handle_checkbox_change(tag, prop, target)
-        elif tag.startswith("sel-"):
-            self._handle_select_change(tag, prop, target)
-        elif tag.startswith("num-"):
-            self._handle_number_change(tag, prop, target)
-        elif tag.startswith("slider-"):
-            self._handle_slider_change(tag, prop, target)
-        elif tag.startswith("hex-"):
-            self._handle_hex_change(tag, prop, target)
-        elif tag.startswith("step-"):
-            self._handle_step_edit(tag, target)
-
-    def _handle_checkbox_change(self, tag, prop, target):
-        val = target.has_attribute("checked")
-
-        if tag in DATASET_BOOL_PROPS:
-            dataset = lf.dataset_params()
-            if dataset.has_params():
-                setattr(dataset, DATASET_BOOL_PROPS[tag], val)
-            return
-
-        if tag == "cb-ppisp_auto_step":
-            params = lf.optimization_params()
-            if not params.has_params():
-                return
-            if val:
-                params.ppisp_controller_activation_step = -1
-            else:
-                params.ppisp_controller_activation_step = max(1, int(params.iterations) - 5000)
-            return
-
-        if not prop:
-            return
+    def _set_bool_prop(self, prop, val):
         params = lf.optimization_params()
-        if not params.has_params():
+        if not params or not params.has_params():
             return
         setattr(params, prop, val)
-
         rs = lf.get_render_settings()
-        if rs:
-            if prop == "gut":
-                rs.set("gut", val)
-            elif prop == "mip_filter":
-                rs.set("mip_filter", val)
-            elif prop == "ppisp":
-                rs.set("apply_appearance_correction", val)
+        if rs and prop in RENDER_SYNC:
+            rs.set(RENDER_SYNC[prop], val)
+        if self._handle:
+            self._handle.dirty_all()
 
-    def _handle_select_change(self, tag, prop, target):
-        val = target.get_attribute("value")
-        if val is None:
+    def _set_ppisp_auto_step(self, val):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
             return
+        if val:
+            params.ppisp_controller_activation_step = -1
+        else:
+            params.ppisp_controller_activation_step = max(1, int(params.iterations) - 5000)
+        if self._handle:
+            self._handle.dirty_all()
 
-        if tag == "sel-strategy":
-            params = lf.optimization_params()
-            if not params.has_params():
-                return
-            if val == "adc" and params.gut:
-                btn_gut = tr("training.conflict.btn_disable_gut")
-                btn_cancel = tr("training.conflict.btn_cancel")
-
-                def _on_conflict(button, _gut=btn_gut):
-                    p = lf.optimization_params()
-                    if button == _gut:
-                        p.gut = False
-                        p.set_strategy("adc")
-
-                lf.ui.confirm_dialog(
-                    tr("training.error.adc_gut_title"),
-                    tr("training.conflict.adc_gut_strategy_message"),
-                    [btn_gut, btn_cancel],
-                    _on_conflict)
-            else:
-                params.set_strategy(val)
+    def _set_strategy(self, val):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
             return
+        if val == "adc" and params.gut:
+            btn_gut = tr("training.conflict.btn_disable_gut")
+            btn_cancel = tr("training.conflict.btn_cancel")
 
-        if tag == "sel-mask_mode":
-            params = lf.optimization_params()
-            if params.has_params():
-                params.mask_mode = lf.MaskMode(int(val))
+            def _on_conflict(button, _gut=btn_gut):
+                p = lf.optimization_params()
+                if button == _gut:
+                    p.gut = False
+                    p.set_strategy("adc")
+                    if self._handle:
+                        self._handle.dirty_all()
+
+            lf.ui.confirm_dialog(
+                tr("training.error.adc_gut_title"),
+                tr("training.conflict.adc_gut_strategy_message"),
+                [btn_gut, btn_cancel],
+                _on_conflict)
+        else:
+            params.set_strategy(val)
+            if self._handle:
+                self._handle.dirty_all()
+
+    def _set_int_param(self, prop, val_str):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
             return
-
-        if tag == "sel-bg_mode":
-            params = lf.optimization_params()
-            if params.has_params():
-                params.bg_mode = lf.BackgroundMode(int(val))
-            return
-
-        if tag == "sel-sh_degree":
-            params = lf.optimization_params()
-            if params.has_params():
-                params.sh_degree = int(val)
-            return
-
-        if tag == "sel-tile_mode":
-            params = lf.optimization_params()
-            if params.has_params():
-                params.tile_mode = int(val)
-            return
-
-        if tag == "sel-resize_factor":
-            dataset = lf.dataset_params()
-            if dataset.has_params():
-                dataset.resize_factor = int(val)
-            return
-
-    def _handle_number_change(self, tag, prop, target):
-        raw = target.get_attribute("value") or ""
-        data_type = target.get_attribute("data-type") or "float"
-        data_min = target.get_attribute("data-min")
-        data_max = target.get_attribute("data-max")
-
         try:
-            if data_type == "int":
-                val = int(raw)
-            else:
-                val = float(raw)
+            setattr(params, prop, int(val_str))
+        except (ValueError, TypeError):
+            pass
+
+    def _set_mask_mode(self, val_str):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return
+        try:
+            params.mask_mode = lf.MaskMode(int(val_str))
+        except (ValueError, TypeError):
+            pass
+        if self._handle:
+            self._handle.dirty_all()
+
+    def _set_bg_mode(self, val_str):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return
+        try:
+            params.bg_mode = lf.BackgroundMode(int(val_str))
+        except (ValueError, TypeError):
+            pass
+        if self._handle:
+            self._handle.dirty_all()
+
+    def _set_resize_factor(self, val_str):
+        d = lf.dataset_params()
+        if not d or not d.has_params():
+            return
+        try:
+            d.resize_factor = int(val_str)
+        except (ValueError, TypeError, RuntimeError):
+            pass
+
+    def _set_num_prop(self, prop, val_str, dtype, min_v, max_v):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return
+        try:
+            val = dtype(val_str)
         except (ValueError, TypeError):
             return
-
-        if data_min is not None:
-            try:
-                min_v = int(data_min) if data_type == "int" else float(data_min)
-                val = max(val, min_v)
-            except (ValueError, TypeError):
-                pass
-        if data_max is not None:
-            try:
-                max_v = int(data_max) if data_type == "int" else float(data_max)
-                val = min(val, max_v)
-            except (ValueError, TypeError):
-                pass
-
-        if not prop:
-            return
-
-        if prop == "max_width":
-            dataset = lf.dataset_params()
-            if dataset.has_params() and 0 < val <= 4096:
-                dataset.max_width = val
-            return
-
-        if prop == "iterations":
-            params = lf.optimization_params()
-            if params.has_params() and val > 0:
-                params.iterations = val
-            return
-
-        if prop == "max_cap":
-            params = lf.optimization_params()
-            if params.has_params() and val > 0:
-                params.max_cap = val
-            return
+        if min_v is not None:
+            val = max(val, dtype(min_v))
+        if max_v is not None:
+            val = min(val, dtype(max_v))
 
         if prop == "steps_scaler":
-            params = lf.optimization_params()
-            if params.has_params():
-                params.apply_step_scaling(val)
-            return
+            params.apply_step_scaling(val)
+        elif prop in DIRECT_SET_PROPS:
+            setattr(params, prop, val)
+        else:
+            params.set(prop, val)
 
-        if prop == "ppisp_controller_activation_step":
-            params = lf.optimization_params()
-            if params.has_params():
-                params.ppisp_controller_activation_step = max(1, int(val))
-            return
-
-        if prop == "ppisp_controller_lr":
-            params = lf.optimization_params()
-            if params.has_params():
-                params.ppisp_controller_lr = val
-            return
-
+    def _set_ppisp_activation_step(self, val_str):
         params = lf.optimization_params()
-        if params.has_params():
-            if prop in ("means_lr", "shs_lr", "opacity_lr", "scaling_lr", "rotation_lr"):
-                setattr(params, prop, val)
-            else:
-                params.set(prop, val)
-
-    def _handle_slider_change(self, tag, prop, target):
-        if not prop:
+        if not params or not params.has_params():
             return
         try:
-            val = float(target.get_attribute("value"))
+            params.ppisp_controller_activation_step = max(1, int(val_str))
         except (ValueError, TypeError):
-            return
-        params = lf.optimization_params()
-        if params.has_params():
-            params.set(prop, val)
-            self._slider_user_vals[prop] = val
+            pass
 
-    def _handle_hex_change(self, tag, prop, target):
-        if not prop:
+    def _set_max_width(self, val_str):
+        d = lf.dataset_params()
+        if not d or not d.has_params():
             return
-        hex_val = target.get_attribute("value")
-        if not hex_val:
+        try:
+            val = int(val_str)
+            if 0 < val <= 4096:
+                d.max_width = val
+        except (ValueError, TypeError, RuntimeError):
+            pass
+
+    def _set_new_step_val(self, val_str):
+        try:
+            self._new_save_step = max(1, int(val_str))
+        except (ValueError, TypeError):
+            pass
+
+    def _set_slider_prop(self, prop, val):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return
+        try:
+            params.set(prop, float(val))
+        except (ValueError, TypeError):
+            pass
+
+    def _set_bg_color_hex(self, hex_val):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
             return
         color = _hex_to_color(hex_val)
-        if not color:
-            return
-        params = lf.optimization_params()
-        if params.has_params():
-            setattr(params, prop, color)
+        if color:
+            params.bg_color = color
             rs = lf.get_render_settings()
-            if rs and prop == "bg_color":
+            if rs:
                 rs.set("background_color", color)
+            if self._handle:
+                self._handle.dirty_all()
 
-    def _handle_step_edit(self, tag, target):
-        idx_str = target.get_attribute("data-step-idx")
-        if idx_str is None:
+    # ── Event handlers ─────────────────────────────────────
+
+    def _on_toggle_section(self, handle, event, args):
+        if not args:
             return
-        try:
-            idx = int(idx_str)
-            new_val = int(target.get_attribute("value") or "0")
-        except (ValueError, TypeError):
+        name = str(args[0])
+        if name in self._collapsed:
+            self._collapsed.discard(name)
+        else:
+            self._collapsed.add(name)
+        handle.dirty(f"sec_{name}_collapsed")
+        handle.dirty(f"sec_{name}_arrow")
+
+    def _on_color_click(self, handle, event, args):
+        if not args:
             return
-        if new_val <= 0:
+        prop_id = str(args[0])
+        if self._color_edit_prop == prop_id:
+            self._color_edit_prop = None
+        else:
+            self._color_edit_prop = prop_id
+            self._color_picker_needs_pos = True
+
+    def _on_action(self, handle, event, args):
+        if not args:
             return
-        params = lf.optimization_params()
-        if not params.has_params():
-            return
-        steps = list(params.save_steps)
-        if 0 <= idx < len(steps):
-            old = steps[idx]
-            if new_val != old:
-                params.remove_save_step(old)
-                params.add_save_step(new_val)
-                self._last_save_steps = []
+        action = str(args[0])
 
-    def _on_click(self, event):
-        target = event.target()
-        if not target:
-            return
-
-        body = event.current_target()
-        el = target
-        while el:
-            cls = el.get_class_names()
-
-            if "section-header" in cls:
-                section_name = el.get_attribute("data-section")
-                if section_name and body:
-                    sec_el = body.get_element_by_id(f"sec-{section_name}")
-                    if sec_el:
-                        is_collapsed = sec_el.is_class_set("collapsed")
-                        sec_el.set_class("collapsed", not is_collapsed)
-                        arrow = el.query_selector(".section-arrow")
-                        if arrow:
-                            arrow.set_inner_rml("\u25BC" if is_collapsed else "\u25B6")
-                return
-
-            if "color-swatch" in cls:
-                prop_id = el.get_attribute("data-prop")
-                if prop_id:
-                    if self._color_edit_prop == prop_id:
-                        self._color_edit_prop = None
-                    else:
-                        self._color_edit_prop = prop_id
-                        self._color_picker_needs_pos = True
-                return
-
-            action = el.get_attribute("data-action")
-            if action:
-                self._dispatch_action(action, el)
-                return
-
-            el = el.parent()
-
-    def _dispatch_action(self, action, el):
         if action == "start":
-            params = lf.optimization_params()
-            error = params.validate() if params.has_params() else ""
-            if error:
-                btn_mcmc = tr("training.conflict.btn_use_mcmc")
-                btn_gut = tr("training.conflict.btn_disable_gut")
-                btn_cancel = tr("training.conflict.btn_cancel")
-
-                def _on_start_conflict(button, _mcmc=btn_mcmc, _gut=btn_gut):
-                    p = lf.optimization_params()
-                    if button == _mcmc:
-                        p.set_strategy("mcmc")
-                        lf.start_training()
-                    elif button == _gut:
-                        p.gut = False
-                        lf.start_training()
-
-                lf.ui.confirm_dialog(
-                    tr("training.error.adc_gut_title"),
-                    tr("training.conflict.adc_gut_start_message"),
-                    [btn_mcmc, btn_gut, btn_cancel],
-                    _on_start_conflict)
-            else:
-                lf.start_training()
-
+            self._action_start()
         elif action == "pause":
             lf.pause_training()
         elif action == "resume":
@@ -966,43 +855,74 @@ class TrainingPanel(RmlPanel):
             selected = lf.ui.open_image_file_dialog("")
             if selected:
                 params = lf.optimization_params()
-                if params.has_params():
+                if params and params.has_params():
                     params.bg_image_path = selected
+                    if self._handle:
+                        self._handle.dirty_all()
         elif action == "clear_bg":
             params = lf.optimization_params()
-            if params.has_params():
+            if params and params.has_params():
                 params.bg_image_path = ""
+                if self._handle:
+                    self._handle.dirty_all()
         elif action == "add_step":
             params = lf.optimization_params()
-            if params.has_params():
-                step_el = el.parent()
-                if step_el:
-                    inp = step_el.query_selector("#num-new_step")
-                    if inp:
-                        try:
-                            val = int(inp.get_attribute("value") or str(self._new_save_step))
-                        except (ValueError, TypeError):
-                            val = self._new_save_step
-                    else:
-                        val = self._new_save_step
-                else:
-                    val = self._new_save_step
-                if val > 0:
-                    params.add_save_step(val)
-                    self._last_save_steps = []
-        elif action == "remove_step":
-            idx_str = el.get_attribute("data-step-idx")
-            if idx_str is not None:
-                try:
-                    idx = int(idx_str)
-                except (ValueError, TypeError):
-                    return
-                params = lf.optimization_params()
-                if params.has_params():
-                    steps = list(params.save_steps)
-                    if 0 <= idx < len(steps):
-                        params.remove_save_step(steps[idx])
-                        self._last_save_steps = []
+            if params and params.has_params() and self._new_save_step > 0:
+                params.add_save_step(self._new_save_step)
+                self._last_save_steps = []
+
+    def _action_start(self):
+        params = lf.optimization_params()
+        error = params.validate() if params and params.has_params() else ""
+        if error:
+            btn_mcmc = tr("training.conflict.btn_use_mcmc")
+            btn_gut = tr("training.conflict.btn_disable_gut")
+            btn_cancel = tr("training.conflict.btn_cancel")
+
+            def _on_conflict(button, _mcmc=btn_mcmc, _gut=btn_gut):
+                p = lf.optimization_params()
+                if button == _mcmc:
+                    p.set_strategy("mcmc")
+                    lf.start_training()
+                elif button == _gut:
+                    p.gut = False
+                    lf.start_training()
+
+            lf.ui.confirm_dialog(
+                tr("training.error.adc_gut_title"),
+                tr("training.conflict.adc_gut_start_message"),
+                [btn_mcmc, btn_gut, btn_cancel],
+                _on_conflict)
+        else:
+            lf.start_training()
+
+    def _on_step_edit(self, idx, event):
+        target = event.target()
+        if not target:
+            return
+        try:
+            new_val = int(target.get_attribute("value") or "0")
+        except (ValueError, TypeError):
+            return
+        if new_val <= 0:
+            return
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return
+        steps = list(params.save_steps)
+        if 0 <= idx < len(steps) and new_val != steps[idx]:
+            params.remove_save_step(steps[idx])
+            params.add_save_step(new_val)
+            self._last_save_steps = []
+
+    def _on_step_remove(self, idx):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            return
+        steps = list(params.save_steps)
+        if 0 <= idx < len(steps):
+            params.remove_save_step(steps[idx])
+            self._last_save_steps = []
 
     def _try_auto_scale_steps(self, params):
         scene = lf.get_scene()
@@ -1013,38 +933,3 @@ class TrainingPanel(RmlPanel):
             return
         self._auto_scaled_for_cameras = camera_count
         params.auto_scale_steps(camera_count)
-
-    def _sync_render_setting(self, name, value):
-        rs = lf.get_render_settings()
-        if rs:
-            rs.set(name, value)
-
-    @staticmethod
-    def _set_visible(doc, el_id, visible):
-        el = doc.get_element_by_id(el_id)
-        if el:
-            el.set_class("hidden", not visible)
-
-    @staticmethod
-    def _set_disabled(doc, el_id, disabled):
-        el = doc.get_element_by_id(el_id)
-        if el:
-            el.set_class("disabled-overlay", disabled)
-
-    @staticmethod
-    def _set_text(doc, el_id, text):
-        el = doc.get_element_by_id(el_id)
-        if el:
-            el.set_inner_rml(text)
-
-    @staticmethod
-    def _set_btn_text(doc, el_id, text):
-        el = doc.get_element_by_id(el_id)
-        if el:
-            el.set_inner_rml(text)
-
-    @staticmethod
-    def _set_num_value(doc, el_id, value, fmt):
-        el = doc.get_element_by_id(el_id)
-        if el:
-            el.set_attribute("value", fmt % value)

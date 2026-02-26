@@ -194,6 +194,13 @@ namespace lfs::vis::gui {
         rml_theme::applyTheme(document_, base_rcss_, generateThemeRCSS());
     }
 
+    bool RmlPanelHost::ensureContext() {
+        if (rml_context_)
+            return true;
+        rml_context_ = manager_->createContext(context_name_, 100, 100);
+        return rml_context_ != nullptr;
+    }
+
     void RmlPanelHost::draw(const PanelDrawContext& ctx) {
         (void)ctx;
 
@@ -205,11 +212,10 @@ namespace lfs::vis::gui {
         const float dp_ratio = manager_->getDpRatio();
         const int w = static_cast<int>(avail_w * dp_ratio);
 
-        if (!rml_context_) {
-            rml_context_ = manager_->createContext(context_name_, w, 100);
-            if (!rml_context_)
-                return;
+        if (!ensureContext())
+            return;
 
+        if (!document_) {
             try {
                 const auto full_path = lfs::vis::getAssetPath(rml_path_);
                 document_ = rml_context_->LoadDocument(full_path.string());
@@ -221,7 +227,7 @@ namespace lfs::vis::gui {
                 LOG_ERROR("RmlUI: resource not found: {}", e.what());
             }
         }
-        if (!rml_context_ || !document_)
+        if (!document_)
             return;
 
         syncThemeProperties();
