@@ -6,6 +6,25 @@ body {
     font-size: 13dp;
 }
 
+#resize-handle {
+    position: absolute;
+    left: -4dp;
+    top: 0;
+    width: 8dp;
+    height: 100%;
+    z-index: 10;
+    cursor: resize-horizontal;
+}
+
+#left-border {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 1dp;
+    height: 100%;
+    pointer-events: none;
+}
+
 #splitter {
     position: absolute;
     left: 0;
@@ -28,6 +47,14 @@ body {
     flex-direction: row;
     align-items: stretch;
     overflow: hidden;
+}
+
+#tab-separator {
+    position: absolute;
+    left: 0;
+    width: 100%;
+    height: 1dp;
+    pointer-events: none;
 }
 
 .tab {

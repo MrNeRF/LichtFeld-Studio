@@ -35,9 +35,10 @@ namespace lfs::vis::gui {
                                              bool python_console_visible) const;
 
         bool isResizingPanel() const {
-            return resizing_panel_ || hovering_panel_edge_ ||
-                   python_console_resizing_ || python_console_hovering_edge_;
+            return python_console_resizing_ || python_console_hovering_edge_;
         }
+
+        void applyResizeDelta(float dx);
 
         float getRightPanelWidth() const { return right_panel_width_; }
         float getScenePanelRatio() const { return scene_panel_ratio_; }
@@ -59,8 +60,6 @@ namespace lfs::vis::gui {
         void renderDockedPythonConsole(const UIContext& ctx, float panel_x, float panel_h);
 
         float right_panel_width_ = 300.0f;
-        bool resizing_panel_ = false;
-        bool hovering_panel_edge_ = false;
         float scene_panel_ratio_ = 0.4f;
 
         float python_console_width_ = -1.0f;

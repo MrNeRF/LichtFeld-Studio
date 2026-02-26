@@ -225,6 +225,44 @@ def setting_row(container, label="", control_id=""):
     return row
 
 
+def number_input(container, id, label="", value="", data_prop="",
+                 data_type="float", fmt="", min_val=None, max_val=None):
+    """Create a setting row with a text input for numeric values.
+
+    Args:
+        data_type: "int" or "float" for validation.
+        fmt: Python format string for display (e.g. "%.6f", "%d").
+        min_val/max_val: Clamping bounds (None = unclamped).
+    """
+    row = container.append_child("div")
+    row.set_class_names("setting-row")
+
+    inp = row.append_child("input")
+    inp.set_id(f"num-{id}")
+    inp.set_attribute("type", "text")
+    inp.set_class_names("number-input")
+    if data_prop:
+        inp.set_attribute("data-prop", data_prop)
+    if data_type:
+        inp.set_attribute("data-type", data_type)
+    if fmt:
+        inp.set_attribute("data-fmt", fmt)
+    if min_val is not None:
+        inp.set_attribute("data-min", str(min_val))
+    if max_val is not None:
+        inp.set_attribute("data-max", str(max_val))
+    if value != "":
+        inp.set_attribute("value", str(value))
+
+    if label:
+        prop_lbl = row.append_child("span")
+        prop_lbl.set_id(f"label-{id}")
+        prop_lbl.set_class_names("prop-label")
+        prop_lbl.set_inner_rml(label)
+
+    return row
+
+
 def icon_button(container, id, icon_src, selected=False,
                 disabled=False, tooltip=""):
     """Create an icon button for toolbars.

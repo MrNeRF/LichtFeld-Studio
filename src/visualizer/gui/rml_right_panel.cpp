@@ -48,8 +48,11 @@ namespace lfs::vis::gui {
             return;
         }
 
+        resize_handle_el_ = document_->GetElementById("resize-handle");
+        left_border_el_ = document_->GetElementById("left-border");
         splitter_el_ = document_->GetElementById("splitter");
         tab_bar_el_ = document_->GetElementById("tab-bar");
+        tab_separator_el_ = document_->GetElementById("tab-separator");
 
         updateTheme();
     }
@@ -60,8 +63,11 @@ namespace lfs::vis::gui {
             rml_manager_->destroyContext("right_panel");
         rml_context_ = nullptr;
         document_ = nullptr;
+        resize_handle_el_ = nullptr;
+        left_border_el_ = nullptr;
         splitter_el_ = nullptr;
         tab_bar_el_ = nullptr;
+        tab_separator_el_ = nullptr;
     }
 
     std::string RmlRightPanel::generateThemeRCSS() const {
@@ -78,6 +84,10 @@ namespace lfs::vis::gui {
         const auto splitter_bg = colorToRmlAlpha(p.border, 0.4f);
         const auto splitter_hover = colorToRmlAlpha(p.info, 0.6f);
         const auto splitter_active = colorToRmlAlpha(p.info, 0.8f);
+        const auto border_color = colorToRmlAlpha(p.border, 0.6f);
+        const auto separator_color = colorToRmlAlpha(p.border, 0.4f);
+        const auto resize_hover = colorToRmlAlpha(p.info, 0.3f);
+        const auto resize_active = colorToRmlAlpha(p.info, 0.5f);
 
         return std::format(
             "#splitter {{ background-color: {}; }}\n"
@@ -85,11 +95,19 @@ namespace lfs::vis::gui {
             "#splitter.dragging {{ background-color: {}; }}\n"
             ".tab {{ background-color: {}; color: {}; }}\n"
             ".tab:hover {{ background-color: {}; }}\n"
-            ".tab.active {{ background-color: {}; color: {}; }}\n",
+            ".tab.active {{ background-color: {}; color: {}; }}\n"
+            "#left-border {{ background-color: {}; }}\n"
+            "#tab-separator {{ background-color: {}; }}\n"
+            "#resize-handle:hover {{ background-color: {}; }}\n"
+            "#resize-handle.dragging {{ background-color: {}; }}\n",
             splitter_bg, splitter_hover, splitter_active,
             tab_bg, tab_text_dim,
             tab_hover,
-            tab_active, tab_text);
+            tab_active, tab_text,
+            border_color,
+            separator_color,
+            resize_hover,
+            resize_active);
     }
 
     void RmlRightPanel::updateTheme() {
@@ -176,13 +194,32 @@ namespace lfs::vis::gui {
         const float dp_ratio = rml_manager_->getDpRatio();
 
         const float mx = (io.MousePos.x - layout.pos.x) * dp_ratio;
-        const float my = (io.MousePos.y - layout.pos.y - layout.scene_h) * dp_ratio;
+        const float my = (io.MousePos.y - layout.pos.y) * dp_ratio;
 
         rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), 0);
 
         auto* hover = rml_context_->GetHoverElement();
         const bool over_interactive = hover && hover->GetTagName() != "body" &&
-                                      hover->GetId() != "rp-body";
+                                      hover->GetId() != "rp-body" &&
+                                      hover->GetId() != "left-border" &&
+                                      hover->GetId() != "tab-separator";
+
+        if (resize_dragging_) {
+            wants_input_ = true;
+            io.WantCaptureMouse = true;
+
+            if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                const float delta_x = io.MouseDelta.x;
+                if (on_resize_delta && delta_x != 0.0f)
+                    on_resize_delta(delta_x);
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+            } else {
+                resize_dragging_ = false;
+                if (resize_handle_el_)
+                    resize_handle_el_->SetAttribute("class", "");
+            }
+            return;
+        }
 
         if (splitter_dragging_) {
             wants_input_ = true;
@@ -204,7 +241,14 @@ namespace lfs::vis::gui {
             wants_input_ = true;
             io.WantCaptureMouse = true;
 
-            if (isOrHasAncestor(hover, "splitter")) {
+            if (isOrHasAncestor(hover, "resize-handle")) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    resize_dragging_ = true;
+                    if (resize_handle_el_)
+                        resize_handle_el_->SetAttribute("class", "dragging");
+                }
+            } else if (isOrHasAncestor(hover, "splitter")) {
                 ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
                 if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                     splitter_dragging_ = true;
@@ -236,20 +280,34 @@ namespace lfs::vis::gui {
         updateTheme();
 
         const float dp_ratio = rml_manager_->getDpRatio();
-        const float chrome_h = layout.splitter_h + 28.0f;
         const int w = static_cast<int>(layout.size.x * dp_ratio);
-        const int h = static_cast<int>(chrome_h * dp_ratio);
+        const int h = static_cast<int>(layout.size.y * dp_ratio);
 
         if (w <= 0 || h <= 0)
             return;
 
+        const float tab_bar_h = 28.0f;
+
+        if (resize_handle_el_) {
+            resize_handle_el_->SetProperty("top", "0dp");
+            resize_handle_el_->SetProperty("height", std::format("{:.0f}dp", layout.size.y));
+        }
+        if (left_border_el_) {
+            left_border_el_->SetProperty("top", "0dp");
+            left_border_el_->SetProperty("height", std::format("{:.0f}dp", layout.size.y));
+        }
         if (splitter_el_) {
-            splitter_el_->SetProperty("top", "0dp");
+            splitter_el_->SetProperty("top", std::format("{:.0f}dp", layout.scene_h));
             splitter_el_->SetProperty("height", std::format("{:.0f}dp", layout.splitter_h));
         }
         if (tab_bar_el_) {
-            tab_bar_el_->SetProperty("top", std::format("{:.0f}dp", layout.splitter_h));
-            tab_bar_el_->SetProperty("height", "28dp");
+            const float tab_top = layout.scene_h + layout.splitter_h;
+            tab_bar_el_->SetProperty("top", std::format("{:.0f}dp", tab_top));
+            tab_bar_el_->SetProperty("height", std::format("{:.0f}dp", tab_bar_h));
+        }
+        if (tab_separator_el_) {
+            const float sep_top = layout.scene_h + layout.splitter_h + tab_bar_h;
+            tab_separator_el_->SetProperty("top", std::format("{:.0f}dp", sep_top));
         }
 
         rebuildTabs(tabs, active_tab);
@@ -274,8 +332,8 @@ namespace lfs::vis::gui {
 
         fbo_.unbind(prev_fbo);
 
-        const ImVec2 blit_pos = {layout.pos.x, layout.pos.y + layout.scene_h};
-        const ImVec2 blit_size = {layout.size.x, chrome_h};
+        const ImVec2 blit_pos = {layout.pos.x, layout.pos.y};
+        const ImVec2 blit_size = {layout.size.x, layout.size.y};
 
         auto* vp = ImGui::GetMainViewport();
         fbo_.blitToDrawList(ImGui::GetBackgroundDrawList(vp), blit_pos, blit_size);

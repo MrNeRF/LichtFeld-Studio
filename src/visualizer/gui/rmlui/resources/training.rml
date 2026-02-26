@@ -1,0 +1,569 @@
+<rml>
+<head>
+  <link type="text/rcss" href="training.rcss"/>
+</head>
+<body id="body">
+<div id="content-wrap">
+
+  <!-- No trainer / no params messages -->
+  <span id="msg-no-trainer" class="status-text status-muted hidden"></span>
+  <span id="msg-no-params" class="status-text status-muted hidden"></span>
+
+  <div id="main-content">
+
+  <!-- ── Controls ──────────────────────────────────────── -->
+  <div id="controls">
+    <div id="ctrl-ready">
+      <button id="btn-start" class="btn btn--success btn--full" data-action="start"></button>
+      <button id="btn-reset-ready" class="btn btn--secondary btn--full hidden" data-action="reset"></button>
+      <button id="btn-clear-ready" class="btn btn--error btn--full" data-action="clear"></button>
+    </div>
+    <div id="ctrl-running" class="hidden">
+      <button id="btn-pause" class="btn btn--warning btn--full" data-action="pause"></button>
+    </div>
+    <div id="ctrl-paused" class="hidden">
+      <button id="btn-resume" class="btn btn--success btn--full" data-action="resume"></button>
+      <button id="btn-reset-paused" class="btn btn--secondary btn--full" data-action="reset"></button>
+      <button id="btn-stop" class="btn btn--error btn--full" data-action="stop"></button>
+    </div>
+    <div id="ctrl-completed" class="hidden">
+      <span id="status-completed" class="status-text status-success"></span>
+      <button id="btn-switch-edit" class="btn btn--success btn--full" data-action="switch_edit"></button>
+      <button id="btn-reset-completed" class="btn btn--secondary btn--full" data-action="reset"></button>
+      <button id="btn-clear-completed" class="btn btn--error btn--full" data-action="clear"></button>
+    </div>
+    <div id="ctrl-stopped" class="hidden">
+      <span id="status-stopped" class="status-text status-muted"></span>
+      <button id="btn-switch-edit-stopped" class="btn btn--success btn--full" data-action="switch_edit"></button>
+      <button id="btn-reset-stopped" class="btn btn--secondary btn--full" data-action="reset"></button>
+      <button id="btn-clear-stopped" class="btn btn--error btn--full" data-action="clear"></button>
+    </div>
+    <div id="ctrl-error" class="hidden">
+      <span id="status-error-label" class="status-text status-error"></span>
+      <span id="error-message" class="status-text"></span>
+      <button id="btn-reset-error" class="btn btn--secondary btn--full" data-action="reset"></button>
+      <button id="btn-clear-error" class="btn btn--error btn--full" data-action="clear"></button>
+    </div>
+    <div id="ctrl-stopping" class="hidden">
+      <span class="status-text status-muted" id="status-stopping-label"></span>
+    </div>
+    <button id="btn-save-checkpoint" class="btn btn--primary btn--full hidden" data-action="save_checkpoint"></button>
+    <span id="checkpoint-saved" class="status-text status-success hidden"></span>
+  </div>
+
+  <div class="separator"></div>
+
+  <!-- ── Basic Parameters (collapsible, default open) ── -->
+  <div class="section-header" id="hdr-basic_params" data-section="basic_params">
+    <span class="section-arrow">&#x25BC;</span>
+    <span id="text-hdr-basic_params"></span>
+  </div>
+  <div class="section-content" id="sec-basic_params">
+
+    <!-- Structural params (disabled when training started) -->
+    <div id="struct-params">
+      <!-- Strategy -->
+      <div class="setting-row">
+        <select id="sel-strategy" data-prop="strategy">
+          <option value="mcmc"></option>
+          <option value="adc"></option>
+        </select>
+        <span class="prop-label" id="label-strategy"></span>
+      </div>
+      <!-- Iterations -->
+      <div class="setting-row">
+        <input type="text" id="num-iterations" class="number-input" data-prop="iterations" data-type="int" data-fmt="%d" data-min="1" />
+        <span class="prop-label" id="label-iterations"></span>
+      </div>
+      <!-- Max Gaussians -->
+      <div class="setting-row">
+        <input type="text" id="num-max_cap" class="number-input" data-prop="max_cap" data-type="int" data-fmt="%d" data-min="1" />
+        <span class="prop-label" id="label-max_cap"></span>
+      </div>
+      <!-- SH Degree -->
+      <div class="setting-row">
+        <select id="sel-sh_degree" data-prop="sh_degree">
+          <option value="0">0</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+        </select>
+        <span class="prop-label" id="label-sh_degree"></span>
+      </div>
+      <!-- Tile Mode -->
+      <div class="setting-row">
+        <select id="sel-tile_mode" data-prop="tile_mode">
+          <option value="1"></option>
+          <option value="2"></option>
+          <option value="4"></option>
+        </select>
+        <span class="prop-label" id="label-tile_mode"></span>
+      </div>
+      <!-- Steps Scaler -->
+      <div class="setting-row">
+        <input type="text" id="num-steps_scaler" class="number-input" data-prop="steps_scaler" data-type="float" data-fmt="%.2f" data-min="0.01" />
+        <span class="prop-label" id="label-steps_scaler"></span>
+      </div>
+    </div>
+
+    <!-- Live-editable params -->
+    <div id="live-params">
+      <!-- Bilateral Grid -->
+      <div class="setting-row" id="row-bilateral_grid">
+        <label class="setting-label" id="label-bilateral_grid">
+          <input type="checkbox" id="cb-bilateral_grid" data-prop="use_bilateral_grid" />
+          <span id="text-bilateral_grid"></span>
+        </label>
+      </div>
+      <!-- Mask Mode -->
+      <div class="setting-row">
+        <select id="sel-mask_mode" data-prop="mask_mode">
+          <option value="0"></option>
+          <option value="1"></option>
+          <option value="2"></option>
+          <option value="3"></option>
+        </select>
+        <span class="prop-label" id="label-mask_mode"></span>
+      </div>
+      <!-- Mask sub-options (conditional) -->
+      <div id="dep-mask_mode" class="indent hidden">
+        <div class="setting-row">
+          <label class="setting-label">
+            <input type="checkbox" id="cb-invert_masks" data-prop="invert_masks" />
+            <span id="text-invert_masks"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label">
+            <input type="checkbox" id="cb-use_alpha_as_mask" data-prop="use_alpha_as_mask" />
+            <span id="text-use_alpha_as_mask"></span>
+          </label>
+        </div>
+      </div>
+      <!-- Sparsity -->
+      <div class="setting-row">
+        <label class="setting-label">
+          <input type="checkbox" id="cb-sparsity" data-prop="enable_sparsity" />
+          <span id="text-sparsity"></span>
+        </label>
+      </div>
+      <!-- GUT -->
+      <div class="setting-row" id="row-gut">
+        <label class="setting-label">
+          <input type="checkbox" id="cb-gut" data-prop="gut" />
+          <span id="text-gut"></span>
+        </label>
+      </div>
+      <!-- Undistort -->
+      <div class="setting-row">
+        <label class="setting-label">
+          <input type="checkbox" id="cb-undistort" data-prop="undistort" />
+          <span id="text-undistort"></span>
+        </label>
+      </div>
+      <!-- Mip Filter -->
+      <div class="setting-row">
+        <label class="setting-label">
+          <input type="checkbox" id="cb-mip_filter" data-prop="mip_filter" />
+          <span id="text-mip_filter"></span>
+        </label>
+      </div>
+      <!-- PPISP -->
+      <div class="setting-row">
+        <label class="setting-label">
+          <input type="checkbox" id="cb-ppisp" data-prop="ppisp" />
+          <span id="text-ppisp"></span>
+        </label>
+      </div>
+      <!-- PPISP sub-options (conditional) -->
+      <div id="dep-ppisp" class="indent hidden">
+        <div class="setting-row">
+          <label class="setting-label">
+            <input type="checkbox" id="cb-ppisp_use_controller" data-prop="ppisp_use_controller" />
+            <span id="text-ppisp_controller"></span>
+          </label>
+        </div>
+        <div id="dep-ppisp_controller" class="indent hidden">
+          <!-- Activation step: auto checkbox + number input -->
+          <div class="setting-row" id="row-ppisp_activation">
+            <label class="setting-label">
+              <input type="checkbox" id="cb-ppisp_auto_step" />
+              <span id="text-ppisp_auto_step"></span>
+            </label>
+          </div>
+          <div id="dep-ppisp_manual_step" class="hidden">
+            <div class="setting-row">
+              <input type="text" id="num-ppisp_controller_activation_step" class="number-input" data-prop="ppisp_controller_activation_step" data-type="int" data-fmt="%d" data-min="1" />
+              <span class="prop-label" id="label-ppisp_activation_step"></span>
+            </div>
+          </div>
+          <!-- Controller LR -->
+          <div class="setting-row">
+            <input type="text" id="num-ppisp_controller_lr" class="number-input" data-prop="ppisp_controller_lr" data-type="float" data-fmt="%.5f" data-min="0" />
+            <span class="prop-label" id="label-ppisp_controller_lr"></span>
+          </div>
+          <!-- Freeze Gaussians -->
+          <div class="setting-row">
+            <label class="setting-label">
+              <input type="checkbox" id="cb-ppisp_freeze_gaussians" data-prop="ppisp_freeze_gaussians" />
+              <span id="text-ppisp_freeze_gaussians"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <!-- Background Mode -->
+      <div class="setting-row">
+        <select id="sel-bg_mode" data-prop="bg_mode">
+          <option value="0"></option>
+          <option value="1"></option>
+          <option value="2"></option>
+          <option value="3"></option>
+        </select>
+        <span class="prop-label" id="label-bg_mode"></span>
+      </div>
+      <!-- BG Color (conditional) -->
+      <div id="dep-bg_color" class="indent hidden">
+        <div class="setting-row" id="row-bg_color">
+          <span class="color-comp" id="rc-bg_color"></span>
+          <span class="color-comp" id="gc-bg_color"></span>
+          <span class="color-comp" id="bc-bg_color"></span>
+          <div class="color-swatch" id="swatch-bg_color" data-prop="bg_color"></div>
+          <input type="text" id="hex-bg_color" class="color-hex visible" data-prop="bg_color" />
+          <span class="prop-label" id="label-bg_color"></span>
+        </div>
+      </div>
+      <!-- BG Image (conditional) -->
+      <div id="dep-bg_image" class="indent hidden">
+        <div class="setting-row">
+          <span id="bg-image-path" class="text-disabled"></span>
+          <span class="prop-label" id="label-bg_image"></span>
+        </div>
+        <div class="setting-row">
+          <button id="btn-bg-browse" class="btn btn--secondary" data-action="browse_bg"></button>
+          <button id="btn-bg-clear" class="btn btn--secondary hidden" data-action="clear_bg"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Advanced Parameters (collapsible, default closed) ── -->
+  <div class="section-header" id="hdr-advanced_params" data-section="advanced_params">
+    <span class="section-arrow">&#x25B6;</span>
+    <span id="text-hdr-advanced_params"></span>
+  </div>
+  <div class="section-content collapsed" id="sec-advanced_params">
+
+    <!-- Dataset subsection -->
+    <div class="section-header" id="hdr-dataset" data-section="dataset">
+      <span class="section-arrow">&#x25B6;</span>
+      <span id="text-hdr-dataset"></span>
+    </div>
+    <div class="section-content collapsed" id="sec-dataset">
+      <div id="dataset-content">
+        <div class="setting-row">
+          <span id="dataset-path" class="text-disabled"></span>
+          <span class="prop-label" id="label-dataset_path"></span>
+        </div>
+        <div class="setting-row">
+          <span id="dataset-images" class="text-disabled"></span>
+          <span class="prop-label" id="label-dataset_images"></span>
+        </div>
+        <div class="setting-row" id="row-resize_factor">
+          <select id="sel-resize_factor" data-prop="resize_factor">
+            <option value="-1"></option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="4">4</option>
+            <option value="8">8</option>
+          </select>
+          <span class="prop-label" id="label-resize_factor"></span>
+        </div>
+        <div class="setting-row">
+          <input type="text" id="num-max_width" class="number-input" data-prop="max_width" data-type="int" data-fmt="%d" data-min="1" data-max="4096" />
+          <span class="prop-label" id="label-max_width"></span>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label">
+            <input type="checkbox" id="cb-cpu_cache" data-prop="use_cpu_cache" />
+            <span id="text-cpu_cache"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label">
+            <input type="checkbox" id="cb-fs_cache" data-prop="use_fs_cache" />
+            <span id="text-fs_cache"></span>
+          </label>
+        </div>
+        <div class="setting-row">
+          <span id="dataset-output" class="text-disabled"></span>
+          <span class="prop-label" id="label-dataset_output"></span>
+        </div>
+      </div>
+      <span id="dataset-no-data" class="status-text status-muted hidden"></span>
+    </div>
+
+    <!-- Optimization subsection -->
+    <div class="section-header" id="hdr-optimization" data-section="optimization">
+      <span class="section-arrow">&#x25B6;</span>
+      <span id="text-hdr-optimization"></span>
+    </div>
+    <div class="section-content collapsed" id="sec-optimization">
+      <div id="optimization-params">
+        <div class="setting-row">
+          <span id="opt-strategy" class="text-disabled"></span>
+          <span class="prop-label" id="label-opt_strategy"></span>
+        </div>
+        <span class="status-text status-muted" id="text-lr-header"></span>
+        <!-- Learning rates -->
+        <div class="setting-row">
+          <input type="text" id="num-means_lr" class="number-input" data-prop="means_lr" data-type="float" data-fmt="%.6f" data-min="0" />
+          <span class="prop-label" id="label-means_lr"></span>
+        </div>
+        <div class="setting-row">
+          <input type="text" id="num-shs_lr" class="number-input" data-prop="shs_lr" data-type="float" data-fmt="%.4f" data-min="0" />
+          <span class="prop-label" id="label-shs_lr"></span>
+        </div>
+        <div class="setting-row">
+          <input type="text" id="num-opacity_lr" class="number-input" data-prop="opacity_lr" data-type="float" data-fmt="%.4f" data-min="0" />
+          <span class="prop-label" id="label-opacity_lr"></span>
+        </div>
+        <div class="setting-row">
+          <input type="text" id="num-scaling_lr" class="number-input" data-prop="scaling_lr" data-type="float" data-fmt="%.4f" data-min="0" />
+          <span class="prop-label" id="label-scaling_lr"></span>
+        </div>
+        <div class="setting-row">
+          <input type="text" id="num-rotation_lr" class="number-input" data-prop="rotation_lr" data-type="float" data-fmt="%.4f" data-min="0" />
+          <span class="prop-label" id="label-rotation_lr"></span>
+        </div>
+        <!-- Refinement -->
+        <span class="status-text status-muted" id="text-refinement-header"></span>
+        <div class="setting-row">
+          <input type="text" id="num-refine_every" class="number-input" data-prop="refine_every" data-type="int" data-fmt="%d" data-min="1" />
+          <span class="prop-label" id="label-refine_every"></span>
+        </div>
+        <div class="setting-row">
+          <input type="text" id="num-start_refine" class="number-input" data-prop="start_refine" data-type="int" data-fmt="%d" data-min="0" />
+          <span class="prop-label" id="label-start_refine"></span>
+        </div>
+        <div class="setting-row">
+          <input type="text" id="num-stop_refine" class="number-input" data-prop="stop_refine" data-type="int" data-fmt="%d" data-min="0" />
+          <span class="prop-label" id="label-stop_refine"></span>
+        </div>
+        <div class="setting-row">
+          <input type="text" id="num-grad_threshold" class="number-input" data-prop="grad_threshold" data-type="float" data-fmt="%.6f" data-min="0" />
+          <span class="prop-label" id="label-grad_threshold"></span>
+        </div>
+        <div class="setting-row">
+          <input type="text" id="num-reset_every" class="number-input" data-prop="reset_every" data-type="int" data-fmt="%d" data-min="1" />
+          <span class="prop-label" id="label-reset_every"></span>
+        </div>
+        <div class="setting-row">
+          <input type="text" id="num-sh_degree_interval" class="number-input" data-prop="sh_degree_interval" data-type="int" data-fmt="%d" data-min="1" />
+          <span class="prop-label" id="label-sh_degree_interval"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bilateral Grid subsection (conditional) -->
+    <div id="dep-bilateral" class="hidden">
+      <div class="section-header" id="hdr-bilateral" data-section="bilateral">
+        <span class="section-arrow">&#x25B6;</span>
+        <span id="text-hdr-bilateral"></span>
+      </div>
+      <div class="section-content collapsed" id="sec-bilateral">
+        <div id="bilateral-params">
+          <div class="setting-row">
+            <input type="text" id="num-bilateral_grid_x" class="number-input" data-prop="bilateral_grid_x" data-type="int" data-fmt="%d" data-min="1" />
+            <span class="prop-label" id="label-bilateral_grid_x"></span>
+          </div>
+          <div class="setting-row">
+            <input type="text" id="num-bilateral_grid_y" class="number-input" data-prop="bilateral_grid_y" data-type="int" data-fmt="%d" data-min="1" />
+            <span class="prop-label" id="label-bilateral_grid_y"></span>
+          </div>
+          <div class="setting-row">
+            <input type="text" id="num-bilateral_grid_w" class="number-input" data-prop="bilateral_grid_w" data-type="int" data-fmt="%d" data-min="1" />
+            <span class="prop-label" id="label-bilateral_grid_w"></span>
+          </div>
+          <div class="setting-row">
+            <input type="text" id="num-bilateral_grid_lr" class="number-input" data-prop="bilateral_grid_lr" data-type="float" data-fmt="%.6f" data-min="0" />
+            <span class="prop-label" id="label-bilateral_grid_lr"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Losses subsection -->
+    <div class="section-header" id="hdr-losses" data-section="losses">
+      <span class="section-arrow">&#x25B6;</span>
+      <span id="text-hdr-losses"></span>
+    </div>
+    <div class="section-content collapsed" id="sec-losses">
+      <div id="losses-params">
+        <div class="setting-row">
+          <input type="range" id="slider-lambda_dssim" class="setting-slider" data-prop="lambda_dssim" min="0" max="1" step="0.01" />
+          <span class="slider-value" id="val-lambda_dssim"></span>
+          <span class="prop-label" id="label-lambda_dssim"></span>
+        </div>
+        <div class="setting-row">
+          <input type="text" id="num-opacity_reg" class="number-input" data-prop="opacity_reg" data-type="float" data-fmt="%.4f" data-min="0" />
+          <span class="prop-label" id="label-opacity_reg"></span>
+        </div>
+        <div class="setting-row">
+          <input type="text" id="num-scale_reg" class="number-input" data-prop="scale_reg" data-type="float" data-fmt="%.4f" data-min="0" />
+          <span class="prop-label" id="label-scale_reg"></span>
+        </div>
+        <div class="setting-row">
+          <input type="text" id="num-tv_loss_weight" class="number-input" data-prop="tv_loss_weight" data-type="float" data-fmt="%.1f" data-min="0" />
+          <span class="prop-label" id="label-tv_loss_weight"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Initialization subsection -->
+    <div class="section-header" id="hdr-init" data-section="init">
+      <span class="section-arrow">&#x25B6;</span>
+      <span id="text-hdr-init"></span>
+    </div>
+    <div class="section-content collapsed" id="sec-init">
+      <div id="init-params">
+        <div class="setting-row">
+          <input type="range" id="slider-init_opacity" class="setting-slider" data-prop="init_opacity" min="0.01" max="1" step="0.01" />
+          <span class="slider-value" id="val-init_opacity"></span>
+          <span class="prop-label" id="label-init_opacity"></span>
+        </div>
+        <div class="setting-row">
+          <input type="text" id="num-init_scaling" class="number-input" data-prop="init_scaling" data-type="float" data-fmt="%.3f" data-min="0.001" />
+          <span class="prop-label" id="label-init_scaling"></span>
+        </div>
+        <div class="setting-row">
+          <label class="setting-label">
+            <input type="checkbox" id="cb-random" data-prop="random" />
+            <span id="text-random_init"></span>
+          </label>
+        </div>
+        <div id="dep-random" class="indent hidden">
+          <div class="setting-row">
+            <input type="text" id="num-init_num_pts" class="number-input" data-prop="init_num_pts" data-type="int" data-fmt="%d" data-min="1" />
+            <span class="prop-label" id="label-init_num_pts"></span>
+          </div>
+          <div class="setting-row">
+            <input type="text" id="num-init_extent" class="number-input" data-prop="init_extent" data-type="float" data-fmt="%.1f" data-min="0.1" />
+            <span class="prop-label" id="label-init_extent"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADC Pruning/Growing subsection (conditional) -->
+    <div id="dep-adc" class="hidden">
+      <div class="section-header" id="hdr-adc" data-section="adc">
+        <span class="section-arrow">&#x25B6;</span>
+        <span id="text-hdr-adc"></span>
+      </div>
+      <div class="section-content collapsed" id="sec-adc">
+        <div id="adc-params">
+          <div class="setting-row">
+            <input type="text" id="num-min_opacity" class="number-input" data-prop="min_opacity" data-type="float" data-fmt="%.4f" data-min="0" />
+            <span class="prop-label" id="label-min_opacity"></span>
+          </div>
+          <div class="setting-row">
+            <input type="text" id="num-prune_opacity" class="number-input" data-prop="prune_opacity" data-type="float" data-fmt="%.4f" data-min="0" />
+            <span class="prop-label" id="label-prune_opacity"></span>
+          </div>
+          <div class="setting-row">
+            <input type="text" id="num-grow_scale3d" class="number-input" data-prop="grow_scale3d" data-type="float" data-fmt="%.4f" data-min="0" />
+            <span class="prop-label" id="label-grow_scale3d"></span>
+          </div>
+          <div class="setting-row">
+            <input type="text" id="num-grow_scale2d" class="number-input" data-prop="grow_scale2d" data-type="float" data-fmt="%.3f" data-min="0" />
+            <span class="prop-label" id="label-grow_scale2d"></span>
+          </div>
+          <div class="setting-row">
+            <input type="text" id="num-prune_scale3d" class="number-input" data-prop="prune_scale3d" data-type="float" data-fmt="%.3f" data-min="0" />
+            <span class="prop-label" id="label-prune_scale3d"></span>
+          </div>
+          <div class="setting-row">
+            <input type="text" id="num-prune_scale2d" class="number-input" data-prop="prune_scale2d" data-type="float" data-fmt="%.3f" data-min="0" />
+            <span class="prop-label" id="label-prune_scale2d"></span>
+          </div>
+          <div class="setting-row">
+            <input type="text" id="num-pause_refine_after_reset" class="number-input" data-prop="pause_refine_after_reset" data-type="int" data-fmt="%d" data-min="0" />
+            <span class="prop-label" id="label-pause_refine_after_reset"></span>
+          </div>
+          <div class="setting-row">
+            <label class="setting-label">
+              <input type="checkbox" id="cb-revised_opacity" data-prop="revised_opacity" />
+              <span id="text-revised_opacity"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sparsity subsection (conditional) -->
+    <div id="dep-sparsity" class="hidden">
+      <div class="section-header" id="hdr-sparsity" data-section="sparsity">
+        <span class="section-arrow">&#x25B6;</span>
+        <span id="text-hdr-sparsity"></span>
+      </div>
+      <div class="section-content collapsed" id="sec-sparsity">
+        <div id="sparsity-params">
+          <div class="setting-row">
+            <input type="text" id="num-sparsify_steps" class="number-input" data-prop="sparsify_steps" data-type="int" data-fmt="%d" data-min="1" />
+            <span class="prop-label" id="label-sparsify_steps"></span>
+          </div>
+          <div class="setting-row">
+            <input type="text" id="num-init_rho" class="number-input" data-prop="init_rho" data-type="float" data-fmt="%.4f" data-min="0" />
+            <span class="prop-label" id="label-init_rho"></span>
+          </div>
+          <div class="setting-row">
+            <input type="range" id="slider-prune_ratio" class="setting-slider" data-prop="prune_ratio" min="0" max="1" step="0.01" />
+            <span class="slider-value" id="val-prune_ratio"></span>
+            <span class="prop-label" id="label-prune_ratio"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Save Steps subsection -->
+    <div class="section-header" id="hdr-save_steps" data-section="save_steps">
+      <span class="section-arrow">&#x25B6;</span>
+      <span id="text-hdr-save_steps"></span>
+    </div>
+    <div class="section-content collapsed" id="sec-save_steps">
+      <div id="save-steps-edit" class="hidden">
+        <div class="setting-row">
+          <input type="text" id="num-new_step" class="number-input" data-type="int" data-fmt="%d" data-min="1" />
+          <button id="btn-add-step" class="btn btn--secondary" data-action="add_step"></button>
+        </div>
+        <div class="separator"></div>
+        <div id="save-steps-list"></div>
+        <span id="no-save-steps" class="status-text status-muted hidden"></span>
+      </div>
+      <div id="save-steps-readonly" class="hidden">
+        <span id="save-steps-display" class="status-text status-info"></span>
+        <span id="no-save-steps-ro" class="status-text status-muted hidden"></span>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="separator"></div>
+
+  <!-- ── Status Section ────────────────────────────────── -->
+  <div id="status-section">
+    <span id="status-mode" class="status-text status-info"></span>
+    <span id="status-iteration" class="status-text status-info"></span>
+    <span id="status-gaussians" class="status-text status-info"></span>
+    <div id="progress-wrapper" class="hidden">
+      <div style="position: relative;">
+        <progress id="training-progress" value="0" max="1" />
+        <span id="progress-text" class="progress__text"></span>
+      </div>
+    </div>
+  </div>
+
+  </div>
+</div>
+</body>
+</rml>

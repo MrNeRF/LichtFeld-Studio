@@ -46,6 +46,7 @@ namespace lfs::vis::gui {
 
         std::function<void(const std::string&)> on_tab_changed;
         std::function<void(float)> on_splitter_delta;
+        std::function<void(float)> on_resize_delta;
 
     private:
         void updateTheme();
@@ -56,8 +57,11 @@ namespace lfs::vis::gui {
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
 
+        Rml::Element* resize_handle_el_ = nullptr;
+        Rml::Element* left_border_el_ = nullptr;
         Rml::Element* splitter_el_ = nullptr;
         Rml::Element* tab_bar_el_ = nullptr;
+        Rml::Element* tab_separator_el_ = nullptr;
 
         RmlFBO fbo_;
 
@@ -70,6 +74,8 @@ namespace lfs::vis::gui {
 
         bool splitter_dragging_ = false;
         float drag_start_y_ = 0;
+
+        bool resize_dragging_ = false;
     };
 
 } // namespace lfs::vis::gui

@@ -497,3 +497,51 @@ progress fill {
     color: #a6adc8;
     font-size: 13dp;
 }
+
+/* ── Number Input ──────────────────────────────────────── */
+
+.number-input {
+    width: 100%;
+    box-sizing: border-box;
+    font-family: JetBrainsMono;
+}
+
+/* ── Full-width button ─────────────────────────────────── */
+
+.btn--full {
+    display: block;
+    width: 100%;
+    margin-bottom: 4dp;
+    box-sizing: border-box;
+}
+
+/* ── Disabled overlay ──────────────────────────────────── */
+
+.disabled-overlay {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+/* ── Status text ───────────────────────────────────────── */
+
+.status-text {
+    display: block;
+    font-size: 13dp;
+    padding: 2dp 0;
+}
+
+.status-success {
+    color: #a6e3a1;
+}
+
+.status-error {
+    color: #f38ba8;
+}
+
+.status-muted {
+    color: #a6adc8;
+}
+
+.status-info {
+    color: #cdd6f4;
+}

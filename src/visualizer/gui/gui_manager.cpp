@@ -447,6 +447,9 @@ namespace lfs::vis::gui {
         rml_right_panel_.on_splitter_delta = [this](float delta_y) {
             panel_layout_.adjustScenePanelRatio(delta_y);
         };
+        rml_right_panel_.on_resize_delta = [this](float dx) {
+            panel_layout_.applyResizeDelta(dx);
+        };
         rml_viewport_overlay_.init(&rmlui_manager_);
         rml_menu_bar_.init(&rmlui_manager_);
         rml_status_bar_.init(&rmlui_manager_);

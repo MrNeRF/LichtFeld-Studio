@@ -15,7 +15,7 @@ def register_builtin_panels():
         lf.ui.register_rml_panel(RenderingPanel)
 
         from .training_panel import TrainingPanel
-        lf.register_class(TrainingPanel)
+        lf.ui.register_rml_panel(TrainingPanel)
 
         from .scene_panel import ScenePanel
         lf.ui.register_rml_panel(ScenePanel)

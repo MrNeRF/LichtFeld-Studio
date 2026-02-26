@@ -37,8 +37,6 @@ namespace lfs::vis::gui {
                                               std::unordered_map<std::string, bool>& window_states,
                                               std::string& focus_panel_name) {
         if (!show_main_panel || ui_hidden) {
-            hovering_panel_edge_ = false;
-            resizing_panel_ = false;
             python_console_hovering_edge_ = false;
             python_console_resizing_ = false;
             return;
@@ -85,23 +83,6 @@ namespace lfs::vis::gui {
         const auto& t = theme();
         ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {8.0f, 8.0f});
-
-        constexpr float EDGE_GRAB_W = 8.0f;
-        const auto& io = ImGui::GetIO();
-        hovering_panel_edge_ = io.MousePos.x >= panel_x - EDGE_GRAB_W &&
-                               io.MousePos.x <= panel_x + EDGE_GRAB_W &&
-                               io.MousePos.y >= vp->WorkPos.y &&
-                               io.MousePos.y <= vp->WorkPos.y + panel_h;
-
-        if (hovering_panel_edge_ && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-            resizing_panel_ = true;
-        if (resizing_panel_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
-            resizing_panel_ = false;
-        if (resizing_panel_) {
-            right_panel_width_ = std::clamp(right_panel_width_ - io.MouseDelta.x, min_w, max_w);
-        }
-        if (hovering_panel_edge_ || resizing_panel_)
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
 
         if (ImGui::Begin("##RightPanel", nullptr, PANEL_FLAGS)) {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, {0, 0, 0, 0});
@@ -157,6 +138,13 @@ namespace lfs::vis::gui {
         const float avail_h = panel_h - padding;
         if (avail_h > 0)
             scene_panel_ratio_ = std::clamp(scene_panel_ratio_ + delta_y / avail_h, 0.15f, 0.85f);
+    }
+
+    void PanelLayoutManager::applyResizeDelta(float dx) {
+        const auto* const vp = ImGui::GetMainViewport();
+        const float min_w = vp->WorkSize.x * RIGHT_PANEL_MIN_RATIO;
+        const float max_w = vp->WorkSize.x * RIGHT_PANEL_MAX_RATIO;
+        right_panel_width_ = std::clamp(right_panel_width_ - dx, min_w, max_w);
     }
 
     ViewportLayout PanelLayoutManager::computeViewportLayout(bool show_main_panel, bool ui_hidden,
