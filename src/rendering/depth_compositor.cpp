@@ -4,6 +4,7 @@
 
 #include "depth_compositor.hpp"
 #include "core/logger.hpp"
+#include "gl_state_guard.hpp"
 #include <glad/glad.h>
 
 namespace lfs::rendering {
@@ -68,6 +69,7 @@ namespace lfs::rendering {
         if (!initialized_)
             return std::unexpected("DepthCompositor not initialized");
 
+        GLStateGuard state_guard;
         ShaderScope scope(shader_);
 
         glActiveTexture(GL_TEXTURE0);
@@ -93,22 +95,12 @@ namespace lfs::rendering {
         shader_->set_uniform("u_splat_depth_is_ndc", splat_depth_is_ndc);
         shader_->set_uniform("u_mesh_only", false);
 
-        const GLboolean depth_was_enabled = glIsEnabled(GL_DEPTH_TEST);
-        GLint prev_depth_func = GL_LESS;
-        glGetIntegerv(GL_DEPTH_FUNC, &prev_depth_func);
-
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_ALWAYS);
 
         glBindVertexArray(vao_.get());
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         glBindVertexArray(0);
-
-        glDepthFunc(prev_depth_func);
-        if (!depth_was_enabled)
-            glDisable(GL_DEPTH_TEST);
-
-        glActiveTexture(GL_TEXTURE0);
 
         return {};
     }
@@ -117,6 +109,7 @@ namespace lfs::rendering {
         if (!initialized_)
             return std::unexpected("DepthCompositor not initialized");
 
+        GLStateGuard state_guard;
         ShaderScope scope(shader_);
 
         glActiveTexture(GL_TEXTURE2);
@@ -129,22 +122,12 @@ namespace lfs::rendering {
 
         shader_->set_uniform("u_mesh_only", true);
 
-        const GLboolean depth_was_enabled = glIsEnabled(GL_DEPTH_TEST);
-        GLint prev_depth_func = GL_LESS;
-        glGetIntegerv(GL_DEPTH_FUNC, &prev_depth_func);
-
         glEnable(GL_DEPTH_TEST);
         glDepthFunc(GL_ALWAYS);
 
         glBindVertexArray(vao_.get());
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         glBindVertexArray(0);
-
-        glDepthFunc(prev_depth_func);
-        if (!depth_was_enabled)
-            glDisable(GL_DEPTH_TEST);
-
-        glActiveTexture(GL_TEXTURE0);
 
         return {};
     }

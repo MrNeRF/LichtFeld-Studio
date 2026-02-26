@@ -108,14 +108,9 @@ namespace lfs::vis {
         if (!scene_state.model_transforms.empty()) {
             point_cloud_transform = scene_state.model_transforms[0];
         }
+        const std::vector<glm::mat4> pc_transforms = {point_cloud_transform};
 
-        const lfs::rendering::ViewportData viewport_data{
-            .rotation = ctx.viewport.getRotationMatrix(),
-            .translation = ctx.viewport.getTranslation(),
-            .size = ctx.render_size,
-            .focal_length_mm = ctx.settings.focal_length_mm,
-            .orthographic = ctx.settings.orthographic,
-            .ortho_scale = ctx.settings.ortho_scale};
+        const auto viewport_data = ctx.makeViewportData();
 
         std::optional<lfs::rendering::BoundingBox> crop_box;
         bool crop_inverse = false;
@@ -142,7 +137,7 @@ namespace lfs::vis {
             .point_cloud_mode = true,
             .voxel_size = ctx.settings.voxel_size,
             .equirectangular = ctx.settings.equirectangular,
-            .model_transforms = {point_cloud_transform},
+            .model_transforms = &pc_transforms,
             .crop_inverse = crop_inverse,
             .crop_desaturate = crop_desaturate};
 

@@ -12,12 +12,6 @@ namespace lfs::rendering {
         CUDA_INTEROP
     };
 
-    // Template-based feature detection instead of preprocessor
-    template <bool EnableInterop = false>
-    struct InteropCapability {
-        static constexpr bool available = EnableInterop;
-    };
-
     // Runtime interop disable flag (set before RenderingEngine creation)
     inline bool& isInteropDisabled() {
         static bool disabled = false;

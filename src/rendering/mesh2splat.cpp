@@ -685,7 +685,8 @@ namespace lfs::rendering {
             total_vertices += geo.vertices.size();
         }
         const float scene_scale = glm::length(global_max - global_min) * 0.5f;
-        assert(scene_scale > 0.0f);
+        if (scene_scale <= 0.0f)
+            return std::unexpected("Degenerate mesh: zero bounding box extent");
 
         const int res = options.resolution_target;
 

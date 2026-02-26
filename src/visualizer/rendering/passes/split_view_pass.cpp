@@ -5,9 +5,7 @@
 #include "split_view_pass.hpp"
 #include "core/logger.hpp"
 #include "scene/scene_manager.hpp"
-#include "training/training_manager.hpp"
 #include <cassert>
-#include <shared_mutex>
 
 namespace lfs::vis {
 
@@ -32,12 +30,7 @@ namespace lfs::vis {
             res.split_info.right_name = split_request->panels[1].label;
         }
 
-        std::optional<std::shared_lock<std::shared_mutex>> render_lock;
-        if (const auto* tm = ctx.scene_manager ? ctx.scene_manager->getTrainerManager() : nullptr) {
-            if (const auto* trainer = tm->getTrainer()) {
-                render_lock.emplace(trainer->getRenderMutex());
-            }
-        }
+        auto render_lock = acquireRenderLock(ctx);
 
         auto result = engine.renderSplitView(*split_request);
         render_lock.reset();
@@ -58,13 +51,7 @@ namespace lfs::vis {
         if (settings.split_view_mode == SplitViewMode::Disabled || !ctx.scene_manager)
             return std::nullopt;
 
-        const lfs::rendering::ViewportData viewport_data{
-            .rotation = ctx.viewport.getRotationMatrix(),
-            .translation = ctx.viewport.getTranslation(),
-            .size = ctx.render_size,
-            .focal_length_mm = settings.focal_length_mm,
-            .orthographic = settings.orthographic,
-            .ortho_scale = settings.ortho_scale};
+        const auto viewport_data = ctx.makeViewportData();
 
         std::optional<lfs::rendering::BoundingBox> crop_box;
         if (settings.use_crop_box || settings.show_crop_box) {

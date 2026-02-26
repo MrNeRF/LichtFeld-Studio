@@ -84,8 +84,8 @@ namespace lfs::rendering {
         float ring_width = 0.002f;
         bool show_center_markers = false;
         // Per-node transforms: array of 4x4 matrices and per-Gaussian indices
-        std::vector<glm::mat4> model_transforms;              // Array of transforms, one per node
-        std::shared_ptr<lfs::core::Tensor> transform_indices; // Per-Gaussian index [N], nullable
+        const std::vector<glm::mat4>* model_transforms = nullptr; // Array of transforms, one per node
+        std::shared_ptr<lfs::core::Tensor> transform_indices;     // Per-Gaussian index [N], nullable
         // Selection mask for highlighting selected Gaussians
         std::shared_ptr<lfs::core::Tensor> selection_mask; // Per-Gaussian uint8 [N], nullable (1 = selected, 0 = not)
         // Request screen positions output for brush tool
@@ -207,64 +207,6 @@ namespace lfs::rendering {
         ED = 2,
         RGB_D = 3,
         RGB_ED = 4
-    };
-
-    // Translation Gizmo types
-    enum class GizmoElement {
-        None,
-        XAxis,
-        YAxis,
-        ZAxis,
-        XYPlane,
-        XZPlane,
-        YZPlane
-    };
-
-    // Abstract interface for gizmo interaction
-    class GizmoInteraction {
-    public:
-        virtual ~GizmoInteraction() = default;
-
-        virtual GizmoElement pick(const glm::vec2& mouse_pos, const glm::mat4& view,
-                                  const glm::mat4& projection, const glm::vec3& position) = 0;
-
-        virtual glm::vec3 startDrag(GizmoElement element, const glm::vec2& mouse_pos,
-                                    const glm::mat4& view, const glm::mat4& projection,
-                                    const glm::vec3& position) = 0;
-
-        virtual glm::vec3 updateDrag(const glm::vec2& mouse_pos, const glm::mat4& view,
-                                     const glm::mat4& projection) = 0;
-
-        virtual void endDrag() = 0;
-        virtual bool isDragging() const = 0;
-
-        virtual void setHovered(GizmoElement element) = 0;
-        virtual GizmoElement getHovered() const = 0;
-    };
-
-    // Rendering pipeline types (for compatibility)
-    struct RenderingPipelineRequest {
-        glm::mat3 view_rotation;
-        glm::vec3 view_translation;
-        glm::ivec2 viewport_size;
-        float focal_length_mm = DEFAULT_FOCAL_LENGTH_MM;
-        float scaling_modifier = 1.0f;
-        bool antialiasing = false;
-        RenderMode render_mode = RenderMode::RGB;
-        const void* crop_box = nullptr; // Actually lfs::geometry::BoundingBox*
-        glm::vec3 background_color = glm::vec3(0.0f, 0.0f, 0.0f);
-        bool point_cloud_mode = false;
-        float voxel_size = 0.01f;
-        bool gut = false;
-        bool equirectangular = false;
-        bool show_rings = false;
-        float ring_width = 0.002f;
-    };
-
-    struct RenderingPipelineResult {
-        Tensor image;
-        Tensor depth;
-        bool valid = false;
     };
 
     // Interface for bounding box manipulation (for visualizer)
@@ -415,24 +357,6 @@ namespace lfs::rendering {
         // Get camera rotation matrix to view along axis
         [[nodiscard]] static glm::mat3 getAxisViewRotation(int axis, bool negative = false);
 
-        // Translation gizmo rendering
-        virtual Result<void> renderTranslationGizmo(
-            const glm::vec3& position,
-            const ViewportData& viewport,
-            float scale = 1.0f) = 0;
-
-        // Camera frustum rendering
-        virtual Result<void> renderCameraFrustums(
-            const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
-            const ViewportData& viewport,
-            float scale = 0.1f,
-            const glm::vec3& train_color = glm::vec3(0.0f, 1.0f, 0.0f),
-            const glm::vec3& eval_color = glm::vec3(1.0f, 0.0f, 0.0f),
-            const glm::mat4& scene_transform = glm::mat4(1.0f),
-            bool equirectangular_view = false,
-            const std::unordered_set<int>& disabled_uids = {},
-            const std::unordered_set<int>& selected_uids = {}) = 0;
-
         // Camera frustum rendering with highlighting
         virtual Result<void> renderCameraFrustumsWithHighlight(
             const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
@@ -457,18 +381,6 @@ namespace lfs::rendering {
             const glm::mat4& scene_transform = glm::mat4(1.0f)) = 0;
 
         virtual void clearFrustumCache() = 0;
-
-        // Get gizmo interaction interface
-        virtual std::shared_ptr<GizmoInteraction> getGizmoInteraction() = 0;
-
-        // Pipeline rendering (for visualizer compatibility)
-        virtual RenderingPipelineResult renderWithPipeline(
-            const lfs::core::SplatData& model,
-            const RenderingPipelineRequest& request) = 0;
-
-        // Factory methods - now return Result
-        virtual Result<std::shared_ptr<IBoundingBox>> createBoundingBox() = 0;
-        virtual Result<std::shared_ptr<ICoordinateAxes>> createCoordinateAxes() = 0;
     };
 
 } // namespace lfs::rendering

@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "overlay_pass.hpp"
-#include "../rendering_manager.hpp"
 #include "core/logger.hpp"
 #include "scene/scene_manager.hpp"
 #include <cassert>
@@ -19,13 +18,7 @@ namespace lfs::vis {
         if (ctx.render_size.x <= 0 || ctx.render_size.y <= 0)
             return;
 
-        const lfs::rendering::ViewportData viewport{
-            .rotation = ctx.viewport.getRotationMatrix(),
-            .translation = ctx.viewport.getTranslation(),
-            .size = ctx.render_size,
-            .focal_length_mm = settings.focal_length_mm,
-            .orthographic = settings.orthographic,
-            .ortho_scale = settings.ortho_scale};
+        const auto viewport = ctx.makeViewportData();
 
         if (settings.show_crop_box && ctx.scene_manager) {
             const auto visible_cropboxes = ctx.scene_manager->getScene().getVisibleCropBoxes();
@@ -112,10 +105,10 @@ namespace lfs::vis {
             const float time_since_set = ctx.viewport.camera.getSecondsSincePivotSet();
             const bool animation_active = time_since_set < PIVOT_DURATION_SEC;
 
-            if (animation_active && res.manager) {
+            if (animation_active) {
                 const auto remaining_ms = static_cast<int>((PIVOT_DURATION_SEC - time_since_set) * 1000.0f);
-                res.manager->setPivotAnimationEndTime(std::chrono::steady_clock::now() +
-                                                      std::chrono::milliseconds(remaining_ms));
+                res.pivot_animation_end = std::chrono::steady_clock::now() +
+                                          std::chrono::milliseconds(remaining_ms);
             }
 
             if (settings.show_pivot || animation_active) {
@@ -193,14 +186,12 @@ namespace lfs::vis {
                         if (cam_id != ctx.pick.hovered_camera_id) {
                             LOG_DEBUG("Camera hover changed: {} -> {}", ctx.pick.hovered_camera_id, cam_id);
                             res.hovered_camera_id = cam_id;
-                            if (res.manager)
-                                res.manager->markDirty(DirtyFlag::OVERLAY);
+                            res.additional_dirty |= DirtyFlag::OVERLAY;
                         }
                     } else if (ctx.pick.hovered_camera_id != -1) {
                         LOG_DEBUG("Camera hover lost (was ID: {})", ctx.pick.hovered_camera_id);
                         res.hovered_camera_id = -1;
-                        if (res.manager)
-                            res.manager->markDirty(DirtyFlag::OVERLAY);
+                        res.additional_dirty |= DirtyFlag::OVERLAY;
                     }
                 }
             }

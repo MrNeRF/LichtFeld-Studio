@@ -182,26 +182,20 @@ namespace lfs::rendering {
 
         LOG_TIMER_TRACE("RenderCoordinateAxes::render");
 
-        const GLboolean depth_test_enabled = glIsEnabled(GL_DEPTH_TEST);
+        GLStateGuard state_guard;
         glDisable(GL_DEPTH_TEST);
 
         GLLineGuard line_guard(line_width_);
         ShaderScope s(shader_);
 
         const glm::mat4 mvp = projection * view;
-        if (auto result = s->set("u_mvp", mvp); !result) {
-            if (depth_test_enabled)
-                glEnable(GL_DEPTH_TEST);
+        if (auto result = s->set("u_mvp", mvp); !result)
             return result;
-        }
         s->set("u_view", view);
         s->set("u_equirectangular", equirectangular);
 
         VAOBinder vao_bind(vao_);
         glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(vertices_.size()));
-
-        if (depth_test_enabled)
-            glEnable(GL_DEPTH_TEST);
 
         return {};
     }

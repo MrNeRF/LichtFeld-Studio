@@ -17,7 +17,10 @@ namespace lfs::vis {
         static constexpr DirtyMask MESH_GEOMETRY_MASK =
             DirtyFlag::MESH | DirtyFlag::CAMERA | DirtyFlag::VIEWPORT;
 
-        [[nodiscard]] DirtyMask sensitivity() const override { return DirtyFlag::ALL; }
+        [[nodiscard]] DirtyMask sensitivity() const override {
+            return DirtyFlag::MESH | DirtyFlag::CAMERA | DirtyFlag::VIEWPORT |
+                   DirtyFlag::SPLATS | DirtyFlag::BACKGROUND;
+        }
         [[nodiscard]] bool shouldExecute(DirtyMask frame_dirty, const FrameContext& ctx) const override;
 
         void execute(lfs::rendering::RenderingEngine& engine,

@@ -125,8 +125,10 @@ namespace gsplat_fwd {
         }
 
         // Allocate outputs
-        cudaMalloc(&result.isect_ids, n_isects * sizeof(int64_t));
-        cudaMalloc(&result.flatten_ids, n_isects * sizeof(int32_t));
+        cudaError_t err_isect = cudaMalloc(&result.isect_ids, n_isects * sizeof(int64_t));
+        assert(err_isect == cudaSuccess && "isect_ids alloc failed");
+        cudaError_t err_flatten = cudaMalloc(&result.flatten_ids, n_isects * sizeof(int32_t));
+        assert(err_flatten == cudaSuccess && "flatten_ids alloc failed");
 
         // Second pass: compute isect_ids and flatten_ids
         launch_intersect_tile_kernel(

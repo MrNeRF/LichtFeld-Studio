@@ -5,6 +5,7 @@
 #include "screen_renderer.hpp"
 #include "core/logger.hpp"
 #include "core/tensor.hpp"
+#include "gl_state_guard.hpp"
 
 #ifdef CUDA_GL_INTEROP_ENABLED
 #include "cuda_gl_interop.hpp"
@@ -97,24 +98,22 @@ namespace lfs::rendering {
     Result<void> ScreenQuadRenderer::render(ManagedShader& shader) const {
         LOG_TIMER_TRACE("ScreenQuadRenderer::render");
 
+        GLStateGuard state_guard;
         ShaderScope s(shader);
 
         VAOBinder vao_bind(quadVAO_);
 
-        // Bind color texture
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, getTextureID());
         if (auto result = shader.set("screenTexture", 0); !result) {
             return result;
         }
 
-        // Set texture coordinate scale for over-allocated textures
         glm::vec2 texcoord_scale = getTexcoordScale();
         if (auto result = shader.set("texcoord_scale", texcoord_scale); !result) {
             LOG_TRACE("Uniform 'texcoord_scale' not found in shader: {}", result.error());
         }
 
-        // Bind depth texture and set depth parameters
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, getDepthTextureID());
 
@@ -142,26 +141,13 @@ namespace lfs::rendering {
             LOG_TRACE("Uniform 'depth_is_ndc' not set: {}", result.error());
         }
 
-        // Enable depth writing when we have depth data
-        GLboolean prev_depth_mask;
-        GLboolean prev_depth_test;
-        glGetBooleanv(GL_DEPTH_WRITEMASK, &prev_depth_mask);
-        prev_depth_test = glIsEnabled(GL_DEPTH_TEST);
-
         if (depth_params_.has_depth) {
             glEnable(GL_DEPTH_TEST);
             glDepthMask(GL_TRUE);
-            glDepthFunc(GL_ALWAYS); // Always write depth from CUDA render
+            glDepthFunc(GL_ALWAYS);
         }
 
         glDrawArrays(GL_TRIANGLES, 0, 6);
-
-        // Restore depth state
-        glDepthMask(prev_depth_mask);
-        if (!prev_depth_test) {
-            glDisable(GL_DEPTH_TEST);
-        }
-        glDepthFunc(GL_LESS);
 
         return {};
     }

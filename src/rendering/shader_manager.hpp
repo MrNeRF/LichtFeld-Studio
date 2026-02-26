@@ -148,42 +148,4 @@ namespace lfs::rendering {
         bool create_buffer = false,
         std::source_location loc = std::source_location::current());
 
-    // Helper function to log shader compilation info
-    inline void logShaderInfo(GLuint shader, const std::string& type) {
-        GLint compile_status;
-        glGetShaderiv(shader, GL_COMPILE_STATUS, &compile_status);
-
-        GLint info_log_length;
-        glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &info_log_length);
-
-        GLint shader_source_length;
-        glGetShaderiv(shader, GL_SHADER_SOURCE_LENGTH, &shader_source_length);
-
-        LOG_DEBUG("{} shader {} info: compile_status={}, log_length={}, source_length={}",
-                  type, shader, compile_status, info_log_length, shader_source_length);
-    }
-
-    // Helper function to log program linking info
-    inline void logProgramInfo(GLuint program) {
-        GLint link_status;
-        glGetProgramiv(program, GL_LINK_STATUS, &link_status);
-
-        GLint info_log_length;
-        glGetProgramiv(program, GL_INFO_LOG_LENGTH, &info_log_length);
-
-        GLint attached_shaders;
-        glGetProgramiv(program, GL_ATTACHED_SHADERS, &attached_shaders);
-
-        GLint active_attributes;
-        glGetProgramiv(program, GL_ACTIVE_ATTRIBUTES, &active_attributes);
-
-        GLint active_uniforms;
-        glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &active_uniforms);
-
-        LOG_DEBUG("Program {} info: link_status={}, log_length={}, attached_shaders={}, "
-                  "active_attributes={}, active_uniforms={}",
-                  program, link_status, info_log_length, attached_shaders,
-                  active_attributes, active_uniforms);
-    }
-
 } // namespace lfs::rendering

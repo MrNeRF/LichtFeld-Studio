@@ -28,13 +28,7 @@ namespace lfs::vis {
         const bool mesh_dirty = (ctx.frame_dirty & MESH_GEOMETRY_MASK) != 0;
 
         if (mesh_dirty) {
-            const lfs::rendering::ViewportData mesh_viewport{
-                .rotation = ctx.viewport.getRotationMatrix(),
-                .translation = ctx.viewport.getTranslation(),
-                .size = ctx.render_size,
-                .focal_length_mm = ctx.settings.focal_length_mm,
-                .orthographic = ctx.settings.orthographic,
-                .ortho_scale = ctx.settings.ortho_scale};
+            const auto mesh_viewport = ctx.makeViewportData();
 
             const float flash_intensity = ctx.selection_flash_intensity;
             const bool any_selected = std::any_of(

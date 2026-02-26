@@ -180,7 +180,7 @@ namespace lfs::rendering {
             .show_rings = request.show_rings,
             .ring_width = request.ring_width,
             .show_center_markers = request.show_center_markers,
-            .model_transforms = request.model_transforms,
+            .model_transforms = request.model_transforms ? *request.model_transforms : std::vector<glm::mat4>{},
             .transform_indices = request.transform_indices,
             .selection_mask = request.selection_mask,
             .output_screen_positions = request.output_screen_positions,
@@ -349,7 +349,7 @@ namespace lfs::rendering {
             .show_rings = false,
             .ring_width = 0.0f,
             .show_center_markers = false,
-            .model_transforms = request.model_transforms,
+            .model_transforms = request.model_transforms ? *request.model_transforms : std::vector<glm::mat4>{},
             .transform_indices = nullptr,
             .selection_mask = nullptr,
             .output_screen_positions = false,
@@ -618,38 +618,6 @@ namespace lfs::rendering {
         }
     }
 
-    Result<void> RenderingEngineImpl::renderTranslationGizmo(
-        [[maybe_unused]] const glm::vec3& position,
-        [[maybe_unused]] const ViewportData& viewport,
-        [[maybe_unused]] float scale) {
-        return {};
-    }
-
-    std::shared_ptr<GizmoInteraction> RenderingEngineImpl::getGizmoInteraction() {
-        return nullptr;
-    }
-
-    Result<void> RenderingEngineImpl::renderCameraFrustums(
-        const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
-        const ViewportData& viewport,
-        float scale,
-        const glm::vec3& train_color,
-        const glm::vec3& eval_color,
-        const glm::mat4& scene_transform,
-        bool equirectangular_view,
-        const std::unordered_set<int>& disabled_uids,
-        const std::unordered_set<int>& selected_uids) {
-
-        if (!camera_frustum_renderer_.isInitialized()) {
-            return {};
-        }
-
-        auto view = createViewMatrix(viewport);
-        auto proj = createProjectionMatrix(viewport);
-
-        return camera_frustum_renderer_.render(cameras, view, proj, scale, train_color, eval_color, scene_transform, equirectangular_view, disabled_uids, selected_uids);
-    }
-
     Result<void> RenderingEngineImpl::renderCameraFrustumsWithHighlight(
         const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
         const ViewportData& viewport,
@@ -698,47 +666,6 @@ namespace lfs::rendering {
         camera_frustum_renderer_.clearThumbnailCache();
     }
 
-    RenderingPipelineResult RenderingEngineImpl::renderWithPipeline(
-        const lfs::core::SplatData& model,
-        const RenderingPipelineRequest& request) {
-
-        LOG_TRACE("Rendering with pipeline");
-
-        RenderingPipeline::RenderRequest internal_request{
-            .view_rotation = request.view_rotation,
-            .view_translation = request.view_translation,
-            .viewport_size = request.viewport_size,
-            .focal_length_mm = request.focal_length_mm,
-            .scaling_modifier = request.scaling_modifier,
-            .antialiasing = request.antialiasing,
-            .render_mode = request.render_mode,
-            .crop_box = static_cast<const lfs::geometry::BoundingBox*>(request.crop_box),
-            .background_color = request.background_color,
-            .point_cloud_mode = request.point_cloud_mode,
-            .voxel_size = request.voxel_size,
-            .gut = request.gut,
-            .equirectangular = request.equirectangular,
-            .show_rings = request.show_rings,
-            .ring_width = request.ring_width};
-
-        auto result = pipeline_.render(model, internal_request);
-
-        RenderingPipelineResult public_result;
-
-        if (!result) {
-            public_result.valid = false;
-            LOG_ERROR("Pipeline render error: {}", result.error());
-        } else {
-            public_result.valid = result->valid;
-            if (result->valid) {
-                public_result.image = result->image;
-                public_result.depth = result->depth;
-            }
-        }
-
-        return public_result;
-    }
-
     glm::mat4 RenderingEngineImpl::createViewMatrix(const ViewportData& viewport) const {
         glm::mat3 flip_yz = glm::mat3(1, 0, 0, 0, -1, 0, 0, 0, -1);
         glm::mat3 R_inv = glm::transpose(viewport.rotation);
@@ -762,36 +689,6 @@ namespace lfs::rendering {
 
     glm::mat4 RenderingEngineImpl::createProjectionMatrix(const ViewportData& viewport) const {
         return viewport.getProjectionMatrix();
-    }
-
-    Result<std::shared_ptr<IBoundingBox>> RenderingEngineImpl::createBoundingBox() {
-        if (!isInitialized()) {
-            LOG_ERROR("RenderingEngine must be initialized before creating bounding boxes");
-            return std::unexpected("RenderingEngine must be initialized before creating bounding boxes");
-        }
-
-        auto bbox = std::make_shared<RenderBoundingBox>();
-        if (auto result = bbox->init(); !result) {
-            LOG_ERROR("Failed to initialize bounding box: {}", result.error());
-            return std::unexpected(result.error());
-        }
-        LOG_DEBUG("Created bounding box renderer");
-        return bbox;
-    }
-
-    Result<std::shared_ptr<ICoordinateAxes>> RenderingEngineImpl::createCoordinateAxes() {
-        if (!isInitialized()) {
-            LOG_ERROR("RenderingEngine must be initialized before creating coordinate axes");
-            return std::unexpected("RenderingEngine must be initialized before creating coordinate axes");
-        }
-
-        auto axes = std::make_shared<RenderCoordinateAxes>();
-        if (auto result = axes->init(); !result) {
-            LOG_ERROR("Failed to initialize coordinate axes: {}", result.error());
-            return std::unexpected(result.error());
-        }
-        LOG_DEBUG("Created coordinate axes renderer");
-        return axes;
     }
 
     Result<void> RenderingEngineImpl::renderMesh(

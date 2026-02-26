@@ -97,6 +97,8 @@ namespace lfs::rendering {
     }
 
     Result<void> SplitViewRenderer::blitTextureToFramebuffer(const GLuint texture_id) {
+        GLStateGuard state_guard;
+
         glDisable(GL_DEPTH_TEST);
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -104,32 +106,21 @@ namespace lfs::rendering {
         ManagedShader* shader = texture_blit_shader_.valid() ? &texture_blit_shader_ : nullptr;
 
         if (shader) {
-            if (auto result = shader->bind(); !result) {
-                LOG_ERROR("Failed to bind texture blit shader: {}", result.error());
-                return result;
-            }
+            ShaderScope scope(*shader);
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, texture_id);
             if (auto result = shader->set("texture0", 0); !result) {
                 LOG_TRACE("Failed to set texture0: {}", result.error());
             }
-
+            VAOBinder vao_bind(quad_vao_);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
         } else {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, texture_id);
+            VAOBinder vao_bind(quad_vao_);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
         }
 
-        VAOBinder vao_bind(quad_vao_);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-
-        if (shader) {
-            if (auto result = split_shader_.unbind(); !result) {
-                LOG_TRACE("Failed to unbind shader: {}", result.error());
-            }
-        }
-
-        glDisable(GL_BLEND);
-        glEnable(GL_DEPTH_TEST);
         return {};
     }
 
@@ -427,54 +418,41 @@ namespace lfs::rendering {
         glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-        if (auto result = split_shader_.bind(); !result) {
-            LOG_ERROR("Failed to bind split shader: {}", result.error());
-            return result;
-        }
+        ShaderScope scope(split_shader_);
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, left_texture);
-        if (auto r = split_shader_.set("leftTexture", 0); !r) {
+        if (auto r = split_shader_.set("leftTexture", 0); !r)
             return r;
-        }
 
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, right_texture);
-        if (auto r = split_shader_.set("rightTexture", 1); !r) {
+        if (auto r = split_shader_.set("rightTexture", 1); !r)
             return r;
-        }
 
-        if (auto result = split_shader_.set("splitPosition", split_position); !result) {
+        if (auto result = split_shader_.set("splitPosition", split_position); !result)
             LOG_TRACE("Uniform 'splitPosition' not found in shader: {}", result.error());
-        }
 
-        if (auto result = split_shader_.set("showDivider", true); !result) {
+        if (auto result = split_shader_.set("showDivider", true); !result)
             LOG_TRACE("Uniform 'showDivider' not found in shader: {}", result.error());
-        }
 
-        if (auto result = split_shader_.set("dividerColor", divider_color); !result) {
+        if (auto result = split_shader_.set("dividerColor", divider_color); !result)
             LOG_TRACE("Uniform 'dividerColor' not found in shader: {}", result.error());
-        }
 
-        if (auto result = split_shader_.set("dividerWidth", DIVIDER_WIDTH_PX / static_cast<float>(viewport_width)); !result) {
+        if (auto result = split_shader_.set("dividerWidth", DIVIDER_WIDTH_PX / static_cast<float>(viewport_width)); !result)
             LOG_TRACE("Uniform 'dividerWidth' not found in shader: {}", result.error());
-        }
 
-        if (auto result = split_shader_.set("leftTexcoordScale", left_texcoord_scale); !result) {
+        if (auto result = split_shader_.set("leftTexcoordScale", left_texcoord_scale); !result)
             LOG_TRACE("Uniform 'leftTexcoordScale' not found in shader: {}", result.error());
-        }
 
-        if (auto result = split_shader_.set("rightTexcoordScale", right_texcoord_scale); !result) {
+        if (auto result = split_shader_.set("rightTexcoordScale", right_texcoord_scale); !result)
             LOG_TRACE("Uniform 'rightTexcoordScale' not found in shader: {}", result.error());
-        }
 
-        if (auto result = split_shader_.set("flipLeftY", flip_left_y); !result) {
+        if (auto result = split_shader_.set("flipLeftY", flip_left_y); !result)
             LOG_TRACE("Uniform 'flipLeftY' not found in shader: {}", result.error());
-        }
 
-        if (auto result = split_shader_.set("flipRightY", flip_right_y); !result) {
+        if (auto result = split_shader_.set("flipRightY", flip_right_y); !result)
             LOG_TRACE("Uniform 'flipRightY' not found in shader: {}", result.error());
-        }
 
         GLint viewport[4];
         glGetIntegerv(GL_VIEWPORT, viewport);
@@ -483,9 +461,6 @@ namespace lfs::rendering {
         VAOBinder vao_bind(quad_vao_);
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
-        if (auto result = split_shader_.unbind(); !result) {
-            LOG_TRACE("Failed to unbind shader: {}", result.error());
-        }
         glDisable(GL_BLEND);
         glEnable(GL_DEPTH_TEST);
 

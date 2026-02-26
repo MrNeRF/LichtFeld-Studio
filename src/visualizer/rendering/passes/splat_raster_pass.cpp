@@ -15,7 +15,6 @@
 #include <cassert>
 #include <cuda_runtime.h>
 #include <glad/glad.h>
-#include <shared_mutex>
 
 namespace lfs::vis {
 
@@ -179,13 +178,8 @@ namespace lfs::vis {
         glClearColor(settings.background_color.r, settings.background_color.g, settings.background_color.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        const lfs::rendering::ViewportData viewport_data{
-            .rotation = ctx.viewport.getRotationMatrix(),
-            .translation = ctx.viewport.getTranslation(),
-            .size = render_size,
-            .focal_length_mm = settings.focal_length_mm,
-            .orthographic = settings.orthographic,
-            .ortho_scale = settings.ortho_scale};
+        auto viewport_data = ctx.makeViewportData();
+        viewport_data.size = render_size;
 
         const auto& scene_state = ctx.scene_state;
 
@@ -204,7 +198,7 @@ namespace lfs::vis {
             .show_rings = settings.show_rings,
             .ring_width = settings.ring_width,
             .show_center_markers = settings.show_center_markers,
-            .model_transforms = scene_state.model_transforms,
+            .model_transforms = &scene_state.model_transforms,
             .transform_indices = scene_state.transform_indices,
             .selection_mask = scene_state.selection_mask,
             .output_screen_positions = ctx.brush.output_screen_positions,
@@ -297,12 +291,7 @@ namespace lfs::vis {
                 .transform = settings.depth_filter_transform.inv().toMat4()};
         }
 
-        std::optional<std::shared_lock<std::shared_mutex>> render_lock;
-        if (const auto* tm = ctx.scene_manager ? ctx.scene_manager->getTrainerManager() : nullptr) {
-            if (const auto* trainer = tm->getTrainer()) {
-                render_lock.emplace(trainer->getRenderMutex());
-            }
-        }
+        auto render_lock = acquireRenderLock(ctx);
 
         auto render_result = engine.renderGaussians(*ctx.model, request);
 

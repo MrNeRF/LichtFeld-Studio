@@ -106,7 +106,7 @@ namespace lfs::vis {
         [[nodiscard]] bool pollDirtyState() {
             if (pivot_animation_active_.load() &&
                 std::chrono::steady_clock::now() < from_ns(pivot_animation_end_ns_.load(std::memory_order_acquire))) {
-                dirty_mask_.fetch_or(DirtyFlag::CAMERA, std::memory_order_relaxed);
+                dirty_mask_.fetch_or(DirtyFlag::CAMERA | DirtyFlag::OVERLAY, std::memory_order_relaxed);
                 return true;
             }
             pivot_animation_active_.store(false);
@@ -115,7 +115,7 @@ namespace lfs::vis {
                 const auto elapsed = std::chrono::steady_clock::now() -
                                      from_ns(selection_flash_start_ns_.load(std::memory_order_acquire));
                 if (std::chrono::duration<float>(elapsed).count() < SELECTION_FLASH_DURATION_SEC) {
-                    dirty_mask_.fetch_or(DirtyFlag::SPLATS | DirtyFlag::MESH, std::memory_order_relaxed);
+                    dirty_mask_.fetch_or(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY, std::memory_order_relaxed);
                     return true;
                 }
                 selection_flash_active_.store(false);
@@ -316,7 +316,7 @@ namespace lfs::vis {
 
         // Cached render texture for reuse in split view
         unsigned int cached_render_texture_ = 0;
-        bool render_texture_valid_ = false;
+        std::atomic<bool> render_texture_valid_{false};
 
         // Granular dirty tracking
         std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};

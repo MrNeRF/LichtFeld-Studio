@@ -129,9 +129,14 @@ namespace lfs::rendering {
 
         try {
             if (request.sh_degree != model.get_active_sh_degree()) {
-                // Temporarily set sh_degree for rendering, then immediately restore
-                int original_sh_degree = model.get_active_sh_degree();
-                const_cast<lfs::core::SplatData&>(model).set_active_sh_degree(request.sh_degree);
+                auto& mutable_sh = const_cast<lfs::core::SplatData&>(model);
+                const int original_sh_degree = model.get_active_sh_degree();
+                mutable_sh.set_active_sh_degree(request.sh_degree);
+                const struct ShDegreeGuard {
+                    lfs::core::SplatData& m;
+                    int original;
+                    ~ShDegreeGuard() { m.set_active_sh_degree(original); }
+                } sh_guard{mutable_sh, original_sh_degree};
 
                 RenderResult result;
 
@@ -182,13 +187,9 @@ namespace lfs::rendering {
                     }
                 }
 
-                // IMMEDIATELY restore original sh_degree
-                const_cast<lfs::core::SplatData&>(model).set_active_sh_degree(original_sh_degree);
-
                 result.valid = true;
                 result.orthographic = request.orthographic;
                 result.far_plane = request.far_plane;
-                LOG_TRACE("Rasterization completed successfully (sh_degree restored to {})", original_sh_degree);
                 return result;
             }
 

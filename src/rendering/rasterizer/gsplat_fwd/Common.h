@@ -5,6 +5,7 @@
 #pragma once
 
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <cstdio>
 
@@ -67,14 +68,15 @@ namespace gsplat_fwd {
 
 // CUB wrapper that handles temporary storage allocation
 // Uses cudaMalloc instead of PyTorch caching allocator
-#define CUB_WRAPPER_LFS(func, ...)                           \
-    do {                                                     \
-        size_t temp_storage_bytes = 0;                       \
-        func(nullptr, temp_storage_bytes, __VA_ARGS__);      \
-        void* temp_storage = nullptr;                        \
-        cudaMalloc(&temp_storage, temp_storage_bytes);       \
-        func(temp_storage, temp_storage_bytes, __VA_ARGS__); \
-        cudaFree(temp_storage);                              \
+#define CUB_WRAPPER_LFS(func, ...)                                            \
+    do {                                                                      \
+        size_t temp_storage_bytes = 0;                                        \
+        func(nullptr, temp_storage_bytes, __VA_ARGS__);                       \
+        void* temp_storage = nullptr;                                         \
+        cudaError_t _cub_err = cudaMalloc(&temp_storage, temp_storage_bytes); \
+        assert(_cub_err == cudaSuccess && "CUB temp alloc failed");           \
+        func(temp_storage, temp_storage_bytes, __VA_ARGS__);                  \
+        cudaFree(temp_storage);                                               \
     } while (false)
 
     //

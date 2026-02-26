@@ -122,15 +122,7 @@ namespace lfs::rendering {
         if (!initialized_ || !shader_.valid() || !vao_)
             return std::unexpected("Ellipsoid renderer not initialized");
 
-        GLboolean depth_test_enabled = glIsEnabled(GL_DEPTH_TEST);
-        GLboolean depth_mask;
-        glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_mask);
-        GLboolean blend_enabled = glIsEnabled(GL_BLEND);
-        GLint blend_src, blend_dst;
-        if (blend_enabled) {
-            glGetIntegerv(GL_BLEND_SRC_RGB, &blend_src);
-            glGetIntegerv(GL_BLEND_DST_RGB, &blend_dst);
-        }
+        GLStateGuard state_guard;
 
         glEnable(GL_DEPTH_TEST);
         glDepthMask(GL_FALSE);
@@ -138,7 +130,6 @@ namespace lfs::rendering {
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
         GLLineGuard line_guard(line_width_);
-
         ShaderScope s(shader_);
 
         const glm::mat4 scale_matrix = glm::scale(glm::mat4(1.0f), radii_);
@@ -162,14 +153,6 @@ namespace lfs::rendering {
 
         VAOBinder vao_bind(vao_);
         glDrawElements(GL_LINES, static_cast<GLsizei>(indices_.size()), GL_UNSIGNED_INT, nullptr);
-
-        glDepthMask(depth_mask);
-        if (!depth_test_enabled)
-            glDisable(GL_DEPTH_TEST);
-        if (!blend_enabled)
-            glDisable(GL_BLEND);
-        else
-            glBlendFunc(blend_src, blend_dst);
 
         return {};
     }

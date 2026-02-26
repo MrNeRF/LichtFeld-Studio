@@ -45,83 +45,6 @@ namespace lfs::rendering {
         }                                                                         \
     } while (0)
 
-    template <typename E>
-    inline GLenum is_type_integral() {
-        return GL_FALSE;
-    }
-
-    template <>
-    inline GLenum is_type_integral<GLbyte>() {
-        return GL_TRUE;
-    }
-
-    template <>
-    inline GLenum is_type_integral<GLshort>() {
-        return GL_TRUE;
-    }
-
-    template <>
-    inline GLenum is_type_integral<GLint>() {
-        return GL_TRUE;
-    }
-
-    template <>
-    inline GLenum is_type_integral<GLubyte>() {
-        return GL_TRUE;
-    }
-
-    template <>
-    inline GLenum is_type_integral<GLushort>() {
-        return GL_TRUE;
-    }
-
-    template <>
-    inline GLenum is_type_integral<GLuint>() {
-        return GL_TRUE;
-    }
-
-    template <typename E>
-    inline GLenum get_type_enum() {
-        LOG_ERROR("Error getting type enum: unsupported type at {}:{}", __FILE__, __LINE__);
-        throw std::runtime_error(std::format("Error getting type enum: unsupported type at {}:{}",
-                                             __FILE__, __LINE__));
-    }
-
-    template <>
-    inline GLenum get_type_enum<GLbyte>() {
-        return GL_BYTE;
-    }
-
-    template <>
-    inline GLenum get_type_enum<GLshort>() {
-        return GL_SHORT;
-    }
-
-    template <>
-    inline GLenum get_type_enum<GLint>() {
-        return GL_INT;
-    }
-
-    template <>
-    inline GLenum get_type_enum<GLubyte>() {
-        return GL_UNSIGNED_BYTE;
-    }
-
-    template <>
-    inline GLenum get_type_enum<GLushort>() {
-        return GL_UNSIGNED_SHORT;
-    }
-
-    template <>
-    inline GLenum get_type_enum<GLuint>() {
-        return GL_UNSIGNED_INT;
-    }
-
-    template <>
-    inline GLenum get_type_enum<GLfloat>() {
-        return GL_FLOAT;
-    }
-
     class Shader {
     public:
         Shader(const char* vshader_path, const char* fshader_path, bool create_buffer = true)
@@ -314,11 +237,6 @@ namespace lfs::rendering {
             LOG_TRACE("Destroying shader program {} (vertex: {}, fragment: {})",
                       program, vshader_path_, fshader_path_);
 
-            for (auto [attrib, buffer] : attribute_buffers) {
-                glDeleteBuffers(1, &buffer);
-                LOG_TRACE("Deleted attribute buffer {} for attribute {}", buffer, attrib);
-            }
-
             if (vertex_array != 0) {
                 glDeleteVertexArrays(1, &vertex_array);
                 LOG_TRACE("Deleted vertex array {}", vertex_array);
@@ -435,76 +353,6 @@ namespace lfs::rendering {
             LOG_TRACE("Set uniform '{}' to texture unit 0", name);
         }
 
-        template <typename E, int N>
-        void set_attribute(const std::string& name,
-                           const std::vector<glm::vec<N, E, glm::defaultp>>& data) {
-            LOG_TIMER_TRACE("Shader::set_attribute");
-
-            if (data.empty()) {
-                LOG_WARN("Attempting to set attribute '{}' with empty data", name);
-                return;
-            }
-
-            GLint attrib = attribute(name);
-            if (attribute_buffers.count(attrib) == 0) {
-                GLuint buffer;
-                glGenBuffers(1, &buffer);
-                CHECK_GL_ERROR(std::format("glGenBuffers for attribute '{}'", name));
-
-                attribute_buffers[attrib] = buffer;
-                LOG_TRACE("Created attribute buffer {} for '{}'", buffer, name);
-            }
-
-            GLuint buffer = attribute_buffers.at(attrib);
-            glBindBuffer(GL_ARRAY_BUFFER, buffer);
-            CHECK_GL_ERROR(std::format("glBindBuffer for attribute '{}'", name));
-
-            size_t data_size = sizeof(E) * N * data.size();
-            glBufferData(GL_ARRAY_BUFFER, data_size, data.data(), GL_DYNAMIC_DRAW);
-            CHECK_GL_ERROR(std::format("glBufferData ({} bytes) for attribute '{}'", data_size, name));
-
-            glEnableVertexAttribArray(attrib);
-            CHECK_GL_ERROR(std::format("glEnableVertexAttribArray for attribute '{}'", name));
-
-            GLenum type_enum = get_type_enum<E>();
-            glVertexAttribPointer(attrib, N, type_enum, is_type_integral<E>(), 0, nullptr);
-            CHECK_GL_ERROR(std::format("glVertexAttribPointer for attribute '{}'", name));
-
-            glBindBuffer(GL_ARRAY_BUFFER, 0);
-            LOG_TRACE("Set attribute '{}' (location {}) with {} elements ({} bytes)",
-                      name, attrib, data.size(), data_size);
-        }
-
-        void set_indices(const std::vector<unsigned int>& indices) {
-            LOG_TIMER_TRACE("Shader::set_indices");
-
-            if (indices.empty()) {
-                LOG_WARN("Attempting to set empty indices");
-                return;
-            }
-
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, index_buffer);
-            CHECK_GL_ERROR("glBindBuffer (element array)");
-
-            size_t data_size = sizeof(unsigned int) * indices.size();
-            glBufferData(GL_ELEMENT_ARRAY_BUFFER, data_size, &indices[0], GL_DYNAMIC_DRAW);
-            CHECK_GL_ERROR(std::format("glBufferData ({} bytes) for indices", data_size));
-
-            LOG_TRACE("Set {} indices ({} bytes)", indices.size(), data_size);
-        }
-
-        void draw(GLenum mode, GLuint start, GLuint count) {
-            glDrawArrays(mode, start, count);
-            CHECK_GL_ERROR(std::format("glDrawArrays(mode={}, start={}, count={})", mode, start, count));
-            LOG_TRACE("Drew {} vertices starting at {} with mode {}", count, start, mode);
-        }
-
-        void draw_indexed(GLenum mode, GLuint start, GLuint count) {
-            glDrawElements(mode, count, GL_UNSIGNED_INT, (const void*)(start * sizeof(GLuint)));
-            CHECK_GL_ERROR(std::format("glDrawElements(mode={}, count={}, start={})", mode, count, start));
-            LOG_TRACE("Drew {} indexed elements starting at {} with mode {}", count, start, mode);
-        }
-
     private:
         std::string readShaderSourceFromFile(const std::string& filePath) {
             LOG_TIMER_TRACE("Shader::readShaderSourceFromFile");
@@ -567,25 +415,6 @@ namespace lfs::rendering {
             return uniforms.at(name);
         }
 
-        GLint attribute(const std::string& name) {
-            if (attributes.count(name) == 0) {
-                GLint location = glGetAttribLocation(program, name.c_str());
-                if (location == -1) {
-                    LOG_ERROR("Cannot find attribute '{}' in shader program {} (vertex: {}, fragment: {})",
-                              name, program, vshader_path_, fshader_path_);
-
-                    // Log all available attributes
-                    logAvailableAttributes();
-
-                    throw std::runtime_error(std::format("Error getting attribute location for '{}' in program {}",
-                                                         name, program));
-                }
-                attributes[name] = location;
-                LOG_TRACE("Found attribute '{}' at location {} in program {}", name, location, program);
-            }
-            return attributes.at(name);
-        }
-
         void logProgramInfo() {
             GLint num_uniforms = 0;
             glGetProgramiv(program, GL_ACTIVE_UNIFORMS, &num_uniforms);
@@ -613,22 +442,6 @@ namespace lfs::rendering {
             }
         }
 
-        void logAvailableAttributes() {
-            GLint count;
-            glGetProgramiv(program, GL_ACTIVE_ATTRIBUTES, &count);
-            LOG_DEBUG("Available attributes in program {}:", program);
-
-            for (GLint i = 0; i < count; i++) {
-                GLsizei length;
-                GLint size;
-                GLenum type;
-                GLchar name[256];
-                glGetActiveAttrib(program, i, sizeof(name), &length, &size, &type, name);
-                GLint location = glGetAttribLocation(program, name);
-                LOG_DEBUG("  - '{}' (location: {}, type: 0x{:x}, size: {})", name, location, type, size);
-            }
-        }
-
         GLuint program;
         GLuint vshader;
         GLuint fshader;
@@ -637,8 +450,6 @@ namespace lfs::rendering {
         std::string fshader_path_;
         std::string gshader_path_;
         std::map<std::string, GLint> uniforms;
-        std::map<std::string, GLint> attributes;
-        std::map<GLint, GLuint> attribute_buffers;
         GLuint index_buffer = 0;
         GLuint vertex_array = 0;
     };

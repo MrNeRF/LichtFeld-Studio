@@ -11,6 +11,7 @@
 #include <chrono>
 #include <optional>
 #include <rendering/rendering.hpp>
+#include <shared_mutex>
 
 namespace lfs::core {
     class Tensor;
@@ -19,7 +20,6 @@ namespace lfs::core {
 
 namespace lfs::vis {
 
-    class RenderingManager;
     class SceneManager;
 
     struct BrushState {
@@ -69,8 +69,30 @@ namespace lfs::vis {
         int hovered_gaussian_id = -1;
         float selection_flash_intensity = 0;
         unsigned int cached_render_texture = 0;
+
+        [[nodiscard]] lfs::rendering::ViewportData makeViewportData() const {
+            return {.rotation = viewport.getRotationMatrix(),
+                    .translation = viewport.getTranslation(),
+                    .size = render_size,
+                    .focal_length_mm = settings.focal_length_mm,
+                    .orthographic = settings.orthographic,
+                    .ortho_scale = settings.ortho_scale};
+        }
     };
 
+    // Pass execution order (defined in RenderingManager constructor):
+    //   [pre] SplatRasterPass — GT comparison pre-render (before loop, at GT dimensions)
+    //   [0]   SplitViewPass   — Side-by-side views (blocks all downstream if active)
+    //   [1]   SplatRasterPass — Render splats to offscreen FBO
+    //   [2]   PointCloudPass  — Pre-training point cloud (mutually exclusive with splats)
+    //   [3]   PresentPass     — Blit cached splat image to screen
+    //   [4]   MeshPass        — Render meshes, composite with splats
+    //   [5]   OverlayPass     — Grid, crop boxes, frustums, pivot, axes
+    //
+    // Inter-pass coordination flags:
+    //   split_view_executed — Set by SplitViewPass. Skips SplatRaster/PointCloud/Present/Mesh.
+    //   splats_presented    — Set by PresentPass/PointCloudPass. Tells MeshPass to composite.
+    //   splat_pre_rendered  — Set by GT pre-render. Skips SplatRasterPass in the loop.
     struct FrameResources {
         lfs::rendering::RenderResult cached_result;
         glm::ivec2 cached_result_size{0};
@@ -85,8 +107,11 @@ namespace lfs::vis {
         bool pick_consumed = false;
         SplitViewInfo split_info;
 
-        RenderingManager* manager = nullptr;
+        DirtyMask additional_dirty = 0;
+        std::optional<std::chrono::steady_clock::time_point> pivot_animation_end;
     };
+
+    std::optional<std::shared_lock<std::shared_mutex>> acquireRenderLock(const FrameContext& ctx);
 
     class RenderPass {
     public:

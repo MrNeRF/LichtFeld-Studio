@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -31,6 +32,69 @@ namespace lfs::core {
      * @param p The filesystem path to convert
      * @return UTF-8 encoded string representation of the path
      */
+    namespace detail {
+        inline bool is_valid_utf8(const std::string& s) {
+            const auto* bytes = reinterpret_cast<const uint8_t*>(s.data());
+            const size_t len = s.size();
+            for (size_t i = 0; i < len;) {
+                if (bytes[i] < 0x80) {
+                    ++i;
+                } else if ((bytes[i] & 0xE0) == 0xC0) {
+                    if (i + 1 >= len || (bytes[i + 1] & 0xC0) != 0x80)
+                        return false;
+                    i += 2;
+                } else if ((bytes[i] & 0xF0) == 0xE0) {
+                    if (i + 2 >= len || (bytes[i + 1] & 0xC0) != 0x80 || (bytes[i + 2] & 0xC0) != 0x80)
+                        return false;
+                    i += 3;
+                } else if ((bytes[i] & 0xF8) == 0xF0) {
+                    if (i + 3 >= len || (bytes[i + 1] & 0xC0) != 0x80 || (bytes[i + 2] & 0xC0) != 0x80 ||
+                        (bytes[i + 3] & 0xC0) != 0x80)
+                        return false;
+                    i += 4;
+                } else {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        inline std::string sanitize_utf8(const std::string& s) {
+            std::string result;
+            result.reserve(s.size());
+            const auto* bytes = reinterpret_cast<const uint8_t*>(s.data());
+            const size_t len = s.size();
+            for (size_t i = 0; i < len;) {
+                if (bytes[i] < 0x80) {
+                    result += static_cast<char>(bytes[i]);
+                    ++i;
+                } else if ((bytes[i] & 0xE0) == 0xC0 && i + 1 < len && (bytes[i + 1] & 0xC0) == 0x80) {
+                    result += static_cast<char>(bytes[i]);
+                    result += static_cast<char>(bytes[i + 1]);
+                    i += 2;
+                } else if ((bytes[i] & 0xF0) == 0xE0 && i + 2 < len && (bytes[i + 1] & 0xC0) == 0x80 &&
+                           (bytes[i + 2] & 0xC0) == 0x80) {
+                    result += static_cast<char>(bytes[i]);
+                    result += static_cast<char>(bytes[i + 1]);
+                    result += static_cast<char>(bytes[i + 2]);
+                    i += 3;
+                } else if ((bytes[i] & 0xF8) == 0xF0 && i + 3 < len && (bytes[i + 1] & 0xC0) == 0x80 &&
+                           (bytes[i + 2] & 0xC0) == 0x80 && (bytes[i + 3] & 0xC0) == 0x80) {
+                    result += static_cast<char>(bytes[i]);
+                    result += static_cast<char>(bytes[i + 1]);
+                    result += static_cast<char>(bytes[i + 2]);
+                    result += static_cast<char>(bytes[i + 3]);
+                    i += 4;
+                } else {
+                    // U+FFFD replacement character
+                    result += "\xEF\xBF\xBD";
+                    ++i;
+                }
+            }
+            return result;
+        }
+    } // namespace detail
+
     inline std::string path_to_utf8(const std::filesystem::path& p) {
 #ifdef _WIN32
         // On Windows, convert wide string to UTF-8
@@ -56,8 +120,11 @@ namespace lfs::core {
         utf8_str.resize(converted);
         return utf8_str;
 #else
-        // On Linux/Mac, native encoding is UTF-8
-        return p.string();
+        // Linux filesystems are byte-oriented; filenames may not be valid UTF-8.
+        std::string s = p.string();
+        if (detail::is_valid_utf8(s))
+            return s;
+        return detail::sanitize_utf8(s);
 #endif
     }
 

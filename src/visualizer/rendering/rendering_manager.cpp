@@ -421,7 +421,7 @@ namespace lfs::vis {
             cached_result_ = {};
             if (point_cloud_pass_)
                 point_cloud_pass_->resetCache();
-            render_texture_valid_ = false;
+            render_texture_valid_.store(false, std::memory_order_relaxed);
             gt_texture_cache_.clear();
             if (engine_) {
                 engine_->clearFrustumCache();
@@ -499,7 +499,7 @@ namespace lfs::vis {
             DirtyFlag::SELECTION | DirtyFlag::BACKGROUND | DirtyFlag::PPISP | DirtyFlag::SPLIT_VIEW;
 
         if (flags & SPLAT_INVALIDATING)
-            render_texture_valid_ = false;
+            render_texture_valid_.store(false, std::memory_order_relaxed);
 
         LOG_TRACE("Render marked dirty (flags: 0x{:x})", flags);
     }
@@ -785,7 +785,7 @@ namespace lfs::vis {
                     }
                 }
 
-                if (gt_context_ && !render_texture_valid_) {
+                if (gt_context_ && !render_texture_valid_.load(std::memory_order_relaxed)) {
                     dirty_mask_.fetch_or(DirtyFlag::SPLATS, std::memory_order_relaxed);
                 }
             }
@@ -895,13 +895,11 @@ namespace lfs::vis {
         FrameResources resources{
             .cached_result = cached_result_,
             .cached_result_size = cached_result_size_,
-            .render_texture_valid = render_texture_valid_,
+            .render_texture_valid = render_texture_valid_.load(std::memory_order_relaxed),
             .gt_context = gt_context_,
             .hovered_gaussian_id = hovered_gaussian_id_,
-            .hovered_camera_id = hovered_camera_id_,
-            .manager = this};
+            .hovered_camera_id = hovered_camera_id_};
 
-        // Pre-render splats at GT dimensions; pass loop skips via splat_pre_rendered guard
         if (frame_ctx.settings.split_view_mode == SplitViewMode::GTComparison &&
             resources.gt_context && resources.gt_context->valid() &&
             (!resources.render_texture_valid || (frame_dirty & splat_raster_pass_->sensitivity()))) {
@@ -916,10 +914,16 @@ namespace lfs::vis {
             }
         }
 
+        // Apply pass-produced side effects
+        if (resources.additional_dirty)
+            markDirty(resources.additional_dirty);
+        if (resources.pivot_animation_end)
+            setPivotAnimationEndTime(*resources.pivot_animation_end);
+
         // Write-back from FrameResources to manager state
         cached_result_ = resources.cached_result;
         cached_result_size_ = resources.cached_result_size;
-        render_texture_valid_ = resources.render_texture_valid;
+        render_texture_valid_.store(resources.render_texture_valid, std::memory_order_relaxed);
         hovered_gaussian_id_ = resources.hovered_gaussian_id;
         hovered_camera_id_ = resources.hovered_camera_id;
         if (resources.pick_consumed)
