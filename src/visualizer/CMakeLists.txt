@@ -203,12 +203,14 @@ if(NOT WIN32)
     file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/lfs_rmlui_stub.cpp" "")
     add_library(lfs_rmlui SHARED "${CMAKE_CURRENT_BINARY_DIR}/lfs_rmlui_stub.cpp")
 
+    find_package(lunasvg CONFIG REQUIRED)
     target_link_libraries(lfs_rmlui PRIVATE
         -Wl,--whole-archive
         $<TARGET_FILE:RmlUi::Core>
         $<TARGET_FILE:RmlUi::Debugger>
         -Wl,--no-whole-archive
         Freetype::Freetype
+        lunasvg::lunasvg
     )
 
     get_target_property(_rmlui_includes RmlUi::Core INTERFACE_INCLUDE_DIRECTORIES)

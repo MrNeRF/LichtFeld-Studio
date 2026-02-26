@@ -4,7 +4,7 @@
 </head>
 <body id="body">
     <div id="search-container">
-        <img id="search-icon" class="row-icon" src="../icon/scene/search.png" />
+        <img id="search-icon" class="row-icon" sprite="icon-search" />
         <input id="filter-input" type="text" />
     </div>
     <div id="tree-container">

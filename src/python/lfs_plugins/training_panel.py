@@ -128,6 +128,7 @@ LOCALE_KEYS = {
     "save_checkpoint": "training_panel.save_checkpoint",
     "checkpoint_saved": "training_panel.checkpoint_saved",
     "add": "common.add",
+    "remove": "common.remove",
     "bg_browse": "training_params.bg_image_browse",
     "bg_clear": "training_params.bg_image_clear",
 }
@@ -353,6 +354,7 @@ class TrainingPanel(RmlPanel):
                                  p() is not None and p().has_params() and not list(p().save_steps))
         model.bind_func("has_save_steps",
                          lambda: p() is not None and p().has_params() and bool(list(p().save_steps)))
+        model.bind_string_list("save_steps_list")
 
     def _bind_disabled(self, model, p):
         model.bind_func("struct_disabled",
@@ -519,6 +521,7 @@ class TrainingPanel(RmlPanel):
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_event("color_click", self._on_color_click)
         model.bind_event("action", self._on_action)
+        model.bind_event("remove_step", self._on_remove_step_event)
 
     def on_update(self, doc):
         if not self._handle:
@@ -567,29 +570,10 @@ class TrainingPanel(RmlPanel):
         steps = list(params.save_steps)
         if steps != self._last_save_steps:
             self._last_save_steps = steps[:]
-            self._rebuild_save_steps_dom(doc, steps)
+            self._handle.update_string_list("save_steps_list", [str(s) for s in steps])
             self._handle.dirty("no_save_steps")
             self._handle.dirty("has_save_steps")
             self._handle.dirty("save_steps_display")
-
-    def _rebuild_save_steps_dom(self, doc, steps):
-        container = doc.get_element_by_id("save-steps-list")
-        if not container:
-            return
-        container.set_inner_rml("")
-        for i, step in enumerate(steps):
-            row = container.append_child("div")
-            row.set_class_names("setting-row")
-            inp = row.append_child("input")
-            inp.set_id(f"step-{i}")
-            inp.set_attribute("type", "text")
-            inp.set_class_names("number-input")
-            inp.set_attribute("value", str(step))
-            inp.add_event_listener("change", lambda e, idx=i: self._on_step_edit(idx, e))
-            btn = row.append_child("button")
-            btn.set_class_names("btn btn--secondary")
-            btn.set_inner_rml(tr("common.remove"))
-            btn.add_event_listener("click", lambda e, idx=i: self._on_step_remove(idx))
 
     def _update_color_swatch(self, doc):
         params = lf.optimization_params()
@@ -896,24 +880,14 @@ class TrainingPanel(RmlPanel):
         else:
             lf.start_training()
 
-    def _on_step_edit(self, idx, event):
-        target = event.target()
-        if not target:
+    def _on_remove_step_event(self, handle, event, args):
+        if not args:
             return
         try:
-            new_val = int(target.get_attribute("value") or "0")
+            idx = int(args[0])
         except (ValueError, TypeError):
             return
-        if new_val <= 0:
-            return
-        params = lf.optimization_params()
-        if not params or not params.has_params():
-            return
-        steps = list(params.save_steps)
-        if 0 <= idx < len(steps) and new_val != steps[idx]:
-            params.remove_save_step(steps[idx])
-            params.add_save_step(new_val)
-            self._last_save_steps = []
+        self._on_step_remove(idx)
 
     def _on_step_remove(self, idx):
         params = lf.optimization_params()

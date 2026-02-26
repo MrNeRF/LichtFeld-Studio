@@ -6,9 +6,6 @@ import lichtfeld as lf
 
 from .types import RmlPanel
 
-ICON_PATH = "../icon/scene"
-
-
 def _tr(key):
     result = lf.ui.tr(key)
     return result if result else key
@@ -165,7 +162,7 @@ class SelectionGroupsPanel(RmlPanel):
             parts.append(
                 f'<div class="group-row{active_cls}" data-gid="{gid}">'
                 f'  <div class="icon-btn lock-btn" data-action="lock" data-gid="{gid}">'
-                f'    <img src="{ICON_PATH}/{icon_name}.png" />'
+                f'    <img sprite="icon-{icon_name}" />'
                 f'  </div>'
                 f'  <div class="color-swatch" data-action="color" data-gid="{gid}"'
                 f'       style="background-color: rgb({r},{g},{b})"></div>'

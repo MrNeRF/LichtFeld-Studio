@@ -18,6 +18,8 @@ namespace lfs::python {
 
     namespace {
         std::unordered_map<Rml::ElementDocument*, std::vector<Rml::ElementPtr>> s_held_elements;
+        std::map<std::string, DataModelArrayStorage> s_model_storage;
+        bool s_string_array_type_registered = false;
     } // namespace
 
     Rml::ElementPtr extractHeldElement(Rml::ElementDocument* doc, Rml::Element* raw) {
@@ -78,10 +80,11 @@ namespace lfs::python {
         if (!ctor)
             return nb::none();
         register_builtin_transforms(ctor);
-        return nb::cast(PyDataModelConstructor(std::move(ctor)));
+        return nb::cast(PyDataModelConstructor(std::move(ctor), name));
     }
 
     bool PyRmlContext::remove_data_model(const std::string& name) {
+        s_model_storage.erase(name);
         return ctx_->RemoveDataModel(name);
     }
 
@@ -303,12 +306,13 @@ namespace lfs::python {
         if (!ctor)
             return nb::none();
         register_builtin_transforms(ctor);
-        return nb::cast(PyDataModelConstructor(std::move(ctor)));
+        return nb::cast(PyDataModelConstructor(std::move(ctor), name));
     }
 
     bool PyRmlDocument::remove_data_model(const std::string& name) {
         auto* ctx = doc_->GetContext();
         assert(ctx);
+        s_model_storage.erase(name);
         return ctx->RemoveDataModel(name);
     }
 
@@ -324,6 +328,19 @@ namespace lfs::python {
 
     bool PyDataModelHandle::is_dirty(const std::string& name) {
         return handle_.IsVariableDirty(name);
+    }
+
+    void PyDataModelHandle::update_string_list(const std::string& name, nb::list items) {
+        auto model_it = s_model_storage.find(model_name_);
+        assert(model_it != s_model_storage.end());
+        auto arr_it = model_it->second.string_arrays.find(name);
+        assert(arr_it != model_it->second.string_arrays.end());
+        auto& vec = arr_it->second;
+        vec.clear();
+        vec.reserve(nb::len(items));
+        for (auto item : items)
+            vec.push_back(nb::cast<std::string>(item));
+        handle_.DirtyVariable(name);
     }
 
     // --- PyDataModelConstructor ---
@@ -368,16 +385,17 @@ namespace lfs::python {
     void PyDataModelConstructor::bind_event(const std::string& name, nb::callable callback) {
         nb::callable cb = nb::borrow<nb::callable>(callback);
         prevent_gc_.push_back(nb::object(cb));
+        const auto model_name = model_name_;
 
         ctor_.BindEventCallback(
-            name, [cb](Rml::DataModelHandle handle, Rml::Event& event,
-                       const Rml::VariantList& args) {
+            name, [cb, model_name](Rml::DataModelHandle handle, Rml::Event& event,
+                                   const Rml::VariantList& args) {
                 nb::gil_scoped_acquire gil;
                 try {
                     nb::list py_args;
                     for (const auto& arg : args)
                         py_args.append(variant_to_python(arg));
-                    cb(PyDataModelHandle(handle), PyRmlEvent(&event), py_args);
+                    cb(PyDataModelHandle(handle, model_name), PyRmlEvent(&event), py_args);
                 } catch (const std::exception& e) {
                     LOG_ERROR("Data model event error: {}", e.what());
                 }
@@ -404,8 +422,18 @@ namespace lfs::python {
             });
     }
 
+    void PyDataModelConstructor::bind_string_list(const std::string& name) {
+        if (!s_string_array_type_registered) {
+            ctor_.RegisterArray<std::vector<Rml::String>>();
+            s_string_array_type_registered = true;
+        }
+        auto& storage = s_model_storage[model_name_];
+        storage.string_arrays[name]; // create empty vector
+        ctor_.Bind(name, &storage.string_arrays[name]);
+    }
+
     PyDataModelHandle PyDataModelConstructor::get_handle() {
-        return PyDataModelHandle(ctor_.GetModelHandle());
+        return PyDataModelHandle(ctor_.GetModelHandle(), model_name_);
     }
 
     void register_builtin_transforms(Rml::DataModelConstructor& ctor) {
@@ -560,7 +588,9 @@ namespace lfs::python {
         nb::class_<PyDataModelHandle>(rml, "DataModelHandle")
             .def("dirty", &PyDataModelHandle::dirty, nb::arg("name"))
             .def("dirty_all", &PyDataModelHandle::dirty_all)
-            .def("is_dirty", &PyDataModelHandle::is_dirty, nb::arg("name"));
+            .def("is_dirty", &PyDataModelHandle::is_dirty, nb::arg("name"))
+            .def("update_string_list", &PyDataModelHandle::update_string_list, nb::arg("name"),
+                 nb::arg("items"));
 
         nb::class_<PyDataModelConstructor>(rml, "DataModelConstructor")
             .def("bind", &PyDataModelConstructor::bind, nb::arg("name"), nb::arg("getter"),
@@ -571,6 +601,7 @@ namespace lfs::python {
                  nb::arg("callback"))
             .def("register_transform", &PyDataModelConstructor::register_transform,
                  nb::arg("name"), nb::arg("func"))
+            .def("bind_string_list", &PyDataModelConstructor::bind_string_list, nb::arg("name"))
             .def("get_handle", &PyDataModelConstructor::get_handle);
 
         rml.def("get_document", [](const std::string& name) -> nb::object {

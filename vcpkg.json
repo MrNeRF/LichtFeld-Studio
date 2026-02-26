@@ -47,6 +47,11 @@
     },
     "nanobind",
     "assimp",
-    "rmlui"
+    {
+      "name": "rmlui",
+      "features": [
+        "svg"
+      ]
+    }
   ]
 }

@@ -56,6 +56,7 @@ body {
     width: auto;
     padding: 1dp 4dp;
     cursor: pointer;
+    transition: background-color 0.1s quadratic-out;
 }
 
 .tree-row:hover {
@@ -101,6 +102,7 @@ body {
     color: #a6adc8;
     cursor: pointer;
     text-align: center;
+    transition: color 0.1s quadratic-out;
 }
 
 .expand-toggle:hover {
@@ -131,6 +133,7 @@ body {
 /* Visibility toggle */
 .row-icon.icon-vis-on {
     image-color: rgba(102, 230, 102, 255);
+    transition: image-color 0.12s quadratic-out;
 }
 
 .row-icon.icon-vis-on:hover {
@@ -139,6 +142,7 @@ body {
 
 .row-icon.icon-vis-off {
     image-color: rgba(153, 102, 102, 178);
+    transition: image-color 0.12s quadratic-out;
 }
 
 .row-icon.icon-vis-off:hover {
@@ -148,6 +152,7 @@ body {
 /* Trash icon — dim by default, highlighted when row selected */
 .row-icon.icon-trash {
     image-color: rgba(128, 128, 128, 128);
+    transition: image-color 0.12s quadratic-out;
 }
 
 .row-icon.icon-trash:hover {

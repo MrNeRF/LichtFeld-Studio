@@ -18,6 +18,7 @@ scrollbarvertical slidertrack {
 
 scrollbarvertical sliderbar {
     background-color: rgba(108, 112, 134, 160);
+    transition: background-color 0.12s quadratic-out;
 }
 
 scrollbarvertical sliderbar:hover {
@@ -34,6 +35,7 @@ scrollbarhorizontal slidertrack {
 
 scrollbarhorizontal sliderbar {
     background-color: rgba(108, 112, 134, 160);
+    transition: background-color 0.12s quadratic-out;
 }
 
 scrollbarhorizontal sliderbar:hover {
@@ -49,6 +51,7 @@ input[type="checkbox"] {
     border-color: #585b70;
     margin: 0 6dp 0 0;
     padding: 0;
+    transition: background-color border-color 0.12s quadratic-out;
 }
 
 input[type="checkbox"]:checked {
@@ -69,6 +72,7 @@ input[type="range"] sliderbar {
     width: 12dp;
     height: 12dp;
     background-color: #89b4fa;
+    transition: background-color 0.12s quadratic-out;
 }
 
 input[type="range"] sliderbar:hover {
@@ -89,6 +93,7 @@ input[type="text"] {
     border-width: 1dp;
     border-color: #45475a;
     padding: 2dp 4dp;
+    transition: border-color 0.12s quadratic-out;
 }
 
 input[type="text"]:focus {
@@ -105,6 +110,7 @@ select {
     border-color: #45475a;
     padding: 2dp 6dp;
     min-width: 80dp;
+    transition: border-color 0.12s quadratic-out;
 }
 
 select:hover {
@@ -120,6 +126,7 @@ selectbox {
 selectbox option {
     padding: 2dp 6dp;
     font-size: 13dp;
+    transition: background-color 0.1s quadratic-out;
 }
 
 selectbox option:hover {
@@ -203,6 +210,7 @@ progress fill {
     cursor: pointer;
     font-size: 13dp;
     background-color: rgba(137, 180, 250, 64);
+    transition: background-color 0.12s quadratic-out;
 }
 
 .section-header:hover {
@@ -232,6 +240,7 @@ progress fill {
     cursor: pointer;
     margin-right: 4dp;
     flex-shrink: 0;
+    transition: border-color 0.12s quadratic-out;
 }
 
 .color-comp {
@@ -257,6 +266,7 @@ progress fill {
     border-width: 1dp;
     border-color: #45475a;
     display: none;
+    transition: border-color 0.12s quadratic-out;
 }
 
 .color-hex.visible {
@@ -290,6 +300,7 @@ progress fill {
     cursor: pointer;
     color: #cdd6f4;
     font-size: 13dp;
+    transition: background-color 0.1s quadratic-out;
 }
 
 .context-menu-item:hover {
@@ -332,6 +343,7 @@ progress fill {
     border-color: #585b70;
     cursor: pointer;
     text-align: center;
+    transition: background-color border-color 0.12s quadratic-out;
 }
 
 .btn:hover {
@@ -351,6 +363,7 @@ progress fill {
     background-color: #89b4fa;
     border-color: #89b4fa;
     color: #1e1e2e;
+    transition: background-color border-color 0.12s quadratic-out;
 }
 
 .btn--primary:hover {
@@ -367,6 +380,7 @@ progress fill {
     background-color: #a6e3a1;
     border-color: #a6e3a1;
     color: #1e1e2e;
+    transition: background-color border-color 0.12s quadratic-out;
 }
 
 .btn--success:hover {
@@ -383,6 +397,7 @@ progress fill {
     background-color: #f9e2af;
     border-color: #f9e2af;
     color: #1e1e2e;
+    transition: background-color border-color 0.12s quadratic-out;
 }
 
 .btn--warning:hover {
@@ -399,6 +414,7 @@ progress fill {
     background-color: #f38ba8;
     border-color: #f38ba8;
     color: #1e1e2e;
+    transition: background-color border-color 0.12s quadratic-out;
 }
 
 .btn--error:hover {
@@ -415,6 +431,7 @@ progress fill {
     background-color: transparent;
     border-color: #585b70;
     color: #cdd6f4;
+    transition: background-color 0.12s quadratic-out;
 }
 
 .btn--secondary:hover {
@@ -433,6 +450,7 @@ progress fill {
     background-color: transparent;
     border-width: 0;
     cursor: pointer;
+    transition: background-color 0.12s quadratic-out;
 }
 
 .icon-btn:hover {

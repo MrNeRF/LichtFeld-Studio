@@ -8,9 +8,6 @@ import lichtfeld as lf
 from .types import RmlPanel
 from .ui.state import AppState
 
-# Icon images relative to the RML document (rmlui/ directory)
-ICON_PATH = "../icon/scene"
-
 NODE_TYPE_ICONS = {
     "SPLAT": "splat",
     "POINTCLOUD": "pointcloud",
@@ -89,7 +86,7 @@ def _type_icon_html(node_type):
     icon_name = NODE_TYPE_ICONS.get(node_type)
     css_cls = NODE_TYPE_CSS_CLASS.get(node_type, "")
     if icon_name:
-        return f'<img class="row-icon icon-type {css_cls}" src="{ICON_PATH}/{icon_name}.png" />'
+        return f'<img class="row-icon icon-type {css_cls}" sprite="icon-{icon_name}" />'
     unicode_char = NODE_TYPE_UNICODE.get(node_type, "?")
     return f'<span class="node-icon {css_cls}">{unicode_char}</span>'
 
@@ -345,10 +342,10 @@ class ScenePanel(RmlPanel):
             return
         if visible:
             vis.set_class_names("row-icon icon-vis-on")
-            vis.set_attribute("src", f"{ICON_PATH}/visible.png")
+            vis.set_attribute("sprite", "icon-visible")
         else:
             vis.set_class_names("row-icon icon-vis-off")
-            vis.set_attribute("src", f"{ICON_PATH}/hidden.png")
+            vis.set_attribute("sprite", "icon-hidden")
 
     def _toggle_expand(self, target_id, toggle_el):
         if not self.doc or not target_id:
@@ -503,22 +500,22 @@ class ScenePanel(RmlPanel):
         row += '<span class="row-content">'
 
         if draggable:
-            row += f'<img class="row-icon icon-grip" src="{ICON_PATH}/grip.png" />'
+            row += f'<img class="row-icon icon-grip" sprite="icon-grip" />'
 
         if node.visible:
-            row += f'<img class="row-icon icon-vis-on" src="{ICON_PATH}/visible.png" data-action="toggle-vis" data-node="{node.name}" />'
+            row += f'<img class="row-icon icon-vis-on" sprite="icon-visible" data-action="toggle-vis" data-node="{node.name}" />'
         else:
-            row += f'<img class="row-icon icon-vis-off" src="{ICON_PATH}/hidden.png" data-action="toggle-vis" data-node="{node.name}" />'
+            row += f'<img class="row-icon icon-vis-off" sprite="icon-hidden" data-action="toggle-vis" data-node="{node.name}" />'
 
         if is_camera:
             tooltip = tr("scene.training_enabled_tooltip") if node.training_enabled else tr("scene.training_disabled_tooltip")
             if node.training_enabled:
-                row += f'<img class="row-icon icon-train-on" src="{ICON_PATH}/camera.png" data-action="toggle-train" data-node="{node.name}" title="{tooltip}" />'
+                row += f'<img class="row-icon icon-train-on" sprite="icon-camera" data-action="toggle-train" data-node="{node.name}" title="{tooltip}" />'
             else:
                 row += f'<span class="action-icon train-off" data-action="toggle-train" data-node="{node.name}" title="{tooltip}">\u25cb</span>'
 
         if deletable:
-            row += f'<img class="row-icon icon-trash" src="{ICON_PATH}/trash.png" data-action="delete-node" data-node="{node.name}" />'
+            row += f'<img class="row-icon icon-trash" sprite="icon-trash" data-action="delete-node" data-node="{node.name}" />'
 
         row += _type_icon_html(node_type)
 

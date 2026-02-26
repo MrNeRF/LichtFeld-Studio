@@ -15,6 +15,7 @@
 #include <RmlUi/Core/EventListener.h>
 
 #include <cassert>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -142,30 +143,42 @@ namespace lfs::python {
         Rml::ElementDocument* doc_;
     };
 
+    struct DataModelArrayStorage {
+        std::map<std::string, std::vector<Rml::String>> string_arrays;
+    };
+
     class PyDataModelHandle {
     public:
-        explicit PyDataModelHandle(Rml::DataModelHandle handle) : handle_(handle) {}
+        PyDataModelHandle(Rml::DataModelHandle handle, std::string model_name)
+            : handle_(handle),
+              model_name_(std::move(model_name)) {}
 
         void dirty(const std::string& name);
         void dirty_all();
         bool is_dirty(const std::string& name);
+        void update_string_list(const std::string& name, nb::list items);
 
     private:
         Rml::DataModelHandle handle_;
+        std::string model_name_;
     };
 
     class PyDataModelConstructor {
     public:
-        explicit PyDataModelConstructor(Rml::DataModelConstructor ctor) : ctor_(std::move(ctor)) {}
+        PyDataModelConstructor(Rml::DataModelConstructor ctor, std::string model_name)
+            : ctor_(std::move(ctor)),
+              model_name_(std::move(model_name)) {}
 
         void bind(const std::string& name, nb::callable getter, nb::object setter);
         void bind_func(const std::string& name, nb::callable getter);
         void bind_event(const std::string& name, nb::callable callback);
         void register_transform(const std::string& name, nb::callable func);
+        void bind_string_list(const std::string& name);
         PyDataModelHandle get_handle();
 
     private:
         Rml::DataModelConstructor ctor_;
+        std::string model_name_;
         std::vector<nb::object> prevent_gc_;
     };
 

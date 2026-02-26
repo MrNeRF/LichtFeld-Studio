@@ -484,7 +484,12 @@
           <button class="btn btn--secondary" data-event-click="action('add_step')">{{label_add}}</button>
         </div>
         <div class="separator"></div>
-        <div id="save-steps-list"></div>
+        <div data-for="step : save_steps_list">
+          <div class="setting-row">
+            <span class="number-input">{{step}}</span>
+            <button class="btn btn--secondary" data-event-click="remove_step(it_index)">{{label_remove}}</button>
+          </div>
+        </div>
         <span class="status-text status-muted" data-if="no_save_steps">{{label_no_save_steps}}</span>
       </div>
       <div data-if="save_readonly_mode">

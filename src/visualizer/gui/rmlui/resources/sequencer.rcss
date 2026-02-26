@@ -31,6 +31,7 @@ body {
     margin-right: 4dp;
     border-radius: 10dp;
     vertical-align: middle;
+    transition: background-color 0.12s quadratic-out;
 }
 
 .transport-btn:hover {
