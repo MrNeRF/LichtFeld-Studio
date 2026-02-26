@@ -54,11 +54,11 @@ def register_builtin_panels():
         lf.ui.set_panel_enabled("lfs.export", False)
 
         from .about_panel import AboutPanel
-        lf.register_class(AboutPanel)
+        lf.ui.register_rml_panel(AboutPanel)
         lf.ui.set_panel_enabled("lfs.about", False)
 
         from .getting_started_panel import GettingStartedPanel
-        lf.register_class(GettingStartedPanel)
+        lf.ui.register_rml_panel(GettingStartedPanel)
         lf.ui.set_panel_enabled("lfs.getting_started", False)
 
         from .image_preview_panel import ImagePreviewPanel

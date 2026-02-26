@@ -27,6 +27,7 @@ namespace lfs::vis::gui {
         float getDirectDrawHeight() const override;
         bool hasImguiOverlay() const override;
         void drawImguiOverlay(const PanelDrawContext& ctx) override;
+        void setForeground(bool fg);
 
     private:
         void* host_ = nullptr;
@@ -40,6 +41,7 @@ namespace lfs::vis::gui {
         bool has_draw_imgui_ = false;
         bool draw_imgui_checked_ = false;
         int height_mode_ = 0;
+        bool foreground_ = false;
         uint64_t last_scene_gen_ = 0;
     };
 

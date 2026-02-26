@@ -25,6 +25,7 @@
 #include "rendering/rendering_pipeline.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene/scene_render_state.hpp"
+#include "theme/theme.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller.hpp"
 #include "training/trainer.hpp"
@@ -715,8 +716,8 @@ namespace lfs::vis {
         // SAFETY CHECK: Don't render with invalid viewport dimensions
         if (current_size.x <= 0 || current_size.y <= 0) {
             LOG_TRACE("Skipping render - invalid viewport size: {}x{}", current_size.x, current_size.y);
-            // Still clear to prevent trails
-            glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+            const auto& shell_bg = theme().menu_background();
+            glClearColor(shell_bg.x, shell_bg.y, shell_bg.z, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             return;
         }
@@ -803,7 +804,8 @@ namespace lfs::vis {
 
         glViewport(0, 0, context.viewport.frameBufferSize.x, context.viewport.frameBufferSize.y);
 
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        const auto& shell_bg = theme().menu_background();
+        glClearColor(shell_bg.x, shell_bg.y, shell_bg.z, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
         if (context.viewport_region) {

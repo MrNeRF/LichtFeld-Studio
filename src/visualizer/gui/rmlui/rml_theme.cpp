@@ -113,7 +113,30 @@ namespace lfs::vis::gui::rml_theme {
                 ? std::string{}
                 : std::format("input[type=\"checkbox\"]:checked {{ decorator: image({}); }}\n", check_path);
 
-        return check_decorator +
+        const auto error_col = colorToRml(p.error);
+
+        return std::format(
+                   "#window-frame {{ background-color: {0}; border-color: {1}; }}\n"
+                   "#title-bar {{ background-color: {2}; }}\n"
+                   "#title-text {{ color: {3}; }}\n"
+                   "#close-btn {{ color: {4}; }}\n"
+                   "#close-btn:hover {{ color: {5}; }}\n"
+                   ".panel-title {{ color: {6}; }}\n"
+                   ".description {{ color: {3}; }}\n"
+                   ".info-key {{ color: {4}; }}\n"
+                   ".info-val {{ color: {3}; }}\n"
+                   ".link-label {{ color: {3}; }}\n"
+                   ".link-url {{ color: {6}; }}\n"
+                   ".link-url:hover {{ text-decoration: underline; }}\n"
+                   ".footer-text {{ color: {4}; }}\n"
+                   ".footer-sep {{ color: {1}; }}\n"
+                   ".card-body {{ background-color: {0}; border-color: {1}; }}\n"
+                   ".video-card:hover .card-body {{ border-color: {6}; background-color: {2}; }}\n"
+                   ".play-icon {{ color: {6}; }}\n"
+                   ".card-title {{ color: {4}; }}\n",
+                   surface, border, surface_bright, text, text_dim,
+                   error_col, primary) +
+               check_decorator +
                std::format(
                    "input[type=\"checkbox\"] {{ border-color: {5}; }}\n"
                    "input[type=\"checkbox\"]:checked {{ background-color: {4}; border-color: {4}; }}\n"

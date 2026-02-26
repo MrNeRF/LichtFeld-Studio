@@ -194,6 +194,8 @@ namespace lfs::python {
         int order = 0;
         std::string rml_template;
         int height_mode = 0;
+        float initial_width = 0;
+        float initial_height = 0;
 
         try {
             idname = nb::hasattr(panel_class, "idname")
@@ -215,6 +217,10 @@ namespace lfs::python {
                 if (mode_str == "content")
                     height_mode = 1;
             }
+            if (nb::hasattr(panel_class, "initial_width"))
+                initial_width = nb::cast<float>(panel_class.attr("initial_width"));
+            if (nb::hasattr(panel_class, "initial_height"))
+                initial_height = nb::cast<float>(panel_class.attr("initial_height"));
         } catch (const std::exception& e) {
             LOG_ERROR("register_rml_panel: failed to extract attributes: {}", e.what());
             return;
@@ -236,13 +242,19 @@ namespace lfs::python {
         auto adapter = std::make_shared<gui::RmlPythonPanelAdapter>(
             rml_manager, std::move(instance), idname, rml_template, height_mode);
 
+        const auto gui_space = to_gui_space(space);
+        if (gui_space == gui::PanelSpace::Floating)
+            adapter->setForeground(true);
+
         gui::PanelInfo info;
         info.panel = adapter;
         info.label = label;
         info.idname = idname;
-        info.space = to_gui_space(space);
+        info.space = gui_space;
         info.order = order;
         info.is_native = false;
+        info.initial_width = initial_width;
+        info.initial_height = initial_height;
 
         gui::PanelRegistry::instance().register_panel(std::move(info));
         rml_adapters_[idname] = std::move(adapter);

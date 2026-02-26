@@ -239,7 +239,8 @@ namespace lfs::vis::gui {
             rml_context_->SetDimensions(Rml::Vector2i(w, layout_h));
             rml_context_->Update();
 
-            auto* wrap = document_->GetElementById("content-wrap");
+            auto* frame = document_->GetElementById("window-frame");
+            auto* wrap = frame ? frame : document_->GetElementById("content-wrap");
             const float content_h = wrap ? wrap->GetOffsetHeight() : 100.0f;
             h = std::max(1, static_cast<int>(std::ceil(content_h)));
             display_h = static_cast<float>(h) / dp_ratio;
@@ -309,7 +310,8 @@ namespace lfs::vis::gui {
             rml_context_->SetDimensions(Rml::Vector2i(pw, layout_h));
             rml_context_->Update();
 
-            auto* wrap = document_->GetElementById("content-wrap");
+            auto* frame = document_->GetElementById("window-frame");
+            auto* wrap = frame ? frame : document_->GetElementById("content-wrap");
             const float content_h = wrap ? wrap->GetOffsetHeight() : 100.0f;
             ph = std::max(1, static_cast<int>(std::ceil(content_h)));
             display_h = static_cast<float>(ph) / dp_ratio;
@@ -343,7 +345,9 @@ namespace lfs::vis::gui {
         fbo_.unbind(prev_fbo);
 
         auto* vp = ImGui::GetMainViewport();
-        fbo_.blitToDrawList(ImGui::GetBackgroundDrawList(vp), {x, y}, {w, display_h});
+        auto* draw_list = foreground_ ? ImGui::GetForegroundDrawList(vp)
+                                      : ImGui::GetBackgroundDrawList(vp);
+        fbo_.blitToDrawList(draw_list, {x, y}, {w, display_h});
     }
 
     void RmlPanelHost::forwardInput(float panel_x, float panel_y) {

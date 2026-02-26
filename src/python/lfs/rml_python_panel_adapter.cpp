@@ -59,6 +59,8 @@ namespace lfs::vis::gui {
 
             if (height_mode_ != 0 && ops.set_height_mode)
                 ops.set_height_mode(host_, height_mode_);
+            if (foreground_ && ops.set_foreground)
+                ops.set_foreground(host_, true);
         }
 
         if (!model_bound_ && ops.ensure_context && ops.get_context && lfs::python::can_acquire_gil()) {
@@ -151,6 +153,8 @@ namespace lfs::vis::gui {
                 return;
             if (height_mode_ != 0 && ops.set_height_mode)
                 ops.set_height_mode(host_, height_mode_);
+            if (foreground_ && ops.set_foreground)
+                ops.set_foreground(host_, true);
         }
 
         if (!model_bound_ && ops.ensure_context && ops.get_context && lfs::python::can_acquire_gil()) {
@@ -239,6 +243,15 @@ namespace lfs::vis::gui {
             panel_instance_.attr("draw_imgui")(layout);
         } catch (const std::exception& e) {
             LOG_ERROR("RmlPanel draw_imgui error: {}", e.what());
+        }
+    }
+
+    void RmlPythonPanelAdapter::setForeground(bool fg) {
+        foreground_ = fg;
+        if (host_) {
+            const auto& ops = lfs::python::get_rml_panel_host_ops();
+            if (ops.set_foreground)
+                ops.set_foreground(host_, fg);
         }
     }
 

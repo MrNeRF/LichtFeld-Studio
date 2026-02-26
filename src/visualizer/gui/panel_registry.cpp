@@ -116,7 +116,8 @@ namespace lfs::vis::gui {
                 if (p.space == space && p.enabled && !p.error_disabled && p.parent_idname.empty()) {
                     snapshots.push_back({i, p.panel.get(), p.label, p.idname,
                                          p.parent_idname, p.options, p.is_native,
-                                         p.poll_deps, p.initial_width, p.initial_height});
+                                         p.poll_deps, p.initial_width, p.initial_height,
+                                         p.float_x, p.float_y});
                 }
             }
         }
@@ -138,6 +139,57 @@ namespace lfs::vis::gui {
                 case PanelSpace::Floating: {
                     if (snap.has_option(PanelOption::SELF_MANAGED)) {
                         snap.panel->draw(ctx);
+                    } else if (snap.panel->supportsDirectDraw()) {
+                        const float w = snap.initial_width > 0 ? snap.initial_width : 560.0f;
+                        const float h = snap.panel->getDirectDrawHeight() > 0
+                                            ? snap.panel->getDirectDrawHeight()
+                                            : (snap.initial_height > 0 ? snap.initial_height : 400.0f);
+                        const auto* vp = ImGui::GetMainViewport();
+
+                        float px = snap.float_x;
+                        float py = snap.float_y;
+                        if (px < 0) {
+                            px = vp->WorkPos.x + (vp->WorkSize.x - w) * 0.5f;
+                            py = vp->WorkPos.y + (vp->WorkSize.y - h) * 0.5f;
+                        }
+
+                        ImGuiIO& io = ImGui::GetIO();
+                        const ImVec2 mouse = io.MousePos;
+                        const bool mouse_in_panel = mouse.x >= px && mouse.x < px + w &&
+                                                    mouse.y >= py && mouse.y < py + h;
+                        const bool mouse_in_titlebar = mouse.x >= px && mouse.x < px + w &&
+                                                       mouse.y >= py && mouse.y < py + 28.0f;
+
+                        {
+                            std::lock_guard lock(mutex_);
+                            if (snap.index < panels_.size() && panels_[snap.index].idname == snap.idname) {
+                                auto& pi = panels_[snap.index];
+                                if (mouse_in_titlebar && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                                    bool any_dragging = std::any_of(panels_.begin(), panels_.end(),
+                                                                    [](const PanelInfo& p) { return p.float_dragging; });
+                                    if (!any_dragging) {
+                                        pi.float_dragging = true;
+                                        pi.float_drag_ox = mouse.x - px;
+                                        pi.float_drag_oy = mouse.y - py;
+                                    }
+                                }
+                                if (pi.float_dragging) {
+                                    if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                                        px = mouse.x - pi.float_drag_ox;
+                                        py = mouse.y - pi.float_drag_oy;
+                                    } else {
+                                        pi.float_dragging = false;
+                                    }
+                                }
+                                pi.float_x = px;
+                                pi.float_y = py;
+                            }
+                        }
+
+                        if (mouse_in_panel)
+                            io.WantCaptureMouse = true;
+
+                        snap.panel->drawDirect(px, py, w, h, ctx);
                     } else {
                         if (snap.initial_width > 0 || snap.initial_height > 0)
                             ImGui::SetNextWindowSize(ImVec2(snap.initial_width, snap.initial_height), ImGuiCond_Appearing);
@@ -249,7 +301,8 @@ namespace lfs::vis::gui {
                 if (p.space == space && p.enabled && !p.error_disabled && p.parent_idname.empty()) {
                     snapshots.push_back({i, p.panel.get(), p.label, p.idname,
                                          p.parent_idname, p.options, p.is_native,
-                                         p.poll_deps, p.initial_width, p.initial_height});
+                                         p.poll_deps, p.initial_width, p.initial_height,
+                                         p.float_x, p.float_y});
                 }
             }
         }
@@ -294,7 +347,8 @@ namespace lfs::vis::gui {
                     panel_holder = panels_[i].panel;
                     snap = {i, panels_[i].panel.get(), panels_[i].label, panels_[i].idname,
                             panels_[i].parent_idname, panels_[i].options, panels_[i].is_native,
-                            panels_[i].poll_deps, panels_[i].initial_width, panels_[i].initial_height};
+                            panels_[i].poll_deps, panels_[i].initial_width, panels_[i].initial_height,
+                            panels_[i].float_x, panels_[i].float_y};
                     found = true;
                     break;
                 }
@@ -374,6 +428,10 @@ namespace lfs::vis::gui {
         for (auto& p : panels_) {
             if (p.idname == idname) {
                 p.enabled = enabled;
+                if (enabled && p.space == PanelSpace::Floating) {
+                    p.float_x = -1;
+                    p.float_y = -1;
+                }
                 return;
             }
         }
@@ -471,7 +529,8 @@ namespace lfs::vis::gui {
                 if (p.parent_idname == parent_idname && p.enabled && !p.error_disabled) {
                     snapshots.push_back({i, p.panel.get(), p.label, p.idname,
                                          p.parent_idname, p.options, p.is_native,
-                                         p.poll_deps, p.initial_width, p.initial_height});
+                                         p.poll_deps, p.initial_width, p.initial_height,
+                                         p.float_x, p.float_y});
                 }
             }
         }

@@ -1,0 +1,62 @@
+<rml>
+<head>
+  <link type="text/rcss" href="about.rcss"/>
+</head>
+<body id="body" data-model="about">
+<div id="window-frame">
+  <div id="title-bar">
+    <span id="title-text">{{panel_label}}</span>
+    <span id="close-btn">&#xD7;</span>
+  </div>
+  <div id="content-wrap">
+
+  <span class="panel-title">{{title}}</span>
+  <div class="separator"></div>
+
+  <p class="description">{{description}}</p>
+
+  <span class="section-label">{{build_info_label}}</span>
+  <div class="info-table">
+    <div class="info-row">
+      <span class="info-key">{{label_version}}</span>
+      <span class="info-val">{{version}}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-key">{{label_commit}}</span>
+      <span class="info-val">{{commit}}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-key">{{label_build_type}}</span>
+      <span class="info-val">{{build_type}}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-key">{{label_platform}}</span>
+      <span class="info-val">{{platform}}</span>
+    </div>
+    <div class="info-row">
+      <span class="info-key">{{label_cuda_gl_interop}}</span>
+      <span class="info-val">{{cuda_gl_interop}}</span>
+    </div>
+  </div>
+
+  <span class="section-label">{{links_label}}</span>
+  <div class="link-row">
+    <span class="link-label">{{repo_label}}</span>
+    <span id="link-repo" class="link-url">{{repo_url}}</span>
+  </div>
+  <div class="link-row">
+    <span class="link-label">{{website_label}}</span>
+    <span id="link-website" class="link-url">{{website_url}}</span>
+  </div>
+
+  <div class="separator"></div>
+  <div class="footer">
+    <span class="footer-text">{{authors}}</span>
+    <span class="footer-sep">{{separator}}</span>
+    <span class="footer-text">{{license}}</span>
+  </div>
+
+  </div>
+</div>
+</body>
+</rml>

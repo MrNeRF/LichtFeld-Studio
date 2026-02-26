@@ -488,6 +488,9 @@ namespace lfs::vis::gui {
         ops.get_context = [](void* host) -> void* {
             return static_cast<RmlPanelHost*>(host)->getContext();
         };
+        ops.set_foreground = [](void* host, bool fg) {
+            static_cast<RmlPanelHost*>(host)->setForeground(fg);
+        };
         lfs::python::set_rml_panel_host_ops(ops);
 
         registerNativePanels();

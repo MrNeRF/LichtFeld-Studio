@@ -91,6 +91,11 @@ namespace lfs::vis::gui {
         bool error_disabled = false;
         float initial_width = 0;
         float initial_height = 0;
+        float float_x = -1;
+        float float_y = -1;
+        bool float_dragging = false;
+        float float_drag_ox = 0;
+        float float_drag_oy = 0;
         static constexpr int MAX_CONSECUTIVE_ERRORS = 3;
 
         bool has_option(PanelOption opt) const {
@@ -117,6 +122,8 @@ namespace lfs::vis::gui {
         PollDependency poll_deps;
         float initial_width;
         float initial_height;
+        float float_x;
+        float float_y;
 
         bool has_option(PanelOption opt) const {
             return (options & static_cast<uint32_t>(opt)) != 0;
