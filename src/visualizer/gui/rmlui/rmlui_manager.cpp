@@ -4,12 +4,16 @@
 
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "core/logger.hpp"
+#include "gui/rmlui/elements/chromaticity_element.hpp"
+#include "gui/rmlui/elements/crf_curve_element.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
 #include "gui/rmlui/stb_font_engine.hpp"
 #include "internal/resource_paths.hpp"
 
 #include <RmlUi/Core.h>
+#include <RmlUi/Core/ElementInstancer.h>
+#include <RmlUi/Core/Factory.h>
 #include <cassert>
 #include <filesystem>
 
@@ -42,6 +46,11 @@ namespace lfs::vis::gui {
             LOG_ERROR("Failed to initialize RmlUI");
             return false;
         }
+
+        static Rml::ElementInstancerGeneric<ChromaticityElement> chromaticity_instancer;
+        static Rml::ElementInstancerGeneric<CRFCurveElement> crf_curve_instancer;
+        Rml::Factory::RegisterElementInstancer("chromaticity-diagram", &chromaticity_instancer);
+        Rml::Factory::RegisterElementInstancer("crf-curve", &crf_curve_instancer);
 
         try {
             const auto regular_path = lfs::vis::getAssetPath("fonts/Inter-Regular.ttf");

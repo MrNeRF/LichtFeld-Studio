@@ -14,6 +14,9 @@ def register_builtin_panels():
         from .rendering_panel import RenderingPanel
         lf.ui.register_rml_panel(RenderingPanel)
 
+        from .sequencer_panel import SequencerSettingsPanel
+        lf.ui.register_rml_panel(SequencerSettingsPanel)
+
         from .training_panel import TrainingPanel
         lf.ui.register_rml_panel(TrainingPanel)
 

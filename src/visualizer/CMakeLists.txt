@@ -149,6 +149,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/rml_panel_host.cpp
         gui/rmlui/rml_theme.cpp
         gui/rmlui/stb_font_engine.cpp
+        gui/rmlui/elements/chromaticity_element.cpp
+        gui/rmlui/elements/crf_curve_element.cpp
 )
 
 # Set include directories

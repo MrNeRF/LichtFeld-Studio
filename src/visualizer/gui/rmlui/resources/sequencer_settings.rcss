@@ -1,0 +1,27 @@
+body {
+    font-family: Inter;
+    font-size: 14dp;
+    color: #cdd6f4;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: auto;
+    padding: 2dp 6dp;
+}
+
+#content-wrap {
+    display: block;
+}
+
+.confirm-overlay {
+    display: block;
+    padding: 4dp;
+    margin-top: 4dp;
+    background-color: rgba(30, 30, 46, 200);
+    border-width: 1dp;
+    border-color: #f38ba8;
+}
+
+.confirm-box {
+    display: block;
+}

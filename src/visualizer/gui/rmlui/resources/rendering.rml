@@ -253,6 +253,114 @@
     </div>
   </div>
 
+  <div class="separator"></div>
+
+  <!-- PPISP Appearance Correction -->
+  <div class="setting-row">
+    <label class="setting-label">
+      <input type="checkbox" data-checked="apply_appearance_correction" />
+      <span>{{label_apply_appearance_correction}}</span>
+    </label>
+  </div>
+  <div class="indent" data-if="apply_appearance_correction">
+    <div class="setting-row">
+      <select data-value="ppisp_mode">
+        <option value="MANUAL">Manual</option>
+        <option value="AUTO">Auto (Controller)</option>
+      </select>
+      <span class="prop-label">{{label_ppisp_mode}}</span>
+    </div>
+
+    <div data-class-disabled-overlay="ppisp_auto">
+      <!-- Exposure -->
+      <div class="setting-row">
+        <input type="range" class="setting-slider" data-value="ppisp_exposure" min="-3" max="3" step="0.01" />
+        <span class="slider-value">{{ppisp_exposure | format_float(2)}}</span>
+        <span class="prop-label">{{label_ppisp_exposure}}</span>
+      </div>
+
+      <!-- Vignette -->
+      <div class="setting-row">
+        <label class="setting-label">
+          <input type="checkbox" data-checked="ppisp_vignette_enabled" />
+          <span>{{label_ppisp_vignette_enabled}}</span>
+        </label>
+      </div>
+      <div class="indent" data-if="ppisp_vignette_enabled">
+        <div class="setting-row">
+          <input type="range" class="setting-slider" data-value="ppisp_vignette_strength" min="0" max="2" step="0.01" />
+          <span class="slider-value">{{ppisp_vignette_strength | format_float(2)}}</span>
+          <span class="prop-label">{{label_ppisp_vignette_strength}}</span>
+        </div>
+      </div>
+
+      <!-- Chromaticity Diagram -->
+      <div class="setting-row">
+        <chromaticity-diagram
+          data-attr-red-x="ppisp_color_red_x"
+          data-attr-red-y="ppisp_color_red_y"
+          data-attr-green-x="ppisp_color_green_x"
+          data-attr-green-y="ppisp_color_green_y"
+          data-attr-blue-x="ppisp_color_blue_x"
+          data-attr-blue-y="ppisp_color_blue_y"
+          data-attr-wb-temp="ppisp_wb_temperature"
+          data-attr-wb-tint="ppisp_wb_tint"
+          data-event-change="chrom_change"
+        />
+        <span class="prop-label">{{label_ppisp_color_balance}}</span>
+      </div>
+
+      <!-- Gamma -->
+      <div class="setting-row">
+        <input type="range" class="setting-slider" data-value="ppisp_gamma_multiplier" min="0.5" max="2.5" step="0.01" />
+        <span class="slider-value">{{ppisp_gamma_multiplier | format_float(2)}}</span>
+        <span class="prop-label">{{label_ppisp_gamma_multiplier}}</span>
+      </div>
+
+      <!-- CRF (collapsible) -->
+      <div class="section-header" data-event-click="toggle_section('ppisp_crf')">
+        <span class="section-arrow">{{sec_ppisp_crf_arrow}}</span>
+        <span>{{label_ppisp_crf}}</span>
+      </div>
+      <div class="section-content" data-class-collapsed="sec_ppisp_crf_collapsed">
+        <crf-curve
+          data-attr-gamma="ppisp_gamma_multiplier"
+          data-attr-toe="ppisp_crf_toe"
+          data-attr-shoulder="ppisp_crf_shoulder"
+          data-attr-gamma-r="ppisp_gamma_red"
+          data-attr-gamma-g="ppisp_gamma_green"
+          data-attr-gamma-b="ppisp_gamma_blue"
+        />
+        <div class="setting-row">
+          <input type="range" class="setting-slider" data-value="ppisp_gamma_red" min="-0.5" max="0.5" step="0.01" />
+          <span class="slider-value">{{ppisp_gamma_red | format_float(2)}}</span>
+          <span class="prop-label">{{label_ppisp_gamma_red}}</span>
+        </div>
+        <div class="setting-row">
+          <input type="range" class="setting-slider" data-value="ppisp_gamma_green" min="-0.5" max="0.5" step="0.01" />
+          <span class="slider-value">{{ppisp_gamma_green | format_float(2)}}</span>
+          <span class="prop-label">{{label_ppisp_gamma_green}}</span>
+        </div>
+        <div class="setting-row">
+          <input type="range" class="setting-slider" data-value="ppisp_gamma_blue" min="-0.5" max="0.5" step="0.01" />
+          <span class="slider-value">{{ppisp_gamma_blue | format_float(2)}}</span>
+          <span class="prop-label">{{label_ppisp_gamma_blue}}</span>
+        </div>
+        <div class="setting-row">
+          <input type="range" class="setting-slider" data-value="ppisp_crf_toe" min="-1" max="1" step="0.01" />
+          <span class="slider-value">{{ppisp_crf_toe | format_float(2)}}</span>
+          <span class="prop-label">{{label_ppisp_crf_toe}}</span>
+        </div>
+        <div class="setting-row">
+          <input type="range" class="setting-slider" data-value="ppisp_crf_shoulder" min="-1" max="1" step="0.01" />
+          <span class="slider-value">{{ppisp_crf_shoulder | format_float(2)}}</span>
+          <span class="prop-label">{{label_ppisp_crf_shoulder}}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
 </div>
 </body>
 </rml>

@@ -1,0 +1,137 @@
+<rml>
+<head>
+  <link type="text/rcss" href="sequencer_settings.rcss"/>
+</head>
+<body id="body" data-model="sequencer_settings">
+<div id="content-wrap">
+
+  <div class="section-header" data-event-click="toggle_section('seq_main')">
+    <span class="section-arrow">{{sec_seq_main_arrow}}</span>
+    <span>{{label_sequencer}}</span>
+  </div>
+  <div class="section-content" data-class-collapsed="sec_seq_main_collapsed">
+    <div class="setting-row">
+      <label class="setting-label">
+        <input type="checkbox" data-checked="show_camera_path" />
+        <span>Show Camera Path</span>
+      </label>
+    </div>
+
+    <div class="setting-row">
+      <select data-value="speed_idx">
+        <option value="0">0.25x</option>
+        <option value="1">0.5x</option>
+        <option value="2">1x</option>
+        <option value="3">2x</option>
+        <option value="4">4x</option>
+      </select>
+      <span class="prop-label">Speed</span>
+    </div>
+
+    <div class="setting-row">
+      <label class="setting-label">
+        <input type="checkbox" data-checked="snap_to_grid" />
+        <span>Snap to Grid</span>
+      </label>
+    </div>
+    <div class="indent" data-if="snap_to_grid">
+      <div class="setting-row">
+        <select data-value="snap_idx">
+          <option value="0">0.25s</option>
+          <option value="1">0.5s</option>
+          <option value="2">1s</option>
+          <option value="3">2s</option>
+        </select>
+        <span class="prop-label">Interval</span>
+      </div>
+    </div>
+
+    <div class="setting-row">
+      <label class="setting-label">
+        <input type="checkbox" data-checked="follow_playback" />
+        <span>Follow Playback</span>
+      </label>
+    </div>
+
+    <div class="setting-row">
+      <input type="range" class="setting-slider" data-value="pip_preview_scale" min="0.5" max="2.0" step="0.01" />
+      <span class="slider-value">{{pip_preview_scale | format_float(2)}}</span>
+      <span class="prop-label">Preview Size</span>
+    </div>
+
+    <div class="separator"></div>
+
+    <div class="setting-row">
+      <button class="btn btn--secondary" data-event-click="save_path" data-class-disabled="!has_keyframes">Save Path...</button>
+      <button class="btn btn--secondary" data-event-click="load_path" style="margin-left: 4dp;">Load Path...</button>
+    </div>
+
+    <button class="btn btn--error btn--full" data-event-click="clear_keyframes" data-class-disabled="!has_keyframes">Clear All Keyframes</button>
+
+    <div class="confirm-overlay" data-if="show_clear_modal">
+      <div class="confirm-box">
+        <span>Delete all keyframes? This cannot be undone.</span>
+        <div class="setting-row" style="margin-top: 4dp;">
+          <button class="btn btn--secondary" data-event-click="clear_cancel">Cancel</button>
+          <button class="btn btn--error" data-event-click="clear_confirm" style="margin-left: 4dp;">Delete</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="separator"></div>
+
+  <!-- Video Export -->
+  <div class="section-header" data-event-click="toggle_section('video_export')">
+    <span class="section-arrow">{{sec_video_export_arrow}}</span>
+    <span>Video Export</span>
+  </div>
+  <div class="section-content" data-class-collapsed="sec_video_export_collapsed">
+    <div class="setting-row">
+      <select data-value="preset_idx">
+        <option value="0">YouTube 1080p</option>
+        <option value="1">YouTube 4K</option>
+        <option value="2">720p HD</option>
+        <option value="3">TikTok</option>
+        <option value="4">TikTok HD</option>
+        <option value="5">Instagram Square</option>
+        <option value="6">Instagram Portrait</option>
+        <option value="7">Custom</option>
+      </select>
+      <span class="prop-label">Format</span>
+    </div>
+
+    <div data-if="is_custom_preset">
+      <div class="setting-row">
+        <input type="text" class="number-input" data-value="custom_width" style="width: 60dp;" />
+        <span class="prop-label">Width</span>
+      </div>
+      <div class="setting-row">
+        <input type="text" class="number-input" data-value="custom_height" style="width: 60dp;" />
+        <span class="prop-label">Height</span>
+      </div>
+      <div class="setting-row">
+        <select data-value="fps_idx">
+          <option value="0">24 fps</option>
+          <option value="1">30 fps</option>
+          <option value="2">60 fps</option>
+        </select>
+        <span class="prop-label">Framerate</span>
+      </div>
+    </div>
+    <div data-if="!is_custom_preset">
+      <span class="text-disabled">{{preset_desc}}</span>
+    </div>
+
+    <div class="setting-row">
+      <input type="range" class="setting-slider" data-value="quality" min="15" max="28" step="1" />
+      <span class="slider-value">{{quality}}</span>
+      <span class="prop-label">Quality</span>
+    </div>
+
+    <button class="btn btn--primary btn--full" data-event-click="export_video" data-class-disabled="!has_keyframes">Export Video...</button>
+  </div>
+
+</div>
+</body>
+</rml>

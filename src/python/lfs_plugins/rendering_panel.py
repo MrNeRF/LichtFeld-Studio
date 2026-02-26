@@ -7,7 +7,6 @@ import math
 import lichtfeld as lf
 
 from .types import RmlPanel
-from .sequencer_section import draw_sequencer_section
 
 SENSOR_HALF_HEIGHT_MM = 12.0
 
@@ -16,16 +15,27 @@ BOOL_PROPS = [
     "point_cloud_mode", "desaturate_unselected", "desaturate_cropping",
     "equirectangular", "gut", "mip_filter",
     "mesh_wireframe", "mesh_backface_culling", "mesh_shadow_enabled",
+    "apply_appearance_correction", "ppisp_vignette_enabled",
 ]
 
 SLIDER_PROPS = [
     "axes_size", "grid_opacity", "camera_frustum_scale", "voxel_size",
     "focal_length_mm", "render_scale",
     "mesh_wireframe_width", "mesh_light_intensity", "mesh_ambient",
+    "ppisp_exposure", "ppisp_vignette_strength", "ppisp_gamma_multiplier",
+    "ppisp_gamma_red", "ppisp_gamma_green", "ppisp_gamma_blue",
+    "ppisp_crf_toe", "ppisp_crf_shoulder",
 ]
 
 SELECT_PROPS = [
     "grid_plane", "sh_degree", "mesh_shadow_resolution",
+]
+
+CHROM_FLOAT_PROPS = [
+    "ppisp_color_red_x", "ppisp_color_red_y",
+    "ppisp_color_green_x", "ppisp_color_green_y",
+    "ppisp_color_blue_x", "ppisp_color_blue_y",
+    "ppisp_wb_temperature", "ppisp_wb_tint",
 ]
 
 COLOR_PROPS = [
@@ -66,6 +76,17 @@ LOCALE_KEY = {
     "mesh_shadow_resolution": "main_panel.mesh_shadow_resolution",
     "camera_frustum_scale": "main_panel.camera_frustum_scale",
     "voxel_size": "main_panel.voxel_size",
+    "apply_appearance_correction": "main_panel.appearance_correction",
+    "ppisp_mode": "main_panel.ppisp_mode",
+    "ppisp_exposure": "main_panel.ppisp_exposure",
+    "ppisp_vignette_enabled": "main_panel.ppisp_vignette",
+    "ppisp_vignette_strength": "main_panel.ppisp_vignette",
+    "ppisp_gamma_multiplier": "main_panel.ppisp_gamma",
+    "ppisp_gamma_red": "main_panel.ppisp_gamma_red",
+    "ppisp_gamma_green": "main_panel.ppisp_gamma_green",
+    "ppisp_gamma_blue": "main_panel.ppisp_gamma_blue",
+    "ppisp_crf_toe": "main_panel.ppisp_crf_toe",
+    "ppisp_crf_shoulder": "main_panel.ppisp_crf_shoulder",
 }
 
 
@@ -132,7 +153,11 @@ class RenderingPanel(RmlPanel):
                        lambda p=prop_id: str(getattr(s(), p, "")),
                        lambda v, p=prop_id: setattr(s(), p, v) if s() else None)
 
-        all_props = BOOL_PROPS + SLIDER_PROPS + SELECT_PROPS + COLOR_PROPS
+        model.bind("ppisp_mode",
+                    lambda: str(getattr(s(), "ppisp_mode", "")),
+                    lambda v: self._set_ppisp_mode(v))
+
+        all_props = BOOL_PROPS + SLIDER_PROPS + SELECT_PROPS + ["ppisp_mode"] + COLOR_PROPS
         for prop_id in all_props:
             model.bind_func(f"label_{prop_id}", lambda p=prop_id: _prop_label(p))
 
@@ -147,21 +172,33 @@ class RenderingPanel(RmlPanel):
                        lambda p=prop_id: _color_to_hex(getattr(s(), p, (0,0,0))),
                        lambda v, p=prop_id: self._set_color_hex(p, v))
 
+        for prop_id in CHROM_FLOAT_PROPS:
+            model.bind(prop_id,
+                       lambda p=prop_id: float(getattr(s(), p, 0.0)),
+                       lambda v, p=prop_id: setattr(s(), p, float(v)) if s() else None)
+
+        model.bind_func("ppisp_auto",
+                         lambda: s() is not None and getattr(s(), "ppisp_mode", "") != "MANUAL")
+
         model.bind_func("label_hdr_selection_colors",
                          lambda: lf.ui.tr("main_panel.selection_colors") or "Selection Colors")
         model.bind_func("label_hdr_mesh",
                          lambda: lf.ui.tr("main_panel.mesh") or "Mesh")
+        model.bind_func("label_ppisp_color_balance",
+                         lambda: lf.ui.tr("main_panel.ppisp_color_balance") or "Color Correction")
+        model.bind_func("label_ppisp_crf",
+                         lambda: lf.ui.tr("main_panel.ppisp_crf_advanced") or "CRF")
 
-        for sec in ["selection_colors", "mesh"]:
+        for sec in ["selection_colors", "mesh", "ppisp_crf"]:
             model.bind(f"sec_{sec}_collapsed",
                        lambda n=sec: n in self._collapsed)
             model.bind_func(f"sec_{sec}_arrow",
                             lambda n=sec: "\u25B6" if n in self._collapsed else "\u25BC")
 
         model.bind_func("fov_display", self._compute_fov)
-
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_event("color_click", self._on_color_click)
+        model.bind_event("chrom_change", self._on_chrom_change)
 
         self._handle = model.get_handle()
 
@@ -190,8 +227,6 @@ class RenderingPanel(RmlPanel):
         if not settings:
             return
 
-        tr = lf.ui.tr
-
         if self._color_picker_needs_pos:
             layout.set_next_window_pos(layout.get_mouse_pos())
             layout.open_popup("##color_picker")
@@ -208,69 +243,6 @@ class RenderingPanel(RmlPanel):
             layout.end_popup()
         elif self._color_edit_prop:
             self._color_edit_prop = None
-
-        layout.prop(settings, "apply_appearance_correction")
-        if settings.apply_appearance_correction:
-            layout.indent()
-            layout.prop(settings, "ppisp_mode")
-
-            is_manual = settings.ppisp_mode == "MANUAL"
-            if not is_manual:
-                layout.begin_disabled()
-
-            layout.prop(settings, "ppisp_exposure")
-
-            layout.prop(settings, "ppisp_vignette_enabled")
-            if settings.ppisp_vignette_enabled:
-                layout.same_line()
-                layout.prop(settings, "ppisp_vignette_strength")
-
-            changed, values = layout.chromaticity_diagram(
-                tr("main_panel.ppisp_color_balance"),
-                settings.ppisp_color_red_x,
-                settings.ppisp_color_red_y,
-                settings.ppisp_color_green_x,
-                settings.ppisp_color_green_y,
-                settings.ppisp_color_blue_x,
-                settings.ppisp_color_blue_y,
-                settings.ppisp_wb_temperature,
-                settings.ppisp_wb_tint,
-            )
-            if changed:
-                settings.ppisp_color_red_x = values[0]
-                settings.ppisp_color_red_y = values[1]
-                settings.ppisp_color_green_x = values[2]
-                settings.ppisp_color_green_y = values[3]
-                settings.ppisp_color_blue_x = values[4]
-                settings.ppisp_color_blue_y = values[5]
-                settings.ppisp_wb_temperature = values[6]
-                settings.ppisp_wb_tint = values[7]
-
-            layout.prop(settings, "ppisp_gamma_multiplier")
-
-            if layout.collapsing_header(tr("main_panel.ppisp_crf_advanced")):
-                layout.crf_curve_preview(
-                    "##crf_preview",
-                    settings.ppisp_gamma_multiplier,
-                    settings.ppisp_crf_toe,
-                    settings.ppisp_crf_shoulder,
-                    settings.ppisp_gamma_red,
-                    settings.ppisp_gamma_green,
-                    settings.ppisp_gamma_blue,
-                )
-                layout.prop(settings, "ppisp_gamma_red")
-                layout.prop(settings, "ppisp_gamma_green")
-                layout.prop(settings, "ppisp_gamma_blue")
-                layout.prop(settings, "ppisp_crf_toe")
-                layout.prop(settings, "ppisp_crf_shoulder")
-
-            if not is_manual:
-                layout.end_disabled()
-            layout.unindent()
-
-        if lf.ui.is_sequencer_visible():
-            layout.separator()
-            draw_sequencer_section(layout)
 
         layout.separator()
         lf.ui.draw_console_button()
@@ -317,3 +289,32 @@ class RenderingPanel(RmlPanel):
         else:
             self._color_edit_prop = prop_id
             self._color_picker_needs_pos = True
+
+    def _set_ppisp_mode(self, v):
+        s = lf.get_render_settings()
+        if s:
+            setattr(s, "ppisp_mode", v)
+        if self._handle:
+            self._handle.dirty("ppisp_auto")
+
+    def _on_chrom_change(self, handle, event, args):
+        s = lf.get_render_settings()
+        if not s or not event:
+            return
+        mapping = {
+            "red_x": "ppisp_color_red_x",
+            "red_y": "ppisp_color_red_y",
+            "green_x": "ppisp_color_green_x",
+            "green_y": "ppisp_color_green_y",
+            "blue_x": "ppisp_color_blue_x",
+            "blue_y": "ppisp_color_blue_y",
+            "wb_temp": "ppisp_wb_temperature",
+            "wb_tint": "ppisp_wb_tint",
+        }
+        for param_key, prop_name in mapping.items():
+            val = event.get_parameter(param_key, "")
+            if val:
+                setattr(s, prop_name, float(val))
+        for prop_name in mapping.values():
+            handle.dirty(prop_name)
+

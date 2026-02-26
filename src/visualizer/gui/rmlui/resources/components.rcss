@@ -499,6 +499,19 @@ progress fill {
     font-size: 13dp;
 }
 
+/* ── Custom Diagram Elements ──────────────────────────── */
+
+chromaticity-diagram {
+    width: 140dp;
+    height: 140dp;
+    display: inline-block;
+}
+
+crf-curve {
+    height: 120dp;
+    display: block;
+}
+
 /* ── Number Input ──────────────────────────────────────── */
 
 .number-input {
