@@ -23,6 +23,7 @@ class GizmoToolbar(Panel):
         self._built = False
         self._last_tool_ids = []
         self._last_active_tool = None
+        self._last_enabled = {}
         self._last_submode_key = None
         self._last_pivot_key = None
 
@@ -56,28 +57,27 @@ class GizmoToolbar(Panel):
             self._rebuild_tools(container, tool_defs, w)
             self._last_tool_ids = tool_ids
 
+        if active_tool != self._last_active_tool or not self._built:
+            self._last_active_tool = active_tool
+            for tool_def in tool_defs:
+                tid = tool_def.id
+                btn = self._buttons.get(tid)
+                if btn is None:
+                    continue
+                btn.set_class("selected", active_tool == tid)
+
         for tool_def in tool_defs:
             tid = tool_def.id
             btn = self._buttons.get(tid)
             if btn is None:
                 continue
-            selected = (active_tool == tid)
             enabled = tool_def.can_activate(context)
-            btn.set_class("selected", selected)
-            if enabled:
-                btn.remove_attribute("disabled")
-            else:
-                btn.set_attribute("disabled", "disabled")
-
-        vp_w = int(doc.get_element_by_id("overlay-body").get_attribute("data-vp-w", "0"))
-        if vp_w > 0:
-            n = len(self._buttons)
-            btn_dp = 28
-            gap_dp = 4
-            pad_dp = 6
-            toolbar_w = n * btn_dp + max(0, n - 1) * gap_dp + 2 * pad_dp
-            left = (vp_w - toolbar_w) / 2.0
-            container.set_property("left", f"{left:.0f}dp")
+            if enabled != self._last_enabled.get(tid):
+                self._last_enabled[tid] = enabled
+                if enabled:
+                    btn.remove_attribute("disabled")
+                else:
+                    btn.set_attribute("disabled", "disabled")
 
         self._update_submodes(doc, w)
         self._update_pivots(doc, w)
@@ -164,16 +164,6 @@ class GizmoToolbar(Panel):
                 if btn:
                     btn.set_class("selected", active_submode == mode.id)
 
-        vp_w = int(doc.get_element_by_id("overlay-body").get_attribute("data-vp-w", "0"))
-        if vp_w > 0:
-            n = len(self._submode_buttons)
-            btn_dp = 28
-            gap_dp = 3
-            pad_dp = 4
-            toolbar_w = n * btn_dp + max(0, n - 1) * gap_dp + 2 * pad_dp
-            left = (vp_w - toolbar_w) / 2.0
-            container.set_property("left", f"{left:.0f}dp")
-
     def _on_submode_click(self, mode_id):
         import lichtfeld as lf
         active_tool_id = lf.ui.get_active_tool()
@@ -229,16 +219,6 @@ class GizmoToolbar(Panel):
             if btn:
                 btn.set_class("selected", current_pivot == pivot_map.get(mode.id, -1))
 
-        vp_w = int(doc.get_element_by_id("overlay-body").get_attribute("data-vp-w", "0"))
-        if vp_w > 0:
-            n = len(self._pivot_buttons)
-            btn_dp = 28
-            gap_dp = 3
-            pad_dp = 4
-            toolbar_w = n * btn_dp + max(0, n - 1) * gap_dp + 2 * pad_dp
-            left = (vp_w - toolbar_w) / 2.0
-            container.set_property("left", f"{left:.0f}dp")
-
     def _on_pivot_click(self, mode_id):
         import lichtfeld as lf
         pivot_map = {"origin": 0, "bounds": 1}
@@ -257,6 +237,7 @@ class UtilityToolbar(Panel):
         self._buttons = {}
         self._built = False
         self._last_render_manager = None
+        self._last_state_key = None
 
     def draw(self, layout):
         import lichtfeld as lf
@@ -333,6 +314,15 @@ class UtilityToolbar(Panel):
         import lichtfeld as lf
 
         is_fullscreen = lf.is_fullscreen() if hasattr(lf, 'is_fullscreen') else False
+        render_mode = lf.get_render_mode() if has_render_manager else None
+        is_ortho = lf.is_orthographic() if has_render_manager else None
+        seq_visible = lf.ui.is_sequencer_visible() if has_render_manager else None
+
+        state_key = (is_fullscreen, render_mode, is_ortho, seq_visible)
+        if state_key == self._last_state_key:
+            return
+        self._last_state_key = state_key
+
         fs_btn = self._buttons.get("fullscreen")
         if fs_btn:
             fs_btn.set_class("selected", is_fullscreen)
@@ -344,7 +334,6 @@ class UtilityToolbar(Panel):
         if not has_render_manager:
             return
 
-        render_mode = lf.get_render_mode()
         mode_map = {
             "blob": lf.RenderMode.SPLATS,
             "dots-diagonal": lf.RenderMode.POINTS,
@@ -356,7 +345,6 @@ class UtilityToolbar(Panel):
             if btn:
                 btn.set_class("selected", render_mode == mode_val)
 
-        is_ortho = lf.is_orthographic()
         proj_btn = self._buttons.get("projection")
         if proj_btn:
             proj_btn.set_class("selected", is_ortho)
@@ -366,4 +354,4 @@ class UtilityToolbar(Panel):
 
         seq_btn = self._buttons.get("sequencer")
         if seq_btn:
-            seq_btn.set_class("selected", lf.ui.is_sequencer_visible())
+            seq_btn.set_class("selected", seq_visible)

@@ -24,6 +24,7 @@ class SequencerSettingsPanel(RmlPanel):
         self._handle = None
         self._collapsed = set()
         self._show_clear_modal = False
+        self._last_has_keyframes = None
 
     @classmethod
     def poll(cls, context=None):
@@ -159,7 +160,10 @@ class SequencerSettingsPanel(RmlPanel):
 
     def on_update(self, doc):
         if self._handle:
-            self._handle.dirty("has_keyframes")
+            hk = lf.ui.has_keyframes()
+            if hk != self._last_has_keyframes:
+                self._last_has_keyframes = hk
+                self._handle.dirty("has_keyframes")
 
     def on_scene_changed(self, doc):
         if self._handle:

@@ -192,6 +192,7 @@ namespace lfs::vis::gui {
         }
 
         rml_theme::applyTheme(document_, base_rcss_, generateThemeRCSS());
+        content_dirty_ = true;
     }
 
     bool RmlPanelHost::ensureContext() {
@@ -235,16 +236,23 @@ namespace lfs::vis::gui {
         int h;
         float display_h;
         if (height_mode_ == HeightMode::Content) {
-            const int layout_h = static_cast<int>(10000.0f * dp_ratio);
-            rml_context_->SetDimensions(Rml::Vector2i(w, layout_h));
-            rml_context_->Update();
+            if (w != last_measure_w_ || content_dirty_) {
+                last_measure_w_ = w;
+                content_dirty_ = false;
+                const int layout_h = static_cast<int>(10000.0f * dp_ratio);
+                rml_context_->SetDimensions(Rml::Vector2i(w, layout_h));
+                rml_context_->Update();
 
-            auto* frame = document_->GetElementById("window-frame");
-            auto* wrap = frame ? frame : document_->GetElementById("content-wrap");
-            const float content_h = wrap ? wrap->GetOffsetHeight() : 100.0f;
-            h = std::max(1, static_cast<int>(std::ceil(content_h)));
-            display_h = static_cast<float>(h) / dp_ratio;
-            last_content_height_ = display_h;
+                auto* frame = document_->GetElementById("window-frame");
+                auto* wrap = frame ? frame : document_->GetElementById("content-wrap");
+                const float content_h = wrap ? wrap->GetOffsetHeight() : 100.0f;
+                h = std::max(1, static_cast<int>(std::ceil(content_h)));
+                display_h = static_cast<float>(h) / dp_ratio;
+                last_content_height_ = display_h;
+            } else {
+                h = std::max(1, static_cast<int>(std::ceil(last_content_height_ * dp_ratio)));
+                display_h = last_content_height_;
+            }
         } else {
             h = static_cast<int>(avail_h * dp_ratio);
             display_h = avail_h;
@@ -306,15 +314,22 @@ namespace lfs::vis::gui {
         int ph;
         float display_h;
         if (height_mode_ == HeightMode::Content) {
-            const int layout_h = static_cast<int>(10000.0f * dp_ratio);
-            rml_context_->SetDimensions(Rml::Vector2i(pw, layout_h));
-            rml_context_->Update();
+            if (pw != last_measure_w_ || content_dirty_) {
+                last_measure_w_ = pw;
+                content_dirty_ = false;
+                const int layout_h = static_cast<int>(10000.0f * dp_ratio);
+                rml_context_->SetDimensions(Rml::Vector2i(pw, layout_h));
+                rml_context_->Update();
 
-            auto* frame = document_->GetElementById("window-frame");
-            auto* wrap = frame ? frame : document_->GetElementById("content-wrap");
-            const float content_h = wrap ? wrap->GetOffsetHeight() : 100.0f;
-            ph = std::max(1, static_cast<int>(std::ceil(content_h)));
-            display_h = static_cast<float>(ph) / dp_ratio;
+                auto* frame = document_->GetElementById("window-frame");
+                auto* wrap = frame ? frame : document_->GetElementById("content-wrap");
+                const float content_h = wrap ? wrap->GetOffsetHeight() : 100.0f;
+                ph = std::max(1, static_cast<int>(std::ceil(content_h)));
+                display_h = static_cast<float>(ph) / dp_ratio;
+            } else {
+                ph = std::max(1, static_cast<int>(std::ceil(last_content_height_ * dp_ratio)));
+                display_h = last_content_height_;
+            }
         } else {
             ph = static_cast<int>(h * dp_ratio);
             display_h = h;

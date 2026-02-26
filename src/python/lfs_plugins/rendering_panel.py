@@ -132,6 +132,7 @@ class RenderingPanel(RmlPanel):
         self._popup_el = None
         self._doc = None
         self._picker_click_handled = False
+        self._last_swatch_colors = {}
 
     def on_load(self, doc):
         self._doc = doc
@@ -237,11 +238,14 @@ class RenderingPanel(RmlPanel):
             return
 
         for prop_id in COLOR_PROPS:
+            val = getattr(s, prop_id)
+            key = (prop_id, int(val[0] * 255), int(val[1] * 255), int(val[2] * 255))
+            if key == self._last_swatch_colors.get(prop_id):
+                continue
+            self._last_swatch_colors[prop_id] = key
             swatch = doc.get_element_by_id(f"swatch-{prop_id}")
             if swatch:
-                val = getattr(s, prop_id)
-                r, g, b = int(val[0] * 255), int(val[1] * 255), int(val[2] * 255)
-                swatch.set_property("background-color", f"rgb({r},{g},{b})")
+                swatch.set_property("background-color", f"rgb({key[1]},{key[2]},{key[3]})")
 
     def on_scene_changed(self, doc):
         if self._handle:
@@ -311,8 +315,12 @@ class RenderingPanel(RmlPanel):
         r = float(event.get_parameter("red", "0"))
         g = float(event.get_parameter("green", "0"))
         b = float(event.get_parameter("blue", "0"))
-        setattr(s, self._color_edit_prop, (r, g, b))
-        handle.dirty_all()
+        prop = self._color_edit_prop
+        setattr(s, prop, (r, g, b))
+        handle.dirty(f"{prop}_r")
+        handle.dirty(f"{prop}_g")
+        handle.dirty(f"{prop}_b")
+        handle.dirty(f"{prop}_hex")
 
     def _on_popup_click(self, event):
         event.stop_propagation()

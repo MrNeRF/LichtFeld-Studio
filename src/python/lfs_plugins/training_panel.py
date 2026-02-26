@@ -236,6 +236,10 @@ class TrainingPanel(RmlPanel):
         self._color_edit_prop = None
         self._color_picker_needs_pos = False
         self._collapsed = set(INITIALLY_COLLAPSED)
+        self._last_iteration = -1
+        self._last_num_gaussians = -1
+        self._last_progress_frac = -1.0
+        self._last_bg_color = None
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("training")
@@ -532,13 +536,19 @@ class TrainingPanel(RmlPanel):
             self._last_state = state
             self._handle.dirty_all()
         else:
-            self._handle.dirty("status_mode")
-            self._handle.dirty("status_iteration")
-            self._handle.dirty("status_gaussians")
-            self._handle.dirty("progress_text")
-            self._handle.dirty("show_progress")
+            it = AppState.iteration.value
+            if it != self._last_iteration:
+                self._last_iteration = it
+                self._handle.dirty("status_iteration")
+                self._handle.dirty("progress_text")
+                self._handle.dirty("show_progress")
+
+            ng = AppState.num_gaussians.value
+            if ng != self._last_num_gaussians:
+                self._last_num_gaussians = ng
+                self._handle.dirty("status_gaussians")
+
             self._handle.dirty("show_checkpoint_saved")
-            self._handle.dirty("btn_start")
 
         if state == "ready" and AppState.iteration.value == 0:
             params = lf.optimization_params()
@@ -553,9 +563,12 @@ class TrainingPanel(RmlPanel):
         it = AppState.iteration.value
         mx = AppState.max_iterations.value
         if mx > 0 and it > 0:
-            prog = doc.get_element_by_id("training-progress")
-            if prog:
-                prog.set_attribute("value", str(it / mx))
+            frac = it / mx
+            if frac != self._last_progress_frac:
+                self._last_progress_frac = frac
+                prog = doc.get_element_by_id("training-progress")
+                if prog:
+                    prog.set_attribute("value", str(frac))
 
     def _update_save_steps(self, doc):
         params = lf.optimization_params()
@@ -579,9 +592,12 @@ class TrainingPanel(RmlPanel):
         params = lf.optimization_params()
         if not params or not params.has_params():
             return
+        c = tuple(params.bg_color)
+        if c == self._last_bg_color:
+            return
+        self._last_bg_color = c
         swatch = doc.get_element_by_id("swatch-bg_color")
         if swatch:
-            c = params.bg_color
             r, g, b = int(c[0] * 255), int(c[1] * 255), int(c[2] * 255)
             swatch.set_property("background-color", f"rgb({r},{g},{b})")
 

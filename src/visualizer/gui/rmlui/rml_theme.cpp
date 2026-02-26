@@ -242,10 +242,15 @@ namespace lfs::vis::gui::rml_theme {
         return result;
     }
 
+    const std::string& getSpriteSheetRCSS() {
+        static std::string cached = generateSpriteSheetRCSS();
+        return cached;
+    }
+
     void applyTheme(Rml::ElementDocument* doc, const std::string& base_rcss,
                     const std::string& theme_rcss) {
         assert(doc);
-        const std::string combined = generateSpriteSheetRCSS() + getComponentsRCSS() + "\n" + base_rcss + "\n" + generateComponentsThemeRCSS() + "\n" + theme_rcss;
+        const std::string combined = getSpriteSheetRCSS() + getComponentsRCSS() + "\n" + base_rcss + "\n" + generateComponentsThemeRCSS() + "\n" + theme_rcss;
         auto sheet = Rml::Factory::InstanceStyleSheetString(combined);
         if (sheet)
             doc->SetStyleSheetContainer(std::move(sheet));

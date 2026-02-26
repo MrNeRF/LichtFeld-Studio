@@ -130,6 +130,8 @@ namespace lfs::vis::gui {
                 LOG_ERROR("RmlPanel on_scene_changed error: {}", e.what());
             }
             last_scene_gen_ = ctx.scene_generation;
+            if (ops.mark_content_dirty)
+                ops.mark_content_dirty(host_);
         }
 
         if (has_draw_imgui_) {
@@ -219,6 +221,8 @@ namespace lfs::vis::gui {
                 LOG_ERROR("RmlPanel on_scene_changed error: {}", e.what());
             }
             last_scene_gen_ = ctx.scene_generation;
+            if (ops.mark_content_dirty)
+                ops.mark_content_dirty(host_);
         }
     }
 

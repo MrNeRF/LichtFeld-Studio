@@ -39,6 +39,7 @@ namespace lfs::vis::gui {
         void setHeightMode(HeightMode mode) { height_mode_ = mode; }
         HeightMode getHeightMode() const { return height_mode_; }
         float getContentHeight() const { return last_content_height_; }
+        void markContentDirty() { content_dirty_ = true; }
         void setForeground(bool fg) { foreground_ = fg; }
 
         Rml::ElementDocument* getDocument() { return document_; }
@@ -61,6 +62,8 @@ namespace lfs::vis::gui {
 
         HeightMode height_mode_ = HeightMode::Fill;
         float last_content_height_ = 0.0f;
+        int last_measure_w_ = 0;
+        bool content_dirty_ = true;
 
         std::string base_rcss_;
         ImVec4 last_synced_text_{};

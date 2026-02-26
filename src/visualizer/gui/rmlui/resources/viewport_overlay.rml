@@ -4,8 +4,14 @@
 </head>
 <body id="overlay-body">
     <div id="utility-toolbar" class="toolbar-container toolbar-vertical"></div>
-    <div id="gizmo-toolbar" class="toolbar-container toolbar-horizontal"></div>
-    <div id="submode-toolbar" class="subtoolbar-container toolbar-horizontal hidden"></div>
-    <div id="pivot-toolbar" class="subtoolbar-container toolbar-horizontal hidden"></div>
+    <div class="toolbar-hcenter" style="top: 10dp;">
+        <div id="gizmo-toolbar" class="toolbar-container"></div>
+    </div>
+    <div class="toolbar-hcenter" style="top: 54dp;">
+        <div id="submode-toolbar" class="subtoolbar-container hidden"></div>
+    </div>
+    <div class="toolbar-hcenter" style="top: 88dp;">
+        <div id="pivot-toolbar" class="subtoolbar-container hidden"></div>
+    </div>
 </body>
 </rml>

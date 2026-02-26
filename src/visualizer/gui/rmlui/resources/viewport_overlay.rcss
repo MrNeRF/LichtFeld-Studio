@@ -26,18 +26,12 @@ body {
     flex-direction: column;
 }
 
-.toolbar-horizontal {
+.toolbar-hcenter {
     position: absolute;
-    top: 10dp;
-    flex-direction: row;
-}
-
-#submode-toolbar {
-    top: 54dp;
-}
-
-#pivot-toolbar {
-    top: 88dp;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: center;
 }
 
 .toolbar-separator {
