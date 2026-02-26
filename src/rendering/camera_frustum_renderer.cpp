@@ -28,6 +28,9 @@ namespace lfs::rendering {
 
     CameraFrustumRenderer::~CameraFrustumRenderer() {
         stopThumbnailLoader();
+        if (picking_pbos_[0]) {
+            glDeleteBuffers(2, picking_pbos_);
+        }
     }
 
     void CameraFrustumRenderer::clearThumbnailCache() {
@@ -275,6 +278,16 @@ namespace lfs::rendering {
         if (status != GL_FRAMEBUFFER_COMPLETE) {
             return std::unexpected("Picking FBO incomplete");
         }
+
+        glGenBuffers(2, picking_pbos_);
+        for (auto& pbo : picking_pbos_) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo);
+            glBufferData(GL_PIXEL_PACK_BUFFER,
+                         PICKING_SAMPLE_SIZE * PICKING_SAMPLE_SIZE * 3 * sizeof(float),
+                         nullptr, GL_STREAM_READ);
+        }
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+
         return {};
     }
 
@@ -651,13 +664,27 @@ namespace lfs::rendering {
             glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, picking_fbo_width_, picking_fbo_height_, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
         }
 
+        const int pixel_x = std::clamp(static_cast<int>(mouse_pos.x - viewport_pos.x), 0, picking_fbo_width_ - 1);
+        const int pixel_y = std::clamp(static_cast<int>(viewport_size.y - (mouse_pos.y - viewport_pos.y)), 0, picking_fbo_height_ - 1);
+        const int read_x = std::max(0, pixel_x - 1);
+        const int read_y = std::max(0, pixel_y - 1);
+        const int read_width = std::min(PICKING_SAMPLE_SIZE, picking_fbo_width_ - read_x);
+        const int read_height = std::min(PICKING_SAMPLE_SIZE, picking_fbo_height_ - read_y);
+
         GLint current_fbo;
         GLint current_viewport[4];
+        GLboolean scissor_was_enabled;
+        GLint prev_scissor[4];
         glGetIntegerv(GL_FRAMEBUFFER_BINDING, &current_fbo);
         glGetIntegerv(GL_VIEWPORT, current_viewport);
+        scissor_was_enabled = glIsEnabled(GL_SCISSOR_TEST);
+        glGetIntegerv(GL_SCISSOR_BOX, prev_scissor);
 
         glBindFramebuffer(GL_FRAMEBUFFER, picking_fbo_);
         glViewport(0, 0, picking_fbo_width_, picking_fbo_height_);
+
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(read_x, read_y, read_width, read_height);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -767,31 +794,39 @@ namespace lfs::rendering {
             }
         }
 
-        glFinish();
+        const int write_pbo = pbo_index_;
+        const int read_pbo = 1 - pbo_index_;
 
-        const int pixel_x = std::clamp(static_cast<int>(mouse_pos.x - viewport_pos.x), 0, picking_fbo_width_ - 1);
-        const int pixel_y = std::clamp(static_cast<int>(viewport_size.y - (mouse_pos.y - viewport_pos.y)), 0, picking_fbo_height_ - 1);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, picking_pbos_[write_pbo]);
+        const int sample_bytes = read_width * read_height * 3 * static_cast<int>(sizeof(float));
+        if (read_width != pbo_sample_w_ || read_height != pbo_sample_h_) {
+            glBufferData(GL_PIXEL_PACK_BUFFER, sample_bytes, nullptr, GL_STREAM_READ);
+        }
+        glReadPixels(read_x, read_y, read_width, read_height, GL_RGB, GL_FLOAT, nullptr);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 
-        const int read_x = std::max(0, pixel_x - 1);
-        const int read_y = std::max(0, pixel_y - 1);
-        const int read_width = std::min(PICKING_SAMPLE_SIZE, picking_fbo_width_ - read_x);
-        const int read_height = std::min(PICKING_SAMPLE_SIZE, picking_fbo_height_ - read_y);
-
-        std::vector<float> pixels(read_width * read_height * 3);
-        glReadPixels(read_x, read_y, read_width, read_height, GL_RGB, GL_FLOAT, pixels.data());
-
-        int center_idx = 0;
-        if (read_width == 3 && read_height == 3) {
-            center_idx = 4 * 3;
-        } else if (read_width >= 2 && read_height >= 2) {
-            center_idx = ((read_height / 2) * read_width + (read_width / 2)) * 3;
+        int id = -1;
+        if (pbo_has_data_) {
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, picking_pbos_[read_pbo]);
+            const auto* pixels = static_cast<const float*>(
+                glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY));
+            if (pixels) {
+                id = decodePickId(pixels, pbo_sample_w_, pbo_sample_h_);
+                glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+            }
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
         }
 
-        const int id = (static_cast<int>(pixels[center_idx] * 255.0f + 0.5f) << 16 |
-                        static_cast<int>(pixels[center_idx + 1] * 255.0f + 0.5f) << 8 |
-                        static_cast<int>(pixels[center_idx + 2] * 255.0f + 0.5f)) -
-                       1;
+        pbo_sample_w_ = read_width;
+        pbo_sample_h_ = read_height;
+        pbo_index_ = read_pbo;
+        pbo_has_data_ = true;
 
+        if (scissor_was_enabled) {
+            glScissor(prev_scissor[0], prev_scissor[1], prev_scissor[2], prev_scissor[3]);
+        } else {
+            glDisable(GL_SCISSOR_TEST);
+        }
         glBindFramebuffer(GL_FRAMEBUFFER, current_fbo);
         glViewport(current_viewport[0], current_viewport[1], current_viewport[2], current_viewport[3]);
 
@@ -799,6 +834,19 @@ namespace lfs::rendering {
             return camera_ids_[id];
         }
         return -1;
+    }
+
+    int CameraFrustumRenderer::decodePickId(const float* pixels, const int width, const int height) const {
+        int center_idx = 0;
+        if (width == 3 && height == 3) {
+            center_idx = 4 * 3;
+        } else if (width >= 2 && height >= 2) {
+            center_idx = ((height / 2) * width + (width / 2)) * 3;
+        }
+        return (static_cast<int>(pixels[center_idx] * 255.0f + 0.5f) << 16 |
+                static_cast<int>(pixels[center_idx + 1] * 255.0f + 0.5f) << 8 |
+                static_cast<int>(pixels[center_idx + 2] * 255.0f + 0.5f)) -
+               1;
     }
 
     GLuint CameraFrustumRenderer::getOrLoadThumbnail(const lfs::core::Camera& camera) {

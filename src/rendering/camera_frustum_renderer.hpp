@@ -141,6 +141,14 @@ namespace lfs::rendering {
         int picking_fbo_width_ = 0;
         int picking_fbo_height_ = 0;
 
+        GLuint picking_pbos_[2] = {0, 0};
+        int pbo_index_ = 0;
+        bool pbo_has_data_ = false;
+        int pbo_sample_w_ = 0;
+        int pbo_sample_h_ = 0;
+
+        int decodePickId(const float* pixels, int width, int height) const;
+
         // Instance data
         std::vector<InstanceData> cached_instances_;
         std::vector<int> camera_ids_;

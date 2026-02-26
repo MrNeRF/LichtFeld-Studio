@@ -300,7 +300,8 @@ namespace lfs::vis {
             return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(ns));
         }
 
-        void doFullRender(const RenderContext& context, SceneManager* scene_manager, const lfs::core::SplatData* model);
+        void doFullRender(const RenderContext& context, SceneManager* scene_manager,
+                          const lfs::core::SplatData* model);
         void setupEventHandlers();
 
         // Core components
@@ -309,7 +310,7 @@ namespace lfs::vis {
         SplatRasterPass* splat_raster_pass_ = nullptr;
         OverlayPass* overlay_pass_ = nullptr;
         PointCloudPass* point_cloud_pass_ = nullptr;
-        FramerateController framerate_controller_;
+        mutable FramerateController framerate_controller_;
 
         // GT texture cache
         GTTextureCache gt_texture_cache_;
@@ -352,10 +353,14 @@ namespace lfs::vis {
         // Camera picking state
         int hovered_camera_id_ = -1;
         int highlighted_camera_index_ = -1;
-        glm::vec2 pending_pick_pos_{-1, -1};
-        bool pick_requested_ = false;
         std::chrono::steady_clock::time_point last_pick_time_;
         static constexpr auto pick_throttle_interval_ = std::chrono::milliseconds(50);
+
+        // Cached from last renderFrame for direct picking
+        SceneManager* last_scene_manager_ = nullptr;
+        lfs::rendering::ViewportData last_viewport_data_{};
+        ViewportRegion last_viewport_region_{};
+        bool has_pick_context_ = false;
 
         // Debug tracking
         uint64_t render_count_ = 0;
