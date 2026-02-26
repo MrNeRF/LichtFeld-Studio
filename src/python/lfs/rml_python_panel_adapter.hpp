@@ -22,6 +22,11 @@ namespace lfs::vis::gui {
         ~RmlPythonPanelAdapter() override;
 
         void draw(const PanelDrawContext& ctx) override;
+        bool supportsDirectDraw() const override { return true; }
+        void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx) override;
+        float getDirectDrawHeight() const override;
+        bool hasImguiOverlay() const override;
+        void drawImguiOverlay(const PanelDrawContext& ctx) override;
 
     private:
         void* host_ = nullptr;

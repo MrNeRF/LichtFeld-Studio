@@ -63,6 +63,17 @@ namespace lfs::vis::gui {
             (void)ctx;
             return true;
         }
+        virtual bool supportsDirectDraw() const { return false; }
+        virtual void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx) {
+            (void)x;
+            (void)y;
+            (void)w;
+            (void)h;
+            draw(ctx);
+        }
+        virtual float getDirectDrawHeight() const { return 0.0f; }
+        virtual bool hasImguiOverlay() const { return false; }
+        virtual void drawImguiOverlay(const PanelDrawContext& ctx) { (void)ctx; }
     };
 
     struct PanelInfo {
@@ -132,6 +143,9 @@ namespace lfs::vis::gui {
         void draw_single_panel(const std::string& idname, const PanelDrawContext& ctx);
         void draw_child_panels(const std::string& parent_idname, const PanelDrawContext& ctx);
         bool has_panels(PanelSpace space) const;
+
+        float draw_panels_direct(PanelSpace space, float x, float y, float w, float max_h,
+                                 const PanelDrawContext& ctx);
 
         std::vector<PanelSummary> get_panels_for_space(PanelSpace space);
         std::vector<std::string> get_panel_names(PanelSpace space) const;

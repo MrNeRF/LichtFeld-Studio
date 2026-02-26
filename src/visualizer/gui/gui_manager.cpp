@@ -466,6 +466,9 @@ namespace lfs::vis::gui {
             static_cast<RmlPanelHost*>(host)->draw(
                 *static_cast<const PanelDrawContext*>(ctx));
         };
+        ops.draw_direct = [](void* host, float x, float y, float w, float h) {
+            static_cast<RmlPanelHost*>(host)->drawDirect(x, y, w, h);
+        };
         ops.get_document = [](void* host) -> void* {
             return static_cast<RmlPanelHost*>(host)->getDocument();
         };

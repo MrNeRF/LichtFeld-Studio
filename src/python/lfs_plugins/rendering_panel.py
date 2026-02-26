@@ -273,11 +273,6 @@ class RenderingPanel(RmlPanel):
             draw_sequencer_section(layout)
 
         layout.separator()
-        lf.ui.invoke_hooks("rendering", "selection_groups", True)
-        lf.ui.invoke_hooks("rendering", "selection_groups", False)
-
-        layout.separator()
-        lf.ui.draw_tools_section()
         lf.ui.draw_console_button()
 
     def _set_color_hex(self, prop_id, hex_val):

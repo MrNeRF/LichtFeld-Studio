@@ -450,7 +450,17 @@
     "add_group": "+ Añadir Grupo",
     "no_selection_groups": "Sin grupos de selección",
     "clear": "Limpiar",
-    "mesh": "Malla"
+    "mesh": "Malla",
+    "mesh_wireframe": "Malla de alambre",
+    "mesh_wireframe_color": "Color de malla de alambre",
+    "mesh_wireframe_width": "Ancho de malla de alambre",
+    "mesh_light_intensity": "Intensidad de luz",
+    "mesh_ambient": "Ambiental",
+    "mesh_backface_culling": "Eliminación de caras traseras",
+    "mesh_shadow_enabled": "Sombras",
+    "mesh_shadow_resolution": "Resolución de sombras",
+    "camera_frustum_scale": "Escala de frustum",
+    "voxel_size": "Tamaño de vóxel"
   },
   "toolbar": {
     "selection": "Selección",

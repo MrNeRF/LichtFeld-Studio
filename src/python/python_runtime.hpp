@@ -539,6 +539,7 @@ namespace lfs::python {
         void* (*create)(void* manager, const char* context_name, const char* rml_path);
         void (*destroy)(void* host);
         void (*draw)(void* host, const void* draw_ctx);
+        void (*draw_direct)(void* host, float x, float y, float w, float h);
         void* (*get_document)(void* host);
         bool (*is_loaded)(void* host);
         void (*set_height_mode)(void* host, int mode);

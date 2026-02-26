@@ -275,6 +275,77 @@ namespace lfs::vis::gui {
         fbo_.blitAsImage(avail_w, display_h);
     }
 
+    void RmlPanelHost::drawDirect(float x, float y, float w, float h) {
+        if (w <= 0 || h <= 0)
+            return;
+
+        const float dp_ratio = manager_->getDpRatio();
+        const int pw = static_cast<int>(w * dp_ratio);
+
+        if (!ensureContext())
+            return;
+
+        if (!document_) {
+            try {
+                const auto full_path = lfs::vis::getAssetPath(rml_path_);
+                document_ = rml_context_->LoadDocument(full_path.string());
+                if (document_)
+                    document_->Show();
+                else
+                    LOG_ERROR("RmlUI: failed to load {}", rml_path_);
+            } catch (const std::exception& e) {
+                LOG_ERROR("RmlUI: resource not found: {}", e.what());
+            }
+        }
+        if (!document_)
+            return;
+
+        syncThemeProperties();
+
+        int ph;
+        float display_h;
+        if (height_mode_ == HeightMode::Content) {
+            const int layout_h = static_cast<int>(10000.0f * dp_ratio);
+            rml_context_->SetDimensions(Rml::Vector2i(pw, layout_h));
+            rml_context_->Update();
+
+            auto* wrap = document_->GetElementById("content-wrap");
+            const float content_h = wrap ? wrap->GetOffsetHeight() : 100.0f;
+            ph = std::max(1, static_cast<int>(std::ceil(content_h)));
+            display_h = static_cast<float>(ph) / dp_ratio;
+        } else {
+            ph = static_cast<int>(h * dp_ratio);
+            display_h = h;
+        }
+
+        last_content_height_ = display_h;
+
+        rml_context_->SetDimensions(Rml::Vector2i(pw, ph));
+        rml_context_->Update();
+
+        fbo_.ensure(pw, ph);
+        if (!fbo_.valid())
+            return;
+
+        forwardInput(x, y);
+
+        auto* render = manager_->getRenderInterface();
+        assert(render);
+        render->SetViewport(pw, ph);
+
+        GLint prev_fbo = 0;
+        fbo_.bind(&prev_fbo);
+
+        render->BeginFrame();
+        rml_context_->Render();
+        render->EndFrame();
+
+        fbo_.unbind(prev_fbo);
+
+        auto* vp = ImGui::GetMainViewport();
+        fbo_.blitToDrawList(ImGui::GetBackgroundDrawList(vp), {x, y}, {w, display_h});
+    }
+
     void RmlPanelHost::forwardInput(float panel_x, float panel_y) {
         assert(rml_context_);
 

@@ -450,7 +450,17 @@
     "add_group": "+ グループを追加",
     "no_selection_groups": "選択グループがありません",
     "clear": "クリア",
-    "mesh": "メッシュ"
+    "mesh": "メッシュ",
+    "mesh_wireframe": "ワイヤーフレーム",
+    "mesh_wireframe_color": "ワイヤーフレーム色",
+    "mesh_wireframe_width": "ワイヤーフレーム幅",
+    "mesh_light_intensity": "光の強度",
+    "mesh_ambient": "環境光",
+    "mesh_backface_culling": "裏面カリング",
+    "mesh_shadow_enabled": "影",
+    "mesh_shadow_resolution": "影の解像度",
+    "camera_frustum_scale": "視錐台スケール",
+    "voxel_size": "ボクセルサイズ"
   },
   "toolbar": {
     "selection": "選択",

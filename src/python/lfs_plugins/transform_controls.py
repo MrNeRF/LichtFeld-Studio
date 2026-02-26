@@ -1,11 +1,13 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Transform panel for editing node transforms."""
+"""Transform panel for editing node transforms - RmlUI panel with ImGui draw."""
 
 import math
-from typing import Optional, List
+from typing import List
 
 import lichtfeld as lf
+
+from .types import RmlPanel
 
 TRANSLATE_STEP = 0.01
 TRANSLATE_STEP_FAST = 0.1
@@ -59,11 +61,18 @@ class TransformPanelState:
         self.multi_transforms_before = []
 
 
-class TransformPanel:
+class TransformControlsPanel(RmlPanel):
+    idname = "lfs.transform_controls"
+    label = "Transform"
+    space = "MAIN_PANEL_TAB"
+    order = 120
+    rml_template = "rmlui/transform_controls.rml"
+    rml_height_mode = "content"
+
     def __init__(self):
         self._state = TransformPanelState()
 
-    def draw(self, layout):
+    def draw_imgui(self, layout):
         active_tool = lf.ui.get_active_tool()
         if active_tool not in ("builtin.translate", "builtin.rotate", "builtin.scale"):
             return
@@ -440,21 +449,10 @@ class TransformPanel:
                       old_transforms=old_transforms)
 
 
-_panel_instance: Optional[TransformPanel] = None
-
-
-def _draw_hook(layout):
-    global _panel_instance
-    if _panel_instance is None:
-        _panel_instance = TransformPanel()
-    _panel_instance.draw(layout)
-
-
 def register():
-    lf.ui.add_hook("tools", "transform", _draw_hook, "prepend")
+    lf.ui.register_rml_panel(TransformControlsPanel)
+    lf.ui.set_panel_parent("lfs.transform_controls", "lfs.rendering")
 
 
 def unregister():
-    global _panel_instance
-    lf.ui.remove_hook("tools", "transform", _draw_hook)
-    _panel_instance = None
+    lf.ui.set_panel_enabled("lfs.transform_controls", False)

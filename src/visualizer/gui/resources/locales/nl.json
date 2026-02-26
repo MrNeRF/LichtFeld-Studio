@@ -450,7 +450,17 @@
     "add_group": "+ Groep Toevoegen",
     "no_selection_groups": "Geen selectie groepen",
     "clear": "Wissen",
-    "mesh": "Mesh"
+    "mesh": "Mesh",
+    "mesh_wireframe": "Draadmodel",
+    "mesh_wireframe_color": "Draadmodel kleur",
+    "mesh_wireframe_width": "Draadmodel breedte",
+    "mesh_light_intensity": "Lichtintensiteit",
+    "mesh_ambient": "Omgevingslicht",
+    "mesh_backface_culling": "Achtervlak verwijdering",
+    "mesh_shadow_enabled": "Schaduwen",
+    "mesh_shadow_resolution": "Schaduwresolutie",
+    "camera_frustum_scale": "Frustum schaal",
+    "voxel_size": "Voxelgrootte"
   },
   "toolbar": {
     "selection": "Selectie",

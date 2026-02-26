@@ -450,7 +450,17 @@
     "add_group": "+ Ajouter un Groupe",
     "no_selection_groups": "Aucun groupe de sélection",
     "clear": "Effacer",
-    "mesh": "Maillage"
+    "mesh": "Maillage",
+    "mesh_wireframe": "Fil de fer",
+    "mesh_wireframe_color": "Couleur fil de fer",
+    "mesh_wireframe_width": "Épaisseur fil de fer",
+    "mesh_light_intensity": "Intensité lumineuse",
+    "mesh_ambient": "Ambiante",
+    "mesh_backface_culling": "Élimination des faces arrière",
+    "mesh_shadow_enabled": "Ombres",
+    "mesh_shadow_resolution": "Résolution des ombres",
+    "camera_frustum_scale": "Échelle du frustum",
+    "voxel_size": "Taille de voxel"
   },
   "toolbar": {
     "selection": "Sélection",

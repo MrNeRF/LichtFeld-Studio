@@ -1,0 +1,23 @@
+<rml>
+<head>
+  <link type="text/rcss" href="selection_groups.rcss"/>
+</head>
+<body id="body">
+<div id="content-wrap">
+
+  <div class="section-header" id="hdr-groups">
+    <span class="section-arrow" id="arrow-groups">&#x25BC;</span>
+    <span id="title-groups">Selection Groups</span>
+  </div>
+  <div id="groups-section">
+    <button class="btn btn--secondary btn--full" id="btn-add-group">Add Group</button>
+    <div id="groups-list"></div>
+    <span class="empty-message" id="no-groups-msg"></span>
+  </div>
+
+  <div id="context-menu" class="context-menu">
+  </div>
+
+</div>
+</body>
+</rml>

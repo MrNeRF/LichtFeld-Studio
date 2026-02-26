@@ -239,6 +239,50 @@ namespace lfs::vis::gui {
         }
     }
 
+    float PanelRegistry::draw_panels_direct(PanelSpace space, float x, float y, float w,
+                                            float max_h, const PanelDrawContext& ctx) {
+        std::vector<PanelSnapshot> snapshots;
+        {
+            std::lock_guard lock(mutex_);
+            for (size_t i = 0; i < panels_.size(); ++i) {
+                auto& p = panels_[i];
+                if (p.space == space && p.enabled && !p.error_disabled && p.parent_idname.empty()) {
+                    snapshots.push_back({i, p.panel.get(), p.label, p.idname,
+                                         p.parent_idname, p.options, p.is_native,
+                                         p.poll_deps, p.initial_width, p.initial_height});
+                }
+            }
+        }
+
+        float y_offset = 0.0f;
+        for (auto& snap : snapshots) {
+            try {
+                if (!check_poll(snap, ctx))
+                    continue;
+            } catch (const std::exception& e) {
+                LOG_ERROR("Panel '{}' poll error: {}", snap.label, e.what());
+                continue;
+            }
+
+            const float remaining = max_h - y_offset;
+            if (remaining <= 0)
+                break;
+
+            bool draw_succeeded = false;
+            try {
+                snap.panel->drawDirect(x, y + y_offset, w, remaining, ctx);
+                const float h = snap.panel->getDirectDrawHeight();
+                y_offset += h > 0 ? h : remaining;
+                draw_succeeded = true;
+            } catch (const std::exception& e) {
+                LOG_ERROR("Panel '{}' drawDirect error: {}", snap.label, e.what());
+            }
+
+            track_draw_result(snap, draw_succeeded);
+        }
+        return y_offset;
+    }
+
     void PanelRegistry::draw_single_panel(const std::string& idname, const PanelDrawContext& ctx) {
         std::shared_ptr<IPanel> panel_holder;
         PanelSnapshot snap{};

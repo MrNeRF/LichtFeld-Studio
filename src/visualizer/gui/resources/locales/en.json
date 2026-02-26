@@ -450,7 +450,17 @@
     "selection_groups": "Selection Groups",
     "add_group": "+ Add Group",
     "no_selection_groups": "No selection groups",
-    "clear": "Clear"
+    "clear": "Clear",
+    "mesh_wireframe": "Wireframe",
+    "mesh_wireframe_color": "Wireframe Color",
+    "mesh_wireframe_width": "Wireframe Width",
+    "mesh_light_intensity": "Light Intensity",
+    "mesh_ambient": "Ambient",
+    "mesh_backface_culling": "Backface Culling",
+    "mesh_shadow_enabled": "Shadows",
+    "mesh_shadow_resolution": "Shadow Resolution",
+    "camera_frustum_scale": "Frustum Scale",
+    "voxel_size": "Voxel Size"
   },
   "toolbar": {
     "selection": "Selection",

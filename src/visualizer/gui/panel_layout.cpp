@@ -5,7 +5,6 @@
 #include "gui/panel_layout.hpp"
 #include "gui/panels/python_console_panel.hpp"
 #include "python/python_runtime.hpp"
-#include "theme/theme.hpp"
 #include "visualizer_impl.hpp"
 #include <algorithm>
 #include <imgui.h>
@@ -72,63 +71,63 @@ namespace lfs::vis::gui {
         }
 
         const float panel_x = right_panel_x;
-        ImGui::SetNextWindowPos({panel_x, vp->WorkPos.y}, ImGuiCond_Always);
-        ImGui::SetNextWindowSize({right_panel_width_, panel_h}, ImGuiCond_Always);
+        constexpr float PAD = 8.0f;
+        const float content_x = panel_x + PAD;
+        const float content_w = right_panel_width_ - 2.0f * PAD;
+        const float content_top = vp->WorkPos.y + PAD;
 
-        constexpr ImGuiWindowFlags PANEL_FLAGS =
-            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDocking |
-            ImGuiWindowFlags_NoTitleBar;
+        const float dpi = lfs::python::get_shared_dpi_scale();
+        const float splitter_h = SPLITTER_H * dpi;
+        const float tab_bar_h = TAB_BAR_H * dpi;
+        constexpr float MIN_H = 80.0f;
+        const float min_h = MIN_H * dpi;
+        const float avail_h = panel_h - 2.0f * PAD;
 
-        const auto& t = theme();
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {8.0f, 8.0f});
+        const float scene_h = std::max(min_h, avail_h * scene_panel_ratio_ - splitter_h * 0.5f);
 
-        if (ImGui::Begin("##RightPanel", nullptr, PANEL_FLAGS)) {
-            ImGui::PushStyleColor(ImGuiCol_ChildBg, {0, 0, 0, 0});
-            const float avail_h = ImGui::GetContentRegionAvail().y;
-            const float dpi = lfs::python::get_shared_dpi_scale();
-            constexpr float MIN_H = 80.0f;
-            const float splitter_h = SPLITTER_H * dpi;
-            const float tab_bar_h = TAB_BAR_H * dpi;
-            const float min_h = MIN_H * dpi;
+        auto& reg = PanelRegistry::instance();
+        reg.draw_panels_direct(PanelSpace::SceneHeader, content_x, content_top,
+                               content_w, scene_h, draw_ctx);
 
-            const float scene_h = std::max(min_h, avail_h * scene_panel_ratio_ - splitter_h * 0.5f);
-            if (ImGui::BeginChild("##ScenePanel", {0, scene_h}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
-                PanelRegistry::instance().draw_panels(PanelSpace::SceneHeader, draw_ctx);
-            }
-            ImGui::EndChild();
+        const auto main_tabs = reg.get_panels_for_space(PanelSpace::MainPanelTab);
 
-            ImGui::Dummy({0, splitter_h + tab_bar_h});
-
-            auto& reg = PanelRegistry::instance();
-            const auto main_tabs = reg.get_panels_for_space(PanelSpace::MainPanelTab);
-
-            if (!focus_panel_name.empty()) {
-                for (const auto& tab : main_tabs) {
-                    if (focus_panel_name == tab.label || focus_panel_name == tab.idname) {
-                        active_tab_idname_ = tab.idname;
-                        focus_panel_name.clear();
-                        break;
-                    }
+        if (!focus_panel_name.empty()) {
+            for (const auto& tab : main_tabs) {
+                if (focus_panel_name == tab.label || focus_panel_name == tab.idname) {
+                    active_tab_idname_ = tab.idname;
+                    focus_panel_name.clear();
+                    break;
                 }
             }
+        }
 
-            if (active_tab_idname_.empty() && !main_tabs.empty())
-                active_tab_idname_ = main_tabs[0].idname;
+        if (active_tab_idname_.empty() && !main_tabs.empty())
+            active_tab_idname_ = main_tabs[0].idname;
 
-            const std::string child_id = "##" + active_tab_idname_ + "Panel";
-            if (ImGui::BeginChild(child_id.c_str(), {0, 0}, ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground)) {
-                reg.draw_single_panel(active_tab_idname_, draw_ctx);
-                reg.draw_child_panels(active_tab_idname_, draw_ctx);
-                reg.draw_panels(PanelSpace::SidePanel, draw_ctx);
-            }
-            ImGui::EndChild();
-            ImGui::PopStyleColor();
+        const float tab_content_y = content_top + scene_h + splitter_h + tab_bar_h;
+        const float tab_content_h = std::max(0.0f, content_top + avail_h - tab_content_y);
+
+        constexpr ImGuiWindowFlags TAB_FLAGS =
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDocking |
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoFocusOnAppearing |
+            ImGuiWindowFlags_NoScrollbar;
+
+        ImGui::SetNextWindowPos({panel_x, tab_content_y}, ImGuiCond_Always);
+        ImGui::SetNextWindowSize({right_panel_width_, tab_content_h}, ImGuiCond_Always);
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0, 0, 0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {PAD, 0});
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+
+        if (ImGui::Begin("##RightPanelContent", nullptr, TAB_FLAGS)) {
+            reg.draw_single_panel(active_tab_idname_, draw_ctx);
+            reg.draw_child_panels(active_tab_idname_, draw_ctx);
+            reg.draw_panels(PanelSpace::SidePanel, draw_ctx);
         }
         ImGui::End();
-        ImGui::PopStyleVar();
-        ImGui::PopStyleColor();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor(2);
     }
 
     void PanelLayoutManager::adjustScenePanelRatio(float delta_y) {

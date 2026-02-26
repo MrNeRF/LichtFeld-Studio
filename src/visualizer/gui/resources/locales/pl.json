@@ -450,7 +450,17 @@
     "add_group": "+ Dodaj Grupę",
     "no_selection_groups": "Brak grup zaznaczenia",
     "clear": "Wyczyść",
-    "mesh": "Siatka"
+    "mesh": "Siatka",
+    "mesh_wireframe": "Szkielet",
+    "mesh_wireframe_color": "Kolor szkieletu",
+    "mesh_wireframe_width": "Szerokość szkieletu",
+    "mesh_light_intensity": "Intensywność światła",
+    "mesh_ambient": "Światło otoczenia",
+    "mesh_backface_culling": "Usuwanie tylnych ścian",
+    "mesh_shadow_enabled": "Cienie",
+    "mesh_shadow_resolution": "Rozdzielczość cieni",
+    "camera_frustum_scale": "Skala ostrosłupa",
+    "voxel_size": "Rozmiar voksela"
   },
   "toolbar": {
     "selection": "Zaznaczenie",

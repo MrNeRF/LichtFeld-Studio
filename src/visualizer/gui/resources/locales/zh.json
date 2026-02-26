@@ -450,7 +450,17 @@
     "add_group": "+ 添加组",
     "no_selection_groups": "无选择组",
     "clear": "清除",
-    "mesh": "网格"
+    "mesh": "网格",
+    "mesh_wireframe": "线框",
+    "mesh_wireframe_color": "线框颜色",
+    "mesh_wireframe_width": "线框宽度",
+    "mesh_light_intensity": "光照强度",
+    "mesh_ambient": "环境光",
+    "mesh_backface_culling": "背面剔除",
+    "mesh_shadow_enabled": "阴影",
+    "mesh_shadow_resolution": "阴影分辨率",
+    "camera_frustum_scale": "视锥体缩放",
+    "voxel_size": "体素大小"
   },
   "toolbar": {
     "selection": "选择",

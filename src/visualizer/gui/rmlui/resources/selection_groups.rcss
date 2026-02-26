@@ -1,0 +1,48 @@
+body {
+    font-family: Inter;
+    font-size: 14dp;
+    color: #cdd6f4;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: auto;
+    padding: 0;
+}
+
+.group-row {
+    display: flex;
+    align-items: center;
+    padding: 1dp 4dp;
+    cursor: pointer;
+}
+
+.group-row:hover {
+    background-color: rgba(88, 91, 112, 77);
+}
+
+.group-row.active {
+    background-color: rgba(88, 91, 112, 128);
+}
+
+.group-row .lock-btn {
+    width: 20dp;
+    height: 20dp;
+    padding: 2dp;
+    flex-shrink: 0;
+}
+
+.group-row .lock-btn img {
+    width: 14dp;
+    height: 14dp;
+}
+
+.group-row .color-swatch {
+    margin-right: 6dp;
+}
+
+.group-name {
+    flex: 1;
+    font-size: 13dp;
+    overflow: hidden;
+    white-space: nowrap;
+}

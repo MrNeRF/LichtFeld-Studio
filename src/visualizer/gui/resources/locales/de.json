@@ -450,7 +450,17 @@
     "add_group": "+ Gruppe hinzufügen",
     "no_selection_groups": "Keine Auswahlgruppen",
     "clear": "Löschen",
-    "mesh": "Mesh"
+    "mesh": "Mesh",
+    "mesh_wireframe": "Drahtgitter",
+    "mesh_wireframe_color": "Drahtgitterfarbe",
+    "mesh_wireframe_width": "Drahtgitterbreite",
+    "mesh_light_intensity": "Lichtintensität",
+    "mesh_ambient": "Umgebungslicht",
+    "mesh_backface_culling": "Rückseitenentfernung",
+    "mesh_shadow_enabled": "Schatten",
+    "mesh_shadow_resolution": "Schattenauflösung",
+    "camera_frustum_scale": "Frustum-Skalierung",
+    "voxel_size": "Voxelgröße"
   },
   "toolbar": {
     "selection": "Auswahl",

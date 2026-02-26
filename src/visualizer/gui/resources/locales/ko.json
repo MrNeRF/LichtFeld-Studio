@@ -450,7 +450,17 @@
     "add_group": "+ 그룹 추가",
     "no_selection_groups": "선택 그룹 없음",
     "clear": "지우기",
-    "mesh": "메시"
+    "mesh": "메시",
+    "mesh_wireframe": "와이어프레임",
+    "mesh_wireframe_color": "와이어프레임 색상",
+    "mesh_wireframe_width": "와이어프레임 두께",
+    "mesh_light_intensity": "조명 강도",
+    "mesh_ambient": "환경광",
+    "mesh_backface_culling": "후면 제거",
+    "mesh_shadow_enabled": "그림자",
+    "mesh_shadow_resolution": "그림자 해상도",
+    "camera_frustum_scale": "절두체 스케일",
+    "voxel_size": "복셀 크기"
   },
   "toolbar": {
     "selection": "선택",
