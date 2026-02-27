@@ -1,0 +1,644 @@
+/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+// clang-format off
+#include <glad/glad.h>
+// clang-format on
+
+#include "gui/rml_sequencer_overlay.hpp"
+#include "core/events.hpp"
+#include "core/logger.hpp"
+#include "gui/rmlui/rml_theme.hpp"
+#include "gui/rmlui/rmlui_manager.hpp"
+#include "gui/rmlui/rmlui_render_interface.hpp"
+#include "internal/resource_paths.hpp"
+#include "sequencer/keyframe.hpp"
+#include "sequencer/sequencer_controller.hpp"
+#include "theme/theme.hpp"
+
+#include <RmlUi/Core.h>
+#include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/Input.h>
+#include <cassert>
+#include <cstring>
+#include <format>
+#include <imgui.h>
+
+namespace lfs::vis::gui {
+
+    namespace {
+        Rml::Input::KeyIdentifier imguiKeyToRml(ImGuiKey key) {
+            // clang-format off
+            switch (key) {
+            case ImGuiKey_Space:      return Rml::Input::KI_SPACE;
+            case ImGuiKey_Backspace:  return Rml::Input::KI_BACK;
+            case ImGuiKey_Tab:        return Rml::Input::KI_TAB;
+            case ImGuiKey_Enter:      return Rml::Input::KI_RETURN;
+            case ImGuiKey_Escape:     return Rml::Input::KI_ESCAPE;
+            case ImGuiKey_Delete:     return Rml::Input::KI_DELETE;
+            case ImGuiKey_Home:       return Rml::Input::KI_HOME;
+            case ImGuiKey_End:        return Rml::Input::KI_END;
+            case ImGuiKey_LeftArrow:  return Rml::Input::KI_LEFT;
+            case ImGuiKey_RightArrow: return Rml::Input::KI_RIGHT;
+            case ImGuiKey_UpArrow:    return Rml::Input::KI_UP;
+            case ImGuiKey_DownArrow:  return Rml::Input::KI_DOWN;
+            default: break;
+            }
+            // clang-format on
+
+            if (key >= ImGuiKey_A && key <= ImGuiKey_Z)
+                return static_cast<Rml::Input::KeyIdentifier>(
+                    Rml::Input::KI_A + (key - ImGuiKey_A));
+            if (key >= ImGuiKey_0 && key <= ImGuiKey_9)
+                return static_cast<Rml::Input::KeyIdentifier>(
+                    Rml::Input::KI_0 + (key - ImGuiKey_0));
+
+            return Rml::Input::KI_UNKNOWN;
+        }
+
+        int buildRmlModifiers() {
+            ImGuiIO& io = ImGui::GetIO();
+            int mods = 0;
+            if (io.KeyCtrl)
+                mods |= Rml::Input::KM_CTRL;
+            if (io.KeyShift)
+                mods |= Rml::Input::KM_SHIFT;
+            if (io.KeyAlt)
+                mods |= Rml::Input::KM_ALT;
+            return mods;
+        }
+
+        constexpr const char* EASING_NAMES[] = {"Linear", "Ease In", "Ease Out", "Ease In-Out"};
+    } // namespace
+
+    RmlSequencerOverlay::RmlSequencerOverlay(SequencerController& controller, RmlUIManager* rml_manager)
+        : controller_(controller),
+          rml_manager_(rml_manager) {
+        assert(rml_manager_);
+        listener_.overlay = this;
+    }
+
+    RmlSequencerOverlay::~RmlSequencerOverlay() {
+        fbo_.destroy();
+        if (rml_context_ && rml_manager_)
+            rml_manager_->destroyContext("sequencer_overlay");
+    }
+
+    void RmlSequencerOverlay::initContext() {
+        if (rml_context_)
+            return;
+
+        rml_context_ = rml_manager_->createContext("sequencer_overlay", 800, 600);
+        if (!rml_context_) {
+            LOG_ERROR("RmlSequencerOverlay: failed to create context");
+            return;
+        }
+
+        rml_context_->EnableMouseCursor(false);
+
+        try {
+            const auto rml_path = lfs::vis::getAssetPath("rmlui/sequencer_overlay.rml");
+            document_ = rml_context_->LoadDocument(rml_path.string());
+            if (!document_) {
+                LOG_ERROR("RmlSequencerOverlay: failed to load sequencer_overlay.rml");
+                return;
+            }
+            document_->Show();
+            cacheElements();
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlSequencerOverlay: resource not found: {}", e.what());
+        }
+    }
+
+    void RmlSequencerOverlay::cacheElements() {
+        assert(document_);
+        el_menu_backdrop_ = document_->GetElementById("menu-backdrop");
+        el_context_menu_ = document_->GetElementById("keyframe-context-menu");
+        el_popup_backdrop_ = document_->GetElementById("popup-backdrop");
+        el_time_popup_ = document_->GetElementById("time-edit-popup");
+        el_focal_popup_ = document_->GetElementById("focal-edit-popup");
+        el_time_input_ = document_->GetElementById("time-edit-input");
+        el_focal_input_ = document_->GetElementById("focal-edit-input");
+        el_edit_overlay_ = document_->GetElementById("kf-edit-overlay");
+        el_edit_label_ = document_->GetElementById("kf-edit-label");
+        el_edit_delta_ = document_->GetElementById("kf-edit-delta");
+
+        elements_cached_ = el_menu_backdrop_ && el_context_menu_ && el_popup_backdrop_ &&
+                           el_time_popup_ && el_focal_popup_ && el_time_input_ &&
+                           el_focal_input_ && el_edit_overlay_ && el_edit_label_ && el_edit_delta_;
+
+        if (!elements_cached_) {
+            LOG_ERROR("RmlSequencerOverlay: missing DOM elements");
+            return;
+        }
+
+        el_menu_backdrop_->AddEventListener(Rml::EventId::Click, &listener_);
+        el_context_menu_->AddEventListener(Rml::EventId::Click, &listener_);
+        el_popup_backdrop_->AddEventListener(Rml::EventId::Click, &listener_);
+        el_edit_overlay_->AddEventListener(Rml::EventId::Click, &listener_);
+        el_time_popup_->AddEventListener(Rml::EventId::Click, &listener_);
+        el_focal_popup_->AddEventListener(Rml::EventId::Click, &listener_);
+    }
+
+    std::string RmlSequencerOverlay::generateThemeRCSS() const {
+        using rml_theme::colorToRml;
+        using rml_theme::colorToRmlAlpha;
+        const auto& p = lfs::vis::theme().palette;
+        const auto& t = lfs::vis::theme();
+
+        const auto surface = colorToRmlAlpha(p.surface, 0.95f);
+        const auto border = colorToRmlAlpha(p.border, 0.4f);
+        const auto text = colorToRml(p.text);
+        const auto text_dim = colorToRml(p.text_dim);
+        const auto primary = colorToRml(p.primary);
+        const auto sep_color = colorToRmlAlpha(p.border, 0.5f);
+        const int rounding = static_cast<int>(t.sizes.window_rounding);
+
+        return std::format(
+            ".overlay-panel {{ background-color: {}; border-color: {}; border-radius: {}dp; }}\n"
+            ".overlay-text {{ color: {}; }}\n"
+            ".overlay-text-dim {{ color: {}; }}\n"
+            ".close-x {{ color: {}; }}\n"
+            ".edit-popup {{ background-color: {}; border-color: {}; border-radius: {}dp; }}\n"
+            ".popup-title {{ color: {}; }}\n"
+            ".popup-sep {{ background-color: {}; }}\n",
+            surface, border, rounding,
+            text, text_dim, text_dim,
+            surface, border, rounding,
+            text, sep_color);
+    }
+
+    void RmlSequencerOverlay::syncTheme() {
+        if (!document_)
+            return;
+
+        const auto& p = lfs::vis::theme().palette;
+        if (std::memcmp(last_synced_text_, &p.text, sizeof(last_synced_text_)) == 0)
+            return;
+        std::memcpy(last_synced_text_, &p.text, sizeof(last_synced_text_));
+
+        if (base_rcss_.empty())
+            base_rcss_ = rml_theme::loadBaseRCSS("rmlui/sequencer_overlay.rcss");
+
+        rml_theme::applyTheme(document_, base_rcss_, generateThemeRCSS());
+    }
+
+    std::string RmlSequencerOverlay::buildContextMenuHTML(
+        std::optional<size_t> keyframe,
+        ImGuizmo::OPERATION gizmo_op) const {
+
+        const auto& timeline = controller_.timeline();
+        std::string html;
+        html.reserve(1024);
+
+        html += R"(<div class="context-menu-item" id="ctx-add">Add Keyframe Here<span class="context-menu-label" style="float: right; display: inline; padding: 0;">K</span></div>)";
+
+        if (keyframe.has_value() && *keyframe < timeline.size()) {
+            const size_t idx = *keyframe;
+            const bool is_first = (idx == 0);
+            const bool is_last = (idx == timeline.size() - 1);
+
+            html += R"(<div class="context-menu-separator"></div>)";
+            html += R"(<div class="context-menu-item" id="ctx-update">Update to Current View<span class="context-menu-label" style="float: right; display: inline; padding: 0;">U</span></div>)";
+            html += R"(<div class="context-menu-item" id="ctx-goto">Go to Keyframe</div>)";
+            html += R"(<div class="context-menu-item" id="ctx-focal">Edit Focal Length...</div>)";
+            html += R"(<div class="context-menu-separator"></div>)";
+
+            const bool translate_active = gizmo_op == ImGuizmo::TRANSLATE;
+            const bool rotate_active = gizmo_op == ImGuizmo::ROTATE;
+
+            if (translate_active)
+                html += R"(<div class="context-menu-item active" id="ctx-translate">Move (Translate)</div>)";
+            else
+                html += R"(<div class="context-menu-item" id="ctx-translate">Move (Translate)</div>)";
+
+            if (rotate_active)
+                html += R"(<div class="context-menu-item active" id="ctx-rotate">Rotate</div>)";
+            else
+                html += R"(<div class="context-menu-item" id="ctx-rotate">Rotate</div>)";
+
+            html += R"(<div class="context-menu-separator"></div>)";
+
+            if (!is_last) {
+                const auto current_easing = timeline.keyframes()[idx].easing;
+                html += R"(<div class="context-menu-label">Easing</div>)";
+                for (int e = 0; e < 4; ++e) {
+                    const auto easing = static_cast<lfs::sequencer::EasingType>(e);
+                    const bool active = (current_easing == easing);
+                    html += std::format(
+                        R"(<div class="context-menu-item submenu-item{}" id="ctx-easing-{}">{}</div>)",
+                        active ? " active" : "", e, EASING_NAMES[e]);
+                }
+            } else {
+                html += R"(<div class="context-menu-label">Easing (last keyframe)</div>)";
+            }
+
+            html += R"(<div class="context-menu-separator"></div>)";
+
+            if (is_first)
+                html += R"(<div class="context-menu-item disabled" id="ctx-delete-disabled">Delete Keyframe</div>)";
+            else
+                html += R"(<div class="context-menu-item" id="ctx-delete">Delete Keyframe<span class="context-menu-label" style="float: right; display: inline; padding: 0;">Del</span></div>)";
+        }
+
+        return html;
+    }
+
+    void RmlSequencerOverlay::showContextMenu(float screen_x, float screen_y,
+                                              std::optional<size_t> keyframe_index,
+                                              ImGuizmo::OPERATION gizmo_op) {
+        if (!elements_cached_)
+            return;
+
+        context_menu_keyframe_ = keyframe_index;
+        context_menu_open_ = true;
+
+        const std::string html = buildContextMenuHTML(keyframe_index, gizmo_op);
+        el_context_menu_->SetInnerRML(html);
+        el_context_menu_->SetProperty("left", std::format("{:.0f}dp", screen_x));
+        el_context_menu_->SetProperty("top", std::format("{:.0f}dp", screen_y));
+        el_context_menu_->SetClass("visible", true);
+        el_menu_backdrop_->SetProperty("display", "block");
+    }
+
+    void RmlSequencerOverlay::hideContextMenu() {
+        if (!elements_cached_)
+            return;
+
+        context_menu_open_ = false;
+        context_menu_keyframe_ = std::nullopt;
+        el_context_menu_->SetClass("visible", false);
+        el_menu_backdrop_->SetProperty("display", "none");
+    }
+
+    void RmlSequencerOverlay::showTimeEdit(size_t index, float current_time) {
+        if (!elements_cached_)
+            return;
+
+        time_edit_active_ = true;
+        time_edit_index_ = index;
+
+        el_time_input_->SetAttribute("value", std::format("{:.2f}", current_time));
+
+        const auto& io = ImGui::GetIO();
+        const float popup_x = io.DisplaySize.x * 0.5f - 110.0f;
+        const float popup_y = io.DisplaySize.y * 0.5f - 60.0f;
+        el_time_popup_->SetProperty("left", std::format("{:.0f}dp", popup_x));
+        el_time_popup_->SetProperty("top", std::format("{:.0f}dp", popup_y));
+        el_time_popup_->SetProperty("display", "block");
+        el_popup_backdrop_->SetProperty("display", "block");
+
+        el_time_input_->Focus();
+        has_text_focus_ = true;
+    }
+
+    void RmlSequencerOverlay::showFocalEdit(size_t index, float current_focal_mm) {
+        if (!elements_cached_)
+            return;
+
+        focal_edit_active_ = true;
+        focal_edit_index_ = index;
+
+        el_focal_input_->SetAttribute("value", std::format("{:.1f}", current_focal_mm));
+
+        const auto& io = ImGui::GetIO();
+        const float popup_x = io.DisplaySize.x * 0.5f - 110.0f;
+        const float popup_y = io.DisplaySize.y * 0.5f - 60.0f;
+        el_focal_popup_->SetProperty("left", std::format("{:.0f}dp", popup_x));
+        el_focal_popup_->SetProperty("top", std::format("{:.0f}dp", popup_y));
+        el_focal_popup_->SetProperty("display", "block");
+        el_popup_backdrop_->SetProperty("display", "block");
+
+        el_focal_input_->Focus();
+        has_text_focus_ = true;
+    }
+
+    void RmlSequencerOverlay::submitTimeEdit() {
+        if (!time_edit_active_ || !el_time_input_)
+            return;
+
+        const Rml::String val = el_time_input_->GetAttribute<Rml::String>("value", "");
+        const float new_time = std::strtof(val.c_str(), nullptr);
+        if (new_time > 0.0f && time_edit_index_ > 0)
+            pending_time_edit_ = EditResult{time_edit_index_, new_time};
+
+        time_edit_active_ = false;
+        has_text_focus_ = false;
+        el_time_popup_->SetProperty("display", "none");
+        el_popup_backdrop_->SetProperty("display", "none");
+    }
+
+    void RmlSequencerOverlay::submitFocalEdit() {
+        if (!focal_edit_active_ || !el_focal_input_)
+            return;
+
+        const Rml::String val = el_focal_input_->GetAttribute<Rml::String>("value", "");
+        const float new_focal = std::strtof(val.c_str(), nullptr);
+        if (new_focal > 0.0f)
+            pending_focal_edit_ = EditResult{focal_edit_index_, new_focal};
+
+        focal_edit_active_ = false;
+        has_text_focus_ = false;
+        el_focal_popup_->SetProperty("display", "none");
+        el_popup_backdrop_->SetProperty("display", "none");
+    }
+
+    void RmlSequencerOverlay::updateEditOverlay(size_t selected, float pos_delta, float rot_delta,
+                                                float right_x, float top_y) {
+        if (!elements_cached_)
+            return;
+
+        constexpr float MARGIN = 16.0f;
+        constexpr float OVERLAY_WIDTH = 200.0f;
+        constexpr const char* DEG_SIGN = "\xC2\xB0";
+
+        const float left = right_x - OVERLAY_WIDTH - MARGIN;
+        const float top = top_y + MARGIN;
+
+        el_edit_overlay_->SetProperty("left", std::format("{:.0f}dp", left));
+        el_edit_overlay_->SetProperty("top", std::format("{:.0f}dp", top));
+        el_edit_label_->SetInnerRML(std::format("Editing Keyframe {}", selected + 1));
+        el_edit_delta_->SetInnerRML(std::format("{:.3f}m  {:.1f}{}", pos_delta, rot_delta, DEG_SIGN));
+
+        if (!edit_overlay_visible_) {
+            el_edit_overlay_->SetProperty("display", "block");
+            edit_overlay_visible_ = true;
+        }
+    }
+
+    void RmlSequencerOverlay::hideEditOverlay() {
+        if (!elements_cached_ || !edit_overlay_visible_)
+            return;
+
+        el_edit_overlay_->SetProperty("display", "none");
+        edit_overlay_visible_ = false;
+    }
+
+    void RmlSequencerOverlay::processInput(const PanelInputState& input) {
+        wants_input_ = false;
+        if (!rml_context_ || !document_ || !elements_cached_)
+            return;
+
+        const float dp_ratio = rml_manager_->getDpRatio();
+        const float mx = input.mouse_x * dp_ratio;
+        const float my = input.mouse_y * dp_ratio;
+
+        rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), 0);
+
+        auto* hover = rml_context_->GetHoverElement();
+        const bool over_interactive = hover && hover->GetTagName() != "body" &&
+                                      hover->GetId() != "body";
+
+        if (over_interactive || context_menu_open_ || time_edit_active_ || focal_edit_active_) {
+            wants_input_ = true;
+
+            if (input.mouse_clicked[0])
+                rml_context_->ProcessMouseButtonDown(0, 0);
+            if (!input.mouse_down[0])
+                rml_context_->ProcessMouseButtonUp(0, 0);
+            if (input.mouse_clicked[1])
+                rml_context_->ProcessMouseButtonDown(1, 0);
+            if (!input.mouse_down[1])
+                rml_context_->ProcessMouseButtonUp(1, 0);
+        }
+
+        const bool need_keyboard = has_text_focus_ || context_menu_open_ ||
+                                   time_edit_active_ || focal_edit_active_;
+        if (need_keyboard) {
+            ImGuiIO& io = ImGui::GetIO();
+            io.WantCaptureKeyboard = true;
+
+            const int mods = buildRmlModifiers();
+            for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
+                const auto imgui_key = static_cast<ImGuiKey>(k);
+                const auto rml_key = imguiKeyToRml(imgui_key);
+                if (rml_key == Rml::Input::KI_UNKNOWN)
+                    continue;
+                if (ImGui::IsKeyPressed(imgui_key, false))
+                    rml_context_->ProcessKeyDown(rml_key, mods);
+                if (ImGui::IsKeyReleased(imgui_key))
+                    rml_context_->ProcessKeyUp(rml_key, mods);
+            }
+
+            if (has_text_focus_) {
+                for (int i = 0; i < io.InputQueueCharacters.Size; i++)
+                    rml_context_->ProcessTextInput(
+                        static_cast<Rml::Character>(io.InputQueueCharacters[i]));
+            }
+
+            if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
+                if (time_edit_active_)
+                    submitTimeEdit();
+                else if (focal_edit_active_)
+                    submitFocalEdit();
+            }
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+                if (time_edit_active_) {
+                    time_edit_active_ = false;
+                    has_text_focus_ = false;
+                    el_time_popup_->SetProperty("display", "none");
+                    el_popup_backdrop_->SetProperty("display", "none");
+                } else if (focal_edit_active_) {
+                    focal_edit_active_ = false;
+                    has_text_focus_ = false;
+                    el_focal_popup_->SetProperty("display", "none");
+                    el_popup_backdrop_->SetProperty("display", "none");
+                } else if (context_menu_open_) {
+                    hideContextMenu();
+                }
+            }
+        }
+
+        if (edit_overlay_visible_ && !need_keyboard) {
+            if (ImGui::IsKeyPressed(ImGuiKey_U, false))
+                pending_actions_.push_back({Action::APPLY_EDIT, 0, 0});
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+                pending_actions_.push_back({Action::REVERT_EDIT, 0, 0});
+        }
+    }
+
+    void RmlSequencerOverlay::render(int screen_w, int screen_h) {
+        const bool anything_visible = context_menu_open_ || time_edit_active_ ||
+                                      focal_edit_active_ || edit_overlay_visible_;
+        if (!anything_visible)
+            return;
+
+        if (!rml_context_) {
+            initContext();
+            if (!rml_context_)
+                return;
+        }
+
+        syncTheme();
+
+        const float dp_ratio = rml_manager_->getDpRatio();
+        const int w = static_cast<int>(static_cast<float>(screen_w) * dp_ratio);
+        const int h = static_cast<int>(static_cast<float>(screen_h) * dp_ratio);
+
+        if (w <= 0 || h <= 0)
+            return;
+
+        if (w != width_ || h != height_) {
+            width_ = w;
+            height_ = h;
+            rml_context_->SetDimensions(Rml::Vector2i(w, h));
+        }
+
+        rml_context_->Update();
+
+        fbo_.ensure(w, h);
+        if (!fbo_.valid())
+            return;
+
+        auto* render_iface = rml_manager_->getRenderInterface();
+        assert(render_iface);
+        render_iface->SetViewport(w, h);
+
+        GLint prev_fbo = 0;
+        fbo_.bind(&prev_fbo);
+
+        render_iface->BeginFrame();
+        rml_context_->Render();
+        render_iface->EndFrame();
+
+        fbo_.unbind(prev_fbo);
+
+        auto* vp = ImGui::GetMainViewport();
+        const ImVec2 pos(0, 0);
+        const ImVec2 size(static_cast<float>(screen_w), static_cast<float>(screen_h));
+        fbo_.blitToDrawList(ImGui::GetForegroundDrawList(vp), pos, size);
+    }
+
+    void RmlSequencerOverlay::destroyGLResources() {
+        fbo_.destroy();
+    }
+
+    std::optional<RmlSequencerOverlay::PendingAction> RmlSequencerOverlay::consumeAction() {
+        if (pending_actions_.empty())
+            return std::nullopt;
+        auto action = pending_actions_.front();
+        pending_actions_.erase(pending_actions_.begin());
+        return action;
+    }
+
+    std::optional<RmlSequencerOverlay::EditResult> RmlSequencerOverlay::consumeTimeEdit() {
+        auto result = pending_time_edit_;
+        pending_time_edit_ = std::nullopt;
+        return result;
+    }
+
+    std::optional<RmlSequencerOverlay::EditResult> RmlSequencerOverlay::consumeFocalEdit() {
+        auto result = pending_focal_edit_;
+        pending_focal_edit_ = std::nullopt;
+        return result;
+    }
+
+    void RmlSequencerOverlay::OverlayEventListener::ProcessEvent(Rml::Event& event) {
+        assert(overlay);
+        auto* target = event.GetTargetElement();
+        if (!target)
+            return;
+
+        const auto& id = target->GetId();
+
+        if (id == "menu-backdrop") {
+            overlay->hideContextMenu();
+            return;
+        }
+
+        if (id == "popup-backdrop") {
+            if (overlay->time_edit_active_) {
+                overlay->time_edit_active_ = false;
+                overlay->has_text_focus_ = false;
+                overlay->el_time_popup_->SetProperty("display", "none");
+            }
+            if (overlay->focal_edit_active_) {
+                overlay->focal_edit_active_ = false;
+                overlay->has_text_focus_ = false;
+                overlay->el_focal_popup_->SetProperty("display", "none");
+            }
+            overlay->el_popup_backdrop_->SetProperty("display", "none");
+            return;
+        }
+
+        if (id == "ctx-add") {
+            overlay->pending_actions_.push_back({RmlSequencerOverlay::Action::ADD_KEYFRAME, 0, 0});
+            overlay->hideContextMenu();
+        } else if (id == "ctx-update") {
+            if (overlay->context_menu_keyframe_) {
+                overlay->pending_actions_.push_back(
+                    {RmlSequencerOverlay::Action::UPDATE_KEYFRAME,
+                     *overlay->context_menu_keyframe_, 0});
+            }
+            overlay->hideContextMenu();
+        } else if (id == "ctx-goto") {
+            if (overlay->context_menu_keyframe_) {
+                overlay->pending_actions_.push_back(
+                    {RmlSequencerOverlay::Action::GOTO_KEYFRAME,
+                     *overlay->context_menu_keyframe_, 0});
+            }
+            overlay->hideContextMenu();
+        } else if (id == "ctx-focal") {
+            if (overlay->context_menu_keyframe_) {
+                overlay->pending_actions_.push_back(
+                    {RmlSequencerOverlay::Action::EDIT_FOCAL_LENGTH,
+                     *overlay->context_menu_keyframe_, 0});
+            }
+            overlay->hideContextMenu();
+        } else if (id == "ctx-translate") {
+            if (overlay->context_menu_keyframe_) {
+                overlay->pending_actions_.push_back(
+                    {RmlSequencerOverlay::Action::SET_TRANSLATE,
+                     *overlay->context_menu_keyframe_, 0});
+            }
+            overlay->hideContextMenu();
+        } else if (id == "ctx-rotate") {
+            if (overlay->context_menu_keyframe_) {
+                overlay->pending_actions_.push_back(
+                    {RmlSequencerOverlay::Action::SET_ROTATE,
+                     *overlay->context_menu_keyframe_, 0});
+            }
+            overlay->hideContextMenu();
+        } else if (id.starts_with("ctx-easing-")) {
+            const int easing_val = id.back() - '0';
+            if (easing_val >= 0 && easing_val < 4 && overlay->context_menu_keyframe_) {
+                overlay->pending_actions_.push_back(
+                    {RmlSequencerOverlay::Action::SET_EASING,
+                     *overlay->context_menu_keyframe_, easing_val});
+            }
+            overlay->hideContextMenu();
+        } else if (id == "ctx-delete") {
+            if (overlay->context_menu_keyframe_) {
+                overlay->pending_actions_.push_back(
+                    {RmlSequencerOverlay::Action::DELETE_KEYFRAME,
+                     *overlay->context_menu_keyframe_, 0});
+            }
+            overlay->hideContextMenu();
+        } else if (id == "kf-close-btn") {
+            overlay->pending_actions_.push_back(
+                {RmlSequencerOverlay::Action::DESELECT_KEYFRAME, 0, 0});
+        } else if (id == "kf-edit-apply") {
+            overlay->pending_actions_.push_back(
+                {RmlSequencerOverlay::Action::APPLY_EDIT, 0, 0});
+        } else if (id == "kf-edit-revert") {
+            overlay->pending_actions_.push_back(
+                {RmlSequencerOverlay::Action::REVERT_EDIT, 0, 0});
+        } else if (id == "time-edit-ok") {
+            overlay->submitTimeEdit();
+        } else if (id == "time-edit-cancel") {
+            overlay->time_edit_active_ = false;
+            overlay->has_text_focus_ = false;
+            overlay->el_time_popup_->SetProperty("display", "none");
+            overlay->el_popup_backdrop_->SetProperty("display", "none");
+        } else if (id == "focal-edit-ok") {
+            overlay->submitFocalEdit();
+        } else if (id == "focal-edit-cancel") {
+            overlay->focal_edit_active_ = false;
+            overlay->has_text_focus_ = false;
+            overlay->el_focal_popup_->SetProperty("display", "none");
+            overlay->el_popup_backdrop_->SetProperty("display", "none");
+        }
+    }
+
+} // namespace lfs::vis::gui

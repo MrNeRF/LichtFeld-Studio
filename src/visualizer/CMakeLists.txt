@@ -58,6 +58,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/gl_line_renderer.cpp
         gui/rml_overlay_context.cpp
         gui/sequencer_ui_manager.cpp
+        gui/rml_sequencer_overlay.cpp
         gui/keyframe_scene_sync.cpp
         gui/gizmo_transform.cpp
         gui/html_viewer_export.cpp
