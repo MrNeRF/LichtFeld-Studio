@@ -5,6 +5,7 @@
 #pragma once
 
 #include "core/mesh2splat.hpp"
+#include "core/modal_request.hpp"
 
 #include <atomic>
 #include <cstdint>
@@ -158,6 +159,11 @@ namespace lfs::python {
 
     LFS_PYTHON_RUNTIME_API void draw_python_modals(lfs::core::Scene* scene = nullptr);
     LFS_PYTHON_RUNTIME_API bool has_python_modals();
+
+    // Modal enqueue callback - routes ModalRequests from PyModalRegistry to the overlay
+    using ModalEnqueueCallback = std::function<void(lfs::core::ModalRequest)>;
+    LFS_PYTHON_RUNTIME_API void set_modal_enqueue_callback(ModalEnqueueCallback cb);
+    LFS_PYTHON_RUNTIME_API const ModalEnqueueCallback& get_modal_enqueue_callback();
 
     using DrawPopupsCallback = void (*)();
     LFS_PYTHON_RUNTIME_API void set_popup_draw_callback(DrawPopupsCallback cb);

@@ -14,7 +14,6 @@
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "visualizer_impl.hpp"
-#include "windows/disk_space_error_dialog.hpp"
 #include "windows/video_extractor_dialog.hpp"
 
 #include <glm/gtc/type_ptr.hpp>
@@ -29,19 +28,6 @@ namespace lfs::vis::gui::native_panels {
         (void)ctx;
         if (!dialog_->render())
             PanelRegistry::instance().set_panel_enabled("native.video_extractor", false);
-    }
-
-    DiskSpaceErrorPanel::DiskSpaceErrorPanel(DiskSpaceErrorDialog* dialog)
-        : dialog_(dialog) {}
-
-    void DiskSpaceErrorPanel::draw(const PanelDrawContext& ctx) {
-        (void)ctx;
-        dialog_->render();
-    }
-
-    bool DiskSpaceErrorPanel::poll(const PanelDrawContext& ctx) {
-        (void)ctx;
-        return dialog_->isOpen();
     }
 
     StartupOverlayPanel::StartupOverlayPanel(StartupOverlay* overlay, const bool* drag_hovering)

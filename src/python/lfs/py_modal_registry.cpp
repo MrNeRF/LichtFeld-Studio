@@ -11,6 +11,11 @@ namespace lfs::python {
         return registry;
     }
 
+    void PyModalRegistry::set_enqueue_callback(EnqueueCallback cb) {
+        std::lock_guard lock(mutex_);
+        enqueue_cb_ = std::move(cb);
+    }
+
     void PyModalRegistry::show_confirm(const std::string& title, const std::string& message,
                                        const std::vector<std::string>& buttons, nb::object callback) {
         std::lock_guard lock(mutex_);

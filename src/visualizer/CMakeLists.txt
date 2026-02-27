@@ -58,6 +58,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/gl_line_renderer.cpp
         gui/rml_overlay_context.cpp
         gui/sequencer_ui_manager.cpp
+        gui/rml_modal_overlay.cpp
         gui/rml_sequencer_overlay.cpp
         gui/keyframe_scene_sync.cpp
         gui/gizmo_transform.cpp
@@ -79,7 +80,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # Terminal emulator
         gui/terminal/pty_process.cpp
         gui/terminal/terminal_widget.cpp
-        gui/windows/disk_space_error_dialog.cpp
         gui/windows/video_extractor_dialog.cpp
 
         # Scene management

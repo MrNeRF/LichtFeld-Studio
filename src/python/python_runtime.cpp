@@ -774,6 +774,13 @@ namespace lfs::python {
         return g_bridge.has_modals();
     }
 
+    namespace {
+        ModalEnqueueCallback g_modal_enqueue_callback;
+    }
+
+    void set_modal_enqueue_callback(ModalEnqueueCallback cb) { g_modal_enqueue_callback = std::move(cb); }
+    const ModalEnqueueCallback& get_modal_enqueue_callback() { return g_modal_enqueue_callback; }
+
     void set_popup_draw_callback(DrawPopupsCallback cb) { g_popup_draw_callback = cb; }
 
     void draw_python_popups(lfs::core::Scene* scene) {

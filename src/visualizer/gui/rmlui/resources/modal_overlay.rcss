@@ -1,0 +1,101 @@
+body {
+    display: block;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    width: 100%;
+    height: 100%;
+}
+
+.modal-backdrop {
+    display: none;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 100);
+}
+
+.modal-dialog {
+    display: none;
+    position: absolute;
+    padding: 16dp 20dp;
+    border-width: 2dp;
+    border-radius: 6dp;
+}
+
+.modal-title {
+    display: block;
+    font-size: 15dp;
+    font-weight: bold;
+    text-align: center;
+    margin-bottom: 4dp;
+}
+
+.modal-sep {
+    display: block;
+    height: 1dp;
+    margin: 8dp 0;
+}
+
+.modal-content {
+    display: block;
+    font-size: 13dp;
+    text-align: center;
+    max-height: 400dp;
+    overflow: auto;
+}
+
+.modal-input-row {
+    display: none;
+    margin: 8dp 0 0 0;
+}
+
+.modal-input-row.visible {
+    display: block;
+}
+
+.modal-input-row input[type="text"] {
+    width: 100%;
+}
+
+.modal-button-row {
+    display: flex;
+    gap: 8dp;
+    justify-content: center;
+}
+
+.modal-button-row .btn {
+    min-width: 90dp;
+}
+
+/* Style accent classes for border color */
+.modal-dialog.style-info {
+}
+
+.modal-dialog.style-warning {
+}
+
+.modal-dialog.style-error {
+}
+
+/* Content helper classes */
+.dim-text {
+    font-size: 13dp;
+}
+
+.error-text {
+}
+
+.warning-text {
+}
+
+.content-row {
+    display: block;
+    margin: 2dp 0;
+}
+
+.content-label {
+    display: inline;
+}

@@ -4724,6 +4724,9 @@ namespace lfs::python {
         };
         bridge.draw_modals = []() { PyModalRegistry::instance().draw_modals(); };
         bridge.has_modals = []() { return PyModalRegistry::instance().has_open_modals(); };
+
+        if (const auto& enqueue_cb = get_modal_enqueue_callback())
+            PyModalRegistry::instance().set_enqueue_callback(enqueue_cb);
         bridge.has_toolbar = []() { return true; }; // Always true - Python ToolRegistry has builtin tools
         bridge.shutdown_gl_resources = []() { shutdown_dynamic_textures(); };
         bridge.cleanup = []() {

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/modal_request.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer/operator/poll_dependency.hpp"
 
@@ -872,12 +873,14 @@ namespace lfs::python {
         bool needs_open = true;
     };
 
-    // Singleton registry for modal dialogs
     class PyModalRegistry {
     public:
+        using EnqueueCallback = std::function<void(lfs::core::ModalRequest)>;
+
         static PyModalRegistry& instance();
 
-        // Show dialogs
+        void set_enqueue_callback(EnqueueCallback cb);
+
         void show_confirm(const std::string& title, const std::string& message,
                           const std::vector<std::string>& buttons, nb::object callback);
         void show_confirm(const std::string& title, const std::string& message,
@@ -889,13 +892,10 @@ namespace lfs::python {
                           MessageStyle style = MessageStyle::Info,
                           nb::object callback = nb::none());
 
-        // Draw pending modals (called from C++ render loop)
         void draw_modals();
 
-        // Check if any modals are open
         bool has_open_modals() const;
 
-        // Test hooks for lock-order regression coverage
         void clear_for_test();
         bool can_lock_mutex_for_test() const;
         void run_pending_callback_for_test(std::function<void()> callback);
@@ -908,13 +908,10 @@ namespace lfs::python {
 
         using ModalCallbackAction = std::function<void()>;
 
-        std::optional<ModalCallbackAction> draw_confirm_dialog(PyModalDialog& modal, float scale);
-        std::optional<ModalCallbackAction> draw_input_dialog(PyModalDialog& modal, float scale);
-        std::optional<ModalCallbackAction> draw_message_dialog(PyModalDialog& modal, float scale);
-
         mutable std::mutex mutex_;
         std::vector<PyModalDialog> modals_;
         uint32_t next_id_ = 0;
+        EnqueueCallback enqueue_cb_;
     };
 
     // Register UI classes with nanobind module

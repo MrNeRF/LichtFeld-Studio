@@ -65,7 +65,7 @@ namespace lfs::vis::gui {
 
         // Create components
         menu_bar_ = std::make_unique<MenuBar>();
-        disk_space_error_dialog_ = std::make_unique<DiskSpaceErrorDialog>();
+        rml_modal_overlay_ = std::make_unique<RmlModalOverlay>(&rmlui_manager_);
         video_extractor_dialog_ = std::make_unique<lfs::gui::VideoExtractorDialog>();
 
         // Wire up video extractor dialog callback
@@ -114,6 +114,9 @@ namespace lfs::vis::gui {
         window_states_["training_tab"] = false;
         window_states_["export_dialog"] = false;
         window_states_["python_console"] = false;
+
+        lfs::python::set_modal_enqueue_callback(
+            [this](lfs::core::ModalRequest req) { rml_modal_overlay_->enqueue(std::move(req)); });
 
         setupEventHandlers();
         async_tasks_.setupEvents();
@@ -557,10 +560,6 @@ namespace lfs::vis::gui {
                   PanelSpace::Floating, 11, 0, 750.0f);
         reg.set_panel_enabled("native.video_extractor", false);
 
-        reg_panel("native.disk_space_error", "Disk Space Error",
-                  make_panel(DiskSpaceErrorPanel(disk_space_error_dialog_.get())),
-                  PanelSpace::Floating, 900, SELF);
-
         reg_panel("native.mesh2splat", "Mesh to Splat",
                   make_panel(panels::Mesh2SplatPanel(viewer_)),
                   PanelSpace::Floating, 12, 0, 400.0f);
@@ -888,7 +887,14 @@ namespace lfs::vis::gui {
         python::draw_python_modals(scene);
         python::draw_python_popups(scene);
 
-        // Notification popups are rendered via PyModalRegistry (draw_modals in Python bridge)
+        {
+            const auto* mvp_modal = ImGui::GetMainViewport();
+            rml_modal_overlay_->processInput();
+            rml_modal_overlay_->render(static_cast<int>(mvp_modal->Size.x),
+                                       static_cast<int>(mvp_modal->Size.y),
+                                       viewport_layout_.pos.x, viewport_layout_.pos.y,
+                                       viewport_layout_.size.x, viewport_layout_.size.y);
+        }
 
         ImGui::Render();
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
@@ -1231,70 +1237,103 @@ namespace lfs::vis::gui {
         });
 
         state::DiskSpaceSaveFailed::when([this](const auto& e) {
-            // Non-disk-space errors are handled by notification_bridge.cpp
+            using namespace lichtfeld::Strings;
             if (!e.is_disk_space_error)
                 return;
 
-            if (!disk_space_error_dialog_)
-                return;
+            auto formatBytes = [](size_t bytes) -> std::string {
+                constexpr double KB = 1024.0;
+                constexpr double MB = KB * 1024.0;
+                constexpr double GB = MB * 1024.0;
+                if (bytes >= static_cast<size_t>(GB))
+                    return std::format("{:.2f} GB", static_cast<double>(bytes) / GB);
+                if (bytes >= static_cast<size_t>(MB))
+                    return std::format("{:.2f} MB", static_cast<double>(bytes) / MB);
+                if (bytes >= static_cast<size_t>(KB))
+                    return std::format("{:.2f} KB", static_cast<double>(bytes) / KB);
+                return std::format("{} bytes", bytes);
+            };
 
-            const DiskSpaceErrorDialog::ErrorInfo info{
-                .path = e.path,
-                .error_message = e.error,
-                .required_bytes = e.required_bytes,
-                .available_bytes = e.available_bytes,
-                .iteration = e.iteration,
-                .is_checkpoint = e.is_checkpoint};
+            const std::string subtitle = e.is_checkpoint
+                                             ? std::format("{} {})", LOC(DiskSpaceDialog::CHECKPOINT_SAVE_FAILED), e.iteration)
+                                             : std::string(LOC(DiskSpaceDialog::EXPORT_FAILED));
 
-            if (e.is_checkpoint) {
-                auto on_retry = [this, iteration = e.iteration]() {
-                    if (auto* tm = viewer_->getTrainerManager()) {
-                        if (tm->isFinished() || !tm->isTrainingActive()) {
-                            if (auto* trainer = tm->getTrainer()) {
-                                LOG_INFO("Retrying save at iteration {}", iteration);
-                                trainer->save_final_ply_and_checkpoint(iteration);
-                            }
-                        } else {
-                            tm->requestSaveCheckpoint();
-                        }
-                    }
-                };
+            std::string body;
+            body += std::format("<div>{}</div>", LOC(DiskSpaceDialog::INSUFFICIENT_SPACE_PREFIX));
+            body += std::format("<div class=\"content-row\"><span class=\"dim-text\">{} </span>{}</div>",
+                                LOC(DiskSpaceDialog::LOCATION_LABEL), lfs::core::path_to_utf8(e.path.parent_path()));
+            body += std::format("<div class=\"content-row\"><span class=\"dim-text\">{} </span>{}</div>",
+                                LOC(DiskSpaceDialog::REQUIRED_LABEL), formatBytes(e.required_bytes));
+            if (e.available_bytes > 0) {
+                body += std::format("<div class=\"content-row\"><span class=\"dim-text\">{} </span>"
+                                    "<span class=\"error-text\">{}</span></div>",
+                                    LOC(DiskSpaceDialog::AVAILABLE_LABEL), formatBytes(e.available_bytes));
+            }
+            body += std::format("<div class=\"warning-text\">{}</div>", LOC(DiskSpaceDialog::INSTRUCTION));
 
-                auto on_change_location = [this, iteration = e.iteration](const std::filesystem::path& new_path) {
-                    if (auto* tm = viewer_->getTrainerManager()) {
-                        if (auto* trainer = tm->getTrainer()) {
-                            auto params = trainer->getParams();
-                            params.dataset.output_path = new_path;
-                            trainer->setParams(params);
-                            LOG_INFO("Output path changed to: {}", lfs::core::path_to_utf8(new_path));
+            lfs::core::ModalRequest req;
+            req.title = std::format("{} | {}", LOC(DiskSpaceDialog::ERROR_LABEL), subtitle);
+            req.body_rml = body;
+            req.style = lfs::core::ModalStyle::Error;
+            req.width_dp = 480;
+            req.buttons = {
+                {LOC(DiskSpaceDialog::CANCEL), "secondary"},
+                {LOC(DiskSpaceDialog::CHANGE_LOCATION), "warning"},
+                {LOC(DiskSpaceDialog::RETRY), "primary"}};
 
+            auto path = e.path;
+            auto iteration = e.iteration;
+            auto is_checkpoint = e.is_checkpoint;
+
+            req.on_result = [this, path, iteration, is_checkpoint](const lfs::core::ModalResult& result) {
+                if (result.button_label == LOC(DiskSpaceDialog::RETRY)) {
+                    if (is_checkpoint) {
+                        if (auto* tm = viewer_->getTrainerManager()) {
                             if (tm->isFinished() || !tm->isTrainingActive()) {
-                                trainer->save_final_ply_and_checkpoint(iteration);
+                                if (auto* trainer = tm->getTrainer()) {
+                                    LOG_INFO("Retrying save at iteration {}", iteration);
+                                    trainer->save_final_ply_and_checkpoint(iteration);
+                                }
                             } else {
                                 tm->requestSaveCheckpoint();
                             }
                         }
                     }
-                };
-
-                auto on_cancel = []() {
+                } else if (result.button_label == LOC(DiskSpaceDialog::CHANGE_LOCATION)) {
+                    std::filesystem::path new_location = SelectFolderDialog(
+                        LOC(DiskSpaceDialog::SELECT_OUTPUT_LOCATION), path.parent_path());
+                    if (!new_location.empty() && is_checkpoint) {
+                        if (auto* tm = viewer_->getTrainerManager()) {
+                            if (auto* trainer = tm->getTrainer()) {
+                                auto params = trainer->getParams();
+                                params.dataset.output_path = new_location;
+                                trainer->setParams(params);
+                                LOG_INFO("Output path changed to: {}", lfs::core::path_to_utf8(new_location));
+                                if (tm->isFinished() || !tm->isTrainingActive())
+                                    trainer->save_final_ply_and_checkpoint(iteration);
+                                else
+                                    tm->requestSaveCheckpoint();
+                            }
+                        }
+                    } else if (!new_location.empty()) {
+                        LOG_INFO("Re-export manually using File > Export to: {}",
+                                 lfs::core::path_to_utf8(new_location));
+                    }
+                } else {
+                    if (is_checkpoint)
+                        LOG_WARN("Checkpoint save cancelled by user");
+                    else
+                        LOG_INFO("Export cancelled by user");
+                }
+            };
+            req.on_cancel = [is_checkpoint]() {
+                if (is_checkpoint)
                     LOG_WARN("Checkpoint save cancelled by user");
-                };
-
-                disk_space_error_dialog_->show(info, on_retry, on_change_location, on_cancel);
-            } else {
-                auto on_retry = []() {};
-
-                auto on_change_location = [](const std::filesystem::path& new_path) {
-                    LOG_INFO("Re-export manually using File > Export to: {}", lfs::core::path_to_utf8(new_path));
-                };
-
-                auto on_cancel = []() {
+                else
                     LOG_INFO("Export cancelled by user");
-                };
+            };
 
-                disk_space_error_dialog_->show(info, on_retry, on_change_location, on_cancel);
-            }
+            rml_modal_overlay_->enqueue(std::move(req));
         });
 
         state::DatasetLoadCompleted::when([this](const auto& e) {
@@ -1316,8 +1355,8 @@ namespace lfs::vis::gui {
     }
 
     bool GuiManager::isModalWindowOpen() const {
-        // Check any ImGui popup/modal (covers Python popups and floating panels)
-        return ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+        return ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) ||
+               rml_modal_overlay_->isOpen();
     }
 
     void GuiManager::captureKey(int key, int mods) {

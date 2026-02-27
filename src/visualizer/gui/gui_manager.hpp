@@ -13,6 +13,7 @@
 #include "gui/panel_registry.hpp"
 #include "gui/panels/menu_bar.hpp"
 #include "gui/rml_menu_bar.hpp"
+#include "gui/rml_modal_overlay.hpp"
 #include "gui/rml_right_panel.hpp"
 #include "gui/rml_shell_frame.hpp"
 #include "gui/rml_status_bar.hpp"
@@ -23,7 +24,6 @@
 #include "gui/startup_overlay.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/utils/drag_drop_native.hpp"
-#include "windows/disk_space_error_dialog.hpp"
 #include "windows/video_extractor_dialog.hpp"
 #include <filesystem>
 #include <memory>
@@ -117,7 +117,7 @@ namespace lfs::vis {
             VisualizerImpl* viewer_;
 
             // Owned components
-            std::unique_ptr<DiskSpaceErrorDialog> disk_space_error_dialog_;
+            std::unique_ptr<RmlModalOverlay> rml_modal_overlay_;
             std::unique_ptr<lfs::gui::VideoExtractorDialog> video_extractor_dialog_;
             std::optional<std::jthread> video_extraction_thread_;
 

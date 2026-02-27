@@ -8,7 +8,6 @@
 
 namespace lfs::vis::gui {
 
-    class DiskSpaceErrorDialog;
     class StartupOverlay;
     class GizmoManager;
     class GuiManager;
@@ -31,16 +30,6 @@ namespace lfs::vis::gui::native_panels {
 
     private:
         lfs::gui::VideoExtractorDialog* dialog_;
-    };
-
-    class DiskSpaceErrorPanel : public IPanel {
-    public:
-        explicit DiskSpaceErrorPanel(DiskSpaceErrorDialog* dialog);
-        void draw(const PanelDrawContext& ctx) override;
-        bool poll(const PanelDrawContext& ctx) override;
-
-    private:
-        DiskSpaceErrorDialog* dialog_;
     };
 
     class StartupOverlayPanel : public IPanel {
