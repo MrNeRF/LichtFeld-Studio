@@ -234,12 +234,17 @@ class TrainingPanel(RmlPanel):
         self._last_state = ""
         self._last_save_steps = []
         self._color_edit_prop = None
-        self._color_picker_needs_pos = False
+        self._picker_click_handled = False
         self._collapsed = set(INITIALLY_COLLAPSED)
         self._last_iteration = -1
         self._last_num_gaussians = -1
         self._last_progress_frac = -1.0
         self._last_bg_color = None
+        self._doc = None
+        self._popup_el = None
+        self._loss_graph_el = None
+        self._loss_label_el = None
+        self._tick_els = []
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("training")
@@ -461,6 +466,13 @@ class TrainingPanel(RmlPanel):
                     lambda: _color_to_hex(_bg()),
                     lambda v: self._set_bg_color_hex(v))
 
+        model.bind_func("picker_r",
+                         lambda: float(_bg()[0]) if self._color_edit_prop else 0.0)
+        model.bind_func("picker_g",
+                         lambda: float(_bg()[1]) if self._color_edit_prop else 0.0)
+        model.bind_func("picker_b",
+                         lambda: float(_bg()[2]) if self._color_edit_prop else 0.0)
+
     def _bind_status(self, model, p):
         def _status_mode():
             state = AppState.trainer_state.value
@@ -524,8 +536,25 @@ class TrainingPanel(RmlPanel):
     def _bind_events(self, model):
         model.bind_event("toggle_section", self._on_toggle_section)
         model.bind_event("color_click", self._on_color_click)
+        model.bind_event("picker_change", self._on_picker_change)
         model.bind_event("action", self._on_action)
         model.bind_event("remove_step", self._on_remove_step_event)
+
+    def on_load(self, doc):
+        self._doc = doc
+        self._popup_el = doc.get_element_by_id("color-picker-popup")
+        if self._popup_el:
+            self._popup_el.add_event_listener("click", self._on_popup_click)
+        body = doc.get_element_by_id("body")
+        if body:
+            body.add_event_listener("click", self._on_body_click)
+        self._loss_graph_el = doc.get_element_by_id("loss-graph-el")
+        self._loss_label_el = doc.get_element_by_id("loss-label")
+        self._tick_els = [
+            doc.get_element_by_id("loss-tick-max"),
+            doc.get_element_by_id("loss-tick-mid"),
+            doc.get_element_by_id("loss-tick-min"),
+        ]
 
     def on_update(self, doc):
         if not self._handle:
@@ -558,6 +587,7 @@ class TrainingPanel(RmlPanel):
         self._update_progress(doc)
         self._update_save_steps(doc)
         self._update_color_swatch(doc)
+        self._update_loss_graph()
 
     def _update_progress(self, doc):
         it = AppState.iteration.value
@@ -609,44 +639,46 @@ class TrainingPanel(RmlPanel):
         doc.remove_data_model("training")
         self._handle = None
 
-    def draw_imgui(self, layout):
-        params = lf.optimization_params()
-        if not params or not params.has_params():
+    def _update_loss_graph(self):
+        if not self._loss_graph_el:
             return
-
-        if self._color_picker_needs_pos:
-            layout.set_next_window_pos(layout.get_mouse_pos())
-            layout.open_popup("##training_color_picker")
-            self._color_picker_needs_pos = False
-
-        if self._color_edit_prop and layout.begin_popup("##training_color_picker"):
-            prop_id = self._color_edit_prop
-            val = getattr(params, prop_id)
-            changed, new_color = layout.color_picker3("##picker", val)
-            if changed:
-                setattr(params, prop_id, new_color)
-                rs = lf.get_render_settings()
-                if rs and prop_id == "bg_color":
-                    rs.set("background_color", new_color)
-                if self._handle:
-                    self._handle.dirty_all()
-            layout.end_popup()
-        elif self._color_edit_prop:
-            self._color_edit_prop = None
-
         loss_data = lf.loss_buffer()
-        if loss_data:
-            min_val = min(loss_data)
-            max_val = max(loss_data)
-            if min_val == max_val:
-                min_val -= 1.0
-                max_val += 1.0
-            else:
-                margin = (max_val - min_val) * 0.05
-                min_val -= margin
-                max_val += margin
-            loss_label = f"{tr('status.loss')}: {loss_data[-1]:.4f}"
-            layout.plot_lines(loss_label, loss_data, min_val, max_val, (-1, 60))
+        if not loss_data:
+            return
+        data_min, data_max = lf.push_loss_to_element(self._loss_graph_el, loss_data)
+        if self._loss_label_el:
+            self._loss_label_el.set_inner_rml(f"{tr('status.loss')}: {loss_data[-1]:.4f}")
+        fmt = "%.4f" if data_max < 0.1 else ("%.3f" if data_max < 1.0 else "%.2f")
+        mid = data_min + (data_max - data_min) * 0.5
+        tick_values = [data_max, mid, data_min]
+        for el, val in zip(self._tick_els, tick_values):
+            if el:
+                el.set_inner_rml(fmt % val)
+
+    def _on_picker_change(self, handle, event, args):
+        params = lf.optimization_params()
+        if not params or not params.has_params() or not event or not self._color_edit_prop:
+            return
+        r = float(event.get_parameter("red", "0"))
+        g = float(event.get_parameter("green", "0"))
+        b = float(event.get_parameter("blue", "0"))
+        setattr(params, self._color_edit_prop, (r, g, b))
+        rs = lf.get_render_settings()
+        if rs and self._color_edit_prop == "bg_color":
+            rs.set("background_color", (r, g, b))
+        if self._handle:
+            self._handle.dirty_all()
+
+    def _on_popup_click(self, event):
+        self._picker_click_handled = True
+
+    def _on_body_click(self, event):
+        if hasattr(self, '_picker_click_handled') and self._picker_click_handled:
+            self._picker_click_handled = False
+            return
+        if hasattr(self, '_popup_el') and self._popup_el:
+            self._popup_el.set_class("visible", False)
+            self._color_edit_prop = None
 
     # ── Setters ────────────────────────────────────────────
 
@@ -825,9 +857,20 @@ class TrainingPanel(RmlPanel):
         prop_id = str(args[0])
         if self._color_edit_prop == prop_id:
             self._color_edit_prop = None
+            if hasattr(self, '_popup_el') and self._popup_el:
+                self._popup_el.set_class("visible", False)
         else:
             self._color_edit_prop = prop_id
-            self._color_picker_needs_pos = True
+            if hasattr(self, '_popup_el') and self._popup_el and event:
+                mx = event.get_parameter("mouse_x", "0")
+                my = event.get_parameter("mouse_y", "0")
+                self._popup_el.set_property("left", f"{mx}px")
+                self._popup_el.set_property("top", f"{int(float(my)) + 2}px")
+                self._popup_el.set_class("visible", True)
+                handle.dirty("picker_r")
+                handle.dirty("picker_g")
+                handle.dirty("picker_b")
+            self._picker_click_handled = True
 
     def _on_action(self, handle, event, args):
         if not args:

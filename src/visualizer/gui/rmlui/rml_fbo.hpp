@@ -23,13 +23,22 @@ namespace lfs::vis::gui {
         void unbind(GLint prev_fbo);
         void blitToDrawList(ImDrawList* dl, ImVec2 pos, ImVec2 size);
         void blitAsImage(float w, float h);
+        void blitToScreen(float x, float y, float w, float h, int screen_w, int screen_h);
         GLuint texture() const { return texture_; }
         int width() const { return width_; }
         int height() const { return height_; }
         bool valid() const { return fbo_ != 0; }
         void destroy();
 
+        static void destroyBlitResources();
+
     private:
+        static void ensureBlitProgram();
+
+        static GLuint blit_program_;
+        static GLuint blit_vao_;
+        static GLuint blit_vbo_;
+
         GLuint fbo_ = 0;
         GLuint texture_ = 0;
         GLuint depth_stencil_ = 0;

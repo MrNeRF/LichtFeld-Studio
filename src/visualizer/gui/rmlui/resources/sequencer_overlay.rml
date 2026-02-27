@@ -1,0 +1,22 @@
+<rml>
+<head>
+    <link type="text/rcss" href="sequencer_overlay.rcss"/>
+</head>
+<body id="body">
+    <div id="keyframe-context-menu" class="context-menu"></div>
+
+    <div id="pip-preview" class="overlay-panel" style="display: none;">
+        <span id="pip-title" class="overlay-text"></span>
+        <div id="pip-border"></div>
+    </div>
+
+    <div id="kf-edit-overlay" class="overlay-panel" style="display: none;">
+        <span id="kf-edit-label" class="overlay-text"></span>
+        <span id="kf-edit-delta" class="overlay-text-dim"></span>
+        <div id="kf-edit-buttons">
+            <div id="kf-edit-apply" class="btn btn--primary">Apply (U)</div>
+            <div id="kf-edit-revert" class="btn btn--secondary">Revert (Esc)</div>
+        </div>
+    </div>
+</body>
+</rml>

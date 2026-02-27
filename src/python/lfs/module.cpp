@@ -7,6 +7,8 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
+#include <deque>
+
 #include "notification_bridge.hpp"
 #include "py_animation.hpp"
 #include "py_cameras.hpp"
@@ -41,8 +43,10 @@
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
 #include "core/parameters.hpp"
+#include "gui/rmlui/elements/loss_graph_element.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/filesystem_utils.hpp"
+#include "py_rml.hpp"
 #include "python/python_runtime.hpp"
 
 #include "config.h"
@@ -738,6 +742,21 @@ NB_MODULE(lichtfeld, m) {
             return std::vector<float>(loss_deque.begin(), loss_deque.end());
         },
         "Get the recent loss history as a list of floats");
+
+    m.def(
+        "push_loss_to_element",
+        [](lfs::python::PyRmlElement& elem, const std::vector<float>& data) -> nb::tuple {
+            auto* raw = elem.raw();
+            if (!raw)
+                return nb::make_tuple(0.0f, 1.0f);
+            auto* lg = dynamic_cast<lfs::vis::gui::LossGraphElement*>(raw);
+            if (!lg)
+                return nb::make_tuple(0.0f, 1.0f);
+            std::deque<float> deque(data.begin(), data.end());
+            lg->setData(deque);
+            return nb::make_tuple(lg->getDataMin(), lg->getDataMax());
+        },
+        "Push loss data to a loss-graph element, returns (data_min, data_max)");
 
     // Trainer status bar bindings
     m.def(

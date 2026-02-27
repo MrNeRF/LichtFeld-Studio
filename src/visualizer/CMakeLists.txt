@@ -55,6 +55,8 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rml_viewport_overlay.cpp
         gui/rml_status_bar.cpp
         gui/gpu_memory_query.cpp
+        gui/gl_line_renderer.cpp
+        gui/rml_overlay_context.cpp
         gui/sequencer_ui_manager.cpp
         gui/keyframe_scene_sync.cpp
         gui/gizmo_transform.cpp
@@ -153,6 +155,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/elements/chromaticity_element.cpp
         gui/rmlui/elements/color_picker_element.cpp
         gui/rmlui/elements/crf_curve_element.cpp
+        gui/rmlui/elements/loss_graph_element.cpp
 )
 
 # Set include directories

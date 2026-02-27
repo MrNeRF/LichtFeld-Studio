@@ -99,6 +99,164 @@ namespace lfs::vis::gui {
         dl->AddCallback(restoreStandardBlend, nullptr);
     }
 
+    GLuint RmlFBO::blit_program_ = 0;
+    GLuint RmlFBO::blit_vao_ = 0;
+    GLuint RmlFBO::blit_vbo_ = 0;
+
+    void RmlFBO::ensureBlitProgram() {
+        if (blit_program_)
+            return;
+
+        static const char* vs_src = R"(
+            #version 330 core
+            layout(location=0) in vec2 aPos;
+            layout(location=1) in vec2 aUV;
+            out vec2 vUV;
+            void main() {
+                gl_Position = vec4(aPos, 0.0, 1.0);
+                vUV = aUV;
+            }
+        )";
+        static const char* fs_src = R"(
+            #version 330 core
+            in vec2 vUV;
+            out vec4 fragColor;
+            uniform sampler2D uTex;
+            void main() {
+                fragColor = texture(uTex, vUV);
+            }
+        )";
+
+        auto compile = [](GLenum type, const char* src) -> GLuint {
+            GLuint s = glCreateShader(type);
+            glShaderSource(s, 1, &src, nullptr);
+            glCompileShader(s);
+            return s;
+        };
+
+        GLuint vs = compile(GL_VERTEX_SHADER, vs_src);
+        GLuint fs = compile(GL_FRAGMENT_SHADER, fs_src);
+
+        blit_program_ = glCreateProgram();
+        glAttachShader(blit_program_, vs);
+        glAttachShader(blit_program_, fs);
+        glLinkProgram(blit_program_);
+        glDeleteShader(vs);
+        glDeleteShader(fs);
+
+        glGenVertexArrays(1, &blit_vao_);
+        glGenBuffers(1, &blit_vbo_);
+        glBindVertexArray(blit_vao_);
+        glBindBuffer(GL_ARRAY_BUFFER, blit_vbo_);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+                              reinterpret_cast<void*>(2 * sizeof(float)));
+        glBindVertexArray(0);
+    }
+
+    void RmlFBO::blitToScreen(float x, float y, float w, float h, int screen_w, int screen_h) {
+        assert(texture_);
+        assert(screen_w > 0 && screen_h > 0);
+
+        ensureBlitProgram();
+
+        static constexpr float verts[] = {
+            -1.0f,
+            -1.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+            -1.0f,
+            1.0f,
+            0.0f,
+            1.0f,
+            1.0f,
+            1.0f,
+            1.0f,
+            -1.0f,
+            -1.0f,
+            0.0f,
+            0.0f,
+            1.0f,
+            1.0f,
+            1.0f,
+            1.0f,
+            -1.0f,
+            1.0f,
+            0.0f,
+            1.0f,
+        };
+
+        GLint prev_program = 0;
+        GLint prev_vao = 0;
+        GLint prev_blend = 0;
+        GLint prev_depth = 0;
+        GLint prev_scissor = 0;
+        GLint prev_viewport[4] = {};
+        glGetIntegerv(GL_CURRENT_PROGRAM, &prev_program);
+        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prev_vao);
+        glGetIntegerv(GL_BLEND, &prev_blend);
+        glGetIntegerv(GL_DEPTH_TEST, &prev_depth);
+        glGetIntegerv(GL_SCISSOR_TEST, &prev_scissor);
+        glGetIntegerv(GL_VIEWPORT, prev_viewport);
+
+        glViewport(static_cast<GLint>(x),
+                   screen_h - static_cast<GLint>(y + h),
+                   static_cast<GLsizei>(w),
+                   static_cast<GLsizei>(h));
+
+        glEnable(GL_BLEND);
+        glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_SCISSOR_TEST);
+
+        glUseProgram(blit_program_);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, texture_);
+        glUniform1i(glGetUniformLocation(blit_program_, "uTex"), 0);
+
+        glBindVertexArray(blit_vao_);
+        glBindBuffer(GL_ARRAY_BUFFER, blit_vbo_);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+        glBindVertexArray(prev_vao);
+        glUseProgram(prev_program);
+        if (prev_blend)
+            glEnable(GL_BLEND);
+        else
+            glDisable(GL_BLEND);
+        if (prev_depth)
+            glEnable(GL_DEPTH_TEST);
+        else
+            glDisable(GL_DEPTH_TEST);
+        if (prev_scissor)
+            glEnable(GL_SCISSOR_TEST);
+        else
+            glDisable(GL_SCISSOR_TEST);
+
+        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
+                            GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    }
+
+    void RmlFBO::destroyBlitResources() {
+        if (blit_program_) {
+            glDeleteProgram(blit_program_);
+            blit_program_ = 0;
+        }
+        if (blit_vbo_) {
+            glDeleteBuffers(1, &blit_vbo_);
+            blit_vbo_ = 0;
+        }
+        if (blit_vao_) {
+            glDeleteVertexArrays(1, &blit_vao_);
+            blit_vao_ = 0;
+        }
+    }
+
     void RmlFBO::destroy() {
         if (texture_) {
             glDeleteTextures(1, &texture_);

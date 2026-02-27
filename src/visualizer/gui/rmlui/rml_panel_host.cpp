@@ -282,6 +282,16 @@ namespace lfs::vis::gui {
         fbo_.unbind(prev_fbo);
 
         fbo_.blitAsImage(avail_w, display_h);
+
+        if (height_mode_ == HeightMode::Content && !content_dirty_) {
+            auto* frame = document_->GetElementById("window-frame");
+            auto* wrap = frame ? frame : document_->GetElementById("content-wrap");
+            if (wrap) {
+                const float actual_h = wrap->GetOffsetHeight();
+                if (std::abs(actual_h - static_cast<float>(h)) > 2.0f)
+                    content_dirty_ = true;
+            }
+        }
     }
 
     void RmlPanelHost::drawDirect(float x, float y, float w, float h) {
@@ -363,6 +373,16 @@ namespace lfs::vis::gui {
         auto* draw_list = foreground_ ? ImGui::GetForegroundDrawList(vp)
                                       : ImGui::GetBackgroundDrawList(vp);
         fbo_.blitToDrawList(draw_list, {x, y}, {w, display_h});
+
+        if (height_mode_ == HeightMode::Content && !content_dirty_) {
+            auto* frame = document_->GetElementById("window-frame");
+            auto* wrap = frame ? frame : document_->GetElementById("content-wrap");
+            if (wrap) {
+                const float actual_h = wrap->GetOffsetHeight();
+                if (std::abs(actual_h - static_cast<float>(ph)) > 2.0f)
+                    content_dirty_ = true;
+            }
+        }
     }
 
     void RmlPanelHost::forwardInput(float panel_x, float panel_y) {

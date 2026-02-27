@@ -17,19 +17,19 @@ body {
 
 #transport {
     display: inline-block;
-    width: 152dp;
+    width: 176dp;
     height: 100%;
     vertical-align: middle;
-    padding-top: 18dp;
+    padding-top: 16dp;
     box-sizing: border-box;
 }
 
 .transport-btn {
     display: inline-block;
-    width: 20dp;
-    height: 20dp;
+    width: 24dp;
+    height: 24dp;
     margin-right: 4dp;
-    border-radius: 10dp;
+    border-radius: 12dp;
     vertical-align: middle;
     transition: background-color 0.12s quadratic-out;
 }
@@ -48,8 +48,8 @@ body {
 
 .transport-icon {
     display: block;
-    width: 16dp;
-    height: 16dp;
+    width: 20dp;
+    height: 20dp;
     margin: 2dp;
     image-color: #cdd6f4;
 }

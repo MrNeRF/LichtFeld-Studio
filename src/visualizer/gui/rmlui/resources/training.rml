@@ -513,6 +513,23 @@
         <span class="progress__text">{{progress_text}}</span>
       </div>
     </div>
+    <div id="loss-graph-container">
+      <span id="loss-label" class="status-text status-info"></span>
+      <div class="loss-graph-wrap">
+        <div class="loss-graph-ticks">
+          <span id="loss-tick-max" class="loss-tick"></span>
+          <span id="loss-tick-mid" class="loss-tick"></span>
+          <span id="loss-tick-min" class="loss-tick"></span>
+        </div>
+        <loss-graph id="loss-graph-el" />
+      </div>
+    </div>
+  </div>
+
+  <div id="color-picker-popup" class="color-picker-popup">
+    <color-picker id="color-picker-el"
+      data-attr-red="picker_r" data-attr-green="picker_g" data-attr-blue="picker_b"
+      data-event-change="picker_change" />
   </div>
 
   </div>

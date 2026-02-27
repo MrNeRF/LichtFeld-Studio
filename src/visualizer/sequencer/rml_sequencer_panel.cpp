@@ -24,7 +24,6 @@
 #include <cstdio>
 #include <filesystem>
 #include <format>
-#include <imgui.h>
 
 namespace lfs::vis {
 
@@ -62,9 +61,69 @@ namespace lfs::vis {
         : controller_(controller),
           rml_manager_(rml_manager) {
         assert(rml_manager_);
+        transport_listener_.panel = this;
     }
 
     RmlSequencerPanel::~RmlSequencerPanel() = default;
+
+    void RmlSequencerPanel::TransportClickListener::ProcessEvent(Rml::Event& event) {
+        assert(panel);
+        auto* el = event.GetCurrentElement();
+        if (!el)
+            return;
+
+        const auto& id = el->GetId();
+        auto& ctrl = panel->controller_;
+
+        if (id == "btn-skip-back")
+            ctrl.seekToFirstKeyframe();
+        else if (id == "btn-stop")
+            ctrl.stop();
+        else if (id == "btn-play")
+            ctrl.togglePlayPause();
+        else if (id == "btn-skip-forward")
+            ctrl.seekToLastKeyframe();
+        else if (id == "btn-loop")
+            ctrl.toggleLoop();
+        else if (id == "btn-add")
+            lfs::core::events::cmd::SequencerAddKeyframe{}.emit();
+    }
+
+    TimelineContextMenuState RmlSequencerPanel::consumeContextMenu() {
+        TimelineContextMenuState state;
+        if (context_menu_open_) {
+            state.open = true;
+            state.time = context_menu_time_;
+            state.keyframe = context_menu_keyframe_;
+            context_menu_open_ = false;
+        }
+        return state;
+    }
+
+    TimeEditRequest RmlSequencerPanel::consumeTimeEditRequest() {
+        TimeEditRequest req;
+        if (editing_keyframe_time_) {
+            const auto& keyframes = controller_.timeline().keyframes();
+            if (editing_keyframe_index_ < keyframes.size()) {
+                req.active = true;
+                req.keyframe_index = editing_keyframe_index_;
+                req.current_time = keyframes[editing_keyframe_index_].time;
+            }
+            editing_keyframe_time_ = false;
+        }
+        return req;
+    }
+
+    FocalEditRequest RmlSequencerPanel::consumeFocalEditRequest() {
+        FocalEditRequest req;
+        if (editing_focal_length_) {
+            req.active = true;
+            req.keyframe_index = editing_focal_index_;
+            req.current_focal_mm = std::stof(focal_edit_buffer_);
+            editing_focal_length_ = false;
+        }
+        return req;
+    }
 
     void RmlSequencerPanel::destroyGLResources() {
         fbo_.destroy();
@@ -109,6 +168,14 @@ namespace lfs::vis {
                            el_btn_loop_ && el_timeline_;
         if (!elements_cached_) {
             LOG_ERROR("RmlUI sequencer: missing DOM elements");
+            return;
+        }
+
+        for (const char* btn_id : {"btn-skip-back", "btn-stop", "btn-play",
+                                   "btn-skip-forward", "btn-loop", "btn-add"}) {
+            auto* el = document_->GetElementById(btn_id);
+            if (el)
+                el->AddEventListener(Rml::EventId::Click, &transport_listener_);
         }
     }
 
@@ -157,9 +224,9 @@ namespace lfs::vis {
             return;
 
         const auto& p = lfs::vis::theme().palette;
-        if (std::memcmp(&last_synced_text_, &p.text, sizeof(ImVec4)) == 0)
+        if (std::memcmp(last_synced_text_, &p.text, sizeof(last_synced_text_)) == 0)
             return;
-        last_synced_text_ = p.text;
+        std::memcpy(last_synced_text_, &p.text, sizeof(last_synced_text_));
 
         if (base_rcss_.empty())
             base_rcss_ = gui::rml_theme::loadBaseRCSS("rmlui/sequencer.rcss");
@@ -338,26 +405,31 @@ namespace lfs::vis {
         el_ruler_->SetInnerRML(html);
     }
 
-    void RmlSequencerPanel::forwardInput() {
+    void RmlSequencerPanel::forwardInput(const PanelInputState& input) {
         if (!rml_context_)
             return;
 
-        const ImVec2 mouse = ImGui::GetMousePos();
-        const float local_x = mouse.x - cached_panel_x_;
-        const float local_y = mouse.y - cached_panel_y_;
+        const float local_x = input.mouse_x - cached_panel_x_;
+        const float local_y = input.mouse_y - cached_panel_y_;
 
-        const bool hovered = local_x >= 0 && local_y >= 0 &&
-                             local_x < cached_panel_width_ && local_y < HEIGHT;
-        if (!hovered)
+        hovered_ = local_x >= 0 && local_y >= 0 &&
+                   local_x < cached_panel_width_ && local_y < HEIGHT;
+        if (!hovered_)
             return;
 
         const float dp_ratio = rml_manager_->getDpRatio();
         rml_context_->ProcessMouseMove(static_cast<int>(local_x * dp_ratio),
                                        static_cast<int>(local_y * dp_ratio), 0);
+
+        if (input.mouse_clicked[0])
+            rml_context_->ProcessMouseButtonDown(0, 0);
+        if (!input.mouse_down[0])
+            rml_context_->ProcessMouseButtonUp(0, 0);
     }
 
     void RmlSequencerPanel::render(const float viewport_x, const float viewport_width,
-                                   const float viewport_y_bottom) {
+                                   const float viewport_y_bottom,
+                                   const PanelInputState& input) {
         const float panel_x = viewport_x + PADDING_H;
         const float panel_width = viewport_width - 2.0f * PADDING_H;
         const float panel_y = viewport_y_bottom - HEIGHT - PADDING_BOTTOM;
@@ -392,7 +464,7 @@ namespace lfs::vis {
             rebuildRuler();
         }
 
-        forwardInput();
+        forwardInput(input);
 
         rml_context_->SetDimensions(Rml::Vector2i(w, h));
         rml_context_->Update();
@@ -414,128 +486,60 @@ namespace lfs::vis {
 
         fbo_.unbind(prev_fbo);
 
-        constexpr ImGuiWindowFlags PANEL_FLAGS =
-            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
-            ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoBackground;
+        fbo_.blitToScreen(panel_x, panel_y, panel_width, HEIGHT,
+                          input.screen_w, input.screen_h);
 
-        const ImVec2 panel_pos = {panel_x, panel_y};
-        const ImVec2 panel_size = {panel_width, HEIGHT};
+        const float content_height = HEIGHT - 2.0f * INNER_PADDING;
+        const float timeline_width = panel_width - 2.0f * INNER_PADDING -
+                                     TRANSPORT_WIDTH - TIME_DISPLAY_WIDTH;
 
-        ImGui::SetNextWindowPos(panel_pos);
-        ImGui::SetNextWindowSize(panel_size);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
-
-        if (ImGui::Begin("##RmlSequencerPanel", nullptr, PANEL_FLAGS)) {
-            fbo_.blitAsImage(panel_width, HEIGHT);
-
-            const float content_height = HEIGHT - 2.0f * INNER_PADDING;
-            const float timeline_width = panel_size.x - 2.0f * INNER_PADDING -
-                                         TRANSPORT_WIDTH - TIME_DISPLAY_WIDTH;
-
-            // Transport button interaction (invisible ImGui buttons over RmlUI icons)
-            {
-                const float y_center = panel_pos.y + INNER_PADDING + content_height / 2.0f;
-                const float btn_half = BUTTON_SIZE / 2.0f;
-                const float btn_y = y_center - btn_half;
-                float x_offset = panel_pos.x + INNER_PADDING;
-
-                ImGui::SetCursorScreenPos({x_offset, btn_y});
-                if (ImGui::InvisibleButton("##first", {BUTTON_SIZE, BUTTON_SIZE}))
-                    controller_.seekToFirstKeyframe();
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Go to first keyframe");
-                x_offset += BUTTON_SIZE + BUTTON_SPACING;
-
-                ImGui::SetCursorScreenPos({x_offset, btn_y});
-                if (ImGui::InvisibleButton("##stop", {BUTTON_SIZE, BUTTON_SIZE}))
-                    controller_.stop();
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Stop");
-                x_offset += BUTTON_SIZE + BUTTON_SPACING;
-
-                ImGui::SetCursorScreenPos({x_offset, btn_y});
-                if (ImGui::InvisibleButton("##playpause", {BUTTON_SIZE, BUTTON_SIZE}))
-                    controller_.togglePlayPause();
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip(controller_.isPlaying() ? "Pause (Space)" : "Play (Space)");
-                x_offset += BUTTON_SIZE + BUTTON_SPACING;
-
-                ImGui::SetCursorScreenPos({x_offset, btn_y});
-                if (ImGui::InvisibleButton("##last", {BUTTON_SIZE, BUTTON_SIZE}))
-                    controller_.seekToLastKeyframe();
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Go to last keyframe");
-                x_offset += BUTTON_SIZE + BUTTON_SPACING + 4.0f;
-
-                ImGui::SetCursorScreenPos({x_offset, btn_y});
-                if (ImGui::InvisibleButton("##loop", {BUTTON_SIZE, BUTTON_SIZE}))
-                    controller_.toggleLoop();
-                if (ImGui::IsItemHovered()) {
-                    const bool looping = controller_.loopMode() != LoopMode::ONCE;
-                    ImGui::SetTooltip(looping ? "Loop: ON" : "Loop: OFF");
-                }
-                x_offset += BUTTON_SIZE + BUTTON_SPACING;
-
-                ImGui::SetCursorScreenPos({x_offset, btn_y});
-                if (ImGui::InvisibleButton("##addkf", {BUTTON_SIZE, BUTTON_SIZE}))
-                    lfs::core::events::cmd::SequencerAddKeyframe{}.emit();
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Add keyframe (K)");
-            }
-
-            // Timeline interaction
-            const ImVec2 timeline_pos = {panel_pos.x + INNER_PADDING + TRANSPORT_WIDTH,
-                                         panel_pos.y + INNER_PADDING};
-            handleTimelineInteraction(timeline_pos, timeline_width, content_height);
-        }
-        ImGui::End();
-        ImGui::PopStyleVar();
-
-        renderTimeEditPopup();
-        renderFocalLengthEditPopup();
+        const Vec2 timeline_pos = {panel_x + INNER_PADDING + TRANSPORT_WIDTH,
+                                   panel_y + INNER_PADDING};
+        handleTimelineInteraction(timeline_pos, timeline_width, content_height, input);
     }
 
-    void RmlSequencerPanel::handleTimelineInteraction(const ImVec2& pos, const float width,
-                                                      const float height) {
+    void RmlSequencerPanel::handleTimelineInteraction(const Vec2& pos, const float width,
+                                                      const float height,
+                                                      const PanelInputState& input) {
         const float timeline_y = pos.y + RULER_HEIGHT + 4.0f;
         const float timeline_height = height - RULER_HEIGHT - 4.0f;
         const float bar_half = std::min(timeline_height, TIMELINE_HEIGHT) / 2.0f;
         const float y_center = timeline_y + timeline_height / 2.0f;
 
-        const ImVec2 bar_min = {pos.x, y_center - bar_half};
-        const ImVec2 bar_max = {pos.x + width, y_center + bar_half};
+        const Vec2 bar_min = {pos.x, y_center - bar_half};
+        const Vec2 bar_max = {pos.x + width, y_center + bar_half};
 
         const auto& timeline = controller_.timeline();
         if (timeline.empty())
             return;
 
-        const ImVec2 mouse = ImGui::GetMousePos();
-        const bool mouse_in_timeline = mouse.x >= bar_min.x && mouse.x <= bar_max.x &&
-                                       mouse.y >= bar_min.y - RULER_HEIGHT && mouse.y <= bar_max.y;
+        const float mx = input.mouse_x;
+        const float my = input.mouse_y;
+        const bool mouse_in_timeline = mx >= bar_min.x && mx <= bar_max.x &&
+                                       my >= bar_min.y - RULER_HEIGHT && my <= bar_max.y;
 
-        if (mouse_in_timeline && !ImGui::GetIO().WantCaptureMouse) {
-            const float wheel = ImGui::GetIO().MouseWheel;
+        if (mouse_in_timeline && !input.want_capture_mouse) {
+            const float wheel = input.mouse_wheel;
             if (std::abs(wheel) > 0.01f) {
                 const float old_zoom = zoom_level_;
                 zoom_level_ = std::clamp(zoom_level_ + wheel * ZOOM_SPEED, MIN_ZOOM, MAX_ZOOM);
 
                 if (zoom_level_ != old_zoom) {
-                    const float mouse_time = xToTime(mouse.x, pos.x, width);
+                    const float mouse_time = xToTime(mx, pos.x, width);
                     pan_offset_ += (mouse_time - pan_offset_) * (1.0f - old_zoom / zoom_level_) * 0.5f;
                     pan_offset_ = std::max(0.0f, pan_offset_);
                 }
             }
         }
 
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mouse_in_timeline && !dragging_keyframe_ &&
+        if (input.mouse_clicked[0] && mouse_in_timeline && !dragging_keyframe_ &&
             !hovered_keyframe_.has_value()) {
             dragging_playhead_ = true;
             controller_.beginScrub();
         }
         if (dragging_playhead_) {
-            if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                float time = xToTime(mouse.x, pos.x, width);
+            if (input.mouse_down[0]) {
+                float time = xToTime(mx, pos.x, width);
                 time = std::clamp(time, 0.0f, timeline.endTime());
                 if (snap_enabled_)
                     time = snapTime(time);
@@ -550,32 +554,32 @@ namespace lfs::vis {
         const auto& keyframes = timeline.keyframes();
         for (size_t i = 0; i < keyframes.size(); ++i) {
             const float x = timeToX(keyframes[i].time, pos.x, width);
-            const float dist = std::abs(mouse.x - x);
+            const float dist = std::abs(mx - x);
             const bool hovered = mouse_in_timeline && dist < KEYFRAME_RADIUS * 2;
             if (hovered)
                 hovered_keyframe_ = i;
 
-            if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                const float current_time = static_cast<float>(ImGui::GetTime());
+            if (hovered && input.mouse_clicked[0]) {
+                const float current_time = input.time;
 
                 if (last_clicked_keyframe_ == i &&
                     (current_time - last_click_time_) < DOUBLE_CLICK_TIME) {
                     editing_keyframe_time_ = true;
                     editing_keyframe_index_ = i;
-                    std::snprintf(time_edit_buffer_, sizeof(time_edit_buffer_), "%.2f", keyframes[i].time);
+                    time_edit_buffer_ = std::format("{:.2f}", keyframes[i].time);
                     last_clicked_keyframe_ = std::nullopt;
                 } else {
                     last_click_time_ = current_time;
                     last_clicked_keyframe_ = i;
 
-                    if (ImGui::GetIO().KeyShift && controller_.hasSelection()) {
+                    if (input.key_shift && controller_.hasSelection()) {
                         const size_t first_sel = *controller_.selectedKeyframe();
                         const size_t lo = std::min(first_sel, i);
                         const size_t hi = std::max(first_sel, i);
                         selected_keyframes_.clear();
                         for (size_t j = lo; j <= hi; ++j)
                             selected_keyframes_.insert(j);
-                    } else if (ImGui::GetIO().KeyCtrl) {
+                    } else if (input.key_ctrl) {
                         if (selected_keyframes_.contains(i))
                             selected_keyframes_.erase(i);
                         else
@@ -588,7 +592,7 @@ namespace lfs::vis {
                             dragging_keyframe_ = true;
                             dragged_keyframe_index_ = i;
                             drag_start_time_ = keyframes[i].time;
-                            drag_start_mouse_x_ = mouse.x;
+                            drag_start_mouse_x_ = mx;
                         } else {
                             lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = i}.emit();
                         }
@@ -598,14 +602,14 @@ namespace lfs::vis {
         }
 
         if (dragging_keyframe_) {
-            if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                float new_time = xToTime(mouse.x, pos.x, width);
+            if (input.mouse_down[0]) {
+                float new_time = xToTime(mx, pos.x, width);
                 new_time = std::max(new_time, MIN_KEYFRAME_SPACING);
                 if (snap_enabled_)
                     new_time = snapTime(new_time);
                 controller_.timeline().setKeyframeTime(dragged_keyframe_index_, new_time, false);
             } else {
-                if (std::abs(mouse.x - drag_start_mouse_x_) < DRAG_THRESHOLD_PX) {
+                if (std::abs(mx - drag_start_mouse_x_) < DRAG_THRESHOLD_PX) {
                     lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = dragged_keyframe_index_}.emit();
                 }
                 controller_.timeline().sortKeyframes();
@@ -614,7 +618,7 @@ namespace lfs::vis {
         }
 
         if ((controller_.hasSelection() || !selected_keyframes_.empty()) &&
-            ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+            input.key_delete_pressed) {
             std::vector<size_t> to_delete;
             if (!selected_keyframes_.empty())
                 to_delete.assign(selected_keyframes_.begin(), selected_keyframes_.end());
@@ -632,176 +636,22 @@ namespace lfs::vis {
             controller_.deselectKeyframe();
         }
 
-        if (mouse_in_timeline && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-            context_menu_time_ = xToTime(mouse.x, pos.x, width);
+        if (mouse_in_timeline && input.mouse_clicked[1]) {
+            context_menu_time_ = xToTime(mx, pos.x, width);
             context_menu_keyframe_ = hovered_keyframe_;
             context_menu_open_ = true;
-            context_menu_pos_ = mouse;
-            ImGui::OpenPopup("TimelineContextMenu");
+            context_menu_x_ = mx;
+            context_menu_y_ = my;
         }
 
-        ImGui::SetNextWindowPos(context_menu_pos_, ImGuiCond_Always, {0.0f, 1.0f});
-        if (ImGui::BeginPopup("TimelineContextMenu")) {
-            if (context_menu_keyframe_.has_value()) {
-                const size_t idx = *context_menu_keyframe_;
-                const bool is_first = (idx == 0);
-
-                if (ImGui::MenuItem("Update to Current View", "U")) {
-                    lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = idx}.emit();
-                    lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
-                }
-                if (ImGui::MenuItem("Go to Keyframe")) {
-                    lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = idx}.emit();
-                }
-                if (ImGui::MenuItem("Edit Time...", nullptr)) {
-                    editing_keyframe_time_ = true;
-                    editing_keyframe_index_ = idx;
-                    std::snprintf(time_edit_buffer_, sizeof(time_edit_buffer_), "%.2f", keyframes[idx].time);
-                }
-                if (ImGui::MenuItem(LOC(lichtfeld::Strings::Sequencer::EDIT_FOCAL_LENGTH), nullptr)) {
-                    editing_focal_length_ = true;
-                    editing_focal_index_ = idx;
-                    std::snprintf(focal_edit_buffer_, sizeof(focal_edit_buffer_), "%.1f", keyframes[idx].focal_length_mm);
-                }
-
-                const bool is_last = (idx == keyframes.size() - 1);
-                if (ImGui::BeginMenu("Easing", !is_last)) {
-                    const auto current_easing = keyframes[idx].easing;
-                    for (int e = 0; e < 4; ++e) {
-                        const auto easing = static_cast<sequencer::EasingType>(e);
-                        if (ImGui::MenuItem(EASING_NAMES[e], nullptr, current_easing == easing)) {
-                            if (current_easing != easing)
-                                controller_.timeline().setKeyframeEasing(idx, easing);
-                        }
-                    }
-                    ImGui::EndMenu();
-                }
-                if (is_last && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                    ImGui::SetTooltip("Easing controls outgoing motion\n(last keyframe has no outgoing segment)");
-                }
-
-                ImGui::Separator();
-                if (ImGui::MenuItem("Delete Keyframe", "Del", false, !is_first)) {
-                    controller_.timeline().removeKeyframe(idx);
-                }
-            } else {
-                if (ImGui::MenuItem("Add Keyframe Here", "K")) {
-                    lfs::core::events::cmd::SequencerAddKeyframe{}.emit();
-                }
-            }
-            ImGui::EndPopup();
-        } else {
-            context_menu_open_ = false;
-        }
-
-        if (hovered_keyframe_.has_value()) {
-            const size_t hi = *hovered_keyframe_;
-            if (hi < keyframes.size()) {
-                const bool is_loop = keyframes[hi].is_loop_point;
-                const char* tooltip = is_loop
-                                          ? "Loop Point @ %s (returns to start)"
-                                          : "Keyframe @ %s (double-click to edit)";
-                ImGui::SetTooltip(tooltip, formatTime(keyframes[hi].time).c_str());
-            }
-        }
-    }
-
-    void RmlSequencerPanel::renderTimeEditPopup() {
-        if (!editing_keyframe_time_)
-            return;
-
-        if (!ImGui::IsPopupOpen("EditKeyframeTime"))
-            ImGui::OpenPopup("EditKeyframeTime");
-
-        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, {0.5f, 0.5f});
-        if (ImGui::BeginPopupModal("EditKeyframeTime", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text("Edit Keyframe Time");
-            ImGui::Separator();
-
-            auto applyTimeChange = [this]() {
-                const float new_time = std::strtof(time_edit_buffer_, nullptr);
-                if (new_time >= 0.0f) {
-                    const auto& kfs = controller_.timeline().keyframes();
-                    if (editing_keyframe_index_ < kfs.size()) {
-                        controller_.timeline().setKeyframeTime(editing_keyframe_index_, new_time);
-                    }
-                }
-            };
-
-            ImGui::SetNextItemWidth(120);
-            if (ImGui::InputText("Time (s)", time_edit_buffer_, sizeof(time_edit_buffer_),
-                                 ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_EnterReturnsTrue)) {
-                applyTimeChange();
-                editing_keyframe_time_ = false;
-                ImGui::CloseCurrentPopup();
-            }
-
-            if (ImGui::Button("OK", {60, 0})) {
-                applyTimeChange();
-                editing_keyframe_time_ = false;
-                ImGui::CloseCurrentPopup();
-            }
-
-            ImGui::SameLine();
-            if (ImGui::Button("Cancel", {60, 0})) {
-                editing_keyframe_time_ = false;
-                ImGui::CloseCurrentPopup();
-            }
-
-            ImGui::EndPopup();
-        }
+        // Context menu rendering is handled in sequencer_ui_manager for now
+        // (still uses ImGui for context menus and tooltips as part of the viewport layer)
     }
 
     void RmlSequencerPanel::openFocalLengthEdit(const size_t index, const float current_focal_mm) {
         editing_focal_length_ = true;
         editing_focal_index_ = index;
-        std::snprintf(focal_edit_buffer_, sizeof(focal_edit_buffer_), "%.1f", current_focal_mm);
-    }
-
-    void RmlSequencerPanel::renderFocalLengthEditPopup() {
-        if (!editing_focal_length_)
-            return;
-
-        if (!ImGui::IsPopupOpen("EditKeyframeFocalLength"))
-            ImGui::OpenPopup("EditKeyframeFocalLength");
-
-        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, {0.5f, 0.5f});
-        if (ImGui::BeginPopupModal("EditKeyframeFocalLength", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::TextUnformatted(LOC(lichtfeld::Strings::Sequencer::EDIT_FOCAL_LENGTH_TITLE));
-            ImGui::Separator();
-            auto applyFocalChange = [this]() {
-                float new_focal = std::strtof(focal_edit_buffer_, nullptr);
-                new_focal = std::clamp(new_focal,
-                                       lfs::rendering::MIN_FOCAL_LENGTH_MM,
-                                       lfs::rendering::MAX_FOCAL_LENGTH_MM);
-                if (editing_focal_index_ < controller_.timeline().keyframes().size()) {
-                    controller_.timeline().setKeyframeFocalLength(editing_focal_index_, new_focal);
-                    controller_.updateLoopKeyframe();
-                }
-            };
-
-            ImGui::SetNextItemWidth(120);
-            if (ImGui::InputText(LOC(lichtfeld::Strings::Sequencer::FOCAL_LENGTH_MM), focal_edit_buffer_, sizeof(focal_edit_buffer_),
-                                 ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_EnterReturnsTrue)) {
-                applyFocalChange();
-                editing_focal_length_ = false;
-                ImGui::CloseCurrentPopup();
-            }
-
-            if (ImGui::Button(LOC(lichtfeld::Strings::Common::OK), {60, 0})) {
-                applyFocalChange();
-                editing_focal_length_ = false;
-                ImGui::CloseCurrentPopup();
-            }
-
-            ImGui::SameLine();
-            if (ImGui::Button(LOC(lichtfeld::Strings::Common::CANCEL), {60, 0})) {
-                editing_focal_length_ = false;
-                ImGui::CloseCurrentPopup();
-            }
-
-            ImGui::EndPopup();
-        }
+        focal_edit_buffer_ = std::format("{:.1f}", current_focal_mm);
     }
 
     float RmlSequencerPanel::getDisplayEndTime() const {

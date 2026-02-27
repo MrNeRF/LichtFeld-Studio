@@ -5,10 +5,10 @@
 
 #include "gui/rmlui/rml_fbo.hpp"
 #include "sequencer_controller.hpp"
+#include <RmlUi/Core/EventListener.h>
 #include <optional>
 #include <set>
 #include <string>
-#include <imgui.h>
 
 namespace Rml {
     class Context;
@@ -22,6 +22,22 @@ namespace lfs::vis::gui {
 
 namespace lfs::vis {
 
+    struct PanelInputState {
+        float mouse_x = 0.0f;
+        float mouse_y = 0.0f;
+        bool mouse_down[3] = {};
+        bool mouse_clicked[3] = {};
+        float mouse_wheel = 0.0f;
+        bool key_shift = false;
+        bool key_ctrl = false;
+        bool key_delete_pressed = false;
+        float time = 0.0f;
+        float delta_time = 0.0f;
+        bool want_capture_mouse = false;
+        int screen_w = 0;
+        int screen_h = 0;
+    };
+
     namespace panel_config {
         inline constexpr float HEIGHT = 72.0f;
         inline constexpr float PADDING_H = 16.0f;
@@ -33,13 +49,31 @@ namespace lfs::vis {
         inline constexpr float PLAYHEAD_WIDTH = 2.0f;
         inline constexpr float BUTTON_SIZE = 20.0f;
         inline constexpr float BUTTON_SPACING = 4.0f;
-        inline constexpr float TRANSPORT_WIDTH = 152.0f;
+        inline constexpr float TRANSPORT_WIDTH = 176.0f;
         inline constexpr float TIME_DISPLAY_WIDTH = 100.0f;
 
         inline constexpr float MIN_ZOOM = 0.5f;
         inline constexpr float MAX_ZOOM = 4.0f;
         inline constexpr float ZOOM_SPEED = 0.1f;
     } // namespace panel_config
+
+    struct TimelineContextMenuState {
+        bool open = false;
+        float time = 0.0f;
+        std::optional<size_t> keyframe;
+    };
+
+    struct TimeEditRequest {
+        bool active = false;
+        size_t keyframe_index = 0;
+        float current_time = 0.0f;
+    };
+
+    struct FocalEditRequest {
+        bool active = false;
+        size_t keyframe_index = 0;
+        float current_focal_mm = 0.0f;
+    };
 
     class RmlSequencerPanel {
     public:
@@ -49,12 +83,19 @@ namespace lfs::vis {
         RmlSequencerPanel(const RmlSequencerPanel&) = delete;
         RmlSequencerPanel& operator=(const RmlSequencerPanel&) = delete;
 
-        void render(float viewport_x, float viewport_width, float viewport_y_bottom);
+        void render(float viewport_x, float viewport_width, float viewport_y_bottom,
+                    const PanelInputState& input);
 
         void setSnapEnabled(bool enabled) { snap_enabled_ = enabled; }
         void setSnapInterval(float interval) { snap_interval_ = interval; }
 
         void openFocalLengthEdit(size_t index, float current_focal_mm);
+
+        [[nodiscard]] bool isHovered() const { return hovered_; }
+
+        [[nodiscard]] TimelineContextMenuState consumeContextMenu();
+        [[nodiscard]] TimeEditRequest consumeTimeEditRequest();
+        [[nodiscard]] FocalEditRequest consumeFocalEditRequest();
 
         void destroyGLResources();
 
@@ -70,24 +111,33 @@ namespace lfs::vis {
         void updateTimeDisplay();
         void rebuildKeyframes();
         void rebuildRuler();
-        void forwardInput();
+        void forwardInput(const PanelInputState& input);
 
-        void handleTimelineInteraction(const ImVec2& pos, float width, float height);
-        void renderTimeEditPopup();
-        void renderFocalLengthEditPopup();
+        struct Vec2 {
+            float x, y;
+        };
+
+        void handleTimelineInteraction(const Vec2& pos, float width, float height,
+                                       const PanelInputState& input);
 
         [[nodiscard]] float getDisplayEndTime() const;
         [[nodiscard]] float timeToX(float time, float timeline_x, float timeline_width) const;
         [[nodiscard]] float xToTime(float x, float timeline_x, float timeline_width) const;
         [[nodiscard]] float snapTime(float time) const;
 
+        struct TransportClickListener : Rml::EventListener {
+            RmlSequencerPanel* panel = nullptr;
+            void ProcessEvent(Rml::Event& event) override;
+        };
+
         SequencerController& controller_;
         gui::RmlUIManager* rml_manager_;
+        TransportClickListener transport_listener_;
 
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
         std::string base_rcss_;
-        ImVec4 last_synced_text_{};
+        float last_synced_text_[4] = {};
 
         // Cached DOM elements
         bool elements_cached_ = false;
@@ -136,25 +186,28 @@ namespace lfs::vis {
         bool snap_enabled_ = false;
         float snap_interval_ = 0.5f;
 
-        // Time editing popup (ImGui modal)
+        // Time editing
         bool editing_keyframe_time_ = false;
         size_t editing_keyframe_index_ = 0;
-        char time_edit_buffer_[32] = {};
+        std::string time_edit_buffer_;
 
-        // Focal length editing popup (ImGui modal)
+        // Focal length editing
         bool editing_focal_length_ = false;
         size_t editing_focal_index_ = 0;
-        char focal_edit_buffer_[32] = {};
+        std::string focal_edit_buffer_;
 
         // Context menu state
         bool context_menu_open_ = false;
         float context_menu_time_ = 0.0f;
-        ImVec2 context_menu_pos_ = {0, 0};
+        float context_menu_x_ = 0.0f;
+        float context_menu_y_ = 0.0f;
         std::optional<size_t> context_menu_keyframe_;
 
         // Double-click detection
         float last_click_time_ = 0.0f;
         std::optional<size_t> last_clicked_keyframe_;
+
+        bool hovered_ = false;
     };
 
 } // namespace lfs::vis

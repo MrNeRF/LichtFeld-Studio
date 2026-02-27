@@ -13,15 +13,76 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
 
     namespace {
 
+        void hsvToRgb(float h, float s, float v, float& r, float& g, float& b) {
+            if (s == 0.0f) {
+                r = g = b = v;
+                return;
+            }
+            h = std::fmod(h, 1.0f) * 6.0f;
+            const int i = static_cast<int>(h);
+            const float f = h - static_cast<float>(i);
+            const float p = v * (1.0f - s);
+            const float q = v * (1.0f - s * f);
+            const float t = v * (1.0f - s * (1.0f - f));
+            switch (i) {
+            case 0:
+                r = v;
+                g = t;
+                b = p;
+                break;
+            case 1:
+                r = q;
+                g = v;
+                b = p;
+                break;
+            case 2:
+                r = p;
+                g = v;
+                b = t;
+                break;
+            case 3:
+                r = p;
+                g = q;
+                b = v;
+                break;
+            case 4:
+                r = t;
+                g = p;
+                b = v;
+                break;
+            default:
+                r = v;
+                g = p;
+                b = q;
+                break;
+            }
+        }
+
+        void rgbToHsv(float r, float g, float b, float& h, float& s, float& v) {
+            const float mx = std::max({r, g, b});
+            const float mn = std::min({r, g, b});
+            const float d = mx - mn;
+            v = mx;
+            s = (mx > 0.0f) ? d / mx : 0.0f;
+            if (d == 0.0f) {
+                h = 0.0f;
+            } else if (mx == r) {
+                h = std::fmod((g - b) / d + 6.0f, 6.0f) / 6.0f;
+            } else if (mx == g) {
+                h = ((b - r) / d + 2.0f) / 6.0f;
+            } else {
+                h = ((r - g) / d + 4.0f) / 6.0f;
+            }
+        }
+
         Rml::ColourbPremultiplied hsvToColor(float h, float s, float v) {
             float r, g, b;
-            ImGui::ColorConvertHSVtoRGB(h, s, v, r, g, b);
+            hsvToRgb(h, s, v, r, g, b);
             return {static_cast<Rml::byte>(r * 255.f), static_cast<Rml::byte>(g * 255.f),
                     static_cast<Rml::byte>(b * 255.f), 255};
         }
@@ -90,12 +151,12 @@ namespace lfs::vis::gui {
         float r = get("red", 1.f);
         float g = get("green", 0.f);
         float b = get("blue", 0.f);
-        ImGui::ColorConvertRGBtoHSV(r, g, b, h_, s_, v_);
+        rgbToHsv(r, g, b, h_, s_, v_);
     }
 
     void ColorPickerElement::dispatchChange() {
         float r, g, b;
-        ImGui::ColorConvertHSVtoRGB(h_, s_, v_, r, g, b);
+        hsvToRgb(h_, s_, v_, r, g, b);
         Rml::Dictionary params;
         params["red"] = Rml::Variant(r);
         params["green"] = Rml::Variant(g);

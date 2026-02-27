@@ -21,9 +21,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <format>
 #include <glm/gtc/type_ptr.hpp>
-#include <imgui_internal.h>
 #include <imgui.h>
 #include <ImGuizmo.h>
 
@@ -43,6 +43,7 @@ namespace lfs::vis::gui {
         pip_texture_ = {};
         pip_depth_rbo_ = {};
         pip_initialized_ = false;
+        line_renderer_.destroyGLResources();
         if (panel_)
             panel_->destroyGLResources();
     }
@@ -99,11 +100,14 @@ namespace lfs::vis::gui {
         renderSequencerPanel(ctx, viewport);
         drawPipPreviewWindow(viewport);
         renderContextMenu();
+        renderTimeEditPopup();
+        renderFocalEditPopup();
         renderKeyframeEditOverlay(viewport);
     }
 
     void SequencerUIManager::renderSequencerPanel(const UIContext& /*ctx*/, const ViewportLayout& viewport) {
-        controller_.update(ImGui::GetIO().DeltaTime);
+        const auto& io = ImGui::GetIO();
+        controller_.update(io.DeltaTime);
 
         const bool is_playing = controller_.isPlaying() && !controller_.timeline().empty();
 
@@ -121,7 +125,53 @@ namespace lfs::vis::gui {
 
         panel_->setSnapEnabled(ui_state_.snap_to_grid);
         panel_->setSnapInterval(ui_state_.snap_interval);
-        panel_->render(viewport.pos.x, viewport.size.x, viewport.pos.y + viewport.size.y);
+
+        PanelInputState input;
+        input.mouse_x = io.MousePos.x;
+        input.mouse_y = io.MousePos.y;
+        input.mouse_down[0] = io.MouseDown[0];
+        input.mouse_down[1] = io.MouseDown[1];
+        input.mouse_down[2] = io.MouseDown[2];
+        input.mouse_clicked[0] = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+        input.mouse_clicked[1] = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+        input.mouse_clicked[2] = ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
+        input.mouse_wheel = io.MouseWheel;
+        input.key_shift = io.KeyShift;
+        input.key_ctrl = io.KeyCtrl;
+        input.key_delete_pressed = ImGui::IsKeyPressed(ImGuiKey_Delete);
+        input.time = static_cast<float>(ImGui::GetTime());
+        input.delta_time = io.DeltaTime;
+        input.want_capture_mouse = io.WantCaptureMouse;
+        input.screen_w = static_cast<int>(io.DisplaySize.x);
+        input.screen_h = static_cast<int>(io.DisplaySize.y);
+
+        panel_->render(viewport.pos.x, viewport.size.x, viewport.pos.y + viewport.size.y, input);
+
+        if (panel_->isHovered())
+            ImGui::GetIO().WantCaptureMouse = true;
+
+        const auto timeline_menu = panel_->consumeContextMenu();
+        if (timeline_menu.open) {
+            context_menu_keyframe_ = timeline_menu.keyframe;
+            context_menu_open_ = true;
+            ImGui::OpenPopup("KeyframeContextMenu");
+        }
+
+        const auto time_req = panel_->consumeTimeEditRequest();
+        if (time_req.active) {
+            time_edit_active_ = true;
+            time_edit_index_ = time_req.keyframe_index;
+            std::snprintf(time_edit_buffer_, sizeof(time_edit_buffer_), "%.2f", time_req.current_time);
+            ImGui::OpenPopup("EditKeyframeTime");
+        }
+
+        const auto focal_req = panel_->consumeFocalEditRequest();
+        if (focal_req.active) {
+            focal_edit_active_ = true;
+            focal_edit_index_ = focal_req.keyframe_index;
+            std::snprintf(focal_edit_buffer_, sizeof(focal_edit_buffer_), "%.1f", focal_req.current_focal_mm);
+            ImGui::OpenPopup("EditFocalLength");
+        }
     }
 
     void SequencerUIManager::renderCameraPath(const ViewportLayout& viewport) {
@@ -137,7 +187,7 @@ namespace lfs::vis::gui {
         const auto& vp = viewer_->getViewport();
         const glm::mat4 view_proj = vp.getProjectionMatrix() * vp.getViewMatrix();
 
-        const auto projectToScreen = [&](const glm::vec3& pos) -> ImVec2 {
+        const auto projectToScreen = [&](const glm::vec3& pos) -> glm::vec2 {
             const glm::vec4 clip = view_proj * glm::vec4(pos, 1.0f);
             if (clip.w <= 0.0f)
                 return {-10000.0f, -10000.0f};
@@ -154,19 +204,28 @@ namespace lfs::vis::gui {
             return std::abs(ndc.x) <= NDC_CULL_MARGIN && std::abs(ndc.y) <= NDC_CULL_MARGIN;
         };
 
-        ImDrawList* const dl = ImGui::GetBackgroundDrawList();
+        const auto toColor = [](const ImVec4& c, float alpha) -> glm::vec4 {
+            return {c.x, c.y, c.z, alpha};
+        };
+
         const auto& t = theme();
 
         if (timeline.empty())
             return;
 
+        const auto& io = ImGui::GetIO();
+        const int screen_w = static_cast<int>(io.DisplaySize.x);
+        const int screen_h = static_cast<int>(io.DisplaySize.y);
+        line_renderer_.begin(screen_w, screen_h);
+
         const auto path_points = timeline.generatePath(PATH_SAMPLES);
         if (path_points.size() >= 2) {
-            const ImU32 path_color = toU32WithAlpha(t.palette.primary, 0.8f);
+            const glm::vec4 path_color = toColor(t.palette.primary, 0.8f);
             for (size_t i = 0; i + 1 < path_points.size(); ++i) {
                 if (!isVisible(path_points[i]) && !isVisible(path_points[i + 1]))
                     continue;
-                dl->AddLine(projectToScreen(path_points[i]), projectToScreen(path_points[i + 1]), path_color, PATH_THICKNESS);
+                line_renderer_.addLine(projectToScreen(path_points[i]), projectToScreen(path_points[i + 1]),
+                                       path_color, PATH_THICKNESS);
             }
         }
 
@@ -177,20 +236,21 @@ namespace lfs::vis::gui {
         std::optional<size_t> hovered_keyframe;
         float closest_dist = HIT_RADIUS;
 
-        const ImU32 frustum_color = toU32WithAlpha(t.palette.primary, 0.7f);
-        const ImU32 hovered_frustum_color = toU32WithAlpha(lighten(t.palette.primary, 0.15f), 0.85f);
-        const ImU32 selected_frustum_color = toU32WithAlpha(lighten(t.palette.primary, 0.3f), 0.9f);
+        const glm::vec4 frustum_color = toColor(t.palette.primary, 0.7f);
+        const glm::vec4 hovered_frustum_color = toColor(lighten(t.palette.primary, 0.15f), 0.85f);
+        const glm::vec4 selected_frustum_color = toColor(lighten(t.palette.primary, 0.3f), 0.9f);
 
         for (size_t i = 0; i < timeline.keyframes().size(); ++i) {
             const auto& kf = timeline.keyframes()[i];
             if (!isVisible(kf.position))
                 continue;
 
-            const ImVec2 s_apex = projectToScreen(kf.position);
+            const glm::vec2 s_apex = projectToScreen(kf.position);
 
             if (mouse_in_viewport) {
-                const float dist = std::sqrt((mouse.x - s_apex.x) * (mouse.x - s_apex.x) +
-                                             (mouse.y - s_apex.y) * (mouse.y - s_apex.y));
+                const float dx = mouse.x - s_apex.x;
+                const float dy = mouse.y - s_apex.y;
+                const float dist = std::sqrt(dx * dx + dy * dy);
                 if (dist < closest_dist) {
                     closest_dist = dist;
                     hovered_keyframe = i;
@@ -199,7 +259,7 @@ namespace lfs::vis::gui {
 
             const bool selected = controller_.selectedKeyframe() == i;
             const bool hovered = hovered_keyframe == i;
-            ImU32 color = frustum_color;
+            glm::vec4 color = frustum_color;
             if (selected)
                 color = selected_frustum_color;
             else if (hovered)
@@ -223,50 +283,30 @@ namespace lfs::vis::gui {
             const glm::vec3 bl = base_center - up * half_h - right * half_w;
             const glm::vec3 br = base_center - up * half_h + right * half_w;
 
-            const ImVec2 s_tl = projectToScreen(tl);
-            const ImVec2 s_tr = projectToScreen(tr);
-            const ImVec2 s_bl = projectToScreen(bl);
-            const ImVec2 s_br = projectToScreen(br);
+            const glm::vec2 s_tl = projectToScreen(tl);
+            const glm::vec2 s_tr = projectToScreen(tr);
+            const glm::vec2 s_bl = projectToScreen(bl);
+            const glm::vec2 s_br = projectToScreen(br);
 
-            dl->AddLine(s_apex, s_tl, color, thickness);
-            dl->AddLine(s_apex, s_tr, color, thickness);
-            dl->AddLine(s_apex, s_bl, color, thickness);
-            dl->AddLine(s_apex, s_br, color, thickness);
+            line_renderer_.addLine(s_apex, s_tl, color, thickness);
+            line_renderer_.addLine(s_apex, s_tr, color, thickness);
+            line_renderer_.addLine(s_apex, s_bl, color, thickness);
+            line_renderer_.addLine(s_apex, s_br, color, thickness);
 
-            dl->AddLine(s_tl, s_tr, color, thickness);
-            dl->AddLine(s_tr, s_br, color, thickness);
-            dl->AddLine(s_br, s_bl, color, thickness);
-            dl->AddLine(s_bl, s_tl, color, thickness);
+            line_renderer_.addLine(s_tl, s_tr, color, thickness);
+            line_renderer_.addLine(s_tr, s_br, color, thickness);
+            line_renderer_.addLine(s_br, s_bl, color, thickness);
+            line_renderer_.addLine(s_bl, s_tl, color, thickness);
 
             const glm::vec3 up_tip = base_center + up * half_h * 1.3f;
-            const ImVec2 s_up = projectToScreen(up_tip);
-            dl->AddTriangleFilled(s_up, s_tl, s_tr, color);
-        }
-
-        if (mouse_in_viewport && !ImGui::IsAnyItemHovered()) {
-            if (hovered_keyframe.has_value() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver()) {
-                const float now = static_cast<float>(ImGui::GetTime());
-                if (last_frustum_clicked_ == *hovered_keyframe &&
-                    (now - last_frustum_click_time_) < ImGui::GetIO().MouseDoubleClickTime) {
-                    lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = *hovered_keyframe}.emit();
-                    last_frustum_clicked_ = std::nullopt;
-                } else {
-                    lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = *hovered_keyframe}.emit();
-                    last_frustum_click_time_ = now;
-                    last_frustum_clicked_ = *hovered_keyframe;
-                }
-            }
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-                context_menu_keyframe_ = hovered_keyframe;
-                context_menu_open_ = true;
-                ImGui::OpenPopup("KeyframeContextMenu");
-            }
+            const glm::vec2 s_up = projectToScreen(up_tip);
+            line_renderer_.addTriangleFilled(s_up, s_tl, s_tr, color);
         }
 
         if (!controller_.isStopped()) {
             const auto state = controller_.currentCameraState();
             if (isVisible(state.position)) {
-                const ImU32 playhead_color = t.error_u32();
+                const glm::vec4 playhead_color = toColor(t.palette.error, 1.0f);
                 constexpr float PLAYHEAD_FRUSTUM_DEPTH = 0.20f;
 
                 const float ph_half_vfov = rendering::focalLengthToVFovRad(state.focal_length_mm) * 0.5f;
@@ -285,25 +325,47 @@ namespace lfs::vis::gui {
                 const glm::vec3 bl = base_center - up * ph_half_h - right * ph_half_w;
                 const glm::vec3 br = base_center - up * ph_half_h + right * ph_half_w;
 
-                const ImVec2 s_apex = projectToScreen(apex);
-                const ImVec2 s_tl = projectToScreen(tl);
-                const ImVec2 s_tr = projectToScreen(tr);
-                const ImVec2 s_bl = projectToScreen(bl);
-                const ImVec2 s_br = projectToScreen(br);
+                const glm::vec2 s_apex = projectToScreen(apex);
+                const glm::vec2 s_tl = projectToScreen(tl);
+                const glm::vec2 s_tr = projectToScreen(tr);
+                const glm::vec2 s_bl = projectToScreen(bl);
+                const glm::vec2 s_br = projectToScreen(br);
 
-                dl->AddLine(s_apex, s_tl, playhead_color, FRUSTUM_THICKNESS);
-                dl->AddLine(s_apex, s_tr, playhead_color, FRUSTUM_THICKNESS);
-                dl->AddLine(s_apex, s_bl, playhead_color, FRUSTUM_THICKNESS);
-                dl->AddLine(s_apex, s_br, playhead_color, FRUSTUM_THICKNESS);
+                line_renderer_.addLine(s_apex, s_tl, playhead_color, FRUSTUM_THICKNESS);
+                line_renderer_.addLine(s_apex, s_tr, playhead_color, FRUSTUM_THICKNESS);
+                line_renderer_.addLine(s_apex, s_bl, playhead_color, FRUSTUM_THICKNESS);
+                line_renderer_.addLine(s_apex, s_br, playhead_color, FRUSTUM_THICKNESS);
 
-                dl->AddLine(s_tl, s_tr, playhead_color, FRUSTUM_THICKNESS);
-                dl->AddLine(s_tr, s_br, playhead_color, FRUSTUM_THICKNESS);
-                dl->AddLine(s_br, s_bl, playhead_color, FRUSTUM_THICKNESS);
-                dl->AddLine(s_bl, s_tl, playhead_color, FRUSTUM_THICKNESS);
+                line_renderer_.addLine(s_tl, s_tr, playhead_color, FRUSTUM_THICKNESS);
+                line_renderer_.addLine(s_tr, s_br, playhead_color, FRUSTUM_THICKNESS);
+                line_renderer_.addLine(s_br, s_bl, playhead_color, FRUSTUM_THICKNESS);
+                line_renderer_.addLine(s_bl, s_tl, playhead_color, FRUSTUM_THICKNESS);
 
                 const glm::vec3 up_tip = base_center + up * ph_half_h * 1.3f;
-                const ImVec2 s_up = projectToScreen(up_tip);
-                dl->AddTriangleFilled(s_up, s_tl, s_tr, playhead_color);
+                const glm::vec2 s_up = projectToScreen(up_tip);
+                line_renderer_.addTriangleFilled(s_up, s_tl, s_tr, playhead_color);
+            }
+        }
+
+        line_renderer_.end();
+
+        if (mouse_in_viewport && !ImGui::IsAnyItemHovered()) {
+            if (hovered_keyframe.has_value() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver()) {
+                const float now = static_cast<float>(ImGui::GetTime());
+                if (last_frustum_clicked_ == *hovered_keyframe &&
+                    (now - last_frustum_click_time_) < ImGui::GetIO().MouseDoubleClickTime) {
+                    lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = *hovered_keyframe}.emit();
+                    last_frustum_clicked_ = std::nullopt;
+                } else {
+                    lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = *hovered_keyframe}.emit();
+                    last_frustum_click_time_ = now;
+                    last_frustum_clicked_ = *hovered_keyframe;
+                }
+            }
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                context_menu_keyframe_ = hovered_keyframe;
+                context_menu_open_ = true;
+                ImGui::OpenPopup("KeyframeContextMenu");
             }
         }
     }
@@ -451,6 +513,69 @@ namespace lfs::vis::gui {
         } else {
             context_menu_open_ = false;
             context_menu_keyframe_ = std::nullopt;
+        }
+    }
+
+    void SequencerUIManager::renderTimeEditPopup() {
+        if (!time_edit_active_)
+            return;
+
+        if (ImGui::BeginPopup("EditKeyframeTime")) {
+            ImGui::Text("Edit Keyframe Time");
+            ImGui::Separator();
+            ImGui::SetNextItemWidth(120);
+            const bool enter = ImGui::InputText("##time", time_edit_buffer_, sizeof(time_edit_buffer_),
+                                                ImGuiInputTextFlags_EnterReturnsTrue);
+            if (enter || ImGui::Button("OK")) {
+                const float new_time = std::strtof(time_edit_buffer_, nullptr);
+                if (new_time > 0.0f && time_edit_index_ > 0) {
+                    controller_.timeline().setKeyframeTime(time_edit_index_, new_time, true);
+                }
+                time_edit_active_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) {
+                time_edit_active_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        } else {
+            time_edit_active_ = false;
+        }
+    }
+
+    void SequencerUIManager::renderFocalEditPopup() {
+        if (!focal_edit_active_)
+            return;
+
+        if (ImGui::BeginPopup("EditFocalLength")) {
+            ImGui::Text("Edit Focal Length");
+            ImGui::Separator();
+            ImGui::SetNextItemWidth(120);
+            const bool enter = ImGui::InputText("##focal", focal_edit_buffer_, sizeof(focal_edit_buffer_),
+                                                ImGuiInputTextFlags_EnterReturnsTrue);
+            if (enter || ImGui::Button("OK")) {
+                const float new_focal = std::strtof(focal_edit_buffer_, nullptr);
+                if (new_focal > 0.0f) {
+                    auto& timeline = controller_.timeline();
+                    if (focal_edit_index_ < timeline.size()) {
+                        const auto* kf = timeline.getKeyframe(focal_edit_index_);
+                        if (kf)
+                            timeline.updateKeyframe(focal_edit_index_, kf->position, kf->rotation, new_focal);
+                    }
+                }
+                focal_edit_active_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Cancel")) {
+                focal_edit_active_ = false;
+                ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+        } else {
+            focal_edit_active_ = false;
         }
     }
 

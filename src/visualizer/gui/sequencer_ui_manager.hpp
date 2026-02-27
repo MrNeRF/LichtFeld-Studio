@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "gui/gl_line_renderer.hpp"
 #include "gui/keyframe_scene_sync.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/sequencer_ui_state.hpp"
@@ -42,6 +43,8 @@ namespace lfs::vis {
             void renderCameraPath(const ViewportLayout& viewport);
             void renderKeyframeGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void renderContextMenu();
+            void renderTimeEditPopup();
+            void renderFocalEditPopup();
             void renderKeyframeEditOverlay(const ViewportLayout& viewport);
             void initPipPreview();
             void renderKeyframePreview(const UIContext& ctx);
@@ -52,6 +55,7 @@ namespace lfs::vis {
             SequencerController controller_;
             std::unique_ptr<RmlSequencerPanel> panel_;
             std::unique_ptr<KeyframeSceneSync> scene_sync_;
+            GLLineRenderer line_renderer_;
 
             bool context_menu_open_ = false;
             std::optional<size_t> context_menu_keyframe_;
@@ -60,6 +64,14 @@ namespace lfs::vis {
             bool keyframe_gizmo_active_ = false;
             glm::vec3 keyframe_pos_before_drag_{0.0f};
             glm::quat keyframe_rot_before_drag_{1.0f, 0.0f, 0.0f, 0.0f};
+
+            bool time_edit_active_ = false;
+            size_t time_edit_index_ = 0;
+            char time_edit_buffer_[32] = {};
+
+            bool focal_edit_active_ = false;
+            size_t focal_edit_index_ = 0;
+            char focal_edit_buffer_[32] = {};
 
             float last_frustum_click_time_ = 0.0f;
             std::optional<size_t> last_frustum_clicked_;
