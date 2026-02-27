@@ -39,6 +39,7 @@
 #include "visualizer/training/training_manager.hpp"
 
 #include "config.h"
+#include <cuda.h>
 #include <cuda_runtime.h>
 
 #include "visualizer/input/key_codes.hpp"
@@ -57,10 +58,10 @@
 #include <imgui.h>
 
 #ifdef _WIN32
+#include <dxgi1_4.h>
 #include <process.h>
 #include <shellapi.h>
 #include <windows.h>
-#include <dxgi1_4.h>
 #else
 #include <dlfcn.h>
 #include <unistd.h>
@@ -96,32 +97,28 @@ namespace lfs::python {
                 if (FAILED(fn_create(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory))))
                     return;
 
-                // Find the DXGI adapter matching the active CUDA device.
+                // Get LUID of the active CUDA device for exact adapter matching.
                 int cuda_device = 0;
                 cudaGetDevice(&cuda_device);
-                char cuda_pci_bus_id[32];
-                if (cudaDeviceGetPCIBusId(cuda_pci_bus_id, sizeof(cuda_pci_bus_id), cuda_device) != cudaSuccess) {
+                char cuda_luid[8] = {};
+                unsigned int node_mask = 0;
+                CUdevice cu_device;
+                if (cuDeviceGet(&cu_device, cuda_device) != CUDA_SUCCESS ||
+                    cuDeviceGetLuid(cuda_luid, &node_mask, cu_device) != CUDA_SUCCESS) {
                     factory->Release();
                     return;
                 }
-                // Parse domain:bus:device from CUDA PCI string (e.g. "0000:01:00.0")
-                unsigned int cuda_bus = 0, cuda_dev = 0;
-                sscanf(cuda_pci_bus_id, "%*x:%x:%x", &cuda_bus, &cuda_dev);
 
                 IDXGIAdapter* matched_adapter = nullptr;
-                for (UINT i = 0; ; ++i) {
+                for (UINT i = 0;; ++i) {
                     IDXGIAdapter* adapter = nullptr;
                     if (factory->EnumAdapters(i, &adapter) == DXGI_ERROR_NOT_FOUND)
                         break;
                     DXGI_ADAPTER_DESC desc{};
-                    if (SUCCEEDED(adapter->GetDesc(&desc))) {
-                        // DXGI doesn't expose PCI bus directly, but on single-GPU
-                        // systems the first hardware adapter is correct. For multi-GPU,
-                        // skip Microsoft Basic Render Driver (VendorId == 0x1414).
-                        if (desc.VendorId != 0x1414) {
-                            matched_adapter = adapter;
-                            break;
-                        }
+                    if (SUCCEEDED(adapter->GetDesc(&desc)) &&
+                        memcmp(&desc.AdapterLuid, cuda_luid, sizeof(LUID)) == 0) {
+                        matched_adapter = adapter;
+                        break;
                     }
                     adapter->Release();
                 }
@@ -143,6 +140,9 @@ namespace lfs::python {
                 if (adapter3)
                     adapter3->Release();
             }
+
+            DxgiMemoryState(const DxgiMemoryState&) = delete;
+            DxgiMemoryState& operator=(const DxgiMemoryState&) = delete;
 
             size_t get_process_memory() const {
                 if (!adapter3)
@@ -3463,7 +3463,8 @@ namespace lfs::python {
                                  {0, 0}, {u1, v1}, t, {0, 0, 0, 0});
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def("image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def(
+                "image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);
