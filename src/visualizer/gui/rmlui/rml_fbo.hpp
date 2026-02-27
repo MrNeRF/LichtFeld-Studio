@@ -21,9 +21,9 @@ namespace lfs::vis::gui {
         void ensure(int w, int h);
         void bind(GLint* prev_fbo);
         void unbind(GLint prev_fbo);
-        void blitToDrawList(ImDrawList* dl, ImVec2 pos, ImVec2 size);
+        void blitToDrawList(ImDrawList* dl, ImVec2 pos, ImVec2 size) const;
         void blitAsImage(float w, float h);
-        void blitToScreen(float x, float y, float w, float h, int screen_w, int screen_h);
+        void blitToScreen(float x, float y, float w, float h, int screen_w, int screen_h) const;
         GLuint texture() const { return texture_; }
         int width() const { return width_; }
         int height() const { return height_; }

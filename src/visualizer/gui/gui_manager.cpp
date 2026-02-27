@@ -673,12 +673,13 @@ namespace lfs::vis::gui {
                 rml_menu_bar_.updateLabels({}, {});
             }
 
-            // Invisible ImGui menu bar to reserve space at top of viewport
+            // Reserve work area for the RML menu bar via ImGui's internal inset mechanism
             {
-                ImGui::PushStyleColor(ImGuiCol_MenuBarBg, ImVec4(0, 0, 0, 0));
-                if (ImGui::BeginMainMenuBar())
-                    ImGui::EndMainMenuBar();
-                ImGui::PopStyleColor();
+                auto* vp = static_cast<ImGuiViewportP*>(ImGui::GetMainViewport());
+                float bar_h = rml_menu_bar_.barHeight();
+                vp->BuildWorkInsetMin.y = ImMax(vp->BuildWorkInsetMin.y, bar_h);
+                vp->WorkInsetMin.y = ImMax(vp->WorkInsetMin.y, bar_h);
+                vp->UpdateWorkRect();
             }
 
             const auto& io = ImGui::GetIO();
@@ -696,6 +697,23 @@ namespace lfs::vis::gui {
                 ImGui::GetIO().WantCaptureMouse = true;
 
             rml_menu_bar_.draw(menu_input.screen_w, menu_input.screen_h);
+
+            if (rml_menu_bar_.fbo().valid()) {
+                auto* dl = ImGui::GetForegroundDrawList();
+                auto* mvp = ImGui::GetMainViewport();
+                ImVec2 pos = mvp->Pos;
+                float sw = static_cast<float>(menu_input.screen_w);
+                float sh = static_cast<float>(menu_input.screen_h);
+
+                if (rml_menu_bar_.isOpen()) {
+                    ImVec2 clip(pos.x + sw, pos.y + rml_menu_bar_.barHeight());
+                    dl->PushClipRect(pos, clip, true);
+                    rml_menu_bar_.fbo().blitToDrawList(dl, pos, {sw, sh});
+                    dl->PopClipRect();
+                } else {
+                    rml_menu_bar_.fbo().blitToDrawList(dl, pos, {sw, rml_menu_bar_.barHeight()});
+                }
+            }
         }
 
         updateInputOverrides(mouse_in_viewport);
@@ -861,6 +879,12 @@ namespace lfs::vis::gui {
         rml_viewport_overlay_.processInput();
         reg.draw_panels(PanelSpace::ViewportOverlay, draw_ctx);
         rml_viewport_overlay_.render();
+
+        if (rml_menu_bar_.isOpen() && rml_menu_bar_.fbo().valid()) {
+            auto* mvp = ImGui::GetMainViewport();
+            rml_menu_bar_.fbo().blitToDrawList(
+                ImGui::GetForegroundDrawList(), mvp->Pos, mvp->Size);
+        }
 
         // Recompute viewport layout
         viewport_layout_ = panel_layout_.computeViewportLayout(

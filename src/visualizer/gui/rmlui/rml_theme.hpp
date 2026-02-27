@@ -22,5 +22,6 @@ namespace lfs::vis::gui::rml_theme {
     LFS_VIS_API std::string generateSpriteSheetRCSS();
     LFS_VIS_API void applyTheme(Rml::ElementDocument* doc, const std::string& base_rcss,
                                 const std::string& theme_rcss);
+    LFS_VIS_API std::string darkenColorToRml(const ImVec4& c, float amount);
 
 } // namespace lfs::vis::gui::rml_theme

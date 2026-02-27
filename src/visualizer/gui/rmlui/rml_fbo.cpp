@@ -80,7 +80,7 @@ namespace lfs::vis::gui {
         glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
     }
 
-    void RmlFBO::blitToDrawList(ImDrawList* dl, ImVec2 pos, ImVec2 size) {
+    void RmlFBO::blitToDrawList(ImDrawList* dl, ImVec2 pos, ImVec2 size) const {
         assert(dl);
         assert(texture_);
         dl->AddCallback(setPremultipliedBlend, nullptr);
@@ -156,7 +156,7 @@ namespace lfs::vis::gui {
         glBindVertexArray(0);
     }
 
-    void RmlFBO::blitToScreen(float x, float y, float w, float h, int screen_w, int screen_h) {
+    void RmlFBO::blitToScreen(float x, float y, float w, float h, int screen_w, int screen_h) const {
         assert(texture_);
         assert(screen_w > 0 && screen_h > 0);
 

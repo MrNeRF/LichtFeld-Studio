@@ -6,6 +6,7 @@
 
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Geometry.h>
+#include <core/export.hpp>
 
 #include <deque>
 
@@ -15,7 +16,7 @@ namespace lfs::vis::gui {
     public:
         explicit LossGraphElement(const Rml::String& tag);
 
-        void setData(const std::deque<float>& data);
+        LFS_VIS_API void setData(const std::deque<float>& data);
 
         float getDataMin() const { return data_min_; }
         float getDataMax() const { return data_max_; }

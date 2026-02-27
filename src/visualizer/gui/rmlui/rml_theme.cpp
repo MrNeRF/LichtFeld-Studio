@@ -247,6 +247,10 @@ namespace lfs::vis::gui::rml_theme {
         return cached;
     }
 
+    std::string darkenColorToRml(const ImVec4& c, float amount) {
+        return colorToRml({c.x - amount, c.y - amount, c.z - amount, c.w});
+    }
+
     void applyTheme(Rml::ElementDocument* doc, const std::string& base_rcss,
                     const std::string& theme_rcss) {
         assert(doc);

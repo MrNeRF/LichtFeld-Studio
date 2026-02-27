@@ -20,15 +20,10 @@
 #include <RmlUi/Core/Element.h>
 #include <cassert>
 #include <format>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
 
     namespace {
-        ImVec4 darkenImVec4(const ImVec4& c, float amount) {
-            return {c.x - amount, c.y - amount, c.z - amount, c.w};
-        }
-
         std::string escapeRml(const std::string& s) {
             std::string out;
             out.reserve(s.size());
@@ -385,7 +380,7 @@ namespace lfs::vis::gui {
         const auto text_dim = colorToRml(t.palette.text_dim);
         const auto hover = colorToRml(t.menu_hover());
         const auto active = colorToRml(t.menu_active());
-        const auto border = colorToRml(darkenImVec4(t.palette.surface, t.menu.bottom_border_darken));
+        const auto border = rml_theme::darkenColorToRml(t.palette.surface, t.menu.bottom_border_darken);
         const auto popup_bg = colorToRml(t.menu_popup_background());
         const auto popup_border = colorToRml(t.menu_border());
 
@@ -459,15 +454,6 @@ namespace lfs::vis::gui {
         render->EndFrame();
 
         fbo_.unbind(prev_fbo);
-
-        ImVec2 pos = ImGui::GetMainViewport()->Pos;
-        if (open_menu_index_ >= 0) {
-            ImVec2 size(static_cast<float>(screen_w), static_cast<float>(screen_h));
-            fbo_.blitToDrawList(ImGui::GetForegroundDrawList(), pos, size);
-        } else {
-            ImVec2 size(static_cast<float>(screen_w), bar_height_);
-            fbo_.blitToDrawList(ImGui::GetForegroundDrawList(), pos, size);
-        }
     }
 
 } // namespace lfs::vis::gui
