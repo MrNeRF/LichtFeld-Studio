@@ -10,7 +10,6 @@
 #include "gui/rml_status_bar.hpp"
 #include "gui/sequencer_ui_manager.hpp"
 #include "gui/startup_overlay.hpp"
-#include "gui/windows/file_browser.hpp"
 #include "internal/viewport.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
@@ -22,20 +21,6 @@
 #include <imgui.h>
 
 namespace lfs::vis::gui::native_panels {
-
-    FileBrowserPanel::FileBrowserPanel(FileBrowser* browser, bool* visible)
-        : browser_(browser),
-          visible_(visible) {}
-
-    void FileBrowserPanel::draw(const PanelDrawContext& ctx) {
-        (void)ctx;
-        browser_->render(visible_);
-    }
-
-    bool FileBrowserPanel::poll(const PanelDrawContext& ctx) {
-        (void)ctx;
-        return visible_ && *visible_;
-    }
 
     VideoExtractorPanel::VideoExtractorPanel(lfs::gui::VideoExtractorDialog* dialog)
         : dialog_(dialog) {}

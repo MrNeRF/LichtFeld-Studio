@@ -276,7 +276,6 @@
     "move_to_root": "Katalog Główny",
     "images": "Obrazy ({}):",
     "no_images": "Nie załadowano obrazów.",
-    "use_file_browser": "Użyj 'Otwórz Przeglądarkę Plików', aby załadować zbiór danych.",
     "move_node": "Przenieś: %s",
     "models": "Modele ({})",
     "filter": "Filtruj...",
@@ -525,20 +524,6 @@
     "line_width": "Szerokość Linii",
     "instructions": "Enter: Zatwierdź przycinanie | Ctrl+C: Kopiuj zawartość"
   },
-  "file_browser": {
-    "title": "Przeglądarka Plików",
-    "quick_access": "Szybki Dostęp",
-    "current_dir": "Bieżący Katalog",
-    "home": "Start",
-    "current_path": "Bieżąca Ścieżka: %s",
-    "parent_dir": "../",
-    "directory": "[KAT]",
-    "selected": "Zaznaczono: %s",
-    "load_dataset": "Wczytaj Zbiór Danych",
-    "load_sog": "Wczytaj SOG",
-    "load_ply": "Wczytaj PLY",
-    "enter_dir": "Wejdź do Katalogu"
-  },
   "training_panel": {
     "start_training": "Rozpocznij Trening",
     "resume_training": "Wznów Trening",
@@ -628,15 +613,6 @@
   "selection_group": {
     "lock": "Zablokuj",
     "unlock": "Odblokuj"
-  },
-  "file_browser_ext": {
-    "dataset": "[Zbiór Danych]",
-    "sog": "[SOG]",
-    "no_file_selected": "Nie wybrano pliku",
-    "not_a_dataset": "(Nie jest zbiorem danych)",
-    "sog_directory": "(Katalog SOG)",
-    "sog_meta": "(SOG meta.json)",
-    "error": "Błąd:"
   },
   "progress": {
     "loss": "Strata:",

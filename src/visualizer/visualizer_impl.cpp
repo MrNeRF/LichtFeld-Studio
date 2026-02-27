@@ -304,7 +304,6 @@ namespace lfs::vis {
                     return;
                 gui::UIContext ctx{
                     .viewer = viewer,
-                    .file_browser = nullptr,
                     .window_states = nullptr,
                     .editor = python::get_editor_context(),
                     .sequencer_controller = nullptr,
@@ -319,7 +318,6 @@ namespace lfs::vis {
                     return;
                 gui::UIContext ctx{
                     .viewer = viewer,
-                    .file_browser = nullptr,
                     .window_states = gm->getWindowStates(),
                     .editor = python::get_editor_context(),
                     .sequencer_controller = nullptr,
@@ -334,7 +332,6 @@ namespace lfs::vis {
                     return;
                 gui::UIContext ctx{
                     .viewer = viewer,
-                    .file_browser = nullptr,
                     .window_states = gm->getWindowStates(),
                     .editor = python::get_editor_context(),
                     .sequencer_controller = nullptr,
@@ -561,10 +558,6 @@ namespace lfs::vis {
         main_loop_->setRenderCallback([this]() { render(); });
         main_loop_->setShutdownCallback([this]() { shutdown(); });
         main_loop_->setShouldCloseCallback([this]() { return allowclose(); });
-
-        gui_manager_->setFileSelectedCallback([this](const std::filesystem::path& path, bool is_dataset) {
-            lfs::core::events::cmd::LoadFile{.path = path, .is_dataset = is_dataset}.emit();
-        });
     }
 
     void VisualizerImpl::setupEventHandlers() {

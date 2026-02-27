@@ -277,7 +277,6 @@
     "move_to_root": "Root",
     "images": "Images ({}):",
     "no_images": "No images loaded.",
-    "use_file_browser": "Use 'Open File Browser' to load a dataset.",
     "move_node": "Move: %s",
     "models": "Models ({})",
     "filter": "Filter...",
@@ -537,20 +536,6 @@
     "line_width": "Line Width",
     "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   },
-  "file_browser": {
-    "title": "File Browser",
-    "quick_access": "Quick Access",
-    "current_dir": "Current Directory",
-    "home": "Home",
-    "current_path": "Current Path: %s",
-    "parent_dir": "../",
-    "directory": "[DIR]",
-    "selected": "Selected: %s",
-    "load_dataset": "Load Dataset",
-    "load_sog": "Load SOG",
-    "load_ply": "Load PLY",
-    "enter_dir": "Enter Directory"
-  },
   "training_panel": {
     "start_training": "Start Training",
     "resume_training": "Resume Training",
@@ -640,15 +625,6 @@
   "selection_group": {
     "lock": "Lock",
     "unlock": "Unlock"
-  },
-  "file_browser_ext": {
-    "dataset": "[Dataset]",
-    "sog": "[SOG]",
-    "no_file_selected": "No file selected",
-    "not_a_dataset": "(Not a dataset)",
-    "sog_directory": "(SOG Directory)",
-    "sog_meta": "(SOG meta.json)",
-    "error": "Error:"
   },
   "progress": {
     "loss": "Loss:",

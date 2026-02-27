@@ -276,7 +276,6 @@
     "move_to_root": "根目录",
     "images": "图像 ({})：",
     "no_images": "未加载图像。",
-    "use_file_browser": "使用'打开文件浏览器'加载数据集。",
     "move_node": "移动：%s",
     "models": "模型 ({})",
     "filter": "过滤器...",
@@ -525,20 +524,6 @@
     "line_width": "线宽",
     "instructions": "Enter：确认裁剪 | Ctrl+C：复制内容"
   },
-  "file_browser": {
-    "title": "文件浏览器",
-    "quick_access": "快速访问",
-    "current_dir": "当前目录",
-    "home": "主页",
-    "current_path": "当前路径：%s",
-    "parent_dir": "../",
-    "directory": "[目录]",
-    "selected": "已选择：%s",
-    "load_dataset": "加载数据集",
-    "load_sog": "加载SOG",
-    "load_ply": "加载PLY",
-    "enter_dir": "进入目录"
-  },
   "training_panel": {
     "start_training": "开始训练",
     "resume_training": "继续训练",
@@ -628,15 +613,6 @@
   "selection_group": {
     "lock": "锁定",
     "unlock": "解锁"
-  },
-  "file_browser_ext": {
-    "dataset": "[数据集]",
-    "sog": "[SOG]",
-    "no_file_selected": "未选择文件",
-    "not_a_dataset": "（非数据集）",
-    "sog_directory": "（SOG目录）",
-    "sog_meta": "（SOG meta.json）",
-    "error": "错误："
   },
   "progress": {
     "loss": "损失：",

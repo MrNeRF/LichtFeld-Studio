@@ -24,7 +24,6 @@
 #include "gui/string_keys.hpp"
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/windows_utils.hpp"
-#include "gui/windows/file_browser.hpp"
 #include "io/video_frame_extractor.hpp"
 #include <implot.h>
 
@@ -65,7 +64,6 @@ namespace lfs::vis::gui {
         panel_layout_.loadState();
 
         // Create components
-        file_browser_ = std::make_unique<FileBrowser>();
         menu_bar_ = std::make_unique<MenuBar>();
         disk_space_error_dialog_ = std::make_unique<DiskSpaceErrorDialog>();
         video_extractor_dialog_ = std::make_unique<lfs::gui::VideoExtractorDialog>();
@@ -111,7 +109,6 @@ namespace lfs::vis::gui {
         });
 
         // Initialize window states
-        window_states_["file_browser"] = false;
         window_states_["scene_panel"] = true;
         window_states_["system_console"] = false;
         window_states_["training_tab"] = false;
@@ -410,15 +407,6 @@ namespace lfs::vis::gui {
         }
         ImGui_ImplOpenGL3_CreateFontsTexture();
 
-        setFileSelectedCallback([this](const std::filesystem::path& path, const bool is_dataset) {
-            window_states_["file_browser"] = false;
-            if (is_dataset) {
-                lfs::core::events::cmd::ShowDatasetLoadPopup{.dataset_path = path}.emit();
-            } else {
-                lfs::core::events::cmd::LoadFile{.path = path, .is_dataset = false}.emit();
-            }
-        });
-
         initMenuBar();
         menu_bar_->setFonts(buildFontSet());
 
@@ -564,10 +552,6 @@ namespace lfs::vis::gui {
         constexpr uint32_t SELF = static_cast<uint32_t>(PanelOption::SELF_MANAGED);
 
         // Floating panels (self-managed windows)
-        reg_panel("native.file_browser", "File Browser",
-                  make_panel(FileBrowserPanel(file_browser_.get(), &window_states_["file_browser"])),
-                  PanelSpace::Floating, 10, SELF);
-
         reg_panel("native.video_extractor", "Video Extractor",
                   make_panel(VideoExtractorPanel(video_extractor_dialog_.get())),
                   PanelSpace::Floating, 11, 0, 750.0f);
@@ -775,7 +759,6 @@ namespace lfs::vis::gui {
         // Create context for this frame
         UIContext ctx{
             .viewer = viewer_,
-            .file_browser = file_browser_.get(),
             .window_states = &window_states_,
             .editor = &editor_ctx,
             .sequencer_controller = &sequencer_ui_.controller(),
@@ -1383,12 +1366,6 @@ namespace lfs::vis::gui {
 
     void GuiManager::dismissStartupOverlay() {
         startup_overlay_.dismiss();
-    }
-
-    void GuiManager::setFileSelectedCallback(std::function<void(const std::filesystem::path&, bool)> callback) {
-        if (file_browser_) {
-            file_browser_->setOnFileSelected(callback);
-        }
     }
 
     void GuiManager::requestExitConfirmation() {

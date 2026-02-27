@@ -276,7 +276,6 @@
     "move_to_root": "Root",
     "images": "Afbeeldingen ({}):",
     "no_images": "Geen afbeeldingen geladen.",
-    "use_file_browser": "Gebruik 'Open Bestandsbrowser' om een dataset te laden.",
     "move_node": "Verplaats: %s",
     "models": "Modellen ({})",
     "filter": "Filteren...",
@@ -525,20 +524,6 @@
     "line_width": "Lijndikte",
     "instructions": "Enter: Bijsnijden bevestigen | Ctrl+C: Inhoud kopiëren"
   },
-  "file_browser": {
-    "title": "Bestandsbrowser",
-    "quick_access": "Snelle Toegang",
-    "current_dir": "Huidige Map",
-    "home": "Home",
-    "current_path": "Huidig Pad: %s",
-    "parent_dir": "../",
-    "directory": "[MAP]",
-    "selected": "Geselecteerd: %s",
-    "load_dataset": "Dataset Laden",
-    "load_sog": "SOG Laden",
-    "load_ply": "PLY Laden",
-    "enter_dir": "Map Openen"
-  },
   "training_panel": {
     "start_training": "Start Training",
     "resume_training": "Hervat Training",
@@ -628,15 +613,6 @@
   "selection_group": {
     "lock": "Vergrendelen",
     "unlock": "Ontgrendelen"
-  },
-  "file_browser_ext": {
-    "dataset": "[Dataset]",
-    "sog": "[SOG]",
-    "no_file_selected": "Geen bestand geselecteerd",
-    "not_a_dataset": "(Geen dataset)",
-    "sog_directory": "(SOG Map)",
-    "sog_meta": "(SOG meta.json)",
-    "error": "Fout:"
   },
   "progress": {
     "loss": "Verlies:",

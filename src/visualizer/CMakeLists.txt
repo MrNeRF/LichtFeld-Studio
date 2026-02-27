@@ -79,7 +79,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # Terminal emulator
         gui/terminal/pty_process.cpp
         gui/terminal/terminal_widget.cpp
-        gui/windows/file_browser.cpp
         gui/windows/disk_space_error_dialog.cpp
         gui/windows/video_extractor_dialog.cpp
 

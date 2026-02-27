@@ -276,7 +276,6 @@
     "move_to_root": "Radice",
     "images": "Immagini ({}):",
     "no_images": "Nessuna immagine caricata.",
-    "use_file_browser": "Usa 'Apri Browser File' per caricare un dataset.",
     "move_node": "Sposta: %s",
     "models": "Modelli ({})",
     "filter": "Filtro...",
@@ -525,20 +524,6 @@
     "line_width": "Spessore Linea",
     "instructions": "Invio: Conferma ritaglio | Ctrl+C: Copia contenuto"
   },
-  "file_browser": {
-    "title": "Browser File",
-    "quick_access": "Accesso Rapido",
-    "current_dir": "Cartella Corrente",
-    "home": "Home",
-    "current_path": "Percorso Corrente: %s",
-    "parent_dir": "../",
-    "directory": "[DIR]",
-    "selected": "Selezionato: %s",
-    "load_dataset": "Carica Dataset",
-    "load_sog": "Carica SOG",
-    "load_ply": "Carica PLY",
-    "enter_dir": "Entra nella Cartella"
-  },
   "training_panel": {
     "start_training": "Avvia Addestramento",
     "resume_training": "Riprendi Addestramento",
@@ -628,15 +613,6 @@
   "selection_group": {
     "lock": "Blocca",
     "unlock": "Sblocca"
-  },
-  "file_browser_ext": {
-    "dataset": "[Dataset]",
-    "sog": "[SOG]",
-    "no_file_selected": "Nessun file selezionato",
-    "not_a_dataset": "(Non è un dataset)",
-    "sog_directory": "(Cartella SOG)",
-    "sog_meta": "(SOG meta.json)",
-    "error": "Errore:"
   },
   "progress": {
     "loss": "Perdita:",

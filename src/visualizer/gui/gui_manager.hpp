@@ -37,8 +37,6 @@ namespace lfs::vis {
     class VisualizerImpl;
 
     namespace gui {
-        class FileBrowser;
-
         class GuiManager {
         public:
             GuiManager(VisualizerImpl* viewer);
@@ -62,8 +60,6 @@ namespace lfs::vis {
 
             // Window visibility
             void showWindow(const std::string& name, bool show = true);
-
-            void setFileSelectedCallback(std::function<void(const std::filesystem::path&, bool)> callback);
 
             // Viewport region access
             glm::vec2 getViewportPos() const;
@@ -121,7 +117,6 @@ namespace lfs::vis {
             VisualizerImpl* viewer_;
 
             // Owned components
-            std::unique_ptr<FileBrowser> file_browser_;
             std::unique_ptr<DiskSpaceErrorDialog> disk_space_error_dialog_;
             std::unique_ptr<lfs::gui::VideoExtractorDialog> video_extractor_dialog_;
             std::optional<std::jthread> video_extraction_thread_;

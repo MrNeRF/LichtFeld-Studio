@@ -8,7 +8,6 @@
 
 namespace lfs::vis::gui {
 
-    class FileBrowser;
     class DiskSpaceErrorDialog;
     class StartupOverlay;
     class GizmoManager;
@@ -24,17 +23,6 @@ namespace lfs::gui {
 }
 
 namespace lfs::vis::gui::native_panels {
-
-    class FileBrowserPanel : public IPanel {
-    public:
-        FileBrowserPanel(FileBrowser* browser, bool* visible);
-        void draw(const PanelDrawContext& ctx) override;
-        bool poll(const PanelDrawContext& ctx) override;
-
-    private:
-        FileBrowser* browser_;
-        bool* visible_;
-    };
 
     class VideoExtractorPanel : public IPanel {
     public:

@@ -276,7 +276,6 @@
     "move_to_root": "ルート",
     "images": "画像 ({}):",
     "no_images": "画像が読み込まれていません。",
-    "use_file_browser": "'ファイルブラウザを開く'を使用してデータセットを読み込んでください。",
     "move_node": "移動: %s",
     "models": "モデル ({})",
     "filter": "フィルター...",
@@ -525,20 +524,6 @@
     "line_width": "線の太さ",
     "instructions": "Enter: クロップを確定 | Ctrl+C: 内容をコピー"
   },
-  "file_browser": {
-    "title": "ファイルブラウザ",
-    "quick_access": "クイックアクセス",
-    "current_dir": "現在のディレクトリ",
-    "home": "ホーム",
-    "current_path": "現在のパス: %s",
-    "parent_dir": "../",
-    "directory": "[ディレクトリ]",
-    "selected": "選択済み: %s",
-    "load_dataset": "データセットを読み込む",
-    "load_sog": "SOGを読み込む",
-    "load_ply": "PLYを読み込む",
-    "enter_dir": "ディレクトリに入る"
-  },
   "training_panel": {
     "start_training": "トレーニングを開始",
     "resume_training": "トレーニングを再開",
@@ -628,15 +613,6 @@
   "selection_group": {
     "lock": "ロック",
     "unlock": "ロック解除"
-  },
-  "file_browser_ext": {
-    "dataset": "[データセット]",
-    "sog": "[SOG]",
-    "no_file_selected": "ファイルが選択されていません",
-    "not_a_dataset": "(データセットではありません)",
-    "sog_directory": "(SOGディレクトリ)",
-    "sog_meta": "(SOG meta.json)",
-    "error": "エラー:"
   },
   "progress": {
     "loss": "損失:",

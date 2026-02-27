@@ -276,7 +276,6 @@
     "move_to_root": "Wurzel",
     "images": "Bilder ({}):",
     "no_images": "Keine Bilder geladen.",
-    "use_file_browser": "Verwenden Sie 'Dateibrowser öffnen' um einen Datensatz zu laden.",
     "move_node": "Verschieben: %s",
     "models": "Modelle ({})",
     "filter": "Filter...",
@@ -525,20 +524,6 @@
     "line_width": "Linienbreite",
     "instructions": "Enter: Zuschnitt bestätigen | Strg+C: Inhalt kopieren"
   },
-  "file_browser": {
-    "title": "Dateibrowser",
-    "quick_access": "Schnellzugriff",
-    "current_dir": "Aktuelles Verzeichnis",
-    "home": "Start",
-    "current_path": "Aktueller Pfad: %s",
-    "parent_dir": "../",
-    "directory": "[VERZ]",
-    "selected": "Ausgewählt: %s",
-    "load_dataset": "Datensatz laden",
-    "load_sog": "SOG laden",
-    "load_ply": "PLY laden",
-    "enter_dir": "Verzeichnis öffnen"
-  },
   "training_panel": {
     "start_training": "Training starten",
     "resume_training": "Training fortsetzen",
@@ -628,15 +613,6 @@
   "selection_group": {
     "lock": "Sperren",
     "unlock": "Entsperren"
-  },
-  "file_browser_ext": {
-    "dataset": "[Datensatz]",
-    "sog": "[SOG]",
-    "no_file_selected": "Keine Datei ausgewählt",
-    "not_a_dataset": "(Kein Datensatz)",
-    "sog_directory": "(SOG Verzeichnis)",
-    "sog_meta": "(SOG meta.json)",
-    "error": "Fehler:"
   },
   "progress": {
     "loss": "Verlust:",

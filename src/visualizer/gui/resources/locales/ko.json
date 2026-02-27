@@ -276,7 +276,6 @@
     "move_to_root": "루트",
     "images": "이미지 ({}):",
     "no_images": "이미지가 로드되지 않았습니다.",
-    "use_file_browser": "'파일 브라우저 열기'를 사용하여 데이터셋을 로드하세요.",
     "move_node": "이동: %s",
     "models": "모델 ({})",
     "filter": "필터...",
@@ -525,20 +524,6 @@
     "line_width": "선 너비",
     "instructions": "Enter: 자르기 확정 | Ctrl+C: 내용 복사"
   },
-  "file_browser": {
-    "title": "파일 브라우저",
-    "quick_access": "빠른 액세스",
-    "current_dir": "현재 디렉터리",
-    "home": "홈",
-    "current_path": "현재 경로: %s",
-    "parent_dir": "../",
-    "directory": "[디렉터리]",
-    "selected": "선택됨: %s",
-    "load_dataset": "데이터셋 로드",
-    "load_sog": "SOG 로드",
-    "load_ply": "PLY 로드",
-    "enter_dir": "디렉터리 열기"
-  },
   "training_panel": {
     "start_training": "학습 시작",
     "resume_training": "학습 재개",
@@ -628,15 +613,6 @@
   "selection_group": {
     "lock": "잠금",
     "unlock": "잠금 해제"
-  },
-  "file_browser_ext": {
-    "dataset": "[데이터셋]",
-    "sog": "[SOG]",
-    "no_file_selected": "선택된 파일 없음",
-    "not_a_dataset": "(데이터셋 아님)",
-    "sog_directory": "(SOG 디렉터리)",
-    "sog_meta": "(SOG meta.json)",
-    "error": "오류:"
   },
   "progress": {
     "loss": "손실:",

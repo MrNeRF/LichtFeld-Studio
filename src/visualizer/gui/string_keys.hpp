@@ -45,7 +45,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* GETTING_STARTED = "menu.help.getting_started";
             inline constexpr const char* ABOUT = "menu.help.about";
         } // namespace Help
-    } // namespace Menu
+    }     // namespace Menu
 
     namespace Window {
         inline constexpr const char* GETTING_STARTED = "window.getting_started";
@@ -105,7 +105,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* ENABLED = "about.interop.enabled";
             inline constexpr const char* DISABLED = "about.interop.disabled";
         } // namespace Interop
-    } // namespace About
+    }     // namespace About
 
     namespace Training {
         namespace Section {
@@ -294,7 +294,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* ADD = "training.button.add";
             inline constexpr const char* REMOVE = "training.button.remove";
         } // namespace Button
-    } // namespace Training
+    }     // namespace Training
 
     namespace Scene {
         inline constexpr const char* ADD_PLY = "scene.add_ply";
@@ -316,7 +316,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* MOVE_TO_ROOT = "scene.move_to_root";
         inline constexpr const char* IMAGES = "scene.images";
         inline constexpr const char* NO_IMAGES = "scene.no_images";
-        inline constexpr const char* USE_FILE_BROWSER = "scene.use_file_browser";
         inline constexpr const char* MOVE_NODE = "scene.move_node";
         inline constexpr const char* MODELS = "scene.models";
         inline constexpr const char* FILTER = "scene.filter";
@@ -566,21 +565,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* INSTRUCTIONS = "ellipsoid.instructions";
     } // namespace Ellipsoid
 
-    namespace FileBrowser {
-        inline constexpr const char* TITLE = "file_browser.title";
-        inline constexpr const char* QUICK_ACCESS = "file_browser.quick_access";
-        inline constexpr const char* CURRENT_DIR = "file_browser.current_dir";
-        inline constexpr const char* HOME = "file_browser.home";
-        inline constexpr const char* CURRENT_PATH = "file_browser.current_path";
-        inline constexpr const char* PARENT_DIR = "file_browser.parent_dir";
-        inline constexpr const char* DIRECTORY = "file_browser.directory";
-        inline constexpr const char* SELECTED = "file_browser.selected";
-        inline constexpr const char* LOAD_DATASET = "file_browser.load_dataset";
-        inline constexpr const char* LOAD_SOG = "file_browser.load_sog";
-        inline constexpr const char* LOAD_PLY = "file_browser.load_ply";
-        inline constexpr const char* ENTER_DIR = "file_browser.enter_dir";
-    } // namespace FileBrowser
-
     namespace TrainingPanel {
         inline constexpr const char* START_TRAINING = "training_panel.start_training";
         inline constexpr const char* RESUME_TRAINING = "training_panel.resume_training";
@@ -685,16 +669,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* LOCK = "selection_group.lock";
         inline constexpr const char* UNLOCK = "selection_group.unlock";
     } // namespace SelectionGroup
-
-    namespace FileBrowserExt {
-        inline constexpr const char* DATASET = "file_browser_ext.dataset";
-        inline constexpr const char* SOG = "file_browser_ext.sog";
-        inline constexpr const char* NO_FILE_SELECTED = "file_browser_ext.no_file_selected";
-        inline constexpr const char* NOT_A_DATASET = "file_browser_ext.not_a_dataset";
-        inline constexpr const char* SOG_DIRECTORY = "file_browser_ext.sog_directory";
-        inline constexpr const char* SOG_META = "file_browser_ext.sog_meta";
-        inline constexpr const char* ERROR_MSG = "file_browser_ext.error";
-    } // namespace FileBrowserExt
 
     namespace Progress {
         inline constexpr const char* LOSS = "progress.loss";

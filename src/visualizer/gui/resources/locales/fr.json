@@ -276,7 +276,6 @@
     "move_to_root": "Racine",
     "images": "Images ({}) :",
     "no_images": "Aucune image chargée.",
-    "use_file_browser": "Utilisez 'Ouvrir le Navigateur de Fichiers' pour charger un dataset.",
     "move_node": "Déplacer : %s",
     "models": "Modèles ({})",
     "filter": "Filtrer...",
@@ -525,20 +524,6 @@
     "line_width": "Épaisseur de Ligne",
     "instructions": "Entrée : Valider le recadrage | Ctrl+C : Copier le contenu"
   },
-  "file_browser": {
-    "title": "Navigateur de Fichiers",
-    "quick_access": "Accès Rapide",
-    "current_dir": "Répertoire Actuel",
-    "home": "Accueil",
-    "current_path": "Chemin Actuel : %s",
-    "parent_dir": "../",
-    "directory": "[RÉP]",
-    "selected": "Sélectionné : %s",
-    "load_dataset": "Charger le Dataset",
-    "load_sog": "Charger SOG",
-    "load_ply": "Charger PLY",
-    "enter_dir": "Entrer dans le Répertoire"
-  },
   "training_panel": {
     "start_training": "Démarrer l'Entraînement",
     "resume_training": "Reprendre l'Entraînement",
@@ -628,15 +613,6 @@
   "selection_group": {
     "lock": "Verrouiller",
     "unlock": "Déverrouiller"
-  },
-  "file_browser_ext": {
-    "dataset": "[Dataset]",
-    "sog": "[SOG]",
-    "no_file_selected": "Aucun fichier sélectionné",
-    "not_a_dataset": "(Pas un dataset)",
-    "sog_directory": "(Répertoire SOG)",
-    "sog_meta": "(SOG meta.json)",
-    "error": "Erreur :"
   },
   "progress": {
     "loss": "Perte :",
