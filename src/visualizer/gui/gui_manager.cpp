@@ -421,7 +421,6 @@ namespace lfs::vis::gui {
 
         initMenuBar();
         menu_bar_->setFonts(buildFontSet());
-        menu_bar_->setRmlMenuBar(&rml_menu_bar_);
 
         if (!drag_drop_.init(viewer_->getWindow())) {
             LOG_WARN("Native drag-drop initialization failed, drag-drop will use SDL events only");
@@ -674,6 +673,45 @@ namespace lfs::vis::gui {
 
         if (menu_bar_ && !ui_hidden_) {
             menu_bar_->render();
+
+            if (menu_bar_->hasMenuEntries()) {
+                auto entries = menu_bar_->getMenuEntries();
+                std::vector<std::string> labels;
+                std::vector<std::string> idnames;
+                labels.reserve(entries.size());
+                idnames.reserve(entries.size());
+                for (const auto& entry : entries) {
+                    labels.emplace_back(LOC(entry.label.c_str()));
+                    idnames.emplace_back(entry.idname);
+                }
+                rml_menu_bar_.updateLabels(labels, idnames);
+            } else {
+                rml_menu_bar_.updateLabels({}, {});
+            }
+
+            // Invisible ImGui menu bar to reserve space at top of viewport
+            {
+                ImGui::PushStyleColor(ImGuiCol_MenuBarBg, ImVec4(0, 0, 0, 0));
+                if (ImGui::BeginMainMenuBar())
+                    ImGui::EndMainMenuBar();
+                ImGui::PopStyleColor();
+            }
+
+            const auto& io = ImGui::GetIO();
+            PanelInputState menu_input;
+            menu_input.mouse_x = io.MousePos.x;
+            menu_input.mouse_y = io.MousePos.y;
+            menu_input.mouse_down[0] = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+            menu_input.mouse_clicked[0] = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+            menu_input.screen_w = static_cast<int>(ImGui::GetMainViewport()->Size.x);
+            menu_input.screen_h = static_cast<int>(ImGui::GetMainViewport()->Size.y);
+
+            rml_menu_bar_.processInput(menu_input);
+
+            if (rml_menu_bar_.wantsInput())
+                ImGui::GetIO().WantCaptureMouse = true;
+
+            rml_menu_bar_.draw(menu_input.screen_w, menu_input.screen_h);
         }
 
         updateInputOverrides(mouse_in_viewport);

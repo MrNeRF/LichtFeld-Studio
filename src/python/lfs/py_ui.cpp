@@ -11,6 +11,7 @@
 #include "core/logger.hpp"
 #include "core/property_registry.hpp"
 #include "core/scene.hpp"
+#include "gui/rml_menu_bar.hpp"
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/windows_utils.hpp"
 #include "internal/resource_paths.hpp"
@@ -1651,6 +1652,16 @@ namespace lfs::python {
 
         const bool can_execute = vis::op::operators().poll(operator_id);
 
+        if (collecting_ && collect_target_) {
+            vis::gui::MenuItemDesc item;
+            item.type = vis::gui::MenuItemDesc::Type::Operator;
+            item.label = btn_text;
+            item.operator_id = operator_id;
+            item.enabled = can_execute;
+            collect_target_->items.push_back(std::move(item));
+            return nb::cast(PyOperatorProperties(operator_id));
+        }
+
         bool clicked = false;
         if (menu_depth_ > 0) {
             clicked = ImGui::MenuItem(btn_text.c_str(), nullptr, false, can_execute);
@@ -2274,6 +2285,12 @@ namespace lfs::python {
 
     // Layout
     void PyUILayout::separator() {
+        if (collecting_ && collect_target_) {
+            vis::gui::MenuItemDesc item;
+            item.type = vis::gui::MenuItemDesc::Type::Separator;
+            collect_target_->items.push_back(std::move(item));
+            return;
+        }
         ImGui::Separator();
     }
 
@@ -2445,10 +2462,29 @@ namespace lfs::python {
     }
 
     bool PyUILayout::menu_item(const std::string& label, bool enabled, bool selected) {
+        if (collecting_ && collect_target_) {
+            vis::gui::MenuItemDesc item;
+            item.type = vis::gui::MenuItemDesc::Type::Item;
+            item.label = label;
+            item.enabled = enabled;
+            item.selected = selected;
+            const int idx = collect_callback_index_++;
+            item.callback_index = idx;
+            collect_target_->items.push_back(std::move(item));
+            return execute_at_index_ == idx;
+        }
         return ImGui::MenuItem(label.c_str(), nullptr, selected, enabled);
     }
 
     bool PyUILayout::begin_menu(const std::string& label) {
+        if (collecting_ && collect_target_) {
+            vis::gui::MenuItemDesc item;
+            item.type = vis::gui::MenuItemDesc::Type::SubMenuBegin;
+            item.label = label;
+            collect_target_->items.push_back(std::move(item));
+            ++menu_depth_;
+            return true;
+        }
         if (ImGui::BeginMenu(label.c_str())) {
             ++menu_depth_;
             return true;
@@ -2459,6 +2495,12 @@ namespace lfs::python {
     void PyUILayout::end_menu() {
         assert(menu_depth_ > 0);
         --menu_depth_;
+        if (collecting_ && collect_target_) {
+            vis::gui::MenuItemDesc item;
+            item.type = vis::gui::MenuItemDesc::Type::SubMenuEnd;
+            collect_target_->items.push_back(std::move(item));
+            return;
+        }
         ImGui::EndMenu();
     }
 
@@ -2731,10 +2773,32 @@ namespace lfs::python {
     }
 
     bool PyUILayout::menu_item_toggle(const std::string& label, const std::string& shortcut, bool selected) {
+        if (collecting_ && collect_target_) {
+            vis::gui::MenuItemDesc item;
+            item.type = vis::gui::MenuItemDesc::Type::Toggle;
+            item.label = label;
+            item.shortcut = shortcut;
+            item.selected = selected;
+            const int idx = collect_callback_index_++;
+            item.callback_index = idx;
+            collect_target_->items.push_back(std::move(item));
+            return execute_at_index_ == idx;
+        }
         return ImGui::MenuItem(label.c_str(), shortcut.c_str(), selected);
     }
 
     bool PyUILayout::menu_item_shortcut(const std::string& label, const std::string& shortcut, bool enabled) {
+        if (collecting_ && collect_target_) {
+            vis::gui::MenuItemDesc item;
+            item.type = vis::gui::MenuItemDesc::Type::ShortcutItem;
+            item.label = label;
+            item.shortcut = shortcut;
+            item.enabled = enabled;
+            const int idx = collect_callback_index_++;
+            item.callback_index = idx;
+            collect_target_->items.push_back(std::move(item));
+            return execute_at_index_ == idx;
+        }
         return ImGui::MenuItem(label.c_str(), shortcut.c_str(), false, enabled);
     }
 
@@ -4637,6 +4701,26 @@ namespace lfs::python {
         bridge.draw_menu_bar_entry = [](const char* idname) {
             if (idname)
                 PyMenuRegistry::instance().draw_menu_bar_entry(idname);
+        };
+        bridge.collect_menu_content = [](const char* idname, MenuItemVisitor visitor, void* ctx) {
+            if (!idname)
+                return;
+            auto content = PyMenuRegistry::instance().collect_menu_content(idname);
+            for (const auto& item : content.items) {
+                MenuItemInfo info;
+                info.type = static_cast<int>(item.type);
+                info.label = item.label.c_str();
+                info.operator_id = item.operator_id.c_str();
+                info.shortcut = item.shortcut.c_str();
+                info.enabled = item.enabled;
+                info.selected = item.selected;
+                info.callback_index = item.callback_index;
+                visitor(&info, ctx);
+            }
+        };
+        bridge.execute_menu_callback = [](const char* idname, int idx) {
+            if (idname)
+                PyMenuRegistry::instance().execute_menu_callback(idname, idx);
         };
         bridge.draw_modals = []() { PyModalRegistry::instance().draw_modals(); };
         bridge.has_modals = []() { return PyModalRegistry::instance().has_open_modals(); };

@@ -723,6 +723,28 @@ namespace lfs::python {
         g_bridge.draw_menu_bar_entry(idname.c_str());
     }
 
+    void collect_menu_content(const std::string& idname, MenuItemVisitor visitor, void* user_data) {
+        if (!g_bridge.collect_menu_content)
+            return;
+        if (!can_acquire_gil())
+            return;
+        if (g_bridge.prepare_ui)
+            g_bridge.prepare_ui();
+        const GilAcquire gil;
+        g_bridge.collect_menu_content(idname.c_str(), visitor, user_data);
+    }
+
+    void execute_menu_callback(const std::string& idname, int callback_index) {
+        if (!g_bridge.execute_menu_callback)
+            return;
+        if (!can_acquire_gil())
+            return;
+        if (g_bridge.prepare_ui)
+            g_bridge.prepare_ui();
+        const GilAcquire gil;
+        g_bridge.execute_menu_callback(idname.c_str(), callback_index);
+    }
+
     void draw_python_modals(lfs::core::Scene* scene) {
         if (!g_bridge.draw_modals)
             return;

@@ -8,7 +8,6 @@
 #include "core/logger.hpp"
 #include "core/tensor_trace.hpp"
 #include "core/training_snapshot.hpp"
-#include "gui/rml_menu_bar.hpp"
 #include "python/python_runtime.hpp"
 #ifdef WIN32
 #include <shellapi.h>
@@ -163,10 +162,15 @@ namespace lfs::vis::gui {
         }
     } // namespace
 
-    void MenuBar::render() {
-        const auto& t = theme();
+    bool MenuBar::hasMenuEntries() const {
+        return g_menu_entries_ready.load(std::memory_order_acquire);
+    }
 
-        // Register callbacks for Python-driven menu
+    std::vector<python::MenuBarEntry> MenuBar::getMenuEntries() const {
+        return copy_menu_entries();
+    }
+
+    void MenuBar::render() {
         if (g_menu_bar_instance != this) {
             g_menu_bar_instance = this;
             python::set_show_python_console_callback([]() {
@@ -175,79 +179,13 @@ namespace lfs::vis::gui {
             });
         }
 
-        if (fonts_.regular)
-            ImGui::PushFont(fonts_.regular);
-
-        static const ImVec4 kTransparent(0.0f, 0.0f, 0.0f, 0.0f);
-
-        // Bar background and text: transparent (RmlUi provides visuals)
-        ImGui::PushStyleColor(ImGuiCol_MenuBarBg, kTransparent);
-        ImGui::PushStyleColor(ImGuiCol_Text, kTransparent);
-        ImGui::PushStyleColor(ImGuiCol_Header, kTransparent);
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kTransparent);
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, kTransparent);
-
-        // Popup styles: keep opaque so dropdowns remain visible
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, t.menu_popup_background());
-        ImGui::PushStyleColor(ImGuiCol_Border, t.menu_border());
-
-        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, t.menu.popup_rounding);
-        ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, t.menu.popup_border_size);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, t.menu.popup_padding);
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, t.menu.frame_padding);
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, t.menu.item_spacing);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, {1.0f, 1.0f});
-
-        if (!g_menu_entries_ready.load(std::memory_order_acquire)) {
+        if (!g_menu_entries_ready.load(std::memory_order_acquire))
             start_menu_entry_preload_once();
-        }
 
         if (python::are_plugins_loaded() && !g_menu_entries_ready.load(std::memory_order_acquire)) {
             g_menu_entries_loading.store(false, std::memory_order_release);
             start_menu_entry_preload_once();
         }
-
-        if (ImGui::BeginMainMenuBar()) {
-            // Collect labels and draw RmlUi background
-            int active_idx = -1;
-
-            if (g_menu_entries_ready.load(std::memory_order_acquire)) {
-                auto entries = copy_menu_entries();
-
-                std::vector<std::string> labels;
-                labels.reserve(entries.size());
-                for (const auto& entry : entries)
-                    labels.emplace_back(LOC(entry.label.c_str()));
-
-                if (rml_menu_bar_) {
-                    rml_menu_bar_->updateLabels(labels);
-                    rml_menu_bar_->draw();
-                }
-
-                for (int i = 0; i < static_cast<int>(entries.size()); ++i) {
-                    if (ImGui::BeginMenu(labels[i].c_str())) {
-                        active_idx = i;
-                        ImGui::PushStyleColor(ImGuiCol_Text, t.palette.text);
-                        python::draw_menu_bar_entry(entries[i].idname);
-                        ImGui::PopStyleColor();
-                        ImGui::EndMenu();
-                    }
-                }
-            } else if (rml_menu_bar_) {
-                rml_menu_bar_->updateLabels({});
-                rml_menu_bar_->draw();
-            }
-
-            if (rml_menu_bar_)
-                rml_menu_bar_->setActiveIndex(active_idx);
-
-            ImGui::EndMainMenuBar();
-        }
-
-        ImGui::PopStyleVar(6);
-        ImGui::PopStyleColor(7);
-        if (fonts_.regular)
-            ImGui::PopFont();
 
         renderPluginInstallPopup();
     }

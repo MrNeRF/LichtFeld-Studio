@@ -5,6 +5,7 @@
 #pragma once
 
 #include "gui/ui_context.hpp"
+#include "python/python_runtime.hpp"
 
 #include <functional>
 #include <future>
@@ -14,8 +15,6 @@
 
 namespace lfs::vis::gui {
 
-    class RmlMenuBar;
-
     class MenuBar {
     public:
         MenuBar();
@@ -23,11 +22,13 @@ namespace lfs::vis::gui {
 
         void render();
         void setFonts(const FontSet& fonts) { fonts_ = fonts; }
-        void setRmlMenuBar(RmlMenuBar* bar) { rml_menu_bar_ = bar; }
 
         void setOnShowPythonConsole(std::function<void()> callback);
 
         void renderPluginInstallPopup();
+
+        bool hasMenuEntries() const;
+        std::vector<python::MenuBarEntry> getMenuEntries() const;
 
         void triggerShowPythonConsole() {
             if (on_show_python_console_)
@@ -63,7 +64,6 @@ namespace lfs::vis::gui {
         bool plugin_status_is_error_ = false;
 
         FontSet fonts_;
-        RmlMenuBar* rml_menu_bar_ = nullptr;
         std::unordered_map<std::string, Thumbnail> thumbnails_;
     };
 

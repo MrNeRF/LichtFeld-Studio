@@ -137,6 +137,21 @@ namespace lfs::python {
     LFS_PYTHON_RUNTIME_API std::vector<MenuBarEntry> get_menu_bar_entries();
     LFS_PYTHON_RUNTIME_API void draw_menu_bar_entry(const std::string& idname);
 
+    struct MenuItemInfo {
+        int type;
+        const char* label;
+        const char* operator_id;
+        const char* shortcut;
+        bool enabled;
+        bool selected;
+        int callback_index;
+    };
+    using MenuItemVisitor = void (*)(const MenuItemInfo* item, void* user_data);
+
+    LFS_PYTHON_RUNTIME_API void collect_menu_content(const std::string& idname,
+                                                     MenuItemVisitor visitor, void* user_data);
+    LFS_PYTHON_RUNTIME_API void execute_menu_callback(const std::string& idname, int callback_index);
+
     // Modal dialog callbacks
     using DrawModalsCallback = void (*)();
     using HasModalsCallback = bool (*)();
@@ -232,6 +247,8 @@ namespace lfs::python {
         bool (*has_menu_bar_entries)() = nullptr;
         void (*get_menu_bar_entries)(MenuBarEntryVisitor, void*) = nullptr;
         void (*draw_menu_bar_entry)(const char*) = nullptr;
+        void (*collect_menu_content)(const char*, MenuItemVisitor, void*) = nullptr;
+        void (*execute_menu_callback)(const char*, int) = nullptr;
 
         // Modals
         void (*draw_modals)() = nullptr;

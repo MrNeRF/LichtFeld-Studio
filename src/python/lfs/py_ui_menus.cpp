@@ -4,6 +4,7 @@
 
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "gui/rml_menu_bar.hpp"
 #include "py_ui.hpp"
 
 #include <algorithm>
@@ -290,6 +291,77 @@ namespace lfs::python {
             LOG_INFO("Synced {} menus from Python registry", menu_classes_.size());
         } catch (const std::exception& e) {
             LOG_ERROR("Failed to sync menus from Python: {}", e.what());
+        }
+    }
+
+    vis::gui::MenuDropdownContent PyMenuRegistry::collect_menu_content(const std::string& idname) {
+        vis::gui::MenuDropdownContent content;
+        content.menu_idname = idname;
+
+        PyMenuClassInfo* target = nullptr;
+        {
+            std::lock_guard lock(mutex_);
+            for (auto& mc : menu_classes_) {
+                if (mc.idname == idname) {
+                    target = &mc;
+                    break;
+                }
+            }
+        }
+
+        if (!target || !target->menu_instance.is_valid())
+            return content;
+
+        nb::gil_scoped_acquire gil;
+
+        try {
+            bool should_draw = true;
+            if (nb::hasattr(target->menu_class, "poll"))
+                should_draw = nb::cast<bool>(target->menu_class.attr("poll")(nb::none()));
+
+            if (should_draw && nb::hasattr(target->menu_instance, "draw")) {
+                PyUILayout layout(1);
+                layout.setCollecting(&content);
+                target->menu_instance.attr("draw")(layout);
+            }
+        } catch (const std::exception& e) {
+            LOG_ERROR("Menu '{}' collect error: {}", idname, e.what());
+        }
+
+        return content;
+    }
+
+    void PyMenuRegistry::execute_menu_callback(const std::string& idname, int callback_index) {
+        PyMenuClassInfo* target = nullptr;
+        {
+            std::lock_guard lock(mutex_);
+            for (auto& mc : menu_classes_) {
+                if (mc.idname == idname) {
+                    target = &mc;
+                    break;
+                }
+            }
+        }
+
+        if (!target || !target->menu_instance.is_valid())
+            return;
+
+        nb::gil_scoped_acquire gil;
+
+        try {
+            bool should_draw = true;
+            if (nb::hasattr(target->menu_class, "poll"))
+                should_draw = nb::cast<bool>(target->menu_class.attr("poll")(nb::none()));
+
+            if (should_draw && nb::hasattr(target->menu_instance, "draw")) {
+                vis::gui::MenuDropdownContent dummy;
+                PyUILayout layout(1);
+                layout.setCollecting(&dummy);
+                layout.setExecuteAtIndex(callback_index);
+                target->menu_instance.attr("draw")(layout);
+            }
+        } catch (const std::exception& e) {
+            LOG_ERROR("Menu '{}' callback execution error: {}", idname, e.what());
         }
     }
 

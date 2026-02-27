@@ -26,6 +26,7 @@ namespace nb = nanobind;
 namespace lfs::vis::gui {
     struct UIContext;
     class IPanel;
+    struct MenuDropdownContent;
 } // namespace lfs::vis::gui
 
 namespace lfs::vis::op {
@@ -309,6 +310,16 @@ namespace lfs::python {
     class PyUILayout {
     public:
         explicit PyUILayout(int initial_menu_depth = 0) : menu_depth_(initial_menu_depth) {}
+
+        void setCollecting(vis::gui::MenuDropdownContent* target) {
+            collecting_ = target != nullptr;
+            collect_target_ = target;
+            collect_callback_index_ = 0;
+        }
+        bool isCollecting() const { return collecting_; }
+
+        void setExecuteAtIndex(int index) { execute_at_index_ = index; }
+        int executeAtIndex() const { return execute_at_index_; }
 
         // Text
         void label(const std::string& text);
@@ -641,6 +652,11 @@ namespace lfs::python {
         int menu_depth_;
         int box_id_counter_ = 0;
         int grid_id_counter_ = 0;
+
+        bool collecting_ = false;
+        vis::gui::MenuDropdownContent* collect_target_ = nullptr;
+        int collect_callback_index_ = 0;
+        int execute_at_index_ = -1;
     };
 
     using PollDependency = lfs::vis::op::PollDependency;
@@ -798,6 +814,9 @@ namespace lfs::python {
         bool has_menu_bar_entries() const;
         std::vector<PyMenuClassInfo*> get_menu_bar_entries();
         void draw_menu_bar_entry(const std::string& idname);
+
+        vis::gui::MenuDropdownContent collect_menu_content(const std::string& idname);
+        void execute_menu_callback(const std::string& idname, int callback_index);
 
         void sync_from_python() const;
 
