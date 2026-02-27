@@ -11,6 +11,7 @@
 #include "core/services.hpp"
 #include "gui/panels/tools_panel.hpp"
 #include "gui/panels/windows_console_utils.hpp"
+#include "ipc/render_settings_convert.hpp"
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
@@ -94,12 +95,94 @@ namespace lfs::vis {
         op::registerBrushOperators();
         op::registerEditOperators();
 
+        setupPythonBridge();
+        setupEventHandlers();
+        setupComponentConnections();
+    }
+
+    VisualizerImpl::~VisualizerImpl() {
+        // Clear event handlers before destroying components to prevent use-after-free
+        lfs::core::event::bus().clear_all();
+        services().clear();
+
+        // Clear operator system
+        op::unregisterEditOperators();
+        op::unregisterBrushOperators();
+        op::unregisterSelectionOperators();
+        op::unregisterAlignOperators();
+        op::unregisterTransformOperators();
+        op::operators().clear();
+
+        if (selection_server_)
+            selection_server_->stop();
+        callback_cleanup_.clear();
+        trainer_manager_.reset();
+        brush_tool_.reset();
+        tool_context_.reset();
+        if (gui_manager_) {
+            gui_manager_->shutdown();
+        }
+        LOG_DEBUG("Visualizer destroyed");
+    }
+
+    void VisualizerImpl::initializeTools() {
+        if (tools_initialized_) {
+            LOG_TRACE("Tools already initialized, skipping");
+            return;
+        }
+
+        tool_context_ = std::make_unique<ToolContext>(
+            rendering_manager_.get(),
+            scene_manager_.get(),
+            &viewport_,
+            window_manager_->getWindow());
+
+        // Connect tool context to input controller
+        if (input_controller_) {
+            input_controller_->setToolContext(tool_context_.get());
+        }
+
+        brush_tool_ = std::make_shared<tools::BrushTool>();
+        if (!brush_tool_->initialize(*tool_context_)) {
+            LOG_ERROR("Failed to initialize brush tool");
+            brush_tool_.reset();
+        } else if (input_controller_) {
+            input_controller_->setBrushTool(brush_tool_);
+        }
+
+        align_tool_ = std::make_shared<tools::AlignTool>();
+        if (!align_tool_->initialize(*tool_context_)) {
+            LOG_ERROR("Failed to initialize align tool");
+            align_tool_.reset();
+        } else if (input_controller_) {
+            input_controller_->setAlignTool(align_tool_);
+        }
+
+        selection_tool_ = std::make_shared<tools::SelectionTool>();
+        if (!selection_tool_->initialize(*tool_context_)) {
+            LOG_ERROR("Failed to initialize selection tool");
+            selection_tool_.reset();
+        } else if (input_controller_) {
+            input_controller_->setSelectionTool(selection_tool_);
+            selection_tool_->setInputBindings(&input_controller_->getBindings());
+        }
+
+        tools_initialized_ = true;
+    }
+
+    void VisualizerImpl::setupPythonBridge() {
         python::set_trainer_manager(trainer_manager_.get());
+        callback_cleanup_.add([] { python::set_trainer_manager(nullptr); });
         python::set_parameter_manager(parameter_manager_.get());
+        callback_cleanup_.add([] { python::set_parameter_manager(nullptr); });
         python::set_rendering_manager(rendering_manager_.get());
+        callback_cleanup_.add([] { python::set_rendering_manager(nullptr); });
         python::set_editor_context(&editor_context_);
-        python::set_operator_callbacks(&editor_context_); // Also set as IOperatorCallbacks for callback dispatch
+        callback_cleanup_.add([] { python::set_editor_context(nullptr); });
+        python::set_operator_callbacks(&editor_context_);
+        callback_cleanup_.add([] { python::set_operator_callbacks(nullptr); });
         python::set_gui_manager(gui_manager_.get());
+        callback_cleanup_.add([] { python::set_gui_manager(nullptr); });
         python::set_mesh2splat_callbacks(
             [](std::shared_ptr<core::MeshData> mesh, std::string name, core::Mesh2SplatOptions opts) {
                 auto* gm = python::get_gui_manager();
@@ -119,14 +202,17 @@ namespace lfs::vis {
                 auto* gm = python::get_gui_manager();
                 return gm ? gm->asyncTasks().getMesh2SplatError() : std::string{};
             });
+        callback_cleanup_.add([] { python::set_mesh2splat_callbacks(nullptr, nullptr, nullptr, nullptr); });
         python::set_selected_camera_callback([]() -> int {
             const auto* gm = python::get_gui_manager();
             return gm ? gm->getHighlightedCameraUid() : -1;
         });
+        callback_cleanup_.add([] { python::set_selected_camera_callback(nullptr); });
         python::set_invert_masks_callback([]() -> bool {
             auto* pm = python::get_parameter_manager();
             return pm && pm->getActiveParams().invert_masks;
         });
+        callback_cleanup_.add([] { python::set_invert_masks_callback(nullptr); });
         python::set_sequencer_callbacks(
             []() {
                 const auto* gm = python::get_gui_manager();
@@ -136,8 +222,8 @@ namespace lfs::vis {
                 if (auto* gm = python::get_gui_manager())
                     gm->panelLayout().setShowSequencer(visible);
             });
+        callback_cleanup_.add([] { python::set_sequencer_callbacks(nullptr, nullptr); });
 
-        // Overlay state callbacks (for Python overlay panels)
         python::set_overlay_callbacks(
             []() {
                 const auto* gm = python::get_gui_manager();
@@ -206,8 +292,8 @@ namespace lfs::vis {
                 if (auto* gm = python::get_gui_manager())
                     gm->asyncTasks().cancelVideoExport();
             });
+        callback_cleanup_.add([] { python::set_overlay_callbacks(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr); });
 
-        // Section drawing callbacks (for Python-first UI)
         python::set_section_draw_callbacks({
             .draw_tools_section = []() {
                 auto* gm = python::get_gui_manager();
@@ -255,8 +341,8 @@ namespace lfs::vis {
                     .fonts = {}};
                 gui::panels::ToggleSystemConsole(ctx); },
         });
+        callback_cleanup_.add([] { python::set_section_draw_callbacks({}); });
 
-        // Sequencer timeline callbacks
         python::set_sequencer_timeline_callbacks(
             []() -> bool {
                 auto* gm = python::get_gui_manager();
@@ -278,37 +364,38 @@ namespace lfs::vis {
                 if (auto* gm = python::get_gui_manager())
                     gm->sequencer().setPlaybackSpeed(speed);
             });
+        callback_cleanup_.add([] { python::set_sequencer_timeline_callbacks(nullptr, nullptr, nullptr, nullptr, nullptr); });
 
-        python::set_sequencer_ui_state_callback([]() -> python::SequencerUIStateData* {
+        sequencer_ui_state_ = std::make_unique<python::SequencerUIStateData>();
+        python::set_sequencer_ui_state_callback([this]() -> python::SequencerUIStateData* {
             auto* gm = python::get_gui_manager();
             if (!gm)
                 return nullptr;
 
-            assert(gm == python::get_gui_manager() && "single GUI manager expected");
             auto& state = gm->getSequencerUIState();
-            static python::SequencerUIStateData s_state;
-            static bool initialized = false;
+            auto& s = *sequencer_ui_state_;
 
-            if (initialized) {
-                state.show_camera_path = s_state.show_camera_path;
-                state.snap_to_grid = s_state.snap_to_grid;
-                state.snap_interval = s_state.snap_interval;
-                state.playback_speed = s_state.playback_speed;
-                state.follow_playback = s_state.follow_playback;
-                state.pip_preview_scale = s_state.pip_preview_scale;
+            if (sequencer_ui_initialized_) {
+                state.show_camera_path = s.show_camera_path;
+                state.snap_to_grid = s.snap_to_grid;
+                state.snap_interval = s.snap_interval;
+                state.playback_speed = s.playback_speed;
+                state.follow_playback = s.follow_playback;
+                state.pip_preview_scale = s.pip_preview_scale;
             }
 
-            s_state.show_camera_path = state.show_camera_path;
-            s_state.snap_to_grid = state.snap_to_grid;
-            s_state.snap_interval = state.snap_interval;
-            s_state.playback_speed = state.playback_speed;
-            s_state.follow_playback = state.follow_playback;
-            s_state.pip_preview_scale = state.pip_preview_scale;
+            s.show_camera_path = state.show_camera_path;
+            s.snap_to_grid = state.snap_to_grid;
+            s.snap_interval = state.snap_interval;
+            s.playback_speed = state.playback_speed;
+            s.follow_playback = state.follow_playback;
+            s.pip_preview_scale = state.pip_preview_scale;
             const auto sel = gm->sequencer().selectedKeyframe();
-            s_state.selected_keyframe = sel.has_value() ? static_cast<int>(*sel) : -1;
-            initialized = true;
-            return &s_state;
+            s.selected_keyframe = sel.has_value() ? static_cast<int>(*sel) : -1;
+            sequencer_ui_initialized_ = true;
+            return &s;
         });
+        callback_cleanup_.add([] { python::set_sequencer_ui_state_callback({}); });
 
         python::set_pivot_mode_callbacks(
             []() -> int {
@@ -319,6 +406,7 @@ namespace lfs::vis {
                 if (auto* gm = python::get_gui_manager())
                     gm->gizmo().setPivotMode(static_cast<PivotMode>(mode));
             });
+        callback_cleanup_.add([] { python::set_pivot_mode_callbacks(nullptr, nullptr); });
         python::set_transform_space_callbacks(
             []() -> int {
                 const auto* gm = python::get_gui_manager();
@@ -328,6 +416,7 @@ namespace lfs::vis {
                 if (auto* gm = python::get_gui_manager())
                     gm->gizmo().setTransformSpace(static_cast<TransformSpace>(space));
             });
+        callback_cleanup_.add([] { python::set_transform_space_callbacks(nullptr, nullptr); });
         python::set_thumbnail_callbacks(
             [](const char* video_id) {
                 if (auto* gm = python::get_gui_manager())
@@ -345,7 +434,9 @@ namespace lfs::vis {
                 const auto* gm = python::get_gui_manager();
                 return gm ? gm->getThumbnailTexture(video_id) : 0;
             });
+        callback_cleanup_.add([] { python::set_thumbnail_callbacks(nullptr, nullptr, nullptr, nullptr); });
         python::set_scene_manager(scene_manager_.get());
+        callback_cleanup_.add([] { python::set_scene_manager(nullptr); });
 
         python::set_export_callback([](int format, const char* path, const char** node_names,
                                        int node_count, int sh_degree) {
@@ -359,87 +450,108 @@ namespace lfs::vis {
                                                std::filesystem::path(path), names, sh_degree);
             }
         });
-
-        // Setup connections
-        setupEventHandlers();
-        setupComponentConnections();
+        callback_cleanup_.add([] { python::set_export_callback(nullptr); });
     }
 
-    VisualizerImpl::~VisualizerImpl() {
-        // Clear event handlers before destroying components to prevent use-after-free
-        lfs::core::event::bus().clear_all();
-        services().clear();
-
-        // Clear operator system
-        op::unregisterEditOperators();
-        op::unregisterBrushOperators();
-        op::unregisterSelectionOperators();
-        op::unregisterAlignOperators();
-        op::unregisterTransformOperators();
-        op::operators().clear();
-
-        python::set_sequencer_callbacks(nullptr, nullptr);
-        python::set_overlay_callbacks(nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
-        python::set_section_draw_callbacks({});
-        python::set_sequencer_ui_state_callback(nullptr);
-        python::set_pivot_mode_callbacks(nullptr, nullptr);
-        python::set_transform_space_callbacks(nullptr, nullptr);
-        python::set_selected_camera_callback(nullptr);
-        python::set_invert_masks_callback(nullptr);
-        python::set_mesh2splat_callbacks(nullptr, nullptr, nullptr, nullptr);
-        python::set_gui_manager(nullptr);
-        trainer_manager_.reset();
-        brush_tool_.reset();
-        tool_context_.reset();
-        if (gui_manager_) {
-            gui_manager_->shutdown();
-        }
-        LOG_DEBUG("Visualizer destroyed");
-    }
-
-    void VisualizerImpl::initializeTools() {
-        if (tools_initialized_) {
-            LOG_TRACE("Tools already initialized, skipping");
+    void VisualizerImpl::setupIpcServer() {
+        if (selection_server_)
             return;
+
+        selection_server_ = std::make_unique<SelectionServer>();
+        selection_server_->start();
+        if (rendering_manager_) {
+            rendering_manager_->setOutputScreenPositions(true);
         }
 
-        tool_context_ = std::make_unique<ToolContext>(
-            rendering_manager_.get(),
-            scene_manager_.get(),
-            &viewport_,
-            window_manager_->getWindow());
+        vis::set_view_callback([this]() -> std::optional<vis::ViewInfo> {
+            if (!rendering_manager_)
+                return std::nullopt;
 
-        // Connect tool context to input controller
-        if (input_controller_) {
-            input_controller_->setToolContext(tool_context_.get());
-        }
+            const auto& settings = rendering_manager_->getSettings();
+            const auto R = viewport_.getRotationMatrix();
+            const auto T = viewport_.getTranslation();
 
-        brush_tool_ = std::make_shared<tools::BrushTool>();
-        if (!brush_tool_->initialize(*tool_context_)) {
-            LOG_ERROR("Failed to initialize brush tool");
-            brush_tool_.reset();
-        } else if (input_controller_) {
-            input_controller_->setBrushTool(brush_tool_);
-        }
+            vis::ViewInfo info;
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    info.rotation[i * 3 + j] = R[j][i];
+            info.translation = {T.x, T.y, T.z};
+            const auto P = viewport_.camera.getPivot();
+            info.pivot = {P.x, P.y, P.z};
+            info.width = viewport_.windowSize.x;
+            info.height = viewport_.windowSize.y;
+            info.fov = lfs::rendering::focalLengthToVFov(settings.focal_length_mm);
+            return info;
+        });
+        callback_cleanup_.add([] { vis::set_view_callback(nullptr); });
 
-        align_tool_ = std::make_shared<tools::AlignTool>();
-        if (!align_tool_->initialize(*tool_context_)) {
-            LOG_ERROR("Failed to initialize align tool");
-            align_tool_.reset();
-        } else if (input_controller_) {
-            input_controller_->setAlignTool(align_tool_);
-        }
+        vis::set_set_view_callback([this](const vis::SetViewParams& params) {
+            const glm::vec3 eye(params.eye[0], params.eye[1], params.eye[2]);
+            const glm::vec3 target(params.target[0], params.target[1], params.target[2]);
+            const glm::vec3 up(params.up[0], params.up[1], params.up[2]);
 
-        selection_tool_ = std::make_shared<tools::SelectionTool>();
-        if (!selection_tool_->initialize(*tool_context_)) {
-            LOG_ERROR("Failed to initialize selection tool");
-            selection_tool_.reset();
-        } else if (input_controller_) {
-            input_controller_->setSelectionTool(selection_tool_);
-            selection_tool_->setInputBindings(&input_controller_->getBindings());
-        }
+            const glm::vec3 forward = glm::normalize(target - eye);
+            const glm::vec3 right = glm::normalize(glm::cross(up, forward));
+            const glm::vec3 cam_up = glm::cross(forward, right);
 
-        tools_initialized_ = true;
+            viewport_.camera.R = glm::mat3(right, cam_up, forward);
+            viewport_.camera.t = eye;
+            viewport_.camera.setPivot(target);
+
+            if (rendering_manager_)
+                rendering_manager_->markDirty(DirtyFlag::CAMERA);
+        });
+        callback_cleanup_.add([] { vis::set_set_view_callback(nullptr); });
+
+        vis::set_set_fov_callback([this](float fov_degrees) {
+            if (rendering_manager_)
+                rendering_manager_->setFocalLength(lfs::rendering::vFovToFocalLength(fov_degrees));
+        });
+        callback_cleanup_.add([] { vis::set_set_fov_callback(nullptr); });
+
+        vis::set_viewport_render_callback([this]() -> std::optional<vis::ViewportRender> {
+            if (!rendering_manager_)
+                return std::nullopt;
+
+            const auto& result = rendering_manager_->getCachedResult();
+            if (!result.valid || !result.image)
+                return std::nullopt;
+
+            return vis::ViewportRender{result.image, result.screen_positions};
+        });
+        callback_cleanup_.add([] { vis::set_viewport_render_callback(nullptr); });
+
+        vis::set_render_settings_callbacks(
+            [this]() -> std::optional<vis::RenderSettingsProxy> {
+                return rendering_manager_ ? std::optional{vis::to_proxy(rendering_manager_->getSettings())}
+                                          : std::nullopt;
+            },
+            [this](const vis::RenderSettingsProxy& proxy) {
+                if (!rendering_manager_)
+                    return;
+                auto s = rendering_manager_->getSettings();
+                vis::apply_proxy(s, proxy);
+                rendering_manager_->updateSettings(s);
+            });
+        callback_cleanup_.add([] { vis::set_render_settings_callbacks(nullptr, nullptr); });
+
+        selection_server_->setInvokeCapabilityCallback(
+            [this](const std::string& name, const std::string& args) -> CapabilityInvokeResult {
+                std::mutex mtx;
+                std::condition_variable cv;
+                CapabilityInvokeResult result;
+                bool done = false;
+
+                {
+                    std::lock_guard lock(capability_request_mutex_);
+                    pending_capability_request_ = CapabilityRequest{name, args, &result, &mtx, &cv, &done};
+                }
+
+                std::unique_lock lock(mtx);
+                cv.wait(lock, [&done] { return done; });
+
+                return result;
+            });
     }
 
     void VisualizerImpl::setupComponentConnections() {
@@ -609,8 +721,7 @@ namespace lfs::vis {
     }
 
     bool VisualizerImpl::initialize() {
-        static bool fully_initialized = false;
-        if (fully_initialized) {
+        if (fully_initialized_) {
             LOG_TRACE("Already fully initialized");
             return true;
         }
@@ -670,6 +781,7 @@ namespace lfs::vis {
             input_controller_->initialize();
             window_manager_->setInputController(input_controller_.get());
             python::set_keymap_bindings(&input_controller_->getBindings());
+            callback_cleanup_.add([] { python::set_keymap_bindings(nullptr); });
         }
 
         // Initialize tools AFTER rendering is initialized
@@ -677,204 +789,7 @@ namespace lfs::vis {
             initializeTools();
         }
 
-        // Start IPC server for MCP selection commands
-        if (!selection_server_) {
-            selection_server_ = std::make_unique<SelectionServer>();
-            selection_server_->start();
-            if (rendering_manager_) {
-                rendering_manager_->setOutputScreenPositions(true);
-            }
-
-            // Set up view callback for Python rendering API
-            vis::set_view_callback([this]() -> std::optional<vis::ViewInfo> {
-                if (!rendering_manager_)
-                    return std::nullopt;
-
-                const auto& settings = rendering_manager_->getSettings();
-                const auto R = viewport_.getRotationMatrix();
-                const auto T = viewport_.getTranslation();
-
-                vis::ViewInfo info;
-                for (int i = 0; i < 3; ++i)
-                    for (int j = 0; j < 3; ++j)
-                        info.rotation[i * 3 + j] = R[j][i];
-                info.translation = {T.x, T.y, T.z};
-                const auto P = viewport_.camera.getPivot();
-                info.pivot = {P.x, P.y, P.z};
-                info.width = viewport_.windowSize.x;
-                info.height = viewport_.windowSize.y;
-                info.fov = lfs::rendering::focalLengthToVFov(settings.focal_length_mm);
-                return info;
-            });
-
-            vis::set_set_view_callback([this](const vis::SetViewParams& params) {
-                const glm::vec3 eye(params.eye[0], params.eye[1], params.eye[2]);
-                const glm::vec3 target(params.target[0], params.target[1], params.target[2]);
-                const glm::vec3 up(params.up[0], params.up[1], params.up[2]);
-
-                const glm::vec3 forward = glm::normalize(target - eye);
-                const glm::vec3 right = glm::normalize(glm::cross(up, forward));
-                const glm::vec3 cam_up = glm::cross(forward, right);
-
-                viewport_.camera.R = glm::mat3(right, cam_up, forward);
-                viewport_.camera.t = eye;
-                viewport_.camera.setPivot(target);
-
-                if (rendering_manager_)
-                    rendering_manager_->markDirty(DirtyFlag::CAMERA);
-            });
-
-            vis::set_set_fov_callback([this](float fov_degrees) {
-                if (rendering_manager_)
-                    rendering_manager_->setFocalLength(lfs::rendering::vFovToFocalLength(fov_degrees));
-            });
-
-            // Set up viewport render callback for Python rendering API
-            vis::set_viewport_render_callback([this]() -> std::optional<vis::ViewportRender> {
-                if (!rendering_manager_)
-                    return std::nullopt;
-
-                const auto& result = rendering_manager_->getCachedResult();
-                if (!result.valid || !result.image)
-                    return std::nullopt;
-
-                return vis::ViewportRender{result.image, result.screen_positions};
-            });
-
-            vis::set_render_settings_callbacks(
-                [this]() -> std::optional<vis::RenderSettingsProxy> {
-                    if (!rendering_manager_)
-                        return std::nullopt;
-
-                    const auto& s = rendering_manager_->getSettings();
-                    vis::RenderSettingsProxy proxy;
-                    proxy.focal_length_mm = s.focal_length_mm;
-                    proxy.scaling_modifier = s.scaling_modifier;
-                    proxy.antialiasing = s.antialiasing;
-                    proxy.mip_filter = s.mip_filter;
-                    proxy.sh_degree = s.sh_degree;
-                    proxy.render_scale = s.render_scale;
-                    proxy.show_crop_box = s.show_crop_box;
-                    proxy.use_crop_box = s.use_crop_box;
-                    proxy.desaturate_unselected = s.desaturate_unselected;
-                    proxy.desaturate_cropping = s.desaturate_cropping;
-                    proxy.background_color = {s.background_color.r, s.background_color.g, s.background_color.b};
-                    proxy.show_coord_axes = s.show_coord_axes;
-                    proxy.axes_size = s.axes_size;
-                    proxy.show_grid = s.show_grid;
-                    proxy.grid_plane = s.grid_plane;
-                    proxy.grid_opacity = s.grid_opacity;
-                    proxy.point_cloud_mode = s.point_cloud_mode;
-                    proxy.voxel_size = s.voxel_size;
-                    proxy.show_rings = s.show_rings;
-                    proxy.ring_width = s.ring_width;
-                    proxy.show_center_markers = s.show_center_markers;
-                    proxy.show_camera_frustums = s.show_camera_frustums;
-                    proxy.camera_frustum_scale = s.camera_frustum_scale;
-                    proxy.train_camera_color = {s.train_camera_color.r, s.train_camera_color.g, s.train_camera_color.b};
-                    proxy.eval_camera_color = {s.eval_camera_color.r, s.eval_camera_color.g, s.eval_camera_color.b};
-                    proxy.show_pivot = s.show_pivot;
-                    proxy.split_position = s.split_position;
-                    proxy.gut = s.gut;
-                    proxy.equirectangular = s.equirectangular;
-                    proxy.orthographic = s.orthographic;
-                    proxy.ortho_scale = s.ortho_scale;
-                    proxy.selection_color_committed = {s.selection_color_committed.r, s.selection_color_committed.g, s.selection_color_committed.b};
-                    proxy.selection_color_preview = {s.selection_color_preview.r, s.selection_color_preview.g, s.selection_color_preview.b};
-                    proxy.selection_color_center_marker = {s.selection_color_center_marker.r, s.selection_color_center_marker.g, s.selection_color_center_marker.b};
-                    proxy.depth_clip_enabled = s.depth_clip_enabled;
-                    proxy.depth_clip_far = s.depth_clip_far;
-                    proxy.apply_appearance_correction = s.apply_appearance_correction;
-                    proxy.ppisp_mode = static_cast<int>(s.ppisp_mode);
-                    proxy.ppisp = s.ppisp_overrides;
-                    proxy.mesh_wireframe = s.mesh_wireframe;
-                    proxy.mesh_wireframe_color = {s.mesh_wireframe_color.r, s.mesh_wireframe_color.g, s.mesh_wireframe_color.b};
-                    proxy.mesh_wireframe_width = s.mesh_wireframe_width;
-                    proxy.mesh_light_dir = {s.mesh_light_dir.x, s.mesh_light_dir.y, s.mesh_light_dir.z};
-                    proxy.mesh_light_intensity = s.mesh_light_intensity;
-                    proxy.mesh_ambient = s.mesh_ambient;
-                    proxy.mesh_backface_culling = s.mesh_backface_culling;
-                    proxy.mesh_shadow_enabled = s.mesh_shadow_enabled;
-                    proxy.mesh_shadow_resolution = s.mesh_shadow_resolution;
-                    return proxy;
-                },
-                [this](const vis::RenderSettingsProxy& proxy) {
-                    if (!rendering_manager_)
-                        return;
-
-                    auto s = rendering_manager_->getSettings();
-                    s.focal_length_mm = proxy.focal_length_mm;
-                    s.scaling_modifier = proxy.scaling_modifier;
-                    s.antialiasing = proxy.antialiasing;
-                    s.mip_filter = proxy.mip_filter;
-                    s.sh_degree = proxy.sh_degree;
-                    s.render_scale = proxy.render_scale;
-                    s.show_crop_box = proxy.show_crop_box;
-                    s.use_crop_box = proxy.use_crop_box;
-                    s.desaturate_unselected = proxy.desaturate_unselected;
-                    s.desaturate_cropping = proxy.desaturate_cropping;
-                    s.background_color = glm::vec3(proxy.background_color[0], proxy.background_color[1], proxy.background_color[2]);
-                    s.show_coord_axes = proxy.show_coord_axes;
-                    s.axes_size = proxy.axes_size;
-                    s.show_grid = proxy.show_grid;
-                    s.grid_plane = proxy.grid_plane;
-                    s.grid_opacity = proxy.grid_opacity;
-                    s.point_cloud_mode = proxy.point_cloud_mode;
-                    s.voxel_size = proxy.voxel_size;
-                    s.show_rings = proxy.show_rings;
-                    s.ring_width = proxy.ring_width;
-                    s.show_center_markers = proxy.show_center_markers;
-                    s.show_camera_frustums = proxy.show_camera_frustums;
-                    s.camera_frustum_scale = proxy.camera_frustum_scale;
-                    s.train_camera_color = glm::vec3(proxy.train_camera_color[0], proxy.train_camera_color[1], proxy.train_camera_color[2]);
-                    s.eval_camera_color = glm::vec3(proxy.eval_camera_color[0], proxy.eval_camera_color[1], proxy.eval_camera_color[2]);
-                    s.show_pivot = proxy.show_pivot;
-                    s.split_position = proxy.split_position;
-                    s.gut = proxy.gut;
-                    s.equirectangular = proxy.equirectangular;
-                    s.orthographic = proxy.orthographic;
-                    s.ortho_scale = proxy.ortho_scale;
-                    s.selection_color_committed = glm::vec3(proxy.selection_color_committed[0], proxy.selection_color_committed[1], proxy.selection_color_committed[2]);
-                    s.selection_color_preview = glm::vec3(proxy.selection_color_preview[0], proxy.selection_color_preview[1], proxy.selection_color_preview[2]);
-                    s.selection_color_center_marker = glm::vec3(proxy.selection_color_center_marker[0], proxy.selection_color_center_marker[1], proxy.selection_color_center_marker[2]);
-                    s.depth_clip_enabled = proxy.depth_clip_enabled;
-                    s.depth_clip_far = proxy.depth_clip_far;
-                    s.apply_appearance_correction = proxy.apply_appearance_correction;
-                    s.ppisp_mode = static_cast<vis::RenderSettings::PPISPMode>(proxy.ppisp_mode);
-                    s.ppisp_overrides = proxy.ppisp;
-                    s.mesh_wireframe = proxy.mesh_wireframe;
-                    s.mesh_wireframe_color = glm::vec3(proxy.mesh_wireframe_color[0], proxy.mesh_wireframe_color[1], proxy.mesh_wireframe_color[2]);
-                    s.mesh_wireframe_width = proxy.mesh_wireframe_width;
-                    s.mesh_light_dir = glm::vec3(proxy.mesh_light_dir[0], proxy.mesh_light_dir[1], proxy.mesh_light_dir[2]);
-                    s.mesh_light_intensity = proxy.mesh_light_intensity;
-                    s.mesh_ambient = proxy.mesh_ambient;
-                    s.mesh_backface_culling = proxy.mesh_backface_culling;
-                    s.mesh_shadow_enabled = proxy.mesh_shadow_enabled;
-                    s.mesh_shadow_resolution = proxy.mesh_shadow_resolution;
-                    rendering_manager_->updateSettings(s);
-                });
-
-            // Set up generic capability invocation callback (runs on IPC thread, waits for main thread)
-            selection_server_->setInvokeCapabilityCallback(
-                [this](const std::string& name, const std::string& args) -> CapabilityInvokeResult {
-                    std::mutex mtx;
-                    std::condition_variable cv;
-                    CapabilityInvokeResult result;
-                    bool done = false;
-
-                    // Queue request for main thread
-                    {
-                        std::lock_guard lock(capability_request_mutex_);
-                        pending_capability_request_ = CapabilityRequest{name, args, &result, &mtx, &cv, &done};
-                    }
-
-                    // Wait for main thread to process
-                    std::unique_lock lock(mtx);
-                    cv.wait(lock, [&done] { return done; });
-
-                    return result;
-                });
-        }
+        setupIpcServer();
 
         if (scene_manager_)
             scene_manager_->initSelectionService();
@@ -884,7 +799,7 @@ namespace lfs::vis {
 
         window_manager_->showWindow();
 
-        fully_initialized = true;
+        fully_initialized_ = true;
         return true;
     }
 
@@ -974,11 +889,9 @@ namespace lfs::vis {
 
     void VisualizerImpl::render() {
 
-        // Calculate delta time for input updates
-        static auto last_frame_time = std::chrono::high_resolution_clock::now();
         auto now = std::chrono::high_resolution_clock::now();
-        float delta_time = std::chrono::duration<float>(now - last_frame_time).count();
-        last_frame_time = now;
+        float delta_time = std::chrono::duration<float>(now - last_frame_time_).count();
+        last_frame_time_ = now;
 
         // Clamp delta time to prevent huge jumps (min 30 FPS)
         delta_time = std::min(delta_time, 1.0f / 30.0f);

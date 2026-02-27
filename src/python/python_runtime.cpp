@@ -72,7 +72,7 @@ namespace lfs::python {
 
         // Section drawing callbacks
         SectionDrawCallbacks g_section_draw_callbacks;
-        GetSequencerUIStateCallback g_get_sequencer_ui_state_cb = nullptr;
+        GetSequencerUIStateCallback g_get_sequencer_ui_state_cb;
 
         // Pivot mode callbacks
         GetPivotModeCallback g_get_pivot_mode_cb = nullptr;
@@ -416,7 +416,7 @@ namespace lfs::python {
     }
 
     void set_sequencer_ui_state_callback(GetSequencerUIStateCallback cb) {
-        g_get_sequencer_ui_state_cb = cb;
+        g_get_sequencer_ui_state_cb = std::move(cb);
     }
 
     SequencerUIStateData* get_sequencer_ui_state() {

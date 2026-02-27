@@ -77,7 +77,7 @@ namespace lfs::training {
         static constexpr float NOISE_LR = 5e5f;
 
         // State variables
-        lfs::core::Tensor _binoms;       // [n_max, n_max] binomial coefficients
+        int _n_max = 0;                  // max relocation ratio
         lfs::core::Tensor _noise_buffer; // Reusable buffer for noise injection
         lfs::core::Tensor _ones_int32;   // [max_cap] cached ones for ratio counting
         lfs::core::Tensor _error_score_max;

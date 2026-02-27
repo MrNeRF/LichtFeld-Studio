@@ -16,23 +16,23 @@ namespace cg = cooperative_groups;
 namespace fast_lfs::rasterization::kernels::forward {
 
     __global__ void preprocess_cu(
-        const float3* means,
-        const float3* raw_scales,
-        const float4* raw_rotations,
-        const float* raw_opacities,
-        const float3* sh_coefficients_0,
-        const float3* sh_coefficients_rest,
-        const float4* w2c,
-        const float3* cam_position,
-        uint* primitive_depth_keys,
-        uint* primitive_indices,
-        uint* primitive_n_touched_tiles,
-        ushort4* primitive_screen_bounds,
-        float2* primitive_mean2d,
-        float4* primitive_conic_opacity,
-        float3* primitive_color,
-        uint* n_visible_primitives,
-        uint* n_instances,
+        const float3* __restrict__ means,
+        const float3* __restrict__ raw_scales,
+        const float4* __restrict__ raw_rotations,
+        const float* __restrict__ raw_opacities,
+        const float3* __restrict__ sh_coefficients_0,
+        const float3* __restrict__ sh_coefficients_rest,
+        const float4* __restrict__ w2c,
+        const float3* __restrict__ cam_position,
+        uint* __restrict__ primitive_depth_keys,
+        uint* __restrict__ primitive_indices,
+        uint* __restrict__ primitive_n_touched_tiles,
+        ushort4* __restrict__ primitive_screen_bounds,
+        float2* __restrict__ primitive_mean2d,
+        float4* __restrict__ primitive_conic_opacity,
+        float3* __restrict__ primitive_color,
+        uint* __restrict__ n_visible_primitives,
+        uint* __restrict__ n_instances,
         const uint n_primitives,
         const uint grid_width,
         const uint grid_height,
@@ -149,7 +149,7 @@ namespace fast_lfs::rasterization::kernels::forward {
         cov2d.x += kernel_size;
         cov2d.z += kernel_size;
         const float det = cov2d.x * cov2d.z - cov2d.y * cov2d.y;
-        if (det < 1e-8f)
+        if (det < config::min_cov2d_determinant)
             active = false;
         const float det_rcp = 1.0f / det;
         const float output_opacity = mip_filter ? opacity * sqrtf(det_raw * det_rcp) : opacity;
@@ -222,13 +222,13 @@ namespace fast_lfs::rasterization::kernels::forward {
 
     // based on https://github.com/r4dl/StopThePop-Rasterization/blob/d8cad09919ff49b11be3d693d1e71fa792f559bb/cuda_rasterizer/stopthepop/stopthepop_common.cuh#L325
     __global__ void create_instances_cu(
-        const uint* primitive_indices_sorted,
-        const uint* primitive_offsets,
-        const ushort4* primitive_screen_bounds,
-        const float2* primitive_mean2d,
-        const float4* primitive_conic_opacity,
-        ushort* instance_keys,
-        uint* instance_primitive_indices,
+        const uint* __restrict__ primitive_indices_sorted,
+        const uint* __restrict__ primitive_offsets,
+        const ushort4* __restrict__ primitive_screen_bounds,
+        const float2* __restrict__ primitive_mean2d,
+        const float4* __restrict__ primitive_conic_opacity,
+        ushort* __restrict__ instance_keys,
+        uint* __restrict__ instance_primitive_indices,
         const uint grid_width,
         const uint n_visible_primitives) {
         auto block = cg::this_thread_block();
@@ -252,18 +252,20 @@ namespace fast_lfs::rasterization::kernels::forward {
 
         __shared__ ushort4 collected_screen_bounds[config::block_size_create_instances];
         __shared__ float2 collected_mean2d_shifted[config::block_size_create_instances];
-        __shared__ float4 collected_conic_opacity[config::block_size_create_instances];
+        __shared__ float4 collected_conic_power_threshold[config::block_size_create_instances];
         collected_screen_bounds[block.thread_rank()] = screen_bounds;
         collected_mean2d_shifted[block.thread_rank()] = primitive_mean2d[primitive_idx] - 0.5f;
-        collected_conic_opacity[block.thread_rank()] = primitive_conic_opacity[primitive_idx];
+        const float4 conic_opacity_loaded = primitive_conic_opacity[primitive_idx];
+        const float power_threshold_precomputed = logf(conic_opacity_loaded.w * config::min_alpha_threshold_rcp);
+        collected_conic_power_threshold[block.thread_rank()] = make_float4(make_float3(conic_opacity_loaded), power_threshold_precomputed);
 
         uint current_write_offset = primitive_offsets[idx];
 
         if (active) {
             const float2 mean2d_shifted = collected_mean2d_shifted[block.thread_rank()];
-            const float4 conic_opacity = collected_conic_opacity[block.thread_rank()];
-            const float3 conic = make_float3(conic_opacity);
-            const float power_threshold = logf(conic_opacity.w * config::min_alpha_threshold_rcp);
+            const float4 conic_pt = collected_conic_power_threshold[block.thread_rank()];
+            const float3 conic = make_float3(conic_pt);
+            const float power_threshold = conic_pt.w;
 
             for (uint instance_idx = 0; instance_idx < tile_count && instance_idx < config::n_sequential_threshold; instance_idx++) {
                 const uint tile_y = screen_bounds.z + (instance_idx / screen_bounds_width);
@@ -279,7 +281,7 @@ namespace fast_lfs::rasterization::kernels::forward {
 
         const uint lane_idx = cg::this_thread_block().thread_rank() % 32u;
         const uint warp_idx = cg::this_thread_block().thread_rank() / 32u;
-        const uint lane_mask_allprev_excl = 0xffffffffu >> (32u - lane_idx);
+        const uint lane_mask_allprev_excl = (1u << lane_idx) - 1u;
         const int compute_cooperatively = active && tile_count > config::n_sequential_threshold;
         const uint remaining_threads = __ballot_sync(0xffffffffu, compute_cooperatively);
         if (remaining_threads == 0)
@@ -296,9 +298,9 @@ namespace fast_lfs::rasterization::kernels::forward {
             const uint tile_count_coop = screen_bounds_width_coop * static_cast<uint>(screen_bounds_coop.w - screen_bounds_coop.z);
 
             const float2 mean2d_shifted_coop = collected_mean2d_shifted[warp.meta_group_rank() * 32 + current_lane];
-            const float4 conic_opacity_coop = collected_conic_opacity[warp.meta_group_rank() * 32 + current_lane];
-            const float3 conic_coop = make_float3(conic_opacity_coop);
-            const float power_threshold_coop = logf(conic_opacity_coop.w * config::min_alpha_threshold_rcp);
+            const float4 conic_pt_coop = collected_conic_power_threshold[warp.meta_group_rank() * 32 + current_lane];
+            const float3 conic_coop = make_float3(conic_pt_coop);
+            const float power_threshold_coop = conic_pt_coop.w;
 
             const uint remaining_tile_count = tile_count_coop - config::n_sequential_threshold;
             const int n_iterations = div_round_up(remaining_tile_count, 32u);
@@ -358,18 +360,18 @@ namespace fast_lfs::rasterization::kernels::forward {
     }
 
     __global__ void __launch_bounds__(config::block_size_blend) blend_cu(
-        const uint2* tile_instance_ranges,
-        const uint* tile_bucket_offsets,
-        const uint* instance_primitive_indices,
-        const float2* primitive_mean2d,
-        const float4* primitive_conic_opacity,
-        const float3* primitive_color,
-        float* image,
-        float* alpha_map,
-        uint* tile_max_n_contributions,
-        uint* tile_n_contributions,
-        uint* bucket_tile_index,
-        uint* bucket_checkpoint_uint8,
+        const uint2* __restrict__ tile_instance_ranges,
+        const uint* __restrict__ tile_bucket_offsets,
+        const uint* __restrict__ instance_primitive_indices,
+        const float2* __restrict__ primitive_mean2d,
+        const float4* __restrict__ primitive_conic_opacity,
+        const float3* __restrict__ primitive_color,
+        float* __restrict__ image,
+        float* __restrict__ alpha_map,
+        uint* __restrict__ tile_max_n_contributions,
+        uint* __restrict__ tile_n_contributions,
+        uint* __restrict__ bucket_tile_index,
+        uint* __restrict__ bucket_checkpoint_uint8,
         const uint width,
         const uint height,
         const uint grid_width) {
@@ -437,14 +439,13 @@ namespace fast_lfs::rasterization::kernels::forward {
                 const float alpha = fminf(opacity * gaussian, config::max_fragment_alpha);
                 if (alpha < config::min_alpha_threshold)
                     continue;
-                const float next_transmittance = transmittance * (1.0f - alpha);
-                if (next_transmittance < config::transmittance_threshold) {
+                color_pixel += transmittance * alpha * collected_color[j];
+                transmittance *= (1.0f - alpha);
+                n_contributions = n_possible_contributions;
+                if (transmittance < config::transmittance_threshold) {
                     done = true;
                     continue;
                 }
-                color_pixel += transmittance * alpha * collected_color[j];
-                transmittance = next_transmittance;
-                n_contributions = n_possible_contributions;
             }
         }
         if (inside) {

@@ -62,7 +62,7 @@ namespace fast_lfs::rasterization::kernels {
         const float3* coefficients_ptr = sh_coefficients_rest + coefficients_base_idx;
         float3* grad_coefficients_ptr = grad_sh_coefficients_rest + coefficients_base_idx;
         const float3 grad_color = grad_sh_coefficients_0[primitive_idx];
-        grad_sh_coefficients_0[primitive_idx] = 0.28209479177387814f * grad_color;
+        grad_sh_coefficients_0[primitive_idx] += 0.28209479177387814f * grad_color;
         float3 dcolor_dposition = make_float3(0.0f);
         if (active_sh_bases > 1) {
             auto [x_raw, y_raw, z_raw] = position - cam_position;

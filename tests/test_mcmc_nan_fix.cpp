@@ -17,13 +17,13 @@ class MCMCNaNFixTest : public ::testing::Test {
 protected:
     void SetUp() override {
         cudaDeviceSynchronize();
+        lfs::training::mcmc::init_relocation_coefficients(51);
     }
 
     void TearDown() override {
         cudaDeviceSynchronize();
     }
 
-    // Helper to check for NaN/Inf in a tensor
     bool hasNaNOrInf(const Tensor& t) {
         auto cpu = t.cpu();
         const float* data = cpu.ptr<float>();
@@ -35,7 +35,6 @@ protected:
         return false;
     }
 
-    // Count NaN/Inf values
     std::pair<int, int> countNaNInf(const Tensor& t) {
         auto cpu = t.cpu();
         const float* data = cpu.ptr<float>();
@@ -48,28 +47,11 @@ protected:
         }
         return {nan_count, inf_count};
     }
-
-    // Create binomial coefficient matrix (n_max x n_max)
-    Tensor createBinomials(int n_max) {
-        std::vector<float> binoms(n_max * n_max, 0.0f);
-        for (int n = 0; n < n_max; ++n) {
-            binoms[n * n_max + 0] = 1.0f;
-            for (int k = 1; k <= n; ++k) {
-                binoms[n * n_max + k] = binoms[(n - 1) * n_max + k - 1] + binoms[(n - 1) * n_max + k];
-            }
-        }
-        auto t = Tensor::from_vector(binoms, {static_cast<size_t>(n_max), static_cast<size_t>(n_max)}, Device::CPU);
-        return t.to(Device::CUDA);
-    }
 };
 
 // Test that relocation kernel produces NaN with extreme opacity values
 TEST_F(MCMCNaNFixTest, RelocationKernel_ExtremeOpacity_ProducesNaN) {
     const size_t N = 100;
-    const int n_max = 51;
-
-    // Create binomial coefficients
-    Tensor binoms = createBinomials(n_max);
 
     // Create test data with some extreme opacities
     std::vector<float> opacities_data(N);
@@ -103,13 +85,10 @@ TEST_F(MCMCNaNFixTest, RelocationKernel_ExtremeOpacity_ProducesNaN) {
     Tensor new_opacities = Tensor::empty({N}, Device::CUDA, DataType::Float32);
     Tensor new_scales = Tensor::empty({N, 3}, Device::CUDA, DataType::Float32);
 
-    // Run the relocation kernel
     lfs::training::mcmc::launch_relocation_kernel(
         opacities.ptr<float>(),
         scales.ptr<float>(),
         ratios.ptr<int32_t>(),
-        binoms.ptr<float>(),
-        n_max,
         new_opacities.ptr<float>(),
         new_scales.ptr<float>(),
         N);
@@ -133,9 +112,6 @@ TEST_F(MCMCNaNFixTest, RelocationKernel_ExtremeOpacity_ProducesNaN) {
 // Test that normal opacity values don't produce NaN
 TEST_F(MCMCNaNFixTest, RelocationKernel_NormalOpacity_NoNaN) {
     const size_t N = 1000;
-    const int n_max = 51;
-
-    Tensor binoms = createBinomials(n_max);
 
     // Create test data with normal opacity values
     std::vector<float> opacities_data(N);
@@ -163,8 +139,6 @@ TEST_F(MCMCNaNFixTest, RelocationKernel_NormalOpacity_NoNaN) {
         opacities.ptr<float>(),
         scales.ptr<float>(),
         ratios.ptr<int32_t>(),
-        binoms.ptr<float>(),
-        n_max,
         new_opacities.ptr<float>(),
         new_scales.ptr<float>(),
         N);
@@ -179,16 +153,12 @@ TEST_F(MCMCNaNFixTest, RelocationKernel_NormalOpacity_NoNaN) {
     EXPECT_EQ(inf_scale, 0) << "new_scales contains Inf";
 }
 
-// Test the specific Gaussian that caused NaN in the real training run
 TEST_F(MCMCNaNFixTest, RelocationKernel_ReproduceGaussian15975) {
     // From the crash dump analysis:
     // Gaussian 15975: raw_opacity=2.4869, opacity=0.923216
     // The NaN appeared in position, scale, rotation - all from relocation
 
     const size_t N = 1;
-    const int n_max = 51;
-
-    Tensor binoms = createBinomials(n_max);
 
     // Use the exact opacity that caused the issue
     float opacity_sigmoid = 0.923216f;
@@ -207,8 +177,6 @@ TEST_F(MCMCNaNFixTest, RelocationKernel_ReproduceGaussian15975) {
         opacities.ptr<float>(),
         scales.ptr<float>(),
         ratios.ptr<int32_t>(),
-        binoms.ptr<float>(),
-        n_max,
         new_opacities.ptr<float>(),
         new_scales.ptr<float>(),
         N);
@@ -237,9 +205,6 @@ TEST_F(MCMCNaNFixTest, RelocationKernel_ReproduceGaussian15975) {
 // Test that the log() of new_scales doesn't produce NaN for valid inputs
 TEST_F(MCMCNaNFixTest, NewScalesLog_ProducesValidOutput) {
     const size_t N = 100;
-    const int n_max = 51;
-
-    Tensor binoms = createBinomials(n_max);
 
     // Test with various opacity values, including edge cases
     std::vector<float> test_opacities = {0.01f, 0.1f, 0.5f, 0.9f, 0.99f, 0.999f, 0.9999f};
@@ -260,8 +225,6 @@ TEST_F(MCMCNaNFixTest, NewScalesLog_ProducesValidOutput) {
             opacities.ptr<float>(),
             scales.ptr<float>(),
             ratios.ptr<int32_t>(),
-            binoms.ptr<float>(),
-            n_max,
             new_opacities.ptr<float>(),
             new_scales.ptr<float>(),
             N);

@@ -62,11 +62,15 @@ namespace lfs::vis {
         float render_scale = 1.0f;
         bool show_crop_box = false;
         bool use_crop_box = false;
+        bool show_ellipsoid = false;
+        bool use_ellipsoid = false;
         bool desaturate_unselected = false;
         bool desaturate_cropping = true;
+        bool crop_filter_for_selection = false;
         std::array<float, 3> background_color{0.0f, 0.0f, 0.0f};
         bool show_coord_axes = false;
         float axes_size = 2.0f;
+        std::array<bool, 3> axes_visibility = {true, true, true};
         bool show_grid = true;
         int grid_plane = 1;
         float grid_opacity = 0.5f;
@@ -80,6 +84,7 @@ namespace lfs::vis {
         std::array<float, 3> train_camera_color{1.0f, 1.0f, 1.0f};
         std::array<float, 3> eval_camera_color{1.0f, 0.0f, 0.0f};
         bool show_pivot = false;
+        int split_view_mode = 0;
         float split_position = 0.5f;
         bool gut = false;
         bool equirectangular = false;
@@ -104,6 +109,10 @@ namespace lfs::vis {
         bool mesh_backface_culling = true;
         bool mesh_shadow_enabled = false;
         int mesh_shadow_resolution = 2048;
+
+        bool depth_filter_enabled = false;
+        std::array<float, 3> depth_filter_min{-50.0f, -10000.0f, 0.0f};
+        std::array<float, 3> depth_filter_max{50.0f, 10000.0f, 100.0f};
     };
 
     using GetRenderSettingsCallback = std::function<std::optional<RenderSettingsProxy>()>;

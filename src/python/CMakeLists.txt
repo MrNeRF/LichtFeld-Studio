@@ -202,10 +202,12 @@ target_link_libraries(lfs_py PRIVATE
     OpenImageIO::OpenImageIO
     CUDA::cudart
     CUDA::curand
+    $<$<PLATFORM_ID:Windows>:CUDA::cuda_driver>
     ${CMAKE_DL_LIBS}
     imgui::imgui
     implot::implot
     $<IF:$<PLATFORM_ID:Windows>,RmlUi::RmlUi,lfs_rmlui>
+    $<$<PLATFORM_ID:Windows>:dxgi>
 )
 
 target_include_directories(lfs_py PRIVATE

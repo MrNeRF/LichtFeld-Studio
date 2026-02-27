@@ -25,13 +25,29 @@ namespace lfs::training::mcmc {
     using vec4 = glm::vec<4, float>;
     using mat3 = glm::mat<3, 3, float>;
 
+    constexpr int RELOCATION_N_MAX = 51;
+    __constant__ float d_relocation_coefficients[RELOCATION_N_MAX * RELOCATION_N_MAX];
+
+    void init_relocation_coefficients(int n_max) {
+        assert(n_max <= RELOCATION_N_MAX);
+        std::vector<float> coeffs(RELOCATION_N_MAX * RELOCATION_N_MAX, 0.0f);
+        for (int n = 0; n < n_max; n++) {
+            float binom = 1.0f;
+            for (int k = 0; k <= n; k++) {
+                const float sign = (k % 2 == 0) ? 1.0f : -1.0f;
+                coeffs[n * RELOCATION_N_MAX + k] = binom * sign * rsqrtf(static_cast<float>(k + 1));
+                if (k < n)
+                    binom *= static_cast<float>(n - k) / static_cast<float>(k + 1);
+            }
+        }
+        cudaMemcpyToSymbol(d_relocation_coefficients, coeffs.data(), RELOCATION_N_MAX * RELOCATION_N_MAX * sizeof(float));
+    }
+
     // Equation (9) in "3D Gaussian Splatting as Markov Chain Monte Carlo"
     __global__ void relocation_kernel(
         const float* __restrict__ opacities,
         const float* __restrict__ scales,
         const int32_t* __restrict__ ratios,
-        const float* __restrict__ binoms,
-        const int n_max,
         float* __restrict__ new_opacities,
         float* __restrict__ new_scales,
         const size_t N) {
@@ -56,14 +72,12 @@ namespace lfs::training::mcmc {
                                         OPACITY_MAX);
         new_opacities[idx] = new_opacity;
 
-        // Compute denominator sum for scale calculation
+        // Compute denominator sum using pre-computed coefficients from __constant__ memory
         float denom_sum = 0.0f;
         for (int i = 1; i <= n_idx; ++i) {
             for (int k = 0; k <= (i - 1); ++k) {
-                const float sign = (k & 1) ? -1.0f : 1.0f;
-                const float term = (sign / sqrtf(static_cast<float>(k + 1))) *
-                                   powf(new_opacity, static_cast<float>(k + 1));
-                denom_sum += binoms[(i - 1) * n_max + k] * term;
+                denom_sum += d_relocation_coefficients[(i - 1) * RELOCATION_N_MAX + k] *
+                             powf(new_opacity, static_cast<float>(k + 1));
             }
         }
 
@@ -83,8 +97,6 @@ namespace lfs::training::mcmc {
         const float* opacities,
         const float* scales,
         const int32_t* ratios,
-        const float* binoms,
-        int n_max,
         float* new_opacities,
         float* new_scales,
         size_t N,
@@ -103,8 +115,6 @@ namespace lfs::training::mcmc {
             opacities,
             scales,
             ratios,
-            binoms,
-            n_max,
             new_opacities,
             new_scales,
             N);

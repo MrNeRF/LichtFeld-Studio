@@ -420,7 +420,7 @@ namespace lfs::python {
         int selected_keyframe = -1;
     };
 
-    using GetSequencerUIStateCallback = SequencerUIStateData* (*)();
+    using GetSequencerUIStateCallback = std::function<SequencerUIStateData*()>;
     LFS_PYTHON_RUNTIME_API void set_sequencer_ui_state_callback(GetSequencerUIStateCallback cb);
     LFS_PYTHON_RUNTIME_API SequencerUIStateData* get_sequencer_ui_state();
 

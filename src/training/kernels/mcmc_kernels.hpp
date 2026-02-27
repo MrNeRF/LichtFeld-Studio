@@ -10,15 +10,23 @@
 namespace lfs::training::mcmc {
 
     /**
+     * Initialize relocation coefficients in __constant__ memory.
+     * Must be called once before first use of launch_relocation_kernel.
+     * Pre-computes C(n,k) * (-1)^k * rsqrt(k+1) for all n,k < n_max.
+     *
+     * @param n_max - Maximum ratio value (must be <= 51)
+     */
+    void init_relocation_coefficients(int n_max);
+
+    /**
      * Relocation kernel - Equation (9) from "3D Gaussian Splatting as Markov Chain Monte Carlo"
      *
      * Computes new opacities and scales for relocated Gaussians based on their sampling ratios.
+     * Requires init_relocation_coefficients() to have been called first.
      *
      * @param opacities [N] - Original opacity values
      * @param scales [N, 3] - Original scale values
      * @param ratios [N] - Number of times each Gaussian was sampled (int32)
-     * @param binoms [n_max, n_max] - Precomputed binomial coefficients
-     * @param n_max - Maximum ratio value (size of binomial table)
      * @param new_opacities [N] - Output: relocated opacity values
      * @param new_scales [N, 3] - Output: relocated scale values
      * @param N - Number of Gaussians
@@ -28,8 +36,6 @@ namespace lfs::training::mcmc {
         const float* opacities,
         const float* scales,
         const int32_t* ratios,
-        const float* binoms,
-        int n_max,
         float* new_opacities,
         float* new_scales,
         size_t N,

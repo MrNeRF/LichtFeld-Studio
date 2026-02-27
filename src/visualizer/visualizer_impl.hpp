@@ -20,13 +20,20 @@
 #include "training/training_manager.hpp"
 #include "visualizer/visualizer.hpp"
 #include "window/window_manager.hpp"
+#include <chrono>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <vector>
 
 struct SDL_Window;
+
+namespace lfs::python {
+    struct SequencerUIStateData;
+} // namespace lfs::python
 
 namespace lfs::vis {
     class SceneManager;
@@ -148,8 +155,28 @@ namespace lfs::vis {
         // Tool initialization
         void initializeTools();
 
+        // Subsystem wiring
+        void setupPythonBridge();
+        void setupIpcServer();
+
         // Plugin capability invocation (runs on main thread with scene context)
         [[nodiscard]] CapabilityInvokeResult processCapabilityRequest(const std::string& name, const std::string& args);
+
+        class CallbackCleanup {
+            std::vector<std::function<void()>> cleanups_;
+
+        public:
+            void add(std::function<void()> fn) { cleanups_.push_back(std::move(fn)); }
+            void clear() {
+                for (auto it = cleanups_.rbegin(); it != cleanups_.rend(); ++it)
+                    (*it)();
+                cleanups_.clear();
+            }
+            ~CallbackCleanup() { clear(); }
+            CallbackCleanup() = default;
+            CallbackCleanup(const CallbackCleanup&) = delete;
+            CallbackCleanup& operator=(const CallbackCleanup&) = delete;
+        };
 
         // Options
         ViewerOptions options_;
@@ -189,13 +216,19 @@ namespace lfs::vis {
         std::optional<CapabilityRequest> pending_capability_request_;
         std::mutex capability_request_mutex_;
 
+        CallbackCleanup callback_cleanup_;
+
         // State tracking
+        bool fully_initialized_ = false;
         bool window_initialized_ = false;
         bool gui_initialized_ = false;
         bool tools_initialized_ = false;
         bool pending_auto_train_ = false;
         bool pending_reset_ = false;
         bool gui_frame_rendered_ = false;
+        std::chrono::high_resolution_clock::time_point last_frame_time_ = std::chrono::high_resolution_clock::now();
+        bool sequencer_ui_initialized_ = false;
+        std::unique_ptr<python::SequencerUIStateData> sequencer_ui_state_;
         std::vector<std::filesystem::path> pending_view_paths_;
         std::filesystem::path pending_dataset_path_;
     };

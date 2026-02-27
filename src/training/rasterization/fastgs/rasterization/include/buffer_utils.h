@@ -12,6 +12,30 @@
 
 namespace fast_lfs::rasterization {
 
+    inline int extract_end_bit(uint n) {
+        int leading_zeros = 0;
+        if ((n & 0xffff0000u) == 0) {
+            leading_zeros += 16;
+            n <<= 16;
+        }
+        if ((n & 0xff000000u) == 0) {
+            leading_zeros += 8;
+            n <<= 8;
+        }
+        if ((n & 0xf0000000u) == 0) {
+            leading_zeros += 4;
+            n <<= 4;
+        }
+        if ((n & 0xc0000000u) == 0) {
+            leading_zeros += 2;
+            n <<= 2;
+        }
+        if ((n & 0x80000000u) == 0) {
+            leading_zeros += 1;
+        }
+        return 32 - leading_zeros;
+    }
+
     struct mat3x3 {
         float m11, m12, m13;
         float m21, m22, m23;
@@ -91,7 +115,7 @@ namespace fast_lfs::rasterization {
         cub::DoubleBuffer<ushort> keys;
         cub::DoubleBuffer<uint> primitive_indices;
 
-        static PerInstanceBuffers from_blob(char*& blob, int n_instances) {
+        static PerInstanceBuffers from_blob(char*& blob, int n_instances, int end_bit = 16) {
             PerInstanceBuffers buffers;
             ushort* keys_current;
             obtain(blob, keys_current, n_instances, 128);
@@ -106,7 +130,7 @@ namespace fast_lfs::rasterization {
             cub::DeviceRadixSort::SortPairs(
                 nullptr, buffers.cub_workspace_size,
                 buffers.keys, buffers.primitive_indices,
-                n_instances);
+                n_instances, 0, end_bit);
             obtain(blob, buffers.cub_workspace, buffers.cub_workspace_size, 128);
             return buffers;
         }

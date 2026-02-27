@@ -60,9 +60,10 @@ void fast_lfs::rasterization::backward(
     const int n_tiles = grid.x * grid.y;
 
     // These blobs are from the arena and are guaranteed to be valid
+    const int end_bit = extract_end_bit(static_cast<uint>(n_tiles - 1));
     PerPrimitiveBuffers per_primitive_buffers = PerPrimitiveBuffers::from_blob(per_primitive_buffers_blob, n_primitives);
     PerTileBuffers per_tile_buffers = PerTileBuffers::from_blob(per_tile_buffers_blob, n_tiles);
-    PerInstanceBuffers per_instance_buffers = PerInstanceBuffers::from_blob(per_instance_buffers_blob, n_instances);
+    PerInstanceBuffers per_instance_buffers = PerInstanceBuffers::from_blob(per_instance_buffers_blob, n_instances, end_bit);
     PerBucketBuffers per_bucket_buffers = PerBucketBuffers::from_blob(per_bucket_buffers_blob, n_buckets);
 
     // Restore selectors from forward pass
