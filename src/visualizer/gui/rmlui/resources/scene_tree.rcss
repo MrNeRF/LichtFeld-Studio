@@ -124,12 +124,6 @@ body {
     image-color: #cdd6f4;
 }
 
-/* Grip handle — compound selector to beat theme .row-icon override */
-.row-icon.icon-grip {
-    image-color: rgba(128, 128, 128, 128);
-    cursor: move;
-}
-
 /* Visibility toggle */
 .row-icon.icon-vis-on {
     image-color: rgba(102, 230, 102, 255);
@@ -149,43 +143,25 @@ body {
     image-color: rgba(180, 120, 120, 220);
 }
 
-/* Trash icon — dim by default, highlighted when row selected */
-.row-icon.icon-trash {
-    image-color: rgba(128, 128, 128, 128);
-    transition: image-color 0.12s quadratic-out;
-}
 
-.row-icon.icon-trash:hover {
-    image-color: rgba(255, 153, 153, 230);
-}
-
-.tree-row.selected .row-icon.icon-trash {
-    image-color: rgba(255, 153, 153, 230);
-}
-
-/* Training toggle */
-.row-icon.icon-train-on {
-    image-color: rgba(102, 179, 255, 255);
-}
-
-.row-icon.icon-train-off {
-    image-color: rgba(128, 128, 128, 102);
-}
-
-/* Node type icons — tinted per type, matching master palette */
-.row-icon.icon-type {
+/* Colored dot — replaces type icons for a cleaner row */
+.color-dot {
+    display: inline;
+    width: 8dp;
+    height: 8dp;
+    border-radius: 4dp;
     margin-right: 4dp;
 }
 
-.row-icon.icon-type.splat        { image-color: rgba(153, 204, 255, 230); }
-.row-icon.icon-type.group        { image-color: rgba(178, 178, 178, 204); }
-.row-icon.icon-type.dataset      { image-color: rgba(127, 178, 255, 230); }
-.row-icon.icon-type.camera       { image-color: rgba(127, 153, 204, 153); }
-.row-icon.icon-type.camera_group { image-color: rgba(153, 178, 230, 204); }
-.row-icon.icon-type.cropbox      { image-color: rgba(255, 178, 77, 230); }
-.row-icon.icon-type.ellipsoid    { image-color: rgba(77, 204, 255, 230); }
-.row-icon.icon-type.pointcloud   { image-color: rgba(204, 127, 255, 204); }
-.row-icon.icon-type.mesh         { image-color: rgba(127, 230, 153, 230); }
+.color-dot.splat        { background-color: rgba(153, 204, 255, 230); }
+.color-dot.group        { background-color: rgba(178, 178, 178, 204); }
+.color-dot.dataset      { background-color: rgba(127, 178, 255, 230); }
+.color-dot.camera       { background-color: rgba(127, 153, 204, 153); }
+.color-dot.camera_group { background-color: rgba(153, 178, 230, 204); }
+.color-dot.cropbox      { background-color: rgba(255, 178, 77, 230); }
+.color-dot.ellipsoid    { background-color: rgba(77, 204, 255, 230); }
+.color-dot.pointcloud   { background-color: rgba(204, 127, 255, 204); }
+.color-dot.mesh         { background-color: rgba(127, 230, 153, 230); }
 
 /* Fallback Unicode node icons (keyframe etc. without PNG) */
 .node-icon {
@@ -199,29 +175,12 @@ body {
 .node-icon.keyframe_group { color: rgba(230, 178, 77, 204); }
 .node-icon.keyframe       { color: rgba(255, 204, 51, 230); }
 
-/* Fallback Unicode action icons */
-.action-icon {
-    display: inline;
-    width: 14dp;
-    font-size: 14dp;
-    text-align: center;
-    cursor: pointer;
-    margin-right: 2dp;
-}
-
-.action-icon.train-off {
-    color: rgba(128, 128, 128, 102);
-}
 
 .node-name {
     display: inline;
     color: #cdd6f4;
 }
 
-.node-name.training-disabled {
-    color: #a6adc8;
-    text-decoration: line-through;
-}
 
 .node-count {
     display: inline;

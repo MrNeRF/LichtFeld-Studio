@@ -44,8 +44,7 @@ namespace lfs::vis::gui {
         void processInput(const RightPanelLayout& layout, const PanelInputState& input);
         void render(const RightPanelLayout& layout,
                     const std::vector<TabSnapshot>& tabs,
-                    const std::string& active_tab,
-                    const PanelInputState& input);
+                    const std::string& active_tab);
 
         bool wantsInput() const { return wants_input_; }
         CursorRequest getCursorRequest() const;

@@ -20,6 +20,7 @@
 #include <RmlUi/Core/ElementUtilities.h>
 #include <cassert>
 #include <format>
+#include <imgui.h>
 
 namespace lfs::vis::gui {
 
@@ -277,8 +278,7 @@ namespace lfs::vis::gui {
 
     void RmlRightPanel::render(const RightPanelLayout& layout,
                                const std::vector<TabSnapshot>& tabs,
-                               const std::string& active_tab,
-                               const PanelInputState& input) {
+                               const std::string& active_tab) {
         if (!rml_context_ || !document_)
             return;
         if (layout.size.x <= 0 || layout.size.y <= 0)
@@ -339,8 +339,10 @@ namespace lfs::vis::gui {
 
         fbo_.unbind(prev_fbo);
 
-        fbo_.blitToScreen(layout.pos.x, layout.pos.y, layout.size.x, layout.size.y,
-                          input.screen_w, input.screen_h);
+        auto* vp = ImGui::GetMainViewport();
+        fbo_.blitToDrawList(ImGui::GetForegroundDrawList(vp),
+                            {layout.pos.x, layout.pos.y},
+                            {layout.size.x, layout.size.y});
     }
 
 } // namespace lfs::vis::gui

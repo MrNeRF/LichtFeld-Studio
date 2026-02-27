@@ -849,7 +849,7 @@ namespace lfs::vis::gui {
             for (const auto& t : main_tabs)
                 tab_snaps.push_back({t.idname, t.label});
 
-            rml_right_panel_.render(rp_layout, tab_snaps, panel_layout_.getActiveTab(), panel_input);
+            rml_right_panel_.render(rp_layout, tab_snaps, panel_layout_.getActiveTab());
         }
 
         panel_layout_.renderRightPanel(ctx, draw_ctx, show_main_panel_, ui_hidden_,

@@ -140,7 +140,8 @@ namespace lfs::vis::gui::rml_theme {
                std::format(
                    "input[type=\"checkbox\"] {{ border-color: {5}; }}\n"
                    "input[type=\"checkbox\"]:checked {{ background-color: {4}; border-color: {4}; }}\n"
-                   "input[type=\"range\"] slidertrack {{ background-color: {2}; border-color: {5}; }}\n"
+                   "input[type=\"range\"] slidertrack {{ background-color: {5}; border-width: 0; }}\n"
+                   "input[type=\"range\"] sliderprogress {{ background-color: {4}; }}\n"
                    "input[type=\"range\"] sliderbar {{ background-color: {4}; }}\n"
                    "input[type=\"text\"] {{ color: {0}; background-color: {2}; border-color: {5}; }}\n"
                    "input[type=\"text\"]:focus {{ border-color: {4}; }}\n"

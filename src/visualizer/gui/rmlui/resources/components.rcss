@@ -106,15 +106,23 @@ input[type="checkbox"]:checked {
 
 input[type="range"] slidertrack {
     height: 4dp;
-    background-color: #313244;
-    border-width: 1dp;
-    border-color: #45475a;
+    background-color: #45475a;
+    border-width: 0;
+    border-radius: 2dp;
+}
+
+input[type="range"] sliderprogress {
+    height: 4dp;
+    background-color: #89b4fa;
+    border-radius: 2dp;
 }
 
 input[type="range"] sliderbar {
-    width: 12dp;
-    height: 12dp;
+    width: 10dp;
+    height: 10dp;
     background-color: #89b4fa;
+    border-radius: 2dp;
+    margin-top: -3dp;
     transition: background-color 0.12s quadratic-out;
 }
 

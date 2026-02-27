@@ -82,11 +82,10 @@ def _can_drag(node_type, parent_is_dataset):
     return node_type in DRAGGABLE_TYPES and not parent_is_dataset
 
 
-def _type_icon_html(node_type):
-    icon_name = NODE_TYPE_ICONS.get(node_type)
+def _type_dot_html(node_type):
     css_cls = NODE_TYPE_CSS_CLASS.get(node_type, "")
-    if icon_name:
-        return f'<img class="row-icon icon-type {css_cls}" sprite="icon-{icon_name}" />'
+    if NODE_TYPE_ICONS.get(node_type):
+        return f'<span class="color-dot {css_cls}"></span>'
     unicode_char = NODE_TYPE_UNICODE.get(node_type, "?")
     return f'<span class="node-icon {css_cls}">{unicode_char}</span>'
 
@@ -323,13 +322,6 @@ class ScenePanel(RmlPanel):
                 new_visible = not node.visible
                 lf.set_node_visibility(node_name, new_visible)
                 self._update_vis_icon(node_name, new_visible)
-        elif action == "toggle-train":
-            node = scene.get_node(node_name)
-            if node:
-                node.training_enabled = not node.training_enabled
-                self._rebuild_tree()
-        elif action == "delete-node":
-            lf.remove_node(node_name, False)
 
     def _update_vis_icon(self, node_name, visible):
         if not self.container:
@@ -477,21 +469,14 @@ class ScenePanel(RmlPanel):
         node_type = _node_type(node)
         is_selected = node.name in self._selected_nodes
         has_children = len(node.children) > 0
-        is_camera = node_type == "CAMERA"
 
         parent_is_dataset = self._check_parent_dataset(scene, node)
         draggable = _can_drag(node_type, parent_is_dataset)
-        deletable = _is_deletable(node_type, parent_is_dataset)
 
         parity = "even" if self._row_index % 2 == 0 else "odd"
         selected_cls = " selected" if is_selected else ""
         self._row_index += 1
         self._visible_node_order.append(node.name)
-
-        training_disabled = is_camera and not node.training_enabled
-        name_cls = "node-name"
-        if training_disabled:
-            name_cls += " training-disabled"
 
         drag_attr = ' drag="drag-drop"' if draggable else ""
         indent_px = depth * 16
@@ -499,25 +484,12 @@ class ScenePanel(RmlPanel):
         row = f'<div class="tree-row {parity}{selected_cls}" data-node="{node.name}" data-id="{node.id}" data-type="{node_type}"{drag_attr}{indent_style}>'
         row += '<span class="row-content">'
 
-        if draggable:
-            row += f'<img class="row-icon icon-grip" sprite="icon-grip" />'
-
         if node.visible:
             row += f'<img class="row-icon icon-vis-on" sprite="icon-visible" data-action="toggle-vis" data-node="{node.name}" />'
         else:
             row += f'<img class="row-icon icon-vis-off" sprite="icon-hidden" data-action="toggle-vis" data-node="{node.name}" />'
 
-        if is_camera:
-            tooltip = tr("scene.training_enabled_tooltip") if node.training_enabled else tr("scene.training_disabled_tooltip")
-            if node.training_enabled:
-                row += f'<img class="row-icon icon-train-on" sprite="icon-camera" data-action="toggle-train" data-node="{node.name}" title="{tooltip}" />'
-            else:
-                row += f'<span class="action-icon train-off" data-action="toggle-train" data-node="{node.name}" title="{tooltip}">\u25cb</span>'
-
-        if deletable:
-            row += f'<img class="row-icon icon-trash" sprite="icon-trash" data-action="delete-node" data-node="{node.name}" />'
-
-        row += _type_icon_html(node_type)
+        row += _type_dot_html(node_type)
 
         if has_children:
             collapsed = node.id in self._collapsed_ids
@@ -544,7 +516,7 @@ class ScenePanel(RmlPanel):
                 kf = node.keyframe_data()
                 if kf:
                     label = tr("scene.keyframe_label").format(index=kf.keyframe_index + 1, time=kf.time)
-            row += f'<span class="{name_cls}">{label}</span>'
+            row += f'<span class="node-name">{label}</span>'
 
         row += '</span></div>'
 
