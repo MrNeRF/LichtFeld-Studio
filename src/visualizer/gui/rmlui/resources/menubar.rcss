@@ -19,6 +19,9 @@ body {
     flex-direction: row;
     align-items: center;
     flex: none;
+    height: 30dp;
+    min-height: 30dp;
+    max-height: 30dp;
 }
 
 .menu-label {

@@ -18,7 +18,9 @@ body {
     align-items: center;
     padding: 28dp 40dp;
     border-radius: 12dp;
-    border-width: 1.5dp;
+    border-width: 1dp;
+    background-color: rgba(0, 0, 0, 0);
+    border-color: rgba(0, 0, 0, 0);
 }
 
 #supported-text {

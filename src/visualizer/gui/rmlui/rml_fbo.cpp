@@ -30,6 +30,8 @@ namespace lfs::vis::gui {
 
     void RmlFBO::ensure(int w, int h) {
         assert(w > 0 && h > 0);
+        if (w <= 0 || h <= 0)
+            return;
         if (fbo_ && width_ == w && height_ == h)
             return;
 
@@ -58,8 +60,10 @@ namespace lfs::vis::gui {
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER,
                                   depth_stencil_);
 
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            LOG_ERROR("RmlFBO: framebuffer incomplete");
+        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            LOG_ERROR("RmlFBO: framebuffer incomplete (status=0x{:X}, {}x{}, tex={}, rbo={})",
+                      status, w, h, texture_, depth_stencil_);
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             destroy();
             return;
@@ -71,9 +75,21 @@ namespace lfs::vis::gui {
         assert(fbo_);
         assert(prev_fbo);
         glGetIntegerv(GL_FRAMEBUFFER_BINDING, prev_fbo);
+
+        const GLboolean had_scissor = glIsEnabled(GL_SCISSOR_TEST);
+        GLint prev_scissor[4] = {};
+        glGetIntegerv(GL_SCISSOR_BOX, prev_scissor);
+        if (had_scissor)
+            glDisable(GL_SCISSOR_TEST);
+
         glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
+        if (had_scissor) {
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(prev_scissor[0], prev_scissor[1], prev_scissor[2], prev_scissor[3]);
+        }
     }
 
     void RmlFBO::unbind(GLint prev_fbo) {

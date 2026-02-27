@@ -184,27 +184,27 @@ namespace lfs::vis::gui {
         const auto& t = theme();
         const auto& p = t.palette;
 
-        const auto surface = colorToRml(p.surface);
-        const auto border = colorToRml(p.border);
+        const auto border = colorToRmlAlpha(p.border, t.isLightTheme() ? 0.75f : 0.62f);
         const auto text = colorToRml(p.text);
         const auto text_dim_85 = colorToRmlAlpha(p.text_dim, 0.85f);
         const auto text_dim_50 = colorToRmlAlpha(p.text_dim, 0.50f);
-        const auto primary = colorToRml(p.primary);
-        const auto background = colorToRml(p.background);
+        const auto primary = colorToRmlAlpha(p.primary, t.isLightTheme() ? 0.78f : 0.62f);
+        const auto select_bg = colorToRmlAlpha(p.background, t.isLightTheme() ? 0.90f : 0.78f);
+        const auto selectbox_bg = colorToRmlAlpha(p.surface, t.isLightTheme() ? 0.95f : 0.90f);
 
         return std::format(
-            "#overlay-box {{ background-color: {0}; border-color: {1}; }}\n"
-            ".dim-text {{ color: {3}; }}\n"
-            ".hint-text {{ color: {4}; }}\n"
-            ".social-link span {{ color: {3}; }}\n"
-            ".social-icon {{ image-color: {3}; }}\n"
+            "#overlay-box {{ background-color: rgba(0,0,0,0); border-color: rgba(0,0,0,0); }}\n"
+            ".dim-text {{ color: {2}; }}\n"
+            ".hint-text {{ color: {3}; }}\n"
+            ".social-link span {{ color: {2}; }}\n"
+            ".social-icon {{ image-color: {2}; }}\n"
             ".heart-icon {{ image-color: rgb(220, 50, 50); }}\n"
-            "select {{ color: {2}; background-color: {6}; border-color: {1}; }}\n"
-            "select:hover {{ border-color: {5}; }}\n"
-            "selectbox {{ background-color: {6}; border-color: {1}; }}\n"
-            "selectbox option:hover {{ background-color: {5}; }}\n"
-            "#lang-label {{ color: {3}; }}\n",
-            surface, border, text, text_dim_85, text_dim_50, primary, background);
+            "select {{ color: {1}; background-color: {5}; border-color: {0}; }}\n"
+            "select:hover {{ border-color: {4}; }}\n"
+            "selectbox {{ background-color: {6}; border-color: {0}; }}\n"
+            "selectbox option:hover {{ background-color: {4}; }}\n"
+            "#lang-label {{ color: {2}; }}\n",
+            border, text, text_dim_85, text_dim_50, primary, select_bg, selectbox_bg);
     }
 
     void StartupOverlay::updateTheme() {
@@ -293,6 +293,21 @@ namespace lfs::vis::gui {
         rml_context_->SetDimensions(Rml::Vector2i(ctx_w, ctx_h));
         rml_context_->Update();
 
+        ImVec2 overlay_box_pos = {};
+        ImVec2 overlay_box_size = {};
+        bool overlay_box_valid = false;
+        if (auto* overlay_box = document_->GetElementById("overlay-box")) {
+            const auto abs_offset = overlay_box->GetAbsoluteOffset(Rml::BoxArea::Border);
+            const float box_w = overlay_box->GetOffsetWidth();
+            const float box_h = overlay_box->GetOffsetHeight();
+            if (box_w > 1.0f && box_h > 1.0f) {
+                overlay_box_pos = {viewport.pos.x + abs_offset.x / dp_ratio,
+                                   viewport.pos.y + abs_offset.y / dp_ratio};
+                overlay_box_size = {box_w / dp_ratio, box_h / dp_ratio};
+                overlay_box_valid = overlay_box_size.x > 2.0f && overlay_box_size.y > 2.0f;
+            }
+        }
+
         fbo_.ensure(ctx_w, ctx_h);
         if (!fbo_.valid())
             return;
@@ -324,6 +339,56 @@ namespace lfs::vis::gui {
                              ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
                              ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus |
                              ImGuiWindowFlags_NoFocusOnAppearing)) {
+            if (overlay_box_valid) {
+                auto blend = [](const ImVec4& a, const ImVec4& b, float t_val) -> ImVec4 {
+                    return {a.x + (b.x - a.x) * t_val,
+                            a.y + (b.y - a.y) * t_val,
+                            a.z + (b.z - a.z) * t_val,
+                            1.0f};
+                };
+                auto to_u32 = [](const ImVec4& c, float alpha) -> ImU32 {
+                    const int r = static_cast<int>(std::clamp(c.x, 0.0f, 1.0f) * 255.0f);
+                    const int g = static_cast<int>(std::clamp(c.y, 0.0f, 1.0f) * 255.0f);
+                    const int b = static_cast<int>(std::clamp(c.z, 0.0f, 1.0f) * 255.0f);
+                    const int a = static_cast<int>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f);
+                    return IM_COL32(r, g, b, a);
+                };
+
+                const auto& t = theme();
+                const auto& p = t.palette;
+                const bool is_light = t.isLightTheme();
+
+                const ImVec2 p1 = overlay_box_pos;
+                const ImVec2 p2 = {overlay_box_pos.x + overlay_box_size.x,
+                                   overlay_box_pos.y + overlay_box_size.y};
+                static constexpr float ROUNDING = 12.0f;
+                const ImVec2 shadow_offset = {0.0f, is_light ? 2.0f : 3.0f};
+                const float shadow_alpha = is_light ? 0.08f : 0.17f;
+
+                auto* draw = ImGui::GetWindowDrawList();
+                static constexpr int SHADOW_LAYERS = 8;
+                for (int i = 0; i < SHADOW_LAYERS; ++i) {
+                    const float t_val = static_cast<float>(i) / static_cast<float>(SHADOW_LAYERS - 1);
+                    const float inv_t = 1.0f - t_val;
+                    const float alpha = shadow_alpha * inv_t * inv_t;
+                    const float expand = 2.0f + t_val * 13.0f;
+                    draw->AddRectFilled({p1.x + shadow_offset.x - expand, p1.y + shadow_offset.y - expand},
+                                        {p2.x + shadow_offset.x + expand, p2.y + shadow_offset.y + expand},
+                                        to_u32(ImVec4(0, 0, 0, 1), alpha),
+                                        ROUNDING + expand * 0.25f);
+                }
+
+                const ImVec4 base_color = blend(p.surface, p.text, is_light ? 0.04f : 0.10f);
+                const ImVec4 border_color = blend(p.border, p.text, is_light ? 0.28f : 0.38f);
+                const float base_alpha = is_light ? 0.82f : 0.86f;
+
+                draw->AddRectFilled(p1, p2, to_u32(base_color, base_alpha), ROUNDING);
+
+                draw->AddRect(p1, p2, to_u32(border_color, is_light ? 0.40f : 0.50f), ROUNDING);
+                draw->AddRect({p1.x + 1.0f, p1.y + 1.0f}, {p2.x - 1.0f, p2.y - 1.0f},
+                              to_u32(ImVec4(1, 1, 1, 1), is_light ? 0.08f : 0.05f),
+                              ROUNDING - 1.0f);
+            }
             fbo_.blitAsImage(viewport.size.x, viewport.size.y);
         }
         ImGui::End();

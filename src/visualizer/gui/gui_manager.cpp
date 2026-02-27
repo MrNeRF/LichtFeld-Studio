@@ -698,21 +698,12 @@ namespace lfs::vis::gui {
 
             rml_menu_bar_.draw(menu_input.screen_w, menu_input.screen_h);
 
-            if (rml_menu_bar_.fbo().valid()) {
+            if (rml_menu_bar_.fbo().valid() && !rml_menu_bar_.isOpen()) {
                 auto* dl = ImGui::GetForegroundDrawList();
                 auto* mvp = ImGui::GetMainViewport();
                 ImVec2 pos = mvp->Pos;
                 float sw = static_cast<float>(menu_input.screen_w);
-                float sh = static_cast<float>(menu_input.screen_h);
-
-                if (rml_menu_bar_.isOpen()) {
-                    ImVec2 clip(pos.x + sw, pos.y + rml_menu_bar_.barHeight());
-                    dl->PushClipRect(pos, clip, true);
-                    rml_menu_bar_.fbo().blitToDrawList(dl, pos, {sw, sh});
-                    dl->PopClipRect();
-                } else {
-                    rml_menu_bar_.fbo().blitToDrawList(dl, pos, {sw, rml_menu_bar_.barHeight()});
-                }
+                rml_menu_bar_.fbo().blitToDrawList(dl, pos, {sw, rml_menu_bar_.barHeight()});
             }
         }
 
