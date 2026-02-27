@@ -178,14 +178,14 @@ namespace lfs::vis::gui {
         if (fonts_.regular)
             ImGui::PushFont(fonts_.regular);
 
-        static constexpr ImVec4 TRANSPARENT = {0, 0, 0, 0};
+        static constexpr ImVec4 kTransparent = {0, 0, 0, 0};
 
         // Bar background and text: transparent (RmlUi provides visuals)
-        ImGui::PushStyleColor(ImGuiCol_MenuBarBg, TRANSPARENT);
-        ImGui::PushStyleColor(ImGuiCol_Text, TRANSPARENT);
-        ImGui::PushStyleColor(ImGuiCol_Header, TRANSPARENT);
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, TRANSPARENT);
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, TRANSPARENT);
+        ImGui::PushStyleColor(ImGuiCol_MenuBarBg, kTransparent);
+        ImGui::PushStyleColor(ImGuiCol_Text, kTransparent);
+        ImGui::PushStyleColor(ImGuiCol_Header, kTransparent);
+        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kTransparent);
+        ImGui::PushStyleColor(ImGuiCol_HeaderActive, kTransparent);
 
         // Popup styles: keep opaque so dropdowns remain visible
         ImGui::PushStyleColor(ImGuiCol_PopupBg, t.menu_popup_background());
