@@ -178,7 +178,7 @@ namespace lfs::vis::gui {
         if (fonts_.regular)
             ImGui::PushFont(fonts_.regular);
 
-        static constexpr ImVec4 kTransparent = {0, 0, 0, 0};
+        static constexpr ImVec4 kTransparent{0.0f, 0.0f, 0.0f, 0.0f};
 
         // Bar background and text: transparent (RmlUi provides visuals)
         ImGui::PushStyleColor(ImGuiCol_MenuBarBg, kTransparent);

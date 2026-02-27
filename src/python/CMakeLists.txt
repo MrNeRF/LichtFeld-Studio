@@ -205,6 +205,7 @@ target_link_libraries(lfs_py PRIVATE
     ${CMAKE_DL_LIBS}
     imgui::imgui
     implot::implot
+    $<IF:$<PLATFORM_ID:Windows>,RmlUi::RmlUi,lfs_rmlui>
 )
 
 target_include_directories(lfs_py PRIVATE
