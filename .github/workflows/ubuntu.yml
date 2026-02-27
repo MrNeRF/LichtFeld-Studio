@@ -82,12 +82,23 @@ jobs:
           update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 100 \
                               --slave /usr/bin/g++ g++ /usr/bin/g++-14
 
+      - name: Cache vcpkg tool
+        id: cache-vcpkg-tool
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_ROOT }}
+          key: vcpkg-tool-${{ runner.os }}-2026-02-21
+          restore-keys: vcpkg-tool-${{ runner.os }}-
+
       - name: Setup vcpkg
+        if: steps.cache-vcpkg-tool.outputs.cache-hit != 'true'
         run: |
           cd ..
           git clone https://github.com/microsoft/vcpkg.git
           ./vcpkg/bootstrap-vcpkg.sh -disableMetrics
 
+      - name: Configure vcpkg triplet
+        run: |
           cat >> $VCPKG_ROOT/triplets/x64-linux.cmake << 'EOF'
           set(VCPKG_BUILD_TYPE release)
           set(VCPKG_MAX_CONCURRENCY 2)
@@ -100,12 +111,12 @@ jobs:
           key: ccache-${{ runner.os }}-${{ matrix.build_type }}-${{ github.run_id }}
           restore-keys: ccache-${{ runner.os }}-${{ matrix.build_type }}-
 
-      - name: Cache vcpkg
+      - name: Cache vcpkg packages
         uses: actions/cache@v4
         with:
           path: /github/home/.cache/vcpkg/archives
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('**/vcpkg.json') }}
-          restore-keys: vcpkg-${{ runner.os }}-
+          key: vcpkg-pkgs-${{ runner.os }}-${{ hashFiles('**/vcpkg.json') }}
+          restore-keys: vcpkg-pkgs-${{ runner.os }}-
 
       - name: Configure
         run: |

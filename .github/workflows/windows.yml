@@ -113,19 +113,31 @@ jobs:
           echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\libnvvp" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Cache vcpkg tool
+        id: cache-vcpkg-tool
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_ROOT }}
+          key: vcpkg-tool-${{ runner.os }}-2026-02-21
+          restore-keys: vcpkg-tool-${{ runner.os }}-
+
       - name: Setup vcpkg
+        if: steps.cache-vcpkg-tool.outputs.cache-hit != 'true'
         run: |
           cd ..
           git clone https://github.com/microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
+
+      - name: Configure vcpkg triplet
+        run: |
           Add-Content -Path "$env:VCPKG_ROOT\triplets\x64-windows.cmake" -Value "set(VCPKG_MAX_CONCURRENCY 2)"
 
-      - name: Cache vcpkg
+      - name: Cache vcpkg packages
         uses: actions/cache@v4
         with:
           path: C:\Users\runneradmin\AppData\Local\vcpkg\archives
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('**/vcpkg.json') }}
-          restore-keys: vcpkg-${{ runner.os }}-
+          key: vcpkg-pkgs-${{ runner.os }}-${{ hashFiles('**/vcpkg.json') }}
+          restore-keys: vcpkg-pkgs-${{ runner.os }}-
 
       - name: Configure
         shell: cmd
