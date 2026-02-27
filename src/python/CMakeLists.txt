@@ -203,6 +203,7 @@ target_link_libraries(lfs_py PRIVATE
     ${CMAKE_DL_LIBS}
     imgui::imgui
     implot::implot
+    $<$<PLATFORM_ID:Windows>:dxgi>
 )
 
 target_include_directories(lfs_py PRIVATE
