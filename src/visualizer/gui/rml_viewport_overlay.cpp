@@ -111,7 +111,7 @@ namespace lfs::vis::gui {
         rml_theme::applyTheme(document_, base_rcss_, generateThemeRCSS());
     }
 
-    void RmlViewportOverlay::setViewportBounds(ImVec2 pos, ImVec2 size) {
+    void RmlViewportOverlay::setViewportBounds(glm::vec2 pos, glm::vec2 size) {
         vp_pos_ = pos;
         vp_size_ = size;
     }
@@ -194,8 +194,9 @@ namespace lfs::vis::gui {
         fbo_.unbind(prev_fbo);
 
         auto* vp = ImGui::GetMainViewport();
-        fbo_.blitToDrawList(ImGui::GetForegroundDrawList(vp),
-                            vp_pos_, vp_size_);
+        const ImVec2 blit_pos(vp_pos_.x, vp_pos_.y);
+        const ImVec2 blit_size(vp_size_.x, vp_size_.y);
+        fbo_.blitToDrawList(ImGui::GetForegroundDrawList(vp), blit_pos, blit_size);
     }
 
 } // namespace lfs::vis::gui

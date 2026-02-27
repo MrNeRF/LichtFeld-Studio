@@ -5,10 +5,11 @@
 #pragma once
 
 #include "gui/rmlui/rml_fbo.hpp"
+#include <cstdint>
 #include <functional>
+#include <glm/glm.hpp>
 #include <string>
 #include <vector>
-#include <imgui.h>
 
 namespace Rml {
     class Context;
@@ -25,9 +26,12 @@ namespace lfs::vis::gui {
         std::string label;
     };
 
+    enum class CursorRequest : uint8_t;
+    struct PanelInputState;
+
     struct RightPanelLayout {
-        ImVec2 pos{0, 0};
-        ImVec2 size{0, 0};
+        glm::vec2 pos{0, 0};
+        glm::vec2 size{0, 0};
         float scene_h = 0;
         float splitter_h = 6.0f;
     };
@@ -37,12 +41,14 @@ namespace lfs::vis::gui {
         void init(RmlUIManager* mgr);
         void shutdown();
 
-        void processInput(const RightPanelLayout& layout);
+        void processInput(const RightPanelLayout& layout, const PanelInputState& input);
         void render(const RightPanelLayout& layout,
                     const std::vector<TabSnapshot>& tabs,
-                    const std::string& active_tab);
+                    const std::string& active_tab,
+                    const PanelInputState& input);
 
         bool wantsInput() const { return wants_input_; }
+        CursorRequest getCursorRequest() const;
 
         std::function<void(const std::string&)> on_tab_changed;
         std::function<void(float)> on_splitter_delta;
@@ -76,6 +82,10 @@ namespace lfs::vis::gui {
         float drag_start_y_ = 0;
 
         bool resize_dragging_ = false;
+
+        CursorRequest cursor_request_{};
+        float prev_mouse_x_ = 0;
+        float prev_mouse_y_ = 0;
     };
 
 } // namespace lfs::vis::gui

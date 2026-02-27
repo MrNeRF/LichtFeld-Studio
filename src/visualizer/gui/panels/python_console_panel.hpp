@@ -107,6 +107,6 @@ namespace lfs::vis::gui::panels {
     void DrawPythonConsole(const UIContext& ctx, bool* open);
 
     // Draw the Python console as a docked panel (fixed position/size)
-    void DrawDockedPythonConsole(const UIContext& ctx, const ImVec2& pos, const ImVec2& size);
+    void DrawDockedPythonConsole(const UIContext& ctx, float x, float y, float w, float h);
 
 } // namespace lfs::vis::gui::panels

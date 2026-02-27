@@ -71,7 +71,7 @@ namespace lfs::vis::gui {
                                float right_x, float top_y);
         void hideEditOverlay();
 
-        void processInput(const PanelInputState& input);
+        void processInput(const lfs::vis::PanelInputState& input);
         void render(int screen_w, int screen_h);
         void destroyGLResources();
 

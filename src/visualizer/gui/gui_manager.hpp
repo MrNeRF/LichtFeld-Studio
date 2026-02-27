@@ -66,8 +66,8 @@ namespace lfs::vis {
             void setFileSelectedCallback(std::function<void(const std::filesystem::path&, bool)> callback);
 
             // Viewport region access
-            ImVec2 getViewportPos() const;
-            ImVec2 getViewportSize() const;
+            glm::vec2 getViewportPos() const;
+            glm::vec2 getViewportSize() const;
             bool isMouseInViewport() const;
             bool isViewportFocused() const;
             bool isPositionInViewport(double x, double y) const;

@@ -445,10 +445,18 @@ namespace lfs::vis::gui {
             panel_layout_.setActiveTab(idname);
         };
         rml_right_panel_.on_splitter_delta = [this](float delta_y) {
-            panel_layout_.adjustScenePanelRatio(delta_y);
+            const auto* mvp = ImGui::GetMainViewport();
+            ScreenState ss;
+            ss.work_pos = {mvp->WorkPos.x, mvp->WorkPos.y};
+            ss.work_size = {mvp->WorkSize.x, mvp->WorkSize.y};
+            panel_layout_.adjustScenePanelRatio(delta_y, ss);
         };
         rml_right_panel_.on_resize_delta = [this](float dx) {
-            panel_layout_.applyResizeDelta(dx);
+            const auto* mvp = ImGui::GetMainViewport();
+            ScreenState ss;
+            ss.work_pos = {mvp->WorkPos.x, mvp->WorkPos.y};
+            ss.work_size = {mvp->WorkSize.x, mvp->WorkSize.y};
+            panel_layout_.applyResizeDelta(dx, ss);
         };
         rml_viewport_overlay_.init(&rmlui_manager_);
         rml_menu_bar_.init(&rmlui_manager_);
@@ -753,11 +761,32 @@ namespace lfs::vis::gui {
 
         auto& reg = PanelRegistry::instance();
 
+        const auto* mvp_input = ImGui::GetMainViewport();
+        const auto& io = ImGui::GetIO();
+        PanelInputState panel_input;
+        panel_input.mouse_x = io.MousePos.x;
+        panel_input.mouse_y = io.MousePos.y;
+        panel_input.mouse_down[0] = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+        panel_input.mouse_down[1] = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+        panel_input.mouse_down[2] = ImGui::IsMouseDown(ImGuiMouseButton_Middle);
+        panel_input.mouse_clicked[0] = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+        panel_input.mouse_clicked[1] = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+        panel_input.mouse_clicked[2] = ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
+        panel_input.mouse_released[0] = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+        panel_input.mouse_released[1] = ImGui::IsMouseReleased(ImGuiMouseButton_Right);
+        panel_input.mouse_released[2] = ImGui::IsMouseReleased(ImGuiMouseButton_Middle);
+        panel_input.screen_w = static_cast<int>(mvp_input->Size.x);
+        panel_input.screen_h = static_cast<int>(mvp_input->Size.y);
+
+        ScreenState screen;
+        screen.work_pos = {mvp_input->WorkPos.x, mvp_input->WorkPos.y};
+        screen.work_size = {mvp_input->WorkSize.x, mvp_input->WorkSize.y};
+        screen.any_item_active = ImGui::IsAnyItemActive();
+
         if (show_main_panel_ && !ui_hidden_) {
-            const auto* mvp2 = ImGui::GetMainViewport();
             constexpr float SBH = PanelLayoutManager::STATUS_BAR_HEIGHT;
             const float rpw = panel_layout_.getRightPanelWidth();
-            const float ph = mvp2->WorkSize.y - SBH;
+            const float ph = screen.work_size.y - SBH;
             const float dpi = python::get_shared_dpi_scale();
             const float splitter_h = PanelLayoutManager::SPLITTER_H * dpi;
             const float avail_h = ph - 16.0f;
@@ -765,12 +794,15 @@ namespace lfs::vis::gui {
                                            avail_h * panel_layout_.getScenePanelRatio() - splitter_h * 0.5f);
 
             RightPanelLayout rp_layout;
-            rp_layout.pos = {mvp2->WorkPos.x + mvp2->WorkSize.x - rpw, mvp2->WorkPos.y};
-            rp_layout.size = {rpw, ph};
+            rp_layout.pos = glm::vec2(screen.work_pos.x + screen.work_size.x - rpw, screen.work_pos.y);
+            rp_layout.size = glm::vec2(rpw, ph);
             rp_layout.scene_h = scene_h + 8.0f;
             rp_layout.splitter_h = splitter_h;
 
-            rml_right_panel_.processInput(rp_layout);
+            rml_right_panel_.processInput(rp_layout, panel_input);
+
+            if (rml_right_panel_.wantsInput())
+                ImGui::GetIO().WantCaptureMouse = true;
 
             const auto main_tabs = reg.get_panels_for_space(PanelSpace::MainPanelTab);
             std::vector<TabSnapshot> tab_snaps;
@@ -778,10 +810,22 @@ namespace lfs::vis::gui {
             for (const auto& t : main_tabs)
                 tab_snaps.push_back({t.idname, t.label});
 
-            rml_right_panel_.render(rp_layout, tab_snaps, panel_layout_.getActiveTab());
+            rml_right_panel_.render(rp_layout, tab_snaps, panel_layout_.getActiveTab(), panel_input);
         }
 
-        panel_layout_.renderRightPanel(ctx, draw_ctx, show_main_panel_, ui_hidden_, window_states_, focus_panel_name_);
+        panel_layout_.renderRightPanel(ctx, draw_ctx, show_main_panel_, ui_hidden_,
+                                       window_states_, focus_panel_name_, panel_input, screen);
+
+        // Apply cursor requests from right panel and panel layout
+        auto apply_cursor = [](CursorRequest req) {
+            switch (req) {
+            case CursorRequest::ResizeEW: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW); break;
+            case CursorRequest::ResizeNS: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS); break;
+            default: break;
+            }
+        };
+        apply_cursor(rml_right_panel_.getCursorRequest());
+        apply_cursor(panel_layout_.getCursorRequest());
 
         python::set_viewport_bounds(viewport_layout_.pos.x, viewport_layout_.pos.y,
                                     viewport_layout_.size.x, viewport_layout_.size.y);
@@ -799,7 +843,7 @@ namespace lfs::vis::gui {
 
         // Recompute viewport layout
         viewport_layout_ = panel_layout_.computeViewportLayout(
-            show_main_panel_, ui_hidden_, window_states_["python_console"]);
+            show_main_panel_, ui_hidden_, window_states_["python_console"], screen);
 
         if (!ui_hidden_) {
             reg.draw_panels(PanelSpace::StatusBar, draw_ctx);
@@ -988,7 +1032,9 @@ namespace lfs::vis::gui {
 
     void GuiManager::renderViewportDecorations() {
         if (viewport_layout_.size.x > 0 && viewport_layout_.size.y > 0) {
-            widgets::DrawViewportVignette(viewport_layout_.pos, viewport_layout_.size);
+            const ImVec2 vp_pos(viewport_layout_.pos.x, viewport_layout_.pos.y);
+            const ImVec2 vp_size(viewport_layout_.size.x, viewport_layout_.size.y);
+            widgets::DrawViewportVignette(vp_pos, vp_size);
         }
 
         if (!ui_hidden_ && viewport_layout_.size.x > 0 && viewport_layout_.size.y > 0) {
@@ -1069,16 +1115,16 @@ namespace lfs::vis::gui {
         }
     }
 
-    ImVec2 GuiManager::getViewportPos() const {
+    glm::vec2 GuiManager::getViewportPos() const {
         return viewport_layout_.pos;
     }
 
-    ImVec2 GuiManager::getViewportSize() const {
+    glm::vec2 GuiManager::getViewportSize() const {
         return viewport_layout_.size;
     }
 
     bool GuiManager::isMouseInViewport() const {
-        ImVec2 mouse_pos = ImGui::GetMousePos();
+        const auto mouse_pos = ImGui::GetMousePos();
         return mouse_pos.x >= viewport_layout_.pos.x &&
                mouse_pos.y >= viewport_layout_.pos.y &&
                mouse_pos.x < viewport_layout_.pos.x + viewport_layout_.size.x &&

@@ -312,8 +312,8 @@ namespace lfs::vis::gui {
 
         fbo_.unbind(prev_fbo);
 
-        ImGui::SetNextWindowPos(viewport.pos);
-        ImGui::SetNextWindowSize(viewport.size);
+        ImGui::SetNextWindowPos(ImVec2(viewport.pos.x, viewport.pos.y));
+        ImGui::SetNextWindowSize(ImVec2(viewport.size.x, viewport.size.y));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
         ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));

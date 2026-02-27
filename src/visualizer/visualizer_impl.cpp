@@ -929,8 +929,8 @@ namespace lfs::vis {
         ViewportRegion viewport_region;
         bool has_viewport_region = false;
         if (gui_manager_) {
-            ImVec2 pos = gui_manager_->getViewportPos();
-            ImVec2 size = gui_manager_->getViewportSize();
+            auto pos = gui_manager_->getViewportPos();
+            auto size = gui_manager_->getViewportSize();
 
             viewport_region.x = pos.x;
             viewport_region.y = pos.y;

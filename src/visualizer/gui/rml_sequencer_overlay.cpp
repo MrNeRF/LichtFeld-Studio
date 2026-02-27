@@ -375,7 +375,7 @@ namespace lfs::vis::gui {
         edit_overlay_visible_ = false;
     }
 
-    void RmlSequencerOverlay::processInput(const PanelInputState& input) {
+    void RmlSequencerOverlay::processInput(const lfs::vis::PanelInputState& input) {
         wants_input_ = false;
         if (!rml_context_ || !document_ || !elements_cached_)
             return;

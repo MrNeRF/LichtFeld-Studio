@@ -1,0 +1,225 @@
+/* Plugin Marketplace panel styles
+ * No hardcoded colors — all colors inherit from theme pipeline. */
+
+/* Warning text — hardcoded fallback; no theme-generated .status-warning exists. */
+.mp-warning-text {
+    display: block;
+    color: #f9e2af;
+    font-size: 12dp;
+    margin-bottom: 4dp;
+}
+
+/* ── Controls row ─────────────────────────────────────── */
+
+.mp-controls {
+    display: flex;
+    align-items: center;
+    gap: 6dp;
+    margin-bottom: 6dp;
+}
+
+.mp-select {
+    min-width: 120dp;
+}
+
+.mp-sort-label {
+    margin-left: 4dp;
+}
+
+.mp-select-sort {
+    min-width: 150dp;
+}
+
+/* ── Manual URL install ───────────────────────────────── */
+
+.mp-manual-section {
+    margin-bottom: 4dp;
+}
+
+.mp-manual-row {
+    display: flex;
+    align-items: center;
+    gap: 8dp;
+    margin-top: 4dp;
+}
+
+.mp-url-input {
+    flex: 1;
+    min-width: 120dp;
+}
+
+.mp-install-btn {
+    flex-shrink: 0;
+}
+
+.mp-formats-header {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    margin-top: 4dp;
+    gap: 4dp;
+}
+
+.mp-format-item {
+    font-size: 12dp;
+    padding: 1dp 0 1dp 18dp;
+}
+
+/* ── Card grid ────────────────────────────────────────── */
+
+.card-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12dp;
+}
+
+/* ── Plugin card ──────────────────────────────────────── */
+
+.plugin-card {
+    width: 220dp;
+    min-height: 180dp;
+    border-width: 1dp;
+    padding: 8dp;
+    display: flex;
+    flex-direction: column;
+    transition: border-color 0.15s quadratic-out;
+}
+
+/* ── Card info area ───────────────────────────────────── */
+
+.card-info {
+    cursor: pointer;
+    flex: 1;
+    min-height: 0;
+}
+
+.card-name {
+    font-size: 14dp;
+    font-weight: bold;
+}
+
+.card-version {
+    font-size: 12dp;
+    margin-left: 6dp;
+}
+
+.card-repo {
+    display: block;
+}
+
+.card-metrics {
+    font-size: 11dp;
+    display: block;
+    margin-top: 2dp;
+}
+
+.card-tags {
+    font-size: 11dp;
+    display: block;
+}
+
+.card-local {
+    font-size: 11dp;
+    display: block;
+}
+
+.card-status {
+    font-size: 12dp;
+    display: block;
+    margin-top: 2dp;
+}
+
+.card-error {
+    font-size: 12dp;
+    display: block;
+}
+
+.card-description {
+    display: block;
+    margin-top: 2dp;
+}
+
+/* ── Card buttons ─────────────────────────────────────── */
+
+.card-buttons {
+    display: flex;
+    gap: 6dp;
+    margin-top: 4dp;
+}
+
+.card-buttons .btn {
+    flex: 1;
+    font-size: 12dp;
+    padding: 2dp 4dp;
+}
+
+.card-startup-row {
+    display: flex;
+    align-items: center;
+    margin-top: 4dp;
+}
+
+.card-startup-label {
+    font-size: 11dp;
+}
+
+/* ── Card feedback ────────────────────────────────────── */
+
+.card-feedback {
+    margin-top: 4dp;
+}
+
+.card-progress {
+    display: block;
+    width: 100%;
+    height: 14dp;
+}
+
+.card-progress-text {
+    font-size: 11dp;
+    display: block;
+}
+
+/* ── Confirm overlay ──────────────────────────────────── */
+
+.confirm-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 160);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    z-index: 50;
+}
+
+.confirm-overlay.hidden {
+    display: none;
+}
+
+.confirm-dialog {
+    border-width: 1dp;
+    padding: 16dp;
+    min-width: 280dp;
+    max-width: 380dp;
+}
+
+.confirm-message {
+    display: block;
+    font-size: 13dp;
+    text-align: center;
+    margin-bottom: 8dp;
+}
+
+.confirm-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 8dp;
+    margin-top: 8dp;
+}
+
+.confirm-buttons .btn {
+    min-width: 80dp;
+}

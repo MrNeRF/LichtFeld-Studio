@@ -8,6 +8,7 @@
 
 #include "gui/rml_right_panel.hpp"
 #include "core/logger.hpp"
+#include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
@@ -19,7 +20,6 @@
 #include <RmlUi/Core/ElementUtilities.h>
 #include <cassert>
 #include <format>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
 
@@ -184,18 +184,28 @@ namespace lfs::vis::gui {
         return false;
     }
 
-    void RmlRightPanel::processInput(const RightPanelLayout& layout) {
+    CursorRequest RmlRightPanel::getCursorRequest() const {
+        return cursor_request_;
+    }
+
+    void RmlRightPanel::processInput(const RightPanelLayout& layout, const PanelInputState& input) {
         wants_input_ = false;
+        cursor_request_ = CursorRequest::None;
+
+        const float delta_x = input.mouse_x - prev_mouse_x_;
+        const float delta_y = input.mouse_y - prev_mouse_y_;
+        prev_mouse_x_ = input.mouse_x;
+        prev_mouse_y_ = input.mouse_y;
+
         if (!rml_context_ || !document_)
             return;
         if (layout.size.x <= 0 || layout.size.y <= 0)
             return;
 
-        ImGuiIO& io = ImGui::GetIO();
         const float dp_ratio = rml_manager_->getDpRatio();
 
-        const float mx = (io.MousePos.x - layout.pos.x) * dp_ratio;
-        const float my = (io.MousePos.y - layout.pos.y) * dp_ratio;
+        const float mx = (input.mouse_x - layout.pos.x) * dp_ratio;
+        const float my = (input.mouse_y - layout.pos.y) * dp_ratio;
 
         rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), 0);
 
@@ -207,13 +217,11 @@ namespace lfs::vis::gui {
 
         if (resize_dragging_) {
             wants_input_ = true;
-            io.WantCaptureMouse = true;
 
-            if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                const float delta_x = io.MouseDelta.x;
+            if (input.mouse_down[0]) {
                 if (on_resize_delta && delta_x != 0.0f)
                     on_resize_delta(delta_x);
-                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                cursor_request_ = CursorRequest::ResizeEW;
             } else {
                 resize_dragging_ = false;
                 if (resize_handle_el_)
@@ -224,10 +232,8 @@ namespace lfs::vis::gui {
 
         if (splitter_dragging_) {
             wants_input_ = true;
-            io.WantCaptureMouse = true;
 
-            if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                const float delta_y = io.MouseDelta.y;
+            if (input.mouse_down[0]) {
                 if (on_splitter_delta && delta_y != 0.0f)
                     on_splitter_delta(delta_y);
             } else {
@@ -240,25 +246,24 @@ namespace lfs::vis::gui {
 
         if (over_interactive) {
             wants_input_ = true;
-            io.WantCaptureMouse = true;
 
             if (isOrHasAncestor(hover, "resize-handle")) {
-                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                cursor_request_ = CursorRequest::ResizeEW;
+                if (input.mouse_clicked[0]) {
                     resize_dragging_ = true;
                     if (resize_handle_el_)
                         resize_handle_el_->SetAttribute("class", "dragging");
                 }
             } else if (isOrHasAncestor(hover, "splitter")) {
-                ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                cursor_request_ = CursorRequest::ResizeNS;
+                if (input.mouse_clicked[0]) {
                     splitter_dragging_ = true;
-                    drag_start_y_ = io.MousePos.y;
+                    drag_start_y_ = input.mouse_y;
                     if (splitter_el_)
                         splitter_el_->SetAttribute("class", "dragging");
                 }
             } else {
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                if (input.mouse_clicked[0]) {
                     auto* tab_el = findAncestorWithAttribute(hover, "data-idname");
                     if (tab_el) {
                         auto idname = tab_el->GetAttribute<Rml::String>("data-idname", "");
@@ -272,7 +277,8 @@ namespace lfs::vis::gui {
 
     void RmlRightPanel::render(const RightPanelLayout& layout,
                                const std::vector<TabSnapshot>& tabs,
-                               const std::string& active_tab) {
+                               const std::string& active_tab,
+                               const PanelInputState& input) {
         if (!rml_context_ || !document_)
             return;
         if (layout.size.x <= 0 || layout.size.y <= 0)
@@ -333,11 +339,8 @@ namespace lfs::vis::gui {
 
         fbo_.unbind(prev_fbo);
 
-        const ImVec2 blit_pos = {layout.pos.x, layout.pos.y};
-        const ImVec2 blit_size = {layout.size.x, layout.size.y};
-
-        auto* vp = ImGui::GetMainViewport();
-        fbo_.blitToDrawList(ImGui::GetBackgroundDrawList(vp), blit_pos, blit_size);
+        fbo_.blitToScreen(layout.pos.x, layout.pos.y, layout.size.x, layout.size.y,
+                          input.screen_w, input.screen_h);
     }
 
 } // namespace lfs::vis::gui

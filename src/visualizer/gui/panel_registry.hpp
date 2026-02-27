@@ -96,6 +96,9 @@ namespace lfs::vis::gui {
         bool float_dragging = false;
         float float_drag_ox = 0;
         float float_drag_oy = 0;
+        bool float_resizing = false;
+        float float_resize_start_w = 0;
+        float float_resize_start_mx = 0;
         static constexpr int MAX_CONSECUTIVE_ERRORS = 3;
 
         bool has_option(PanelOption opt) const {
@@ -153,6 +156,10 @@ namespace lfs::vis::gui {
 
         float draw_panels_direct(PanelSpace space, float x, float y, float w, float max_h,
                                  const PanelDrawContext& ctx);
+        float draw_single_panel_direct(const std::string& idname, float x, float y, float w, float h,
+                                       const PanelDrawContext& ctx);
+        float draw_child_panels_direct(const std::string& parent_idname, float x, float y, float w, float h,
+                                       const PanelDrawContext& ctx);
 
         std::vector<PanelSummary> get_panels_for_space(PanelSpace space);
         std::vector<std::string> get_panel_names(PanelSpace space) const;

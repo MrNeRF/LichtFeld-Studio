@@ -34,22 +34,25 @@ namespace lfs::vis::gui {
     void PanelLayoutManager::renderRightPanel(const UIContext& ctx, const PanelDrawContext& draw_ctx,
                                               bool show_main_panel, bool ui_hidden,
                                               std::unordered_map<std::string, bool>& window_states,
-                                              std::string& focus_panel_name) {
+                                              std::string& focus_panel_name,
+                                              const PanelInputState& input,
+                                              const ScreenState& screen) {
+        cursor_request_ = CursorRequest::None;
+
         if (!show_main_panel || ui_hidden) {
             python_console_hovering_edge_ = false;
             python_console_resizing_ = false;
             return;
         }
 
-        const auto* const vp = ImGui::GetMainViewport();
-        const float panel_h = vp->WorkSize.y - STATUS_BAR_HEIGHT;
-        const float min_w = vp->WorkSize.x * RIGHT_PANEL_MIN_RATIO;
-        const float max_w = vp->WorkSize.x * RIGHT_PANEL_MAX_RATIO;
+        const float panel_h = screen.work_size.y - STATUS_BAR_HEIGHT;
+        const float min_w = screen.work_size.x * RIGHT_PANEL_MIN_RATIO;
+        const float max_w = screen.work_size.x * RIGHT_PANEL_MAX_RATIO;
 
         right_panel_width_ = std::clamp(right_panel_width_, min_w, max_w);
 
         const bool python_console_visible = window_states["python_console"];
-        const float available_for_split = vp->WorkSize.x - right_panel_width_ - PANEL_GAP;
+        const float available_for_split = screen.work_size.x - right_panel_width_ - PANEL_GAP;
 
         if (python_console_visible && python_console_width_ < 0.0f) {
             python_console_width_ = (available_for_split - PANEL_GAP) / 2.0f;
@@ -60,11 +63,11 @@ namespace lfs::vis::gui {
             python_console_width_ = std::clamp(python_console_width_, PYTHON_CONSOLE_MIN_WIDTH, max_console_w);
         }
 
-        const float right_panel_x = vp->WorkPos.x + vp->WorkSize.x - right_panel_width_;
+        const float right_panel_x = screen.work_pos.x + screen.work_size.x - right_panel_width_;
         const float console_x = right_panel_x - (python_console_visible ? python_console_width_ + PANEL_GAP : 0.0f);
 
         if (python_console_visible) {
-            renderDockedPythonConsole(ctx, console_x, panel_h);
+            renderDockedPythonConsole(ctx, console_x, panel_h, input, screen);
         } else {
             python_console_hovering_edge_ = false;
             python_console_resizing_ = false;
@@ -74,7 +77,7 @@ namespace lfs::vis::gui {
         constexpr float PAD = 8.0f;
         const float content_x = panel_x + PAD;
         const float content_w = right_panel_width_ - 2.0f * PAD;
-        const float content_top = vp->WorkPos.y + PAD;
+        const float content_top = screen.work_pos.y + PAD;
 
         const float dpi = lfs::python::get_shared_dpi_scale();
         const float splitter_h = SPLITTER_H * dpi;
@@ -130,30 +133,27 @@ namespace lfs::vis::gui {
         ImGui::PopStyleColor(3);
     }
 
-    void PanelLayoutManager::adjustScenePanelRatio(float delta_y) {
-        const auto* const vp = ImGui::GetMainViewport();
-        const float panel_h = vp->WorkSize.y - STATUS_BAR_HEIGHT;
+    void PanelLayoutManager::adjustScenePanelRatio(float delta_y, const ScreenState& screen) {
+        const float panel_h = screen.work_size.y - STATUS_BAR_HEIGHT;
         const float padding = 16.0f;
         const float avail_h = panel_h - padding;
         if (avail_h > 0)
             scene_panel_ratio_ = std::clamp(scene_panel_ratio_ + delta_y / avail_h, 0.15f, 0.85f);
     }
 
-    void PanelLayoutManager::applyResizeDelta(float dx) {
-        const auto* const vp = ImGui::GetMainViewport();
-        const float min_w = vp->WorkSize.x * RIGHT_PANEL_MIN_RATIO;
-        const float max_w = vp->WorkSize.x * RIGHT_PANEL_MAX_RATIO;
+    void PanelLayoutManager::applyResizeDelta(float dx, const ScreenState& screen) {
+        const float min_w = screen.work_size.x * RIGHT_PANEL_MIN_RATIO;
+        const float max_w = screen.work_size.x * RIGHT_PANEL_MAX_RATIO;
         right_panel_width_ = std::clamp(right_panel_width_ - dx, min_w, max_w);
     }
 
     ViewportLayout PanelLayoutManager::computeViewportLayout(bool show_main_panel, bool ui_hidden,
-                                                             bool python_console_visible) const {
-        const auto* const vp = ImGui::GetMainViewport();
-
+                                                             bool python_console_visible,
+                                                             const ScreenState& screen) const {
         float console_w = 0.0f;
         if (python_console_visible && show_main_panel && !ui_hidden) {
             if (python_console_width_ < 0.0f) {
-                const float available = vp->WorkSize.x - right_panel_width_ - PANEL_GAP;
+                const float available = screen.work_size.x - right_panel_width_ - PANEL_GAP;
                 console_w = (available - PANEL_GAP) / 2.0f + PANEL_GAP;
             } else {
                 console_w = python_console_width_ + PANEL_GAP;
@@ -161,42 +161,44 @@ namespace lfs::vis::gui {
         }
 
         const float w = (show_main_panel && !ui_hidden)
-                            ? vp->WorkSize.x - right_panel_width_ - console_w - PANEL_GAP
-                            : vp->WorkSize.x;
-        const float h = ui_hidden ? vp->WorkSize.y : vp->WorkSize.y - STATUS_BAR_HEIGHT;
+                            ? screen.work_size.x - right_panel_width_ - console_w - PANEL_GAP
+                            : screen.work_size.x;
+        const float h = ui_hidden ? screen.work_size.y : screen.work_size.y - STATUS_BAR_HEIGHT;
 
         ViewportLayout layout;
-        layout.pos = {vp->WorkPos.x, vp->WorkPos.y};
+        layout.pos = {screen.work_pos.x, screen.work_pos.y};
         layout.size = {w, h};
-        layout.has_focus = !ImGui::IsAnyItemActive();
+        layout.has_focus = !screen.any_item_active;
         return layout;
     }
 
-    void PanelLayoutManager::renderDockedPythonConsole(const UIContext& ctx, float panel_x, float panel_h) {
-        const auto* const vp = ImGui::GetMainViewport();
-        const auto& io = ImGui::GetIO();
+    void PanelLayoutManager::renderDockedPythonConsole(const UIContext& ctx, float panel_x, float panel_h,
+                                                       const PanelInputState& input, const ScreenState& screen) {
         constexpr float EDGE_GRAB_W = 8.0f;
 
-        python_console_hovering_edge_ = io.MousePos.x >= panel_x - EDGE_GRAB_W &&
-                                        io.MousePos.x <= panel_x + EDGE_GRAB_W &&
-                                        io.MousePos.y >= vp->WorkPos.y &&
-                                        io.MousePos.y <= vp->WorkPos.y + panel_h;
+        const float delta_x = input.mouse_x - prev_mouse_x_;
+        prev_mouse_x_ = input.mouse_x;
 
-        if (python_console_hovering_edge_ && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-            python_console_resizing_ = true;
-        if (python_console_resizing_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+        python_console_hovering_edge_ = input.mouse_x >= panel_x - EDGE_GRAB_W &&
+                                        input.mouse_x <= panel_x + EDGE_GRAB_W &&
+                                        input.mouse_y >= screen.work_pos.y &&
+                                        input.mouse_y <= screen.work_pos.y + panel_h;
+
+        if (python_console_resizing_ && !input.mouse_down[0])
             python_console_resizing_ = false;
-        if (python_console_resizing_) {
-            const float max_console_w = vp->WorkSize.x * PYTHON_CONSOLE_MAX_RATIO;
-            python_console_width_ = std::clamp(python_console_width_ - io.MouseDelta.x,
-                                               PYTHON_CONSOLE_MIN_WIDTH, max_console_w);
-        }
-        if (python_console_hovering_edge_ || python_console_resizing_)
-            ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
 
-        const ImVec2 pos{panel_x, vp->WorkPos.y};
-        const ImVec2 size{python_console_width_, panel_h};
-        panels::DrawDockedPythonConsole(ctx, pos, size);
+        if (python_console_resizing_) {
+            const float max_console_w = screen.work_size.x * PYTHON_CONSOLE_MAX_RATIO;
+            python_console_width_ = std::clamp(python_console_width_ - delta_x,
+                                               PYTHON_CONSOLE_MIN_WIDTH, max_console_w);
+        } else if (python_console_hovering_edge_ && input.mouse_clicked[0]) {
+            python_console_resizing_ = true;
+        }
+
+        if (python_console_hovering_edge_ || python_console_resizing_)
+            cursor_request_ = CursorRequest::ResizeEW;
+
+        panels::DrawDockedPythonConsole(ctx, panel_x, screen.work_pos.y, python_console_width_, panel_h);
     }
 
 } // namespace lfs::vis::gui

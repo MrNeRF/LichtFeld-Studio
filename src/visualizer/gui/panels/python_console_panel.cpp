@@ -758,7 +758,7 @@ namespace lfs::vis::gui::panels {
         ImGui::End();
     }
 
-    void DrawDockedPythonConsole(const UIContext& ctx, const ImVec2& pos, const ImVec2& size) {
+    void DrawDockedPythonConsole(const UIContext& ctx, float x, float y, float w, float h) {
         lfs::python::ensure_initialized();
         lfs::python::install_output_redirect();
         setup_sys_path();
@@ -767,8 +767,8 @@ namespace lfs::vis::gui::panels {
         auto& state = PythonConsoleState::getInstance();
         const auto& t = theme();
 
-        ImGui::SetNextWindowPos(pos, ImGuiCond_Always);
-        ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+        ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
 
         ImGui::PushStyleColor(ImGuiCol_WindowBg, t.palette.background);
 

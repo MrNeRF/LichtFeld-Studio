@@ -5,8 +5,8 @@
 #pragma once
 
 #include "gui/rmlui/rml_fbo.hpp"
+#include <glm/glm.hpp>
 #include <string>
-#include <imgui.h>
 
 namespace Rml {
     class Context;
@@ -22,7 +22,7 @@ namespace lfs::vis::gui {
     public:
         void init(RmlUIManager* mgr);
         void shutdown();
-        void setViewportBounds(ImVec2 pos, ImVec2 size);
+        void setViewportBounds(glm::vec2 pos, glm::vec2 size);
         void render();
         void processInput();
         bool wantsInput() const { return wants_input_; }
@@ -37,8 +37,8 @@ namespace lfs::vis::gui {
 
         RmlFBO fbo_;
 
-        ImVec2 vp_pos_{0, 0};
-        ImVec2 vp_size_{0, 0};
+        glm::vec2 vp_pos_{0, 0};
+        glm::vec2 vp_size_{0, 0};
         std::string last_theme_;
         std::string base_rcss_;
         bool wants_input_ = false;

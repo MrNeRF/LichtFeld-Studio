@@ -73,7 +73,7 @@ def register_builtin_panels():
         lf.register_class(InputSettingsPanel)
         lf.ui.set_panel_enabled("lfs.input_settings", False)
 
-        lf.register_class(PluginMarketplacePanel)
+        lf.ui.register_rml_panel(PluginMarketplacePanel)
         lf.ui.set_panel_enabled("lfs.plugin_marketplace", False)
 
         # Status bar (must be registered last, always visible)

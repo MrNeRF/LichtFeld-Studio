@@ -106,7 +106,7 @@ namespace lfs::vis::gui {
         handleOverlayActions();
 
         const auto& io = ImGui::GetIO();
-        PanelInputState overlay_input;
+        lfs::vis::PanelInputState overlay_input;
         overlay_input.mouse_x = io.MousePos.x;
         overlay_input.mouse_y = io.MousePos.y;
         overlay_input.mouse_down[0] = io.MouseDown[0];
@@ -144,7 +144,7 @@ namespace lfs::vis::gui {
         panel_->setSnapEnabled(ui_state_.snap_to_grid);
         panel_->setSnapInterval(ui_state_.snap_interval);
 
-        PanelInputState input;
+        lfs::vis::PanelInputState input;
         input.mouse_x = io.MousePos.x;
         input.mouse_y = io.MousePos.y;
         input.mouse_down[0] = io.MouseDown[0];
