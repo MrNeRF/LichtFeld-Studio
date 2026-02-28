@@ -4,6 +4,7 @@
 
 #include "metrics.hpp"
 #include "../rasterization/fast_rasterizer.hpp"
+#include "../rasterization/gsplat_rasterizer.hpp"
 #include "core/cuda/undistort/undistort.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
@@ -465,13 +466,19 @@ namespace lfs::training {
             }
 
             auto& splatData_mutable = const_cast<lfs::core::SplatData&>(splatData);
-            auto rasterize_result = fast_rasterize_forward(*cam, splatData_mutable, background,
-                                                           0, 0, 0, 0,
-                                                           _params.optimization.mip_filter);
-            if (!rasterize_result) {
-                throw std::runtime_error("Evaluation rasterization failed: " + rasterize_result.error());
+            RenderOutput r_output;
+            if (_params.optimization.gut) {
+                r_output = gsplat_rasterize(*cam, splatData_mutable, background,
+                                            1.0f, false, GsplatRenderMode::RGB, true);
+            } else {
+                auto rasterize_result = fast_rasterize_forward(*cam, splatData_mutable, background,
+                                                               0, 0, 0, 0,
+                                                               _params.optimization.mip_filter);
+                if (!rasterize_result) {
+                    throw std::runtime_error("Evaluation rasterization failed: " + rasterize_result.error());
+                }
+                r_output = std::move(rasterize_result->first);
             }
-            RenderOutput r_output = std::move(rasterize_result->first);
             r_output.image = r_output.image.clamp(0.0f, 1.0f);
 
             float psnr = 0.0f;
