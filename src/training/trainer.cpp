@@ -1415,11 +1415,11 @@ namespace lfs::training {
                                 ssim_map = photometric_loss_.ssim_workspace().ssim_map;
                             }
                             {
-                                const int H = static_cast<int>(ssim_map.shape()[2]);
-                                const int W = static_cast<int>(ssim_map.shape()[3]);
+                                const size_t H = ssim_map.shape()[2];
+                                const size_t W = ssim_map.shape()[3];
                                 if (!densification_error_map_.is_valid() ||
-                                    densification_error_map_.shape()[0] != static_cast<size_t>(H) ||
-                                    densification_error_map_.shape()[1] != static_cast<size_t>(W)) {
+                                    densification_error_map_.shape()[0] != H ||
+                                    densification_error_map_.shape()[1] != W) {
                                     densification_error_map_ = core::Tensor::empty({H, W}, core::Device::CUDA);
                                 }
                                 lfs::training::kernels::launch_ssim_to_error_map(ssim_map, densification_error_map_);
@@ -1440,11 +1440,11 @@ namespace lfs::training {
                             (void)ssim_ctx;
                             const auto& fallback_ssim_map = densification_ssim_workspace_.ssim_map;
                             {
-                                const int H = static_cast<int>(fallback_ssim_map.shape()[2]);
-                                const int W = static_cast<int>(fallback_ssim_map.shape()[3]);
+                                const size_t H = fallback_ssim_map.shape()[2];
+                                const size_t W = fallback_ssim_map.shape()[3];
                                 if (!densification_error_map_.is_valid() ||
-                                    densification_error_map_.shape()[0] != static_cast<size_t>(H) ||
-                                    densification_error_map_.shape()[1] != static_cast<size_t>(W)) {
+                                    densification_error_map_.shape()[0] != H ||
+                                    densification_error_map_.shape()[1] != W) {
                                     densification_error_map_ = core::Tensor::empty({H, W}, core::Device::CUDA);
                                 }
                                 lfs::training::kernels::launch_ssim_to_error_map(fallback_ssim_map, densification_error_map_);
