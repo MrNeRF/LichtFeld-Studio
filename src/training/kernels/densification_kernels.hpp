@@ -177,4 +177,23 @@ namespace lfs::training::kernels {
         bool revised_opacity,
         cudaStream_t stream = nullptr);
 
+    // TO-DO (Doc)
+    void launch_long_axis_split_gaussians_inplace(
+        float* positions,
+        float* rotations,
+        float* scales,
+        const float* sh0,
+        const float* shN,
+        float* opacities,
+        float* second_positions,
+        float* second_rotations,
+        float* second_scales,
+        float* second_sh0,
+        float* second_shN,
+        float* second_opacities,
+        const int64_t* split_indices,
+        int num_split,
+        int shN_dim,
+        cudaStream_t stream = nullptr);
+
 } // namespace lfs::training::kernels

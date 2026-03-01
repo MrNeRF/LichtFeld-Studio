@@ -26,7 +26,8 @@ namespace lfs::training {
         bool antialiased,
         GsplatRenderMode render_mode,
         bool use_gut,
-        const core::Tensor& bg_image) {
+        const core::Tensor& bg_image,
+        std::optional<const lfs::core::Tensor> pixel_weights) {
 
         // Begin arena frame for memory allocation
         auto& arena = core::GlobalArenaManager::instance().get_arena();
@@ -223,11 +224,17 @@ namespace lfs::training {
         const size_t render_colors_size = align(C * H * W * channels * sizeof(float));
         const size_t render_alphas_size = align(C * H * W * sizeof(float));
         const size_t last_ids_size = align(C * H * W * sizeof(int32_t));
+  
+        size_t accum_weights_size = 0;
+        if (pixel_weights.has_value() && pixel_weights.value().is_valid()) {
+            accum_weights_size = align(C * N * sizeof(float));
+        }
 
         const size_t total_size = radii_size + means2d_size + depths_size + dirs_size +
                                   conics_size + compensations_size + tiles_per_gauss_size +
                                   tile_offsets_size + colors_size + render_colors_size +
-                                  render_alphas_size + last_ids_size;
+                                  render_alphas_size + last_ids_size + accum_weights_size;
+
 
         // Allocate from arena
         char* blob = arena_allocator(total_size);
@@ -260,6 +267,19 @@ namespace lfs::training {
         auto* render_alphas_ptr_out = reinterpret_cast<float*>(ptr);
         ptr += render_alphas_size;
         auto* last_ids_ptr_out = reinterpret_cast<int32_t*>(ptr);
+
+        // Improved-GS+ gsplat rasterizer info
+        gsplat_lfs::ImprovedGSPlusData improved_gs_data {
+            .pixel_weights_ptr = nullptr,
+            .accum_weights_ptr_out = nullptr};
+       
+        if (pixel_weights.has_value() && pixel_weights.value().is_valid()) {
+            ptr += last_ids_size;
+            improved_gs_data.accum_weights_ptr_out = reinterpret_cast<float*>(ptr);
+            cudaMemsetAsync(improved_gs_data.accum_weights_ptr_out, 0, accum_weights_size, nullptr);
+
+            improved_gs_data.pixel_weights_ptr = pixel_weights.value().ptr<float>();
+        }
 
         // Setup result struct
         gsplat_lfs::RasterizeWithSHResult result{
@@ -313,6 +333,7 @@ namespace lfs::training {
             tangential_ptr,
             thin_prism_ptr,
             result,
+            improved_gs_data,
             fwd_stream);
 
         // Build RenderOutput - wrap raw pointers in tensor views
@@ -325,6 +346,12 @@ namespace lfs::training {
         auto render_alphas_tensor = core::Tensor::from_blob(
             render_alphas_ptr_out, {static_cast<size_t>(C), static_cast<size_t>(H), static_cast<size_t>(W), 1UL},
             core::Device::CUDA, core::DataType::Float32);
+
+        if (pixel_weights.has_value()) {
+            render_output.edges_score = core::Tensor::from_blob(improved_gs_data.accum_weights_ptr_out, {static_cast<size_t>(C), static_cast<size_t>(N)},
+                                                                        core::Device::CUDA, core::DataType::Float32).clone();
+        }
+
 
         // Process based on render mode
         core::Tensor final_image, final_depth;

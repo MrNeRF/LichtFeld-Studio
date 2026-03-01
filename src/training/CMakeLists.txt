@@ -21,6 +21,7 @@ set(LFS_TRAINING_KERNEL_SOURCES
     kernels/mcmc_kernels.cu
     kernels/densification_kernels.cu
     kernels/grad_alpha.cu
+    kernels/image_kernels.cu
     components/sparsity_optimizer_kernels.cu
 )
 
@@ -72,6 +73,7 @@ set(TRAINING_NEW_SOURCES
     strategies/adc.cpp
     strategies/mcmc.cpp
     strategies/strategy_factory.cpp
+    strategies/improved_gs_plus.cpp
     rasterization/fast_rasterizer.cpp
     rasterization/gsplat_rasterizer.cpp
     components/bilateral_grid.cpp

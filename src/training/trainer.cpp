@@ -28,6 +28,7 @@
 #include "rasterization/gsplat_rasterizer.hpp"
 #include "strategies/adc.hpp"
 #include "strategies/mcmc.hpp"
+#include "strategies/improved_gs_plus.hpp"
 #include "strategies/strategy_factory.hpp"
 #include "training/kernels/grad_alpha.hpp"
 
@@ -508,12 +509,30 @@ namespace lfs::training {
             }
 
             auto& splat = strategy_->get_model();
+            if (strategy_->strategy_type() == "I-GS+") {
+                ImprovedGsPlus* improved_gs_plus = dynamic_cast<ImprovedGsPlus*>(strategy_.get());
+                improved_gs_plus->set_views(train_dataset_);
+            }
 
             int max_cap = params.optimization.max_cap;
             if (max_cap < splat.size()) {
                 LOG_WARN("Max cap is less than to {} initial splats {}. Choosing randomly {} splats", max_cap, splat.size(), max_cap);
                 lfs::core::random_choose(splat, max_cap);
             }
+
+            // Initialize cache loader before strategy initialization
+            auto& cache_loader = lfs::io::CacheLoader::getInstance(
+                params.dataset.loading_params.use_cpu_memory,
+                params.dataset.loading_params.use_fs_cache);
+            cache_loader.reset_cache();
+            cache_loader.update_cache_params(
+                params.dataset.loading_params.use_cpu_memory,
+                params.dataset.loading_params.use_fs_cache,
+                train_dataset_size_,
+                params.dataset.loading_params.min_cpu_free_GB,
+                params.dataset.loading_params.min_cpu_free_memory_ratio,
+                params.dataset.loading_params.print_cache_status,
+                params.dataset.loading_params.print_status_freq_num);
 
             // Re-initialize strategy with new parameters
             strategy_->initialize(params.optimization);

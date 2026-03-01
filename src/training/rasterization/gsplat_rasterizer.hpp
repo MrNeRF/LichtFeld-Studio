@@ -113,7 +113,8 @@ namespace lfs::training {
         bool antialiased = false,
         GsplatRenderMode render_mode = GsplatRenderMode::RGB,
         bool use_gut = false,
-        const lfs::core::Tensor& bg_image = {});
+        const lfs::core::Tensor& bg_image = {},
+        std::optional<const lfs::core::Tensor> pixel_weights = std::nullopt);
 
     // Explicit backward pass - computes gradients and accumulates into optimizer
     void gsplat_rasterize_backward(
@@ -132,10 +133,11 @@ namespace lfs::training {
         float scaling_modifier = 1.0f,
         bool antialiased = false,
         GsplatRenderMode render_mode = GsplatRenderMode::RGB,
-        bool use_gut = false) {
+        bool use_gut = false,
+        std::optional<const lfs::core::Tensor> pixel_weights = std::nullopt) {
         auto result = gsplat_rasterize_forward(
             viewpoint_camera, gaussian_model, bg_color, 0, 0, 0, 0,
-            scaling_modifier, antialiased, render_mode, use_gut);
+            scaling_modifier, antialiased, render_mode, use_gut, {}, pixel_weights);
         if (!result) {
             throw std::runtime_error(result.error());
         }

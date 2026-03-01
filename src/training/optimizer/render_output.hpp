@@ -16,6 +16,7 @@ namespace lfs::training {
         lfs::core::Tensor depths;     // [..., N] - per-gaussian depths
         lfs::core::Tensor radii;      // [..., N]
         lfs::core::Tensor visibility; // [..., N]
+        lfs::core::Tensor edges_score;
         int width;
         int height;
     };

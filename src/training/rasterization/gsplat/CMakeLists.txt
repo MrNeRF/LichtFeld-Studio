@@ -29,6 +29,7 @@ set(GSPLAT_SOURCES
         QuatToRotmatCUDA.cu
         RasterizeToPixelsFromWorld3DGSBwd.cu
         RasterizeToPixelsFromWorld3DGSFwd.cu
+	RasterizeToPixelsFromWorld3DGSFwd_tam.cu
         RelocationCUDA.cu
         SphericalHarmonicsCUDA.cu
 )

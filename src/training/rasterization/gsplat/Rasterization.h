@@ -131,4 +131,49 @@ namespace gsplat_lfs {
         int32_t* pixel_ids,    // [n_elems] optional
         cudaStream_t stream = nullptr);
 
+    /////////////////////////////////////////////////
+    // rasterize_to_pixels_from_world_3dgs - Forward Improved-GS+ modification
+    /////////////////////////////////////////////////
+
+    template <uint32_t CDIM>
+    void launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel_tam(
+        // Gaussian parameters
+        const float* means,       // [N, 3]
+        const float* quats,       // [N, 4]
+        const float* scales,      // [N, 3]
+        const float* colors,      // [C, N, CDIM]
+        const float* opacities,   // [C, N]
+        const float* backgrounds, // [C, CDIM] optional (can be nullptr) - solid color
+        const float* bg_images,   // [C, CDIM, H, W] optional (can be nullptr) - per-pixel background
+        const bool* masks,        // [C, tile_height, tile_width] optional
+        // dimensions
+        uint32_t C,
+        uint32_t N,
+        uint32_t n_isects,
+        uint32_t image_width,
+        uint32_t image_height,
+        uint32_t tile_size,
+        // camera
+        const float* viewmats0, // [C, 4, 4]
+        const float* viewmats1, // [C, 4, 4] optional
+        const float* Ks,        // [C, 3, 3]
+        CameraModelType camera_model,
+        const UnscentedTransformParameters& ut_params,
+        ShutterType rs_type,
+        const float* radial_coeffs,     // optional
+        const float* tangential_coeffs, // optional
+        const float* thin_prism_coeffs, // optional
+        // intersections
+        const int32_t* tile_offsets, // [C, tile_height, tile_width]
+        const int32_t* flatten_ids,  // [n_isects]
+        // outputs (pre-allocated)
+        float* renders,    // [C, image_height, image_width, CDIM]
+        float* alphas,     // [C, image_height, image_width, 1]
+        int32_t* last_ids, // [C, image_height, image_width]
+        // I-GS+ input
+        const float* pixel_weights,
+        // I-GS+ output
+        float* accum_weights,
+        cudaStream_t stream = nullptr);
+
 } // namespace gsplat_lfs
