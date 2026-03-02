@@ -1,0 +1,8 @@
+<rml>
+<head>
+  <link type="text/template" href="docked_panel.rml"/>
+</head>
+<body template="docked-panel">
+  <div id="im-root"></div>
+</body>
+</rml>

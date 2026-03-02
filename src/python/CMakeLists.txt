@@ -172,6 +172,9 @@ nanobind_add_module(
     lfs/py_signals.cpp
     lfs/py_rml.cpp
     lfs/rml_python_panel_adapter.cpp
+    lfs/py_rml_im_mode_layout.cpp
+    lfs/rml_im_mode_layout.cpp
+    lfs/rml_im_mode_panel_adapter.cpp
 )
 
 set_target_properties(lfs_py PROPERTIES

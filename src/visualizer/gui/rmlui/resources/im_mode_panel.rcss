@@ -1,0 +1,95 @@
+/* Immediate-mode layout bridge styles */
+
+#im-root {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+}
+
+.im-line {
+    display: flex;
+    align-items: center;
+    padding: 1dp 0;
+    gap: 4dp;
+    width: 100%;
+}
+
+.im-label {
+    font-size: 13dp;
+    padding: 0 0 0 2dp;
+}
+
+.im-text-wrapped {
+    font-size: 13dp;
+    padding: 0 2dp;
+    word-break: break-word;
+}
+
+.im-bullet {
+    font-size: 13dp;
+    padding: 0 0 0 8dp;
+}
+
+/* Radio button */
+
+.im-radio {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    padding: 1dp 4dp;
+    gap: 4dp;
+    transition: background-color 0.12s quadratic-out;
+}
+
+.im-radio:hover {
+    background-color: rgba(88, 91, 112, 77);
+}
+
+.im-radio-dot {
+    font-size: 14dp;
+    width: 16dp;
+    text-align: center;
+}
+
+.im-radio-label {
+    font-size: 13dp;
+}
+
+/* Table layout */
+
+.im-table {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+}
+
+.im-table-row {
+    display: flex;
+    align-items: center;
+    padding: 1dp 0;
+    gap: 4dp;
+    width: 100%;
+}
+
+.im-table-cell {
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+}
+
+/* Color widgets */
+
+.im-color-swatch {
+    width: 24dp;
+    height: 24dp;
+    border-radius: 3dp;
+    border: 1dp solid rgba(255, 255, 255, 51);
+}
+
+.im-color-btn {
+    min-width: 24dp;
+    min-height: 24dp;
+    border-radius: 3dp;
+    border: 1dp solid rgba(255, 255, 255, 51);
+    padding: 0;
+}

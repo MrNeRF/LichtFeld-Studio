@@ -7,6 +7,7 @@
 #include "py_ui.hpp"
 #include "python/python_runtime.hpp"
 #include "python_panel_adapter.hpp"
+#include "rml_im_mode_panel_adapter.hpp"
 #include "rml_python_panel_adapter.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 
@@ -136,7 +137,17 @@ namespace lfs::python {
             return;
         }
 
-        auto adapter = std::make_shared<PythonPanelAdapter>(instance, nb::hasattr(panel_class, "poll"));
+        const bool has_poll = nb::hasattr(panel_class, "poll");
+        const bool use_rml = (space != PanelSpace::ViewportOverlay) && lfs::python::get_rml_manager();
+
+        std::shared_ptr<gui::IPanel> adapter;
+        if (use_rml) {
+            adapter = std::make_shared<gui::RmlImModePanelAdapter>(
+                lfs::python::get_rml_manager(), instance, has_poll);
+        } else {
+            adapter = std::make_shared<PythonPanelAdapter>(instance, has_poll);
+        }
+
         std::string parent_idname;
         try {
             if (nb::hasattr(panel_class, "parent")) {
@@ -163,7 +174,9 @@ namespace lfs::python {
         info.enabled = !default_closed;
 
         gui::PanelRegistry::instance().register_panel(std::move(info));
-        adapters_[idname] = std::move(adapter);
+        adapters_[idname] = std::dynamic_pointer_cast<PythonPanelAdapter>(adapter);
+        if (!adapters_[idname])
+            rml_adapters_[idname] = adapter;
     }
 
     void PyPanelRegistry::unregister_panel(nb::object panel_class) {
