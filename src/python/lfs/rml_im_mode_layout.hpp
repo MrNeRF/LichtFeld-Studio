@@ -12,6 +12,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <deque>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -70,7 +71,7 @@ namespace lfs::python {
 
     struct ContainerLevel {
         Rml::Element* parent = nullptr;
-        std::vector<Slot> slots;
+        std::deque<Slot> slots;
         int cursor = 0;
     };
 
@@ -421,6 +422,7 @@ namespace lfs::python {
         bool force_next_open_ = false;
 
         std::vector<std::unique_ptr<SlotEventListener>> listeners_;
+        std::vector<Rml::ElementPtr> removed_elements_;
         std::unordered_set<std::string> warned_methods_;
 
         Rml::Element* last_element_ = nullptr;

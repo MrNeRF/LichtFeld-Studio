@@ -83,14 +83,16 @@
     width: 24dp;
     height: 24dp;
     border-radius: 3dp;
-    border: 1dp solid rgba(255, 255, 255, 51);
+    border-width: 1dp;
+    border-color: rgba(255, 255, 255, 51);
 }
 
 .im-color-btn {
     min-width: 24dp;
     min-height: 24dp;
     border-radius: 3dp;
-    border: 1dp solid rgba(255, 255, 255, 51);
+    border-width: 1dp;
+    border-color: rgba(255, 255, 255, 51);
     padding: 0;
 }
 
@@ -101,7 +103,8 @@
     position: absolute;
     z-index: 100;
     background-color: rgba(30, 30, 46, 240);
-    border: 1dp solid rgba(88, 91, 112, 128);
+    border-width: 1dp;
+    border-color: rgba(88, 91, 112, 128);
     border-radius: 3dp;
     padding: 4dp 8dp;
     font-size: 12dp;
@@ -138,7 +141,8 @@
 }
 
 .im-child-bordered {
-    border: 1dp solid rgba(88, 91, 112, 77);
+    border-width: 1dp;
+    border-color: rgba(88, 91, 112, 77);
     border-radius: 3dp;
     padding: 4dp;
 }
@@ -166,7 +170,8 @@
     z-index: 100;
     min-width: 300dp;
     background-color: rgba(30, 30, 46, 245);
-    border: 1dp solid rgba(88, 91, 112, 128);
+    border-width: 1dp;
+    border-color: rgba(88, 91, 112, 128);
     border-radius: 6dp;
     padding: 12dp;
 }
@@ -180,6 +185,7 @@
     font-size: 15dp;
     font-weight: bold;
     padding-bottom: 8dp;
-    border-bottom: 1dp solid rgba(88, 91, 112, 77);
+    border-bottom-width: 1dp;
+    border-bottom-color: rgba(88, 91, 112, 77);
     margin-bottom: 8dp;
 }

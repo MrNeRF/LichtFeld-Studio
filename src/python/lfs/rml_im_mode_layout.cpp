@@ -58,12 +58,19 @@ namespace lfs::python {
         }
         assert(root_);
 
+        removed_elements_.clear();
+
         auto line_height_prop = root_->GetProperty("line-height");
         if (line_height_prop)
             cached_line_height_ = line_height_prop->Get<float>();
 
-        containers_.clear();
-        containers_.push_back({root_, {}, 0});
+        if (containers_.empty() || containers_[0].parent != root_) {
+            containers_.clear();
+            containers_.push_back({root_, {}, 0});
+        } else {
+            containers_.resize(1);
+            containers_[0].cursor = 0;
+        }
         current_line_ = nullptr;
         next_same_line_ = false;
         indent_level_ = 0;
@@ -90,7 +97,7 @@ namespace lfs::python {
         for (auto& level : containers_)
             prune_excess_slots(level);
 
-        containers_.clear();
+        containers_.resize(1);
         current_line_ = nullptr;
         doc_ = nullptr;
         root_ = nullptr;
@@ -100,7 +107,7 @@ namespace lfs::python {
         while (static_cast<int>(level.slots.size()) > level.cursor) {
             auto& slot = level.slots.back();
             if (slot.element && slot.element->GetParentNode())
-                slot.element->GetParentNode()->RemoveChild(slot.element);
+                removed_elements_.push_back(slot.element->GetParentNode()->RemoveChild(slot.element));
             level.slots.pop_back();
         }
     }
@@ -152,16 +159,19 @@ namespace lfs::python {
         finish_current_line();
 
         assert(!containers_.empty());
-        auto& level = containers_.back();
+        auto& slot = ensure_slot(SlotType::Line, build_id("line"));
 
-        auto line = doc_->CreateElement("div");
-        line->SetClass("im-line", true);
-        if (indent_level_ > 0)
-            line->SetProperty("margin-left", Rml::String(std::to_string(indent_level_ * 20) + "dp"));
-        if (disabled_)
-            line->SetClass("disabled-overlay", true);
+        if (!slot.element) {
+            auto line = doc_->CreateElement("div");
+            line->SetClass("im-line", true);
+            if (indent_level_ > 0)
+                line->SetProperty("margin-left", Rml::String(std::to_string(indent_level_ * 20) + "dp"));
+            if (disabled_)
+                line->SetClass("disabled-overlay", true);
+            slot.element = containers_.back().parent->AppendChild(std::move(line));
+        }
 
-        current_line_ = level.parent->AppendChild(std::move(line));
+        current_line_ = slot.element;
         return current_line_;
     }
 
@@ -182,7 +192,7 @@ namespace lfs::python {
                 return slot;
             }
             if (slot.element && slot.element->GetParentNode())
-                slot.element->GetParentNode()->RemoveChild(slot.element);
+                removed_elements_.push_back(slot.element->GetParentNode()->RemoveChild(slot.element));
             slot = Slot{type, key, nullptr, {}};
         } else {
             level.slots.push_back(Slot{type, key, nullptr, {}});
@@ -1167,15 +1177,21 @@ namespace lfs::python {
         finish_current_line();
 
         assert(!containers_.empty());
-        auto& level = containers_.back();
+        auto& slot = ensure_slot(SlotType::Line, build_id("table:" + id));
 
-        auto el = doc_->CreateElement("div");
-        el->SetClass("im-table", true);
+        if (!slot.element) {
+            auto el = doc_->CreateElement("div");
+            el->SetClass("im-table", true);
+            slot.element = containers_.back().parent->AppendChild(std::move(el));
+        }
+
+        while (slot.element->HasChildNodes())
+            removed_elements_.push_back(slot.element->RemoveChild(slot.element->GetFirstChild()));
 
         table_ = TableState{};
         table_->num_columns = columns;
         table_->column_widths.resize(columns, 0.0f);
-        table_->table_element = level.parent->AppendChild(std::move(el));
+        table_->table_element = slot.element;
         table_->current_row = nullptr;
         table_->current_cell = nullptr;
         table_->current_column = -1;
@@ -1449,24 +1465,31 @@ namespace lfs::python {
 
     void RmlImModeLayout::set_scroll_here_y(float /*center_y_ratio*/) {}
 
-    bool RmlImModeLayout::begin_child(const std::string& /*id*/, std::tuple<float, float> size, bool border) {
+    bool RmlImModeLayout::begin_child(const std::string& id, std::tuple<float, float> size, bool border) {
         if (!doc_)
             return true;
         finish_current_line();
         assert(!containers_.empty());
 
-        auto el = doc_->CreateElement("div");
-        el->SetClass("im-child", true);
-        auto [w, h] = size;
-        if (w > 0)
-            el->SetProperty("width", Rml::String(std::to_string(static_cast<int>(w)) + "dp"));
-        if (h > 0)
-            el->SetProperty("height", Rml::String(std::to_string(static_cast<int>(h)) + "dp"));
-        if (border)
-            el->SetClass("im-child-bordered", true);
+        auto& slot = ensure_slot(SlotType::Line, build_id("child:" + id));
 
-        auto* container = containers_.back().parent->AppendChild(std::move(el));
-        containers_.push_back({container, {}, 0});
+        if (!slot.element) {
+            auto el = doc_->CreateElement("div");
+            el->SetClass("im-child", true);
+            auto [w, h] = size;
+            if (w > 0)
+                el->SetProperty("width", Rml::String(std::to_string(static_cast<int>(w)) + "dp"));
+            if (h > 0)
+                el->SetProperty("height", Rml::String(std::to_string(static_cast<int>(h)) + "dp"));
+            if (border)
+                el->SetClass("im-child-bordered", true);
+            slot.element = containers_.back().parent->AppendChild(std::move(el));
+        }
+
+        while (slot.element->HasChildNodes())
+            removed_elements_.push_back(slot.element->RemoveChild(slot.element->GetFirstChild()));
+
+        containers_.push_back({slot.element, {}, 0});
         return true;
     }
 
@@ -1999,10 +2022,20 @@ namespace lfs::python {
         parent_->finish_current_line();
         assert(!parent_->containers_.empty());
 
-        auto el = parent_->doc_->CreateElement("div");
-        el->SetClass(direction_ == RmlLayoutDirection::Row ? "im-row" : "im-column", true);
-        auto* container = parent_->containers_.back().parent->AppendChild(std::move(el));
-        parent_->containers_.push_back({container, {}, 0});
+        const char* cls = direction_ == RmlLayoutDirection::Row ? "im-row" : "im-column";
+        auto& slot = parent_->ensure_slot(
+            SlotType::Line, parent_->build_id(direction_ == RmlLayoutDirection::Row ? "row" : "col"));
+
+        if (!slot.element) {
+            auto el = parent_->doc_->CreateElement("div");
+            el->SetClass(cls, true);
+            slot.element = parent_->containers_.back().parent->AppendChild(std::move(el));
+        }
+
+        while (slot.element->HasChildNodes())
+            parent_->removed_elements_.push_back(slot.element->RemoveChild(slot.element->GetFirstChild()));
+
+        parent_->containers_.push_back({slot.element, {}, 0});
         return *this;
     }
 

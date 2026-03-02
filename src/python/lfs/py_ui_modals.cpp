@@ -11,6 +11,16 @@
 namespace lfs::python {
 
     namespace {
+
+        using SafePyFunc = std::shared_ptr<nb::object>;
+
+        SafePyFunc make_safe_py_func(nb::object func) {
+            return {new nb::object(std::move(func)), [](nb::object* p) {
+                        nb::gil_scoped_acquire gil;
+                        delete p;
+                    }};
+        }
+
         std::string escapeRml(const std::string& text) {
             std::string result;
             result.reserve(text.size() + text.size() / 8);
@@ -69,11 +79,11 @@ namespace lfs::python {
                         cpp_cb(result.button_label);
                     };
                 } else if (modal.callback.is_valid() && !modal.callback.is_none()) {
-                    nb::object py_cb = std::move(modal.callback);
-                    req.on_result = [py_cb = std::move(py_cb)](const lfs::core::ModalResult& result) {
+                    auto py_cb = make_safe_py_func(std::move(modal.callback));
+                    req.on_result = [py_cb](const lfs::core::ModalResult& result) {
                         nb::gil_scoped_acquire gil;
                         try {
-                            py_cb(result.button_label);
+                            (*py_cb)(result.button_label);
                         } catch (const std::exception& e) {
                             LOG_ERROR("Modal callback error: {}", e.what());
                         }
@@ -87,22 +97,22 @@ namespace lfs::python {
                 req.buttons = {{"OK", "primary"}, {"Cancel", "secondary"}};
 
                 if (modal.callback.is_valid() && !modal.callback.is_none()) {
-                    nb::object py_cb = std::move(modal.callback);
-                    req.on_result = [py_cb = std::move(py_cb)](const lfs::core::ModalResult& result) {
+                    auto py_cb = make_safe_py_func(std::move(modal.callback));
+                    req.on_result = [py_cb](const lfs::core::ModalResult& result) {
                         nb::gil_scoped_acquire gil;
                         try {
                             if (result.button_label == "OK")
-                                py_cb(nb::str(result.input_value.c_str()));
+                                (*py_cb)(nb::str(result.input_value.c_str()));
                             else
-                                py_cb(nb::none());
+                                (*py_cb)(nb::none());
                         } catch (const std::exception& e) {
                             LOG_ERROR("Modal callback error: {}", e.what());
                         }
                     };
-                    req.on_cancel = [py_cb_cancel = nb::object(py_cb)]() {
+                    req.on_cancel = [py_cb]() {
                         nb::gil_scoped_acquire gil;
                         try {
-                            py_cb_cancel(nb::none());
+                            (*py_cb)(nb::none());
                         } catch (const std::exception& e) {
                             LOG_ERROR("Modal callback error: {}", e.what());
                         }
@@ -114,11 +124,11 @@ namespace lfs::python {
                 req.buttons = {{"OK", "primary"}};
 
                 if (modal.callback.is_valid() && !modal.callback.is_none()) {
-                    nb::object py_cb = std::move(modal.callback);
-                    req.on_result = [py_cb = std::move(py_cb)](const lfs::core::ModalResult&) {
+                    auto py_cb = make_safe_py_func(std::move(modal.callback));
+                    req.on_result = [py_cb](const lfs::core::ModalResult&) {
                         nb::gil_scoped_acquire gil;
                         try {
-                            py_cb();
+                            (*py_cb)();
                         } catch (const std::exception& e) {
                             LOG_ERROR("Modal callback error: {}", e.what());
                         }
