@@ -116,19 +116,8 @@ namespace lfs::vis::gui {
 
         lang_listener_ = new LangChangeListener();
         auto* lang_select = document_->GetElementById("lang-select");
-        if (lang_select) {
+        if (lang_select)
             lang_select->AddEventListener(Rml::EventId::Change, lang_listener_);
-            for (int i = 0; i < lang_select->GetNumChildren(true); ++i) {
-                auto* child = lang_select->GetChild(i);
-                if (!child)
-                    continue;
-                if (child->GetTagName() == "selectarrow") {
-                    child->SetProperty("width", "14dp");
-                    child->SetProperty("decorator", "image(../icon/dropdown-arrow.png)");
-                    child->SetProperty("image-color", "rgba(180,180,200,180)");
-                }
-            }
-        }
 
         updateTheme();
     }

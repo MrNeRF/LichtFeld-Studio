@@ -72,10 +72,14 @@
       <div class="setting-row">
         <span class="prop-label">{{label_iterations}}</span>
         <input type="text" class="number-input" data-value="iterations_str" />
+        <button class="num-step-btn" data-event-mousedown="num_step('iterations', -1)">-</button>
+        <button class="num-step-btn" data-event-mousedown="num_step('iterations', 1)">+</button>
       </div>
       <div class="setting-row">
         <span class="prop-label">{{label_max_cap}}</span>
         <input type="text" class="number-input" data-value="max_cap_str" />
+        <button class="num-step-btn" data-event-mousedown="num_step('max_cap', -1)">-</button>
+        <button class="num-step-btn" data-event-mousedown="num_step('max_cap', 1)">+</button>
       </div>
       <div class="setting-row">
         <span class="prop-label">{{label_sh_degree}}</span>
@@ -97,6 +101,8 @@
       <div class="setting-row">
         <span class="prop-label">{{label_steps_scaler}}</span>
         <input type="text" class="number-input" data-value="steps_scaler_str" />
+        <button class="num-step-btn" data-event-mousedown="num_step('steps_scaler', -1)">-</button>
+        <button class="num-step-btn" data-event-mousedown="num_step('steps_scaler', 1)">+</button>
       </div>
     </div>
 
@@ -159,11 +165,15 @@
             <div class="setting-row">
               <span class="prop-label">{{label_ppisp_activation_step}}</span>
               <input type="text" class="number-input" data-value="ppisp_activation_step_str" />
+              <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', -1)">-</button>
+              <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', 1)">+</button>
             </div>
           </div>
           <div class="setting-row">
             <span class="prop-label">{{label_ppisp_controller_lr}}</span>
             <input type="text" class="number-input" data-value="ppisp_controller_lr_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('ppisp_controller_lr', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('ppisp_controller_lr', 1)">+</button>
           </div>
           <div class="setting-row">
             <span class="prop-label">{{label_ppisp_freeze_gaussians}}</span>
@@ -238,6 +248,8 @@
         <div class="setting-row">
           <span class="prop-label">{{label_max_width}}</span>
           <input type="text" class="number-input" data-value="max_width_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('max_width', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('max_width', 1)">+</button>
         </div>
         <div class="setting-row">
           <span class="prop-label">{{label_cpu_cache}}</span>
@@ -270,47 +282,69 @@
         <div class="setting-row">
           <span class="prop-label">{{label_means_lr}}</span>
           <input type="text" class="number-input" data-value="means_lr_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('means_lr', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('means_lr', 1)">+</button>
         </div>
         <div class="setting-row">
           <span class="prop-label">{{label_shs_lr}}</span>
           <input type="text" class="number-input" data-value="shs_lr_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('shs_lr', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('shs_lr', 1)">+</button>
         </div>
         <div class="setting-row">
           <span class="prop-label">{{label_opacity_lr}}</span>
           <input type="text" class="number-input" data-value="opacity_lr_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('opacity_lr', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('opacity_lr', 1)">+</button>
         </div>
         <div class="setting-row">
           <span class="prop-label">{{label_scaling_lr}}</span>
           <input type="text" class="number-input" data-value="scaling_lr_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('scaling_lr', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('scaling_lr', 1)">+</button>
         </div>
         <div class="setting-row">
           <span class="prop-label">{{label_rotation_lr}}</span>
           <input type="text" class="number-input" data-value="rotation_lr_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('rotation_lr', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('rotation_lr', 1)">+</button>
         </div>
         <span class="status-text status-muted">{{label_refinement_header}}</span>
         <div class="setting-row">
           <span class="prop-label">{{label_refine_every}}</span>
           <input type="text" class="number-input" data-value="refine_every_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('refine_every', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('refine_every', 1)">+</button>
         </div>
         <div class="setting-row">
           <span class="prop-label">{{label_start_refine}}</span>
           <input type="text" class="number-input" data-value="start_refine_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('start_refine', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('start_refine', 1)">+</button>
         </div>
         <div class="setting-row">
           <span class="prop-label">{{label_stop_refine}}</span>
           <input type="text" class="number-input" data-value="stop_refine_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('stop_refine', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('stop_refine', 1)">+</button>
         </div>
         <div class="setting-row">
           <span class="prop-label">{{label_grad_threshold}}</span>
           <input type="text" class="number-input" data-value="grad_threshold_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('grad_threshold', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('grad_threshold', 1)">+</button>
         </div>
         <div class="setting-row">
           <span class="prop-label">{{label_reset_every}}</span>
           <input type="text" class="number-input" data-value="reset_every_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('reset_every', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('reset_every', 1)">+</button>
         </div>
         <div class="setting-row">
           <span class="prop-label">{{label_sh_degree_interval}}</span>
           <input type="text" class="number-input" data-value="sh_degree_interval_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('sh_degree_interval', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('sh_degree_interval', 1)">+</button>
         </div>
       </div>
     </div>
@@ -326,18 +360,26 @@
           <div class="setting-row">
             <span class="prop-label">{{label_bilateral_grid_x}}</span>
             <input type="text" class="number-input" data-value="bilateral_grid_x_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_x', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_x', 1)">+</button>
           </div>
           <div class="setting-row">
             <span class="prop-label">{{label_bilateral_grid_y}}</span>
             <input type="text" class="number-input" data-value="bilateral_grid_y_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_y', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_y', 1)">+</button>
           </div>
           <div class="setting-row">
             <span class="prop-label">{{label_bilateral_grid_w}}</span>
             <input type="text" class="number-input" data-value="bilateral_grid_w_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_w', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_w', 1)">+</button>
           </div>
           <div class="setting-row">
             <span class="prop-label">{{label_bilateral_grid_lr}}</span>
             <input type="text" class="number-input" data-value="bilateral_grid_lr_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_lr', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_lr', 1)">+</button>
           </div>
         </div>
       </div>
@@ -358,14 +400,20 @@
         <div class="setting-row">
           <span class="prop-label">{{label_opacity_reg}}</span>
           <input type="text" class="number-input" data-value="opacity_reg_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('opacity_reg', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('opacity_reg', 1)">+</button>
         </div>
         <div class="setting-row">
           <span class="prop-label">{{label_scale_reg}}</span>
           <input type="text" class="number-input" data-value="scale_reg_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('scale_reg', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('scale_reg', 1)">+</button>
         </div>
         <div class="setting-row">
           <span class="prop-label">{{label_tv_loss_weight}}</span>
           <input type="text" class="number-input" data-value="tv_loss_weight_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('tv_loss_weight', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('tv_loss_weight', 1)">+</button>
         </div>
       </div>
     </div>
@@ -385,6 +433,8 @@
         <div class="setting-row">
           <span class="prop-label">{{label_init_scaling}}</span>
           <input type="text" class="number-input" data-value="init_scaling_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('init_scaling', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('init_scaling', 1)">+</button>
         </div>
         <div class="setting-row">
           <span class="prop-label">{{label_random_init}}</span>
@@ -394,10 +444,14 @@
           <div class="setting-row">
             <span class="prop-label">{{label_init_num_pts}}</span>
             <input type="text" class="number-input" data-value="init_num_pts_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('init_num_pts', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('init_num_pts', 1)">+</button>
           </div>
           <div class="setting-row">
             <span class="prop-label">{{label_init_extent}}</span>
             <input type="text" class="number-input" data-value="init_extent_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('init_extent', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('init_extent', 1)">+</button>
           </div>
         </div>
       </div>
@@ -414,30 +468,44 @@
           <div class="setting-row">
             <span class="prop-label">{{label_min_opacity}}</span>
             <input type="text" class="number-input" data-value="min_opacity_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('min_opacity', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('min_opacity', 1)">+</button>
           </div>
           <div class="setting-row">
             <span class="prop-label">{{label_prune_opacity}}</span>
             <input type="text" class="number-input" data-value="prune_opacity_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('prune_opacity', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('prune_opacity', 1)">+</button>
           </div>
           <div class="setting-row">
             <span class="prop-label">{{label_grow_scale3d}}</span>
             <input type="text" class="number-input" data-value="grow_scale3d_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('grow_scale3d', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('grow_scale3d', 1)">+</button>
           </div>
           <div class="setting-row">
             <span class="prop-label">{{label_grow_scale2d}}</span>
             <input type="text" class="number-input" data-value="grow_scale2d_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('grow_scale2d', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('grow_scale2d', 1)">+</button>
           </div>
           <div class="setting-row">
             <span class="prop-label">{{label_prune_scale3d}}</span>
             <input type="text" class="number-input" data-value="prune_scale3d_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('prune_scale3d', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('prune_scale3d', 1)">+</button>
           </div>
           <div class="setting-row">
             <span class="prop-label">{{label_prune_scale2d}}</span>
             <input type="text" class="number-input" data-value="prune_scale2d_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('prune_scale2d', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('prune_scale2d', 1)">+</button>
           </div>
           <div class="setting-row">
             <span class="prop-label">{{label_pause_refine_after_reset}}</span>
             <input type="text" class="number-input" data-value="pause_refine_after_reset_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('pause_refine_after_reset', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('pause_refine_after_reset', 1)">+</button>
           </div>
           <div class="setting-row">
             <span class="prop-label">{{label_revised_opacity}}</span>
@@ -458,10 +526,14 @@
           <div class="setting-row">
             <span class="prop-label">{{label_sparsify_steps}}</span>
             <input type="text" class="number-input" data-value="sparsify_steps_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('sparsify_steps', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('sparsify_steps', 1)">+</button>
           </div>
           <div class="setting-row">
             <span class="prop-label">{{label_init_rho}}</span>
             <input type="text" class="number-input" data-value="init_rho_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('init_rho', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('init_rho', 1)">+</button>
           </div>
           <div class="setting-row">
             <span class="prop-label">{{label_prune_ratio}}</span>
@@ -481,6 +553,8 @@
       <div data-if="save_edit_mode">
         <div class="setting-row">
           <input type="text" id="num-new_step" class="number-input" data-value="new_step_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('new_step', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('new_step', 1)">+</button>
           <button class="btn btn--secondary" data-event-click="action('add_step')">{{label_add}}</button>
         </div>
         <div class="separator"></div>

@@ -184,6 +184,11 @@ selectbox option:hover {
     background-color: #89b4fa;
 }
 
+selectarrow {
+    width: 14dp;
+    margin-left: 4dp;
+}
+
 /* ── Progress ───────────────────────────────────────────── */
 
 progress {
@@ -608,9 +613,23 @@ crf-curve {
 /* ── Number Input ──────────────────────────────────────── */
 
 .number-input {
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     box-sizing: border-box;
     font-family: JetBrainsMono;
+}
+
+.num-step-btn {
+    width: 20dp;
+    height: 18dp;
+    padding: 0;
+    text-align: center;
+    font-size: 13dp;
+    border-width: 1dp;
+    margin-left: 2dp;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: background-color border-color 0.12s quadratic-out;
 }
 
 /* ── Full-width button ─────────────────────────────────── */

@@ -74,6 +74,11 @@ namespace lfs::vis::gui::rml_theme {
             check_path = lfs::vis::getAssetPath("icon/check.png").string();
         } catch (...) {}
 
+        std::string arrow_path;
+        try {
+            arrow_path = lfs::vis::getAssetPath("icon/dropdown-arrow.png").string();
+        } catch (...) {}
+
         const float tn = t.button.tint_normal;
         const float th = t.button.tint_hover;
         const float ta = t.button.tint_active;
@@ -113,6 +118,11 @@ namespace lfs::vis::gui::rml_theme {
                 ? std::string{}
                 : std::format("input[type=\"checkbox\"]:checked {{ decorator: image({}); }}\n", check_path);
 
+        const auto arrow_decorator =
+            arrow_path.empty()
+                ? std::string{}
+                : std::format("selectarrow {{ decorator: image({}); image-color: {}; }}\n", arrow_path, text_dim);
+
         const auto error_col = colorToRml(p.error);
 
         return std::format(
@@ -137,6 +147,7 @@ namespace lfs::vis::gui::rml_theme {
                    surface, border, surface_bright, text, text_dim,
                    error_col, primary) +
                check_decorator +
+               arrow_decorator +
                std::format(
                    "input[type=\"checkbox\"] {{ border-color: {5}; }}\n"
                    "input[type=\"checkbox\"]:checked {{ background-color: {4}; border-color: {4}; }}\n"
@@ -209,7 +220,11 @@ namespace lfs::vis::gui::rml_theme {
                    "input[type=\"text\"] {{ padding: {4}dp {3}dp; }}\n"
                    "select {{ padding: {4}dp {3}dp; }}\n"
                    ".btn--full {{ padding: {4}dp {3}dp; }}\n",
-                   row_pad_y, indent, inner_gap, fp_x, fp_y);
+                   row_pad_y, indent, inner_gap, fp_x, fp_y) +
+               std::format(
+                   ".num-step-btn {{ color: {0}; background-color: {1}; border-color: {2}; }}\n"
+                   ".num-step-btn:hover {{ background-color: {3}; border-color: {4}; }}\n",
+                   text_dim, surface, border, surface_bright, primary);
     }
 
     std::string generateSpriteSheetRCSS() {

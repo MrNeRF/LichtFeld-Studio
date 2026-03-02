@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Sequencer settings panel - camera animation and video export (RML)."""
 
+import time
+
 import lichtfeld as lf
 
 from .sequencer_section import (
@@ -25,6 +27,10 @@ class SequencerSettingsPanel(RmlPanel):
         self._collapsed = set()
         self._show_clear_modal = False
         self._last_has_keyframes = None
+        self._step_repeat_prop = None
+        self._step_repeat_dir = 0
+        self._step_repeat_start = 0.0
+        self._step_repeat_last = 0.0
 
     @classmethod
     def poll(cls, context=None):
@@ -155,10 +161,17 @@ class SequencerSettingsPanel(RmlPanel):
         model.bind_event("clear_confirm", self._on_clear_confirm)
         model.bind_event("clear_cancel", self._on_clear_cancel)
         model.bind_event("export_video", self._on_export_video)
+        model.bind_event("num_step", self._on_num_step)
 
         self._handle = model.get_handle()
 
+    def on_load(self, doc):
+        body = doc.get_element_by_id("body")
+        if body:
+            body.add_event_listener("mouseup", self._on_step_mouseup)
+
     def on_update(self, doc):
+        self._update_step_repeat()
         if self._handle:
             hk = lf.ui.has_keyframes()
             if hk != self._last_has_keyframes:
@@ -172,6 +185,43 @@ class SequencerSettingsPanel(RmlPanel):
     def on_unload(self, doc):
         doc.remove_data_model("sequencer_settings")
         self._handle = None
+
+    def _on_num_step(self, handle, event, args):
+        if len(args) < 2:
+            return
+        prop = str(args[0])
+        direction = int(args[1])
+        self._apply_num_step(prop, direction)
+        now = time.monotonic()
+        self._step_repeat_prop = prop
+        self._step_repeat_dir = direction
+        self._step_repeat_start = now
+        self._step_repeat_last = now
+
+    def _apply_num_step(self, prop, direction):
+        vs = _video_state
+        if prop == "custom_width":
+            vs.custom_width = max(MIN_WIDTH, min(MAX_WIDTH, vs.custom_width + 16 * direction))
+            if self._handle:
+                self._handle.dirty("custom_width")
+        elif prop == "custom_height":
+            vs.custom_height = max(MIN_HEIGHT, min(MAX_HEIGHT, vs.custom_height + 16 * direction))
+            if self._handle:
+                self._handle.dirty("custom_height")
+
+    def _on_step_mouseup(self, event):
+        self._step_repeat_prop = None
+
+    def _update_step_repeat(self):
+        if not self._step_repeat_prop:
+            return
+        now = time.monotonic()
+        if now - self._step_repeat_start < 0.15:
+            return
+        if now - self._step_repeat_last < 0.01:
+            return
+        self._step_repeat_last = now
+        self._apply_num_step(self._step_repeat_prop, self._step_repeat_dir)
 
     def _set_preset(self, idx):
         vs = _video_state

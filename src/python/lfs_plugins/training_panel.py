@@ -144,41 +144,45 @@ DATASET_BOOL_PROPS = ["use_cpu_cache", "use_fs_cache"]
 
 # (prop, type, format, min, max)
 NUM_PROP_DEFS = [
-    ("iterations", int, "%d", 1, None),
-    ("max_cap", int, "%d", 1, None),
-    ("steps_scaler", float, "%.2f", 0.01, None),
-    ("means_lr", float, "%.6f", 0, None),
-    ("shs_lr", float, "%.4f", 0, None),
-    ("opacity_lr", float, "%.4f", 0, None),
-    ("scaling_lr", float, "%.4f", 0, None),
-    ("rotation_lr", float, "%.4f", 0, None),
-    ("refine_every", int, "%d", 1, None),
-    ("start_refine", int, "%d", 0, None),
-    ("stop_refine", int, "%d", 0, None),
-    ("grad_threshold", float, "%.6f", 0, None),
-    ("reset_every", int, "%d", 1, None),
-    ("sh_degree_interval", int, "%d", 1, None),
-    ("bilateral_grid_x", int, "%d", 1, None),
-    ("bilateral_grid_y", int, "%d", 1, None),
-    ("bilateral_grid_w", int, "%d", 1, None),
-    ("bilateral_grid_lr", float, "%.6f", 0, None),
-    ("opacity_reg", float, "%.4f", 0, None),
-    ("scale_reg", float, "%.4f", 0, None),
-    ("tv_loss_weight", float, "%.1f", 0, None),
-    ("init_scaling", float, "%.3f", 0.001, None),
-    ("init_num_pts", int, "%d", 1, None),
-    ("init_extent", float, "%.1f", 0.1, None),
-    ("min_opacity", float, "%.4f", 0, None),
-    ("prune_opacity", float, "%.4f", 0, None),
-    ("grow_scale3d", float, "%.4f", 0, None),
-    ("grow_scale2d", float, "%.3f", 0, None),
-    ("prune_scale3d", float, "%.3f", 0, None),
-    ("prune_scale2d", float, "%.3f", 0, None),
-    ("pause_refine_after_reset", int, "%d", 0, None),
-    ("sparsify_steps", int, "%d", 1, None),
-    ("init_rho", float, "%.4f", 0, None),
-    ("ppisp_controller_lr", float, "%.5f", 0, None),
+    # (name, dtype, format, min, max, step)
+    ("iterations", int, "%d", 1, None, 100),
+    ("max_cap", int, "%d", 1, None, 100000),
+    ("steps_scaler", float, "%.2f", 0.01, None, 0.1),
+    ("means_lr", float, "%.6f", 0, None, 0.00001),
+    ("shs_lr", float, "%.4f", 0, None, 0.001),
+    ("opacity_lr", float, "%.4f", 0, None, 0.001),
+    ("scaling_lr", float, "%.4f", 0, None, 0.001),
+    ("rotation_lr", float, "%.4f", 0, None, 0.001),
+    ("refine_every", int, "%d", 1, None, 10),
+    ("start_refine", int, "%d", 0, None, 100),
+    ("stop_refine", int, "%d", 0, None, 100),
+    ("grad_threshold", float, "%.6f", 0, None, 0.00001),
+    ("reset_every", int, "%d", 1, None, 100),
+    ("sh_degree_interval", int, "%d", 1, None, 100),
+    ("bilateral_grid_x", int, "%d", 1, None, 1),
+    ("bilateral_grid_y", int, "%d", 1, None, 1),
+    ("bilateral_grid_w", int, "%d", 1, None, 1),
+    ("bilateral_grid_lr", float, "%.6f", 0, None, 0.00001),
+    ("opacity_reg", float, "%.4f", 0, None, 0.001),
+    ("scale_reg", float, "%.4f", 0, None, 0.001),
+    ("tv_loss_weight", float, "%.1f", 0, None, 0.5),
+    ("init_scaling", float, "%.3f", 0.001, None, 0.01),
+    ("init_num_pts", int, "%d", 1, None, 1000),
+    ("init_extent", float, "%.1f", 0.1, None, 0.5),
+    ("min_opacity", float, "%.4f", 0, None, 0.001),
+    ("prune_opacity", float, "%.4f", 0, None, 0.001),
+    ("grow_scale3d", float, "%.4f", 0, None, 0.001),
+    ("grow_scale2d", float, "%.3f", 0, None, 0.01),
+    ("prune_scale3d", float, "%.3f", 0, None, 0.01),
+    ("prune_scale2d", float, "%.3f", 0, None, 0.01),
+    ("pause_refine_after_reset", int, "%d", 0, None, 10),
+    ("sparsify_steps", int, "%d", 1, None, 100),
+    ("init_rho", float, "%.4f", 0, None, 0.001),
+    ("ppisp_controller_lr", float, "%.5f", 0, None, 0.0001),
 ]
+
+_NUM_PROP_LOOKUP = {name: (dtype, fmt, min_v, max_v, step)
+                    for name, dtype, fmt, min_v, max_v, step in NUM_PROP_DEFS}
 
 SLIDER_PROPS = ["lambda_dssim", "init_opacity", "prune_ratio"]
 
@@ -202,6 +206,8 @@ INITIALLY_COLLAPSED = {
     "advanced_params", "dataset", "optimization", "bilateral",
     "losses", "init", "adc", "sparsity", "save_steps",
 }
+
+
 
 
 def _color_to_hex(c):
@@ -245,6 +251,10 @@ class TrainingPanel(RmlPanel):
         self._loss_graph_el = None
         self._loss_label_el = None
         self._tick_els = []
+        self._step_repeat_prop = None
+        self._step_repeat_dir = 0
+        self._step_repeat_start = 0.0
+        self._step_repeat_last = 0.0
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("training")
@@ -427,7 +437,7 @@ class TrainingPanel(RmlPanel):
                     lambda v: self._set_resize_factor(v))
 
     def _bind_num_props(self, model, p, d):
-        for prop, dtype, fmt, min_v, max_v in NUM_PROP_DEFS:
+        for prop, dtype, fmt, min_v, max_v, _step in NUM_PROP_DEFS:
             model.bind(
                 f"{prop}_str",
                 lambda pr=prop, f=fmt: f % getattr(p(), pr, 0) if p() and p().has_params() else "",
@@ -539,6 +549,7 @@ class TrainingPanel(RmlPanel):
         model.bind_event("picker_change", self._on_picker_change)
         model.bind_event("action", self._on_action)
         model.bind_event("remove_step", self._on_remove_step_event)
+        model.bind_event("num_step", self._on_num_step)
 
     def on_load(self, doc):
         self._doc = doc
@@ -548,6 +559,7 @@ class TrainingPanel(RmlPanel):
         body = doc.get_element_by_id("body")
         if body:
             body.add_event_listener("click", self._on_body_click)
+            body.add_event_listener("mouseup", self._on_step_mouseup)
         self._loss_graph_el = doc.get_element_by_id("loss-graph-el")
         self._loss_label_el = doc.get_element_by_id("loss-label")
         self._tick_els = [
@@ -584,6 +596,7 @@ class TrainingPanel(RmlPanel):
             if params and params.has_params():
                 self._try_auto_scale_steps(params)
 
+        self._update_step_repeat()
         self._update_progress(doc)
         self._update_save_steps(doc)
         self._update_color_swatch(doc)
@@ -839,6 +852,72 @@ class TrainingPanel(RmlPanel):
                 self._handle.dirty_all()
 
     # ── Event handlers ─────────────────────────────────────
+
+    def _on_num_step(self, handle, event, args):
+        if len(args) < 2:
+            return
+        prop = str(args[0])
+        direction = int(args[1])
+        self._apply_num_step(prop, direction)
+        now = time.monotonic()
+        self._step_repeat_prop = prop
+        self._step_repeat_dir = direction
+        self._step_repeat_start = now
+        self._step_repeat_last = now
+
+    def _apply_num_step(self, prop, direction):
+        entry = _NUM_PROP_LOOKUP.get(prop)
+        if entry:
+            params = lf.optimization_params()
+            if not params or not params.has_params():
+                return
+            dtype, fmt, min_v, max_v, step = entry
+            current = getattr(params, prop, 0)
+            new_val = dtype(current + step * direction)
+            if min_v is not None:
+                new_val = max(new_val, dtype(min_v))
+            if max_v is not None:
+                new_val = min(new_val, dtype(max_v))
+            self._set_num_prop(prop, str(new_val), dtype, min_v, max_v)
+            if self._handle:
+                self._handle.dirty(f"{prop}_str")
+            return
+
+        if prop == "ppisp_activation_step":
+            params = lf.optimization_params()
+            if not params or not params.has_params():
+                return
+            current = params.ppisp_controller_activation_step
+            if current < 0:
+                return
+            params.ppisp_controller_activation_step = max(1, current + 100 * direction)
+            if self._handle:
+                self._handle.dirty("ppisp_activation_step_str")
+        elif prop == "max_width":
+            d = lf.dataset_params()
+            if not d or not d.has_params():
+                return
+            d.max_width = max(1, min(4096, d.max_width + 16 * direction))
+            if self._handle:
+                self._handle.dirty("max_width_str")
+        elif prop == "new_step":
+            self._new_save_step = max(1, self._new_save_step + 100 * direction)
+            if self._handle:
+                self._handle.dirty("new_step_str")
+
+    def _on_step_mouseup(self, event):
+        self._step_repeat_prop = None
+
+    def _update_step_repeat(self):
+        if not self._step_repeat_prop:
+            return
+        now = time.monotonic()
+        if now - self._step_repeat_start < 0.15:
+            return
+        if now - self._step_repeat_last < 0.01:
+            return
+        self._step_repeat_last = now
+        self._apply_num_step(self._step_repeat_prop, self._step_repeat_dir)
 
     def _on_toggle_section(self, handle, event, args):
         if not args:

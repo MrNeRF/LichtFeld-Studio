@@ -103,11 +103,15 @@
 
     <div data-if="is_custom_preset">
       <div class="setting-row">
-        <input type="text" class="number-input" data-value="custom_width" style="width: 60dp;" />
+        <input type="text" class="number-input" data-value="custom_width" style="flex: 0 0 60dp;" />
+        <button class="num-step-btn" data-event-mousedown="num_step('custom_width', -1)">-</button>
+        <button class="num-step-btn" data-event-mousedown="num_step('custom_width', 1)">+</button>
         <span class="prop-label">Width</span>
       </div>
       <div class="setting-row">
-        <input type="text" class="number-input" data-value="custom_height" style="width: 60dp;" />
+        <input type="text" class="number-input" data-value="custom_height" style="flex: 0 0 60dp;" />
+        <button class="num-step-btn" data-event-mousedown="num_step('custom_height', -1)">-</button>
+        <button class="num-step-btn" data-event-mousedown="num_step('custom_height', 1)">+</button>
         <span class="prop-label">Height</span>
       </div>
       <div class="setting-row">
