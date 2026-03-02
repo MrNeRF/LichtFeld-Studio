@@ -6,7 +6,7 @@
 <body template="docked-panel" data-model="rendering">
 
   <!-- Background Color -->
-  <div class="setting-row">
+  <div class="setting-row" data-tooltip="tooltip.background">
     <span class="color-comp">{{background_color_r}}</span>
     <span class="color-comp">{{background_color_g}}</span>
     <span class="color-comp">{{background_color_b}}</span>
@@ -16,7 +16,7 @@
   </div>
 
   <!-- Show Coordinate Axes -->
-  <div class="setting-row">
+  <div class="setting-row" data-tooltip="tooltip.coord_axes">
     <label class="setting-label">
       <input type="checkbox" data-checked="show_coord_axes" />
       <span>{{label_show_coord_axes}}</span>
@@ -31,7 +31,7 @@
   </div>
 
   <!-- Show Pivot -->
-  <div class="setting-row">
+  <div class="setting-row" data-tooltip="tooltip.pivot">
     <label class="setting-label">
       <input type="checkbox" data-checked="show_pivot" />
       <span>{{label_show_pivot}}</span>
@@ -39,7 +39,7 @@
   </div>
 
   <!-- Show Grid -->
-  <div class="setting-row">
+  <div class="setting-row" data-tooltip="tooltip.grid">
     <label class="setting-label">
       <input type="checkbox" data-checked="show_grid" />
       <span>{{label_show_grid}}</span>
@@ -62,7 +62,7 @@
   </div>
 
   <!-- Camera Frustums -->
-  <div class="setting-row">
+  <div class="setting-row" data-tooltip="tooltip.camera_frustums">
     <label class="setting-label">
       <input type="checkbox" data-checked="show_camera_frustums" />
       <span>{{label_show_camera_frustums}}</span>
@@ -77,7 +77,7 @@
   </div>
 
   <!-- Point Cloud Mode -->
-  <div class="setting-row">
+  <div class="setting-row" data-tooltip="tooltip.point_cloud_mode">
     <label class="setting-label">
       <input type="checkbox" data-checked="point_cloud_mode" />
       <span>{{label_point_cloud_mode}}</span>
@@ -94,7 +94,7 @@
   <div class="separator"></div>
 
   <!-- Selection Colors (collapsible) -->
-  <div class="section-header" data-event-click="toggle_section('selection_colors')">
+  <div class="section-header" data-event-click="toggle_section('selection_colors')" data-tooltip="tooltip.selection_colors">
     <span class="section-arrow">{{sec_selection_colors_arrow}}</span>
     <span>{{label_hdr_selection_colors}}</span>
   </div>
@@ -126,13 +126,13 @@
   </div>
 
   <!-- Desaturation -->
-  <div class="setting-row">
+  <div class="setting-row" data-tooltip="tooltip.desaturate_unselected">
     <label class="setting-label">
       <input type="checkbox" data-checked="desaturate_unselected" />
       <span>{{label_desaturate_unselected}}</span>
     </label>
   </div>
-  <div class="setting-row">
+  <div class="setting-row" data-tooltip="tooltip.desaturate_cropping">
     <label class="setting-label">
       <input type="checkbox" data-checked="desaturate_cropping" />
       <span>{{label_desaturate_cropping}}</span>
@@ -142,7 +142,7 @@
   <div class="separator"></div>
 
   <!-- Focal Length -->
-  <div class="setting-row">
+  <div class="setting-row" data-tooltip="tooltip.focal_length">
     <input type="range" class="setting-slider" data-value="focal_length_mm" min="10" max="200" step="0.1" />
     <span class="slider-value">{{focal_length_mm | format_float(1)}}</span>
     <span class="prop-label">{{label_focal_length_mm}}</span>
@@ -152,7 +152,7 @@
   </div>
 
   <!-- SH Degree -->
-  <div class="setting-row">
+  <div class="setting-row" data-tooltip="tooltip.sh_degree">
     <select data-value="sh_degree">
       <option value="0">0</option>
       <option value="1">1</option>
@@ -163,13 +163,13 @@
   </div>
 
   <!-- Equirectangular / GUT -->
-  <div class="setting-row">
+  <div class="setting-row" data-tooltip="tooltip.equirectangular">
     <label class="setting-label">
       <input type="checkbox" data-checked="equirectangular" />
       <span>{{label_equirectangular}}</span>
     </label>
   </div>
-  <div class="setting-row">
+  <div class="setting-row" data-tooltip="tooltip.gut_mode">
     <label class="setting-label">
       <input type="checkbox" data-checked="gut" />
       <span>{{label_gut}}</span>
@@ -177,13 +177,13 @@
   </div>
 
   <!-- Mip Filter / Render Scale -->
-  <div class="setting-row">
+  <div class="setting-row" data-tooltip="tooltip.mip_filter">
     <label class="setting-label">
       <input type="checkbox" data-checked="mip_filter" />
       <span>{{label_mip_filter}}</span>
     </label>
   </div>
-  <div class="setting-row">
+  <div class="setting-row" data-tooltip="tooltip.render_scale">
     <input type="range" class="setting-slider" data-value="render_scale" min="0.25" max="1" step="0.01" />
     <span class="slider-value">{{render_scale | format_float(2)}}</span>
     <span class="prop-label">{{label_render_scale}}</span>
@@ -256,14 +256,14 @@
   <div class="separator"></div>
 
   <!-- PPISP Appearance Correction -->
-  <div class="setting-row">
+  <div class="setting-row" data-tooltip="tooltip.appearance_correction">
     <label class="setting-label">
       <input type="checkbox" data-checked="apply_appearance_correction" />
       <span>{{label_apply_appearance_correction}}</span>
     </label>
   </div>
   <div class="indent" data-if="apply_appearance_correction">
-    <div class="setting-row">
+    <div class="setting-row" data-tooltip="tooltip.ppisp_mode">
       <select data-value="ppisp_mode">
         <option value="MANUAL">Manual</option>
         <option value="AUTO">Auto (Controller)</option>
@@ -273,7 +273,7 @@
 
     <div data-class-disabled-overlay="ppisp_auto">
       <!-- Exposure -->
-      <div class="setting-row">
+      <div class="setting-row" data-tooltip="tooltip.ppisp_exposure">
         <input type="range" class="setting-slider" data-value="ppisp_exposure" min="-3" max="3" step="0.01" />
         <span class="slider-value">{{ppisp_exposure | format_float(2)}}</span>
         <span class="prop-label">{{label_ppisp_exposure}}</span>
@@ -311,7 +311,7 @@
       </div>
 
       <!-- Gamma -->
-      <div class="setting-row">
+      <div class="setting-row" data-tooltip="tooltip.ppisp_gamma">
         <input type="range" class="setting-slider" data-value="ppisp_gamma_multiplier" min="0.5" max="2.5" step="0.01" />
         <span class="slider-value">{{ppisp_gamma_multiplier | format_float(2)}}</span>
         <span class="prop-label">{{label_ppisp_gamma_multiplier}}</span>
@@ -331,27 +331,27 @@
           data-attr-gamma-g="ppisp_gamma_green"
           data-attr-gamma-b="ppisp_gamma_blue"
         />
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="tooltip.ppisp_gamma_channel">
           <input type="range" class="setting-slider" data-value="ppisp_gamma_red" min="-0.5" max="0.5" step="0.01" />
           <span class="slider-value">{{ppisp_gamma_red | format_float(2)}}</span>
           <span class="prop-label">{{label_ppisp_gamma_red}}</span>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="tooltip.ppisp_gamma_channel">
           <input type="range" class="setting-slider" data-value="ppisp_gamma_green" min="-0.5" max="0.5" step="0.01" />
           <span class="slider-value">{{ppisp_gamma_green | format_float(2)}}</span>
           <span class="prop-label">{{label_ppisp_gamma_green}}</span>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="tooltip.ppisp_gamma_channel">
           <input type="range" class="setting-slider" data-value="ppisp_gamma_blue" min="-0.5" max="0.5" step="0.01" />
           <span class="slider-value">{{ppisp_gamma_blue | format_float(2)}}</span>
           <span class="prop-label">{{label_ppisp_gamma_blue}}</span>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="tooltip.ppisp_crf_toe">
           <input type="range" class="setting-slider" data-value="ppisp_crf_toe" min="-1" max="1" step="0.01" />
           <span class="slider-value">{{ppisp_crf_toe | format_float(2)}}</span>
           <span class="prop-label">{{label_ppisp_crf_toe}}</span>
         </div>
-        <div class="setting-row">
+        <div class="setting-row" data-tooltip="tooltip.ppisp_crf_shoulder">
           <input type="range" class="setting-slider" data-value="ppisp_crf_shoulder" min="-1" max="1" step="0.01" />
           <span class="slider-value">{{ppisp_crf_shoulder | format_float(2)}}</span>
           <span class="prop-label">{{label_ppisp_crf_shoulder}}</span>

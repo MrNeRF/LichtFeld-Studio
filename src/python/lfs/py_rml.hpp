@@ -207,5 +207,6 @@ namespace lfs::python {
     };
 
     void register_rml_bindings(nb::module_& m);
+    void dirty_all_data_models();
 
 } // namespace lfs::python

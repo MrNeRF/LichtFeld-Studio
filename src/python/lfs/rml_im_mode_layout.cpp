@@ -72,10 +72,20 @@ namespace lfs::python {
         id_stack_.clear();
         force_next_open_ = false;
         table_.reset();
+        last_element_ = nullptr;
+        last_clicked_ = false;
+        tooltip_el_ = doc->GetElementById("im-tooltip");
+        tooltip_shown_ = false;
+        popup_backdrop_ = doc->GetElementById("im-popup-backdrop");
+        popup_dialog_ = doc->GetElementById("im-popup-dialog");
+        active_popup_id_.clear();
     }
 
     void RmlImModeLayout::end_frame() {
         finish_current_line();
+
+        if (!tooltip_shown_ && tooltip_el_)
+            tooltip_el_->SetClass("visible", false);
 
         for (auto& level : containers_)
             prune_excess_slots(level);
@@ -231,6 +241,8 @@ namespace lfs::python {
                 line->AppendChild(slot.element->GetParentNode()->RemoveChild(slot.element));
             slot.element->SetInnerRML(Rml::String(text));
         }
+        last_element_ = slot.element;
+        last_clicked_ = false;
     }
 
     void RmlImModeLayout::label_centered(const std::string& text) {
@@ -251,6 +263,8 @@ namespace lfs::python {
                 line->AppendChild(slot.element->GetParentNode()->RemoveChild(slot.element));
             slot.element->SetInnerRML(Rml::String(text));
         }
+        last_element_ = slot.element;
+        last_clicked_ = false;
     }
 
     void RmlImModeLayout::heading(const std::string& text) {
@@ -269,6 +283,8 @@ namespace lfs::python {
                 line->AppendChild(slot.element->GetParentNode()->RemoveChild(slot.element));
             slot.element->SetInnerRML(Rml::String(text));
         }
+        last_element_ = slot.element;
+        last_clicked_ = false;
     }
 
     void RmlImModeLayout::text_colored(const std::string& text, nb::object color) {
@@ -292,6 +308,8 @@ namespace lfs::python {
                 slot.element->SetProperty("color", Rml::String(css_color));
             slot.element->SetInnerRML(Rml::String(text));
         }
+        last_element_ = slot.element;
+        last_clicked_ = false;
     }
 
     void RmlImModeLayout::text_colored_centered(const std::string& text, nb::object color) {
@@ -317,6 +335,8 @@ namespace lfs::python {
                 slot.element->SetProperty("color", Rml::String(css_color));
             slot.element->SetInnerRML(Rml::String(text));
         }
+        last_element_ = slot.element;
+        last_clicked_ = false;
     }
 
     void RmlImModeLayout::text_selectable(const std::string& text, float /*height*/) {
@@ -339,6 +359,8 @@ namespace lfs::python {
                 line->AppendChild(slot.element->GetParentNode()->RemoveChild(slot.element));
             slot.element->SetInnerRML(Rml::String(text));
         }
+        last_element_ = slot.element;
+        last_clicked_ = false;
     }
 
     void RmlImModeLayout::text_disabled(const std::string& text) {
@@ -357,6 +379,8 @@ namespace lfs::python {
                 line->AppendChild(slot.element->GetParentNode()->RemoveChild(slot.element));
             slot.element->SetInnerRML(Rml::String(text));
         }
+        last_element_ = slot.element;
+        last_clicked_ = false;
     }
 
     void RmlImModeLayout::bullet_text(const std::string& text) {
@@ -375,6 +399,8 @@ namespace lfs::python {
                 line->AppendChild(slot.element->GetParentNode()->RemoveChild(slot.element));
             slot.element->SetInnerRML(Rml::String(std::format("\xe2\x80\xa2 {}", text)));
         }
+        last_element_ = slot.element;
+        last_clicked_ = false;
     }
 
     // ── Buttons ─────────────────────────────────────────────
@@ -408,6 +434,8 @@ namespace lfs::python {
 
         bool clicked = slot.events.clicked;
         slot.events.clicked = false;
+        last_element_ = slot.element;
+        last_clicked_ = clicked;
         return clicked;
     }
 
@@ -450,6 +478,8 @@ namespace lfs::python {
 
         bool clicked = slot.events.clicked;
         slot.events.clicked = false;
+        last_element_ = slot.element;
+        last_clicked_ = clicked;
         return clicked;
     }
 
@@ -484,6 +514,8 @@ namespace lfs::python {
 
         bool clicked = slot.events.clicked;
         slot.events.clicked = false;
+        last_element_ = slot.element;
+        last_clicked_ = clicked;
         return clicked;
     }
 
@@ -526,6 +558,8 @@ namespace lfs::python {
             }
         }
 
+        last_element_ = slot.element;
+        last_clicked_ = false;
         if (slot.events.changed) {
             slot.events.changed = false;
             return {true, slot.events.bool_value};
@@ -570,7 +604,10 @@ namespace lfs::python {
                 dot->SetInnerRML(selected ? "\xe2\x97\x89" : "\xe2\x97\x8b");
         }
 
-        if (slot.events.clicked) {
+        bool clicked = slot.events.clicked;
+        last_element_ = slot.element;
+        last_clicked_ = clicked;
+        if (clicked) {
             slot.events.clicked = false;
             return {true, value};
         }
@@ -628,6 +665,8 @@ namespace lfs::python {
             }
         }
 
+        last_element_ = slot.element;
+        last_clicked_ = false;
         if (slot.events.changed) {
             slot.events.changed = false;
             return {true, slot.events.float_value};
@@ -684,6 +723,8 @@ namespace lfs::python {
             }
         }
 
+        last_element_ = slot.element;
+        last_clicked_ = false;
         if (slot.events.changed) {
             slot.events.changed = false;
             return {true, static_cast<int>(std::round(slot.events.float_value))};
@@ -758,6 +799,8 @@ namespace lfs::python {
                 line->AppendChild(slot.element->GetParentNode()->RemoveChild(slot.element));
         }
 
+        last_element_ = slot.element;
+        last_clicked_ = false;
         if (slot.events.changed) {
             slot.events.changed = false;
             return {true, slot.events.string_value};
@@ -897,6 +940,8 @@ namespace lfs::python {
 
         bool clicked = slot.events.clicked;
         slot.events.clicked = false;
+        last_element_ = slot.element;
+        last_clicked_ = clicked;
         return clicked;
     }
 
@@ -944,6 +989,8 @@ namespace lfs::python {
                 select->SetAttribute("value", Rml::String(std::to_string(current_idx)));
         }
 
+        last_element_ = slot.element;
+        last_clicked_ = false;
         if (slot.events.changed) {
             slot.events.changed = false;
             return {true, slot.events.int_value};
@@ -984,6 +1031,8 @@ namespace lfs::python {
 
         bool clicked = slot.events.clicked;
         slot.events.clicked = false;
+        last_element_ = slot.element;
+        last_clicked_ = clicked;
         return clicked;
     }
 
@@ -1090,6 +1139,8 @@ namespace lfs::python {
                 arrow->SetInnerRML(slot.events.open ? "\xe2\x96\xbc" : "\xe2\x96\xb6");
         }
 
+        last_element_ = slot.element;
+        last_clicked_ = false;
         return slot.events.open;
     }
 
@@ -1258,6 +1309,8 @@ namespace lfs::python {
                     text->SetInnerRML(Rml::String(std::format("{}%", static_cast<int>(fraction * 100))));
             }
         }
+        last_element_ = slot.element;
+        last_clicked_ = false;
     }
 
     // ── ID stack ────────────────────────────────────────────
@@ -1282,14 +1335,29 @@ namespace lfs::python {
     // ── Tooltip ─────────────────────────────────────────────
 
     void RmlImModeLayout::set_tooltip(const std::string& text) {
-        (void)text;
+        if (!tooltip_el_ || !last_element_ || !last_element_->IsPseudoClassSet("hover"))
+            return;
+
+        auto body_offset = doc_->GetAbsoluteOffset(Rml::BoxArea::Content);
+        float local_x = mouse_.pos_x - body_offset.x;
+        float local_y = mouse_.pos_y - body_offset.y;
+
+        tooltip_el_->SetInnerRML(Rml::String(text));
+        tooltip_el_->SetClass("visible", true);
+        tooltip_el_->SetProperty("left", Rml::String(std::format("{:.0f}dp", local_x + 12.0f)));
+        tooltip_el_->SetProperty("top", Rml::String(std::format("{:.0f}dp", local_y + 12.0f)));
+        tooltip_shown_ = true;
     }
 
     // ── Item state ──────────────────────────────────────────
 
-    bool RmlImModeLayout::is_item_hovered() { return false; }
-    bool RmlImModeLayout::is_item_clicked(int /*button*/) { return false; }
-    bool RmlImModeLayout::is_item_active() { return false; }
+    bool RmlImModeLayout::is_item_hovered() {
+        return last_element_ && last_element_->IsPseudoClassSet("hover");
+    }
+    bool RmlImModeLayout::is_item_clicked(int /*button*/) { return last_clicked_; }
+    bool RmlImModeLayout::is_item_active() {
+        return last_element_ && last_element_->IsPseudoClassSet("active");
+    }
 
     // ── Mouse ───────────────────────────────────────────────
 
@@ -1380,8 +1448,35 @@ namespace lfs::python {
     // ── Scrolling ───────────────────────────────────────────
 
     void RmlImModeLayout::set_scroll_here_y(float /*center_y_ratio*/) {}
-    bool RmlImModeLayout::begin_child(const std::string& /*id*/, std::tuple<float, float> /*size*/, bool /*border*/) { return true; }
-    void RmlImModeLayout::end_child() {}
+
+    bool RmlImModeLayout::begin_child(const std::string& /*id*/, std::tuple<float, float> size, bool border) {
+        if (!doc_)
+            return true;
+        finish_current_line();
+        assert(!containers_.empty());
+
+        auto el = doc_->CreateElement("div");
+        el->SetClass("im-child", true);
+        auto [w, h] = size;
+        if (w > 0)
+            el->SetProperty("width", Rml::String(std::to_string(static_cast<int>(w)) + "dp"));
+        if (h > 0)
+            el->SetProperty("height", Rml::String(std::to_string(static_cast<int>(h)) + "dp"));
+        if (border)
+            el->SetClass("im-child-bordered", true);
+
+        auto* container = containers_.back().parent->AppendChild(std::move(el));
+        containers_.push_back({container, {}, 0});
+        return true;
+    }
+
+    void RmlImModeLayout::end_child() {
+        if (containers_.size() <= 1)
+            return;
+        finish_current_line();
+        prune_excess_slots(containers_.back());
+        containers_.pop_back();
+    }
 
     // ── Menu bar (no-op) ────────────────────────────────────
 
@@ -1398,14 +1493,64 @@ namespace lfs::python {
 
     // ── Popups (no-op) ──────────────────────────────────────
 
-    bool RmlImModeLayout::begin_popup(const std::string& /*id*/) { return false; }
-    void RmlImModeLayout::open_popup(const std::string& /*id*/) {}
-    void RmlImModeLayout::end_popup() {}
+    bool RmlImModeLayout::begin_popup(const std::string& id) {
+        return begin_popup_modal(id);
+    }
+
+    void RmlImModeLayout::open_popup(const std::string& id) {
+        popup_open_[id] = true;
+    }
+
+    void RmlImModeLayout::end_popup() {
+        end_popup_modal();
+    }
+
     bool RmlImModeLayout::begin_context_menu(const std::string& /*id*/) { return false; }
     void RmlImModeLayout::end_context_menu() {}
-    bool RmlImModeLayout::begin_popup_modal(const std::string& /*title*/) { return false; }
-    void RmlImModeLayout::end_popup_modal() {}
-    void RmlImModeLayout::close_current_popup() {}
+
+    bool RmlImModeLayout::begin_popup_modal(const std::string& title) {
+        auto it = popup_open_.find(title);
+        if (it == popup_open_.end() || !it->second)
+            return false;
+        if (!popup_backdrop_ || !popup_dialog_)
+            return false;
+
+        popup_backdrop_->SetClass("visible", true);
+        popup_dialog_->SetClass("visible", true);
+        popup_dialog_->SetInnerRML("");
+
+        auto title_el = doc_->CreateElement("div");
+        title_el->SetClass("im-popup-title", true);
+        title_el->SetInnerRML(Rml::String(title));
+        popup_dialog_->AppendChild(std::move(title_el));
+
+        active_popup_id_ = title;
+        finish_current_line();
+        containers_.push_back({popup_dialog_, {}, 0});
+        return true;
+    }
+
+    void RmlImModeLayout::end_popup_modal() {
+        if (containers_.size() <= 1)
+            return;
+        if (active_popup_id_.empty())
+            return;
+        finish_current_line();
+        prune_excess_slots(containers_.back());
+        containers_.pop_back();
+    }
+
+    void RmlImModeLayout::close_current_popup() {
+        if (!active_popup_id_.empty()) {
+            popup_open_[active_popup_id_] = false;
+            active_popup_id_.clear();
+        }
+        if (popup_backdrop_)
+            popup_backdrop_->SetClass("visible", false);
+        if (popup_dialog_)
+            popup_dialog_->SetClass("visible", false);
+    }
+
     void RmlImModeLayout::push_modal_style() {}
     void RmlImModeLayout::pop_modal_style() {}
 
@@ -1473,24 +1618,19 @@ namespace lfs::python {
     // ── Sub-layouts (return self as no-op context manager) ──
 
     nb::object RmlImModeLayout::row() {
-        warn_unsupported("row");
-        return nb::none();
+        return nb::cast(RmlSubLayout(this, RmlLayoutDirection::Row));
     }
     nb::object RmlImModeLayout::column() {
-        warn_unsupported("column");
-        return nb::none();
+        return nb::cast(RmlSubLayout(this, RmlLayoutDirection::Column));
     }
     nb::object RmlImModeLayout::split(float /*factor*/) {
-        warn_unsupported("split");
-        return nb::none();
+        return nb::cast(RmlSubLayout(this, RmlLayoutDirection::Row));
     }
     nb::object RmlImModeLayout::box() {
-        warn_unsupported("box");
-        return nb::none();
+        return nb::cast(RmlSubLayout(this, RmlLayoutDirection::Column));
     }
     nb::object RmlImModeLayout::grid_flow(int /*columns*/, bool /*even_columns*/, bool /*even_rows*/) {
-        warn_unsupported("grid_flow");
-        return nb::none();
+        return nb::cast(RmlSubLayout(this, RmlLayoutDirection::Row));
     }
 
     // ── Property binding ────────────────────────────────────
@@ -1843,6 +1983,58 @@ namespace lfs::python {
     void RmlImModeLayout::popover(const std::string& /*panel_id*/, const std::string& /*text*/,
                                   const std::string& /*icon*/) {
         warn_unsupported("popover");
+    }
+
+    // ── RmlSubLayout ─────────────────────────────────────────
+
+    RmlSubLayout::RmlSubLayout(RmlImModeLayout* parent, RmlLayoutDirection dir)
+        : parent_(parent),
+          direction_(dir) {
+        assert(parent_);
+    }
+
+    RmlSubLayout& RmlSubLayout::enter() {
+        assert(!entered_);
+        entered_ = true;
+        parent_->finish_current_line();
+        assert(!parent_->containers_.empty());
+
+        auto el = parent_->doc_->CreateElement("div");
+        el->SetClass(direction_ == RmlLayoutDirection::Row ? "im-row" : "im-column", true);
+        auto* container = parent_->containers_.back().parent->AppendChild(std::move(el));
+        parent_->containers_.push_back({container, {}, 0});
+        return *this;
+    }
+
+    void RmlSubLayout::exit() {
+        if (!entered_)
+            return;
+        entered_ = false;
+        parent_->finish_current_line();
+        if (parent_->containers_.size() > 1) {
+            parent_->prune_excess_slots(parent_->containers_.back());
+            parent_->containers_.pop_back();
+        }
+    }
+
+    RmlSubLayout RmlSubLayout::row() {
+        return RmlSubLayout(parent_, RmlLayoutDirection::Row);
+    }
+
+    RmlSubLayout RmlSubLayout::column() {
+        return RmlSubLayout(parent_, RmlLayoutDirection::Column);
+    }
+
+    RmlSubLayout RmlSubLayout::split(float /*factor*/) {
+        return RmlSubLayout(parent_, RmlLayoutDirection::Row);
+    }
+
+    RmlSubLayout RmlSubLayout::box() {
+        return RmlSubLayout(parent_, RmlLayoutDirection::Column);
+    }
+
+    RmlSubLayout RmlSubLayout::grid_flow(int /*columns*/, bool /*even_columns*/, bool /*even_rows*/) {
+        return RmlSubLayout(parent_, RmlLayoutDirection::Row);
     }
 
 } // namespace lfs::python

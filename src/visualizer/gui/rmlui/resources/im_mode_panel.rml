@@ -4,5 +4,8 @@
 </head>
 <body template="docked-panel">
   <div id="im-root"></div>
+  <div id="im-tooltip" class="im-tooltip"></div>
+  <div id="im-popup-backdrop" class="im-popup-backdrop"></div>
+  <div id="im-popup-dialog" class="im-popup-dialog"></div>
 </body>
 </rml>

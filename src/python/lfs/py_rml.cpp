@@ -19,6 +19,7 @@ namespace lfs::python {
     namespace {
         std::unordered_map<Rml::ElementDocument*, std::vector<Rml::ElementPtr>> s_held_elements;
         std::map<std::string, DataModelArrayStorage> s_model_storage;
+        std::unordered_map<std::string, Rml::DataModelHandle> s_active_handles;
         bool s_string_array_type_registered = false;
     } // namespace
 
@@ -85,6 +86,7 @@ namespace lfs::python {
 
     bool PyRmlContext::remove_data_model(const std::string& name) {
         s_model_storage.erase(name);
+        s_active_handles.erase(name);
         return ctx_->RemoveDataModel(name);
     }
 
@@ -313,6 +315,7 @@ namespace lfs::python {
         auto* ctx = doc_->GetContext();
         assert(ctx);
         s_model_storage.erase(name);
+        s_active_handles.erase(name);
         return ctx->RemoveDataModel(name);
     }
 
@@ -433,7 +436,9 @@ namespace lfs::python {
     }
 
     PyDataModelHandle PyDataModelConstructor::get_handle() {
-        return PyDataModelHandle(ctor_.GetModelHandle(), model_name_);
+        auto handle = ctor_.GetModelHandle();
+        s_active_handles[model_name_] = handle;
+        return PyDataModelHandle(handle, model_name_);
     }
 
     void register_builtin_transforms(Rml::DataModelConstructor& ctor) {
@@ -476,6 +481,11 @@ namespace lfs::python {
                                        std::snprintf(buf, sizeof(buf), "%.1f\xC2\xB0", deg);
                                        return Rml::Variant(Rml::String(buf));
                                    });
+    }
+
+    void dirty_all_data_models() {
+        for (auto& [name, handle] : s_active_handles)
+            handle.DirtyAllVariables();
     }
 
     // --- PyEventListener ---

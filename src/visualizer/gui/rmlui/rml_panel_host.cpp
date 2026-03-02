@@ -7,6 +7,7 @@
 // clang-format on
 
 #include "gui/rmlui/rml_panel_host.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
@@ -435,6 +436,31 @@ namespace lfs::vis::gui {
                 drainTextInput();
                 has_text_focus_ = false;
                 SDL_StopTextInput(manager_->getWindow());
+            }
+        }
+
+        if (hovered) {
+            auto* hover = rml_context_->GetHoverElement();
+            if (hover) {
+                Rml::String tip;
+                for (auto* el = hover; el; el = el->GetParentNode()) {
+                    auto key = el->GetAttribute<Rml::String>("data-tooltip", "");
+                    if (!key.empty()) {
+                        auto& loc = lfs::event::LocalizationManager::getInstance();
+                        tip = loc.get(key);
+                        if (tip == key)
+                            tip.clear();
+                        break;
+                    }
+                    tip = el->GetAttribute<Rml::String>("title", "");
+                    if (!tip.empty())
+                        break;
+                }
+                if (!tip.empty()) {
+                    ImGui::BeginTooltip();
+                    ImGui::TextUnformatted(tip.c_str());
+                    ImGui::EndTooltip();
+                }
             }
         }
 
