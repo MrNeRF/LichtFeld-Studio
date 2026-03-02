@@ -115,7 +115,6 @@ namespace lfs::training {
         // Member variables
         std::unique_ptr<AdamOptimizer> _optimizer;
         std::unique_ptr<ExponentialLR> _scheduler;
-        std::unique_ptr<ExponentialLR> _fast_scheduler;
         lfs::core::SplatData* _splat_data;
         std::unique_ptr<const lfs::core::param::OptimizationParameters> _params;
 

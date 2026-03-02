@@ -35,7 +35,7 @@ namespace lfs::training {
 
     } // private namespace
 
-           lfs::core::Tensor apply_laplacian_filter(const lfs::core::Tensor& input_data) {
+    lfs::core::Tensor apply_laplacian_filter(const lfs::core::Tensor& input_data) {
 
         assert(input_data.dtype() == lfs::core::DataType::Float32);
         assert(input_data.device() == lfs::core::Device::CUDA);
@@ -181,8 +181,8 @@ namespace lfs::training {
 
             lfs::core::Tensor laplacian = apply_laplacian_filter(image).unsqueeze(0);
 
-            printf("Storing laplacian view %d, ndim: %d, shape[0]: %d, shape[1]: %d, shape[2]: %d\n", i, laplacian.ndim(), laplacian.shape()[0], laplacian.shape()[1], laplacian.shape()[2]);
-            printf("Mean value: %.3f\n", laplacian.mean_scalar());
+            //printf("Storing laplacian view %d, ndim: %d, shape[0]: %d, shape[1]: %d, shape[2]: %d\n", i, laplacian.ndim(), laplacian.shape()[0], laplacian.shape()[1], laplacian.shape()[2]);
+            //printf("Mean value: %.3f\n", laplacian.mean_scalar());
 
             this->_all_edges.index_put_(idx, laplacian);
             /*
@@ -207,6 +207,7 @@ namespace lfs::training {
             // 3. Pass to stb_image using .c_str()
             stbi_write_jpg(filename.c_str(), image.shape()[2], image.shape()[1], 1, write_buffer.data(), 90);*/
         }
+        std::cout << "Total Mean Scene dataset: " << this->_all_edges.mean_scalar() << std::endl;
     }
 
     void ImprovedGsPlus::initialize(const lfs::core::param::OptimizationParameters& optimParams) {
@@ -219,13 +220,8 @@ namespace lfs::training {
         _optimizer = create_optimizer(*_splat_data, *_params);
         _optimizer->allocate_gradients(_params->max_cap > 0 ? static_cast<size_t>(_params->max_cap) : 0);
 
-        //if (optimParams.fast_mode) {
-        //    const double fast_gamma = std::pow(0.01, 1.0 / optimParams.iterations);
-        //    _scheduler = std::make_unique<ExponentialLR>(*_optimizer, fast_gamma, std::vector<ParamType>{ParamType::Means, ParamType::Scaling});
-        //} else {
         const double gamma = std::pow(0.1, 1.0 / optimParams.iterations);
         _scheduler = std::make_unique<ExponentialLR>(*_optimizer, gamma, std::vector<ParamType>{ParamType::Means, ParamType::Scaling});
-        //}
 
         // Initialize densification info: [2, N] tensor for tracking gradients
         _splat_data->_densification_info = lfs::core::Tensor::zeros(
@@ -544,9 +540,6 @@ namespace lfs::training {
             _optimizer->zero_grad(iter);
             _scheduler->step();
         }
-        // if(_params->fast_mode){
-        //     _fast_scheduler->step();
-        // }
     }
 
     void ImprovedGsPlus::remove_gaussians(const lfs::core::Tensor& mask) {
@@ -621,12 +614,10 @@ namespace lfs::training {
         const lfs::core::Tensor l1_loss_norm = (l1_loss - min) / (max - min);
 
 
-        const lfs::core::Tensor edge_min = edge_loss.min();
-        const lfs::core::Tensor edge_max = edge_loss.max();
-        const lfs::core::Tensor edge_loss_norm = (edge_loss - edge_min) / (edge_max - edge_min).clamp_min(1e-8f);
-
-        //std::cout << "l1_loss_norm value mean: " << l1_loss_norm.mean_scalar() << " max: " << l1_loss_norm.max_scalar() << " min: "<< l1_loss_norm.min_scalar() << std::endl;
-        //std::cout << "edge_loss_norm value mean: " << edge_loss_norm.mean_scalar() << " max: " << edge_loss_norm.max_scalar() << " min: " << edge_loss_norm.min_scalar() << std::endl;
+        //const lfs::core::Tensor edge_min = edge_loss.min();
+        //const lfs::core::Tensor edge_max = edge_loss.max();
+        //const lfs::core::Tensor edge_loss_norm = (edge_loss - edge_min) / (edge_max - edge_min).clamp_min(1e-8f);
+        const lfs::core::Tensor edge_loss_norm = edge_loss;
 
         const lfs::core::Tensor final_loss =
             l1_loss_norm * _score_coefficients.mse_importance +
