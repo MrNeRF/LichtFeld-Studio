@@ -573,6 +573,8 @@ namespace lfs::python {
         void* (*get_context)(void* host);
         void (*set_foreground)(void* host, bool fg);
         void (*mark_content_dirty)(void* host);
+        void (*set_input_clip_y)(void* host, float y_min, float y_max);
+        void (*set_input)(void* host, const void* input);
     };
 
     LFS_PYTHON_RUNTIME_API void set_rml_panel_host_ops(const RmlPanelHostOps& ops);

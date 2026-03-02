@@ -18,5 +18,9 @@
   <div id="context-menu" class="context-menu">
   </div>
 
+  <div id="color-picker-popup" class="color-picker-popup">
+    <color-picker id="color-picker-el" />
+  </div>
+
 </body>
 </rml>

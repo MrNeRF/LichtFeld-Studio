@@ -106,6 +106,28 @@ namespace lfs::vis::gui {
         dl->AddCallback(restoreStandardBlend, nullptr);
     }
 
+    void RmlFBO::blitToDrawListOpaque(void* draw_list, float x, float y, float w, float h) const {
+        assert(draw_list);
+        assert(texture_);
+        auto* dl = static_cast<ImDrawList*>(draw_list);
+        dl->AddCallback(setPremultipliedBlend, nullptr);
+        const ImVec2 p0(x, y);
+        const ImVec2 p1(x + w, y + h);
+        dl->AddImage(static_cast<ImTextureID>(static_cast<uintptr_t>(texture_)),
+                     p0, p1, {0, 1}, {1, 0});
+        dl->AddCallback(restoreStandardBlend, nullptr);
+    }
+
+    void RmlFBO::pushDrawListClipRect(void* draw_list, float x1, float y1, float x2, float y2) {
+        assert(draw_list);
+        static_cast<ImDrawList*>(draw_list)->PushClipRect(ImVec2(x1, y1), ImVec2(x2, y2), true);
+    }
+
+    void RmlFBO::popDrawListClipRect(void* draw_list) {
+        assert(draw_list);
+        static_cast<ImDrawList*>(draw_list)->PopClipRect();
+    }
+
     void RmlFBO::blitAsImage(float w, float h) {
         assert(texture_);
         auto* dl = ImGui::GetWindowDrawList();
@@ -210,12 +232,15 @@ namespace lfs::vis::gui {
         GLint prev_blend = 0;
         GLint prev_depth = 0;
         GLint prev_scissor = 0;
+        GLint prev_scissor_box[4] = {};
         GLint prev_viewport[4] = {};
         glGetIntegerv(GL_CURRENT_PROGRAM, &prev_program);
         glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prev_vao);
         glGetIntegerv(GL_BLEND, &prev_blend);
         glGetIntegerv(GL_DEPTH_TEST, &prev_depth);
         glGetIntegerv(GL_SCISSOR_TEST, &prev_scissor);
+        if (prev_scissor)
+            glGetIntegerv(GL_SCISSOR_BOX, prev_scissor_box);
         glGetIntegerv(GL_VIEWPORT, prev_viewport);
 
         glViewport(static_cast<GLint>(x),
@@ -226,7 +251,8 @@ namespace lfs::vis::gui {
         glEnable(GL_BLEND);
         glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
         glDisable(GL_DEPTH_TEST);
-        glDisable(GL_SCISSOR_TEST);
+        if (!prev_scissor)
+            glDisable(GL_SCISSOR_TEST);
 
         glUseProgram(blit_program_);
         glActiveTexture(GL_TEXTURE0);
@@ -249,10 +275,13 @@ namespace lfs::vis::gui {
             glEnable(GL_DEPTH_TEST);
         else
             glDisable(GL_DEPTH_TEST);
-        if (prev_scissor)
+        if (prev_scissor) {
             glEnable(GL_SCISSOR_TEST);
-        else
+            glScissor(prev_scissor_box[0], prev_scissor_box[1],
+                      prev_scissor_box[2], prev_scissor_box[3]);
+        } else {
             glDisable(GL_SCISSOR_TEST);
+        }
 
         glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
                             GL_ONE, GL_ONE_MINUS_SRC_ALPHA);

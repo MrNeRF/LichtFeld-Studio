@@ -40,3 +40,17 @@ body {
     overflow: hidden;
     white-space: nowrap;
 }
+
+.color-picker-popup {
+    display: none;
+    position: absolute;
+    z-index: 100;
+    padding: 4dp;
+    background-color: rgba(30, 30, 46, 230);
+    border-width: 1dp;
+    border-color: #585b70;
+}
+
+.color-picker-popup.visible {
+    display: block;
+}

@@ -27,6 +27,9 @@ namespace lfs::vis::gui {
         float getDirectDrawHeight() const override;
         bool hasImguiOverlay() const override;
         void drawImguiOverlay(const PanelDrawContext& ctx) override;
+        void setInputClipY(float y_min, float y_max) override;
+        void setInput(const PanelInputState* input) override;
+        bool wantsKeyboard() const override;
         void setForeground(bool fg);
 
     private:

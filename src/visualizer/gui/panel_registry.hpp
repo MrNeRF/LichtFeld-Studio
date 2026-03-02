@@ -26,6 +26,7 @@ namespace lfs::vis::gui {
 
     struct UIContext;
     struct ViewportLayout;
+    struct PanelInputState;
 
     enum class PanelSpace : uint8_t {
         SidePanel,
@@ -74,6 +75,12 @@ namespace lfs::vis::gui {
         virtual float getDirectDrawHeight() const { return 0.0f; }
         virtual bool hasImguiOverlay() const { return false; }
         virtual void drawImguiOverlay(const PanelDrawContext& ctx) { (void)ctx; }
+        virtual void setInputClipY(float y_min, float y_max) {
+            (void)y_min;
+            (void)y_max;
+        }
+        virtual void setInput(const PanelInputState* input) { (void)input; }
+        virtual bool wantsKeyboard() const { return false; }
     };
 
     struct PanelInfo {
@@ -155,11 +162,16 @@ namespace lfs::vis::gui {
         bool has_panels(PanelSpace space) const;
 
         float draw_panels_direct(PanelSpace space, float x, float y, float w, float max_h,
-                                 const PanelDrawContext& ctx);
+                                 const PanelDrawContext& ctx,
+                                 const PanelInputState* input = nullptr);
         float draw_single_panel_direct(const std::string& idname, float x, float y, float w, float h,
-                                       const PanelDrawContext& ctx);
+                                       const PanelDrawContext& ctx,
+                                       float clip_y_min = -1.0f, float clip_y_max = -1.0f,
+                                       const PanelInputState* input = nullptr);
         float draw_child_panels_direct(const std::string& parent_idname, float x, float y, float w, float h,
-                                       const PanelDrawContext& ctx);
+                                       const PanelDrawContext& ctx,
+                                       float clip_y_min = -1.0f, float clip_y_max = -1.0f,
+                                       const PanelInputState* input = nullptr);
 
         std::vector<PanelSummary> get_panels_for_space(PanelSpace space);
         std::vector<std::string> get_panel_names(PanelSpace space) const;

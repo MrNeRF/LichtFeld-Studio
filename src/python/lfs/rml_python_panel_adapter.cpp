@@ -250,6 +250,26 @@ namespace lfs::vis::gui {
         }
     }
 
+    void RmlPythonPanelAdapter::setInputClipY(float y_min, float y_max) {
+        if (host_) {
+            const auto& ops = lfs::python::get_rml_panel_host_ops();
+            if (ops.set_input_clip_y)
+                ops.set_input_clip_y(host_, y_min, y_max);
+        }
+    }
+
+    void RmlPythonPanelAdapter::setInput(const PanelInputState* input) {
+        if (host_) {
+            const auto& ops = lfs::python::get_rml_panel_host_ops();
+            if (ops.set_input)
+                ops.set_input(host_, input);
+        }
+    }
+
+    bool RmlPythonPanelAdapter::wantsKeyboard() const {
+        return false;
+    }
+
     void RmlPythonPanelAdapter::setForeground(bool fg) {
         foreground_ = fg;
         if (host_) {

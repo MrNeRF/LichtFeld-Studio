@@ -9,6 +9,7 @@
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
+#include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
@@ -19,16 +20,20 @@
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Input.h>
 #include <SDL3/SDL_keyboard.h>
+#include <SDL3/SDL_scancode.h>
 #include <cassert>
 #include <cmath>
+#include <cstring>
 #include <filesystem>
 #include <format>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
 
     static std::mutex s_text_mutex;
     static std::vector<uint32_t> s_text_queue;
+
+    static std::string s_frame_tooltip;
+    static bool s_frame_wants_keyboard = false;
 
     void RmlPanelHost::pushTextInput(const std::string& text) {
         std::lock_guard lock(s_text_mutex);
@@ -74,64 +79,77 @@ namespace lfs::vis::gui {
         return result;
     }
 
+    std::string RmlPanelHost::consumeFrameTooltip() {
+        std::string result;
+        result.swap(s_frame_tooltip);
+        return result;
+    }
+
+    bool RmlPanelHost::consumeFrameWantsKeyboard() {
+        bool result = s_frame_wants_keyboard;
+        s_frame_wants_keyboard = false;
+        return result;
+    }
+
     using rml_theme::colorToRml;
 
     namespace {
-        Rml::Input::KeyIdentifier imguiKeyToRml(ImGuiKey key) {
+        Rml::Input::KeyIdentifier sdlScancodeToRml(int scancode) {
             // clang-format off
-            switch (key) {
-            case ImGuiKey_Space:      return Rml::Input::KI_SPACE;
-            case ImGuiKey_Backspace:  return Rml::Input::KI_BACK;
-            case ImGuiKey_Tab:        return Rml::Input::KI_TAB;
-            case ImGuiKey_Enter:      return Rml::Input::KI_RETURN;
-            case ImGuiKey_Escape:     return Rml::Input::KI_ESCAPE;
-            case ImGuiKey_Delete:     return Rml::Input::KI_DELETE;
-            case ImGuiKey_Insert:     return Rml::Input::KI_INSERT;
-            case ImGuiKey_Home:       return Rml::Input::KI_HOME;
-            case ImGuiKey_End:        return Rml::Input::KI_END;
-            case ImGuiKey_PageUp:     return Rml::Input::KI_PRIOR;
-            case ImGuiKey_PageDown:   return Rml::Input::KI_NEXT;
-            case ImGuiKey_LeftArrow:  return Rml::Input::KI_LEFT;
-            case ImGuiKey_UpArrow:    return Rml::Input::KI_UP;
-            case ImGuiKey_RightArrow: return Rml::Input::KI_RIGHT;
-            case ImGuiKey_DownArrow:  return Rml::Input::KI_DOWN;
-            case ImGuiKey_F1:  return Rml::Input::KI_F1;
-            case ImGuiKey_F2:  return Rml::Input::KI_F2;
-            case ImGuiKey_F3:  return Rml::Input::KI_F3;
-            case ImGuiKey_F4:  return Rml::Input::KI_F4;
-            case ImGuiKey_F5:  return Rml::Input::KI_F5;
-            case ImGuiKey_F6:  return Rml::Input::KI_F6;
-            case ImGuiKey_F7:  return Rml::Input::KI_F7;
-            case ImGuiKey_F8:  return Rml::Input::KI_F8;
-            case ImGuiKey_F9:  return Rml::Input::KI_F9;
-            case ImGuiKey_F10: return Rml::Input::KI_F10;
-            case ImGuiKey_F11: return Rml::Input::KI_F11;
-            case ImGuiKey_F12: return Rml::Input::KI_F12;
+            switch (scancode) {
+            case SDL_SCANCODE_SPACE:     return Rml::Input::KI_SPACE;
+            case SDL_SCANCODE_BACKSPACE: return Rml::Input::KI_BACK;
+            case SDL_SCANCODE_TAB:       return Rml::Input::KI_TAB;
+            case SDL_SCANCODE_RETURN:    return Rml::Input::KI_RETURN;
+            case SDL_SCANCODE_ESCAPE:    return Rml::Input::KI_ESCAPE;
+            case SDL_SCANCODE_DELETE:    return Rml::Input::KI_DELETE;
+            case SDL_SCANCODE_INSERT:    return Rml::Input::KI_INSERT;
+            case SDL_SCANCODE_HOME:      return Rml::Input::KI_HOME;
+            case SDL_SCANCODE_END:       return Rml::Input::KI_END;
+            case SDL_SCANCODE_PAGEUP:    return Rml::Input::KI_PRIOR;
+            case SDL_SCANCODE_PAGEDOWN:  return Rml::Input::KI_NEXT;
+            case SDL_SCANCODE_LEFT:      return Rml::Input::KI_LEFT;
+            case SDL_SCANCODE_UP:        return Rml::Input::KI_UP;
+            case SDL_SCANCODE_RIGHT:     return Rml::Input::KI_RIGHT;
+            case SDL_SCANCODE_DOWN:      return Rml::Input::KI_DOWN;
+            case SDL_SCANCODE_F1:  return Rml::Input::KI_F1;
+            case SDL_SCANCODE_F2:  return Rml::Input::KI_F2;
+            case SDL_SCANCODE_F3:  return Rml::Input::KI_F3;
+            case SDL_SCANCODE_F4:  return Rml::Input::KI_F4;
+            case SDL_SCANCODE_F5:  return Rml::Input::KI_F5;
+            case SDL_SCANCODE_F6:  return Rml::Input::KI_F6;
+            case SDL_SCANCODE_F7:  return Rml::Input::KI_F7;
+            case SDL_SCANCODE_F8:  return Rml::Input::KI_F8;
+            case SDL_SCANCODE_F9:  return Rml::Input::KI_F9;
+            case SDL_SCANCODE_F10: return Rml::Input::KI_F10;
+            case SDL_SCANCODE_F11: return Rml::Input::KI_F11;
+            case SDL_SCANCODE_F12: return Rml::Input::KI_F12;
             default: break;
             }
             // clang-format on
 
-            if (key >= ImGuiKey_A && key <= ImGuiKey_Z)
+            if (scancode >= SDL_SCANCODE_A && scancode <= SDL_SCANCODE_Z)
                 return static_cast<Rml::Input::KeyIdentifier>(
-                    Rml::Input::KI_A + (key - ImGuiKey_A));
+                    Rml::Input::KI_A + (scancode - SDL_SCANCODE_A));
 
-            if (key >= ImGuiKey_0 && key <= ImGuiKey_9)
+            if (scancode == SDL_SCANCODE_0)
+                return Rml::Input::KI_0;
+            if (scancode >= SDL_SCANCODE_1 && scancode <= SDL_SCANCODE_9)
                 return static_cast<Rml::Input::KeyIdentifier>(
-                    Rml::Input::KI_0 + (key - ImGuiKey_0));
+                    Rml::Input::KI_1 + (scancode - SDL_SCANCODE_1));
 
             return Rml::Input::KI_UNKNOWN;
         }
 
-        int buildRmlModifiers() {
-            ImGuiIO& io = ImGui::GetIO();
+        int buildRmlModifiers(const PanelInputState& input) {
             int mods = 0;
-            if (io.KeyCtrl)
+            if (input.key_ctrl)
                 mods |= Rml::Input::KM_CTRL;
-            if (io.KeyShift)
+            if (input.key_shift)
                 mods |= Rml::Input::KM_SHIFT;
-            if (io.KeyAlt)
+            if (input.key_alt)
                 mods |= Rml::Input::KM_ALT;
-            if (io.KeySuper)
+            if (input.key_super)
                 mods |= Rml::Input::KM_META;
             return mods;
         }
@@ -183,9 +201,9 @@ namespace lfs::vis::gui {
             return;
 
         const auto& p = lfs::vis::theme().palette;
-        if (std::memcmp(&last_synced_text_, &p.text, sizeof(ImVec4)) == 0)
+        if (std::memcmp(last_synced_text_, &p.text, sizeof(last_synced_text_)) == 0)
             return;
-        last_synced_text_ = p.text;
+        std::memcpy(last_synced_text_, &p.text, sizeof(last_synced_text_));
 
         if (base_rcss_.empty()) {
             auto rcss_name = std::filesystem::path(rml_path_).replace_extension(".rcss").string();
@@ -204,10 +222,14 @@ namespace lfs::vis::gui {
     }
 
     void RmlPanelHost::draw(const PanelDrawContext& ctx) {
+        draw(ctx, 0, 0, 0, 0);
+    }
+
+    void RmlPanelHost::draw(const PanelDrawContext& ctx,
+                            float avail_w, float avail_h,
+                            float pos_x, float pos_y) {
         (void)ctx;
 
-        const float avail_w = ImGui::GetContentRegionAvail().x;
-        const float avail_h = ImGui::GetContentRegionAvail().y;
         if (avail_w <= 0 || avail_h <= 0)
             return;
 
@@ -266,8 +288,7 @@ namespace lfs::vis::gui {
         if (!fbo_.valid())
             return;
 
-        ImVec2 panel_pos = ImGui::GetCursorScreenPos();
-        forwardInput(panel_pos.x, panel_pos.y);
+        forwardInput(pos_x, pos_y);
 
         auto* render = manager_->getRenderInterface();
         assert(render);
@@ -370,10 +391,8 @@ namespace lfs::vis::gui {
 
         fbo_.unbind(prev_fbo);
 
-        auto* vp = ImGui::GetMainViewport();
-        auto* draw_list = foreground_ ? ImGui::GetForegroundDrawList(vp)
-                                      : ImGui::GetBackgroundDrawList(vp);
-        fbo_.blitToDrawList(draw_list, {x, y}, {w, display_h});
+        assert(input_ && input_->bg_draw_list);
+        fbo_.blitToDrawListOpaque(input_->bg_draw_list, x, y, w, display_h);
 
         if (height_mode_ == HeightMode::Content && !content_dirty_) {
             auto* frame = document_->GetElementById("window-frame");
@@ -389,11 +408,15 @@ namespace lfs::vis::gui {
     void RmlPanelHost::forwardInput(float panel_x, float panel_y) {
         assert(rml_context_);
 
-        ImGuiIO& io = ImGui::GetIO();
-        ImVec2 mouse = io.MousePos;
+        if (!input_)
+            return;
 
-        float local_x = mouse.x - panel_x;
-        float local_y = mouse.y - panel_y;
+        const auto& input = *input_;
+        const float mouse_x = input.mouse_x;
+        const float mouse_y = input.mouse_y;
+
+        float local_x = mouse_x - panel_x;
+        float local_y = mouse_y - panel_y;
 
         const float dp_ratio = manager_->getDpRatio();
         const float logical_w = static_cast<float>(fbo_.width()) / dp_ratio;
@@ -401,25 +424,29 @@ namespace lfs::vis::gui {
 
         bool hovered = local_x >= 0 && local_y >= 0 && local_x < logical_w && local_y < logical_h;
 
+        if (hovered && clip_y_min_ >= 0 && clip_y_max_ > clip_y_min_) {
+            if (mouse_y < clip_y_min_ || mouse_y > clip_y_max_)
+                hovered = false;
+        }
+
         if (hovered) {
             rml_context_->ProcessMouseMove(static_cast<int>(local_x * dp_ratio),
                                            static_cast<int>(local_y * dp_ratio), 0);
 
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            if (input.mouse_clicked[0])
                 rml_context_->ProcessMouseButtonDown(0, 0);
-            if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+            if (input.mouse_released[0])
                 rml_context_->ProcessMouseButtonUp(0, 0);
 
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+            if (input.mouse_clicked[1])
                 rml_context_->ProcessMouseButtonDown(1, 0);
-            if (ImGui::IsMouseReleased(ImGuiMouseButton_Right))
+            if (input.mouse_released[1])
                 rml_context_->ProcessMouseButtonUp(1, 0);
 
-            float wheel = io.MouseWheel;
-            if (wheel != 0.0f)
-                rml_context_->ProcessMouseWheel(Rml::Vector2f(0, -wheel), 0);
+            if (input.mouse_wheel != 0.0f)
+                rml_context_->ProcessMouseWheel(Rml::Vector2f(0, -input.mouse_wheel), 0);
 
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            if (input.mouse_clicked[0]) {
                 auto* focused = rml_context_->GetFocusElement();
                 bool want_text = focused && focused->GetTagName() == "input";
                 if (want_text != has_text_focus_) {
@@ -431,7 +458,7 @@ namespace lfs::vis::gui {
                         SDL_StopTextInput(win);
                 }
             }
-        } else if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+        } else if (input.mouse_clicked[0]) {
             if (has_text_focus_) {
                 drainTextInput();
                 has_text_focus_ = false;
@@ -456,30 +483,26 @@ namespace lfs::vis::gui {
                     if (!tip.empty())
                         break;
                 }
-                if (!tip.empty()) {
-                    ImGui::BeginTooltip();
-                    ImGui::TextUnformatted(tip.c_str());
-                    ImGui::EndTooltip();
-                }
+                if (!tip.empty())
+                    s_frame_tooltip = std::string(tip.c_str(), tip.size());
             }
         }
 
-        bool forward_keys = has_text_focus_ || hovered;
-        if (has_text_focus_) {
-            io.WantCaptureKeyboard = true;
-            io.WantTextInput = true;
-        }
+        wants_keyboard_ = has_text_focus_;
+        if (has_text_focus_)
+            s_frame_wants_keyboard = true;
 
+        bool forward_keys = has_text_focus_ || hovered;
         if (forward_keys) {
-            int mods = buildRmlModifiers();
-            for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
-                auto imgui_key = static_cast<ImGuiKey>(k);
-                auto rml_key = imguiKeyToRml(imgui_key);
-                if (rml_key == Rml::Input::KI_UNKNOWN)
-                    continue;
-                if (ImGui::IsKeyPressed(imgui_key, false))
+            int mods = buildRmlModifiers(input);
+            for (int sc : input.keys_pressed) {
+                auto rml_key = sdlScancodeToRml(sc);
+                if (rml_key != Rml::Input::KI_UNKNOWN)
                     rml_context_->ProcessKeyDown(rml_key, mods);
-                if (ImGui::IsKeyReleased(imgui_key))
+            }
+            for (int sc : input.keys_released) {
+                auto rml_key = sdlScancodeToRml(sc);
+                if (rml_key != Rml::Input::KI_UNKNOWN)
                     rml_context_->ProcessKeyUp(rml_key, mods);
             }
         }

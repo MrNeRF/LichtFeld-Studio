@@ -23,8 +23,8 @@ class SelectionGroupsPanel(RmlPanel):
         self._collapsed = False
         self._prev_group_hash = None
         self._color_edit_group_id = None
-        self._color_picker_needs_pos = False
         self._context_menu_group_id = None
+        self._picker_click_handled = False
 
     def on_load(self, doc):
         self.doc = doc
@@ -46,6 +46,14 @@ class SelectionGroupsPanel(RmlPanel):
         if ctx_menu:
             ctx_menu.add_event_listener("click", self._on_context_click)
 
+        self._popup_el = doc.get_element_by_id("color-picker-popup")
+        if self._popup_el:
+            self._popup_el.add_event_listener("click", self._on_popup_click)
+
+        self._picker_el = doc.get_element_by_id("color-picker-el")
+        if self._picker_el:
+            self._picker_el.add_event_listener("change", self._on_picker_change)
+
         body = doc.get_element_by_id("body")
         if body:
             body.add_event_listener("click", self._on_body_click)
@@ -64,26 +72,6 @@ class SelectionGroupsPanel(RmlPanel):
 
     def on_scene_changed(self, doc):
         self._prev_group_hash = None
-
-    def draw_imgui(self, layout):
-        if self._color_picker_needs_pos:
-            layout.set_next_window_pos(layout.get_mouse_pos())
-            layout.open_popup("##sg_color_picker")
-            self._color_picker_needs_pos = False
-
-        if self._color_edit_group_id is not None and layout.begin_popup("##sg_color_picker"):
-            scene = lf.get_scene()
-            if scene:
-                groups = scene.selection_groups()
-                group = next((g for g in groups if g.id == self._color_edit_group_id), None)
-                if group:
-                    changed, new_color = layout.color_picker3("##sg_picker", list(group.color))
-                    if changed:
-                        scene.set_selection_group_color(group.id, tuple(new_color))
-                        self._prev_group_hash = None
-            layout.end_popup()
-        elif self._color_edit_group_id is not None:
-            self._color_edit_group_id = None
 
     def _update_labels(self):
         if not self.doc:
@@ -205,11 +193,58 @@ class SelectionGroupsPanel(RmlPanel):
                 scene.set_selection_group_locked(gid, not group.locked)
                 self._prev_group_hash = None
         elif action == "color":
-            self._color_edit_group_id = gid
-            self._color_picker_needs_pos = True
+            self._show_color_picker(gid, event)
         elif action == "select":
             scene.active_selection_group = gid
             self._prev_group_hash = None
+
+    def _show_color_picker(self, gid, event):
+        if self._color_edit_group_id == gid:
+            self._hide_picker()
+            return
+
+        self._picker_click_handled = True
+        self._color_edit_group_id = gid
+
+        scene = lf.get_scene()
+        if not scene:
+            return
+        groups = scene.selection_groups()
+        group = next((g for g in groups if g.id == gid), None)
+        if not group or not self._picker_el or not self._popup_el:
+            return
+
+        r, g, b = group.color
+        self._picker_el.set_attribute("red", str(float(r)))
+        self._picker_el.set_attribute("green", str(float(g)))
+        self._picker_el.set_attribute("blue", str(float(b)))
+
+        mx = event.get_parameter("mouse_x", "0")
+        my = event.get_parameter("mouse_y", "0")
+        self._popup_el.set_property("left", f"{mx}px")
+        self._popup_el.set_property("top", f"{int(float(my)) + 2}px")
+        self._popup_el.set_class("visible", True)
+
+    def _hide_picker(self):
+        if self._popup_el:
+            self._popup_el.set_class("visible", False)
+        self._color_edit_group_id = None
+
+    def _on_picker_change(self, event):
+        if self._color_edit_group_id is None:
+            return
+        scene = lf.get_scene()
+        if not scene:
+            return
+
+        r = float(event.get_parameter("red", "0"))
+        g = float(event.get_parameter("green", "0"))
+        b = float(event.get_parameter("blue", "0"))
+        scene.set_selection_group_color(self._color_edit_group_id, (r, g, b))
+        self._prev_group_hash = None
+
+    def _on_popup_click(self, event):
+        event.stop_propagation()
 
     def _on_group_mousedown(self, event):
         if int(event.get_parameter("button", "0")) != 1:
@@ -280,10 +315,16 @@ class SelectionGroupsPanel(RmlPanel):
         self._context_menu_group_id = None
 
     def _on_body_click(self, event):
+        if self._picker_click_handled:
+            self._picker_click_handled = False
+            return
+
         ctx = self.doc.get_element_by_id("context-menu")
         if ctx:
             ctx.set_class("visible", False)
         self._context_menu_group_id = None
+
+        self._hide_picker()
 
 
 def register():

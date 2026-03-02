@@ -22,8 +22,12 @@ namespace lfs::vis::gui {
         void bind(GLint* prev_fbo);
         void unbind(GLint prev_fbo);
         void blitToDrawList(ImDrawList* dl, ImVec2 pos, ImVec2 size) const;
+        void blitToDrawListOpaque(void* draw_list, float x, float y, float w, float h) const;
         void blitAsImage(float w, float h);
         void blitToScreen(float x, float y, float w, float h, int screen_w, int screen_h) const;
+
+        static void pushDrawListClipRect(void* draw_list, float x1, float y1, float x2, float y2);
+        static void popDrawListClipRect(void* draw_list);
         GLuint texture() const { return texture_; }
         int width() const { return width_; }
         int height() const { return height_; }

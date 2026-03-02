@@ -321,7 +321,8 @@ namespace lfs::vis::gui {
     }
 
     float PanelRegistry::draw_panels_direct(PanelSpace space, float x, float y, float w,
-                                            float max_h, const PanelDrawContext& ctx) {
+                                            float max_h, const PanelDrawContext& ctx,
+                                            const PanelInputState* input) {
         std::vector<PanelSnapshot> snapshots;
         {
             std::lock_guard lock(mutex_);
@@ -352,6 +353,7 @@ namespace lfs::vis::gui {
 
             bool draw_succeeded = false;
             try {
+                snap.panel->setInput(input);
                 snap.panel->drawDirect(x, y + y_offset, w, remaining, ctx);
                 const float h = snap.panel->getDirectDrawHeight();
                 y_offset += h > 0 ? h : remaining;
@@ -600,7 +602,9 @@ namespace lfs::vis::gui {
     }
 
     float PanelRegistry::draw_single_panel_direct(const std::string& idname, float x, float y,
-                                                  float w, float h, const PanelDrawContext& ctx) {
+                                                  float w, float h, const PanelDrawContext& ctx,
+                                                  float clip_y_min, float clip_y_max,
+                                                  const PanelInputState* input) {
         std::shared_ptr<IPanel> panel_holder;
         PanelSnapshot snap{};
         bool found = false;
@@ -632,6 +636,8 @@ namespace lfs::vis::gui {
 
         bool draw_succeeded = false;
         try {
+            snap.panel->setInputClipY(clip_y_min, clip_y_max);
+            snap.panel->setInput(input);
             snap.panel->drawDirect(x, y, w, h, ctx);
             draw_succeeded = true;
         } catch (const std::exception& e) {
@@ -644,7 +650,9 @@ namespace lfs::vis::gui {
     }
 
     float PanelRegistry::draw_child_panels_direct(const std::string& parent_idname, float x, float y,
-                                                  float w, float h, const PanelDrawContext& ctx) {
+                                                  float w, float h, const PanelDrawContext& ctx,
+                                                  float clip_y_min, float clip_y_max,
+                                                  const PanelInputState* input) {
         std::vector<PanelSnapshot> snapshots;
         {
             std::lock_guard lock(mutex_);
@@ -676,6 +684,8 @@ namespace lfs::vis::gui {
 
             bool draw_succeeded = false;
             try {
+                snap.panel->setInputClipY(clip_y_min, clip_y_max);
+                snap.panel->setInput(input);
                 snap.panel->drawDirect(x, y + y_offset, w, remaining, ctx);
                 const float used = snap.panel->getDirectDrawHeight();
                 y_offset += used > 0 ? used : remaining;

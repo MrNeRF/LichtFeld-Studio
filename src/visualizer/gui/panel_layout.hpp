@@ -11,6 +11,7 @@
 #include <glm/glm.hpp>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace lfs::vis::gui {
 
@@ -32,6 +33,14 @@ namespace lfs::vis::gui {
         bool mouse_released[3] = {};
         int screen_w = 0;
         int screen_h = 0;
+        float mouse_wheel = 0;
+        bool key_ctrl = false;
+        bool key_shift = false;
+        bool key_alt = false;
+        bool key_super = false;
+        std::vector<int> keys_pressed;
+        std::vector<int> keys_released;
+        void* bg_draw_list = nullptr;
     };
 
     struct ScreenState {
@@ -95,6 +104,9 @@ namespace lfs::vis::gui {
 
         bool show_sequencer_ = false;
         std::string active_tab_idname_;
+
+        float tab_scroll_offset_ = 0.0f;
+        float tab_content_total_h_ = 0.0f;
 
         CursorRequest cursor_request_ = CursorRequest::None;
         float prev_mouse_x_ = 0;

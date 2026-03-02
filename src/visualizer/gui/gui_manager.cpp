@@ -55,6 +55,51 @@
 
 namespace lfs::vis::gui {
 
+    namespace {
+        int imguiKeyToSDLScancode(ImGuiKey key) {
+            // clang-format off
+            switch (key) {
+            case ImGuiKey_Space:      return SDL_SCANCODE_SPACE;
+            case ImGuiKey_Backspace:  return SDL_SCANCODE_BACKSPACE;
+            case ImGuiKey_Tab:        return SDL_SCANCODE_TAB;
+            case ImGuiKey_Enter:      return SDL_SCANCODE_RETURN;
+            case ImGuiKey_Escape:     return SDL_SCANCODE_ESCAPE;
+            case ImGuiKey_Delete:     return SDL_SCANCODE_DELETE;
+            case ImGuiKey_Insert:     return SDL_SCANCODE_INSERT;
+            case ImGuiKey_Home:       return SDL_SCANCODE_HOME;
+            case ImGuiKey_End:        return SDL_SCANCODE_END;
+            case ImGuiKey_PageUp:     return SDL_SCANCODE_PAGEUP;
+            case ImGuiKey_PageDown:   return SDL_SCANCODE_PAGEDOWN;
+            case ImGuiKey_LeftArrow:  return SDL_SCANCODE_LEFT;
+            case ImGuiKey_UpArrow:    return SDL_SCANCODE_UP;
+            case ImGuiKey_RightArrow: return SDL_SCANCODE_RIGHT;
+            case ImGuiKey_DownArrow:  return SDL_SCANCODE_DOWN;
+            case ImGuiKey_F1:  return SDL_SCANCODE_F1;
+            case ImGuiKey_F2:  return SDL_SCANCODE_F2;
+            case ImGuiKey_F3:  return SDL_SCANCODE_F3;
+            case ImGuiKey_F4:  return SDL_SCANCODE_F4;
+            case ImGuiKey_F5:  return SDL_SCANCODE_F5;
+            case ImGuiKey_F6:  return SDL_SCANCODE_F6;
+            case ImGuiKey_F7:  return SDL_SCANCODE_F7;
+            case ImGuiKey_F8:  return SDL_SCANCODE_F8;
+            case ImGuiKey_F9:  return SDL_SCANCODE_F9;
+            case ImGuiKey_F10: return SDL_SCANCODE_F10;
+            case ImGuiKey_F11: return SDL_SCANCODE_F11;
+            case ImGuiKey_F12: return SDL_SCANCODE_F12;
+            default: break;
+            }
+            // clang-format on
+
+            if (key >= ImGuiKey_A && key <= ImGuiKey_Z)
+                return SDL_SCANCODE_A + (key - ImGuiKey_A);
+            if (key == ImGuiKey_0)
+                return SDL_SCANCODE_0;
+            if (key >= ImGuiKey_1 && key <= ImGuiKey_9)
+                return SDL_SCANCODE_1 + (key - ImGuiKey_1);
+            return -1;
+        }
+    } // namespace
+
     GuiManager::GuiManager(VisualizerImpl* viewer)
         : viewer_(viewer),
           sequencer_ui_(viewer, sequencer_ui_state_, &rmlui_manager_),
@@ -461,11 +506,61 @@ namespace lfs::vis::gui {
             delete static_cast<RmlPanelHost*>(host);
         };
         ops.draw = [](void* host, const void* ctx) {
-            static_cast<RmlPanelHost*>(host)->draw(
-                *static_cast<const PanelDrawContext*>(ctx));
+            auto* h = static_cast<RmlPanelHost*>(host);
+            float aw = ImGui::GetContentRegionAvail().x;
+            float ah = ImGui::GetContentRegionAvail().y;
+            ImVec2 pos = ImGui::GetCursorScreenPos();
+
+            PanelInputState fallback;
+            if (!h->hasInput()) {
+                auto* mvp = ImGui::GetMainViewport();
+                const auto& fio = ImGui::GetIO();
+                fallback.mouse_x = fio.MousePos.x;
+                fallback.mouse_y = fio.MousePos.y;
+                fallback.mouse_down[0] = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+                fallback.mouse_clicked[0] = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+                fallback.mouse_released[0] = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+                fallback.mouse_clicked[1] = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+                fallback.mouse_released[1] = ImGui::IsMouseReleased(ImGuiMouseButton_Right);
+                fallback.mouse_wheel = fio.MouseWheel;
+                fallback.key_ctrl = fio.KeyCtrl;
+                fallback.key_shift = fio.KeyShift;
+                fallback.key_alt = fio.KeyAlt;
+                fallback.key_super = fio.KeySuper;
+                fallback.screen_w = static_cast<int>(mvp->Size.x);
+                fallback.screen_h = static_cast<int>(mvp->Size.y);
+                h->setInput(&fallback);
+            }
+            h->draw(*static_cast<const PanelDrawContext*>(ctx),
+                    aw, ah, pos.x, pos.y);
+            h->setInput(nullptr);
         };
         ops.draw_direct = [](void* host, float x, float y, float w, float h) {
-            static_cast<RmlPanelHost*>(host)->drawDirect(x, y, w, h);
+            auto* hp = static_cast<RmlPanelHost*>(host);
+            PanelInputState fallback;
+            if (!hp->hasInput()) {
+                auto* mvp = ImGui::GetMainViewport();
+                const auto& fio = ImGui::GetIO();
+                fallback.mouse_x = fio.MousePos.x;
+                fallback.mouse_y = fio.MousePos.y;
+                fallback.mouse_down[0] = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+                fallback.mouse_down[1] = ImGui::IsMouseDown(ImGuiMouseButton_Right);
+                fallback.mouse_clicked[0] = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
+                fallback.mouse_clicked[1] = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+                fallback.mouse_released[0] = ImGui::IsMouseReleased(ImGuiMouseButton_Left);
+                fallback.mouse_released[1] = ImGui::IsMouseReleased(ImGuiMouseButton_Right);
+                fallback.mouse_wheel = fio.MouseWheel;
+                fallback.key_ctrl = fio.KeyCtrl;
+                fallback.key_shift = fio.KeyShift;
+                fallback.key_alt = fio.KeyAlt;
+                fallback.key_super = fio.KeySuper;
+                fallback.screen_w = static_cast<int>(mvp->Size.x);
+                fallback.screen_h = static_cast<int>(mvp->Size.y);
+                fallback.bg_draw_list = ImGui::GetBackgroundDrawList(mvp);
+                hp->setInput(&fallback);
+            }
+            hp->drawDirect(x, y, w, h);
+            hp->setInput(nullptr);
         };
         ops.get_document = [](void* host) -> void* {
             return static_cast<RmlPanelHost*>(host)->getDocument();
@@ -491,6 +586,13 @@ namespace lfs::vis::gui {
         };
         ops.mark_content_dirty = [](void* host) {
             static_cast<RmlPanelHost*>(host)->markContentDirty();
+        };
+        ops.set_input_clip_y = [](void* host, float y_min, float y_max) {
+            static_cast<RmlPanelHost*>(host)->setInputClipY(y_min, y_max);
+        };
+        ops.set_input = [](void* host, const void* input) {
+            static_cast<RmlPanelHost*>(host)->setInput(
+                static_cast<const PanelInputState*>(input));
         };
         lfs::python::set_rml_panel_host_ops(ops);
 
@@ -806,6 +908,23 @@ namespace lfs::vis::gui {
         panel_input.mouse_released[2] = ImGui::IsMouseReleased(ImGuiMouseButton_Middle);
         panel_input.screen_w = static_cast<int>(mvp_input->Size.x);
         panel_input.screen_h = static_cast<int>(mvp_input->Size.y);
+        panel_input.bg_draw_list = ImGui::GetBackgroundDrawList(ImGui::GetMainViewport());
+        panel_input.mouse_wheel = io.MouseWheel;
+        panel_input.key_ctrl = io.KeyCtrl;
+        panel_input.key_shift = io.KeyShift;
+        panel_input.key_alt = io.KeyAlt;
+        panel_input.key_super = io.KeySuper;
+
+        for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
+            auto imgui_key = static_cast<ImGuiKey>(k);
+            int sc = imguiKeyToSDLScancode(imgui_key);
+            if (sc < 0)
+                continue;
+            if (ImGui::IsKeyPressed(imgui_key, false))
+                panel_input.keys_pressed.push_back(sc);
+            if (ImGui::IsKeyReleased(imgui_key))
+                panel_input.keys_released.push_back(sc);
+        }
 
         ScreenState screen;
         screen.work_pos = {mvp_input->WorkPos.x, mvp_input->WorkPos.y};
@@ -844,6 +963,19 @@ namespace lfs::vis::gui {
 
         panel_layout_.renderRightPanel(ctx, draw_ctx, show_main_panel_, ui_hidden_,
                                        window_states_, focus_panel_name_, panel_input, screen);
+
+        {
+            auto tip = RmlPanelHost::consumeFrameTooltip();
+            if (!tip.empty()) {
+                ImGui::BeginTooltip();
+                ImGui::TextUnformatted(tip.c_str());
+                ImGui::EndTooltip();
+            }
+            if (RmlPanelHost::consumeFrameWantsKeyboard()) {
+                ImGui::GetIO().WantCaptureKeyboard = true;
+                ImGui::GetIO().WantTextInput = true;
+            }
+        }
 
         // Apply cursor requests from right panel and panel layout
         auto apply_cursor = [](CursorRequest req) {

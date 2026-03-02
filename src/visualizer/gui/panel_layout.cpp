@@ -4,10 +4,10 @@
 
 #include "gui/panel_layout.hpp"
 #include "gui/panels/python_console_panel.hpp"
+#include "gui/rmlui/rml_fbo.hpp"
 #include "python/python_runtime.hpp"
 #include "visualizer_impl.hpp"
 #include <algorithm>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
 
@@ -90,9 +90,11 @@ namespace lfs::vis::gui {
 
         auto& reg = PanelRegistry::instance();
         reg.draw_panels_direct(PanelSpace::SceneHeader, content_x, content_top,
-                               content_w, scene_h, draw_ctx);
+                               content_w, scene_h, draw_ctx, &input);
 
         const auto main_tabs = reg.get_panels_for_space(PanelSpace::MainPanelTab);
+
+        const std::string prev_tab = active_tab_idname_;
 
         if (!focus_panel_name.empty()) {
             for (const auto& tab : main_tabs) {
@@ -107,30 +109,41 @@ namespace lfs::vis::gui {
         if (active_tab_idname_.empty() && !main_tabs.empty())
             active_tab_idname_ = main_tabs[0].idname;
 
+        if (active_tab_idname_ != prev_tab)
+            tab_scroll_offset_ = 0.0f;
+
         const float tab_content_y = content_top + scene_h + splitter_h + tab_bar_h;
         const float tab_content_h = std::max(0.0f, content_top + avail_h - tab_content_y);
 
-        constexpr ImGuiWindowFlags TAB_FLAGS =
-            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDocking |
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoFocusOnAppearing;
+        RmlFBO::pushDrawListClipRect(input.bg_draw_list,
+                                     content_x, tab_content_y,
+                                     content_x + content_w, tab_content_y + tab_content_h);
 
-        ImGui::SetNextWindowPos({panel_x, tab_content_y}, ImGuiCond_Always);
-        ImGui::SetNextWindowSize({right_panel_width_, tab_content_h}, ImGuiCond_Always);
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {PAD, 0});
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+        const float clip_y_min = tab_content_y;
+        const float clip_y_max = tab_content_y + tab_content_h;
 
-        if (ImGui::Begin("##RightPanelContent", nullptr, TAB_FLAGS)) {
-            reg.draw_single_panel(active_tab_idname_, draw_ctx);
-            reg.draw_child_panels(active_tab_idname_, draw_ctx);
-            reg.draw_panels(PanelSpace::SidePanel, draw_ctx);
+        const float y_cursor = tab_content_y - tab_scroll_offset_;
+        const float main_h = reg.draw_single_panel_direct(active_tab_idname_,
+                                                          content_x, y_cursor, content_w, 100000.0f, draw_ctx,
+                                                          clip_y_min, clip_y_max, &input);
+        const float child_h = reg.draw_child_panels_direct(active_tab_idname_,
+                                                           content_x, y_cursor + main_h, content_w, 100000.0f, draw_ctx,
+                                                           clip_y_min, clip_y_max, &input);
+
+        RmlFBO::popDrawListClipRect(input.bg_draw_list);
+
+        tab_content_total_h_ = main_h + child_h;
+
+        const float max_scroll = std::max(0.0f, tab_content_total_h_ - tab_content_h);
+        tab_scroll_offset_ = std::clamp(tab_scroll_offset_, 0.0f, max_scroll);
+
+        if (input.mouse_x >= content_x && input.mouse_x < content_x + content_w &&
+            input.mouse_y >= tab_content_y && input.mouse_y < tab_content_y + tab_content_h) {
+            if (input.mouse_wheel != 0.0f) {
+                tab_scroll_offset_ -= input.mouse_wheel * 30.0f;
+                tab_scroll_offset_ = std::clamp(tab_scroll_offset_, 0.0f, max_scroll);
+            }
         }
-        ImGui::End();
-        ImGui::PopStyleVar(2);
-        ImGui::PopStyleColor(3);
     }
 
     void PanelLayoutManager::adjustScenePanelRatio(float delta_y, const ScreenState& screen) {
