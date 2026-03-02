@@ -14,8 +14,6 @@ services:
     image: lichtfeld-studio:latest
     network_mode: "host"
     working_dir: /home/${USERNAME}/projects/LichtFeld-Studio
-    cpus: 16
-    mem_limit: 24g
     ipc: host
     pid: host
     privileged: true
