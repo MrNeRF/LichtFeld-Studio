@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/ui_context.hpp"
+#include "python/python_runtime.hpp"
 #include "theme/theme.hpp"
 
 #include <algorithm>
@@ -273,11 +274,11 @@ namespace lfs::vis::gui {
                     break;
                 }
                 case PanelSpace::StatusBar: {
-                    constexpr float STATUS_BAR_HEIGHT = 22.0f;
+                    const float status_bar_h = PanelLayoutManager::STATUS_BAR_HEIGHT * lfs::python::get_shared_dpi_scale();
                     constexpr float PADDING = 8.0f;
                     const auto* vp = ImGui::GetMainViewport();
-                    const ImVec2 bar_pos{vp->WorkPos.x, vp->WorkPos.y + vp->WorkSize.y - STATUS_BAR_HEIGHT};
-                    const ImVec2 bar_size{vp->WorkSize.x, STATUS_BAR_HEIGHT};
+                    const ImVec2 bar_pos{vp->WorkPos.x, vp->WorkPos.y + vp->WorkSize.y - status_bar_h};
+                    const ImVec2 bar_size{vp->WorkSize.x, status_bar_h};
 
                     ImGui::SetNextWindowPos(bar_pos, ImGuiCond_Always);
                     ImGui::SetNextWindowSize(bar_size, ImGuiCond_Always);

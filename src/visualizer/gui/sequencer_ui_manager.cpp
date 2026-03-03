@@ -541,15 +541,16 @@ namespace lfs::vis::gui {
         auto* const rm = ctx.viewer->getRenderingManager();
         auto* const sm = ctx.viewer->getSceneManager();
 
+        const float dp = panel_->cachedDpRatio();
         const float px = panel_->cachedPanelX();
         const float pw = panel_->cachedPanelWidth();
-        const float timeline_x = px + panel_config::TRANSPORT_WIDTH + panel_config::INNER_PADDING;
-        const float timeline_width = pw - panel_config::TRANSPORT_WIDTH - panel_config::TIME_DISPLAY_WIDTH - panel_config::INNER_PADDING * 2.0f;
+        const float timeline_x = px + panel_config::TRANSPORT_WIDTH * dp + panel_config::INNER_PADDING * dp;
+        const float timeline_width = pw - panel_config::TRANSPORT_WIDTH * dp - panel_config::TIME_DISPLAY_WIDTH * dp - panel_config::INNER_PADDING * 2.0f * dp;
 
         if (timeline_width <= 0.0f)
             return;
 
-        const float strip_y = panel_->cachedPanelY() + panel_config::HEIGHT + panel_config::EASING_STRIPE_HEIGHT - 1.0f;
+        const float strip_y = panel_->cachedPanelY() + (panel_config::HEIGHT + panel_config::EASING_STRIPE_HEIGHT - 1.0f) * dp;
 
         film_strip_.render(controller_, rm, sm,
                            px, pw,
@@ -566,22 +567,30 @@ namespace lfs::vis::gui {
     }
 
     void SequencerUIManager::drawEasingCurves() {
+        const float dp = panel_->cachedDpRatio();
         const float px = panel_->cachedPanelX();
         const float pw = panel_->cachedPanelWidth();
         const float panel_y = panel_->cachedPanelY();
-        const float timeline_x = px + panel_config::TRANSPORT_WIDTH + panel_config::INNER_PADDING;
-        const float timeline_width = pw - panel_config::TRANSPORT_WIDTH -
-                                     panel_config::TIME_DISPLAY_WIDTH -
-                                     panel_config::INNER_PADDING * 2.0f;
+        const float timeline_x = px + (panel_config::TRANSPORT_WIDTH + panel_config::INNER_PADDING) * dp;
+        const float timeline_width = pw - (panel_config::TRANSPORT_WIDTH +
+                                           panel_config::TIME_DISPLAY_WIDTH +
+                                           panel_config::INNER_PADDING * 2.0f) *
+                                              dp;
         if (timeline_width <= 0.0f)
             return;
 
-        const float stripe_y = panel_y + panel_config::INNER_PADDING +
-                               (panel_config::HEIGHT - 2.0f * panel_config::INNER_PADDING);
-        const float stripe_h = panel_config::EASING_STRIPE_HEIGHT;
+        const float stripe_y = panel_y + panel_config::HEIGHT * dp;
+        const float stripe_h = panel_config::EASING_STRIPE_HEIGHT * dp;
         const float y_center = stripe_y + stripe_h * 0.5f;
 
         auto* dl = ImGui::GetForegroundDrawList();
+
+        const auto& t = theme();
+        dl->AddRectFilled({px, stripe_y}, {px + pw, stripe_y + stripe_h},
+                          toU32WithAlpha(t.palette.surface, 0.85f),
+                          0.0f);
+        dl->AddLine({px, stripe_y}, {px + pw, stripe_y},
+                    toU32WithAlpha(t.palette.border, 0.3f));
 
         const auto& timeline = controller_.timeline();
         const auto& keyframes = timeline.keyframes();
@@ -604,8 +613,6 @@ namespace lfs::vis::gui {
         };
 
         dl->PushClipRect({timeline_x, stripe_y}, {timeline_x + timeline_width, stripe_y + stripe_h}, true);
-
-        const auto& t = theme();
         const ImU32 colors[2] = {
             toU32WithAlpha(t.palette.primary, 0.8f),
             toU32WithAlpha(t.palette.secondary, 0.8f),
@@ -725,12 +732,14 @@ namespace lfs::vis::gui {
         if (!panel_->isPlayheadInRange())
             return;
 
+        const float dp = panel_->cachedDpRatio();
         const float px = std::round(panel_->cachedPlayheadScreenX());
         const float panel_y = panel_->cachedPanelY();
-        const float line_top = panel_y + panel_config::INNER_PADDING +
-                               panel_config::RULER_HEIGHT + 4.0f;
+        const float line_top = panel_y + (panel_config::INNER_PADDING +
+                                          panel_config::RULER_HEIGHT + 4.0f) *
+                                             dp;
         const float strip_offset = ui_state_.show_film_strip ? FilmStripRenderer::STRIP_HEIGHT : 0.0f;
-        const float line_bottom = panel_y + panel_config::HEIGHT + panel_config::EASING_STRIPE_HEIGHT - 1.0f + strip_offset;
+        const float line_bottom = panel_y + (panel_config::HEIGHT + panel_config::EASING_STRIPE_HEIGHT - 1.0f) * dp + strip_offset;
 
         auto* dl = ImGui::GetForegroundDrawList();
         dl->AddLine({px, line_top}, {px, line_bottom},
@@ -852,7 +861,8 @@ namespace lfs::vis::gui {
         const auto& t = theme();
         const float scale = ui_state_.pip_preview_scale;
         constexpr float MARGIN = 16.0f;
-        const float PANEL_HEIGHT = 90.0f + panel_config::EASING_STRIPE_HEIGHT +
+        const float dp = panel_->cachedDpRatio();
+        const float PANEL_HEIGHT = (90.0f + panel_config::EASING_STRIPE_HEIGHT) * dp +
                                    (ui_state_.show_film_strip ? FilmStripRenderer::STRIP_HEIGHT : 0.0f);
         constexpr float PADDING = 4.0f;
         constexpr float TITLE_HEIGHT = 18.0f;

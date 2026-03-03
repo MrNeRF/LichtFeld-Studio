@@ -224,7 +224,7 @@ namespace lfs::vis::gui {
 
         syncTheme();
         rml_context_->Update();
-        const float menu_h = el_context_menu_->GetClientHeight() / rml_manager_->getDpRatio();
+        const float menu_h = el_context_menu_->GetClientHeight();
         const float screen_h = ImGui::GetIO().DisplaySize.y;
         const float y = (screen_y + menu_h > screen_h)
                             ? std::max(0.0f, screen_y - menu_h)
@@ -357,9 +357,8 @@ namespace lfs::vis::gui {
         if (!anything_visible)
             return;
 
-        const float dp_ratio = rml_manager_->getDpRatio();
-        const float mx = input.mouse_x * dp_ratio;
-        const float my = input.mouse_y * dp_ratio;
+        const float mx = input.mouse_x;
+        const float my = input.mouse_y;
 
         rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), 0);
 
@@ -453,9 +452,8 @@ namespace lfs::vis::gui {
 
         syncTheme();
 
-        const float dp_ratio = rml_manager_->getDpRatio();
-        const int w = static_cast<int>(static_cast<float>(screen_w) * dp_ratio);
-        const int h = static_cast<int>(static_cast<float>(screen_h) * dp_ratio);
+        const int w = screen_w;
+        const int h = screen_h;
 
         if (w <= 0 || h <= 0)
             return;

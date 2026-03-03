@@ -164,9 +164,8 @@ namespace lfs::vis::gui {
         if (!open_ || !ctx_ || !doc_ || !el_backdrop_ || !el_ctx_menu_)
             return;
 
-        const float dp_ratio = mgr_->getDpRatio();
-        const float mx = input.mouse_x * dp_ratio;
-        const float my = input.mouse_y * dp_ratio;
+        const float mx = input.mouse_x;
+        const float my = input.mouse_y;
 
         ctx_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), 0);
 
@@ -216,9 +215,8 @@ namespace lfs::vis::gui {
 
         syncTheme();
 
-        const float dp_ratio = mgr_->getDpRatio();
-        const int w = static_cast<int>(static_cast<float>(screen_w) * dp_ratio);
-        const int h = static_cast<int>(static_cast<float>(screen_h) * dp_ratio);
+        const int w = screen_w;
+        const int h = screen_h;
 
         if (w <= 0 || h <= 0)
             return;

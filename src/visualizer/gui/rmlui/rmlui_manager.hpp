@@ -29,6 +29,7 @@ namespace lfs::vis::gui {
         void shutdown();
 
         float getDpRatio() const { return dp_ratio_; }
+        void setDpRatio(float ratio);
 
         Rml::Context* createContext(const std::string& name, int width, int height);
         Rml::Context* getContext(const std::string& name);

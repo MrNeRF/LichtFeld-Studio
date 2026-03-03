@@ -40,6 +40,11 @@ namespace lfs::vis::gui {
         }
     } // namespace
 
+    float RmlMenuBar::barHeight() const {
+        const float dp = rml_manager_ ? rml_manager_->getDpRatio() : 1.0f;
+        return bar_height_ * dp;
+    }
+
     void RmlMenuBar::init(RmlUIManager* mgr) {
         assert(mgr);
         rml_manager_ = mgr;
@@ -111,9 +116,8 @@ namespace lfs::vis::gui {
 
         wants_input_ = false;
 
-        const float dp_ratio = rml_manager_ ? rml_manager_->getDpRatio() : 1.0f;
-        const float mx = input.mouse_x * dp_ratio;
-        const float my = input.mouse_y * dp_ratio;
+        const float mx = input.mouse_x;
+        const float my = input.mouse_y;
 
         rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), 0);
 
@@ -421,11 +425,11 @@ namespace lfs::vis::gui {
         const float dp_ratio = rml_manager_->getDpRatio();
         const int bar_h = static_cast<int>(bar_height_ * dp_ratio);
 
-        int ctx_w = static_cast<int>(screen_w * dp_ratio);
+        int ctx_w = screen_w;
         int ctx_h;
 
         if (open_menu_index_ >= 0) {
-            ctx_h = static_cast<int>(screen_h * dp_ratio);
+            ctx_h = screen_h;
         } else {
             ctx_h = bar_h;
         }

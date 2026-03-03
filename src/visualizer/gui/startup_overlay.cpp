@@ -242,13 +242,12 @@ namespace lfs::vis::gui {
         const float local_x = io.MousePos.x - overlay_x;
         const float local_y = io.MousePos.y - overlay_y;
 
-        const float dp_ratio = rml_manager_->getDpRatio();
         const bool hovered = local_x >= 0 && local_y >= 0 &&
                              local_x < overlay_w && local_y < overlay_h;
 
         if (hovered) {
-            rml_context_->ProcessMouseMove(static_cast<int>(local_x * dp_ratio),
-                                           static_cast<int>(local_y * dp_ratio), 0);
+            rml_context_->ProcessMouseMove(static_cast<int>(local_x),
+                                           static_cast<int>(local_y), 0);
 
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
                 rml_context_->ProcessMouseButtonDown(0, 0);
@@ -275,9 +274,8 @@ namespace lfs::vis::gui {
         updateTheme();
         updateLocalizedText();
 
-        const float dp_ratio = rml_manager_->getDpRatio();
-        const int ctx_w = static_cast<int>(viewport.size.x * dp_ratio);
-        const int ctx_h = static_cast<int>(viewport.size.y * dp_ratio);
+        const int ctx_w = static_cast<int>(viewport.size.x);
+        const int ctx_h = static_cast<int>(viewport.size.y);
 
         rml_context_->SetDimensions(Rml::Vector2i(ctx_w, ctx_h));
         rml_context_->Update();
@@ -290,9 +288,9 @@ namespace lfs::vis::gui {
             const float box_w = overlay_box->GetOffsetWidth();
             const float box_h = overlay_box->GetOffsetHeight();
             if (box_w > 1.0f && box_h > 1.0f) {
-                overlay_box_pos = {viewport.pos.x + abs_offset.x / dp_ratio,
-                                   viewport.pos.y + abs_offset.y / dp_ratio};
-                overlay_box_size = {box_w / dp_ratio, box_h / dp_ratio};
+                overlay_box_pos = {viewport.pos.x + abs_offset.x,
+                                   viewport.pos.y + abs_offset.y};
+                overlay_box_size = {box_w, box_h};
                 overlay_box_valid = overlay_box_size.x > 2.0f && overlay_box_size.y > 2.0f;
             }
         }
@@ -409,8 +407,8 @@ namespace lfs::vis::gui {
                 auto* overlay_box = document_->GetElementById("overlay-box");
                 bool inside = false;
                 if (overlay_box) {
-                    const float mx = (io.MousePos.x - viewport.pos.x) * dp_ratio;
-                    const float my = (io.MousePos.y - viewport.pos.y) * dp_ratio;
+                    const float mx = io.MousePos.x - viewport.pos.x;
+                    const float my = io.MousePos.y - viewport.pos.y;
                     auto abs_offset = overlay_box->GetAbsoluteOffset(Rml::BoxArea::Border);
                     float box_w = overlay_box->GetOffsetWidth();
                     float box_h = overlay_box->GetOffsetHeight();

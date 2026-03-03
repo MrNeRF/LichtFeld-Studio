@@ -259,19 +259,17 @@ namespace lfs::vis::gui {
         if (!dirty)
             return;
 
-        const float dp_ratio = manager_->getDpRatio();
-
         if (height_mode_ == HeightMode::Content &&
             (content_dirty_ || pw != last_measure_w_)) {
             last_measure_w_ = pw;
-            const int layout_h = static_cast<int>(10000.0f * dp_ratio);
+            const int layout_h = 10000;
             rml_context_->SetDimensions(Rml::Vector2i(pw, layout_h));
             rml_context_->Update();
 
             const float content_h =
                 content_wrap_el_ ? content_wrap_el_->GetOffsetHeight() : 100.0f;
             ph = std::max(1, static_cast<int>(std::ceil(content_h)));
-            display_h = static_cast<float>(ph) / dp_ratio;
+            display_h = static_cast<float>(ph);
             last_content_height_ = display_h;
 
             fbo_.ensure(pw, ph);
@@ -324,16 +322,15 @@ namespace lfs::vis::gui {
         if (!ensureContext() || !loadDocument())
             return;
 
-        const float dp_ratio = manager_->getDpRatio();
-        const int w = static_cast<int>(avail_w * dp_ratio);
+        const int w = static_cast<int>(avail_w);
 
         int h;
         float display_h;
         if (height_mode_ == HeightMode::Content) {
-            h = std::max(1, static_cast<int>(std::ceil(last_content_height_ * dp_ratio)));
+            h = std::max(1, static_cast<int>(std::ceil(last_content_height_)));
             display_h = last_content_height_;
         } else {
-            h = static_cast<int>(avail_h * dp_ratio);
+            h = static_cast<int>(avail_h);
             display_h = avail_h;
         }
 
@@ -352,16 +349,15 @@ namespace lfs::vis::gui {
         if (!ensureContext() || !loadDocument())
             return;
 
-        const float dp_ratio = manager_->getDpRatio();
-        const int pw = static_cast<int>(w * dp_ratio);
+        const int pw = static_cast<int>(w);
 
         int ph;
         float display_h;
         if (height_mode_ == HeightMode::Content) {
-            ph = std::max(1, static_cast<int>(std::ceil(last_content_height_ * dp_ratio)));
+            ph = std::max(1, static_cast<int>(std::ceil(last_content_height_)));
             display_h = last_content_height_;
         } else {
-            ph = static_cast<int>(h * dp_ratio);
+            ph = static_cast<int>(h);
             display_h = h;
         }
 
@@ -388,9 +384,8 @@ namespace lfs::vis::gui {
         float local_x = mouse_x - panel_x;
         float local_y = mouse_y - panel_y;
 
-        const float dp_ratio = manager_->getDpRatio();
-        const float logical_w = static_cast<float>(fbo_.width()) / dp_ratio;
-        const float logical_h = static_cast<float>(fbo_.height()) / dp_ratio;
+        const float logical_w = static_cast<float>(fbo_.width());
+        const float logical_h = static_cast<float>(fbo_.height());
 
         bool hovered = local_x >= 0 && local_y >= 0 && local_x < logical_w && local_y < logical_h;
 
@@ -404,8 +399,8 @@ namespace lfs::vis::gui {
             had_input = true;
         }
 
-        const int rml_mx = static_cast<int>(local_x * dp_ratio);
-        const int rml_my = static_cast<int>(local_y * dp_ratio);
+        const int rml_mx = static_cast<int>(local_x);
+        const int rml_my = static_cast<int>(local_y);
         if (hovered &&
             (rml_mx != last_forwarded_mx_ || rml_my != last_forwarded_my_)) {
             last_forwarded_mx_ = rml_mx;

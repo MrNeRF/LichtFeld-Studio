@@ -52,7 +52,7 @@ namespace lfs::vis::gui {
         bool wantsInput() const { return wants_input_; }
         bool isOpen() const { return open_menu_index_ >= 0; }
         const RmlFBO& fbo() const { return fbo_; }
-        float barHeight() const { return bar_height_; }
+        float barHeight() const;
 
     private:
         void updateTheme();

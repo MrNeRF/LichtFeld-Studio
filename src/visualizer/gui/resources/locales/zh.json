@@ -24,6 +24,8 @@
     "view.theme.catppuccin_mocha": "Catppuccin Mocha",
     "view.theme.catppuccin_latte": "Catppuccin Latte",
     "view.theme.nord": "Nord",
+    "view.ui_scale": "界面缩放",
+    "view.ui_scale.auto": "自动",
     "view.debug_info": "调试信息...",
     "help": "帮助",
     "help.getting_started": "入门指南",

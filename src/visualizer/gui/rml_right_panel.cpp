@@ -211,10 +211,8 @@ namespace lfs::vis::gui {
         if (layout.size.x <= 0 || layout.size.y <= 0)
             return;
 
-        const float dp_ratio = rml_manager_->getDpRatio();
-
-        const float mx = (input.mouse_x - layout.pos.x) * dp_ratio;
-        const float my = (input.mouse_y - layout.pos.y) * dp_ratio;
+        const float mx = input.mouse_x - layout.pos.x;
+        const float my = input.mouse_y - layout.pos.y;
 
         if (mouse_moved)
             rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), 0);
@@ -311,9 +309,8 @@ namespace lfs::vis::gui {
 
         const bool theme_changed = updateTheme();
 
-        const float dp_ratio = rml_manager_->getDpRatio();
-        const int w = static_cast<int>(layout.size.x * dp_ratio);
-        const int h = static_cast<int>(layout.size.y * dp_ratio);
+        const int w = static_cast<int>(layout.size.x);
+        const int h = static_cast<int>(layout.size.y);
 
         if (w <= 0 || h <= 0)
             return;
@@ -334,28 +331,29 @@ namespace lfs::vis::gui {
             return;
         }
 
-        const float tab_bar_h = 28.0f;
+        const float dp_ratio = rml_manager_->getDpRatio();
+        const float tab_bar_h = PanelLayoutManager::TAB_BAR_H * dp_ratio;
 
         if (resize_handle_el_) {
-            resize_handle_el_->SetProperty("top", "0dp");
-            resize_handle_el_->SetProperty("height", std::format("{:.0f}dp", layout.size.y));
+            resize_handle_el_->SetProperty("top", "0px");
+            resize_handle_el_->SetProperty("height", std::format("{:.0f}px", layout.size.y));
         }
         if (left_border_el_) {
-            left_border_el_->SetProperty("top", "0dp");
-            left_border_el_->SetProperty("height", std::format("{:.0f}dp", layout.size.y));
+            left_border_el_->SetProperty("top", "0px");
+            left_border_el_->SetProperty("height", std::format("{:.0f}px", layout.size.y));
         }
         if (splitter_el_) {
-            splitter_el_->SetProperty("top", std::format("{:.0f}dp", layout.scene_h));
-            splitter_el_->SetProperty("height", std::format("{:.0f}dp", layout.splitter_h));
+            splitter_el_->SetProperty("top", std::format("{:.0f}px", layout.scene_h));
+            splitter_el_->SetProperty("height", std::format("{:.0f}px", layout.splitter_h));
         }
         if (tab_bar_el_) {
             const float tab_top = layout.scene_h + layout.splitter_h;
-            tab_bar_el_->SetProperty("top", std::format("{:.0f}dp", tab_top));
-            tab_bar_el_->SetProperty("height", std::format("{:.0f}dp", tab_bar_h));
+            tab_bar_el_->SetProperty("top", std::format("{:.0f}px", tab_top));
+            tab_bar_el_->SetProperty("height", std::format("{:.0f}px", tab_bar_h));
         }
         if (tab_separator_el_) {
             const float sep_top = layout.scene_h + layout.splitter_h + tab_bar_h;
-            tab_separator_el_->SetProperty("top", std::format("{:.0f}dp", sep_top));
+            tab_separator_el_->SetProperty("top", std::format("{:.0f}px", sep_top));
         }
 
         rml_context_->SetDimensions(Rml::Vector2i(w, h));

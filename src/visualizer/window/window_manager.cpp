@@ -221,7 +221,7 @@ namespace lfs::vis {
         case SDL_EVENT_KEY_UP: {
             if (!input_controller_)
                 break;
-            const int key = input::sdlKeycodeToAppKey(event.key.key);
+            const int key = input::sdlScancodeToAppKey(event.key.scancode);
             const int action = event.key.down
                                    ? (event.key.repeat ? input::ACTION_REPEAT : input::ACTION_PRESS)
                                    : input::ACTION_RELEASE;

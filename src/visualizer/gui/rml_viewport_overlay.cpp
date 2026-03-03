@@ -124,10 +124,8 @@ namespace lfs::vis::gui {
             return;
 
         ImGuiIO& io = ImGui::GetIO();
-        const float dp_ratio = rml_manager_->getDpRatio();
-
-        float mx = (io.MousePos.x - vp_pos_.x) * dp_ratio;
-        float my = (io.MousePos.y - vp_pos_.y) * dp_ratio;
+        float mx = io.MousePos.x - vp_pos_.x;
+        float my = io.MousePos.y - vp_pos_.y;
 
         rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), 0);
 
@@ -163,9 +161,8 @@ namespace lfs::vis::gui {
 
         updateTheme();
 
-        const float dp_ratio = rml_manager_->getDpRatio();
-        const int w = static_cast<int>(vp_size_.x * dp_ratio);
-        const int h = static_cast<int>(vp_size_.y * dp_ratio);
+        const int w = static_cast<int>(vp_size_.x);
+        const int h = static_cast<int>(vp_size_.y);
 
         auto* body = document_->GetElementById("overlay-body");
         if (body) {

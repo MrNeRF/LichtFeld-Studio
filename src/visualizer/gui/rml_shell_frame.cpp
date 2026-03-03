@@ -103,24 +103,23 @@ namespace lfs::vis::gui {
 
         updateTheme();
 
-        const float dp_ratio = rml_manager_->getDpRatio();
-        const int w = static_cast<int>(full_w * dp_ratio);
-        const int h = static_cast<int>(full_h * dp_ratio);
+        const int w = static_cast<int>(full_w);
+        const int h = static_cast<int>(full_h);
 
         const float work_y = vp->WorkPos.y - vp->Pos.y;
 
         if (menu_region_) {
-            menu_region_->SetProperty("top", std::format("{:.0f}dp", regions.menu_pos.y - vp->Pos.y));
-            menu_region_->SetProperty("height", std::format("{:.0f}dp", regions.menu_size.y));
+            menu_region_->SetProperty("top", std::format("{:.0f}px", regions.menu_pos.y - vp->Pos.y));
+            menu_region_->SetProperty("height", std::format("{:.0f}px", regions.menu_size.y));
         }
         if (right_panel_region_) {
-            right_panel_region_->SetProperty("top", std::format("{:.0f}dp", work_y));
-            right_panel_region_->SetProperty("right", "0dp");
-            right_panel_region_->SetProperty("width", std::format("{:.0f}dp", regions.right_panel_size.x));
-            right_panel_region_->SetProperty("height", std::format("{:.0f}dp", regions.right_panel_size.y));
+            right_panel_region_->SetProperty("top", std::format("{:.0f}px", work_y));
+            right_panel_region_->SetProperty("right", "0px");
+            right_panel_region_->SetProperty("width", std::format("{:.0f}px", regions.right_panel_size.x));
+            right_panel_region_->SetProperty("height", std::format("{:.0f}px", regions.right_panel_size.y));
         }
         if (status_region_) {
-            status_region_->SetProperty("height", std::format("{:.0f}dp", regions.status_size.y));
+            status_region_->SetProperty("height", std::format("{:.0f}px", regions.status_size.y));
         }
 
         rml_context_->SetDimensions(Rml::Vector2i(w, h));

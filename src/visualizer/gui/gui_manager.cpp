@@ -204,6 +204,142 @@ namespace lfs::vis::gui {
         return fs;
     }
 
+    void GuiManager::rebuildFonts(float scale) {
+        ImGuiIO& io = ImGui::GetIO();
+
+        ImGui_ImplOpenGL3_DestroyFontsTexture();
+        io.Fonts->Clear();
+
+        const auto& t = theme();
+        try {
+            const auto regular_path = lfs::vis::getAssetPath("fonts/" + t.fonts.regular_path);
+            const auto bold_path = lfs::vis::getAssetPath("fonts/" + t.fonts.bold_path);
+            const auto japanese_path = lfs::vis::getAssetPath("fonts/NotoSansJP-Regular.ttf");
+            const auto korean_path = lfs::vis::getAssetPath("fonts/NotoSansKR-Regular.ttf");
+
+            const auto is_font_valid = [](const std::filesystem::path& path) -> bool {
+                constexpr size_t MIN_FONT_FILE_SIZE = 100;
+                return std::filesystem::exists(path) && std::filesystem::file_size(path) >= MIN_FONT_FILE_SIZE;
+            };
+
+            const auto load_font_latin_only =
+                [&](const std::filesystem::path& path, const float size) -> ImFont* {
+                if (!is_font_valid(path))
+                    return nullptr;
+                const std::string path_utf8 = lfs::core::path_to_utf8(path);
+                return io.Fonts->AddFontFromFileTTF(path_utf8.c_str(), size);
+            };
+
+            const auto merge_cjk = [&](const float size) {
+                if (is_font_valid(japanese_path)) {
+                    ImFontConfig config;
+                    config.MergeMode = true;
+                    config.OversampleH = 1;
+                    const std::string japanese_path_utf8 = lfs::core::path_to_utf8(japanese_path);
+                    io.Fonts->AddFontFromFileTTF(japanese_path_utf8.c_str(), size, &config,
+                                                 io.Fonts->GetGlyphRangesJapanese());
+                    io.Fonts->AddFontFromFileTTF(japanese_path_utf8.c_str(), size, &config,
+                                                 io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+                }
+                if (is_font_valid(korean_path)) {
+                    ImFontConfig config;
+                    config.MergeMode = true;
+                    config.OversampleH = 1;
+                    const std::string korean_path_utf8 = lfs::core::path_to_utf8(korean_path);
+                    io.Fonts->AddFontFromFileTTF(korean_path_utf8.c_str(), size, &config,
+                                                 io.Fonts->GetGlyphRangesKorean());
+                }
+            };
+
+            const auto load_font_with_cjk =
+                [&](const std::filesystem::path& path, const float size) -> ImFont* {
+                ImFont* font = load_font_latin_only(path, size);
+                if (!font)
+                    return nullptr;
+                merge_cjk(size);
+                return font;
+            };
+
+            font_regular_ = load_font_with_cjk(regular_path, t.fonts.base_size * scale);
+            font_bold_ = load_font_with_cjk(bold_path, t.fonts.base_size * scale);
+            font_heading_ = load_font_with_cjk(bold_path, t.fonts.heading_size * scale);
+            font_small_ = load_font_with_cjk(regular_path, t.fonts.small_size * scale);
+            font_section_ = load_font_with_cjk(bold_path, t.fonts.section_size * scale);
+
+            const auto monospace_path = lfs::vis::getAssetPath("fonts/JetBrainsMono-Regular.ttf");
+            if (is_font_valid(monospace_path)) {
+                const std::string mono_path_utf8 = lfs::core::path_to_utf8(monospace_path);
+
+                static constexpr ImWchar GLYPH_RANGES[] = {
+                    0x0020,
+                    0x00FF,
+                    0x2190,
+                    0x21FF,
+                    0x2500,
+                    0x257F,
+                    0x2580,
+                    0x259F,
+                    0x25A0,
+                    0x25FF,
+                    0,
+                };
+
+                static constexpr float MONO_SCALES[] = {0.7f, 1.0f, 1.3f, 1.7f, 2.2f};
+                static_assert(std::size(MONO_SCALES) == FontSet::MONO_SIZE_COUNT);
+
+                for (int i = 0; i < FontSet::MONO_SIZE_COUNT; ++i) {
+                    ImFontConfig config;
+                    config.GlyphRanges = GLYPH_RANGES;
+                    const float size = t.fonts.base_size * scale * MONO_SCALES[i];
+                    mono_fonts_[i] = io.Fonts->AddFontFromFileTTF(mono_path_utf8.c_str(), size, &config);
+                    mono_font_scales_[i] = MONO_SCALES[i];
+                }
+                font_monospace_ = mono_fonts_[1];
+            }
+            if (!font_monospace_)
+                font_monospace_ = font_regular_;
+
+            const bool all_loaded = font_regular_ && font_bold_ && font_heading_ && font_small_ && font_section_;
+            if (!all_loaded) {
+                ImFont* const fallback = font_regular_ ? font_regular_ : io.Fonts->AddFontDefault();
+                if (!font_regular_)
+                    font_regular_ = fallback;
+                if (!font_bold_)
+                    font_bold_ = fallback;
+                if (!font_heading_)
+                    font_heading_ = fallback;
+                if (!font_small_)
+                    font_small_ = fallback;
+                if (!font_section_)
+                    font_section_ = fallback;
+            }
+        } catch (const std::exception& e) {
+            LOG_ERROR("Font loading failed: {}", e.what());
+            ImFont* const fallback = io.Fonts->AddFontDefault();
+            font_regular_ = font_bold_ = font_heading_ = font_small_ = font_section_ = fallback;
+        }
+
+        io.Fonts->TexDesiredWidth = 2048;
+        if (!io.Fonts->Build()) {
+            LOG_ERROR("Font atlas build failed — CJK glyphs may be missing");
+        }
+        ImGui_ImplOpenGL3_CreateFontsTexture();
+    }
+
+    void GuiManager::applyUiScale(float scale) {
+        scale = std::clamp(scale, 1.0f, 4.0f);
+
+        rmlui_manager_.setDpRatio(scale);
+        lfs::vis::setThemeDpiScale(scale);
+        lfs::python::set_shared_dpi_scale(scale);
+        applyDefaultStyle();
+        rebuildFonts(scale);
+        menu_bar_->setFonts(buildFontSet());
+        current_ui_scale_ = scale;
+
+        LOG_INFO("UI scale applied: {:.2f}", scale);
+    }
+
     void GuiManager::init() {
         // ImGui initialization
         IMGUI_CHECKVERSION();
@@ -293,17 +429,15 @@ namespace lfs::vis::gui {
             LOG_INFO("Localization initialized with language: {}", loc.getCurrentLanguageName());
         }
 
-        float xscale = SDL_GetWindowDisplayScale(viewer_->getWindow());
+        float saved_scale = lfs::vis::loadUiScalePreference();
+        if (saved_scale <= 0.0f)
+            saved_scale = SDL_GetWindowDisplayScale(viewer_->getWindow());
+        current_ui_scale_ = std::clamp(saved_scale, 1.0f, 4.0f);
 
-        // Clamping / safety net for weird DPI values
-        // Support up to 4.0x scale for high-DPI displays (e.g., 6K monitors)
-        xscale = std::clamp(xscale, 1.0f, 4.0f);
+        lfs::python::set_shared_dpi_scale(current_ui_scale_);
+        lfs::vis::setThemeDpiScale(current_ui_scale_);
 
-        // Store DPI scale for use by UI components
-        lfs::python::set_shared_dpi_scale(xscale);
-        lfs::vis::setThemeDpiScale(xscale);
-
-        // Set application icon - use the resource path helper
+        // Set application icon
         try {
             const auto icon_path = lfs::vis::getAssetPath("lichtfeld-icon.png");
             const auto [data, width, height, channels] = lfs::core::load_image_with_alpha(icon_path);
@@ -318,144 +452,8 @@ namespace lfs::vis::gui {
             LOG_WARN("Could not load application icon: {}", e.what());
         }
 
-        // Apply theme first to get font settings
         applyDefaultStyle();
-
-        // Load fonts
-        const auto& t = theme();
-        try {
-            const auto regular_path = lfs::vis::getAssetPath("fonts/" + t.fonts.regular_path);
-            const auto bold_path = lfs::vis::getAssetPath("fonts/" + t.fonts.bold_path);
-            const auto japanese_path = lfs::vis::getAssetPath("fonts/NotoSansJP-Regular.ttf");
-            const auto korean_path = lfs::vis::getAssetPath("fonts/NotoSansKR-Regular.ttf");
-
-            // Helper to check if font file is valid
-            const auto is_font_valid = [](const std::filesystem::path& path) -> bool {
-                constexpr size_t MIN_FONT_FILE_SIZE = 100;
-                return std::filesystem::exists(path) && std::filesystem::file_size(path) >= MIN_FONT_FILE_SIZE;
-            };
-
-            // Latin-only font loader for bold/heading/small/section
-            const auto load_font_latin_only =
-                [&](const std::filesystem::path& path, const float size) -> ImFont* {
-                if (!is_font_valid(path)) {
-                    LOG_WARN("Font file invalid: {}", lfs::core::path_to_utf8(path));
-                    return nullptr;
-                }
-                const std::string path_utf8 = lfs::core::path_to_utf8(path);
-                return io.Fonts->AddFontFromFileTTF(path_utf8.c_str(), size);
-            };
-
-            const auto merge_cjk = [&](const float size) {
-                if (is_font_valid(japanese_path)) {
-                    ImFontConfig config;
-                    config.MergeMode = true;
-                    config.OversampleH = 1;
-                    const std::string japanese_path_utf8 = lfs::core::path_to_utf8(japanese_path);
-                    io.Fonts->AddFontFromFileTTF(japanese_path_utf8.c_str(), size, &config,
-                                                 io.Fonts->GetGlyphRangesJapanese());
-                    io.Fonts->AddFontFromFileTTF(japanese_path_utf8.c_str(), size, &config,
-                                                 io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
-                }
-
-                if (is_font_valid(korean_path)) {
-                    ImFontConfig config;
-                    config.MergeMode = true;
-                    config.OversampleH = 1;
-                    const std::string korean_path_utf8 = lfs::core::path_to_utf8(korean_path);
-                    io.Fonts->AddFontFromFileTTF(korean_path_utf8.c_str(), size, &config,
-                                                 io.Fonts->GetGlyphRangesKorean());
-                }
-            };
-
-            const auto load_font_with_cjk =
-                [&](const std::filesystem::path& path, const float size) -> ImFont* {
-                ImFont* font = load_font_latin_only(path, size);
-                if (!font)
-                    return nullptr;
-                merge_cjk(size);
-                return font;
-            };
-
-            font_regular_ = load_font_with_cjk(regular_path, t.fonts.base_size * xscale);
-            font_bold_ = load_font_with_cjk(bold_path, t.fonts.base_size * xscale);
-            font_heading_ = load_font_with_cjk(bold_path, t.fonts.heading_size * xscale);
-            font_small_ = load_font_with_cjk(regular_path, t.fonts.small_size * xscale);
-            font_section_ = load_font_with_cjk(bold_path, t.fonts.section_size * xscale);
-
-            // Monospace font at multiple sizes for crisp scaling
-            const auto monospace_path = lfs::vis::getAssetPath("fonts/JetBrainsMono-Regular.ttf");
-            if (is_font_valid(monospace_path)) {
-                const std::string mono_path_utf8 = lfs::core::path_to_utf8(monospace_path);
-
-                static constexpr ImWchar GLYPH_RANGES[] = {
-                    0x0020,
-                    0x00FF, // Basic Latin + Latin Supplement
-                    0x2190,
-                    0x21FF, // Arrows
-                    0x2500,
-                    0x257F, // Box Drawing
-                    0x2580,
-                    0x259F, // Block Elements
-                    0x25A0,
-                    0x25FF, // Geometric Shapes
-                    0,
-                };
-
-                static constexpr float MONO_SCALES[] = {0.7f, 1.0f, 1.3f, 1.7f, 2.2f};
-                static_assert(std::size(MONO_SCALES) == FontSet::MONO_SIZE_COUNT);
-
-                for (int i = 0; i < FontSet::MONO_SIZE_COUNT; ++i) {
-                    ImFontConfig config;
-                    config.GlyphRanges = GLYPH_RANGES;
-                    const float size = t.fonts.base_size * xscale * MONO_SCALES[i];
-                    mono_fonts_[i] = io.Fonts->AddFontFromFileTTF(mono_path_utf8.c_str(), size, &config);
-                    mono_font_scales_[i] = MONO_SCALES[i];
-                }
-                font_monospace_ = mono_fonts_[1];
-                if (font_monospace_) {
-                    LOG_INFO("Loaded monospace font: JetBrainsMono-Regular.ttf ({} sizes)", FontSet::MONO_SIZE_COUNT);
-                }
-            }
-            if (!font_monospace_) {
-                font_monospace_ = font_regular_;
-                LOG_WARN("Monospace font not found, using regular font for code editor");
-            }
-
-            const bool all_loaded = font_regular_ && font_bold_ && font_heading_ && font_small_ && font_section_;
-            if (!all_loaded) {
-                LOG_WARN("Some fonts failed to load, using fallback");
-                ImFont* const fallback = font_regular_ ? font_regular_ : io.Fonts->AddFontDefault();
-                if (!font_regular_)
-                    font_regular_ = fallback;
-                if (!font_bold_)
-                    font_bold_ = fallback;
-                if (!font_heading_)
-                    font_heading_ = fallback;
-                if (!font_small_)
-                    font_small_ = fallback;
-                if (!font_section_)
-                    font_section_ = fallback;
-            } else {
-                LOG_INFO("Loaded fonts: {} and {}", t.fonts.regular_path, t.fonts.bold_path);
-                if (is_font_valid(japanese_path)) {
-                    LOG_INFO("Japanese + Chinese font support enabled");
-                }
-                if (is_font_valid(korean_path)) {
-                    LOG_INFO("Korean font support enabled");
-                }
-            }
-        } catch (const std::exception& e) {
-            LOG_ERROR("Font loading failed: {}", e.what());
-            ImFont* const fallback = io.Fonts->AddFontDefault();
-            font_regular_ = font_bold_ = font_heading_ = font_small_ = font_section_ = fallback;
-        }
-
-        io.Fonts->TexDesiredWidth = 2048;
-        if (!io.Fonts->Build()) {
-            LOG_ERROR("Font atlas build failed — CJK glyphs may be missing");
-        }
-        ImGui_ImplOpenGL3_CreateFontsTexture();
+        rebuildFonts(current_ui_scale_);
 
         initMenuBar();
         menu_bar_->setFonts(buildFontSet());
@@ -472,7 +470,7 @@ namespace lfs::vis::gui {
             }
         });
 
-        rmlui_manager_.init(viewer_->getWindow(), xscale);
+        rmlui_manager_.init(viewer_->getWindow(), current_ui_scale_);
         lfs::python::set_rml_manager(&rmlui_manager_);
 
         startup_overlay_.init(&rmlui_manager_);
@@ -734,6 +732,11 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::render() {
+        if (pending_ui_scale_ > 0.0f) {
+            applyUiScale(pending_ui_scale_);
+            pending_ui_scale_ = 0.0f;
+        }
+
         drag_drop_.pollEvents();
         drag_drop_hovering_ = drag_drop_.isDragHovering();
 
@@ -862,8 +865,8 @@ namespace lfs::vis::gui {
 
         if (!ui_hidden_) {
             const auto* mvp = ImGui::GetMainViewport();
-            constexpr float STATUS_BAR_H = 22.0f;
-            const float panel_h = mvp->WorkSize.y - STATUS_BAR_H;
+            const float status_bar_h = PanelLayoutManager::STATUS_BAR_HEIGHT * current_ui_scale_;
+            const float panel_h = mvp->WorkSize.y - status_bar_h;
 
             ShellRegions shell_regions;
             shell_regions.menu_pos = mvp->Pos;
@@ -875,8 +878,8 @@ namespace lfs::vis::gui {
                 shell_regions.right_panel_size = {rpw, panel_h};
             }
 
-            shell_regions.status_pos = {mvp->WorkPos.x, mvp->WorkPos.y + mvp->WorkSize.y - STATUS_BAR_H};
-            shell_regions.status_size = {mvp->WorkSize.x, STATUS_BAR_H};
+            shell_regions.status_pos = {mvp->WorkPos.x, mvp->WorkPos.y + mvp->WorkSize.y - status_bar_h};
+            shell_regions.status_size = {mvp->WorkSize.x, status_bar_h};
 
             rml_shell_frame_.render(shell_regions);
         }
@@ -956,13 +959,12 @@ namespace lfs::vis::gui {
         screen.any_item_active = ImGui::IsAnyItemActive();
 
         if (show_main_panel_ && !ui_hidden_) {
-            constexpr float SBH = PanelLayoutManager::STATUS_BAR_HEIGHT;
+            const float sbh = PanelLayoutManager::STATUS_BAR_HEIGHT * current_ui_scale_;
             const float rpw = panel_layout_.getRightPanelWidth();
-            const float ph = screen.work_size.y - SBH;
-            const float dpi = python::get_shared_dpi_scale();
-            const float splitter_h = PanelLayoutManager::SPLITTER_H * dpi;
+            const float ph = screen.work_size.y - sbh;
+            const float splitter_h = PanelLayoutManager::SPLITTER_H * current_ui_scale_;
             const float avail_h = ph - 16.0f;
-            const float scene_h = std::max(80.0f * dpi,
+            const float scene_h = std::max(80.0f * current_ui_scale_,
                                            avail_h * panel_layout_.getScenePanelRatio() - splitter_h * 0.5f);
 
             RightPanelLayout rp_layout;
@@ -1265,7 +1267,7 @@ namespace lfs::vis::gui {
                     auto* mvp = ImGui::GetMainViewport();
                     const float px = mvp->WorkPos.x + mvp->WorkSize.x - rpw;
                     const float py1 = mvp->WorkPos.y;
-                    const float py2 = py1 + mvp->WorkSize.y - PanelLayoutManager::STATUS_BAR_HEIGHT;
+                    const float py2 = py1 + mvp->WorkSize.y - PanelLayoutManager::STATUS_BAR_HEIGHT * current_ui_scale_;
                     maskCorner({px, py1}, {px, py1 + r}, {px + r, py1 + r}, IM_PI, IM_PI * 1.5f);
                     maskCorner({px, py2}, {px + r, py2}, {px + r, py2 - r}, IM_PI * 0.5f, IM_PI);
                 }
@@ -1388,10 +1390,17 @@ namespace lfs::vis::gui {
         });
 
         internal::DisplayScaleChanged::when([this](const auto& e) {
-            const float scale = std::clamp(e.scale, 1.0f, 4.0f);
-            lfs::python::set_shared_dpi_scale(scale);
-            lfs::vis::setThemeDpiScale(scale);
-            LOG_INFO("Display scale changed to {:.2f}", scale);
+            if (lfs::vis::loadUiScalePreference() <= 0.0f) {
+                pending_ui_scale_ = std::clamp(e.scale, 1.0f, 4.0f);
+            }
+        });
+
+        internal::UiScaleChangeRequested::when([this](const auto& e) {
+            if (e.scale <= 0.0f) {
+                pending_ui_scale_ = std::clamp(SDL_GetWindowDisplayScale(viewer_->getWindow()), 1.0f, 4.0f);
+            } else {
+                pending_ui_scale_ = std::clamp(e.scale, 1.0f, 4.0f);
+            }
         });
 
         state::DiskSpaceSaveFailed::when([this](const auto& e) {

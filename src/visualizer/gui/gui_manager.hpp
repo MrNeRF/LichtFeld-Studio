@@ -114,6 +114,8 @@ namespace lfs::vis {
             void initMenuBar();
             void registerNativePanels();
             void updateInputOverrides(bool mouse_in_viewport);
+            void applyUiScale(float scale);
+            void rebuildFonts(float scale);
 
             // Core dependencies
             VisualizerImpl* viewer_;
@@ -166,6 +168,10 @@ namespace lfs::vis {
             // Native drag-drop handler
             NativeDragDrop drag_drop_;
             bool drag_drop_hovering_ = false;
+
+            // DPI scaling
+            float current_ui_scale_ = 1.0f;
+            float pending_ui_scale_ = 0.0f;
 
             // RmlUI integration
             RmlUIManager rmlui_manager_;

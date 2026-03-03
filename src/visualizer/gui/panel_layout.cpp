@@ -46,7 +46,8 @@ namespace lfs::vis::gui {
             return;
         }
 
-        const float panel_h = screen.work_size.y - STATUS_BAR_HEIGHT;
+        const float dpi = lfs::python::get_shared_dpi_scale();
+        const float panel_h = screen.work_size.y - STATUS_BAR_HEIGHT * dpi;
         const float min_w = screen.work_size.x * RIGHT_PANEL_MIN_RATIO;
         const float max_w = screen.work_size.x * RIGHT_PANEL_MAX_RATIO;
 
@@ -80,7 +81,6 @@ namespace lfs::vis::gui {
         const float content_w = right_panel_width_ - 2.0f * PAD;
         const float content_top = screen.work_pos.y + PAD;
 
-        const float dpi = lfs::python::get_shared_dpi_scale();
         const float splitter_h = SPLITTER_H * dpi;
         const float tab_bar_h = TAB_BAR_H * dpi;
         constexpr float MIN_H = 80.0f;
@@ -172,7 +172,7 @@ namespace lfs::vis::gui {
     }
 
     void PanelLayoutManager::adjustScenePanelRatio(float delta_y, const ScreenState& screen) {
-        const float panel_h = screen.work_size.y - STATUS_BAR_HEIGHT;
+        const float panel_h = screen.work_size.y - STATUS_BAR_HEIGHT * lfs::python::get_shared_dpi_scale();
         const float padding = 16.0f;
         const float avail_h = panel_h - padding;
         if (avail_h > 0)
@@ -201,7 +201,8 @@ namespace lfs::vis::gui {
         const float w = (show_main_panel && !ui_hidden)
                             ? screen.work_size.x - right_panel_width_ - console_w - PANEL_GAP
                             : screen.work_size.x;
-        const float h = ui_hidden ? screen.work_size.y : screen.work_size.y - STATUS_BAR_HEIGHT;
+        const float h = ui_hidden ? screen.work_size.y
+                                  : screen.work_size.y - STATUS_BAR_HEIGHT * lfs::python::get_shared_dpi_scale();
 
         ViewportLayout layout;
         layout.pos = {screen.work_pos.x, screen.work_pos.y};

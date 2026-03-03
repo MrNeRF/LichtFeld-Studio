@@ -24,6 +24,8 @@
     "view.theme.catppuccin_mocha": "Catppuccin Mocha",
     "view.theme.catppuccin_latte": "Catppuccin Latte",
     "view.theme.nord": "Nord",
+    "view.ui_scale": "UI 배율",
+    "view.ui_scale.auto": "자동",
     "view.debug_info": "디버그 정보...",
     "help": "도움말",
     "help.getting_started": "시작하기",

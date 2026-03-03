@@ -1219,4 +1219,34 @@ namespace lfs::vis {
         return loadThemePreferenceName() != "light";
     }
 
+    void saveUiScalePreference(float scale) {
+        try {
+            const auto config_dir = getThemeConfigDir();
+            std::filesystem::create_directories(config_dir);
+            const auto pref_path = config_dir / "ui_scale";
+            std::ofstream file(pref_path);
+            if (file) {
+                file << scale;
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to save UI scale preference: {}", e.what());
+        }
+    }
+
+    float loadUiScalePreference() {
+        try {
+            const auto config_dir = getThemeConfigDir();
+            const auto pref_path = config_dir / "ui_scale";
+            if (std::filesystem::exists(pref_path)) {
+                std::ifstream file(pref_path);
+                float scale = 0.0f;
+                if (file >> scale)
+                    return scale;
+            }
+        } catch (const std::exception& e) {
+            LOG_WARN("Failed to load UI scale preference: {}", e.what());
+        }
+        return 0.0f;
+    }
+
 } // namespace lfs::vis

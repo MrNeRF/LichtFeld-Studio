@@ -2225,6 +2225,15 @@ def get_theme() -> str:
     Get current theme name (e.g. 'Dark', 'Light', 'Gruvbox', 'Catppuccin Mocha', 'Catppuccin Latte', or 'Nord')
     """
 
+def set_ui_scale(scale: float) -> None:
+    """Set UI scale (0.0 = auto from OS, or 1.0-4.0)"""
+
+def get_ui_scale() -> float:
+    """Get current UI scale factor"""
+
+def get_ui_scale_preference() -> float:
+    """Get saved UI scale preference (0.0 = auto)"""
+
 def set_language(lang_code: str) -> None:
     """Set language by code (e.g., 'en', 'de')"""
 

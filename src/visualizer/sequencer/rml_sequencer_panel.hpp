@@ -100,6 +100,7 @@ namespace lfs::vis {
         [[nodiscard]] float cachedPanelX() const { return cached_panel_x_; }
         [[nodiscard]] float cachedPanelY() const { return cached_panel_y_; }
         [[nodiscard]] float cachedPanelWidth() const { return cached_panel_width_; }
+        [[nodiscard]] float cachedDpRatio() const { return cached_dp_ratio_; }
         [[nodiscard]] float cachedPlayheadScreenX() const { return cached_playhead_screen_x_; }
         [[nodiscard]] bool isPlayheadInRange() const { return playhead_in_range_; }
         [[nodiscard]] float getDisplayEndTime() const;
@@ -174,12 +175,16 @@ namespace lfs::vis {
         float last_ruler_pan_ = -1.0f;
         float last_ruler_width_ = -1.0f;
 
+        float timelineWidth() const;
+
         // Layout cache for interaction
         float cached_panel_x_ = 0.0f;
         float cached_panel_y_ = 0.0f;
         float cached_panel_width_ = 0.0f;
         float cached_playhead_screen_x_ = 0.0f;
         bool playhead_in_range_ = false;
+        float cached_dp_ratio_ = 1.0f;
+        float cached_height_ = panel_config::HEIGHT;
 
         gui::RmlFBO fbo_;
 

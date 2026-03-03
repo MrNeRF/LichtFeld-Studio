@@ -134,6 +134,7 @@ namespace lfs::vis {
         if (rml_context_)
             return;
 
+        cached_dp_ratio_ = rml_manager_->getDpRatio();
         rml_context_ = rml_manager_->createContext("sequencer", width, height);
         if (!rml_context_)
             return;
@@ -262,13 +263,12 @@ namespace lfs::vis {
         if (!elements_cached_)
             return;
 
-        const float timeline_width = cached_panel_width_ - 2.0f * INNER_PADDING -
-                                     TRANSPORT_WIDTH - TIME_DISPLAY_WIDTH;
-        if (timeline_width <= 0.0f)
+        const float tl_width = timelineWidth();
+        if (tl_width <= 0.0f)
             return;
 
-        const float x = timeToX(controller_.playhead(), 0.0f, timeline_width);
-        el_playhead_->SetProperty("left", std::format("{:.1f}dp", x));
+        const float x = timeToX(controller_.playhead(), 0.0f, tl_width);
+        el_playhead_->SetProperty("left", std::format("{:.1f}px", x));
     }
 
     void RmlSequencerPanel::updateTimeDisplay() {
@@ -292,8 +292,7 @@ namespace lfs::vis {
         const auto& keyframes = timeline.keyframes();
         const size_t count = keyframes.size();
 
-        const float timeline_width = cached_panel_width_ - 2.0f * INNER_PADDING -
-                                     TRANSPORT_WIDTH - TIME_DISPLAY_WIDTH;
+        const float timeline_width = timelineWidth();
 
         if (!dragging_keyframe_ &&
             count == last_keyframe_count_ &&
@@ -351,7 +350,7 @@ namespace lfs::vis {
             el->SetClassNames("keyframe");
             el->SetClass("loop-point", is_loop);
             el->SetClass("selected", selected);
-            el->SetProperty("left", std::format("{:.1f}dp", x));
+            el->SetProperty("left", std::format("{:.1f}px", x));
             el->SetProperty("background-color", colorToRml(fill));
             el->SetProperty("border-color", selected ? colorToRml(p.text) : colorToRml(fill));
         }
@@ -361,8 +360,7 @@ namespace lfs::vis {
         if (!elements_cached_)
             return;
 
-        const float timeline_width = cached_panel_width_ - 2.0f * INNER_PADDING -
-                                     TRANSPORT_WIDTH - TIME_DISPLAY_WIDTH;
+        const float timeline_width = timelineWidth();
 
         if (zoom_level_ == last_ruler_zoom_ &&
             pan_offset_ == last_ruler_pan_ &&
@@ -401,12 +399,12 @@ namespace lfs::vis {
 
             if (is_major) {
                 html += std::format(
-                    "<div class=\"ruler-tick major\" style=\"left: {:.1f}dp;\" />"
-                    "<span class=\"ruler-label\" style=\"left: {:.1f}dp;\">{}</span>",
-                    x, x + 4.0f, formatTimeShort(t_val));
+                    "<div class=\"ruler-tick major\" style=\"left: {:.1f}px;\" />"
+                    "<span class=\"ruler-label\" style=\"left: {:.1f}px;\">{}</span>",
+                    x, x + 4.0f * cached_dp_ratio_, formatTimeShort(t_val));
             } else {
                 html += std::format(
-                    "<div class=\"ruler-tick minor\" style=\"left: {:.1f}dp;\" />",
+                    "<div class=\"ruler-tick minor\" style=\"left: {:.1f}px;\" />",
                     x);
             }
         }
@@ -421,14 +419,14 @@ namespace lfs::vis {
         const float local_x = input.mouse_x - cached_panel_x_;
         const float local_y = input.mouse_y - cached_panel_y_;
 
+        const float total_h = (HEIGHT + EASING_STRIPE_HEIGHT) * cached_dp_ratio_;
         hovered_ = local_x >= 0 && local_y >= 0 &&
-                   local_x < cached_panel_width_ && local_y < (HEIGHT + EASING_STRIPE_HEIGHT);
+                   local_x < cached_panel_width_ && local_y < total_h;
         if (!hovered_)
             return;
 
-        const float dp_ratio = rml_manager_->getDpRatio();
-        rml_context_->ProcessMouseMove(static_cast<int>(local_x * dp_ratio),
-                                       static_cast<int>(local_y * dp_ratio), 0);
+        rml_context_->ProcessMouseMove(static_cast<int>(local_x),
+                                       static_cast<int>(local_y), 0);
 
         if (input.mouse_clicked[0])
             rml_context_->ProcessMouseButtonDown(0, 0);
@@ -436,21 +434,33 @@ namespace lfs::vis {
             rml_context_->ProcessMouseButtonUp(0, 0);
     }
 
+    float RmlSequencerPanel::timelineWidth() const {
+        const float s = cached_dp_ratio_;
+        return cached_panel_width_ - 2.0f * INNER_PADDING * s -
+               TRANSPORT_WIDTH * s - TIME_DISPLAY_WIDTH * s;
+    }
+
     void RmlSequencerPanel::render(const float viewport_x, const float viewport_width,
                                    const float viewport_y_bottom,
                                    const PanelInputState& input) {
-        const float panel_x = viewport_x + PADDING_H;
-        const float panel_width = viewport_width - 2.0f * PADDING_H;
-        const float total_height = HEIGHT + EASING_STRIPE_HEIGHT;
-        const float panel_y = viewport_y_bottom - total_height - PADDING_BOTTOM;
+        const float dp = rml_manager_->getDpRatio();
+        cached_dp_ratio_ = dp;
+        cached_height_ = HEIGHT * dp;
+        const float total_height = (HEIGHT + EASING_STRIPE_HEIGHT) * dp;
+
+        const float padding_h = PADDING_H * dp;
+        const float padding_bottom = PADDING_BOTTOM * dp;
+
+        const float panel_x = viewport_x + padding_h;
+        const float panel_width = viewport_width - 2.0f * padding_h;
+        const float panel_y = viewport_y_bottom - total_height - padding_bottom;
 
         cached_panel_x_ = panel_x;
         cached_panel_y_ = panel_y;
         cached_panel_width_ = panel_width;
 
-        const float dp_ratio = rml_manager_->getDpRatio();
-        const int w = static_cast<int>(panel_width * dp_ratio);
-        const int h = static_cast<int>(total_height * dp_ratio);
+        const int w = static_cast<int>(panel_width);
+        const int h = static_cast<int>(cached_height_);
 
         if (w <= 0 || h <= 0)
             return;
@@ -463,9 +473,7 @@ namespace lfs::vis {
         syncTheme();
 
         if (elements_cached_) {
-            const float timeline_width = panel_width - 2.0f * INNER_PADDING -
-                                         TRANSPORT_WIDTH - TIME_DISPLAY_WIDTH;
-            el_timeline_->SetProperty("width", std::format("{:.1f}dp", timeline_width));
+            el_timeline_->SetProperty("width", std::format("{:.1f}px", timelineWidth()));
 
             updateButtonStates();
             updatePlayhead();
@@ -496,29 +504,31 @@ namespace lfs::vis {
 
         fbo_.unbind(prev_fbo);
 
-        fbo_.blitToScreen(panel_x, panel_y, panel_width, total_height,
+        fbo_.blitToScreen(panel_x, panel_y, panel_width, cached_height_,
                           input.screen_w, input.screen_h);
 
-        const float content_height = HEIGHT - 2.0f * INNER_PADDING;
-        const float timeline_width = panel_width - 2.0f * INNER_PADDING -
-                                     TRANSPORT_WIDTH - TIME_DISPLAY_WIDTH;
+        const float inner_pad = INNER_PADDING * dp;
+        const float transport_w = TRANSPORT_WIDTH * dp;
+        const float content_height = cached_height_ - 2.0f * inner_pad;
+        const float tl_width = timelineWidth();
 
-        const Vec2 timeline_pos = {panel_x + INNER_PADDING + TRANSPORT_WIDTH,
-                                   panel_y + INNER_PADDING};
+        const Vec2 timeline_pos = {panel_x + inner_pad + transport_w,
+                                   panel_y + inner_pad};
 
-        cached_playhead_screen_x_ = timeToX(controller_.playhead(), timeline_pos.x, timeline_width);
+        cached_playhead_screen_x_ = timeToX(controller_.playhead(), timeline_pos.x, tl_width);
         playhead_in_range_ = cached_playhead_screen_x_ >= timeline_pos.x &&
-                             cached_playhead_screen_x_ <= timeline_pos.x + timeline_width;
+                             cached_playhead_screen_x_ <= timeline_pos.x + tl_width;
 
-        handleTimelineInteraction(timeline_pos, timeline_width, content_height, input);
+        handleTimelineInteraction(timeline_pos, tl_width, content_height, input);
     }
 
     void RmlSequencerPanel::handleTimelineInteraction(const Vec2& pos, const float width,
                                                       const float height,
                                                       const PanelInputState& input) {
-        const float timeline_y = pos.y + RULER_HEIGHT + 4.0f;
-        const float timeline_height = height - RULER_HEIGHT - 4.0f;
-        const float bar_half = std::min(timeline_height, TIMELINE_HEIGHT) / 2.0f;
+        const float s = cached_dp_ratio_;
+        const float timeline_y = pos.y + RULER_HEIGHT * s + 4.0f * s;
+        const float timeline_height = height - RULER_HEIGHT * s - 4.0f * s;
+        const float bar_half = std::min(timeline_height, TIMELINE_HEIGHT * s) / 2.0f;
         const float y_center = timeline_y + timeline_height / 2.0f;
 
         const Vec2 bar_min = {pos.x, y_center - bar_half};
@@ -531,7 +541,7 @@ namespace lfs::vis {
         const float mx = input.mouse_x;
         const float my = input.mouse_y;
         const bool mouse_in_timeline = mx >= bar_min.x && mx <= bar_max.x &&
-                                       my >= bar_min.y - RULER_HEIGHT && my <= bar_max.y;
+                                       my >= bar_min.y - RULER_HEIGHT * s && my <= bar_max.y;
 
         if (mouse_in_timeline && !input.want_capture_mouse) {
             const float wheel = input.mouse_wheel;
@@ -552,7 +562,7 @@ namespace lfs::vis {
         for (size_t i = 0; i < keyframes.size(); ++i) {
             const float x = timeToX(keyframes[i].time, pos.x, width);
             const float dist = std::abs(mx - x);
-            const bool hovered = mouse_in_timeline && dist < KEYFRAME_RADIUS * 2;
+            const bool hovered = mouse_in_timeline && dist < KEYFRAME_RADIUS * s * 2;
             if (hovered)
                 hovered_keyframe_ = i;
         }

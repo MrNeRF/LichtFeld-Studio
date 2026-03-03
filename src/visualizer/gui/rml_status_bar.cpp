@@ -587,9 +587,8 @@ namespace lfs::vis::gui {
         updateTheme();
         updateContent(ctx);
 
-        const float dp_ratio = rml_manager_->getDpRatio();
-        const int w = static_cast<int>(avail_w * dp_ratio);
-        const int h = static_cast<int>(avail_h * dp_ratio);
+        const int w = static_cast<int>(avail_w);
+        const int h = static_cast<int>(avail_h);
 
         rml_context_->SetDimensions(Rml::Vector2i(w, h));
         document_->SetProperty("height", std::format("{}px", h));

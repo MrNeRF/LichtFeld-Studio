@@ -248,6 +248,10 @@ namespace lfs::vis {
     LFS_VIS_API void saveThemePreference(bool is_dark);
     [[nodiscard]] LFS_VIS_API bool loadThemePreference(); // Legacy: returns true for non-light themes
 
+    // UI scale preference (0.0 = auto from OS)
+    LFS_VIS_API void saveUiScalePreference(float scale);
+    [[nodiscard]] LFS_VIS_API float loadUiScalePreference();
+
     // Color utilities
     [[nodiscard]] LFS_VIS_API ImVec4 lighten(const ImVec4& color, float amount);
     [[nodiscard]] LFS_VIS_API ImVec4 darken(const ImVec4& color, float amount);

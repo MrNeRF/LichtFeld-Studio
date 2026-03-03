@@ -209,10 +209,7 @@ namespace lfs::vis {
     }
 
     bool InputController::isKeyPressed(int app_key) const {
-        const SDL_Keycode sdl_key = input::appKeyToSdlKeycode(app_key);
-        if (sdl_key == SDLK_UNKNOWN)
-            return false;
-        const SDL_Scancode scancode = SDL_GetScancodeFromKey(sdl_key, nullptr);
+        const SDL_Scancode scancode = input::appKeyToSdlScancode(app_key);
         if (scancode == SDL_SCANCODE_UNKNOWN)
             return false;
         const bool* state = SDL_GetKeyboardState(nullptr);

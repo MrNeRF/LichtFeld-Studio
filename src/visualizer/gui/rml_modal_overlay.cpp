@@ -252,9 +252,8 @@ namespace lfs::vis::gui {
         io.WantCaptureMouse = true;
         io.WantCaptureKeyboard = true;
 
-        const float dp_ratio = rml_manager_->getDpRatio();
-        const float mx = io.MousePos.x * dp_ratio;
-        const float my = io.MousePos.y * dp_ratio;
+        const float mx = io.MousePos.x;
+        const float my = io.MousePos.y;
         rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), 0);
 
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
@@ -317,9 +316,8 @@ namespace lfs::vis::gui {
 
         syncTheme();
 
-        const float dp_ratio = rml_manager_->getDpRatio();
-        const int w = static_cast<int>(static_cast<float>(screen_w) * dp_ratio);
-        const int h = static_cast<int>(static_cast<float>(screen_h) * dp_ratio);
+        const int w = screen_w;
+        const int h = screen_h;
 
         if (w <= 0 || h <= 0)
             return;
@@ -330,14 +328,14 @@ namespace lfs::vis::gui {
             rml_context_->SetDimensions(Rml::Vector2i(w, h));
         }
 
-        // First update to get layout metrics, then position, then update again
         rml_context_->Update();
 
         if (el_dialog_ && active_) {
+            const float dp_ratio = rml_manager_->getDpRatio();
             const float dialog_w = static_cast<float>(active_->width_dp) * dp_ratio;
             const float dialog_h = el_dialog_->GetClientHeight();
-            const float vp_cx = (vp_x + vp_w * 0.5f) * dp_ratio;
-            const float vp_cy = (vp_y + vp_h * 0.5f) * dp_ratio;
+            const float vp_cx = vp_x + vp_w * 0.5f;
+            const float vp_cy = vp_y + vp_h * 0.5f;
             el_dialog_->SetProperty("left", std::format("{}px", vp_cx - dialog_w * 0.5f));
             el_dialog_->SetProperty("top", std::format("{}px", vp_cy - dialog_h * 0.5f));
             rml_context_->Update();

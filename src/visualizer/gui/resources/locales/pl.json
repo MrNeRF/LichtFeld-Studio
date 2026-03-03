@@ -24,6 +24,8 @@
     "view.theme.catppuccin_mocha": "Catppuccin Mocha",
     "view.theme.catppuccin_latte": "Catppuccin Latte",
     "view.theme.nord": "Nord",
+    "view.ui_scale": "Skala interfejsu",
+    "view.ui_scale.auto": "Automatycznie",
     "view.debug_info": "Informacje Debugowania...",
     "help": "Pomoc",
     "help.getting_started": "Wprowadzenie",

@@ -112,6 +112,16 @@ namespace lfs::vis::gui {
         LOG_INFO("RmlUI shut down");
     }
 
+    void RmlUIManager::setDpRatio(float ratio) {
+        assert(ratio >= 1.0f);
+        if (!initialized_)
+            return;
+        dp_ratio_ = ratio;
+        for (auto& [name, ctx] : contexts_) {
+            ctx->SetDensityIndependentPixelRatio(ratio);
+        }
+    }
+
     Rml::Context* RmlUIManager::createContext(const std::string& name, int width, int height) {
         assert(initialized_);
 

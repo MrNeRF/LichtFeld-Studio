@@ -257,6 +257,7 @@ namespace lfs::core {
             EVENT(TrainingReadyToStart, );
             EVENT(WindowFocusLost, );
             EVENT(DisplayScaleChanged, float scale;);
+            EVENT(UiScaleChangeRequested, float scale;); // 0 = auto (from OS)
         } // namespace internal
     } // namespace events
 

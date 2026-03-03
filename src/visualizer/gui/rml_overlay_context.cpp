@@ -119,9 +119,8 @@ namespace lfs::vis::gui {
         if (!ctx_ || !doc_)
             return;
 
-        const float dp_ratio = mgr_->getDpRatio();
-        const int px_w = static_cast<int>(w * dp_ratio);
-        const int px_h = static_cast<int>(h * dp_ratio);
+        const int px_w = static_cast<int>(w);
+        const int px_h = static_cast<int>(h);
 
         if (px_w <= 0 || px_h <= 0)
             return;
@@ -154,9 +153,8 @@ namespace lfs::vis::gui {
         if (!ctx_)
             return;
 
-        const float dp_ratio = mgr_->getDpRatio();
-        const float local_x = (input.mouse_x - overlay_x) * dp_ratio;
-        const float local_y = (input.mouse_y - overlay_y) * dp_ratio;
+        const float local_x = input.mouse_x - overlay_x;
+        const float local_y = input.mouse_y - overlay_y;
 
         ctx_->ProcessMouseMove(static_cast<int>(local_x), static_cast<int>(local_y), 0);
 
