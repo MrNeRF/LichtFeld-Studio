@@ -1171,16 +1171,16 @@ namespace lfs::vis {
         rect_preview_active_ = false;
     }
 
-    void RenderingManager::setPolygonPreview(const std::vector<std::pair<float, float>>& points, bool closed, bool add_mode) {
+    void RenderingManager::setPolygonPreview(const std::vector<glm::vec3>& world_points, bool closed, bool add_mode) {
         polygon_preview_active_ = true;
-        polygon_points_ = points;
+        polygon_world_points_ = world_points;
         polygon_closed_ = closed;
         polygon_add_mode_ = add_mode;
     }
 
     void RenderingManager::clearPolygonPreview() {
         polygon_preview_active_ = false;
-        polygon_points_.clear();
+        polygon_world_points_.clear();
         polygon_closed_ = false;
     }
 

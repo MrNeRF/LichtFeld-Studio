@@ -42,6 +42,7 @@ namespace lfs::vis {
 
             [[nodiscard]] SequencerController& controller() { return controller_; }
             [[nodiscard]] const SequencerController& controller() const { return controller_; }
+            [[nodiscard]] float panelTopY() const { return panel_ ? panel_->cachedPanelY() : -1.0f; }
 
         private:
             void renderSequencerPanel(const UIContext& ctx, const ViewportLayout& viewport);

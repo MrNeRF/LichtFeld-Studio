@@ -235,11 +235,11 @@ namespace lfs::vis {
             add_mode = rect_add_mode_;
         }
 
-        // Polygon preview
-        void setPolygonPreview(const std::vector<std::pair<float, float>>& points, bool closed, bool add_mode = true);
+        // Polygon preview (world-space points)
+        void setPolygonPreview(const std::vector<glm::vec3>& world_points, bool closed, bool add_mode = true);
         void clearPolygonPreview();
         [[nodiscard]] bool isPolygonPreviewActive() const { return polygon_preview_active_; }
-        [[nodiscard]] const std::vector<std::pair<float, float>>& getPolygonPoints() const { return polygon_points_; }
+        [[nodiscard]] const std::vector<glm::vec3>& getPolygonWorldPoints() const { return polygon_world_points_; }
         [[nodiscard]] bool isPolygonClosed() const { return polygon_closed_; }
         [[nodiscard]] bool isPolygonAddMode() const { return polygon_add_mode_; }
 
@@ -389,7 +389,7 @@ namespace lfs::vis {
         bool rect_add_mode_ = true;
 
         bool polygon_preview_active_ = false;
-        std::vector<std::pair<float, float>> polygon_points_;
+        std::vector<glm::vec3> polygon_world_points_;
         bool polygon_closed_ = false;
         bool polygon_add_mode_ = true;
 

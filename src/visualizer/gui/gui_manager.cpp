@@ -1136,12 +1136,16 @@ namespace lfs::vis::gui {
 
             if (rm && rm->isPolygonPreviewActive()) {
                 const auto& t = theme();
-                const auto& points = rm->getPolygonPoints();
+                const auto& world_points = rm->getPolygonWorldPoints();
                 const bool closed = rm->isPolygonClosed();
                 const bool add_mode = rm->isPolygonAddMode();
 
-                if (!points.empty()) {
-                    const float render_scale = rm->getSettings().render_scale;
+                if (!world_points.empty()) {
+                    const auto& viewport = ctx.viewer->getViewport();
+                    const glm::mat4 view = viewport.getViewMatrix();
+                    const glm::mat4 proj = viewport.getProjectionMatrix(rm->getFocalLengthMm());
+                    const glm::mat4 vp_mat = proj * view;
+
                     const ImU32 line_color = add_mode
                                                  ? toU32WithAlpha(t.palette.success, 0.8f)
                                                  : toU32WithAlpha(t.palette.error, 0.8f);
@@ -1156,11 +1160,28 @@ namespace lfs::vis::gui {
                                                           : toU32WithAlpha(t.palette.error, 0.5f);
 
                     std::vector<ImVec2> screen_points;
-                    screen_points.reserve(points.size());
-                    for (const auto& [px, py] : points) {
-                        screen_points.emplace_back(viewport_layout_.pos.x + px / render_scale,
-                                                   viewport_layout_.pos.y + py / render_scale);
+                    screen_points.reserve(world_points.size());
+                    for (const auto& wp : world_points) {
+                        const glm::vec4 clip = vp_mat * glm::vec4(wp, 1.0f);
+                        if (clip.w <= 0.0f) {
+                            continue;
+                        }
+                        const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                        screen_points.emplace_back(
+                            viewport_layout_.pos.x + (ndc.x * 0.5f + 0.5f) * viewport_layout_.size.x,
+                            viewport_layout_.pos.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * viewport_layout_.size.y);
                     }
+
+                    const ImVec2 clip_min(viewport_layout_.pos.x, viewport_layout_.pos.y);
+                    float clip_bottom = viewport_layout_.pos.y + viewport_layout_.size.y;
+                    if (panel_layout_.isShowSequencer()) {
+                        const float seq_top = sequencer_ui_.panelTopY();
+                        if (seq_top > 0.0f) {
+                            clip_bottom = std::min(clip_bottom, seq_top);
+                        }
+                    }
+                    const ImVec2 clip_max(viewport_layout_.pos.x + viewport_layout_.size.x, clip_bottom);
+                    draw_list->PushClipRect(clip_min, clip_max, true);
 
                     if (closed && screen_points.size() >= 3) {
                         draw_list->AddConvexPolyFilled(screen_points.data(), static_cast<int>(screen_points.size()), fill_color);
@@ -1190,6 +1211,24 @@ namespace lfs::vis::gui {
                     for (const auto& sp : screen_points) {
                         draw_list->AddCircleFilled(sp, 5.0f, vertex_color);
                     }
+
+                    if (closed && screen_points.size() >= 3) {
+                        float cx = 0.0f, cy = 0.0f;
+                        for (const auto& sp : screen_points) {
+                            cx += sp.x;
+                            cy += sp.y;
+                        }
+                        cx /= static_cast<float>(screen_points.size());
+                        cy /= static_cast<float>(screen_points.size());
+
+                        const char* hint = "Enter to confirm";
+                        const ImVec2 text_size = ImGui::CalcTextSize(hint);
+                        draw_list->AddText(
+                            ImVec2(cx - text_size.x * 0.5f, cy - text_size.y * 0.5f),
+                            toU32WithAlpha(t.palette.text, 0.9f), hint);
+                    }
+
+                    draw_list->PopClipRect();
                 }
             }
 
