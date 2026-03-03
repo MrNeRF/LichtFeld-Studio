@@ -208,18 +208,30 @@ namespace lfs::vis::gui {
     void RmlSequencerOverlay::showContextMenu(float screen_x, float screen_y,
                                               std::optional<size_t> keyframe_index,
                                               ImGuizmo::OPERATION gizmo_op) {
+        if (!rml_context_)
+            initContext();
         if (!elements_cached_)
             return;
 
         context_menu_keyframe_ = keyframe_index;
         context_menu_open_ = true;
+        skip_next_click_ = true;
 
         const std::string html = buildContextMenuHTML(keyframe_index, gizmo_op);
         el_context_menu_->SetInnerRML(html);
-        el_context_menu_->SetProperty("left", std::format("{:.0f}dp", screen_x));
-        el_context_menu_->SetProperty("top", std::format("{:.0f}dp", screen_y));
         el_context_menu_->SetClass("visible", true);
         el_menu_backdrop_->SetProperty("display", "block");
+
+        syncTheme();
+        rml_context_->Update();
+        const float menu_h = el_context_menu_->GetClientHeight() / rml_manager_->getDpRatio();
+        const float screen_h = ImGui::GetIO().DisplaySize.y;
+        const float y = (screen_y + menu_h > screen_h)
+                            ? std::max(0.0f, screen_y - menu_h)
+                            : screen_y;
+
+        el_context_menu_->SetProperty("left", std::format("{:.0f}dp", screen_x));
+        el_context_menu_->SetProperty("top", std::format("{:.0f}dp", y));
     }
 
     void RmlSequencerOverlay::hideContextMenu() {
@@ -340,6 +352,11 @@ namespace lfs::vis::gui {
         if (!rml_context_ || !document_ || !elements_cached_)
             return;
 
+        const bool anything_visible = context_menu_open_ || time_edit_active_ ||
+                                      focal_edit_active_ || edit_overlay_visible_;
+        if (!anything_visible)
+            return;
+
         const float dp_ratio = rml_manager_->getDpRatio();
         const float mx = input.mouse_x * dp_ratio;
         const float my = input.mouse_y * dp_ratio;
@@ -353,14 +370,18 @@ namespace lfs::vis::gui {
         if (over_interactive || context_menu_open_ || time_edit_active_ || focal_edit_active_) {
             wants_input_ = true;
 
-            if (input.mouse_clicked[0])
-                rml_context_->ProcessMouseButtonDown(0, 0);
-            if (!input.mouse_down[0])
-                rml_context_->ProcessMouseButtonUp(0, 0);
-            if (input.mouse_clicked[1])
-                rml_context_->ProcessMouseButtonDown(1, 0);
-            if (!input.mouse_down[1])
-                rml_context_->ProcessMouseButtonUp(1, 0);
+            if (skip_next_click_) {
+                skip_next_click_ = false;
+            } else {
+                if (input.mouse_clicked[0])
+                    rml_context_->ProcessMouseButtonDown(0, 0);
+                if (!input.mouse_down[0])
+                    rml_context_->ProcessMouseButtonUp(0, 0);
+                if (input.mouse_clicked[1])
+                    rml_context_->ProcessMouseButtonDown(1, 0);
+                if (!input.mouse_down[1])
+                    rml_context_->ProcessMouseButtonUp(1, 0);
+            }
         }
 
         const bool need_keyboard = has_text_focus_ || context_menu_open_ ||

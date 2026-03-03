@@ -344,6 +344,8 @@ progress fill {
     border-color: #45475a;
     padding: 4dp 0;
     min-width: 150dp;
+    max-height: 80%;
+    overflow-y: auto;
 }
 
 .context-menu.visible {

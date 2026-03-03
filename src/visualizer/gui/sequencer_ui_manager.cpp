@@ -383,11 +383,6 @@ namespace lfs::vis::gui {
                     last_frustum_clicked_ = *hovered_keyframe;
                 }
             }
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
-                const ImVec2 mouse_pos = ImGui::GetMousePos();
-                overlay_->showContextMenu(mouse_pos.x, mouse_pos.y,
-                                          hovered_keyframe, keyframe_gizmo_op_);
-            }
         }
     }
 
@@ -689,6 +684,41 @@ namespace lfs::vis::gui {
         }
 
         dl->PopClipRect();
+
+        const auto& io = ImGui::GetIO();
+        const float mx = io.MousePos.x;
+        const float my = io.MousePos.y;
+        if (mx >= timeline_x && mx <= timeline_x + timeline_width &&
+            my >= stripe_y && my <= stripe_y + stripe_h) {
+            ImGui::GetIO().WantCaptureMouse = true;
+
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                std::optional<size_t> nearest;
+                float best_dist = panel_config::KEYFRAME_RADIUS * 3.0f;
+                for (size_t i = 0; i < keyframes.size(); ++i) {
+                    const float dist = std::abs(mx - localTimeToX(keyframes[i].time));
+                    if (dist < best_dist) {
+                        best_dist = dist;
+                        nearest = i;
+                    }
+                }
+                overlay_->showContextMenu(mx, my, nearest, keyframe_gizmo_op_);
+            }
+
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                std::optional<size_t> nearest;
+                float best_dist = panel_config::KEYFRAME_RADIUS * 2.0f;
+                for (size_t i = 0; i < keyframes.size(); ++i) {
+                    const float dist = std::abs(mx - localTimeToX(keyframes[i].time));
+                    if (dist < best_dist) {
+                        best_dist = dist;
+                        nearest = i;
+                    }
+                }
+                if (nearest.has_value())
+                    lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = *nearest}.emit();
+            }
+        }
     }
 
     void SequencerUIManager::drawPlayheadLine() {

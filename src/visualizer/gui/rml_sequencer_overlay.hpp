@@ -130,6 +130,7 @@ namespace lfs::vis::gui {
         bool wants_input_ = false;
         bool has_text_focus_ = false;
         bool elements_cached_ = false;
+        bool skip_next_click_ = false;
 
         std::vector<PendingAction> pending_actions_;
         std::optional<EditResult> pending_time_edit_;

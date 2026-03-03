@@ -367,8 +367,7 @@ namespace lfs::vis {
         }
 
         if (action == input::ACTION_PRESS) {
-            // Block if hovering over GUI window
-            if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
+            if (over_gui || ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
                 return;
             }
 

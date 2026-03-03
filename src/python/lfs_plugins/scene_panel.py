@@ -649,9 +649,20 @@ class ScenePanel(RmlPanel):
             html = self._build_single_context_html(scene, node, node_type, is_del, draggable)
 
         self._context_menu.set_inner_rml(html)
-        self._context_menu.set_property("left", f"{mouse_x}px")
-        self._context_menu.set_property("top", f"{mouse_y}px")
         self._context_menu.set_class("visible", True)
+
+        item_count = html.count("context-menu-item")
+        label_count = html.count("context-menu-label")
+        sep_count = html.count("context-menu-separator")
+        estimated_h = item_count * 22 + label_count * 20 + sep_count * 5 + 8
+        body = self.doc.get_element_by_id("body")
+        panel_h = body.scroll_height if body else 600
+        my = float(mouse_y)
+        if my + estimated_h > panel_h:
+            my = max(0, my - estimated_h)
+
+        self._context_menu.set_property("left", f"{mouse_x}px")
+        self._context_menu.set_property("top", f"{my:.0f}px")
         self._context_menu_node = node_name
 
     def _build_single_context_html(self, scene, node, node_type, is_deletable, can_drag):
