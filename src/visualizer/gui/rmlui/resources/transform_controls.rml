@@ -5,7 +5,7 @@
 </head>
 <body template="docked-panel" data-model="transform_controls">
 
-  <div id="content-wrap" class="hidden">
+  <div id="transform-wrap" class="hidden">
 
     <div class="section-header" id="hdr-transform">
       <span class="section-arrow" id="arrow-transform">&#x25BC;</span>
