@@ -50,14 +50,6 @@ class SelectionGroupsPanel(RmlPanel):
         if self._picker_el:
             self._picker_el.add_event_listener("change", self._on_picker_change)
 
-        self._popup_el = doc.get_element_by_id("color-picker-popup")
-        if self._popup_el:
-            self._popup_el.add_event_listener("click", self._on_popup_click)
-
-        self._picker_el = doc.get_element_by_id("color-picker-el")
-        if self._picker_el:
-            self._picker_el.add_event_listener("change", self._on_picker_change)
-
         body = doc.get_element_by_id("body")
         if body:
             body.add_event_listener("click", self._on_body_click)

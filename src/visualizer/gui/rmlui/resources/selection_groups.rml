@@ -19,9 +19,5 @@
     <color-picker id="color-picker-el" />
   </div>
 
-  <div id="color-picker-popup" class="color-picker-popup">
-    <color-picker id="color-picker-el" />
-  </div>
-
 </body>
 </rml>
