@@ -215,7 +215,14 @@ namespace lfs::vis::gui {
 
         const auto& timeline = controller_.timeline();
         const auto& vp = viewer_->getViewport();
-        const glm::mat4 view_proj = vp.getProjectionMatrix() * vp.getViewMatrix();
+        auto* const rm = viewer_->getRenderingManager();
+        if (!rm)
+            return;
+        const auto& settings = rm->getSettings();
+        const glm::ivec2 vp_size(static_cast<int>(viewport.size.x), static_cast<int>(viewport.size.y));
+        const glm::mat4 projection = lfs::rendering::createProjectionMatrixFromFocal(
+            vp_size, settings.focal_length_mm, settings.orthographic, settings.ortho_scale);
+        const glm::mat4 view_proj = projection * vp.getViewMatrix();
 
         const auto projectToScreen = [&](const glm::vec3& pos) -> glm::vec2 {
             const glm::vec4 clip = view_proj * glm::vec4(pos, 1.0f);

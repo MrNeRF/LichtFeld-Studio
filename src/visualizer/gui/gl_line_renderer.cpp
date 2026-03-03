@@ -144,12 +144,15 @@ namespace lfs::vis::gui {
         GLint prev_blend = 0;
         GLint prev_depth = 0;
         GLint prev_scissor = 0;
+        GLint prev_viewport[4] = {};
         glGetIntegerv(GL_CURRENT_PROGRAM, &prev_program);
         glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prev_vao);
         glGetIntegerv(GL_BLEND, &prev_blend);
         glGetIntegerv(GL_DEPTH_TEST, &prev_depth);
         glGetIntegerv(GL_SCISSOR_TEST, &prev_scissor);
+        glGetIntegerv(GL_VIEWPORT, prev_viewport);
 
+        glViewport(0, 0, screen_w_, screen_h_);
         glEnable(GL_BLEND);
         glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
                             GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
@@ -169,6 +172,7 @@ namespace lfs::vis::gui {
 
         glBindVertexArray(prev_vao);
         glUseProgram(prev_program);
+        glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
         if (prev_blend)
             glEnable(GL_BLEND);
         else
