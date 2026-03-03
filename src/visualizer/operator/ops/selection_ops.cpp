@@ -18,6 +18,7 @@
 #include "visualizer_impl.hpp"
 #include <cuda_runtime.h>
 #include <glm/gtc/matrix_transform.hpp>
+#include <optional>
 
 namespace lfs::vis::op {
 
@@ -60,8 +61,10 @@ namespace lfs::vis::op {
                 }
             }
 
+            const float pivot_dist = glm::length(viewport.camera.pivot - viewport.camera.t);
+            const float fallback_dist = pivot_dist > 0.1f ? pivot_dist : 10.0f;
             const glm::vec3 forward = viewport.camera.R * glm::vec3(0, 0, 1);
-            return viewport.camera.t + forward * 10.0f;
+            return viewport.camera.t + forward * fallback_dist;
         }
 
         glm::vec2 worldToScreen(const glm::vec3& world_pos, const Viewport& viewport, float focal_mm) {
@@ -74,8 +77,28 @@ namespace lfs::vis::op {
             const glm::vec3 ndc = glm::vec3(clip) / clip.w;
             const auto bounds = getViewportBounds();
             return glm::vec2(
-                bounds.x + (ndc.x * 0.5f + 0.5f) * viewport.windowSize.x,
-                bounds.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * viewport.windowSize.y);
+                bounds.x + (ndc.x * 0.5f + 0.5f) * bounds.width,
+                bounds.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * bounds.height);
+        }
+
+        std::optional<lfs::core::Tensor> projectPolygonToRenderSpace(
+            const std::vector<glm::vec3>& world_points,
+            const glm::mat4& vp,
+            int render_w, int render_h) {
+            const size_t num_verts = world_points.size();
+            auto poly_cpu = lfs::core::Tensor::empty(
+                {num_verts, 2}, lfs::core::Device::CPU, lfs::core::DataType::Float32);
+            auto* data = poly_cpu.ptr<float>();
+            for (size_t i = 0; i < num_verts; ++i) {
+                const glm::vec4 clip = vp * glm::vec4(world_points[i], 1.0f);
+                if (clip.w <= 0.0f) {
+                    return std::nullopt;
+                }
+                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                data[i * 2] = (ndc.x * 0.5f + 0.5f) * static_cast<float>(render_w);
+                data[i * 2 + 1] = (1.0f - (ndc.y * 0.5f + 0.5f)) * static_cast<float>(render_h);
+            }
+            return poly_cpu;
         }
 
     } // namespace
@@ -516,23 +539,12 @@ namespace lfs::vis::op {
         if (stroke_selection_.is_valid() && polygon_world_points_.size() >= 3) {
             const auto screen_positions = rm->getScreenPositions();
             if (screen_positions && screen_positions->is_valid()) {
-                const size_t num_verts = polygon_world_points_.size();
-                auto poly_cpu = lfs::core::Tensor::empty({num_verts, 2}, lfs::core::Device::CPU, lfs::core::DataType::Float32);
-                auto* data = poly_cpu.ptr<float>();
-                for (size_t i = 0; i < num_verts; ++i) {
-                    const glm::vec4 clip = vp * glm::vec4(polygon_world_points_[i], 1.0f);
-                    if (clip.w <= 0.0f) {
-                        data[i * 2] = -1.0f;
-                        data[i * 2 + 1] = -1.0f;
-                        continue;
-                    }
-                    const glm::vec3 ndc = glm::vec3(clip) / clip.w;
-                    data[i * 2] = (ndc.x * 0.5f + 0.5f) * static_cast<float>(render_w);
-                    data[i * 2 + 1] = (1.0f - (ndc.y * 0.5f + 0.5f)) * static_cast<float>(render_h);
+                const auto poly_cpu = projectPolygonToRenderSpace(polygon_world_points_, vp, render_w, render_h);
+                if (poly_cpu) {
+                    const auto poly_gpu = poly_cpu->cuda();
+                    lfs::rendering::polygon_select_tensor(*screen_positions, poly_gpu, stroke_selection_);
+                    rm->setPreviewSelection(&stroke_selection_, add_mode);
                 }
-                const auto poly_gpu = poly_cpu.cuda();
-                lfs::rendering::polygon_select_tensor(*screen_positions, poly_gpu, stroke_selection_);
-                rm->setPreviewSelection(&stroke_selection_, add_mode);
             }
         }
     }
@@ -563,21 +575,11 @@ namespace lfs::vis::op {
         const glm::mat4 proj = viewport.getProjectionMatrix(rm->getFocalLengthMm());
         const glm::mat4 vp = proj * view;
 
-        const size_t num_verts = polygon_world_points_.size();
-        auto poly_cpu = lfs::core::Tensor::empty({num_verts, 2}, lfs::core::Device::CPU, lfs::core::DataType::Float32);
-        auto* data = poly_cpu.ptr<float>();
-        for (size_t i = 0; i < num_verts; ++i) {
-            const glm::vec4 clip = vp * glm::vec4(polygon_world_points_[i], 1.0f);
-            if (clip.w <= 0.0f) {
-                data[i * 2] = -1.0f;
-                data[i * 2 + 1] = -1.0f;
-                continue;
-            }
-            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
-            data[i * 2] = (ndc.x * 0.5f + 0.5f) * static_cast<float>(render_w);
-            data[i * 2 + 1] = (1.0f - (ndc.y * 0.5f + 0.5f)) * static_cast<float>(render_h);
+        const auto poly_cpu = projectPolygonToRenderSpace(polygon_world_points_, vp, render_w, render_h);
+        if (!poly_cpu) {
+            return;
         }
-        const auto poly_gpu = poly_cpu.cuda();
+        const auto poly_gpu = poly_cpu->cuda();
 
         lfs::rendering::polygon_select_tensor(*screen_positions, poly_gpu, stroke_selection_);
     }

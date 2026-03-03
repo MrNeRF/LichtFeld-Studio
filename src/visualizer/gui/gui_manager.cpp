@@ -1161,15 +1161,20 @@ namespace lfs::vis::gui {
 
                     std::vector<ImVec2> screen_points;
                     screen_points.reserve(world_points.size());
+                    bool all_visible = true;
                     for (const auto& wp : world_points) {
                         const glm::vec4 clip = vp_mat * glm::vec4(wp, 1.0f);
                         if (clip.w <= 0.0f) {
-                            continue;
+                            all_visible = false;
+                            break;
                         }
                         const glm::vec3 ndc = glm::vec3(clip) / clip.w;
                         screen_points.emplace_back(
                             viewport_layout_.pos.x + (ndc.x * 0.5f + 0.5f) * viewport_layout_.size.x,
                             viewport_layout_.pos.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * viewport_layout_.size.y);
+                    }
+                    if (!all_visible) {
+                        screen_points.clear();
                     }
 
                     const ImVec2 clip_min(viewport_layout_.pos.x, viewport_layout_.pos.y);
