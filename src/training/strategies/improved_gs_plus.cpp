@@ -31,7 +31,16 @@ namespace lfs::training {
             return shN.is_valid() && shN.ndim() >= 2 && shN.shape()[1] > 0;
         }
 
- 
+
+        const float get_percentil_value(const float q_percent, const lfs::core::Tensor tensor) { 
+            auto [sorted_val, sorted_idx] = tensor.sort();
+
+            const int num_gaussians = static_cast<int>(tensor.shape()[0]);
+            const int q_index = std::clamp(static_cast<int>(num_gaussians * q_percent), 0, num_gaussians - 1);
+            const float quantile_threshold = sorted_val[q_index].item_as<float>();
+
+            return quantile_threshold;
+        }
 
     } // private namespace
 
@@ -90,7 +99,7 @@ namespace lfs::training {
         return laplacian;
     }
 
-    lfs::core::Tensor median_normalization(float multiplier, const lfs::core::Tensor& value_tensor) {
+    lfs::core::Tensor median_normalization(const lfs::core::Tensor& value_tensor) {
         // Handle NaNs
         lfs::core::Tensor clean_tensor = value_tensor.masked_fill(value_tensor.isnan(), 0.0f);
 
@@ -120,7 +129,7 @@ namespace lfs::training {
         }
 
         // Apply the scaling
-        lfs::core::Tensor ret_value = clean_tensor.div(median_val).mul(multiplier);
+        lfs::core::Tensor ret_value = clean_tensor.div(median_val);
 
         return ret_value;
     }
@@ -181,10 +190,12 @@ namespace lfs::training {
 
             lfs::core::Tensor laplacian = apply_laplacian_filter(image).unsqueeze(0);
 
+            
+
             //printf("Storing laplacian view %d, ndim: %d, shape[0]: %d, shape[1]: %d, shape[2]: %d\n", i, laplacian.ndim(), laplacian.shape()[0], laplacian.shape()[1], laplacian.shape()[2]);
             //printf("Mean value: %.3f\n", laplacian.mean_scalar());
 
-            this->_all_edges.index_put_(idx, laplacian);
+            this->_all_edges.index_put_(idx, median_normalization(laplacian));
             /*
             std::cout << "Debug image saved to debug_laplaciano.jpg" << std::endl;
 
@@ -245,7 +256,7 @@ namespace lfs::training {
     const lfs::core::Tensor ImprovedGsPlus::compute_gaussian_score(const lfs::core::Tensor& gradients) {
         const int64_t current_gaussian_count = _splat_data->size();
 
-        const std::vector<CameraExample> cam_list = random_cam_sample();
+        auto[cam_list, cam_idx] = random_cam_sample();
         const int num_views = cam_list.size();
 
         // Indices
@@ -268,17 +279,21 @@ namespace lfs::training {
             lfs::core::Tensor bg;
             const RenderOutput r_output = gsplat_rasterize(*my_viewpoint_cam, this->get_model(), bg);
 
-            const lfs::core::Tensor pixel_weigths = get_loss_map(r_output.image, cam.data.image, _all_edges[view]).contiguous();
+            //const lfs::core::Tensor pixel_weigths = get_loss_map(r_output.image, cam.data.image, _all_edges[view]).contiguous();
+
+            lfs::core::Tensor pixel_weights = _all_edges[cam_idx[view]];
 
             // Second, render for score, photometric importance values (pixel_weights)
             const RenderOutput score_render = gsplat_rasterize(*my_viewpoint_cam, this->get_model(), bg, 1.0f, false,
-                                                                 lfs::training::GsplatRenderMode::RGB, false, pixel_weigths);
+                                                               lfs::training::GsplatRenderMode::RGB, false, pixel_weights);
 
             lfs::core::Tensor edges_score = score_render.edges_score;
             //std::cout << "Mean edges_score: " << edges_score.mean_scalar() << std::endl;
 
             // Compute photometric importance, view dependent
-            const lfs::core::Tensor edge_score = median_normalization(_score_coefficients.accum_importance, score_render.edges_score);
+            const lfs::core::Tensor edge_score = median_normalization(score_render.edges_score);
+            std::cout << "Mean edges_score: " << edges_score.mean_scalar() << std::endl;
+
 
             // Aggregation
             lfs::core::Tensor idx = d_indices.slice(0, view, view + 1);
@@ -313,11 +328,15 @@ namespace lfs::training {
 
         lfs::core::Tensor scores_masked;
 
+        if (_current_step < 3) {
+            scores_masked = scores;
+        } else {
+            const lfs::core::Tensor LAS_grad_mask = lfs::core::Tensor::where(grads >= 0.00004,
+                                                                             lfs::core::Tensor::ones({1}), lfs::core::Tensor::zeros({1}))
+                                                        .to(lfs::core::DataType::Bool);
 
-        const lfs::core::Tensor LAS_grad_mask = lfs::core::Tensor::where(grads >= 0.00004,
-                                                 lfs::core::Tensor::ones({1}), lfs::core::Tensor::zeros({1})).to(lfs::core::DataType::Bool);
-
-        scores_masked = scores.masked_fill(~LAS_grad_mask, 0);
+            scores_masked = scores.masked_fill(~LAS_grad_mask, 0);
+        }
 
         const lfs::core::Tensor sampled_idxs = lfs::core::Tensor::multinomial(scores_masked, budget_for_alloc, false);
 
@@ -469,7 +488,7 @@ namespace lfs::training {
     }
 
     void ImprovedGsPlus::reset_opacity() {
-        const float reset_value = 0.1;
+        const float reset_value = 0.05;
         const float logit_reset_value = std::log(reset_value / (1.0f - reset_value));
 
         _splat_data->opacity_raw().clamp_max_(logit_reset_value);
@@ -489,6 +508,10 @@ namespace lfs::training {
 
         if (iter > _params->stop_refine) {
             return;
+        }
+
+        if (((iter % _params->reset_every) == 300) && (iter < 6500) && (iter % _params->reset_every < iter)) {
+            //prune_post_reset();
         }
 
         if (is_refining(iter)) {
@@ -566,7 +589,7 @@ namespace lfs::training {
         return;
     }
 
-    const std::vector<CameraExample> ImprovedGsPlus::random_cam_sample(const int N) const {
+    const std::pair<std::vector<CameraExample>, std::vector<int>> ImprovedGsPlus::random_cam_sample(const int N) const {
         const int num_cam_dataset = _views->size();
         int num_samples = 0;
 
@@ -579,7 +602,9 @@ namespace lfs::training {
         }
 
         std::vector<CameraExample> samples;
+        std::vector<int> indices;
         samples.reserve(num_samples);
+        indices.reserve(num_samples);
 
         std::vector<int> all_indices(num_cam_dataset);
         std::iota(all_indices.begin(), all_indices.end(), 0);
@@ -592,15 +617,30 @@ namespace lfs::training {
         // Select the first num_samples
         for (int i = 0; i < num_samples; ++i) {
             samples.push_back(_views->get(all_indices[i]));
+            indices.push_back(all_indices[i]);
         }
 
-        return samples;
+        return {samples, indices};
     }
 
     void ImprovedGsPlus::prune_post_reset() {
-        lfs::core::Tensor prune_mask = (_splat_data->get_opacity() < _params->min_opacity);
+        const float q = 0.1f;
+        const lfs::core::Tensor opacity = _splat_data->get_opacity();
 
-        remove(prune_mask);
+        std::cout << "Opacity ndim: " << opacity.ndim() << std::endl;
+
+        auto [sorted_val, sorted_idx] = opacity.sort();
+
+        int num_gaussians = opacity.shape()[0];
+        int q_index = static_cast<int>(num_gaussians * q);
+
+        float quantile_threshold = sorted_val[q_index].item_as<float>();
+
+        std::cout << "Quantile_threshold: " << quantile_threshold << std::endl;
+
+        const lfs::core::Tensor prune_mask = (opacity < quantile_threshold);
+
+        lfs::training::ImprovedGsPlus::remove(prune_mask);
     }
 
     const lfs::core::Tensor ImprovedGsPlus::get_loss_map(const lfs::core::Tensor reconstructed_img,
@@ -628,44 +668,12 @@ namespace lfs::training {
 
     void ImprovedGsPlus::prune_with_score(const int iter, const lfs::core::Tensor& scores) {
 
+        if (iter >= _params->stop_refine) {
+            return;
+        }
+
         lfs::core::Tensor prune_mask = (_splat_data->get_opacity() < _params->prune_opacity);
-
-        if (iter > _params->reset_every) {
-            const lfs::core::Tensor max_values = _splat_data->get_scaling().max(-1, false);
-            lfs::core::Tensor big_points_world = max_values > _params->prune_scale3d * _splat_data->get_scene_scale();
-            prune_mask = prune_mask.logical_or(big_points_world);
-        }
-
-        const int to_remove = static_cast<int>(prune_mask.sum_scalar());
-        const int remove_budget = static_cast<int>(0.5 * to_remove);
-
-        // Prune based on the inversed score
-        if ((remove_budget > 0) && (_current_step < 28)) {
-
-            const lfs::core::Tensor inversed_score = (scores + 1e-6).pow(-1);
-            // select those to prunee base on their score
-            const lfs::core::Tensor sampled_idx = lfs::core::Tensor::multinomial(inversed_score, remove_budget, false);
-
-            lfs::core::Tensor prune_score_mask = lfs::core::Tensor::zeros_like(prune_mask).to(lfs::core::Device::CUDA);
-
-            lfs::core::Tensor one_bool = lfs::core::Tensor::ones_bool({static_cast<size_t>(remove_budget)}, lfs::core::Device::CUDA);
-            prune_score_mask.index_put_(sampled_idx, one_bool);
-
-            lfs::core::Tensor final_pruning = prune_score_mask.logical_and(prune_mask);
-
-            // Exclude already-free slots from pruning (they're already soft-deleted)
-            const size_t current_size = static_cast<size_t>(_splat_data->size());
-            if (_free_mask.is_valid() && current_size > 0) {
-                auto active_free_mask = _free_mask.slice(0, 0, current_size);
-                auto is_active = active_free_mask.logical_not();      // true = slot is active
-                final_pruning = final_pruning.logical_and(is_active); // only prune active slots
-            }
-
-            const auto num_prunes = static_cast<int64_t>(final_pruning.sum_scalar());
-            if (num_prunes > 0) {
-                remove(final_pruning);
-            }
-        }
+         remove(prune_mask);
     }
 
     void ImprovedGsPlus::mark_as_free(const lfs::core::Tensor& indices) {
@@ -728,7 +736,8 @@ namespace lfs::training {
         zero_optimizer_state(ParamType::Sh0);
         zero_optimizer_state(ParamType::ShN);
         zero_optimizer_state(ParamType::Opacity);
-
+        
+        std::cout << "[DEBUG]: To Remove: " << num_pruned << std::endl;
         LOG_DEBUG("remove(): soft-deleted {} Gaussians (marked as free, rotation & gradients zeroed)", num_pruned);
     }
 

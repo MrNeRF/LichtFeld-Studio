@@ -75,7 +75,7 @@ namespace lfs::training {
         // Helper Functions
         inline const int64_t get_current_budget() const noexcept { return _budget_schedule[_current_step + 1]; }
         inline const unsigned global_seed() const noexcept { return _current_step; } // for camera sampling
-        const std::vector<CameraExample> random_cam_sample(const int N = 10) const;  // N minimum
+        const std::pair<std::vector<CameraExample>, std::vector<int>> random_cam_sample(const int N = 10) const; // N minimum
 
         const lfs::core::Tensor get_loss_map(const lfs::core::Tensor reconstructed_img, const lfs::core::Tensor original_img, const lfs::core::Tensor edge_loss_norm) const;
 
