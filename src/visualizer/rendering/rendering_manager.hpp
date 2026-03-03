@@ -292,6 +292,8 @@ namespace lfs::vis {
         void setCropboxGizmoActive(bool active) { cropbox_gizmo_active_ = active; }
         void setEllipsoidGizmoActive(bool active) { ellipsoid_gizmo_active_ = active; }
 
+        void setViewportResizeActive(bool active);
+
     private:
         static int64_t to_ns(std::chrono::steady_clock::time_point tp) {
             return std::chrono::duration_cast<std::chrono::nanoseconds>(tp.time_since_epoch()).count();
@@ -413,6 +415,8 @@ namespace lfs::vis {
         glm::mat4 pending_cropbox_transform_{1.0f};
         glm::vec3 pending_ellipsoid_radii_{1.0f};
         glm::mat4 pending_ellipsoid_transform_{1.0f};
+
+        std::atomic<bool> viewport_resize_active_{false};
     };
 
 } // namespace lfs::vis

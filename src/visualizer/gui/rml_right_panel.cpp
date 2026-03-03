@@ -227,6 +227,8 @@ namespace lfs::vis::gui {
                 resize_dragging_ = false;
                 if (resize_handle_el_)
                     resize_handle_el_->SetAttribute("class", "");
+                if (on_resize_end)
+                    on_resize_end();
             }
             return;
         }
@@ -241,6 +243,8 @@ namespace lfs::vis::gui {
                 splitter_dragging_ = false;
                 if (splitter_el_)
                     splitter_el_->SetAttribute("class", "");
+                if (on_splitter_end)
+                    on_splitter_end();
             }
             return;
         }

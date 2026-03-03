@@ -51,7 +51,9 @@ namespace lfs::vis::gui {
 
         std::function<void(const std::string&)> on_tab_changed;
         std::function<void(float)> on_splitter_delta;
+        std::function<void()> on_splitter_end;
         std::function<void(float)> on_resize_delta;
+        std::function<void()> on_resize_end;
 
     private:
         void updateTheme();

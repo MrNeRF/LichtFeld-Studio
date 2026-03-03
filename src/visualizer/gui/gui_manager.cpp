@@ -480,18 +480,26 @@ namespace lfs::vis::gui {
             panel_layout_.setActiveTab(idname);
         };
         rml_right_panel_.on_splitter_delta = [this](float delta_y) {
+            viewer_->getRenderingManager()->setViewportResizeActive(true);
             const auto* mvp = ImGui::GetMainViewport();
             ScreenState ss;
             ss.work_pos = {mvp->WorkPos.x, mvp->WorkPos.y};
             ss.work_size = {mvp->WorkSize.x, mvp->WorkSize.y};
             panel_layout_.adjustScenePanelRatio(delta_y, ss);
         };
+        rml_right_panel_.on_splitter_end = [this]() {
+            viewer_->getRenderingManager()->setViewportResizeActive(false);
+        };
         rml_right_panel_.on_resize_delta = [this](float dx) {
+            viewer_->getRenderingManager()->setViewportResizeActive(true);
             const auto* mvp = ImGui::GetMainViewport();
             ScreenState ss;
             ss.work_pos = {mvp->WorkPos.x, mvp->WorkPos.y};
             ss.work_size = {mvp->WorkSize.x, mvp->WorkSize.y};
             panel_layout_.applyResizeDelta(dx, ss);
+        };
+        rml_right_panel_.on_resize_end = [this]() {
+            viewer_->getRenderingManager()->setViewportResizeActive(false);
         };
         rml_viewport_overlay_.init(&rmlui_manager_);
         rml_menu_bar_.init(&rmlui_manager_);

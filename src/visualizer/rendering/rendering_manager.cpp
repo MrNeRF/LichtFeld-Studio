@@ -505,6 +505,12 @@ namespace lfs::vis {
         LOG_TRACE("Render marked dirty (flags: 0x{:x})", flags);
     }
 
+    void RenderingManager::setViewportResizeActive(bool active) {
+        const bool was_active = viewport_resize_active_.exchange(active);
+        if (was_active && !active)
+            markDirty(DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
+    }
+
     void RenderingManager::updateSettings(const RenderSettings& new_settings) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
 
@@ -747,10 +753,16 @@ namespace lfs::vis {
         }
 
         if (current_size != last_viewport_size_) {
-            LOG_DEBUG("Viewport resize: {}x{} -> {}x{}", last_viewport_size_.x, last_viewport_size_.y,
-                      current_size.x, current_size.y);
-            markDirty(DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
-            last_viewport_size_ = current_size;
+            if (viewport_resize_active_.load(std::memory_order_relaxed)) {
+                LOG_DEBUG("Viewport resize (drag): {}x{}", current_size.x, current_size.y);
+                last_viewport_size_ = current_size;
+                markDirty(DirtyFlag::OVERLAY);
+            } else {
+                LOG_DEBUG("Viewport resize: {}x{} -> {}x{}", last_viewport_size_.x, last_viewport_size_.y,
+                          current_size.x, current_size.y);
+                last_viewport_size_ = current_size;
+                markDirty(DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
+            }
         }
 
         const lfs::core::SplatData* const model = scene_manager ? scene_manager->getModelForRendering() : nullptr;
