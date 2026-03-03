@@ -45,6 +45,7 @@ namespace lfs::vis::gui {
         pip_depth_rbo_ = {};
         pip_initialized_ = false;
         line_renderer_.destroyGLResources();
+        film_strip_.destroyGLResources();
         if (panel_)
             panel_->destroyGLResources();
         if (overlay_)
@@ -91,6 +92,10 @@ namespace lfs::vis::gui {
             controller_.togglePlayPause();
         });
 
+        state::KeyframeListChanged::when([this](const auto&) {
+            film_strip_.invalidateAll();
+        });
+
         scene_sync_->setupEvents();
     }
 
@@ -101,6 +106,8 @@ namespace lfs::vis::gui {
             renderKeyframePreview(ctx);
         }
         renderSequencerPanel(ctx, viewport);
+        renderFilmStrip(ctx);
+        drawPlayheadLine();
         drawPipPreviewWindow(viewport);
         renderKeyframeEditOverlay(viewport);
         handleOverlayActions();
@@ -143,6 +150,7 @@ namespace lfs::vis::gui {
 
         panel_->setSnapEnabled(ui_state_.snap_to_grid);
         panel_->setSnapInterval(ui_state_.snap_interval);
+        panel_->setFilmStripAttached(ui_state_.show_film_strip);
 
         lfs::vis::PanelInputState input;
         input.mouse_x = io.MousePos.x;
@@ -163,7 +171,9 @@ namespace lfs::vis::gui {
         input.screen_w = static_cast<int>(io.DisplaySize.x);
         input.screen_h = static_cast<int>(io.DisplaySize.y);
 
-        panel_->render(viewport.pos.x, viewport.size.x, viewport.pos.y + viewport.size.y, input);
+        const float strip_offset = ui_state_.show_film_strip ? FilmStripRenderer::STRIP_HEIGHT : 0.0f;
+        panel_->render(viewport.pos.x, viewport.size.x,
+                       viewport.pos.y + viewport.size.y - strip_offset, input);
 
         if (panel_->isHovered())
             ImGui::GetIO().WantCaptureMouse = true;
@@ -527,6 +537,53 @@ namespace lfs::vis::gui {
         }
     }
 
+    void SequencerUIManager::renderFilmStrip(const UIContext& ctx) {
+        if (!ui_state_.show_film_strip)
+            return;
+
+        auto* const rm = ctx.viewer->getRenderingManager();
+        auto* const sm = ctx.viewer->getSceneManager();
+
+        const float px = panel_->cachedPanelX();
+        const float pw = panel_->cachedPanelWidth();
+        const float timeline_x = px + panel_config::TRANSPORT_WIDTH + panel_config::INNER_PADDING;
+        const float timeline_width = pw - panel_config::TRANSPORT_WIDTH - panel_config::TIME_DISPLAY_WIDTH - panel_config::INNER_PADDING * 2.0f;
+
+        if (timeline_width <= 0.0f)
+            return;
+
+        const float strip_y = panel_->cachedPanelY() + panel_config::HEIGHT - 1.0f;
+
+        film_strip_.render(controller_, rm, sm,
+                           px, pw,
+                           timeline_x, timeline_width,
+                           strip_y,
+                           panel_->zoomLevel(), panel_->panOffset(),
+                           panel_->getDisplayEndTime());
+
+        const auto& io = ImGui::GetIO();
+        const float mx = io.MousePos.x;
+        const float my = io.MousePos.y;
+        if (mx >= px && mx < px + pw && my >= strip_y && my < strip_y + FilmStripRenderer::STRIP_HEIGHT)
+            ImGui::GetIO().WantCaptureMouse = true;
+    }
+
+    void SequencerUIManager::drawPlayheadLine() {
+        if (!panel_->isPlayheadInRange())
+            return;
+
+        const float px = std::round(panel_->cachedPlayheadScreenX());
+        const float panel_y = panel_->cachedPanelY();
+        const float line_top = panel_y + panel_config::INNER_PADDING +
+                               panel_config::RULER_HEIGHT + 4.0f;
+        const float strip_offset = ui_state_.show_film_strip ? FilmStripRenderer::STRIP_HEIGHT : 0.0f;
+        const float line_bottom = panel_y + panel_config::HEIGHT - 1.0f + strip_offset;
+
+        auto* dl = ImGui::GetForegroundDrawList();
+        dl->AddLine({px, line_top}, {px, line_bottom},
+                    theme().error_u32(), panel_config::PLAYHEAD_WIDTH);
+    }
+
     void SequencerUIManager::initPipPreview() {
         if (pip_initialized_ || pip_init_failed_)
             return;
@@ -642,7 +699,7 @@ namespace lfs::vis::gui {
         const auto& t = theme();
         const float scale = ui_state_.pip_preview_scale;
         constexpr float MARGIN = 16.0f;
-        constexpr float PANEL_HEIGHT = 90.0f;
+        const float PANEL_HEIGHT = 90.0f + (ui_state_.show_film_strip ? FilmStripRenderer::STRIP_HEIGHT : 0.0f);
         constexpr float PADDING = 4.0f;
         constexpr float TITLE_HEIGHT = 18.0f;
         const float scaled_width = static_cast<float>(PREVIEW_WIDTH) * scale;

@@ -33,6 +33,7 @@ namespace lfs::vis {
         constexpr float MIN_KEYFRAME_SPACING = 0.1f;
         constexpr float DOUBLE_CLICK_TIME = 0.3f;
         constexpr float DRAG_THRESHOLD_PX = 3.0f;
+        constexpr float PLAYHEAD_HIT_RADIUS = 6.0f;
 
         constexpr const char* EASING_NAMES[] = {"Linear", "Ease In", "Ease Out", "Ease In-Out"};
 
@@ -193,27 +194,30 @@ namespace lfs::vis {
         const auto error = colorToRml(p.error);
         const int rounding = static_cast<int>(t.sizes.window_rounding);
 
+        const std::string radius_str = film_strip_attached_
+                                           ? std::format("{}dp {}dp 0dp 0dp", rounding, rounding)
+                                           : std::format("{}dp", rounding);
+
         return std::format(
             "#panel {{ background-color: {}; border-width: 1dp; border-color: {}; "
-            "border-radius: {}dp; }}\n"
+            "border-radius: {}; }}\n"
             ".transport-icon {{ image-color: {}; }}\n"
             "#track-bar {{ background-color: {}; border-width: 1dp; border-color: {}; }}\n"
             "#hint {{ color: {}; }}\n"
             ".ruler-tick.major {{ background-color: {}; }}\n"
             ".ruler-tick.minor {{ background-color: {}; }}\n"
             ".ruler-label {{ color: {}; }}\n"
-            "#playhead-line {{ background-color: {}; }}\n"
+            "#playhead-line {{ background-color: transparent; }}\n"
             "#playhead-handle {{ background-color: {}; }}\n"
             "#current-time {{ color: {}; }}\n"
             "#duration {{ color: {}; }}\n",
-            surface_alpha, border, rounding,
+            surface_alpha, border, radius_str,
             text,
             bg_alpha, border_dim,
             text_dim_half,
             text_dim,
             text_dim_half,
             text_dim,
-            error,
             error,
             text,
             text_dim);
@@ -224,9 +228,11 @@ namespace lfs::vis {
             return;
 
         const auto& p = lfs::vis::theme().palette;
-        if (std::memcmp(last_synced_text_, &p.text, sizeof(last_synced_text_)) == 0)
+        const bool layout_changed = film_strip_attached_ != last_film_strip_attached_;
+        if (!layout_changed && std::memcmp(last_synced_text_, &p.text, sizeof(last_synced_text_)) == 0)
             return;
         std::memcpy(last_synced_text_, &p.text, sizeof(last_synced_text_));
+        last_film_strip_attached_ = film_strip_attached_;
 
         if (base_rcss_.empty())
             base_rcss_ = gui::rml_theme::loadBaseRCSS("rmlui/sequencer.rcss");
@@ -287,7 +293,8 @@ namespace lfs::vis {
         const float timeline_width = cached_panel_width_ - 2.0f * INNER_PADDING -
                                      TRANSPORT_WIDTH - TIME_DISPLAY_WIDTH;
 
-        if (count == last_keyframe_count_ &&
+        if (!dragging_keyframe_ &&
+            count == last_keyframe_count_ &&
             zoom_level_ == last_zoom_level_ &&
             pan_offset_ == last_pan_offset_ &&
             timeline_width == last_kf_width_) {
@@ -495,6 +502,11 @@ namespace lfs::vis {
 
         const Vec2 timeline_pos = {panel_x + INNER_PADDING + TRANSPORT_WIDTH,
                                    panel_y + INNER_PADDING};
+
+        cached_playhead_screen_x_ = timeToX(controller_.playhead(), timeline_pos.x, timeline_width);
+        playhead_in_range_ = cached_playhead_screen_x_ >= timeline_pos.x &&
+                             cached_playhead_screen_x_ <= timeline_pos.x + timeline_width;
+
         handleTimelineInteraction(timeline_pos, timeline_width, content_height, input);
     }
 
@@ -532,24 +544,6 @@ namespace lfs::vis {
             }
         }
 
-        if (input.mouse_clicked[0] && mouse_in_timeline && !dragging_keyframe_ &&
-            !hovered_keyframe_.has_value()) {
-            dragging_playhead_ = true;
-            controller_.beginScrub();
-        }
-        if (dragging_playhead_) {
-            if (input.mouse_down[0]) {
-                float time = xToTime(mx, pos.x, width);
-                time = std::clamp(time, 0.0f, timeline.endTime());
-                if (snap_enabled_)
-                    time = snapTime(time);
-                controller_.scrub(time);
-            } else {
-                dragging_playhead_ = false;
-                controller_.endScrub();
-            }
-        }
-
         hovered_keyframe_ = std::nullopt;
         const auto& keyframes = timeline.keyframes();
         for (size_t i = 0; i < keyframes.size(); ++i) {
@@ -558,8 +552,22 @@ namespace lfs::vis {
             const bool hovered = mouse_in_timeline && dist < KEYFRAME_RADIUS * 2;
             if (hovered)
                 hovered_keyframe_ = i;
+        }
 
-            if (hovered && input.mouse_clicked[0]) {
+        const float playhead_x = timeToX(controller_.playhead(), pos.x, width);
+        const float playhead_dist = std::abs(mx - playhead_x);
+        bool on_playhead_handle = playhead_dist < PLAYHEAD_HIT_RADIUS;
+
+        if (on_playhead_handle && hovered_keyframe_.has_value()) {
+            const float kf_x = timeToX(keyframes[*hovered_keyframe_].time, pos.x, width);
+            if (std::abs(mx - kf_x) < playhead_dist)
+                on_playhead_handle = false;
+        }
+
+        for (size_t i = 0; i < keyframes.size(); ++i) {
+            const bool hovered = hovered_keyframe_.has_value() && *hovered_keyframe_ == i;
+
+            if (hovered && input.mouse_clicked[0] && !on_playhead_handle) {
                 const float current_time = input.time;
 
                 if (last_clicked_keyframe_ == i &&
@@ -598,6 +606,24 @@ namespace lfs::vis {
                         }
                     }
                 }
+            }
+        }
+
+        if (input.mouse_clicked[0] && mouse_in_timeline && !dragging_keyframe_ &&
+            (on_playhead_handle || !hovered_keyframe_.has_value())) {
+            dragging_playhead_ = true;
+            controller_.beginScrub();
+        }
+        if (dragging_playhead_) {
+            if (input.mouse_down[0]) {
+                float time = xToTime(mx, pos.x, width);
+                time = std::clamp(time, 0.0f, timeline.endTime());
+                if (snap_enabled_)
+                    time = snapTime(time);
+                controller_.scrub(time);
+            } else {
+                dragging_playhead_ = false;
+                controller_.endScrub();
             }
         }
 

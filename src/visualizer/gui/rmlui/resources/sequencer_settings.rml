@@ -54,6 +54,13 @@
     </div>
 
     <div class="setting-row">
+      <label class="setting-label">
+        <input type="checkbox" data-checked="show_film_strip" />
+        <span>Show Film Strip</span>
+      </label>
+    </div>
+
+    <div class="setting-row">
       <input type="range" class="setting-slider" data-value="pip_preview_scale" min="0.5" max="2.0" step="0.01" />
       <span class="slider-value">{{pip_preview_scale | format_float(2)}}</span>
       <span class="prop-label">Preview Size</span>

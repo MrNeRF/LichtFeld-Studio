@@ -88,10 +88,20 @@ namespace lfs::vis {
 
         void setSnapEnabled(bool enabled) { snap_enabled_ = enabled; }
         void setSnapInterval(float interval) { snap_interval_ = interval; }
+        void setFilmStripAttached(bool attached) { film_strip_attached_ = attached; }
 
         void openFocalLengthEdit(size_t index, float current_focal_mm);
 
         [[nodiscard]] bool isHovered() const { return hovered_; }
+
+        [[nodiscard]] float zoomLevel() const { return zoom_level_; }
+        [[nodiscard]] float panOffset() const { return pan_offset_; }
+        [[nodiscard]] float cachedPanelX() const { return cached_panel_x_; }
+        [[nodiscard]] float cachedPanelY() const { return cached_panel_y_; }
+        [[nodiscard]] float cachedPanelWidth() const { return cached_panel_width_; }
+        [[nodiscard]] float cachedPlayheadScreenX() const { return cached_playhead_screen_x_; }
+        [[nodiscard]] bool isPlayheadInRange() const { return playhead_in_range_; }
+        [[nodiscard]] float getDisplayEndTime() const;
 
         [[nodiscard]] TimelineContextMenuState consumeContextMenu();
         [[nodiscard]] TimeEditRequest consumeTimeEditRequest();
@@ -120,7 +130,6 @@ namespace lfs::vis {
         void handleTimelineInteraction(const Vec2& pos, float width, float height,
                                        const PanelInputState& input);
 
-        [[nodiscard]] float getDisplayEndTime() const;
         [[nodiscard]] float timeToX(float time, float timeline_x, float timeline_width) const;
         [[nodiscard]] float xToTime(float x, float timeline_x, float timeline_width) const;
         [[nodiscard]] float snapTime(float time) const;
@@ -168,6 +177,8 @@ namespace lfs::vis {
         float cached_panel_x_ = 0.0f;
         float cached_panel_y_ = 0.0f;
         float cached_panel_width_ = 0.0f;
+        float cached_playhead_screen_x_ = 0.0f;
+        bool playhead_in_range_ = false;
 
         gui::RmlFBO fbo_;
 
@@ -185,6 +196,8 @@ namespace lfs::vis {
 
         bool snap_enabled_ = false;
         float snap_interval_ = 0.5f;
+        bool film_strip_attached_ = false;
+        bool last_film_strip_attached_ = false;
 
         // Time editing
         bool editing_keyframe_time_ = false;

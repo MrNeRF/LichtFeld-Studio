@@ -2077,6 +2077,13 @@ class SequencerUIState:
     def pip_preview_scale(self, arg: float, /) -> None: ...
 
     @property
+    def show_film_strip(self) -> bool:
+        """Whether film strip thumbnails are shown above sequencer"""
+
+    @show_film_strip.setter
+    def show_film_strip(self, arg: bool, /) -> None: ...
+
+    @property
     def selected_keyframe(self) -> int: ...
 
 def get_sequencer_state() -> SequencerUIState:

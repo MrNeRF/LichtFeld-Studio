@@ -379,6 +379,7 @@ namespace lfs::vis {
                 state.playback_speed = s.playback_speed;
                 state.follow_playback = s.follow_playback;
                 state.pip_preview_scale = s.pip_preview_scale;
+                state.show_film_strip = s.show_film_strip;
             }
 
             s.show_camera_path = state.show_camera_path;
@@ -387,6 +388,7 @@ namespace lfs::vis {
             s.playback_speed = state.playback_speed;
             s.follow_playback = state.follow_playback;
             s.pip_preview_scale = state.pip_preview_scale;
+            s.show_film_strip = state.show_film_strip;
             const auto sel = gm->sequencer().selectedKeyframe();
             s.selected_keyframe = sel.has_value() ? static_cast<int>(*sel) : -1;
             sequencer_ui_initialized_ = true;

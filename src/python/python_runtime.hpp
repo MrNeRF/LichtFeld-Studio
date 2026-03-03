@@ -439,6 +439,7 @@ namespace lfs::python {
         float playback_speed = 1.0f;
         bool follow_playback = false;
         float pip_preview_scale = 1.0f;
+        bool show_film_strip = true;
         int preset = 0;
         int custom_width = 1920;
         int custom_height = 1080;

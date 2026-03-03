@@ -112,7 +112,6 @@ namespace lfs::vis::gui {
                 return;
 
             controller_.selectKeyframe(e.keyframe_index);
-            emitNodeSelectedForKeyframe(e.keyframe_index);
         });
 
         ui::RenderSettingsChanged::when([this](const auto& e) {

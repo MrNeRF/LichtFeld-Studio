@@ -58,6 +58,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/gpu_memory_query.cpp
         gui/gl_line_renderer.cpp
         gui/rml_overlay_context.cpp
+        gui/film_strip_renderer.cpp
         gui/sequencer_ui_manager.cpp
         gui/rml_modal_overlay.cpp
         gui/rml_sequencer_overlay.cpp

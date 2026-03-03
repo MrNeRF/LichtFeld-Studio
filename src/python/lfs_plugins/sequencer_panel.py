@@ -103,6 +103,9 @@ class SequencerSettingsPanel(RmlPanel):
         model.bind("follow_playback",
                     lambda: _seq_bool_getter("follow_playback"),
                     lambda v: _seq_bool_setter("follow_playback", v))
+        model.bind("show_film_strip",
+                    lambda: _seq_bool_getter("show_film_strip"),
+                    lambda v: _seq_bool_setter("show_film_strip", v))
         model.bind("pip_preview_scale",
                     lambda: _seq_float_getter("pip_preview_scale", 1.0),
                     lambda v: _seq_float_setter("pip_preview_scale", v))

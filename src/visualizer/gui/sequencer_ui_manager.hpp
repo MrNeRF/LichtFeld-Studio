@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "gui/film_strip_renderer.hpp"
 #include "gui/gl_line_renderer.hpp"
 #include "gui/keyframe_scene_sync.hpp"
 #include "gui/panel_layout.hpp"
@@ -48,6 +49,8 @@ namespace lfs::vis {
             void renderKeyframeGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void handleOverlayActions();
             void renderKeyframeEditOverlay(const ViewportLayout& viewport);
+            void renderFilmStrip(const UIContext& ctx);
+            void drawPlayheadLine();
             void initPipPreview();
             void renderKeyframePreview(const UIContext& ctx);
             void drawPipPreviewWindow(const ViewportLayout& viewport);
@@ -59,6 +62,7 @@ namespace lfs::vis {
             std::unique_ptr<gui::RmlSequencerOverlay> overlay_;
             std::unique_ptr<KeyframeSceneSync> scene_sync_;
             GLLineRenderer line_renderer_;
+            FilmStripRenderer film_strip_;
 
             ImGuizmo::OPERATION keyframe_gizmo_op_ = ImGuizmo::OPERATION(0);
             bool keyframe_gizmo_active_ = false;

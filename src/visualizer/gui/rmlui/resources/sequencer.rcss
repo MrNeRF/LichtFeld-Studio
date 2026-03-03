@@ -172,22 +172,21 @@ body {
 #playhead-handle {
     display: block;
     position: absolute;
-    top: -12dp;
-    left: -5dp;
-    width: 10dp;
-    height: 10dp;
-    background-color: #ff4444;
-    border-radius: 2dp;
-    transform: rotate(45deg);
+    top: -10dp;
+    left: -4dp;
+    width: 8dp;
+    height: 12dp;
+    background-color: #ff6688;
+    border-radius: 4dp;
 }
 
 #playhead-line {
     display: block;
     position: absolute;
-    top: -6dp;
+    top: 2dp;
     left: -1dp;
     width: 2dp;
-    height: 40dp;
+    height: 44dp;
 }
 
 #time-display {
