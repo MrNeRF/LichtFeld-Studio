@@ -56,9 +56,9 @@ namespace lfs::vis::gui {
         std::function<void()> on_resize_end;
 
     private:
-        void updateTheme();
+        bool updateTheme();
         std::string generateThemeRCSS() const;
-        void rebuildTabs(const std::vector<TabSnapshot>& tabs, const std::string& active_tab);
+        bool rebuildTabs(const std::vector<TabSnapshot>& tabs, const std::string& active_tab);
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
@@ -87,6 +87,14 @@ namespace lfs::vis::gui {
         CursorRequest cursor_request_{};
         float prev_mouse_x_ = 0;
         float prev_mouse_y_ = 0;
+
+        bool render_needed_ = true;
+        int last_fbo_w_ = 0;
+        int last_fbo_h_ = 0;
+        float last_scene_h_ = -1.0f;
+        float last_splitter_h_ = -1.0f;
+        bool input_dirty_ = false;
+        bool last_over_interactive_ = false;
     };
 
 } // namespace lfs::vis::gui

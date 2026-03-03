@@ -196,13 +196,13 @@ namespace lfs::vis::gui {
             text, text_dim, surface, surface_bright, primary, border, row_even, row_odd);
     }
 
-    void RmlPanelHost::syncThemeProperties() {
+    bool RmlPanelHost::syncThemeProperties() {
         if (!document_)
-            return;
+            return false;
 
         const auto& p = lfs::vis::theme().palette;
         if (std::memcmp(last_synced_text_, &p.text, sizeof(last_synced_text_)) == 0)
-            return;
+            return false;
         std::memcpy(last_synced_text_, &p.text, sizeof(last_synced_text_));
 
         if (base_rcss_.empty()) {
@@ -212,6 +212,7 @@ namespace lfs::vis::gui {
 
         rml_theme::applyTheme(document_, base_rcss_, generateThemeRCSS());
         content_dirty_ = true;
+        return true;
     }
 
     bool RmlPanelHost::ensureContext() {
@@ -221,162 +222,67 @@ namespace lfs::vis::gui {
         return rml_context_ != nullptr;
     }
 
-    void RmlPanelHost::draw(const PanelDrawContext& ctx) {
-        draw(ctx, 0, 0, 0, 0);
+    bool RmlPanelHost::loadDocument() {
+        if (document_)
+            return true;
+        try {
+            const auto full_path = lfs::vis::getAssetPath(rml_path_);
+            document_ = rml_context_->LoadDocument(full_path.string());
+            if (document_) {
+                document_->Show();
+                cacheContentElements();
+            } else {
+                LOG_ERROR("RmlUI: failed to load {}", rml_path_);
+            }
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlUI: resource not found: {}", e.what());
+        }
+        return document_ != nullptr;
     }
 
-    void RmlPanelHost::draw(const PanelDrawContext& ctx,
-                            float avail_w, float avail_h,
-                            float pos_x, float pos_y) {
-        (void)ctx;
-
-        if (avail_w <= 0 || avail_h <= 0)
-            return;
-
-        const float dp_ratio = manager_->getDpRatio();
-        const int w = static_cast<int>(avail_w * dp_ratio);
-
-        if (!ensureContext())
-            return;
-
-        if (!document_) {
-            try {
-                const auto full_path = lfs::vis::getAssetPath(rml_path_);
-                document_ = rml_context_->LoadDocument(full_path.string());
-                if (document_)
-                    document_->Show();
-                else
-                    LOG_ERROR("RmlUI: failed to load {}", rml_path_);
-            } catch (const std::exception& e) {
-                LOG_ERROR("RmlUI: resource not found: {}", e.what());
-            }
-        }
-        if (!document_)
-            return;
-
-        syncThemeProperties();
-
-        int h;
-        float display_h;
-        if (height_mode_ == HeightMode::Content) {
-            if (w != last_measure_w_ || content_dirty_) {
-                last_measure_w_ = w;
-                content_dirty_ = false;
-                const int layout_h = static_cast<int>(10000.0f * dp_ratio);
-                rml_context_->SetDimensions(Rml::Vector2i(w, layout_h));
-                rml_context_->Update();
-
-                auto* frame = document_->GetElementById("window-frame");
-                auto* wrap = frame ? frame : document_->GetElementById("content-wrap");
-                const float content_h = wrap ? wrap->GetOffsetHeight() : 100.0f;
-                h = std::max(1, static_cast<int>(std::ceil(content_h)));
-                display_h = static_cast<float>(h) / dp_ratio;
-                last_content_height_ = display_h;
-            } else {
-                h = std::max(1, static_cast<int>(std::ceil(last_content_height_ * dp_ratio)));
-                display_h = last_content_height_;
-            }
-        } else {
-            h = static_cast<int>(avail_h * dp_ratio);
-            display_h = avail_h;
-        }
-
-        rml_context_->SetDimensions(Rml::Vector2i(w, h));
-        rml_context_->Update();
-
-        fbo_.ensure(w, h);
-        if (!fbo_.valid())
-            return;
-
-        forwardInput(pos_x, pos_y);
-
-        auto* render = manager_->getRenderInterface();
-        assert(render);
-        render->SetViewport(w, h);
-
-        GLint prev_fbo = 0;
-        fbo_.bind(&prev_fbo);
-
-        render->BeginFrame();
-        rml_context_->Render();
-        render->EndFrame();
-
-        fbo_.unbind(prev_fbo);
-
-        fbo_.blitAsImage(avail_w, display_h);
-
-        if (height_mode_ == HeightMode::Content && !content_dirty_) {
-            auto* frame = document_->GetElementById("window-frame");
-            auto* wrap = frame ? frame : document_->GetElementById("content-wrap");
-            if (wrap) {
-                const float actual_h = wrap->GetOffsetHeight();
-                if (std::abs(actual_h - static_cast<float>(h)) > 2.0f)
-                    content_dirty_ = true;
-            }
-        }
+    void RmlPanelHost::cacheContentElements() {
+        assert(document_);
+        auto* frame = document_->GetElementById("window-frame");
+        content_wrap_el_ = frame ? frame : document_->GetElementById("content-wrap");
     }
 
-    void RmlPanelHost::drawDirect(float x, float y, float w, float h) {
-        if (w <= 0 || h <= 0)
-            return;
-
-        const float dp_ratio = manager_->getDpRatio();
-        const int pw = static_cast<int>(w * dp_ratio);
-
-        if (!ensureContext())
-            return;
-
-        if (!document_) {
-            try {
-                const auto full_path = lfs::vis::getAssetPath(rml_path_);
-                document_ = rml_context_->LoadDocument(full_path.string());
-                if (document_)
-                    document_->Show();
-                else
-                    LOG_ERROR("RmlUI: failed to load {}", rml_path_);
-            } catch (const std::exception& e) {
-                LOG_ERROR("RmlUI: resource not found: {}", e.what());
-            }
-        }
-        if (!document_)
-            return;
-
-        syncThemeProperties();
-
-        int ph;
-        float display_h;
-        if (height_mode_ == HeightMode::Content) {
-            if (pw != last_measure_w_ || content_dirty_) {
-                last_measure_w_ = pw;
-                content_dirty_ = false;
-                const int layout_h = static_cast<int>(10000.0f * dp_ratio);
-                rml_context_->SetDimensions(Rml::Vector2i(pw, layout_h));
-                rml_context_->Update();
-
-                auto* frame = document_->GetElementById("window-frame");
-                auto* wrap = frame ? frame : document_->GetElementById("content-wrap");
-                const float content_h = wrap ? wrap->GetOffsetHeight() : 100.0f;
-                ph = std::max(1, static_cast<int>(std::ceil(content_h)));
-                display_h = static_cast<float>(ph) / dp_ratio;
-            } else {
-                ph = std::max(1, static_cast<int>(std::ceil(last_content_height_ * dp_ratio)));
-                display_h = last_content_height_;
-            }
-        } else {
-            ph = static_cast<int>(h * dp_ratio);
-            display_h = h;
-        }
-
-        last_content_height_ = display_h;
-
-        rml_context_->SetDimensions(Rml::Vector2i(pw, ph));
-        rml_context_->Update();
+    void RmlPanelHost::renderIfDirty(int pw, int ph, float& display_h) {
+        const bool theme_dirty = syncThemeProperties();
+        const bool size_dirty = (pw != last_fbo_w_ || ph != last_fbo_h_);
 
         fbo_.ensure(pw, ph);
         if (!fbo_.valid())
             return;
 
-        forwardInput(x, y);
+        const bool dirty = render_needed_ || content_dirty_ || theme_dirty ||
+                           size_dirty || animation_active_;
+        if (!dirty)
+            return;
+
+        const float dp_ratio = manager_->getDpRatio();
+
+        if (height_mode_ == HeightMode::Content &&
+            (content_dirty_ || pw != last_measure_w_)) {
+            last_measure_w_ = pw;
+            const int layout_h = static_cast<int>(10000.0f * dp_ratio);
+            rml_context_->SetDimensions(Rml::Vector2i(pw, layout_h));
+            rml_context_->Update();
+
+            const float content_h =
+                content_wrap_el_ ? content_wrap_el_->GetOffsetHeight() : 100.0f;
+            ph = std::max(1, static_cast<int>(std::ceil(content_h)));
+            display_h = static_cast<float>(ph) / dp_ratio;
+            last_content_height_ = display_h;
+
+            fbo_.ensure(pw, ph);
+            if (!fbo_.valid())
+                return;
+        }
+        content_dirty_ = false;
+        last_content_height_ = display_h;
+
+        rml_context_->SetDimensions(Rml::Vector2i(pw, ph));
+        rml_context_->Update();
 
         auto* render = manager_->getRenderInterface();
         assert(render);
@@ -391,26 +297,90 @@ namespace lfs::vis::gui {
 
         fbo_.unbind(prev_fbo);
 
-        assert(input_ && input_->bg_draw_list);
-        fbo_.blitToDrawListOpaque(input_->bg_draw_list, x, y, w, display_h);
+        animation_active_ = (rml_context_->GetNextUpdateDelay() == 0);
+        last_fbo_w_ = pw;
+        last_fbo_h_ = ph;
+        render_needed_ = false;
 
-        if (height_mode_ == HeightMode::Content && !content_dirty_) {
-            auto* frame = document_->GetElementById("window-frame");
-            auto* wrap = frame ? frame : document_->GetElementById("content-wrap");
-            if (wrap) {
-                const float actual_h = wrap->GetOffsetHeight();
-                if (std::abs(actual_h - static_cast<float>(ph)) > 2.0f)
-                    content_dirty_ = true;
-            }
+        if (height_mode_ == HeightMode::Content && content_wrap_el_) {
+            const float actual_h = content_wrap_el_->GetOffsetHeight();
+            if (std::abs(actual_h - static_cast<float>(ph)) > 2.0f)
+                content_dirty_ = true;
         }
     }
 
-    void RmlPanelHost::forwardInput(float panel_x, float panel_y) {
-        assert(rml_context_);
+    void RmlPanelHost::draw(const PanelDrawContext& ctx) {
+        draw(ctx, 0, 0, 0, 0);
+    }
 
-        if (!input_)
+    void RmlPanelHost::draw(const PanelDrawContext& ctx,
+                            float avail_w, float avail_h,
+                            float pos_x, float pos_y) {
+        (void)ctx;
+
+        if (avail_w <= 0 || avail_h <= 0)
             return;
 
+        if (!ensureContext() || !loadDocument())
+            return;
+
+        const float dp_ratio = manager_->getDpRatio();
+        const int w = static_cast<int>(avail_w * dp_ratio);
+
+        int h;
+        float display_h;
+        if (height_mode_ == HeightMode::Content) {
+            h = std::max(1, static_cast<int>(std::ceil(last_content_height_ * dp_ratio)));
+            display_h = last_content_height_;
+        } else {
+            h = static_cast<int>(avail_h * dp_ratio);
+            display_h = avail_h;
+        }
+
+        if (forwardInput(pos_x, pos_y))
+            render_needed_ = true;
+
+        renderIfDirty(w, h, display_h);
+
+        fbo_.blitAsImage(avail_w, display_h);
+    }
+
+    void RmlPanelHost::drawDirect(float x, float y, float w, float h) {
+        if (w <= 0 || h <= 0)
+            return;
+
+        if (!ensureContext() || !loadDocument())
+            return;
+
+        const float dp_ratio = manager_->getDpRatio();
+        const int pw = static_cast<int>(w * dp_ratio);
+
+        int ph;
+        float display_h;
+        if (height_mode_ == HeightMode::Content) {
+            ph = std::max(1, static_cast<int>(std::ceil(last_content_height_ * dp_ratio)));
+            display_h = last_content_height_;
+        } else {
+            ph = static_cast<int>(h * dp_ratio);
+            display_h = h;
+        }
+
+        if (forwardInput(x, y))
+            render_needed_ = true;
+
+        renderIfDirty(pw, ph, display_h);
+
+        assert(input_ && input_->bg_draw_list);
+        fbo_.blitToDrawListOpaque(input_->bg_draw_list, x, y, w, display_h);
+    }
+
+    bool RmlPanelHost::forwardInput(float panel_x, float panel_y) {
+        assert(rml_context_);
+
+        if (!input_ || !fbo_.valid())
+            return false;
+
+        bool had_input = false;
         const auto& input = *input_;
         const float mouse_x = input.mouse_x;
         const float mouse_y = input.mouse_y;
@@ -429,9 +399,27 @@ namespace lfs::vis::gui {
                 hovered = false;
         }
 
+        if (hovered != last_hovered_) {
+            last_hovered_ = hovered;
+            had_input = true;
+        }
+
+        const int rml_mx = static_cast<int>(local_x * dp_ratio);
+        const int rml_my = static_cast<int>(local_y * dp_ratio);
+        if (hovered &&
+            (rml_mx != last_forwarded_mx_ || rml_my != last_forwarded_my_)) {
+            last_forwarded_mx_ = rml_mx;
+            last_forwarded_my_ = rml_my;
+            had_input = true;
+        }
+
+        if (input.mouse_clicked[0] || input.mouse_released[0] ||
+            input.mouse_clicked[1] || input.mouse_released[1] ||
+            input.mouse_wheel != 0.0f)
+            had_input = true;
+
         if (hovered) {
-            rml_context_->ProcessMouseMove(static_cast<int>(local_x * dp_ratio),
-                                           static_cast<int>(local_y * dp_ratio), 0);
+            rml_context_->ProcessMouseMove(rml_mx, rml_my, 0);
 
             if (input.mouse_clicked[0])
                 rml_context_->ProcessMouseButtonDown(0, 0);
@@ -497,21 +485,29 @@ namespace lfs::vis::gui {
             int mods = buildRmlModifiers(input);
             for (int sc : input.keys_pressed) {
                 auto rml_key = sdlScancodeToRml(sc);
-                if (rml_key != Rml::Input::KI_UNKNOWN)
+                if (rml_key != Rml::Input::KI_UNKNOWN) {
                     rml_context_->ProcessKeyDown(rml_key, mods);
+                    had_input = true;
+                }
             }
             for (int sc : input.keys_released) {
                 auto rml_key = sdlScancodeToRml(sc);
-                if (rml_key != Rml::Input::KI_UNKNOWN)
+                if (rml_key != Rml::Input::KI_UNKNOWN) {
                     rml_context_->ProcessKeyUp(rml_key, mods);
+                    had_input = true;
+                }
             }
         }
 
         if (has_text_focus_) {
             auto chars = drainTextInput();
+            if (!chars.empty())
+                had_input = true;
             for (uint32_t cp : chars)
                 rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
         }
+
+        return had_input;
     }
 
 } // namespace lfs::vis::gui

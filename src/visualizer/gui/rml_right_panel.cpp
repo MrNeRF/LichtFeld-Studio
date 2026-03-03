@@ -112,25 +112,26 @@ namespace lfs::vis::gui {
             resize_active);
     }
 
-    void RmlRightPanel::updateTheme() {
+    bool RmlRightPanel::updateTheme() {
         if (!document_)
-            return;
+            return false;
 
         const auto& t = lfs::vis::theme();
         if (t.name == last_theme_)
-            return;
+            return false;
         last_theme_ = t.name;
 
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/right_panel.rcss");
 
         rml_theme::applyTheme(document_, base_rcss_, generateThemeRCSS());
+        return true;
     }
 
-    void RmlRightPanel::rebuildTabs(const std::vector<TabSnapshot>& tabs,
+    bool RmlRightPanel::rebuildTabs(const std::vector<TabSnapshot>& tabs,
                                     const std::string& active_tab) {
         if (!tab_bar_el_)
-            return;
+            return false;
 
         bool tabs_changed = tabs.size() != last_tabs_.size();
         if (!tabs_changed) {
@@ -154,7 +155,10 @@ namespace lfs::vis::gui {
             }
             last_tabs_ = tabs;
             last_active_tab_ = active_tab;
-        } else if (active_tab != last_active_tab_) {
+            return true;
+        }
+
+        if (active_tab != last_active_tab_) {
             for (int i = 0; i < tab_bar_el_->GetNumChildren(); ++i) {
                 auto* child = tab_bar_el_->GetChild(i);
                 const auto idname = child->GetAttribute<Rml::String>("data-idname", "");
@@ -164,7 +168,10 @@ namespace lfs::vis::gui {
                     child->SetAttribute("class", "tab");
             }
             last_active_tab_ = active_tab;
+            return true;
         }
+
+        return false;
     }
 
     static Rml::Element* findAncestorWithAttribute(Rml::Element* el, const Rml::String& attr) {
@@ -195,6 +202,7 @@ namespace lfs::vis::gui {
 
         const float delta_x = input.mouse_x - prev_mouse_x_;
         const float delta_y = input.mouse_y - prev_mouse_y_;
+        const bool mouse_moved = (delta_x != 0.0f || delta_y != 0.0f);
         prev_mouse_x_ = input.mouse_x;
         prev_mouse_y_ = input.mouse_y;
 
@@ -208,7 +216,8 @@ namespace lfs::vis::gui {
         const float mx = (input.mouse_x - layout.pos.x) * dp_ratio;
         const float my = (input.mouse_y - layout.pos.y) * dp_ratio;
 
-        rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), 0);
+        if (mouse_moved)
+            rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), 0);
 
         auto* hover = rml_context_->GetHoverElement();
         const bool over_interactive = hover && hover->GetTagName() != "body" &&
@@ -216,8 +225,16 @@ namespace lfs::vis::gui {
                                       hover->GetId() != "left-border" &&
                                       hover->GetId() != "tab-separator";
 
+        if (over_interactive != last_over_interactive_) {
+            input_dirty_ = true;
+            last_over_interactive_ = over_interactive;
+        } else if (mouse_moved && over_interactive) {
+            input_dirty_ = true;
+        }
+
         if (resize_dragging_) {
             wants_input_ = true;
+            input_dirty_ = true;
 
             if (input.mouse_down[0]) {
                 if (on_resize_delta && delta_x != 0.0f)
@@ -235,6 +252,7 @@ namespace lfs::vis::gui {
 
         if (splitter_dragging_) {
             wants_input_ = true;
+            input_dirty_ = true;
 
             if (input.mouse_down[0]) {
                 if (on_splitter_delta && delta_y != 0.0f)
@@ -256,6 +274,7 @@ namespace lfs::vis::gui {
                 cursor_request_ = CursorRequest::ResizeEW;
                 if (input.mouse_clicked[0]) {
                     resize_dragging_ = true;
+                    input_dirty_ = true;
                     if (resize_handle_el_)
                         resize_handle_el_->SetAttribute("class", "dragging");
                 }
@@ -263,12 +282,14 @@ namespace lfs::vis::gui {
                 cursor_request_ = CursorRequest::ResizeNS;
                 if (input.mouse_clicked[0]) {
                     splitter_dragging_ = true;
+                    input_dirty_ = true;
                     drag_start_y_ = input.mouse_y;
                     if (splitter_el_)
                         splitter_el_->SetAttribute("class", "dragging");
                 }
             } else {
                 if (input.mouse_clicked[0]) {
+                    input_dirty_ = true;
                     auto* tab_el = findAncestorWithAttribute(hover, "data-idname");
                     if (tab_el) {
                         auto idname = tab_el->GetAttribute<Rml::String>("data-idname", "");
@@ -288,7 +309,7 @@ namespace lfs::vis::gui {
         if (layout.size.x <= 0 || layout.size.y <= 0)
             return;
 
-        updateTheme();
+        const bool theme_changed = updateTheme();
 
         const float dp_ratio = rml_manager_->getDpRatio();
         const int w = static_cast<int>(layout.size.x * dp_ratio);
@@ -296,6 +317,22 @@ namespace lfs::vis::gui {
 
         if (w <= 0 || h <= 0)
             return;
+
+        const bool dims_changed = (w != last_fbo_w_ || h != last_fbo_h_);
+        const bool layout_changed = (layout.scene_h != last_scene_h_ ||
+                                     layout.splitter_h != last_splitter_h_);
+        const bool tabs_changed = rebuildTabs(tabs, active_tab);
+
+        const bool needs_render = render_needed_ || theme_changed || layout_changed ||
+                                  tabs_changed || dims_changed || input_dirty_;
+
+        if (!needs_render) {
+            auto* vp = ImGui::GetMainViewport();
+            fbo_.blitToDrawList(ImGui::GetForegroundDrawList(vp),
+                                {layout.pos.x, layout.pos.y},
+                                {layout.size.x, layout.size.y});
+            return;
+        }
 
         const float tab_bar_h = 28.0f;
 
@@ -321,8 +358,6 @@ namespace lfs::vis::gui {
             tab_separator_el_->SetProperty("top", std::format("{:.0f}dp", sep_top));
         }
 
-        rebuildTabs(tabs, active_tab);
-
         rml_context_->SetDimensions(Rml::Vector2i(w, h));
         rml_context_->Update();
 
@@ -342,6 +377,13 @@ namespace lfs::vis::gui {
         render->EndFrame();
 
         fbo_.unbind(prev_fbo);
+
+        last_fbo_w_ = w;
+        last_fbo_h_ = h;
+        last_scene_h_ = layout.scene_h;
+        last_splitter_h_ = layout.splitter_h;
+        render_needed_ = false;
+        input_dirty_ = false;
 
         auto* vp = ImGui::GetMainViewport();
         fbo_.blitToDrawList(ImGui::GetForegroundDrawList(vp),

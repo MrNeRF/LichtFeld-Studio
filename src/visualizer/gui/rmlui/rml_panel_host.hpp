@@ -14,6 +14,7 @@
 
 namespace Rml {
     class Context;
+    class Element;
     class ElementDocument;
 } // namespace Rml
 
@@ -63,15 +64,19 @@ namespace lfs::vis::gui {
 
     private:
         static std::vector<uint32_t> drainTextInput();
-        void forwardInput(float panel_x, float panel_y);
-        void syncThemeProperties();
+        bool forwardInput(float panel_x, float panel_y);
+        bool syncThemeProperties();
         std::string generateThemeRCSS() const;
+        bool loadDocument();
+        void cacheContentElements();
+        void renderIfDirty(int pw, int ph, float& display_h);
 
         RmlUIManager* manager_;
         std::string context_name_;
         std::string rml_path_;
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
+        Rml::Element* content_wrap_el_ = nullptr;
 
         HeightMode height_mode_ = HeightMode::Fill;
         float last_content_height_ = 0.0f;
@@ -88,6 +93,14 @@ namespace lfs::vis::gui {
         float clip_y_max_ = -1.0f;
         const PanelInputState* input_ = nullptr;
         RmlFBO fbo_;
+
+        bool render_needed_ = true;
+        bool animation_active_ = false;
+        int last_fbo_w_ = 0;
+        int last_fbo_h_ = 0;
+        int last_forwarded_mx_ = -1;
+        int last_forwarded_my_ = -1;
+        bool last_hovered_ = false;
     };
 
 } // namespace lfs::vis::gui
