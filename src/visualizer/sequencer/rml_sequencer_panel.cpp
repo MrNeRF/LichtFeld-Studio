@@ -208,7 +208,6 @@ namespace lfs::vis {
             ".ruler-tick.major {{ background-color: {}; }}\n"
             ".ruler-tick.minor {{ background-color: {}; }}\n"
             ".ruler-label {{ color: {}; }}\n"
-            "#playhead-line {{ background-color: transparent; }}\n"
             "#playhead-handle {{ background-color: {}; }}\n"
             "#current-time {{ color: {}; }}\n"
             "#duration {{ color: {}; }}\n"
@@ -569,7 +568,7 @@ namespace lfs::vis {
 
         const float playhead_x = timeToX(controller_.playhead(), pos.x, width);
         const float playhead_dist = std::abs(mx - playhead_x);
-        bool on_playhead_handle = playhead_dist < PLAYHEAD_HIT_RADIUS;
+        bool on_playhead_handle = playhead_dist < PLAYHEAD_HIT_RADIUS * s;
 
         if (on_playhead_handle && hovered_keyframe_.has_value()) {
             const float kf_x = timeToX(keyframes[*hovered_keyframe_].time, pos.x, width);

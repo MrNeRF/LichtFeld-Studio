@@ -56,6 +56,7 @@ namespace lfs::vis {
         inline constexpr float MAX_ZOOM = 4.0f;
         inline constexpr float ZOOM_SPEED = 0.1f;
         inline constexpr float EASING_STRIPE_HEIGHT = 36.0f;
+        inline constexpr float BORDER_OVERLAP = 1.0f;
     } // namespace panel_config
 
     struct TimelineContextMenuState {

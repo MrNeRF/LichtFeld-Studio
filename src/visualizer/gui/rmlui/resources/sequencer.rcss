@@ -186,15 +186,6 @@ body {
     border-radius: 4dp;
 }
 
-#playhead-line {
-    display: block;
-    position: absolute;
-    top: 2dp;
-    left: -1dp;
-    width: 2dp;
-    height: 44dp;
-}
-
 #easing-stripe {
     display: block;
     width: 100%;

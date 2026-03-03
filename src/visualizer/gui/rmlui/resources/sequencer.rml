@@ -34,7 +34,6 @@
                     <div id="keyframes"></div>
                     <div id="playhead">
                         <div id="playhead-handle"></div>
-                        <div id="playhead-line"></div>
                     </div>
                 </div>
             </div>

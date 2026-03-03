@@ -107,6 +107,15 @@ namespace lfs::vis::gui {
             renderKeyframePreview(ctx);
         }
         renderSequencerPanel(ctx, viewport);
+        {
+            const float dp = panel_->cachedDpRatio();
+            const float px = panel_->cachedPanelX();
+            const float pw = panel_->cachedPanelWidth();
+            tl_geo_ = {
+                px + (panel_config::TRANSPORT_WIDTH + panel_config::INNER_PADDING) * dp,
+                pw - (panel_config::TRANSPORT_WIDTH + panel_config::TIME_DISPLAY_WIDTH + panel_config::INNER_PADDING * 2.0f) * dp,
+                px, pw, panel_->cachedPanelY(), dp};
+        }
         renderFilmStrip(ctx);
         drawEasingCurves();
         drawPlayheadLine();
@@ -541,16 +550,15 @@ namespace lfs::vis::gui {
         auto* const rm = ctx.viewer->getRenderingManager();
         auto* const sm = ctx.viewer->getSceneManager();
 
-        const float dp = panel_->cachedDpRatio();
-        const float px = panel_->cachedPanelX();
-        const float pw = panel_->cachedPanelWidth();
-        const float timeline_x = px + panel_config::TRANSPORT_WIDTH * dp + panel_config::INNER_PADDING * dp;
-        const float timeline_width = pw - panel_config::TRANSPORT_WIDTH * dp - panel_config::TIME_DISPLAY_WIDTH * dp - panel_config::INNER_PADDING * 2.0f * dp;
+        const float timeline_x = tl_geo_.timeline_x;
+        const float timeline_width = tl_geo_.timeline_width;
+        const float px = tl_geo_.panel_x;
+        const float pw = tl_geo_.panel_width;
 
         if (timeline_width <= 0.0f)
             return;
 
-        const float strip_y = panel_->cachedPanelY() + (panel_config::HEIGHT + panel_config::EASING_STRIPE_HEIGHT - 1.0f) * dp;
+        const float strip_y = tl_geo_.panel_y + (panel_config::HEIGHT + panel_config::EASING_STRIPE_HEIGHT - panel_config::BORDER_OVERLAP) * tl_geo_.dp;
 
         film_strip_.render(controller_, rm, sm,
                            px, pw,
@@ -567,15 +575,12 @@ namespace lfs::vis::gui {
     }
 
     void SequencerUIManager::drawEasingCurves() {
-        const float dp = panel_->cachedDpRatio();
-        const float px = panel_->cachedPanelX();
-        const float pw = panel_->cachedPanelWidth();
-        const float panel_y = panel_->cachedPanelY();
-        const float timeline_x = px + (panel_config::TRANSPORT_WIDTH + panel_config::INNER_PADDING) * dp;
-        const float timeline_width = pw - (panel_config::TRANSPORT_WIDTH +
-                                           panel_config::TIME_DISPLAY_WIDTH +
-                                           panel_config::INNER_PADDING * 2.0f) *
-                                              dp;
+        const float dp = tl_geo_.dp;
+        const float px = tl_geo_.panel_x;
+        const float pw = tl_geo_.panel_width;
+        const float panel_y = tl_geo_.panel_y;
+        const float timeline_x = tl_geo_.timeline_x;
+        const float timeline_width = tl_geo_.timeline_width;
         if (timeline_width <= 0.0f)
             return;
 
@@ -701,7 +706,7 @@ namespace lfs::vis::gui {
 
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                 std::optional<size_t> nearest;
-                float best_dist = panel_config::KEYFRAME_RADIUS * 3.0f;
+                float best_dist = panel_config::KEYFRAME_RADIUS * 3.0f * dp;
                 for (size_t i = 0; i < keyframes.size(); ++i) {
                     const float dist = std::abs(mx - localTimeToX(keyframes[i].time));
                     if (dist < best_dist) {
@@ -714,7 +719,7 @@ namespace lfs::vis::gui {
 
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 std::optional<size_t> nearest;
-                float best_dist = panel_config::KEYFRAME_RADIUS * 2.0f;
+                float best_dist = panel_config::KEYFRAME_RADIUS * 2.0f * dp;
                 for (size_t i = 0; i < keyframes.size(); ++i) {
                     const float dist = std::abs(mx - localTimeToX(keyframes[i].time));
                     if (dist < best_dist) {
@@ -732,14 +737,14 @@ namespace lfs::vis::gui {
         if (!panel_->isPlayheadInRange())
             return;
 
-        const float dp = panel_->cachedDpRatio();
+        const float dp = tl_geo_.dp;
         const float px = std::round(panel_->cachedPlayheadScreenX());
-        const float panel_y = panel_->cachedPanelY();
+        const float panel_y = tl_geo_.panel_y;
         const float line_top = panel_y + (panel_config::INNER_PADDING +
                                           panel_config::RULER_HEIGHT + 4.0f) *
                                              dp;
         const float strip_offset = ui_state_.show_film_strip ? FilmStripRenderer::STRIP_HEIGHT : 0.0f;
-        const float line_bottom = panel_y + (panel_config::HEIGHT + panel_config::EASING_STRIPE_HEIGHT - 1.0f) * dp + strip_offset;
+        const float line_bottom = panel_y + (panel_config::HEIGHT + panel_config::EASING_STRIPE_HEIGHT - panel_config::BORDER_OVERLAP) * dp + strip_offset;
 
         auto* dl = ImGui::GetForegroundDrawList();
         dl->AddLine({px, line_top}, {px, line_bottom},
@@ -862,7 +867,7 @@ namespace lfs::vis::gui {
         const float scale = ui_state_.pip_preview_scale;
         constexpr float MARGIN = 16.0f;
         const float dp = panel_->cachedDpRatio();
-        const float PANEL_HEIGHT = (90.0f + panel_config::EASING_STRIPE_HEIGHT) * dp +
+        const float panel_height = (90.0f + panel_config::EASING_STRIPE_HEIGHT) * dp +
                                    (ui_state_.show_film_strip ? FilmStripRenderer::STRIP_HEIGHT : 0.0f);
         constexpr float PADDING = 4.0f;
         constexpr float TITLE_HEIGHT = 18.0f;
@@ -872,7 +877,7 @@ namespace lfs::vis::gui {
 
         const ImVec2 pos(
             viewport.pos.x + MARGIN,
-            viewport.pos.y + viewport.size.y - PANEL_HEIGHT - total_height - MARGIN);
+            viewport.pos.y + viewport.size.y - panel_height - total_height - MARGIN);
         const ImVec2 size(scaled_width + PADDING * 2.0f, total_height);
 
         const ImU32 bg_color = toU32WithAlpha(t.palette.surface, 0.95f);

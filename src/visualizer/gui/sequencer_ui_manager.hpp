@@ -84,6 +84,16 @@ namespace lfs::vis {
             std::optional<size_t> pip_last_keyframe_;
             bool pip_needs_update_ = true;
             std::chrono::steady_clock::time_point pip_last_render_time_ = std::chrono::steady_clock::now();
+
+            struct TimelineGeometry {
+                float timeline_x = 0.0f;
+                float timeline_width = 0.0f;
+                float panel_x = 0.0f;
+                float panel_width = 0.0f;
+                float panel_y = 0.0f;
+                float dp = 1.0f;
+            };
+            TimelineGeometry tl_geo_;
         };
 
     } // namespace gui

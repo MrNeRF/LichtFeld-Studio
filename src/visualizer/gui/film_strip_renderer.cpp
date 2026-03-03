@@ -15,7 +15,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
-#include <vector>
 #include <imgui.h>
 
 namespace lfs::vis::gui {
@@ -135,14 +134,8 @@ namespace lfs::vis::gui {
         const int num_thumbs = (thumb_display_w > 0.0f) ? std::max(1, static_cast<int>(timeline_width / thumb_display_w)) : 0;
         const float actual_thumb_w = (num_thumbs > 0) ? timeline_width / static_cast<float>(num_thumbs) : 0.0f;
 
-        struct ThumbInfo {
-            float time;
-            float screen_x;
-            int slot_idx;
-            float dist_from_center;
-        };
-
-        std::vector<ThumbInfo> thumbs;
+        thumbs_.clear();
+        uncached_.clear();
 
         if (has_animation && rm && sm && num_thumbs > 0) {
             if (!gl_initialized_)
@@ -161,7 +154,7 @@ namespace lfs::vis::gui {
                 const float anim_end = timeline.endTime();
                 const float visible_center_time = xToTime(timeline_x + timeline_width * 0.5f);
 
-                thumbs.reserve(num_thumbs);
+                thumbs_.reserve(num_thumbs);
 
                 for (int i = 0; i < num_thumbs; ++i) {
                     const float sx = timeline_x + actual_thumb_w * static_cast<float>(i);
@@ -173,32 +166,31 @@ namespace lfs::vis::gui {
 
                     const float clamped_t = std::clamp(t, anim_start, anim_end);
                     const int existing = findSlot(clamped_t, half_interval);
-                    thumbs.push_back({clamped_t, sx, existing, std::abs(clamped_t - visible_center_time)});
+                    thumbs_.push_back({clamped_t, sx, existing, std::abs(clamped_t - visible_center_time)});
                 }
 
-                for (auto& thumb : thumbs) {
+                for (auto& thumb : thumbs_) {
                     if (thumb.slot_idx >= 0)
                         slots_[thumb.slot_idx].frame_used = frame_counter_;
                 }
 
-                std::vector<size_t> uncached;
-                for (size_t i = 0; i < thumbs.size(); ++i) {
-                    if (thumbs[i].slot_idx < 0)
-                        uncached.push_back(i);
+                for (size_t i = 0; i < thumbs_.size(); ++i) {
+                    if (thumbs_[i].slot_idx < 0)
+                        uncached_.push_back(i);
                 }
 
-                std::sort(uncached.begin(), uncached.end(), [&](size_t a, size_t b) {
-                    return thumbs[a].dist_from_center < thumbs[b].dist_from_center;
+                std::sort(uncached_.begin(), uncached_.end(), [&](size_t a, size_t b) {
+                    return thumbs_[a].dist_from_center < thumbs_[b].dist_from_center;
                 });
 
                 int renders = 0;
-                for (const size_t idx : uncached) {
+                for (const size_t idx : uncached_) {
                     if (renders >= MAX_RENDERS_PER_FRAME)
                         break;
 
                     const int slot = allocateSlot(frame_counter_);
-                    if (renderThumbnail(slot, thumbs[idx].time, controller, rm, sm)) {
-                        thumbs[idx].slot_idx = slot;
+                    if (renderThumbnail(slot, thumbs_[idx].time, controller, rm, sm)) {
+                        thumbs_[idx].slot_idx = slot;
                         ++renders;
                     }
                 }
@@ -236,7 +228,7 @@ namespace lfs::vis::gui {
         // Clip thumbnails to groove
         dl->PushClipRect(groove_min, groove_max, true);
 
-        for (const auto& thumb : thumbs) {
+        for (const auto& thumb : thumbs_) {
             if (thumb.slot_idx < 0)
                 continue;
 
@@ -253,12 +245,6 @@ namespace lfs::vis::gui {
 
         dl->PopClipRect();
 
-        // Sprocket holes (drawn on top of thumbnails)
-        constexpr float SPROCKET_W = 4.0f;
-        constexpr float SPROCKET_H = 3.0f;
-        constexpr float SPROCKET_SPACING = 10.0f;
-        constexpr float SPROCKET_ROUNDING = 1.0f;
-        constexpr float SPROCKET_INSET = 0.5f;
         const ImU32 sprocket_color = toU32WithAlpha(t.palette.text_dim, 0.3f);
 
         const float sprocket_start = groove_min.x + SPROCKET_SPACING * 0.5f;
