@@ -17,7 +17,7 @@ namespace lfs::vis::gui {
     public:
         GLLineRenderer() = default;
 
-        void begin(int screen_w, int screen_h);
+        void begin(int screen_w, int screen_h, int fb_w, int fb_h);
         void addLine(glm::vec2 p0, glm::vec2 p1, glm::vec4 color, float thickness = 1.0f);
         void addTriangleFilled(glm::vec2 p0, glm::vec2 p1, glm::vec2 p2, glm::vec4 color);
         void addCircleFilled(glm::vec2 center, float radius, glm::vec4 color, int segments = 16);
@@ -40,6 +40,8 @@ namespace lfs::vis::gui {
         std::vector<Vertex> vertices_;
         int screen_w_ = 0;
         int screen_h_ = 0;
+        int fb_w_ = 0;
+        int fb_h_ = 0;
     };
 
 } // namespace lfs::vis::gui

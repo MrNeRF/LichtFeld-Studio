@@ -258,7 +258,9 @@ namespace lfs::vis::gui {
         const auto& io = ImGui::GetIO();
         const int screen_w = static_cast<int>(io.DisplaySize.x);
         const int screen_h = static_cast<int>(io.DisplaySize.y);
-        line_renderer_.begin(screen_w, screen_h);
+        const int fb_w = static_cast<int>(io.DisplaySize.x * io.DisplayFramebufferScale.x);
+        const int fb_h = static_cast<int>(io.DisplaySize.y * io.DisplayFramebufferScale.y);
+        line_renderer_.begin(screen_w, screen_h, fb_w, fb_h);
 
         const auto path_points = timeline.generatePath(PATH_SAMPLES);
         if (path_points.size() >= 2) {

@@ -74,10 +74,13 @@ namespace lfs::vis::gui {
         glBindVertexArray(0);
     }
 
-    void GLLineRenderer::begin(int screen_w, int screen_h) {
+    void GLLineRenderer::begin(int screen_w, int screen_h, int fb_w, int fb_h) {
         assert(screen_w > 0 && screen_h > 0);
+        assert(fb_w > 0 && fb_h > 0);
         screen_w_ = screen_w;
         screen_h_ = screen_h;
+        fb_w_ = fb_w;
+        fb_h_ = fb_h;
         vertices_.clear();
     }
 
@@ -152,7 +155,7 @@ namespace lfs::vis::gui {
         glGetIntegerv(GL_SCISSOR_TEST, &prev_scissor);
         glGetIntegerv(GL_VIEWPORT, prev_viewport);
 
-        glViewport(0, 0, screen_w_, screen_h_);
+        glViewport(0, 0, fb_w_, fb_h_);
         glEnable(GL_BLEND);
         glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
                             GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
