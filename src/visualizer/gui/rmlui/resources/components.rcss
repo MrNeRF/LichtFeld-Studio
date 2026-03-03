@@ -233,7 +233,7 @@ progress fill {
 
 .prop-label {
     min-width: 80dp;
-    text-align: right;
+    text-align: left;
     font-size: 13dp;
     color: #cdd6f4;
     margin-left: 4dp;
