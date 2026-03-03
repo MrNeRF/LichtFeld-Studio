@@ -76,10 +76,6 @@ def register_builtin_panels():
         lf.ui.register_rml_panel(PluginMarketplacePanel)
         lf.ui.set_panel_enabled("lfs.plugin_marketplace", False)
 
-        # Status bar (must be registered last, always visible)
-        from .status_bar_panel import StatusBarPanel
-        lf.register_class(StatusBarPanel)
-
         # Viewport overlays
         from .overlays import register as register_overlays
         register_overlays()

@@ -41,6 +41,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # GUI system
         gui/gui_manager.cpp
+        gui/global_context_menu.cpp
         gui/gizmo_manager.cpp
         gui/pie_menu.cpp
         gui/panel_layout.cpp
@@ -368,6 +369,7 @@ if (WIN32)
     )
     target_link_libraries(lfs_visualizer PRIVATE
             Ole32       # OLE drag-drop (IDropTarget)
+            dxgi        # DXGI per-process VRAM query
     )
 elseif (UNIX AND NOT APPLE)
     target_link_libraries(lfs_visualizer PRIVATE

@@ -229,6 +229,13 @@ namespace lfs::python {
     vis::gui::GuiManager* get_gui_manager() { return g_gui_manager.load(); }
 
     namespace {
+        std::atomic<vis::gui::GlobalContextMenu*> g_global_context_menu{nullptr};
+    }
+
+    void set_global_context_menu(vis::gui::GlobalContextMenu* cm) { g_global_context_menu.store(cm); }
+    vis::gui::GlobalContextMenu* get_global_context_menu() { return g_global_context_menu.load(); }
+
+    namespace {
         Mesh2SplatStartFn g_m2s_start;
         std::function<bool()> g_m2s_active;
         std::function<float()> g_m2s_progress;

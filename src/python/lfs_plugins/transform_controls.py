@@ -168,7 +168,7 @@ class TransformControlsPanel(RmlPanel):
 
         if visible != self._visible:
             self._visible = visible
-            wrap = doc.get_element_by_id("content-wrap")
+            wrap = doc.get_element_by_id("transform-wrap")
             if wrap:
                 wrap.set_class("hidden", not visible)
 

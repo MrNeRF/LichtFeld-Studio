@@ -11,6 +11,7 @@
 #include "core/logger.hpp"
 #include "core/property_registry.hpp"
 #include "core/scene.hpp"
+#include "gui/global_context_menu.hpp"
 #include "gui/rml_menu_bar.hpp"
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/windows_utils.hpp"
@@ -41,8 +42,6 @@
 #include "visualizer/training/training_manager.hpp"
 
 #include "config.h"
-#include <cuda.h>
-#include <cuda_runtime.h>
 
 #include "visualizer/input/key_codes.hpp"
 
@@ -60,13 +59,8 @@
 #include <imgui.h>
 
 #ifdef _WIN32
-#include <dxgi1_4.h>
-#include <process.h>
 #include <shellapi.h>
 #include <windows.h>
-#else
-#include <dlfcn.h>
-#include <unistd.h>
 #endif
 
 namespace lfs::python {
@@ -74,170 +68,6 @@ namespace lfs::python {
     using lfs::training::CommandCenter;
 
     namespace {
-
-#ifdef _WIN32
-        // Windows: use DXGI QueryVideoMemoryInfo for per-process GPU memory.
-        // NVML returns NVML_VALUE_NOT_AVAILABLE for usedGpuMemory under WDDM,
-        // so DXGI is the only reliable source on Windows.
-        struct DxgiMemoryState {
-            IDXGIAdapter3* adapter3 = nullptr;
-
-            DxgiMemoryState() {
-                HMODULE dxgi_lib = LoadLibraryA("dxgi.dll");
-                if (!dxgi_lib) {
-                    LOG_WARN("Failed to load dxgi.dll – per-process GPU memory unavailable");
-                    return;
-                }
-
-                using FnCreateDXGIFactory1 = HRESULT(WINAPI*)(REFIID, void**);
-                auto fn_create = reinterpret_cast<FnCreateDXGIFactory1>(
-                    GetProcAddress(dxgi_lib, "CreateDXGIFactory1"));
-                if (!fn_create)
-                    return;
-
-                IDXGIFactory1* factory = nullptr;
-                if (FAILED(fn_create(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory))))
-                    return;
-
-                // Get LUID of the active CUDA device for exact adapter matching.
-                int cuda_device = 0;
-                cudaGetDevice(&cuda_device);
-                char cuda_luid[8] = {};
-                unsigned int node_mask = 0;
-                CUdevice cu_device;
-                if (cuDeviceGet(&cu_device, cuda_device) != CUDA_SUCCESS ||
-                    cuDeviceGetLuid(cuda_luid, &node_mask, cu_device) != CUDA_SUCCESS) {
-                    factory->Release();
-                    return;
-                }
-
-                IDXGIAdapter* matched_adapter = nullptr;
-                for (UINT i = 0;; ++i) {
-                    IDXGIAdapter* adapter = nullptr;
-                    if (factory->EnumAdapters(i, &adapter) == DXGI_ERROR_NOT_FOUND)
-                        break;
-                    DXGI_ADAPTER_DESC desc{};
-                    if (SUCCEEDED(adapter->GetDesc(&desc)) &&
-                        memcmp(&desc.AdapterLuid, cuda_luid, sizeof(LUID)) == 0) {
-                        matched_adapter = adapter;
-                        break;
-                    }
-                    adapter->Release();
-                }
-
-                if (matched_adapter) {
-                    if (FAILED(matched_adapter->QueryInterface(
-                            __uuidof(IDXGIAdapter3), reinterpret_cast<void**>(&adapter3)))) {
-                        adapter3 = nullptr;
-                    }
-                    matched_adapter->Release();
-                }
-                factory->Release();
-
-                if (!adapter3)
-                    LOG_WARN("IDXGIAdapter3 unavailable – per-process GPU memory unavailable");
-            }
-
-            ~DxgiMemoryState() {
-                if (adapter3)
-                    adapter3->Release();
-            }
-
-            DxgiMemoryState(const DxgiMemoryState&) = delete;
-            DxgiMemoryState& operator=(const DxgiMemoryState&) = delete;
-
-            size_t get_process_memory() const {
-                if (!adapter3)
-                    return 0;
-                DXGI_QUERY_VIDEO_MEMORY_INFO info{};
-                if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(
-                        0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)))
-                    return static_cast<size_t>(info.CurrentUsage);
-                return 0;
-            }
-        };
-
-        DxgiMemoryState& dxgi_state() {
-            static DxgiMemoryState s;
-            return s;
-        }
-#else
-        // Linux: NVML per-process memory works correctly.
-        using NvmlDevice = void*;
-        enum { NVML_SUCCESS = 0 };
-        constexpr int NVML_PCI_BUS_ID_LEN = 32;
-
-        struct NvmlProcessInfo {
-            unsigned int pid;
-            unsigned long long usedGpuMemory;
-            unsigned int gpuInstanceId;
-            unsigned int computeInstanceId;
-        };
-
-        using FnNvmlInit = int (*)();
-        using FnNvmlShutdown = int (*)();
-        using FnNvmlDeviceGetHandleByPciBusId = int (*)(const char*, NvmlDevice*);
-        using FnNvmlDeviceGetComputeRunningProcesses = int (*)(NvmlDevice, unsigned int*, NvmlProcessInfo*);
-
-        struct NvmlState {
-            bool initialized = false;
-            NvmlDevice device = nullptr;
-            unsigned int pid = 0;
-            void* lib = nullptr;
-            FnNvmlDeviceGetComputeRunningProcesses fn_get_procs = nullptr;
-
-            NvmlState() {
-                lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY);
-                if (!lib)
-                    lib = dlopen("libnvidia-ml.so", RTLD_LAZY);
-                if (!lib)
-                    return;
-
-                auto load = [this](const char* name) -> void* {
-                    return dlsym(lib, name);
-                };
-
-                auto fn_init = reinterpret_cast<FnNvmlInit>(load("nvmlInit_v2"));
-                auto fn_get_handle = reinterpret_cast<FnNvmlDeviceGetHandleByPciBusId>(load("nvmlDeviceGetHandleByPciBusId_v2"));
-                fn_get_procs = reinterpret_cast<FnNvmlDeviceGetComputeRunningProcesses>(load("nvmlDeviceGetComputeRunningProcesses_v3"));
-
-                if (!fn_init || !fn_get_handle || !fn_get_procs)
-                    return;
-                if (fn_init() != NVML_SUCCESS)
-                    return;
-
-                int cuda_device = 0;
-                cudaGetDevice(&cuda_device);
-                char pci_bus_id[NVML_PCI_BUS_ID_LEN];
-                if (cudaDeviceGetPCIBusId(pci_bus_id, sizeof(pci_bus_id), cuda_device) != cudaSuccess)
-                    return;
-                if (fn_get_handle(pci_bus_id, &device) != NVML_SUCCESS)
-                    return;
-
-                pid = static_cast<unsigned int>(getpid());
-                initialized = true;
-            }
-
-            size_t get_process_memory() const {
-                if (!initialized)
-                    return 0;
-                unsigned int count = 64;
-                NvmlProcessInfo procs[64];
-                if (fn_get_procs(device, &count, procs) != NVML_SUCCESS)
-                    return 0;
-                for (unsigned int i = 0; i < count; ++i) {
-                    if (procs[i].pid == pid)
-                        return static_cast<size_t>(procs[i].usedGpuMemory);
-                }
-                return 0;
-            }
-        };
-
-        NvmlState& nvml_state() {
-            static NvmlState s;
-            return s;
-        }
-#endif
 
         std::string get_class_id(nb::object cls) {
             auto mod = nb::cast<std::string>(cls.attr("__module__"));
@@ -3227,6 +3057,50 @@ namespace lfs::python {
         // ~PyDynamicTexture destructors run here without holding the mutex
     }
 
+    void register_ui_context_menu(nb::module_& m) {
+        m.def(
+            "show_context_menu",
+            [](nb::list items, float sx, float sy) {
+                auto* cm = get_global_context_menu();
+                if (!cm)
+                    return;
+
+                std::vector<lfs::vis::gui::ContextMenuItem> vec;
+                vec.reserve(nb::len(items));
+
+                for (auto item_handle : items) {
+                    auto d = nb::cast<nb::dict>(item_handle);
+                    lfs::vis::gui::ContextMenuItem ci;
+                    ci.label = nb::cast<std::string>(d["label"]);
+                    ci.action = nb::cast<std::string>(d["action"]);
+                    if (d.contains("separator_before"))
+                        ci.separator_before = nb::cast<bool>(d["separator_before"]);
+                    if (d.contains("is_label"))
+                        ci.is_label = nb::cast<bool>(d["is_label"]);
+                    if (d.contains("is_submenu_item"))
+                        ci.is_submenu_item = nb::cast<bool>(d["is_submenu_item"]);
+                    if (d.contains("is_active"))
+                        ci.is_active = nb::cast<bool>(d["is_active"]);
+                    vec.push_back(std::move(ci));
+                }
+
+                cm->request(std::move(vec), sx, sy);
+            },
+            nb::arg("items"), nb::arg("screen_x"), nb::arg("screen_y"));
+
+        m.def("poll_context_menu", []() -> std::string {
+            auto* cm = get_global_context_menu();
+            if (!cm)
+                return "";
+            return cm->pollResult();
+        });
+
+        m.def("get_mouse_screen_pos", []() -> nb::tuple {
+            const auto& io = ImGui::GetIO();
+            return nb::make_tuple(io.MousePos.x, io.MousePos.y);
+        });
+    }
+
     // Register UI classes with nanobind module
     void register_ui(nb::module_& m) {
         g_gl_thread_id = std::this_thread::get_id();
@@ -3238,6 +3112,7 @@ namespace lfs::python {
         register_rml_im_mode_layout(m);
         register_ui_hooks(m);
         register_ui_menus(m);
+        register_ui_context_menu(m);
         register_ui_operators(m);
         register_ui_modals(m);
         register_rml_bindings(m);
@@ -4940,21 +4815,6 @@ namespace lfs::python {
                 return rm->getAverageFPS();
             },
             "Get current FPS");
-
-        m.def(
-            "get_gpu_memory", []() -> std::tuple<size_t, size_t, size_t> {
-                size_t free_mem = 0, total_mem = 0;
-                cudaMemGetInfo(&free_mem, &total_mem);
-#ifdef _WIN32
-                size_t process_bytes = dxgi_state().get_process_memory();
-#else
-                size_t process_bytes = nvml_state().get_process_memory();
-#endif
-                if (process_bytes > total_mem)
-                    process_bytes = 0;
-                return {process_bytes, total_mem - free_mem, total_mem};
-            },
-            "Get GPU memory (process_used, total_used, total) in bytes");
 
         m.def(
             "get_content_type", []() -> const char* {

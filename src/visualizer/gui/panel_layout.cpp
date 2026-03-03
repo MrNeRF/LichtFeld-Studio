@@ -6,6 +6,7 @@
 #include "gui/panels/python_console_panel.hpp"
 #include "gui/rmlui/rml_fbo.hpp"
 #include "python/python_runtime.hpp"
+#include "theme/theme.hpp"
 #include "visualizer_impl.hpp"
 #include <algorithm>
 
@@ -143,6 +144,30 @@ namespace lfs::vis::gui {
                 tab_scroll_offset_ -= input.mouse_wheel * 30.0f;
                 tab_scroll_offset_ = std::clamp(tab_scroll_offset_, 0.0f, max_scroll);
             }
+        }
+
+        if (max_scroll > 0.0f && tab_content_h > 0.0f) {
+            auto* dl = static_cast<ImDrawList*>(input.bg_draw_list);
+            const auto& t = lfs::vis::theme();
+            constexpr float SCROLLBAR_W = 4.0f;
+            constexpr float SCROLLBAR_PAD = 2.0f;
+
+            const float track_x = content_x + content_w - SCROLLBAR_W - SCROLLBAR_PAD;
+            const float track_y = tab_content_y;
+            const float track_h = tab_content_h;
+
+            const float ratio = tab_content_h / tab_content_total_h_;
+            const float thumb_h = std::max(20.0f, track_h * ratio);
+            const float scroll_frac = tab_scroll_offset_ / max_scroll;
+            const float thumb_y = track_y + scroll_frac * (track_h - thumb_h);
+
+            const auto& style = ImGui::GetStyle();
+            const ImU32 col = ImGui::ColorConvertFloat4ToU32(style.Colors[ImGuiCol_ScrollbarGrab]);
+            const float rounding = t.sizes.scrollbar_rounding;
+
+            dl->AddRectFilled(ImVec2(track_x, thumb_y),
+                              ImVec2(track_x + SCROLLBAR_W, thumb_y + thumb_h),
+                              col, rounding);
         }
     }
 

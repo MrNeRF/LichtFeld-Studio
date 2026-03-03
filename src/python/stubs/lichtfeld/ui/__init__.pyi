@@ -818,6 +818,12 @@ def unregister_menu(cls: object) -> None:
 def unregister_all_menus() -> None:
     """Unregister all Python menus"""
 
+def show_context_menu(items: list, screen_x: float, screen_y: float) -> None: ...
+
+def poll_context_menu() -> str: ...
+
+def get_mouse_screen_pos() -> tuple: ...
+
 class OperatorProperties:
     def __init__(self, operator_id: str) -> None: ...
 
@@ -2310,9 +2316,6 @@ def is_point_cloud_forced() -> bool:
 
 def get_fps() -> float:
     """Get current FPS"""
-
-def get_gpu_memory() -> tuple[int, int, int]:
-    """Get GPU memory (process_used, total_used, total) in bytes"""
 
 def get_content_type() -> str:
     """Get content type (empty, splat_files, dataset)"""

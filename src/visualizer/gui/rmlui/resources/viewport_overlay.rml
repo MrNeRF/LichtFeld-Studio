@@ -4,13 +4,13 @@
 </head>
 <body id="overlay-body">
     <div id="utility-toolbar" class="toolbar-container toolbar-vertical"></div>
-    <div class="toolbar-hcenter" style="top: 10dp;">
+    <div class="toolbar-hcenter" style="top: 5dp;">
         <div id="gizmo-toolbar" class="toolbar-container"></div>
     </div>
-    <div class="toolbar-hcenter" style="top: 54dp;">
+    <div class="toolbar-hcenter" style="top: 49dp;">
         <div id="submode-toolbar" class="subtoolbar-container hidden"></div>
     </div>
-    <div class="toolbar-hcenter" style="top: 88dp;">
+    <div class="toolbar-hcenter" style="top: 83dp;">
         <div id="pivot-toolbar" class="subtoolbar-container hidden"></div>
     </div>
 </body>
