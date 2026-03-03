@@ -186,8 +186,12 @@ namespace lfs::vis::gui {
         panel_->render(viewport.pos.x, viewport.size.x,
                        viewport.pos.y + viewport.size.y - strip_offset, input);
 
-        if (panel_->isHovered())
+        if (panel_->isHovered()) {
             ImGui::GetIO().WantCaptureMouse = true;
+            auto tip = panel_->consumeTooltip();
+            if (!tip.empty())
+                ImGui::SetTooltip("%s", tip.c_str());
+        }
 
         const auto timeline_menu = panel_->consumeContextMenu();
         if (timeline_menu.open) {
@@ -891,9 +895,14 @@ namespace lfs::vis::gui {
         dl->AddRectFilled(pos, p1, bg_color, t.sizes.window_rounding);
         dl->AddRect(pos, p1, border_color, t.sizes.window_rounding, 0, 2.0f);
 
-        const std::string title = is_playing
-                                      ? std::format("Playback {:.2f}s", controller_.playhead())
-                                      : std::format("Keyframe {} Preview", *selected + 1);
+        const float playhead = controller_.playhead();
+        const size_t kf_num = *selected + 1;
+        const std::string title =
+            is_playing
+                ? std::vformat(LOC(lichtfeld::Strings::Sequencer::PLAYBACK_TIME),
+                               std::make_format_args(playhead))
+                : std::vformat(LOC(lichtfeld::Strings::Sequencer::KEYFRAME_PREVIEW),
+                               std::make_format_args(kf_num));
         dl->AddText({pos.x + PADDING, pos.y + PADDING}, text_color, title.c_str());
 
         const ImVec2 img_pos(pos.x + PADDING, pos.y + PADDING + TITLE_HEIGHT);

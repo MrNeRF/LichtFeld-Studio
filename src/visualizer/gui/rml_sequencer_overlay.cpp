@@ -7,12 +7,14 @@
 // clang-format on
 
 #include "gui/rml_sequencer_overlay.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
+#include "gui/string_keys.hpp"
 #include "internal/resource_paths.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/sequencer_controller.hpp"
@@ -29,7 +31,16 @@
 namespace lfs::vis::gui {
 
     namespace {
-        constexpr const char* EASING_NAMES[] = {"Linear", "Ease In", "Ease Out", "Ease In-Out"};
+        const char* easingName(const lfs::sequencer::EasingType easing) {
+            using namespace lichtfeld::Strings;
+            switch (easing) {
+            case lfs::sequencer::EasingType::LINEAR: return LOC(Scene::KEYFRAME_EASING_LINEAR);
+            case lfs::sequencer::EasingType::EASE_IN: return LOC(Scene::KEYFRAME_EASING_EASE_IN);
+            case lfs::sequencer::EasingType::EASE_OUT: return LOC(Scene::KEYFRAME_EASING_EASE_OUT);
+            case lfs::sequencer::EasingType::EASE_IN_OUT: return LOC(Scene::KEYFRAME_EASING_EASE_IN_OUT);
+            default: return LOC(Scene::KEYFRAME_EASING_LINEAR);
+            }
+        }
     } // namespace
 
     RmlSequencerOverlay::RmlSequencerOverlay(SequencerController& controller, RmlUIManager* rml_manager)
@@ -83,6 +94,26 @@ namespace lfs::vis::gui {
         el_edit_overlay_ = document_->GetElementById("kf-edit-overlay");
         el_edit_label_ = document_->GetElementById("kf-edit-label");
         el_edit_delta_ = document_->GetElementById("kf-edit-delta");
+        el_edit_apply_ = document_->GetElementById("kf-edit-apply");
+        el_edit_revert_ = document_->GetElementById("kf-edit-revert");
+        el_time_ok_ = document_->GetElementById("time-edit-ok");
+        el_time_cancel_ = document_->GetElementById("time-edit-cancel");
+        el_focal_ok_ = document_->GetElementById("focal-edit-ok");
+        el_focal_cancel_ = document_->GetElementById("focal-edit-cancel");
+
+        // Popup titles are the first .popup-title span inside each popup
+        {
+            Rml::ElementList elems;
+            if (el_time_popup_) {
+                el_time_popup_->GetElementsByClassName(elems, "popup-title");
+                el_time_popup_title_ = elems.empty() ? nullptr : elems[0];
+            }
+            elems.clear();
+            if (el_focal_popup_) {
+                el_focal_popup_->GetElementsByClassName(elems, "popup-title");
+                el_focal_popup_title_ = elems.empty() ? nullptr : elems[0];
+            }
+        }
 
         elements_cached_ = el_menu_backdrop_ && el_context_menu_ && el_popup_backdrop_ &&
                            el_time_popup_ && el_focal_popup_ && el_time_input_ &&
@@ -92,6 +123,8 @@ namespace lfs::vis::gui {
             LOG_ERROR("RmlSequencerOverlay: missing DOM elements");
             return;
         }
+
+        syncLocalization();
 
         el_menu_backdrop_->AddEventListener(Rml::EventId::Click, &listener_);
         el_context_menu_->AddEventListener(Rml::EventId::Click, &listener_);
@@ -142,6 +175,27 @@ namespace lfs::vis::gui {
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/sequencer_overlay.rcss");
 
         rml_theme::applyTheme(document_, base_rcss_, generateThemeRCSS());
+        syncLocalization();
+    }
+
+    void RmlSequencerOverlay::syncLocalization() {
+        using namespace lichtfeld::Strings;
+        if (el_edit_apply_)
+            el_edit_apply_->SetInnerRML(LOC(Sequencer::APPLY_U));
+        if (el_edit_revert_)
+            el_edit_revert_->SetInnerRML(LOC(Sequencer::REVERT_ESC));
+        if (el_time_popup_title_)
+            el_time_popup_title_->SetInnerRML(LOC(Sequencer::EDIT_KEYFRAME_TIME));
+        if (el_focal_popup_title_)
+            el_focal_popup_title_->SetInnerRML(LOC(Sequencer::EDIT_FOCAL_LENGTH_TITLE));
+        if (el_time_ok_)
+            el_time_ok_->SetInnerRML(LOC(Common::OK));
+        if (el_time_cancel_)
+            el_time_cancel_->SetInnerRML(LOC(Common::CANCEL));
+        if (el_focal_ok_)
+            el_focal_ok_->SetInnerRML(LOC(Common::OK));
+        if (el_focal_cancel_)
+            el_focal_cancel_->SetInnerRML(LOC(Common::CANCEL));
     }
 
     std::string RmlSequencerOverlay::buildContextMenuHTML(
@@ -152,7 +206,10 @@ namespace lfs::vis::gui {
         std::string html;
         html.reserve(1024);
 
-        html += R"(<div class="context-menu-item" id="ctx-add">Add Keyframe Here<span class="context-menu-label" style="float: right; display: inline; padding: 0;">K</span></div>)";
+        using namespace lichtfeld::Strings;
+        html += std::format(
+            R"(<div class="context-menu-item" id="ctx-add">{}<span class="context-menu-label" style="float: right; display: inline; padding: 0;">K</span></div>)",
+            LOC(Sequencer::ADD_KEYFRAME_HERE));
 
         if (keyframe.has_value() && *keyframe < timeline.size()) {
             const size_t idx = *keyframe;
@@ -160,46 +217,54 @@ namespace lfs::vis::gui {
             const bool is_last = (idx == timeline.size() - 1);
 
             html += R"(<div class="context-menu-separator"></div>)";
-            html += R"(<div class="context-menu-item" id="ctx-update">Update to Current View<span class="context-menu-label" style="float: right; display: inline; padding: 0;">U</span></div>)";
-            html += R"(<div class="context-menu-item" id="ctx-goto">Go to Keyframe</div>)";
-            html += R"(<div class="context-menu-item" id="ctx-focal">Edit Focal Length...</div>)";
+            html += std::format(
+                R"(<div class="context-menu-item" id="ctx-update">{}<span class="context-menu-label" style="float: right; display: inline; padding: 0;">U</span></div>)",
+                LOC(Sequencer::UPDATE_TO_CURRENT_VIEW));
+            html += std::format(
+                R"(<div class="context-menu-item" id="ctx-goto">{}</div>)",
+                LOC(Sequencer::GO_TO_KEYFRAME));
+            html += std::format(
+                R"(<div class="context-menu-item" id="ctx-focal">{}</div>)",
+                LOC(Sequencer::EDIT_FOCAL_LENGTH));
             html += R"(<div class="context-menu-separator"></div>)";
 
             const bool translate_active = gizmo_op == ImGuizmo::TRANSLATE;
             const bool rotate_active = gizmo_op == ImGuizmo::ROTATE;
 
-            if (translate_active)
-                html += R"(<div class="context-menu-item active" id="ctx-translate">Move (Translate)</div>)";
-            else
-                html += R"(<div class="context-menu-item" id="ctx-translate">Move (Translate)</div>)";
-
-            if (rotate_active)
-                html += R"(<div class="context-menu-item active" id="ctx-rotate">Rotate</div>)";
-            else
-                html += R"(<div class="context-menu-item" id="ctx-rotate">Rotate</div>)";
+            html += std::format(
+                R"(<div class="context-menu-item{}" id="ctx-translate">{}</div>)",
+                translate_active ? " active" : "", LOC(Sequencer::MOVE_TRANSLATE));
+            html += std::format(
+                R"(<div class="context-menu-item{}" id="ctx-rotate">{}</div>)",
+                rotate_active ? " active" : "", LOC(Sequencer::ROTATE));
 
             html += R"(<div class="context-menu-separator"></div>)";
 
             if (!is_last) {
                 const auto current_easing = timeline.keyframes()[idx].easing;
-                html += R"(<div class="context-menu-label">Easing</div>)";
+                html += std::format(R"(<div class="context-menu-label">{}</div>)", LOC(Sequencer::EASING));
                 for (int e = 0; e < 4; ++e) {
                     const auto easing = static_cast<lfs::sequencer::EasingType>(e);
                     const bool active = (current_easing == easing);
                     html += std::format(
                         R"(<div class="context-menu-item submenu-item{}" id="ctx-easing-{}">{}</div>)",
-                        active ? " active" : "", e, EASING_NAMES[e]);
+                        active ? " active" : "", e, easingName(easing));
                 }
             } else {
-                html += R"(<div class="context-menu-label">Easing (last keyframe)</div>)";
+                html += std::format(
+                    R"(<div class="context-menu-label">{}</div>)", LOC(Sequencer::EASING_LAST_KEYFRAME));
             }
 
             html += R"(<div class="context-menu-separator"></div>)";
 
             if (is_first)
-                html += R"(<div class="context-menu-item disabled" id="ctx-delete-disabled">Delete Keyframe</div>)";
+                html += std::format(
+                    R"(<div class="context-menu-item disabled" id="ctx-delete-disabled">{}</div>)",
+                    LOC(Sequencer::DELETE_KEYFRAME));
             else
-                html += R"(<div class="context-menu-item" id="ctx-delete">Delete Keyframe<span class="context-menu-label" style="float: right; display: inline; padding: 0;">Del</span></div>)";
+                html += std::format(
+                    R"(<div class="context-menu-item" id="ctx-delete">{}<span class="context-menu-label" style="float: right; display: inline; padding: 0;">Del</span></div>)",
+                    LOC(Sequencer::DELETE_KEYFRAME));
         }
 
         return html;
@@ -330,7 +395,8 @@ namespace lfs::vis::gui {
 
         el_edit_overlay_->SetProperty("left", std::format("{:.0f}dp", left));
         el_edit_overlay_->SetProperty("top", std::format("{:.0f}dp", top));
-        el_edit_label_->SetInnerRML(std::format("Editing Keyframe {}", selected + 1));
+        const size_t kf_num = selected + 1;
+        el_edit_label_->SetInnerRML(std::vformat(LOC(lichtfeld::Strings::Sequencer::EDITING_KEYFRAME), std::make_format_args(kf_num)));
         el_edit_delta_->SetInnerRML(std::format("{:.3f}m  {:.1f}{}", pos_delta, rot_delta, DEG_SIGN));
 
         if (!edit_overlay_visible_) {

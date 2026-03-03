@@ -149,7 +149,32 @@ class SequencerSettingsPanel(RmlPanel):
             VideoPreset(vs.preset) if 0 <= vs.preset <= 7 else VideoPreset.YOUTUBE_1080P,
             {}).get("desc", ""))
 
-        model.bind_func("label_sequencer", lambda: "Sequencer")
+        _LABELS = {
+            "label_sequencer": "sequencer_settings.sequencer",
+            "label_show_camera_path": "sequencer_settings.show_camera_path",
+            "label_speed": "sequencer_settings.speed",
+            "label_snap_to_grid": "sequencer_settings.snap_to_grid",
+            "label_interval": "sequencer_settings.interval",
+            "label_follow_playback": "sequencer_settings.follow_playback",
+            "label_show_film_strip": "sequencer_settings.show_film_strip",
+            "label_preview_size": "sequencer_settings.preview_size",
+            "label_save_path": "sequencer_settings.save_path",
+            "label_load_path": "sequencer_settings.load_path",
+            "label_clear_all_keyframes": "sequencer_settings.clear_all_keyframes",
+            "label_clear_confirm": "sequencer_settings.clear_confirm",
+            "label_cancel": "common.cancel",
+            "label_delete": "common.delete",
+            "label_video_export": "sequencer_settings.video_export",
+            "label_format": "sequencer_settings.format",
+            "label_width": "sequencer_settings.width",
+            "label_height": "sequencer_settings.height",
+            "label_framerate": "sequencer_settings.framerate",
+            "label_quality": "sequencer_settings.quality",
+            "label_export_video": "sequencer_settings.export_video",
+            "label_custom": "sequencer_settings.custom",
+        }
+        for bind_name, loc_key in _LABELS.items():
+            model.bind_func(bind_name, lambda k=loc_key: lf.ui.tr(k) or k)
 
         for sec in ["seq_main", "video_export"]:
             model.bind(f"sec_{sec}_collapsed",

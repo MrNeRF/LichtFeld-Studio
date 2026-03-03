@@ -35,8 +35,6 @@ namespace lfs::vis {
         constexpr float DRAG_THRESHOLD_PX = 3.0f;
         constexpr float PLAYHEAD_HIT_RADIUS = 6.0f;
 
-        constexpr const char* EASING_NAMES[] = {"Linear", "Ease In", "Ease Out", "Ease In-Out"};
-
         [[nodiscard]] std::string formatTime(const float seconds) {
             const int mins = static_cast<int>(seconds) / 60;
             const float secs = seconds - static_cast<float>(mins * 60);
@@ -251,11 +249,15 @@ namespace lfs::vis {
                                     playing ? "../icon/sequencer/pause.png"
                                             : "../icon/sequencer/play.png");
 
+        auto* btn_play = document_->GetElementById("btn-play");
+        if (btn_play)
+            btn_play->SetAttribute("data-tooltip",
+                                   playing ? "tooltip.seq_pause" : "tooltip.seq_play");
+
         const bool looping = controller_.loopMode() != LoopMode::ONCE;
-        if (looping)
-            el_btn_loop_->SetClass("active", true);
-        else
-            el_btn_loop_->SetClass("active", false);
+        el_btn_loop_->SetClass("active", looping);
+        el_btn_loop_->SetAttribute("data-tooltip",
+                                   looping ? "tooltip.seq_loop_on" : "tooltip.seq_loop_off");
     }
 
     void RmlSequencerPanel::updatePlayhead() {
@@ -315,7 +317,7 @@ namespace lfs::vis {
                 keyframe_elements_.pop_back();
             }
             if (el_hint_)
-                el_hint_->SetInnerRML("Position camera and press K to add keyframes");
+                el_hint_->SetInnerRML(LOC(lichtfeld::Strings::Sequencer::EMPTY_HINT));
             return;
         }
 
@@ -431,6 +433,26 @@ namespace lfs::vis {
             rml_context_->ProcessMouseButtonDown(0, 0);
         if (!input.mouse_down[0])
             rml_context_->ProcessMouseButtonUp(0, 0);
+
+        tooltip_.clear();
+        auto* hover = rml_context_->GetHoverElement();
+        if (hover) {
+            for (auto* el = hover; el; el = el->GetParentNode()) {
+                auto key = el->GetAttribute<Rml::String>("data-tooltip", "");
+                if (!key.empty()) {
+                    const char* resolved = LOC(key.c_str());
+                    if (resolved && std::string_view(resolved) != key.c_str())
+                        tooltip_ = resolved;
+                    break;
+                }
+            }
+        }
+    }
+
+    std::string RmlSequencerPanel::consumeTooltip() {
+        std::string result;
+        result.swap(tooltip_);
+        return result;
     }
 
     float RmlSequencerPanel::timelineWidth() const {
@@ -470,6 +492,12 @@ namespace lfs::vis {
             return;
 
         syncTheme();
+
+        const auto& lang = lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
+        if (lang != last_language_) {
+            last_language_ = lang;
+            last_keyframe_count_ = static_cast<size_t>(-1);
+        }
 
         if (elements_cached_) {
             el_timeline_->SetProperty("width", std::format("{:.1f}px", timelineWidth()));

@@ -45,7 +45,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* GETTING_STARTED = "menu.help.getting_started";
             inline constexpr const char* ABOUT = "menu.help.about";
         } // namespace Help
-    } // namespace Menu
+    }     // namespace Menu
 
     namespace Window {
         inline constexpr const char* GETTING_STARTED = "window.getting_started";
@@ -105,7 +105,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* ENABLED = "about.interop.enabled";
             inline constexpr const char* DISABLED = "about.interop.disabled";
         } // namespace Interop
-    } // namespace About
+    }     // namespace About
 
     namespace Training {
         namespace Section {
@@ -294,7 +294,7 @@ namespace lichtfeld::Strings {
             inline constexpr const char* ADD = "training.button.add";
             inline constexpr const char* REMOVE = "training.button.remove";
         } // namespace Button
-    } // namespace Training
+    }     // namespace Training
 
     namespace Scene {
         inline constexpr const char* ADD_PLY = "scene.add_ply";
@@ -339,6 +339,10 @@ namespace lichtfeld::Strings {
         inline constexpr const char* SELECT_IN_TIMELINE = "scene.select_in_timeline";
         inline constexpr const char* ADD_KEYFRAME_SCENE = "scene.add_keyframe_scene";
         inline constexpr const char* KEYFRAME_EASING = "scene.keyframe_easing";
+        inline constexpr const char* KEYFRAME_EASING_LINEAR = "scene.keyframe_easing.linear";
+        inline constexpr const char* KEYFRAME_EASING_EASE_IN = "scene.keyframe_easing.ease_in";
+        inline constexpr const char* KEYFRAME_EASING_EASE_OUT = "scene.keyframe_easing.ease_out";
+        inline constexpr const char* KEYFRAME_EASING_EASE_IN_OUT = "scene.keyframe_easing.ease_in_out";
     } // namespace Scene
 
     namespace Export {
@@ -915,6 +919,34 @@ namespace lichtfeld::Strings {
         inline constexpr const char* EDIT_FOCAL_LENGTH = "sequencer.edit_focal_length";
         inline constexpr const char* EDIT_FOCAL_LENGTH_TITLE = "sequencer.edit_focal_length_title";
         inline constexpr const char* FOCAL_LENGTH_MM = "sequencer.focal_length_mm";
+        inline constexpr const char* GO_TO_FIRST_KEYFRAME = "sequencer.go_to_first_keyframe";
+        inline constexpr const char* STOP = "sequencer.stop";
+        inline constexpr const char* PAUSE = "sequencer.pause";
+        inline constexpr const char* PLAY = "sequencer.play";
+        inline constexpr const char* GO_TO_LAST_KEYFRAME = "sequencer.go_to_last_keyframe";
+        inline constexpr const char* LOOP_ON = "sequencer.loop_on";
+        inline constexpr const char* LOOP_OFF = "sequencer.loop_off";
+        inline constexpr const char* ADD_KEYFRAME = "sequencer.add_keyframe";
+        inline constexpr const char* EMPTY_HINT = "sequencer.empty_hint";
+        inline constexpr const char* UPDATE_TO_CURRENT_VIEW = "sequencer.update_to_current_view";
+        inline constexpr const char* GO_TO_KEYFRAME = "sequencer.go_to_keyframe";
+        inline constexpr const char* EDIT_TIME = "sequencer.edit_time";
+        inline constexpr const char* EASING = "sequencer.easing";
+        inline constexpr const char* EASING_LAST_KEYFRAME = "sequencer.easing_last_keyframe";
+        inline constexpr const char* EASING_TOOLTIP = "sequencer.easing_tooltip";
+        inline constexpr const char* DELETE_KEYFRAME = "sequencer.delete_keyframe";
+        inline constexpr const char* ADD_KEYFRAME_HERE = "sequencer.add_keyframe_here";
+        inline constexpr const char* EDIT_KEYFRAME_TIME = "sequencer.edit_keyframe_time";
+        inline constexpr const char* TIME_SECONDS = "sequencer.time_seconds";
+        inline constexpr const char* APPLY_U = "sequencer.apply_u";
+        inline constexpr const char* REVERT_ESC = "sequencer.revert_esc";
+        inline constexpr const char* EDITING_KEYFRAME = "sequencer.editing_keyframe";
+        inline constexpr const char* MOVE_TRANSLATE = "sequencer.move_translate";
+        inline constexpr const char* ROTATE = "sequencer.rotate";
+        inline constexpr const char* LOOP_POINT_TOOLTIP = "sequencer.loop_point_tooltip";
+        inline constexpr const char* KEYFRAME_TOOLTIP = "sequencer.keyframe_tooltip";
+        inline constexpr const char* PLAYBACK_TIME = "sequencer.playback_time";
+        inline constexpr const char* KEYFRAME_PREVIEW = "sequencer.keyframe_preview";
     } // namespace Sequencer
 
     namespace DiskSpaceDialog {

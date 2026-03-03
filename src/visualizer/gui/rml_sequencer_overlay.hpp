@@ -86,6 +86,7 @@ namespace lfs::vis::gui {
     private:
         void initContext();
         void syncTheme();
+        void syncLocalization();
         std::string generateThemeRCSS() const;
         void cacheElements();
         std::string buildContextMenuHTML(std::optional<size_t> keyframe,
@@ -116,6 +117,14 @@ namespace lfs::vis::gui {
         Rml::Element* el_edit_overlay_ = nullptr;
         Rml::Element* el_edit_label_ = nullptr;
         Rml::Element* el_edit_delta_ = nullptr;
+        Rml::Element* el_edit_apply_ = nullptr;
+        Rml::Element* el_edit_revert_ = nullptr;
+        Rml::Element* el_time_popup_title_ = nullptr;
+        Rml::Element* el_focal_popup_title_ = nullptr;
+        Rml::Element* el_time_ok_ = nullptr;
+        Rml::Element* el_time_cancel_ = nullptr;
+        Rml::Element* el_focal_ok_ = nullptr;
+        Rml::Element* el_focal_cancel_ = nullptr;
 
         bool context_menu_open_ = false;
         std::optional<size_t> context_menu_keyframe_;

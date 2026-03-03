@@ -110,6 +110,8 @@ namespace lfs::vis {
         [[nodiscard]] TimeEditRequest consumeTimeEditRequest();
         [[nodiscard]] FocalEditRequest consumeFocalEditRequest();
 
+        [[nodiscard]] std::string consumeTooltip();
+
         void destroyGLResources();
 
     private:
@@ -228,6 +230,8 @@ namespace lfs::vis {
         std::optional<size_t> last_clicked_keyframe_;
 
         bool hovered_ = false;
+        std::string tooltip_;
+        std::string last_language_;
     };
 
 } // namespace lfs::vis

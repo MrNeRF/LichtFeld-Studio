@@ -6,22 +6,22 @@
     <div id="panel">
         <div id="header">
             <div id="transport">
-                <div id="btn-skip-back" class="transport-btn">
+                <div id="btn-skip-back" class="transport-btn" data-tooltip="tooltip.seq_first">
                     <img class="transport-icon" src="../icon/sequencer/skip-back.png" />
                 </div>
-                <div id="btn-stop" class="transport-btn">
+                <div id="btn-stop" class="transport-btn" data-tooltip="tooltip.seq_stop">
                     <img class="transport-icon" src="../icon/sequencer/stop.png" />
                 </div>
-                <div id="btn-play" class="transport-btn">
+                <div id="btn-play" class="transport-btn" data-tooltip="tooltip.seq_play">
                     <img id="play-icon" class="transport-icon" src="../icon/sequencer/play.png" />
                 </div>
-                <div id="btn-skip-forward" class="transport-btn">
+                <div id="btn-skip-forward" class="transport-btn" data-tooltip="tooltip.seq_last">
                     <img class="transport-icon" src="../icon/sequencer/skip-forward.png" />
                 </div>
-                <div id="btn-loop" class="transport-btn">
+                <div id="btn-loop" class="transport-btn" data-tooltip="tooltip.seq_loop_off">
                     <img class="transport-icon" src="../icon/sequencer/loop.png" />
                 </div>
-                <div id="btn-add" class="transport-btn">
+                <div id="btn-add" class="transport-btn" data-tooltip="tooltip.seq_add">
                     <img class="transport-icon" src="../icon/sequencer/plus.png" />
                 </div>
             </div>
