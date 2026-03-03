@@ -252,6 +252,35 @@ namespace lfs::vis::gui {
         }
 
         dl->PopClipRect();
+
+        // Sprocket holes (drawn on top of thumbnails)
+        constexpr float SPROCKET_W = 4.0f;
+        constexpr float SPROCKET_H = 3.0f;
+        constexpr float SPROCKET_SPACING = 10.0f;
+        constexpr float SPROCKET_ROUNDING = 1.0f;
+        constexpr float SPROCKET_INSET = 0.5f;
+        const ImU32 sprocket_color = toU32WithAlpha(t.palette.text_dim, 0.3f);
+
+        const float sprocket_start = groove_min.x + SPROCKET_SPACING * 0.5f;
+        const int sprocket_count = static_cast<int>((groove_max.x - groove_min.x) / SPROCKET_SPACING);
+        for (int i = 0; i < sprocket_count; ++i) {
+            const float cx = sprocket_start + static_cast<float>(i) * SPROCKET_SPACING;
+            const float sx = cx - SPROCKET_W * 0.5f;
+            dl->AddRectFilled({sx, groove_min.y + SPROCKET_INSET},
+                              {sx + SPROCKET_W, groove_min.y + SPROCKET_INSET + SPROCKET_H},
+                              sprocket_color, SPROCKET_ROUNDING);
+            dl->AddRectFilled({sx, groove_max.y - SPROCKET_INSET - SPROCKET_H},
+                              {sx + SPROCKET_W, groove_max.y - SPROCKET_INSET},
+                              sprocket_color, SPROCKET_ROUNDING);
+        }
+
+        // Frame divider lines between thumbnail slots
+        const ImU32 divider_color = toU32WithAlpha(t.palette.text_dim, 0.15f);
+        for (int i = 1; i < num_thumbs; ++i) {
+            const float dx = timeline_x + actual_thumb_w * static_cast<float>(i);
+            dl->AddLine({dx, groove_min.y + SPROCKET_H + 1.0f},
+                        {dx, groove_max.y - SPROCKET_H - 1.0f}, divider_color);
+        }
     }
 
     void FilmStripRenderer::invalidateAll() {

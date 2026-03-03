@@ -15,6 +15,12 @@ body {
     box-sizing: border-box;
 }
 
+#header {
+    display: block;
+    width: 100%;
+    height: 56dp;
+}
+
 #transport {
     display: inline-block;
     width: 176dp;
@@ -187,6 +193,14 @@ body {
     left: -1dp;
     width: 2dp;
     height: 44dp;
+}
+
+#easing-stripe {
+    display: block;
+    width: 100%;
+    height: 36dp;
+    box-sizing: border-box;
+    border-top: 1dp rgba(160, 160, 180, 40);
 }
 
 #time-display {

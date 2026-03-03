@@ -51,6 +51,7 @@ namespace lfs::vis {
             void renderKeyframeEditOverlay(const ViewportLayout& viewport);
             void renderFilmStrip(const UIContext& ctx);
             void drawPlayheadLine();
+            void drawEasingCurves();
             void initPipPreview();
             void renderKeyframePreview(const UIContext& ctx);
             void drawPipPreviewWindow(const ViewportLayout& viewport);

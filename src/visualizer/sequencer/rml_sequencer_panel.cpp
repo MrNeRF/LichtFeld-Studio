@@ -210,7 +210,8 @@ namespace lfs::vis {
             "#playhead-line {{ background-color: transparent; }}\n"
             "#playhead-handle {{ background-color: {}; }}\n"
             "#current-time {{ color: {}; }}\n"
-            "#duration {{ color: {}; }}\n",
+            "#duration {{ color: {}; }}\n"
+            "#easing-stripe {{ border-top: 1dp {}; }}\n",
             surface_alpha, border, radius_str,
             text,
             bg_alpha, border_dim,
@@ -220,7 +221,8 @@ namespace lfs::vis {
             text_dim,
             error,
             text,
-            text_dim);
+            text_dim,
+            border_dim);
     }
 
     void RmlSequencerPanel::syncTheme() {
@@ -341,7 +343,7 @@ namespace lfs::vis {
                                   selected_keyframes_.contains(i);
             const bool is_loop = keyframes[i].is_loop_point;
 
-            const auto base = is_loop ? p.info : p.primary;
+            const auto base = is_loop ? p.info : (i % 2 == 0 ? p.primary : p.secondary);
             auto fill = base;
             if (selected)
                 fill = lighten(base, 0.2f);
@@ -420,7 +422,7 @@ namespace lfs::vis {
         const float local_y = input.mouse_y - cached_panel_y_;
 
         hovered_ = local_x >= 0 && local_y >= 0 &&
-                   local_x < cached_panel_width_ && local_y < HEIGHT;
+                   local_x < cached_panel_width_ && local_y < (HEIGHT + EASING_STRIPE_HEIGHT);
         if (!hovered_)
             return;
 
@@ -439,7 +441,8 @@ namespace lfs::vis {
                                    const PanelInputState& input) {
         const float panel_x = viewport_x + PADDING_H;
         const float panel_width = viewport_width - 2.0f * PADDING_H;
-        const float panel_y = viewport_y_bottom - HEIGHT - PADDING_BOTTOM;
+        const float total_height = HEIGHT + EASING_STRIPE_HEIGHT;
+        const float panel_y = viewport_y_bottom - total_height - PADDING_BOTTOM;
 
         cached_panel_x_ = panel_x;
         cached_panel_y_ = panel_y;
@@ -447,7 +450,7 @@ namespace lfs::vis {
 
         const float dp_ratio = rml_manager_->getDpRatio();
         const int w = static_cast<int>(panel_width * dp_ratio);
-        const int h = static_cast<int>(HEIGHT * dp_ratio);
+        const int h = static_cast<int>(total_height * dp_ratio);
 
         if (w <= 0 || h <= 0)
             return;
@@ -493,7 +496,7 @@ namespace lfs::vis {
 
         fbo_.unbind(prev_fbo);
 
-        fbo_.blitToScreen(panel_x, panel_y, panel_width, HEIGHT,
+        fbo_.blitToScreen(panel_x, panel_y, panel_width, total_height,
                           input.screen_w, input.screen_h);
 
         const float content_height = HEIGHT - 2.0f * INNER_PADDING;
