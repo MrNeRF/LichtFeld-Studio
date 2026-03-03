@@ -187,13 +187,6 @@ namespace lfs::vis::gui {
             glDisable(GL_SCISSOR_TEST);
     }
 
-    glm::vec4 GLLineRenderer::fromU32(uint32_t abgr) {
-        return {static_cast<float>((abgr >> 0) & 0xFF) / 255.0f,
-                static_cast<float>((abgr >> 8) & 0xFF) / 255.0f,
-                static_cast<float>((abgr >> 16) & 0xFF) / 255.0f,
-                static_cast<float>((abgr >> 24) & 0xFF) / 255.0f};
-    }
-
     void GLLineRenderer::destroyGLResources() {
         if (program_) {
             glDeleteProgram(program_);

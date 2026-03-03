@@ -66,7 +66,6 @@ namespace lfs::vis {
             // Viewport region access
             glm::vec2 getViewportPos() const;
             glm::vec2 getViewportSize() const;
-            bool isMouseInViewport() const;
             bool isViewportFocused() const;
             bool isPositionInViewport(double x, double y) const;
 

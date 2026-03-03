@@ -30,7 +30,6 @@ namespace lfs::vis {
             void renderNodeTransformGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void renderCropBoxGizmo(const UIContext& ctx, const ViewportLayout& viewport);
             void renderEllipsoidGizmo(const UIContext& ctx, const ViewportLayout& viewport);
-            void renderCropGizmoMiniToolbar(const UIContext& ctx);
             void renderViewportGizmo(const ViewportLayout& viewport);
             void updateCropFlash();
             void deactivateAllTools();

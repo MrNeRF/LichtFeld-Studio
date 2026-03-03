@@ -1325,14 +1325,6 @@ namespace lfs::vis::gui {
         return viewport_layout_.size;
     }
 
-    bool GuiManager::isMouseInViewport() const {
-        const auto mouse_pos = ImGui::GetMousePos();
-        return mouse_pos.x >= viewport_layout_.pos.x &&
-               mouse_pos.y >= viewport_layout_.pos.y &&
-               mouse_pos.x < viewport_layout_.pos.x + viewport_layout_.size.x &&
-               mouse_pos.y < viewport_layout_.pos.y + viewport_layout_.size.y;
-    }
-
     bool GuiManager::isViewportFocused() const {
         return viewport_layout_.has_focus;
     }

@@ -97,6 +97,11 @@ namespace lfs::vis::gui {
             film_strip_.invalidateAll();
         });
 
+        ui::NodeSelected::when([this](const auto& e) {
+            if (e.type != "KEYFRAME")
+                keyframe_gizmo_op_ = ImGuizmo::OPERATION(0);
+        });
+
         scene_sync_->setupEvents();
     }
 

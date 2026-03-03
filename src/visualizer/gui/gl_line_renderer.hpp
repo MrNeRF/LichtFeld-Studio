@@ -23,8 +23,6 @@ namespace lfs::vis::gui {
         void addCircleFilled(glm::vec2 center, float radius, glm::vec4 color, int segments = 16);
         void end();
 
-        static glm::vec4 fromU32(uint32_t abgr);
-
         void destroyGLResources();
 
     private:

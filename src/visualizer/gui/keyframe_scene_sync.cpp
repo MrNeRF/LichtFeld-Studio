@@ -88,6 +88,9 @@ namespace lfs::vis::gui {
                 return;
 
             controller_.selectKeyframe(e.keyframe_index);
+            if (auto* sm = viewer_->getSceneManager())
+                sm->clearSelection();
+
             const auto* kf = timeline.getKeyframe(e.keyframe_index);
             if (!kf)
                 return;
@@ -112,6 +115,13 @@ namespace lfs::vis::gui {
                 return;
 
             controller_.selectKeyframe(e.keyframe_index);
+            if (auto* sm = viewer_->getSceneManager())
+                sm->clearSelection();
+        });
+
+        ui::NodeSelected::when([this](const auto& e) {
+            if (e.type != "KEYFRAME")
+                controller_.deselectKeyframe();
         });
 
         ui::RenderSettingsChanged::when([this](const auto& e) {
