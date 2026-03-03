@@ -172,7 +172,7 @@ namespace lfs::vis::gui {
 
         if (input.mouse_clicked[0])
             ctx_->ProcessMouseButtonDown(0, 0);
-        if (!input.mouse_down[0])
+        if (input.mouse_released[0])
             ctx_->ProcessMouseButtonUp(0, 0);
 
         if (input.mouse_clicked[1]) {
