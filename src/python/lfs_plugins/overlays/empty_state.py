@@ -34,11 +34,7 @@ class EmptyStateOverlay(Panel):
 
     @classmethod
     def poll(cls, context):
-        return (
-            lf.ui.is_scene_empty()
-            and not lf.ui.is_startup_visible()
-            and not lf.ui.is_drag_hovering()
-        )
+        return lf.ui.is_scene_empty() and not lf.ui.is_drag_hovering()
 
     def draw(self, layout):
         vp_x, vp_y = layout.get_viewport_pos()
@@ -89,6 +85,10 @@ class EmptyStateOverlay(Panel):
                         border_color, BORDER_THICKNESS,
                     )
                 pos += DASH_LENGTH + GAP_LENGTH
+
+        if lf.ui.is_startup_visible():
+            layout.end_window()
+            return
 
         draw_dashed_line(zone_min_x, zone_min_y, zone_max_x, zone_min_y)
         draw_dashed_line(zone_max_x, zone_min_y, zone_max_x, zone_max_y)

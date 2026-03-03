@@ -70,7 +70,7 @@ def register_builtin_panels():
         lf.ui.set_panel_enabled("lfs.scripts", False)
 
         from .input_settings_panel import InputSettingsPanel
-        lf.register_class(InputSettingsPanel)
+        lf.ui.register_rml_panel(InputSettingsPanel)
         lf.ui.set_panel_enabled("lfs.input_settings", False)
 
         lf.ui.register_rml_panel(PluginMarketplacePanel)

@@ -3099,6 +3099,14 @@ namespace lfs::python {
             const auto& io = ImGui::GetIO();
             return nb::make_tuple(io.MousePos.x, io.MousePos.y);
         });
+
+        m.def(
+            "get_display_size", []() -> nb::tuple {
+                const auto* vp = ImGui::GetMainViewport();
+                assert(vp);
+                return nb::make_tuple(vp->WorkSize.x, vp->WorkSize.y);
+            },
+            "Get display work area size as (width, height)");
     }
 
     // Register UI classes with nanobind module

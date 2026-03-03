@@ -58,7 +58,7 @@ body {
     display: flex;
     flex-direction: column;
     padding: 4dp 0;
-    min-width: 180dp;
+    min-width: 140dp;
     border-width: 1dp;
     border-radius: 4dp;
 }
@@ -81,7 +81,7 @@ body {
 
 .menu-item .checkmark {
     width: 16dp;
-    margin-right: 4dp;
+    margin-left: 4dp;
     text-align: center;
 }
 
@@ -115,7 +115,7 @@ body {
     left: 100%;
     flex-direction: column;
     padding: 4dp 0;
-    min-width: 160dp;
+    min-width: 120dp;
     border-width: 1dp;
     border-radius: 4dp;
 }

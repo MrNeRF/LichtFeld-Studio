@@ -266,7 +266,6 @@ namespace lfs::vis::gui {
                         cls += " disabled";
                     rml += std::format(
                         "<div class=\"{}\" data-action=\"operator\" data-operator-id=\"{}\"{}>"
-                        "<span class=\"checkmark\"></span>"
                         "<span class=\"label\">{}</span>"
                         "</div>",
                         cls, escapeRml(item.operator_id),
@@ -283,7 +282,6 @@ namespace lfs::vis::gui {
                     rml += std::format(
                         "<div class=\"submenu-container\">"
                         "<div class=\"menu-item\">"
-                        "<span class=\"checkmark\"></span>"
                         "<span class=\"label\">{}</span>"
                         "<span class=\"submenu-arrow\">&gt;</span>"
                         "</div>"
@@ -302,12 +300,12 @@ namespace lfs::vis::gui {
                     const std::string check = item.selected ? "&#x2713;" : "";
                     rml += std::format(
                         "<div class=\"{}\" data-action=\"callback\" data-callback-index=\"{}\">"
-                        "<span class=\"checkmark\">{}</span>"
                         "<span class=\"label\">{}</span>"
                         "<span class=\"shortcut\">{}</span>"
+                        "<span class=\"checkmark\">{}</span>"
                         "</div>",
-                        cls, item.callback_index, check,
-                        escapeRml(item.label), escapeRml(item.shortcut));
+                        cls, item.callback_index,
+                        escapeRml(item.label), escapeRml(item.shortcut), check);
                     ++pos;
                     break;
                 }
@@ -317,7 +315,6 @@ namespace lfs::vis::gui {
                         cls += " disabled";
                     rml += std::format(
                         "<div class=\"{}\" data-action=\"callback\" data-callback-index=\"{}\"{}>"
-                        "<span class=\"checkmark\"></span>"
                         "<span class=\"label\">{}</span>"
                         "<span class=\"shortcut\">{}</span>"
                         "</div>",
@@ -333,7 +330,6 @@ namespace lfs::vis::gui {
                         cls += " disabled";
                     rml += std::format(
                         "<div class=\"{}\" data-action=\"callback\" data-callback-index=\"{}\"{}>"
-                        "<span class=\"checkmark\"></span>"
                         "<span class=\"label\">{}</span>"
                         "</div>",
                         cls, item.callback_index,

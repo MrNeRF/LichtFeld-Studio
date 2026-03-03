@@ -255,6 +255,7 @@ class TrainingPanel(RmlPanel):
         self._step_repeat_dir = 0
         self._step_repeat_start = 0.0
         self._step_repeat_last = 0.0
+        self._text_bufs = {}
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("training")
@@ -438,24 +439,55 @@ class TrainingPanel(RmlPanel):
 
     def _bind_num_props(self, model, p, d):
         for prop, dtype, fmt, min_v, max_v, _step in NUM_PROP_DEFS:
-            model.bind(
-                f"{prop}_str",
-                lambda pr=prop, f=fmt: f % getattr(p(), pr, 0) if p() and p().has_params() else "",
-                lambda v, pr=prop, dt=dtype, mn=min_v, mx=max_v: self._set_num_prop(pr, v, dt, mn, mx))
+            key = f"{prop}_str"
+            self._text_bufs[key] = ""
 
+            def getter(k=key, pr=prop, f=fmt):
+                if not self._text_bufs[k]:
+                    self._text_bufs[k] = f % getattr(p(), pr, 0) if p() and p().has_params() else ""
+                return self._text_bufs[k]
+
+            def setter(v, k=key, pr=prop, dt=dtype, mn=min_v, mx=max_v):
+                self._text_bufs[k] = str(v)
+                self._set_num_prop(pr, v, dt, mn, mx)
+
+            model.bind(key, getter, setter)
+
+        self._text_bufs["ppisp_activation_step_str"] = ""
         model.bind("ppisp_activation_step_str",
-                    lambda: str(p().ppisp_controller_activation_step)
-                            if p() and p().has_params() and p().ppisp_controller_activation_step >= 0
-                            else "",
-                    lambda v: self._set_ppisp_activation_step(v))
+                    lambda: self._text_bufs["ppisp_activation_step_str"] or (
+                        str(p().ppisp_controller_activation_step)
+                        if p() and p().has_params() and p().ppisp_controller_activation_step >= 0
+                        else ""),
+                    lambda v: (self._text_bufs.__setitem__("ppisp_activation_step_str", str(v)),
+                               self._set_ppisp_activation_step(v)))
 
+        self._text_bufs["max_width_str"] = ""
         model.bind("max_width_str",
-                    lambda: "%d" % d().max_width if d() and d().has_params() else "",
-                    lambda v: self._set_max_width(v))
+                    lambda: self._text_bufs["max_width_str"] or (
+                        "%d" % d().max_width if d() and d().has_params() else ""),
+                    lambda v: (self._text_bufs.__setitem__("max_width_str", str(v)),
+                               self._set_max_width(v)))
 
+        self._text_bufs["new_step_str"] = ""
         model.bind("new_step_str",
-                    lambda: str(self._new_save_step),
-                    lambda v: self._set_new_step_val(v))
+                    lambda: self._text_bufs["new_step_str"] or str(self._new_save_step),
+                    lambda v: (self._text_bufs.__setitem__("new_step_str", str(v)),
+                               self._set_new_step_val(v)))
+
+    def _sync_text_bufs(self):
+        p = lf.optimization_params()
+        d = lf.dataset_params()
+        for prop, _dtype, fmt, _min_v, _max_v, _step in NUM_PROP_DEFS:
+            key = f"{prop}_str"
+            self._text_bufs[key] = fmt % getattr(p, prop, 0) if p and p.has_params() else ""
+        if p and p.has_params():
+            step = p.ppisp_controller_activation_step
+            self._text_bufs["ppisp_activation_step_str"] = str(step) if step >= 0 else ""
+        else:
+            self._text_bufs["ppisp_activation_step_str"] = ""
+        self._text_bufs["max_width_str"] = "%d" % d.max_width if d and d.has_params() else ""
+        self._text_bufs["new_step_str"] = str(self._new_save_step)
 
     def _bind_slider_props(self, model, p):
         for prop in SLIDER_PROPS:
@@ -575,6 +607,7 @@ class TrainingPanel(RmlPanel):
         state = AppState.trainer_state.value
         if state != self._last_state:
             self._last_state = state
+            self._sync_text_bufs()
             self._handle.dirty_all()
         else:
             it = AppState.iteration.value
@@ -646,6 +679,7 @@ class TrainingPanel(RmlPanel):
 
     def on_scene_changed(self, doc):
         if self._handle:
+            self._sync_text_bufs()
             self._handle.dirty_all()
 
     def on_unload(self, doc):
@@ -680,6 +714,7 @@ class TrainingPanel(RmlPanel):
         if rs and self._color_edit_prop == "bg_color":
             rs.set("background_color", (r, g, b))
         if self._handle:
+            self._sync_text_bufs()
             self._handle.dirty_all()
 
     def _on_popup_click(self, event):
@@ -704,6 +739,7 @@ class TrainingPanel(RmlPanel):
         if rs and prop in RENDER_SYNC:
             rs.set(RENDER_SYNC[prop], val)
         if self._handle:
+            self._sync_text_bufs()
             self._handle.dirty_all()
 
     def _set_ppisp_auto_step(self, val):
@@ -715,6 +751,7 @@ class TrainingPanel(RmlPanel):
         else:
             params.ppisp_controller_activation_step = max(1, int(params.iterations) - 5000)
         if self._handle:
+            self._sync_text_bufs()
             self._handle.dirty_all()
 
     def _set_strategy(self, val):
@@ -731,6 +768,7 @@ class TrainingPanel(RmlPanel):
                     p.gut = False
                     p.set_strategy("adc")
                     if self._handle:
+                        self._sync_text_bufs()
                         self._handle.dirty_all()
 
             lf.ui.confirm_dialog(
@@ -741,6 +779,7 @@ class TrainingPanel(RmlPanel):
         else:
             params.set_strategy(val)
             if self._handle:
+                self._sync_text_bufs()
                 self._handle.dirty_all()
 
     def _set_int_param(self, prop, val_str):
@@ -761,6 +800,7 @@ class TrainingPanel(RmlPanel):
         except (ValueError, TypeError):
             pass
         if self._handle:
+            self._sync_text_bufs()
             self._handle.dirty_all()
 
     def _set_bg_mode(self, val_str):
@@ -772,6 +812,7 @@ class TrainingPanel(RmlPanel):
         except (ValueError, TypeError):
             pass
         if self._handle:
+            self._sync_text_bufs()
             self._handle.dirty_all()
 
     def _set_resize_factor(self, val_str):
@@ -849,6 +890,7 @@ class TrainingPanel(RmlPanel):
             if rs:
                 rs.set("background_color", color)
             if self._handle:
+                self._sync_text_bufs()
                 self._handle.dirty_all()
 
     # ── Event handlers ─────────────────────────────────────
@@ -879,6 +921,7 @@ class TrainingPanel(RmlPanel):
             if max_v is not None:
                 new_val = min(new_val, dtype(max_v))
             self._set_num_prop(prop, str(new_val), dtype, min_v, max_v)
+            self._text_bufs[f"{prop}_str"] = fmt % new_val
             if self._handle:
                 self._handle.dirty(f"{prop}_str")
             return
@@ -890,18 +933,23 @@ class TrainingPanel(RmlPanel):
             current = params.ppisp_controller_activation_step
             if current < 0:
                 return
-            params.ppisp_controller_activation_step = max(1, current + 100 * direction)
+            new_val = max(1, current + 100 * direction)
+            params.ppisp_controller_activation_step = new_val
+            self._text_bufs["ppisp_activation_step_str"] = str(new_val)
             if self._handle:
                 self._handle.dirty("ppisp_activation_step_str")
         elif prop == "max_width":
             d = lf.dataset_params()
             if not d or not d.has_params():
                 return
-            d.max_width = max(1, min(4096, d.max_width + 16 * direction))
+            new_val = max(1, min(4096, d.max_width + 16 * direction))
+            d.max_width = new_val
+            self._text_bufs["max_width_str"] = str(new_val)
             if self._handle:
                 self._handle.dirty("max_width_str")
         elif prop == "new_step":
             self._new_save_step = max(1, self._new_save_step + 100 * direction)
+            self._text_bufs["new_step_str"] = str(self._new_save_step)
             if self._handle:
                 self._handle.dirty("new_step_str")
 
@@ -980,12 +1028,14 @@ class TrainingPanel(RmlPanel):
                 if params and params.has_params():
                     params.bg_image_path = selected
                     if self._handle:
+                        self._sync_text_bufs()
                         self._handle.dirty_all()
         elif action == "clear_bg":
             params = lf.optimization_params()
             if params and params.has_params():
                 params.bg_image_path = ""
                 if self._handle:
+                    self._sync_text_bufs()
                     self._handle.dirty_all()
         elif action == "add_step":
             params = lf.optimization_params()

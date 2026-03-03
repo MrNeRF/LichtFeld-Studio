@@ -567,6 +567,7 @@ namespace lfs::vis::gui {
                 fallback.screen_w = static_cast<int>(mvp->Size.x);
                 fallback.screen_h = static_cast<int>(mvp->Size.y);
                 fallback.bg_draw_list = ImGui::GetBackgroundDrawList(mvp);
+                fallback.fg_draw_list = ImGui::GetForegroundDrawList(mvp);
                 hp->setInput(&fallback);
             }
             hp->drawDirect(x, y, w, h);
@@ -919,6 +920,7 @@ namespace lfs::vis::gui {
         panel_input.screen_w = static_cast<int>(mvp_input->Size.x);
         panel_input.screen_h = static_cast<int>(mvp_input->Size.y);
         panel_input.bg_draw_list = ImGui::GetBackgroundDrawList(ImGui::GetMainViewport());
+        panel_input.fg_draw_list = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
         panel_input.mouse_wheel = io.MouseWheel;
         panel_input.key_ctrl = io.KeyCtrl;
         panel_input.key_shift = io.KeyShift;

@@ -41,6 +41,7 @@ namespace lfs::vis::gui {
         std::vector<int> keys_pressed;
         std::vector<int> keys_released;
         void* bg_draw_list = nullptr;
+        void* fg_draw_list = nullptr;
     };
 
     struct ScreenState {
