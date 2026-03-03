@@ -42,10 +42,6 @@ class SelectionGroupsPanel(RmlPanel):
             container.add_event_listener("click", self._on_group_click)
             container.add_event_listener("mousedown", self._on_group_mousedown)
 
-        ctx_menu = doc.get_element_by_id("context-menu")
-        if ctx_menu:
-            ctx_menu.add_event_listener("click", self._on_context_click)
-
         self._popup_el = doc.get_element_by_id("color-picker-popup")
         if self._popup_el:
             self._popup_el.add_event_listener("click", self._on_popup_click)
@@ -67,6 +63,11 @@ class SelectionGroupsPanel(RmlPanel):
             wrap.set_class("hidden", not visible)
         if not visible:
             return
+
+        action = lf.ui.poll_context_menu()
+        if action and self._context_menu_group_id is not None:
+            self._handle_context_action(action, self._context_menu_group_id)
+            self._context_menu_group_id = None
 
         self._rebuild_groups(doc)
 
@@ -268,38 +269,17 @@ class SelectionGroupsPanel(RmlPanel):
 
         self._context_menu_group_id = gid
         lock_label = _tr("selection_group.unlock") if group.locked else _tr("selection_group.lock")
+        items = [
+            {"label": lock_label, "action": "lock"},
+            {"label": _tr("main_panel.clear"), "action": "clear"},
+            {"label": _tr("common.delete"), "action": "delete", "separator_before": True},
+        ]
+        sx, sy = lf.ui.get_mouse_screen_pos()
+        lf.ui.show_context_menu(items, sx, sy)
 
-        ctx = self.doc.get_element_by_id("context-menu")
-        if not ctx:
-            return
-
-        ctx.set_inner_rml(
-            f'<div class="context-menu-item" data-ctx-action="lock">{lock_label}</div>'
-            f'<div class="context-menu-item" data-ctx-action="clear">{_tr("main_panel.clear")}</div>'
-            f'<div class="context-menu-separator"></div>'
-            f'<div class="context-menu-item" data-ctx-action="delete">{_tr("common.delete")}</div>'
-        )
-        mouse_x = event.get_parameter("mouse_x", "0")
-        mouse_y = event.get_parameter("mouse_y", "0")
-        ctx.set_property("left", f"{mouse_x}px")
-        ctx.set_property("top", f"{mouse_y}px")
-        ctx.set_class("visible", True)
-
-    def _on_context_click(self, event):
-        target = event.target()
-        if target is None:
-            return
-        action = target.get_attribute("data-ctx-action")
-        if not action:
-            return
-
-        ctx = self.doc.get_element_by_id("context-menu")
-        if ctx:
-            ctx.set_class("visible", False)
-
+    def _handle_context_action(self, action, gid):
         scene = lf.get_scene()
-        gid = self._context_menu_group_id
-        if not scene or gid is None:
+        if not scene:
             return
 
         if action == "lock":
@@ -312,17 +292,11 @@ class SelectionGroupsPanel(RmlPanel):
         elif action == "delete":
             scene.remove_selection_group(gid)
         self._prev_group_hash = None
-        self._context_menu_group_id = None
 
     def _on_body_click(self, event):
         if self._picker_click_handled:
             self._picker_click_handled = False
             return
-
-        ctx = self.doc.get_element_by_id("context-menu")
-        if ctx:
-            ctx.set_class("visible", False)
-        self._context_menu_group_id = None
 
         self._hide_picker()
 

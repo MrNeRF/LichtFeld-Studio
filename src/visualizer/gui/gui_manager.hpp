@@ -9,6 +9,7 @@
 #include "core/path_utils.hpp"
 #include "gui/async_task_manager.hpp"
 #include "gui/gizmo_manager.hpp"
+#include "gui/global_context_menu.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/panels/menu_bar.hpp"
@@ -54,6 +55,7 @@ namespace lfs::vis {
             [[nodiscard]] const GizmoManager& gizmo() const { return gizmo_manager_; }
             [[nodiscard]] PanelLayoutManager& panelLayout() { return panel_layout_; }
             [[nodiscard]] const PanelLayoutManager& panelLayout() const { return panel_layout_; }
+            [[nodiscard]] GlobalContextMenu& globalContextMenu() { return *global_context_menu_; }
 
             // State queries
             bool needsAnimationFrame() const;
@@ -159,6 +161,7 @@ namespace lfs::vis {
             RmlViewportOverlay rml_viewport_overlay_;
             RmlMenuBar rml_menu_bar_;
             RmlStatusBar rml_status_bar_;
+            std::unique_ptr<GlobalContextMenu> global_context_menu_;
 
             // Native drag-drop handler
             NativeDragDrop drag_drop_;

@@ -1,0 +1,9 @@
+<rml>
+<head>
+  <link type="text/rcss" href="global_context_menu.rcss"/>
+</head>
+<body id="body">
+  <div id="backdrop"></div>
+  <div id="ctx-menu" class="context-menu"></div>
+</body>
+</rml>

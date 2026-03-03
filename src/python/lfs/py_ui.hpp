@@ -927,6 +927,7 @@ namespace lfs::python {
     void register_ui_modals(nb::module_& m);
     void register_ui_hooks(nb::module_& m);
     void register_ui_menus(nb::module_& m);
+    void register_ui_context_menu(nb::module_& m);
     void register_ui_panels(nb::module_& m);
     void register_rml_im_mode_layout(nb::module_& m);
     void register_keymap(nb::module_& m);

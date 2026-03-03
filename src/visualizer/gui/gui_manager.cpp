@@ -111,6 +111,8 @@ namespace lfs::vis::gui {
         // Create components
         menu_bar_ = std::make_unique<MenuBar>();
         rml_modal_overlay_ = std::make_unique<RmlModalOverlay>(&rmlui_manager_);
+        global_context_menu_ = std::make_unique<GlobalContextMenu>(&rmlui_manager_);
+        lfs::python::set_global_context_menu(global_context_menu_.get());
         video_extractor_dialog_ = std::make_unique<lfs::gui::VideoExtractorDialog>();
 
         // Wire up video extractor dialog callback
@@ -609,6 +611,7 @@ namespace lfs::vis::gui {
 
         async_tasks_.shutdown();
 
+        global_context_menu_->destroyGLResources();
         rml_status_bar_.shutdown();
         rml_menu_bar_.shutdown();
         rml_viewport_overlay_.shutdown();
@@ -926,6 +929,10 @@ namespace lfs::vis::gui {
                 panel_input.keys_released.push_back(sc);
         }
 
+        global_context_menu_->processInput(panel_input);
+        if (global_context_menu_->isOpen())
+            panel_input.mouse_wheel = 0;
+
         ScreenState screen;
         screen.work_pos = {mvp_input->WorkPos.x, mvp_input->WorkPos.y};
         screen.work_size = {mvp_input->WorkSize.x, mvp_input->WorkSize.y};
@@ -1018,6 +1025,8 @@ namespace lfs::vis::gui {
 
         python::draw_python_modals(scene);
         python::draw_python_popups(scene);
+
+        global_context_menu_->render(panel_input.screen_w, panel_input.screen_h);
 
         {
             const auto* mvp_modal = ImGui::GetMainViewport();
