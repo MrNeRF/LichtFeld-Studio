@@ -146,9 +146,14 @@ namespace lfs::vis {
             panel->load_path_requested_ = true;
         else if (id == "btn-export")
             panel->export_requested_ = true;
-        else if (id == "btn-clear")
-            panel->clear_requested_ = true;
-        else if (id == "quality-slider") {
+        else if (id == "btn-clear") {
+            float sx = panel->cached_panel_x_;
+            float sy = panel->cached_panel_y_;
+            auto abs_offset = el->GetAbsoluteOffset(Rml::BoxArea::Border);
+            sx = panel->cached_panel_x_ + abs_offset.x;
+            sy = panel->cached_panel_y_ + abs_offset.y + el->GetBox().GetSize().y;
+            panel->transport_ctx_request_ = {TransportContextMenuRequest::Target::CLEAR, sx, sy};
+        } else if (id == "quality-slider") {
             auto val_str = el->GetAttribute<Rml::String>("value", "18");
             ui.quality = std::clamp(std::stoi(val_str), 15, 28);
         }
@@ -163,6 +168,12 @@ namespace lfs::vis {
             context_menu_open_ = false;
         }
         return state;
+    }
+
+    TransportContextMenuRequest RmlSequencerPanel::consumeTransportContextMenu() {
+        auto req = transport_ctx_request_;
+        transport_ctx_request_ = {};
+        return req;
     }
 
     TimeEditRequest RmlSequencerPanel::consumeTimeEditRequest() {
@@ -327,7 +338,8 @@ namespace lfs::vis {
             ".format-badge {{ background-color: {}; }}\n"
             "#btn-export {{ border-width: 1dp; border-color: {}; }}\n"
             "#btn-clear {{ background-color: {}; border-width: 1dp; border-color: {}; }}\n"
-            "#btn-clear .transport-icon {{ image-color: {}; }}\n",
+            "#btn-clear .transport-icon {{ image-color: {}; }}\n"
+            ".ctx-indicator {{ color: {}; }}\n",
             surface_alpha, border, radius_str,
             text,
             bg_alpha, border_dim,
@@ -357,7 +369,8 @@ namespace lfs::vis {
             surface_bright_alpha,
             primary_export_border,
             error_btn, error_btn,
-            error);
+            error,
+            text_dim_half);
     }
 
     void RmlSequencerPanel::syncTheme() {
@@ -585,6 +598,24 @@ namespace lfs::vis {
                     if (resolved && std::string_view(resolved) != key.c_str())
                         tooltip_ = resolved;
                     break;
+                }
+            }
+
+            if (input.mouse_clicked[1]) {
+                for (auto* el = hover; el; el = el->GetParentNode()) {
+                    const auto& id = el->GetId();
+                    TransportContextMenuRequest::Target target = TransportContextMenuRequest::Target::NONE;
+                    if (id == "btn-snap")
+                        target = TransportContextMenuRequest::Target::SNAP;
+                    else if (id == "btn-preview")
+                        target = TransportContextMenuRequest::Target::PREVIEW;
+                    else if (id == "btn-format")
+                        target = TransportContextMenuRequest::Target::FORMAT;
+
+                    if (target != TransportContextMenuRequest::Target::NONE) {
+                        transport_ctx_request_ = {target, input.mouse_x, input.mouse_y};
+                        break;
+                    }
                 }
             }
         }

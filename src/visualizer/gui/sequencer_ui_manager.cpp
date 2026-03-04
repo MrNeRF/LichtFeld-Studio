@@ -263,6 +263,118 @@ namespace lfs::vis::gui {
             lfs::core::events::state::KeyframeListChanged{.count = 0}.emit();
             LOG_INFO("All keyframes cleared");
         }
+
+        auto ctx_req = panel_->consumeTransportContextMenu();
+        if (ctx_req.target != TransportContextMenuRequest::Target::NONE) {
+            auto& cm = viewer_->getGuiManager()->globalContextMenu();
+            std::vector<gui::ContextMenuItem> items;
+
+            using Target = TransportContextMenuRequest::Target;
+            switch (ctx_req.target) {
+            case Target::SNAP: {
+                items.push_back({LOC("context_menu.snap_interval"), "", false, true});
+                constexpr std::array<float, 4> snap_values = {0.25f, 0.5f, 1.0f, 2.0f};
+                constexpr std::array<const char*, 4> snap_labels = {"0.25s", "0.5s", "1s", "2s"};
+                for (size_t i = 0; i < snap_values.size(); ++i) {
+                    bool active = std::abs(ui_state_.snap_interval - snap_values[i]) < 0.01f;
+                    items.push_back({snap_labels[i],
+                                     std::format("snap_{}", snap_values[i]),
+                                     false, false, false, active});
+                }
+                active_transport_menu_ = TransportMenuType::SNAP;
+                break;
+            }
+            case Target::PREVIEW: {
+                items.push_back({LOC("context_menu.preview_scale"), "", false, true});
+                constexpr std::array<float, 5> scale_values = {0.5f, 0.75f, 1.0f, 1.5f, 2.0f};
+                constexpr std::array<const char*, 5> scale_labels = {"0.5x", "0.75x", "1.0x", "1.5x", "2.0x"};
+                for (size_t i = 0; i < scale_values.size(); ++i) {
+                    bool active = std::abs(ui_state_.pip_preview_scale - scale_values[i]) < 0.01f;
+                    items.push_back({scale_labels[i],
+                                     std::format("scale_{}", scale_values[i]),
+                                     false, false, false, active});
+                }
+                active_transport_menu_ = TransportMenuType::PREVIEW;
+                break;
+            }
+            case Target::FORMAT: {
+                items.push_back({LOC("context_menu.video_format"), "", false, true});
+                using lfs::io::video::VideoPreset;
+                for (int p = 0; p <= static_cast<int>(VideoPreset::CUSTOM); ++p) {
+                    const auto preset = static_cast<VideoPreset>(p);
+                    const auto info = lfs::io::video::getPresetInfo(preset);
+                    bool active = ui_state_.preset == preset;
+                    items.push_back({info.name,
+                                     std::format("preset_{}", p),
+                                     false, false, false, active});
+                }
+                active_transport_menu_ = TransportMenuType::FORMAT;
+                break;
+            }
+            case Target::CLEAR: {
+                items.push_back({LOC("context_menu.clear_confirm"), "", false, true});
+                items.push_back({LOC("context_menu.confirm"), "clear_confirm"});
+                items.push_back({LOC("context_menu.cancel"), "clear_cancel"});
+                active_transport_menu_ = TransportMenuType::CLEAR_CONFIRM;
+                break;
+            }
+            default:
+                break;
+            }
+
+            if (!items.empty())
+                cm.request(std::move(items), ctx_req.screen_x, ctx_req.screen_y);
+        }
+
+        if (active_transport_menu_ != TransportMenuType::NONE) {
+            auto& cm = viewer_->getGuiManager()->globalContextMenu();
+            auto action = cm.pollResult();
+            if (!action.empty()) {
+                switch (active_transport_menu_) {
+                case TransportMenuType::SNAP: {
+                    if (action.starts_with("snap_")) {
+                        float val = std::stof(action.substr(5));
+                        ui_state_.snap_interval = val;
+                    }
+                    break;
+                }
+                case TransportMenuType::PREVIEW: {
+                    if (action.starts_with("scale_")) {
+                        float val = std::stof(action.substr(6));
+                        ui_state_.pip_preview_scale = val;
+                    }
+                    break;
+                }
+                case TransportMenuType::FORMAT: {
+                    if (action.starts_with("preset_")) {
+                        using lfs::io::video::VideoPreset;
+                        int idx = std::stoi(action.substr(7));
+                        ui_state_.preset = static_cast<VideoPreset>(idx);
+                        const auto info = lfs::io::video::getPresetInfo(ui_state_.preset);
+                        ui_state_.custom_width = info.width;
+                        ui_state_.custom_height = info.height;
+                        ui_state_.framerate = info.framerate;
+                    }
+                    break;
+                }
+                case TransportMenuType::CLEAR_CONFIRM: {
+                    if (action == "clear_confirm" && !controller_.timeline().empty()) {
+                        controller_.stop();
+                        controller_.deselectKeyframe();
+                        controller_.timeline().clear();
+                        lfs::core::events::state::KeyframeListChanged{.count = 0}.emit();
+                        LOG_INFO("All keyframes cleared");
+                    }
+                    break;
+                }
+                default:
+                    break;
+                }
+                active_transport_menu_ = TransportMenuType::NONE;
+            } else if (!cm.isOpen()) {
+                active_transport_menu_ = TransportMenuType::NONE;
+            }
+        }
     }
 
     void SequencerUIManager::renderCameraPath(const ViewportLayout& viewport) {

@@ -589,14 +589,14 @@
     "seq_loop_off": "Attiva la riproduzione in loop",
     "seq_loop_on": "Disattiva la riproduzione in loop",
     "seq_add": "Aggiungi keyframe alla posizione attuale",
-    "seq_speed": "Velocità di riproduzione (clic destro per le opzioni)",
-    "seq_snap": "Allinea i keyframe alla griglia",
+    "seq_speed": "Velocità di riproduzione (clic per cambiare)",
+    "seq_snap": "Allinea i keyframe alla griglia (clic destro per le opzioni)",
     "seq_follow": "Segui la testina durante la riproduzione",
     "seq_film_strip": "Mostra pellicola sotto la timeline",
-    "seq_pip_preview": "Mostra anteprima picture-in-picture",
+    "seq_pip_preview": "Mostra anteprima picture-in-picture (clic destro per le opzioni)",
     "seq_save_path": "Salva percorso camera su file",
     "seq_load_path": "Carica percorso camera da file",
-    "seq_format": "Preset formato di esportazione",
+    "seq_format": "Preset formato di esportazione (clic destro per le opzioni)",
     "seq_quality": "Qualità CRF (più basso = qualità migliore, file più grande)",
     "seq_export": "Esporta video dal percorso camera",
     "seq_clear": "Elimina tutti i keyframe",
@@ -969,29 +969,6 @@
     "playback_time": "Riproduzione {:.2f}s",
     "keyframe_preview": "Anteprima Keyframe {}"
   },
-  "sequencer_settings": {
-    "sequencer": "Sequencer",
-    "show_camera_path": "Mostra percorso camera",
-    "speed": "Velocita",
-    "snap_to_grid": "Aggancia alla griglia",
-    "interval": "Intervallo",
-    "follow_playback": "Segui riproduzione",
-    "show_film_strip": "Mostra striscia di fotogrammi",
-    "preview_size": "Dimensione anteprima",
-    "show_pip_preview": "Mostra anteprima",
-    "save_path": "Salva percorso...",
-    "load_path": "Carica percorso...",
-    "clear_all_keyframes": "Cancella tutti i keyframe",
-    "clear_confirm": "Eliminare tutti i keyframe? Non sara possibile annullare.",
-    "video_export": "Esportazione video",
-    "format": "Formato",
-    "width": "Larghezza",
-    "height": "Altezza",
-    "framerate": "Frequenza fotogrammi",
-    "quality": "Qualita",
-    "export_video": "Esporta video...",
-    "custom": "Personalizzato"
-  },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V"
   },
@@ -1059,5 +1036,13 @@
     "appearance": "Appearance",
     "line_width": "Line Width",
     "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
+  },
+  "context_menu": {
+    "snap_interval": "Intervallo griglia",
+    "preview_scale": "Scala anteprima",
+    "video_format": "Formato video",
+    "clear_confirm": "Eliminare tutti i keyframe?",
+    "confirm": "Conferma",
+    "cancel": "Annulla"
   }
 }

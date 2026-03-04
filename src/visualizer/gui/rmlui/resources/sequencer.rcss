@@ -55,6 +55,7 @@ body {
     border-radius: 4dp;
     flex-shrink: 0;
     transition: background-color 0.12s quadratic-out;
+    position: relative;
 }
 
 .transport-btn:hover {
@@ -98,6 +99,15 @@ body {
 .transport-btn.disabled {
     opacity: 0.35;
     pointer-events: none;
+}
+
+.ctx-indicator {
+    position: absolute;
+    bottom: -1dp;
+    right: 0;
+    font-size: 7dp;
+    line-height: 7dp;
+    color: rgba(200, 210, 230, 140);
 }
 
 .transport-icon {

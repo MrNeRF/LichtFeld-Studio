@@ -95,6 +95,13 @@ namespace lfs::vis {
                 float dp = 1.0f;
             };
             TimelineGeometry tl_geo_;
+
+            enum class TransportMenuType { NONE,
+                                           SNAP,
+                                           PREVIEW,
+                                           FORMAT,
+                                           CLEAR_CONFIRM };
+            TransportMenuType active_transport_menu_ = TransportMenuType::NONE;
         };
 
     } // namespace gui

@@ -66,6 +66,17 @@ namespace lfs::vis {
         std::optional<size_t> keyframe;
     };
 
+    struct TransportContextMenuRequest {
+        enum class Target { NONE,
+                            SNAP,
+                            PREVIEW,
+                            FORMAT,
+                            CLEAR };
+        Target target = Target::NONE;
+        float screen_x = 0.0f;
+        float screen_y = 0.0f;
+    };
+
     struct TimeEditRequest {
         bool active = false;
         size_t keyframe_index = 0;
@@ -112,6 +123,7 @@ namespace lfs::vis {
         [[nodiscard]] float getDisplayEndTime() const;
 
         [[nodiscard]] TimelineContextMenuState consumeContextMenu();
+        [[nodiscard]] TransportContextMenuRequest consumeTransportContextMenu();
         [[nodiscard]] TimeEditRequest consumeTimeEditRequest();
         [[nodiscard]] FocalEditRequest consumeFocalEditRequest();
 
@@ -234,6 +246,8 @@ namespace lfs::vis {
         bool load_path_requested_ = false;
         bool export_requested_ = false;
         bool clear_requested_ = false;
+
+        TransportContextMenuRequest transport_ctx_request_;
 
         // Time editing
         bool editing_keyframe_time_ = false;
