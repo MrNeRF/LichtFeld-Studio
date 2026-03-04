@@ -86,6 +86,9 @@ namespace lfs::vis::gui {
             model_bound_ = true;
         }
 
+        if (content_dirty_ && ops.mark_content_dirty)
+            ops.mark_content_dirty(host_);
+
         ops.draw(host_, &ctx);
 
         auto* doc = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
@@ -117,7 +120,8 @@ namespace lfs::vis::gui {
 
         try {
             auto py_doc = lfs::python::PyRmlDocument(doc);
-            panel_instance_.attr("on_update")(py_doc);
+            nb::object result = panel_instance_.attr("on_update")(py_doc);
+            content_dirty_ = !result.is_none() && nb::cast<bool>(result);
         } catch (const std::exception& e) {
             LOG_ERROR("RmlPanel on_update error: {}", e.what());
         }
@@ -181,6 +185,9 @@ namespace lfs::vis::gui {
             model_bound_ = true;
         }
 
+        if (content_dirty_ && ops.mark_content_dirty)
+            ops.mark_content_dirty(host_);
+
         ops.draw_direct(host_, x, y, w, h);
 
         auto* doc = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
@@ -208,7 +215,8 @@ namespace lfs::vis::gui {
 
         try {
             auto py_doc = lfs::python::PyRmlDocument(doc);
-            panel_instance_.attr("on_update")(py_doc);
+            nb::object result = panel_instance_.attr("on_update")(py_doc);
+            content_dirty_ = !result.is_none() && nb::cast<bool>(result);
         } catch (const std::exception& e) {
             LOG_ERROR("RmlPanel on_update error: {}", e.what());
         }

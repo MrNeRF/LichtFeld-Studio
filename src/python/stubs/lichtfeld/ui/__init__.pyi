@@ -2070,6 +2070,13 @@ class SequencerUIState:
     def follow_playback(self, arg: bool, /) -> None: ...
 
     @property
+    def show_pip_preview(self) -> bool:
+        """Whether PiP preview window is shown"""
+
+    @show_pip_preview.setter
+    def show_pip_preview(self, arg: bool, /) -> None: ...
+
+    @property
     def pip_preview_scale(self) -> float:
         """Picture-in-picture preview scale factor"""
 

@@ -46,6 +46,7 @@ namespace lfs::vis::gui {
         int height_mode_ = 0;
         bool foreground_ = false;
         uint64_t last_scene_gen_ = 0;
+        bool content_dirty_ = false;
     };
 
 } // namespace lfs::vis::gui

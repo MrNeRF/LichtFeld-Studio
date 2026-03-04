@@ -602,13 +602,15 @@ class TrainingPanel(RmlPanel):
 
     def on_update(self, doc):
         if not self._handle:
-            return
+            return False
 
+        changed = False
         state = AppState.trainer_state.value
         if state != self._last_state:
             self._last_state = state
             self._sync_text_bufs()
             self._handle.dirty_all()
+            changed = True
         else:
             it = AppState.iteration.value
             if it != self._last_iteration:
@@ -616,11 +618,13 @@ class TrainingPanel(RmlPanel):
                 self._handle.dirty("status_iteration")
                 self._handle.dirty("progress_text")
                 self._handle.dirty("show_progress")
+                changed = True
 
             ng = AppState.num_gaussians.value
             if ng != self._last_num_gaussians:
                 self._last_num_gaussians = ng
                 self._handle.dirty("status_gaussians")
+                changed = True
 
             self._handle.dirty("show_checkpoint_saved")
 
@@ -634,6 +638,7 @@ class TrainingPanel(RmlPanel):
         self._update_save_steps(doc)
         self._update_color_swatch(doc)
         self._update_loss_graph()
+        return changed
 
     def _update_progress(self, doc):
         it = AppState.iteration.value
