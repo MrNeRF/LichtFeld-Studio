@@ -176,14 +176,7 @@ namespace lfs::vis::gui {
         using namespace lfs::core;
         const auto info = check_cuda_version();
         if (!info.query_failed && !info.supported) {
-            constexpr int MIN_MAJOR = MIN_CUDA_VERSION / 1000;
-            constexpr int MIN_MINOR = (MIN_CUDA_VERSION % 1000) / 10;
-            events::state::CudaVersionUnsupported{
-                .major = info.major,
-                .minor = info.minor,
-                .min_major = MIN_MAJOR,
-                .min_minor = MIN_MINOR}
-                .emit();
+            pending_cuda_warning_ = info;
         }
     }
 
@@ -732,6 +725,18 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::render() {
+        if (pending_cuda_warning_) {
+            constexpr int MIN_MAJOR = lfs::core::MIN_CUDA_VERSION / 1000;
+            constexpr int MIN_MINOR = (lfs::core::MIN_CUDA_VERSION % 1000) / 10;
+            lfs::core::events::state::CudaVersionUnsupported{
+                .major = pending_cuda_warning_->major,
+                .minor = pending_cuda_warning_->minor,
+                .min_major = MIN_MAJOR,
+                .min_minor = MIN_MINOR}
+                .emit();
+            pending_cuda_warning_.reset();
+        }
+
         if (pending_ui_scale_ > 0.0f) {
             applyUiScale(pending_ui_scale_);
             pending_ui_scale_ = 0.0f;

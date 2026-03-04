@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/cuda_version.hpp"
 #include "core/events.hpp"
 #include "core/parameters.hpp"
 #include "core/path_utils.hpp"
@@ -171,6 +172,9 @@ namespace lfs::vis {
             // DPI scaling
             float current_ui_scale_ = 1.0f;
             float pending_ui_scale_ = 0.0f;
+
+            // Deferred CUDA version warning (emitted on first drawFrame)
+            std::optional<lfs::core::CudaVersionInfo> pending_cuda_warning_;
 
             // RmlUI integration
             RmlUIManager rmlui_manager_;

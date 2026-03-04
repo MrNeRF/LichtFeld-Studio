@@ -127,7 +127,7 @@ namespace lfs::core {
             EVENT(SetSelectionSubMode, int selection_mode;);
             EVENT(ExecuteMirror, int axis;); // 0=X, 1=Y, 2=Z
             EVENT(CancelActiveOperator, );   // Cancel and revert current operator
-        } // namespace tools
+        }                                    // namespace tools
 
         // ============================================================================
         // State - Notifications about what has happened (broadcasts)
@@ -200,6 +200,10 @@ namespace lfs::core {
             EVENT(FrameRendered, float render_ms; float fps; int num_gaussians;);
             EVENT(KeyframeListChanged, size_t count;);
 
+            EVENT(ExportFailed, std::string error;);
+            EVENT(VideoExportFailed, std::string error;);
+            EVENT(Mesh2SplatFailed, std::string error;);
+
             // CUDA version check
             EVENT(CudaVersionUnsupported, int major; int minor; int min_major; int min_minor;);
         } // namespace state
@@ -258,8 +262,8 @@ namespace lfs::core {
             EVENT(WindowFocusLost, );
             EVENT(DisplayScaleChanged, float scale;);
             EVENT(UiScaleChangeRequested, float scale;); // 0 = auto (from OS)
-        } // namespace internal
-    } // namespace events
+        }                                                // namespace internal
+    }                                                    // namespace events
 
     // ============================================================================
     // Convenience functions
