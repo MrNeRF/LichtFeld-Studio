@@ -17,7 +17,7 @@
     "scale_reg": 0.0,
     "init_opacity": 0.3,
     "init_scaling": 0.2,
-    "max_cap": 3000000,
+    "max_cap": 1000000,
     "render_mode": "RGB",
     "strategy": "IGS+",
     "eval_steps": [ 7000, 30000 ],
