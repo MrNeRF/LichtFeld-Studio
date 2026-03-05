@@ -1531,6 +1531,11 @@ namespace lfs::core {
             return *this;
         }
 
+        // Strided destination, contiguous source (cross-device: move src to dst device first)
+        if (!dst_contig && src_contig && device_ != other.device_) {
+            return copy_from(other.to(device_));
+        }
+
         // Fallback: materialize non-contiguous source
         if (!src_contig) {
             return copy_from(other.contiguous());

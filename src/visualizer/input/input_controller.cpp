@@ -139,6 +139,12 @@ namespace lfs::vis {
             publishCameraMove();
         });
 
+        state::DatasetLoadCompleted::when([this](const auto& e) {
+            if (e.success) {
+                handleFocusSelection();
+            }
+        });
+
         internal::WindowFocusLost::when([this](const auto&) {
             drag_mode_ = DragMode::None;
             std::fill(std::begin(keys_movement_), std::end(keys_movement_), false);

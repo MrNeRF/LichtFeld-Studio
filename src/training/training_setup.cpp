@@ -20,6 +20,13 @@ namespace lfs::training {
     namespace {
         constexpr size_t SH_CHANNELS = 3;
 
+        std::shared_ptr<lfs::core::PointCloud> createRandomPointCloud() {
+            constexpr size_t N = 10000;
+            auto positions = lfs::core::Tensor::rand({N, 3}, lfs::core::Device::CPU) * 2.0f - 1.0f;
+            auto colors = lfs::core::Tensor::randint({N, 3}, 0, 256, lfs::core::Device::CPU, lfs::core::DataType::UInt8);
+            return std::make_shared<lfs::core::PointCloud>(positions, colors);
+        }
+
         void truncateSHDegree(lfs::core::SplatData& splat, const int target_degree) {
             if (target_degree < 0 || target_degree >= splat.get_max_sh_degree())
                 return;
@@ -149,7 +156,10 @@ namespace lfs::training {
                         LOG_INFO("Adding {} points to scene", data.point_cloud->size());
                         scene.addPointCloud("PointCloud", data.point_cloud, dataset_id);
                     } else {
-                        LOG_INFO("No point cloud, random initialization will be used");
+                        LOG_INFO("No point cloud, using random initialization");
+                        auto pc = createRandomPointCloud();
+                        LOG_INFO("Adding {} random points to scene", pc->size());
+                        scene.addPointCloud("PointCloud", pc, dataset_id);
                     }
                 }
 
@@ -318,12 +328,7 @@ namespace lfs::training {
             }
         } else {
             LOG_INFO("No point cloud provided, using random initialization");
-            constexpr size_t NUM_INIT_GAUSSIANS = 10000;
-            auto positions = lfs::core::Tensor::rand({NUM_INIT_GAUSSIANS, 3}, lfs::core::Device::CPU);
-            positions = positions * 2.0f - 1.0f;
-            auto colors = lfs::core::Tensor::randint({NUM_INIT_GAUSSIANS, 3}, 0, 256,
-                                                     lfs::core::Device::CPU, lfs::core::DataType::UInt8);
-            point_cloud_to_use = lfs::core::PointCloud(positions, colors);
+            point_cloud_to_use = *createRandomPointCloud();
         }
 
         lfs::core::Tensor scene_center = scene.getSceneCenter();
@@ -466,6 +471,8 @@ namespace lfs::training {
                     }
                 } else if (data.point_cloud && data.point_cloud->size() > 0) {
                     scene.addPointCloud("PointCloud", data.point_cloud, dataset_id);
+                } else {
+                    scene.addPointCloud("PointCloud", createRandomPointCloud(), dataset_id);
                 }
 
                 const auto& cameras = data.cameras;
