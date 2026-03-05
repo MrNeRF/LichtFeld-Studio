@@ -1,25 +1,30 @@
+/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
 #pragma once
 
 #include "istrategy.hpp"
-#include "trainer.hpp"
+
 #include "optimizer/adam_optimizer.hpp"
 #include "optimizer/scheduler.hpp"
+#include "trainer.hpp"
 
 #include <vector>
 
 namespace lfs::training {
 
-    class ImprovedGsPlus : public IStrategy {
+    class ImprovedGSPlus : public IStrategy {
     public:
-        ImprovedGsPlus() = delete;
+        ImprovedGSPlus() = delete;
 
-        explicit ImprovedGsPlus(lfs::core::SplatData& splat_data);
+        explicit ImprovedGSPlus(lfs::core::SplatData& splat_data);
 
         // Preventing Move & copy operators
-        ImprovedGsPlus(const ImprovedGsPlus&) = delete;
-        ImprovedGsPlus& operator=(const ImprovedGsPlus&) = delete;
-        ImprovedGsPlus(ImprovedGsPlus&&) = delete;
-        ImprovedGsPlus& operator=(ImprovedGsPlus&&) = delete;
+        ImprovedGSPlus(const ImprovedGSPlus&) = delete;
+        ImprovedGSPlus& operator=(const ImprovedGSPlus&) = delete;
+        ImprovedGSPlus(ImprovedGSPlus&&) = delete;
+        ImprovedGSPlus& operator=(ImprovedGSPlus&&) = delete;
 
         // IStrategy interface implementation
 
@@ -45,7 +50,7 @@ namespace lfs::training {
         // Serialization for checkpoints
         void serialize(std::ostream& os) const override;
         void deserialize(std::istream& is) override;
-        const char* strategy_type() const override { return "I-GS+"; }
+        const char* strategy_type() const override { return "IGS+"; }
 
         // Reserve optimizer capacity for future growth (e.g., after checkpoint load)
         void reserve_optimizer_capacity(size_t capacity) override;
@@ -62,19 +67,10 @@ namespace lfs::training {
         // Setters
         void set_views(std::shared_ptr<CameraDataset> views) noexcept { this->_views = views; }
 
-        // weighting used to compute gaussian score
-        struct ScoreCoefficients {
-            float accum_importance; // 10 --> 30
-            float blend_importance; // 50 --> 30
-
-            float mse_importance;  // 50
-            float edge_importance; // 50
-        };
-
     private:
         // Helper Functions
         inline const int64_t get_current_budget() const noexcept { return _budget_schedule[_current_step + 1]; }
-        inline const unsigned global_seed() const noexcept { return _current_step; } // for camera sampling
+        inline const unsigned global_seed() const noexcept { return _current_step; }                             // for camera sampling
         const std::pair<std::vector<CameraExample>, std::vector<int>> random_cam_sample(const int N = 10) const; // N minimum
 
         const lfs::core::Tensor get_loss_map(const lfs::core::Tensor reconstructed_img, const lfs::core::Tensor original_img, const lfs::core::Tensor edge_loss_norm) const;
@@ -88,7 +84,7 @@ namespace lfs::training {
 
         void reset_opacity();
         void prune_post_reset();
-        void prune_with_score(const int iter, const lfs::core::Tensor& scores);
+        void opacity_prune(const int iter);
         void remove(const lfs::core::Tensor& is_prune);
         void mark_as_free(const lfs::core::Tensor& indices);
 
@@ -117,8 +113,6 @@ namespace lfs::training {
         std::unique_ptr<ExponentialLR> _scheduler;
         lfs::core::SplatData* _splat_data;
         std::unique_ptr<const lfs::core::param::OptimizationParameters> _params;
-
-        static constexpr ScoreCoefficients _score_coefficients = {10, 50, 50, 50};
 
         // Free slot tracking - bool tensor [capacity], true = slot is free for reuse
         lfs::core::Tensor _free_mask;

@@ -214,7 +214,7 @@ namespace lfs::core {
 
             if (json.contains("strategy")) {
                 std::string strategy = json["strategy"];
-                if (strategy == "mcmc" || strategy == "adc") {
+                if (strategy == "mcmc" || strategy == "adc" || strategy == "IGS+") {
                     params.strategy = strategy;
                 } else {
                     LOG_WARN("Invalid strategy '{}' in JSON, using default", strategy);

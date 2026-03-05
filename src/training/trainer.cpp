@@ -27,8 +27,8 @@
 #include "rasterization/fast_rasterizer.hpp"
 #include "rasterization/gsplat_rasterizer.hpp"
 #include "strategies/adc.hpp"
-#include "strategies/mcmc.hpp"
 #include "strategies/improved_gs_plus.hpp"
+#include "strategies/mcmc.hpp"
 #include "strategies/strategy_factory.hpp"
 #include "training/kernels/grad_alpha.hpp"
 
@@ -509,8 +509,8 @@ namespace lfs::training {
             }
 
             auto& splat = strategy_->get_model();
-            if (strategy_->strategy_type() == "I-GS+") {
-                ImprovedGsPlus* improved_gs_plus = dynamic_cast<ImprovedGsPlus*>(strategy_.get());
+            if (strategy_->strategy_type() == "IGS+") {
+                ImprovedGSPlus* improved_gs_plus = dynamic_cast<ImprovedGSPlus*>(strategy_.get());
                 improved_gs_plus->set_views(train_dataset_);
             }
 
