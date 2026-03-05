@@ -1,3 +1,7 @@
+/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
 #include "image_kernels.hpp"
 #include <stdio.h>
 
@@ -167,10 +171,6 @@ namespace lfs::training::kernels {
                 n2 = magnitude[(row + 1) * width + (col + 1)]; // Bottom-Right
             }
 
-            // if (row == 6 && col == 6) { // Adding col check to avoid flooding the console
-            //     printf("Row 6, Col 6 -> Mag: %f, Angle: %f, Degree: %f\n", mag, ang, deg);
-            // }
-
             // 2. Suppress non-maxima
             if (mag >= n1 && mag >= n2) {
                 output[idx] = mag;
@@ -227,5 +227,4 @@ namespace lfs::training::kernels {
 
         sobel_gradient_kernel<<<gridDim, blockDim>>>(d_input, d_magnitude, d_angle, height, width);
     }
-
 } // namespace lfs::training::kernels
