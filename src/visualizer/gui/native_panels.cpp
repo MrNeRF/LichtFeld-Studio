@@ -7,34 +7,19 @@
 #include "gui/gui_manager.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/panel_registry.hpp"
+#include "gui/rml_status_bar.hpp"
 #include "gui/sequencer_ui_manager.hpp"
 #include "gui/startup_overlay.hpp"
-#include "gui/windows/file_browser.hpp"
 #include "internal/viewport.hpp"
 #include "python/python_runtime.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "visualizer_impl.hpp"
-#include "windows/disk_space_error_dialog.hpp"
 #include "windows/video_extractor_dialog.hpp"
 
 #include <glm/gtc/type_ptr.hpp>
 #include <imgui.h>
 
 namespace lfs::vis::gui::native_panels {
-
-    FileBrowserPanel::FileBrowserPanel(FileBrowser* browser, bool* visible)
-        : browser_(browser),
-          visible_(visible) {}
-
-    void FileBrowserPanel::draw(const PanelDrawContext& ctx) {
-        (void)ctx;
-        browser_->render(visible_);
-    }
-
-    bool FileBrowserPanel::poll(const PanelDrawContext& ctx) {
-        (void)ctx;
-        return visible_ && *visible_;
-    }
 
     VideoExtractorPanel::VideoExtractorPanel(lfs::gui::VideoExtractorDialog* dialog)
         : dialog_(dialog) {}
@@ -45,27 +30,13 @@ namespace lfs::vis::gui::native_panels {
             PanelRegistry::instance().set_panel_enabled("native.video_extractor", false);
     }
 
-    DiskSpaceErrorPanel::DiskSpaceErrorPanel(DiskSpaceErrorDialog* dialog)
-        : dialog_(dialog) {}
-
-    void DiskSpaceErrorPanel::draw(const PanelDrawContext& ctx) {
-        (void)ctx;
-        dialog_->render();
-    }
-
-    bool DiskSpaceErrorPanel::poll(const PanelDrawContext& ctx) {
-        (void)ctx;
-        return dialog_->isOpen();
-    }
-
-    StartupOverlayPanel::StartupOverlayPanel(StartupOverlay* overlay, ImFont* font, const bool* drag_hovering)
+    StartupOverlayPanel::StartupOverlayPanel(StartupOverlay* overlay, const bool* drag_hovering)
         : overlay_(overlay),
-          font_(font),
           drag_hovering_(drag_hovering) {}
 
     void StartupOverlayPanel::draw(const PanelDrawContext& ctx) {
         if (ctx.viewport)
-            overlay_->render(*ctx.viewport, font_, drag_hovering_ ? *drag_hovering_ : false);
+            overlay_->render(*ctx.viewport, drag_hovering_ ? *drag_hovering_ : false);
     }
 
     bool StartupOverlayPanel::poll(const PanelDrawContext& ctx) {
@@ -179,6 +150,13 @@ namespace lfs::vis::gui::native_panels {
         python::invoke_viewport_overlay(glm::value_ptr(view), glm::value_ptr(proj),
                                         vp_pos, vp_size, cam_pos, cam_fwd,
                                         ImGui::GetBackgroundDrawList());
+    }
+
+    RmlStatusBarPanel::RmlStatusBarPanel(RmlStatusBar* sb)
+        : status_bar_(sb) {}
+
+    void RmlStatusBarPanel::draw(const PanelDrawContext& ctx) {
+        status_bar_->draw(ctx);
     }
 
 } // namespace lfs::vis::gui::native_panels

@@ -1,58 +1,67 @@
 # SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Scene Graph Panel - Python implementation."""
+"""Scene Graph Panel - RmlUI DOM implementation with retained-mode event delegation."""
 
 from pathlib import Path
 import lichtfeld as lf
 
-from .types import Panel
+from .types import RmlPanel
 from .ui.state import AppState
 
-INDENT_SPACING = 14.0
-RENAME_INPUT_WIDTH = 150.0
-ROW_PADDING = 2.0
-ICON_SIZE_BASE = 16.0
-ICON_SPACING_BASE = 2.0
-
-SELECTION_COLOR = (0.3, 0.5, 0.8, 0.4)
-VISIBLE_TINT = (0.4, 0.9, 0.4, 1.0)
-HIDDEN_TINT = (0.6, 0.4, 0.4, 0.7)
-TRASH_SELECTED_TINT = (1.0, 0.6, 0.6, 0.9)
-TRASH_DEFAULT_TINT = (0.5, 0.5, 0.5, 0.5)
-GRIP_ACTIVE_TINT = (0.5, 0.5, 0.5, 0.5)
-GRIP_INACTIVE_TINT = (0.0, 0.0, 0.0, 0.0)
-MASK_TINT = (0.9, 0.5, 0.6, 0.8)
-TRAINING_ENABLED_TINT = (0.4, 0.7, 1.0, 1.0)
-TRAINING_DISABLED_TINT = (0.5, 0.5, 0.5, 0.4)
-DEFAULT_ICON_COLOR = (0.7, 0.7, 0.7, 1.0)
-
-NODE_TYPE_COLORS = {
-    "SPLAT": (0.6, 0.8, 1.0, 0.9),
-    "GROUP": (0.7, 0.7, 0.7, 0.8),
-    "DATASET": (0.5, 0.7, 1.0, 0.9),
-    "CAMERA": (0.5, 0.6, 0.8, 0.6),
-    "CAMERA_GROUP": (0.6, 0.7, 0.9, 0.8),
-    "CROPBOX": (1.0, 0.7, 0.3, 0.9),
-    "ELLIPSOID": (0.3, 0.8, 1.0, 0.9),
-    "POINTCLOUD": (0.8, 0.5, 1.0, 0.8),
-    "MESH": (0.5, 0.9, 0.6, 0.9),
-    "KEYFRAME_GROUP": (0.9, 0.7, 0.3, 0.8),
-    "KEYFRAME": (1.0, 0.8, 0.2, 0.9),
-}
-
-NODE_TYPE_ICON_NAMES = {
+NODE_TYPE_ICONS = {
     "SPLAT": "splat",
+    "POINTCLOUD": "pointcloud",
     "GROUP": "group",
     "DATASET": "dataset",
     "CAMERA": "camera",
     "CAMERA_GROUP": "camera",
     "CROPBOX": "cropbox",
     "ELLIPSOID": "ellipsoid",
-    "POINTCLOUD": "pointcloud",
     "MESH": "mesh",
-    "KEYFRAME_GROUP": "camera",
-    "KEYFRAME": "camera",
+    "KEYFRAME_GROUP": None,
+    "KEYFRAME": None,
+    "IMAGE_GROUP": None,
+    "IMAGE": None,
 }
+
+# Fallback Unicode icons for types without PNG
+NODE_TYPE_UNICODE = {
+    "KEYFRAME_GROUP": "\u25c6",
+    "KEYFRAME": "\u25c6",
+    "IMAGE_GROUP": "\u25a3",
+    "IMAGE": "\u25a3",
+}
+
+NODE_TYPE_CSS_CLASS = {
+    "SPLAT": "splat",
+    "POINTCLOUD": "pointcloud",
+    "GROUP": "group",
+    "DATASET": "dataset",
+    "CAMERA": "camera",
+    "CAMERA_GROUP": "camera_group",
+    "CROPBOX": "cropbox",
+    "ELLIPSOID": "ellipsoid",
+    "MESH": "mesh",
+    "KEYFRAME_GROUP": "keyframe_group",
+    "KEYFRAME": "keyframe",
+    "IMAGE_GROUP": "group",
+    "IMAGE": "group",
+}
+
+# RmlUI key identifiers (Rml::Input::KeyIdentifier)
+KI_RETURN = 72
+KI_ESCAPE = 81
+KI_DELETE = 99
+KI_F2 = 108
+
+EASING_TYPES = [
+    (0, "scene.keyframe_easing.linear"),
+    (1, "scene.keyframe_easing.ease_in"),
+    (2, "scene.keyframe_easing.ease_out"),
+    (3, "scene.keyframe_easing.ease_in_out"),
+]
+
+DRAGGABLE_TYPES = {"SPLAT", "GROUP", "POINTCLOUD", "MESH", "CROPBOX", "ELLIPSOID"}
 
 
 def tr(key):
@@ -60,390 +69,508 @@ def tr(key):
     return result if result else key
 
 
-class ScenePanel(Panel):
+def _node_type(node):
+    return str(node.type).split(".")[-1]
+
+
+def _is_deletable(node_type, parent_is_dataset):
+    return (node_type not in ("CAMERA", "CAMERA_GROUP", "KEYFRAME", "KEYFRAME_GROUP")
+            and not parent_is_dataset)
+
+
+def _can_drag(node_type, parent_is_dataset):
+    return node_type in DRAGGABLE_TYPES and not parent_is_dataset
+
+
+def _type_dot_html(node_type):
+    css_cls = NODE_TYPE_CSS_CLASS.get(node_type, "")
+    if NODE_TYPE_ICONS.get(node_type):
+        return f'<span class="color-dot {css_cls}"></span>'
+    unicode_char = NODE_TYPE_UNICODE.get(node_type, "?")
+    return f'<span class="node-icon {css_cls}">{unicode_char}</span>'
+
+
+class ScenePanel(RmlPanel):
     idname = "lfs.scene"
     label = "Scene"
     space = "SCENE_HEADER"
     order = 0
+    rml_template = "rmlui/scene_tree.rml"
 
     def __init__(self):
+        self.doc = None
+        self.container = None
+        self.filter_input = None
         self._filter_text = ""
         self._selected_nodes = set()
-        self._row_index = 0
-        self._rename_node = None
-        self._rename_buffer = ""
-        self._rename_focus = False
         self._click_anchor = None
         self._visible_node_order = []
         self._committed_node_order = []
         self._prev_selected = set()
         self._scroll_to_node = None
-        self._force_open_ids = set()
+        self._collapsed_ids = set()
+        self._rename_node = None
+        self._rename_buffer = ""
+        self._row_index = 0
+        self._context_menu = None
+        self._context_menu_node = None
+        self._last_scene_gen = 0
+        self._drag_source = None
+        self._models_collapsed = False
+        self._last_lang = ""
 
-    def _is_node_selected(self, node):
-        return node.name in self._selected_nodes
+    def on_load(self, doc):
+        self.doc = doc
+        self._last_lang = lf.ui.get_current_language()
+        self.container = doc.get_element_by_id("tree-container")
+        self.filter_input = doc.get_element_by_id("filter-input")
+        self._context_menu = doc.get_element_by_id("context-menu")
 
-    def _open_camera_preview(self, scene, target_cam_uid: int):
-        from . import image_preview_panel
+        if self.filter_input:
+            self.filter_input.set_attribute("placeholder", tr("scene.search"))
+            self.filter_input.add_event_listener("change", self._on_filter_change)
 
-        cameras = []
-        for node in scene.get_nodes():
-            if str(node.type).endswith("CAMERA") and node.image_path:
-                cameras.append((node.name, node.image_path, node.mask_path, node.camera_uid))
+        if self.container:
+            self.container.add_event_listener("click", self._on_tree_click)
+            self.container.add_event_listener("dblclick", self._on_tree_dblclick)
+            self.container.add_event_listener("mousedown", self._on_tree_mousedown)
+            self.container.add_event_listener("dragstart", self._on_tree_dragstart)
+            self.container.add_event_listener("dragover", self._on_tree_dragover)
+            self.container.add_event_listener("dragout", self._on_tree_dragout)
+            self.container.add_event_listener("dragdrop", self._on_tree_dragdrop)
+            self.container.add_event_listener("dragend", self._on_tree_dragend)
 
-        cameras.sort(key=lambda c: c[0])
+        if self._context_menu:
+            self._context_menu.add_event_listener("click", self._on_context_menu_click)
 
-        image_paths = [Path(c[1]) for c in cameras]
-        mask_paths = [Path(c[2]) if c[2] else None for c in cameras]
+        body = doc.get_element_by_id("body")
+        if body:
+            body.add_event_listener("keydown", self._on_keydown)
+            body.add_event_listener("click", self._on_body_click)
 
-        target_idx = next((i for i, c in enumerate(cameras) if c[3] == target_cam_uid), 0)
+    def on_scene_changed(self, doc):
+        self._rebuild_tree()
 
-        image_preview_panel.open_image_preview(image_paths, mask_paths, target_idx)
+    def on_update(self, doc):
+        cur_lang = lf.ui.get_current_language()
+        if cur_lang != self._last_lang:
+            self._last_lang = cur_lang
+            if self.filter_input:
+                self.filter_input.set_attribute("placeholder", tr("scene.search"))
+            self._rebuild_tree()
 
-    def _get_icon(self, name: str) -> int:
-        from . import icon_manager
-        return icon_manager.get_scene_icon(name)
+        current = set(lf.get_selected_node_names())
+        if current != self._prev_selected:
+            self._prev_selected = current
+            self._selected_nodes = current
+            self._update_selection_display()
+            if current:
+                self._scroll_to_node = next(iter(current))
+                self._do_scroll()
 
-    def _draw_row_background(self, layout, is_selected, row_index):
-        theme = lf.ui.theme()
-        scale = layout.get_dpi_scale()
-        _, cursor_y = layout.get_cursor_screen_pos()
-        win_x, _ = layout.get_window_pos()
-        win_width = layout.get_window_width()
-        row_height = layout.get_text_line_height() + ROW_PADDING * scale
+    # -- DOM traversal helpers --
 
-        if is_selected:
-            color = SELECTION_COLOR
-        elif row_index % 2 == 0:
-            color = theme.palette.row_even
+    def _find_row_from_target(self, target):
+        el = target
+        while el is not None:
+            if el.is_class_set("tree-row"):
+                return el
+            el = el.parent()
+        return None
+
+    # -- Delegated event handlers --
+
+    def _on_tree_click(self, event):
+        target = event.target()
+        if target is None:
+            return
+
+        if target.has_attribute("data-action"):
+            event.stop_propagation()
+            action = target.get_attribute("data-action")
+            node_name = target.get_attribute("data-node", "")
+            self._handle_inline_action(action, node_name)
+            return
+
+        if target.is_class_set("expand-toggle"):
+            event.stop_propagation()
+            target_id = target.get_attribute("data-target", "")
+            self._toggle_expand(target_id, target)
+            return
+
+        el = target
+        while el is not None and el != self.container:
+            if el.is_class_set("section-header"):
+                event.stop_propagation()
+                self._toggle_models_section()
+                return
+            el = el.parent()
+
+        row = self._find_row_from_target(target)
+        if row:
+            event.stop_propagation()
+            node_name = row.get_attribute("data-node", "")
+            if node_name:
+                self._handle_click(node_name)
+
+    def _on_tree_dblclick(self, event):
+        target = event.target()
+        if target is None:
+            return
+        if target.has_attribute("data-action") or target.is_class_set("expand-toggle"):
+            return
+        row = self._find_row_from_target(target)
+        if not row:
+            return
+        event.stop_propagation()
+        node_name = row.get_attribute("data-node", "")
+        node_type = row.get_attribute("data-type", "")
+        if not node_name:
+            return
+        scene = lf.get_scene()
+        if not scene:
+            return
+        node = scene.get_node(node_name)
+        if not node:
+            return
+        if node_type == "CAMERA":
+            from .image_preview_panel import open_camera_preview_by_uid
+            open_camera_preview_by_uid(node.camera_uid)
+        elif node_type == "KEYFRAME":
+            kf = node.keyframe_data()
+            if kf:
+                lf.ui.go_to_keyframe(kf.keyframe_index)
+
+    def _on_tree_mousedown(self, event):
+        button = int(event.get_parameter("button", "0"))
+        if button != 1:
+            return
+        target = event.target()
+        if target is None:
+            return
+        row = self._find_row_from_target(target)
+        if not row:
+            return
+        event.stop_propagation()
+        node_name = row.get_attribute("data-node", "")
+        if not node_name:
+            return
+        mouse_x = event.get_parameter("mouse_x", "0")
+        mouse_y = event.get_parameter("mouse_y", "0")
+        if node_name not in self._selected_nodes:
+            lf.select_node(node_name)
+            self._selected_nodes = {node_name}
+            self._click_anchor = node_name
+            self._update_selection_display()
+        self._show_context_menu(node_name, mouse_x, mouse_y)
+
+    def _on_tree_dragstart(self, event):
+        row = self._find_row_from_target(event.target())
+        if row:
+            self._drag_source = row.get_attribute("data-node", "")
+
+    def _on_tree_dragend(self, event):
+        self._drag_source = None
+        if self.container:
+            for row in self.container.query_selector_all(".drop-target"):
+                row.set_class("drop-target", False)
+
+    def _on_tree_dragover(self, event):
+        row = self._find_row_from_target(event.target())
+        if row:
+            target_name = row.get_attribute("data-node", "")
+            if self._drag_source and target_name != self._drag_source:
+                row.set_class("drop-target", True)
+
+    def _on_tree_dragout(self, event):
+        row = self._find_row_from_target(event.target())
+        if row:
+            row.set_class("drop-target", False)
+
+    def _on_tree_dragdrop(self, event):
+        row = self._find_row_from_target(event.target())
+        if row and self._drag_source:
+            target_name = row.get_attribute("data-node", "")
+            if self._drag_source != target_name:
+                lf.reparent_node(self._drag_source, target_name)
+                self._drag_source = None
+                self._rebuild_tree()
+
+    def _on_context_menu_click(self, event):
+        target = event.target()
+        if target is None:
+            return
+        el = target
+        while el is not None and el != self._context_menu:
+            if el.is_class_set("context-menu-item"):
+                action = el.get_attribute("data-action", "")
+                if action:
+                    event.stop_propagation()
+                    self._hide_context_menu()
+                    self._execute_action(action)
+                return
+            el = el.parent()
+
+    # -- Inline action handlers --
+
+    def _handle_inline_action(self, action, node_name):
+        scene = lf.get_scene()
+        if not scene:
+            return
+        if action == "toggle-vis":
+            node = scene.get_node(node_name)
+            if node:
+                new_visible = not node.visible
+                lf.set_node_visibility(node_name, new_visible)
+                self._update_vis_icon(node_name, new_visible)
+
+    def _update_vis_icon(self, node_name, visible):
+        if not self.container:
+            return
+        row = self.container.query_selector(f'[data-node="{node_name}"]')
+        if not row:
+            return
+        vis = row.query_selector("[data-action='toggle-vis']")
+        if not vis:
+            return
+        if visible:
+            vis.set_class_names("row-icon icon-vis-on")
+            vis.set_attribute("sprite", "icon-visible")
         else:
-            color = theme.palette.row_odd
+            vis.set_class_names("row-icon icon-vis-off")
+            vis.set_attribute("sprite", "icon-hidden")
 
-        layout.draw_rect_filled(win_x, cursor_y, win_x + win_width, cursor_y + row_height, color)
+    def _toggle_expand(self, target_id, toggle_el):
+        if not self.doc or not target_id:
+            return
+        try:
+            nid = int(target_id.replace("children-", ""))
+        except ValueError:
+            return
+        children_elem = self.doc.get_element_by_id(target_id)
+        if children_elem is None:
+            return
+        if nid in self._collapsed_ids:
+            self._collapsed_ids.discard(nid)
+            children_elem.set_class("collapsed", False)
+            toggle_el.set_inner_rml("\u25BC")
+        else:
+            self._collapsed_ids.add(nid)
+            children_elem.set_class("collapsed", True)
+            toggle_el.set_inner_rml("\u25B6")
 
-    def draw(self, layout):
+    def _toggle_models_section(self):
+        if not self.doc:
+            return
+        content = self.doc.get_element_by_id("models-content")
+        header = self.doc.get_element_by_id("models-header")
+        if content:
+            self._models_collapsed = not self._models_collapsed
+            content.set_class("collapsed", self._models_collapsed)
+            if header:
+                arrow = "\u25BC" if not self._models_collapsed else "\u25B6"
+                scene = lf.get_scene()
+                count = sum(1 for n in scene.get_nodes() if n.parent_id == -1) if scene else 0
+                header.set_inner_rml(f'{arrow} {tr("scene.models").format(count)}')
+
+    # -- Keyboard handling --
+
+    def _on_keydown(self, event):
+        key = int(event.get_parameter("key_identifier", "0"))
+
+        if key == KI_F2:
+            if self._selected_nodes and not self._rename_node:
+                name = next(iter(self._selected_nodes))
+                scene = lf.get_scene()
+                if scene:
+                    node = scene.get_node(name)
+                    if node and _is_deletable(_node_type(node), self._check_parent_dataset(scene, node)):
+                        self._rename_node = name
+                        self._rename_buffer = name
+                        self._rebuild_tree()
+            event.stop_propagation()
+
+        elif key == KI_DELETE:
+            if self._rename_node:
+                return
+            scene = lf.get_scene()
+            if scene:
+                self._delete_selected(scene)
+            event.stop_propagation()
+
+        elif key == KI_ESCAPE:
+            if self._rename_node:
+                self._rename_node = None
+                self._rebuild_tree()
+            self._hide_context_menu()
+            event.stop_propagation()
+
+    def _on_body_click(self, event):
+        self._hide_context_menu()
+
+    def _on_filter_change(self, event):
+        if self.filter_input:
+            self._filter_text = self.filter_input.get_attribute("value") or ""
+        self._rebuild_tree()
+
+    # -- Tree building --
+
+    def _rebuild_tree(self):
+        if not self.container:
+            return
+
         scene = lf.get_scene()
         if scene is None or not scene.has_nodes():
-            theme = lf.ui.theme()
-            layout.text_colored(tr("scene.no_data_loaded"), theme.palette.text_dim)
-            layout.text_colored(tr("scene.use_file_menu"), theme.palette.text_dim)
+            self.container.set_inner_rml(
+                '<div class="empty-message">' + tr("scene.no_data_loaded") + '</div>'
+                '<div class="empty-message">' + tr("scene.use_file_menu") + '</div>'
+            )
             return
 
         self._selected_nodes = set(lf.get_selected_node_names())
-
-        new_nodes = self._selected_nodes - self._prev_selected
-        if new_nodes:
-            self._scroll_to_node = next(iter(new_nodes))
-            target = scene.get_node(self._scroll_to_node)
-            self._force_open_ids = set()
-            while target and target.parent_id != -1:
-                self._force_open_ids.add(target.parent_id)
-                target = scene.get_node_by_id(target.parent_id)
-        self._prev_selected = set(self._selected_nodes)
-
-        theme = lf.ui.theme()
-        scale = layout.get_dpi_scale()
-
-        layout.push_style_var_vec2("FramePadding", (4.0 * scale, 2.0 * scale))
-        layout.push_style_color("FrameBg", (theme.palette.surface[0], theme.palette.surface[1],
-                                            theme.palette.surface[2], 0.5))
-        layout.push_item_width(-1)
-        _, self._filter_text = layout.input_text_with_hint("##filter", tr("scene.filter"), self._filter_text)
-        layout.pop_item_width()
-        layout.pop_style_color()
-        layout.pop_style_var()
-
-        layout.spacing()
-
-        layout.push_style_var_vec2("FramePadding", (2.0 * scale, 1.0 * scale))
-        layout.push_style_var_vec2("ItemSpacing", (4.0 * scale, 0.0))
-        layout.push_style_var("IndentSpacing", INDENT_SPACING * scale)
-
         self._row_index = 0
         self._visible_node_order = []
 
-        if layout.is_window_focused() and self._rename_node is None:
-            if lf.ui.is_key_pressed(lf.ui.Key.F2) and self._selected_nodes:
-                first_selected = next(iter(self._selected_nodes))
-                self._rename_node = first_selected
-                self._rename_buffer = first_selected
-                self._rename_focus = True
-            if lf.ui.is_key_pressed(lf.ui.Key.DELETE) and self._selected_nodes:
-                self._delete_selected(scene)
-
         nodes = scene.get_nodes()
-        splat_count = sum(1 for n in nodes if str(n.type).endswith("SPLAT"))
+        root_count = sum(1 for n in nodes if n.parent_id == -1)
 
-        models_label = tr("scene.models").format(splat_count)
-        if layout.collapsing_header(models_label, default_open=True):
-            if layout.begin_drag_drop_target():
-                payload = layout.accept_drag_drop_payload("SCENE_NODE")
-                if payload:
-                    lf.reparent_node(payload, "")
-                layout.end_drag_drop_target()
+        tree_html = ""
+        for node in nodes:
+            if node.parent_id == -1:
+                tree_html += self._build_node_html(scene, node, 0)
 
-            if layout.begin_context_menu("##ModelsMenu"):
-                if not AppState.has_trainer.value:
-                    if layout.menu_item(tr("scene.add_group")):
-                        lf.add_group(tr("scene.new_group_name"), "")
-                    layout.separator()
-                layout.end_context_menu()
+        if not nodes:
+            tree_html = '<div class="empty-message">' + tr("scene.no_models_loaded") + '</div>'
 
-            for node in nodes:
-                if node.parent_id == -1:
-                    self._draw_node(layout, scene, node, 0, scale)
+        arrow = "\u25BC" if not self._models_collapsed else "\u25B6"
+        header_text = tr("scene.models").format(root_count)
+        collapsed_cls = " collapsed" if self._models_collapsed else ""
 
-            if not nodes:
-                layout.text_colored(tr("scene.no_models_loaded"), theme.palette.text_dim)
+        html = (f'<div class="section-header" id="models-header">'
+                f'{arrow} {header_text}</div>'
+                f'<div id="models-content" class="{collapsed_cls}">{tree_html}</div>')
 
+        self.container.set_inner_rml(html)
         self._committed_node_order = self._visible_node_order
 
-        layout.pop_style_var()
-        layout.pop_style_var()
-        layout.pop_style_var()
+        self._setup_rename_input()
+        self._do_scroll()
 
-    def _draw_node(self, layout, scene, node, depth, scale):
-        try:
-            node_name = node.name
-        except (UnicodeDecodeError, ValueError):
-            node_name = f"<node_{node.id}>"
-
+    def _build_node_html(self, scene, node, depth):
         if self._filter_text:
             filter_lower = self._filter_text.lower()
-            if filter_lower not in node_name.lower():
+            if filter_lower not in node.name.lower():
+                child_html = ""
                 for child_id in node.children:
                     child = scene.get_node_by_id(child_id)
                     if child:
-                        self._draw_node(layout, scene, child, depth + 1, scale)
-                return
+                        child_html += self._build_node_html(scene, child, depth + 1)
+                return child_html
 
-        layout.push_id(str(node.id))
-
-        node_type = str(node.type).split(".")[-1]
-        is_visible = node.visible
+        node_type = _node_type(node)
+        is_selected = node.name in self._selected_nodes
         has_children = len(node.children) > 0
-        is_group = node_type == "GROUP"
-        is_camera = node_type == "CAMERA"
-        is_camera_group = node_type == "CAMERA_GROUP"
-        is_dataset = node_type == "DATASET"
-        is_splat = node_type == "SPLAT"
-        is_pointcloud = node_type == "POINTCLOUD"
-        is_mesh = node_type == "MESH"
-        is_keyframe = node_type == "KEYFRAME"
-        is_keyframe_group = node_type == "KEYFRAME_GROUP"
 
-        parent_is_dataset = False
-        if node.parent_id != -1:
-            parent = scene.get_node_by_id(node.parent_id)
-            if parent:
-                parent_type = str(parent.type).split(".")[-1]
-                parent_is_dataset = parent_type == "DATASET"
+        parent_is_dataset = self._check_parent_dataset(scene, node)
+        draggable = _can_drag(node_type, parent_is_dataset)
 
-        is_deletable = (not is_camera and not is_camera_group and not parent_is_dataset
-                        and not is_keyframe and not is_keyframe_group)
-        can_drag = (node_type in ("SPLAT", "GROUP", "POINTCLOUD", "MESH", "CROPBOX", "ELLIPSOID")
-                    and not parent_is_dataset)
-
-        is_selected = self._is_node_selected(node)
-        if is_keyframe and not is_selected:
-            kf = node.keyframe_data()
-            if kf:
-                seq = lf.ui.get_sequencer_state()
-                if seq and seq.selected_keyframe == kf.keyframe_index:
-                    is_selected = True
-        self._visible_node_order.append(node_name)
-
-        icon_size = ICON_SIZE_BASE * scale
-        icon_spacing = ICON_SPACING_BASE * scale
-        icon_sz = (icon_size, icon_size)
-
-        self._draw_row_background(layout, is_selected, self._row_index)
+        parity = "even" if self._row_index % 2 == 0 else "odd"
+        selected_cls = " selected" if is_selected else ""
         self._row_index += 1
+        self._visible_node_order.append(node.name)
 
-        if self._scroll_to_node == node_name:
-            layout.set_scroll_here_y(0.5)
-            self._scroll_to_node = None
+        drag_attr = ' drag="drag-drop"' if draggable else ""
+        indent_px = depth * 16
+        indent_style = f' style="padding-left: {indent_px}dp"' if depth > 0 else ""
+        row = f'<div class="tree-row {parity}{selected_cls}" data-node="{node.name}" data-id="{node.id}" data-type="{node_type}"{drag_attr}{indent_style}>'
+        row += '<span class="row-content">'
 
-        if depth > 0:
-            layout.indent(depth * INDENT_SPACING * scale)
-
-        grip_tex = self._get_icon("grip")
-        if grip_tex:
-            grip_tint = GRIP_ACTIVE_TINT if can_drag else GRIP_INACTIVE_TINT
-            layout.image(grip_tex, icon_sz, grip_tint)
-            layout.same_line(0.0, icon_spacing)
-
-        vis_tex = self._get_icon("visible") if is_visible else self._get_icon("hidden")
-        vis_tint = VISIBLE_TINT if is_visible else HIDDEN_TINT
-        if vis_tex and layout.image_button(f"##vis_{node.id}", vis_tex, icon_sz, vis_tint):
-            lf.set_node_visibility(node_name, not is_visible)
-        layout.same_line(0.0, icon_spacing)
-
-        if is_camera:
-            train_enabled = node.training_enabled
-            train_tex = self._get_icon("camera")
-            train_tint = TRAINING_ENABLED_TINT if train_enabled else TRAINING_DISABLED_TINT
-            if train_tex and layout.image_button(f"##train_{node.id}", train_tex, icon_sz, train_tint):
-                node.training_enabled = not train_enabled
-            if layout.is_item_hovered():
-                tip = tr("scene.training_enabled_tooltip") if train_enabled else tr("scene.training_disabled_tooltip")
-                layout.set_tooltip(tip)
-            layout.same_line(0.0, icon_spacing)
-
-        if is_deletable:
-            trash_tex = self._get_icon("trash")
-            trash_tint = TRASH_SELECTED_TINT if is_selected else TRASH_DEFAULT_TINT
-            if trash_tex and layout.image_button(f"##del_{node.id}", trash_tex, icon_sz, trash_tint):
-                lf.remove_node(node_name, False)
-            if layout.is_item_hovered():
-                layout.set_tooltip(tr("scene.delete_node"))
-            layout.same_line(0.0, icon_spacing)
-
-        if self._rename_node == node_name:
-            if self._rename_focus:
-                layout.set_keyboard_focus_here()
-                self._rename_focus = False
-            layout.push_item_width(RENAME_INPUT_WIDTH * scale)
-            entered, self._rename_buffer = layout.input_text_enter("##rename", self._rename_buffer)
-            layout.pop_item_width()
-            if entered and self._rename_buffer:
-                lf.rename_node(node_name, self._rename_buffer)
-                self._rename_node = None
-            elif lf.ui.is_key_pressed(lf.ui.Key.ESCAPE):
-                self._rename_node = None
+        if node.visible:
+            row += f'<img class="row-icon icon-vis-on" sprite="icon-visible" data-action="toggle-vis" data-node="{node.name}" />'
         else:
-            icon_name = NODE_TYPE_ICON_NAMES.get(node_type, "splat")
-            type_tex = self._get_icon(icon_name)
-            icon_color = NODE_TYPE_COLORS.get(node_type, DEFAULT_ICON_COLOR)
-            if type_tex:
-                layout.image(type_tex, icon_sz, icon_color)
-                layout.same_line(0.0, icon_spacing)
+            row += f'<img class="row-icon icon-vis-off" sprite="icon-hidden" data-action="toggle-vis" data-node="{node.name}" />'
 
-            if is_camera and node.mask_path:
-                mask_tex = self._get_icon("mask")
-                if mask_tex:
-                    inverted = lf.ui.get_invert_masks()
-                    uv0 = (1.0, 1.0) if inverted else (0.0, 0.0)
-                    uv1 = (0.0, 0.0) if inverted else (1.0, 1.0)
-                    layout.image_uv(mask_tex, icon_sz, uv0, uv1, MASK_TINT)
-                    layout.same_line(0.0, icon_spacing)
+        row += _type_dot_html(node_type)
 
-            layout.same_line(0.0, 2.0 * scale)
+        if has_children:
+            collapsed = node.id in self._collapsed_ids
+            arrow = "\u25B6" if collapsed else "\u25BC"
+            row += f'<span class="expand-toggle" data-target="children-{node.id}">{arrow}</span>'
+        else:
+            row += '<span class="leaf-spacer"></span>'
 
-            training_disabled = is_camera and not node.training_enabled
-            if training_disabled:
-                theme = lf.ui.theme()
-                layout.push_style_color("Text", theme.palette.text_dim)
-
-            label = node_name
-            if is_splat:
+        if self._rename_node and node.name == self._rename_node:
+            row += f'<input class="rename-input" id="rename-input" type="text" value="{node.name}" />'
+        else:
+            label = node.name
+            if node_type == "SPLAT" and node.gaussian_count > 0:
                 label += f"  ({node.gaussian_count:,})"
-            elif is_pointcloud:
+            elif node_type == "POINTCLOUD":
                 pc = node.point_cloud()
                 if pc:
                     label += f"  ({pc.size:,})"
-            elif is_mesh:
+            elif node_type == "MESH":
                 mesh = node.mesh()
                 if mesh:
                     label += f"  ({mesh.vertex_count:,}V / {mesh.face_count:,}F)"
-            elif is_keyframe:
+            elif node_type == "KEYFRAME":
                 kf = node.keyframe_data()
                 if kf:
                     label = tr("scene.keyframe_label").format(index=kf.keyframe_index + 1, time=kf.time)
+            row += f'<span class="node-name">{label}</span>'
 
-            label_x, label_y = layout.get_cursor_screen_pos()
+        row += '</span></div>'
 
-            if has_children:
-                flags = "OpenOnArrow|SpanAvailWidth"
-                if is_group or is_dataset:
-                    flags += "|DefaultOpen"
-                if is_selected:
-                    flags += "|Selected"
-                if node.id in self._force_open_ids:
-                    layout.set_next_item_open(True)
-                    self._force_open_ids.discard(node.id)
-                is_open = layout.tree_node_ex(label, flags)
-                node_clicked = layout.is_item_clicked()
+        if has_children:
+            collapsed = node.id in self._collapsed_ids
+            collapsed_cls = " collapsed" if collapsed else ""
+            row += f'<div class="tree-children{collapsed_cls}" id="children-{node.id}">'
+            for child_id in node.children:
+                child = scene.get_node_by_id(child_id)
+                if child:
+                    row += self._build_node_html(scene, child, depth + 1)
+            row += '</div>'
 
-                self._draw_context_menu(layout, scene, node, node_type, is_deletable, can_drag)
-                self._handle_drag_drop(layout, node, can_drag)
+        return row
 
-                if node_clicked:
-                    self._handle_click(node_name)
-                    if is_keyframe:
-                        kf = node.keyframe_data()
-                        if kf:
-                            lf.ui.select_keyframe(kf.keyframe_index)
+    def _setup_rename_input(self):
+        if not self._rename_node or not self.doc:
+            return
+        rename_el = self.doc.get_element_by_id("rename-input")
+        if rename_el:
+            rename_el.focus()
+            rename_el.add_event_listener("keydown", self._on_rename_keydown)
 
-                if is_camera and layout.is_item_hovered() and layout.is_mouse_double_clicked(0):
-                    if node.image_path:
-                        self._open_camera_preview(scene, node.camera_uid)
+    # -- Rename --
 
-                if is_keyframe and layout.is_item_hovered() and layout.is_mouse_double_clicked(0):
-                    kf = node.keyframe_data()
-                    if kf:
-                        lf.ui.go_to_keyframe(kf.keyframe_index)
+    def _on_rename_keydown(self, event):
+        key = int(event.get_parameter("key_identifier", "0"))
+        if key == KI_RETURN:
+            event.stop_propagation()
+            self._confirm_rename()
+        elif key == KI_ESCAPE:
+            event.stop_propagation()
+            self._cancel_rename()
 
-                if is_open:
-                    for child_id in node.children:
-                        child = scene.get_node_by_id(child_id)
-                        if child:
-                            self._draw_node(layout, scene, child, depth + 1, scale)
-                    layout.tree_pop()
-            else:
-                flags = "Leaf|NoTreePushOnOpen|SpanAvailWidth"
-                if is_selected:
-                    flags += "|Selected"
-                layout.tree_node_ex(label, flags)
+    def _confirm_rename(self):
+        if not self._rename_node or not self.doc:
+            return
+        rename_el = self.doc.get_element_by_id("rename-input")
+        if rename_el:
+            new_name = rename_el.get_attribute("value", self._rename_node)
+            if new_name and new_name != self._rename_node:
+                lf.rename_node(self._rename_node, new_name)
+        self._rename_node = None
+        self._rebuild_tree()
 
-                self._draw_context_menu(layout, scene, node, node_type, is_deletable, can_drag)
-                self._handle_drag_drop(layout, node, can_drag)
+    def _cancel_rename(self):
+        self._rename_node = None
+        self._rebuild_tree()
 
-                if layout.is_item_clicked():
-                    self._handle_click(node_name)
-                    if is_keyframe:
-                        kf = node.keyframe_data()
-                        if kf:
-                            lf.ui.select_keyframe(kf.keyframe_index)
-
-                if is_camera and layout.is_item_hovered() and layout.is_mouse_double_clicked(0):
-                    if node.image_path:
-                        self._open_camera_preview(scene, node.camera_uid)
-
-                if is_keyframe and layout.is_item_hovered() and layout.is_mouse_double_clicked(0):
-                    kf = node.keyframe_data()
-                    if kf:
-                        lf.ui.go_to_keyframe(kf.keyframe_index)
-
-            if training_disabled:
-                layout.pop_style_color()
-                tw, th = layout.calc_text_size(label)
-                arrow_indent = layout.get_text_line_height() + 4.0 * scale
-                line_y = label_y + th * 0.5
-                layout.draw_window_line(label_x + arrow_indent, line_y,
-                                        label_x + arrow_indent + tw, line_y,
-                                        theme.palette.text_dim, 1.0)
-
-        if depth > 0:
-            layout.unindent(depth * INDENT_SPACING * scale)
-
-        layout.pop_id()
-
-    def _handle_drag_drop(self, layout, node, can_drag):
-        node_type = str(node.type).split(".")[-1]
-        if can_drag and layout.begin_drag_drop_source():
-            layout.set_drag_drop_payload("SCENE_NODE", node.name)
-            layout.label(tr("scene.move_node") % node.name)
-            layout.end_drag_drop_source()
-
-        if node_type in ("GROUP", "SPLAT", "POINTCLOUD", "MESH"):
-            if layout.begin_drag_drop_target():
-                payload = layout.accept_drag_drop_payload("SCENE_NODE")
-                if payload and payload != node.name:
-                    lf.reparent_node(payload, node.name)
-                layout.end_drag_drop_target()
+    # -- Selection --
 
     def _handle_click(self, node_name):
+        self._hide_context_menu()
         ctrl = lf.ui.is_ctrl_down()
         shift = lf.ui.is_shift_down()
 
@@ -460,9 +587,13 @@ class ScenePanel(Panel):
             lf.select_nodes(names)
             self._selected_nodes = set(names)
         else:
+            if self._selected_nodes == {node_name}:
+                return
             lf.select_node(node_name)
             self._selected_nodes = {node_name}
             self._click_anchor = node_name
+
+        self._update_selection_display()
 
     def _get_range(self, a, b):
         order = self._committed_node_order
@@ -473,233 +604,328 @@ class ScenePanel(Panel):
         lo, hi = min(ia, ib), max(ia, ib)
         return order[lo:hi + 1]
 
-    def _delete_selected(self, scene):
-        for name in list(self._selected_nodes):
-            node = scene.get_node(name)
-            if not node:
-                continue
-            ntype = str(node.type).split(".")[-1]
-            parent_is_dataset = False
-            if node.parent_id != -1:
-                parent = scene.get_node_by_id(node.parent_id)
-                if parent and str(parent.type).split(".")[-1] == "DATASET":
-                    parent_is_dataset = True
-            if ntype not in ("CAMERA", "CAMERA_GROUP", "KEYFRAME", "KEYFRAME_GROUP") and not parent_is_dataset:
-                lf.remove_node(name, False)
+    def _update_selection_display(self):
+        if not self.container:
+            return
+        rows = self.container.query_selector_all(".tree-row")
+        for row in rows:
+            name = row.get_attribute("data-node")
+            row.set_class("selected", name in self._selected_nodes)
 
-    def _draw_context_menu(self, layout, scene, node, node_type, is_deletable, can_drag):
-        if not layout.begin_context_menu(f"##ctx_{node.name}"):
+    def _do_scroll(self):
+        if not self._scroll_to_node or not self.container:
+            return
+        row = self.container.query_selector(f'[data-node="{self._scroll_to_node}"]')
+        if row:
+            row.scroll_into_view(False)
+        self._scroll_to_node = None
+
+    def _check_parent_dataset(self, scene, node):
+        if node.parent_id != -1:
+            parent = scene.get_node_by_id(node.parent_id)
+            if parent and _node_type(parent) == "DATASET":
+                return True
+        return False
+
+    # -- Context menu --
+
+    def _show_context_menu(self, node_name, mouse_x="0", mouse_y="0"):
+        if not self._context_menu or not self.doc:
             return
 
-        if node.name not in self._selected_nodes:
-            lf.select_node(node.name)
-            self._selected_nodes = {node.name}
-            self._click_anchor = node.name
+        scene = lf.get_scene()
+        if not scene:
+            return
+
+        node = scene.get_node(node_name)
+        if not node:
+            return
+
+        node_type = _node_type(node)
+        parent_is_dataset = self._check_parent_dataset(scene, node)
+        is_del = _is_deletable(node_type, parent_is_dataset)
+        draggable = _can_drag(node_type, parent_is_dataset)
 
         if len(self._selected_nodes) > 1:
-            self._draw_multi_context_menu(layout, scene)
-            layout.end_context_menu()
-            return
+            html = self._build_multi_context_html(scene)
+        else:
+            html = self._build_single_context_html(scene, node, node_type, is_del, draggable)
+
+        self._context_menu.set_inner_rml(html)
+        self._context_menu.set_class("visible", True)
+
+        item_count = html.count("context-menu-item")
+        label_count = html.count("context-menu-label")
+        sep_count = html.count("context-menu-separator")
+        estimated_h = item_count * 22 + label_count * 20 + sep_count * 5 + 8
+        body = self.doc.get_element_by_id("body")
+        panel_h = body.scroll_height if body else 600
+        my = float(mouse_y)
+        if my + estimated_h > panel_h:
+            my = max(0, my - estimated_h)
+
+        self._context_menu.set_property("left", f"{mouse_x}px")
+        self._context_menu.set_property("top", f"{my:.0f}px")
+        self._context_menu_node = node_name
+
+    def _build_single_context_html(self, scene, node, node_type, is_deletable, can_drag):
+        html = ""
 
         if node_type == "CAMERA":
-            if layout.menu_item(tr("scene.go_to_camera_view")):
-                lf.ui.go_to_camera_view(node.camera_uid)
-            layout.separator()
+            html += f'<div class="context-menu-item" data-action="go_to_camera:{node.camera_uid}">{tr("scene.go_to_camera_view")}</div>'
+            html += '<div class="context-menu-separator"></div>'
             if node.training_enabled:
-                if layout.menu_item(tr("scene.disable_for_training")):
-                    node.training_enabled = False
+                html += f'<div class="context-menu-item" data-action="disable_train:{node.name}">{tr("scene.disable_for_training")}</div>'
             else:
-                if layout.menu_item(tr("scene.enable_for_training")):
-                    node.training_enabled = True
-            layout.end_context_menu()
-            return
+                html += f'<div class="context-menu-item" data-action="enable_train:{node.name}">{tr("scene.enable_for_training")}</div>'
+            return html
 
         if node_type == "KEYFRAME":
             kf = node.keyframe_data()
             if kf:
-                if layout.menu_item(tr("scene.go_to_keyframe")):
-                    lf.ui.go_to_keyframe(kf.keyframe_index)
-                if layout.menu_item(tr("scene.update_keyframe")):
-                    lf.ui.select_keyframe(kf.keyframe_index)
-                    lf.ui.update_keyframe()
-                if layout.menu_item(tr("scene.select_in_timeline")):
-                    lf.ui.select_keyframe(kf.keyframe_index)
-                layout.separator()
-                if layout.begin_menu(tr("scene.keyframe_easing")):
-                    easing_names = [
-                        tr("scene.keyframe_easing.linear"),
-                        tr("scene.keyframe_easing.ease_in"),
-                        tr("scene.keyframe_easing.ease_out"),
-                        tr("scene.keyframe_easing.ease_in_out"),
-                    ]
-                    for e_idx, e_name in enumerate(easing_names):
-                        is_current = kf.easing == e_idx
-                        if layout.menu_item(e_name, selected=is_current):
-                            if not is_current:
-                                lf.ui.set_keyframe_easing(kf.keyframe_index, e_idx)
-                    layout.end_menu()
-                layout.separator()
+                html += f'<div class="context-menu-item" data-action="go_to_kf:{kf.keyframe_index}">{tr("scene.go_to_keyframe")}</div>'
+                html += f'<div class="context-menu-item" data-action="update_kf:{kf.keyframe_index}">{tr("scene.update_keyframe")}</div>'
+                html += f'<div class="context-menu-item" data-action="select_kf:{kf.keyframe_index}">{tr("scene.select_in_timeline")}</div>'
+
+                html += '<div class="context-menu-separator"></div>'
+                html += f'<div class="context-menu-label">{tr("scene.keyframe_easing")}</div>'
+                for easing_id, easing_key in EASING_TYPES:
+                    active = " active" if kf.easing == easing_id else ""
+                    html += f'<div class="context-menu-item submenu-item{active}" data-action="set_easing:{kf.keyframe_index}:{easing_id}">{tr(easing_key)}</div>'
+
                 if kf.keyframe_index > 0:
-                    if layout.menu_item(tr("scene.delete")):
-                        lf.ui.delete_keyframe(kf.keyframe_index)
-            layout.end_context_menu()
-            return
+                    html += '<div class="context-menu-separator"></div>'
+                    html += f'<div class="context-menu-item" data-action="delete_kf:{kf.keyframe_index}">{tr("scene.delete")}</div>'
+            return html
 
         if node_type == "KEYFRAME_GROUP":
-            if layout.menu_item(tr("scene.add_keyframe_scene")):
-                lf.ui.add_keyframe()
-            layout.end_context_menu()
-            return
+            html += f'<div class="context-menu-item" data-action="add_kf">{tr("scene.add_keyframe_scene")}</div>'
+            return html
 
         if node_type == "CAMERA_GROUP":
-            if layout.menu_item(tr("scene.enable_all_training")):
-                for child_id in node.children:
-                    child = scene.get_node_by_id(child_id)
-                    if child and str(child.type).split(".")[-1] == "CAMERA":
-                        child.training_enabled = True
-            if layout.menu_item(tr("scene.disable_all_training")):
-                for child_id in node.children:
-                    child = scene.get_node_by_id(child_id)
-                    if child and str(child.type).split(".")[-1] == "CAMERA":
-                        child.training_enabled = False
-            layout.end_context_menu()
-            return
+            html += f'<div class="context-menu-item" data-action="enable_all_train:{node.name}">{tr("scene.enable_all_training")}</div>'
+            html += f'<div class="context-menu-item" data-action="disable_all_train:{node.name}">{tr("scene.disable_all_training")}</div>'
+            return html
 
         if node_type == "DATASET":
-            if layout.menu_item(tr("scene.delete")):
-                lf.remove_node(node.name, False)
-            layout.end_context_menu()
-            return
+            html += f'<div class="context-menu-item" data-action="delete:{node.name}">{tr("scene.delete")}</div>'
+            return html
 
         if node_type == "CROPBOX":
-            if layout.menu_item(tr("common.apply")):
-                lf.ui.apply_cropbox()
-            layout.separator()
-            if layout.menu_item(tr("scene.fit_to_scene")):
-                lf.ui.fit_cropbox_to_scene(False)
-            if layout.menu_item(tr("scene.fit_to_scene_trimmed")):
-                lf.ui.fit_cropbox_to_scene(True)
-            if layout.menu_item(tr("scene.reset_crop")):
-                lf.ui.reset_cropbox()
-            layout.separator()
-            if layout.menu_item(tr("scene.delete")):
-                lf.remove_node(node.name, False)
-            layout.end_context_menu()
-            return
+            html += f'<div class="context-menu-item" data-action="apply_cropbox">{tr("common.apply")}</div>'
+            html += '<div class="context-menu-separator"></div>'
+            html += f'<div class="context-menu-item" data-action="fit_cropbox:0">{tr("scene.fit_to_scene")}</div>'
+            html += f'<div class="context-menu-item" data-action="fit_cropbox:1">{tr("scene.fit_to_scene_trimmed")}</div>'
+            html += f'<div class="context-menu-item" data-action="reset_cropbox">{tr("scene.reset_crop")}</div>'
+            html += '<div class="context-menu-separator"></div>'
+            html += f'<div class="context-menu-item" data-action="delete:{node.name}">{tr("scene.delete")}</div>'
+            return html
 
         if node_type == "ELLIPSOID":
-            if layout.menu_item(tr("common.apply")):
-                lf.ui.apply_ellipsoid()
-            layout.separator()
-            if layout.menu_item(tr("scene.fit_to_scene")):
-                lf.ui.fit_ellipsoid_to_scene(False)
-            if layout.menu_item(tr("scene.fit_to_scene_trimmed")):
-                lf.ui.fit_ellipsoid_to_scene(True)
-            if layout.menu_item(tr("scene.reset_crop")):
-                lf.ui.reset_ellipsoid()
-            layout.separator()
-            if layout.menu_item(tr("scene.delete")):
-                lf.remove_node(node.name, False)
-            layout.end_context_menu()
-            return
+            html += f'<div class="context-menu-item" data-action="apply_ellipsoid">{tr("common.apply")}</div>'
+            html += '<div class="context-menu-separator"></div>'
+            html += f'<div class="context-menu-item" data-action="fit_ellipsoid:0">{tr("scene.fit_to_scene")}</div>'
+            html += f'<div class="context-menu-item" data-action="fit_ellipsoid:1">{tr("scene.fit_to_scene_trimmed")}</div>'
+            html += f'<div class="context-menu-item" data-action="reset_ellipsoid">{tr("scene.reset_crop")}</div>'
+            html += '<div class="context-menu-separator"></div>'
+            html += f'<div class="context-menu-item" data-action="delete:{node.name}">{tr("scene.delete")}</div>'
+            return html
 
         if node_type == "GROUP" and not AppState.has_trainer.value:
-            if layout.menu_item(tr("scene.add_group_ellipsis")):
-                lf.add_group(tr("scene.new_group_name"), node.name)
-            if layout.menu_item(tr("scene.merge_to_single_ply")):
-                lf.ui.merge_group(node.name)
-            layout.separator()
+            html += f'<div class="context-menu-item" data-action="add_group:{node.name}">{tr("scene.add_group_ellipsis")}</div>'
+            html += f'<div class="context-menu-item" data-action="merge_group:{node.name}">{tr("scene.merge_to_single_ply")}</div>'
+            html += '<div class="context-menu-separator"></div>'
 
         if node_type in ("SPLAT", "POINTCLOUD"):
-            if layout.menu_item(tr("scene.add_crop_box")):
-                lf.ui.add_cropbox(node.name)
-            if layout.menu_item(tr("scene.add_crop_ellipsoid")):
-                lf.ui.add_ellipsoid(node.name)
-            if layout.menu_item(tr("scene.save_to_disk")):
-                lf.ui.save_node_to_disk(node.name)
-            layout.separator()
+            html += f'<div class="context-menu-item" data-action="add_cropbox:{node.name}">{tr("scene.add_crop_box")}</div>'
+            html += f'<div class="context-menu-item" data-action="add_ellipsoid:{node.name}">{tr("scene.add_crop_ellipsoid")}</div>'
+            html += f'<div class="context-menu-item" data-action="save_node:{node.name}">{tr("scene.save_to_disk")}</div>'
+            html += '<div class="context-menu-separator"></div>'
 
         if is_deletable:
-            if layout.menu_item(tr("scene.rename")):
-                self._rename_node = node.name
-                self._rename_buffer = node.name
-                self._rename_focus = True
+            html += f'<div class="context-menu-item" data-action="rename:{node.name}">{tr("scene.rename")}</div>'
 
-        if layout.menu_item(tr("scene.duplicate")):
-            lf.ui.duplicate_node(node.name)
+        html += f'<div class="context-menu-item" data-action="duplicate:{node.name}">{tr("scene.duplicate")}</div>'
 
         if can_drag:
-            if layout.begin_menu(tr("scene.move_to")):
-                if layout.menu_item(tr("scene.move_to_root")):
-                    lf.reparent_node(node.name, "")
-                layout.separator()
-                for other in scene.get_nodes():
-                    other_type = str(other.type).split(".")[-1]
-                    if other_type == "GROUP" and other.name != node.name:
-                        if layout.menu_item(other.name):
-                            lf.reparent_node(node.name, other.name)
-                layout.end_menu()
-
-        layout.separator()
+            html += self._build_move_to_items(scene, node.name)
 
         if is_deletable:
-            if layout.menu_item(tr("scene.delete")):
-                lf.remove_node(node.name, False)
+            html += '<div class="context-menu-separator"></div>'
+            html += f'<div class="context-menu-item" data-action="delete:{node.name}">{tr("scene.delete")}</div>'
 
-        layout.end_context_menu()
+        return html
 
-    def _draw_multi_context_menu(self, layout, scene):
+    def _build_move_to_items(self, scene, node_name):
+        groups = []
+        for n in scene.get_nodes():
+            if _node_type(n) == "GROUP" and n.name != node_name:
+                groups.append(n.name)
+
+        if not groups:
+            return ""
+
+        html = '<div class="context-menu-separator"></div>'
+        html += f'<div class="context-menu-label">{tr("scene.move_to")}</div>'
+        html += f'<div class="context-menu-item submenu-item" data-action="reparent:{node_name}:">{tr("scene.move_to_root")}</div>'
+        for group_name in groups:
+            html += f'<div class="context-menu-item submenu-item" data-action="reparent:{node_name}:{group_name}">{group_name}</div>'
+        return html
+
+    def _build_multi_context_html(self, scene):
         types = set()
         deletable = []
         for name in self._selected_nodes:
             node = scene.get_node(name)
             if not node:
                 continue
-            ntype = str(node.type).split(".")[-1]
+            ntype = _node_type(node)
             types.add(ntype)
-            parent_is_dataset = False
-            if node.parent_id != -1:
-                parent = scene.get_node_by_id(node.parent_id)
-                if parent and str(parent.type).split(".")[-1] == "DATASET":
-                    parent_is_dataset = True
-            if ntype not in ("CAMERA", "CAMERA_GROUP", "KEYFRAME", "KEYFRAME_GROUP") and not parent_is_dataset:
+            parent_is_dataset = self._check_parent_dataset(scene, node)
+            if _is_deletable(ntype, parent_is_dataset):
                 deletable.append(name)
 
-        if types == {"CAMERA"}:
-            if layout.menu_item(tr("scene.enable_all_training")):
-                for name in self._selected_nodes:
-                    node = scene.get_node(name)
-                    if node:
-                        node.training_enabled = True
-            if layout.menu_item(tr("scene.disable_all_training")):
-                for name in self._selected_nodes:
-                    node = scene.get_node(name)
-                    if node:
-                        node.training_enabled = False
-        elif types == {"CAMERA_GROUP"}:
-            if layout.menu_item(tr("scene.enable_all_training")):
-                for name in self._selected_nodes:
-                    grp = scene.get_node(name)
-                    if not grp:
-                        continue
-                    for child_id in grp.children:
-                        child = scene.get_node_by_id(child_id)
-                        if child and str(child.type).split(".")[-1] == "CAMERA":
-                            child.training_enabled = True
-            if layout.menu_item(tr("scene.disable_all_training")):
-                for name in self._selected_nodes:
-                    grp = scene.get_node(name)
-                    if not grp:
-                        continue
-                    for child_id in grp.children:
-                        child = scene.get_node_by_id(child_id)
-                        if child and str(child.type).split(".")[-1] == "CAMERA":
-                            child.training_enabled = False
+        html = ""
+        if types == {"CAMERA"} or types == {"CAMERA_GROUP"}:
+            html += f'<div class="context-menu-item" data-action="enable_all_selected_train">{tr("scene.enable_all_training")}</div>'
+            html += f'<div class="context-menu-item" data-action="disable_all_selected_train">{tr("scene.disable_all_training")}</div>'
 
         if deletable:
-            if types in ({"CAMERA"}, {"CAMERA_GROUP"}):
-                layout.separator()
-            label = f"{tr('scene.delete')} ({len(deletable)})"
-            if layout.menu_item(label):
-                for name in deletable:
-                    lf.remove_node(name, False)
+            if html:
+                html += '<div class="context-menu-separator"></div>'
+            html += f'<div class="context-menu-item" data-action="delete_selected">{tr("scene.delete")} ({len(deletable)})</div>'
+
+        return html
+
+    def _hide_context_menu(self):
+        if self._context_menu:
+            self._context_menu.set_class("visible", False)
+            self._context_menu_node = None
+
+    # -- Action execution --
+
+    def _execute_action(self, action_str):
+        if not action_str:
+            return
+
+        parts = action_str.split(":", 1)
+        action = parts[0]
+        arg = parts[1] if len(parts) > 1 else ""
+
+        scene = lf.get_scene()
+
+        if action == "go_to_camera":
+            lf.ui.go_to_camera_view(int(arg))
+        elif action == "enable_train":
+            node = scene.get_node(arg) if scene else None
+            if node:
+                node.training_enabled = True
+                self._rebuild_tree()
+        elif action == "disable_train":
+            node = scene.get_node(arg) if scene else None
+            if node:
+                node.training_enabled = False
+                self._rebuild_tree()
+        elif action == "go_to_kf":
+            lf.ui.go_to_keyframe(int(arg))
+        elif action == "update_kf":
+            lf.ui.select_keyframe(int(arg))
+            lf.ui.update_keyframe()
+        elif action == "select_kf":
+            lf.ui.select_keyframe(int(arg))
+        elif action == "delete_kf":
+            lf.ui.delete_keyframe(int(arg))
+        elif action == "add_kf":
+            lf.ui.add_keyframe()
+        elif action == "enable_all_train":
+            self._toggle_children_training(scene, arg, True)
+        elif action == "disable_all_train":
+            self._toggle_children_training(scene, arg, False)
+        elif action == "delete":
+            lf.remove_node(arg, False)
+        elif action == "rename":
+            self._rename_node = arg
+            self._rename_buffer = arg
+            self._rebuild_tree()
+        elif action == "duplicate":
+            lf.ui.duplicate_node(arg)
+        elif action == "add_group":
+            lf.add_group(tr("scene.new_group_name"), arg)
+        elif action == "merge_group":
+            lf.ui.merge_group(arg)
+        elif action == "add_cropbox":
+            lf.ui.add_cropbox(arg)
+        elif action == "add_ellipsoid":
+            lf.ui.add_ellipsoid(arg)
+        elif action == "save_node":
+            lf.ui.save_node_to_disk(arg)
+        elif action == "apply_cropbox":
+            lf.ui.apply_cropbox()
+        elif action == "fit_cropbox":
+            lf.ui.fit_cropbox_to_scene(arg == "1")
+        elif action == "reset_cropbox":
+            lf.ui.reset_cropbox()
+        elif action == "apply_ellipsoid":
+            lf.ui.apply_ellipsoid()
+        elif action == "fit_ellipsoid":
+            lf.ui.fit_ellipsoid_to_scene(arg == "1")
+        elif action == "reset_ellipsoid":
+            lf.ui.reset_ellipsoid()
+        elif action == "enable_all_selected_train":
+            self._toggle_selected_training(scene, True)
+        elif action == "disable_all_selected_train":
+            self._toggle_selected_training(scene, False)
+        elif action == "delete_selected":
+            self._delete_selected(scene)
+        elif action == "set_easing":
+            easing_parts = arg.split(":")
+            if len(easing_parts) == 2:
+                lf.ui.set_keyframe_easing(int(easing_parts[0]), int(easing_parts[1]))
+        elif action == "reparent":
+            reparent_parts = arg.split(":", 1)
+            if len(reparent_parts) == 2:
+                lf.reparent_node(reparent_parts[0], reparent_parts[1])
+                self._rebuild_tree()
+
+    # -- Bulk operations --
+
+    def _toggle_children_training(self, scene, group_name, enabled):
+        if not scene:
+            return
+        node = scene.get_node(group_name)
+        if not node:
+            return
+        for child_id in node.children:
+            child = scene.get_node_by_id(child_id)
+            if child and _node_type(child) == "CAMERA":
+                child.training_enabled = enabled
+        self._rebuild_tree()
+
+    def _toggle_selected_training(self, scene, enabled):
+        if not scene:
+            return
+        for name in self._selected_nodes:
+            node = scene.get_node(name)
+            if not node:
+                continue
+            ntype = _node_type(node)
+            if ntype == "CAMERA":
+                node.training_enabled = enabled
+            elif ntype == "CAMERA_GROUP":
+                for child_id in node.children:
+                    child = scene.get_node_by_id(child_id)
+                    if child and _node_type(child) == "CAMERA":
+                        child.training_enabled = enabled
+        self._rebuild_tree()
+
+    def _delete_selected(self, scene):
+        if not scene:
+            return
+        for name in list(self._selected_nodes):
+            node = scene.get_node(name)
+            if not node:
+                continue
+            ntype = _node_type(node)
+            parent_is_dataset = self._check_parent_dataset(scene, node)
+            if _is_deletable(ntype, parent_is_dataset):
+                lf.remove_node(name, False)

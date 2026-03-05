@@ -1,0 +1,55 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="input_settings.rcss"/>
+</head>
+<body template="floating-window" data-model="input_settings">
+
+  <!-- Profile selection -->
+  <div class="is-section">
+    <div class="is-row">
+      <span class="is-label">{{profile_label}}</span>
+      <select id="profile-select" class="is-select" data-value="profile_idx">
+      </select>
+    </div>
+  </div>
+
+  <div class="separator"></div>
+
+  <!-- Tool mode selection -->
+  <div class="is-section">
+    <span class="is-section-title">{{tool_mode_label}}</span>
+    <span class="is-hint">{{tool_mode_hint}}</span>
+    <div class="is-row">
+      <select id="mode-select" class="is-select" data-value="mode_idx">
+      </select>
+    </div>
+  </div>
+
+  <div class="separator"></div>
+
+  <!-- Bindings -->
+  <div class="is-section">
+    <span class="is-section-title">{{bindings_label}}</span>
+    <span class="is-hint" id="bindings-hint"></span>
+    <div id="bindings-table" class="is-bindings-table"></div>
+  </div>
+
+  <div class="separator"></div>
+
+  <!-- Action buttons -->
+  <div class="is-buttons">
+    <button class="btn btn--success" data-event-click="save_profile">{{save_label}}</button>
+    <button class="btn btn--error" data-event-click="reset_default">{{reset_label}}</button>
+  </div>
+  <div class="is-buttons">
+    <button class="btn btn--secondary" data-event-click="export_profile">{{export_label}}</button>
+    <button class="btn btn--secondary" data-event-click="import_profile">{{import_label}}</button>
+  </div>
+
+  <!-- Hints -->
+  <span class="is-hint">{{save_hint}}</span>
+  <span class="is-hint">{{double_click_hint}}</span>
+
+</body>
+</rml>

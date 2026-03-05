@@ -127,9 +127,9 @@ namespace lfs::vis {
 
             if (!cameras.empty()) {
                 int highlight_index = -1;
-                if (ctx.pick.hovered_camera_id >= 0) {
+                if (ctx.hovered_camera_id >= 0) {
                     for (size_t i = 0; i < cameras.size(); ++i) {
-                        if (cameras[i]->uid() == ctx.pick.hovered_camera_id) {
+                        if (cameras[i]->uid() == ctx.hovered_camera_id) {
                             highlight_index = static_cast<int>(i);
                             break;
                         }
@@ -143,7 +143,7 @@ namespace lfs::vis {
                 }
 
                 LOG_TRACE("Rendering {} camera frustums with scale {}, highlighted index: {} (ID: {})",
-                          cameras.size(), settings.camera_frustum_scale, highlight_index, ctx.pick.hovered_camera_id);
+                          cameras.size(), settings.camera_frustum_scale, highlight_index, ctx.hovered_camera_id);
 
                 auto disabled_uids = ctx.scene_manager->getScene().getTrainingDisabledCameraUids();
 
@@ -167,32 +167,6 @@ namespace lfs::vis {
 
                 if (!frustum_result) {
                     LOG_ERROR("Failed to render camera frustums: {}", frustum_result.error());
-                }
-
-                if (ctx.pick.requested && ctx.viewport_region) {
-                    res.pick_consumed = true;
-
-                    auto pick_result = engine.pickCameraFrustum(
-                        cameras,
-                        ctx.pick.pos,
-                        glm::vec2(ctx.viewport_region->x, ctx.viewport_region->y),
-                        glm::vec2(ctx.viewport_region->width, ctx.viewport_region->height),
-                        viewport,
-                        settings.camera_frustum_scale,
-                        scene_transform);
-
-                    if (pick_result) {
-                        int cam_id = *pick_result;
-                        if (cam_id != ctx.pick.hovered_camera_id) {
-                            LOG_DEBUG("Camera hover changed: {} -> {}", ctx.pick.hovered_camera_id, cam_id);
-                            res.hovered_camera_id = cam_id;
-                            res.additional_dirty |= DirtyFlag::OVERLAY;
-                        }
-                    } else if (ctx.pick.hovered_camera_id != -1) {
-                        LOG_DEBUG("Camera hover lost (was ID: {})", ctx.pick.hovered_camera_id);
-                        res.hovered_camera_id = -1;
-                        res.additional_dirty |= DirtyFlag::OVERLAY;
-                    }
                 }
             }
         }

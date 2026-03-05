@@ -141,6 +141,10 @@ namespace lfs::python {
 
         void* g_view_context_state{nullptr};
         float g_shared_dpi_scale{DEFAULT_DPI_SCALE};
+        void* g_rml_manager{nullptr};
+        RmlPanelHostOps g_rml_panel_host_ops{};
+        RmlDocRegisterCallback g_rml_doc_register_cb{nullptr};
+        RmlDocUnregisterCallback g_rml_doc_unregister_cb{nullptr};
 
         // Viewport bounds (set by gui_manager each frame)
         // Protected by mutex for multi-field atomicity
@@ -223,6 +227,13 @@ namespace lfs::python {
 
     void set_gui_manager(vis::gui::GuiManager* gm) { g_gui_manager.store(gm); }
     vis::gui::GuiManager* get_gui_manager() { return g_gui_manager.load(); }
+
+    namespace {
+        std::atomic<vis::gui::GlobalContextMenu*> g_global_context_menu{nullptr};
+    }
+
+    void set_global_context_menu(vis::gui::GlobalContextMenu* cm) { g_global_context_menu.store(cm); }
+    vis::gui::GlobalContextMenu* get_global_context_menu() { return g_global_context_menu.load(); }
 
     namespace {
         Mesh2SplatStartFn g_m2s_start;
@@ -406,6 +417,11 @@ namespace lfs::python {
             g_section_draw_callbacks.draw_console_button();
     }
 
+    void toggle_system_console() {
+        if (g_section_draw_callbacks.toggle_system_console)
+            g_section_draw_callbacks.toggle_system_console();
+    }
+
     void set_sequencer_ui_state_callback(GetSequencerUIStateCallback cb) {
         g_get_sequencer_ui_state_cb = std::move(cb);
     }
@@ -458,11 +474,15 @@ namespace lfs::python {
 
     uint64_t ApplicationSceneContext::generation() const { return generation_.load(); }
 
+    void ApplicationSceneContext::bump() { generation_.fetch_add(1); }
+
     void set_application_scene(core::Scene* scene) { g_app_scene_context.set(scene); }
 
     core::Scene* get_application_scene() { return g_app_scene_context.get(); }
 
     uint64_t get_scene_generation() { return g_app_scene_context.generation(); }
+
+    void bump_scene_generation() { g_app_scene_context.bump(); }
 
     void set_gil_state_ready(const bool ready) { g_gil_state_ready.store(ready, std::memory_order_release); }
     bool is_gil_state_ready() { return g_gil_state_ready.load(std::memory_order_acquire); }
@@ -560,6 +580,38 @@ namespace lfs::python {
 
     float get_shared_dpi_scale() {
         return g_shared_dpi_scale;
+    }
+
+    void set_rml_manager(void* manager) {
+        g_rml_manager = manager;
+    }
+
+    void* get_rml_manager() {
+        return g_rml_manager;
+    }
+
+    void set_rml_panel_host_ops(const RmlPanelHostOps& ops) {
+        g_rml_panel_host_ops = ops;
+    }
+
+    const RmlPanelHostOps& get_rml_panel_host_ops() {
+        return g_rml_panel_host_ops;
+    }
+
+    void set_rml_doc_registry_callbacks(RmlDocRegisterCallback reg_cb,
+                                        RmlDocUnregisterCallback unreg_cb) {
+        g_rml_doc_register_cb = reg_cb;
+        g_rml_doc_unregister_cb = unreg_cb;
+    }
+
+    void register_rml_document(const char* name, void* doc) {
+        if (g_rml_doc_register_cb)
+            g_rml_doc_register_cb(name, doc);
+    }
+
+    void unregister_rml_document(const char* name) {
+        if (g_rml_doc_unregister_cb)
+            g_rml_doc_unregister_cb(name);
     }
 
     void set_ensure_initialized_callback(EnsureInitializedCallback cb) {
@@ -678,6 +730,28 @@ namespace lfs::python {
         g_bridge.draw_menu_bar_entry(idname.c_str());
     }
 
+    void collect_menu_content(const std::string& idname, MenuItemVisitor visitor, void* user_data) {
+        if (!g_bridge.collect_menu_content)
+            return;
+        if (!can_acquire_gil())
+            return;
+        if (g_bridge.prepare_ui)
+            g_bridge.prepare_ui();
+        const GilAcquire gil;
+        g_bridge.collect_menu_content(idname.c_str(), visitor, user_data);
+    }
+
+    void execute_menu_callback(const std::string& idname, int callback_index) {
+        if (!g_bridge.execute_menu_callback)
+            return;
+        if (!can_acquire_gil())
+            return;
+        if (g_bridge.prepare_ui)
+            g_bridge.prepare_ui();
+        const GilAcquire gil;
+        g_bridge.execute_menu_callback(idname.c_str(), callback_index);
+    }
+
     void draw_python_modals(lfs::core::Scene* scene) {
         if (!g_bridge.draw_modals)
             return;
@@ -706,6 +780,13 @@ namespace lfs::python {
         const GilAcquire gil;
         return g_bridge.has_modals();
     }
+
+    namespace {
+        ModalEnqueueCallback g_modal_enqueue_callback;
+    }
+
+    void set_modal_enqueue_callback(ModalEnqueueCallback cb) { g_modal_enqueue_callback = std::move(cb); }
+    const ModalEnqueueCallback& get_modal_enqueue_callback() { return g_modal_enqueue_callback; }
 
     void set_popup_draw_callback(DrawPopupsCallback cb) { g_popup_draw_callback = cb; }
 

@@ -43,12 +43,6 @@ namespace lfs::vis {
         glm::mat4 ellipsoid_transform{1};
     };
 
-    struct PickState {
-        bool requested = false;
-        glm::vec2 pos{-1};
-        int hovered_camera_id = -1;
-    };
-
     struct FrameContext {
         const Viewport& viewport;
         const ViewportRegion* viewport_region = nullptr;
@@ -64,7 +58,7 @@ namespace lfs::vis {
 
         BrushState brush;
         GizmoState gizmo;
-        PickState pick;
+        int hovered_camera_id = -1;
         int current_camera_id = -1;
         int hovered_gaussian_id = -1;
         float selection_flash_intensity = 0;
@@ -103,8 +97,6 @@ namespace lfs::vis {
         std::optional<GTComparisonContext> gt_context;
 
         int hovered_gaussian_id = -1;
-        int hovered_camera_id = -1;
-        bool pick_consumed = false;
         SplitViewInfo split_info;
 
         DirtyMask additional_dirty = 0;

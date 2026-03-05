@@ -316,7 +316,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* MOVE_TO_ROOT = "scene.move_to_root";
         inline constexpr const char* IMAGES = "scene.images";
         inline constexpr const char* NO_IMAGES = "scene.no_images";
-        inline constexpr const char* USE_FILE_BROWSER = "scene.use_file_browser";
         inline constexpr const char* MOVE_NODE = "scene.move_node";
         inline constexpr const char* MODELS = "scene.models";
         inline constexpr const char* FILTER = "scene.filter";
@@ -340,6 +339,10 @@ namespace lichtfeld::Strings {
         inline constexpr const char* SELECT_IN_TIMELINE = "scene.select_in_timeline";
         inline constexpr const char* ADD_KEYFRAME_SCENE = "scene.add_keyframe_scene";
         inline constexpr const char* KEYFRAME_EASING = "scene.keyframe_easing";
+        inline constexpr const char* KEYFRAME_EASING_LINEAR = "scene.keyframe_easing.linear";
+        inline constexpr const char* KEYFRAME_EASING_EASE_IN = "scene.keyframe_easing.ease_in";
+        inline constexpr const char* KEYFRAME_EASING_EASE_OUT = "scene.keyframe_easing.ease_out";
+        inline constexpr const char* KEYFRAME_EASING_EASE_IN_OUT = "scene.keyframe_easing.ease_in_out";
     } // namespace Scene
 
     namespace Export {
@@ -566,21 +569,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* INSTRUCTIONS = "ellipsoid.instructions";
     } // namespace Ellipsoid
 
-    namespace FileBrowser {
-        inline constexpr const char* TITLE = "file_browser.title";
-        inline constexpr const char* QUICK_ACCESS = "file_browser.quick_access";
-        inline constexpr const char* CURRENT_DIR = "file_browser.current_dir";
-        inline constexpr const char* HOME = "file_browser.home";
-        inline constexpr const char* CURRENT_PATH = "file_browser.current_path";
-        inline constexpr const char* PARENT_DIR = "file_browser.parent_dir";
-        inline constexpr const char* DIRECTORY = "file_browser.directory";
-        inline constexpr const char* SELECTED = "file_browser.selected";
-        inline constexpr const char* LOAD_DATASET = "file_browser.load_dataset";
-        inline constexpr const char* LOAD_SOG = "file_browser.load_sog";
-        inline constexpr const char* LOAD_PLY = "file_browser.load_ply";
-        inline constexpr const char* ENTER_DIR = "file_browser.enter_dir";
-    } // namespace FileBrowser
-
     namespace TrainingPanel {
         inline constexpr const char* START_TRAINING = "training_panel.start_training";
         inline constexpr const char* RESUME_TRAINING = "training_panel.resume_training";
@@ -685,16 +673,6 @@ namespace lichtfeld::Strings {
         inline constexpr const char* LOCK = "selection_group.lock";
         inline constexpr const char* UNLOCK = "selection_group.unlock";
     } // namespace SelectionGroup
-
-    namespace FileBrowserExt {
-        inline constexpr const char* DATASET = "file_browser_ext.dataset";
-        inline constexpr const char* SOG = "file_browser_ext.sog";
-        inline constexpr const char* NO_FILE_SELECTED = "file_browser_ext.no_file_selected";
-        inline constexpr const char* NOT_A_DATASET = "file_browser_ext.not_a_dataset";
-        inline constexpr const char* SOG_DIRECTORY = "file_browser_ext.sog_directory";
-        inline constexpr const char* SOG_META = "file_browser_ext.sog_meta";
-        inline constexpr const char* ERROR_MSG = "file_browser_ext.error";
-    } // namespace FileBrowserExt
 
     namespace Progress {
         inline constexpr const char* LOSS = "progress.loss";
@@ -941,6 +919,34 @@ namespace lichtfeld::Strings {
         inline constexpr const char* EDIT_FOCAL_LENGTH = "sequencer.edit_focal_length";
         inline constexpr const char* EDIT_FOCAL_LENGTH_TITLE = "sequencer.edit_focal_length_title";
         inline constexpr const char* FOCAL_LENGTH_MM = "sequencer.focal_length_mm";
+        inline constexpr const char* GO_TO_FIRST_KEYFRAME = "sequencer.go_to_first_keyframe";
+        inline constexpr const char* STOP = "sequencer.stop";
+        inline constexpr const char* PAUSE = "sequencer.pause";
+        inline constexpr const char* PLAY = "sequencer.play";
+        inline constexpr const char* GO_TO_LAST_KEYFRAME = "sequencer.go_to_last_keyframe";
+        inline constexpr const char* LOOP_ON = "sequencer.loop_on";
+        inline constexpr const char* LOOP_OFF = "sequencer.loop_off";
+        inline constexpr const char* ADD_KEYFRAME = "sequencer.add_keyframe";
+        inline constexpr const char* EMPTY_HINT = "sequencer.empty_hint";
+        inline constexpr const char* UPDATE_TO_CURRENT_VIEW = "sequencer.update_to_current_view";
+        inline constexpr const char* GO_TO_KEYFRAME = "sequencer.go_to_keyframe";
+        inline constexpr const char* EDIT_TIME = "sequencer.edit_time";
+        inline constexpr const char* EASING = "sequencer.easing";
+        inline constexpr const char* EASING_LAST_KEYFRAME = "sequencer.easing_last_keyframe";
+        inline constexpr const char* EASING_TOOLTIP = "sequencer.easing_tooltip";
+        inline constexpr const char* DELETE_KEYFRAME = "sequencer.delete_keyframe";
+        inline constexpr const char* ADD_KEYFRAME_HERE = "sequencer.add_keyframe_here";
+        inline constexpr const char* EDIT_KEYFRAME_TIME = "sequencer.edit_keyframe_time";
+        inline constexpr const char* TIME_SECONDS = "sequencer.time_seconds";
+        inline constexpr const char* APPLY_U = "sequencer.apply_u";
+        inline constexpr const char* REVERT_ESC = "sequencer.revert_esc";
+        inline constexpr const char* EDITING_KEYFRAME = "sequencer.editing_keyframe";
+        inline constexpr const char* MOVE_TRANSLATE = "sequencer.move_translate";
+        inline constexpr const char* ROTATE = "sequencer.rotate";
+        inline constexpr const char* LOOP_POINT_TOOLTIP = "sequencer.loop_point_tooltip";
+        inline constexpr const char* KEYFRAME_TOOLTIP = "sequencer.keyframe_tooltip";
+        inline constexpr const char* PLAYBACK_TIME = "sequencer.playback_time";
+        inline constexpr const char* KEYFRAME_PREVIEW = "sequencer.keyframe_preview";
     } // namespace Sequencer
 
     namespace DiskSpaceDialog {
@@ -958,5 +964,16 @@ namespace lichtfeld::Strings {
         inline constexpr const char* RETRY = "disk_space_dialog.retry";
         inline constexpr const char* SELECT_OUTPUT_LOCATION = "disk_space_dialog.select_output_location";
     } // namespace DiskSpaceDialog
+
+    namespace FileAssociation {
+        inline constexpr const char* TITLE = "file_association.title";
+        inline constexpr const char* MESSAGE = "file_association.message";
+        inline constexpr const char* YES = "file_association.yes";
+        inline constexpr const char* NOT_NOW = "file_association.not_now";
+        inline constexpr const char* DONT_ASK = "file_association.dont_ask";
+        inline constexpr const char* SUCCESS = "file_association.success";
+        inline constexpr const char* MENU_REGISTER = "file_association.menu_register";
+        inline constexpr const char* MENU_UNREGISTER = "file_association.menu_unregister";
+    } // namespace FileAssociation
 
 } // namespace lichtfeld::Strings

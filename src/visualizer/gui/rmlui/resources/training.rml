@@ -1,0 +1,611 @@
+<rml>
+<head>
+  <link type="text/template" href="docked_panel.rml"/>
+  <link type="text/rcss" href="training.rcss"/>
+</head>
+<body template="docked-panel" data-model="training">
+
+  <!-- No trainer / no params messages -->
+  <span class="status-text status-muted" data-if="show_no_trainer">{{label_no_trainer}}</span>
+  <span class="status-text status-muted" data-if="show_no_params">{{label_no_params}}</span>
+
+  <div data-if="show_main">
+
+  <!-- ── Controls ──────────────────────────────────────── -->
+  <div id="controls">
+    <div data-if="show_ctrl_ready">
+      <button class="btn btn--success btn--full" data-event-click="action('start')">{{btn_start}}</button>
+      <button class="btn btn--secondary btn--full" data-if="show_reset_ready" data-event-click="action('reset')">{{label_reset}}</button>
+      <button class="btn btn--error btn--full" data-event-click="action('clear')">{{label_clear}}</button>
+    </div>
+    <div data-if="show_ctrl_running">
+      <button class="btn btn--warning btn--full" data-event-click="action('pause')">{{label_pause}}</button>
+    </div>
+    <div data-if="show_ctrl_paused">
+      <button class="btn btn--success btn--full" data-event-click="action('resume')">{{label_resume}}</button>
+      <button class="btn btn--secondary btn--full" data-event-click="action('reset')">{{label_reset}}</button>
+      <button class="btn btn--error btn--full" data-event-click="action('stop')">{{label_stop}}</button>
+    </div>
+    <div data-if="show_ctrl_completed">
+      <span class="status-text status-success">{{label_status_completed}}</span>
+      <button class="btn btn--success btn--full" data-event-click="action('switch_edit')">{{label_switch_edit}}</button>
+      <button class="btn btn--secondary btn--full" data-event-click="action('reset')">{{label_reset}}</button>
+      <button class="btn btn--error btn--full" data-event-click="action('clear')">{{label_clear}}</button>
+    </div>
+    <div data-if="show_ctrl_stopped">
+      <span class="status-text status-muted">{{label_status_stopped}}</span>
+      <button class="btn btn--success btn--full" data-event-click="action('switch_edit')">{{label_switch_edit}}</button>
+      <button class="btn btn--secondary btn--full" data-event-click="action('reset')">{{label_reset}}</button>
+      <button class="btn btn--error btn--full" data-event-click="action('clear')">{{label_clear}}</button>
+    </div>
+    <div data-if="show_ctrl_error">
+      <span class="status-text status-error">{{label_status_error}}</span>
+      <span class="status-text">{{error_message}}</span>
+      <button class="btn btn--secondary btn--full" data-event-click="action('reset')">{{label_reset}}</button>
+      <button class="btn btn--error btn--full" data-event-click="action('clear')">{{label_clear}}</button>
+    </div>
+    <div data-if="show_ctrl_stopping">
+      <span class="status-text status-muted">{{label_status_stopping}}</span>
+    </div>
+    <button class="btn btn--primary btn--full" data-if="show_checkpoint" data-event-click="action('save_checkpoint')">{{label_save_checkpoint}}</button>
+    <span class="status-text status-success" data-if="show_checkpoint_saved">{{label_checkpoint_saved}}</span>
+  </div>
+
+  <div class="separator"></div>
+
+  <!-- ── Basic Parameters (collapsible, default open) ── -->
+  <div class="section-header" data-event-click="toggle_section('basic_params')">
+    <span class="section-arrow">{{sec_basic_params_arrow}}</span>
+    <span>{{label_hdr_basic_params}}</span>
+  </div>
+  <div class="section-content" data-class-collapsed="sec_basic_params_collapsed">
+
+    <!-- Structural params (disabled when training started) -->
+    <div data-class-disabled-overlay="struct_disabled">
+      <div class="setting-row">
+        <span class="prop-label">{{label_strategy}}</span>
+        <select data-value="strategy">
+          <option value="mcmc">MCMC</option>
+          <option value="adc">ADC</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <span class="prop-label">{{label_iterations}}</span>
+        <input type="text" class="number-input" data-value="iterations_str" />
+        <button class="num-step-btn" data-event-mousedown="num_step('iterations', -1)">-</button>
+        <button class="num-step-btn" data-event-mousedown="num_step('iterations', 1)">+</button>
+      </div>
+      <div class="setting-row">
+        <span class="prop-label">{{label_max_cap}}</span>
+        <input type="text" class="number-input" data-value="max_cap_str" />
+        <button class="num-step-btn" data-event-mousedown="num_step('max_cap', -1)">-</button>
+        <button class="num-step-btn" data-event-mousedown="num_step('max_cap', 1)">+</button>
+      </div>
+      <div class="setting-row">
+        <span class="prop-label">{{label_sh_degree}}</span>
+        <select data-value="sh_degree_str">
+          <option value="0">0</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <span class="prop-label">{{label_tile_mode}}</span>
+        <select data-value="tile_mode_str">
+          <option value="1">Full</option>
+          <option value="2">Half</option>
+          <option value="4">Quarter</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <span class="prop-label">{{label_steps_scaler}}</span>
+        <input type="text" class="number-input" data-value="steps_scaler_str" />
+        <button class="num-step-btn" data-event-mousedown="num_step('steps_scaler', -1)">-</button>
+        <button class="num-step-btn" data-event-mousedown="num_step('steps_scaler', 1)">+</button>
+      </div>
+    </div>
+
+    <!-- Live-editable params -->
+    <div data-class-disabled-overlay="live_disabled">
+      <div class="setting-row">
+        <span class="prop-label">{{label_bilateral_grid}}</span>
+        <input type="checkbox" data-checked="use_bilateral_grid" />
+      </div>
+      <div class="setting-row">
+        <span class="prop-label">{{label_mask_mode}}</span>
+        <select data-value="mask_mode_str">
+          <option value="0">None</option>
+          <option value="1">Segment</option>
+          <option value="2">Ignore</option>
+          <option value="3">Alpha Consistent</option>
+        </select>
+      </div>
+      <div class="indent" data-if="dep_mask_mode">
+        <div class="setting-row">
+          <span class="prop-label">{{label_invert_masks}}</span>
+          <input type="checkbox" data-checked="invert_masks" />
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_use_alpha_as_mask}}</span>
+          <input type="checkbox" data-checked="use_alpha_as_mask" />
+        </div>
+      </div>
+      <div class="setting-row">
+        <span class="prop-label">{{label_sparsity}}</span>
+        <input type="checkbox" data-checked="enable_sparsity" />
+      </div>
+      <div class="setting-row" data-class-disabled-overlay="gut_disabled">
+        <span class="prop-label">{{label_gut}}</span>
+        <input type="checkbox" data-checked="gut" />
+      </div>
+      <div class="setting-row">
+        <span class="prop-label">{{label_undistort}}</span>
+        <input type="checkbox" data-checked="undistort" />
+      </div>
+      <div class="setting-row">
+        <span class="prop-label">{{label_mip_filter}}</span>
+        <input type="checkbox" data-checked="mip_filter" />
+      </div>
+      <div class="setting-row">
+        <span class="prop-label">{{label_ppisp}}</span>
+        <input type="checkbox" data-checked="ppisp" />
+      </div>
+      <div class="indent" data-if="dep_ppisp">
+        <div class="setting-row">
+          <span class="prop-label">{{label_ppisp_controller}}</span>
+          <input type="checkbox" data-checked="ppisp_use_controller" />
+        </div>
+        <div class="indent" data-if="dep_ppisp_controller">
+          <div class="setting-row">
+            <span class="prop-label">{{label_ppisp_auto}}</span>
+            <input type="checkbox" data-checked="ppisp_auto_step" />
+          </div>
+          <div data-if="dep_ppisp_manual_step">
+            <div class="setting-row">
+              <span class="prop-label">{{label_ppisp_activation_step}}</span>
+              <input type="text" class="number-input" data-value="ppisp_activation_step_str" />
+              <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', -1)">-</button>
+              <button class="num-step-btn" data-event-mousedown="num_step('ppisp_activation_step', 1)">+</button>
+            </div>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">{{label_ppisp_controller_lr}}</span>
+            <input type="text" class="number-input" data-value="ppisp_controller_lr_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('ppisp_controller_lr', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('ppisp_controller_lr', 1)">+</button>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">{{label_ppisp_freeze_gaussians}}</span>
+            <input type="checkbox" data-checked="ppisp_freeze_gaussians" />
+          </div>
+        </div>
+      </div>
+      <div class="setting-row">
+        <span class="prop-label">{{label_bg_mode}}</span>
+        <select data-value="bg_mode_str">
+          <option value="0">Color</option>
+          <option value="1">Modulation</option>
+          <option value="2">Image</option>
+          <option value="3">Random</option>
+        </select>
+      </div>
+      <div class="indent" data-if="dep_bg_color">
+        <div class="setting-row">
+          <span class="prop-label">{{label_bg_color}}</span>
+          <span class="color-comp">{{bg_color_r}}</span>
+          <span class="color-comp">{{bg_color_g}}</span>
+          <span class="color-comp">{{bg_color_b}}</span>
+          <div class="color-swatch" id="swatch-bg_color" data-event-click="color_click('bg_color')"></div>
+          <input type="text" class="color-hex" data-value="bg_color_hex" />
+        </div>
+      </div>
+      <div class="indent" data-if="dep_bg_image">
+        <div class="setting-row">
+          <span class="prop-label">{{label_bg_image}}</span>
+          <span class="text-disabled">{{bg_image_path_display}}</span>
+        </div>
+        <div class="setting-row">
+          <button class="btn btn--secondary" data-event-click="action('browse_bg')">{{label_bg_browse}}</button>
+          <button class="btn btn--secondary" data-if="has_bg_clear" data-event-click="action('clear_bg')">{{label_bg_clear}}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Advanced Parameters (collapsible, default closed) ── -->
+  <div class="section-header" data-event-click="toggle_section('advanced_params')">
+    <span class="section-arrow">{{sec_advanced_params_arrow}}</span>
+    <span>{{label_hdr_advanced_params}}</span>
+  </div>
+  <div class="section-content" data-class-collapsed="sec_advanced_params_collapsed">
+
+    <!-- Dataset subsection -->
+    <div class="section-header" data-event-click="toggle_section('dataset')">
+      <span class="section-arrow">{{sec_dataset_arrow}}</span>
+      <span>{{label_hdr_dataset}}</span>
+    </div>
+    <div class="section-content" data-class-collapsed="sec_dataset_collapsed">
+      <div data-if="has_dataset" data-class-disabled-overlay="dataset_disabled">
+        <div class="setting-row">
+          <span class="prop-label">{{label_dataset_path}}</span>
+          <span class="text-disabled">{{dataset_path_display}}</span>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_dataset_images}}</span>
+          <span class="text-disabled">{{dataset_images_display}}</span>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_resize_factor}}</span>
+          <select data-value="resize_factor_str">
+            <option value="-1">Auto</option>
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="4">4</option>
+            <option value="8">8</option>
+          </select>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_max_width}}</span>
+          <input type="text" class="number-input" data-value="max_width_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('max_width', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('max_width', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_cpu_cache}}</span>
+          <input type="checkbox" data-checked="use_cpu_cache" />
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_fs_cache}}</span>
+          <input type="checkbox" data-checked="use_fs_cache" />
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_dataset_output}}</span>
+          <span class="text-disabled">{{dataset_output_display}}</span>
+        </div>
+      </div>
+      <span class="status-text status-muted" data-if="show_dataset_no_data">{{label_no_dataset}}</span>
+    </div>
+
+    <!-- Optimization subsection -->
+    <div class="section-header" data-event-click="toggle_section('optimization')">
+      <span class="section-arrow">{{sec_optimization_arrow}}</span>
+      <span>{{label_hdr_optimization}}</span>
+    </div>
+    <div class="section-content" data-class-collapsed="sec_optimization_collapsed">
+      <div data-class-disabled-overlay="adv_disabled">
+        <div class="setting-row">
+          <span class="prop-label">{{label_opt_strategy}}</span>
+          <span class="text-disabled">{{opt_strategy_display}}</span>
+        </div>
+        <span class="status-text status-muted">{{label_lr_header}}</span>
+        <div class="setting-row">
+          <span class="prop-label">{{label_means_lr}}</span>
+          <input type="text" class="number-input" data-value="means_lr_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('means_lr', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('means_lr', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_shs_lr}}</span>
+          <input type="text" class="number-input" data-value="shs_lr_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('shs_lr', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('shs_lr', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_opacity_lr}}</span>
+          <input type="text" class="number-input" data-value="opacity_lr_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('opacity_lr', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('opacity_lr', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_scaling_lr}}</span>
+          <input type="text" class="number-input" data-value="scaling_lr_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('scaling_lr', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('scaling_lr', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_rotation_lr}}</span>
+          <input type="text" class="number-input" data-value="rotation_lr_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('rotation_lr', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('rotation_lr', 1)">+</button>
+        </div>
+        <span class="status-text status-muted">{{label_refinement_header}}</span>
+        <div class="setting-row">
+          <span class="prop-label">{{label_refine_every}}</span>
+          <input type="text" class="number-input" data-value="refine_every_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('refine_every', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('refine_every', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_start_refine}}</span>
+          <input type="text" class="number-input" data-value="start_refine_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('start_refine', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('start_refine', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_stop_refine}}</span>
+          <input type="text" class="number-input" data-value="stop_refine_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('stop_refine', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('stop_refine', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_grad_threshold}}</span>
+          <input type="text" class="number-input" data-value="grad_threshold_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('grad_threshold', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('grad_threshold', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_reset_every}}</span>
+          <input type="text" class="number-input" data-value="reset_every_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('reset_every', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('reset_every', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_sh_degree_interval}}</span>
+          <input type="text" class="number-input" data-value="sh_degree_interval_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('sh_degree_interval', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('sh_degree_interval', 1)">+</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bilateral Grid subsection (conditional) -->
+    <div data-if="dep_bilateral">
+      <div class="section-header" data-event-click="toggle_section('bilateral')">
+        <span class="section-arrow">{{sec_bilateral_arrow}}</span>
+        <span>{{label_hdr_bilateral}}</span>
+      </div>
+      <div class="section-content" data-class-collapsed="sec_bilateral_collapsed">
+        <div data-class-disabled-overlay="adv_disabled">
+          <div class="setting-row">
+            <span class="prop-label">{{label_bilateral_grid_x}}</span>
+            <input type="text" class="number-input" data-value="bilateral_grid_x_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_x', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_x', 1)">+</button>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">{{label_bilateral_grid_y}}</span>
+            <input type="text" class="number-input" data-value="bilateral_grid_y_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_y', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_y', 1)">+</button>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">{{label_bilateral_grid_w}}</span>
+            <input type="text" class="number-input" data-value="bilateral_grid_w_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_w', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_w', 1)">+</button>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">{{label_bilateral_grid_lr}}</span>
+            <input type="text" class="number-input" data-value="bilateral_grid_lr_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_lr', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('bilateral_grid_lr', 1)">+</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Losses subsection -->
+    <div class="section-header" data-event-click="toggle_section('losses')">
+      <span class="section-arrow">{{sec_losses_arrow}}</span>
+      <span>{{label_hdr_losses}}</span>
+    </div>
+    <div class="section-content" data-class-collapsed="sec_losses_collapsed">
+      <div data-class-disabled-overlay="adv_disabled">
+        <div class="setting-row">
+          <span class="prop-label">{{label_lambda_dssim}}</span>
+          <input type="range" class="setting-slider" data-value="lambda_dssim" min="0" max="1" step="0.01" />
+          <span class="slider-value">{{lambda_dssim | format_float(3)}}</span>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_opacity_reg}}</span>
+          <input type="text" class="number-input" data-value="opacity_reg_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('opacity_reg', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('opacity_reg', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_scale_reg}}</span>
+          <input type="text" class="number-input" data-value="scale_reg_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('scale_reg', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('scale_reg', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_tv_loss_weight}}</span>
+          <input type="text" class="number-input" data-value="tv_loss_weight_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('tv_loss_weight', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('tv_loss_weight', 1)">+</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Initialization subsection -->
+    <div class="section-header" data-event-click="toggle_section('init')">
+      <span class="section-arrow">{{sec_init_arrow}}</span>
+      <span>{{label_hdr_init}}</span>
+    </div>
+    <div class="section-content" data-class-collapsed="sec_init_collapsed">
+      <div data-class-disabled-overlay="adv_disabled">
+        <div class="setting-row">
+          <span class="prop-label">{{label_init_opacity}}</span>
+          <input type="range" class="setting-slider" data-value="init_opacity" min="0.01" max="1" step="0.01" />
+          <span class="slider-value">{{init_opacity | format_float(3)}}</span>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_init_scaling}}</span>
+          <input type="text" class="number-input" data-value="init_scaling_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('init_scaling', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('init_scaling', 1)">+</button>
+        </div>
+        <div class="setting-row">
+          <span class="prop-label">{{label_random_init}}</span>
+          <input type="checkbox" data-checked="random" />
+        </div>
+        <div class="indent" data-if="dep_random">
+          <div class="setting-row">
+            <span class="prop-label">{{label_init_num_pts}}</span>
+            <input type="text" class="number-input" data-value="init_num_pts_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('init_num_pts', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('init_num_pts', 1)">+</button>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">{{label_init_extent}}</span>
+            <input type="text" class="number-input" data-value="init_extent_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('init_extent', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('init_extent', 1)">+</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADC Pruning/Growing subsection (conditional) -->
+    <div data-if="dep_adc">
+      <div class="section-header" data-event-click="toggle_section('adc')">
+        <span class="section-arrow">{{sec_adc_arrow}}</span>
+        <span>{{label_hdr_adc}}</span>
+      </div>
+      <div class="section-content" data-class-collapsed="sec_adc_collapsed">
+        <div data-class-disabled-overlay="adv_disabled">
+          <div class="setting-row">
+            <span class="prop-label">{{label_min_opacity}}</span>
+            <input type="text" class="number-input" data-value="min_opacity_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('min_opacity', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('min_opacity', 1)">+</button>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">{{label_prune_opacity}}</span>
+            <input type="text" class="number-input" data-value="prune_opacity_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('prune_opacity', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('prune_opacity', 1)">+</button>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">{{label_grow_scale3d}}</span>
+            <input type="text" class="number-input" data-value="grow_scale3d_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('grow_scale3d', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('grow_scale3d', 1)">+</button>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">{{label_grow_scale2d}}</span>
+            <input type="text" class="number-input" data-value="grow_scale2d_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('grow_scale2d', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('grow_scale2d', 1)">+</button>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">{{label_prune_scale3d}}</span>
+            <input type="text" class="number-input" data-value="prune_scale3d_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('prune_scale3d', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('prune_scale3d', 1)">+</button>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">{{label_prune_scale2d}}</span>
+            <input type="text" class="number-input" data-value="prune_scale2d_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('prune_scale2d', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('prune_scale2d', 1)">+</button>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">{{label_pause_refine_after_reset}}</span>
+            <input type="text" class="number-input" data-value="pause_refine_after_reset_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('pause_refine_after_reset', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('pause_refine_after_reset', 1)">+</button>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">{{label_revised_opacity}}</span>
+            <input type="checkbox" data-checked="revised_opacity" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sparsity subsection (conditional) -->
+    <div data-if="dep_sparsity">
+      <div class="section-header" data-event-click="toggle_section('sparsity')">
+        <span class="section-arrow">{{sec_sparsity_arrow}}</span>
+        <span>{{label_hdr_sparsity}}</span>
+      </div>
+      <div class="section-content" data-class-collapsed="sec_sparsity_collapsed">
+        <div data-class-disabled-overlay="adv_disabled">
+          <div class="setting-row">
+            <span class="prop-label">{{label_sparsify_steps}}</span>
+            <input type="text" class="number-input" data-value="sparsify_steps_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('sparsify_steps', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('sparsify_steps', 1)">+</button>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">{{label_init_rho}}</span>
+            <input type="text" class="number-input" data-value="init_rho_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('init_rho', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('init_rho', 1)">+</button>
+          </div>
+          <div class="setting-row">
+            <span class="prop-label">{{label_prune_ratio}}</span>
+            <input type="range" class="setting-slider" data-value="prune_ratio" min="0" max="1" step="0.01" />
+            <span class="slider-value">{{prune_ratio | format_float(3)}}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Save Steps subsection -->
+    <div class="section-header" data-event-click="toggle_section('save_steps')">
+      <span class="section-arrow">{{sec_save_steps_arrow}}</span>
+      <span>{{label_hdr_save_steps}}</span>
+    </div>
+    <div class="section-content" data-class-collapsed="sec_save_steps_collapsed">
+      <div data-if="save_edit_mode">
+        <div class="setting-row">
+          <input type="text" id="num-new_step" class="number-input" data-value="new_step_str" />
+          <button class="num-step-btn" data-event-mousedown="num_step('new_step', -1)">-</button>
+          <button class="num-step-btn" data-event-mousedown="num_step('new_step', 1)">+</button>
+          <button class="btn btn--secondary" data-event-click="action('add_step')">{{label_add}}</button>
+        </div>
+        <div class="separator"></div>
+        <div data-for="step : save_steps_list">
+          <div class="setting-row">
+            <span class="number-input">{{step}}</span>
+            <button class="btn btn--secondary" data-event-click="remove_step(it_index)">{{label_remove}}</button>
+          </div>
+        </div>
+        <span class="status-text status-muted" data-if="no_save_steps">{{label_no_save_steps}}</span>
+      </div>
+      <div data-if="save_readonly_mode">
+        <span class="status-text status-info" data-if="has_save_steps">{{save_steps_display}}</span>
+        <span class="status-text status-muted" data-if="no_save_steps_ro">{{label_no_save_steps}}</span>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="separator"></div>
+
+  <!-- ── Status Section ────────────────────────────────── -->
+  <div>
+    <span class="status-text status-info">{{status_mode}}</span>
+    <span class="status-text status-info">{{status_iteration}}</span>
+    <span class="status-text status-info">{{status_gaussians}}</span>
+    <div data-if="show_progress">
+      <div style="position: relative;">
+        <progress id="training-progress" max="1" />
+        <span class="progress__text">{{progress_text}}</span>
+      </div>
+    </div>
+    <div id="loss-graph-container">
+      <span id="loss-label" class="status-text status-info"></span>
+      <div class="loss-graph-wrap">
+        <div class="loss-graph-ticks">
+          <span id="loss-tick-max" class="loss-tick"></span>
+          <span id="loss-tick-mid" class="loss-tick"></span>
+          <span id="loss-tick-min" class="loss-tick"></span>
+        </div>
+        <loss-graph id="loss-graph-el" />
+      </div>
+    </div>
+  </div>
+
+  <div id="color-picker-popup" class="color-picker-popup">
+    <color-picker id="color-picker-el"
+      data-attr-red="picker_r" data-attr-green="picker_g" data-attr-blue="picker_b"
+      data-event-change="picker_change" />
+  </div>
+
+  </div>
+</body>
+</rml>

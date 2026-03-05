@@ -9,6 +9,7 @@
 #include "core/scene.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/html_viewer_export.hpp"
+#include "gui/panel_registry.hpp"
 #include "gui/utils/windows_utils.hpp"
 #include "io/exporter.hpp"
 #include "io/video/video_encoder.hpp"
@@ -307,6 +308,9 @@ namespace lfs::vis::gui {
                     const std::lock_guard lock(export_state_.mutex);
                     export_state_.error = error_msg;
                     export_state_.stage = "Failed";
+                    lfs::core::events::state::ExportFailed{
+                        .error = error_msg}
+                        .emit();
                 }
 
                 export_state_.active.store(false);
@@ -334,6 +338,7 @@ namespace lfs::vis::gui {
         import_state_.load_complete.store(false);
         import_state_.show_completion.store(false);
         import_state_.progress.store(0.0f);
+        PanelRegistry::instance().invalidate_poll_cache();
         {
             const std::lock_guard lock(import_state_.mutex);
             import_state_.path = path;
@@ -429,6 +434,7 @@ namespace lfs::vis::gui {
             const std::lock_guard lock(import_state_.mutex);
             import_state_.completion_time = std::chrono::steady_clock::now();
         }
+        PanelRegistry::instance().invalidate_poll_cache();
 
         if (import_state_.thread && import_state_.thread->joinable()) {
             import_state_.thread->join();
@@ -584,11 +590,16 @@ namespace lfs::vis::gui {
 
                 auto result = encoder.open(path, options);
                 if (!result) {
-                    std::lock_guard lock(video_export_state_.mutex);
-                    video_export_state_.error = result.error();
-                    video_export_state_.stage = "Failed: " + result.error();
-                    video_export_state_.active.store(false);
+                    {
+                        std::lock_guard lock(video_export_state_.mutex);
+                        video_export_state_.error = result.error();
+                        video_export_state_.stage = "Failed: " + result.error();
+                    }
                     LOG_ERROR("Failed to open encoder: {}", result.error());
+                    lfs::core::events::state::VideoExportFailed{
+                        .error = result.error()}
+                        .emit();
+                    video_export_state_.active.store(false);
                     return;
                 }
 
@@ -662,6 +673,18 @@ namespace lfs::vis::gui {
                     }
                 }
 
+                {
+                    std::string err;
+                    {
+                        std::lock_guard lock(video_export_state_.mutex);
+                        err = video_export_state_.error;
+                    }
+                    if (!err.empty()) {
+                        lfs::core::events::state::VideoExportFailed{
+                            .error = std::move(err)}
+                            .emit();
+                    }
+                }
                 video_export_state_.active.store(false);
             });
     }
@@ -710,8 +733,20 @@ namespace lfs::vis::gui {
             has_result = mesh2splat_state_.result != nullptr;
         }
 
-        if (has_result)
+        if (has_result) {
             applyMesh2SplatResult();
+        } else {
+            std::string err;
+            {
+                std::lock_guard lock(mesh2splat_state_.mutex);
+                err = mesh2splat_state_.error;
+            }
+            if (!err.empty()) {
+                lfs::core::events::state::Mesh2SplatFailed{
+                    .error = std::move(err)}
+                    .emit();
+            }
+        }
 
         mesh2splat_state_.active.store(false);
         mesh2splat_state_.progress.store(has_result ? 1.0f : 0.0f);

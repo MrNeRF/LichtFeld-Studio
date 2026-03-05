@@ -9,5 +9,6 @@
 namespace lfs::vis::gui::panels {
 
     void DrawSystemConsoleButton(const UIContext& ctx);
+    void ToggleSystemConsole(const UIContext& ctx);
 
 } // namespace lfs::vis::gui::panels

@@ -63,8 +63,8 @@ def draw_rect_preview(x0: float, y0: float, x1: float, y1: float, add_mode: bool
 def clear_rect_preview() -> None:
     """Clear rectangle selection preview"""
 
-def draw_polygon_preview(points: Sequence[tuple[float, float]], closed: bool = False, add_mode: bool = True) -> None:
-    """Draw polygon selection preview"""
+def draw_polygon_preview(points: Sequence[tuple[float, float, float]], closed: bool = False, add_mode: bool = True) -> None:
+    """Draw polygon selection preview (world-space 3D points)"""
 
 def clear_polygon_preview() -> None:
     """Clear polygon selection preview"""

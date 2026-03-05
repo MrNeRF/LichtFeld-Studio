@@ -100,20 +100,17 @@ namespace lfs::vis {
             return;
         }
 
-        // Current FPS from last frame
+        auto now = std::chrono::high_resolution_clock::now();
+        float since_last = std::chrono::duration<float>(now - frame_times_.back().timestamp).count();
+
         if (frame_times_.back().duration > 0.0f) {
-            current_fps_ = 1.0f / frame_times_.back().duration;
+            current_fps_ = 1.0f / std::max(frame_times_.back().duration, since_last);
         }
 
-        // Average FPS from recent frames
-        if (frame_times_.size() >= 5) { // Need at least 5 samples for meaningful average
-            float sum = 0.0f;
-            for (const auto& frame_data : frame_times_) {
-                sum += frame_data.duration;
-            }
-            float avg_frame_time = sum / frame_times_.size();
-            if (avg_frame_time > 0.0f) {
-                average_fps_ = 1.0f / avg_frame_time;
+        if (frame_times_.size() >= 5) {
+            float span = std::chrono::duration<float>(now - frame_times_.front().timestamp).count();
+            if (span > 0.0f) {
+                average_fps_ = static_cast<float>(frame_times_.size()) / span;
             }
         } else {
             average_fps_ = current_fps_;

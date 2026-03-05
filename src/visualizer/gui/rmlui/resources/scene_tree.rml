@@ -1,0 +1,15 @@
+<rml>
+<head>
+    <link type="text/rcss" href="scene_tree.rcss"/>
+</head>
+<body id="body">
+    <div id="search-container">
+        <img id="search-icon" class="row-icon" src="../icon/scene/search.png" />
+        <input id="filter-input" type="text" />
+    </div>
+    <div id="tree-container">
+    </div>
+    <div id="context-menu" class="context-menu">
+    </div>
+</body>
+</rml>

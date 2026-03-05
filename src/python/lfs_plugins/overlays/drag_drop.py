@@ -60,7 +60,14 @@ class DragDropOverlay(Panel):
         zone_min_x = vp_x + INSET
         zone_min_y = vp_y + INSET
         zone_max_x = win_max_x - INSET
-        zone_max_y = win_max_y - INSET
+        bottom_inset = INSET
+        if lf.ui.is_sequencer_visible():
+            dp = layout.get_dpi_scale()
+            seq_state = lf.ui.get_sequencer_state()
+            film_strip_h = 56.0 if (seq_state and seq_state.show_film_strip) else 0.0
+            seq_height = 162.0 * dp + film_strip_h
+            bottom_inset = max(INSET, seq_height + 8.0)
+        zone_max_y = win_max_y - bottom_inset
         center_x = vp_x + vp_w * 0.5
         center_y = vp_y + vp_h * 0.5
 

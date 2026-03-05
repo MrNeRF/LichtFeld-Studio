@@ -1,0 +1,217 @@
+/* Scene tree panel — panel-specific styles only.
+ * Shared widget styles are in components.rcss (auto-included via applyTheme). */
+
+body {
+    font-family: Inter;
+    font-size: 11dp;
+    color: #cdd6f4;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Search container */
+#search-container {
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    padding: 4dp 6dp;
+    margin-bottom: 4dp;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+}
+
+#search-icon {
+    width: 13dp;
+    height: 13dp;
+    margin-right: 4dp;
+    image-color: #6c7086;
+}
+
+#filter-input {
+    flex: 1;
+    font-size: 10dp;
+    color: #cdd6f4;
+    background-color: transparent;
+    border-width: 0;
+    padding: 0;
+}
+
+#filter-input:focus {
+    border-width: 0;
+}
+
+#tree-container {
+    flex: 1;
+    overflow: auto;
+    min-height: 0;
+}
+
+.tree-row {
+    display: block;
+    width: auto;
+    padding: 1dp 4dp;
+    cursor: pointer;
+    transition: background-color 0.1s quadratic-out;
+}
+
+.tree-row:hover {
+    background-color: #313244;
+}
+
+.tree-row.even {
+    background-color: #1e1e2e08;
+}
+
+.tree-row.odd {
+    background-color: #31324408;
+}
+
+/* selected MUST come after even/odd for cascade */
+.tree-row.selected {
+    background-color: #3c5a8a;
+}
+
+.tree-row.selected:hover {
+    background-color: #4a6a9a;
+}
+
+.tree-row.drop-target {
+    border-width: 1dp;
+    border-color: #89b4fa;
+}
+
+.tree-row:drag {
+    opacity: 0.5;
+}
+
+.row-content {
+    display: inline;
+    white-space: nowrap;
+}
+
+/* Expand/collapse toggle — inline before name */
+.expand-toggle {
+    display: inline;
+    width: 12dp;
+    font-size: 10dp;
+    color: #a6adc8;
+    cursor: pointer;
+    text-align: center;
+    transition: color 0.1s quadratic-out;
+}
+
+.expand-toggle:hover {
+    color: #cdd6f4;
+}
+
+/* Leaf spacer — same width as expand-toggle for alignment */
+.leaf-spacer {
+    display: inline;
+    width: 12dp;
+}
+
+/* Icon images — base style for all PNG icons */
+.row-icon {
+    display: inline;
+    width: 14dp;
+    height: 14dp;
+    margin-right: 2dp;
+    image-color: #cdd6f4;
+}
+
+/* Visibility toggle */
+.row-icon.icon-vis-on {
+    image-color: rgba(102, 230, 102, 255);
+    transition: image-color 0.12s quadratic-out;
+}
+
+.row-icon.icon-vis-on:hover {
+    image-color: rgba(130, 255, 130, 255);
+}
+
+.row-icon.icon-vis-off {
+    image-color: rgba(153, 102, 102, 178);
+    transition: image-color 0.12s quadratic-out;
+}
+
+.row-icon.icon-vis-off:hover {
+    image-color: rgba(180, 120, 120, 220);
+}
+
+
+/* Colored dot — replaces type icons for a cleaner row */
+.color-dot {
+    display: inline;
+    width: 8dp;
+    height: 8dp;
+    border-radius: 4dp;
+    margin-right: 4dp;
+}
+
+.color-dot.splat        { background-color: rgba(153, 204, 255, 230); }
+.color-dot.group        { background-color: rgba(178, 178, 178, 204); }
+.color-dot.dataset      { background-color: rgba(127, 178, 255, 230); }
+.color-dot.camera       { background-color: rgba(127, 153, 204, 153); }
+.color-dot.camera_group { background-color: rgba(153, 178, 230, 204); }
+.color-dot.cropbox      { background-color: rgba(255, 178, 77, 230); }
+.color-dot.ellipsoid    { background-color: rgba(77, 204, 255, 230); }
+.color-dot.pointcloud   { background-color: rgba(204, 127, 255, 204); }
+.color-dot.mesh         { background-color: rgba(127, 230, 153, 230); }
+
+/* Fallback Unicode node icons (keyframe etc. without PNG) */
+.node-icon {
+    display: inline;
+    width: 16dp;
+    font-size: 11dp;
+    text-align: center;
+    margin-right: 4dp;
+}
+
+.node-icon.keyframe_group { color: rgba(230, 178, 77, 204); }
+.node-icon.keyframe       { color: rgba(255, 204, 51, 230); }
+
+
+.node-name {
+    display: inline;
+    color: #cdd6f4;
+}
+
+
+.node-count {
+    display: inline;
+    color: #6c7086;
+    font-size: 11dp;
+    margin-left: 6dp;
+}
+
+.tree-children {
+    /* indentation handled via inline style on each tree-row */
+}
+
+.tree-children.collapsed {
+    display: none;
+}
+
+/* Inline rename input */
+.rename-input {
+    display: inline;
+    width: 150dp;
+    padding: 2dp 4dp;
+    font-size: 10dp;
+    color: #cdd6f4;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #89b4fa;
+}
+
+/* Scene tree overrides section-header to block display with different padding */
+.section-header {
+    display: block;
+    padding: 4dp 6dp;
+    font-size: 11dp;
+}

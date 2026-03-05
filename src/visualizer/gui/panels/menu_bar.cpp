@@ -162,10 +162,15 @@ namespace lfs::vis::gui {
         }
     } // namespace
 
-    void MenuBar::render() {
-        const auto& t = theme();
+    bool MenuBar::hasMenuEntries() const {
+        return g_menu_entries_ready.load(std::memory_order_acquire);
+    }
 
-        // Register callbacks for Python-driven menu
+    std::vector<python::MenuBarEntry> MenuBar::getMenuEntries() const {
+        return copy_menu_entries();
+    }
+
+    void MenuBar::render() {
         if (g_menu_bar_instance != this) {
             g_menu_bar_instance = this;
             python::set_show_python_console_callback([]() {
@@ -174,52 +179,13 @@ namespace lfs::vis::gui {
             });
         }
 
-        if (fonts_.regular)
-            ImGui::PushFont(fonts_.regular);
-
-        ImGui::PushStyleColor(ImGuiCol_MenuBarBg, t.menu_background());
-        ImGui::PushStyleColor(ImGuiCol_Header, t.menu_active());
-        ImGui::PushStyleColor(ImGuiCol_HeaderHovered, t.menu_hover());
-        ImGui::PushStyleColor(ImGuiCol_HeaderActive, t.menu_active());
-        ImGui::PushStyleColor(ImGuiCol_PopupBg, t.menu_popup_background());
-        ImGui::PushStyleColor(ImGuiCol_Border, t.menu_border());
-        ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, t.menu.popup_rounding);
-        ImGui::PushStyleVar(ImGuiStyleVar_PopupBorderSize, t.menu.popup_border_size);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, t.menu.popup_padding);
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, t.menu.frame_padding);
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, t.menu.item_spacing);
-
-        if (!g_menu_entries_ready.load(std::memory_order_acquire)) {
+        if (!g_menu_entries_ready.load(std::memory_order_acquire))
             start_menu_entry_preload_once();
-        }
 
         if (python::are_plugins_loaded() && !g_menu_entries_ready.load(std::memory_order_acquire)) {
             g_menu_entries_loading.store(false, std::memory_order_release);
             start_menu_entry_preload_once();
         }
-
-        if (ImGui::BeginMainMenuBar()) {
-            if (g_menu_entries_ready.load(std::memory_order_acquire)) {
-                auto entries = copy_menu_entries();
-                for (const auto& entry : entries) {
-                    if (ImGui::BeginMenu(LOC(entry.label.c_str()))) {
-                        python::draw_menu_bar_entry(entry.idname);
-                        ImGui::EndMenu();
-                    }
-                }
-            }
-
-            const float h = ImGui::GetWindowHeight();
-            ImGui::GetWindowDrawList()->AddLine({0, h - 1}, {ImGui::GetWindowWidth(), h - 1},
-                                                t.menu_bottom_border_u32(), 1.0f);
-
-            ImGui::EndMainMenuBar();
-        }
-
-        ImGui::PopStyleVar(5);
-        ImGui::PopStyleColor(6);
-        if (fonts_.regular)
-            ImGui::PopFont();
 
         renderPluginInstallPopup();
     }

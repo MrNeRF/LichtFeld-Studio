@@ -14,7 +14,7 @@ from .marketplace import (
     PluginMarketplaceCatalog,
 )
 from .plugin import PluginInfo, PluginState
-from .types import Panel
+from .types import RmlPanel
 
 MAX_OUTPUT_LINES = 100
 SUCCESS_DISMISS_SEC = 3.0
@@ -50,21 +50,24 @@ class CardOpState:
     finished_at: float = 0.0
 
 
-class PluginMarketplacePanel(Panel):
+def _xml_escape(text: str) -> str:
+    return (text
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
+
+class PluginMarketplacePanel(RmlPanel):
     """Floating plugin window for browsing, installing, and managing plugins."""
 
     idname = "lfs.plugin_marketplace"
     label = "Plugin Marketplace"
     space = "FLOATING"
     order = 91
-    options = {"DEFAULT_CLOSED"}
-
-    GRID_COLUMNS = 100
-    CARD_WIDTH = 330
-    CARD_HEIGHT = 200
-    CARD_SPACING = 12
-    FILTER_WIDTH = 140
-    SORT_WIDTH = 170
+    rml_template = "rmlui/plugin_marketplace.rml"
+    rml_height_mode = "content"
+    initial_width = 770
 
     def __init__(self):
         self._catalog = PluginMarketplaceCatalog()
@@ -77,94 +80,556 @@ class PluginMarketplacePanel(Panel):
         self._lock = threading.Lock()
         self._pending_uninstall_name = ""
         self._pending_uninstall_card_id = ""
-        self._pending_uninstall_open = False
 
         self._discover_cache: Optional[List[PluginInfo]] = None
-        self._clear_manual_url = False
 
-    def draw(self, layout):
+        self._doc = None
+        self._handle = None
+        self._rendered_card_ids: List[str] = []
+        self._last_card_phases: Dict[str, Tuple] = {}
+        self._force_rebuild = False
+        self._formats_open = False
+
+    # ── Data model ────────────────────────────────────────────
+
+    def on_bind_model(self, ctx):
+        import lichtfeld as lf
+
+        model = ctx.create_data_model("plugin_marketplace")
+        if model is None:
+            return
+
+        tr = lf.ui.tr
+
+        model.bind_func("panel_label", lambda: tr("menu.view.plugin_marketplace"))
+        model.bind_func("title_line", lambda: tr("plugin_marketplace.title_line"))
+        model.bind_func("warning_body", lambda: tr("plugin_marketplace.warning_body"))
+        model.bind_func("filter_label", lambda: tr("plugin_marketplace.filter_label"))
+        model.bind_func("sort_label", lambda: tr("plugin_marketplace.sort_label"))
+        model.bind_func("url_label", lambda: tr("plugin_manager.github_url_or_shorthand"))
+        model.bind_func("install_btn_label", lambda: tr("plugin_manager.button.install_plugin"))
+        model.bind_func("no_plugins_text", lambda: tr("plugin_marketplace.no_plugins"))
+        model.bind_func("edit_list_hint", lambda: tr("plugin_marketplace.edit_list_hint"))
+        model.bind_func("confirm_no_label", lambda: tr("plugin_marketplace.confirm_uninstall_no"))
+        model.bind_func("confirm_yes_label", lambda: tr("plugin_marketplace.confirm_uninstall_yes"))
+        model.bind_func("formats_label", lambda: tr("plugin_manager.supported_formats"))
+
+        model.bind_func("filter_all", lambda: tr("plugin_marketplace.filter.all"))
+        model.bind_func("filter_installed", lambda: tr("plugin_marketplace.filter.installed"))
+        model.bind_func("filter_not_installed", lambda: tr("plugin_marketplace.filter.not_installed"))
+        model.bind_func("sort_pop_desc", lambda: tr("plugin_marketplace.sort.popularity_desc"))
+        model.bind_func("sort_pop_asc", lambda: tr("plugin_marketplace.sort.popularity_asc"))
+        model.bind_func("sort_name_asc", lambda: tr("plugin_marketplace.sort.name_asc"))
+        model.bind_func("sort_name_desc", lambda: tr("plugin_marketplace.sort.name_desc"))
+
+        model.bind(
+            "manual_url",
+            lambda: self._manual_url,
+            lambda v: setattr(self, "_manual_url", v),
+        )
+        model.bind(
+            "filter_idx",
+            lambda: str(self._install_filter_idx),
+            self._set_filter_idx,
+        )
+        model.bind(
+            "sort_idx",
+            lambda: str(self._sort_idx),
+            self._set_sort_idx,
+        )
+
+        model.bind_event("install_from_url", self._on_install_from_url)
+        model.bind_event("confirm_yes", self._on_confirm_yes)
+        model.bind_event("confirm_no", self._on_confirm_no)
+
+        self._handle = model.get_handle()
+
+    def _set_filter_idx(self, v):
+        try:
+            idx = int(v)
+        except (ValueError, TypeError):
+            return
+        if idx != self._install_filter_idx:
+            self._install_filter_idx = idx
+            self._force_rebuild = True
+
+    def _set_sort_idx(self, v):
+        try:
+            idx = int(v)
+        except (ValueError, TypeError):
+            return
+        if idx != self._sort_idx:
+            self._sort_idx = idx
+            self._force_rebuild = True
+
+    # ── Lifecycle ─────────────────────────────────────────────
+
+    def on_load(self, doc):
+        super().on_load(doc)
+        self._doc = doc
+
+        formats_header = doc.get_element_by_id("formats-header")
+        if formats_header:
+            formats_header.add_event_listener("click", self._on_toggle_formats)
+
+        grid_el = doc.get_element_by_id("card-grid")
+        if grid_el:
+            grid_el.add_event_listener("click", self._on_card_click)
+
+    def on_update(self, doc):
         import lichtfeld as lf
         from .manager import PluginManager
 
-        tr = lf.ui.tr
-        theme = lf.ui.theme()
-        palette = theme.palette
         mgr = PluginManager.instance()
         self._ensure_loaded()
 
-        if self._clear_manual_url:
-            self._manual_url = ""
-            self._clear_manual_url = False
-
-        scale = layout.get_dpi_scale()
-        self._draw_uninstall_confirmation_modal(layout, mgr, scale)
-
-        layout.text_colored(
-            tr("plugin_marketplace.title_line"),
-            palette.info,
-        )
-        layout.spacing()
-
-        layout.text_colored(tr("plugin_marketplace.warning_body"), palette.warning)
-        layout.spacing()
-
-        self._draw_marketplace_controls(layout, mgr, scale)
-        layout.spacing()
-
-        entries, is_loading = self._catalog.snapshot()
+        entries, _is_loading = self._catalog.snapshot()
         entries = self._with_local_plugins(entries, mgr)
         installed_lookup = self._get_installed_plugin_lookup(mgr)
         installed_versions = self._get_installed_plugin_versions(mgr)
         installed_names = set(installed_lookup.values())
         entries = self._filter_and_sort_entries(entries, set(installed_lookup.keys()), installed_names)
 
-        layout.spacing()
-        layout.separator()
-        layout.spacing()
+        card_ids = [e.registry_id or e.name or str(i) for i, e in enumerate(entries)]
 
-        if not entries:
-            layout.text_disabled(tr("plugin_marketplace.no_plugins"))
-            layout.text_disabled(tr("plugin_marketplace.edit_list_hint"))
+        empty_el = doc.get_element_by_id("empty-state")
+        grid_el = doc.get_element_by_id("card-grid")
+        if empty_el:
+            empty_el.set_class("hidden", len(entries) > 0)
+        if not grid_el:
             return
 
-        card_w = self.CARD_WIDTH * scale
-        card_h = self.CARD_HEIGHT * scale
-        spacing = self.CARD_SPACING * scale
+        grid_el.set_class("hidden", len(entries) == 0)
 
-        avail_w, _ = layout.get_content_region_avail()
-        visible_columns = self._visible_columns(avail_w, card_w, spacing)
-        card_w = self._fit_card_width(avail_w, card_w, spacing, visible_columns, scale)
+        if card_ids != self._rendered_card_ids or self._force_rebuild:
+            self._force_rebuild = False
+            self._rendered_card_ids = list(card_ids)
+            self._last_card_phases.clear()
+            rml_parts = []
+            for i, entry in enumerate(entries):
+                card_id = card_ids[i]
+                rml_parts.append(self._build_card_rml(
+                    mgr, i, entry, card_id,
+                    installed_lookup, installed_versions, installed_names,
+                ))
+            grid_el.set_inner_rml("\n".join(rml_parts))
 
-        if layout.begin_child("##plugin_marketplace_scroll", (0, 0), border=False):
-            row_count = (len(entries) + visible_columns - 1) // visible_columns
-            for row in range(row_count):
-                base = row * visible_columns
-                drawn = 0
-                for col in range(visible_columns):
-                    idx = base + col
-                    if idx >= len(entries):
-                        break
+        self._update_card_states(doc, entries, card_ids, mgr, installed_lookup, installed_versions, installed_names)
+        self._update_manual_feedback(doc)
 
-                    if drawn > 0:
-                        layout.same_line(spacing=spacing)
+    # ── Card RML generation ───────────────────────────────────
 
-                    self._draw_plugin_card(
-                        layout,
-                        mgr,
-                        idx,
-                        entries[idx],
-                        installed_lookup,
-                        installed_versions,
-                        installed_names,
-                        card_w,
-                        card_h,
-                        scale,
+    def _build_card_rml(self, mgr, idx, entry, card_id,
+                        installed_lookup, installed_versions, installed_names):
+        import lichtfeld as lf
+
+        tr = lf.ui.tr
+        plugin_name = self._resolve_entry_plugin_name(entry, installed_lookup, installed_names)
+        plugin_state = mgr.get_state(plugin_name) if plugin_name else None
+        is_installed = plugin_name is not None
+        is_local = self._is_local_entry(entry)
+        is_local_only = self._is_local_only_entry(entry)
+        has_github = bool(entry.github_url)
+        card_state = self._get_card_state(card_id)
+
+        short_name = _xml_escape(entry.name or entry.repo or tr("plugin_marketplace.unknown_plugin"))
+        repo_label = ""
+        if entry.owner and entry.repo:
+            repo_label = f"{entry.owner}/{entry.repo}"
+        elif entry.repo:
+            repo_label = entry.repo
+
+        desc = entry.description
+        if not desc and plugin_name and self._discover_cache:
+            for p in self._discover_cache:
+                if p.name == plugin_name:
+                    desc = p.description
+                    break
+        description = _xml_escape(self._truncate_text(desc or tr("plugin_marketplace.no_description"), 90))
+
+        parts = []
+        parts.append(f'<div class="plugin-card" id="card-{_xml_escape(card_id)}" data-card-id="{_xml_escape(card_id)}">')
+
+        info_attrs = ""
+        if has_github:
+            info_attrs = f' data-action="open-url" data-url="{_xml_escape(entry.github_url)}"'
+        parts.append(f'  <div class="card-info"{info_attrs}>')
+        parts.append(f'    <span class="card-name">{short_name}</span>')
+        if plugin_name and plugin_state == PluginState.ACTIVE:
+            version = installed_versions.get(plugin_name, "").strip()
+            if version:
+                version_label = version if version.lower().startswith("v") else f"v{version}"
+                parts.append(f'    <span class="card-version status-info">{_xml_escape(version_label)}</span>')
+        if repo_label:
+            parts.append(f'    <span class="card-repo text-disabled">{_xml_escape(repo_label)}</span>')
+        if not is_local_only:
+            metrics = []
+            if entry.stars > 0:
+                metrics.append(f"{tr('plugin_marketplace.stars')}: {entry.stars}")
+            if entry.downloads > 0:
+                metrics.append(f"{tr('plugin_marketplace.downloads')}: {entry.downloads}")
+            if metrics:
+                parts.append(f'    <span class="card-metrics mp-warning-text">{_xml_escape("  |  ".join(metrics))}</span>')
+
+        tags = self._entry_type_tags(entry)
+        if tags:
+            parts.append(f'    <span class="card-tags text-disabled">{_xml_escape("  |  ".join(tags[:3]))}</span>')
+        if is_local:
+            parts.append(f'    <span class="card-local status-info">{_xml_escape(tr("plugin_marketplace.local_install"))}</span>')
+
+        if is_installed:
+            state_str = plugin_state.value if plugin_state else tr("plugin_manager.status_not_loaded")
+            css_cls = "status-success" if plugin_state == PluginState.ACTIVE else "status-muted"
+            parts.append(f'    <span class="card-status {css_cls}">'
+                         f'{_xml_escape(tr("plugin_manager.status"))}: {_xml_escape(state_str)}</span>')
+
+        if entry.error:
+            parts.append(f'    <span class="card-error status-error">{_xml_escape(tr("plugin_marketplace.invalid_link"))}</span>')
+        else:
+            parts.append(f'    <span class="card-description text-disabled">{description}</span>')
+
+        parts.append('    <div class="separator"></div>')
+        parts.append('  </div>')
+
+        parts.append(f'  <div class="card-feedback" id="feedback-{_xml_escape(card_id)}"></div>')
+
+        parts.append(self._build_card_buttons_rml(
+            mgr, idx, entry, plugin_name, plugin_state,
+            is_installed, is_local, is_local_only, card_id, card_state,
+        ))
+
+        parts.append('</div>')
+        return "\n".join(parts)
+
+    def _build_card_buttons_rml(self, mgr, idx, entry, plugin_name, plugin_state,
+                                is_installed, is_local, is_local_only, card_id, card_state):
+        import lichtfeld as lf
+        from .settings import SettingsManager
+
+        tr = lf.ui.tr
+        esc_id = _xml_escape(card_id)
+        busy = card_state.phase == CardOpPhase.IN_PROGRESS
+
+        if card_state.phase != CardOpPhase.IDLE:
+            return f'  <div class="card-buttons" id="btns-{esc_id}"></div>'
+
+        parts = []
+        if is_installed and plugin_name:
+            prefs = SettingsManager.instance().get(plugin_name)
+            startup = prefs.get("load_on_startup", False)
+            checked = ' checked="checked"' if startup else ''
+            parts.append(f'  <div class="card-startup-row">')
+            parts.append(f'    <input type="checkbox" id="startup-{esc_id}" data-action="startup"'
+                         f' data-card-id="{esc_id}" data-plugin="{_xml_escape(plugin_name)}"{checked} />')
+            parts.append(f'    <span class="card-startup-label text-disabled">{_xml_escape(tr("plugin_marketplace.load_on_startup"))}</span>')
+            parts.append(f'  </div>')
+
+        disabled = ' disabled="disabled"' if busy else ''
+        parts.append(f'  <div class="card-buttons" id="btns-{esc_id}">')
+
+        if not is_installed:
+            if is_local_only:
+                parts.append('  </div>')
+                return "\n".join(parts)
+            dis_install = ' disabled="disabled"' if (busy or bool(entry.error)) else ''
+            parts.append(f'    <button class="btn btn--success" data-action="install"'
+                         f' data-card-id="{esc_id}"{dis_install}>'
+                         f'{_xml_escape(tr("plugin_marketplace.button.install"))}</button>')
+        elif is_local_only:
+            load_label = tr("plugin_manager.button.unload") if plugin_state == PluginState.ACTIVE else tr("plugin_manager.button.load")
+            load_action = "unload" if plugin_state == PluginState.ACTIVE else "load"
+            load_cls = "btn--warning" if plugin_state == PluginState.ACTIVE else "btn--success"
+            parts.append(f'    <button class="btn {load_cls}" data-action="{load_action}"'
+                         f' data-card-id="{esc_id}" data-plugin="{_xml_escape(plugin_name)}"{disabled}>'
+                         f'{_xml_escape(load_label)}</button>')
+            parts.append(f'    <button class="btn btn--error" data-action="uninstall"'
+                         f' data-card-id="{esc_id}" data-plugin="{_xml_escape(plugin_name)}"{disabled}>'
+                         f'{_xml_escape(tr("plugin_manager.button.uninstall"))}</button>')
+        elif is_local and bool(entry.github_url):
+            load_label = tr("plugin_manager.button.unload") if plugin_state == PluginState.ACTIVE else tr("plugin_manager.button.load")
+            load_action = "unload" if plugin_state == PluginState.ACTIVE else "load"
+            load_cls = "btn--warning" if plugin_state == PluginState.ACTIVE else "btn--success"
+            parts.append(f'    <button class="btn {load_cls}" data-action="{load_action}"'
+                         f' data-card-id="{esc_id}" data-plugin="{_xml_escape(plugin_name)}"{disabled}>'
+                         f'{_xml_escape(load_label)}</button>')
+            parts.append(f'    <button class="btn btn--primary" data-action="update"'
+                         f' data-card-id="{esc_id}" data-plugin="{_xml_escape(plugin_name)}"{disabled}>'
+                         f'{_xml_escape(tr("plugin_manager.button.update"))}</button>')
+            parts.append(f'    <button class="btn btn--error" data-action="uninstall"'
+                         f' data-card-id="{esc_id}" data-plugin="{_xml_escape(plugin_name)}"{disabled}>'
+                         f'{_xml_escape(tr("plugin_manager.button.uninstall"))}</button>')
+        else:
+            if plugin_state == PluginState.ACTIVE:
+                parts.append(f'    <button class="btn btn--primary" data-action="reload"'
+                             f' data-card-id="{esc_id}" data-plugin="{_xml_escape(plugin_name)}"{disabled}>'
+                             f'{_xml_escape(tr("plugin_manager.button.reload"))}</button>')
+                parts.append(f'    <button class="btn btn--warning" data-action="unload"'
+                             f' data-card-id="{esc_id}" data-plugin="{_xml_escape(plugin_name)}"{disabled}>'
+                             f'{_xml_escape(tr("plugin_manager.button.unload"))}</button>')
+            else:
+                parts.append(f'    <button class="btn btn--success" data-action="load"'
+                             f' data-card-id="{esc_id}" data-plugin="{_xml_escape(plugin_name)}"{disabled}>'
+                             f'{_xml_escape(tr("plugin_manager.button.load"))}</button>')
+                parts.append(f'    <button class="btn btn--primary" data-action="update"'
+                             f' data-card-id="{esc_id}" data-plugin="{_xml_escape(plugin_name)}"{disabled}>'
+                             f'{_xml_escape(tr("plugin_manager.button.update"))}</button>')
+            parts.append(f'    <button class="btn btn--error" data-action="uninstall"'
+                         f' data-card-id="{esc_id}" data-plugin="{_xml_escape(plugin_name)}"{disabled}>'
+                         f'{_xml_escape(tr("plugin_manager.button.uninstall"))}</button>')
+
+        parts.append('  </div>')
+        return "\n".join(parts)
+
+    # ── Card state updates (per-frame, minimal DOM touches) ───
+
+    def _update_card_states(self, doc, entries, card_ids, mgr,
+                            installed_lookup, installed_versions, installed_names):
+        import lichtfeld as lf
+
+        tr = lf.ui.tr
+
+        for i, card_id in enumerate(card_ids):
+            state = self._get_card_state(card_id)
+            phase_key = (state.phase, state.message, round(state.progress, 2))
+            prev_key = self._last_card_phases.get(card_id)
+            if prev_key == phase_key:
+                continue
+            self._last_card_phases[card_id] = phase_key
+
+            prev_phase = prev_key[0] if prev_key else CardOpPhase.IDLE
+            if state.phase == CardOpPhase.IDLE and prev_phase != CardOpPhase.IDLE:
+                self._force_rebuild = True
+                continue
+
+            card_el = doc.get_element_by_id(f"card-{card_id}")
+            if not card_el:
+                continue
+
+            card_el.set_class("card--in-progress", state.phase == CardOpPhase.IN_PROGRESS)
+            card_el.set_class("card--success", state.phase == CardOpPhase.SUCCESS)
+            card_el.set_class("card--error", state.phase == CardOpPhase.ERROR)
+
+            feedback_el = doc.get_element_by_id(f"feedback-{card_id}")
+            if feedback_el:
+                if state.phase == CardOpPhase.IN_PROGRESS:
+                    msg = _xml_escape(state.message or tr("plugin_manager.working"))
+                    feedback_el.set_inner_rml(
+                        f'<progress class="card-progress" value="{state.progress:.2f}" max="1" />'
+                        f'<span class="card-progress-text">{msg}</span>'
                     )
-                    drawn += 1
+                elif state.phase == CardOpPhase.SUCCESS:
+                    feedback_el.set_inner_rml(
+                        f'<span class="status-text status-success">{_xml_escape(state.message)}</span>'
+                    )
+                elif state.phase == CardOpPhase.ERROR:
+                    feedback_el.set_inner_rml(
+                        f'<span class="status-text status-error">{_xml_escape(state.message)}</span>'
+                    )
+                else:
+                    feedback_el.set_inner_rml("")
 
-                if drawn > 0:
-                    layout.spacing()
-        layout.end_child()
+    def _update_manual_feedback(self, doc):
+        card_id = "__manual_url__"
+        state = self._get_card_state(card_id)
+        feedback_el = doc.get_element_by_id("manual-feedback")
+        if not feedback_el:
+            return
+
+        import lichtfeld as lf
+        tr = lf.ui.tr
+
+        phase_key = (state.phase, state.message, round(state.progress, 2))
+        cache_key = "_manual_feedback_"
+        if self._last_card_phases.get(cache_key) == phase_key:
+            return
+        self._last_card_phases[cache_key] = phase_key
+
+        btn = doc.get_element_by_id("btn-install-url")
+
+        if state.phase == CardOpPhase.IN_PROGRESS:
+            msg = _xml_escape(state.message or tr("plugin_manager.working"))
+            feedback_el.set_inner_rml(
+                f'<progress class="card-progress" value="{state.progress:.2f}" max="1" />'
+                f'<span class="card-progress-text">{msg}</span>'
+            )
+            if btn:
+                btn.set_attribute("disabled", "disabled")
+        elif state.phase == CardOpPhase.SUCCESS:
+            feedback_el.set_inner_rml(
+                f'<span class="status-text status-success">{_xml_escape(state.message)}</span>'
+            )
+            if btn:
+                btn.remove_attribute("disabled")
+            self._manual_url = ""
+            if self._handle:
+                self._handle.dirty("manual_url")
+        elif state.phase == CardOpPhase.ERROR:
+            feedback_el.set_inner_rml(
+                f'<span class="status-text status-error">{_xml_escape(state.message)}</span>'
+            )
+            if btn:
+                btn.remove_attribute("disabled")
+        else:
+            feedback_el.set_inner_rml("")
+            if btn:
+                btn.remove_attribute("disabled")
+
+    # ── Event handlers ────────────────────────────────────────
+
+    def _on_toggle_formats(self, _ev):
+        self._formats_open = not self._formats_open
+        doc = self._doc
+        content = doc.get_element_by_id("formats-content")
+        arrow = doc.get_element_by_id("formats-arrow")
+        if content:
+            content.set_class("collapsed", not self._formats_open)
+        if arrow:
+            arrow.set_inner_rml("\u25BC" if self._formats_open else "\u25B6")
+
+    def _on_install_from_url(self, handle, event, args):
+        from .manager import PluginManager
+        mgr = PluginManager.instance()
+        self._install_plugin_from_url(mgr, self._manual_url, "__manual_url__")
+
+    def _on_confirm_yes(self, handle, event, args):
+        from .manager import PluginManager
+        mgr = PluginManager.instance()
+        name = self._pending_uninstall_name
+        card_id = self._pending_uninstall_card_id
+        self._pending_uninstall_name = ""
+        self._pending_uninstall_card_id = ""
+        overlay = self._doc.get_element_by_id("confirm-overlay")
+        if overlay:
+            overlay.set_class("hidden", True)
+        if name:
+            self._uninstall_plugin(mgr, name, card_id)
+
+    def _on_confirm_no(self, handle, event, args):
+        self._pending_uninstall_name = ""
+        self._pending_uninstall_card_id = ""
+        overlay = self._doc.get_element_by_id("confirm-overlay")
+        if overlay:
+            overlay.set_class("hidden", True)
+
+    def _on_card_click(self, ev):
+        import lichtfeld as lf
+        from .manager import PluginManager
+        from .settings import SettingsManager
+
+        target = ev.target()
+        if target is None:
+            return
+
+        action, card_id, plugin_name = self._find_card_action(target)
+        if not action:
+            return
+
+        mgr = PluginManager.instance()
+
+        if action == "open-url":
+            url = self._find_data_attr(target, "data-url")
+            if url:
+                lf.ui.open_url(url)
+            return
+
+        if action == "startup":
+            if plugin_name:
+                prefs = SettingsManager.instance().get(plugin_name)
+                cb_el = self._find_element_with_attr(target, "type", "checkbox")
+                checked = cb_el.has_attribute("checked") if cb_el else not prefs.get("load_on_startup", False)
+                prefs.set("load_on_startup", checked)
+            return
+
+        if not card_id:
+            return
+
+        entries, _ = self._catalog.snapshot()
+        entries = self._with_local_plugins(entries, mgr)
+        installed_lookup = self._get_installed_plugin_lookup(mgr)
+        installed_names = set(installed_lookup.values())
+        entries = self._filter_and_sort_entries(entries, set(installed_lookup.keys()), installed_names)
+
+        entry = None
+        for i, e in enumerate(entries):
+            eid = e.registry_id or e.name or str(i)
+            if eid == card_id:
+                entry = e
+                break
+
+        if action == "install" and entry:
+            self._install_plugin_from_marketplace(mgr, entry, card_id)
+        elif action == "load" and plugin_name:
+            self._load_plugin(mgr, plugin_name, card_id)
+        elif action == "unload" and plugin_name:
+            self._unload_plugin(mgr, plugin_name, card_id)
+        elif action == "reload" and plugin_name:
+            self._reload_plugin(mgr, plugin_name, card_id)
+        elif action == "update" and plugin_name:
+            self._update_plugin(mgr, plugin_name, card_id)
+        elif action == "uninstall" and plugin_name:
+            self._request_uninstall_confirmation(plugin_name, card_id, ev)
+
+    def _find_card_action(self, element):
+        for _ in range(6):
+            if element is None:
+                return None, None, None
+            action = element.get_attribute("data-action")
+            if action:
+                card_id = element.get_attribute("data-card-id", "")
+                plugin_name = element.get_attribute("data-plugin", "")
+                return action, card_id, plugin_name or None
+            p = element.parent()
+            if p is None:
+                return None, None, None
+            element = p
+        return None, None, None
+
+    def _find_element_with_attr(self, element, attr, value):
+        for _ in range(6):
+            if element is None:
+                return None
+            if element.get_attribute(attr, "") == value:
+                return element
+            p = element.parent()
+            if p is None:
+                return None
+            element = p
+        return None
+
+    def _find_data_attr(self, element, attr):
+        for _ in range(6):
+            if element is None:
+                return None
+            val = element.get_attribute(attr, "")
+            if val:
+                return val
+            p = element.parent()
+            if p is None:
+                return None
+            element = p
+        return None
+
+    def _request_uninstall_confirmation(self, name, card_id, ev):
+        import lichtfeld as lf
+
+        if not name:
+            return
+        self._pending_uninstall_name = name
+        self._pending_uninstall_card_id = card_id
+
+        tr = lf.ui.tr
+        doc = self._doc
+
+        msg_el = doc.get_element_by_id("confirm-message")
+        if msg_el:
+            msg_el.set_inner_rml(
+                _xml_escape(tr("plugin_marketplace.confirm_uninstall_message").format(name=name))
+            )
+        overlay = doc.get_element_by_id("confirm-overlay")
+        if overlay:
+            overlay.set_class("hidden", False)
+
+    # ── Business logic (unchanged) ────────────────────────────
 
     def _ensure_loaded(self):
         self._catalog.refresh_async()
@@ -198,418 +663,6 @@ class PluginMarketplacePanel(Panel):
                 output_lines=list(state.output_lines),
                 finished_at=state.finished_at,
             )
-
-    def _draw_manual_install_controls(self, layout, mgr, scale: float):
-        import lichtfeld as lf
-
-        tr = lf.ui.tr
-        card_id = "__manual_url__"
-        card_state = self._get_card_state(card_id)
-        in_progress = card_state.phase == CardOpPhase.IN_PROGRESS
-
-        layout.label(tr("plugin_manager.github_url_or_shorthand"))
-        input_width = max(140.0, layout.get_content_region_avail()[0] - 104.0 * scale)
-        layout.set_next_item_width(input_width)
-        _, self._manual_url = layout.input_text("##marketplace_install_url", self._manual_url)
-
-        layout.same_line(spacing=8.0 * scale)
-        if in_progress:
-            layout.begin_disabled()
-        if layout.button_styled(tr("plugin_manager.button.install_plugin"), "success", (0, 28)):
-            if not in_progress:
-                self._install_plugin_from_url(mgr, self._manual_url, card_id)
-        if in_progress:
-            layout.end_disabled()
-
-        self._draw_inline_feedback(layout, card_state, scale)
-
-        if layout.tree_node(tr("plugin_manager.supported_formats")):
-            layout.bullet_text("https://github.com/owner/repo")
-            layout.bullet_text("github:owner/repo")
-            layout.bullet_text("owner/repo")
-            layout.tree_pop()
-
-    def _draw_inline_feedback(self, layout, card_state: CardOpState, scale: float):
-        import lichtfeld as lf
-
-        palette = lf.ui.theme().palette
-        tr = lf.ui.tr
-
-        if card_state.phase == CardOpPhase.IN_PROGRESS:
-            layout.progress_bar(
-                card_state.progress,
-                card_state.message or tr("plugin_manager.working"),
-            )
-        elif card_state.phase == CardOpPhase.SUCCESS:
-            layout.progress_bar(1.0, card_state.message)
-        elif card_state.phase == CardOpPhase.ERROR:
-            layout.text_colored(card_state.message, palette.error)
-            if layout.is_item_hovered() and card_state.message:
-                layout.set_tooltip(card_state.message)
-
-    @staticmethod
-    def _calc_bottom_area_height(
-        card_state: CardOpState,
-        is_installed: bool,
-        is_local_only: bool,
-        button_height: float,
-        button_spacing: float,
-        scale: float,
-    ) -> float:
-        if card_state.phase != CardOpPhase.IDLE:
-            return button_height
-
-        if not is_installed:
-            return button_height
-
-        item_sp = 6 * scale
-        return button_height + item_sp + button_height
-
-    def _draw_plugin_card(
-        self,
-        layout,
-        mgr,
-        idx: int,
-        entry: MarketplacePluginEntry,
-        installed_lookup: Dict[str, str],
-        installed_versions: Dict[str, str],
-        installed_names: Set[str],
-        card_w: float,
-        card_h: float,
-        scale: float,
-    ):
-        import lichtfeld as lf
-
-        tr = lf.ui.tr
-        theme = lf.ui.theme()
-        palette = theme.palette
-        card_rounding = max(theme.sizes.frame_rounding, theme.sizes.popup_rounding)
-        layout.push_style_var("ChildRounding", card_rounding * scale)
-        layout.push_style_color("ChildBg", palette.surface)
-
-        plugin_name = self._resolve_entry_plugin_name(entry, installed_lookup, installed_names)
-        plugin_state = mgr.get_state(plugin_name) if plugin_name else None
-        is_installed = plugin_name is not None
-        is_local = self._is_local_entry(entry)
-        has_github = bool(entry.github_url)
-        is_local_only = self._is_local_only_entry(entry)
-
-        card_id = entry.registry_id or entry.name or str(idx)
-        card_state = self._get_card_state(card_id)
-
-        border_color = palette.border
-        if card_state.phase == CardOpPhase.IN_PROGRESS:
-            border_color = palette.info
-        elif card_state.phase == CardOpPhase.SUCCESS:
-            border_color = palette.success
-        elif card_state.phase == CardOpPhase.ERROR:
-            border_color = palette.error
-        layout.push_style_color("Border", border_color)
-
-        this_card_busy = card_state.phase == CardOpPhase.IN_PROGRESS
-
-        if layout.begin_child(f"##plugin_card_{card_id}", (card_w, card_h), border=True):
-            info_start = layout.get_cursor_pos()
-            self._draw_card_info(
-                layout, entry, plugin_name, plugin_state,
-                is_installed, is_local, is_local_only, installed_versions, scale,
-            )
-            info_end_y = layout.get_cursor_pos()[1]
-
-            if has_github:
-                info_w = layout.get_content_region_avail()[0]
-                info_h = info_end_y - info_start[1]
-                saved = layout.get_cursor_pos()
-                layout.set_cursor_pos(info_start)
-                layout.invisible_button(f"##info_link_{card_id}", (info_w, info_h))
-                if layout.is_item_hovered():
-                    layout.set_mouse_cursor_hand()
-                    layout.set_tooltip(entry.github_url)
-                if layout.is_item_clicked():
-                    lf.ui.open_url(entry.github_url)
-                layout.set_cursor_pos(saved)
-
-            button_spacing = 6 * scale
-            button_height = 25 * scale
-            avail_button_w, avail_h = layout.get_content_region_avail()
-            pad = 4 * scale
-
-            bottom_h = self._calc_bottom_area_height(
-                card_state, is_installed, is_local_only,
-                button_height, button_spacing, scale,
-            )
-            skip = avail_h - bottom_h - pad
-            if skip > 0:
-                cursor_x, cursor_y = layout.get_cursor_pos()
-                layout.set_cursor_pos((cursor_x, cursor_y + skip))
-
-            if card_state.phase != CardOpPhase.IDLE:
-                self._draw_inline_feedback(layout, card_state, scale)
-            elif is_installed:
-                self._draw_card_buttons_installed(
-                    layout, mgr, idx, entry, plugin_name, plugin_state,
-                    is_local, is_local_only, this_card_busy,
-                    card_id, avail_button_w, button_spacing, button_height, scale,
-                )
-            else:
-                if is_local_only:
-                    layout.spacing()
-                    layout.end_child()
-                    layout.pop_style_color(2)
-                    layout.pop_style_var()
-                    return
-
-                self._draw_card_buttons_not_installed(
-                    layout, mgr, idx, entry, this_card_busy,
-                    card_id, avail_button_w, button_spacing, button_height, scale,
-                )
-        layout.end_child()
-
-        layout.pop_style_color(2)
-        layout.pop_style_var()
-
-    def _draw_card_info(
-        self, layout, entry, plugin_name, plugin_state,
-        is_installed, is_local, is_local_only, installed_versions, scale,
-    ):
-        import lichtfeld as lf
-
-        tr = lf.ui.tr
-        palette = lf.ui.theme().palette
-
-        short_name = entry.name or entry.repo or tr("plugin_marketplace.unknown_plugin")
-        repo_label = f"{entry.owner}/{entry.repo}" if entry.owner and entry.repo else entry.repo
-        desc = entry.description
-        if not desc and plugin_name and self._discover_cache:
-            for p in self._discover_cache:
-                if p.name == plugin_name:
-                    desc = p.description
-                    break
-        description = self._truncate_text(desc or tr("plugin_marketplace.no_description"), 90)
-
-        layout.text_colored(short_name, palette.text)
-        if plugin_name and plugin_state == PluginState.ACTIVE:
-            version = installed_versions.get(plugin_name, "").strip()
-            if version:
-                version_label = version if version.lower().startswith("v") else f"v{version}"
-                layout.same_line(spacing=6 * scale)
-                layout.text_colored(version_label, palette.info)
-        if repo_label:
-            layout.text_disabled(repo_label)
-        if not is_local_only:
-            metrics = []
-            if entry.stars > 0:
-                metrics.append(f"{tr('plugin_marketplace.stars')}: {entry.stars}")
-            if entry.downloads > 0:
-                metrics.append(f"{tr('plugin_marketplace.downloads')}: {entry.downloads}")
-            if metrics:
-                layout.text_colored("  |  ".join(metrics), palette.warning)
-
-        tags = self._entry_type_tags(entry)
-        if tags:
-            layout.text_disabled("  |  ".join(tags[:3]))
-        if is_local:
-            layout.text_colored(tr("plugin_marketplace.local_install"), palette.info)
-
-        if is_installed:
-            state_str = plugin_state.value if plugin_state else tr("plugin_manager.status_not_loaded")
-            layout.text_colored(
-                f"{tr('plugin_manager.status')}: {state_str}",
-                palette.success if plugin_state == PluginState.ACTIVE else palette.text_dim,
-            )
-
-        if entry.error:
-            layout.text_colored(tr("plugin_marketplace.invalid_link"), palette.error)
-        else:
-            layout.text_wrapped(description)
-
-        layout.spacing()
-        layout.separator()
-        layout.spacing()
-
-    def _draw_card_buttons_installed(
-        self, layout, mgr, idx, entry, plugin_name, plugin_state,
-        is_local, is_local_only, this_card_busy,
-        card_id, avail_button_w, button_spacing, button_height, scale,
-    ):
-        import lichtfeld as lf
-        from .settings import SettingsManager
-
-        tr = lf.ui.tr
-
-        if plugin_name:
-            prefs = SettingsManager.instance().get(plugin_name)
-            startup = prefs.get("load_on_startup", False)
-            changed, startup = layout.checkbox(
-                f"{tr('plugin_marketplace.load_on_startup')}##startup_{idx}", startup
-            )
-            if changed:
-                prefs.set("load_on_startup", startup)
-
-        if this_card_busy:
-            layout.begin_disabled()
-
-        bw = max(40.0, (avail_button_w - button_spacing * 2.0) / 3.0)
-
-        if is_local_only:
-            load_label = (
-                tr("plugin_manager.button.unload")
-                if plugin_state == PluginState.ACTIVE
-                else tr("plugin_manager.button.load")
-            )
-            load_style = "warning" if plugin_state == PluginState.ACTIVE else "success"
-            if layout.button_styled(
-                f"{load_label}##loadtoggle_{idx}", load_style, (bw, button_height),
-            ):
-                if plugin_state == PluginState.ACTIVE:
-                    self._unload_plugin(mgr, plugin_name, card_id)
-                else:
-                    self._load_plugin(mgr, plugin_name, card_id)
-            layout.same_line(spacing=button_spacing)
-            if layout.button_styled(
-                f"{tr('plugin_manager.button.uninstall')}##uninstall_{idx}",
-                "error", (bw, button_height),
-            ):
-                self._request_uninstall_confirmation(plugin_name, card_id)
-        elif is_local and bool(entry.github_url):
-            load_label = (
-                tr("plugin_manager.button.unload")
-                if plugin_state == PluginState.ACTIVE
-                else tr("plugin_manager.button.load")
-            )
-            load_style = "warning" if plugin_state == PluginState.ACTIVE else "success"
-            if layout.button_styled(
-                f"{load_label}##loadtoggle_{idx}", load_style, (bw, button_height),
-            ):
-                if plugin_state == PluginState.ACTIVE:
-                    self._unload_plugin(mgr, plugin_name, card_id)
-                else:
-                    self._load_plugin(mgr, plugin_name, card_id)
-            layout.same_line(spacing=button_spacing)
-            if layout.button_styled(
-                f"{tr('plugin_manager.button.update')}##update_{idx}",
-                "primary", (bw, button_height),
-            ):
-                self._update_plugin(mgr, plugin_name, card_id)
-            layout.same_line(spacing=button_spacing)
-            if layout.button_styled(
-                f"{tr('plugin_manager.button.uninstall')}##uninstall_{idx}",
-                "error", (bw, button_height),
-            ):
-                self._request_uninstall_confirmation(plugin_name, card_id)
-        else:
-            if plugin_state == PluginState.ACTIVE:
-                if layout.button_styled(
-                    f"{tr('plugin_manager.button.reload')}##reload_{idx}",
-                    "primary", (bw, button_height),
-                ):
-                    self._reload_plugin(mgr, plugin_name, card_id)
-                layout.same_line(spacing=button_spacing)
-                if layout.button_styled(
-                    f"{tr('plugin_manager.button.unload')}##unload_{idx}",
-                    "warning", (bw, button_height),
-                ):
-                    self._unload_plugin(mgr, plugin_name, card_id)
-            else:
-                if layout.button_styled(
-                    f"{tr('plugin_manager.button.load')}##load_{idx}",
-                    "success", (bw, button_height),
-                ):
-                    self._load_plugin(mgr, plugin_name, card_id)
-                layout.same_line(spacing=button_spacing)
-                if layout.button_styled(
-                    f"{tr('plugin_manager.button.update')}##update_{idx}",
-                    "primary", (bw, button_height),
-                ):
-                    self._update_plugin(mgr, plugin_name, card_id)
-            layout.same_line(spacing=button_spacing)
-            if layout.button_styled(
-                f"{tr('plugin_manager.button.uninstall')}##uninstall_{idx}",
-                "error", (bw, button_height),
-            ):
-                self._request_uninstall_confirmation(plugin_name, card_id)
-
-        if this_card_busy:
-            layout.end_disabled()
-
-    def _draw_card_buttons_not_installed(
-        self, layout, mgr, idx, entry, this_card_busy,
-        card_id, avail_button_w, button_spacing, button_height, scale,
-    ):
-        import lichtfeld as lf
-
-        tr = lf.ui.tr
-        bw = max(40.0, (avail_button_w - button_spacing * 2.0) / 3.0)
-        disable_install = this_card_busy or bool(entry.error)
-
-        if disable_install:
-            layout.begin_disabled()
-        if layout.button_styled(
-            f"{tr('plugin_marketplace.button.install')}##install_{idx}",
-            "success",
-            (bw, button_height),
-        ):
-            if not disable_install:
-                self._install_plugin_from_marketplace(mgr, entry, card_id)
-        if disable_install:
-            layout.end_disabled()
-
-    def _draw_marketplace_controls(self, layout, mgr, scale: float):
-        import lichtfeld as lf
-
-        tr = lf.ui.tr
-        avail_w, _ = layout.get_content_region_avail()
-        filter_items = [
-            tr("plugin_marketplace.filter.all"),
-            tr("plugin_marketplace.filter.installed"),
-            tr("plugin_marketplace.filter.not_installed"),
-        ]
-        sort_items = [
-            tr("plugin_marketplace.sort.popularity_desc"),
-            tr("plugin_marketplace.sort.popularity_asc"),
-            tr("plugin_marketplace.sort.name_asc"),
-            tr("plugin_marketplace.sort.name_desc"),
-        ]
-
-        filter_w = max(1.0, min(self.FILTER_WIDTH * scale, avail_w))
-        remaining = max(1.0, avail_w - filter_w - 8 * scale)
-        sort_w = max(1.0, min(self.SORT_WIDTH * scale, remaining))
-
-        layout.text_disabled(tr("plugin_marketplace.filter_label"))
-        layout.same_line(spacing=6 * scale)
-        layout.set_next_item_width(filter_w)
-        _, self._install_filter_idx = layout.combo(
-            "##install_filter",
-            self._install_filter_idx,
-            filter_items,
-        )
-        layout.same_line(spacing=10 * scale)
-        layout.text_disabled(tr("plugin_marketplace.sort_label"))
-        layout.same_line(spacing=6 * scale)
-        layout.set_next_item_width(sort_w)
-        _, self._sort_idx = layout.combo("##sort_filter", self._sort_idx, sort_items)
-
-        layout.spacing()
-        self._draw_manual_install_controls(layout, mgr, scale)
-
-    @staticmethod
-    def _visible_columns(avail_w: float, card_w: float, spacing: float) -> int:
-        if avail_w <= 0:
-            return 1
-        return max(1, min(PluginMarketplacePanel.GRID_COLUMNS, int((avail_w + spacing) // (card_w + spacing))))
-
-    @staticmethod
-    def _fit_card_width(
-        avail_w: float,
-        preferred_card_w: float,
-        spacing: float,
-        columns: int,
-        scale: float,
-    ) -> float:
-        if columns <= 0:
-            return preferred_card_w
-        usable = max(1.0, avail_w - (columns - 1) * spacing - 2.0 * scale)
-        return max(1.0, min(preferred_card_w, usable / columns))
 
     def _filter_and_sort_entries(
         self,
@@ -733,7 +786,6 @@ class PluginMarketplacePanel(Panel):
             if mgr.get_state(name) == PluginState.ERROR:
                 err = mgr.get_error(name) or tr("plugin_manager.status.load_failed")
                 raise RuntimeError(err)
-            self._clear_manual_url = True
             with self._lock:
                 self._url_plugin_names[self._normalize_url(clean_url)] = name
             self._invalidate_discover_cache()
@@ -839,73 +891,6 @@ class PluginMarketplacePanel(Panel):
             tr("plugin_manager.status.uninstalled").format(name=name),
             tr("plugin_manager.status.uninstall_failed"),
         )
-
-    def _request_uninstall_confirmation(self, name: str, card_id: str):
-        if not name:
-            return
-        self._pending_uninstall_name = name
-        self._pending_uninstall_card_id = card_id
-        self._pending_uninstall_open = True
-
-    def _draw_uninstall_confirmation_modal(self, layout, mgr, scale: float):
-        import lichtfeld as lf
-
-        tr = lf.ui.tr
-        if not self._pending_uninstall_name and not self._pending_uninstall_open:
-            return
-
-        popup_title = tr("plugin_marketplace.confirm_uninstall_title")
-        popup_id = f"{popup_title}##plugin_marketplace_uninstall_confirm"
-
-        if self._pending_uninstall_open:
-            layout.set_next_window_pos_viewport_center(always=True)
-            layout.set_next_window_size((380 * scale, 0))
-            layout.open_popup(popup_id)
-            self._pending_uninstall_open = False
-
-        layout.push_modal_style()
-        if layout.begin_popup_modal(popup_id):
-            avail_width = layout.get_content_region_avail()[0]
-            text_width = layout.calc_text_size(
-                tr("plugin_marketplace.confirm_uninstall_message").format(name=self._pending_uninstall_name)
-            )[0]
-            layout.set_cursor_pos_x(layout.get_cursor_pos()[0] + max(0.0, (avail_width - text_width) * 0.5))
-            layout.text_wrapped(
-                tr("plugin_marketplace.confirm_uninstall_message").format(name=self._pending_uninstall_name)
-            )
-            layout.spacing()
-            layout.separator()
-            layout.spacing()
-
-            button_width = 92 * scale
-            button_spacing = 8 * scale
-            avail_width = layout.get_content_region_avail()[0]
-            total_width = button_width * 2 + button_spacing
-            layout.set_cursor_pos_x(layout.get_cursor_pos()[0] + max(0.0, (avail_width - total_width) * 0.5))
-
-            if layout.button_styled(
-                tr("plugin_marketplace.confirm_uninstall_no"),
-                "secondary",
-                (button_width, 0),
-            ) or lf.ui.is_key_pressed(lf.ui.Key.ESCAPE):
-                self._pending_uninstall_name = ""
-                layout.close_current_popup()
-
-            layout.same_line(0, button_spacing)
-            if layout.button_styled(
-                tr("plugin_marketplace.confirm_uninstall_yes"),
-                "error",
-                (button_width, 0),
-            ):
-                uninstall_name = self._pending_uninstall_name
-                uninstall_card_id = self._pending_uninstall_card_id
-                self._pending_uninstall_name = ""
-                layout.close_current_popup()
-                self._uninstall_plugin(mgr, uninstall_name, uninstall_card_id)
-
-            layout.end_popup_modal()
-        layout.pop_modal_style()
-
 
     def _with_local_plugins(self, entries: List[MarketplacePluginEntry], mgr) -> List[MarketplacePluginEntry]:
         merged = list(entries)

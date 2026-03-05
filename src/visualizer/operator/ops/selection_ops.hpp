@@ -52,8 +52,8 @@ namespace lfs::vis::op {
         // Lasso mode state
         std::vector<glm::vec2> lasso_points_;
 
-        // Polygon mode state
-        std::vector<glm::vec2> polygon_points_;
+        // Polygon mode state (world-space anchored points)
+        std::vector<glm::vec3> polygon_world_points_;
         bool polygon_closed_ = false;
         static constexpr float POLYGON_CLOSE_THRESHOLD = 12.0f;
 

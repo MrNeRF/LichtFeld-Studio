@@ -49,4 +49,22 @@ namespace lfs::vis::gui::panels {
 #endif // Win32
     }
 
+    void ToggleSystemConsole(const UIContext& ctx) {
+#ifdef WIN32
+        bool& visible = ctx.window_states->at("system_console");
+        HWND hwnd = GetConsoleWindow();
+        Sleep(1);
+        HWND owner = GetWindow(hwnd, GW_OWNER);
+        HWND target = (owner == NULL) ? hwnd : owner;
+
+        if (visible) {
+            ShowWindow(target, SW_HIDE);
+            visible = false;
+        } else {
+            ShowWindow(target, SW_SHOW);
+            visible = true;
+        }
+#endif
+    }
+
 } // namespace lfs::vis::gui::panels

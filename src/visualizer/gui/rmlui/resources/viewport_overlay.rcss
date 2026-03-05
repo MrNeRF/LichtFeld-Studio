@@ -1,0 +1,57 @@
+/* Viewport overlay — toolbar layout only.
+ * Shared widget styles are in components.rcss (auto-included via applyTheme). */
+
+body {
+    font-family: Inter;
+    width: 100%;
+    height: 100%;
+    position: relative;
+}
+
+.toolbar-container {
+    display: flex;
+    padding: 6dp;
+    gap: 4dp;
+}
+
+.subtoolbar-container {
+    display: flex;
+    padding: 4dp;
+    gap: 3dp;
+}
+
+.toolbar-vertical {
+    position: absolute;
+    left: 10dp;
+    top: 5dp;
+    flex-direction: column;
+}
+
+.toolbar-hcenter {
+    position: absolute;
+    left: 0;
+    right: 0;
+    display: flex;
+    justify-content: center;
+    pointer-events: none;
+}
+
+.toolbar-hcenter > div {
+    pointer-events: auto;
+}
+
+.toolbar-separator {
+    width: 1dp;
+    margin: 2dp 0;
+    background-color: rgba(88, 91, 112, 100);
+}
+
+.toolbar-vertical .toolbar-separator {
+    width: auto;
+    height: 1dp;
+    margin: 0 2dp;
+}
+
+.hidden {
+    display: none;
+}

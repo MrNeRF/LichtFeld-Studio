@@ -24,6 +24,8 @@
     "view.theme.catppuccin_mocha": "Catppuccin Mocha",
     "view.theme.catppuccin_latte": "Catppuccin Latte",
     "view.theme.nord": "Nord",
+    "view.ui_scale": "UIスケール",
+    "view.ui_scale.auto": "自動",
     "view.debug_info": "デバッグ情報...",
     "help": "ヘルプ",
     "help.getting_started": "はじめに",
@@ -276,7 +278,6 @@
     "move_to_root": "ルート",
     "images": "画像 ({}):",
     "no_images": "画像が読み込まれていません。",
-    "use_file_browser": "'ファイルブラウザを開く'を使用してデータセットを読み込んでください。",
     "move_node": "移動: %s",
     "models": "モデル ({})",
     "filter": "フィルター...",
@@ -305,7 +306,8 @@
     "keyframe_easing.ease_in": "イーズイン",
     "keyframe_easing.ease_out": "イーズアウト",
     "keyframe_easing.ease_in_out": "イーズインアウト",
-    "keyframe_label": "キーフレーム {index}  ({time:.2f}s)"
+    "keyframe_label": "キーフレーム {index}  ({time:.2f}s)",
+    "search": "検索"
   },
   "export": {
     "title": "エクスポート",
@@ -403,6 +405,7 @@
     "scene_panel": "シーンパネル",
     "show_console": "システムコンソールを表示",
     "hide_console": "システムコンソールを非表示",
+    "console": "コンソール",
     "background": "背景",
     "color": "色",
     "show_coord_axes": "座標軸を表示",
@@ -449,7 +452,17 @@
     "add_group": "+ グループを追加",
     "no_selection_groups": "選択グループがありません",
     "clear": "クリア",
-    "mesh": "メッシュ"
+    "mesh": "メッシュ",
+    "mesh_wireframe": "ワイヤーフレーム",
+    "mesh_wireframe_color": "ワイヤーフレーム色",
+    "mesh_wireframe_width": "ワイヤーフレーム幅",
+    "mesh_light_intensity": "光の強度",
+    "mesh_ambient": "環境光",
+    "mesh_backface_culling": "裏面カリング",
+    "mesh_shadow_enabled": "影",
+    "mesh_shadow_resolution": "影の解像度",
+    "camera_frustum_scale": "視錐台スケール",
+    "voxel_size": "ボクセルサイズ"
   },
   "toolbar": {
     "selection": "選択",
@@ -513,20 +526,6 @@
     "line_width": "線の太さ",
     "instructions": "Enter: クロップを確定 | Ctrl+C: 内容をコピー"
   },
-  "file_browser": {
-    "title": "ファイルブラウザ",
-    "quick_access": "クイックアクセス",
-    "current_dir": "現在のディレクトリ",
-    "home": "ホーム",
-    "current_path": "現在のパス: %s",
-    "parent_dir": "../",
-    "directory": "[ディレクトリ]",
-    "selected": "選択済み: %s",
-    "load_dataset": "データセットを読み込む",
-    "load_sog": "SOGを読み込む",
-    "load_ply": "PLYを読み込む",
-    "enter_dir": "ディレクトリに入る"
-  },
   "training_panel": {
     "start_training": "トレーニングを開始",
     "resume_training": "トレーニングを再開",
@@ -580,7 +579,29 @@
     "grid": "参照グリッド平面を表示",
     "camera_frustums": "データセットからのカメラ位置を表示",
     "point_cloud_mode": "スプラットではなくポイントでレンダリング",
-    "selection_colors": "選択範囲の可視化色"
+    "selection_colors": "選択範囲の可視化色",
+    "seq_camera_path": "カメラパスの表示を切り替え",
+    "seq_first": "最初のキーフレームに移動",
+    "seq_stop": "再生を停止",
+    "seq_play": "アニメーションを再生",
+    "seq_pause": "アニメーションを一時停止",
+    "seq_last": "最後のキーフレームに移動",
+    "seq_loop_off": "ループ再生を有効にする",
+    "seq_loop_on": "ループ再生を無効にする",
+    "seq_add": "現在の位置にキーフレームを追加",
+    "seq_speed": "再生速度（クリックで切替）",
+    "seq_snap": "キーフレームをグリッドにスナップ（右クリックでオプション）",
+    "seq_follow": "再生中にプレイヘッドを追従",
+    "seq_film_strip": "タイムライン下にフィルムストリップを表示",
+    "seq_pip_preview": "ピクチャーインピクチャープレビューを表示（右クリックでオプション）",
+    "seq_save_path": "カメラパスをファイルに保存",
+    "seq_load_path": "ファイルからカメラパスを読み込み",
+    "seq_format": "エクスポートフォーマットプリセット（右クリックでオプション）",
+    "seq_quality": "CRF品質（低い値 = 高品質、ファイルサイズ大）",
+    "seq_export": "カメラパスから動画をエクスポート",
+    "seq_clear": "すべてのキーフレームを削除",
+    "seq_interval": "グリッドスナップ間隔",
+    "seq_preview_size": "PiPプレビュースケール"
   },
   "exit_popup": {
     "title": "アプリケーションを終了しますか？",
@@ -616,15 +637,6 @@
   "selection_group": {
     "lock": "ロック",
     "unlock": "ロック解除"
-  },
-  "file_browser_ext": {
-    "dataset": "[データセット]",
-    "sog": "[SOG]",
-    "no_file_selected": "ファイルが選択されていません",
-    "not_a_dataset": "(データセットではありません)",
-    "sog_directory": "(SOGディレクトリ)",
-    "sog_meta": "(SOG meta.json)",
-    "error": "エラー:"
   },
   "progress": {
     "loss": "損失:",
@@ -739,6 +751,7 @@
     "disabled": "無効"
   },
   "image_preview": {
+    "title": "イメージプレビュー",
     "image_section": "画像",
     "file_section": "ファイル",
     "view_section": "表示",
@@ -780,7 +793,8 @@
     "no_images_loaded": "画像が読み込まれていません",
     "no_image": "画像なし",
     "zoom": "ズーム",
-    "fit": "フィット"
+    "fit": "フィット",
+    "storage_section": "ストレージ"
   },
   "startup": {
     "supported_by": "サポート",
@@ -927,7 +941,35 @@
   "sequencer": {
     "edit_focal_length": "焦点距離を編集...",
     "edit_focal_length_title": "焦点距離を編集",
-    "focal_length_mm": "焦点距離 (mm)"
+    "focal_length_mm": "焦点距離 (mm)",
+    "go_to_first_keyframe": "最初のキーフレームへ",
+    "stop": "停止",
+    "pause": "一時停止 (スペース)",
+    "play": "再生 (スペース)",
+    "go_to_last_keyframe": "最後のキーフレームへ",
+    "loop_on": "ループ：ON",
+    "loop_off": "ループ：OFF",
+    "add_keyframe": "キーフレームを追加 (K)",
+    "empty_hint": "カメラを配置して K を押すとキーフレームが追加されます",
+    "update_to_current_view": "現在のビューに更新",
+    "go_to_keyframe": "キーフレームへ移動",
+    "edit_time": "時間を編集...",
+    "easing": "イージング",
+    "easing_last_keyframe": "イージング（最後のキーフレーム）",
+    "easing_tooltip": "イージングは出ていく動きを制御します\n（最後のキーフレームには出力セグメントがありません）",
+    "delete_keyframe": "キーフレームを削除",
+    "add_keyframe_here": "ここにキーフレームを追加",
+    "edit_keyframe_time": "キーフレーム時間を編集",
+    "time_seconds": "時間 (s)",
+    "apply_u": "適用 (U)",
+    "revert_esc": "元に戻す (Esc)",
+    "editing_keyframe": "キーフレーム {} を編集中",
+    "move_translate": "移動",
+    "rotate": "回転",
+    "loop_point_tooltip": "ループポイント @ {} (開始位置に戻る)",
+    "keyframe_tooltip": "キーフレーム @ {} (ダブルクリックで編集)",
+    "playback_time": "再生 {:.2f}秒",
+    "keyframe_preview": "キーフレーム {} プレビュー"
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V"
@@ -996,5 +1038,23 @@
     "appearance": "Appearance",
     "line_width": "Line Width",
     "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
+  },
+  "file_association": {
+    "title": "既定のアプリケーションに設定",
+    "message": "LichtFeld Studioをスプラットファイル（.ply、.sog、.spz）の既定のアプリケーションに設定しますか？",
+    "yes": "はい",
+    "not_now": "後で",
+    "dont_ask": "今後表示しない",
+    "success": "ファイルの関連付けが正常に登録されました。",
+    "menu_register": "既定のアプリケーションに設定...",
+    "menu_unregister": "既定のアプリケーションから解除..."
+  },
+  "context_menu": {
+    "snap_interval": "スナップ間隔",
+    "preview_scale": "プレビュースケール",
+    "video_format": "動画フォーマット",
+    "clear_confirm": "すべてのキーフレームを削除しますか？",
+    "confirm": "確認",
+    "cancel": "キャンセル"
   }
 }

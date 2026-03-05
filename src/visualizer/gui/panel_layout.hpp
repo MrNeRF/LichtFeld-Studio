@@ -7,16 +7,47 @@
 #include "gui/layout_state.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/ui_context.hpp"
+#include <cstdint>
+#include <glm/glm.hpp>
 #include <string>
 #include <unordered_map>
-#include <imgui.h>
+#include <vector>
 
 namespace lfs::vis::gui {
 
     struct ViewportLayout {
-        ImVec2 pos{0, 0};
-        ImVec2 size{0, 0};
+        glm::vec2 pos{0, 0};
+        glm::vec2 size{0, 0};
         bool has_focus = false;
+    };
+
+    enum class CursorRequest : uint8_t { None,
+                                         ResizeEW,
+                                         ResizeNS };
+
+    struct PanelInputState {
+        float mouse_x = 0;
+        float mouse_y = 0;
+        bool mouse_down[3] = {};
+        bool mouse_clicked[3] = {};
+        bool mouse_released[3] = {};
+        int screen_w = 0;
+        int screen_h = 0;
+        float mouse_wheel = 0;
+        bool key_ctrl = false;
+        bool key_shift = false;
+        bool key_alt = false;
+        bool key_super = false;
+        std::vector<int> keys_pressed;
+        std::vector<int> keys_released;
+        void* bg_draw_list = nullptr;
+        void* fg_draw_list = nullptr;
+    };
+
+    struct ScreenState {
+        glm::vec2 work_pos{0, 0};
+        glm::vec2 work_size{0, 0};
+        bool any_item_active = false;
     };
 
     class PanelLayoutManager {
@@ -29,28 +60,43 @@ namespace lfs::vis::gui {
         void renderRightPanel(const UIContext& ctx, const PanelDrawContext& draw_ctx,
                               bool show_main_panel, bool ui_hidden,
                               std::unordered_map<std::string, bool>& window_states,
-                              std::string& focus_panel_name);
+                              std::string& focus_panel_name,
+                              const PanelInputState& input,
+                              const ScreenState& screen);
 
         ViewportLayout computeViewportLayout(bool show_main_panel, bool ui_hidden,
-                                             bool python_console_visible) const;
+                                             bool python_console_visible,
+                                             const ScreenState& screen) const;
 
         bool isResizingPanel() const {
-            return resizing_panel_ || hovering_panel_edge_ ||
-                   python_console_resizing_ || python_console_hovering_edge_;
+            return python_console_resizing_ || python_console_hovering_edge_;
         }
+
+        CursorRequest getCursorRequest() const { return cursor_request_; }
+
+        void applyResizeDelta(float dx, const ScreenState& screen);
 
         float getRightPanelWidth() const { return right_panel_width_; }
         float getScenePanelRatio() const { return scene_panel_ratio_; }
+        void setScenePanelRatio(float r) { scene_panel_ratio_ = std::clamp(r, 0.15f, 0.85f); }
+        void adjustScenePanelRatio(float delta_y, const ScreenState& screen);
         float getPythonConsoleWidth() const { return python_console_width_; }
         bool isShowSequencer() const { return show_sequencer_; }
         void setShowSequencer(bool v) { show_sequencer_ = v; }
 
-    private:
-        void renderDockedPythonConsole(const UIContext& ctx, float panel_x, float panel_h);
+        const std::string& getActiveTab() const { return active_tab_idname_; }
+        void setActiveTab(const std::string& idname) { active_tab_idname_ = idname; }
 
-        float right_panel_width_ = 300.0f;
-        bool resizing_panel_ = false;
-        bool hovering_panel_edge_ = false;
+        static constexpr float SPLITTER_H = 6.0f;
+        static constexpr float TAB_BAR_H = 28.0f;
+        static constexpr float STATUS_BAR_HEIGHT = 22.0f;
+        static constexpr float PANEL_GAP = 2.0f;
+
+    private:
+        void renderDockedPythonConsole(const UIContext& ctx, float panel_x, float panel_h,
+                                       const PanelInputState& input, const ScreenState& screen);
+
+        float right_panel_width_ = 340.0f;
         float scene_panel_ratio_ = 0.4f;
 
         float python_console_width_ = -1.0f;
@@ -58,13 +104,18 @@ namespace lfs::vis::gui {
         bool python_console_hovering_edge_ = false;
 
         bool show_sequencer_ = false;
+        std::string active_tab_idname_;
+
+        float tab_scroll_offset_ = 0.0f;
+        float tab_content_total_h_ = 0.0f;
+
+        CursorRequest cursor_request_ = CursorRequest::None;
+        float prev_mouse_x_ = 0;
 
         static constexpr float RIGHT_PANEL_MIN_RATIO = 0.01f;
         static constexpr float RIGHT_PANEL_MAX_RATIO = 0.99f;
         static constexpr float PYTHON_CONSOLE_MIN_WIDTH = 200.0f;
         static constexpr float PYTHON_CONSOLE_MAX_RATIO = 0.5f;
-        static constexpr float STATUS_BAR_HEIGHT = 22.0f;
-        static constexpr float PANEL_GAP = 2.0f;
     };
 
 } // namespace lfs::vis::gui

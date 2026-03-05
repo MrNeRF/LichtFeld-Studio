@@ -1,0 +1,75 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="plugin_marketplace.rcss"/>
+</head>
+<body template="floating-window" data-model="plugin_marketplace">
+
+  <span class="status-text status-info">{{title_line}}</span>
+  <span class="mp-warning-text">{{warning_body}}</span>
+
+  <div class="separator"></div>
+
+  <!-- Filter / Sort controls -->
+  <div class="mp-controls">
+    <span class="text-disabled">{{filter_label}}</span>
+    <select data-value="filter_idx" class="mp-select">
+      <option value="0">{{filter_all}}</option>
+      <option value="1">{{filter_installed}}</option>
+      <option value="2">{{filter_not_installed}}</option>
+    </select>
+    <span class="text-disabled mp-sort-label">{{sort_label}}</span>
+    <select data-value="sort_idx" class="mp-select-sort">
+      <option value="0">{{sort_pop_desc}}</option>
+      <option value="1">{{sort_pop_asc}}</option>
+      <option value="2">{{sort_name_asc}}</option>
+      <option value="3">{{sort_name_desc}}</option>
+    </select>
+  </div>
+
+  <!-- Manual URL install -->
+  <div class="mp-manual-section">
+    <span class="text-disabled">{{url_label}}</span>
+    <div class="mp-manual-row">
+      <input type="text" id="manual-url-input" class="mp-url-input" data-value="manual_url" />
+      <button id="btn-install-url" class="btn btn--success mp-install-btn" data-event-click="install_from_url">{{install_btn_label}}</button>
+    </div>
+    <div id="manual-feedback"></div>
+
+    <!-- Supported formats (collapsible) -->
+    <div id="formats-header" class="mp-formats-header">
+      <span class="section-arrow" id="formats-arrow">&#x25B6;</span>
+      <span class="text-disabled">{{formats_label}}</span>
+    </div>
+    <div id="formats-content" class="collapsed">
+      <div class="mp-format-item">https://github.com/owner/repo</div>
+      <div class="mp-format-item">github:owner/repo</div>
+      <div class="mp-format-item">owner/repo</div>
+    </div>
+  </div>
+
+  <div class="separator"></div>
+
+  <!-- Empty state -->
+  <div id="empty-state" class="hidden">
+    <span class="text-disabled">{{no_plugins_text}}</span>
+    <span class="text-disabled">{{edit_list_hint}}</span>
+  </div>
+
+  <!-- Card grid -->
+  <div id="card-grid" class="card-grid"></div>
+
+  <!-- Uninstall confirmation overlay -->
+  <div id="confirm-overlay" class="confirm-overlay hidden">
+    <div class="confirm-dialog">
+      <span id="confirm-message" class="confirm-message"></span>
+      <div class="separator"></div>
+      <div class="confirm-buttons">
+        <button class="btn btn--secondary" data-event-click="confirm_no">{{confirm_no_label}}</button>
+        <button class="btn btn--error" data-event-click="confirm_yes">{{confirm_yes_label}}</button>
+      </div>
+    </div>
+  </div>
+
+</body>
+</rml>

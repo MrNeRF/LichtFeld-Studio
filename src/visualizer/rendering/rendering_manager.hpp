@@ -19,6 +19,7 @@
 #include <mutex>
 #include <optional>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace lfs::vis {
@@ -235,11 +236,11 @@ namespace lfs::vis {
             add_mode = rect_add_mode_;
         }
 
-        // Polygon preview
-        void setPolygonPreview(const std::vector<std::pair<float, float>>& points, bool closed, bool add_mode = true);
+        // Polygon preview (world-space points)
+        void setPolygonPreview(const std::vector<glm::vec3>& world_points, bool closed, bool add_mode = true);
         void clearPolygonPreview();
         [[nodiscard]] bool isPolygonPreviewActive() const { return polygon_preview_active_; }
-        [[nodiscard]] const std::vector<std::pair<float, float>>& getPolygonPoints() const { return polygon_points_; }
+        [[nodiscard]] const std::vector<glm::vec3>& getPolygonWorldPoints() const { return polygon_world_points_; }
         [[nodiscard]] bool isPolygonClosed() const { return polygon_closed_; }
         [[nodiscard]] bool isPolygonAddMode() const { return polygon_add_mode_; }
 
@@ -292,6 +293,12 @@ namespace lfs::vis {
         void setCropboxGizmoActive(bool active) { cropbox_gizmo_active_ = active; }
         void setEllipsoidGizmoActive(bool active) { ellipsoid_gizmo_active_ = active; }
 
+        void setViewportResizeActive(bool active);
+        [[nodiscard]] bool isViewportResizeDeferring() const {
+            return viewport_resize_active_.load(std::memory_order_relaxed) || viewport_resize_debounce_ > 0;
+        }
+        bool consumeResizeCompleted() { return std::exchange(resize_completed_, false); }
+
     private:
         static int64_t to_ns(std::chrono::steady_clock::time_point tp) {
             return std::chrono::duration_cast<std::chrono::nanoseconds>(tp.time_since_epoch()).count();
@@ -300,7 +307,8 @@ namespace lfs::vis {
             return std::chrono::steady_clock::time_point(std::chrono::nanoseconds(ns));
         }
 
-        void doFullRender(const RenderContext& context, SceneManager* scene_manager, const lfs::core::SplatData* model);
+        void doFullRender(const RenderContext& context, SceneManager* scene_manager,
+                          const lfs::core::SplatData* model);
         void setupEventHandlers();
 
         // Core components
@@ -309,7 +317,7 @@ namespace lfs::vis {
         SplatRasterPass* splat_raster_pass_ = nullptr;
         OverlayPass* overlay_pass_ = nullptr;
         PointCloudPass* point_cloud_pass_ = nullptr;
-        FramerateController framerate_controller_;
+        mutable FramerateController framerate_controller_;
 
         // GT texture cache
         GTTextureCache gt_texture_cache_;
@@ -352,10 +360,14 @@ namespace lfs::vis {
         // Camera picking state
         int hovered_camera_id_ = -1;
         int highlighted_camera_index_ = -1;
-        glm::vec2 pending_pick_pos_{-1, -1};
-        bool pick_requested_ = false;
         std::chrono::steady_clock::time_point last_pick_time_;
         static constexpr auto pick_throttle_interval_ = std::chrono::milliseconds(50);
+
+        // Cached from last renderFrame for direct picking
+        SceneManager* last_scene_manager_ = nullptr;
+        lfs::rendering::ViewportData last_viewport_data_{};
+        ViewportRegion last_viewport_region_{};
+        bool has_pick_context_ = false;
 
         // Debug tracking
         uint64_t render_count_ = 0;
@@ -382,7 +394,7 @@ namespace lfs::vis {
         bool rect_add_mode_ = true;
 
         bool polygon_preview_active_ = false;
-        std::vector<std::pair<float, float>> polygon_points_;
+        std::vector<glm::vec3> polygon_world_points_;
         bool polygon_closed_ = false;
         bool polygon_add_mode_ = true;
 
@@ -408,6 +420,10 @@ namespace lfs::vis {
         glm::mat4 pending_cropbox_transform_{1.0f};
         glm::vec3 pending_ellipsoid_radii_{1.0f};
         glm::mat4 pending_ellipsoid_transform_{1.0f};
+
+        std::atomic<bool> viewport_resize_active_{false};
+        int viewport_resize_debounce_{0};
+        bool resize_completed_{false};
     };
 
 } // namespace lfs::vis

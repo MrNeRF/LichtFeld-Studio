@@ -3,91 +3,65 @@
 """About panel showing application info and build details."""
 
 import lichtfeld as lf
-from .types import Panel
-from .windows.layout_utils import center_content
+from .types import RmlPanel
 
 
-class AboutPanel(Panel):
+class AboutPanel(RmlPanel):
     """Floating panel displaying application information."""
 
     idname = "lfs.about"
     label = "About"
     space = "FLOATING"
     order = 100
-    options = {"DEFAULT_CLOSED"}
+    rml_template = "rmlui/about.rml"
+    rml_height_mode = "content"
+    initial_width = 400
 
-    TITLE_COLOR = (0.3, 0.7, 1.0, 1.0)
-    LABEL_COLOR = (0.6, 0.6, 0.6, 1.0)
-    LINK_COLOR = (0.4, 0.8, 1.0, 1.0)
+    def on_bind_model(self, ctx):
+        model = ctx.create_data_model("about")
+        if model is None:
+            return
 
-    def draw(self, layout):
         tr = lf.ui.tr
+        bi = lf.build_info
 
-        layout.text_colored(tr("about.title"), self.TITLE_COLOR)
-        layout.spacing()
-        layout.separator()
-        layout.spacing()
+        model.bind_func("panel_label", lambda: tr("about.title"))
+        model.bind_func("title", lambda: tr("about.title"))
+        model.bind_func("description", lambda: tr("about.description"))
+        model.bind_func("build_info_label", lambda: tr("about.build_info"))
 
-        layout.text_wrapped(tr("about.description"))
-        layout.spacing()
-        layout.spacing()
+        model.bind_func("label_version", lambda: tr("about.build_info.version"))
+        model.bind_func("label_commit", lambda: tr("about.build_info.commit"))
+        model.bind_func("label_build_type", lambda: tr("about.build_info.build_type"))
+        model.bind_func("label_platform", lambda: tr("about.build_info.platform"))
+        model.bind_func("label_cuda_gl_interop", lambda: tr("about.build_info.cuda_gl_interop"))
 
-        layout.text_colored(tr("about.build_info"), self.LABEL_COLOR)
-        layout.spacing()
+        model.bind_func("version", lambda: bi.version)
+        model.bind_func("commit", lambda: bi.commit)
+        model.bind_func("build_type", lambda: bi.build_type)
+        model.bind_func("platform", lambda: bi.platform)
+        model.bind_func("cuda_gl_interop",
+                         lambda: tr("about.interop.enabled") if bi.cuda_gl_interop else tr("about.interop.disabled"))
 
-        if layout.begin_table("build_info", 2):
-            layout.table_setup_column(tr("about.build_info.property"), 140)
-            layout.table_setup_column(tr("about.build_info.value"))
+        model.bind_func("links_label", lambda: tr("about.links"))
+        model.bind_func("repo_label", lambda: tr("about.repository"))
+        model.bind_func("website_label", lambda: tr("about.website"))
+        model.bind_func("repo_url", lambda: bi.repo_url)
+        model.bind_func("website_url", lambda: bi.website_url)
 
-            self._table_row(layout, tr("about.build_info.version"), lf.build_info.version)
-            self._table_row(layout, tr("about.build_info.commit"), lf.build_info.commit)
-            self._table_row(layout, tr("about.build_info.build_type"), lf.build_info.build_type)
-            self._table_row(layout, tr("about.build_info.platform"), lf.build_info.platform)
-            interop_str = tr("about.interop.enabled") if lf.build_info.cuda_gl_interop else tr("about.interop.disabled")
-            self._table_row(layout, tr("about.build_info.cuda_gl_interop"), interop_str)
+        model.bind_func("authors", lambda: tr("about.authors"))
+        model.bind_func("license", lambda: tr("about.license"))
+        model.bind_func("separator", lambda: tr("about.separator"))
 
-            layout.end_table()
+        self._handle = model.get_handle()
 
-        layout.spacing()
-        layout.spacing()
+    def on_load(self, doc):
+        super().on_load(doc)
 
-        layout.text_colored(tr("about.links"), self.LABEL_COLOR)
-        layout.spacing()
+        repo_el = doc.get_element_by_id("link-repo")
+        if repo_el:
+            repo_el.add_event_listener("click", lambda _ev: lf.ui.open_url(lf.build_info.repo_url))
 
-        layout.label(tr("about.repository"))
-        layout.same_line()
-        layout.text_colored(lf.build_info.repo_url, self.LINK_COLOR)
-        if layout.is_item_hovered():
-            layout.set_mouse_cursor_hand()
-        if layout.is_item_clicked():
-            lf.ui.open_url(lf.build_info.repo_url)
-
-        layout.label(tr("about.website"))
-        layout.same_line()
-        layout.text_colored(lf.build_info.website_url, self.LINK_COLOR)
-        if layout.is_item_hovered():
-            layout.set_mouse_cursor_hand()
-        if layout.is_item_clicked():
-            lf.ui.open_url(lf.build_info.website_url)
-
-        layout.spacing()
-        layout.separator()
-        layout.spacing()
-
-        separator = tr("about.separator")
-        footer_text = tr("about.authors") + separator + tr("about.license")
-        text_w, _ = layout.calc_text_size(footer_text)
-        center_content(layout, text_w)
-        layout.text_colored(tr("about.authors"), self.LABEL_COLOR)
-        layout.same_line()
-        layout.text_colored(separator, (0.4, 0.4, 0.4, 1.0))
-        layout.same_line()
-        layout.text_colored(tr("about.license"), self.LABEL_COLOR)
-
-    def _table_row(self, layout, label: str, value: str):
-        layout.table_next_row()
-        layout.table_next_column()
-        layout.text_colored(label, self.LABEL_COLOR)
-        layout.table_next_column()
-        layout.label(value)
-
+        website_el = doc.get_element_by_id("link-website")
+        if website_el:
+            website_el.add_event_listener("click", lambda _ev: lf.ui.open_url(lf.build_info.website_url))

@@ -24,6 +24,8 @@
     "view.theme.catppuccin_mocha": "Catppuccin Mocha",
     "view.theme.catppuccin_latte": "Catppuccin Latte",
     "view.theme.nord": "Nord",
+    "view.ui_scale": "UI-schaal",
+    "view.ui_scale.auto": "Automatisch",
     "view.debug_info": "Debug Info...",
     "help": "Help",
     "help.getting_started": "Aan de Slag",
@@ -276,7 +278,6 @@
     "move_to_root": "Root",
     "images": "Afbeeldingen ({}):",
     "no_images": "Geen afbeeldingen geladen.",
-    "use_file_browser": "Gebruik 'Open Bestandsbrowser' om een dataset te laden.",
     "move_node": "Verplaats: %s",
     "models": "Modellen ({})",
     "filter": "Filteren...",
@@ -305,7 +306,8 @@
     "keyframe_easing.ease_in": "Langzaam in",
     "keyframe_easing.ease_out": "Langzaam uit",
     "keyframe_easing.ease_in_out": "Langzaam in/uit",
-    "keyframe_label": "Keyframe {index}  ({time:.2f}s)"
+    "keyframe_label": "Keyframe {index}  ({time:.2f}s)",
+    "search": "Zoeken"
   },
   "export": {
     "title": "Exporteren",
@@ -403,6 +405,7 @@
     "scene_panel": "Scène Paneel",
     "show_console": "Toon systeem Console",
     "hide_console": "Verberg systeem Console",
+    "console": "Console",
     "background": "Achtergrond",
     "color": "Kleur",
     "show_coord_axes": "Toon Coördinaat Assen",
@@ -449,7 +452,17 @@
     "add_group": "+ Groep Toevoegen",
     "no_selection_groups": "Geen selectie groepen",
     "clear": "Wissen",
-    "mesh": "Mesh"
+    "mesh": "Mesh",
+    "mesh_wireframe": "Draadmodel",
+    "mesh_wireframe_color": "Draadmodel kleur",
+    "mesh_wireframe_width": "Draadmodel breedte",
+    "mesh_light_intensity": "Lichtintensiteit",
+    "mesh_ambient": "Omgevingslicht",
+    "mesh_backface_culling": "Achtervlak verwijdering",
+    "mesh_shadow_enabled": "Schaduwen",
+    "mesh_shadow_resolution": "Schaduwresolutie",
+    "camera_frustum_scale": "Frustum schaal",
+    "voxel_size": "Voxelgrootte"
   },
   "toolbar": {
     "selection": "Selectie",
@@ -513,20 +526,6 @@
     "line_width": "Lijndikte",
     "instructions": "Enter: Bijsnijden bevestigen | Ctrl+C: Inhoud kopiëren"
   },
-  "file_browser": {
-    "title": "Bestandsbrowser",
-    "quick_access": "Snelle Toegang",
-    "current_dir": "Huidige Map",
-    "home": "Home",
-    "current_path": "Huidig Pad: %s",
-    "parent_dir": "../",
-    "directory": "[MAP]",
-    "selected": "Geselecteerd: %s",
-    "load_dataset": "Dataset Laden",
-    "load_sog": "SOG Laden",
-    "load_ply": "PLY Laden",
-    "enter_dir": "Map Openen"
-  },
   "training_panel": {
     "start_training": "Start Training",
     "resume_training": "Hervat Training",
@@ -580,7 +579,29 @@
     "grid": "Toon referentie rastervlak",
     "camera_frustums": "Toon cameraposities van dataset",
     "point_cloud_mode": "Render als punten in plaats van splats",
-    "selection_colors": "Kleuren voor selectie visualisatie"
+    "selection_colors": "Kleuren voor selectie visualisatie",
+    "seq_camera_path": "Camerapad-visualisatie in-/uitschakelen",
+    "seq_first": "Naar eerste keyframe springen",
+    "seq_stop": "Afspelen stoppen",
+    "seq_play": "Animatie afspelen",
+    "seq_pause": "Animatie pauzeren",
+    "seq_last": "Naar laatste keyframe springen",
+    "seq_loop_off": "Herhaald afspelen inschakelen",
+    "seq_loop_on": "Herhaald afspelen uitschakelen",
+    "seq_add": "Keyframe toevoegen op huidige positie",
+    "seq_speed": "Afspeelsnelheid (klik om te wisselen)",
+    "seq_snap": "Keyframes uitlijnen op raster (rechtsklik voor opties)",
+    "seq_follow": "Afspeelkop volgen tijdens afspelen",
+    "seq_film_strip": "Filmstrip onder de tijdlijn tonen",
+    "seq_pip_preview": "Beeld-in-beeld-voorbeeld tonen (rechtsklik voor opties)",
+    "seq_save_path": "Camerapad opslaan naar bestand",
+    "seq_load_path": "Camerapad laden vanuit bestand",
+    "seq_format": "Exportformaat-voorinstelling (rechtsklik voor opties)",
+    "seq_quality": "CRF-kwaliteit (lager = betere kwaliteit, groter bestand)",
+    "seq_export": "Video exporteren vanuit camerapad",
+    "seq_clear": "Alle keyframes verwijderen",
+    "seq_interval": "Rasterinterval",
+    "seq_preview_size": "PiP-voorbeeldschaal"
   },
   "exit_popup": {
     "title": "Applicatie Afsluiten?",
@@ -616,15 +637,6 @@
   "selection_group": {
     "lock": "Vergrendelen",
     "unlock": "Ontgrendelen"
-  },
-  "file_browser_ext": {
-    "dataset": "[Dataset]",
-    "sog": "[SOG]",
-    "no_file_selected": "Geen bestand geselecteerd",
-    "not_a_dataset": "(Geen dataset)",
-    "sog_directory": "(SOG Map)",
-    "sog_meta": "(SOG meta.json)",
-    "error": "Fout:"
   },
   "progress": {
     "loss": "Verlies:",
@@ -739,6 +751,7 @@
     "disabled": "Uitgeschakeld"
   },
   "image_preview": {
+    "title": "Afbeeldingsvoorbeeld",
     "image_section": "AFBEELDING",
     "file_section": "BESTAND",
     "view_section": "WEERGAVE",
@@ -780,7 +793,8 @@
     "no_images_loaded": "Geen afbeeldingen geladen",
     "no_image": "Geen afbeelding",
     "zoom": "Zoom",
-    "fit": "Passend"
+    "fit": "Passend",
+    "storage_section": "OPSLAG"
   },
   "startup": {
     "supported_by": "Ondersteund door",
@@ -927,7 +941,35 @@
   "sequencer": {
     "edit_focal_length": "Brandpuntsafstand bewerken...",
     "edit_focal_length_title": "Brandpuntsafstand bewerken",
-    "focal_length_mm": "Brandpuntsafstand (mm)"
+    "focal_length_mm": "Brandpuntsafstand (mm)",
+    "go_to_first_keyframe": "Naar eerste keyframe",
+    "stop": "Stoppen",
+    "pause": "Pauzeren (Spatie)",
+    "play": "Afspelen (Spatie)",
+    "go_to_last_keyframe": "Naar laatste keyframe",
+    "loop_on": "Lus: AAN",
+    "loop_off": "Lus: UIT",
+    "add_keyframe": "Keyframe toevoegen (K)",
+    "empty_hint": "Positioneer de camera en druk op K om keyframes toe te voegen",
+    "update_to_current_view": "Bijwerken naar huidige weergave",
+    "go_to_keyframe": "Naar keyframe",
+    "edit_time": "Tijd bewerken...",
+    "easing": "Easing",
+    "easing_last_keyframe": "Easing (laatste keyframe)",
+    "easing_tooltip": "Easing regelt de uitgaande beweging\n(Laatste keyframe heeft geen uitgaand segment)",
+    "delete_keyframe": "Keyframe verwijderen",
+    "add_keyframe_here": "Keyframe hier toevoegen",
+    "edit_keyframe_time": "Keyframe-tijd bewerken",
+    "time_seconds": "Tijd (s)",
+    "apply_u": "Toepassen (U)",
+    "revert_esc": "Herstellen (Esc)",
+    "editing_keyframe": "Keyframe {} bewerken",
+    "move_translate": "Verplaatsen",
+    "rotate": "Roteren",
+    "loop_point_tooltip": "Luspunt @ {} (keert terug naar begin)",
+    "keyframe_tooltip": "Keyframe @ {} (dubbelklik om te bewerken)",
+    "playback_time": "Afspelen {:.2f}s",
+    "keyframe_preview": "Keyframe {} voorbeeld"
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V"
@@ -996,5 +1038,23 @@
     "appearance": "Appearance",
     "line_width": "Line Width",
     "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
+  },
+  "file_association": {
+    "title": "Instellen als standaardtoepassing",
+    "message": "Wilt u LichtFeld Studio instellen als de standaardtoepassing voor splat-bestanden (.ply, .sog, .spz)?",
+    "yes": "Ja",
+    "not_now": "Niet nu",
+    "dont_ask": "Niet meer vragen",
+    "success": "Bestandskoppelingen succesvol geregistreerd.",
+    "menu_register": "Instellen als standaardtoepassing...",
+    "menu_unregister": "Verwijderen als standaardtoepassing..."
+  },
+  "context_menu": {
+    "snap_interval": "Rasterinterval",
+    "preview_scale": "Voorbeeldgrootte",
+    "video_format": "Videoformaat",
+    "clear_confirm": "Alle keyframes verwijderen?",
+    "confirm": "Bevestigen",
+    "cancel": "Annuleren"
   }
 }

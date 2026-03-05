@@ -24,6 +24,8 @@
     "view.theme.catppuccin_mocha": "Catppuccin Mocha",
     "view.theme.catppuccin_latte": "Catppuccin Latte",
     "view.theme.nord": "Nord",
+    "view.ui_scale": "UI Scale",
+    "view.ui_scale.auto": "Auto",
     "view.debug_info": "Debug Info...",
     "help": "Help",
     "help.getting_started": "Getting Started",
@@ -277,7 +279,6 @@
     "move_to_root": "Root",
     "images": "Images ({}):",
     "no_images": "No images loaded.",
-    "use_file_browser": "Use 'Open File Browser' to load a dataset.",
     "move_node": "Move: %s",
     "models": "Models ({})",
     "filter": "Filter...",
@@ -305,7 +306,8 @@
     "keyframe_easing.ease_in": "Ease In",
     "keyframe_easing.ease_out": "Ease Out",
     "keyframe_easing.ease_in_out": "Ease In-Out",
-    "keyframe_label": "Keyframe {index}  ({time:.2f}s)"
+    "keyframe_label": "Keyframe {index}  ({time:.2f}s)",
+    "search": "Search"
   },
   "export": {
     "title": "Export",
@@ -403,6 +405,7 @@
     "scene_panel": "Scene Panel",
     "show_console": "Show system Console",
     "hide_console": "Hide system Console",
+    "console": "Console",
     "background": "Background",
     "color": "Color",
     "show_coord_axes": "Show Coordinate Axes",
@@ -449,7 +452,17 @@
     "selection_groups": "Selection Groups",
     "add_group": "+ Add Group",
     "no_selection_groups": "No selection groups",
-    "clear": "Clear"
+    "clear": "Clear",
+    "mesh_wireframe": "Wireframe",
+    "mesh_wireframe_color": "Wireframe Color",
+    "mesh_wireframe_width": "Wireframe Width",
+    "mesh_light_intensity": "Light Intensity",
+    "mesh_ambient": "Ambient",
+    "mesh_backface_culling": "Backface Culling",
+    "mesh_shadow_enabled": "Shadows",
+    "mesh_shadow_resolution": "Shadow Resolution",
+    "camera_frustum_scale": "Frustum Scale",
+    "voxel_size": "Voxel Size"
   },
   "toolbar": {
     "selection": "Selection",
@@ -525,20 +538,6 @@
     "line_width": "Line Width",
     "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
   },
-  "file_browser": {
-    "title": "File Browser",
-    "quick_access": "Quick Access",
-    "current_dir": "Current Directory",
-    "home": "Home",
-    "current_path": "Current Path: %s",
-    "parent_dir": "../",
-    "directory": "[DIR]",
-    "selected": "Selected: %s",
-    "load_dataset": "Load Dataset",
-    "load_sog": "Load SOG",
-    "load_ply": "Load PLY",
-    "enter_dir": "Enter Directory"
-  },
   "training_panel": {
     "start_training": "Start Training",
     "resume_training": "Resume Training",
@@ -592,7 +591,29 @@
     "grid": "Show reference grid plane",
     "camera_frustums": "Show camera positions from dataset",
     "point_cloud_mode": "Render as points instead of splats",
-    "selection_colors": "Colors for selection visualization"
+    "selection_colors": "Colors for selection visualization",
+    "seq_camera_path": "Toggle camera path visualization",
+    "seq_first": "Jump to first keyframe",
+    "seq_stop": "Stop playback",
+    "seq_play": "Play animation",
+    "seq_pause": "Pause animation",
+    "seq_last": "Jump to last keyframe",
+    "seq_loop_off": "Enable loop playback",
+    "seq_loop_on": "Disable loop playback",
+    "seq_add": "Add keyframe at current position",
+    "seq_speed": "Playback speed (click to cycle)",
+    "seq_snap": "Snap keyframes to grid (right-click for options)",
+    "seq_follow": "Follow playhead during playback",
+    "seq_film_strip": "Show film strip below timeline",
+    "seq_pip_preview": "Show picture-in-picture preview (right-click for options)",
+    "seq_save_path": "Save camera path to file",
+    "seq_load_path": "Load camera path from file",
+    "seq_format": "Export format preset (right-click for options)",
+    "seq_quality": "CRF quality (lower = better quality, larger file)",
+    "seq_export": "Export video from camera path",
+    "seq_clear": "Clear all keyframes",
+    "seq_interval": "Grid snap interval",
+    "seq_preview_size": "PiP preview scale"
   },
   "exit_popup": {
     "title": "Exit Application?",
@@ -628,15 +649,6 @@
   "selection_group": {
     "lock": "Lock",
     "unlock": "Unlock"
-  },
-  "file_browser_ext": {
-    "dataset": "[Dataset]",
-    "sog": "[SOG]",
-    "no_file_selected": "No file selected",
-    "not_a_dataset": "(Not a dataset)",
-    "sog_directory": "(SOG Directory)",
-    "sog_meta": "(SOG meta.json)",
-    "error": "Error:"
   },
   "progress": {
     "loss": "Loss:",
@@ -751,6 +763,7 @@
     "disabled": "Disabled"
   },
   "image_preview": {
+    "title": "Image Preview",
     "image_section": "IMAGE",
     "file_section": "FILE",
     "view_section": "VIEW",
@@ -792,7 +805,8 @@
     "fit": "Fit",
     "visible": "Visible",
     "hidden": "Hidden",
-    "mask_section": "MASK"
+    "mask_section": "MASK",
+    "storage_section": "STORAGE"
   },
   "startup": {
     "supported_by": "Supported by",
@@ -995,6 +1009,52 @@
   "sequencer": {
     "edit_focal_length": "Edit Focal Length...",
     "edit_focal_length_title": "Edit Focal Length",
-    "focal_length_mm": "Focal Length (mm)"
+    "focal_length_mm": "Focal Length (mm)",
+    "go_to_first_keyframe": "Go to first keyframe",
+    "stop": "Stop",
+    "pause": "Pause (Space)",
+    "play": "Play (Space)",
+    "go_to_last_keyframe": "Go to last keyframe",
+    "loop_on": "Loop: ON",
+    "loop_off": "Loop: OFF",
+    "add_keyframe": "Add keyframe (K)",
+    "empty_hint": "Position camera and press K to add keyframes",
+    "update_to_current_view": "Update to Current View",
+    "go_to_keyframe": "Go to Keyframe",
+    "edit_time": "Edit Time...",
+    "easing": "Easing",
+    "easing_last_keyframe": "Easing (last keyframe)",
+    "easing_tooltip": "Easing controls outgoing motion\n(last keyframe has no outgoing segment)",
+    "delete_keyframe": "Delete Keyframe",
+    "add_keyframe_here": "Add Keyframe Here",
+    "edit_keyframe_time": "Edit Keyframe Time",
+    "time_seconds": "Time (s)",
+    "apply_u": "Apply (U)",
+    "revert_esc": "Revert (Esc)",
+    "editing_keyframe": "Editing Keyframe {}",
+    "move_translate": "Move (Translate)",
+    "rotate": "Rotate",
+    "loop_point_tooltip": "Loop Point @ {} (returns to start)",
+    "keyframe_tooltip": "Keyframe @ {} (double-click to edit)",
+    "playback_time": "Playback {:.2f}s",
+    "keyframe_preview": "Keyframe {} Preview"
+  },
+  "file_association": {
+    "title": "Set as Default Application",
+    "message": "Would you like to set LichtFeld Studio as the default application for splat files (.ply, .sog, .spz)?",
+    "yes": "Yes",
+    "not_now": "Not Now",
+    "dont_ask": "Don't Ask Again",
+    "success": "File associations registered successfully.",
+    "menu_register": "Set as Default Application...",
+    "menu_unregister": "Remove as Default Application..."
+  },
+  "context_menu": {
+    "snap_interval": "Snap Interval",
+    "preview_scale": "Preview Scale",
+    "video_format": "Video Format",
+    "clear_confirm": "Clear All Keyframes?",
+    "confirm": "Confirm",
+    "cancel": "Cancel"
   }
 }

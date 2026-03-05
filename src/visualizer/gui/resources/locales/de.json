@@ -24,6 +24,8 @@
     "view.theme.catppuccin_mocha": "Catppuccin Mocha",
     "view.theme.catppuccin_latte": "Catppuccin Latte",
     "view.theme.nord": "Nord",
+    "view.ui_scale": "UI-Skalierung",
+    "view.ui_scale.auto": "Automatisch",
     "view.debug_info": "Debug-Info...",
     "help": "Hilfe",
     "help.getting_started": "Erste Schritte",
@@ -276,7 +278,6 @@
     "move_to_root": "Wurzel",
     "images": "Bilder ({}):",
     "no_images": "Keine Bilder geladen.",
-    "use_file_browser": "Verwenden Sie 'Dateibrowser öffnen' um einen Datensatz zu laden.",
     "move_node": "Verschieben: %s",
     "models": "Modelle ({})",
     "filter": "Filter...",
@@ -305,7 +306,8 @@
     "keyframe_easing.ease_in": "Langsam ein",
     "keyframe_easing.ease_out": "Langsam aus",
     "keyframe_easing.ease_in_out": "Langsam ein/aus",
-    "keyframe_label": "Schluesselbild {index}  ({time:.2f}s)"
+    "keyframe_label": "Schluesselbild {index}  ({time:.2f}s)",
+    "search": "Suchen"
   },
   "export": {
     "title": "Exportieren",
@@ -403,6 +405,7 @@
     "scene_panel": "Szenen-Panel",
     "show_console": "Systemkonsole anzeigen",
     "hide_console": "Systemkonsole ausblenden",
+    "console": "Konsole",
     "background": "Hintergrund",
     "color": "Farbe",
     "show_coord_axes": "Koordinatenachsen anzeigen",
@@ -449,7 +452,17 @@
     "add_group": "+ Gruppe hinzufügen",
     "no_selection_groups": "Keine Auswahlgruppen",
     "clear": "Löschen",
-    "mesh": "Mesh"
+    "mesh": "Mesh",
+    "mesh_wireframe": "Drahtgitter",
+    "mesh_wireframe_color": "Drahtgitterfarbe",
+    "mesh_wireframe_width": "Drahtgitterbreite",
+    "mesh_light_intensity": "Lichtintensität",
+    "mesh_ambient": "Umgebungslicht",
+    "mesh_backface_culling": "Rückseitenentfernung",
+    "mesh_shadow_enabled": "Schatten",
+    "mesh_shadow_resolution": "Schattenauflösung",
+    "camera_frustum_scale": "Frustum-Skalierung",
+    "voxel_size": "Voxelgröße"
   },
   "toolbar": {
     "selection": "Auswahl",
@@ -513,20 +526,6 @@
     "line_width": "Linienbreite",
     "instructions": "Enter: Zuschnitt bestätigen | Strg+C: Inhalt kopieren"
   },
-  "file_browser": {
-    "title": "Dateibrowser",
-    "quick_access": "Schnellzugriff",
-    "current_dir": "Aktuelles Verzeichnis",
-    "home": "Start",
-    "current_path": "Aktueller Pfad: %s",
-    "parent_dir": "../",
-    "directory": "[VERZ]",
-    "selected": "Ausgewählt: %s",
-    "load_dataset": "Datensatz laden",
-    "load_sog": "SOG laden",
-    "load_ply": "PLY laden",
-    "enter_dir": "Verzeichnis öffnen"
-  },
   "training_panel": {
     "start_training": "Training starten",
     "resume_training": "Training fortsetzen",
@@ -580,7 +579,29 @@
     "grid": "Referenzgitterebene anzeigen",
     "camera_frustums": "Kamerapositionen aus Datensatz anzeigen",
     "point_cloud_mode": "Als Punkte statt Splats rendern",
-    "selection_colors": "Farben für Auswahl-Visualisierung"
+    "selection_colors": "Farben für Auswahl-Visualisierung",
+    "seq_camera_path": "Kamerapfad-Visualisierung umschalten",
+    "seq_first": "Zum ersten Keyframe springen",
+    "seq_stop": "Wiedergabe stoppen",
+    "seq_play": "Animation abspielen",
+    "seq_pause": "Animation pausieren",
+    "seq_last": "Zum letzten Keyframe springen",
+    "seq_loop_off": "Schleifenwiedergabe aktivieren",
+    "seq_loop_on": "Schleifenwiedergabe deaktivieren",
+    "seq_add": "Keyframe an aktueller Position hinzufügen",
+    "seq_speed": "Wiedergabegeschwindigkeit (Klick zum Wechseln)",
+    "seq_snap": "Keyframes am Raster einrasten (Rechtsklick für Optionen)",
+    "seq_follow": "Abspielkopf bei Wiedergabe folgen",
+    "seq_film_strip": "Filmstreifen unterhalb der Zeitleiste anzeigen",
+    "seq_pip_preview": "Bild-in-Bild-Vorschau anzeigen (Rechtsklick für Optionen)",
+    "seq_save_path": "Kamerapfad in Datei speichern",
+    "seq_load_path": "Kamerapfad aus Datei laden",
+    "seq_format": "Export-Formatvorlage (Rechtsklick für Optionen)",
+    "seq_quality": "CRF-Qualität (niedriger = bessere Qualität, größere Datei)",
+    "seq_export": "Video aus Kamerapfad exportieren",
+    "seq_clear": "Alle Keyframes löschen",
+    "seq_interval": "Rasterintervall",
+    "seq_preview_size": "PiP-Vorschauskalierung"
   },
   "exit_popup": {
     "title": "Anwendung beenden?",
@@ -616,15 +637,6 @@
   "selection_group": {
     "lock": "Sperren",
     "unlock": "Entsperren"
-  },
-  "file_browser_ext": {
-    "dataset": "[Datensatz]",
-    "sog": "[SOG]",
-    "no_file_selected": "Keine Datei ausgewählt",
-    "not_a_dataset": "(Kein Datensatz)",
-    "sog_directory": "(SOG Verzeichnis)",
-    "sog_meta": "(SOG meta.json)",
-    "error": "Fehler:"
   },
   "progress": {
     "loss": "Verlust:",
@@ -739,6 +751,7 @@
     "disabled": "Deaktiviert"
   },
   "image_preview": {
+    "title": "Bildvorschau",
     "image_section": "BILD",
     "file_section": "DATEI",
     "view_section": "ANSICHT",
@@ -780,7 +793,8 @@
     "no_images_loaded": "Keine Bilder geladen",
     "no_image": "Kein Bild",
     "zoom": "Zoom",
-    "fit": "Anpassen"
+    "fit": "Anpassen",
+    "storage_section": "SPEICHER"
   },
   "startup": {
     "supported_by": "Unterstützt von",
@@ -927,7 +941,35 @@
   "sequencer": {
     "edit_focal_length": "Brennweite bearbeiten...",
     "edit_focal_length_title": "Brennweite bearbeiten",
-    "focal_length_mm": "Brennweite (mm)"
+    "focal_length_mm": "Brennweite (mm)",
+    "go_to_first_keyframe": "Zum ersten Keyframe",
+    "stop": "Stopp",
+    "pause": "Pause (Leertaste)",
+    "play": "Abspielen (Leertaste)",
+    "go_to_last_keyframe": "Zum letzten Keyframe",
+    "loop_on": "Schleife: EIN",
+    "loop_off": "Schleife: AUS",
+    "add_keyframe": "Keyframe hinzufuegen (K)",
+    "empty_hint": "Kamera positionieren und K druecken, um Keyframes hinzuzufuegen",
+    "update_to_current_view": "Auf aktuelle Ansicht aktualisieren",
+    "go_to_keyframe": "Zum Keyframe",
+    "edit_time": "Zeit bearbeiten...",
+    "easing": "Easing",
+    "easing_last_keyframe": "Easing (letzter Keyframe)",
+    "easing_tooltip": "Easing steuert die ausgehende Bewegung\n(Letzter Keyframe hat kein ausgehendes Segment)",
+    "delete_keyframe": "Keyframe loeschen",
+    "add_keyframe_here": "Keyframe hier hinzufuegen",
+    "edit_keyframe_time": "Keyframe-Zeit bearbeiten",
+    "time_seconds": "Zeit (s)",
+    "apply_u": "Anwenden (U)",
+    "revert_esc": "Zuruecksetzen (Esc)",
+    "editing_keyframe": "Keyframe {} bearbeiten",
+    "move_translate": "Verschieben",
+    "rotate": "Drehen",
+    "loop_point_tooltip": "Schleifenpunkt @ {} (kehrt zum Anfang zurueck)",
+    "keyframe_tooltip": "Keyframe @ {} (Doppelklick zum Bearbeiten)",
+    "playback_time": "Wiedergabe {:.2f}s",
+    "keyframe_preview": "Keyframe {} Vorschau"
   },
   "rendering_panel": {
     "fov_format": "Sichtfeld: {hfov:.1f}° H / {vfov:.1f}° V"
@@ -996,5 +1038,23 @@
     "appearance": "Appearance",
     "line_width": "Line Width",
     "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
+  },
+  "file_association": {
+    "title": "Als Standardanwendung festlegen",
+    "message": "Möchten Sie LichtFeld Studio als Standardanwendung für Splat-Dateien (.ply, .sog, .spz) festlegen?",
+    "yes": "Ja",
+    "not_now": "Nicht jetzt",
+    "dont_ask": "Nicht mehr fragen",
+    "success": "Dateizuordnungen erfolgreich registriert.",
+    "menu_register": "Als Standardanwendung festlegen...",
+    "menu_unregister": "Als Standardanwendung entfernen..."
+  },
+  "context_menu": {
+    "snap_interval": "Rasterintervall",
+    "preview_scale": "Vorschaugröße",
+    "video_format": "Videoformat",
+    "clear_confirm": "Alle Keyframes löschen?",
+    "confirm": "Bestätigen",
+    "cancel": "Abbrechen"
   }
 }

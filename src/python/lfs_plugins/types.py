@@ -121,6 +121,40 @@ class Panel:
         pass
 
 
+class RmlPanel:
+    """Base class for Python panels using RmlUI DOM."""
+
+    idname: str = ""
+    label: str = ""
+    space: str = "SCENE_HEADER"
+    order: int = 0
+    rml_template: str = ""
+
+    @classmethod
+    def _class_id(cls) -> str:
+        return f"{cls.__module__}.{cls.__qualname__}"
+
+    def on_load(self, doc):
+        """Called once when the RmlUI document is loaded.
+
+        Auto-wires the close button for floating panels using the
+        shared floating_window.rml template.
+        """
+        import lichtfeld as lf
+        close_btn = doc.get_element_by_id("close-btn")
+        if close_btn and self.idname:
+            close_btn.add_event_listener(
+                "click", lambda _ev: lf.ui.set_panel_enabled(self.idname, False))
+
+    def on_update(self, doc):
+        """Called each frame after the host renders."""
+        pass
+
+    def on_scene_changed(self, doc):
+        """Called when scene_generation changes."""
+        pass
+
+
 class Menu:
     """Base class for menu definitions."""
 

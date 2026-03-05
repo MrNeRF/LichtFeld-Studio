@@ -5,6 +5,7 @@
 #pragma once
 
 #include "gui/ui_context.hpp"
+#include "python/python_runtime.hpp"
 
 #include <functional>
 #include <future>
@@ -25,6 +26,9 @@ namespace lfs::vis::gui {
         void setOnShowPythonConsole(std::function<void()> callback);
 
         void renderPluginInstallPopup();
+
+        bool hasMenuEntries() const;
+        std::vector<python::MenuBarEntry> getMenuEntries() const;
 
         void triggerShowPythonConsole() {
             if (on_show_python_console_)

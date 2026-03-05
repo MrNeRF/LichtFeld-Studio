@@ -1,0 +1,43 @@
+<rml>
+<head>
+    <link type="text/rcss" href="sequencer_overlay.rcss"/>
+</head>
+<body id="body">
+    <div id="kf-edit-overlay" class="overlay-panel">
+        <div class="kf-edit-header">
+            <span id="kf-edit-label" class="overlay-text"></span>
+            <span id="kf-close-btn" class="close-x">&#x2715;</span>
+        </div>
+        <span id="kf-edit-delta" class="overlay-text-dim"></span>
+        <div id="kf-edit-buttons">
+            <div id="kf-edit-apply" class="btn btn--primary">Apply (U)</div>
+            <div id="kf-edit-revert" class="btn btn--secondary">Revert (Esc)</div>
+        </div>
+    </div>
+
+    <div id="menu-backdrop" class="backdrop"></div>
+    <div id="keyframe-context-menu" class="context-menu"></div>
+
+    <div id="popup-backdrop" class="backdrop"></div>
+
+    <div id="time-edit-popup" class="edit-popup">
+        <span class="popup-title">Edit Keyframe Time</span>
+        <div class="popup-sep"></div>
+        <input id="time-edit-input" type="text" />
+        <div class="popup-buttons">
+            <div class="btn btn--primary" id="time-edit-ok">OK</div>
+            <div class="btn btn--secondary" id="time-edit-cancel">Cancel</div>
+        </div>
+    </div>
+
+    <div id="focal-edit-popup" class="edit-popup">
+        <span class="popup-title">Edit Focal Length (mm)</span>
+        <div class="popup-sep"></div>
+        <input id="focal-edit-input" type="text" />
+        <div class="popup-buttons">
+            <div class="btn btn--primary" id="focal-edit-ok">OK</div>
+            <div class="btn btn--secondary" id="focal-edit-cancel">Cancel</div>
+        </div>
+    </div>
+</body>
+</rml>

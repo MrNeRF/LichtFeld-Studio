@@ -57,6 +57,9 @@ namespace lfs::vis::gui {
             j["python_console_width"] = python_console_width;
             j["show_sequencer"] = show_sequencer;
 
+            if (!file_association.empty())
+                j["file_association"] = file_association;
+
             nlohmann::json windows;
             for (const auto& [name, visible] : window_visibility) {
                 windows[name] = visible;
@@ -89,6 +92,7 @@ namespace lfs::vis::gui {
             scene_panel_ratio = j.value("scene_panel_ratio", scene_panel_ratio);
             python_console_width = j.value("python_console_width", python_console_width);
             show_sequencer = j.value("show_sequencer", show_sequencer);
+            file_association = j.value("file_association", file_association);
 
             if (j.contains("windows") && j["windows"].is_object()) {
                 for (const auto& [key, val] : j["windows"].items()) {

@@ -18,8 +18,6 @@ namespace lfs::vis {
     class SequencerController;
 
     namespace gui {
-        class FileBrowser;
-
         // Font set for typography hierarchy
         struct FontSet {
             ImFont* regular = nullptr;
@@ -54,7 +52,6 @@ namespace lfs::vis {
 
         struct UIContext {
             VisualizerImpl* viewer = nullptr;
-            FileBrowser* file_browser = nullptr;
             std::unordered_map<std::string, bool>* window_states = nullptr;
             EditorContext* editor = nullptr;
             SequencerController* sequencer_controller = nullptr;

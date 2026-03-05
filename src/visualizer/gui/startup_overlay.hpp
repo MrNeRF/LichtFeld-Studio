@@ -5,17 +5,25 @@
 #pragma once
 
 #include "gui/panel_layout.hpp"
-#include "rendering/gl_resources.hpp"
+#include "gui/rmlui/rml_fbo.hpp"
+#include <string>
 
-struct ImFont;
+namespace Rml {
+    class Context;
+    class ElementDocument;
+    class Element;
+    class EventListener;
+} // namespace Rml
 
 namespace lfs::vis::gui {
 
+    class RmlUIManager;
+
     class StartupOverlay {
     public:
-        void loadTextures();
-        void destroyTextures();
-        void render(const ViewportLayout& viewport, ImFont* font_small, bool drag_hovering);
+        void init(RmlUIManager* mgr);
+        void shutdown();
+        void render(const ViewportLayout& viewport, bool drag_hovering);
         void dismiss() { visible_ = false; }
         [[nodiscard]] bool isVisible() const { return visible_; }
         [[nodiscard]] bool needsAnimationFrame() const { return visible_ && shown_frames_ < 3; }
@@ -23,21 +31,25 @@ namespace lfs::vis::gui {
         static void openURL(const char* url);
 
     private:
+        void populateLanguages();
+        void updateTheme();
+        void updateLocalizedText();
+        void forwardInput(float overlay_x, float overlay_y, float overlay_w, float overlay_h);
+        std::string generateThemeRCSS() const;
+
         bool visible_ = true;
         int shown_frames_ = 0;
 
-        rendering::Texture logo_light_texture_;
-        rendering::Texture logo_dark_texture_;
-        rendering::Texture core11_light_texture_;
-        rendering::Texture core11_dark_texture_;
-        rendering::Texture discord_icon_texture_;
-        rendering::Texture x_icon_texture_;
-        rendering::Texture heart_icon_texture_;
-        int logo_width_ = 0, logo_height_ = 0;
-        int core11_width_ = 0, core11_height_ = 0;
-        int discord_icon_width_ = 0, discord_icon_height_ = 0;
-        int x_icon_width_ = 0, x_icon_height_ = 0;
-        int heart_icon_width_ = 0, heart_icon_height_ = 0;
+        RmlUIManager* rml_manager_ = nullptr;
+        Rml::Context* rml_context_ = nullptr;
+        Rml::ElementDocument* document_ = nullptr;
+
+        RmlFBO fbo_;
+
+        std::string last_theme_;
+
+        Rml::EventListener* link_listener_ = nullptr;
+        Rml::EventListener* lang_listener_ = nullptr;
     };
 
 } // namespace lfs::vis::gui

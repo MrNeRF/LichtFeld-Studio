@@ -55,7 +55,7 @@ namespace lfs::vis {
     struct ThemeFonts {
         std::string regular_path = "Inter-Regular.ttf";
         std::string bold_path = "Inter-SemiBold.ttf";
-        float base_size = 14.0f;
+        float base_size = 12.0f;
         float small_size = 12.0f;
         float large_size = 16.0f;
         float heading_size = 18.0f;
@@ -247,6 +247,10 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API std::string loadThemePreferenceName(); // Returns a canonical theme id
     LFS_VIS_API void saveThemePreference(bool is_dark);
     [[nodiscard]] LFS_VIS_API bool loadThemePreference(); // Legacy: returns true for non-light themes
+
+    // UI scale preference (0.0 = auto from OS)
+    LFS_VIS_API void saveUiScalePreference(float scale);
+    [[nodiscard]] LFS_VIS_API float loadUiScalePreference();
 
     // Color utilities
     [[nodiscard]] LFS_VIS_API ImVec4 lighten(const ImVec4& color, float amount);

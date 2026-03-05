@@ -150,6 +150,19 @@ if(NVIDIA_SMI)
     )
     string(REGEX REPLACE "\n.*" "" DETECTED_COMPUTE_CAP "${DETECTED_COMPUTE_CAP}")
 
+    execute_process(
+            COMMAND ${NVIDIA_SMI} --query-gpu=driver_version --format=csv,noheader
+            OUTPUT_VARIABLE NVIDIA_DRIVER_VERSION
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    string(REGEX REPLACE "\n.*" "" NVIDIA_DRIVER_VERSION "${NVIDIA_DRIVER_VERSION}")
+    message(STATUS "Detected NVIDIA driver: ${NVIDIA_DRIVER_VERSION}")
+    if(NVIDIA_DRIVER_VERSION VERSION_LESS "570")
+        message(FATAL_ERROR "NVIDIA driver ${NVIDIA_DRIVER_VERSION} is too old. "
+            "CUDA Toolkit 12.8 requires driver >= 570. "
+            "Please update: https://www.nvidia.com/drivers")
+    endif()
+
     message(STATUS "Detected GPU compute capability: ${DETECTED_COMPUTE_CAP}")
     if(CMAKE_CUDA_COMPILER_VERSION VERSION_GREATER_EQUAL 13.1)
         string(REPLACE "." "" LichtFeld-Studio_CUDA_ARCH "${DETECTED_COMPUTE_CAP}")
@@ -243,6 +256,7 @@ find_package(OpenImageIO REQUIRED)
 find_package(Boost REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(assimp REQUIRED)
+find_package(RmlUi CONFIG REQUIRED)
 
 # TORCH_CUDA_ARCH_LIST is already defined by Torch
 # use it here as the global default CUDA architecture list too
@@ -752,6 +766,7 @@ install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-splash-lo
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/lichtfeld-splash-loading-dark.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/core11-logo.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
 install(FILES "${CMAKE_SOURCE_DIR}/src/visualizer/gui/assets/core11-logo-dark.png" DESTINATION "${INSTALL_RESOURCE_DIR}/assets")
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/rmlui/resources/" DESTINATION "${INSTALL_RESOURCE_DIR}/assets/rmlui")
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/src/visualizer/gui/resources/locales" DESTINATION "${INSTALL_RESOURCE_DIR}")
 
 # Plugin development documentation

@@ -2,109 +2,119 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Getting Started panel with tutorial videos and documentation links."""
 
+import os
+import threading
+
 import lichtfeld as lf
-from .types import Panel
+from .types import RmlPanel
+
+_CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "lichtfeld-studio", "thumbnails")
 
 
-class GettingStartedPanel(Panel):
+def _extract_video_id(url):
+    if "v=" in url:
+        return url.split("v=")[1].split("&")[0]
+    return None
+
+
+def _download_thumbnail(video_id, on_done):
+    os.makedirs(_CACHE_DIR, exist_ok=True)
+    path = os.path.join(_CACHE_DIR, f"{video_id}.jpg")
+    if os.path.exists(path):
+        on_done(video_id, path)
+        return
+    try:
+        from urllib.request import urlopen
+        data = urlopen(f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg", timeout=5).read()
+        with open(path, "wb") as f:
+            f.write(data)
+        on_done(video_id, path)
+    except Exception:
+        pass
+
+
+class GettingStartedPanel(RmlPanel):
     """Floating panel displaying tutorial videos and documentation."""
 
     idname = "lfs.getting_started"
     label = "Getting Started"
     space = "FLOATING"
     order = 99
-    options = {"DEFAULT_CLOSED"}
-
-    TITLE_COLOR = (0.3, 0.7, 1.0, 1.0)
-    LINK_COLOR = (0.4, 0.8, 1.0, 1.0)
-    LABEL_COLOR = (0.6, 0.6, 0.6, 1.0)
-
-    CARD_WIDTH = 160
-    CARD_HEIGHT = 90
-    CARD_SPACING = 16
-    CARDS_PER_ROW = 3
-
-    VIDEO_CARDS = [
-        ("getting_started.video_intro", "b1Olu_IU1sM", "https://www.youtube.com/watch?v=b1Olu_IU1sM"),
-        ("getting_started.video_latest", "zWIzBHRc-60", "https://www.youtube.com/watch?v=zWIzBHRc-60"),
-        ("getting_started.video_masks", "956qR8N3Xk4", "https://www.youtube.com/watch?v=956qR8N3Xk4"),
-        ("getting_started.video_reality_scan", "JWmkhTlbDvg", "https://www.youtube.com/watch?v=JWmkhTlbDvg"),
-        ("getting_started.video_colmap", "-3TBbukYN00", "https://www.youtube.com/watch?v=-3TBbukYN00"),
-        ("getting_started.video_lichtfeld", "aX8MTlr9Ypc", "https://www.youtube.com/watch?v=aX8MTlr9Ypc"),
-    ]
+    rml_template = "rmlui/getting_started.rml"
+    rml_height_mode = "content"
+    initial_width = 560
 
     WIKI_URL = "https://github.com/MrNeRF/LichtFeld-Studio/wiki"
 
-    def __init__(self):
-        self._thumbnails_requested = set()
+    VIDEO_CARDS = [
+        ("card-intro", "getting_started.video_intro", "https://www.youtube.com/watch?v=b1Olu_IU1sM"),
+        ("card-latest", "getting_started.video_latest", "https://www.youtube.com/watch?v=zWIzBHRc-60"),
+        ("card-masks", "getting_started.video_masks", "https://www.youtube.com/watch?v=956qR8N3Xk4"),
+        ("card-reality-scan", "getting_started.video_reality_scan", "https://www.youtube.com/watch?v=JWmkhTlbDvg"),
+        ("card-colmap", "getting_started.video_colmap", "https://www.youtube.com/watch?v=-3TBbukYN00"),
+        ("card-lichtfeld", "getting_started.video_lichtfeld", "https://www.youtube.com/watch?v=aX8MTlr9Ypc"),
+    ]
 
-    def draw(self, layout):
+    def on_bind_model(self, ctx):
+        model = ctx.create_data_model("getting_started")
+        if model is None:
+            return
+
         tr = lf.ui.tr
 
-        lf.ui.process_thumbnails()
+        model.bind_func("panel_label", lambda: tr("getting_started.title"))
+        model.bind_func("title", lambda: tr("getting_started.title"))
+        model.bind_func("description", lambda: tr("getting_started.description"))
+        model.bind_func("wiki_section", lambda: tr("getting_started.wiki_section"))
 
-        scale = layout.get_dpi_scale()
-        card_w = self.CARD_WIDTH * scale
-        card_h = self.CARD_HEIGHT * scale
-        spacing = self.CARD_SPACING * scale
+        for _elem_id, title_key, _url in self.VIDEO_CARDS:
+            binding_name = title_key.split(".")[-1]
+            model.bind_func(binding_name, lambda k=title_key: tr(k))
 
-        layout.text_colored(tr("getting_started.title"), self.TITLE_COLOR)
-        layout.spacing()
-        layout.separator()
-        layout.spacing()
+        self._handle = model.get_handle()
 
-        layout.text_wrapped(tr("getting_started.description"))
-        layout.spacing()
-        layout.spacing()
+    def on_load(self, doc):
+        super().on_load(doc)
 
-        for i, (title_key, video_id, url) in enumerate(self.VIDEO_CARDS):
-            self._draw_video_card(layout, tr, title_key, video_id, url, card_w, card_h)
+        self._ready_lock = threading.Lock()
+        self._ready_queue = []
+        self._thumb_card_map = {}
 
-            if (i % self.CARDS_PER_ROW) < (self.CARDS_PER_ROW - 1):
-                layout.same_line(spacing=spacing)
+        for elem_id, _title_key, url in self.VIDEO_CARDS:
+            el = doc.get_element_by_id(elem_id)
+            if el:
+                el.add_event_listener("click", lambda _ev, u=url: lf.ui.open_url(u))
 
-        layout.spacing()
-        layout.spacing()
-        layout.separator()
-        layout.spacing()
+            vid = _extract_video_id(url)
+            if vid:
+                self._thumb_card_map[vid] = elem_id
+                threading.Thread(target=_download_thumbnail,
+                                 args=(vid, self._on_thumb_ready),
+                                 daemon=True).start()
 
-        layout.text_colored(tr("getting_started.wiki_section"), self.LABEL_COLOR)
-        layout.spacing()
+        wiki_section = doc.get_element_by_id("wiki-section")
+        if wiki_section:
+            wiki_section.add_event_listener("click", lambda _ev: lf.ui.open_url(self.WIKI_URL))
 
-        layout.label(tr("getting_started.wiki_label"))
-        layout.same_line()
-        layout.text_colored(self.WIKI_URL, self.LINK_COLOR)
-        if layout.is_item_hovered():
-            layout.set_mouse_cursor_hand()
-        if layout.is_item_clicked():
-            lf.ui.open_url(self.WIKI_URL)
+    def _on_thumb_ready(self, video_id, path):
+        with self._ready_lock:
+            self._ready_queue.append((video_id, path))
 
-    def _draw_video_card(self, layout, tr, title_key: str, video_id: str, url: str, width: float, height: float):
-        title = tr(title_key)
+    def on_update(self, doc):
+        if not hasattr(self, "_ready_lock"):
+            return
 
-        if video_id not in self._thumbnails_requested:
-            lf.ui.request_thumbnail(video_id)
-            self._thumbnails_requested.add(video_id)
+        with self._ready_lock:
+            batch = list(self._ready_queue)
+            self._ready_queue.clear()
 
-        layout.begin_group()
-
-        if lf.ui.is_thumbnail_ready(video_id):
-            texture_id = lf.ui.get_thumbnail_texture(video_id)
-            if texture_id > 0:
-                if layout.image_button(f"thumb_{video_id}", texture_id, (width, height)):
-                    lf.ui.open_url(url)
-            else:
-                if layout.button(f"##btn_{video_id}", (width, height)):
-                    lf.ui.open_url(url)
-        else:
-            if layout.button(tr("getting_started.loading") + f"##btn_{video_id}", (width, height)):
-                lf.ui.open_url(url)
-
-        if layout.is_item_hovered():
-            layout.set_mouse_cursor_hand()
-            layout.set_tooltip(tr("getting_started.watch_tooltip").format(title=title))
-
-        layout.text_colored(title, self.LABEL_COLOR)
-
-        layout.end_group()
-
+        for video_id, path in batch:
+            elem_id = self._thumb_card_map.get(video_id)
+            if not elem_id:
+                continue
+            card = doc.get_element_by_id(elem_id)
+            if not card:
+                continue
+            body = card.query_selector(".card-body")
+            if body:
+                body.set_property("decorator", f"image({path})")

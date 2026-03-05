@@ -45,7 +45,16 @@ namespace lfs::vis {
             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
             ImGuiWindowFlags_NoFocusOnAppearing;
 
-        constexpr const char* EASING_NAMES[] = {"Linear", "Ease In", "Ease Out", "Ease In-Out"};
+        [[nodiscard]] const char* easingName(const sequencer::EasingType easing) {
+            using namespace lichtfeld::Strings;
+            switch (easing) {
+            case sequencer::EasingType::LINEAR: return LOC(Scene::KEYFRAME_EASING_LINEAR);
+            case sequencer::EasingType::EASE_IN: return LOC(Scene::KEYFRAME_EASING_EASE_IN);
+            case sequencer::EasingType::EASE_OUT: return LOC(Scene::KEYFRAME_EASING_EASE_OUT);
+            case sequencer::EasingType::EASE_IN_OUT: return LOC(Scene::KEYFRAME_EASING_EASE_IN_OUT);
+            default: return LOC(Scene::KEYFRAME_EASING_LINEAR);
+            }
+        }
 
         [[nodiscard]] std::string formatTime(const float seconds) {
             const int mins = static_cast<int>(seconds) / 60;
@@ -128,7 +137,7 @@ namespace lfs::vis {
             controller_.seekToFirstKeyframe();
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Go to first keyframe");
+            ImGui::SetTooltip("%s", LOC(lichtfeld::Strings::Sequencer::GO_TO_FIRST_KEYFRAME));
         }
         {
             ImDrawList* const dl = ImGui::GetWindowDrawList();
@@ -151,7 +160,7 @@ namespace lfs::vis {
             controller_.stop();
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Stop");
+            ImGui::SetTooltip("%s", LOC(lichtfeld::Strings::Sequencer::STOP));
         }
         {
             ImDrawList* const dl = ImGui::GetWindowDrawList();
@@ -169,7 +178,9 @@ namespace lfs::vis {
             controller_.togglePlayPause();
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(controller_.isPlaying() ? "Pause (Space)" : "Play (Space)");
+            ImGui::SetTooltip("%s", controller_.isPlaying()
+                                        ? LOC(lichtfeld::Strings::Sequencer::PAUSE)
+                                        : LOC(lichtfeld::Strings::Sequencer::PLAY));
         }
         {
             ImDrawList* const dl = ImGui::GetWindowDrawList();
@@ -200,7 +211,7 @@ namespace lfs::vis {
             controller_.seekToLastKeyframe();
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Go to last keyframe");
+            ImGui::SetTooltip("%s", LOC(lichtfeld::Strings::Sequencer::GO_TO_LAST_KEYFRAME));
         }
         {
             ImDrawList* const dl = ImGui::GetWindowDrawList();
@@ -230,7 +241,9 @@ namespace lfs::vis {
             ImGui::PopStyleColor();
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip(is_looping ? "Loop: ON" : "Loop: OFF");
+            ImGui::SetTooltip("%s", is_looping
+                                        ? LOC(lichtfeld::Strings::Sequencer::LOOP_ON)
+                                        : LOC(lichtfeld::Strings::Sequencer::LOOP_OFF));
         }
         {
             ImDrawList* const dl = ImGui::GetWindowDrawList();
@@ -261,7 +274,7 @@ namespace lfs::vis {
             lfs::core::events::cmd::SequencerAddKeyframe{}.emit();
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Add keyframe (K)");
+            ImGui::SetTooltip("%s", LOC(lichtfeld::Strings::Sequencer::ADD_KEYFRAME));
         }
 
         ImGui::PopStyleColor(3);
@@ -289,10 +302,10 @@ namespace lfs::vis {
         renderTimeRuler(dl, {pos.x, ruler_y}, width);
 
         if (timeline.empty()) {
-            constexpr const char* HINT = "Position camera and press K to add keyframes";
-            const ImVec2 text_size = ImGui::CalcTextSize(HINT);
+            const char* hint = LOC(lichtfeld::Strings::Sequencer::EMPTY_HINT);
+            const ImVec2 text_size = ImGui::CalcTextSize(hint);
             dl->AddText({pos.x + (width - text_size.x) / 2, y_center - text_size.y / 2},
-                        toU32WithAlpha(t.palette.text_dim, 0.5f), HINT);
+                        toU32WithAlpha(t.palette.text_dim, 0.5f), hint);
             return;
         }
 
@@ -457,14 +470,14 @@ namespace lfs::vis {
                 const size_t idx = *context_menu_keyframe_;
                 const bool is_first = (idx == 0);
 
-                if (ImGui::MenuItem("Update to Current View", "U")) {
+                if (ImGui::MenuItem(LOC(lichtfeld::Strings::Sequencer::UPDATE_TO_CURRENT_VIEW), "U")) {
                     lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = idx}.emit();
                     lfs::core::events::cmd::SequencerUpdateKeyframe{}.emit();
                 }
-                if (ImGui::MenuItem("Go to Keyframe")) {
+                if (ImGui::MenuItem(LOC(lichtfeld::Strings::Sequencer::GO_TO_KEYFRAME))) {
                     lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = idx}.emit();
                 }
-                if (ImGui::MenuItem("Edit Time...", nullptr)) {
+                if (ImGui::MenuItem(LOC(lichtfeld::Strings::Sequencer::EDIT_TIME), nullptr)) {
                     editing_keyframe_time_ = true;
                     editing_keyframe_index_ = idx;
                     std::snprintf(time_edit_buffer_, sizeof(time_edit_buffer_), "%.2f", keyframes[idx].time);
@@ -477,11 +490,11 @@ namespace lfs::vis {
 
                 // Easing submenu (only for non-last keyframes - easing controls outgoing segment)
                 const bool is_last = (idx == keyframes.size() - 1);
-                if (ImGui::BeginMenu("Easing", !is_last)) {
+                if (ImGui::BeginMenu(LOC(lichtfeld::Strings::Sequencer::EASING), !is_last)) {
                     const auto current_easing = keyframes[idx].easing;
                     for (int e = 0; e < 4; ++e) {
                         const auto easing = static_cast<sequencer::EasingType>(e);
-                        if (ImGui::MenuItem(EASING_NAMES[e], nullptr, current_easing == easing)) {
+                        if (ImGui::MenuItem(easingName(easing), nullptr, current_easing == easing)) {
                             if (current_easing != easing) {
                                 controller_.timeline().setKeyframeEasing(idx, easing);
                             }
@@ -490,15 +503,15 @@ namespace lfs::vis {
                     ImGui::EndMenu();
                 }
                 if (is_last && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-                    ImGui::SetTooltip("Easing controls outgoing motion\n(last keyframe has no outgoing segment)");
+                    ImGui::SetTooltip("%s", LOC(lichtfeld::Strings::Sequencer::EASING_TOOLTIP));
                 }
 
                 ImGui::Separator();
-                if (ImGui::MenuItem("Delete Keyframe", "Del", false, !is_first)) {
+                if (ImGui::MenuItem(LOC(lichtfeld::Strings::Sequencer::DELETE_KEYFRAME), "Del", false, !is_first)) {
                     controller_.timeline().removeKeyframe(idx);
                 }
             } else {
-                if (ImGui::MenuItem("Add Keyframe Here", "K")) {
+                if (ImGui::MenuItem(LOC(lichtfeld::Strings::Sequencer::ADD_KEYFRAME_HERE), "K")) {
                     lfs::core::events::cmd::SequencerAddKeyframe{}.emit();
                 }
             }
@@ -523,7 +536,7 @@ namespace lfs::vis {
 
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, {0.5f, 0.5f});
         if (ImGui::BeginPopupModal("EditKeyframeTime", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Text("Edit Keyframe Time");
+            ImGui::TextUnformatted(LOC(lichtfeld::Strings::Sequencer::EDIT_KEYFRAME_TIME));
             ImGui::Separator();
 
             auto applyTimeChange = [this]() {
@@ -537,21 +550,21 @@ namespace lfs::vis {
             };
 
             ImGui::SetNextItemWidth(120);
-            if (ImGui::InputText("Time (s)", time_edit_buffer_, sizeof(time_edit_buffer_),
+            if (ImGui::InputText(LOC(lichtfeld::Strings::Sequencer::TIME_SECONDS), time_edit_buffer_, sizeof(time_edit_buffer_),
                                  ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_EnterReturnsTrue)) {
                 applyTimeChange();
                 editing_keyframe_time_ = false;
                 ImGui::CloseCurrentPopup();
             }
 
-            if (ImGui::Button("OK", {60, 0})) {
+            if (ImGui::Button(LOC(lichtfeld::Strings::Common::OK), {60, 0})) {
                 applyTimeChange();
                 editing_keyframe_time_ = false;
                 ImGui::CloseCurrentPopup();
             }
 
             ImGui::SameLine();
-            if (ImGui::Button("Cancel", {60, 0})) {
+            if (ImGui::Button(LOC(lichtfeld::Strings::Common::CANCEL), {60, 0})) {
                 editing_keyframe_time_ = false;
                 ImGui::CloseCurrentPopup();
             }
@@ -723,10 +736,12 @@ namespace lfs::vis {
         }
 
         if (hovered) {
-            const char* tooltip = is_loop_point
-                                      ? "Loop Point @ %s (returns to start)"
-                                      : "Keyframe @ %s (double-click to edit)";
-            ImGui::SetTooltip(tooltip, formatTime(time).c_str());
+            const std::string time_str = formatTime(time);
+            if (is_loop_point) {
+                ImGui::SetTooltip("%s", std::vformat(LOC(lichtfeld::Strings::Sequencer::LOOP_POINT_TOOLTIP), std::make_format_args(time_str)).c_str());
+            } else {
+                ImGui::SetTooltip("%s", std::vformat(LOC(lichtfeld::Strings::Sequencer::KEYFRAME_TOOLTIP), std::make_format_args(time_str)).c_str());
+            }
         }
     }
 

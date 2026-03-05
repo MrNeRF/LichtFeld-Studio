@@ -15,6 +15,7 @@ namespace lfs::vis::gui {
         float scene_panel_ratio = 0.4f;
         float python_console_width = -1.0f;
         bool show_sequencer = false;
+        std::string file_association;
         std::unordered_map<std::string, bool> window_visibility;
 
         void save() const;

@@ -651,7 +651,16 @@ std::expected<std::unique_ptr<lfs::core::param::TrainingParameters>, std::string
 lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
 
     auto params = std::make_unique<lfs::core::param::TrainingParameters>();
-    auto parse_result = parse_arguments(convert_args(argc, argv), *params);
+    auto args = convert_args(argc, argv);
+
+    if (args.size() >= 2 && !args[1].starts_with('-') && args[1] != "convert" && args[1] != "plugin") {
+        const std::filesystem::path p = lfs::core::utf8_to_path(args[1]);
+        std::error_code ec;
+        if (std::filesystem::exists(p, ec))
+            args.insert(args.begin() + 1, "-v");
+    }
+
+    auto parse_result = parse_arguments(args, *params);
     const std::string& strategy = params->optimization.strategy;
     const std::string& config_file = params->optimization.config_file;
 

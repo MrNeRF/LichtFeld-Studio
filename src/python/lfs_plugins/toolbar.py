@@ -1,333 +1,269 @@
-# Toolbar panels - Data-driven Python implementation
-# GizmoToolbar: Horizontal toolbar for transform tools (data-driven from registry)
-# UtilityToolbar: Vertical toolbar on left side of viewport
-
-WINDOW_FLAGS = (
-    1 << 0 |    # NoTitleBar
-    1 << 1 |    # NoResize
-    1 << 2 |    # NoMove
-    1 << 3 |    # NoScrollbar
-    1 << 5 |    # NoCollapse
-    1 << 8 |    # NoSavedSettings
-    1 << 6 |    # AlwaysAutoResize
-    1 << 12 |   # NoFocusOnAppearing
-    1 << 13     # NoBringToFrontOnFocus
-)
-
-
 from .types import Panel
 from .tools import ToolRegistry
-from .tool_defs.definition import ToolDef
 
 
-def _tool_to_dict(tool: ToolDef) -> dict:
-    """Convert ToolDef to dict format for toolbar compatibility."""
-    return {
-        "id": tool.id,
-        "label": tool.label,
-        "icon": tool.icon,
-        "group": tool.group,
-        "shortcut": tool.shortcut,
-        "plugin_name": tool.plugin_name,
-        "plugin_path": tool.plugin_path,
-        "submodes": [
-            {"id": s.id, "label": s.label, "icon": s.icon}
-            for s in tool.submodes
-        ],
-        "pivot_modes": [
-            {"id": p.id, "label": p.label, "icon": p.icon}
-            for p in tool.pivot_modes
-        ],
-    }
+def _icon_src(icon_name, plugin_name=None, plugin_path=None):
+    """Build icon src path relative to the RML document in assets/rmlui/."""
+    return f"../icon/{icon_name}.png"
 
 
-_TOOLBAR_VISIBLE_STATES = ("idle", "ready")
+_TOOLBAR_HIDDEN_STATES = ("running", "paused", "stopping", "completed")
 
 
 class GizmoToolbar(Panel):
-    """Data-driven horizontal gizmo toolbar - queries tool registry for buttons"""
     label = "Gizmo Toolbar"
     space = "VIEWPORT_OVERLAY"
     order = 1
 
-    @classmethod
-    def poll(cls, context) -> bool:
-        from .ui.state import AppState
-        return AppState.trainer_state.value in _TOOLBAR_VISIBLE_STATES
-
-    def _get_tool_icon(self, tool):
-        from . import icon_manager
-        icon_name = tool.get("icon")
-        if not icon_name:
-            return 0
-        plugin_name = tool.get("plugin_name")
-        plugin_path = tool.get("plugin_path")
-        if plugin_name and plugin_path:
-            return icon_manager.get_plugin_icon(icon_name, plugin_path, plugin_name)
-        return icon_manager.get_ui_icon(f"{icon_name}.png")
-
-    def _activate_tool(self, tool_id):
-        ToolRegistry.set_active(tool_id)
+    def __init__(self):
+        super().__init__()
+        self._buttons = {}
+        self._submode_buttons = {}
+        self._pivot_buttons = {}
+        self._built = False
+        self._last_tool_ids = []
+        self._last_active_tool = None
+        self._last_enabled = {}
+        self._last_submode_key = None
+        self._last_pivot_key = None
+        self._was_hidden = False
 
     def draw(self, layout):
         import lichtfeld as lf
+        from . import rml_widgets as w
         from .op_context import get_context
+        from .ui.state import AppState
+
+        doc = lf.ui.rml.get_document("viewport_overlay")
+        if doc is None:
+            return
+
+        container = doc.get_element_by_id("gizmo-toolbar")
+        if container is None:
+            return
+
+        hidden = AppState.trainer_state.value in _TOOLBAR_HIDDEN_STATES
+        container.set_class("hidden", hidden)
+
+        if hidden:
+            submode = doc.get_element_by_id("submode-toolbar")
+            if submode:
+                submode.set_class("hidden", True)
+            pivot = doc.get_element_by_id("pivot-toolbar")
+            if pivot:
+                pivot.set_class("hidden", True)
+            if not self._was_hidden:
+                ToolRegistry.clear_active()
+                self._was_hidden = True
+            return
+
+        self._was_hidden = False
 
         tool_defs = ToolRegistry.get_all()
         if not tool_defs:
             return
 
-        tools = [_tool_to_dict(t) for t in tool_defs]
+        tool_ids = [t.id for t in tool_defs]
         context = get_context()
+        active_tool = lf.ui.get_active_tool()
 
-        theme = lf.ui.theme()
-        scale = layout.get_dpi_scale()
+        if not self._built or tool_ids != self._last_tool_ids:
+            self._rebuild_tools(container, tool_defs, w)
+            self._last_tool_ids = tool_ids
 
-        btn_size = theme.sizes.toolbar_button_size * scale
-        padding = theme.sizes.toolbar_padding * scale
-        spacing = theme.sizes.toolbar_spacing * scale
+        if active_tool != self._last_active_tool or not self._built:
+            self._last_active_tool = active_tool
+            for tool_def in tool_defs:
+                tid = tool_def.id
+                btn = self._buttons.get(tid)
+                if btn is None:
+                    continue
+                btn.set_class("selected", active_tool == tid)
 
-        # Group tools by their group attribute
-        groups = {}
-        group_order = []
-        for tool in tools:
-            g = tool.get("group", "default")
-            if g not in groups:
-                groups[g] = []
-                group_order.append(g)
-            groups[g].append(tool)
-
-        # Calculate toolbar size
-        num_buttons = len(tools)
-        width = (num_buttons * btn_size +
-                 (num_buttons - 1) * spacing +
-                 2 * padding)
-        height = btn_size + 2 * padding
-
-        # Position toolbar at top center of viewport
-        vp_pos = layout.get_viewport_pos()
-        vp_size = layout.get_viewport_size()
-        pos_x = vp_pos[0] + (vp_size[0] - width) / 2
-        pos_y = vp_pos[1] + 10 * scale
-
-        layout.set_next_window_pos((pos_x, pos_y))
-        layout.set_next_window_size((width, height))
-
-        layout.push_style_var("WindowRounding", theme.sizes.window_rounding)
-        layout.push_style_var_vec2("WindowPadding", (padding, padding))
-        layout.push_style_var_vec2("ItemSpacing", (spacing, 0))
-        layout.push_style_var_vec2("FramePadding", (0, 0))
-        layout.push_style_color("WindowBg", theme.palette.toolbar_background)
-
-        if layout.begin_window("##GizmoToolbar", WINDOW_FLAGS):
-            btn_sz = (btn_size, btn_size)
-            active_tool = lf.ui.get_active_tool()
-
-            first_in_toolbar = True
-            for group_name in group_order:
-                for tool in groups[group_name]:
-                    if not first_in_toolbar:
-                        layout.same_line()
-                    first_in_toolbar = False
-                    tool_id = tool["id"]
-                    icon = self._get_tool_icon(tool)
-                    selected = (active_tool == tool_id)
-                    tool_def = ToolRegistry.get(tool_id)
-                    enabled = tool_def.can_activate(context) if tool_def else False
-
-                    tooltip = tool.get("label", tool_id)
-                    shortcut = tool.get("shortcut")
-                    if shortcut:
-                        tooltip = f"{tooltip} ({shortcut})"
-
-                    if layout.toolbar_button(f"##{tool_id}", icon, btn_sz,
-                                             selected, not enabled, tooltip):
-                        if enabled:
-                            if selected:
-                                ToolRegistry.clear_active()
-                            else:
-                                self._activate_tool(tool_id)
-
-        layout.end_window()
-        layout.pop_style_color(1)
-        layout.pop_style_var(4)
-
-        # Draw submodes toolbar if active tool has submodes
-        self._draw_submodes_toolbar(layout, scale)
-
-    def _draw_submodes_toolbar(self, layout, scale):
-        import lichtfeld as lf
-        from . import icon_manager
-
-        active_tool_id = lf.ui.get_active_tool()
-        if not active_tool_id:
-            return
-
-        tool_def = ToolRegistry.get(active_tool_id)
-        if not tool_def:
-            return
-
-        if not tool_def.submodes:
-            return
-
-        submodes = [
-            {"id": s.id, "label": s.label, "icon": s.icon}
-            for s in tool_def.submodes
-        ]
-
-        theme = lf.ui.theme()
-        btn_size = theme.sizes.toolbar_button_size * scale * 0.85
-        padding = theme.sizes.toolbar_padding * scale
-        spacing = theme.sizes.toolbar_spacing * scale
-
-        num_buttons = len(submodes)
-        width = (num_buttons * btn_size +
-                 (num_buttons - 1) * spacing +
-                 2 * padding)
-        height = btn_size + 2 * padding
-
-        vp_pos = layout.get_viewport_pos()
-        vp_size = layout.get_viewport_size()
-        pos_x = vp_pos[0] + (vp_size[0] - width) / 2
-        pos_y = vp_pos[1] + (10 + theme.sizes.toolbar_button_size + 8) * scale
-
-        layout.set_next_window_pos((pos_x, pos_y))
-        layout.set_next_window_size((width, height))
-
-        layout.push_style_var("WindowRounding", theme.sizes.window_rounding)
-        layout.push_style_var_vec2("WindowPadding", (padding, padding))
-        layout.push_style_var_vec2("ItemSpacing", (spacing, 0))
-        layout.push_style_var_vec2("FramePadding", (0, 0))
-        layout.push_style_color("WindowBg", theme.palette.toolbar_background)
-
-        if layout.begin_window("##SubmodeToolbar", WINDOW_FLAGS):
-            btn_sz = (btn_size, btn_size)
-            is_mirror_tool = (active_tool_id == "builtin.mirror")
-            is_transform_tool = active_tool_id in ("builtin.translate", "builtin.rotate", "builtin.scale")
-
-            if is_transform_tool:
-                current_space = lf.ui.get_transform_space()
-                SPACE_IDS = {"local": 0, "world": 1}
-            else:
-                active_submode = lf.ui.get_active_submode()
-
-            first = True
-            for mode in submodes:
-                if not first:
-                    layout.same_line()
-                first = False
-
-                mode_id = mode.get("id", "")
-                mode_icon = mode.get("icon")
-                icon = icon_manager.get_ui_icon(f"{mode_icon}.png") if mode_icon else 0
-                tooltip = mode.get("label", mode_id)
-
-                if is_mirror_tool:
-                    # Mirror submodes are action buttons, not mode toggles
-                    if layout.toolbar_button(f"##sub_{mode_id}", icon, btn_sz,
-                                             False, False, tooltip):
-                        lf.ui.execute_mirror(mode_id)
-                elif is_transform_tool:
-                    # Transform space toggles (local/world)
-                    space_id = SPACE_IDS.get(mode_id, -1)
-                    selected = (current_space == space_id)
-                    if layout.toolbar_button(f"##sub_{mode_id}", icon, btn_sz,
-                                             selected, False, tooltip):
-                        if space_id >= 0:
-                            lf.ui.set_transform_space(space_id)
+        for tool_def in tool_defs:
+            tid = tool_def.id
+            btn = self._buttons.get(tid)
+            if btn is None:
+                continue
+            enabled = tool_def.can_activate(context)
+            if enabled != self._last_enabled.get(tid):
+                self._last_enabled[tid] = enabled
+                if enabled:
+                    btn.remove_attribute("disabled")
                 else:
-                    # Selection submodes are mode toggles
-                    selected = (active_submode == mode_id)
-                    if layout.toolbar_button(f"##sub_{mode_id}", icon, btn_sz,
-                                             selected, False, tooltip):
-                        lf.ui.set_selection_mode(mode_id)
+                    btn.set_attribute("disabled", "disabled")
 
-        layout.end_window()
-        layout.pop_style_color(1)
-        layout.pop_style_var(4)
+        self._update_submodes(doc, w)
+        self._update_pivots(doc, w)
 
-        # Also render pivot modes if tool has them
-        if tool_def.pivot_modes:
-            pivot_modes = [
-                {"id": p.id, "label": p.label, "icon": p.icon}
-                for p in tool_def.pivot_modes
-            ]
-            self._draw_pivot_toolbar(layout, scale, pivot_modes)
+    def _rebuild_tools(self, container, tool_defs, w):
+        while container.num_children() > 0:
+            children = container.children()
+            container.remove_child(children[0])
 
-    def _draw_pivot_toolbar(self, layout, scale, pivot_modes):
+        self._buttons.clear()
+        for tool_def in tool_defs:
+            icon_src = _icon_src(tool_def.icon, tool_def.plugin_name, tool_def.plugin_path)
+            tooltip = tool_def.label
+            if tool_def.shortcut:
+                tooltip = f"{tooltip} ({tool_def.shortcut})"
+            btn = w.icon_button(container, f"tool-{tool_def.id}",
+                                icon_src, tooltip=tooltip)
+            tid = tool_def.id
+            btn.add_event_listener("click", lambda ev, t=tid: self._on_tool_click(t))
+            self._buttons[tid] = btn
+        self._built = True
+
+    def _on_tool_click(self, tool_id):
         import lichtfeld as lf
-        from . import icon_manager
+        from .op_context import get_context
+        context = get_context()
+        tool_def = ToolRegistry.get(tool_id)
+        if tool_def and tool_def.can_activate(context):
+            active = lf.ui.get_active_tool()
+            if active == tool_id:
+                ToolRegistry.clear_active()
+            else:
+                ToolRegistry.set_active(tool_id)
 
-        theme = lf.ui.theme()
-        btn_size = theme.sizes.toolbar_button_size * scale * 0.85
-        padding = theme.sizes.toolbar_padding * scale
-        spacing = theme.sizes.toolbar_spacing * scale
+    def _update_submodes(self, doc, w):
+        import lichtfeld as lf
+        active_tool_id = lf.ui.get_active_tool()
+        tool_def = ToolRegistry.get(active_tool_id) if active_tool_id else None
 
-        num_buttons = len(pivot_modes)
-        width = (num_buttons * btn_size +
-                 (num_buttons - 1) * spacing +
-                 2 * padding)
-        height = btn_size + 2 * padding
+        container = doc.get_element_by_id("submode-toolbar")
+        if container is None:
+            return
 
-        vp_pos = layout.get_viewport_pos()
-        vp_size = layout.get_viewport_size()
-        pos_x = vp_pos[0] + (vp_size[0] - width) / 2
-        main_toolbar_height = theme.sizes.toolbar_button_size + 8
-        submodes_toolbar_height = theme.sizes.toolbar_button_size * 0.85 + 8
-        pos_y = vp_pos[1] + (10 + main_toolbar_height + submodes_toolbar_height) * scale
+        submodes = tool_def.submodes if tool_def else []
+        submode_key = f"{active_tool_id}:{len(submodes)}" if submodes else None
 
-        layout.set_next_window_pos((pos_x, pos_y))
-        layout.set_next_window_size((width, height))
+        if submode_key != self._last_submode_key:
+            self._last_submode_key = submode_key
+            while container.num_children() > 0:
+                container.remove_child(container.children()[0])
+            self._submode_buttons.clear()
 
-        layout.push_style_var("WindowRounding", theme.sizes.window_rounding)
-        layout.push_style_var_vec2("WindowPadding", (padding, padding))
-        layout.push_style_var_vec2("ItemSpacing", (spacing, 0))
-        layout.push_style_var_vec2("FramePadding", (0, 0))
-        layout.push_style_color("WindowBg", theme.palette.toolbar_background)
+            if not submodes:
+                container.set_class("hidden", True)
+                return
 
-        if layout.begin_window("##PivotToolbar", WINDOW_FLAGS):
-            btn_sz = (btn_size, btn_size)
-            current_pivot = lf.ui.get_pivot_mode()
-            PIVOT_IDS = {"origin": 0, "bounds": 1}
+            container.set_class("hidden", False)
+            for mode in submodes:
+                icon_src = _icon_src(mode.icon) if mode.icon else ""
+                btn = w.icon_button(container, f"sub-{mode.id}", icon_src,
+                                    tooltip=mode.label)
+                mid = mode.id
+                btn.add_event_listener("click",
+                    lambda ev, m=mid: self._on_submode_click(m))
+                self._submode_buttons[mode.id] = btn
 
-            first = True
-            for mode in pivot_modes:
-                if not first:
-                    layout.same_line()
-                first = False
+        if not submodes:
+            return
 
-                mode_id = mode.get("id", "")
-                mode_icon = mode.get("icon")
-                icon = icon_manager.get_ui_icon(f"{mode_icon}.png") if mode_icon else 0
-                tooltip = mode.get("label", mode_id)
-                pivot_id = PIVOT_IDS.get(mode_id, -1)
-                selected = (current_pivot == pivot_id)
+        is_mirror = (active_tool_id == "builtin.mirror")
+        is_transform = active_tool_id in ("builtin.translate", "builtin.rotate", "builtin.scale")
 
-                if layout.toolbar_button(f"##pivot_{mode_id}", icon, btn_sz,
-                                         selected, False, tooltip):
-                    if pivot_id >= 0:
-                        lf.ui.set_pivot_mode(pivot_id)
+        if is_transform:
+            current_space = lf.ui.get_transform_space()
+            space_map = {"local": 0, "world": 1}
+            for mode in submodes:
+                btn = self._submode_buttons.get(mode.id)
+                if btn:
+                    btn.set_class("selected", current_space == space_map.get(mode.id, -1))
+        elif not is_mirror:
+            active_submode = lf.ui.get_active_submode()
+            for mode in submodes:
+                btn = self._submode_buttons.get(mode.id)
+                if btn:
+                    btn.set_class("selected", active_submode == mode.id)
 
-        layout.end_window()
-        layout.pop_style_color(1)
-        layout.pop_style_var(4)
+    def _on_submode_click(self, mode_id):
+        import lichtfeld as lf
+        active_tool_id = lf.ui.get_active_tool()
+        if active_tool_id == "builtin.mirror":
+            lf.ui.execute_mirror(mode_id)
+        elif active_tool_id in ("builtin.translate", "builtin.rotate", "builtin.scale"):
+            space_map = {"local": 0, "world": 1}
+            sid = space_map.get(mode_id, -1)
+            if sid >= 0:
+                lf.ui.set_transform_space(sid)
+        else:
+            lf.ui.set_selection_mode(mode_id)
+
+    def _update_pivots(self, doc, w):
+        import lichtfeld as lf
+        active_tool_id = lf.ui.get_active_tool()
+        tool_def = ToolRegistry.get(active_tool_id) if active_tool_id else None
+
+        container = doc.get_element_by_id("pivot-toolbar")
+        if container is None:
+            return
+
+        pivots = tool_def.pivot_modes if tool_def else []
+        pivot_key = f"{active_tool_id}:{len(pivots)}" if pivots else None
+
+        if pivot_key != self._last_pivot_key:
+            self._last_pivot_key = pivot_key
+            while container.num_children() > 0:
+                container.remove_child(container.children()[0])
+            self._pivot_buttons.clear()
+
+            if not pivots:
+                container.set_class("hidden", True)
+                return
+
+            container.set_class("hidden", False)
+            for mode in pivots:
+                icon_src = _icon_src(mode.icon) if mode.icon else ""
+                btn = w.icon_button(container, f"pivot-{mode.id}", icon_src,
+                                    tooltip=mode.label)
+                mid = mode.id
+                btn.add_event_listener("click",
+                    lambda ev, m=mid: self._on_pivot_click(m))
+                self._pivot_buttons[mode.id] = btn
+
+        if not pivots:
+            return
+
+        pivot_map = {"origin": 0, "bounds": 1}
+        current_pivot = lf.ui.get_pivot_mode()
+        for mode in pivots:
+            btn = self._pivot_buttons.get(mode.id)
+            if btn:
+                btn.set_class("selected", current_pivot == pivot_map.get(mode.id, -1))
+
+    def _on_pivot_click(self, mode_id):
+        import lichtfeld as lf
+        pivot_map = {"origin": 0, "bounds": 1}
+        pid = pivot_map.get(mode_id, -1)
+        if pid >= 0:
+            lf.ui.set_pivot_mode(pid)
 
 
 class UtilityToolbar(Panel):
-    """Vertical utility toolbar on left side of viewport"""
     label = "Utility Toolbar"
     space = "VIEWPORT_OVERLAY"
     order = 0
 
+    def __init__(self):
+        super().__init__()
+        self._buttons = {}
+        self._built = False
+        self._last_render_manager = None
+        self._last_state_key = None
+
     def draw(self, layout):
         import lichtfeld as lf
-        from . import icon_manager
-        theme = lf.ui.theme()
-        scale = layout.get_dpi_scale()
+        from . import rml_widgets as w
 
-        btn_size = theme.sizes.toolbar_button_size * scale
-        padding = theme.sizes.toolbar_padding * scale
-        spacing = theme.sizes.toolbar_spacing * scale
+        doc = lf.ui.rml.get_document("viewport_overlay")
+        if doc is None:
+            return
+
+        container = doc.get_element_by_id("utility-toolbar")
+        if container is None:
+            return
 
         has_render_manager = True
         try:
@@ -335,141 +271,101 @@ class UtilityToolbar(Panel):
         except Exception:
             has_render_manager = False
 
-        num_buttons = 9 if has_render_manager else 4
-        num_separators = 3 if has_render_manager else 1
+        if not self._built or has_render_manager != self._last_render_manager:
+            self._rebuild(container, has_render_manager, w)
+            self._last_render_manager = has_render_manager
 
-        width = btn_size + 2 * padding
-        height = (num_buttons * btn_size +
-                  (num_buttons - 1) * spacing +
-                  num_separators * spacing +
-                  2 * padding)
+        self._update_state(has_render_manager)
 
-        vp_pos = layout.get_viewport_pos()
-        margin_left = 10 * scale
-        margin_top = 5 * scale
-        pos = (vp_pos[0] + margin_left, vp_pos[1] + margin_top)
+    def _rebuild(self, container, has_render_manager, w):
+        while container.num_children() > 0:
+            container.remove_child(container.children()[0])
+        self._buttons.clear()
 
-        layout.set_next_window_pos(pos)
-        layout.set_next_window_size((width, height))
+        def add_btn(name, icon, tooltip, callback):
+            btn = w.icon_button(container, f"util-{name}",
+                                _icon_src(icon), tooltip=tooltip)
+            btn.add_event_listener("click", lambda ev: callback())
+            self._buttons[name] = btn
+            return btn
 
-        layout.push_style_var("WindowRounding", theme.sizes.window_rounding)
-        layout.push_style_var_vec2("WindowPadding", (padding, padding))
-        layout.push_style_var_vec2("ItemSpacing", (0, spacing))
-        layout.push_style_var_vec2("FramePadding", (0, 0))
-        layout.push_style_color("WindowBg", theme.palette.toolbar_background)
-
-        if layout.begin_window("##UtilityToolbar", WINDOW_FLAGS):
-            btn_sz = (btn_size, btn_size)
-
-            # Home button
-            if self._icon_button(layout, "home", btn_sz, False):
-                lf.reset_camera()
-            if layout.is_item_hovered():
-                layout.set_tooltip("Reset Camera (Home)")
-
-            # Fullscreen
-            is_fullscreen = lf.is_fullscreen() if hasattr(lf, 'is_fullscreen') else False
-            fs_icon = "arrows-minimize" if is_fullscreen else "arrows-maximize"
-            if self._icon_button(layout, fs_icon, btn_sz, is_fullscreen):
-                lf.toggle_fullscreen()
-            if layout.is_item_hovered():
-                layout.set_tooltip("Toggle Fullscreen")
-
-            # Toggle UI
-            if self._icon_button(layout, "layout-off", btn_sz, False):
-                lf.toggle_ui()
-            if layout.is_item_hovered():
-                layout.set_tooltip("Toggle UI (Tab)")
-
-            if has_render_manager:
-                layout.spacing()
-
-                render_mode = lf.get_render_mode()
-
-                modes = [
-                    ("blob", lf.RenderMode.SPLATS, "Splat Rendering"),
-                    ("dots-diagonal", lf.RenderMode.POINTS, "Point Cloud"),
-                    ("ring", lf.RenderMode.RINGS, "Gaussian Rings"),
-                    ("circle-dot", lf.RenderMode.CENTERS, "Center Markers"),
-                ]
-                for icon_name, mode, tooltip in modes:
-                    selected = (render_mode == mode)
-                    if self._icon_button(layout, icon_name, btn_sz, selected):
-                        lf.set_render_mode(mode)
-                    if layout.is_item_hovered():
-                        layout.set_tooltip(tooltip)
-
-                layout.spacing()
-
-                is_ortho = lf.is_orthographic()
-                proj_icon = "box" if is_ortho else "perspective"
-                proj_tooltip = "Orthographic" if is_ortho else "Perspective"
-                if self._icon_button(layout, proj_icon, btn_sz, is_ortho):
-                    lf.set_orthographic(not is_ortho)
-                if layout.is_item_hovered():
-                    layout.set_tooltip(proj_tooltip)
-
-                layout.spacing()
-
-                sequencer_active = lf.ui.is_sequencer_visible()
-                if self._icon_button(layout, "video", btn_sz, sequencer_active):
-                    lf.ui.set_sequencer_visible(not sequencer_active)
-                if layout.is_item_hovered():
-                    layout.set_tooltip("Sequencer (Q)")
-
-        layout.end_window()
-        layout.pop_style_color(1)
-        layout.pop_style_var(4)
-
-    def _icon_button(self, layout, icon_name, size, selected):
         import lichtfeld as lf
-        from . import icon_manager
 
-        tex_id = icon_manager.get_icon(icon_name)
-        theme = lf.ui.theme()
+        add_btn("home", "home", "Reset Camera (Home)", lf.reset_camera)
+        add_btn("fullscreen", "arrows-maximize", "Toggle Fullscreen",
+                lf.toggle_fullscreen)
+        add_btn("toggle-ui", "layout-off", "Toggle UI (Tab)", lf.toggle_ui)
 
-        # Match C++ IconButton behavior: transparent bg when not selected
-        if selected:
-            bg_normal = theme.palette.primary
-            bg_hovered = self._lighten(theme.palette.primary, 0.1)
-            bg_active = self._darken(theme.palette.primary, 0.1)
-            # Tinted towards primary when selected
-            tint = (0.7 + theme.palette.primary[0] * 0.3,
-                    0.7 + theme.palette.primary[1] * 0.3,
-                    0.7 + theme.palette.primary[2] * 0.3, 1.0)
-        else:
-            bg_normal = (0, 0, 0, 0)  # Transparent
-            bg_hovered = (theme.palette.surface_bright[0],
-                          theme.palette.surface_bright[1],
-                          theme.palette.surface_bright[2], 0.3)
-            bg_active = (theme.palette.surface_bright[0],
-                         theme.palette.surface_bright[1],
-                         theme.palette.surface_bright[2], 0.5)
-            tint = (1.0, 1.0, 1.0, 0.9)
+        if has_render_manager:
+            sep = container.append_child("div")
+            sep.set_class_names("toolbar-separator")
 
-        layout.push_style_color("Button", bg_normal)
-        layout.push_style_color("ButtonHovered", bg_hovered)
-        layout.push_style_color("ButtonActive", bg_active)
+            for icon, mode_val, tooltip in [
+                ("blob", lf.RenderMode.SPLATS, "Splat Rendering"),
+                ("dots-diagonal", lf.RenderMode.POINTS, "Point Cloud"),
+                ("ring", lf.RenderMode.RINGS, "Gaussian Rings"),
+                ("circle-dot", lf.RenderMode.CENTERS, "Center Markers"),
+            ]:
+                mv = mode_val
+                add_btn(f"render-{icon}", icon, tooltip,
+                        lambda m=mv: lf.set_render_mode(m))
 
-        if tex_id:
-            clicked = layout.image_button(f"##{icon_name}", tex_id, size, tint)
-        else:
-            fallback = icon_name[0].upper() if icon_name else "?"
-            clicked = layout.button(fallback, size)
+            sep2 = container.append_child("div")
+            sep2.set_class_names("toolbar-separator")
 
-        layout.pop_style_color(3)
-        return clicked
+            add_btn("projection", "perspective", "Perspective",
+                    lambda: lf.set_orthographic(not lf.is_orthographic()))
 
-    def _lighten(self, color, amount):
-        return (min(1.0, color[0] + amount),
-                min(1.0, color[1] + amount),
-                min(1.0, color[2] + amount),
-                color[3])
+            sep3 = container.append_child("div")
+            sep3.set_class_names("toolbar-separator")
 
-    def _darken(self, color, amount):
-        return (max(0.0, color[0] - amount),
-                max(0.0, color[1] - amount),
-                max(0.0, color[2] - amount),
-                color[3])
+            add_btn("sequencer", "video", "Sequencer (Q)",
+                    lambda: lf.ui.set_sequencer_visible(not lf.ui.is_sequencer_visible()))
 
+        self._built = True
 
+    def _update_state(self, has_render_manager):
+        import lichtfeld as lf
+
+        is_fullscreen = lf.is_fullscreen() if hasattr(lf, 'is_fullscreen') else False
+        render_mode = lf.get_render_mode() if has_render_manager else None
+        is_ortho = lf.is_orthographic() if has_render_manager else None
+        seq_visible = lf.ui.is_sequencer_visible() if has_render_manager else None
+
+        state_key = (is_fullscreen, render_mode, is_ortho, seq_visible)
+        if state_key == self._last_state_key:
+            return
+        self._last_state_key = state_key
+
+        fs_btn = self._buttons.get("fullscreen")
+        if fs_btn:
+            fs_btn.set_class("selected", is_fullscreen)
+            icon_name = "arrows-minimize" if is_fullscreen else "arrows-maximize"
+            img = fs_btn.query_selector("img")
+            if img:
+                img.set_attribute("src", _icon_src(icon_name))
+
+        if not has_render_manager:
+            return
+
+        mode_map = {
+            "blob": lf.RenderMode.SPLATS,
+            "dots-diagonal": lf.RenderMode.POINTS,
+            "ring": lf.RenderMode.RINGS,
+            "circle-dot": lf.RenderMode.CENTERS,
+        }
+        for icon, mode_val in mode_map.items():
+            btn = self._buttons.get(f"render-{icon}")
+            if btn:
+                btn.set_class("selected", render_mode == mode_val)
+
+        proj_btn = self._buttons.get("projection")
+        if proj_btn:
+            proj_btn.set_class("selected", is_ortho)
+            img = proj_btn.query_selector("img")
+            if img:
+                img.set_attribute("src", _icon_src("box" if is_ortho else "perspective"))
+
+        seq_btn = self._buttons.get("sequencer")
+        if seq_btn:
+            seq_btn.set_class("selected", seq_visible)

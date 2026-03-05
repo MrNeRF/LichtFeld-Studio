@@ -139,6 +139,12 @@ namespace lfs::vis {
             publishCameraMove();
         });
 
+        state::DatasetLoadCompleted::when([this](const auto& e) {
+            if (e.success) {
+                handleFocusSelection();
+            }
+        });
+
         internal::WindowFocusLost::when([this](const auto&) {
             drag_mode_ = DragMode::None;
             std::fill(std::begin(keys_movement_), std::end(keys_movement_), false);
@@ -209,10 +215,7 @@ namespace lfs::vis {
     }
 
     bool InputController::isKeyPressed(int app_key) const {
-        const SDL_Keycode sdl_key = input::appKeyToSdlKeycode(app_key);
-        if (sdl_key == SDLK_UNKNOWN)
-            return false;
-        const SDL_Scancode scancode = SDL_GetScancodeFromKey(sdl_key, nullptr);
+        const SDL_Scancode scancode = input::appKeyToSdlScancode(app_key);
         if (scancode == SDL_SCANCODE_UNKNOWN)
             return false;
         const bool* state = SDL_GetKeyboardState(nullptr);
@@ -297,6 +300,7 @@ namespace lfs::vis {
             if (hovered_camera_id_ >= 0) {
                 if (is_double_click && hovered_camera_id_ == last_clicked_camera_id_) {
                     cmd::GoToCamView{.cam_id = hovered_camera_id_}.emit();
+                    cmd::OpenCameraPreview{.cam_id = hovered_camera_id_}.emit();
 
                     // Reset click tracking to prevent triple-click
                     last_click_time_ = std::chrono::steady_clock::time_point();
@@ -367,8 +371,7 @@ namespace lfs::vis {
         }
 
         if (action == input::ACTION_PRESS) {
-            // Block if hovering over GUI window
-            if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
+            if (over_gui || ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
                 return;
             }
 
@@ -1409,6 +1412,22 @@ namespace lfs::vis {
             .focal_length_mm = is_equirectangular ? std::nullopt : std::optional(focal_mm),
             .equirectangular = is_equirectangular}
             .emit();
+
+        // In orthographic mode, recalculate ortho_scale to match the equivalent perspective view
+        if (auto* rm = services().renderingOrNull()) {
+            auto settings = rm->getSettings();
+            if (settings.orthographic && !is_equirectangular) {
+                const float distance_to_pivot = glm::length(viewport_.camera.pivot - viewport_.camera.t);
+                const float half_tan_fov = std::tan(glm::radians(fov_y_deg) * 0.5f);
+                const float viewport_height = static_cast<float>(viewport_.windowSize.y);
+                constexpr float MIN_SCALE = 1.0f;
+                constexpr float MAX_SCALE = 10000.0f;
+                settings.ortho_scale = std::clamp(
+                    viewport_height / (2.0f * distance_to_pivot * half_tan_fov),
+                    MIN_SCALE, MAX_SCALE);
+                rm->updateSettings(settings);
+            }
+        }
 
         // Force immediate camera update
         ui::CameraMove{

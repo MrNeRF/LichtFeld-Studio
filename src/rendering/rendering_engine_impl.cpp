@@ -366,6 +366,8 @@ namespace lfs::rendering {
             .highlight_gaussian_id = -1,
             .far_plane = DEFAULT_FAR_PLANE,
             .selected_node_mask = {},
+            .orthographic = request.viewport.orthographic,
+            .ortho_scale = request.viewport.ortho_scale,
             .point_cloud_crop_params = crop_params};
 
         auto pipeline_result = pipeline_.renderRawPointCloud(point_cloud, pipeline_req);

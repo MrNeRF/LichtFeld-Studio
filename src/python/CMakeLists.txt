@@ -170,6 +170,11 @@ nanobind_add_module(
     lfs/py_pipeline.cpp
     lfs/py_prop_registry.cpp
     lfs/py_signals.cpp
+    lfs/py_rml.cpp
+    lfs/rml_python_panel_adapter.cpp
+    lfs/py_rml_im_mode_layout.cpp
+    lfs/rml_im_mode_layout.cpp
+    lfs/rml_im_mode_panel_adapter.cpp
 )
 
 set_target_properties(lfs_py PROPERTIES
@@ -200,11 +205,10 @@ target_link_libraries(lfs_py PRIVATE
     OpenImageIO::OpenImageIO
     CUDA::cudart
     CUDA::curand
-    $<$<PLATFORM_ID:Windows>:CUDA::cuda_driver>
     ${CMAKE_DL_LIBS}
     imgui::imgui
     implot::implot
-    $<$<PLATFORM_ID:Windows>:dxgi>
+    $<IF:$<PLATFORM_ID:Windows>,RmlUi::RmlUi,lfs_rmlui>
 )
 
 target_include_directories(lfs_py PRIVATE

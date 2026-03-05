@@ -244,12 +244,17 @@ namespace lfs::python {
 
         // Polygon preview
         sel.def(
-            "draw_polygon_preview", [](const std::vector<std::pair<float, float>>& points, bool closed, bool add_mode) {
+            "draw_polygon_preview", [](const std::vector<std::tuple<float, float, float>>& points, bool closed, bool add_mode) {
                 if (auto* rm = get_rm()) {
-                    rm->setPolygonPreview(points, closed, add_mode);
+                    std::vector<glm::vec3> world_points;
+                    world_points.reserve(points.size());
+                    for (const auto& [x, y, z] : points) {
+                        world_points.emplace_back(x, y, z);
+                    }
+                    rm->setPolygonPreview(world_points, closed, add_mode);
                 }
             },
-            nb::arg("points"), nb::arg("closed") = false, nb::arg("add_mode") = true, "Draw polygon selection preview");
+            nb::arg("points"), nb::arg("closed") = false, nb::arg("add_mode") = true, "Draw polygon selection preview (world-space 3D points)");
 
         sel.def(
             "clear_polygon_preview", []() {

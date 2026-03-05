@@ -1,0 +1,28 @@
+<rml>
+<head>
+  <link type="text/rcss" href="startup.rcss"/>
+</head>
+<body id="body">
+  <div id="overlay-box">
+    <img id="logo" />
+    <span id="supported-text" class="dim-text"></span>
+    <img id="core11-logo" />
+    <div id="social-row">
+      <div id="link-discord" class="social-link" data-url="https://discord.gg/NqwTqVYVmj">
+        <img class="social-icon" src="../icon/discord.png" /><span>Discord</span>
+      </div>
+      <div id="link-x" class="social-link" data-url="https://x.com/janusch_patas">
+        <img class="social-icon" src="../icon/x-twitter.png" /><span>@janusch_patas</span>
+      </div>
+      <div id="link-donate" class="social-link" data-url="https://lichtfeld.io/#support-the-project">
+        <img class="social-icon heart-icon" src="../icon/heart.png" /><span>Donate</span>
+      </div>
+    </div>
+    <div id="lang-row">
+      <span id="lang-label" class="dim-text"></span>
+      <select id="lang-select"></select>
+    </div>
+    <span id="click-hint" class="hint-text"></span>
+  </div>
+</body>
+</rml>

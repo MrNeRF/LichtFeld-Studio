@@ -5,9 +5,8 @@
 import lichtfeld as lf
 from .types import Operator
 from .layouts.menus import register_menu
-from .popups import ExitConfirmationPopup, SaveDirectoryPopup, ResumeCheckpointPopup
+from .popups import SaveDirectoryPopup, ResumeCheckpointPopup
 
-_exit_popup = ExitConfirmationPopup()
 _save_dir_popup = SaveDirectoryPopup()
 _resume_popup = ResumeCheckpointPopup()
 
@@ -119,7 +118,20 @@ class ExitOperator(Operator):
     description = "Exit the application"
 
     def execute(self, context) -> set:
-        _exit_popup.show(on_confirm=lf.force_exit)
+        tr = lf.ui.tr
+        lf.ui.set_exit_popup_open(True)
+
+        def _on_result(button):
+            lf.ui.set_exit_popup_open(False)
+            if button == tr("exit_popup.exit"):
+                lf.force_exit()
+
+        lf.ui.confirm_dialog(
+            tr("exit_popup.title"),
+            tr("exit_popup.message") + "\n" + tr("exit_popup.unsaved_warning"),
+            [tr("common.cancel"), tr("exit_popup.exit")],
+            _on_result,
+        )
         return {"FINISHED"}
 
 
@@ -147,7 +159,6 @@ def _on_show_resume_checkpoint_popup(path: str):
 
 
 def _draw_popups(layout):
-    _exit_popup.draw(layout)
     _save_dir_popup.draw(layout)
     _resume_popup.draw(layout)
 

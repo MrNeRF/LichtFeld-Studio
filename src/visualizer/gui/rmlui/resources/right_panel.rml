@@ -1,0 +1,12 @@
+<rml>
+<head>
+    <link type="text/rcss" href="right_panel.rcss"/>
+</head>
+<body id="rp-body">
+    <div id="resize-handle"></div>
+    <div id="left-border"></div>
+    <div id="splitter"></div>
+    <div id="tab-bar"></div>
+    <div id="tab-separator"></div>
+</body>
+</rml>

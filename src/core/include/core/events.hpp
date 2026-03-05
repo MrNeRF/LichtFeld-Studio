@@ -65,6 +65,7 @@ namespace lfs::core {
             EVENT(ShowWindow, std::string window_name; bool show;);
             EVENT(ExecuteConsole, std::string command;);
             EVENT(GoToCamView, int cam_id;);
+            EVENT(OpenCameraPreview, int cam_id;);
             EVENT(PrepareTrainingFromScene, );
             EVENT(AddPLY, std::filesystem::path path; std::string name;);
             EVENT(RemovePLY, std::string name; bool keep_children = false;);
@@ -200,6 +201,10 @@ namespace lfs::core {
             EVENT(FrameRendered, float render_ms; float fps; int num_gaussians;);
             EVENT(KeyframeListChanged, size_t count;);
 
+            EVENT(ExportFailed, std::string error;);
+            EVENT(VideoExportFailed, std::string error;);
+            EVENT(Mesh2SplatFailed, std::string error;);
+
             // CUDA version check
             EVENT(CudaVersionUnsupported, int major; int minor; int min_major; int min_minor;);
         } // namespace state
@@ -257,6 +262,7 @@ namespace lfs::core {
             EVENT(TrainingReadyToStart, );
             EVENT(WindowFocusLost, );
             EVENT(DisplayScaleChanged, float scale;);
+            EVENT(UiScaleChangeRequested, float scale;); // 0 = auto (from OS)
         } // namespace internal
     } // namespace events
 

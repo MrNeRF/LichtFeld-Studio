@@ -1,0 +1,297 @@
+/* Image Preview Panel */
+
+#content-wrap {
+    padding: 0;
+}
+
+#content {
+    width: 100%;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+/* -- Main Area -- */
+
+#main-area {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+/* -- Filmstrip -- */
+
+#filmstrip {
+    width: 72dp;
+    overflow-y: auto;
+    padding: 6dp;
+    flex-shrink: 0;
+    border-right-width: 1dp;
+}
+
+#filmstrip.hidden {
+    display: none;
+}
+
+.thumb-item {
+    width: 60dp;
+    height: 44dp;
+    margin-bottom: 2dp;
+    cursor: pointer;
+    border-width: 1.5dp;
+    border-color: transparent;
+    border-radius: 3dp;
+    opacity: 0.5;
+    position: relative;
+    overflow: hidden;
+    transition: opacity 0.15s quadratic-out, border-color 0.15s quadratic-out;
+}
+
+.thumb-item:hover {
+    opacity: 0.8;
+}
+
+.thumb-item.selected {
+    opacity: 1;
+}
+
+.thumb-index {
+    display: block;
+    position: absolute;
+    bottom: 1dp;
+    left: 3dp;
+    font-size: 7dp;
+    color: rgba(255, 255, 255, 102);
+}
+
+/* -- Image Area -- */
+
+#image-container {
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+#main-image {
+    display: block;
+    max-width: 100%;
+    max-height: 100%;
+}
+
+#main-image.hidden {
+    display: none;
+}
+
+#mask-overlay {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    margin: auto;
+    max-width: 100%;
+    max-height: 100%;
+    display: none;
+    image-color: rgba(255, 50, 50, 128);
+}
+
+#mask-overlay.visible {
+    display: block;
+}
+
+#no-image-text {
+    font-size: 11dp;
+    position: absolute;
+}
+
+#no-image-text.hidden {
+    display: none;
+}
+
+/* -- Nav Arrows -- */
+
+.nav-arrow {
+    display: block;
+    position: absolute;
+    top: 50%;
+    margin-top: -16dp;
+    width: 32dp;
+    height: 32dp;
+    border-radius: 16dp;
+    background-color: rgba(255, 255, 255, 13);
+    border-width: 1dp;
+    font-size: 14dp;
+    text-align: center;
+    line-height: 30dp;
+    cursor: pointer;
+    opacity: 0.5;
+    transition: opacity 0.15s quadratic-out;
+}
+
+.nav-arrow:hover {
+    opacity: 1;
+}
+
+.nav-arrow.hidden {
+    display: none;
+}
+
+#nav-prev {
+    left: 8dp;
+}
+
+#nav-next {
+    right: 8dp;
+}
+
+/* -- Sidebar -- */
+
+#sidebar {
+    width: 200dp;
+    overflow-y: auto;
+    flex-shrink: 0;
+    border-left-width: 1dp;
+}
+
+#sidebar.hidden {
+    display: none;
+}
+
+.sidebar-header-ip {
+    padding: 10dp 12dp 8dp;
+    border-bottom-width: 1dp;
+}
+
+.sidebar-header-label-ip {
+    display: block;
+    font-size: 8dp;
+    letter-spacing: 1dp;
+    margin-bottom: 2dp;
+}
+
+#sidebar-filename {
+    display: block;
+    font-size: 10dp;
+    overflow: hidden;
+}
+
+.section-label-ip {
+    display: block;
+    font-size: 8dp;
+    letter-spacing: 1dp;
+    margin-bottom: 6dp;
+}
+
+.sidebar-section-ip {
+    padding: 8dp 12dp;
+    border-bottom-width: 1dp;
+}
+
+.meta-row {
+    display: flex;
+    margin-bottom: 4dp;
+}
+
+.meta-item {
+    flex: 1;
+}
+
+.meta-key {
+    display: block;
+    font-size: 7dp;
+    letter-spacing: 0.5dp;
+    margin-bottom: 1dp;
+}
+
+.meta-val {
+    display: block;
+    font-size: 10dp;
+}
+
+.meta-val-accent {
+    display: block;
+    font-size: 10dp;
+}
+
+.meta-full-ip {
+    margin-top: 4dp;
+}
+
+.meta-path-row {
+    display: flex;
+    align-items: center;
+}
+
+.meta-path-row .meta-key {
+    flex: 1;
+}
+
+.btn-copy {
+    display: block;
+    width: 16dp;
+    height: 16dp;
+    border-radius: 3dp;
+    cursor: pointer;
+    background-color: transparent;
+}
+
+.btn-copy-icon {
+    width: 12dp;
+    height: 12dp;
+    margin: 2dp;
+}
+
+.meta-val-secondary {
+    display: block;
+    font-size: 9dp;
+    overflow: hidden;
+}
+
+#sidebar-mask-name {
+    display: block;
+    font-size: 10dp;
+    margin-bottom: 2dp;
+}
+
+.sidebar-check-row {
+    display: flex;
+    align-items: center;
+    margin-top: 3dp;
+    margin-bottom: 2dp;
+}
+
+.sidebar-check-row label {
+    font-size: 10dp;
+    margin-left: 4dp;
+    cursor: pointer;
+}
+
+.hidden {
+    display: none;
+}
+
+/* -- Status Bar -- */
+
+#status-bar {
+    display: flex;
+    align-items: center;
+    height: 24dp;
+    padding: 0 10dp;
+    flex-shrink: 0;
+    border-top-width: 1dp;
+}
+
+.status-item {
+    font-size: 9dp;
+    margin-right: 16dp;
+    letter-spacing: 0.5dp;
+}
+
+.status-counter {
+    font-size: 9dp;
+    margin-left: auto;
+    letter-spacing: 0.5dp;
+}

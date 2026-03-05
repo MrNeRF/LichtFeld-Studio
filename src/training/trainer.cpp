@@ -619,6 +619,19 @@ namespace lfs::training {
                 LOG_INFO("Background color set to RGB({:.2f}, {:.2f}, {:.2f})", bg_color[0], bg_color[1], bg_color[2]);
             }
 
+            // Initialize image cache loader before any code path that calls getInstance()
+            auto& cache_loader = lfs::io::CacheLoader::getInstance(
+                params_.dataset.loading_params.use_cpu_memory,
+                params_.dataset.loading_params.use_fs_cache);
+            cache_loader.update_cache_params(
+                params_.dataset.loading_params.use_cpu_memory,
+                params_.dataset.loading_params.use_fs_cache,
+                train_dataset_size_,
+                params_.dataset.loading_params.min_cpu_free_GB,
+                params_.dataset.loading_params.min_cpu_free_memory_ratio,
+                params_.dataset.loading_params.print_cache_status,
+                params_.dataset.loading_params.print_status_freq_num);
+
             // Load background image if specified
             if (params.optimization.bg_mode == lfs::core::param::BackgroundMode::Image &&
                 !params.optimization.bg_image_path.empty() &&
@@ -1799,10 +1812,8 @@ namespace lfs::training {
 
         is_running_ = true; // Now we can start
         LOG_INFO("Starting training loop");
-        // initializing image loader
-        auto& cache_loader = lfs::io::CacheLoader::getInstance(params_.dataset.loading_params.use_cpu_memory, params_.dataset.loading_params.use_fs_cache);
+        auto& cache_loader = lfs::io::CacheLoader::getInstance();
         cache_loader.reset_cache();
-        // in case we call getInstance multiple times and cache parameters/dataset were changed by user
         cache_loader.update_cache_params(params_.dataset.loading_params.use_cpu_memory,
                                          params_.dataset.loading_params.use_fs_cache,
                                          train_dataset_size_,

@@ -268,6 +268,9 @@ def has_trainer() -> bool:
 def loss_buffer() -> list[float]:
     """Get the recent loss history as a list of floats"""
 
+def push_loss_to_element(arg0: ui.rml.RmlElement, arg1: Sequence[float], /) -> tuple:
+    """Push loss data to a loss-graph element, returns (data_min, data_max)"""
+
 def trainer_elapsed_seconds() -> float:
     """Get elapsed training time in seconds"""
 

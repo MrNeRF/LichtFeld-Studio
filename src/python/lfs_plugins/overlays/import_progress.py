@@ -47,7 +47,7 @@ class ImportProgressOverlay(Panel):
         show_completion = state.get("show_completion", False)
 
         if show_completion and not is_active:
-            if state.get("seconds_since_completion", 0.0) > AUTO_DISMISS_SECONDS:
+            if state.get("success", False) and state.get("seconds_since_completion", 0.0) > AUTO_DISMISS_SECONDS:
                 lf.ui.dismiss_import()
                 return False
 

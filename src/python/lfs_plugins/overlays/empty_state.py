@@ -34,11 +34,7 @@ class EmptyStateOverlay(Panel):
 
     @classmethod
     def poll(cls, context):
-        return (
-            lf.ui.is_scene_empty()
-            and not lf.ui.is_startup_visible()
-            and not lf.ui.is_drag_hovering()
-        )
+        return lf.ui.is_scene_empty() and not lf.ui.is_drag_hovering()
 
     def draw(self, layout):
         vp_x, vp_y = layout.get_viewport_pos()
@@ -66,7 +62,14 @@ class EmptyStateOverlay(Panel):
         zone_min_x = vp_x + ZONE_PADDING
         zone_min_y = vp_y + ZONE_PADDING
         zone_max_x = vp_x + vp_w - ZONE_PADDING
-        zone_max_y = vp_y + vp_h - ZONE_PADDING
+        bottom_padding = ZONE_PADDING
+        if lf.ui.is_sequencer_visible():
+            dp = layout.get_dpi_scale()
+            seq_state = lf.ui.get_sequencer_state()
+            film_strip_h = 56.0 if (seq_state and seq_state.show_film_strip) else 0.0
+            seq_height = 162.0 * dp + film_strip_h
+            bottom_padding = max(ZONE_PADDING, seq_height + 8.0)
+        zone_max_y = vp_y + vp_h - bottom_padding
 
         t = lf.ui.get_time()
         dash_offset = (t * ANIM_SPEED) % (DASH_LENGTH + GAP_LENGTH)
@@ -89,6 +92,10 @@ class EmptyStateOverlay(Panel):
                         border_color, BORDER_THICKNESS,
                     )
                 pos += DASH_LENGTH + GAP_LENGTH
+
+        if lf.ui.is_startup_visible():
+            layout.end_window()
+            return
 
         draw_dashed_line(zone_min_x, zone_min_y, zone_max_x, zone_min_y)
         draw_dashed_line(zone_max_x, zone_min_y, zone_max_x, zone_max_y)

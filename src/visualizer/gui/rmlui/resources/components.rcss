@@ -1,0 +1,682 @@
+/* Shared widget component styles
+ * Included by all RmlUi panels via rml_theme::applyTheme().
+ * Colors here are defaults — theme RCSS overrides them dynamically. */
+
+div {
+    display: block;
+}
+
+body {
+    font-family: Inter;
+    font-size: 10dp;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+
+body.docked-panel {
+    font-size: 11dp;
+    left: 0;
+    right: 0;
+    top: 0;
+}
+
+/* ── Floating Window Chrome ─────────────────────────────── */
+
+#window-frame {
+    border-width: 1dp;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+}
+
+#title-bar {
+    height: 28dp;
+    display: flex;
+    align-items: center;
+    padding: 0 8dp;
+}
+
+#title-text {
+    flex: 1;
+    font-size: 10dp;
+}
+
+#close-btn {
+    font-size: 12dp;
+    cursor: pointer;
+    padding: 0 4dp;
+}
+
+#content-wrap {
+    display: flex;
+    flex-direction: column;
+    padding: 8dp 12dp;
+    flex: 1;
+    overflow-y: auto;
+}
+
+/* ── Scrollbars ─────────────────────────────────────────── */
+
+scrollbarvertical {
+    width: 12dp;
+}
+
+scrollbarvertical slidertrack {
+    background-color: rgba(30, 30, 46, 128);
+}
+
+scrollbarvertical sliderbar {
+    background-color: rgba(108, 112, 134, 160);
+    transition: background-color 0.12s quadratic-out;
+}
+
+scrollbarvertical sliderbar:hover {
+    background-color: rgba(137, 180, 250, 200);
+}
+
+scrollbarhorizontal {
+    height: 12dp;
+}
+
+scrollbarhorizontal slidertrack {
+    background-color: rgba(30, 30, 46, 128);
+}
+
+scrollbarhorizontal sliderbar {
+    background-color: rgba(108, 112, 134, 160);
+    transition: background-color 0.12s quadratic-out;
+}
+
+scrollbarhorizontal sliderbar:hover {
+    background-color: rgba(137, 180, 250, 200);
+}
+
+/* ── Form: Checkbox ─────────────────────────────────────── */
+
+input[type="checkbox"] {
+    width: 13dp;
+    height: 13dp;
+    border-width: 1dp;
+    border-color: #585b70;
+    margin: 0 6dp 0 0;
+    padding: 0;
+    transition: background-color border-color 0.12s quadratic-out;
+}
+
+input[type="checkbox"]:checked {
+    background-color: #94e2d5;
+    border-color: #94e2d5;
+}
+
+/* ── Form: Range Slider ─────────────────────────────────── */
+
+input[type="range"] slidertrack {
+    height: 4dp;
+    background-color: #45475a;
+    border-width: 0;
+    border-radius: 2dp;
+}
+
+input[type="range"] sliderprogress {
+    height: 4dp;
+    background-color: #89b4fa;
+    border-radius: 2dp;
+}
+
+input[type="range"] sliderbar {
+    width: 10dp;
+    height: 10dp;
+    background-color: #89b4fa;
+    border-radius: 2dp;
+    margin-top: -3dp;
+    transition: background-color 0.12s quadratic-out;
+}
+
+input[type="range"] sliderbar:hover {
+    background-color: #b4d0fb;
+}
+
+input[type="range"] sliderarrowdec,
+input[type="range"] sliderarrowinc {
+    width: 0;
+}
+
+/* ── Form: Text Input ───────────────────────────────────── */
+
+input[type="text"] {
+    font-size: 10dp;
+    color: #cdd6f4;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+    padding: 2dp 4dp;
+    transition: border-color 0.12s quadratic-out;
+}
+
+input[type="text"]:focus {
+    border-color: #89b4fa;
+}
+
+/* ── Form: Select ───────────────────────────────────────── */
+
+select {
+    font-size: 10dp;
+    color: #cdd6f4;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+    padding: 2dp 6dp;
+    min-width: 80dp;
+    transition: border-color 0.12s quadratic-out;
+}
+
+select:hover {
+    border-color: #89b4fa;
+}
+
+selectbox {
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+}
+
+selectbox option {
+    padding: 2dp 6dp;
+    font-size: 10dp;
+    transition: background-color 0.1s quadratic-out;
+}
+
+selectbox option:hover {
+    background-color: #89b4fa;
+}
+
+selectarrow {
+    width: 14dp;
+    margin-left: 4dp;
+}
+
+/* ── Progress ───────────────────────────────────────────── */
+
+progress {
+    display: block;
+    height: 16dp;
+    width: 100%;
+    box-sizing: border-box;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+}
+
+progress fill {
+    background-color: #89b4fa;
+}
+
+.progress__text {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 10dp;
+    color: #cdd6f4;
+}
+
+/* ── Setting Row Layout ─────────────────────────────────── */
+
+.setting-row {
+    display: flex;
+    align-items: center;
+    padding: 1dp 0;
+    min-height: 20dp;
+}
+
+.setting-label {
+    display: flex;
+    align-items: center;
+    color: #cdd6f4;
+    font-size: 10dp;
+}
+
+.prop-label {
+    min-width: 80dp;
+    text-align: left;
+    font-size: 10dp;
+    color: #cdd6f4;
+    margin-left: 4dp;
+    flex-shrink: 0;
+}
+
+.setting-slider {
+    flex: 1;
+    min-width: 60dp;
+}
+
+.slider-value {
+    display: inline-block;
+    width: 45dp;
+    text-align: right;
+    font-size: 11dp;
+    color: #a6adc8;
+    margin-left: 4dp;
+    flex-shrink: 0;
+}
+
+/* ── Collapsible Section ────────────────────────────────── */
+
+.section-header {
+    display: flex;
+    align-items: center;
+    padding: 3dp 4dp;
+    font-weight: bold;
+    color: #cdd6f4;
+    cursor: pointer;
+    font-size: 10dp;
+    background-color: rgba(137, 180, 250, 64);
+    transition: background-color 0.12s quadratic-out;
+}
+
+.section-header:hover {
+    background-color: rgba(137, 180, 250, 128);
+}
+
+.section-arrow {
+    display: inline-block;
+    width: 14dp;
+    font-size: 11dp;
+    color: #cdd6f4;
+    margin-right: 4dp;
+    text-align: center;
+}
+
+.section-content.collapsed {
+    display: none;
+}
+
+/* ── Color Controls ─────────────────────────────────────── */
+
+.color-swatch {
+    width: 18dp;
+    height: 18dp;
+    border-width: 1dp;
+    border-color: #45475a;
+    cursor: pointer;
+    margin-right: 4dp;
+    flex-shrink: 0;
+    transition: border-color 0.12s quadratic-out;
+}
+
+.color-comp {
+    display: inline-block;
+    width: 44dp;
+    font-size: 11dp;
+    color: #a6adc8;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+    padding: 1dp 4dp;
+    margin-right: 2dp;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.color-hex {
+    width: 70dp;
+    font-size: 11dp;
+    padding: 2dp 4dp;
+    color: #cdd6f4;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+    display: none;
+    transition: border-color 0.12s quadratic-out;
+}
+
+.color-hex.visible {
+    display: inline-block;
+}
+
+.color-hex:focus {
+    border-color: #89b4fa;
+}
+
+/* ── Context Menu ───────────────────────────────────────── */
+
+.context-menu {
+    display: none;
+    position: absolute;
+    z-index: 100;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+    padding: 4dp 0;
+    min-width: 150dp;
+    max-height: 80%;
+    overflow-y: auto;
+}
+
+.context-menu.visible {
+    display: block;
+}
+
+.context-menu-item {
+    display: block;
+    padding: 4dp 12dp;
+    cursor: pointer;
+    color: #cdd6f4;
+    font-size: 10dp;
+    transition: background-color 0.1s quadratic-out;
+}
+
+.context-menu-item:hover {
+    background-color: #89b4fa;
+    color: #ffffff;
+}
+
+.context-menu-item.active {
+    font-weight: bold;
+}
+
+.context-menu-item.submenu-item {
+    padding-left: 20dp;
+    font-size: 11dp;
+}
+
+.context-menu-label {
+    display: block;
+    padding: 4dp 12dp;
+    color: #a6adc8;
+    font-size: 11dp;
+}
+
+.context-menu-separator {
+    display: block;
+    height: 1dp;
+    margin: 2dp 4dp;
+    background-color: #45475a;
+}
+
+/* ── Shared Panel Content ──────────────────────────────── */
+
+.panel-title {
+    font-size: 12dp;
+    font-weight: bold;
+    margin-bottom: 6dp;
+}
+
+.description {
+    margin-bottom: 10dp;
+}
+
+.section-label {
+    font-size: 11dp;
+    margin-bottom: 4dp;
+    margin-top: 6dp;
+}
+
+/* ── Buttons ────────────────────────────────────────────── */
+
+.btn {
+    display: inline-block;
+    padding: 2dp 8dp;
+    font-size: 10dp;
+    color: #cdd6f4;
+    background-color: #45475a;
+    border-width: 1dp;
+    border-color: #585b70;
+    cursor: pointer;
+    text-align: center;
+    transition: background-color border-color 0.12s quadratic-out;
+}
+
+.btn:hover {
+    background-color: #585b70;
+}
+
+.btn:active {
+    background-color: #313244;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.btn--primary {
+    background-color: #89b4fa;
+    border-color: #89b4fa;
+    color: #1e1e2e;
+    transition: background-color border-color 0.12s quadratic-out;
+}
+
+.btn--primary:hover {
+    background-color: #b4d0fb;
+    border-color: #b4d0fb;
+}
+
+.btn--primary:active {
+    background-color: #74a8f9;
+    border-color: #74a8f9;
+}
+
+.btn--success {
+    background-color: #a6e3a1;
+    border-color: #a6e3a1;
+    color: #1e1e2e;
+    transition: background-color border-color 0.12s quadratic-out;
+}
+
+.btn--success:hover {
+    background-color: #c0eabc;
+    border-color: #c0eabc;
+}
+
+.btn--success:active {
+    background-color: #8cda86;
+    border-color: #8cda86;
+}
+
+.btn--warning {
+    background-color: #f9e2af;
+    border-color: #f9e2af;
+    color: #1e1e2e;
+    transition: background-color border-color 0.12s quadratic-out;
+}
+
+.btn--warning:hover {
+    background-color: #faebc4;
+    border-color: #faebc4;
+}
+
+.btn--warning:active {
+    background-color: #f7d99a;
+    border-color: #f7d99a;
+}
+
+.btn--error {
+    background-color: #f38ba8;
+    border-color: #f38ba8;
+    color: #1e1e2e;
+    transition: background-color border-color 0.12s quadratic-out;
+}
+
+.btn--error:hover {
+    background-color: #f6a8be;
+    border-color: #f6a8be;
+}
+
+.btn--error:active {
+    background-color: #f06e92;
+    border-color: #f06e92;
+}
+
+.btn--secondary {
+    background-color: transparent;
+    border-color: #585b70;
+    color: #cdd6f4;
+    transition: background-color 0.12s quadratic-out;
+}
+
+.btn--secondary:hover {
+    background-color: #313244;
+}
+
+.btn--secondary:active {
+    background-color: #45475a;
+}
+
+/* ── Icon Button ────────────────────────────────────────── */
+
+.icon-btn {
+    display: inline-block;
+    padding: 4dp;
+    background-color: transparent;
+    border-width: 0;
+    cursor: pointer;
+    transition: background-color 0.12s quadratic-out;
+}
+
+.icon-btn:hover {
+    background-color: rgba(88, 91, 112, 77);
+}
+
+.icon-btn:active {
+    background-color: rgba(88, 91, 112, 128);
+}
+
+.icon-btn.selected {
+    background-color: #89b4fa;
+}
+
+.icon-btn.selected:hover {
+    background-color: #b4d0fb;
+}
+
+.icon-btn img {
+    width: 20dp;
+    height: 20dp;
+    image-color: rgba(255, 255, 255, 230);
+}
+
+.icon-btn.selected img {
+    image-color: rgba(30, 30, 46, 255);
+}
+
+.icon-btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+/* ── Utilities ──────────────────────────────────────────── */
+
+.separator {
+    height: 1dp;
+    margin: 4dp 0;
+    background-color: #45475a;
+}
+
+.hidden {
+    display: none;
+}
+
+.collapsed {
+    display: none;
+}
+
+.indent {
+    margin-left: 20dp;
+}
+
+.text-disabled {
+    color: #a6adc8;
+    font-size: 11dp;
+    padding: 0 0 0 2dp;
+}
+
+.empty-message {
+    display: block;
+    padding: 8dp 6dp;
+    color: #a6adc8;
+    font-size: 10dp;
+}
+
+/* ── Custom Diagram Elements ──────────────────────────── */
+
+chromaticity-diagram {
+    width: 140dp;
+    height: 140dp;
+    display: inline-block;
+}
+
+color-picker {
+    width: 200dp;
+    height: 160dp;
+    display: block;
+}
+
+crf-curve {
+    height: 120dp;
+    display: block;
+}
+
+/* ── Number Input ──────────────────────────────────────── */
+
+.number-input {
+    flex: 1;
+    min-width: 0;
+    box-sizing: border-box;
+    font-family: "JetBrains Mono";
+}
+
+.num-step-btn {
+    width: 20dp;
+    height: 18dp;
+    padding: 0;
+    text-align: center;
+    font-size: 10dp;
+    border-width: 1dp;
+    margin-left: 2dp;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: background-color border-color 0.12s quadratic-out;
+}
+
+/* ── Full-width button ─────────────────────────────────── */
+
+.btn--full {
+    display: block;
+    width: 100%;
+    margin-bottom: 2dp;
+    box-sizing: border-box;
+}
+
+/* ── Disabled overlay ──────────────────────────────────── */
+
+.disabled-overlay {
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+/* ── Status text ───────────────────────────────────────── */
+
+.status-text {
+    display: block;
+    font-size: 10dp;
+    padding: 2dp 0;
+}
+
+.status-success {
+    color: #a6e3a1;
+}
+
+.status-error {
+    color: #f38ba8;
+}
+
+.status-muted {
+    color: #a6adc8;
+}
+
+.status-info {
+    color: #cdd6f4;
+}

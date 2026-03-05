@@ -18,6 +18,7 @@
 #include "visualizer_impl.hpp"
 #include <cuda_runtime.h>
 #include <glm/gtc/matrix_transform.hpp>
+#include <optional>
 
 namespace lfs::vis::op {
 
@@ -35,6 +36,69 @@ namespace lfs::vis::op {
             const auto pos = gm->getViewportPos();
             const auto size = gm->getViewportSize();
             return {pos.x, pos.y, size.x, size.y};
+        }
+
+        glm::vec3 screenToWorld(float abs_x, float abs_y) {
+            auto* rm = services().renderingOrNull();
+            auto* gm = services().guiOrNull();
+            if (!rm || !gm || !gm->getViewer()) {
+                return glm::vec3(-1e10f);
+            }
+
+            const auto& viewport = gm->getViewer()->getViewport();
+            const auto bounds = getViewportBounds();
+            const float local_x = abs_x - bounds.x;
+            const float local_y = abs_y - bounds.y;
+
+            const float depth = rm->getDepthAtPixel(
+                static_cast<int>(local_x), static_cast<int>(local_y));
+
+            if (depth > 0.0f) {
+                const glm::vec3 world = viewport.unprojectPixel(
+                    local_x, local_y, depth, rm->getFocalLengthMm());
+                if (world.x > -1e9f) {
+                    return world;
+                }
+            }
+
+            const float pivot_dist = glm::length(viewport.camera.pivot - viewport.camera.t);
+            const float fallback_dist = pivot_dist > 0.1f ? pivot_dist : 10.0f;
+            const glm::vec3 forward = viewport.camera.R * glm::vec3(0, 0, 1);
+            return viewport.camera.t + forward * fallback_dist;
+        }
+
+        glm::vec2 worldToScreen(const glm::vec3& world_pos, const Viewport& viewport, float focal_mm) {
+            const glm::mat4 view = viewport.getViewMatrix();
+            const glm::mat4 proj = viewport.getProjectionMatrix(focal_mm);
+            const glm::vec4 clip = proj * view * glm::vec4(world_pos, 1.0f);
+            if (clip.w <= 0.0f) {
+                return glm::vec2(-1e6f);
+            }
+            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+            const auto bounds = getViewportBounds();
+            return glm::vec2(
+                bounds.x + (ndc.x * 0.5f + 0.5f) * bounds.width,
+                bounds.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * bounds.height);
+        }
+
+        std::optional<lfs::core::Tensor> projectPolygonToRenderSpace(
+            const std::vector<glm::vec3>& world_points,
+            const glm::mat4& vp,
+            int render_w, int render_h) {
+            const size_t num_verts = world_points.size();
+            auto poly_cpu = lfs::core::Tensor::empty(
+                {num_verts, 2}, lfs::core::Device::CPU, lfs::core::DataType::Float32);
+            auto* data = poly_cpu.ptr<float>();
+            for (size_t i = 0; i < num_verts; ++i) {
+                const glm::vec4 clip = vp * glm::vec4(world_points[i], 1.0f);
+                if (clip.w <= 0.0f) {
+                    return std::nullopt;
+                }
+                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                data[i * 2] = (ndc.x * 0.5f + 0.5f) * static_cast<float>(render_w);
+                data[i * 2 + 1] = (1.0f - (ndc.y * 0.5f + 0.5f)) * static_cast<float>(render_h);
+            }
+            return poly_cpu;
         }
 
     } // namespace
@@ -80,9 +144,9 @@ namespace lfs::vis::op {
             lasso_points_.clear();
             lasso_points_.emplace_back(static_cast<float>(x), static_cast<float>(y));
         } else if (mode_ == SelectionMode::Polygon) {
-            polygon_points_.clear();
+            polygon_world_points_.clear();
             polygon_closed_ = false;
-            polygon_points_.emplace_back(static_cast<float>(x), static_cast<float>(y));
+            polygon_world_points_.push_back(screenToWorld(static_cast<float>(x), static_cast<float>(y)));
             updatePolygonPreview(ctx);
         }
 
@@ -120,7 +184,10 @@ namespace lfs::vis::op {
                     updateLassoPreview(ctx);
                 }
             }
-            // Polygon mode: no action on mouse move (click-based, not drag-based)
+
+            if (mode_ == SelectionMode::Polygon) {
+                return OperatorResult::PASS_THROUGH;
+            }
 
             if (services().renderingOrNull()) {
                 services().renderingOrNull()->markDirty(DirtyFlag::SELECTION);
@@ -136,23 +203,29 @@ namespace lfs::vis::op {
 
             if (mode_ == SelectionMode::Polygon) {
                 if (mb->button == static_cast<int>(input::AppMouseButton::LEFT) && mb->action == input::ACTION_PRESS) {
-                    const glm::vec2 new_point(static_cast<float>(mb->position.x),
+                    const glm::vec2 click_pos(static_cast<float>(mb->position.x),
                                               static_cast<float>(mb->position.y));
 
-                    if (polygon_points_.size() >= 3 && !polygon_closed_) {
-                        const float dist = glm::distance(new_point, polygon_points_.front());
-                        if (dist < POLYGON_CLOSE_THRESHOLD) {
-                            polygon_closed_ = true;
-                            updatePolygonPreview(ctx);
-                            if (services().renderingOrNull()) {
-                                services().renderingOrNull()->markDirty(DirtyFlag::SELECTION);
+                    if (polygon_world_points_.size() >= 3 && !polygon_closed_) {
+                        auto* gm = services().guiOrNull();
+                        auto* rm = services().renderingOrNull();
+                        if (gm && gm->getViewer() && rm) {
+                            const auto& vp = gm->getViewer()->getViewport();
+                            const glm::vec2 first_screen = worldToScreen(
+                                polygon_world_points_.front(), vp, rm->getFocalLengthMm());
+                            if (glm::distance(click_pos, first_screen) < POLYGON_CLOSE_THRESHOLD) {
+                                polygon_closed_ = true;
+                                updatePolygonPreview(ctx);
+                                if (rm) {
+                                    rm->markDirty(DirtyFlag::SELECTION);
+                                }
+                                return OperatorResult::RUNNING_MODAL;
                             }
-                            return OperatorResult::RUNNING_MODAL;
                         }
                     }
 
                     if (!polygon_closed_) {
-                        polygon_points_.push_back(new_point);
+                        polygon_world_points_.push_back(screenToWorld(click_pos.x, click_pos.y));
                         updatePolygonPreview(ctx);
                         if (services().renderingOrNull()) {
                             services().renderingOrNull()->markDirty(DirtyFlag::SELECTION);
@@ -162,8 +235,8 @@ namespace lfs::vis::op {
                 }
 
                 if (mb->button == static_cast<int>(input::AppMouseButton::RIGHT) && mb->action == input::ACTION_PRESS) {
-                    if (polygon_points_.size() > 1) {
-                        polygon_points_.pop_back();
+                    if (polygon_world_points_.size() > 1) {
+                        polygon_world_points_.pop_back();
                         polygon_closed_ = false;
                         updatePolygonPreview(ctx);
                         if (services().renderingOrNull()) {
@@ -173,7 +246,7 @@ namespace lfs::vis::op {
                     }
                     return OperatorResult::CANCELLED;
                 }
-                return OperatorResult::RUNNING_MODAL;
+                return OperatorResult::PASS_THROUGH;
             }
 
             if (mb->button == static_cast<int>(input::AppMouseButton::LEFT) && mb->action == input::ACTION_RELEASE) {
@@ -194,6 +267,10 @@ namespace lfs::vis::op {
             }
         }
 
+        if (event->type == ModalEvent::Type::MOUSE_SCROLL && mode_ == SelectionMode::Polygon) {
+            return OperatorResult::PASS_THROUGH;
+        }
+
         if (event->type == ModalEvent::Type::KEY) {
             const auto* ke = event->as<KeyEvent>();
             if (!ke || ke->action != input::ACTION_PRESS) {
@@ -205,7 +282,7 @@ namespace lfs::vis::op {
             }
 
             if (mode_ == SelectionMode::Polygon && ke->key == input::KEY_ENTER) {
-                if (polygon_points_.size() >= 3) {
+                if (polygon_world_points_.size() >= 3) {
                     polygon_closed_ = true;
                     // Update selection op based on current modifiers
                     if (ke->mods & input::KEYMOD_SHIFT) {
@@ -238,7 +315,7 @@ namespace lfs::vis::op {
         stroke_selection_ = lfs::core::Tensor();
         selection_before_.reset();
         lasso_points_.clear();
-        polygon_points_.clear();
+        polygon_world_points_.clear();
         polygon_closed_ = false;
 
         if (auto* rm = services().renderingOrNull()) {
@@ -447,47 +524,33 @@ namespace lfs::vis::op {
             return;
         }
 
-        const auto bounds = getViewportBounds();
-        if (bounds.width <= 0 || bounds.height <= 0) {
-            return;
-        }
-
         const auto& viewport = gm->getViewer()->getViewport();
         const auto& cached = rm->getCachedResult();
         const int render_w = cached.image ? static_cast<int>(cached.image->size(2)) : static_cast<int>(viewport.windowSize.x);
         const int render_h = cached.image ? static_cast<int>(cached.image->size(1)) : static_cast<int>(viewport.windowSize.y);
 
-        const float scale_x = static_cast<float>(render_w) / bounds.width;
-        const float scale_y = static_cast<float>(render_h) / bounds.height;
-
-        std::vector<std::pair<float, float>> scaled_points;
-        scaled_points.reserve(polygon_points_.size());
-        for (const auto& pt : polygon_points_) {
-            scaled_points.emplace_back((pt.x - bounds.x) * scale_x, (pt.y - bounds.y) * scale_y);
-        }
+        const glm::mat4 view = viewport.getViewMatrix();
+        const glm::mat4 proj = viewport.getProjectionMatrix(rm->getFocalLengthMm());
+        const glm::mat4 vp = proj * view;
 
         const bool add_mode = (op_ != SelectionOp::Remove);
-        rm->setPolygonPreview(scaled_points, polygon_closed_, add_mode);
+        rm->setPolygonPreview(polygon_world_points_, polygon_closed_, add_mode);
 
-        if (stroke_selection_.is_valid() && polygon_points_.size() >= 3) {
+        if (stroke_selection_.is_valid() && polygon_world_points_.size() >= 3) {
             const auto screen_positions = rm->getScreenPositions();
             if (screen_positions && screen_positions->is_valid()) {
-                const size_t num_verts = polygon_points_.size();
-                auto poly_cpu = lfs::core::Tensor::empty({num_verts, 2}, lfs::core::Device::CPU, lfs::core::DataType::Float32);
-                auto* data = poly_cpu.ptr<float>();
-                for (size_t i = 0; i < num_verts; ++i) {
-                    data[i * 2] = scaled_points[i].first;
-                    data[i * 2 + 1] = scaled_points[i].second;
+                const auto poly_cpu = projectPolygonToRenderSpace(polygon_world_points_, vp, render_w, render_h);
+                if (poly_cpu) {
+                    const auto poly_gpu = poly_cpu->cuda();
+                    lfs::rendering::polygon_select_tensor(*screen_positions, poly_gpu, stroke_selection_);
+                    rm->setPreviewSelection(&stroke_selection_, add_mode);
                 }
-                const auto poly_gpu = poly_cpu.cuda();
-                lfs::rendering::polygon_select_tensor(*screen_positions, poly_gpu, stroke_selection_);
-                rm->setPreviewSelection(&stroke_selection_, add_mode);
             }
         }
     }
 
     void SelectionStrokeOperator::computePolygonSelection(OperatorContext& /*ctx*/) {
-        if (!stroke_selection_.is_valid() || polygon_points_.size() < 3) {
+        if (!stroke_selection_.is_valid() || polygon_world_points_.size() < 3) {
             return;
         }
 
@@ -503,27 +566,20 @@ namespace lfs::vis::op {
         }
 
         const auto& viewport = gm->getViewer()->getViewport();
-        const auto bounds = getViewportBounds();
         const auto& cached = rm->getCachedResult();
 
         const int render_w = cached.image ? static_cast<int>(cached.image->size(2)) : static_cast<int>(viewport.windowSize.x);
         const int render_h = cached.image ? static_cast<int>(cached.image->size(1)) : static_cast<int>(viewport.windowSize.y);
 
-        if (bounds.width <= 0 || bounds.height <= 0) {
+        const glm::mat4 view = viewport.getViewMatrix();
+        const glm::mat4 proj = viewport.getProjectionMatrix(rm->getFocalLengthMm());
+        const glm::mat4 vp = proj * view;
+
+        const auto poly_cpu = projectPolygonToRenderSpace(polygon_world_points_, vp, render_w, render_h);
+        if (!poly_cpu) {
             return;
         }
-
-        const float scale_x = static_cast<float>(render_w) / bounds.width;
-        const float scale_y = static_cast<float>(render_h) / bounds.height;
-
-        const size_t num_verts = polygon_points_.size();
-        auto poly_cpu = lfs::core::Tensor::empty({num_verts, 2}, lfs::core::Device::CPU, lfs::core::DataType::Float32);
-        auto* data = poly_cpu.ptr<float>();
-        for (size_t i = 0; i < num_verts; ++i) {
-            data[i * 2] = (polygon_points_[i].x - bounds.x) * scale_x;
-            data[i * 2 + 1] = (polygon_points_[i].y - bounds.y) * scale_y;
-        }
-        const auto poly_gpu = poly_cpu.cuda();
+        const auto poly_gpu = poly_cpu->cuda();
 
         lfs::rendering::polygon_select_tensor(*screen_positions, poly_gpu, stroke_selection_);
     }
@@ -590,7 +646,7 @@ namespace lfs::vis::op {
 
         stroke_selection_ = lfs::core::Tensor();
         lasso_points_.clear();
-        polygon_points_.clear();
+        polygon_world_points_.clear();
         polygon_closed_ = false;
 
         if (auto* rm = services().renderingOrNull()) {

@@ -11,7 +11,10 @@
 #include "core/logger.hpp"
 #include "core/property_registry.hpp"
 #include "core/scene.hpp"
+#include "gui/global_context_menu.hpp"
+#include "gui/rml_menu_bar.hpp"
 #include "gui/ui_widgets.hpp"
+#include "gui/utils/file_association.hpp"
 #include "gui/utils/windows_utils.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/exporter.hpp"
@@ -19,6 +22,7 @@
 #include "py_keymap.hpp"
 #include "py_params.hpp"
 #include "py_prop_registry.hpp"
+#include "py_rml.hpp"
 #include "py_signals.hpp"
 #include "py_tensor.hpp"
 #include "py_uilist.hpp"
@@ -39,10 +43,10 @@
 #include "visualizer/training/training_manager.hpp"
 
 #include "config.h"
-#include <cuda.h>
-#include <cuda_runtime.h>
 
 #include "visualizer/input/key_codes.hpp"
+
+#include <SDL3/SDL_clipboard.h>
 
 #include <algorithm>
 #include <atomic>
@@ -58,13 +62,8 @@
 #include <imgui.h>
 
 #ifdef _WIN32
-#include <dxgi1_4.h>
-#include <process.h>
 #include <shellapi.h>
 #include <windows.h>
-#else
-#include <dlfcn.h>
-#include <unistd.h>
 #endif
 
 namespace lfs::python {
@@ -72,170 +71,6 @@ namespace lfs::python {
     using lfs::training::CommandCenter;
 
     namespace {
-
-#ifdef _WIN32
-        // Windows: use DXGI QueryVideoMemoryInfo for per-process GPU memory.
-        // NVML returns NVML_VALUE_NOT_AVAILABLE for usedGpuMemory under WDDM,
-        // so DXGI is the only reliable source on Windows.
-        struct DxgiMemoryState {
-            IDXGIAdapter3* adapter3 = nullptr;
-
-            DxgiMemoryState() {
-                HMODULE dxgi_lib = LoadLibraryA("dxgi.dll");
-                if (!dxgi_lib) {
-                    LOG_WARN("Failed to load dxgi.dll – per-process GPU memory unavailable");
-                    return;
-                }
-
-                using FnCreateDXGIFactory1 = HRESULT(WINAPI*)(REFIID, void**);
-                auto fn_create = reinterpret_cast<FnCreateDXGIFactory1>(
-                    GetProcAddress(dxgi_lib, "CreateDXGIFactory1"));
-                if (!fn_create)
-                    return;
-
-                IDXGIFactory1* factory = nullptr;
-                if (FAILED(fn_create(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory))))
-                    return;
-
-                // Get LUID of the active CUDA device for exact adapter matching.
-                int cuda_device = 0;
-                cudaGetDevice(&cuda_device);
-                char cuda_luid[8] = {};
-                unsigned int node_mask = 0;
-                CUdevice cu_device;
-                if (cuDeviceGet(&cu_device, cuda_device) != CUDA_SUCCESS ||
-                    cuDeviceGetLuid(cuda_luid, &node_mask, cu_device) != CUDA_SUCCESS) {
-                    factory->Release();
-                    return;
-                }
-
-                IDXGIAdapter* matched_adapter = nullptr;
-                for (UINT i = 0;; ++i) {
-                    IDXGIAdapter* adapter = nullptr;
-                    if (factory->EnumAdapters(i, &adapter) == DXGI_ERROR_NOT_FOUND)
-                        break;
-                    DXGI_ADAPTER_DESC desc{};
-                    if (SUCCEEDED(adapter->GetDesc(&desc)) &&
-                        memcmp(&desc.AdapterLuid, cuda_luid, sizeof(LUID)) == 0) {
-                        matched_adapter = adapter;
-                        break;
-                    }
-                    adapter->Release();
-                }
-
-                if (matched_adapter) {
-                    if (FAILED(matched_adapter->QueryInterface(
-                            __uuidof(IDXGIAdapter3), reinterpret_cast<void**>(&adapter3)))) {
-                        adapter3 = nullptr;
-                    }
-                    matched_adapter->Release();
-                }
-                factory->Release();
-
-                if (!adapter3)
-                    LOG_WARN("IDXGIAdapter3 unavailable – per-process GPU memory unavailable");
-            }
-
-            ~DxgiMemoryState() {
-                if (adapter3)
-                    adapter3->Release();
-            }
-
-            DxgiMemoryState(const DxgiMemoryState&) = delete;
-            DxgiMemoryState& operator=(const DxgiMemoryState&) = delete;
-
-            size_t get_process_memory() const {
-                if (!adapter3)
-                    return 0;
-                DXGI_QUERY_VIDEO_MEMORY_INFO info{};
-                if (SUCCEEDED(adapter3->QueryVideoMemoryInfo(
-                        0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &info)))
-                    return static_cast<size_t>(info.CurrentUsage);
-                return 0;
-            }
-        };
-
-        DxgiMemoryState& dxgi_state() {
-            static DxgiMemoryState s;
-            return s;
-        }
-#else
-        // Linux: NVML per-process memory works correctly.
-        using NvmlDevice = void*;
-        enum { NVML_SUCCESS = 0 };
-        constexpr int NVML_PCI_BUS_ID_LEN = 32;
-
-        struct NvmlProcessInfo {
-            unsigned int pid;
-            unsigned long long usedGpuMemory;
-            unsigned int gpuInstanceId;
-            unsigned int computeInstanceId;
-        };
-
-        using FnNvmlInit = int (*)();
-        using FnNvmlShutdown = int (*)();
-        using FnNvmlDeviceGetHandleByPciBusId = int (*)(const char*, NvmlDevice*);
-        using FnNvmlDeviceGetComputeRunningProcesses = int (*)(NvmlDevice, unsigned int*, NvmlProcessInfo*);
-
-        struct NvmlState {
-            bool initialized = false;
-            NvmlDevice device = nullptr;
-            unsigned int pid = 0;
-            void* lib = nullptr;
-            FnNvmlDeviceGetComputeRunningProcesses fn_get_procs = nullptr;
-
-            NvmlState() {
-                lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY);
-                if (!lib)
-                    lib = dlopen("libnvidia-ml.so", RTLD_LAZY);
-                if (!lib)
-                    return;
-
-                auto load = [this](const char* name) -> void* {
-                    return dlsym(lib, name);
-                };
-
-                auto fn_init = reinterpret_cast<FnNvmlInit>(load("nvmlInit_v2"));
-                auto fn_get_handle = reinterpret_cast<FnNvmlDeviceGetHandleByPciBusId>(load("nvmlDeviceGetHandleByPciBusId_v2"));
-                fn_get_procs = reinterpret_cast<FnNvmlDeviceGetComputeRunningProcesses>(load("nvmlDeviceGetComputeRunningProcesses_v3"));
-
-                if (!fn_init || !fn_get_handle || !fn_get_procs)
-                    return;
-                if (fn_init() != NVML_SUCCESS)
-                    return;
-
-                int cuda_device = 0;
-                cudaGetDevice(&cuda_device);
-                char pci_bus_id[NVML_PCI_BUS_ID_LEN];
-                if (cudaDeviceGetPCIBusId(pci_bus_id, sizeof(pci_bus_id), cuda_device) != cudaSuccess)
-                    return;
-                if (fn_get_handle(pci_bus_id, &device) != NVML_SUCCESS)
-                    return;
-
-                pid = static_cast<unsigned int>(getpid());
-                initialized = true;
-            }
-
-            size_t get_process_memory() const {
-                if (!initialized)
-                    return 0;
-                unsigned int count = 64;
-                NvmlProcessInfo procs[64];
-                if (fn_get_procs(device, &count, procs) != NVML_SUCCESS)
-                    return 0;
-                for (unsigned int i = 0; i < count; ++i) {
-                    if (procs[i].pid == pid)
-                        return static_cast<size_t>(procs[i].usedGpuMemory);
-                }
-                return 0;
-            }
-        };
-
-        NvmlState& nvml_state() {
-            static NvmlState s;
-            return s;
-        }
-#endif
 
         std::string get_class_id(nb::object cls) {
             auto mod = nb::cast<std::string>(cls.attr("__module__"));
@@ -390,6 +225,7 @@ namespace lfs::python {
         nb::object g_show_dataset_popup_callback;
         nb::object g_show_resume_popup_callback;
         nb::object g_request_exit_callback;
+        nb::object g_open_camera_preview_callback;
 
         // Redraw request flag for hot-reload notification
         std::atomic<bool> g_redraw_requested{false};
@@ -1650,6 +1486,16 @@ namespace lfs::python {
 
         const bool can_execute = vis::op::operators().poll(operator_id);
 
+        if (collecting_ && collect_target_) {
+            vis::gui::MenuItemDesc item;
+            item.type = vis::gui::MenuItemDesc::Type::Operator;
+            item.label = btn_text;
+            item.operator_id = operator_id;
+            item.enabled = can_execute;
+            collect_target_->items.push_back(std::move(item));
+            return nb::cast(PyOperatorProperties(operator_id));
+        }
+
         bool clicked = false;
         if (menu_depth_ > 0) {
             clicked = ImGui::MenuItem(btn_text.c_str(), nullptr, false, can_execute);
@@ -2213,6 +2059,15 @@ namespace lfs::python {
         return {changed, {c[0], c[1], c[2], c[3]}};
     }
 
+    std::tuple<bool, std::tuple<float, float, float>> PyUILayout::color_picker3(
+        const std::string& label, std::tuple<float, float, float> color) {
+        float c[3] = {std::get<0>(color), std::get<1>(color), std::get<2>(color)};
+        bool changed = ImGui::ColorPicker3(label.c_str(), c,
+                                           ImGuiColorEditFlags_DisplayRGB | ImGuiColorEditFlags_DisplayHSV | ImGuiColorEditFlags_DisplayHex |
+                                               ImGuiColorEditFlags_InputRGB | ImGuiColorEditFlags_PickerHueBar);
+        return {changed, {c[0], c[1], c[2]}};
+    }
+
     bool PyUILayout::color_button(const std::string& label, nb::object color,
                                   std::tuple<float, float> size) {
         return ImGui::ColorButton(label.c_str(), tuple_to_imvec4(color), 0,
@@ -2264,6 +2119,12 @@ namespace lfs::python {
 
     // Layout
     void PyUILayout::separator() {
+        if (collecting_ && collect_target_) {
+            vis::gui::MenuItemDesc item;
+            item.type = vis::gui::MenuItemDesc::Type::Separator;
+            collect_target_->items.push_back(std::move(item));
+            return;
+        }
         ImGui::Separator();
     }
 
@@ -2435,10 +2296,29 @@ namespace lfs::python {
     }
 
     bool PyUILayout::menu_item(const std::string& label, bool enabled, bool selected) {
+        if (collecting_ && collect_target_) {
+            vis::gui::MenuItemDesc item;
+            item.type = vis::gui::MenuItemDesc::Type::Item;
+            item.label = label;
+            item.enabled = enabled;
+            item.selected = selected;
+            const int idx = collect_callback_index_++;
+            item.callback_index = idx;
+            collect_target_->items.push_back(std::move(item));
+            return execute_at_index_ == idx;
+        }
         return ImGui::MenuItem(label.c_str(), nullptr, selected, enabled);
     }
 
     bool PyUILayout::begin_menu(const std::string& label) {
+        if (collecting_ && collect_target_) {
+            vis::gui::MenuItemDesc item;
+            item.type = vis::gui::MenuItemDesc::Type::SubMenuBegin;
+            item.label = label;
+            collect_target_->items.push_back(std::move(item));
+            ++menu_depth_;
+            return true;
+        }
         if (ImGui::BeginMenu(label.c_str())) {
             ++menu_depth_;
             return true;
@@ -2449,6 +2329,12 @@ namespace lfs::python {
     void PyUILayout::end_menu() {
         assert(menu_depth_ > 0);
         --menu_depth_;
+        if (collecting_ && collect_target_) {
+            vis::gui::MenuItemDesc item;
+            item.type = vis::gui::MenuItemDesc::Type::SubMenuEnd;
+            collect_target_->items.push_back(std::move(item));
+            return;
+        }
         ImGui::EndMenu();
     }
 
@@ -2487,6 +2373,11 @@ namespace lfs::python {
 
     std::tuple<float, float> PyUILayout::get_cursor_screen_pos() const {
         const ImVec2 pos = ImGui::GetCursorScreenPos();
+        return {pos.x, pos.y};
+    }
+
+    std::tuple<float, float> PyUILayout::get_mouse_pos() const {
+        const ImVec2 pos = ImGui::GetIO().MousePos;
         return {pos.x, pos.y};
     }
 
@@ -2716,10 +2607,32 @@ namespace lfs::python {
     }
 
     bool PyUILayout::menu_item_toggle(const std::string& label, const std::string& shortcut, bool selected) {
+        if (collecting_ && collect_target_) {
+            vis::gui::MenuItemDesc item;
+            item.type = vis::gui::MenuItemDesc::Type::Toggle;
+            item.label = label;
+            item.shortcut = shortcut;
+            item.selected = selected;
+            const int idx = collect_callback_index_++;
+            item.callback_index = idx;
+            collect_target_->items.push_back(std::move(item));
+            return execute_at_index_ == idx;
+        }
         return ImGui::MenuItem(label.c_str(), shortcut.c_str(), selected);
     }
 
     bool PyUILayout::menu_item_shortcut(const std::string& label, const std::string& shortcut, bool enabled) {
+        if (collecting_ && collect_target_) {
+            vis::gui::MenuItemDesc item;
+            item.type = vis::gui::MenuItemDesc::Type::ShortcutItem;
+            item.label = label;
+            item.shortcut = shortcut;
+            item.enabled = enabled;
+            const int idx = collect_callback_index_++;
+            item.callback_index = idx;
+            collect_target_->items.push_back(std::move(item));
+            return execute_at_index_ == idx;
+        }
         return ImGui::MenuItem(label.c_str(), shortcut.c_str(), false, enabled);
     }
 
@@ -3148,6 +3061,58 @@ namespace lfs::python {
         // ~PyDynamicTexture destructors run here without holding the mutex
     }
 
+    void register_ui_context_menu(nb::module_& m) {
+        m.def(
+            "show_context_menu",
+            [](nb::list items, float sx, float sy) {
+                auto* cm = get_global_context_menu();
+                if (!cm)
+                    return;
+
+                std::vector<lfs::vis::gui::ContextMenuItem> vec;
+                vec.reserve(nb::len(items));
+
+                for (auto item_handle : items) {
+                    auto d = nb::cast<nb::dict>(item_handle);
+                    lfs::vis::gui::ContextMenuItem ci;
+                    ci.label = nb::cast<std::string>(d["label"]);
+                    ci.action = nb::cast<std::string>(d["action"]);
+                    if (d.contains("separator_before"))
+                        ci.separator_before = nb::cast<bool>(d["separator_before"]);
+                    if (d.contains("is_label"))
+                        ci.is_label = nb::cast<bool>(d["is_label"]);
+                    if (d.contains("is_submenu_item"))
+                        ci.is_submenu_item = nb::cast<bool>(d["is_submenu_item"]);
+                    if (d.contains("is_active"))
+                        ci.is_active = nb::cast<bool>(d["is_active"]);
+                    vec.push_back(std::move(ci));
+                }
+
+                cm->request(std::move(vec), sx, sy);
+            },
+            nb::arg("items"), nb::arg("screen_x"), nb::arg("screen_y"));
+
+        m.def("poll_context_menu", []() -> std::string {
+            auto* cm = get_global_context_menu();
+            if (!cm)
+                return "";
+            return cm->pollResult();
+        });
+
+        m.def("get_mouse_screen_pos", []() -> nb::tuple {
+            const auto& io = ImGui::GetIO();
+            return nb::make_tuple(io.MousePos.x, io.MousePos.y);
+        });
+
+        m.def(
+            "get_display_size", []() -> nb::tuple {
+                const auto* vp = ImGui::GetMainViewport();
+                assert(vp);
+                return nb::make_tuple(vp->WorkSize.x, vp->WorkSize.y);
+            },
+            "Get display work area size as (width, height)");
+    }
+
     // Register UI classes with nanobind module
     void register_ui(nb::module_& m) {
         g_gl_thread_id = std::this_thread::get_id();
@@ -3156,10 +3121,13 @@ namespace lfs::python {
         register_ui_context(m);
         register_ui_theme(m);
         register_ui_panels(m);
+        register_rml_im_mode_layout(m);
         register_ui_hooks(m);
         register_ui_menus(m);
+        register_ui_context_menu(m);
         register_ui_operators(m);
         register_ui_modals(m);
+        register_rml_bindings(m);
 
         // Hot-reload redraw request functions
         m.def(
@@ -3356,6 +3324,7 @@ namespace lfs::python {
             // Color
             .def("color_edit3", &PyUILayout::color_edit3, nb::arg("label"), nb::arg("color"), "Draw an RGB color editor, returns (changed, color)")
             .def("color_edit4", &PyUILayout::color_edit4, nb::arg("label"), nb::arg("color"), "Draw an RGBA color editor, returns (changed, color)")
+            .def("color_picker3", &PyUILayout::color_picker3, nb::arg("label"), nb::arg("color"), "Draw a full RGB color picker widget, returns (changed, color)")
             .def("color_button", &PyUILayout::color_button, nb::arg("label"), nb::arg("color"),
                  nb::arg("size") = std::make_tuple(0.0f, 0.0f), "Draw a color swatch button, returns True if clicked")
             // Selection
@@ -3421,6 +3390,7 @@ namespace lfs::python {
             .def("set_scroll_here_y", &PyUILayout::set_scroll_here_y, nb::arg("center_y_ratio") = 0.5f, "Scroll to current cursor Y position")
             // ImDrawList for custom row backgrounds
             .def("get_cursor_screen_pos", &PyUILayout::get_cursor_screen_pos, "Get cursor position in screen coordinates as (x, y)")
+            .def("get_mouse_pos", &PyUILayout::get_mouse_pos, "Get mouse position in screen coordinates as (x, y)")
             .def("get_window_pos", &PyUILayout::get_window_pos, "Get window position in screen coordinates as (x, y)")
             .def("get_window_width", &PyUILayout::get_window_width, "Get current window width in pixels")
             .def("get_text_line_height", &PyUILayout::get_text_line_height, "Get height of a single text line in pixels")
@@ -3892,6 +3862,24 @@ namespace lfs::python {
             "Register callback for RequestExit event");
 
         m.def(
+            "on_open_camera_preview",
+            [](nb::object callback) {
+                g_open_camera_preview_callback = callback;
+                lfs::core::events::cmd::OpenCameraPreview::when([](const auto& e) {
+                    if (g_open_camera_preview_callback && !g_open_camera_preview_callback.is_none()) {
+                        nb::gil_scoped_acquire guard;
+                        try {
+                            g_open_camera_preview_callback(e.cam_id);
+                        } catch (const std::exception& ex) {
+                            LOG_ERROR("OpenCameraPreview callback error: {}", ex.what());
+                        }
+                    }
+                });
+            },
+            nb::arg("callback"),
+            "Register callback for OpenCameraPreview event");
+
+        m.def(
             "set_exit_popup_open",
             [](bool open) { set_exit_popup_open(open); },
             nb::arg("open"),
@@ -4193,6 +4181,14 @@ namespace lfs::python {
             nb::arg("texture_id"), "Release an OpenGL texture");
 
         m.def(
+            "get_image_info",
+            [](const std::string& path) -> nb::tuple {
+                auto [w, h, c] = lfs::core::get_image_info(std::filesystem::path(path));
+                return nb::make_tuple(w, h, c);
+            },
+            nb::arg("path"), "Get image dimensions without loading pixel data, returns (width, height, channels)");
+
+        m.def(
             "preload_image_async",
             [](const std::string& path) {
                 std::lock_guard lock(g_preload_mutex);
@@ -4351,7 +4347,9 @@ namespace lfs::python {
             .def_rw("snap_interval", &SequencerUIStateData::snap_interval, "Snap grid interval in frames")
             .def_rw("playback_speed", &SequencerUIStateData::playback_speed, "Playback speed multiplier")
             .def_rw("follow_playback", &SequencerUIStateData::follow_playback, "Whether viewport follows playback position")
+            .def_rw("show_pip_preview", &SequencerUIStateData::show_pip_preview, "Whether PiP preview window is shown")
             .def_rw("pip_preview_scale", &SequencerUIStateData::pip_preview_scale, "Picture-in-picture preview scale factor")
+            .def_rw("show_film_strip", &SequencerUIStateData::show_film_strip, "Whether film strip thumbnails are shown above sequencer")
             .def_ro("selected_keyframe", &SequencerUIStateData::selected_keyframe);
 
         m.def(
@@ -4439,6 +4437,37 @@ namespace lfs::python {
 
         m.def("draw_console_button", &draw_console_button,
               "Draw system console button (C++ implementation)");
+
+        m.def("toggle_system_console", &toggle_system_console,
+              "Toggle system console visibility");
+
+        m.def(
+            "is_windows_platform", []() -> bool {
+#ifdef WIN32
+                return true;
+#else
+                return false;
+#endif
+            },
+            "Returns true on Windows");
+
+        m.def(
+            "register_file_associations", []() -> bool {
+                return lfs::vis::gui::registerFileAssociations();
+            },
+            "Register LichtFeld Studio as default handler for .ply, .sog, .spz files (Windows only)");
+
+        m.def(
+            "unregister_file_associations", []() -> bool {
+                return lfs::vis::gui::unregisterFileAssociations();
+            },
+            "Remove LichtFeld Studio file associations for .ply, .sog, .spz (Windows only)");
+
+        m.def(
+            "are_file_associations_registered", []() -> bool {
+                return lfs::vis::gui::areFileAssociationsRegistered();
+            },
+            "Check if LichtFeld Studio is the default handler for .ply, .sog, .spz (Windows only)");
 
         m.def("get_pivot_mode", &get_pivot_mode, "Get pivot mode (0=Origin, 1=Bounds)");
 
@@ -4529,11 +4558,35 @@ namespace lfs::python {
             []() -> std::string { return vis::theme().name; },
             "Get current theme name (e.g. 'Dark', 'Light', 'Gruvbox', 'Catppuccin Mocha', 'Catppuccin Latte', or 'Nord')");
 
+        m.def(
+            "set_ui_scale",
+            [](float scale) {
+                vis::saveUiScalePreference(scale);
+                core::events::internal::UiScaleChangeRequested{scale}.emit();
+            },
+            nb::arg("scale"), "Set UI scale (0.0 = auto from OS, or 1.0-4.0)");
+
+        m.def(
+            "get_ui_scale",
+            []() -> float { return python::get_shared_dpi_scale(); },
+            "Get current UI scale factor");
+
+        m.def(
+            "get_ui_scale_preference",
+            []() -> float { return vis::loadUiScalePreference(); },
+            "Get saved UI scale preference (0.0 = auto)");
+
+        m.def(
+            "set_clipboard_text",
+            [](const std::string& text) { SDL_SetClipboardText(text.c_str()); },
+            nb::arg("text"), "Copy text to the system clipboard");
+
         // Language control (for Python-driven Edit menu)
         m.def(
             "set_language",
             [](const std::string& lang_code) {
-                lfs::event::LocalizationManager::getInstance().setLanguage(lang_code);
+                if (lfs::event::LocalizationManager::getInstance().setLanguage(lang_code))
+                    dirty_all_data_models();
             },
             nb::arg("lang_code"), "Set language by code (e.g., 'en', 'de')");
 
@@ -4606,8 +4659,31 @@ namespace lfs::python {
             if (idname)
                 PyMenuRegistry::instance().draw_menu_bar_entry(idname);
         };
+        bridge.collect_menu_content = [](const char* idname, MenuItemVisitor visitor, void* ctx) {
+            if (!idname)
+                return;
+            auto content = PyMenuRegistry::instance().collect_menu_content(idname);
+            for (const auto& item : content.items) {
+                MenuItemInfo info;
+                info.type = static_cast<int>(item.type);
+                info.label = item.label.c_str();
+                info.operator_id = item.operator_id.c_str();
+                info.shortcut = item.shortcut.c_str();
+                info.enabled = item.enabled;
+                info.selected = item.selected;
+                info.callback_index = item.callback_index;
+                visitor(&info, ctx);
+            }
+        };
+        bridge.execute_menu_callback = [](const char* idname, int idx) {
+            if (idname)
+                PyMenuRegistry::instance().execute_menu_callback(idname, idx);
+        };
         bridge.draw_modals = []() { PyModalRegistry::instance().draw_modals(); };
         bridge.has_modals = []() { return PyModalRegistry::instance().has_open_modals(); };
+
+        if (const auto& enqueue_cb = get_modal_enqueue_callback())
+            PyModalRegistry::instance().set_enqueue_callback(enqueue_cb);
         bridge.has_toolbar = []() { return true; }; // Always true - Python ToolRegistry has builtin tools
         bridge.shutdown_gl_resources = []() { shutdown_dynamic_textures(); };
         bridge.cleanup = []() {
@@ -4625,6 +4701,7 @@ namespace lfs::python {
             g_show_dataset_popup_callback = nb::object();
             g_show_resume_popup_callback = nb::object();
             g_request_exit_callback = nb::object();
+            g_open_camera_preview_callback = nb::object();
         };
         set_bridge(bridge);
 
@@ -4819,21 +4896,6 @@ namespace lfs::python {
                 return rm->getAverageFPS();
             },
             "Get current FPS");
-
-        m.def(
-            "get_gpu_memory", []() -> std::tuple<size_t, size_t, size_t> {
-                size_t free_mem = 0, total_mem = 0;
-                cudaMemGetInfo(&free_mem, &total_mem);
-#ifdef _WIN32
-                size_t process_bytes = dxgi_state().get_process_memory();
-#else
-                size_t process_bytes = nvml_state().get_process_memory();
-#endif
-                if (process_bytes > total_mem)
-                    process_bytes = 0;
-                return {process_bytes, total_mem - free_mem, total_mem};
-            },
-            "Get GPU memory (process_used, total_used, total) in bytes");
 
         m.def(
             "get_content_type", []() -> const char* {

@@ -14,8 +14,6 @@ services:
     image: lichtfeld-studio:latest
     network_mode: "host"
     working_dir: /home/${USERNAME}/projects/LichtFeld-Studio
-    cpus: 16
-    mem_limit: 24g
     ipc: host
     pid: host
     privileged: true
@@ -37,6 +35,7 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ${HOME}/.Xauthority:/home/${USERNAME}/.Xauthority:rw
       - ${HOME}/.ssh:/home/${USERNAME}/.ssh:ro
+      - ${HOME}/.lichtfeld:/home/${USERNAME}/.lichtfeld:rw
     deploy:
       resources:
         reservations:

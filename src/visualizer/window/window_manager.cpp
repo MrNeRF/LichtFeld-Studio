@@ -5,6 +5,7 @@
 #include "window_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "gui/rmlui/rml_panel_host.hpp"
 #include "input/input_controller.hpp"
 #include "input/sdl_key_mapping.hpp"
 #include <SDL3/SDL.h>
@@ -220,7 +221,7 @@ namespace lfs::vis {
         case SDL_EVENT_KEY_UP: {
             if (!input_controller_)
                 break;
-            const int key = input::sdlKeycodeToAppKey(event.key.key);
+            const int key = input::sdlScancodeToAppKey(event.key.scancode);
             const int action = event.key.down
                                    ? (event.key.repeat ? input::ACTION_REPEAT : input::ACTION_PRESS)
                                    : input::ACTION_RELEASE;
@@ -228,6 +229,11 @@ namespace lfs::vis {
             input_controller_->handleKey(key, action, mods);
             break;
         }
+
+        case SDL_EVENT_TEXT_INPUT:
+            if (event.text.text)
+                gui::RmlPanelHost::pushTextInput(event.text.text);
+            break;
 
         case SDL_EVENT_DROP_FILE:
             if (event.drop.data) {

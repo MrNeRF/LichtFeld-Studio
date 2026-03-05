@@ -1,0 +1,57 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="getting_started.rcss"/>
+</head>
+<body template="floating-window" data-model="getting_started">
+
+  <span class="panel-title">{{title}}</span>
+  <div class="separator"></div>
+
+  <p class="description">{{description}}</p>
+
+  <div class="video-grid">
+    <div class="video-card" id="card-intro" data-url="https://www.youtube.com/watch?v=b1Olu_IU1sM">
+      <div class="card-body">
+        <span class="play-icon">&#x25B6;</span>
+      </div>
+      <span class="card-title">{{video_intro}}</span>
+    </div>
+    <div class="video-card" id="card-latest" data-url="https://www.youtube.com/watch?v=zWIzBHRc-60">
+      <div class="card-body">
+        <span class="play-icon">&#x25B6;</span>
+      </div>
+      <span class="card-title">{{video_latest}}</span>
+    </div>
+    <div class="video-card" id="card-masks" data-url="https://www.youtube.com/watch?v=956qR8N3Xk4">
+      <div class="card-body">
+        <span class="play-icon">&#x25B6;</span>
+      </div>
+      <span class="card-title">{{video_masks}}</span>
+    </div>
+    <div class="video-card" id="card-reality-scan" data-url="https://www.youtube.com/watch?v=JWmkhTlbDvg">
+      <div class="card-body">
+        <span class="play-icon">&#x25B6;</span>
+      </div>
+      <span class="card-title">{{video_reality_scan}}</span>
+    </div>
+    <div class="video-card" id="card-colmap" data-url="https://www.youtube.com/watch?v=-3TBbukYN00">
+      <div class="card-body">
+        <span class="play-icon">&#x25B6;</span>
+      </div>
+      <span class="card-title">{{video_colmap}}</span>
+    </div>
+    <div class="video-card" id="card-lichtfeld" data-url="https://www.youtube.com/watch?v=aX8MTlr9Ypc">
+      <div class="card-body">
+        <span class="play-icon">&#x25B6;</span>
+      </div>
+      <span class="card-title">{{video_lichtfeld}}</span>
+    </div>
+  </div>
+
+  <div class="separator"></div>
+
+  <span id="wiki-section" class="section-label wiki-link">{{wiki_section}}</span>
+
+</body>
+</rml>

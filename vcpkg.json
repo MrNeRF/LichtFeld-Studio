@@ -23,6 +23,7 @@
       "name": "imgui",
       "features": [
         "docking-experimental",
+        "freetype",
         "opengl3-binding",
         "sdl3-binding"
       ]
@@ -46,6 +47,12 @@
       ]
     },
     "nanobind",
-    "assimp"
+    "assimp",
+    {
+      "name": "rmlui",
+      "features": [
+        "svg"
+      ]
+    }
   ]
 }

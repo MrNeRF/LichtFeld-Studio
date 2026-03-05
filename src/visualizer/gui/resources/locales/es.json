@@ -24,6 +24,8 @@
     "view.theme.catppuccin_mocha": "Catppuccin Mocha",
     "view.theme.catppuccin_latte": "Catppuccin Latte",
     "view.theme.nord": "Nord",
+    "view.ui_scale": "Escala de interfaz",
+    "view.ui_scale.auto": "Automático",
     "view.debug_info": "Información de Depuración...",
     "help": "Ayuda",
     "help.getting_started": "Primeros Pasos",
@@ -276,7 +278,6 @@
     "move_to_root": "Raíz",
     "images": "Imágenes ({}):",
     "no_images": "No hay imágenes cargadas.",
-    "use_file_browser": "Use 'Abrir Explorador de Archivos' para cargar un dataset.",
     "move_node": "Mover: %s",
     "models": "Modelos ({})",
     "filter": "Filtrar...",
@@ -305,7 +306,8 @@
     "keyframe_easing.ease_in": "Aceleracion suave",
     "keyframe_easing.ease_out": "Desaceleracion suave",
     "keyframe_easing.ease_in_out": "Aceleracion/desaceleracion suave",
-    "keyframe_label": "Fotograma clave {index}  ({time:.2f}s)"
+    "keyframe_label": "Fotograma clave {index}  ({time:.2f}s)",
+    "search": "Buscar"
   },
   "export": {
     "title": "Exportar",
@@ -403,6 +405,7 @@
     "scene_panel": "Panel de Escena",
     "show_console": "Mostrar Consola del Sistema",
     "hide_console": "Ocultar Consola del Sistema",
+    "console": "Consola",
     "background": "Fondo",
     "color": "Color",
     "show_coord_axes": "Mostrar Ejes de Coordenadas",
@@ -449,7 +452,17 @@
     "add_group": "+ Añadir Grupo",
     "no_selection_groups": "Sin grupos de selección",
     "clear": "Limpiar",
-    "mesh": "Malla"
+    "mesh": "Malla",
+    "mesh_wireframe": "Malla de alambre",
+    "mesh_wireframe_color": "Color de malla de alambre",
+    "mesh_wireframe_width": "Ancho de malla de alambre",
+    "mesh_light_intensity": "Intensidad de luz",
+    "mesh_ambient": "Ambiental",
+    "mesh_backface_culling": "Eliminación de caras traseras",
+    "mesh_shadow_enabled": "Sombras",
+    "mesh_shadow_resolution": "Resolución de sombras",
+    "camera_frustum_scale": "Escala de frustum",
+    "voxel_size": "Tamaño de vóxel"
   },
   "toolbar": {
     "selection": "Selección",
@@ -513,20 +526,6 @@
     "line_width": "Ancho de Línea",
     "instructions": "Enter: Confirmar recorte | Ctrl+C: Copiar contenido"
   },
-  "file_browser": {
-    "title": "Explorador de Archivos",
-    "quick_access": "Acceso Rápido",
-    "current_dir": "Directorio Actual",
-    "home": "Inicio",
-    "current_path": "Ruta Actual: %s",
-    "parent_dir": "../",
-    "directory": "[DIR]",
-    "selected": "Seleccionado: %s",
-    "load_dataset": "Cargar Dataset",
-    "load_sog": "Cargar SOG",
-    "load_ply": "Cargar PLY",
-    "enter_dir": "Entrar en Directorio"
-  },
   "training_panel": {
     "start_training": "Iniciar Entrenamiento",
     "resume_training": "Reanudar Entrenamiento",
@@ -580,7 +579,29 @@
     "grid": "Mostrar plano de cuadrícula de referencia",
     "camera_frustums": "Mostrar posiciones de cámara del dataset",
     "point_cloud_mode": "Renderizar como puntos en lugar de splats",
-    "selection_colors": "Colores para visualización de selección"
+    "selection_colors": "Colores para visualización de selección",
+    "seq_camera_path": "Alternar visualización de la trayectoria de cámara",
+    "seq_first": "Ir al primer fotograma clave",
+    "seq_stop": "Detener reproducción",
+    "seq_play": "Reproducir animación",
+    "seq_pause": "Pausar animación",
+    "seq_last": "Ir al último fotograma clave",
+    "seq_loop_off": "Activar reproducción en bucle",
+    "seq_loop_on": "Desactivar reproducción en bucle",
+    "seq_add": "Añadir fotograma clave en la posición actual",
+    "seq_speed": "Velocidad de reproducción (clic para cambiar)",
+    "seq_snap": "Ajustar fotogramas clave a la cuadrícula (clic derecho para opciones)",
+    "seq_follow": "Seguir cabezal durante la reproducción",
+    "seq_film_strip": "Mostrar tira de película debajo de la línea de tiempo",
+    "seq_pip_preview": "Mostrar vista previa imagen en imagen (clic derecho para opciones)",
+    "seq_save_path": "Guardar trayectoria de cámara en archivo",
+    "seq_load_path": "Cargar trayectoria de cámara desde archivo",
+    "seq_format": "Formato de exportación predefinido (clic derecho para opciones)",
+    "seq_quality": "Calidad CRF (menor = mejor calidad, archivo más grande)",
+    "seq_export": "Exportar vídeo desde la trayectoria de cámara",
+    "seq_clear": "Eliminar todos los fotogramas clave",
+    "seq_interval": "Intervalo de la cuadrícula",
+    "seq_preview_size": "Escala de vista previa PiP"
   },
   "exit_popup": {
     "title": "¿Salir de la Aplicación?",
@@ -616,15 +637,6 @@
   "selection_group": {
     "lock": "Bloquear",
     "unlock": "Desbloquear"
-  },
-  "file_browser_ext": {
-    "dataset": "[Dataset]",
-    "sog": "[SOG]",
-    "no_file_selected": "No hay archivo seleccionado",
-    "not_a_dataset": "(No es un dataset)",
-    "sog_directory": "(Directorio SOG)",
-    "sog_meta": "(SOG meta.json)",
-    "error": "Error:"
   },
   "progress": {
     "loss": "Pérdida:",
@@ -739,6 +751,7 @@
     "disabled": "Deshabilitado"
   },
   "image_preview": {
+    "title": "Vista previa de imagen",
     "image_section": "IMAGEN",
     "file_section": "ARCHIVO",
     "view_section": "VISTA",
@@ -780,7 +793,8 @@
     "no_images_loaded": "No hay imagenes cargadas",
     "no_image": "Sin imagen",
     "zoom": "Zoom",
-    "fit": "Ajustar"
+    "fit": "Ajustar",
+    "storage_section": "ALMACENAMIENTO"
   },
   "startup": {
     "supported_by": "Apoyado por",
@@ -927,7 +941,35 @@
   "sequencer": {
     "edit_focal_length": "Editar distancia focal...",
     "edit_focal_length_title": "Editar distancia focal",
-    "focal_length_mm": "Distancia focal (mm)"
+    "focal_length_mm": "Distancia focal (mm)",
+    "go_to_first_keyframe": "Ir al primer fotograma clave",
+    "stop": "Detener",
+    "pause": "Pausa (Espacio)",
+    "play": "Reproducir (Espacio)",
+    "go_to_last_keyframe": "Ir al ultimo fotograma clave",
+    "loop_on": "Bucle: ON",
+    "loop_off": "Bucle: OFF",
+    "add_keyframe": "Agregar fotograma clave (K)",
+    "empty_hint": "Posicione la camara y presione K para agregar fotogramas clave",
+    "update_to_current_view": "Actualizar a la vista actual",
+    "go_to_keyframe": "Ir al fotograma clave",
+    "edit_time": "Editar tiempo...",
+    "easing": "Easing",
+    "easing_last_keyframe": "Easing (ultimo fotograma clave)",
+    "easing_tooltip": "El easing controla el movimiento de salida\n(El ultimo fotograma clave no tiene segmento de salida)",
+    "delete_keyframe": "Eliminar fotograma clave",
+    "add_keyframe_here": "Agregar fotograma clave aqui",
+    "edit_keyframe_time": "Editar tiempo del fotograma clave",
+    "time_seconds": "Tiempo (s)",
+    "apply_u": "Aplicar (U)",
+    "revert_esc": "Revertir (Esc)",
+    "editing_keyframe": "Editando fotograma clave {}",
+    "move_translate": "Mover",
+    "rotate": "Rotar",
+    "loop_point_tooltip": "Punto de bucle @ {} (vuelve al inicio)",
+    "keyframe_tooltip": "Fotograma clave @ {} (doble clic para editar)",
+    "playback_time": "Reproducción {:.2f}s",
+    "keyframe_preview": "Vista previa Keyframe {}"
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V"
@@ -996,5 +1038,23 @@
     "appearance": "Appearance",
     "line_width": "Line Width",
     "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
+  },
+  "file_association": {
+    "title": "Establecer como aplicación predeterminada",
+    "message": "¿Desea establecer LichtFeld Studio como la aplicación predeterminada para archivos splat (.ply, .sog, .spz)?",
+    "yes": "Sí",
+    "not_now": "Ahora no",
+    "dont_ask": "No volver a preguntar",
+    "success": "Asociaciones de archivos registradas correctamente.",
+    "menu_register": "Establecer como aplicación predeterminada...",
+    "menu_unregister": "Quitar como aplicación predeterminada..."
+  },
+  "context_menu": {
+    "snap_interval": "Intervalo de ajuste",
+    "preview_scale": "Escala de vista previa",
+    "video_format": "Formato de video",
+    "clear_confirm": "¿Eliminar todos los keyframes?",
+    "confirm": "Confirmar",
+    "cancel": "Cancelar"
   }
 }

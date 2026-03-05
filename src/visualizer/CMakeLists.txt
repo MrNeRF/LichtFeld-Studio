@@ -41,6 +41,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # GUI system
         gui/gui_manager.cpp
+        gui/global_context_menu.cpp
         gui/gizmo_manager.cpp
         gui/pie_menu.cpp
         gui/panel_layout.cpp
@@ -49,7 +50,18 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/layout_state.cpp
         gui/async_task_manager.cpp
         gui/startup_overlay.cpp
+        gui/rml_menu_bar.cpp
+        gui/rml_right_panel.cpp
+        gui/rml_shell_frame.cpp
+        gui/rml_viewport_overlay.cpp
+        gui/rml_status_bar.cpp
+        gui/gpu_memory_query.cpp
+        gui/gl_line_renderer.cpp
+        gui/rml_overlay_context.cpp
+        gui/film_strip_renderer.cpp
         gui/sequencer_ui_manager.cpp
+        gui/rml_modal_overlay.cpp
+        gui/rml_sequencer_overlay.cpp
         gui/keyframe_scene_sync.cpp
         gui/gizmo_transform.cpp
         gui/html_viewer_export.cpp
@@ -70,8 +82,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # Terminal emulator
         gui/terminal/pty_process.cpp
         gui/terminal/terminal_widget.cpp
-        gui/windows/file_browser.cpp
-        gui/windows/disk_space_error_dialog.cpp
         gui/windows/video_extractor_dialog.cpp
 
         # Scene management
@@ -102,7 +112,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # Sequencer (camera animation)
         sequencer/sequencer_controller.cpp
-        sequencer/sequencer_panel.cpp
+        sequencer/rml_sequencer_panel.cpp
 
         # Operator system (Blender-style)
         operator/operator_context.cpp
@@ -135,6 +145,19 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/panels/menu_bar.hpp
         gui/utils/windows_utils.cpp
         gui/utils/drag_drop_native.cpp
+        gui/utils/file_association.cpp
+
+        # RmlUI integration
+        gui/rmlui/rmlui_system_interface.cpp
+        gui/rmlui/rmlui_render_interface.cpp
+        gui/rmlui/rmlui_manager.cpp
+        gui/rmlui/rml_fbo.cpp
+        gui/rmlui/rml_panel_host.cpp
+        gui/rmlui/rml_theme.cpp
+        gui/rmlui/elements/chromaticity_element.cpp
+        gui/rmlui/elements/color_picker_element.cpp
+        gui/rmlui/elements/crf_curve_element.cpp
+        gui/rmlui/elements/loss_graph_element.cpp
 )
 
 # Set include directories
@@ -175,6 +198,49 @@ target_link_libraries(lfs_visualizer
         ${OPENGL_LIBRARIES}
         vterm
 )
+
+# RmlUI: on Linux, lfs_visualizer is STATIC and gets linked into both the
+# exe and the Python .so, which would duplicate librmlui.a globals and cause
+# crashes.  Wrap the static libraries in a small shared library so there is
+# exactly one copy of RmlUI in the process.
+find_package(RmlUi CONFIG REQUIRED)
+
+if(NOT WIN32)
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/lfs_rmlui_stub.cpp" "")
+    add_library(lfs_rmlui SHARED "${CMAKE_CURRENT_BINARY_DIR}/lfs_rmlui_stub.cpp")
+
+    find_package(lunasvg CONFIG REQUIRED)
+    target_link_libraries(lfs_rmlui PRIVATE
+        -Wl,--whole-archive
+        $<TARGET_FILE:RmlUi::Core>
+        $<TARGET_FILE:RmlUi::Debugger>
+        -Wl,--no-whole-archive
+        Freetype::Freetype
+        lunasvg::lunasvg
+    )
+
+    get_target_property(_rmlui_includes RmlUi::Core INTERFACE_INCLUDE_DIRECTORIES)
+    if(_rmlui_includes)
+        target_include_directories(lfs_rmlui PUBLIC ${_rmlui_includes})
+    endif()
+    target_compile_definitions(lfs_rmlui PUBLIC RMLUI_STATIC_LIB)
+
+    if(TARGET Freetype::Freetype)
+        get_target_property(_ft_includes Freetype::Freetype INTERFACE_INCLUDE_DIRECTORIES)
+        if(_ft_includes)
+            target_include_directories(lfs_rmlui PUBLIC ${_ft_includes})
+        endif()
+    endif()
+
+    set_target_properties(lfs_rmlui PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+    )
+
+    target_link_libraries(lfs_visualizer PRIVATE lfs_rmlui)
+else()
+    target_link_libraries(lfs_visualizer PRIVATE RmlUi::RmlUi)
+endif()
 
 # Set C++ standard
 target_compile_features(lfs_visualizer PUBLIC cxx_std_23)
@@ -243,6 +309,37 @@ foreach (ICON_FILE ${ICON_FILES})
     configure_file(${ICON_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/${ICON_NAME}" COPYONLY)
 endforeach ()
 
+# Copy scene icon files (used by RmlUI scene panel)
+file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/scene")
+file(GLOB SCENE_ICON_FILES "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/icon/scene/*.png")
+foreach (ICON_FILE ${SCENE_ICON_FILES})
+    get_filename_component(ICON_NAME ${ICON_FILE} NAME)
+    configure_file(${ICON_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/scene/${ICON_NAME}" COPYONLY)
+endforeach ()
+
+# Copy sequencer icon files (used by RmlUI sequencer panel)
+file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/sequencer")
+file(GLOB SEQUENCER_ICON_FILES "${CMAKE_CURRENT_SOURCE_DIR}/gui/assets/icon/sequencer/*.png")
+foreach (ICON_FILE ${SEQUENCER_ICON_FILES})
+    get_filename_component(ICON_NAME ${ICON_FILE} NAME)
+    configure_file(${ICON_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/icon/sequencer/${ICON_NAME}" COPYONLY)
+endforeach ()
+
+# Copy RmlUI resources (re-copy on every build so edits are picked up)
+file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui")
+file(GLOB RMLUI_RESOURCE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/gui/rmlui/resources/*")
+foreach (RMLUI_FILE ${RMLUI_RESOURCE_FILES})
+    get_filename_component(RMLUI_NAME ${RMLUI_FILE} NAME)
+    configure_file(${RMLUI_FILE} "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/${RMLUI_NAME}" COPYONLY)
+endforeach ()
+add_custom_target(copy_rmlui_resources ALL
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${RMLUI_RESOURCE_FILES}
+        "${VISUALIZER_BUILD_RESOURCE_DIR}/assets/rmlui/"
+    COMMENT "Syncing RmlUI resources"
+)
+add_dependencies(lfs_visualizer copy_rmlui_resources)
+
 # Copy locale files
 file(MAKE_DIRECTORY "${VISUALIZER_BUILD_RESOURCE_DIR}/locales")
 file(GLOB LOCALE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/gui/resources/locales/*.json")
@@ -273,6 +370,8 @@ if (WIN32)
     )
     target_link_libraries(lfs_visualizer PRIVATE
             Ole32       # OLE drag-drop (IDropTarget)
+            Shell32     # SHChangeNotify (file association)
+            dxgi        # DXGI per-process VRAM query
     )
 elseif (UNIX AND NOT APPLE)
     target_link_libraries(lfs_visualizer PRIVATE

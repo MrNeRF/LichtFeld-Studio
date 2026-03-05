@@ -334,7 +334,8 @@ namespace lfs::vis::gui {
             return;
 
         const auto selected_type = scene_manager->getSelectedNodeType();
-        if (selected_type == core::NodeType::CROPBOX || selected_type == core::NodeType::ELLIPSOID)
+        if (selected_type == core::NodeType::CROPBOX || selected_type == core::NodeType::ELLIPSOID ||
+            selected_type == core::NodeType::KEYFRAME || selected_type == core::NodeType::KEYFRAME_GROUP)
             return;
 
         const auto& scene = scene_manager->getScene();
@@ -1121,61 +1122,6 @@ namespace lfs::vis::gui {
         }
 
         overlay_drawlist->PopClipRect();
-    }
-
-    void GizmoManager::renderCropGizmoMiniToolbar(const UIContext&) {
-        const auto vp_pos = viewer_->getGuiManager()->getViewportPos();
-        const auto vp_size = viewer_->getGuiManager()->getViewportSize();
-
-        constexpr float MARGIN_X = 10.0f;
-        constexpr float MARGIN_BOTTOM = 100.0f;
-        constexpr int BUTTON_COUNT = 3;
-        constexpr ImGuiWindowFlags WINDOW_FLAGS =
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings;
-
-        const auto& t = theme();
-        const float scale = lfs::python::get_shared_dpi_scale();
-        const float btn_size = t.sizes.toolbar_button_size * scale;
-        const float spacing = t.sizes.toolbar_spacing * scale;
-        const float padding = t.sizes.toolbar_padding * scale;
-        const float toolbar_width = BUTTON_COUNT * btn_size + (BUTTON_COUNT - 1) * spacing + 2.0f * padding;
-        const float toolbar_height = btn_size + 2.0f * padding;
-        const float toolbar_x = vp_pos.x + MARGIN_X * scale;
-        const float toolbar_y = vp_pos.y + vp_size.y - MARGIN_BOTTOM * scale;
-
-        widgets::DrawWindowShadow({toolbar_x, toolbar_y}, {toolbar_width, toolbar_height}, t.sizes.window_rounding);
-        ImGui::SetNextWindowPos({toolbar_x, toolbar_y});
-        ImGui::SetNextWindowSize({toolbar_width, toolbar_height});
-
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, t.sizes.window_rounding);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {padding, padding});
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {spacing, 0.0f});
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, {0.0f, 0.0f});
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, t.subtoolbar_background());
-
-        if (ImGui::Begin("##CropGizmoMiniToolbar", nullptr, WINDOW_FLAGS)) {
-            const ImVec2 btn_sz(btn_size, btn_size);
-
-            const auto button = [&](const char* id, const ImGuizmo::OPERATION op, const char* label, const char* tip) {
-                if (widgets::IconButton(id, 0, btn_sz, current_operation_ == op, label)) {
-                    current_operation_ = op;
-                }
-                if (ImGui::IsItemHovered()) {
-                    widgets::SetThemedTooltip("%s", tip);
-                }
-            };
-
-            button("##mini_t", ImGuizmo::TRANSLATE, "T", "Translate (T)");
-            ImGui::SameLine();
-            button("##mini_r", ImGuizmo::ROTATE, "R", "Rotate (R)");
-            ImGui::SameLine();
-            button("##mini_s", ImGuizmo::SCALE, "S", "Scale (S)");
-        }
-        ImGui::End();
-
-        ImGui::PopStyleColor();
-        ImGui::PopStyleVar(4);
     }
 
     void GizmoManager::renderViewportGizmo(const ViewportLayout& viewport) {

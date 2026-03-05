@@ -24,6 +24,8 @@
     "view.theme.catppuccin_mocha": "Catppuccin Mocha",
     "view.theme.catppuccin_latte": "Catppuccin Latte",
     "view.theme.nord": "Nord",
+    "view.ui_scale": "Skala interfejsu",
+    "view.ui_scale.auto": "Automatycznie",
     "view.debug_info": "Informacje Debugowania...",
     "help": "Pomoc",
     "help.getting_started": "Wprowadzenie",
@@ -276,7 +278,6 @@
     "move_to_root": "Katalog Główny",
     "images": "Obrazy ({}):",
     "no_images": "Nie załadowano obrazów.",
-    "use_file_browser": "Użyj 'Otwórz Przeglądarkę Plików', aby załadować zbiór danych.",
     "move_node": "Przenieś: %s",
     "models": "Modele ({})",
     "filter": "Filtruj...",
@@ -305,7 +306,8 @@
     "keyframe_easing.ease_in": "Lagodne wejscie",
     "keyframe_easing.ease_out": "Lagodne wyjscie",
     "keyframe_easing.ease_in_out": "Lagodne wejscie/wyjscie",
-    "keyframe_label": "Klatka kluczowa {index}  ({time:.2f}s)"
+    "keyframe_label": "Klatka kluczowa {index}  ({time:.2f}s)",
+    "search": "Szukaj"
   },
   "export": {
     "title": "Eksportuj",
@@ -403,6 +405,7 @@
     "scene_panel": "Panel Sceny",
     "show_console": "Pokaż Konsolę Systemową",
     "hide_console": "Ukryj Konsolę Systemową",
+    "console": "Konsola",
     "background": "Tło",
     "color": "Kolor",
     "show_coord_axes": "Pokaż Osie Współrzędnych",
@@ -449,7 +452,17 @@
     "add_group": "+ Dodaj Grupę",
     "no_selection_groups": "Brak grup zaznaczenia",
     "clear": "Wyczyść",
-    "mesh": "Siatka"
+    "mesh": "Siatka",
+    "mesh_wireframe": "Szkielet",
+    "mesh_wireframe_color": "Kolor szkieletu",
+    "mesh_wireframe_width": "Szerokość szkieletu",
+    "mesh_light_intensity": "Intensywność światła",
+    "mesh_ambient": "Światło otoczenia",
+    "mesh_backface_culling": "Usuwanie tylnych ścian",
+    "mesh_shadow_enabled": "Cienie",
+    "mesh_shadow_resolution": "Rozdzielczość cieni",
+    "camera_frustum_scale": "Skala ostrosłupa",
+    "voxel_size": "Rozmiar voksela"
   },
   "toolbar": {
     "selection": "Zaznaczenie",
@@ -513,20 +526,6 @@
     "line_width": "Szerokość Linii",
     "instructions": "Enter: Zatwierdź przycinanie | Ctrl+C: Kopiuj zawartość"
   },
-  "file_browser": {
-    "title": "Przeglądarka Plików",
-    "quick_access": "Szybki Dostęp",
-    "current_dir": "Bieżący Katalog",
-    "home": "Start",
-    "current_path": "Bieżąca Ścieżka: %s",
-    "parent_dir": "../",
-    "directory": "[KAT]",
-    "selected": "Zaznaczono: %s",
-    "load_dataset": "Wczytaj Zbiór Danych",
-    "load_sog": "Wczytaj SOG",
-    "load_ply": "Wczytaj PLY",
-    "enter_dir": "Wejdź do Katalogu"
-  },
   "training_panel": {
     "start_training": "Rozpocznij Trening",
     "resume_training": "Wznów Trening",
@@ -580,7 +579,29 @@
     "grid": "Pokaż płaszczyznę siatki odniesienia",
     "camera_frustums": "Pokaż pozycje kamer ze zbioru danych",
     "point_cloud_mode": "Renderuj jako punkty zamiast splatów",
-    "selection_colors": "Kolory wizualizacji zaznaczenia"
+    "selection_colors": "Kolory wizualizacji zaznaczenia",
+    "seq_camera_path": "Przełącz wizualizację ścieżki kamery",
+    "seq_first": "Przejdź do pierwszej klatki kluczowej",
+    "seq_stop": "Zatrzymaj odtwarzanie",
+    "seq_play": "Odtwórz animację",
+    "seq_pause": "Wstrzymaj animację",
+    "seq_last": "Przejdź do ostatniej klatki kluczowej",
+    "seq_loop_off": "Włącz odtwarzanie w pętli",
+    "seq_loop_on": "Wyłącz odtwarzanie w pętli",
+    "seq_add": "Dodaj klatkę kluczową w bieżącej pozycji",
+    "seq_speed": "Prędkość odtwarzania (kliknij, aby zmienić)",
+    "seq_snap": "Przyciągaj klatki kluczowe do siatki (prawy przycisk myszy dla opcji)",
+    "seq_follow": "Podążaj za głowicą odtwarzania",
+    "seq_film_strip": "Pokaż taśmę filmową pod osią czasu",
+    "seq_pip_preview": "Pokaż podgląd obraz w obrazie (prawy przycisk myszy dla opcji)",
+    "seq_save_path": "Zapisz ścieżkę kamery do pliku",
+    "seq_load_path": "Wczytaj ścieżkę kamery z pliku",
+    "seq_format": "Preset formatu eksportu (prawy przycisk myszy dla opcji)",
+    "seq_quality": "Jakość CRF (niższa = lepsza jakość, większy plik)",
+    "seq_export": "Eksportuj wideo ze ścieżki kamery",
+    "seq_clear": "Usuń wszystkie klatki kluczowe",
+    "seq_interval": "Interwał siatki",
+    "seq_preview_size": "Skala podglądu PiP"
   },
   "exit_popup": {
     "title": "Zakończyć Aplikację?",
@@ -616,15 +637,6 @@
   "selection_group": {
     "lock": "Zablokuj",
     "unlock": "Odblokuj"
-  },
-  "file_browser_ext": {
-    "dataset": "[Zbiór Danych]",
-    "sog": "[SOG]",
-    "no_file_selected": "Nie wybrano pliku",
-    "not_a_dataset": "(Nie jest zbiorem danych)",
-    "sog_directory": "(Katalog SOG)",
-    "sog_meta": "(SOG meta.json)",
-    "error": "Błąd:"
   },
   "progress": {
     "loss": "Strata:",
@@ -739,6 +751,7 @@
     "disabled": "Wyłączony"
   },
   "image_preview": {
+    "title": "Podgl\u0105d obrazu",
     "image_section": "OBRAZ",
     "file_section": "PLIK",
     "view_section": "WIDOK",
@@ -780,7 +793,8 @@
     "no_images_loaded": "Brak zaladowanych obrazow",
     "no_image": "Brak obrazu",
     "zoom": "Zoom",
-    "fit": "Dopasuj"
+    "fit": "Dopasuj",
+    "storage_section": "MAGAZYN"
   },
   "startup": {
     "supported_by": "Wspierane przez",
@@ -925,9 +939,37 @@
     "load_on_startup": "Ładuj przy starcie"
   },
   "sequencer": {
-    "edit_focal_length": "Edytuj ogniskową...",
-    "edit_focal_length_title": "Edytuj ogniskową",
-    "focal_length_mm": "Ogniskowa (mm)"
+    "edit_focal_length": "Edytuj ogniskowa...",
+    "edit_focal_length_title": "Edytuj ogniskowa",
+    "focal_length_mm": "Ogniskowa (mm)",
+    "go_to_first_keyframe": "Przejdz do pierwszej klatki kluczowej",
+    "stop": "Zatrzymaj",
+    "pause": "Pauza (Spacja)",
+    "play": "Odtwarzaj (Spacja)",
+    "go_to_last_keyframe": "Przejdz do ostatniej klatki kluczowej",
+    "loop_on": "Petla: WL",
+    "loop_off": "Petla: WYL",
+    "add_keyframe": "Dodaj klatke kluczowa (K)",
+    "empty_hint": "Ustaw kamere i nacisnij K, aby dodac klatki kluczowe",
+    "update_to_current_view": "Zaktualizuj do biezacego widoku",
+    "go_to_keyframe": "Przejdz do klatki kluczowej",
+    "edit_time": "Edytuj czas...",
+    "easing": "Easing",
+    "easing_last_keyframe": "Easing (ostatnia klatka kluczowa)",
+    "easing_tooltip": "Easing kontroluje ruch wychodzacy\n(Ostatnia klatka kluczowa nie ma segmentu wychodzacego)",
+    "delete_keyframe": "Usun klatke kluczowa",
+    "add_keyframe_here": "Dodaj klatke kluczowa tutaj",
+    "edit_keyframe_time": "Edytuj czas klatki kluczowej",
+    "time_seconds": "Czas (s)",
+    "apply_u": "Zastosuj (U)",
+    "revert_esc": "Cofnij (Esc)",
+    "editing_keyframe": "Edycja klatki kluczowej {}",
+    "move_translate": "Przesun",
+    "rotate": "Obroc",
+    "loop_point_tooltip": "Punkt petli @ {} (powrot do poczatku)",
+    "keyframe_tooltip": "Klatka kluczowa @ {} (kliknij dwukrotnie, aby edytowac)",
+    "playback_time": "Odtwarzanie {:.2f}s",
+    "keyframe_preview": "Podgląd klatki kluczowej {}"
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V"
@@ -996,5 +1038,23 @@
     "appearance": "Appearance",
     "line_width": "Line Width",
     "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
+  },
+  "file_association": {
+    "title": "Ustaw jako domyślną aplikację",
+    "message": "Czy chcesz ustawić LichtFeld Studio jako domyślną aplikację dla plików splat (.ply, .sog, .spz)?",
+    "yes": "Tak",
+    "not_now": "Nie teraz",
+    "dont_ask": "Nie pytaj ponownie",
+    "success": "Skojarzenia plików zostały pomyślnie zarejestrowane.",
+    "menu_register": "Ustaw jako domyślną aplikację...",
+    "menu_unregister": "Usuń jako domyślną aplikację..."
+  },
+  "context_menu": {
+    "snap_interval": "Interwał siatki",
+    "preview_scale": "Skala podglądu",
+    "video_format": "Format wideo",
+    "clear_confirm": "Usunąć wszystkie klatki kluczowe?",
+    "confirm": "Potwierdź",
+    "cancel": "Anuluj"
   }
 }

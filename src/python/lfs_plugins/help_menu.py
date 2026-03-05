@@ -16,6 +16,24 @@ class GettingStartedOperator(Operator):
         return {"FINISHED"}
 
 
+class SetDefaultAppOperator(Operator):
+    label = "file_association.menu_register"
+    description = "Register as default viewer for .ply, .sog, .spz files"
+
+    def execute(self, context) -> set:
+        lf.ui.register_file_associations()
+        return {"FINISHED"}
+
+
+class UnsetDefaultAppOperator(Operator):
+    label = "file_association.menu_unregister"
+    description = "Remove file type associations"
+
+    def execute(self, context) -> set:
+        lf.ui.unregister_file_associations()
+        return {"FINISHED"}
+
+
 class AboutOperator(Operator):
     label = "menu.help.about"
     description = "Show About dialog"
@@ -35,12 +53,20 @@ class HelpMenu:
 
     def draw(self, layout):
         layout.operator_(GettingStartedOperator._class_id())
+        if lf.ui.is_windows_platform():
+            layout.separator()
+            if lf.ui.are_file_associations_registered():
+                layout.operator_(UnsetDefaultAppOperator._class_id())
+            else:
+                layout.operator_(SetDefaultAppOperator._class_id())
         layout.separator()
         layout.operator_(AboutOperator._class_id())
 
 
 _operator_classes = [
     GettingStartedOperator,
+    SetDefaultAppOperator,
+    UnsetDefaultAppOperator,
     AboutOperator,
 ]
 

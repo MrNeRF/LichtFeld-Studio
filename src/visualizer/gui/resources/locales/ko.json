@@ -24,6 +24,8 @@
     "view.theme.catppuccin_mocha": "Catppuccin Mocha",
     "view.theme.catppuccin_latte": "Catppuccin Latte",
     "view.theme.nord": "Nord",
+    "view.ui_scale": "UI 배율",
+    "view.ui_scale.auto": "자동",
     "view.debug_info": "디버그 정보...",
     "help": "도움말",
     "help.getting_started": "시작하기",
@@ -276,7 +278,6 @@
     "move_to_root": "루트",
     "images": "이미지 ({}):",
     "no_images": "이미지가 로드되지 않았습니다.",
-    "use_file_browser": "'파일 브라우저 열기'를 사용하여 데이터셋을 로드하세요.",
     "move_node": "이동: %s",
     "models": "모델 ({})",
     "filter": "필터...",
@@ -305,7 +306,8 @@
     "keyframe_easing.ease_in": "점진적 시작",
     "keyframe_easing.ease_out": "점진적 종료",
     "keyframe_easing.ease_in_out": "점진적 시작/종료",
-    "keyframe_label": "키프레임 {index}  ({time:.2f}s)"
+    "keyframe_label": "키프레임 {index}  ({time:.2f}s)",
+    "search": "검색"
   },
   "export": {
     "title": "내보내기",
@@ -403,6 +405,7 @@
     "scene_panel": "씬 패널",
     "show_console": "시스템 콘솔 표시",
     "hide_console": "시스템 콘솔 숨기기",
+    "console": "콘솔",
     "background": "배경",
     "color": "색상",
     "show_coord_axes": "좌표축 표시",
@@ -449,7 +452,17 @@
     "add_group": "+ 그룹 추가",
     "no_selection_groups": "선택 그룹 없음",
     "clear": "지우기",
-    "mesh": "메시"
+    "mesh": "메시",
+    "mesh_wireframe": "와이어프레임",
+    "mesh_wireframe_color": "와이어프레임 색상",
+    "mesh_wireframe_width": "와이어프레임 두께",
+    "mesh_light_intensity": "조명 강도",
+    "mesh_ambient": "환경광",
+    "mesh_backface_culling": "후면 제거",
+    "mesh_shadow_enabled": "그림자",
+    "mesh_shadow_resolution": "그림자 해상도",
+    "camera_frustum_scale": "절두체 스케일",
+    "voxel_size": "복셀 크기"
   },
   "toolbar": {
     "selection": "선택",
@@ -513,20 +526,6 @@
     "line_width": "선 너비",
     "instructions": "Enter: 자르기 확정 | Ctrl+C: 내용 복사"
   },
-  "file_browser": {
-    "title": "파일 브라우저",
-    "quick_access": "빠른 액세스",
-    "current_dir": "현재 디렉터리",
-    "home": "홈",
-    "current_path": "현재 경로: %s",
-    "parent_dir": "../",
-    "directory": "[디렉터리]",
-    "selected": "선택됨: %s",
-    "load_dataset": "데이터셋 로드",
-    "load_sog": "SOG 로드",
-    "load_ply": "PLY 로드",
-    "enter_dir": "디렉터리 열기"
-  },
   "training_panel": {
     "start_training": "학습 시작",
     "resume_training": "학습 재개",
@@ -580,7 +579,29 @@
     "grid": "참조 그리드 평면 표시",
     "camera_frustums": "데이터셋의 카메라 위치 표시",
     "point_cloud_mode": "스플랫 대신 포인트로 렌더링",
-    "selection_colors": "선택 영역 시각화 색상"
+    "selection_colors": "선택 영역 시각화 색상",
+    "seq_camera_path": "카메라 경로 시각화 전환",
+    "seq_first": "첫 번째 키프레임으로 이동",
+    "seq_stop": "재생 중지",
+    "seq_play": "애니메이션 재생",
+    "seq_pause": "애니메이션 일시정지",
+    "seq_last": "마지막 키프레임으로 이동",
+    "seq_loop_off": "반복 재생 활성화",
+    "seq_loop_on": "반복 재생 비활성화",
+    "seq_add": "현재 위치에 키프레임 추가",
+    "seq_speed": "재생 속도 (클릭으로 전환)",
+    "seq_snap": "키프레임을 그리드에 스냅 (우클릭으로 옵션)",
+    "seq_follow": "재생 중 플레이헤드 따라가기",
+    "seq_film_strip": "타임라인 아래에 필름 스트립 표시",
+    "seq_pip_preview": "화면 속 화면 미리보기 표시 (우클릭으로 옵션)",
+    "seq_save_path": "카메라 경로를 파일로 저장",
+    "seq_load_path": "파일에서 카메라 경로 불러오기",
+    "seq_format": "내보내기 형식 프리셋 (우클릭으로 옵션)",
+    "seq_quality": "CRF 품질 (낮을수록 = 높은 품질, 큰 파일)",
+    "seq_export": "카메라 경로에서 동영상 내보내기",
+    "seq_clear": "모든 키프레임 삭제",
+    "seq_interval": "그리드 스냅 간격",
+    "seq_preview_size": "PiP 미리보기 배율"
   },
   "exit_popup": {
     "title": "애플리케이션을 종료하시겠습니까?",
@@ -616,15 +637,6 @@
   "selection_group": {
     "lock": "잠금",
     "unlock": "잠금 해제"
-  },
-  "file_browser_ext": {
-    "dataset": "[데이터셋]",
-    "sog": "[SOG]",
-    "no_file_selected": "선택된 파일 없음",
-    "not_a_dataset": "(데이터셋 아님)",
-    "sog_directory": "(SOG 디렉터리)",
-    "sog_meta": "(SOG meta.json)",
-    "error": "오류:"
   },
   "progress": {
     "loss": "손실:",
@@ -739,6 +751,7 @@
     "disabled": "비활성화됨"
   },
   "image_preview": {
+    "title": "이미지 미리보기",
     "image_section": "이미지",
     "file_section": "파일",
     "view_section": "보기",
@@ -780,7 +793,8 @@
     "no_images_loaded": "로드된 이미지가 없습니다",
     "no_image": "이미지 없음",
     "zoom": "줌",
-    "fit": "맞춤"
+    "fit": "맞춤",
+    "storage_section": "저장소"
   },
   "startup": {
     "supported_by": "지원:",
@@ -927,7 +941,35 @@
   "sequencer": {
     "edit_focal_length": "초점 거리 편집...",
     "edit_focal_length_title": "초점 거리 편집",
-    "focal_length_mm": "초점 거리 (mm)"
+    "focal_length_mm": "초점 거리 (mm)",
+    "go_to_first_keyframe": "첫 키프레임으로 이동",
+    "stop": "정지",
+    "pause": "일시정지 (스페이스)",
+    "play": "재생 (스페이스)",
+    "go_to_last_keyframe": "마지막 키프레임으로 이동",
+    "loop_on": "반복: ON",
+    "loop_off": "반복: OFF",
+    "add_keyframe": "키프레임 추가 (K)",
+    "empty_hint": "카메라를 배치하고 K를 눌러 키프레임을 추가하세요",
+    "update_to_current_view": "현재 뷰로 업데이트",
+    "go_to_keyframe": "키프레임으로 이동",
+    "edit_time": "시간 편집...",
+    "easing": "이집",
+    "easing_last_keyframe": "이집 (마지막 키프레임)",
+    "easing_tooltip": "이집은 나가는 움직임을 제어합니다\n(마지막 키프레임에는 나가는 구간이 없습니다)",
+    "delete_keyframe": "키프레임 삭제",
+    "add_keyframe_here": "여기에 키프레임 추가",
+    "edit_keyframe_time": "키프레임 시간 편집",
+    "time_seconds": "시간 (s)",
+    "apply_u": "적용 (U)",
+    "revert_esc": "되돌리기 (Esc)",
+    "editing_keyframe": "키프레임 {} 편집 중",
+    "move_translate": "이동",
+    "rotate": "회전",
+    "loop_point_tooltip": "반복 지점 @ {} (시작으로 돌아감)",
+    "keyframe_tooltip": "키프레임 @ {} (더블클릭으로 편집)",
+    "playback_time": "재생 {:.2f}초",
+    "keyframe_preview": "키프레임 {} 미리보기"
   },
   "rendering_panel": {
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V"
@@ -996,5 +1038,23 @@
     "appearance": "Appearance",
     "line_width": "Line Width",
     "instructions": "Enter: Commit selection | Ctrl+C: Copy contents"
+  },
+  "file_association": {
+    "title": "기본 응용 프로그램으로 설정",
+    "message": "LichtFeld Studio를 스플랫 파일(.ply, .sog, .spz)의 기본 응용 프로그램으로 설정하시겠습니까?",
+    "yes": "예",
+    "not_now": "나중에",
+    "dont_ask": "다시 묻지 않기",
+    "success": "파일 연결이 성공적으로 등록되었습니다.",
+    "menu_register": "기본 응용 프로그램으로 설정...",
+    "menu_unregister": "기본 응용 프로그램 해제..."
+  },
+  "context_menu": {
+    "snap_interval": "스냅 간격",
+    "preview_scale": "미리보기 크기",
+    "video_format": "비디오 형식",
+    "clear_confirm": "모든 키프레임을 삭제하시겠습니까?",
+    "confirm": "확인",
+    "cancel": "취소"
   }
 }

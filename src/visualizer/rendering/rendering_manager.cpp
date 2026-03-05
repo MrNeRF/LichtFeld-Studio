@@ -25,6 +25,7 @@
 #include "rendering/rendering_pipeline.hpp"
 #include "scene/scene_manager.hpp"
 #include "scene/scene_render_state.hpp"
+#include "theme/theme.hpp"
 #include "training/components/ppisp.hpp"
 #include "training/components/ppisp_controller.hpp"
 #include "training/trainer.hpp"
@@ -504,6 +505,17 @@ namespace lfs::vis {
         LOG_TRACE("Render marked dirty (flags: 0x{:x})", flags);
     }
 
+    void RenderingManager::setViewportResizeActive(bool active) {
+        const bool was_active = viewport_resize_active_.exchange(active);
+        if (!was_active || active)
+            return;
+
+        if (viewport_resize_debounce_ == 0)
+            viewport_resize_debounce_ = 1;
+
+        markDirty(DirtyFlag::VIEWPORT | DirtyFlag::CAMERA | DirtyFlag::OVERLAY);
+    }
+
     void RenderingManager::updateSettings(const RenderSettings& new_settings) {
         std::lock_guard<std::mutex> lock(settings_mutex_);
 
@@ -630,21 +642,45 @@ namespace lfs::vis {
     }
 
     int RenderingManager::pickCameraFrustum(const glm::vec2& mouse_pos) {
-        // Throttle picking to avoid excessive calls
+        if (!settings_.show_camera_frustums)
+            return -1;
+
         auto now = std::chrono::steady_clock::now();
-        if (now - last_pick_time_ < pick_throttle_interval_) {
-            return hovered_camera_id_; // Return cached value
-        }
+        if (now - last_pick_time_ < pick_throttle_interval_)
+            return hovered_camera_id_;
         last_pick_time_ = now;
 
-        pending_pick_pos_ = mouse_pos;
-        pick_requested_ = true;
+        if (!engine_ || !last_scene_manager_ || !has_pick_context_)
+            return hovered_camera_id_;
 
-        pick_count_++;
-        LOG_TRACE("Pick #{} requested at ({}, {}), current hover: {}",
-                  pick_count_, mouse_pos.x, mouse_pos.y, hovered_camera_id_);
+        auto cameras = last_scene_manager_->getScene().getVisibleCameras();
+        if (cameras.empty())
+            return -1;
 
-        return hovered_camera_id_; // Return current value
+        glm::mat4 scene_transform(1.0f);
+        auto transforms = last_scene_manager_->getScene().getVisibleNodeTransforms();
+        if (!transforms.empty())
+            scene_transform = transforms[0];
+
+        auto pick_result = engine_->pickCameraFrustum(
+            cameras, mouse_pos,
+            glm::vec2(last_viewport_region_.x, last_viewport_region_.y),
+            glm::vec2(last_viewport_region_.width, last_viewport_region_.height),
+            last_viewport_data_,
+            settings_.camera_frustum_scale,
+            scene_transform);
+
+        int cam_id = -1;
+        if (pick_result)
+            cam_id = *pick_result;
+
+        if (cam_id != hovered_camera_id_) {
+            LOG_DEBUG("Camera hover changed: {} -> {}", hovered_camera_id_, cam_id);
+            hovered_camera_id_ = cam_id;
+            markDirty(DirtyFlag::OVERLAY);
+        }
+
+        return hovered_camera_id_;
     }
 
     bool RenderingManager::renderPreviewFrame(SceneManager* const scene_manager,
@@ -715,17 +751,31 @@ namespace lfs::vis {
         // SAFETY CHECK: Don't render with invalid viewport dimensions
         if (current_size.x <= 0 || current_size.y <= 0) {
             LOG_TRACE("Skipping render - invalid viewport size: {}x{}", current_size.x, current_size.y);
-            // Still clear to prevent trails
-            glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+            const auto& shell_bg = theme().menu_background();
+            glClearColor(shell_bg.x, shell_bg.y, shell_bg.z, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             return;
         }
 
+        constexpr int kResizeDebounceFrames = 3;
+        bool resize_completed = false;
+        const bool resize_active = viewport_resize_active_.load(std::memory_order_relaxed);
+
         if (current_size != last_viewport_size_) {
-            LOG_DEBUG("Viewport resize: {}x{} -> {}x{}", last_viewport_size_.x, last_viewport_size_.y,
-                      current_size.x, current_size.y);
-            markDirty(DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
             last_viewport_size_ = current_size;
+            if (resize_active) {
+                markDirty(DirtyFlag::OVERLAY);
+                viewport_resize_debounce_ = kResizeDebounceFrames;
+            } else {
+                markDirty(DirtyFlag::VIEWPORT | DirtyFlag::CAMERA | DirtyFlag::OVERLAY);
+            }
+        } else if (viewport_resize_debounce_ > 0 && !resize_active) {
+            if (--viewport_resize_debounce_ == 0) {
+                markDirty(DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
+                resize_completed = true;
+            } else {
+                markDirty(DirtyFlag::OVERLAY);
+            }
         }
 
         const lfs::core::SplatData* const model = scene_manager ? scene_manager->getModelForRendering() : nullptr;
@@ -803,7 +853,8 @@ namespace lfs::vis {
 
         glViewport(0, 0, context.viewport.frameBufferSize.x, context.viewport.frameBufferSize.y);
 
-        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        const auto& shell_bg = theme().menu_background();
+        glClearColor(shell_bg.x, shell_bg.y, shell_bg.z, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
         if (context.viewport_region) {
@@ -818,20 +869,28 @@ namespace lfs::vis {
 
         doFullRender(context, scene_manager, model);
 
+        if (resize_completed) {
+            resize_completed_ = true;
+            lfs::core::Tensor::trim_memory_pool();
+        }
+
         if (context.viewport_region) {
             glDisable(GL_SCISSOR_TEST);
         }
+
+        last_scene_manager_ = scene_manager;
+        if (context.viewport_region) {
+            last_viewport_region_ = *context.viewport_region;
+            has_pick_context_ = true;
+        }
     }
 
-    void RenderingManager::doFullRender(const RenderContext& context, SceneManager* scene_manager, const lfs::core::SplatData* model) {
-        const bool count_frame = model != nullptr;
-        if (count_frame) {
-            framerate_controller_.beginFrame();
-        }
+    void RenderingManager::doFullRender(const RenderContext& context, SceneManager* scene_manager,
+                                        const lfs::core::SplatData* model) {
         LOG_TIMER_TRACE("RenderingManager::doFullRender");
 
         render_count_++;
-        LOG_TRACE("Render #{}, pick_requested: {}", render_count_, pick_requested_);
+        LOG_TRACE("Render #{}", render_count_);
 
         glm::ivec2 render_size = context.viewport.windowSize;
         glm::ivec2 viewport_pos(0, 0);
@@ -850,11 +909,23 @@ namespace lfs::vis {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         const DirtyMask frame_dirty = dirty_mask_.exchange(0);
+        const bool count_frame = frame_dirty != 0;
+        if (count_frame) {
+            framerate_controller_.beginFrame();
+        }
 
         SceneRenderState scene_state;
         if (scene_manager) {
             scene_state = scene_manager->buildRenderState();
         }
+
+        last_viewport_data_ = lfs::rendering::ViewportData{
+            .rotation = context.viewport.getRotationMatrix(),
+            .translation = context.viewport.getTranslation(),
+            .size = render_size,
+            .focal_length_mm = settings_.focal_length_mm,
+            .orthographic = settings_.orthographic,
+            .ortho_scale = settings_.ortho_scale};
 
         const FrameContext frame_ctx{
             .viewport = context.viewport,
@@ -884,9 +955,7 @@ namespace lfs::vis {
                       .ellipsoid_active = ellipsoid_gizmo_active_,
                       .ellipsoid_radii = pending_ellipsoid_radii_,
                       .ellipsoid_transform = pending_ellipsoid_transform_},
-            .pick = {.requested = pick_requested_,
-                     .pos = pending_pick_pos_,
-                     .hovered_camera_id = hovered_camera_id_},
+            .hovered_camera_id = hovered_camera_id_,
             .current_camera_id = current_camera_id_,
             .hovered_gaussian_id = hovered_gaussian_id_,
             .selection_flash_intensity = getSelectionFlashIntensity(),
@@ -897,8 +966,7 @@ namespace lfs::vis {
             .cached_result_size = cached_result_size_,
             .render_texture_valid = render_texture_valid_.load(std::memory_order_relaxed),
             .gt_context = gt_context_,
-            .hovered_gaussian_id = hovered_gaussian_id_,
-            .hovered_camera_id = hovered_camera_id_};
+            .hovered_gaussian_id = hovered_gaussian_id_};
 
         if (frame_ctx.settings.split_view_mode == SplitViewMode::GTComparison &&
             resources.gt_context && resources.gt_context->valid() &&
@@ -909,7 +977,6 @@ namespace lfs::vis {
 
         for (auto& pass : passes_) {
             if (pass->shouldExecute(frame_dirty, frame_ctx)) {
-                LOG_TRACE("Executing pass: {}", pass->name());
                 pass->execute(*engine_, frame_ctx, resources);
             }
         }
@@ -925,9 +992,6 @@ namespace lfs::vis {
         cached_result_size_ = resources.cached_result_size;
         render_texture_valid_.store(resources.render_texture_valid, std::memory_order_relaxed);
         hovered_gaussian_id_ = resources.hovered_gaussian_id;
-        hovered_camera_id_ = resources.hovered_camera_id;
-        if (resources.pick_consumed)
-            pick_requested_ = false;
 
         {
             std::lock_guard<std::mutex> lock(split_info_mutex_);
@@ -1124,16 +1188,16 @@ namespace lfs::vis {
         rect_preview_active_ = false;
     }
 
-    void RenderingManager::setPolygonPreview(const std::vector<std::pair<float, float>>& points, bool closed, bool add_mode) {
+    void RenderingManager::setPolygonPreview(const std::vector<glm::vec3>& world_points, bool closed, bool add_mode) {
         polygon_preview_active_ = true;
-        polygon_points_ = points;
+        polygon_world_points_ = world_points;
         polygon_closed_ = closed;
         polygon_add_mode_ = add_mode;
     }
 
     void RenderingManager::clearPolygonPreview() {
         polygon_preview_active_ = false;
-        polygon_points_.clear();
+        polygon_world_points_.clear();
         polygon_closed_ = false;
     }
 

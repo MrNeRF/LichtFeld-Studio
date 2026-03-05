@@ -22,6 +22,15 @@ class ViewMenu:
         ("nord", "menu.view.theme.nord"),
     )
 
+    _SCALE_OPTIONS = (
+        (0.0, "menu.view.ui_scale.auto"),
+        (1.0, "100%"),
+        (1.25, "125%"),
+        (1.5, "150%"),
+        (1.75, "175%"),
+        (2.0, "200%"),
+    )
+
     @staticmethod
     def _normalize_theme_name(name: str) -> str:
         normalized = str(name or "").strip().lower().replace("-", "_").replace(" ", "_")
@@ -41,6 +50,15 @@ class ViewMenu:
                 is_current = current_theme == theme_id
                 if layout.menu_item_toggle(tr(label_key), "", is_current):
                     lf.ui.set_theme(theme_id)
+            layout.end_menu()
+
+        if layout.begin_menu(tr("menu.view.ui_scale")):
+            pref = lf.ui.get_ui_scale_preference()
+            for scale_val, label_key in self._SCALE_OPTIONS:
+                label = tr(label_key) if scale_val == 0.0 else label_key
+                is_current = abs(pref - scale_val) < 0.01
+                if layout.menu_item_toggle(label, "", is_current):
+                    lf.ui.set_ui_scale(scale_val)
             layout.end_menu()
 
         layout.separator()

@@ -1,0 +1,76 @@
+/* Training panel — panel-specific styles only.
+ * Shared widget styles are in components.rcss (auto-included via applyTheme).
+ * Spacing values (row padding, indent, frame padding) come from theme CSS.
+ * Layout: label LEFT, control RIGHT (matching ImGui layout.prop() convention). */
+
+body {
+    font-family: Inter;
+    padding: 6dp;
+}
+
+.prop-label {
+    min-width: 120dp;
+    text-align: left;
+    margin-left: 0;
+}
+
+select {
+    flex: 1;
+}
+
+.number-input {
+    flex: 1;
+}
+
+.setting-slider {
+    flex: 1;
+}
+
+.loss-graph-wrap {
+    display: flex;
+    flex-direction: row;
+}
+
+.loss-graph-ticks {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 4dp 3dp 4dp 0;
+    width: auto;
+}
+
+.loss-tick {
+    font-size: 7dp;
+    color: #8c8c8c;
+    text-align: right;
+    white-space: nowrap;
+}
+
+loss-graph {
+    display: block;
+    flex: 1;
+    height: 70dp;
+    margin-top: 2dp;
+}
+
+#loss-graph-container {
+    margin-top: 4dp;
+}
+
+#loss-label {
+    margin-bottom: 2dp;
+}
+
+.color-picker-popup {
+    display: none;
+    position: absolute;
+    z-index: 100;
+    padding: 4dp;
+    background-color: rgba(30, 30, 46, 230);
+    border-width: 1dp;
+    border-color: #585b70;
+}
+
+.color-picker-popup.visible {
+    display: block;
+}

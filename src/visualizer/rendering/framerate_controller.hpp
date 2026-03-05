@@ -37,8 +37,16 @@ namespace lfs::vis {
         bool shouldSkipSceneRender(bool is_training, bool scene_changed);
 
         // Get current FPS statistics
-        float getCurrentFPS() const { return current_fps_; }
-        float getAverageFPS() const { return average_fps_; }
+        float getCurrentFPS() {
+            cleanupOldFrames();
+            updateFPSStats();
+            return current_fps_;
+        }
+        float getAverageFPS() {
+            cleanupOldFrames();
+            updateFPSStats();
+            return average_fps_;
+        }
         bool isPerformanceCritical() const { return is_performance_critical_; }
 
         // Reset state (useful when scene changes significantly)

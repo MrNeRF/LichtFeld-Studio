@@ -1,0 +1,10 @@
+<rml>
+<head>
+    <link type="text/rcss" href="shell.rcss"/>
+</head>
+<body id="body">
+    <div id="menu-region"></div>
+    <div id="right-panel-region"></div>
+    <div id="status-region"></div>
+</body>
+</rml>
