@@ -44,96 +44,96 @@ namespace lfs::training {
             return quantile_threshold;
         }
 
+        // Input, expects Tensor [C,H,W] RGB format
+        lfs::core::Tensor apply_laplacian_filter(const lfs::core::Tensor& input_data) {
+
+            assert(input_data.dtype() == lfs::core::DataType::Float32);
+            assert(input_data.device() == lfs::core::Device::CUDA);
+            assert(input_data.ndim() == 3);
+
+            const int width = input_data.shape()[2];
+            const int height = input_data.shape()[1];
+            const int channels = input_data.shape()[0];
+
+            const float* d_input = static_cast<float*>(input_data.clone().data_ptr());
+
+            // Raw grayscale output memory in CUDA
+            float* d_output_grayscale;
+            cudaMalloc(&d_output_grayscale, sizeof(float) * width * height);
+            cudaMemset(d_output_grayscale, 0, sizeof(float) * width * height);
+
+            // Step 1: Grayscale
+            kernels::launch_grayscale_filter(d_input, d_output_grayscale, height, width);
+
+            // Raw Gaussian blur output memory in CUDA
+            float* d_output_blur_grayscale;
+            cudaMalloc(&d_output_blur_grayscale, sizeof(float) * width * height);
+            cudaMemset(d_output_blur_grayscale, 0, sizeof(float) * width * height);
+
+            // Step 2: Gaussian blur
+            kernels::launch_gausssian_blur(d_output_grayscale, d_output_blur_grayscale, 3, height, width);
+
+            // Step 3: Gradients intensity
+            float *d_magnitude, *d_angle;
+            cudaMalloc(&d_magnitude, sizeof(float) * width * height);
+            cudaMalloc(&d_angle, sizeof(float) * width * height);
+            cudaMemset(d_magnitude, 0, sizeof(float) * width * height);
+            cudaMemset(d_angle, 0, sizeof(float) * width * height);
+
+            kernels::launch_sobel_gradient_filter(d_output_blur_grayscale, d_magnitude, d_angle, height, width);
+
+            // Step 4: Non-Maximum-Suppresion
+            float* d_output_filter;
+            cudaMalloc(&d_output_filter, sizeof(float) * width * height);
+            cudaMemset(d_output_filter, 0, sizeof(float) * width * height);
+
+            kernels::launch_nms_kernel(d_magnitude, d_angle, d_output_filter, height, width);
+
+            lfs::core::Tensor laplacian = lfs::core::Tensor::from_blob(d_output_filter, lfs::core::TensorShape{static_cast<unsigned int>(height), static_cast<unsigned int>(width)},
+                                                                       lfs::core::Device::CUDA, lfs::core::DataType::Float32)
+                                              .clone(); // gives ownership to Tensor
+
+            // Free all memory used in GPU
+            cudaFree(d_angle);
+            cudaFree(d_output_filter);
+            cudaFree(d_magnitude);
+            cudaFree(d_output_blur_grayscale);
+            cudaFree(d_output_grayscale);
+            return laplacian;
+        }
+
+        lfs::core::Tensor median_normalization(const lfs::core::Tensor& value_tensor) {
+            // Handle NaNs
+            lfs::core::Tensor clean_tensor = value_tensor.masked_fill(value_tensor.isnan(), 0.0f);
+
+            // Create a mask (> 0)
+            lfs::core::Tensor mask = clean_tensor > 0.0f;
+
+            // only valid values to find the median
+            lfs::core::Tensor valid_values = clean_tensor.masked_select(mask);
+
+            // If no valid values exist,
+            if (valid_values.numel() == 0) {
+                return lfs::core::Tensor::zeros_like(clean_tensor);
+            }
+
+            // Calculate Median using Sort
+            auto [sorted_vals, sorted_indices] = valid_values.sort(0, false);
+
+            // Get the middle index & value
+            size_t mid_idx = valid_values.numel() / 2;
+            float median_val = sorted_vals[mid_idx].item_as<float>();
+
+            // Safety check prevent division by zero
+            if (median_val < 1e-9f) {
+                median_val = 1e-9f;
+            }
+
+            // Apply the scaling
+            lfs::core::Tensor ret_value = clean_tensor.div(median_val);
+            return ret_value;
+        }
     } // namespace
-
-    lfs::core::Tensor apply_laplacian_filter(const lfs::core::Tensor& input_data) {
-
-        assert(input_data.dtype() == lfs::core::DataType::Float32);
-        assert(input_data.device() == lfs::core::Device::CUDA);
-        assert(input_data.ndim() == 3);
-
-        const int width = input_data.shape()[2];
-        const int height = input_data.shape()[1];
-        const int channels = input_data.shape()[0];
-
-        const float* d_input = static_cast<float*>(input_data.clone().data_ptr());
-
-        // Raw grayscale output memory in CUDA
-        float* d_output_grayscale;
-        cudaMalloc(&d_output_grayscale, sizeof(float) * width * height);
-        cudaMemset(d_output_grayscale, 0, sizeof(float) * width * height);
-
-        // Step 1: Grayscale
-        kernels::launch_grayscale_filter(d_input, d_output_grayscale, height, width);
-
-        // Raw Gaussian blur output memory in CUDA
-        float* d_output_blur_grayscale;
-        cudaMalloc(&d_output_blur_grayscale, sizeof(float) * width * height);
-        cudaMemset(d_output_blur_grayscale, 0, sizeof(float) * width * height);
-
-        // Step 2: Gaussian blur
-        kernels::launch_gausssian_blur(d_output_grayscale, d_output_blur_grayscale, 3, height, width);
-
-        // Step 3: Gradients intensity
-        float *d_magnitude, *d_angle;
-        cudaMalloc(&d_magnitude, sizeof(float) * width * height);
-        cudaMalloc(&d_angle, sizeof(float) * width * height);
-        cudaMemset(d_magnitude, 0, sizeof(float) * width * height);
-        cudaMemset(d_angle, 0, sizeof(float) * width * height);
-
-        kernels::launch_sobel_gradient_filter(d_output_blur_grayscale, d_magnitude, d_angle, height, width);
-
-        // Step 4: Non-Maximum-Suppresion
-        float* d_output_filter;
-        cudaMalloc(&d_output_filter, sizeof(float) * width * height);
-        cudaMemset(d_output_filter, 0, sizeof(float) * width * height);
-
-        kernels::launch_nms_kernel(d_magnitude, d_angle, d_output_filter, height, width);
-
-        lfs::core::Tensor laplacian = lfs::core::Tensor::from_blob(d_output_filter, lfs::core::TensorShape{static_cast<unsigned int>(height), static_cast<unsigned int>(width)},
-                                                                   lfs::core::Device::CUDA, lfs::core::DataType::Float32)
-                                          .clone(); // gives ownership to Tensor
-
-        // Free all memory used in GPU
-        cudaFree(d_angle);
-        cudaFree(d_output_filter);
-        cudaFree(d_magnitude);
-        cudaFree(d_output_blur_grayscale);
-        cudaFree(d_output_grayscale);
-        return laplacian;
-    }
-
-    lfs::core::Tensor median_normalization(const lfs::core::Tensor& value_tensor) {
-        // Handle NaNs
-        lfs::core::Tensor clean_tensor = value_tensor.masked_fill(value_tensor.isnan(), 0.0f);
-
-        // Create a mask for strictly positive values (> 0)
-        lfs::core::Tensor mask = clean_tensor > 0.0f;
-
-        // only valid values to find the median
-        lfs::core::Tensor valid_values = clean_tensor.masked_select(mask);
-
-        // If no valid values exist,
-        if (valid_values.numel() == 0) {
-            return lfs::core::Tensor::zeros_like(clean_tensor);
-        }
-
-        // Calculate Median using Sort
-        auto [sorted_vals, sorted_indices] = valid_values.sort(0, false);
-
-        // Get the middle index & value
-        size_t mid_idx = valid_values.numel() / 2;
-        float median_val = sorted_vals[mid_idx].item_as<float>();
-
-        // Safety check prevent division by zero
-        if (median_val < 1e-9f) {
-            median_val = 1e-9f;
-        }
-
-        // Apply the scaling
-        lfs::core::Tensor ret_value = clean_tensor.div(median_val);
-        return ret_value;
-    }
 
     ImprovedGSPlus::ImprovedGSPlus(lfs::core::SplatData& splat_data)
         : _splat_data(&splat_data) {}
@@ -255,7 +255,6 @@ namespace lfs::training {
 
             // Compute photometric importance, view dependent
             const lfs::core::Tensor edge_score = median_normalization(edge_scores);
-
             // Aggregation
             const lfs::core::Tensor idx = d_indices.slice(0, view, view + 1);
             gaussian_scores.index_put_(idx, edge_score.unsqueeze(0));
@@ -477,7 +476,7 @@ namespace lfs::training {
             densify_with_score(gaussian_scores, grads, get_current_budget());
             opacity_prune(iter);
 
-            lfs::core::CudaMemoryPool::instance().trim_cached_memory();
+            lfs::core::Tensor::trim_memory_pool();
 
             _splat_data->_densification_info = lfs::core::Tensor::zeros(
                 {2, static_cast<size_t>(_splat_data->size())},
