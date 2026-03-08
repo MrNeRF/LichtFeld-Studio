@@ -168,7 +168,7 @@ namespace lfs::training {
 
         const size_t num_views = _views->size();
 
-        // Prepare tensor size:
+        // Prepare tensor size: [Views, H, W]
         lfs::core::Tensor image_sample = _views->get(0).data.image;
         lfs::core::TensorShape all_egdes_shape = lfs::core::TensorShape({num_views, image_sample.shape()[1], image_sample.shape()[2]});
 
@@ -472,17 +472,18 @@ namespace lfs::training {
             const lfs::core::Tensor denom = _splat_data->_densification_info[0];
             const lfs::core::Tensor grads = numer / denom.clamp_min(1.0f);
 
+            // strategy core
             const lfs::core::Tensor gaussian_scores = compute_gaussian_score(grads);
             densify_with_score(gaussian_scores, grads, get_current_budget());
             opacity_prune(iter);
 
             lfs::core::Tensor::trim_memory_pool();
 
+            // refine reset stats
             _splat_data->_densification_info = lfs::core::Tensor::zeros(
                 {2, static_cast<size_t>(_splat_data->size())},
                 _splat_data->means().device());
 
-            // refine reset stats
             this->_current_step++;
         }
 
@@ -545,6 +546,7 @@ namespace lfs::training {
             num_samples = std::max(N, min_cam_dataset);
         }
 
+        // Create vector for CameraExample and Camera idx
         std::vector<CameraExample> samples;
         std::vector<int> indices;
         samples.reserve(num_samples);
@@ -567,11 +569,11 @@ namespace lfs::training {
         return {samples, indices};
     }
 
+    // From ImprovedGS but not used
+    [[maybe_unused]]
     void ImprovedGSPlus::prune_post_reset() {
-        const float q = 0.1f;
+        const float q = 0.2f;
         const lfs::core::Tensor opacity = _splat_data->get_opacity();
-
-        // std::cout << "Opacity ndim: " << opacity.ndim() << std::endl;
 
         auto [sorted_val, sorted_idx] = opacity.sort();
 
@@ -580,7 +582,6 @@ namespace lfs::training {
 
         float quantile_threshold = sorted_val[q_index].item_as<float>();
 
-        // std::cout << "Quantile_threshold: " << quantile_threshold << std::endl;
 
         const lfs::core::Tensor prune_mask = (opacity < quantile_threshold);
 

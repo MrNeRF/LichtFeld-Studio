@@ -73,8 +73,6 @@ namespace lfs::training {
         inline const unsigned global_seed() const noexcept { return _current_step; }                             // for camera sampling
         const std::pair<std::vector<CameraExample>, std::vector<int>> random_cam_sample(const int N = 10) const; // N minimum
 
-        const lfs::core::Tensor get_loss_map(const lfs::core::Tensor reconstructed_img, const lfs::core::Tensor original_img, const lfs::core::Tensor edge_loss_norm) const;
-
         std::vector<int64_t> get_count_array();
         void get_all_edges();
 

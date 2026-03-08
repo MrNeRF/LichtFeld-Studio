@@ -647,7 +647,12 @@ namespace lfs::training::kernels {
             num_split, shN_dim, revised_opacity);
     }
 
-        // Size[3]
+
+    // ============================================================================
+    // In-place Long-Axis-Split Kernel
+    // ============================================================================
+
+    // Helper function to get the maximum value index in an array of size 3
     __device__ uint3 get_max_value_index(const float* arr) {
 
         float v0 = arr[0], v1 = arr[1], v2 = arr[2];

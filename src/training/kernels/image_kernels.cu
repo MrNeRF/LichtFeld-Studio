@@ -40,6 +40,10 @@ namespace lfs::filters {
 
 namespace lfs::training::kernels {
 
+    // ============================================================================
+    // Image Filtering Kernels (Convolution Kernels)
+    // ============================================================================
+
     __global__ void rgb_to_grayscale(const float* input, float* output, const int height, const int width) {
         int x = blockIdx.x * blockDim.x + threadIdx.x;
         int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -179,6 +183,10 @@ namespace lfs::training::kernels {
             }
         }
     }
+
+    // ============================================================================
+    // Launch functions
+    // ============================================================================
 
     void launch_nms_kernel(const float* d_magnitude, const float* d_angle, float* d_output, const int height, const int width) {
 
