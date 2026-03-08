@@ -15,7 +15,6 @@
 
 #include <RmlUi/Core.h>
 #include <cassert>
-#include <cstring>
 #include <format>
 
 namespace lfs::vis::gui {
@@ -67,22 +66,22 @@ namespace lfs::vis::gui {
         if (!doc_)
             return;
 
-        const auto& p = lfs::vis::theme().palette;
-        if (std::memcmp(last_synced_text_, &p.text, sizeof(last_synced_text_)) == 0)
+        const std::size_t theme_signature = rml_theme::currentThemeSignature();
+        if (has_theme_signature_ && theme_signature == last_theme_signature_)
             return;
-        std::memcpy(last_synced_text_, &p.text, sizeof(last_synced_text_));
+        last_theme_signature_ = theme_signature;
+        has_theme_signature_ = true;
 
         if (base_rcss_.empty()) {
             const std::string rcss_path = rml_path_.substr(0, rml_path_.rfind('.')) + ".rcss";
             base_rcss_ = rml_theme::loadBaseRCSS(rcss_path);
         }
 
-        rml_theme::applyTheme(doc_, base_rcss_, generateThemeRCSS());
+        rml_theme::applyTheme(doc_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
     }
 
-    std::string RmlOverlayContext::generateThemeRCSS() const {
-        const auto& p = lfs::vis::theme().palette;
-        const auto& t = lfs::vis::theme();
+    std::string RmlOverlayContext::generateThemeRCSS(const lfs::vis::Theme& t) const {
+        const auto& p = t.palette;
 
         using rml_theme::colorToRml;
         using rml_theme::colorToRmlAlpha;
@@ -139,11 +138,13 @@ namespace lfs::vis::gui {
 
             GLint prev_fbo = 0;
             fbo_.bind(&prev_fbo);
+            render_iface->SetTargetFramebuffer(fbo_.fbo());
 
             render_iface->BeginFrame();
             ctx_->Render();
             render_iface->EndFrame();
 
+            render_iface->SetTargetFramebuffer(0);
             fbo_.unbind(prev_fbo);
         }
 

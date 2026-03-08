@@ -194,8 +194,8 @@ namespace lfs::vis::gui {
         git_commit_ = get("git-commit");
     }
 
-    std::string RmlStatusBar::generateThemeRCSS() const {
-        const auto& p = lfs::vis::theme().palette;
+    std::string RmlStatusBar::generateThemeRCSS(const lfs::vis::Theme& t) const {
+        const auto& p = t.palette;
 
         const auto text = colorToRml(p.text);
         const auto text_dim = colorToRml(p.text_dim);
@@ -223,15 +223,16 @@ namespace lfs::vis::gui {
         if (!document_)
             return;
 
-        const auto& t = lfs::vis::theme();
-        if (t.name == last_theme_)
+        const std::size_t theme_signature = rml_theme::currentThemeSignature();
+        if (has_theme_signature_ && theme_signature == last_theme_signature_)
             return;
-        last_theme_ = t.name;
+        last_theme_signature_ = theme_signature;
+        has_theme_signature_ = true;
 
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/statusbar.rcss");
 
-        rml_theme::applyTheme(document_, base_rcss_, generateThemeRCSS());
+        rml_theme::applyTheme(document_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
 
         cache_ = CachedState{};
     }
@@ -605,11 +606,13 @@ namespace lfs::vis::gui {
 
             GLint prev_fbo = 0;
             fbo_.bind(&prev_fbo);
+            render->SetTargetFramebuffer(fbo_.fbo());
 
             render->BeginFrame();
             rml_context_->Render();
             render->EndFrame();
 
+            render->SetTargetFramebuffer(0);
             fbo_.unbind(prev_fbo);
         }
 

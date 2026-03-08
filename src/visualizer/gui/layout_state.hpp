@@ -20,6 +20,7 @@ namespace lfs::vis::gui {
 
         void save() const;
         void load();
+        static std::filesystem::path getConfigDir();
 
     private:
         static std::filesystem::path getConfigPath();

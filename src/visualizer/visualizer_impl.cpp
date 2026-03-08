@@ -30,6 +30,7 @@
 // clang-format off
 #include <glad/glad.h>
 // clang-format on
+#include <SDL3/SDL_events.h>
 #include <cassert>
 #include <chrono>
 #include <iostream>
@@ -186,6 +187,12 @@ namespace lfs::vis {
         callback_cleanup_.add([] { python::set_operator_callbacks(nullptr); });
         python::set_gui_manager(gui_manager_.get());
         callback_cleanup_.add([] { python::set_gui_manager(nullptr); });
+        python::set_redraw_wakeup_callback([]() {
+            SDL_Event event{};
+            event.type = SDL_EVENT_USER;
+            SDL_PushEvent(&event);
+        });
+        callback_cleanup_.add([] { python::set_redraw_wakeup_callback(nullptr); });
         python::set_mesh2splat_callbacks(
             [](std::shared_ptr<core::MeshData> mesh, std::string name, core::Mesh2SplatOptions opts) {
                 auto* gm = python::get_gui_manager();
@@ -600,7 +607,8 @@ namespace lfs::vis {
         // ui::PointCloudModeChanged are handled by RenderingManager::setupEventHandlers()
 
         // Window redraw requests on scene/mode changes
-        state::SceneChanged::when([this](const auto&) {
+        state::SceneChanged::when([this](const auto& event) {
+            python::set_scene_mutation_flags(event.mutation_flags);
             python::bump_scene_generation();
             if (window_manager_) {
                 window_manager_->requestRedraw();
@@ -955,9 +963,6 @@ namespace lfs::vis {
 
         rendering_manager_->renderFrame(context, scene_manager_.get());
 
-        if (gui_manager_) {
-            gui_manager_->setRmlResizeDeferring(rendering_manager_->isViewportResizeDeferring());
-        }
         gui_manager_->render();
 
         const bool resize_done = rendering_manager_->consumeResizeCompleted();
@@ -975,9 +980,11 @@ namespace lfs::vis {
         const bool continuous_input = input_controller_ && input_controller_->isContinuousInputActive();
         const bool has_python_animation = python::has_frame_callback();
         const bool has_python_overlay = python::has_viewport_draw_handlers();
+        const bool has_python_redraw = python::consume_redraw_request();
         const bool needs_gui_animation = gui_manager_ && gui_manager_->needsAnimationFrame();
 
-        if (needs_render || continuous_input || has_python_animation || has_python_overlay || needs_gui_animation) {
+        if (needs_render || continuous_input || has_python_animation || has_python_overlay ||
+            has_python_redraw || needs_gui_animation) {
             window_manager_->pollEvents();
         } else if (is_training) {
             // Training: longer wait to reduce GPU load and memory fragmentation

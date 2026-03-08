@@ -8,6 +8,11 @@ body {
     padding: 6dp;
 }
 
+#content-wrap,
+#content {
+    min-width: 0;
+}
+
 .prop-label {
     min-width: 120dp;
     text-align: left;
@@ -29,6 +34,10 @@ select {
 .loss-graph-wrap {
     display: flex;
     flex-direction: row;
+    align-items: stretch;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
 }
 
 .loss-graph-ticks {
@@ -36,10 +45,12 @@ select {
     flex-direction: column;
     justify-content: space-between;
     padding: 4dp 3dp 4dp 0;
-    width: auto;
+    width: 48dp;
+    flex-shrink: 0;
 }
 
 .loss-tick {
+    font-family: "JetBrains Mono";
     font-size: 7dp;
     color: #8c8c8c;
     text-align: right;
@@ -49,16 +60,27 @@ select {
 loss-graph {
     display: block;
     flex: 1;
+    width: 0;
+    min-width: 0;
     height: 70dp;
     margin-top: 2dp;
 }
 
 #loss-graph-container {
     margin-top: 4dp;
+    min-width: 0;
 }
 
 #loss-label {
     margin-bottom: 2dp;
+    min-width: 0;
+}
+
+.training-status-line {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .color-picker-popup {

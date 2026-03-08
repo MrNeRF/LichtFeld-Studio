@@ -2,12 +2,70 @@
 <head>
     <link type="text/rcss" href="scene_tree.rcss"/>
 </head>
-<body id="body">
+<body id="body" data-model="scene_panel">
     <div id="search-container">
         <img id="search-icon" class="row-icon" src="../icon/scene/search.png" />
-        <input id="filter-input" type="text" />
+        <input id="filter-input" type="text" data-attr-placeholder="search_placeholder" />
     </div>
     <div id="tree-container">
+        <div class="empty-state" data-if="show_empty_state">
+            <div class="empty-message">{{ empty_message_primary }}</div>
+            <div class="empty-message">{{ empty_message_secondary }}</div>
+        </div>
+
+        <div id="tree-content" data-if="show_tree">
+            <div class="section-header" id="models-header">
+                <span class="section-arrow">{{ models_collapsed ? '▶' : '▼' }}</span>
+                <span>{{ models_header_text }}</span>
+            </div>
+
+            <div class="virtual-spacer" data-style-height="top_spacer_height"></div>
+
+            <div class="tree-row"
+                 data-for="row : visible_rows"
+                 data-class-placeholder="!row.present"
+                 data-class-even="row.even"
+                 data-class-odd="!row.even"
+                 data-class-selected="row.selected"
+                 data-class-drop-target="row.drop_target"
+                 data-attr-data-node="row.name"
+                 data-attr-data-id="row.id"
+                 data-attr-data-type="row.node_type"
+                 data-style-padding-left="row.indent"
+                 data-style-drag="row.drag_mode">
+                <span class="row-content">
+                    <img class="row-icon"
+                         data-class-icon-vis-on="row.visible"
+                         data-class-icon-vis-off="!row.visible"
+                         data-attr-sprite="row.vis_sprite"
+                         data-attr-data-node="row.name"
+                         data-action="toggle-vis" />
+
+                    <img data-if="row.use_type_icon"
+                         data-attr-class="'row-icon type-icon ' + row.type_class"
+                         data-attr-src="row.type_icon_src" />
+                    <span data-if="row.use_unicode_icon"
+                          data-attr-class="'node-icon ' + row.type_class">{{ row.unicode_icon }}</span>
+
+                    <span class="expand-toggle"
+                          data-if="row.has_children"
+                          data-attr-data-target="row.children_target">{{ row.expand_glyph }}</span>
+                    <span class="leaf-spacer" data-if="!row.has_children"></span>
+
+                    <input type="text"
+                           class="rename-input"
+                           data-if="row.renaming"
+                           data-attr-data-node="row.name"
+                           data-attr-value="row.rename_value" />
+
+                    <span class="node-name"
+                          data-if="!row.renaming"
+                          data-class-training-disabled="row.camera_training_disabled">{{ row.label }}</span>
+                </span>
+            </div>
+
+            <div class="virtual-spacer" data-style-height="bottom_spacer_height"></div>
+        </div>
     </div>
     <div id="context-menu" class="context-menu">
     </div>

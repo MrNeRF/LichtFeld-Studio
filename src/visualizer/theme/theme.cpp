@@ -34,6 +34,7 @@ namespace lfs::vis {
 
         // Theme state
         Theme g_current_theme;
+        std::string g_current_theme_id = "dark";
         Theme g_dark_theme;
         Theme g_light_theme;
         Theme g_gruvbox_theme;
@@ -58,9 +59,15 @@ namespace lfs::vis {
         std::filesystem::file_time_type g_catppuccin_latte_mtime;
         std::filesystem::file_time_type g_nord_mtime;
 
+        void ensureThemesLoaded();
+        void applyCurrentTheme(const Theme& theme, std::string_view theme_id);
+        bool activateThemePreset(std::string_view theme_id);
+
         void ensureInitialized() {
             if (!g_initialized) {
+                ensureThemesLoaded();
                 g_current_theme = darkTheme();
+                g_current_theme_id = "dark";
                 g_initialized = true;
             }
         }
@@ -93,7 +100,7 @@ namespace lfs::vis {
             return {0.0f, 0.0f};
         }
 
-        std::string normalizeThemeName(std::string name) {
+        std::string normalizeThemeIdImpl(std::string name) {
             std::transform(
                 name.begin(),
                 name.end(),
@@ -277,10 +284,23 @@ namespace lfs::vis {
         return g_current_theme;
     }
 
+    namespace {
+        ThemeChangeCallback g_theme_change_cb;
+    }
+
+    void setThemeChangeCallback(ThemeChangeCallback cb) { g_theme_change_cb = std::move(cb); }
+
+    const std::string& currentThemeId() {
+        ensureInitialized();
+        return g_current_theme_id;
+    }
+
+    std::string normalizeThemeId(std::string name) {
+        return normalizeThemeIdImpl(std::move(name));
+    }
+
     void setTheme(const Theme& t) {
-        g_current_theme = t;
-        g_initialized = true;
-        applyThemeToImGui();
+        applyCurrentTheme(t, normalizeThemeIdImpl(t.name));
     }
 
     void applyThemeToImGui() {
@@ -598,77 +618,74 @@ namespace lfs::vis {
             },
         };
 
+        struct ThemePresetRecord {
+            const char* id;
+            const char* asset_name;
+            Theme* theme;
+            const Theme* defaults;
+            std::filesystem::path* path;
+            std::filesystem::file_time_type* mtime;
+        };
+
+        ThemePresetRecord THEME_PRESETS[] = {
+            {"dark", "themes/dark.json", &g_dark_theme, &DEFAULT_DARK, &g_dark_path, &g_dark_mtime},
+            {"light", "themes/light.json", &g_light_theme, &DEFAULT_LIGHT, &g_light_path, &g_light_mtime},
+            {"gruvbox", "themes/gruvbox.json", &g_gruvbox_theme, &DEFAULT_GRUVBOX, &g_gruvbox_path, &g_gruvbox_mtime},
+            {"catppuccin_mocha", "themes/catppuccin_mocha.json", &g_catppuccin_mocha_theme, &DEFAULT_CATPPUCCIN_MOCHA, &g_catppuccin_mocha_path, &g_catppuccin_mocha_mtime},
+            {"catppuccin_latte", "themes/catppuccin_latte.json", &g_catppuccin_latte_theme, &DEFAULT_CATPPUCCIN_LATTE, &g_catppuccin_latte_path, &g_catppuccin_latte_mtime},
+            {"nord", "themes/nord.json", &g_nord_theme, &DEFAULT_NORD, &g_nord_path, &g_nord_mtime},
+        };
+
+        ThemePresetRecord* findThemePreset(std::string_view theme_id) {
+            const auto normalized = normalizeThemeIdImpl(std::string(theme_id));
+            for (auto& preset : THEME_PRESETS) {
+                if (preset.id == normalized)
+                    return &preset;
+            }
+            return nullptr;
+        }
+
+        bool isKnownThemePresetId(std::string_view theme_id) {
+            return findThemePreset(theme_id) != nullptr;
+        }
+
+        void loadThemePreset(ThemePresetRecord& preset) {
+            *preset.theme = *preset.defaults;
+            preset.path->clear();
+
+            try {
+                *preset.path = getAssetPath(preset.asset_name);
+                if (!loadTheme(*preset.theme, lfs::core::path_to_utf8(*preset.path)))
+                    return;
+
+                *preset.mtime = std::filesystem::last_write_time(*preset.path);
+                LOG_INFO("Loaded {} theme from {}", preset.id, lfs::core::path_to_utf8(*preset.path));
+            } catch (...) {
+                preset.path->clear();
+            }
+        }
+
+        bool hotReloadThemePreset(ThemePresetRecord& preset) {
+            if (preset.path->empty() || !std::filesystem::exists(*preset.path))
+                return false;
+
+            const auto mtime = std::filesystem::last_write_time(*preset.path);
+            if (mtime == *preset.mtime)
+                return false;
+
+            Theme reloaded = *preset.defaults;
+            if (!loadTheme(reloaded, lfs::core::path_to_utf8(*preset.path)))
+                return false;
+
+            *preset.theme = std::move(reloaded);
+            *preset.mtime = mtime;
+            LOG_INFO("Hot-reloaded {} theme", preset.id);
+            return true;
+        }
+
         void loadThemesFromFiles() {
-            // Load dark theme
-            g_dark_theme = DEFAULT_DARK;
-            try {
-                g_dark_path = getAssetPath("themes/dark.json");
-                if (loadTheme(g_dark_theme, lfs::core::path_to_utf8(g_dark_path))) {
-                    g_dark_mtime = std::filesystem::last_write_time(g_dark_path);
-                    LOG_INFO("Loaded dark theme from {}", lfs::core::path_to_utf8(g_dark_path));
-                }
-            } catch (...) {
-                g_dark_path.clear();
-            }
-
-            // Load light theme
-            g_light_theme = DEFAULT_LIGHT;
-            try {
-                g_light_path = getAssetPath("themes/light.json");
-                if (loadTheme(g_light_theme, lfs::core::path_to_utf8(g_light_path))) {
-                    g_light_mtime = std::filesystem::last_write_time(g_light_path);
-                    LOG_INFO("Loaded light theme from {}", lfs::core::path_to_utf8(g_light_path));
-                }
-            } catch (...) {
-                g_light_path.clear();
-            }
-
-            // Load gruvbox theme
-            g_gruvbox_theme = DEFAULT_GRUVBOX;
-            try {
-                g_gruvbox_path = getAssetPath("themes/gruvbox.json");
-                if (loadTheme(g_gruvbox_theme, lfs::core::path_to_utf8(g_gruvbox_path))) {
-                    g_gruvbox_mtime = std::filesystem::last_write_time(g_gruvbox_path);
-                    LOG_INFO("Loaded gruvbox theme from {}", lfs::core::path_to_utf8(g_gruvbox_path));
-                }
-            } catch (...) {
-                g_gruvbox_path.clear();
-            }
-
-            // Load Catppuccin Mocha theme
-            g_catppuccin_mocha_theme = DEFAULT_CATPPUCCIN_MOCHA;
-            try {
-                g_catppuccin_mocha_path = getAssetPath("themes/catppuccin_mocha.json");
-                if (loadTheme(g_catppuccin_mocha_theme, lfs::core::path_to_utf8(g_catppuccin_mocha_path))) {
-                    g_catppuccin_mocha_mtime = std::filesystem::last_write_time(g_catppuccin_mocha_path);
-                    LOG_INFO("Loaded catppuccin mocha theme from {}", lfs::core::path_to_utf8(g_catppuccin_mocha_path));
-                }
-            } catch (...) {
-                g_catppuccin_mocha_path.clear();
-            }
-
-            // Load Catppuccin Latte theme
-            g_catppuccin_latte_theme = DEFAULT_CATPPUCCIN_LATTE;
-            try {
-                g_catppuccin_latte_path = getAssetPath("themes/catppuccin_latte.json");
-                if (loadTheme(g_catppuccin_latte_theme, lfs::core::path_to_utf8(g_catppuccin_latte_path))) {
-                    g_catppuccin_latte_mtime = std::filesystem::last_write_time(g_catppuccin_latte_path);
-                    LOG_INFO("Loaded catppuccin latte theme from {}", lfs::core::path_to_utf8(g_catppuccin_latte_path));
-                }
-            } catch (...) {
-                g_catppuccin_latte_path.clear();
-            }
-
-            // Load nord theme
-            g_nord_theme = DEFAULT_NORD;
-            try {
-                g_nord_path = getAssetPath("themes/nord.json");
-                if (loadTheme(g_nord_theme, lfs::core::path_to_utf8(g_nord_path))) {
-                    g_nord_mtime = std::filesystem::last_write_time(g_nord_path);
-                    LOG_INFO("Loaded nord theme from {}", lfs::core::path_to_utf8(g_nord_path));
-                }
-            } catch (...) {
-                g_nord_path.clear();
+            for (auto& preset : THEME_PRESETS) {
+                loadThemePreset(preset);
             }
 
             g_themes_loaded = true;
@@ -712,138 +729,61 @@ namespace lfs::vis {
         return g_nord_theme;
     }
 
-    bool setThemeByName(const std::string& name) {
-        const std::string normalized = normalizeThemeName(name);
-        if (normalized == "dark") {
-            setTheme(darkTheme());
-            return true;
+    void visitThemePresets(const ThemePresetVisitor& visitor) {
+        ensureThemesLoaded();
+        for (const auto& preset : THEME_PRESETS) {
+            visitor(preset.id, *preset.theme);
         }
-        if (normalized == "light") {
-            setTheme(lightTheme());
-            return true;
-        }
-        if (normalized == "gruvbox") {
-            setTheme(gruvboxTheme());
-            return true;
-        }
-        if (normalized == "catppuccin_mocha") {
-            setTheme(catppuccinMochaTheme());
-            return true;
-        }
-        if (normalized == "catppuccin_latte") {
-            setTheme(catppuccinLatteTheme());
-            return true;
-        }
-        if (normalized == "nord") {
-            setTheme(nordTheme());
-            return true;
-        }
-        return false;
     }
 
-    void checkThemeFileChanges() {
+    namespace {
+        void applyCurrentTheme(const Theme& theme, std::string_view theme_id) {
+            g_current_theme = theme;
+            g_current_theme_id = std::string(theme_id);
+            g_initialized = true;
+            applyThemeToImGui();
+            if (g_theme_change_cb)
+                g_theme_change_cb(g_current_theme_id);
+        }
+
+        bool activateThemePreset(std::string_view theme_id) {
+            ensureThemesLoaded();
+
+            const auto* preset = findThemePreset(theme_id);
+            if (!preset)
+                return false;
+
+            applyCurrentTheme(*preset->theme, preset->id);
+            return true;
+        }
+    } // namespace
+
+    bool setThemeByName(const std::string& name) {
+        return activateThemePreset(name);
+    }
+
+    bool checkThemeFileChanges() {
         if (!g_themes_loaded)
-            return;
+            return false;
 
-        const std::string current_theme = normalizeThemeName(g_current_theme.name);
-        bool reloaded = false;
+        const std::string active_theme_id = g_current_theme_id;
+        bool any_reloaded = false;
+        bool active_theme_reloaded = false;
 
-        // Check dark theme
-        if (!g_dark_path.empty() && std::filesystem::exists(g_dark_path)) {
-            const auto mtime = std::filesystem::last_write_time(g_dark_path);
-            if (mtime != g_dark_mtime) {
-                Theme t = DEFAULT_DARK;
-                if (loadTheme(t, lfs::core::path_to_utf8(g_dark_path))) {
-                    g_dark_theme = t;
-                    g_dark_mtime = mtime;
-                    LOG_INFO("Hot-reloaded dark theme");
-                    if (current_theme == "dark")
-                        reloaded = true;
-                }
-            }
+        for (auto& preset : THEME_PRESETS) {
+            if (!hotReloadThemePreset(preset))
+                continue;
+
+            any_reloaded = true;
+            if (active_theme_id == preset.id)
+                active_theme_reloaded = true;
         }
 
-        // Check light theme
-        if (!g_light_path.empty() && std::filesystem::exists(g_light_path)) {
-            const auto mtime = std::filesystem::last_write_time(g_light_path);
-            if (mtime != g_light_mtime) {
-                Theme t = DEFAULT_LIGHT;
-                if (loadTheme(t, lfs::core::path_to_utf8(g_light_path))) {
-                    g_light_theme = t;
-                    g_light_mtime = mtime;
-                    LOG_INFO("Hot-reloaded light theme");
-                    if (current_theme == "light")
-                        reloaded = true;
-                }
-            }
+        if (active_theme_reloaded && !activateThemePreset(active_theme_id)) {
+            activateThemePreset("dark");
         }
 
-        // Check gruvbox theme
-        if (!g_gruvbox_path.empty() && std::filesystem::exists(g_gruvbox_path)) {
-            const auto mtime = std::filesystem::last_write_time(g_gruvbox_path);
-            if (mtime != g_gruvbox_mtime) {
-                Theme t = DEFAULT_GRUVBOX;
-                if (loadTheme(t, lfs::core::path_to_utf8(g_gruvbox_path))) {
-                    g_gruvbox_theme = t;
-                    g_gruvbox_mtime = mtime;
-                    LOG_INFO("Hot-reloaded gruvbox theme");
-                    if (current_theme == "gruvbox")
-                        reloaded = true;
-                }
-            }
-        }
-
-        // Check Catppuccin Mocha theme
-        if (!g_catppuccin_mocha_path.empty() && std::filesystem::exists(g_catppuccin_mocha_path)) {
-            const auto mtime = std::filesystem::last_write_time(g_catppuccin_mocha_path);
-            if (mtime != g_catppuccin_mocha_mtime) {
-                Theme t = DEFAULT_CATPPUCCIN_MOCHA;
-                if (loadTheme(t, lfs::core::path_to_utf8(g_catppuccin_mocha_path))) {
-                    g_catppuccin_mocha_theme = t;
-                    g_catppuccin_mocha_mtime = mtime;
-                    LOG_INFO("Hot-reloaded catppuccin mocha theme");
-                    if (current_theme == "catppuccin_mocha")
-                        reloaded = true;
-                }
-            }
-        }
-
-        // Check Catppuccin Latte theme
-        if (!g_catppuccin_latte_path.empty() && std::filesystem::exists(g_catppuccin_latte_path)) {
-            const auto mtime = std::filesystem::last_write_time(g_catppuccin_latte_path);
-            if (mtime != g_catppuccin_latte_mtime) {
-                Theme t = DEFAULT_CATPPUCCIN_LATTE;
-                if (loadTheme(t, lfs::core::path_to_utf8(g_catppuccin_latte_path))) {
-                    g_catppuccin_latte_theme = t;
-                    g_catppuccin_latte_mtime = mtime;
-                    LOG_INFO("Hot-reloaded catppuccin latte theme");
-                    if (current_theme == "catppuccin_latte")
-                        reloaded = true;
-                }
-            }
-        }
-
-        // Check nord theme
-        if (!g_nord_path.empty() && std::filesystem::exists(g_nord_path)) {
-            const auto mtime = std::filesystem::last_write_time(g_nord_path);
-            if (mtime != g_nord_mtime) {
-                Theme t = DEFAULT_NORD;
-                if (loadTheme(t, lfs::core::path_to_utf8(g_nord_path))) {
-                    g_nord_theme = t;
-                    g_nord_mtime = mtime;
-                    LOG_INFO("Hot-reloaded nord theme");
-                    if (current_theme == "nord")
-                        reloaded = true;
-                }
-            }
-        }
-
-        // Re-apply current theme if it was reloaded
-        if (reloaded) {
-            if (!setThemeByName(current_theme)) {
-                setTheme(darkTheme());
-            }
-        }
+        return any_reloaded;
     }
 
     bool saveTheme(const Theme& t, const std::string& path) {
@@ -1167,14 +1107,8 @@ namespace lfs::vis {
             const auto pref_path = config_dir / "theme_preference";
             std::ofstream file(pref_path);
             if (file) {
-                const std::string normalized = normalizeThemeName(theme_name);
-                if (
-                    normalized == "dark" ||
-                    normalized == "light" ||
-                    normalized == "gruvbox" ||
-                    normalized == "catppuccin_mocha" ||
-                    normalized == "catppuccin_latte" ||
-                    normalized == "nord") {
+                const std::string normalized = normalizeThemeIdImpl(theme_name);
+                if (isKnownThemePresetId(normalized)) {
                     file << normalized;
                 } else {
                     file << "dark";
@@ -1193,14 +1127,8 @@ namespace lfs::vis {
                 std::ifstream file(pref_path);
                 std::string pref;
                 if (file >> pref) {
-                    const std::string normalized = normalizeThemeName(pref);
-                    if (
-                        normalized == "dark" ||
-                        normalized == "light" ||
-                        normalized == "gruvbox" ||
-                        normalized == "catppuccin_mocha" ||
-                        normalized == "catppuccin_latte" ||
-                        normalized == "nord") {
+                    const std::string normalized = normalizeThemeIdImpl(pref);
+                    if (isKnownThemePresetId(normalized)) {
                         return normalized;
                     }
                 }

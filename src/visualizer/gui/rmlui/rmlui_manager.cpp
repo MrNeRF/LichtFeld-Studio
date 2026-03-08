@@ -143,6 +143,8 @@ namespace lfs::vis::gui {
 
         ctx->SetDensityIndependentPixelRatio(dp_ratio_);
         ctx->SetDefaultScrollBehavior(Rml::ScrollBehavior::Instant, 1.0f);
+        if (!active_theme_id_.empty())
+            ctx->ActivateTheme(active_theme_id_, true);
         contexts_[name] = ctx;
         return ctx;
     }
@@ -158,6 +160,17 @@ namespace lfs::vis::gui {
             Rml::RemoveContext(name);
             contexts_.erase(it);
         }
+    }
+
+    void RmlUIManager::activateTheme(const std::string& theme_id) {
+        if (theme_id == active_theme_id_)
+            return;
+        for (auto& [name, ctx] : contexts_) {
+            if (!active_theme_id_.empty())
+                ctx->ActivateTheme(active_theme_id_, false);
+            ctx->ActivateTheme(theme_id, true);
+        }
+        active_theme_id_ = theme_id;
     }
 
     bool RmlUIManager::shouldDeferFboUpdate(const RmlFBO& fbo) const {

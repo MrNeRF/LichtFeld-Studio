@@ -142,6 +142,7 @@ class RenderingPanel(RmlPanel):
         body = doc.get_element_by_id("body")
         if body:
             body.add_event_listener("click", self._on_body_click)
+        self._sync_section_states()
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("rendering")
@@ -201,12 +202,6 @@ class RenderingPanel(RmlPanel):
         model.bind_func("label_ppisp_crf",
                          lambda: lf.ui.tr("main_panel.ppisp_crf_advanced") or "CRF")
 
-        for sec in ["selection_colors", "mesh", "ppisp_crf"]:
-            model.bind(f"sec_{sec}_collapsed",
-                       lambda n=sec: n in self._collapsed)
-            model.bind_func(f"sec_{sec}_arrow",
-                            lambda n=sec: "\u25B6" if n in self._collapsed else "\u25BC")
-
         model.bind_func("fov_display", self._compute_fov)
 
         model.bind_func("picker_r",
@@ -235,8 +230,9 @@ class RenderingPanel(RmlPanel):
     def on_update(self, doc):
         s = lf.get_render_settings()
         if not s:
-            return
+            return False
 
+        dirty = False
         for prop_id in COLOR_PROPS:
             val = getattr(s, prop_id)
             key = (prop_id, int(val[0] * 255), int(val[1] * 255), int(val[2] * 255))
@@ -246,6 +242,8 @@ class RenderingPanel(RmlPanel):
             swatch = doc.get_element_by_id(f"swatch-{prop_id}")
             if swatch:
                 swatch.set_property("background-color", f"rgb({key[1]},{key[2]},{key[3]})")
+                dirty = True
+        return dirty
 
     def on_scene_changed(self, doc):
         if self._handle:
@@ -279,16 +277,38 @@ class RenderingPanel(RmlPanel):
             return fmt.format(hfov=hfov, vfov=vfov)
         return f"H:{hfov:.1f}\u00b0 V:{vfov:.1f}\u00b0"
 
+    def _get_section_elements(self, name):
+        if not self._doc:
+            return None, None, None
+        dom_name = name.replace("_", "-")
+        header = self._doc.get_element_by_id(f"hdr-{dom_name}")
+        arrow = self._doc.get_element_by_id(f"arrow-{dom_name}")
+        content = self._doc.get_element_by_id(f"sec-{dom_name}")
+        return header, arrow, content
+
+    def _sync_section_states(self):
+        from . import rml_widgets as w
+
+        for name in ("selection_colors", "mesh", "ppisp_crf"):
+            header, arrow, content = self._get_section_elements(name)
+            if content:
+                w.sync_section_state(content, name not in self._collapsed, header, arrow)
+
     def _on_toggle_section(self, handle, event, args):
+        del handle, event
         if not args:
             return
         name = str(args[0])
-        if name in self._collapsed:
+        expanding = name in self._collapsed
+        if expanding:
             self._collapsed.discard(name)
         else:
             self._collapsed.add(name)
-        handle.dirty(f"sec_{name}_collapsed")
-        handle.dirty(f"sec_{name}_arrow")
+
+        header, arrow, content = self._get_section_elements(name)
+        if content:
+            from . import rml_widgets as w
+            w.animate_section_toggle(content, expanding, arrow, header_element=header)
 
     def _on_color_click(self, handle, event, args):
         if not args or not self._popup_el:
@@ -363,4 +383,3 @@ class RenderingPanel(RmlPanel):
                 setattr(s, prop_name, float(val))
         for prop_name in mapping.values():
             handle.dirty(prop_name)
-

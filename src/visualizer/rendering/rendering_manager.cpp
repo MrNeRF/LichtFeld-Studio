@@ -779,6 +779,9 @@ namespace lfs::vis {
         }
 
         const lfs::core::SplatData* const model = scene_manager ? scene_manager->getModelForRendering() : nullptr;
+        const auto* const visible_point_cloud =
+            (scene_manager && !model) ? scene_manager->getScene().getVisiblePointCloud() : nullptr;
+        const bool has_visible_point_cloud = visible_point_cloud && visible_point_cloud->size() > 0;
         const size_t model_ptr = reinterpret_cast<size_t>(model);
 
         if (model_ptr != last_model_ptr_) {
@@ -846,7 +849,8 @@ namespace lfs::vis {
             }
         }
 
-        if (!cached_result_.image)
+        if (!cached_result_.image &&
+            (model || has_visible_point_cloud || settings_.split_view_mode != SplitViewMode::Disabled))
             dirty_mask_.fetch_or(DirtyFlag::ALL, std::memory_order_relaxed);
         if (settings_.split_view_mode != SplitViewMode::Disabled)
             dirty_mask_.fetch_or(DirtyFlag::SPLIT_VIEW, std::memory_order_relaxed);
@@ -919,6 +923,12 @@ namespace lfs::vis {
             scene_state = scene_manager->buildRenderState();
         }
 
+        const bool has_splats = model && model->size() > 0;
+        const bool has_point_cloud = scene_state.point_cloud && scene_state.point_cloud->size() > 0;
+        if (!has_point_cloud && point_cloud_pass_) {
+            point_cloud_pass_->resetCache();
+        }
+
         last_viewport_data_ = lfs::rendering::ViewportData{
             .rotation = context.viewport.getRotationMatrix(),
             .translation = context.viewport.getTranslation(),
@@ -967,6 +977,24 @@ namespace lfs::vis {
             .render_texture_valid = render_texture_valid_.load(std::memory_order_relaxed),
             .gt_context = gt_context_,
             .hovered_gaussian_id = hovered_gaussian_id_};
+
+        if (!has_splats && !has_point_cloud) {
+            const bool had_cached_output =
+                resources.cached_result.image ||
+                resources.cached_result.depth ||
+                resources.cached_result.depth_right ||
+                resources.cached_result.screen_positions ||
+                resources.cached_result_size.x > 0 ||
+                resources.cached_result_size.y > 0 ||
+                resources.render_texture_valid;
+            if (had_cached_output) {
+                resources.cached_result = {};
+                resources.cached_result_size = {0, 0};
+                resources.render_texture_valid = false;
+                resources.hovered_gaussian_id = -1;
+                lfs::core::Tensor::trim_memory_pool();
+            }
+        }
 
         if (frame_ctx.settings.split_view_mode == SplitViewMode::GTComparison &&
             resources.gt_context && resources.gt_context->valid() &&

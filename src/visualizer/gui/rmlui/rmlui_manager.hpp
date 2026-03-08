@@ -38,6 +38,9 @@ namespace lfs::vis::gui {
         void setResizeDeferring(bool defer) { resize_deferring_ = defer; }
         [[nodiscard]] bool shouldDeferFboUpdate(const RmlFBO& fbo) const;
 
+        void activateTheme(const std::string& theme_id);
+        const std::string& activeThemeId() const { return active_theme_id_; }
+
         RmlRenderInterface* getRenderInterface() const { return render_interface_.get(); }
         SDL_Window* getWindow() const { return window_; }
 
@@ -47,6 +50,7 @@ namespace lfs::vis::gui {
         std::unordered_map<std::string, Rml::Context*> contexts_;
         SDL_Window* window_ = nullptr;
         float dp_ratio_ = 1.0f;
+        std::string active_theme_id_;
         bool resize_deferring_ = false;
         bool initialized_ = false;
     };

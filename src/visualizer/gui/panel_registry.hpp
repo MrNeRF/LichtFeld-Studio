@@ -52,6 +52,7 @@ namespace lfs::vis::gui {
         const ViewportLayout* viewport = nullptr;
         core::Scene* scene = nullptr;
         bool ui_hidden = false;
+        uint64_t frame_serial = 0;
         uint64_t scene_generation = 0;
         bool has_selection = false;
         bool is_training = false;
@@ -66,6 +67,17 @@ namespace lfs::vis::gui {
             return true;
         }
         virtual bool supportsDirectDraw() const { return false; }
+        virtual void preload(const PanelDrawContext& ctx) { (void)ctx; }
+        virtual void preloadDirect(float w, float h, const PanelDrawContext& ctx,
+                                   float clip_y_min = -1.0f, float clip_y_max = -1.0f,
+                                   const PanelInputState* input = nullptr) {
+            (void)w;
+            (void)h;
+            (void)clip_y_min;
+            (void)clip_y_max;
+            (void)input;
+            preload(ctx);
+        }
         virtual void drawDirect(float x, float y, float w, float h, const PanelDrawContext& ctx) {
             (void)x;
             (void)y;
@@ -81,7 +93,9 @@ namespace lfs::vis::gui {
             (void)y_max;
         }
         virtual void setInput(const PanelInputState* input) { (void)input; }
+        virtual void setForcedHeight(float h) { (void)h; }
         virtual bool wantsKeyboard() const { return false; }
+        virtual bool needsAnimationFrame() const { return false; }
     };
 
     struct PanelInfo {
@@ -99,6 +113,8 @@ namespace lfs::vis::gui {
         bool error_disabled = false;
         float initial_width = 0;
         float initial_height = 0;
+        float original_width = 0;
+        float original_height = 0;
         float float_x = NAN;
         float float_y = NAN;
         bool float_dragging = false;
@@ -166,6 +182,7 @@ namespace lfs::vis::gui {
 
         void draw_panels(PanelSpace space, const PanelDrawContext& ctx,
                          const PanelInputState* input = nullptr);
+        void preload_panels(PanelSpace space, const PanelDrawContext& ctx);
         void draw_single_panel(const std::string& idname, const PanelDrawContext& ctx);
         void draw_child_panels(const std::string& parent_idname, const PanelDrawContext& ctx);
         bool has_panels(PanelSpace space) const;
@@ -173,10 +190,22 @@ namespace lfs::vis::gui {
         float draw_panels_direct(PanelSpace space, float x, float y, float w, float max_h,
                                  const PanelDrawContext& ctx,
                                  const PanelInputState* input = nullptr);
+        void preload_panels_direct(PanelSpace space, float w, float max_h,
+                                   const PanelDrawContext& ctx,
+                                   float clip_y_min = -1.0f, float clip_y_max = -1.0f,
+                                   const PanelInputState* input = nullptr);
         float draw_single_panel_direct(const std::string& idname, float x, float y, float w, float h,
                                        const PanelDrawContext& ctx,
                                        float clip_y_min = -1.0f, float clip_y_max = -1.0f,
                                        const PanelInputState* input = nullptr);
+        float preload_single_panel_direct(const std::string& idname, float w, float h,
+                                          const PanelDrawContext& ctx,
+                                          float clip_y_min = -1.0f, float clip_y_max = -1.0f,
+                                          const PanelInputState* input = nullptr);
+        float preload_child_panels_direct(const std::string& parent_idname, float w, float h,
+                                          const PanelDrawContext& ctx,
+                                          float clip_y_min = -1.0f, float clip_y_max = -1.0f,
+                                          const PanelInputState* input = nullptr);
         float draw_child_panels_direct(const std::string& parent_idname, float x, float y, float w, float h,
                                        const PanelDrawContext& ctx,
                                        float clip_y_min = -1.0f, float clip_y_max = -1.0f,
@@ -188,6 +217,7 @@ namespace lfs::vis::gui {
         void set_panel_enabled(const std::string& idname, bool enabled);
         void set_panel_disabled_override(const std::string& idname);
         bool is_panel_enabled(const std::string& idname) const;
+        bool needsAnimationFrame() const;
         bool set_panel_label(const std::string& idname, const std::string& new_label);
         bool set_panel_order(const std::string& idname, int new_order);
         bool set_panel_space(const std::string& idname, PanelSpace new_space);

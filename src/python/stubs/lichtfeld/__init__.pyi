@@ -1691,6 +1691,12 @@ def get_scene() -> scene.Scene | None:
 def get_scene_generation() -> int:
     """Get current scene generation counter (for validity checking)"""
 
+def get_scene_mutation_flags() -> int:
+    """Get accumulated scene mutation flags"""
+
+def consume_scene_mutation_flags() -> int:
+    """Get and clear accumulated scene mutation flags"""
+
 def run(path: str) -> None:
     """Execute a Python script file"""
 

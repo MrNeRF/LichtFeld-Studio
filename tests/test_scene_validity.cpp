@@ -92,4 +92,20 @@ namespace lfs::python {
         }
     }
 
+    TEST_F(SceneValidityTest, MutationFlagsAccumulateUntilConsumed) {
+        set_application_scene(&dummy_scene_);
+
+        constexpr uint32_t node_added = 1u << 0;
+        constexpr uint32_t transform_changed = 1u << 4;
+        constexpr uint32_t combined = node_added | transform_changed;
+
+        set_scene_mutation_flags(node_added);
+        set_scene_mutation_flags(transform_changed);
+
+        EXPECT_EQ(get_scene_mutation_flags(), combined);
+        EXPECT_EQ(consume_scene_mutation_flags(), combined);
+        EXPECT_EQ(get_scene_mutation_flags(), 0u);
+        EXPECT_EQ(consume_scene_mutation_flags(), 0u);
+    }
+
 } // namespace lfs::python

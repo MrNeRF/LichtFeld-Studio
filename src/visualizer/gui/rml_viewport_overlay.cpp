@@ -8,7 +8,9 @@
 
 #include "gui/rml_viewport_overlay.hpp"
 #include "core/logger.hpp"
+#include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_theme.hpp"
+#include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
 #include "internal/resource_paths.hpp"
@@ -64,10 +66,9 @@ namespace lfs::vis::gui {
         document_ = nullptr;
     }
 
-    std::string RmlViewportOverlay::generateThemeRCSS() const {
+    std::string RmlViewportOverlay::generateThemeRCSS(const lfs::vis::Theme& t) const {
         using rml_theme::colorToRml;
         using rml_theme::colorToRmlAlpha;
-        const auto& t = lfs::vis::theme();
 
         const auto toolbar_bg = colorToRml(t.toolbar_background());
         const auto subtoolbar_bg = colorToRml(t.subtoolbar_background());
@@ -100,15 +101,16 @@ namespace lfs::vis::gui {
         if (!document_)
             return;
 
-        const auto& t = lfs::vis::theme();
-        if (t.name == last_theme_)
+        const std::size_t theme_signature = rml_theme::currentThemeSignature();
+        if (has_theme_signature_ && theme_signature == last_theme_signature_)
             return;
-        last_theme_ = t.name;
+        last_theme_signature_ = theme_signature;
+        has_theme_signature_ = true;
 
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/viewport_overlay.rcss");
 
-        rml_theme::applyTheme(document_, base_rcss_, generateThemeRCSS());
+        rml_theme::applyTheme(document_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
     }
 
     void RmlViewportOverlay::setViewportBounds(glm::vec2 pos, glm::vec2 size) {
@@ -145,6 +147,8 @@ namespace lfs::vis::gui {
                 rml_context_->ProcessMouseButtonDown(1, 0);
             if (ImGui::IsMouseReleased(ImGuiMouseButton_Right))
                 rml_context_->ProcessMouseButtonUp(1, 0);
+
+            RmlPanelHost::setFrameTooltip(resolveRmlTooltip(hover));
         }
     }
 
@@ -184,11 +188,13 @@ namespace lfs::vis::gui {
 
             GLint prev_fbo = 0;
             fbo_.bind(&prev_fbo);
+            render->SetTargetFramebuffer(fbo_.fbo());
 
             render->BeginFrame();
             rml_context_->Render();
             render->EndFrame();
 
+            render->SetTargetFramebuffer(0);
             fbo_.unbind(prev_fbo);
         }
 

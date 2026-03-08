@@ -20,7 +20,6 @@
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Input.h>
 #include <cassert>
-#include <cstring>
 #include <format>
 #include <imgui.h>
 
@@ -74,11 +73,10 @@ namespace lfs::vis::gui {
         }
     }
 
-    std::string GlobalContextMenu::generateThemeRCSS() const {
+    std::string GlobalContextMenu::generateThemeRCSS(const lfs::vis::Theme& t) const {
         using rml_theme::colorToRml;
         using rml_theme::colorToRmlAlpha;
-        const auto& p = lfs::vis::theme().palette;
-        const auto& t = lfs::vis::theme();
+        const auto& p = t.palette;
 
         const auto surface = colorToRmlAlpha(p.surface, 0.95f);
         const auto border = colorToRmlAlpha(p.border, 0.4f);
@@ -100,15 +98,16 @@ namespace lfs::vis::gui {
         if (!doc_)
             return;
 
-        const auto& p = lfs::vis::theme().palette;
-        if (std::memcmp(last_synced_text_, &p.text, sizeof(last_synced_text_)) == 0)
+        const std::size_t theme_signature = rml_theme::currentThemeSignature();
+        if (has_theme_signature_ && theme_signature == last_theme_signature_)
             return;
-        std::memcpy(last_synced_text_, &p.text, sizeof(last_synced_text_));
+        last_theme_signature_ = theme_signature;
+        has_theme_signature_ = true;
 
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/global_context_menu.rcss");
 
-        rml_theme::applyTheme(doc_, base_rcss_, generateThemeRCSS());
+        rml_theme::applyTheme(doc_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
     }
 
     std::string GlobalContextMenu::buildInnerRML(const std::vector<ContextMenuItem>& items) const {
@@ -240,11 +239,13 @@ namespace lfs::vis::gui {
 
             GLint prev_fbo = 0;
             fbo_.bind(&prev_fbo);
+            render_iface->SetTargetFramebuffer(fbo_.fbo());
 
             render_iface->BeginFrame();
             ctx_->Render();
             render_iface->EndFrame();
 
+            render_iface->SetTargetFramebuffer(0);
             fbo_.unbind(prev_fbo);
         }
 

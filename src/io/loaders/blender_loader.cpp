@@ -25,44 +25,6 @@ namespace lfs::io {
     using lfs::core::PointCloud;
     using lfs::core::Tensor;
 
-    namespace {
-        constexpr std::array MASK_FOLDERS = {"masks", "mask", "segmentation"};
-        constexpr std::array MASK_EXTENSIONS = {".png", ".jpg", ".jpeg", ".mask.png"};
-    } // namespace
-
-    static std::filesystem::path find_mask_path(const std::filesystem::path& base_path,
-                                                const std::string& image_name) {
-        const std::filesystem::path img_path = lfs::core::utf8_to_path(image_name);
-        const std::filesystem::path stem_path = img_path.parent_path() / img_path.stem();
-
-        for (const auto& folder : MASK_FOLDERS) {
-            const std::filesystem::path mask_dir = base_path / folder;
-            if (!safe_exists(mask_dir))
-                continue;
-
-            if (const auto exact = mask_dir / img_path; safe_exists(exact))
-                return exact;
-
-            if (auto found = find_path_ci(mask_dir, img_path); !found.empty())
-                return found;
-
-            for (const auto& ext : MASK_EXTENSIONS) {
-                std::filesystem::path target_path = stem_path;
-                target_path += ext;
-                if (auto found = find_path_ci(mask_dir, target_path); !found.empty())
-                    return found;
-            }
-
-            for (const auto& ext : MASK_EXTENSIONS) {
-                std::filesystem::path target_path = img_path;
-                target_path += ext;
-                if (auto found = find_path_ci(mask_dir, target_path); !found.empty())
-                    return found;
-            }
-        }
-        return {};
-    }
-
     Result<LoadResult> BlenderLoader::load(
         const std::filesystem::path& path,
         const LoadOptions& options) {
@@ -169,13 +131,13 @@ namespace lfs::io {
 
             // Get base path for mask lookup
             std::filesystem::path base_path = transforms_file.parent_path();
+            MaskDirCache mask_cache(base_path);
 
             for (size_t i = 0; i < camera_infos.size(); ++i) {
                 const auto& info = camera_infos[i];
 
                 try {
-                    // Find mask path if available
-                    std::filesystem::path mask_path = find_mask_path(base_path, info._image_name);
+                    std::filesystem::path mask_path = mask_cache.find(info._image_name);
 
                     // Validate mask dimensions match image dimensions
                     if (!mask_path.empty()) {

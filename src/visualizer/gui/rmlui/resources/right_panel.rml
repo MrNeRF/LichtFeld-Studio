@@ -2,11 +2,18 @@
 <head>
     <link type="text/rcss" href="right_panel.rcss"/>
 </head>
-<body id="rp-body">
+<body id="rp-body" data-model="right_panel_tabs">
     <div id="resize-handle"></div>
     <div id="left-border"></div>
     <div id="splitter"></div>
-    <div id="tab-bar"></div>
+    <div id="tab-bar">
+        <div data-for="tab : tabs"
+             class="tab"
+             data-class-active="tab.idname == active_tab"
+             data-event-click="tab_click(tab.idname)">
+            {{ tab.label }}
+        </div>
+    </div>
     <div id="tab-separator"></div>
 </body>
 </rml>

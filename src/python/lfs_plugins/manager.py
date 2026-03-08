@@ -354,6 +354,12 @@ class PluginManager:
             except Exception:
                 _log.exception("Failed to cleanup signal subscriptions for '%s'", name)
 
+            try:
+                import lichtfeld as lf
+                lf.ui.unregister_panels_for_module(f"{MODULE_PREFIX}.{plugin.info.name}")
+            except Exception:
+                pass
+
             module_prefix = f"{MODULE_PREFIX}.{plugin.info.name}"
             to_remove = [m for m in sys.modules if m == module_prefix or m.startswith(f"{module_prefix}.")]
             for m in to_remove:
@@ -412,6 +418,12 @@ class PluginManager:
                 SubscriptionRegistry.instance().unsubscribe_all(name)
             except Exception:
                 _log.exception("Failed to cleanup signal subscriptions for '%s'", name)
+
+            try:
+                import lichtfeld as lf
+                lf.ui.unregister_panels_for_module(f"{MODULE_PREFIX}.{plugin.info.name}")
+            except Exception:
+                pass
 
             module_prefix = f"{MODULE_PREFIX}.{plugin.info.name}"
             to_remove = [m for m in sys.modules if m == module_prefix or m.startswith(f"{module_prefix}.")]

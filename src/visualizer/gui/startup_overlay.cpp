@@ -169,8 +169,7 @@ namespace lfs::vis::gui {
         set_text("click-hint", lichtfeld::Strings::Startup::CLICK_TO_CONTINUE);
     }
 
-    std::string StartupOverlay::generateThemeRCSS() const {
-        const auto& t = theme();
+    std::string StartupOverlay::generateThemeRCSS(const lfs::vis::Theme& t) const {
         const auto& p = t.palette;
 
         const auto border = colorToRmlAlpha(p.border, t.isLightTheme() ? 0.75f : 0.62f);
@@ -201,9 +200,11 @@ namespace lfs::vis::gui {
             return;
 
         const auto& t = theme();
-        if (t.name == last_theme_)
+        const std::size_t theme_signature = rml_theme::currentThemeSignature();
+        if (has_theme_signature_ && theme_signature == last_theme_signature_)
             return;
-        last_theme_ = t.name;
+        last_theme_signature_ = theme_signature;
+        has_theme_signature_ = true;
 
         const bool is_light = t.isLightTheme();
         const auto logo_path = lfs::vis::getAssetPath(
@@ -231,7 +232,7 @@ namespace lfs::vis::gui {
         }
 
         auto base_rcss = rml_theme::loadBaseRCSS("rmlui/startup.rcss");
-        rml_theme::applyTheme(document_, base_rcss, generateThemeRCSS());
+        rml_theme::applyTheme(document_, base_rcss, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
     }
 
     void StartupOverlay::forwardInput(float overlay_x, float overlay_y,
@@ -311,11 +312,13 @@ namespace lfs::vis::gui {
 
             GLint prev_fbo = 0;
             fbo_.bind(&prev_fbo);
+            render->SetTargetFramebuffer(fbo_.fbo());
 
             render->BeginFrame();
             rml_context_->Render();
             render->EndFrame();
 
+            render->SetTargetFramebuffer(0);
             fbo_.unbind(prev_fbo);
         }
 
@@ -354,20 +357,26 @@ namespace lfs::vis::gui {
                 const ImVec2 p2 = {overlay_box_pos.x + overlay_box_size.x,
                                    overlay_box_pos.y + overlay_box_size.y};
                 static constexpr float ROUNDING = 12.0f;
-                const ImVec2 shadow_offset = {0.0f, is_light ? 2.0f : 3.0f};
-                const float shadow_alpha = is_light ? 0.08f : 0.17f;
 
                 auto* draw = ImGui::GetWindowDrawList();
-                static constexpr int SHADOW_LAYERS = 8;
-                for (int i = 0; i < SHADOW_LAYERS; ++i) {
-                    const float t_val = static_cast<float>(i) / static_cast<float>(SHADOW_LAYERS - 1);
-                    const float inv_t = 1.0f - t_val;
-                    const float alpha = shadow_alpha * inv_t * inv_t;
-                    const float expand = 2.0f + t_val * 13.0f;
-                    draw->AddRectFilled({p1.x + shadow_offset.x - expand, p1.y + shadow_offset.y - expand},
-                                        {p2.x + shadow_offset.x + expand, p2.y + shadow_offset.y + expand},
-                                        to_u32(ImVec4(0, 0, 0, 1), alpha),
-                                        ROUNDING + expand * 0.25f);
+                if (t.shadows.enabled) {
+                    constexpr int SHADOW_LAYERS = 8;
+                    constexpr float SHADOW_FALLOFF_SCALE = 0.18f;
+                    constexpr float SHADOW_ROUNDING_SCALE = 0.25f;
+                    const ImVec2& shadow_offset = t.shadows.offset;
+                    const float shadow_blur = std::max(0.0f, t.shadows.blur);
+
+                    for (int i = 0; i < SHADOW_LAYERS; ++i) {
+                        const float t_val = static_cast<float>(i) / static_cast<float>(SHADOW_LAYERS - 1);
+                        const float inv_t = 1.0f - t_val;
+                        const float falloff = inv_t * inv_t * inv_t;
+                        const float alpha = t.shadows.alpha * falloff * SHADOW_FALLOFF_SCALE;
+                        const float expand = shadow_blur * t_val;
+                        draw->AddRectFilled({p1.x + shadow_offset.x - expand, p1.y + shadow_offset.y - expand},
+                                            {p2.x + shadow_offset.x + expand, p2.y + shadow_offset.y + expand},
+                                            to_u32(ImVec4(0, 0, 0, 1), alpha),
+                                            ROUNDING + expand * SHADOW_ROUNDING_SCALE);
+                    }
                 }
 
                 const ImVec4 base_color = blend(p.surface, p.text, is_light ? 0.04f : 0.10f);

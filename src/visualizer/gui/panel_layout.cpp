@@ -90,6 +90,8 @@ namespace lfs::vis::gui {
         const float scene_h = std::max(min_h, avail_h * scene_panel_ratio_ - splitter_h * 0.5f);
 
         auto& reg = PanelRegistry::instance();
+        reg.preload_panels_direct(PanelSpace::SceneHeader, content_w, scene_h, draw_ctx,
+                                  -1.0f, -1.0f, &input);
         reg.draw_panels_direct(PanelSpace::SceneHeader, content_x, content_top,
                                content_w, scene_h, draw_ctx, &input);
 
@@ -122,14 +124,38 @@ namespace lfs::vis::gui {
 
         const float clip_y_min = tab_content_y;
         const float clip_y_max = tab_content_y + tab_content_h;
+        constexpr float kPreloadMaxHeight = 100000.0f;
+
+        const float preloaded_main_h =
+            reg.preload_single_panel_direct(active_tab_idname_, content_w, kPreloadMaxHeight, draw_ctx,
+                                            clip_y_min, clip_y_max, &input);
+        const float preloaded_child_h =
+            reg.preload_child_panels_direct(active_tab_idname_, content_w, kPreloadMaxHeight, draw_ctx,
+                                            clip_y_min, clip_y_max, &input);
+        const float preloaded_total_h = preloaded_main_h + preloaded_child_h;
+        const float preloaded_max_scroll =
+            std::max(0.0f, preloaded_total_h - tab_content_h);
+        tab_scroll_offset_ = std::clamp(tab_scroll_offset_, 0.0f, preloaded_max_scroll);
 
         const float y_cursor = tab_content_y - tab_scroll_offset_;
         const float main_h = reg.draw_single_panel_direct(active_tab_idname_,
-                                                          content_x, y_cursor, content_w, 100000.0f, draw_ctx,
+                                                          content_x, y_cursor, content_w, kPreloadMaxHeight, draw_ctx,
                                                           clip_y_min, clip_y_max, &input);
         const float child_h = reg.draw_child_panels_direct(active_tab_idname_,
-                                                           content_x, y_cursor + main_h, content_w, 100000.0f, draw_ctx,
+                                                           content_x, y_cursor + main_h, content_w, kPreloadMaxHeight, draw_ctx,
                                                            clip_y_min, clip_y_max, &input);
+
+        for (size_t attempt = 0; attempt < main_tabs.size(); ++attempt) {
+            const size_t idx = (background_preload_index_ + attempt) % main_tabs.size();
+            const auto& tab = main_tabs[idx];
+            if (tab.idname == active_tab_idname_)
+                continue;
+
+            reg.preload_single_panel_direct(tab.idname, content_w, tab_content_h, draw_ctx,
+                                            clip_y_min, clip_y_max, &input);
+            background_preload_index_ = idx + 1;
+            break;
+        }
 
         RmlFBO::popDrawListClipRect(input.bg_draw_list);
 

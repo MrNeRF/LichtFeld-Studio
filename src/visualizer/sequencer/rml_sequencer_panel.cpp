@@ -6,10 +6,10 @@
 // clang-format on
 
 #include "sequencer/rml_sequencer_panel.hpp"
-#include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "gui/rmlui/rml_theme.hpp"
+#include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/string_keys.hpp"
@@ -279,9 +279,8 @@ namespace lfs::vis {
             el_quality_slider_->AddEventListener(Rml::EventId::Change, &transport_listener_);
     }
 
-    std::string RmlSequencerPanel::generateThemeRCSS() const {
-        const auto& p = lfs::vis::theme().palette;
-        const auto& t = lfs::vis::theme();
+    std::string RmlSequencerPanel::generateThemeRCSS(const lfs::vis::Theme& t) const {
+        const auto& p = t.palette;
 
         const auto surface_alpha = colorToRmlAlpha(p.surface, 0.95f);
         const auto border = colorToRmlAlpha(p.border, 0.4f);
@@ -387,7 +386,7 @@ namespace lfs::vis {
         if (base_rcss_.empty())
             base_rcss_ = gui::rml_theme::loadBaseRCSS("rmlui/sequencer.rcss");
 
-        gui::rml_theme::applyTheme(document_, base_rcss_, generateThemeRCSS());
+        gui::rml_theme::applyTheme(document_, base_rcss_, gui::rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
     }
 
     void RmlSequencerPanel::updateButtonStates() {
@@ -591,15 +590,7 @@ namespace lfs::vis {
         tooltip_.clear();
         auto* hover = rml_context_->GetHoverElement();
         if (hover) {
-            for (auto* el = hover; el; el = el->GetParentNode()) {
-                auto key = el->GetAttribute<Rml::String>("data-tooltip", "");
-                if (!key.empty()) {
-                    const char* resolved = LOC(key.c_str());
-                    if (resolved && std::string_view(resolved) != key.c_str())
-                        tooltip_ = resolved;
-                    break;
-                }
-            }
+            tooltip_ = gui::resolveRmlTooltip(hover);
 
             if (input.mouse_clicked[1]) {
                 for (auto* el = hover; el; el = el->GetParentNode()) {
@@ -760,11 +751,13 @@ namespace lfs::vis {
 
             GLint prev_fbo = 0;
             fbo_.bind(&prev_fbo);
+            render_iface->SetTargetFramebuffer(fbo_.fbo());
 
             render_iface->BeginFrame();
             rml_context_->Render();
             render_iface->EndFrame();
 
+            render_iface->SetTargetFramebuffer(0);
             fbo_.unbind(prev_fbo);
         }
 

@@ -172,20 +172,20 @@ class InputSettingsPanel(RmlPanel):
 
     # ── Events ────────────────────────────────────────────────
 
-    def _on_save_profile(self, ev):
+    def _on_save_profile(self, _handle, _ev, _args):
         lf.keymap.save_profile(lf.keymap.get_current_profile())
 
-    def _on_reset_default(self, ev):
+    def _on_reset_default(self, _handle, _ev, _args):
         lf.keymap.reset_to_default()
         self._last_state_key = None
 
-    def _on_export_profile(self, ev):
+    def _on_export_profile(self, _handle, _ev, _args):
         tr = lf.ui.tr
         path = lf.ui.save_file_dialog(tr("input_settings.export_dialog_title"), "json")
         if path:
             lf.keymap.export_profile(path)
 
-    def _on_import_profile(self, ev):
+    def _on_import_profile(self, _handle, _ev, _args):
         tr = lf.ui.tr
         path = lf.ui.open_file_dialog(tr("input_settings.import_dialog_title"), "json")
         if path:

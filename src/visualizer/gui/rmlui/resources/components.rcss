@@ -11,6 +11,7 @@ body {
     font-size: 10dp;
     display: flex;
     flex-direction: column;
+    width: 100%;
     height: 100%;
 }
 
@@ -191,6 +192,10 @@ selectbox option:hover {
     background-color: #89b4fa;
 }
 
+selectvalue {
+    padding-top: 2dp;
+}
+
 selectarrow {
     width: 14dp;
     margin-left: 4dp;
@@ -267,30 +272,59 @@ progress fill {
 .section-header {
     display: flex;
     align-items: center;
-    padding: 3dp 4dp;
+    gap: 4dp;
+    padding: 4dp 6dp;
+    margin-top: 2dp;
     font-weight: bold;
     color: #cdd6f4;
     cursor: pointer;
     font-size: 10dp;
-    background-color: rgba(137, 180, 250, 64);
-    transition: background-color 0.12s quadratic-out;
+    border-width: 1dp;
+    border-radius: 4dp;
+    border-color: rgba(137, 180, 250, 42);
+    background-color: rgba(137, 180, 250, 36);
+    transition: background-color border-color 0.16s cubic-out;
 }
 
 .section-header:hover {
-    background-color: rgba(137, 180, 250, 128);
+    background-color: rgba(137, 180, 250, 72);
+    border-color: rgba(137, 180, 250, 96);
+}
+
+.section-header.is-expanded {
+    background-color: rgba(137, 180, 250, 56);
+    border-color: rgba(137, 180, 250, 128);
 }
 
 .section-arrow {
     display: inline-block;
-    width: 14dp;
-    font-size: 11dp;
+    width: 12dp;
+    font-size: 10dp;
     color: #cdd6f4;
-    margin-right: 4dp;
     text-align: center;
+    transform: rotate(0deg);
+    transition: transform color opacity 0.18s cubic-out;
+}
+
+.section-header:hover .section-arrow,
+.section-header.is-expanded .section-arrow {
+    color: #f5f7ff;
+}
+
+.section-arrow.is-expanded {
+    transform: rotate(90deg);
+}
+
+.section-content {
+    overflow: hidden;
+    opacity: 1;
 }
 
 .section-content.collapsed {
-    display: none;
+    display: block;
+    max-height: 0;
+    opacity: 0;
+    pointer-events: none;
 }
 
 /* ── Color Controls ─────────────────────────────────────── */

@@ -51,16 +51,29 @@ body {
     min-height: 0;
 }
 
+#tree-content {
+    display: block;
+}
+
 .tree-row {
     display: block;
     width: auto;
+    height: 20dp;
+    box-sizing: border-box;
     padding: 1dp 4dp;
+    border-left-width: 2dp;
+    border-left-color: rgba(0, 0, 0, 0);
     cursor: pointer;
-    transition: background-color 0.1s quadratic-out;
+    overflow: hidden;
+}
+
+.tree-row.placeholder {
+    display: none;
 }
 
 .tree-row:hover {
-    background-color: #313244;
+    background-color: rgba(137, 180, 250, 28);
+    border-left-color: rgba(137, 180, 250, 255);
 }
 
 .tree-row.even {
@@ -73,11 +86,12 @@ body {
 
 /* selected MUST come after even/odd for cascade */
 .tree-row.selected {
-    background-color: #3c5a8a;
+    background-color: #5572a3;
 }
 
 .tree-row.selected:hover {
-    background-color: #4a6a9a;
+    background-color: #6483b7;
+    border-left-color: rgba(180, 208, 251, 255);
 }
 
 .tree-row.drop-target {
@@ -90,8 +104,11 @@ body {
 }
 
 .row-content {
-    display: inline;
+    display: flex;
+    align-items: center;
+    height: 100%;
     white-space: nowrap;
+    min-width: 0;
 }
 
 /* Expand/collapse toggle — inline before name */
@@ -124,6 +141,13 @@ body {
     image-color: #cdd6f4;
 }
 
+.row-icon.type-icon {
+    width: 12dp;
+    height: 12dp;
+    margin-right: 4dp;
+    image-color: #a6adc8;
+}
+
 /* Visibility toggle */
 .row-icon.icon-vis-on {
     image-color: rgba(102, 230, 102, 255);
@@ -145,23 +169,15 @@ body {
 
 
 /* Colored dot — replaces type icons for a cleaner row */
-.color-dot {
-    display: inline;
-    width: 8dp;
-    height: 8dp;
-    border-radius: 4dp;
-    margin-right: 4dp;
-}
-
-.color-dot.splat        { background-color: rgba(153, 204, 255, 230); }
-.color-dot.group        { background-color: rgba(178, 178, 178, 204); }
-.color-dot.dataset      { background-color: rgba(127, 178, 255, 230); }
-.color-dot.camera       { background-color: rgba(127, 153, 204, 153); }
-.color-dot.camera_group { background-color: rgba(153, 178, 230, 204); }
-.color-dot.cropbox      { background-color: rgba(255, 178, 77, 230); }
-.color-dot.ellipsoid    { background-color: rgba(77, 204, 255, 230); }
-.color-dot.pointcloud   { background-color: rgba(204, 127, 255, 204); }
-.color-dot.mesh         { background-color: rgba(127, 230, 153, 230); }
+.row-icon.type-icon.splat        { image-color: rgba(153, 204, 255, 230); }
+.row-icon.type-icon.group        { image-color: rgba(178, 178, 178, 204); }
+.row-icon.type-icon.dataset      { image-color: rgba(127, 178, 255, 230); }
+.row-icon.type-icon.camera       { image-color: rgba(127, 153, 204, 200); }
+.row-icon.type-icon.camera_group { image-color: rgba(153, 178, 230, 204); }
+.row-icon.type-icon.cropbox      { image-color: rgba(255, 178, 77, 230); }
+.row-icon.type-icon.ellipsoid    { image-color: rgba(77, 204, 255, 230); }
+.row-icon.type-icon.pointcloud   { image-color: rgba(204, 127, 255, 204); }
+.row-icon.type-icon.mesh         { image-color: rgba(127, 230, 153, 230); }
 
 /* Fallback Unicode node icons (keyframe etc. without PNG) */
 .node-icon {
@@ -177,25 +193,17 @@ body {
 
 
 .node-name {
-    display: inline;
+    display: block;
     color: #cdd6f4;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-
-.node-count {
-    display: inline;
-    color: #6c7086;
-    font-size: 11dp;
-    margin-left: 6dp;
+.node-name.training-disabled {
+    color: #9399b2;
 }
 
-.tree-children {
-    /* indentation handled via inline style on each tree-row */
-}
-
-.tree-children.collapsed {
-    display: none;
-}
 
 /* Inline rename input */
 .rename-input {
@@ -212,6 +220,23 @@ body {
 /* Scene tree overrides section-header to block display with different padding */
 .section-header {
     display: block;
+    min-height: 24dp;
     padding: 4dp 6dp;
     font-size: 11dp;
+    cursor: pointer;
+}
+
+.section-arrow {
+    display: inline-block;
+    width: 12dp;
+    color: #a6adc8;
+}
+
+.virtual-spacer {
+    display: block;
+    height: 0;
+}
+
+.empty-state {
+    padding: 6dp 0;
 }

@@ -63,9 +63,8 @@ namespace lfs::vis::gui {
         status_region_ = nullptr;
     }
 
-    std::string RmlShellFrame::generateThemeRCSS() const {
+    std::string RmlShellFrame::generateThemeRCSS(const lfs::vis::Theme& t) const {
         using rml_theme::colorToRml;
-        const auto& t = lfs::vis::theme();
 
         const auto shell_bg = colorToRml(t.menu_background());
 
@@ -80,15 +79,16 @@ namespace lfs::vis::gui {
         if (!document_)
             return;
 
-        const auto& t = lfs::vis::theme();
-        if (t.name == last_theme_)
+        const std::size_t theme_signature = rml_theme::currentThemeSignature();
+        if (has_theme_signature_ && theme_signature == last_theme_signature_)
             return;
-        last_theme_ = t.name;
+        last_theme_signature_ = theme_signature;
+        has_theme_signature_ = true;
 
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/shell.rcss");
 
-        rml_theme::applyTheme(document_, base_rcss_, generateThemeRCSS());
+        rml_theme::applyTheme(document_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
     }
 
     void RmlShellFrame::render(const ShellRegions& regions) {
@@ -136,11 +136,13 @@ namespace lfs::vis::gui {
 
             GLint prev_fbo = 0;
             fbo_.bind(&prev_fbo);
+            render->SetTargetFramebuffer(fbo_.fbo());
 
             render->BeginFrame();
             rml_context_->Render();
             render->EndFrame();
 
+            render->SetTargetFramebuffer(0);
             fbo_.unbind(prev_fbo);
         }
 

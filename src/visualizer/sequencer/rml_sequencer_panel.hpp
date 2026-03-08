@@ -23,6 +23,8 @@ namespace lfs::vis::gui {
 
 namespace lfs::vis {
 
+    struct Theme;
+
     struct PanelInputState {
         float mouse_x = 0.0f;
         float mouse_y = 0.0f;
@@ -135,7 +137,7 @@ namespace lfs::vis {
         void initContext(int width, int height);
 
         void syncTheme();
-        std::string generateThemeRCSS() const;
+        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
 
         void cacheElements();
         void updateButtonStates();

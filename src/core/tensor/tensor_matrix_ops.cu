@@ -6,6 +6,10 @@
 
 namespace lfs::core::tensor_ops {
 
+    namespace {
+        constexpr size_t MAX_GRID_Y_DIM = 65535;
+    }
+
     // Transpose kernel using shared memory
     template <int TILE_DIM, int BLOCK_ROWS>
     __global__ void transpose_kernel(const float* input, float* output, size_t rows, size_t cols) {
@@ -364,13 +368,33 @@ namespace lfs::core::tensor_ops {
         if (m >= 16 && n >= 64 && k >= 8) {
             constexpr int BM = 64, BN = 64, BK = 8, TM = 4, TN = 4;
             dim3 block(BN / TN, BM / TM);
-            dim3 grid((n + BN - 1) / BN, (m + BM - 1) / BM);
-            sgemm_optimized_kernel<BM, BN, BK, TM, TN><<<grid, block, 0, stream>>>(a, b, c, m, n, k);
+            const size_t max_rows_per_launch = MAX_GRID_Y_DIM * static_cast<size_t>(BM);
+            for (size_t row_offset = 0; row_offset < m; row_offset += max_rows_per_launch) {
+                const size_t rows_this_launch = std::min(max_rows_per_launch, m - row_offset);
+                dim3 grid((n + BN - 1) / BN, (rows_this_launch + BM - 1) / BM);
+                sgemm_optimized_kernel<BM, BN, BK, TM, TN><<<grid, block, 0, stream>>>(
+                    a + row_offset * k,
+                    b,
+                    c + row_offset * n,
+                    rows_this_launch,
+                    n,
+                    k);
+            }
         } else {
             constexpr int T = 16;
             dim3 block(T, T);
-            dim3 grid((n + T - 1) / T, (m + T - 1) / T);
-            sgemm_tiled_kernel<T><<<grid, block, 0, stream>>>(a, b, c, m, n, k);
+            const size_t max_rows_per_launch = MAX_GRID_Y_DIM * static_cast<size_t>(T);
+            for (size_t row_offset = 0; row_offset < m; row_offset += max_rows_per_launch) {
+                const size_t rows_this_launch = std::min(max_rows_per_launch, m - row_offset);
+                dim3 grid((n + T - 1) / T, (rows_this_launch + T - 1) / T);
+                sgemm_tiled_kernel<T><<<grid, block, 0, stream>>>(
+                    a + row_offset * k,
+                    b,
+                    c + row_offset * n,
+                    rows_this_launch,
+                    n,
+                    k);
+            }
         }
     }
 
@@ -378,13 +402,33 @@ namespace lfs::core::tensor_ops {
         if (m >= 16 && n >= 64 && k >= 8) {
             constexpr int BM = 64, BN = 64, BK = 8, TM = 4, TN = 4;
             dim3 block(BN / TN, BM / TM);
-            dim3 grid((n + BN - 1) / BN, (m + BM - 1) / BM);
-            sgemm_tn_optimized_kernel<BM, BN, BK, TM, TN><<<grid, block, 0, stream>>>(a, b, c, m, n, k);
+            const size_t max_rows_per_launch = MAX_GRID_Y_DIM * static_cast<size_t>(BM);
+            for (size_t row_offset = 0; row_offset < m; row_offset += max_rows_per_launch) {
+                const size_t rows_this_launch = std::min(max_rows_per_launch, m - row_offset);
+                dim3 grid((n + BN - 1) / BN, (rows_this_launch + BM - 1) / BM);
+                sgemm_tn_optimized_kernel<BM, BN, BK, TM, TN><<<grid, block, 0, stream>>>(
+                    a + row_offset * k,
+                    b,
+                    c + row_offset * n,
+                    rows_this_launch,
+                    n,
+                    k);
+            }
         } else {
             constexpr int T = 16;
             dim3 block(T, T);
-            dim3 grid((n + T - 1) / T, (m + T - 1) / T);
-            sgemm_tn_kernel<T><<<grid, block, 0, stream>>>(a, b, c, m, n, k);
+            const size_t max_rows_per_launch = MAX_GRID_Y_DIM * static_cast<size_t>(T);
+            for (size_t row_offset = 0; row_offset < m; row_offset += max_rows_per_launch) {
+                const size_t rows_this_launch = std::min(max_rows_per_launch, m - row_offset);
+                dim3 grid((n + T - 1) / T, (rows_this_launch + T - 1) / T);
+                sgemm_tn_kernel<T><<<grid, block, 0, stream>>>(
+                    a + row_offset * k,
+                    b,
+                    c + row_offset * n,
+                    rows_this_launch,
+                    n,
+                    k);
+            }
         }
     }
 
@@ -392,16 +436,40 @@ namespace lfs::core::tensor_ops {
                               size_t batch, size_t m, size_t n, size_t k, cudaStream_t stream) {
         constexpr int T = 16;
         dim3 block(T, T);
-        dim3 grid((n + T - 1) / T, (m + T - 1) / T, batch);
-        sgemm_batched_kernel<T><<<grid, block, 0, stream>>>(a, b, c, m, n, k, m * k, k * n, m * n);
+        const size_t max_rows_per_launch = MAX_GRID_Y_DIM * static_cast<size_t>(T);
+        for (size_t row_offset = 0; row_offset < m; row_offset += max_rows_per_launch) {
+            const size_t rows_this_launch = std::min(max_rows_per_launch, m - row_offset);
+            dim3 grid((n + T - 1) / T, (rows_this_launch + T - 1) / T, batch);
+            sgemm_batched_kernel<T><<<grid, block, 0, stream>>>(
+                a + row_offset * k,
+                b,
+                c + row_offset * n,
+                rows_this_launch,
+                n,
+                k,
+                m * k,
+                k * n,
+                m * n);
+        }
     }
 
     void launch_sgemm_bias_relu(const float* a, const float* b, const float* bias, float* c,
                                 size_t m, size_t n, size_t k, cudaStream_t stream) {
         constexpr int T = 16;
         dim3 block(T, T);
-        dim3 grid((n + T - 1) / T, (m + T - 1) / T);
-        sgemm_bias_relu_kernel<T><<<grid, block, 0, stream>>>(a, b, bias, c, m, n, k);
+        const size_t max_rows_per_launch = MAX_GRID_Y_DIM * static_cast<size_t>(T);
+        for (size_t row_offset = 0; row_offset < m; row_offset += max_rows_per_launch) {
+            const size_t rows_this_launch = std::min(max_rows_per_launch, m - row_offset);
+            dim3 grid((n + T - 1) / T, (rows_this_launch + T - 1) / T);
+            sgemm_bias_relu_kernel<T><<<grid, block, 0, stream>>>(
+                a + row_offset * k,
+                b,
+                bias + row_offset,
+                c + row_offset * n,
+                rows_this_launch,
+                n,
+                k);
+        }
     }
 
 } // namespace lfs::core::tensor_ops

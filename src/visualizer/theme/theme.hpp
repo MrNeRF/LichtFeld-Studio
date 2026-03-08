@@ -4,7 +4,9 @@
 #pragma once
 
 #include "core/export.hpp"
+#include <functional>
 #include <string>
+#include <string_view>
 #include <imgui.h>
 
 namespace lfs::vis {
@@ -228,6 +230,13 @@ namespace lfs::vis {
     LFS_VIS_API void setTheme(const Theme& t);
     LFS_VIS_API void applyThemeToImGui();
 
+    using ThemeChangeCallback = std::function<void(const std::string& theme_id)>;
+    using ThemePresetVisitor = std::function<void(std::string_view theme_id, const Theme& theme)>;
+    LFS_VIS_API void setThemeChangeCallback(ThemeChangeCallback cb);
+    [[nodiscard]] LFS_VIS_API const std::string& currentThemeId();
+    [[nodiscard]] LFS_VIS_API std::string normalizeThemeId(std::string name);
+    LFS_VIS_API void visitThemePresets(const ThemePresetVisitor& visitor);
+
     // Presets (loaded from JSON files with hot-reload support)
     [[nodiscard]] LFS_VIS_API const Theme& darkTheme();
     [[nodiscard]] LFS_VIS_API const Theme& lightTheme();
@@ -236,7 +245,7 @@ namespace lfs::vis {
     [[nodiscard]] LFS_VIS_API const Theme& catppuccinLatteTheme();
     [[nodiscard]] LFS_VIS_API const Theme& nordTheme();
     LFS_VIS_API bool setThemeByName(const std::string& name); // e.g. "dark", "light", "gruvbox", "catppuccin_mocha", "catppuccin_latte", "nord"
-    LFS_VIS_API void checkThemeFileChanges();                 // Call periodically to hot-reload
+    LFS_VIS_API bool checkThemeFileChanges();                 // Call periodically to hot-reload; returns true when any preset changed
 
     // Persistence
     LFS_VIS_API bool saveTheme(const Theme& t, const std::string& path);

@@ -14,7 +14,7 @@ namespace lfs::vis::gui {
     LossGraphElement::LossGraphElement(const Rml::String& tag) : Rml::Element(tag) {}
 
     bool LossGraphElement::GetIntrinsicDimensions(Rml::Vector2f& dimensions, float& ratio) {
-        dimensions = {200.f, 60.f};
+        dimensions = {1.f, 60.f};
         ratio = 0.f;
         return true;
     }

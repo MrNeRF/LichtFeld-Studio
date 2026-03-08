@@ -216,6 +216,9 @@ def unregister_panel(cls: object) -> None:
 def unregister_all_panels() -> None:
     """Unregister all Python panels"""
 
+def unregister_panels_for_module(module_prefix: str) -> None:
+    """Unregister all panels registered by a given module prefix"""
+
 def get_panel_names(space: str = 'FLOATING') -> list[str]:
     """Get registered panel names for a given space"""
 
@@ -2266,6 +2269,9 @@ def get_ui_scale_preference() -> float:
 
 def set_clipboard_text(text: str) -> None:
     """Copy text to the system clipboard"""
+
+def set_mouse_cursor_hand() -> None:
+    """Set mouse cursor to hand pointer for this frame"""
 
 def set_language(lang_code: str) -> None:
     """Set language by code (e.g., 'en', 'de')"""

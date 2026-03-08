@@ -397,6 +397,7 @@ namespace lfs::vis::gui::panels {
         if (state.isModified()) {
             window_title += " *";
         }
+        window_title += "###python_console";
 
         ImGui::SetNextWindowSize(ImVec2(700, 600), ImGuiCond_FirstUseEver);
         if (!ImGui::Begin(window_title.c_str(), open, ImGuiWindowFlags_MenuBar)) {

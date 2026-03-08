@@ -8,6 +8,7 @@
 #include "gui/panel_registry.hpp"
 #include "gui/rmlui/rml_fbo.hpp"
 #include <chrono>
+#include <cstddef>
 #include <string>
 
 namespace Rml {
@@ -16,6 +17,9 @@ namespace Rml {
     class Element;
 } // namespace Rml
 
+namespace lfs::vis {
+    struct Theme;
+}
 namespace lfs::vis::gui {
 
     class RmlUIManager;
@@ -30,7 +34,7 @@ namespace lfs::vis::gui {
         void cacheElements();
         void updateContent(const PanelDrawContext& ctx);
         void updateTheme();
-        std::string generateThemeRCSS() const;
+        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
@@ -38,7 +42,8 @@ namespace lfs::vis::gui {
 
         RmlFBO fbo_;
 
-        std::string last_theme_;
+        std::size_t last_theme_signature_ = 0;
+        bool has_theme_signature_ = false;
         std::string base_rcss_;
 
         struct SpeedOverlayState {

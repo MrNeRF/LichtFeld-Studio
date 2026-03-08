@@ -19,6 +19,7 @@
 #include "tools/brush_tool.hpp"
 #include "tools/selection_tool.hpp"
 #include "tools/tool_base.hpp"
+#include "tools/unified_tool_registry.hpp"
 #include "training/training_manager.hpp"
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -125,6 +126,96 @@ namespace lfs::vis {
 
             return python::dispatch_modal_event(py_evt);
         }
+
+        bool isAlwaysActiveKeyAction(const input::Action action) {
+            switch (action) {
+            case input::Action::TOOL_SELECT:
+            case input::Action::TOOL_TRANSLATE:
+            case input::Action::TOOL_ROTATE:
+            case input::Action::TOOL_SCALE:
+            case input::Action::TOOL_MIRROR:
+            case input::Action::TOOL_BRUSH:
+            case input::Action::TOOL_ALIGN:
+            case input::Action::TOGGLE_UI:
+            case input::Action::TOGGLE_FULLSCREEN:
+            case input::Action::SELECT_MODE_CENTERS:
+            case input::Action::SELECT_MODE_RECTANGLE:
+            case input::Action::SELECT_MODE_POLYGON:
+            case input::Action::SELECT_MODE_LASSO:
+            case input::Action::SELECT_MODE_RINGS:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        bool handleSelectionModeShortcut(const input::Action action, gui::GuiManager* gui) {
+            if (!gui)
+                return false;
+
+            SelectionSubMode submode = SelectionSubMode::Centers;
+            const char* submode_id = nullptr;
+            switch (action) {
+            case input::Action::SELECT_MODE_CENTERS:
+                submode = SelectionSubMode::Centers;
+                submode_id = "centers";
+                break;
+            case input::Action::SELECT_MODE_RECTANGLE:
+                submode = SelectionSubMode::Rectangle;
+                submode_id = "rectangle";
+                break;
+            case input::Action::SELECT_MODE_POLYGON:
+                submode = SelectionSubMode::Polygon;
+                submode_id = "polygon";
+                break;
+            case input::Action::SELECT_MODE_LASSO:
+                submode = SelectionSubMode::Lasso;
+                submode_id = "lasso";
+                break;
+            case input::Action::SELECT_MODE_RINGS:
+                submode = SelectionSubMode::Rings;
+                submode_id = "rings";
+                break;
+            default:
+                return false;
+            }
+
+            gui->gizmo().setSelectionSubMode(submode);
+            UnifiedToolRegistry::instance().setActiveSubmode(submode_id);
+            return true;
+        }
+
+        bool handleToolbarToolShortcut(const input::Action action) {
+            ToolType tool = ToolType::None;
+            switch (action) {
+            case input::Action::TOOL_SELECT:
+                tool = ToolType::Selection;
+                break;
+            case input::Action::TOOL_TRANSLATE:
+                tool = ToolType::Translate;
+                break;
+            case input::Action::TOOL_ROTATE:
+                tool = ToolType::Rotate;
+                break;
+            case input::Action::TOOL_SCALE:
+                tool = ToolType::Scale;
+                break;
+            case input::Action::TOOL_MIRROR:
+                tool = ToolType::Mirror;
+                break;
+            case input::Action::TOOL_BRUSH:
+                tool = ToolType::Brush;
+                break;
+            case input::Action::TOOL_ALIGN:
+                tool = ToolType::Align;
+                break;
+            default:
+                return false;
+            }
+
+            lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(tool)}.emit();
+            return true;
+        }
     } // namespace
 
     InputController* InputController::instance_ = nullptr;
@@ -141,7 +232,8 @@ namespace lfs::vis {
 
         state::DatasetLoadCompleted::when([this](const auto& e) {
             if (e.success) {
-                handleFocusSelection();
+                viewport_.camera.resetToHome();
+                publishCameraMove();
             }
         });
 
@@ -300,7 +392,6 @@ namespace lfs::vis {
             if (hovered_camera_id_ >= 0) {
                 if (is_double_click && hovered_camera_id_ == last_clicked_camera_id_) {
                     cmd::GoToCamView{.cam_id = hovered_camera_id_}.emit();
-                    cmd::OpenCameraPreview{.cam_id = hovered_camera_id_}.emit();
 
                     // Reset click tracking to prevent triple-click
                     last_click_time_ = std::chrono::steady_clock::time_point();
@@ -877,7 +968,7 @@ namespace lfs::vis {
         const auto tool_mode = getCurrentToolMode();
         const auto bound_action = bindings_.getActionForKey(tool_mode, key, mods);
 
-        // Camera navigation bypasses ImGui keyboard capture (except text input)
+        // Global shortcuts bypass ImGui keyboard capture (except text input)
         if (action == input::ACTION_PRESS && !wants_text_input) {
             if (bound_action == input::Action::CAMERA_NEXT_VIEW ||
                 bound_action == input::Action::CAMERA_PREV_VIEW) {
@@ -896,7 +987,9 @@ namespace lfs::vis {
             }
         }
 
-        if (imgui_wants_keyboard)
+        const bool is_always_active = isAlwaysActiveKeyAction(bound_action);
+
+        if (imgui_wants_keyboard && (!is_always_active || wants_text_input))
             return;
 
         // Only speed controls support key repeat
@@ -907,6 +1000,14 @@ namespace lfs::vis {
                 bound_action != input::Action::ZOOM_SPEED_DOWN) {
                 return;
             }
+        }
+
+        if (action == input::ACTION_PRESS) {
+            if (handleSelectionModeShortcut(bound_action, gui))
+                return;
+
+            if (handleToolbarToolShortcut(bound_action))
+                return;
         }
 
         if (bound_action != input::Action::NONE) {
@@ -1022,36 +1123,6 @@ namespace lfs::vis {
                 updateZoomSpeed(false);
                 return;
 
-            case input::Action::SELECT_MODE_CENTERS:
-                if (gui) {
-                    gui->gizmo().setSelectionSubMode(SelectionSubMode::Centers);
-                }
-                return;
-
-            case input::Action::SELECT_MODE_RECTANGLE:
-                if (gui) {
-                    gui->gizmo().setSelectionSubMode(SelectionSubMode::Rectangle);
-                }
-                return;
-
-            case input::Action::SELECT_MODE_POLYGON:
-                if (gui) {
-                    gui->gizmo().setSelectionSubMode(SelectionSubMode::Polygon);
-                }
-                return;
-
-            case input::Action::SELECT_MODE_LASSO:
-                if (gui) {
-                    gui->gizmo().setSelectionSubMode(SelectionSubMode::Lasso);
-                }
-                return;
-
-            case input::Action::SELECT_MODE_RINGS:
-                if (gui) {
-                    gui->gizmo().setSelectionSubMode(SelectionSubMode::Rings);
-                }
-                return;
-
             case input::Action::TOGGLE_UI:
                 ui::ToggleUI{}.emit();
                 return;
@@ -1070,34 +1141,6 @@ namespace lfs::vis {
 
             case input::Action::SEQUENCER_PLAY_PAUSE:
                 cmd::SequencerPlayPause{}.emit();
-                return;
-
-            case input::Action::TOOL_SELECT:
-                lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(ToolType::Selection)}.emit();
-                return;
-
-            case input::Action::TOOL_TRANSLATE:
-                lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(ToolType::Translate)}.emit();
-                return;
-
-            case input::Action::TOOL_ROTATE:
-                lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(ToolType::Rotate)}.emit();
-                return;
-
-            case input::Action::TOOL_SCALE:
-                lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(ToolType::Scale)}.emit();
-                return;
-
-            case input::Action::TOOL_MIRROR:
-                lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(ToolType::Mirror)}.emit();
-                return;
-
-            case input::Action::TOOL_BRUSH:
-                lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(ToolType::Brush)}.emit();
-                return;
-
-            case input::Action::TOOL_ALIGN:
-                lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(ToolType::Align)}.emit();
                 return;
 
             case input::Action::PIE_MENU:

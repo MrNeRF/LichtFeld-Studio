@@ -465,13 +465,13 @@
     "voxel_size": "Voxel Size"
   },
   "toolbar": {
-    "selection": "Selection",
-    "translate": "Translate",
-    "rotate": "Rotate",
-    "scale": "Scale",
-    "mirror": "Mirror",
-    "painting": "Painting",
-    "align_3point": "3-Point Align",
+    "selection": "Selection (1)",
+    "translate": "Translate (2)",
+    "rotate": "Rotate (3)",
+    "scale": "Scale (4)",
+    "mirror": "Mirror (5)",
+    "painting": "Painting (6)",
+    "align_3point": "3-Point Align (7)",
     "crop_box": "Crop Box",
     "ellipsoid": "Ellipsoid",
     "brush_selection": "Brush selection (Ctrl+1)",
@@ -495,8 +495,8 @@
     "point_cloud": "Point Cloud",
     "gaussian_rings": "Gaussian Rings",
     "center_markers": "Center Markers",
-    "perspective": "Perspective (O)",
-    "orthographic": "Orthographic (O)",
+    "perspective": "Perspective",
+    "orthographic": "Orthographic",
     "sequencer": "Sequencer"
   },
   "transform": {

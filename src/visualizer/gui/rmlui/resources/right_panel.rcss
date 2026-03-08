@@ -59,4 +59,7 @@ body {
     cursor: pointer;
     border-top-left-radius: 4dp;
     border-top-right-radius: 4dp;
+    border-bottom-width: 2dp;
+    border-bottom-color: transparent;
+    transition: border-bottom-color background-color color 0.15s quadratic-out;
 }

@@ -470,8 +470,8 @@ namespace lfs::vis::gui {
             ImGuizmo::SetAxisMask(node_hovered_axis_, node_hovered_axis_, node_hovered_axis_);
         }
 
-        const bool modal_open = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-        ImDrawList* overlay_drawlist = modal_open ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
+        auto* const main_viewport = ImGui::GetMainViewport();
+        ImDrawList* overlay_drawlist = ImGui::GetBackgroundDrawList(main_viewport);
         const ImVec2 clip_min(viewport.pos.x, viewport.pos.y);
         const ImVec2 clip_max(clip_min.x + viewport.size.x, clip_min.y + viewport.size.y);
         overlay_drawlist->PushClipRect(clip_min, clip_max, true);
@@ -875,8 +875,8 @@ namespace lfs::vis::gui {
             }
         }
 
-        const bool modal_open = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-        ImDrawList* overlay_drawlist = modal_open ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
+        auto* const main_viewport = ImGui::GetMainViewport();
+        ImDrawList* overlay_drawlist = ImGui::GetBackgroundDrawList(main_viewport);
         const ImVec2 clip_min(viewport.pos.x, viewport.pos.y);
         const ImVec2 clip_max(clip_min.x + viewport.size.x, clip_min.y + viewport.size.y);
         overlay_drawlist->PushClipRect(clip_min, clip_max, true);
@@ -1044,8 +1044,8 @@ namespace lfs::vis::gui {
             }
         }
 
-        const bool modal_open = ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-        ImDrawList* overlay_drawlist = modal_open ? ImGui::GetBackgroundDrawList() : ImGui::GetForegroundDrawList();
+        auto* const main_viewport = ImGui::GetMainViewport();
+        ImDrawList* overlay_drawlist = ImGui::GetBackgroundDrawList(main_viewport);
         const ImVec2 clip_min(viewport.pos.x, viewport.pos.y);
         const ImVec2 clip_max(clip_min.x + viewport.size.x, clip_min.y + viewport.size.y);
         overlay_drawlist->PushClipRect(clip_min, clip_max, true);

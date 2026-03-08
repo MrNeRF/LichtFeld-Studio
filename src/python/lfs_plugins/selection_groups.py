@@ -26,6 +26,11 @@ class SelectionGroupsPanel(RmlPanel):
         self._context_menu_group_id = None
         self._picker_click_handled = False
 
+    @classmethod
+    def poll(cls, context):
+        del context
+        return lf.ui.get_active_tool() == "builtin.select" and lf.get_scene() is not None
+
     def on_load(self, doc):
         self.doc = doc
 
@@ -53,6 +58,12 @@ class SelectionGroupsPanel(RmlPanel):
         body = doc.get_element_by_id("body")
         if body:
             body.add_event_listener("click", self._on_body_click)
+
+        section = doc.get_element_by_id("groups-section")
+        arrow = doc.get_element_by_id("arrow-groups")
+        if section:
+            from . import rml_widgets as w
+            w.sync_section_state(section, not self._collapsed, header, arrow)
 
         self._update_labels()
 
@@ -86,12 +97,12 @@ class SelectionGroupsPanel(RmlPanel):
 
     def _on_toggle_section(self, event):
         self._collapsed = not self._collapsed
+        header = self.doc.get_element_by_id("hdr-groups")
         section = self.doc.get_element_by_id("groups-section")
-        if section:
-            section.set_class("collapsed", self._collapsed)
         arrow = self.doc.get_element_by_id("arrow-groups")
-        if arrow:
-            arrow.set_inner_rml("\u25B6" if self._collapsed else "\u25BC")
+        if section:
+            from . import rml_widgets as w
+            w.animate_section_toggle(section, not self._collapsed, arrow, header_element=header)
 
     def _on_add_group(self, event):
         scene = lf.get_scene()

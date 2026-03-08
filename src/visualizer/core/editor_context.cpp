@@ -119,6 +119,7 @@ namespace lfs::vis {
     void EditorContext::setActiveTool(const ToolType tool) {
         if (isToolAvailable(tool)) {
             active_tool_ = tool;
+            clearActiveOperator();
         }
     }
 

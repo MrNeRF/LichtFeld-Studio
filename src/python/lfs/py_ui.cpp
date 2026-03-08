@@ -4581,6 +4581,11 @@ namespace lfs::python {
             [](const std::string& text) { SDL_SetClipboardText(text.c_str()); },
             nb::arg("text"), "Copy text to the system clipboard");
 
+        m.def(
+            "set_mouse_cursor_hand",
+            []() { ImGui::SetMouseCursor(ImGuiMouseCursor_Hand); },
+            "Set mouse cursor to hand pointer for this frame");
+
         // Language control (for Python-driven Edit menu)
         m.def(
             "set_language",
@@ -5000,10 +5005,17 @@ namespace lfs::python {
 
                 nb::module_ types_module = nb::module_::import_("lfs_plugins.types");
                 nb::object Panel_type = types_module.attr("Panel");
+                nb::object RmlPanel_type = types_module.attr("RmlPanel");
                 nb::object Operator_type = types_module.attr("Operator");
                 const nb::object Menu_type = types_module.attr("Menu");
 
-                if (nb::cast<bool>(issubclass(cls, Panel_type))) {
+                if (nb::cast<bool>(issubclass(cls, RmlPanel_type))) {
+                    auto* mgr = lfs::python::get_rml_manager();
+                    if (mgr)
+                        PyPanelRegistry::instance().register_rml_panel(cls, mgr);
+                    else
+                        LOG_ERROR("register_class: RmlUI manager not available for RmlPanel");
+                } else if (nb::cast<bool>(issubclass(cls, Panel_type))) {
                     PyPanelRegistry::instance().register_panel(cls);
                 } else if (nb::cast<bool>(issubclass(cls, Operator_type))) {
                     register_python_operator_to_cpp(cls);
@@ -5029,10 +5041,12 @@ namespace lfs::python {
 
                 nb::module_ types_module = nb::module_::import_("lfs_plugins.types");
                 nb::object Panel_type = types_module.attr("Panel");
+                nb::object RmlPanel_type = types_module.attr("RmlPanel");
                 nb::object Operator_type = types_module.attr("Operator");
                 const nb::object Menu_type = types_module.attr("Menu");
 
-                if (nb::cast<bool>(issubclass(cls, Panel_type))) {
+                if (nb::cast<bool>(issubclass(cls, Panel_type)) ||
+                    nb::cast<bool>(issubclass(cls, RmlPanel_type))) {
                     PyPanelRegistry::instance().unregister_panel(cls);
                 } else if (nb::cast<bool>(issubclass(cls, Operator_type))) {
                     std::string idname = get_class_id(cls);

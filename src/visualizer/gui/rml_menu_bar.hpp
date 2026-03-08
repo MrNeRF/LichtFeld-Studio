@@ -6,6 +6,7 @@
 
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_fbo.hpp"
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,9 @@ namespace Rml {
     class Element;
 } // namespace Rml
 
+namespace lfs::vis {
+    struct Theme;
+}
 namespace lfs::vis::gui {
 
     class RmlUIManager;
@@ -57,7 +61,7 @@ namespace lfs::vis::gui {
     private:
         void updateTheme();
         void rebuildLabels();
-        std::string generateThemeRCSS() const;
+        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
         void openDropdown(int index);
         void closeDropdown();
         void rebuildDropdownDOM();
@@ -68,7 +72,8 @@ namespace lfs::vis::gui {
 
         RmlFBO fbo_;
 
-        std::string last_theme_;
+        std::size_t last_theme_signature_ = 0;
+        bool has_theme_signature_ = false;
         std::string base_rcss_;
 
         std::vector<std::string> current_labels_;

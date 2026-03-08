@@ -2,6 +2,9 @@
 
 #content-wrap {
     padding: 0;
+    overflow: hidden;
+    min-width: 0;
+    min-height: 0;
 }
 
 #content {
@@ -9,6 +12,9 @@
     flex: 1;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+    min-width: 0;
+    min-height: 0;
 }
 
 /* -- Main Area -- */
@@ -17,6 +23,8 @@
     display: flex;
     flex: 1;
     overflow: hidden;
+    min-width: 0;
+    min-height: 0;
 }
 
 /* -- Filmstrip -- */
@@ -26,6 +34,7 @@
     overflow-y: auto;
     padding: 6dp;
     flex-shrink: 0;
+    min-height: 0;
     border-right-width: 1dp;
 }
 
@@ -44,7 +53,7 @@
     opacity: 0.5;
     position: relative;
     overflow: hidden;
-    transition: opacity 0.15s quadratic-out, border-color 0.15s quadratic-out;
+    transition: opacity 0.12s quadratic-out;
 }
 
 .thumb-item:hover {
@@ -70,31 +79,40 @@
     flex: 1;
     overflow: hidden;
     position: relative;
-    display: flex;
-    justify-content: center;
-    align-items: center;
+    min-width: 0;
+    min-height: 0;
 }
 
-#main-image {
+#image-viewport {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    overflow: hidden;
+    clip: always;
+}
+
+.image-layer {
+    position: absolute;
     display: block;
-    max-width: 100%;
-    max-height: 100%;
+    decorator: none;
+    opacity: 1;
+    transition: opacity 0.2s quadratic-out;
 }
 
-#main-image.hidden {
+.image-layer.fading-out {
+    opacity: 0;
+}
+
+.image-layer.hidden {
     display: none;
 }
 
 #mask-overlay {
     position: absolute;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    margin: auto;
-    max-width: 100%;
-    max-height: 100%;
     display: none;
+    decorator: none;
     image-color: rgba(255, 50, 50, 128);
 }
 
@@ -105,6 +123,15 @@
 #no-image-text {
     font-size: 11dp;
     position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    pointer-events: none;
 }
 
 #no-image-text.hidden {
@@ -153,6 +180,7 @@
     width: 200dp;
     overflow-y: auto;
     flex-shrink: 0;
+    min-height: 0;
     border-left-width: 1dp;
 }
 
@@ -288,6 +316,32 @@
     font-size: 9dp;
     margin-right: 16dp;
     letter-spacing: 0.5dp;
+}
+
+.status-keys {
+    display: flex;
+    align-items: center;
+    margin-left: auto;
+    margin-right: auto;
+    gap: 8dp;
+}
+
+.hk {
+    display: flex;
+    align-items: center;
+    gap: 2dp;
+}
+
+.hk-key {
+    font-size: 8dp;
+    padding: 1dp 3dp;
+    border-radius: 2dp;
+    letter-spacing: 0.3dp;
+}
+
+.hk-label {
+    font-size: 8dp;
+    letter-spacing: 0.3dp;
 }
 
 .status-counter {

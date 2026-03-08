@@ -2,7 +2,6 @@
 
 from .empty_state import EmptyStateOverlay
 from .drag_drop import DragDropOverlay
-from .export_progress import ExportProgressOverlay
 from .import_progress import ImportProgressOverlay
 from .video_progress import VideoProgressOverlay
 
@@ -12,7 +11,6 @@ def register():
     import lichtfeld as lf
     lf.register_class(EmptyStateOverlay)
     lf.register_class(DragDropOverlay)
-    lf.register_class(ExportProgressOverlay)
     lf.register_class(ImportProgressOverlay)
     lf.register_class(VideoProgressOverlay)
 

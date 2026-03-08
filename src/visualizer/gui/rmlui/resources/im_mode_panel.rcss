@@ -14,6 +14,14 @@
     width: 100%;
 }
 
+.im-line > .setting-row {
+    flex: 1;
+}
+
+.im-line > button {
+    flex-shrink: 0;
+}
+
 .im-label {
     font-size: 10dp;
     padding: 0 0 0 2dp;

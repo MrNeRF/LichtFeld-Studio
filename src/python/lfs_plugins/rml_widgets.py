@@ -19,6 +19,79 @@ Usage in RmlPanel.on_load():
 """
 
 
+def _section_duration(height_px, duration):
+    if duration is not None:
+        return max(0.08, float(duration))
+    height_px = max(0.0, float(height_px))
+    return min(0.28, 0.16 + height_px / 2200.0)
+
+
+def _apply_section_visual_state(expanded, header_element=None, arrow_element=None):
+    if header_element:
+        header_element.set_class("is-expanded", expanded)
+        header_element.set_class("is-collapsed", not expanded)
+    if arrow_element:
+        arrow_element.set_inner_rml("&#x25B6;")
+        arrow_element.set_class("is-expanded", expanded)
+        arrow_element.set_class("is-collapsed", not expanded)
+
+
+def sync_section_state(content_element, expanded, header_element=None, arrow_element=None):
+    """Apply the steady-state visual state for a collapsible section."""
+    if not content_element:
+        return
+
+    _apply_section_visual_state(expanded, header_element, arrow_element)
+    content_element.set_class("collapsed", not expanded)
+
+    if expanded:
+        content_element.remove_property("max-height")
+        content_element.remove_property("opacity")
+        content_element.remove_property("pointer-events")
+        return
+
+    content_element.set_property("max-height", "0px")
+    content_element.set_property("opacity", "0")
+    content_element.set_property("pointer-events", "none")
+
+
+def animate_section_toggle(content_element, expanding, arrow_element=None,
+                           duration=None, header_element=None):
+    """Animate a section open/close with synchronized arrow and header state."""
+    if not content_element:
+        return
+
+    current_h = max(content_element.client_height, 0)
+    target_h = max(content_element.scroll_height, current_h)
+    duration = _section_duration(target_h, duration)
+    fade_duration = max(0.1, min(0.18, duration * 0.7))
+
+    _apply_section_visual_state(expanding, header_element, arrow_element)
+
+    if expanding:
+        content_element.set_class("collapsed", False)
+        content_element.remove_property("pointer-events")
+        if target_h <= 0:
+            sync_section_state(content_element, True, header_element, arrow_element)
+            return
+        content_element.animate("max-height", f"{target_h}px", duration, "cubic-out",
+                                f"{current_h}px" if current_h > 0 else "0px",
+                                remove_on_complete=True)
+        content_element.animate("opacity", "1", fade_duration, "quadratic-out",
+                                remove_on_complete=True)
+        return
+
+    if target_h <= 0:
+        sync_section_state(content_element, False, header_element, arrow_element)
+        return
+
+    content_element.set_class("collapsed", True)
+    content_element.set_property("pointer-events", "none")
+    content_element.animate("max-height", "0px", duration, "cubic-in-out",
+                            f"{target_h}px")
+    content_element.animate("opacity", "0", fade_duration, "quadratic-out", "1")
+
+
 def button(container, id, label, style="", disabled=False):
     """Create a styled button element.
 
@@ -136,7 +209,8 @@ def collapsible(container, id, title="", open=True):
 
     arrow = header.append_child("span")
     arrow.set_class_names("section-arrow")
-    arrow.set_inner_rml("&#x25BC;" if open else "&#x25B6;")
+    arrow.set_id(f"arrow-{id}")
+    arrow.set_inner_rml("&#x25B6;")
 
     title_span = header.append_child("span")
     title_span.set_id(f"text-hdr-{id}")
@@ -145,8 +219,7 @@ def collapsible(container, id, title="", open=True):
     content = container.append_child("div")
     content.set_class_names("section-content")
     content.set_id(f"sec-{id}")
-    if not open:
-        content.set_class("collapsed", True)
+    sync_section_state(content, open, header, arrow)
 
     return header, content
 
@@ -264,11 +337,12 @@ def number_input(container, id, label="", value="", data_prop="",
 
 
 def icon_button(container, id, icon_src, selected=False,
-                disabled=False, tooltip=""):
+                disabled=False, tooltip="", tooltip_key=""):
     """Create an icon button for toolbars.
 
     Args:
         icon_src: Path to icon image (relative to assets).
+        tooltip_key: Locale key for tooltip (resolved via LocalizationManager).
     """
     btn = container.append_child("div")
     btn.set_id(id)
@@ -281,7 +355,9 @@ def icon_button(container, id, icon_src, selected=False,
     img = btn.append_child("img")
     img.set_attribute("src", icon_src)
 
-    if tooltip:
+    if tooltip_key:
+        btn.set_attribute("data-tooltip", tooltip_key)
+    elif tooltip:
         btn.set_attribute("title", tooltip)
 
     return btn

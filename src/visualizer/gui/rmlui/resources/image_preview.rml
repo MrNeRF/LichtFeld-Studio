@@ -6,12 +6,23 @@
 <body template="floating-window" data-model="image_preview">
 
   <div id="main-area">
-    <div id="filmstrip"></div>
+    <div id="filmstrip">
+      <div class="thumb-item"
+           data-for="thumb : thumbs"
+           data-class-selected="thumb.selected"
+           data-attr-data-index="thumb.index"
+           data-style-decorator="thumb.decorator">
+        <span class="thumb-index">{{ thumb.label }}</span>
+      </div>
+    </div>
     <div id="image-container">
+      <div id="image-viewport">
+        <div id="main-image-a" class="image-layer"></div>
+        <div id="main-image-b" class="image-layer hidden"></div>
+        <div id="mask-overlay"></div>
+        <span id="no-image-text"></span>
+      </div>
       <div class="nav-arrow" id="nav-prev">&#x25C0;</div>
-      <img id="main-image" src=""/>
-      <img id="mask-overlay" src=""/>
-      <span id="no-image-text"></span>
       <div class="nav-arrow" id="nav-next">&#x25B6;</div>
     </div>
     <div id="sidebar">
@@ -91,6 +102,17 @@
     <span class="status-item" id="st-h"></span>
     <span class="status-item" id="st-ch"></span>
     <span class="status-item" id="st-zoom"></span>
+    <span class="status-keys">
+      <span class="hk"><span class="hk-key">&#x2190;&#x2192;</span><span class="hk-label">Navigate</span></span>
+      <span class="hk"><span class="hk-key">F</span><span class="hk-label">Fit</span></span>
+      <span class="hk"><span class="hk-key">1</span><span class="hk-label">100%</span></span>
+      <span class="hk"><span class="hk-key">+ &#x2212; / Scroll</span><span class="hk-label">Zoom</span></span>
+      <span class="hk"><span class="hk-key">I</span><span class="hk-label">Info</span></span>
+      <span class="hk"><span class="hk-key">T</span><span class="hk-label">Thumbs</span></span>
+      <span class="hk"><span class="hk-key">M</span><span class="hk-label">Mask</span></span>
+      <span class="hk"><span class="hk-key">R</span><span class="hk-label">Reset</span></span>
+      <span class="hk"><span class="hk-key">Esc</span><span class="hk-label">Close</span></span>
+    </span>
     <span class="status-counter" id="st-counter"></span>
   </div>
 

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "gui/rmlui/rml_fbo.hpp"
+#include <cstddef>
 #include <glm/glm.hpp>
 #include <string>
 
@@ -14,6 +15,9 @@ namespace Rml {
     class Element;
 } // namespace Rml
 
+namespace lfs::vis {
+    struct Theme;
+}
 namespace lfs::vis::gui {
 
     class RmlUIManager;
@@ -29,7 +33,7 @@ namespace lfs::vis::gui {
 
     private:
         void updateTheme();
-        std::string generateThemeRCSS() const;
+        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
@@ -39,7 +43,8 @@ namespace lfs::vis::gui {
 
         glm::vec2 vp_pos_{0, 0};
         glm::vec2 vp_size_{0, 0};
-        std::string last_theme_;
+        std::size_t last_theme_signature_ = 0;
+        bool has_theme_signature_ = false;
         std::string base_rcss_;
         bool wants_input_ = false;
         bool doc_registered_ = false;

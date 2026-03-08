@@ -5,6 +5,8 @@
 #pragma once
 
 #include "gui/rmlui/rml_fbo.hpp"
+#include <RmlUi/Core/DataModelHandle.h>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <glm/glm.hpp>
@@ -17,6 +19,9 @@ namespace Rml {
     class Element;
 } // namespace Rml
 
+namespace lfs::vis {
+    struct Theme;
+}
 namespace lfs::vis::gui {
 
     class RmlUIManager;
@@ -24,6 +29,7 @@ namespace lfs::vis::gui {
     struct TabSnapshot {
         std::string idname;
         std::string label;
+        bool operator==(const TabSnapshot&) const = default;
     };
 
     enum class CursorRequest : uint8_t;
@@ -47,6 +53,7 @@ namespace lfs::vis::gui {
                     const std::string& active_tab);
 
         bool wantsInput() const { return wants_input_; }
+        bool needsAnimationFrame() const;
         CursorRequest getCursorRequest() const;
 
         std::function<void(const std::string&)> on_tab_changed;
@@ -57,8 +64,8 @@ namespace lfs::vis::gui {
 
     private:
         bool updateTheme();
-        std::string generateThemeRCSS() const;
-        bool rebuildTabs(const std::vector<TabSnapshot>& tabs, const std::string& active_tab);
+        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
+        bool syncTabData(const std::vector<TabSnapshot>& tabs, const std::string& active_tab);
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
@@ -71,13 +78,14 @@ namespace lfs::vis::gui {
         Rml::Element* tab_separator_el_ = nullptr;
 
         RmlFBO fbo_;
+        Rml::DataModelHandle tab_model_;
+        std::vector<TabSnapshot> tabs_;
+        Rml::String active_tab_;
 
-        std::string last_theme_;
+        std::size_t last_theme_signature_ = 0;
+        bool has_theme_signature_ = false;
         std::string base_rcss_;
         bool wants_input_ = false;
-
-        std::vector<TabSnapshot> last_tabs_;
-        std::string last_active_tab_;
 
         bool splitter_dragging_ = false;
         float drag_start_y_ = 0;

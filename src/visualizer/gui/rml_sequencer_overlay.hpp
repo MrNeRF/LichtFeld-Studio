@@ -7,6 +7,7 @@
 #include "gui/rmlui/rml_fbo.hpp"
 #include "sequencer/rml_sequencer_panel.hpp"
 #include <RmlUi/Core/EventListener.h>
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <vector>
@@ -19,8 +20,9 @@ namespace Rml {
 } // namespace Rml
 
 namespace lfs::vis {
+    struct Theme;
     class SequencerController;
-}
+} // namespace lfs::vis
 
 namespace lfs::vis::gui {
 
@@ -87,7 +89,7 @@ namespace lfs::vis::gui {
         void initContext();
         void syncTheme();
         void syncLocalization();
-        std::string generateThemeRCSS() const;
+        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
         void cacheElements();
         std::string buildContextMenuHTML(std::optional<size_t> keyframe,
                                          ImGuizmo::OPERATION gizmo_op) const;
@@ -146,7 +148,8 @@ namespace lfs::vis::gui {
         std::optional<EditResult> pending_focal_edit_;
 
         std::string base_rcss_;
-        float last_synced_text_[4] = {};
+        std::size_t last_theme_signature_ = 0;
+        bool has_theme_signature_ = false;
 
         int width_ = 0;
         int height_ = 0;

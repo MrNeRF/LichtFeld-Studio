@@ -83,8 +83,9 @@ namespace lfs::core {
     void Scene::flushMutations() {
         if (pending_mutations_ == 0)
             return;
+        const uint32_t mutations = pending_mutations_;
         pending_mutations_ = 0;
-        events::state::SceneChanged{}.emit();
+        events::state::SceneChanged{.mutation_flags = mutations}.emit();
     }
 
     Scene::Transaction::Transaction(Scene& scene) : scene_(scene) {
@@ -215,6 +216,7 @@ namespace lfs::core {
         const size_t removed_index = idx_it->second;
 
         const std::string name_copy = name;
+        const bool removed_training_model = (training_model_node_ == name_copy);
 
         name_to_id_.erase(name_it);
         id_to_index_.erase(id);
@@ -223,6 +225,17 @@ namespace lfs::core {
         for (auto& [node_id, index] : id_to_index_) {
             if (index > removed_index)
                 --index;
+        }
+
+        if (removed_training_model || (!training_model_node_.empty() && getNode(training_model_node_) == nullptr)) {
+            training_model_node_.clear();
+        }
+
+        const bool has_point_cloud_nodes = std::any_of(
+            nodes_.begin(), nodes_.end(),
+            [](const std::unique_ptr<SceneNode>& n) { return n->type == NodeType::POINTCLOUD && n->point_cloud; });
+        if (!has_point_cloud_nodes) {
+            initial_point_cloud_.reset();
         }
 
         notifyMutation(MutationType::NODE_REMOVED);

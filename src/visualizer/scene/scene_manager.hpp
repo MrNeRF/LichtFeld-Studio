@@ -236,6 +236,7 @@ namespace lfs::vis {
         [[nodiscard]] bool hasAppearanceModel() const { return appearance_ppisp_ != nullptr; }
 
     private:
+        void resetToEmptyState(bool trainer_already_cleared = false);
         void setupEventHandlers();
         void syncCropToolRenderSettings(const core::SceneNode* node);
         void loadPPISPCompanion(const std::filesystem::path& ppisp_path);

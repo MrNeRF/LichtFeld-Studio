@@ -93,6 +93,8 @@ namespace lfs::python {
     // UI redraw request mechanism
     LFS_PYTHON_RUNTIME_API void request_redraw();
     LFS_PYTHON_RUNTIME_API bool consume_redraw_request();
+    using RedrawWakeupCallback = void (*)();
+    LFS_PYTHON_RUNTIME_API void set_redraw_wakeup_callback(RedrawWakeupCallback cb);
 
     using CleanupCallback = void (*)();
     using EnsureInitializedCallback = void (*)();
@@ -498,17 +500,24 @@ namespace lfs::python {
         void set(core::Scene* scene);
         core::Scene* get() const;
         uint64_t generation() const;
+        uint32_t mutation_flags() const;
+        uint32_t consume_mutation_flags();
         void bump();
+        void set_mutation_flags(uint32_t flags);
 
     private:
         std::atomic<core::Scene*> scene_{nullptr};
         std::atomic<uint64_t> generation_{0};
+        std::atomic<uint32_t> mutation_flags_{0};
     };
 
     LFS_PYTHON_RUNTIME_API void set_application_scene(core::Scene* scene);
     LFS_PYTHON_RUNTIME_API core::Scene* get_application_scene();
     LFS_PYTHON_RUNTIME_API uint64_t get_scene_generation();
+    LFS_PYTHON_RUNTIME_API uint32_t get_scene_mutation_flags();
+    LFS_PYTHON_RUNTIME_API uint32_t consume_scene_mutation_flags();
     LFS_PYTHON_RUNTIME_API void bump_scene_generation();
+    LFS_PYTHON_RUNTIME_API void set_scene_mutation_flags(uint32_t flags);
 
     LFS_PYTHON_RUNTIME_API void set_gil_state_ready(bool ready);
     LFS_PYTHON_RUNTIME_API bool is_gil_state_ready();
@@ -571,16 +580,21 @@ namespace lfs::python {
         void (*destroy)(void* host);
         void (*draw)(void* host, const void* draw_ctx);
         void (*draw_direct)(void* host, float x, float y, float w, float h);
+        void (*prepare_direct)(void* host, float w, float h);
+        void (*prepare_layout)(void* host, float w, float h);
         void* (*get_document)(void* host);
         bool (*is_loaded)(void* host);
         void (*set_height_mode)(void* host, int mode);
         float (*get_content_height)(void* host);
         bool (*ensure_context)(void* host);
+        bool (*ensure_document)(void* host);
         void* (*get_context)(void* host);
         void (*set_foreground)(void* host, bool fg);
         void (*mark_content_dirty)(void* host);
         void (*set_input_clip_y)(void* host, float y_min, float y_max);
         void (*set_input)(void* host, const void* input);
+        void (*set_forced_height)(void* host, float h);
+        bool (*needs_animation)(void* host);
     };
 
     LFS_PYTHON_RUNTIME_API void set_rml_panel_host_ops(const RmlPanelHostOps& ops);

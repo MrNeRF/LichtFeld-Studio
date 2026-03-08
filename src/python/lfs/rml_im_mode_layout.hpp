@@ -439,6 +439,9 @@ namespace lfs::python {
         MouseState mouse_;
         std::optional<TableState> table_;
         float cached_line_height_ = 18.0f;
+
+        std::vector<float> item_width_stack_;
+        void apply_item_width(Rml::Element* el);
     };
 
     enum class RmlLayoutDirection : uint8_t { Row,

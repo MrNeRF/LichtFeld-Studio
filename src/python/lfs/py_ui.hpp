@@ -662,8 +662,6 @@ namespace lfs::python {
 
     using PollDependency = lfs::vis::op::PollDependency;
 
-    class PythonPanelAdapter;
-
     namespace gui = lfs::vis::gui;
 
     class PyPanelRegistry {
@@ -673,6 +671,7 @@ namespace lfs::python {
         void register_panel(nb::object panel_class);
         void register_rml_panel(nb::object panel_class, void* rml_manager);
         void unregister_panel(nb::object panel_class);
+        void unregister_for_module(const std::string& prefix);
         void unregister_all();
 
     private:
@@ -681,9 +680,13 @@ namespace lfs::python {
         PyPanelRegistry(const PyPanelRegistry&) = delete;
         PyPanelRegistry& operator=(const PyPanelRegistry&) = delete;
 
+        struct RegisteredPanel {
+            std::shared_ptr<gui::IPanel> adapter;
+            std::string module_prefix;
+        };
+
         mutable std::mutex mutex_;
-        std::unordered_map<std::string, std::shared_ptr<PythonPanelAdapter>> adapters_;
-        std::unordered_map<std::string, std::shared_ptr<gui::IPanel>> rml_adapters_;
+        std::unordered_map<std::string, RegisteredPanel> panels_;
     };
 
     // Theme palette wrapper (read-only)

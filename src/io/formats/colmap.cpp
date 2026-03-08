@@ -602,44 +602,6 @@ namespace lfs::io {
     // -----------------------------------------------------------------------------
     //  Assemble cameras with dimension verification
     // -----------------------------------------------------------------------------
-    namespace {
-        constexpr std::array MASK_FOLDERS = {"masks", "mask", "segmentation"};
-        constexpr std::array MASK_EXTENSIONS = {".png", ".jpg", ".jpeg", ".mask.png"};
-    } // namespace
-
-    static std::filesystem::path find_mask_path(const std::filesystem::path& base_path,
-                                                const std::string& image_name) {
-        const std::filesystem::path img_path = lfs::core::utf8_to_path(image_name);
-        const std::filesystem::path stem_path = img_path.parent_path() / img_path.stem();
-
-        for (const auto& folder : MASK_FOLDERS) {
-            const std::filesystem::path mask_dir = base_path / folder;
-            if (!safe_exists(mask_dir))
-                continue;
-
-            if (const auto exact = mask_dir / img_path; safe_exists(exact))
-                return exact;
-
-            if (auto found = find_path_ci(mask_dir, img_path); !found.empty())
-                return found;
-
-            for (const auto& ext : MASK_EXTENSIONS) {
-                std::filesystem::path target_path = stem_path;
-                target_path += ext;
-                if (auto found = find_path_ci(mask_dir, target_path); !found.empty())
-                    return found;
-            }
-
-            for (const auto& ext : MASK_EXTENSIONS) {
-                std::filesystem::path target_path = img_path;
-                target_path += ext;
-                if (auto found = find_path_ci(mask_dir, target_path); !found.empty())
-                    return found;
-            }
-        }
-        return {};
-    }
-
     Result<std::tuple<std::vector<std::shared_ptr<Camera>>, Tensor>>
     assemble_colmap_cameras(const std::filesystem::path& base_path,
                             const std::unordered_map<uint32_t, CameraDataIntermediate>& cam_map,
@@ -657,6 +619,8 @@ namespace lfs::io {
 
         std::vector<std::shared_ptr<Camera>> cameras;
         cameras.reserve(images.size());
+
+        MaskDirCache mask_cache(base_path);
 
         // Accumulate camera positions for scene center
         std::vector<float> camera_positions;
@@ -824,7 +788,7 @@ namespace lfs::io {
                                   images_path / img.name);
             }
 
-            std::filesystem::path mask_path = find_mask_path(base_path, img.name);
+            std::filesystem::path mask_path = mask_cache.find(img.name);
 
             // Validate mask dimensions match image dimensions
             if (!mask_path.empty()) {

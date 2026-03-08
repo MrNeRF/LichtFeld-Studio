@@ -5,6 +5,7 @@
 #pragma once
 #include "core/event_bridge/event_bridge.hpp"
 #include "geometry/bounding_box.hpp"
+#include <cstdint>
 #include <filesystem>
 #include <glm/glm.hpp>
 #include <optional>
@@ -151,7 +152,7 @@ namespace lfs::core {
                   int checkpoint_iteration = 0;);
             EVENT(SceneCleared, );
             EVENT(ModelUpdated, int iteration; size_t num_gaussians;);
-            EVENT(SceneChanged, );
+            EVENT(SceneChanged, uint32_t mutation_flags = 0;);
             EVENT(SelectionChanged, bool has_selection; int count;);
             // node_type: 0=SPLAT, 1=GROUP, 2=CROPBOX
             EVENT(PLYAdded, std::string name; size_t node_gaussians; size_t total_gaussians; bool is_visible; std::string parent_name; bool is_group; int node_type;);

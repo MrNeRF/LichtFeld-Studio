@@ -17,7 +17,6 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
-#include <RmlUi/Core/ElementUtilities.h>
 #include <cassert>
 #include <format>
 #include <imgui.h>
@@ -35,6 +34,28 @@ namespace lfs::vis::gui {
         }
 
         rml_context_->EnableMouseCursor(false);
+
+        auto ctor = rml_context_->CreateDataModel("right_panel_tabs");
+        assert(ctor);
+
+        if (auto h = ctor.RegisterStruct<TabSnapshot>()) {
+            h.RegisterMember("idname", &TabSnapshot::idname);
+            h.RegisterMember("label", &TabSnapshot::label);
+        }
+        ctor.RegisterArray<std::vector<TabSnapshot>>();
+        ctor.Bind("tabs", &tabs_);
+        ctor.Bind("active_tab", &active_tab_);
+
+        ctor.BindEventCallback("tab_click",
+                               [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& args) {
+                                   if (!args.empty()) {
+                                       auto idname = args[0].Get<Rml::String>();
+                                       if (!idname.empty() && on_tab_changed)
+                                           on_tab_changed(std::string(idname));
+                                   }
+                               });
+
+        tab_model_ = ctor.GetModelHandle();
 
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/right_panel.rml");
@@ -59,6 +80,9 @@ namespace lfs::vis::gui {
     }
 
     void RmlRightPanel::shutdown() {
+        tab_model_ = {};
+        tabs_.clear();
+        active_tab_.clear();
         fbo_.destroy();
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("right_panel");
@@ -71,10 +95,9 @@ namespace lfs::vis::gui {
         tab_separator_el_ = nullptr;
     }
 
-    std::string RmlRightPanel::generateThemeRCSS() const {
+    std::string RmlRightPanel::generateThemeRCSS(const lfs::vis::Theme& t) const {
         using rml_theme::colorToRml;
         using rml_theme::colorToRmlAlpha;
-        const auto& t = lfs::vis::theme();
         const auto& p = t.palette;
 
         const auto tab_hover = colorToRmlAlpha(p.surface_bright, 0.5f);
@@ -97,7 +120,7 @@ namespace lfs::vis::gui {
             ".tab {{ background-color: transparent; color: {}; }}\n"
             ".tab:hover {{ background-color: {}; }}\n"
             ".tab.active {{ background-color: {}; color: {}; "
-            "border-bottom-width: 2dp; border-bottom-color: {}; }}\n"
+            "border-bottom-color: {}; }}\n"
             "#left-border {{ background-color: {}; }}\n"
             "#tab-separator {{ background-color: {}; }}\n"
             "#resize-handle:hover {{ background-color: {}; }}\n"
@@ -116,71 +139,36 @@ namespace lfs::vis::gui {
         if (!document_)
             return false;
 
-        const auto& t = lfs::vis::theme();
-        if (t.name == last_theme_)
+        const std::size_t theme_signature = rml_theme::currentThemeSignature();
+        if (has_theme_signature_ && theme_signature == last_theme_signature_)
             return false;
-        last_theme_ = t.name;
+        last_theme_signature_ = theme_signature;
+        has_theme_signature_ = true;
 
         if (base_rcss_.empty())
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/right_panel.rcss");
 
-        rml_theme::applyTheme(document_, base_rcss_, generateThemeRCSS());
+        rml_theme::applyTheme(document_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
         return true;
     }
 
-    bool RmlRightPanel::rebuildTabs(const std::vector<TabSnapshot>& tabs,
+    bool RmlRightPanel::syncTabData(const std::vector<TabSnapshot>& tabs,
                                     const std::string& active_tab) {
-        if (!tab_bar_el_)
-            return false;
+        bool dirty = false;
 
-        bool tabs_changed = tabs.size() != last_tabs_.size();
-        if (!tabs_changed) {
-            for (size_t i = 0; i < tabs.size(); ++i) {
-                if (tabs[i].idname != last_tabs_[i].idname ||
-                    tabs[i].label != last_tabs_[i].label) {
-                    tabs_changed = true;
-                    break;
-                }
-            }
+        if (tabs_ != tabs) {
+            tabs_ = tabs;
+            tab_model_.DirtyVariable("tabs");
+            dirty = true;
         }
 
-        if (tabs_changed) {
-            tab_bar_el_->SetInnerRML("");
-            for (const auto& tab : tabs) {
-                auto el = document_->CreateElement("div");
-                el->SetAttribute("class", tab.idname == active_tab ? "tab active" : "tab");
-                el->SetAttribute("data-idname", tab.idname);
-                el->SetInnerRML(Rml::String(tab.label));
-                tab_bar_el_->AppendChild(std::move(el));
-            }
-            last_tabs_ = tabs;
-            last_active_tab_ = active_tab;
-            return true;
+        if (active_tab_ != active_tab) {
+            active_tab_ = active_tab;
+            tab_model_.DirtyVariable("active_tab");
+            dirty = true;
         }
 
-        if (active_tab != last_active_tab_) {
-            for (int i = 0; i < tab_bar_el_->GetNumChildren(); ++i) {
-                auto* child = tab_bar_el_->GetChild(i);
-                const auto idname = child->GetAttribute<Rml::String>("data-idname", "");
-                if (idname == active_tab)
-                    child->SetAttribute("class", "tab active");
-                else
-                    child->SetAttribute("class", "tab");
-            }
-            last_active_tab_ = active_tab;
-            return true;
-        }
-
-        return false;
-    }
-
-    static Rml::Element* findAncestorWithAttribute(Rml::Element* el, const Rml::String& attr) {
-        while (el) {
-            if (el->HasAttribute(attr))
-                return el;
-            el = el->GetParentNode();
-        }
-        return nullptr;
+        return dirty;
     }
 
     static bool isOrHasAncestor(Rml::Element* el, const Rml::String& id) {
@@ -194,6 +182,10 @@ namespace lfs::vis::gui {
 
     CursorRequest RmlRightPanel::getCursorRequest() const {
         return cursor_request_;
+    }
+
+    bool RmlRightPanel::needsAnimationFrame() const {
+        return render_needed_ || input_dirty_ || splitter_dragging_ || resize_dragging_;
     }
 
     void RmlRightPanel::processInput(const RightPanelLayout& layout, const PanelInputState& input) {
@@ -289,13 +281,10 @@ namespace lfs::vis::gui {
             } else {
                 if (input.mouse_clicked[0]) {
                     input_dirty_ = true;
-                    auto* tab_el = findAncestorWithAttribute(hover, "data-idname");
-                    if (tab_el) {
-                        auto idname = tab_el->GetAttribute<Rml::String>("data-idname", "");
-                        if (!idname.empty() && on_tab_changed)
-                            on_tab_changed(std::string(idname));
-                    }
+                    rml_context_->ProcessMouseButtonDown(0, 0);
                 }
+                if (input.mouse_released[0])
+                    rml_context_->ProcessMouseButtonUp(0, 0);
             }
         }
     }
@@ -319,7 +308,7 @@ namespace lfs::vis::gui {
         const bool dims_changed = (w != last_fbo_w_ || h != last_fbo_h_);
         const bool layout_changed = (layout.scene_h != last_scene_h_ ||
                                      layout.splitter_h != last_splitter_h_);
-        const bool tabs_changed = rebuildTabs(tabs, active_tab);
+        const bool tabs_changed = syncTabData(tabs, active_tab);
 
         const bool needs_render = render_needed_ || theme_changed || layout_changed ||
                                   tabs_changed || dims_changed || input_dirty_;
@@ -363,11 +352,13 @@ namespace lfs::vis::gui {
 
             GLint prev_fbo = 0;
             fbo_.bind(&prev_fbo);
+            render->SetTargetFramebuffer(fbo_.fbo());
 
             render->BeginFrame();
             rml_context_->Render();
             render->EndFrame();
 
+            render->SetTargetFramebuffer(0);
             fbo_.unbind(prev_fbo);
 
             last_fbo_w_ = w;

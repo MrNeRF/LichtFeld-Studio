@@ -30,6 +30,7 @@ namespace lfs::vis::gui {
 
         static void pushDrawListClipRect(void* draw_list, float x1, float y1, float x2, float y2);
         static void popDrawListClipRect(void* draw_list);
+        GLuint fbo() const { return fbo_; }
         GLuint texture() const { return texture_; }
         int width() const { return width_; }
         int height() const { return height_; }

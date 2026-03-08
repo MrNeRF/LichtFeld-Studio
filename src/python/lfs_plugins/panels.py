@@ -47,7 +47,7 @@ def register_builtin_panels():
 
         # Floating panels
         from .export_panel import ExportPanel
-        lf.register_class(ExportPanel)
+        lf.ui.register_rml_panel(ExportPanel)
         lf.ui.set_panel_enabled("lfs.export", False)
 
         from .about_panel import AboutPanel

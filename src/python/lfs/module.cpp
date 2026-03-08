@@ -1360,6 +1360,18 @@ NB_MODULE(lichtfeld, m) {
         },
         "Get current scene generation counter (for validity checking)");
 
+    m.def(
+        "get_scene_mutation_flags", []() -> uint32_t {
+            return lfs::python::get_scene_mutation_flags();
+        },
+        "Get accumulated scene mutation flags");
+
+    m.def(
+        "consume_scene_mutation_flags", []() -> uint32_t {
+            return lfs::python::consume_scene_mutation_flags();
+        },
+        "Get and clear accumulated scene mutation flags");
+
     // Run a Python script file
     m.def(
         "run", [](const std::string& path) {

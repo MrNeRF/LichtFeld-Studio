@@ -164,6 +164,7 @@ namespace lfs::python {
 
         // Redraw request flag
         std::atomic<bool> g_redraw_requested{false};
+        RedrawWakeupCallback g_redraw_wakeup_callback = nullptr;
     } // namespace
 
     // Bridge API
@@ -197,10 +198,18 @@ namespace lfs::python {
     const PyContext& context() { return g_frame_context; }
 
     // Redraw request mechanism
-    void request_redraw() { g_redraw_requested.store(true, std::memory_order_release); }
+    void request_redraw() {
+        const bool was_requested = g_redraw_requested.exchange(true, std::memory_order_acq_rel);
+        if (!was_requested && g_redraw_wakeup_callback)
+            g_redraw_wakeup_callback();
+    }
 
     bool consume_redraw_request() {
         return g_redraw_requested.exchange(false, std::memory_order_acq_rel);
+    }
+
+    void set_redraw_wakeup_callback(RedrawWakeupCallback cb) {
+        g_redraw_wakeup_callback = cb;
     }
 
     // Operation context (short-lived)
@@ -467,6 +476,7 @@ namespace lfs::python {
     // Application context (long-lived)
     void ApplicationSceneContext::set(core::Scene* scene) {
         scene_.store(scene);
+        mutation_flags_.store(0, std::memory_order_release);
         generation_.fetch_add(1);
     }
 
@@ -474,7 +484,19 @@ namespace lfs::python {
 
     uint64_t ApplicationSceneContext::generation() const { return generation_.load(); }
 
+    uint32_t ApplicationSceneContext::mutation_flags() const {
+        return mutation_flags_.load(std::memory_order_acquire);
+    }
+
+    uint32_t ApplicationSceneContext::consume_mutation_flags() {
+        return mutation_flags_.exchange(0, std::memory_order_acq_rel);
+    }
+
     void ApplicationSceneContext::bump() { generation_.fetch_add(1); }
+
+    void ApplicationSceneContext::set_mutation_flags(const uint32_t flags) {
+        mutation_flags_.fetch_or(flags, std::memory_order_acq_rel);
+    }
 
     void set_application_scene(core::Scene* scene) { g_app_scene_context.set(scene); }
 
@@ -482,7 +504,15 @@ namespace lfs::python {
 
     uint64_t get_scene_generation() { return g_app_scene_context.generation(); }
 
+    uint32_t get_scene_mutation_flags() { return g_app_scene_context.mutation_flags(); }
+
+    uint32_t consume_scene_mutation_flags() { return g_app_scene_context.consume_mutation_flags(); }
+
     void bump_scene_generation() { g_app_scene_context.bump(); }
+
+    void set_scene_mutation_flags(const uint32_t flags) {
+        g_app_scene_context.set_mutation_flags(flags);
+    }
 
     void set_gil_state_ready(const bool ready) { g_gil_state_ready.store(ready, std::memory_order_release); }
     bool is_gil_state_ready() { return g_gil_state_ready.load(std::memory_order_acquire); }

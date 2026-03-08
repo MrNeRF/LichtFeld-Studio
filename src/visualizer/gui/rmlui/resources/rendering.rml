@@ -94,11 +94,11 @@
   <div class="separator"></div>
 
   <!-- Selection Colors (collapsible) -->
-  <div class="section-header" data-event-click="toggle_section('selection_colors')" data-tooltip="tooltip.selection_colors">
-    <span class="section-arrow">{{sec_selection_colors_arrow}}</span>
+  <div class="section-header is-expanded" id="hdr-selection-colors" data-event-click="toggle_section('selection_colors')" data-tooltip="tooltip.selection_colors">
+    <span class="section-arrow is-expanded" id="arrow-selection-colors">&#x25B6;</span>
     <span>{{label_hdr_selection_colors}}</span>
   </div>
-  <div class="section-content" data-class-collapsed="sec_selection_colors_collapsed">
+  <div class="section-content" id="sec-selection-colors">
     <div class="setting-row">
       <span class="color-comp">{{selection_color_committed_r}}</span>
       <span class="color-comp">{{selection_color_committed_g}}</span>
@@ -192,11 +192,11 @@
   <div class="separator"></div>
 
   <!-- Mesh (collapsible) -->
-  <div class="section-header" data-event-click="toggle_section('mesh')">
-    <span class="section-arrow">{{sec_mesh_arrow}}</span>
+  <div class="section-header is-expanded" id="hdr-mesh" data-event-click="toggle_section('mesh')">
+    <span class="section-arrow is-expanded" id="arrow-mesh">&#x25B6;</span>
     <span>{{label_hdr_mesh}}</span>
   </div>
-  <div class="section-content" data-class-collapsed="sec_mesh_collapsed">
+  <div class="section-content" id="sec-mesh">
     <div class="setting-row">
       <label class="setting-label">
         <input type="checkbox" data-checked="mesh_wireframe" />
@@ -318,11 +318,11 @@
       </div>
 
       <!-- CRF (collapsible) -->
-      <div class="section-header" data-event-click="toggle_section('ppisp_crf')">
-        <span class="section-arrow">{{sec_ppisp_crf_arrow}}</span>
+      <div class="section-header is-expanded" id="hdr-ppisp-crf" data-event-click="toggle_section('ppisp_crf')">
+        <span class="section-arrow is-expanded" id="arrow-ppisp-crf">&#x25B6;</span>
         <span>{{label_ppisp_crf}}</span>
       </div>
-      <div class="section-content" data-class-collapsed="sec_ppisp_crf_collapsed">
+      <div class="section-content" id="sec-ppisp-crf">
         <crf-curve
           data-attr-gamma="ppisp_gamma_multiplier"
           data-attr-toe="ppisp_crf_toe"

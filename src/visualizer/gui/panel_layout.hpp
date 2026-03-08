@@ -108,6 +108,7 @@ namespace lfs::vis::gui {
 
         float tab_scroll_offset_ = 0.0f;
         float tab_content_total_h_ = 0.0f;
+        size_t background_preload_index_ = 0;
 
         CursorRequest cursor_request_ = CursorRequest::None;
         float prev_mouse_x_ = 0;

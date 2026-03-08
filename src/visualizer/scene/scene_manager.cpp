@@ -510,6 +510,35 @@ namespace lfs::vis {
         return scene_.consolidateNodeModels();
     }
 
+    void SceneManager::resetToEmptyState(const bool trainer_already_cleared) {
+        if (!trainer_already_cleared) {
+            if (auto* trainer = services().trainerOrNull()) {
+                trainer->clearTrainer();
+            }
+        }
+
+        selection_.clearNodeSelection();
+        selection_.invalidateNodeMask();
+        python::set_application_scene(nullptr);
+        clearAppearanceModel();
+        scene_.clear();
+
+        if (lfs::io::CacheLoader::hasInstance()) {
+            lfs::io::CacheLoader::getInstance().reset_cache();
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            content_type_ = ContentType::Empty;
+            splat_paths_.clear();
+            dataset_path_.clear();
+        }
+
+        state::SceneCleared{}.emit();
+
+        LOG_INFO("Scene cleared");
+    }
+
     void SceneManager::removePLY(const std::string& name, const bool keep_children) {
         const auto& training_name = scene_.getTrainingModelNodeName();
 
@@ -528,6 +557,7 @@ namespace lfs::vis {
         };
 
         const bool affects_training = isTrainingNode();
+        bool trainer_cleared = false;
 
         // Use state machine to check if deletion is allowed
         if (affects_training && services().trainerOrNull()) {
@@ -543,6 +573,7 @@ namespace lfs::vis {
             services().trainerOrNull()->waitForCompletion();
             services().trainerOrNull()->clearTrainer();
             scene_.setTrainingModelNode("");
+            trainer_cleared = true;
         }
 
         std::string parent_name;
@@ -557,10 +588,12 @@ namespace lfs::vis {
         // Collect all descendant IDs before removal (they'll be gone after removeNode)
         const core::NodeId removed_id = scene_.getNodeIdByName(name);
         std::vector<core::NodeId> ids_to_deselect;
+        std::vector<std::string> names_to_remove;
         if (removed_id != core::NULL_NODE && !keep_children) {
             std::function<void(core::NodeId)> collect = [&](core::NodeId id) {
                 ids_to_deselect.push_back(id);
                 if (const auto* node = scene_.getNodeById(id)) {
+                    names_to_remove.push_back(node->name);
                     for (core::NodeId child_id : node->children)
                         collect(child_id);
                 }
@@ -568,25 +601,26 @@ namespace lfs::vis {
             collect(removed_id);
         } else if (removed_id != core::NULL_NODE) {
             ids_to_deselect.push_back(removed_id);
+            names_to_remove.push_back(name);
         }
 
         scene_.removeNode(name, keep_children);
         {
             std::lock_guard lock(state_mutex_);
-            splat_paths_.erase(name);
+            for (const auto& node_name : names_to_remove) {
+                splat_paths_.erase(node_name);
+            }
         }
         for (core::NodeId id : ids_to_deselect)
             selection_.removeFromSelection(id);
         if (!ids_to_deselect.empty())
             selection_.invalidateNodeMask();
 
-        if (scene_.getNodeCount() == 0) {
-            std::lock_guard lock(state_mutex_);
-            content_type_ = ContentType::Empty;
-            dataset_path_.clear();
-        }
-
         state::PLYRemoved{.name = name, .children_kept = keep_children, .parent_of_removed = parent_name}.emit();
+
+        if (scene_.getNodeCount() == 0) {
+            resetToEmptyState(trainer_cleared);
+        }
     }
 
     void SceneManager::setPLYVisibility(const std::string& name, const bool visible) {
@@ -1790,30 +1824,8 @@ namespace lfs::vis {
                          services().trainerOrNull()->getActionBlockedReason(TrainingAction::ClearScene));
                 return;
             }
-            LOG_DEBUG("Clearing trainer before scene");
-            // clearTrainer() handles stop, wait, and cleanup internally
-            services().trainerOrNull()->clearTrainer();
         }
-
-        selection_.clearNodeSelection();
-        python::set_application_scene(nullptr);
-        clearAppearanceModel();
-        scene_.clear();
-
-        if (lfs::io::CacheLoader::hasInstance()) {
-            lfs::io::CacheLoader::getInstance().reset_cache();
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(state_mutex_);
-            content_type_ = ContentType::Empty;
-            splat_paths_.clear();
-            dataset_path_.clear();
-        }
-
-        state::SceneCleared{}.emit();
-
-        LOG_INFO("Scene cleared");
+        resetToEmptyState(false);
     }
 
     void SceneManager::switchToEditMode() {

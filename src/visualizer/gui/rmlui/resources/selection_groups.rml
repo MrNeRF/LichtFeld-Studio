@@ -5,11 +5,11 @@
 </head>
 <body template="docked-panel">
 
-  <div class="section-header" id="hdr-groups">
-    <span class="section-arrow" id="arrow-groups">&#x25BC;</span>
+  <div class="section-header is-expanded" id="hdr-groups">
+    <span class="section-arrow is-expanded" id="arrow-groups">&#x25B6;</span>
     <span id="title-groups">Selection Groups</span>
   </div>
-  <div id="groups-section">
+  <div id="groups-section" class="section-content">
     <button class="btn btn--secondary btn--full" id="btn-add-group">Add Group</button>
     <div id="groups-list"></div>
     <span class="empty-message" id="no-groups-msg"></span>

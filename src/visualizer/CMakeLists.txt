@@ -150,6 +150,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # RmlUI integration
         gui/rmlui/rmlui_system_interface.cpp
         gui/rmlui/rmlui_render_interface.cpp
+        ${PROJECT_SOURCE_DIR}/RmlUi/Backends/RmlUi_Renderer_GL3.cpp
         gui/rmlui/rmlui_manager.cpp
         gui/rmlui/rml_fbo.cpp
         gui/rmlui/rml_panel_host.cpp
@@ -158,6 +159,11 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/elements/color_picker_element.cpp
         gui/rmlui/elements/crf_curve_element.cpp
         gui/rmlui/elements/loss_graph_element.cpp
+)
+
+set_source_files_properties(
+        ${PROJECT_SOURCE_DIR}/RmlUi/Backends/RmlUi_Renderer_GL3.cpp
+        PROPERTIES COMPILE_DEFINITIONS "RMLUI_GL3_CUSTOM_LOADER=<glad/glad.h>"
 )
 
 # Set include directories
@@ -170,6 +176,7 @@ target_include_directories(lfs_visualizer
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/external/httplib
         ${OPENGL_INCLUDE_DIRS}
+        ${PROJECT_SOURCE_DIR}/RmlUi/Backends
 )
 
 target_link_libraries(lfs_visualizer

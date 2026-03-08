@@ -17,6 +17,7 @@
 #include <cassert>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -92,6 +93,12 @@ namespace lfs::python {
         bool set_property(const std::string& name, const std::string& value);
         void remove_property(const std::string& name);
 
+        // Animation
+        bool animate(const std::string& property, const std::string& target_value, float duration,
+                     const std::string& tween = "quadratic-out",
+                     const std::optional<std::string>& start_value = std::nullopt,
+                     bool remove_on_complete = false);
+
         // Events
         void add_event_listener(const std::string& event, nb::callable callback);
 
@@ -109,6 +116,8 @@ namespace lfs::python {
         float scroll_height();
         float client_width();
         float client_height();
+        float offset_top();
+        float offset_height();
         void scroll_into_view(bool align_top = true);
 
         // Focus
@@ -145,42 +154,63 @@ namespace lfs::python {
         Rml::ElementDocument* doc_;
     };
 
+    struct DynamicDataField {
+        Rml::Variant value;
+
+        bool operator==(const DynamicDataField& other) const { return value == other.value; }
+    };
+
+    struct DynamicDataRecord {
+        std::map<std::string, DynamicDataField> fields;
+
+        bool operator==(const DynamicDataRecord& other) const { return fields == other.fields; }
+    };
+
     struct DataModelArrayStorage {
         std::map<std::string, std::vector<Rml::String>> string_arrays;
+        std::map<std::string, std::vector<DynamicDataRecord>> record_arrays;
     };
 
     class PyDataModelHandle {
     public:
-        PyDataModelHandle(Rml::DataModelHandle handle, std::string model_name)
+        PyDataModelHandle(Rml::DataModelHandle handle, std::string model_name,
+                          Rml::Context* context = nullptr)
             : handle_(handle),
-              model_name_(std::move(model_name)) {}
+              model_name_(std::move(model_name)),
+              context_(context) {}
 
         void dirty(const std::string& name);
         void dirty_all();
         bool is_dirty(const std::string& name);
         void update_string_list(const std::string& name, nb::list items);
+        void update_record_list(const std::string& name, nb::list items);
 
     private:
         Rml::DataModelHandle handle_;
         std::string model_name_;
+        Rml::Context* context_ = nullptr;
     };
 
     class PyDataModelConstructor {
     public:
-        PyDataModelConstructor(Rml::DataModelConstructor ctor, std::string model_name)
+        PyDataModelConstructor(Rml::DataModelConstructor ctor, std::string model_name,
+                               Rml::Context* context = nullptr)
             : ctor_(std::move(ctor)),
-              model_name_(std::move(model_name)) {}
+              model_name_(std::move(model_name)),
+              context_(context) {}
 
         void bind(const std::string& name, nb::callable getter, nb::object setter);
         void bind_func(const std::string& name, nb::callable getter);
         void bind_event(const std::string& name, nb::callable callback);
         void register_transform(const std::string& name, nb::callable func);
         void bind_string_list(const std::string& name);
+        void bind_record_list(const std::string& name);
         PyDataModelHandle get_handle();
 
     private:
         Rml::DataModelConstructor ctor_;
         std::string model_name_;
+        Rml::Context* context_ = nullptr;
         std::vector<nb::object> prevent_gc_;
     };
 
@@ -207,6 +237,9 @@ namespace lfs::python {
     private:
         std::unordered_map<std::string, Rml::ElementDocument*> documents_;
     };
+
+    bool consume_document_dirty(Rml::ElementDocument* doc);
+    bool is_document_dirty(Rml::ElementDocument* doc);
 
     void register_rml_bindings(nb::module_& m);
     void dirty_all_data_models();

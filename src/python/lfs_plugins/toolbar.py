@@ -2,9 +2,32 @@ from .types import Panel
 from .tools import ToolRegistry
 
 
-def _icon_src(icon_name, plugin_name=None, plugin_path=None):
+def _icon_src(icon_name):
     """Build icon src path relative to the RML document in assets/rmlui/."""
     return f"../icon/{icon_name}.png"
+
+
+def _icon_button(w, container, button_id, icon_src, tooltip="", tooltip_key=""):
+    kwargs = {"tooltip_key": tooltip_key} if tooltip_key else {"tooltip": tooltip}
+    return w.icon_button(container, button_id, icon_src, **kwargs)
+
+
+def _clear_children(container):
+    while container.num_children() > 0:
+        container.remove_child(container.children()[0])
+
+
+def _tool_signature(tool_defs):
+    return tuple((tool.id, tool.icon, tool.label, tool.shortcut) for tool in tool_defs)
+
+
+def _mode_signature(active_tool_id, modes):
+    if not modes:
+        return None
+    return (
+        active_tool_id,
+        tuple((mode.id, mode.icon, mode.label) for mode in modes),
+    )
 
 
 _TOOLBAR_HIDDEN_STATES = ("running", "paused", "stopping", "completed")
@@ -21,7 +44,7 @@ class GizmoToolbar(Panel):
         self._submode_buttons = {}
         self._pivot_buttons = {}
         self._built = False
-        self._last_tool_ids = []
+        self._last_tool_signature = ()
         self._last_active_tool = None
         self._last_enabled = {}
         self._last_submode_key = None
@@ -52,6 +75,8 @@ class GizmoToolbar(Panel):
             pivot = doc.get_element_by_id("pivot-toolbar")
             if pivot:
                 pivot.set_class("hidden", True)
+            self._last_submode_key = None
+            self._last_pivot_key = None
             if not self._was_hidden:
                 ToolRegistry.clear_active()
                 self._was_hidden = True
@@ -63,13 +88,13 @@ class GizmoToolbar(Panel):
         if not tool_defs:
             return
 
-        tool_ids = [t.id for t in tool_defs]
+        tool_signature = _tool_signature(tool_defs)
         context = get_context()
         active_tool = lf.ui.get_active_tool()
 
-        if not self._built or tool_ids != self._last_tool_ids:
+        if not self._built or tool_signature != self._last_tool_signature:
             self._rebuild_tools(container, tool_defs, w)
-            self._last_tool_ids = tool_ids
+            self._last_tool_signature = tool_signature
 
         if active_tool != self._last_active_tool or not self._built:
             self._last_active_tool = active_tool
@@ -96,19 +121,32 @@ class GizmoToolbar(Panel):
         self._update_submodes(doc, w)
         self._update_pivots(doc, w)
 
-    def _rebuild_tools(self, container, tool_defs, w):
-        while container.num_children() > 0:
-            children = container.children()
-            container.remove_child(children[0])
+    _TOOL_LOCALE_KEYS = {
+        "builtin.select": "toolbar.selection",
+        "builtin.translate": "toolbar.translate",
+        "builtin.rotate": "toolbar.rotate",
+        "builtin.scale": "toolbar.scale",
+        "builtin.mirror": "toolbar.mirror",
+        "builtin.brush": "toolbar.painting",
+        "builtin.align": "toolbar.align_3point",
+    }
 
+    def _rebuild_tools(self, container, tool_defs, w):
+        _clear_children(container)
         self._buttons.clear()
+        self._last_enabled.clear()
         for tool_def in tool_defs:
-            icon_src = _icon_src(tool_def.icon, tool_def.plugin_name, tool_def.plugin_path)
-            tooltip = tool_def.label
-            if tool_def.shortcut:
-                tooltip = f"{tooltip} ({tool_def.shortcut})"
-            btn = w.icon_button(container, f"tool-{tool_def.id}",
-                                icon_src, tooltip=tooltip)
+            icon_src = _icon_src(tool_def.icon)
+            locale_key = self._TOOL_LOCALE_KEYS.get(tool_def.id, "")
+            if locale_key:
+                btn = _icon_button(w, container, f"tool-{tool_def.id}",
+                                   icon_src, tooltip_key=locale_key)
+            else:
+                tooltip = tool_def.label
+                if tool_def.shortcut:
+                    tooltip = f"{tooltip} ({tool_def.shortcut})"
+                btn = _icon_button(w, container, f"tool-{tool_def.id}",
+                                   icon_src, tooltip=tooltip)
             tid = tool_def.id
             btn.add_event_listener("click", lambda ev, t=tid: self._on_tool_click(t))
             self._buttons[tid] = btn
@@ -126,6 +164,28 @@ class GizmoToolbar(Panel):
             else:
                 ToolRegistry.set_active(tool_id)
 
+    _SUBMODE_LOCALE_KEYS = {
+        "builtin.select:centers": "toolbar.brush_selection",
+        "builtin.select:rectangle": "toolbar.rect_selection",
+        "builtin.select:polygon": "toolbar.polygon_selection",
+        "builtin.select:lasso": "toolbar.lasso_selection",
+        "builtin.select:rings": "toolbar.ring_selection",
+        "builtin.translate:local": "toolbar.local_space",
+        "builtin.translate:world": "toolbar.world_space",
+        "builtin.rotate:local": "toolbar.local_space",
+        "builtin.rotate:world": "toolbar.world_space",
+        "builtin.scale:local": "toolbar.local_space",
+        "builtin.scale:world": "toolbar.world_space",
+        "builtin.mirror:x": "toolbar.mirror_x",
+        "builtin.mirror:y": "toolbar.mirror_y",
+        "builtin.mirror:z": "toolbar.mirror_z",
+    }
+
+    _PIVOT_LOCALE_KEYS = {
+        "origin": "toolbar.origin_pivot",
+        "bounds": "toolbar.bounds_center_pivot",
+    }
+
     def _update_submodes(self, doc, w):
         import lichtfeld as lf
         active_tool_id = lf.ui.get_active_tool()
@@ -136,12 +196,11 @@ class GizmoToolbar(Panel):
             return
 
         submodes = tool_def.submodes if tool_def else []
-        submode_key = f"{active_tool_id}:{len(submodes)}" if submodes else None
+        submode_key = _mode_signature(active_tool_id, submodes)
 
         if submode_key != self._last_submode_key:
             self._last_submode_key = submode_key
-            while container.num_children() > 0:
-                container.remove_child(container.children()[0])
+            _clear_children(container)
             self._submode_buttons.clear()
 
             if not submodes:
@@ -151,8 +210,11 @@ class GizmoToolbar(Panel):
             container.set_class("hidden", False)
             for mode in submodes:
                 icon_src = _icon_src(mode.icon) if mode.icon else ""
-                btn = w.icon_button(container, f"sub-{mode.id}", icon_src,
-                                    tooltip=mode.label)
+                locale_key = self._SUBMODE_LOCALE_KEYS.get(
+                    f"{active_tool_id}:{mode.id}", "")
+                btn = _icon_button(
+                    w, container, f"sub-{mode.id}", icon_src,
+                    tooltip=mode.label, tooltip_key=locale_key)
                 mid = mode.id
                 btn.add_event_listener("click",
                     lambda ev, m=mid: self._on_submode_click(m))
@@ -160,6 +222,8 @@ class GizmoToolbar(Panel):
 
         if not submodes:
             return
+
+        container.set_class("hidden", False)
 
         is_mirror = (active_tool_id == "builtin.mirror")
         is_transform = active_tool_id in ("builtin.translate", "builtin.rotate", "builtin.scale")
@@ -201,12 +265,11 @@ class GizmoToolbar(Panel):
             return
 
         pivots = tool_def.pivot_modes if tool_def else []
-        pivot_key = f"{active_tool_id}:{len(pivots)}" if pivots else None
+        pivot_key = _mode_signature(active_tool_id, pivots)
 
         if pivot_key != self._last_pivot_key:
             self._last_pivot_key = pivot_key
-            while container.num_children() > 0:
-                container.remove_child(container.children()[0])
+            _clear_children(container)
             self._pivot_buttons.clear()
 
             if not pivots:
@@ -216,8 +279,10 @@ class GizmoToolbar(Panel):
             container.set_class("hidden", False)
             for mode in pivots:
                 icon_src = _icon_src(mode.icon) if mode.icon else ""
-                btn = w.icon_button(container, f"pivot-{mode.id}", icon_src,
-                                    tooltip=mode.label)
+                locale_key = self._PIVOT_LOCALE_KEYS.get(mode.id, "")
+                btn = _icon_button(
+                    w, container, f"pivot-{mode.id}", icon_src,
+                    tooltip=mode.label, tooltip_key=locale_key)
                 mid = mode.id
                 btn.add_event_listener("click",
                     lambda ev, m=mid: self._on_pivot_click(m))
@@ -225,6 +290,8 @@ class GizmoToolbar(Panel):
 
         if not pivots:
             return
+
+        container.set_class("hidden", False)
 
         pivot_map = {"origin": 0, "bounds": 1}
         current_pivot = lf.ui.get_pivot_mode()
@@ -278,48 +345,47 @@ class UtilityToolbar(Panel):
         self._update_state(has_render_manager)
 
     def _rebuild(self, container, has_render_manager, w):
-        while container.num_children() > 0:
-            container.remove_child(container.children()[0])
+        _clear_children(container)
         self._buttons.clear()
 
-        def add_btn(name, icon, tooltip, callback):
-            btn = w.icon_button(container, f"util-{name}",
-                                _icon_src(icon), tooltip=tooltip)
+        def add_btn(name, icon, tooltip_key, callback):
+            btn = _icon_button(
+                w, container, f"util-{name}", _icon_src(icon), tooltip_key=tooltip_key)
             btn.add_event_listener("click", lambda ev: callback())
             self._buttons[name] = btn
             return btn
 
         import lichtfeld as lf
 
-        add_btn("home", "home", "Reset Camera (Home)", lf.reset_camera)
-        add_btn("fullscreen", "arrows-maximize", "Toggle Fullscreen",
+        add_btn("home", "home", "toolbar.home", lf.reset_camera)
+        add_btn("fullscreen", "arrows-maximize", "toolbar.fullscreen",
                 lf.toggle_fullscreen)
-        add_btn("toggle-ui", "layout-off", "Toggle UI (Tab)", lf.toggle_ui)
+        add_btn("toggle-ui", "layout-off", "toolbar.toggle_ui", lf.toggle_ui)
 
         if has_render_manager:
             sep = container.append_child("div")
             sep.set_class_names("toolbar-separator")
 
-            for icon, mode_val, tooltip in [
-                ("blob", lf.RenderMode.SPLATS, "Splat Rendering"),
-                ("dots-diagonal", lf.RenderMode.POINTS, "Point Cloud"),
-                ("ring", lf.RenderMode.RINGS, "Gaussian Rings"),
-                ("circle-dot", lf.RenderMode.CENTERS, "Center Markers"),
+            for icon, mode_val, tooltip_key in [
+                ("blob", lf.RenderMode.SPLATS, "toolbar.splat_rendering"),
+                ("dots-diagonal", lf.RenderMode.POINTS, "toolbar.point_cloud"),
+                ("ring", lf.RenderMode.RINGS, "toolbar.gaussian_rings"),
+                ("circle-dot", lf.RenderMode.CENTERS, "toolbar.center_markers"),
             ]:
                 mv = mode_val
-                add_btn(f"render-{icon}", icon, tooltip,
+                add_btn(f"render-{icon}", icon, tooltip_key,
                         lambda m=mv: lf.set_render_mode(m))
 
             sep2 = container.append_child("div")
             sep2.set_class_names("toolbar-separator")
 
-            add_btn("projection", "perspective", "Perspective",
+            add_btn("projection", "perspective", "toolbar.perspective",
                     lambda: lf.set_orthographic(not lf.is_orthographic()))
 
             sep3 = container.append_child("div")
             sep3.set_class_names("toolbar-separator")
 
-            add_btn("sequencer", "video", "Sequencer (Q)",
+            add_btn("sequencer", "video", "toolbar.sequencer",
                     lambda: lf.ui.set_sequencer_visible(not lf.ui.is_sequencer_visible()))
 
         self._built = True
@@ -362,6 +428,8 @@ class UtilityToolbar(Panel):
         proj_btn = self._buttons.get("projection")
         if proj_btn:
             proj_btn.set_class("selected", is_ortho)
+            proj_btn.set_attribute("data-tooltip",
+                "toolbar.orthographic" if is_ortho else "toolbar.perspective")
             img = proj_btn.query_selector("img")
             if img:
                 img.set_attribute("src", _icon_src("box" if is_ortho else "perspective"))

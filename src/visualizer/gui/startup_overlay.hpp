@@ -6,6 +6,7 @@
 
 #include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_fbo.hpp"
+#include <cstddef>
 #include <string>
 
 namespace Rml {
@@ -15,6 +16,9 @@ namespace Rml {
     class EventListener;
 } // namespace Rml
 
+namespace lfs::vis {
+    struct Theme;
+}
 namespace lfs::vis::gui {
 
     class RmlUIManager;
@@ -35,7 +39,7 @@ namespace lfs::vis::gui {
         void updateTheme();
         void updateLocalizedText();
         void forwardInput(float overlay_x, float overlay_y, float overlay_w, float overlay_h);
-        std::string generateThemeRCSS() const;
+        std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
 
         bool visible_ = true;
         int shown_frames_ = 0;
@@ -46,7 +50,8 @@ namespace lfs::vis::gui {
 
         RmlFBO fbo_;
 
-        std::string last_theme_;
+        std::size_t last_theme_signature_ = 0;
+        bool has_theme_signature_ = false;
 
         Rml::EventListener* link_listener_ = nullptr;
         Rml::EventListener* lang_listener_ = nullptr;

@@ -4,15 +4,56 @@
 
 #pragma once
 
+#include "core/path_utils.hpp"
+
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <string>
 #include <system_error>
+#include <unordered_map>
 #include <vector>
 
 namespace lfs::io {
 
     namespace fs = std::filesystem;
+
+    namespace detail {
+
+        inline void ascii_lower_inplace(std::string& value) {
+            for (char& ch : value) {
+                const unsigned char uch = static_cast<unsigned char>(ch);
+                if (uch >= 'A' && uch <= 'Z') {
+                    ch = static_cast<char>(uch - 'A' + 'a');
+                }
+            }
+        }
+
+        inline std::string normalize_lookup_key(std::string value) {
+            std::replace(value.begin(), value.end(), '\\', '/');
+            ascii_lower_inplace(value);
+            return value;
+        }
+
+        inline std::string normalize_lookup_key(const fs::path& value) {
+            return normalize_lookup_key(lfs::core::path_to_utf8(value.lexically_normal()));
+        }
+
+    } // namespace detail
+
+    inline constexpr std::array<const char*, 4> MASK_SEARCH_FOLDERS = {
+        "masks",
+        "mask",
+        "segmentation",
+        "dynamic_masks",
+    };
+
+    inline constexpr std::array<const char*, 4> MASK_SEARCH_EXTENSIONS = {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".mask.png",
+    };
 
     // Safe filesystem operations that don't throw
     inline bool safe_exists(const fs::path& path) {
@@ -30,56 +71,20 @@ namespace lfs::io {
         if (!safe_exists(dir) || !safe_is_directory(dir))
             return {};
 
-        std::string target_lower = target;
-        std::transform(target_lower.begin(), target_lower.end(), target_lower.begin(), ::tolower);
+        std::string target_lower = detail::normalize_lookup_key(target);
 
         std::error_code ec;
         for (const auto& entry : fs::directory_iterator(dir, ec)) {
             if (ec)
                 break;
             if (entry.is_regular_file()) {
-                std::string name = entry.path().filename().string();
-                std::transform(name.begin(), name.end(), name.begin(), ::tolower);
+                std::string name = detail::normalize_lookup_key(entry.path().filename());
                 if (name == target_lower) {
                     return entry.path();
                 }
             }
         }
         return {};
-    }
-
-    // Case-insensitive resolution of a relative path (may contain subdirectories)
-    inline fs::path find_path_ci(const fs::path& base_dir, const fs::path& relative_path) {
-        if (!safe_exists(base_dir) || !safe_is_directory(base_dir))
-            return {};
-
-        fs::path current = base_dir;
-
-        for (const auto& component : relative_path) {
-            if (component == ".")
-                continue;
-
-            std::string target = component.string();
-            std::transform(target.begin(), target.end(), target.begin(), ::tolower);
-
-            bool found = false;
-            std::error_code ec;
-            for (const auto& entry : fs::directory_iterator(current, ec)) {
-                if (ec)
-                    break;
-                std::string name = entry.path().filename().string();
-                std::transform(name.begin(), name.end(), name.begin(), ::tolower);
-                if (name == target) {
-                    current = entry.path();
-                    found = true;
-                    break;
-                }
-            }
-            if (!found)
-                return {};
-        }
-
-        return safe_exists(current) ? current : fs::path{};
     }
 
     // Find file in multiple locations (case-insensitive)
@@ -108,7 +113,7 @@ namespace lfs::io {
             ".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"};
 
         std::string ext = path.extension().string();
-        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        detail::ascii_lower_inplace(ext);
 
         return std::find(image_extensions.begin(), image_extensions.end(), ext) != image_extensions.end();
     }
@@ -120,6 +125,85 @@ namespace lfs::io {
         }
         return filename.substr(0, last_dot);
     }
+
+    // Pre-scanned directory cache for fast case-insensitive mask lookups.
+    // Avoids repeated directory scans for every image.
+    class MaskDirCache {
+    public:
+        explicit MaskDirCache(const fs::path& base_path) {
+            for (const auto* folder : MASK_SEARCH_FOLDERS) {
+                const fs::path mask_dir = base_path / folder;
+                if (!safe_is_directory(mask_dir))
+                    continue;
+
+                DirectoryIndex dir_index;
+                std::error_code ec;
+                for (fs::recursive_directory_iterator it(
+                         mask_dir,
+                         fs::directory_options::skip_permission_denied,
+                         ec),
+                     end;
+                     !ec && it != end;
+                     it.increment(ec)) {
+                    const auto& entry = *it;
+                    std::error_code file_ec;
+                    if (!entry.is_regular_file(file_ec) || file_ec)
+                        continue;
+                    fs::path rel = entry.path().lexically_relative(mask_dir);
+                    if (rel.empty())
+                        continue;
+                    dir_index.entries.emplace(detail::normalize_lookup_key(rel), entry.path());
+                }
+                dir_indices_.push_back(std::move(dir_index));
+            }
+        }
+
+        fs::path find(const std::string& image_name) const {
+            if (dir_indices_.empty())
+                return {};
+
+            const std::vector<std::string> lookup_keys = build_lookup_keys(image_name);
+
+            for (const auto& dir_index : dir_indices_) {
+                for (const auto& key : lookup_keys) {
+                    if (auto it = dir_index.entries.find(key); it != dir_index.entries.end()) {
+                        return it->second;
+                    }
+                }
+            }
+            return {};
+        }
+
+    private:
+        struct DirectoryIndex {
+            std::unordered_map<std::string, fs::path> entries;
+        };
+
+        static std::vector<std::string> build_lookup_keys(const std::string& image_name) {
+            const fs::path img_path = lfs::core::utf8_to_path(image_name);
+            const fs::path stem_path = img_path.parent_path() / img_path.stem();
+
+            std::vector<std::string> keys;
+            keys.reserve(1 + 2 * MASK_SEARCH_EXTENSIONS.size());
+            keys.push_back(detail::normalize_lookup_key(img_path));
+
+            for (const auto* ext : MASK_SEARCH_EXTENSIONS) {
+                fs::path target = stem_path;
+                target += ext;
+                keys.push_back(detail::normalize_lookup_key(target));
+            }
+
+            for (const auto* ext : MASK_SEARCH_EXTENSIONS) {
+                fs::path target = img_path;
+                target += ext;
+                keys.push_back(detail::normalize_lookup_key(target));
+            }
+
+            return keys;
+        }
+
+        std::vector<DirectoryIndex> dir_indices_;
+    };
 
     struct DatasetInfo {
         fs::path base_path;
@@ -133,7 +217,6 @@ namespace lfs::io {
 
     inline DatasetInfo detect_dataset_info(const fs::path& base_path) {
         static constexpr const char* const IMAGE_FOLDERS[] = {"images", "images_4", "images_2", "images_8", "input", "rgb"};
-        static constexpr const char* const MASK_FOLDERS[] = {"masks", "mask", "dynamic_masks"};
 
         DatasetInfo info;
         info.base_path = base_path;
@@ -180,13 +263,22 @@ namespace lfs::io {
             info.sparse_path = base_path / "sparse" / "0";
         }
 
-        for (const auto* name : MASK_FOLDERS) {
+        for (const auto* name : MASK_SEARCH_FOLDERS) {
             if (safe_is_directory(base_path / name)) {
                 info.masks_path = base_path / name;
                 info.has_masks = true;
                 std::error_code ec;
-                for (const auto& entry : fs::directory_iterator(info.masks_path, ec)) {
-                    if (!ec && entry.is_regular_file() && is_image_file(entry.path())) {
+                for (fs::recursive_directory_iterator it(
+                         info.masks_path,
+                         fs::directory_options::skip_permission_denied,
+                         ec),
+                     end;
+                     !ec && it != end;
+                     it.increment(ec)) {
+                    std::error_code file_ec;
+                    if (!it->is_regular_file(file_ec) || file_ec)
+                        continue;
+                    if (is_image_file(it->path())) {
                         ++info.mask_count;
                     }
                 }

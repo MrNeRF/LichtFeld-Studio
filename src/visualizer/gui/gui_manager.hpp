@@ -117,6 +117,9 @@ namespace lfs::vis {
             void updateInputOverrides(bool mouse_in_viewport);
             void applyUiScale(float scale);
             void rebuildFonts(float scale);
+            void loadImGuiSettings();
+            void saveImGuiSettings() const;
+            void persistImGuiSettingsIfNeeded();
 
             // Core dependencies
             VisualizerImpl* viewer_;
@@ -153,6 +156,7 @@ namespace lfs::vis {
             ImFont* font_monospace_ = nullptr;
             ImFont* mono_fonts_[FontSet::MONO_SIZE_COUNT] = {};
             float mono_font_scales_[FontSet::MONO_SIZE_COUNT] = {};
+            std::filesystem::path imgui_ini_path_;
             FontSet buildFontSet() const;
 
             // Async task management
@@ -186,6 +190,17 @@ namespace lfs::vis {
 
             // Native panel wrapper storage (registered with PanelRegistry)
             std::vector<std::shared_ptr<IPanel>> native_panel_storage_;
+            uint64_t panel_frame_serial_ = 0;
+            uint8_t ui_layout_settle_frames_ = 0;
+            glm::vec2 last_ui_layout_work_pos_{-1.0f, -1.0f};
+            glm::vec2 last_ui_layout_work_size_{-1.0f, -1.0f};
+            float last_ui_layout_right_panel_w_ = -1.0f;
+            float last_ui_layout_scene_ratio_ = -1.0f;
+            float last_ui_layout_python_console_w_ = -1.0f;
+            bool last_ui_layout_show_main_panel_ = false;
+            bool last_ui_layout_ui_hidden_ = false;
+            bool last_ui_layout_python_console_visible_ = false;
+            std::string last_ui_layout_active_tab_;
         };
     } // namespace gui
 } // namespace lfs::vis
