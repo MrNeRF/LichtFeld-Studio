@@ -2,54 +2,54 @@
 <head>
     <link type="text/rcss" href="statusbar.rcss"/>
 </head>
-<body id="body">
+<body id="body" data-model="status_bar">
     <div id="status-left">
-        <span id="mode-text"></span>
-        <div id="training-section" class="hidden">
+        <span id="mode-text" data-style-color="mode_color">{{ mode_text }}</span>
+        <div id="training-section" class="hidden" data-class-hidden="!show_training">
             <span class="separator">|</span>
             <div id="progress-container">
-                <div id="progress-fill"></div>
-                <span id="progress-text"></span>
+                <div id="progress-fill" data-style-width="progress_width"></div>
+                <span id="progress-text">{{ progress_text }}</span>
             </div>
-            <span id="step-label" class="dim"></span>
-            <span id="step-value"></span>
+            <span id="step-label" class="dim">{{ step_label }}</span>
+            <span id="step-value">{{ step_value }}</span>
             <span class="separator">|</span>
-            <span id="loss-label" class="dim"></span>
-            <span id="loss-value"></span>
+            <span id="loss-label" class="dim">{{ loss_label }}</span>
+            <span id="loss-value">{{ loss_value }}</span>
             <span class="separator">|</span>
-            <span id="gaussians-label" class="dim"></span>
-            <span id="gaussians-value"></span>
+            <span id="gaussians-label" class="dim">{{ gaussians_label }}</span>
+            <span id="gaussians-value">{{ gaussians_value }}</span>
             <span class="separator">|</span>
-            <span id="time-value"></span>
-            <span id="eta-label" class="dim"></span>
-            <span id="eta-value"></span>
+            <span id="time-value">{{ time_value }}</span>
+            <span id="eta-label" class="dim">{{ eta_label }}</span>
+            <span id="eta-value">{{ eta_value }}</span>
         </div>
-        <div id="splat-section" class="hidden">
+        <div id="splat-section" class="hidden" data-class-hidden="!show_splats">
             <span class="separator">|</span>
-            <span id="splat-text"></span>
+            <span id="splat-text" data-style-color="splat_color">{{ splat_text }}</span>
         </div>
-        <div id="split-section" class="hidden">
+        <div id="split-section" class="hidden" data-class-hidden="!show_split">
             <span class="separator">|</span>
-            <span id="split-mode"></span>
-            <span id="split-detail" class="dim"></span>
+            <span id="split-mode" data-style-color="split_mode_color">{{ split_mode }}</span>
+            <span id="split-detail" class="dim">{{ split_detail }}</span>
         </div>
-        <div id="wasd-section" class="hidden">
-            <span class="separator wasd-sep">|</span>
-            <span id="wasd-text"></span>
+        <div id="wasd-section" class="hidden" data-class-hidden="!show_wasd">
+            <span class="separator wasd-sep" data-style-color="wasd_sep_color">|</span>
+            <span id="wasd-text" data-style-color="wasd_color">{{ wasd_text }}</span>
         </div>
-        <div id="zoom-section" class="hidden">
-            <span class="separator zoom-sep">|</span>
-            <span id="zoom-text"></span>
+        <div id="zoom-section" class="hidden" data-class-hidden="!show_zoom">
+            <span class="separator zoom-sep" data-style-color="zoom_sep_color">|</span>
+            <span id="zoom-text" data-style-color="zoom_color">{{ zoom_text }}</span>
         </div>
     </div>
     <div id="status-right">
-        <img id="gpu-icon" src="" />
-        <span id="lfs-mem"></span>
+        <img id="gpu-icon" src="../icon/gpu.png" />
+        <span id="lfs-mem" data-style-color="lfs_mem_color">{{ lfs_mem_text }}</span>
         <span class="separator thin">|</span>
-        <span id="gpu-mem"></span>
-        <span id="fps-value"></span>
-        <span id="fps-label" class="dim"></span>
-        <span id="git-commit" class="dim"></span>
+        <span id="gpu-mem" data-style-color="gpu_mem_color">{{ gpu_mem_text }}</span>
+        <span id="fps-value" data-style-color="fps_color">{{ fps_value }}</span>
+        <span id="fps-label" class="dim">{{ fps_label }}</span>
+        <span id="git-commit" class="dim">{{ git_commit }}</span>
     </div>
 </body>
 </rml>

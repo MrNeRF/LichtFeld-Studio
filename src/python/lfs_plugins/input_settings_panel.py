@@ -6,15 +6,6 @@ import lichtfeld as lf
 from .types import RmlPanel
 
 
-def _xml_escape(text):
-    return (text
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;")
-            .replace("'", "&#39;"))
-
-
 class InputSettingsPanel(RmlPanel):
     idname = "lfs.input_settings"
     label = "Input Settings"
@@ -24,6 +15,7 @@ class InputSettingsPanel(RmlPanel):
     rml_height_mode = "content"
     initial_width = 500
     options = {"DEFAULT_CLOSED"}
+    update_interval_ms = 50
 
     TOOL_MODES = [
         lf.keymap.ToolMode.GLOBAL,
@@ -99,12 +91,12 @@ class InputSettingsPanel(RmlPanel):
         self._selected_mode_idx = 0
         self._rebinding_action = None
         self._rebinding_mode = None
-        self._doc = None
         self._handle = None
         self._last_profiles = []
         self._last_state_key = None
+        self._last_lang = ""
+        self._last_current_profile = ""
         self._last_display_h = 0
-        self._last_hint_mode = None
         self._last_capturing = None
 
     # ── Data model ────────────────────────────────────────────
@@ -127,6 +119,8 @@ class InputSettingsPanel(RmlPanel):
         model.bind_func("import_label", lambda: tr("input_settings.import"))
         model.bind_func("save_hint", lambda: tr("input_settings.save_hint"))
         model.bind_func("double_click_hint", lambda: tr("input_settings.double_click_hint"))
+        model.bind_func("bindings_hint", self._get_bindings_hint)
+        model.bind_func("is_capturing", lambda: lf.keymap.is_capturing())
 
         model.bind(
             "profile_idx",
@@ -143,6 +137,9 @@ class InputSettingsPanel(RmlPanel):
         model.bind_event("reset_default", self._on_reset_default)
         model.bind_event("export_profile", self._on_export_profile)
         model.bind_event("import_profile", self._on_import_profile)
+        model.bind_record_list("profiles")
+        model.bind_record_list("tool_modes")
+        model.bind_record_list("binding_rows")
 
         self._handle = model.get_handle()
 
@@ -196,10 +193,12 @@ class InputSettingsPanel(RmlPanel):
 
     def on_load(self, doc):
         super().on_load(doc)
-        self._doc = doc
+        self._last_lang = lf.ui.get_current_language()
+        self._last_current_profile = lf.keymap.get_current_profile()
 
-        self._populate_profile_select()
-        self._populate_mode_select()
+        self._rebuild_profile_records()
+        self._rebuild_mode_records()
+        self._rebuild_binding_rows(self.TOOL_MODES[self._selected_mode_idx])
 
         table_el = doc.get_element_by_id("bindings-table")
         if table_el:
@@ -208,10 +207,12 @@ class InputSettingsPanel(RmlPanel):
     def on_update(self, doc):
         self._update_max_height(doc)
 
+        current_lang = lf.ui.get_current_language()
         profiles = lf.keymap.get_available_profiles()
         if profiles != self._last_profiles:
             self._last_profiles = list(profiles)
-            self._populate_profile_select()
+            self._rebuild_profile_records()
+            self._dirty_model("profile_idx")
 
         is_capturing = lf.keymap.is_capturing()
         mode = self.TOOL_MODES[self._selected_mode_idx]
@@ -223,18 +224,31 @@ class InputSettingsPanel(RmlPanel):
                 self._rebinding_mode = None
 
         current_profile = lf.keymap.get_current_profile()
-        state_key = (self._selected_mode_idx, self._rebinding_action, is_capturing, current_profile)
+        state_key = (
+            self._selected_mode_idx,
+            self._rebinding_action,
+            is_capturing,
+            current_profile,
+            current_lang,
+        )
         if state_key != self._last_state_key:
             self._last_state_key = state_key
-            self._rebuild_bindings_table(doc, mode)
+            self._rebuild_binding_rows(mode)
+            self._dirty_model("bindings_hint")
 
-        if mode != self._last_hint_mode:
-            self._last_hint_mode = mode
-            self._update_hint(doc, mode)
+        if current_lang != self._last_lang:
+            self._last_lang = current_lang
+            self._rebuild_mode_records()
+            self._rebuild_profile_records()
+            self._dirty_model()
+
+        if current_profile != self._last_current_profile:
+            self._last_current_profile = current_profile
+            self._dirty_model("profile_idx")
 
         if is_capturing != self._last_capturing:
             self._last_capturing = is_capturing
-            self._update_disabled_state(doc, is_capturing)
+            self._dirty_model("is_capturing")
 
     def _update_max_height(self, doc):
         try:
@@ -249,137 +263,149 @@ class InputSettingsPanel(RmlPanel):
         if wrap:
             wrap.set_property("max-height", f"{max_h}dp")
 
-    # ── DOM manipulation ──────────────────────────────────────
+    # ── Retained model updates ────────────────────────────────
 
-    def _populate_profile_select(self):
-        select = self._doc.get_element_by_id("profile-select") if self._doc else None
-        if not select:
+    def _dirty_model(self, *fields):
+        if not self._handle:
+            return
+        if not fields:
+            self._handle.dirty_all()
+            return
+        for field in fields:
+            self._handle.dirty(field)
+
+    def _get_bindings_hint(self):
+        tr = lf.ui.tr
+        mode = self.TOOL_MODES[self._selected_mode_idx]
+        if mode == lf.keymap.ToolMode.GLOBAL:
+            return tr("input_settings.global_bindings_hint")
+        return tr("input_settings.tool_bindings_hint")
+
+    def _rebuild_profile_records(self):
+        if not self._handle:
             return
         profiles = lf.keymap.get_available_profiles()
-        parts = [f'<option value="{i}">{_xml_escape(name)}</option>'
-                 for i, name in enumerate(profiles)]
-        select.set_inner_rml("".join(parts))
+        self._last_profiles = list(profiles)
+        self._handle.update_record_list(
+            "profiles",
+            [{"index": str(i), "label": name} for i, name in enumerate(profiles)],
+        )
 
-    def _populate_mode_select(self):
-        select = self._doc.get_element_by_id("mode-select") if self._doc else None
-        if not select:
+    def _rebuild_mode_records(self):
+        if not self._handle:
             return
-        parts = [f'<option value="{i}">{_xml_escape(lf.keymap.get_tool_mode_name(m))}</option>'
-                 for i, m in enumerate(self.TOOL_MODES)]
-        select.set_inner_rml("".join(parts))
+        self._handle.update_record_list(
+            "tool_modes",
+            [
+                {"index": str(i), "label": lf.keymap.get_tool_mode_name(mode)}
+                for i, mode in enumerate(self.TOOL_MODES)
+            ],
+        )
 
-    def _update_hint(self, doc, mode):
-        hint_el = doc.get_element_by_id("bindings-hint")
-        if not hint_el:
+    def _append_binding_section(self, rows, title, actions, mode):
+        rows.append({
+            "is_section": True,
+            "section_title": title,
+        })
+        for action in actions:
+            rows.append(self._binding_row_record(action, mode))
+
+    def _rebuild_binding_rows(self, mode):
+        if not self._handle:
             return
+
         tr = lf.ui.tr
-        if mode == lf.keymap.ToolMode.GLOBAL:
-            hint_el.set_inner_rml(_xml_escape(tr("input_settings.global_bindings_hint")))
-        else:
-            hint_el.set_inner_rml(_xml_escape(tr("input_settings.tool_bindings_hint")))
+        rows = []
 
-    def _update_disabled_state(self, doc, is_capturing):
-        for eid in ("profile-select", "mode-select"):
-            el = doc.get_element_by_id(eid)
-            if not el:
-                continue
-            if is_capturing:
-                el.set_class("is-disabled-overlay", True)
-            else:
-                el.set_class("is-disabled-overlay", False)
-
-    def _rebuild_bindings_table(self, doc, mode):
-        table_el = doc.get_element_by_id("bindings-table")
-        if not table_el:
-            return
-        table_el.set_inner_rml(self._build_bindings_rml(mode))
-
-    def _build_bindings_rml(self, mode):
-        tr = lf.ui.tr
-        parts = []
-
-        parts.append(self._section_rml(tr("input_settings.section.navigation")))
-        for action in self.BINDING_SECTIONS["navigation"]:
-            parts.append(self._binding_row_rml(action, mode))
+        self._append_binding_section(
+            rows, tr("input_settings.section.navigation"),
+            self.BINDING_SECTIONS["navigation"], mode)
 
         if mode == lf.keymap.ToolMode.GLOBAL:
             for action in self.BINDING_SECTIONS["navigation_global"]:
-                parts.append(self._binding_row_rml(action, mode))
+                rows.append(self._binding_row_record(action, mode))
 
         if mode in (lf.keymap.ToolMode.GLOBAL, lf.keymap.ToolMode.SELECTION, lf.keymap.ToolMode.BRUSH):
-            parts.append(self._section_rml(tr("input_settings.section.selection")))
-            for action in self.BINDING_SECTIONS["selection"]:
-                parts.append(self._binding_row_rml(action, mode))
+            self._append_binding_section(
+                rows, tr("input_settings.section.selection"),
+                self.BINDING_SECTIONS["selection"], mode)
 
             if mode == lf.keymap.ToolMode.GLOBAL:
                 for action in self.BINDING_SECTIONS["selection_global"]:
-                    parts.append(self._binding_row_rml(action, mode))
+                    rows.append(self._binding_row_record(action, mode))
 
             if mode in (lf.keymap.ToolMode.GLOBAL, lf.keymap.ToolMode.SELECTION):
                 for action in self.BINDING_SECTIONS["depth"]:
-                    parts.append(self._binding_row_rml(action, mode))
+                    rows.append(self._binding_row_record(action, mode))
 
         if mode == lf.keymap.ToolMode.BRUSH:
-            parts.append(self._section_rml(tr("input_settings.section.brush")))
-            for action in self.BINDING_SECTIONS["brush"]:
-                parts.append(self._binding_row_rml(action, mode))
+            self._append_binding_section(
+                rows, tr("input_settings.section.brush"),
+                self.BINDING_SECTIONS["brush"], mode)
 
         if mode == lf.keymap.ToolMode.CROP_BOX:
-            parts.append(self._section_rml(tr("input_settings.section.crop_box")))
-            for action in self.BINDING_SECTIONS["crop_box"]:
-                parts.append(self._binding_row_rml(action, mode))
+            self._append_binding_section(
+                rows, tr("input_settings.section.crop_box"),
+                self.BINDING_SECTIONS["crop_box"], mode)
 
-        parts.append(self._section_rml(tr("input_settings.section.editing")))
+        rows.append({
+            "is_section": True,
+            "section_title": tr("input_settings.section.editing"),
+        })
         if mode in (lf.keymap.ToolMode.GLOBAL, lf.keymap.ToolMode.TRANSLATE,
                     lf.keymap.ToolMode.ROTATE, lf.keymap.ToolMode.SCALE):
-            parts.append(self._binding_row_rml(lf.keymap.Action.DELETE_NODE, mode))
+            rows.append(self._binding_row_record(lf.keymap.Action.DELETE_NODE, mode))
         else:
-            parts.append(self._binding_row_rml(lf.keymap.Action.DELETE_SELECTED, mode))
+            rows.append(self._binding_row_record(lf.keymap.Action.DELETE_SELECTED, mode))
 
         for action in self.BINDING_SECTIONS["editing"]:
-            parts.append(self._binding_row_rml(action, mode))
+            rows.append(self._binding_row_record(action, mode))
 
         if mode == lf.keymap.ToolMode.GLOBAL:
-            parts.append(self._section_rml(tr("input_settings.section.view")))
-            for action in self.BINDING_SECTIONS["view_global"]:
-                parts.append(self._binding_row_rml(action, mode))
+            self._append_binding_section(
+                rows, tr("input_settings.section.view"),
+                self.BINDING_SECTIONS["view_global"], mode)
 
-        return "".join(parts)
+        self._handle.update_record_list("binding_rows", rows)
 
-    def _section_rml(self, title):
-        return f'<span class="is-binding-section">{_xml_escape(title)}</span>'
-
-    def _binding_row_rml(self, action, mode):
+    def _binding_row_record(self, action, mode):
         tr = lf.ui.tr
         is_rebinding = (lf.keymap.is_capturing() and
                         self._rebinding_action == action and
                         self._rebinding_mode == mode)
 
-        action_name = _xml_escape(lf.keymap.get_action_name(action))
-        action_val = action.value
-        mode_val = mode.value
+        action_name = lf.keymap.get_action_name(action)
+        action_val = str(action.value)
+        mode_val = str(mode.value)
 
         if is_rebinding:
             if lf.keymap.is_waiting_for_double_click():
-                desc_text = _xml_escape(tr("input_settings.click_again_double"))
+                desc_text = tr("input_settings.click_again_double")
             else:
-                desc_text = _xml_escape(tr("input_settings.press_key_or_click"))
+                desc_text = tr("input_settings.press_key_or_click")
             desc_class = "is-binding-desc is-capturing"
-            btn = (f'<button class="btn btn--error is-rebind-btn" '
-                   f'data-btn-action="cancel" data-action-id="{action_val}" data-mode-id="{mode_val}">'
-                   f'{_xml_escape(tr("input_settings.cancel"))}</button>')
+            button_action = "cancel"
+            button_label = tr("input_settings.cancel")
+            button_class = "btn--error"
         else:
-            desc_text = _xml_escape(lf.keymap.get_trigger_description(action, mode))
+            desc_text = lf.keymap.get_trigger_description(action, mode)
             desc_class = "is-binding-desc"
-            btn = (f'<button class="btn btn--primary is-rebind-btn" '
-                   f'data-btn-action="rebind" data-action-id="{action_val}" data-mode-id="{mode_val}">'
-                   f'{_xml_escape(tr("input_settings.rebind"))}</button>')
+            button_action = "rebind"
+            button_label = tr("input_settings.rebind")
+            button_class = "btn--primary"
 
-        return (f'<div class="is-binding-row" data-action-id="{action_val}" data-mode-id="{mode_val}">'
-                f'<span class="is-action-name">{action_name}</span>'
-                f'<span class="{desc_class}">{desc_text}</span>'
-                f'{btn}'
-                f'</div>')
+        return {
+            "is_section": False,
+            "section_title": "",
+            "action_name": action_name,
+            "desc_text": desc_text,
+            "desc_class": desc_class,
+            "button_action": button_action,
+            "button_label": button_label,
+            "button_class": button_class,
+            "action_id": action_val,
+            "mode_id": mode_val,
+        }
 
     # ── Event delegation ──────────────────────────────────────
 

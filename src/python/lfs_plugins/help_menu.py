@@ -4,7 +4,7 @@
 
 import lichtfeld as lf
 from .types import Operator
-from .layouts.menus import register_menu
+from .layouts.menus import register_menu, menu_operator, menu_separator
 
 
 class GettingStartedOperator(Operator):
@@ -51,16 +51,17 @@ class HelpMenu:
     location = "MENU_BAR"
     order = 100
 
-    def draw(self, layout):
-        layout.operator_(GettingStartedOperator._class_id())
+    def menu_items(self):
+        items = [menu_operator(GettingStartedOperator)]
         if lf.ui.is_windows_platform():
-            layout.separator()
+            items.append(menu_separator())
             if lf.ui.are_file_associations_registered():
-                layout.operator_(UnsetDefaultAppOperator._class_id())
+                items.append(menu_operator(UnsetDefaultAppOperator))
             else:
-                layout.operator_(SetDefaultAppOperator._class_id())
-        layout.separator()
-        layout.operator_(AboutOperator._class_id())
+                items.append(menu_operator(SetDefaultAppOperator))
+        items.append(menu_separator())
+        items.append(menu_operator(AboutOperator))
+        return items
 
 
 _operator_classes = [

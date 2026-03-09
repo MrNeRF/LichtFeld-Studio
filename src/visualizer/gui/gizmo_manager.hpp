@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/scene.hpp"
 #include "gui/gizmo_transform.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/pie_menu.hpp"
@@ -84,10 +85,14 @@ namespace lfs::vis {
             // Cropbox gizmo
             bool cropbox_gizmo_active_ = false;
             std::string cropbox_node_name_;
+            core::CropBoxData cropbox_data_before_drag_;
+            glm::mat4 cropbox_transform_before_drag_{1.0f};
 
             // Ellipsoid gizmo
             bool ellipsoid_gizmo_active_ = false;
             std::string ellipsoid_node_name_;
+            core::EllipsoidData ellipsoid_data_before_drag_;
+            glm::mat4 ellipsoid_transform_before_drag_{1.0f};
 
             // Unified gizmo context
             GizmoTransformContext gizmo_context_;

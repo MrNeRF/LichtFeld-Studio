@@ -1,0 +1,57 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="resume_checkpoint_panel.rcss"/>
+</head>
+<body template="floating-window" data-model="resume_checkpoint">
+
+  <div class="impdlg-badge-row">
+    <span class="impdlg-badge text-accent">{{checkpoint_badge}}</span>
+    <span class="impdlg-pipe text-muted">|</span>
+    <span class="impdlg-subtitle-inline text-muted">{{configure_paths}}</span>
+  </div>
+
+  <div class="separator"></div>
+
+  <div class="impdlg-info-row">
+    <span class="impdlg-field-label text-muted">{{file_label}}</span>
+    <div class="impdlg-info-main">
+      <span class="impdlg-value text-default">{{checkpoint_filename}}</span>
+      <span class="impdlg-meta text-muted">{{checkpoint_metadata}}</span>
+    </div>
+  </div>
+
+  <div class="impdlg-info-row">
+    <span class="impdlg-field-label text-muted">{{stored_path_label}}</span>
+    <div class="impdlg-info-main">
+      <span data-attr-class="stored_path_class">{{stored_path_text}}</span>
+      <span class="impdlg-status status-error" data-if="show_stored_missing">{{not_found_label}}</span>
+    </div>
+  </div>
+
+  <div class="separator"></div>
+
+  <div class="impdlg-field-row">
+    <span class="impdlg-field-label text-muted">{{dataset_path_label}}</span>
+    <input type="text" class="impdlg-input" data-value="dataset_path" />
+    <button class="btn btn--secondary impdlg-browse-btn" data-event-click="browse_dataset">{{browse_label}}</button>
+    <span data-attr-class="dataset_status_class">{{dataset_status_text}}</span>
+  </div>
+
+  <div class="impdlg-field-row">
+    <span class="impdlg-field-label text-muted">{{output_path_label}}</span>
+    <input type="text" class="impdlg-input" data-value="output_path" />
+    <button class="btn btn--secondary impdlg-browse-btn" data-event-click="browse_output">{{browse_label}}</button>
+  </div>
+
+  <span class="impdlg-note text-muted">{{help_text}}</span>
+
+  <div class="impdlg-buttons">
+    <button class="btn btn--secondary impdlg-action-btn" data-event-click="do_cancel">{{cancel_label}}</button>
+    <button class="btn btn--success impdlg-action-btn"
+            data-event-click="do_load"
+            data-attrif-disabled="!can_load">{{load_label}}</button>
+  </div>
+
+</body>
+</rml>

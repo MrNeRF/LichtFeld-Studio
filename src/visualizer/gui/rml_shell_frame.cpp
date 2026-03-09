@@ -18,7 +18,6 @@
 #include <RmlUi/Core/Element.h>
 #include <cassert>
 #include <format>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
 
@@ -95,9 +94,8 @@ namespace lfs::vis::gui {
         if (!rml_context_ || !document_)
             return;
 
-        auto* vp = ImGui::GetMainViewport();
-        const float full_w = vp->Size.x;
-        const float full_h = vp->Size.y;
+        const float full_w = regions.screen.w;
+        const float full_h = regions.screen.h;
         if (full_w <= 0 || full_h <= 0)
             return;
 
@@ -106,20 +104,20 @@ namespace lfs::vis::gui {
         const int w = static_cast<int>(full_w);
         const int h = static_cast<int>(full_h);
 
-        const float work_y = vp->WorkPos.y - vp->Pos.y;
+        const float work_y = regions.menu.y + regions.menu.h - regions.screen.y;
 
         if (menu_region_) {
-            menu_region_->SetProperty("top", std::format("{:.0f}px", regions.menu_pos.y - vp->Pos.y));
-            menu_region_->SetProperty("height", std::format("{:.0f}px", regions.menu_size.y));
+            menu_region_->SetProperty("top", std::format("{:.0f}px", regions.menu.y - regions.screen.y));
+            menu_region_->SetProperty("height", std::format("{:.0f}px", regions.menu.h));
         }
         if (right_panel_region_) {
             right_panel_region_->SetProperty("top", std::format("{:.0f}px", work_y));
             right_panel_region_->SetProperty("right", "0px");
-            right_panel_region_->SetProperty("width", std::format("{:.0f}px", regions.right_panel_size.x));
-            right_panel_region_->SetProperty("height", std::format("{:.0f}px", regions.right_panel_size.y));
+            right_panel_region_->SetProperty("width", std::format("{:.0f}px", regions.right_panel.w));
+            right_panel_region_->SetProperty("height", std::format("{:.0f}px", regions.right_panel.h));
         }
         if (status_region_) {
-            status_region_->SetProperty("height", std::format("{:.0f}px", regions.status_size.y));
+            status_region_->SetProperty("height", std::format("{:.0f}px", regions.status.h));
         }
 
         if (!rml_manager_->shouldDeferFboUpdate(fbo_)) {
@@ -147,8 +145,7 @@ namespace lfs::vis::gui {
         }
 
         if (fbo_.valid())
-            fbo_.blitToDrawList(ImGui::GetBackgroundDrawList(vp),
-                                vp->Pos, vp->Size);
+            fbo_.blitToScreen(0.0f, 0.0f, full_w, full_h, w, h);
     }
 
 } // namespace lfs::vis::gui

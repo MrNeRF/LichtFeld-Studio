@@ -12,6 +12,7 @@
 #include "visualizer/gui/panel_registry.hpp"
 
 #include <algorithm>
+#include <mutex>
 #include <optional>
 
 namespace lfs::python {
@@ -42,6 +43,15 @@ namespace lfs::python {
                 return PanelSpace::Floating;
             return std::nullopt;
         }
+
+        void warnLegacyPanelRegistrationOnce() {
+            static std::once_flag once;
+            std::call_once(once, [] {
+                LOG_WARN("Rml transition: 'Panel' / 'register_panel' is a legacy immediate-mode "
+                         "compatibility path. Keep existing plugins working, but prefer "
+                         "'RmlPanel' and 'register_rml_panel' for new or touched UI.");
+            });
+        }
     } // namespace
 
     PyPanelRegistry& PyPanelRegistry::instance() {
@@ -51,6 +61,7 @@ namespace lfs::python {
 
     void PyPanelRegistry::register_panel(nb::object panel_class) {
         std::lock_guard lock(mutex_);
+        warnLegacyPanelRegistrationOnce();
 
         if (!panel_class.is_valid()) {
             LOG_ERROR("register_panel: invalid panel_class");
@@ -325,7 +336,7 @@ namespace lfs::python {
             "register_panel",
             [](nb::object cls) { PyPanelRegistry::instance().register_panel(cls); },
             nb::arg("cls"),
-            "Register a panel class for rendering in the UI");
+            "Register a legacy immediate-mode panel class for rendering in the UI");
 
         m.def(
             "register_rml_panel",

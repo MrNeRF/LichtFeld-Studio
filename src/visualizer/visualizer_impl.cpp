@@ -210,9 +210,13 @@ namespace lfs::vis {
             },
             []() -> std::string {
                 auto* gm = python::get_gui_manager();
+                return gm ? gm->asyncTasks().getMesh2SplatStage() : std::string{};
+            },
+            []() -> std::string {
+                auto* gm = python::get_gui_manager();
                 return gm ? gm->asyncTasks().getMesh2SplatError() : std::string{};
             });
-        callback_cleanup_.add([] { python::set_mesh2splat_callbacks(nullptr, nullptr, nullptr, nullptr); });
+        callback_cleanup_.add([] { python::set_mesh2splat_callbacks(nullptr, nullptr, nullptr, nullptr, nullptr); });
         python::set_selected_camera_callback([]() -> int {
             const auto* gm = python::get_gui_manager();
             return gm ? gm->getHighlightedCameraUid() : -1;

@@ -25,6 +25,13 @@ namespace {
             return label;
         return label.substr(0, pos);
     }
+
+    std::string hidden_imgui_id(const std::string& label) {
+        const auto pos = label.find("##");
+        if (pos == std::string::npos || pos + 2 >= label.size())
+            return {};
+        return label.substr(pos + 2);
+    }
 } // namespace
 
 namespace lfs::python {
@@ -132,6 +139,24 @@ namespace lfs::python {
         return result;
     }
 
+    std::string RmlImModeLayout::stable_label_token(const std::string& label) {
+        return hidden_imgui_id(label);
+    }
+
+    std::string RmlImModeLayout::build_slot_id(const char* prefix,
+                                               const std::string* label) const {
+        std::string key(prefix);
+        if (label) {
+            const auto token = stable_label_token(*label);
+            if (!token.empty()) {
+                key += ":" + token;
+                return build_id(key);
+            }
+        }
+        key += "#" + std::to_string(containers_.empty() ? 0 : containers_.back().cursor);
+        return build_id(key);
+    }
+
     std::string RmlImModeLayout::color_to_css(nb::object color) const {
         if (color.is_none())
             return {};
@@ -169,7 +194,7 @@ namespace lfs::python {
         finish_current_line();
 
         assert(!containers_.empty());
-        auto& slot = ensure_slot(SlotType::Line, build_id("line"));
+        auto& slot = ensure_slot(SlotType::Line, build_slot_id("line"));
 
         if (!slot.element) {
             auto line = doc_->CreateElement("div");
@@ -249,7 +274,7 @@ namespace lfs::python {
         if (!doc_)
             return;
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::Label, build_id(text));
+        auto& slot = ensure_slot(SlotType::Label, build_slot_id("label", &text));
         const auto display = strip_imgui_id(text);
 
         if (!slot.element) {
@@ -270,7 +295,7 @@ namespace lfs::python {
         if (!doc_)
             return;
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::Label, build_id("c:" + text));
+        auto& slot = ensure_slot(SlotType::Label, build_slot_id("label_center", &text));
         const auto display = strip_imgui_id(text);
 
         if (!slot.element) {
@@ -293,7 +318,7 @@ namespace lfs::python {
         if (!doc_)
             return;
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::Heading, build_id(text));
+        auto& slot = ensure_slot(SlotType::Heading, build_slot_id("heading", &text));
         const auto display = strip_imgui_id(text);
 
         if (!slot.element) {
@@ -314,7 +339,7 @@ namespace lfs::python {
         if (!doc_)
             return;
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::TextColored, build_id(text));
+        auto& slot = ensure_slot(SlotType::TextColored, build_slot_id("text_colored", &text));
         auto css_color = color_to_css(color);
         const auto display = strip_imgui_id(text);
 
@@ -340,7 +365,7 @@ namespace lfs::python {
         if (!doc_)
             return;
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::TextColored, build_id("cc:" + text));
+        auto& slot = ensure_slot(SlotType::TextColored, build_slot_id("text_colored_center", &text));
         auto css_color = color_to_css(color);
         const auto display = strip_imgui_id(text);
 
@@ -372,7 +397,7 @@ namespace lfs::python {
         if (!doc_)
             return;
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::TextWrapped, build_id(text));
+        auto& slot = ensure_slot(SlotType::TextWrapped, build_slot_id("text_wrapped", &text));
         const auto display = strip_imgui_id(text);
 
         if (!slot.element) {
@@ -393,7 +418,7 @@ namespace lfs::python {
         if (!doc_)
             return;
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::TextDisabled, build_id(text));
+        auto& slot = ensure_slot(SlotType::TextDisabled, build_slot_id("text_disabled", &text));
         const auto display = strip_imgui_id(text);
 
         if (!slot.element) {
@@ -414,7 +439,7 @@ namespace lfs::python {
         if (!doc_)
             return;
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::BulletText, build_id(text));
+        auto& slot = ensure_slot(SlotType::BulletText, build_slot_id("bullet_text", &text));
         const auto display = strip_imgui_id(text);
 
         if (!slot.element) {
@@ -437,7 +462,7 @@ namespace lfs::python {
         if (!doc_)
             return false;
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::Button, build_id(label));
+        auto& slot = ensure_slot(SlotType::Button, build_slot_id("button", &label));
         const auto display = strip_imgui_id(label);
 
         if (!slot.element) {
@@ -450,9 +475,7 @@ namespace lfs::python {
             else if (w > 0)
                 el->SetProperty("width", Rml::String(std::to_string(static_cast<int>(w)) + "dp"));
 
-            auto listener = std::make_unique<SlotEventListener>(&slot.events);
-            el->AddEventListener(Rml::EventId::Click, listener.get());
-            listeners_.push_back(std::move(listener));
+            el->AddEventListener(Rml::EventId::Click, new SlotEventListener(&slot.events));
 
             slot.element = line->AppendChild(std::move(el));
         } else {
@@ -485,7 +508,7 @@ namespace lfs::python {
         if (!doc_)
             return false;
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::SmallButton, build_id(label));
+        auto& slot = ensure_slot(SlotType::SmallButton, build_slot_id("small_button", &label));
         const auto display = strip_imgui_id(label);
 
         if (!slot.element) {
@@ -493,9 +516,7 @@ namespace lfs::python {
             el->SetClass("btn", true);
             el->SetInnerRML(Rml::String(display));
 
-            auto listener = std::make_unique<SlotEventListener>(&slot.events);
-            el->AddEventListener(Rml::EventId::Click, listener.get());
-            listeners_.push_back(std::move(listener));
+            el->AddEventListener(Rml::EventId::Click, new SlotEventListener(&slot.events));
 
             slot.element = line->AppendChild(std::move(el));
         } else {
@@ -516,7 +537,7 @@ namespace lfs::python {
         if (!doc_)
             return false;
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::ButtonStyled, build_id(label));
+        auto& slot = ensure_slot(SlotType::ButtonStyled, build_slot_id("button_styled", &label));
         const auto display = strip_imgui_id(label);
 
         if (!slot.element) {
@@ -530,9 +551,7 @@ namespace lfs::python {
             else if (w > 0)
                 el->SetProperty("width", Rml::String(std::to_string(static_cast<int>(w)) + "dp"));
 
-            auto listener = std::make_unique<SlotEventListener>(&slot.events);
-            el->AddEventListener(Rml::EventId::Click, listener.get());
-            listeners_.push_back(std::move(listener));
+            el->AddEventListener(Rml::EventId::Click, new SlotEventListener(&slot.events));
 
             slot.element = line->AppendChild(std::move(el));
         } else {
@@ -552,7 +571,7 @@ namespace lfs::python {
         if (!doc_)
             return {false, value};
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::Checkbox, build_id(label));
+        auto& slot = ensure_slot(SlotType::Checkbox, build_slot_id("checkbox", &label));
 
         if (!slot.element) {
             auto wrapper = doc_->CreateElement("div");
@@ -568,9 +587,7 @@ namespace lfs::python {
             lbl->SetInnerRML(Rml::String(strip_imgui_id(label)));
 
             slot.events.bool_value = value;
-            auto listener = std::make_unique<SlotEventListener>(&slot.events);
-            input->AddEventListener(Rml::EventId::Change, listener.get());
-            listeners_.push_back(std::move(listener));
+            input->AddEventListener(Rml::EventId::Change, new SlotEventListener(&slot.events));
 
             wrapper->AppendChild(std::move(input));
             wrapper->AppendChild(std::move(lbl));
@@ -600,7 +617,7 @@ namespace lfs::python {
         if (!doc_)
             return {false, current};
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::RadioButton, build_id(label));
+        auto& slot = ensure_slot(SlotType::RadioButton, build_slot_id("radio_button", &label));
         const bool selected = (current == value);
 
         if (!slot.element) {
@@ -617,9 +634,7 @@ namespace lfs::python {
             lbl->SetClass("im-radio-label", true);
             lbl->SetInnerRML(Rml::String(strip_imgui_id(label)));
 
-            auto listener = std::make_unique<SlotEventListener>(&slot.events);
-            wrapper->AddEventListener(Rml::EventId::Click, listener.get());
-            listeners_.push_back(std::move(listener));
+            wrapper->AddEventListener(Rml::EventId::Click, new SlotEventListener(&slot.events));
 
             wrapper->AppendChild(std::move(dot));
             wrapper->AppendChild(std::move(lbl));
@@ -650,7 +665,7 @@ namespace lfs::python {
         if (!doc_)
             return {false, value};
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::SliderFloat, build_id(label));
+        auto& slot = ensure_slot(SlotType::SliderFloat, build_slot_id("slider_float", &label));
 
         if (!slot.element) {
             auto wrapper = doc_->CreateElement("div");
@@ -669,9 +684,7 @@ namespace lfs::python {
             input->SetClass("setting-slider", true);
 
             slot.events.float_value = value;
-            auto listener = std::make_unique<SlotEventListener>(&slot.events);
-            input->AddEventListener(Rml::EventId::Change, listener.get());
-            listeners_.push_back(std::move(listener));
+            input->AddEventListener(Rml::EventId::Change, new SlotEventListener(&slot.events));
 
             auto val_text = doc_->CreateElement("span");
             val_text->SetClass("slider-value", true);
@@ -709,7 +722,7 @@ namespace lfs::python {
         if (!doc_)
             return {false, value};
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::SliderInt, build_id(label));
+        auto& slot = ensure_slot(SlotType::SliderInt, build_slot_id("slider_int", &label));
 
         if (!slot.element) {
             auto wrapper = doc_->CreateElement("div");
@@ -728,9 +741,7 @@ namespace lfs::python {
             input->SetClass("setting-slider", true);
 
             slot.events.float_value = static_cast<float>(value);
-            auto listener = std::make_unique<SlotEventListener>(&slot.events);
-            input->AddEventListener(Rml::EventId::Change, listener.get());
-            listeners_.push_back(std::move(listener));
+            input->AddEventListener(Rml::EventId::Change, new SlotEventListener(&slot.events));
 
             auto val_text = doc_->CreateElement("span");
             val_text->SetClass("slider-value", true);
@@ -802,7 +813,7 @@ namespace lfs::python {
         if (!doc_)
             return {false, value};
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::InputText, build_id(label));
+        auto& slot = ensure_slot(SlotType::InputText, build_slot_id("input_text", &label));
 
         if (!slot.element) {
             auto wrapper = doc_->CreateElement("div");
@@ -818,9 +829,7 @@ namespace lfs::python {
             input->SetProperty("flex", "1");
 
             slot.events.string_value = value;
-            auto listener = std::make_unique<SlotEventListener>(&slot.events);
-            input->AddEventListener(Rml::EventId::Change, listener.get());
-            listeners_.push_back(std::move(listener));
+            input->AddEventListener(Rml::EventId::Change, new SlotEventListener(&slot.events));
 
             wrapper->AppendChild(std::move(lbl));
             wrapper->AppendChild(std::move(input));
@@ -857,7 +866,7 @@ namespace lfs::python {
         if (!doc_)
             return {false, value};
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::InputFloat, build_id(label));
+        auto& slot = ensure_slot(SlotType::InputFloat, build_slot_id("input_float", &label));
 
         if (!slot.element) {
             auto wrapper = doc_->CreateElement("div");
@@ -879,9 +888,7 @@ namespace lfs::python {
 
             slot.events.float_value = value;
             slot.events.string_value = std::format("{:.3f}", value);
-            auto listener = std::make_unique<SlotEventListener>(&slot.events);
-            input->AddEventListener(Rml::EventId::Change, listener.get());
-            listeners_.push_back(std::move(listener));
+            input->AddEventListener(Rml::EventId::Change, new SlotEventListener(&slot.events));
 
             wrapper->AppendChild(std::move(input));
             slot.element = line->AppendChild(std::move(wrapper));
@@ -910,7 +917,7 @@ namespace lfs::python {
         if (!doc_)
             return {false, value};
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::InputInt, build_id(label));
+        auto& slot = ensure_slot(SlotType::InputInt, build_slot_id("input_int", &label));
 
         if (!slot.element) {
             auto wrapper = doc_->CreateElement("div");
@@ -931,9 +938,7 @@ namespace lfs::python {
             input->SetProperty("flex", "1");
 
             slot.events.string_value = std::to_string(value);
-            auto listener = std::make_unique<SlotEventListener>(&slot.events);
-            input->AddEventListener(Rml::EventId::Change, listener.get());
-            listeners_.push_back(std::move(listener));
+            input->AddEventListener(Rml::EventId::Change, new SlotEventListener(&slot.events));
 
             wrapper->AppendChild(std::move(input));
             slot.element = line->AppendChild(std::move(wrapper));
@@ -983,7 +988,7 @@ namespace lfs::python {
 
         auto [r, g, b] = color;
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::Label, build_id("ce3:" + label));
+        auto& slot = ensure_slot(SlotType::Label, build_slot_id("color_edit3", &label));
 
         auto css = std::format("rgba({},{},{},255)",
                                static_cast<int>(r * 255), static_cast<int>(g * 255), static_cast<int>(b * 255));
@@ -1039,7 +1044,7 @@ namespace lfs::python {
             return false;
         auto css = color_to_css(color);
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::Button, build_id("cb:" + label));
+        auto& slot = ensure_slot(SlotType::Button, build_slot_id("color_button", &label));
 
         if (!slot.element) {
             auto el = doc_->CreateElement("button");
@@ -1053,9 +1058,7 @@ namespace lfs::python {
             if (h > 0)
                 el->SetProperty("height", Rml::String(std::to_string(static_cast<int>(h)) + "dp"));
 
-            auto listener = std::make_unique<SlotEventListener>(&slot.events);
-            el->AddEventListener(Rml::EventId::Click, listener.get());
-            listeners_.push_back(std::move(listener));
+            el->AddEventListener(Rml::EventId::Click, new SlotEventListener(&slot.events));
 
             slot.element = line->AppendChild(std::move(el));
         } else {
@@ -1079,7 +1082,7 @@ namespace lfs::python {
         if (!doc_)
             return {false, current_idx};
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::Combo, build_id(label));
+        auto& slot = ensure_slot(SlotType::Combo, build_slot_id("combo", &label));
 
         if (!slot.element) {
             auto wrapper = doc_->CreateElement("div");
@@ -1101,9 +1104,7 @@ namespace lfs::python {
             }
 
             slot.events.int_value = current_idx;
-            auto listener = std::make_unique<SlotEventListener>(&slot.events);
-            select->AddEventListener(Rml::EventId::Change, listener.get());
-            listeners_.push_back(std::move(listener));
+            select->AddEventListener(Rml::EventId::Change, new SlotEventListener(&slot.events));
 
             wrapper->AppendChild(std::move(lbl));
             wrapper->AppendChild(std::move(select));
@@ -1136,7 +1137,7 @@ namespace lfs::python {
         if (!doc_)
             return false;
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::Selectable, build_id(label));
+        auto& slot = ensure_slot(SlotType::Selectable, build_slot_id("selectable", &label));
         const auto display = strip_imgui_id(label);
 
         if (!slot.element) {
@@ -1146,9 +1147,7 @@ namespace lfs::python {
                 el->SetClass("active", true);
             el->SetInnerRML(Rml::String(display));
 
-            auto listener = std::make_unique<SlotEventListener>(&slot.events);
-            el->AddEventListener(Rml::EventId::Click, listener.get());
-            listeners_.push_back(std::move(listener));
+            el->AddEventListener(Rml::EventId::Click, new SlotEventListener(&slot.events));
 
             slot.element = line->AppendChild(std::move(el));
         } else {
@@ -1173,7 +1172,7 @@ namespace lfs::python {
         finish_current_line();
         assert(!containers_.empty());
         auto& level = containers_.back();
-        auto& slot = ensure_slot(SlotType::Separator, build_id("sep"));
+        auto& slot = ensure_slot(SlotType::Separator, build_slot_id("separator"));
 
         if (!slot.element) {
             auto el = doc_->CreateElement("div");
@@ -1190,7 +1189,7 @@ namespace lfs::python {
         finish_current_line();
         assert(!containers_.empty());
         auto& level = containers_.back();
-        auto& slot = ensure_slot(SlotType::Spacing, build_id("spc"));
+        auto& slot = ensure_slot(SlotType::Spacing, build_slot_id("spacing"));
 
         if (!slot.element) {
             auto el = doc_->CreateElement("div");
@@ -1229,7 +1228,7 @@ namespace lfs::python {
         if (!doc_)
             return false;
         finish_current_line();
-        auto& slot = ensure_slot(SlotType::CollapsHeader, build_id(label));
+        auto& slot = ensure_slot(SlotType::CollapsHeader, build_slot_id("collapsing_header", &label));
 
         if (!slot.element) {
             slot.events.open = force_next_open_ || default_open;
@@ -1245,9 +1244,7 @@ namespace lfs::python {
             auto text = doc_->CreateElement("span");
             text->SetInnerRML(Rml::String(strip_imgui_id(label)));
 
-            auto listener = std::make_unique<SlotEventListener>(&slot.events);
-            header->AddEventListener(Rml::EventId::Click, listener.get());
-            listeners_.push_back(std::move(listener));
+            header->AddEventListener(Rml::EventId::Click, new SlotEventListener(&slot.events));
 
             header->AppendChild(std::move(arrow));
             header->AppendChild(std::move(text));
@@ -1409,7 +1406,7 @@ namespace lfs::python {
         if (!doc_)
             return;
         auto* line = ensure_line_container();
-        auto& slot = ensure_slot(SlotType::ProgressBar, build_id("progress"));
+        auto& slot = ensure_slot(SlotType::ProgressBar, build_slot_id("progress"));
 
         if (!slot.element) {
             auto wrapper = doc_->CreateElement("div");
@@ -2162,7 +2159,8 @@ namespace lfs::python {
 
         const char* cls = direction_ == RmlLayoutDirection::Row ? "im-row" : "im-column";
         auto& slot = parent_->ensure_slot(
-            SlotType::Line, parent_->build_id(direction_ == RmlLayoutDirection::Row ? "row" : "col"));
+            SlotType::Line,
+            parent_->build_slot_id(direction_ == RmlLayoutDirection::Row ? "row" : "col"));
 
         if (!slot.element) {
             auto el = parent_->doc_->CreateElement("div");

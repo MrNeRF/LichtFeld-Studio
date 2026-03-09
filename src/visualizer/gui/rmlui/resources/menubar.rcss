@@ -26,6 +26,7 @@ body {
 
 .menu-label {
     padding: 8dp 12dp;
+    cursor: pointer;
 }
 
 #bottom-border {
@@ -77,6 +78,14 @@ body {
 
 .menu-item.disabled {
     cursor: default;
+}
+
+.menu-item-label {
+    cursor: default;
+}
+
+.menu-item-label:hover {
+    background-color: transparent;
 }
 
 .menu-item .checkmark {

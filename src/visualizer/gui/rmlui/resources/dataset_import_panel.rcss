@@ -1,0 +1,92 @@
+/* Shared styles for the retained dataset import dialog. */
+
+#content-wrap {
+    overflow-y: auto;
+}
+
+.impdlg-badge-row {
+    display: flex;
+    align-items: center;
+    gap: 6dp;
+    margin-bottom: 2dp;
+}
+
+.impdlg-badge {
+    font-size: 10dp;
+    font-weight: bold;
+}
+
+.impdlg-pipe,
+.impdlg-subtitle-inline,
+.impdlg-subtitle,
+.impdlg-note,
+.impdlg-meta {
+    font-size: 10dp;
+}
+
+.impdlg-subtitle {
+    display: block;
+    margin-bottom: 2dp;
+}
+
+.impdlg-info-row,
+.impdlg-field-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 8dp;
+    margin-bottom: 6dp;
+}
+
+.impdlg-field-row {
+    align-items: center;
+}
+
+.impdlg-field-label {
+    width: 128dp;
+    flex-shrink: 0;
+    font-size: 10dp;
+}
+
+.impdlg-info-main {
+    display: flex;
+    align-items: flex-start;
+    gap: 6dp;
+    flex: 1;
+}
+
+.impdlg-value {
+    flex: 1;
+    font-size: 10dp;
+}
+
+.impdlg-input {
+    flex: 1;
+}
+
+.impdlg-browse-btn {
+    min-width: 72dp;
+    text-align: center;
+}
+
+.impdlg-status {
+    min-width: 48dp;
+    font-size: 10dp;
+    text-align: right;
+    flex-shrink: 0;
+}
+
+.impdlg-note {
+    display: block;
+    margin-top: 2dp;
+}
+
+.impdlg-buttons {
+    display: flex;
+    gap: 6dp;
+    margin-top: 8dp;
+}
+
+.impdlg-action-btn {
+    flex: 1;
+    text-align: center;
+}

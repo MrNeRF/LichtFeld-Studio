@@ -34,6 +34,10 @@ namespace lfs::vis::op {
     struct ModalEvent;
 }
 
+namespace Rml {
+    class ElementDocument;
+}
+
 namespace lfs::python {
 
     class PyOperatorReturnValue {
@@ -771,6 +775,10 @@ namespace lfs::python {
         void invoke(const std::string& panel,
                     const std::string& section,
                     PyHookPosition position);
+        void invoke_document(const std::string& panel,
+                             const std::string& section,
+                             Rml::ElementDocument* document,
+                             PyHookPosition position);
 
         // Check if hooks exist
         bool has_hooks(const std::string& panel, const std::string& section) const;

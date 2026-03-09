@@ -83,6 +83,11 @@ namespace lfs::python {
             "Get mesh-to-splat conversion progress (0.0 to 1.0)");
 
         m.def(
+            "get_mesh2splat_stage",
+            []() { return invoke_mesh2splat_stage(); },
+            "Get mesh-to-splat conversion stage text");
+
+        m.def(
             "get_mesh2splat_error",
             []() { return invoke_mesh2splat_error(); },
             "Get error message from last mesh-to-splat conversion (empty on success)");

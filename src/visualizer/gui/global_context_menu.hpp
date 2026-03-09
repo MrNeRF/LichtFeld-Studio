@@ -5,6 +5,7 @@
 #pragma once
 
 #include "gui/rmlui/rml_fbo.hpp"
+#include <RmlUi/Core/DataModelHandle.h>
 #include <RmlUi/Core/EventListener.h>
 #include <core/export.hpp>
 #include <cstddef>
@@ -47,14 +48,13 @@ namespace lfs::vis::gui {
         [[nodiscard]] bool isOpen() const { return open_; }
 
         void processInput(const PanelInputState& input);
-        void render(int screen_w, int screen_h);
+        void render(int screen_w, int screen_h, float screen_x, float screen_y);
         void destroyGLResources();
 
     private:
         void initContext();
         void syncTheme();
         std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
-        std::string buildInnerRML(const std::vector<ContextMenuItem>& items) const;
         void hide();
 
         struct EventListener : Rml::EventListener {
@@ -65,6 +65,7 @@ namespace lfs::vis::gui {
         RmlUIManager* mgr_;
         Rml::Context* ctx_ = nullptr;
         Rml::ElementDocument* doc_ = nullptr;
+        Rml::DataModelHandle menu_model_;
         RmlFBO fbo_;
         EventListener listener_;
 
@@ -73,6 +74,7 @@ namespace lfs::vis::gui {
 
         bool open_ = false;
         bool pending_open_ = false;
+        std::vector<ContextMenuItem> items_;
         std::vector<ContextMenuItem> pending_items_;
         float pending_x_ = 0;
         float pending_y_ = 0;

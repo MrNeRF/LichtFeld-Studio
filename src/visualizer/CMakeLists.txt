@@ -70,7 +70,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/panels/tools_panel.cpp
         gui/panels/python_console_panel.cpp
         gui/panels/python_scripts_panel.cpp
-        gui/panels/mesh2splat_panel.cpp
         gui/editor/python_language_def.cpp
         gui/editor/editor_theme.cpp
         gui/editor/autocomplete/static_providers.cpp
@@ -150,7 +149,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         # RmlUI integration
         gui/rmlui/rmlui_system_interface.cpp
         gui/rmlui/rmlui_render_interface.cpp
-        ${PROJECT_SOURCE_DIR}/RmlUi/Backends/RmlUi_Renderer_GL3.cpp
+        gui/rmlui/rmlui_gl3_backend.cpp
         gui/rmlui/rmlui_manager.cpp
         gui/rmlui/rml_fbo.cpp
         gui/rmlui/rml_panel_host.cpp
@@ -162,7 +161,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 )
 
 set_source_files_properties(
-        ${PROJECT_SOURCE_DIR}/RmlUi/Backends/RmlUi_Renderer_GL3.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/gui/rmlui/rmlui_gl3_backend.cpp
         PROPERTIES COMPILE_DEFINITIONS "RMLUI_GL3_CUSTOM_LOADER=<glad/glad.h>"
 )
 
@@ -176,7 +175,6 @@ target_include_directories(lfs_visualizer
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_SOURCE_DIR}/external/httplib
         ${OPENGL_INCLUDE_DIRS}
-        ${PROJECT_SOURCE_DIR}/RmlUi/Backends
 )
 
 target_link_libraries(lfs_visualizer

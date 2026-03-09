@@ -230,7 +230,8 @@ class TrainingPanel(RmlPanel):
     space = "MAIN_PANEL_TAB"
     order = 20
     rml_template = "rmlui/training.rml"
-    rml_height_mode = "content"
+    rml_height_mode = "fill"
+    update_interval_ms = 16
 
     def __init__(self):
         self._handle = None
@@ -249,8 +250,6 @@ class TrainingPanel(RmlPanel):
         self._doc = None
         self._popup_el = None
         self._loss_graph_el = None
-        self._loss_label_el = None
-        self._tick_els = []
         self._step_repeat_prop = None
         self._step_repeat_dir = 0
         self._step_repeat_start = 0.0
@@ -258,6 +257,11 @@ class TrainingPanel(RmlPanel):
         self._text_bufs = {}
         self._last_checkpoint_saved_visible = False
         self._last_loss_signature = None
+        self._progress_value = "0"
+        self._loss_label = ""
+        self._loss_tick_max = ""
+        self._loss_tick_mid = ""
+        self._loss_tick_min = ""
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("training")
@@ -546,6 +550,11 @@ class TrainingPanel(RmlPanel):
         model.bind_func("status_iteration", _status_iteration)
         model.bind_func("status_gaussians", _status_gaussians)
         model.bind_func("progress_text", _progress_text)
+        model.bind_func("progress_value", lambda: self._progress_value)
+        model.bind_func("loss_label", lambda: self._loss_label)
+        model.bind_func("loss_tick_max", lambda: self._loss_tick_max)
+        model.bind_func("loss_tick_mid", lambda: self._loss_tick_mid)
+        model.bind_func("loss_tick_min", lambda: self._loss_tick_min)
         model.bind_func("error_message", _error_message)
 
         model.bind_func("save_steps_display",
@@ -587,12 +596,6 @@ class TrainingPanel(RmlPanel):
             body.add_event_listener("click", self._on_body_click)
             body.add_event_listener("mouseup", self._on_step_mouseup)
         self._loss_graph_el = doc.get_element_by_id("loss-graph-el")
-        self._loss_label_el = doc.get_element_by_id("loss-label")
-        self._tick_els = [
-            doc.get_element_by_id("loss-tick-max"),
-            doc.get_element_by_id("loss-tick-mid"),
-            doc.get_element_by_id("loss-tick-min"),
-        ]
         self._sync_section_states()
 
     def on_update(self, doc):
@@ -641,21 +644,21 @@ class TrainingPanel(RmlPanel):
                     dirty = True
 
         self._update_step_repeat()
-        dirty |= self._update_progress(doc)
+        dirty |= self._update_progress()
         dirty |= self._update_save_steps(doc)
         dirty |= self._update_color_swatch(doc)
         dirty |= self._update_loss_graph()
         return dirty
 
-    def _update_progress(self, doc):
+    def _update_progress(self):
         it = AppState.iteration.value
         mx = AppState.max_iterations.value
         frac = it / mx if mx > 0 and it > 0 else 0.0
         if frac != self._last_progress_frac:
             self._last_progress_frac = frac
-            prog = doc.get_element_by_id("training-progress")
-            if prog:
-                prog.set_attribute("value", str(frac))
+            self._progress_value = str(frac)
+            if self._handle:
+                self._handle.dirty("progress_value")
             return True
         return False
 
@@ -712,26 +715,34 @@ class TrainingPanel(RmlPanel):
                 return False
             self._last_loss_signature = None
             lf.push_loss_to_element(self._loss_graph_el, [])
-            if self._loss_label_el:
-                self._loss_label_el.set_inner_rml("")
-            for el in self._tick_els:
-                if el:
-                    el.set_inner_rml("")
+            self._loss_label = ""
+            self._loss_tick_max = ""
+            self._loss_tick_mid = ""
+            self._loss_tick_min = ""
+            if self._handle:
+                self._handle.dirty("loss_label")
+                self._handle.dirty("loss_tick_max")
+                self._handle.dirty("loss_tick_mid")
+                self._handle.dirty("loss_tick_min")
             return True
         signature = (len(loss_data), float(loss_data[-1]))
         if signature == self._last_loss_signature:
             return False
         self._last_loss_signature = signature
         data_min, data_max = lf.push_loss_to_element(self._loss_graph_el, loss_data)
-        if self._loss_label_el:
-            self._loss_label_el.set_inner_rml(f"{tr('status.loss')}: {loss_data[-1]:.4f}")
+        self._loss_label = f"{tr('status.loss')}: {loss_data[-1]:.4f}"
         mid = data_min + (data_max - data_min) * 0.5
         tick_values = [data_max, mid, data_min]
         max_abs = max(abs(data_min), abs(data_max))
         fmt = "%.4f" if max_abs < 0.1 else ("%.3f" if max_abs < 1.0 else "%.2f")
-        for el, val in zip(self._tick_els, tick_values):
-            if el:
-                el.set_inner_rml(fmt % val)
+        self._loss_tick_max, self._loss_tick_mid, self._loss_tick_min = [
+            fmt % val for val in tick_values
+        ]
+        if self._handle:
+            self._handle.dirty("loss_label")
+            self._handle.dirty("loss_tick_max")
+            self._handle.dirty("loss_tick_mid")
+            self._handle.dirty("loss_tick_min")
         return True
 
     def _on_picker_change(self, handle, event, args):
@@ -1043,10 +1054,11 @@ class TrainingPanel(RmlPanel):
         else:
             self._color_edit_prop = prop_id
             if hasattr(self, '_popup_el') and self._popup_el and event:
-                mx = event.get_parameter("mouse_x", "0")
-                my = event.get_parameter("mouse_y", "0")
-                self._popup_el.set_property("left", f"{mx}px")
-                self._popup_el.set_property("top", f"{int(float(my)) + 2}px")
+                mx = int(float(event.get_parameter("mouse_x", "0")))
+                my = int(float(event.get_parameter("mouse_y", "0")))
+                left = max(0, mx - 210)
+                self._popup_el.set_property("left", f"{left}px")
+                self._popup_el.set_property("top", f"{my + 2}px")
                 self._popup_el.set_class("visible", True)
                 handle.dirty("picker_r")
                 handle.dirty("picker_g")

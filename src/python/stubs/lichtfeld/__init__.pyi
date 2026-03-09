@@ -971,6 +971,9 @@ def is_mesh2splat_active() -> bool:
 def get_mesh2splat_progress() -> float:
     """Get mesh-to-splat conversion progress (0.0 to 1.0)"""
 
+def get_mesh2splat_stage() -> str:
+    """Get mesh-to-splat conversion stage text"""
+
 def get_mesh2splat_error() -> str:
     """
     Get error message from last mesh-to-splat conversion (empty on success)

@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <RmlUi_Renderer_GL3.h>
+#include "gui/rmlui/rmlui_gl3_backend.hpp"
 
 namespace lfs::vis::gui {
 

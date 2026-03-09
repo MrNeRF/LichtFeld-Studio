@@ -115,11 +115,13 @@ class ScenePanel(RmlPanel):
     space = "SCENE_HEADER"
     order = 0
     rml_template = "rmlui/scene_tree.rml"
+    update_interval_ms = 16
 
     def __init__(self):
         self.doc = None
         self.container = None
         self.filter_input = None
+        self._filter_clear = None
         self._context_menu = None
         self._handle = None
 
@@ -138,6 +140,9 @@ class ScenePanel(RmlPanel):
         self._rename_node = None
         self._rename_buffer = ""
         self._context_menu_node = None
+        self._context_menu_visible = False
+        self._context_menu_left = "0px"
+        self._context_menu_top = "0px"
         self._drag_source = None
         self._drop_target = None
         self._models_collapsed = False
@@ -152,6 +157,7 @@ class ScenePanel(RmlPanel):
         self._last_scroll_top = -1.0
         self._last_view_h = -1.0
         self._last_ui_scale = 0.0
+        self._last_invert_masks = False
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model(SCENE_MODEL_NAME)
@@ -168,7 +174,12 @@ class ScenePanel(RmlPanel):
                         lambda: tr("scene.models").format(self._root_count))
         model.bind_func("top_spacer_height", lambda: self._top_spacer_height)
         model.bind_func("bottom_spacer_height", lambda: self._bottom_spacer_height)
+        model.bind_func("context_menu_visible", lambda: self._context_menu_visible)
+        model.bind_func("context_menu_left", lambda: self._context_menu_left)
+        model.bind_func("context_menu_top", lambda: self._context_menu_top)
+        model.bind_func("show_filter_clear", lambda: len(self._filter_text) > 0)
         model.bind_record_list("visible_rows")
+        model.bind_record_list("context_menu_entries")
         self._handle = model.get_handle()
 
     def on_load(self, doc):
@@ -176,10 +187,13 @@ class ScenePanel(RmlPanel):
         self._last_lang = lf.ui.get_current_language()
         self.container = doc.get_element_by_id("tree-container")
         self.filter_input = doc.get_element_by_id("filter-input")
+        self._filter_clear = doc.get_element_by_id("filter-clear")
         self._context_menu = doc.get_element_by_id("context-menu")
 
         if self.filter_input:
             self.filter_input.add_event_listener("change", self._on_filter_change)
+        if self._filter_clear:
+            self._filter_clear.add_event_listener("click", self._on_filter_clear)
 
         if self.container:
             self.container.add_event_listener("click", self._on_tree_click)
@@ -204,6 +218,8 @@ class ScenePanel(RmlPanel):
     def on_scene_changed(self, doc):
         del doc
         mutation_flags = self._scene_mutation_flags()
+        if mutation_flags:
+            self._hide_context_menu()
         if not self._handle_scene_changed(mutation_flags):
             self._rebuild_tree(force=True)
 
@@ -215,6 +231,7 @@ class ScenePanel(RmlPanel):
         cur_lang = lf.ui.get_current_language()
         if cur_lang != self._last_lang:
             self._last_lang = cur_lang
+            self._hide_context_menu()
             if self._handle:
                 for name in ("search_placeholder",
                              "empty_message_primary",
@@ -222,6 +239,11 @@ class ScenePanel(RmlPanel):
                              "models_header_text"):
                     self._handle.dirty(name)
             dirty |= self._rebuild_tree(force=True)
+
+        cur_invert = lf.ui.get_invert_masks()
+        if cur_invert != self._last_invert_masks:
+            self._last_invert_masks = cur_invert
+            dirty |= self._render_tree_window(force=True)
 
         current = set(lf.get_selected_node_names())
         if current != self._prev_selected:
@@ -242,6 +264,12 @@ class ScenePanel(RmlPanel):
                 dirty |= self._render_tree_window(force=False)
 
         return dirty
+
+    def _dirty_model(self, *fields):
+        if not self._handle:
+            return
+        for field in fields:
+            self._handle.dirty(field)
 
     def _find_row_from_target(self, target):
         el = target
@@ -457,6 +485,15 @@ class ScenePanel(RmlPanel):
         del event
         if self.filter_input:
             self._filter_text = self.filter_input.get_attribute("value") or ""
+        self._dirty_model("show_filter_clear")
+        self._rebuild_tree(force=True)
+
+    def _on_filter_clear(self, event):
+        del event
+        self._filter_text = ""
+        if self.filter_input:
+            self.filter_input.set_attribute("value", "")
+        self._dirty_model("show_filter_clear")
         self._rebuild_tree(force=True)
 
     def _preserve_scroll_for_local_selection(self):
@@ -522,6 +559,7 @@ class ScenePanel(RmlPanel):
 
     def _make_node_snapshot(self, node):
         node_type = _node_type(node)
+        has_mask = bool(node_type == "CAMERA" and getattr(node, "mask_path", ""))
         return {
             "name": node.name,
             "id": node.id,
@@ -533,6 +571,7 @@ class ScenePanel(RmlPanel):
             "training_enabled": bool(getattr(node, "training_enabled", True)),
             "label": self._format_node_label(node, node_type),
             "draggable": False,
+            "has_mask": has_mask,
         }
 
     def _capture_scene_snapshot(self, scene):
@@ -562,6 +601,7 @@ class ScenePanel(RmlPanel):
             "draggable": snapshot["draggable"],
             "training_enabled": snapshot["training_enabled"],
             "label": snapshot["label"],
+            "has_mask": snapshot["has_mask"],
         }
 
     def _append_snapshot_rows(self, node_id, depth, rows, filter_text_lower):
@@ -599,6 +639,8 @@ class ScenePanel(RmlPanel):
         use_type_icon = bool(type_icon_src)
         unicode_icon = NODE_TYPE_UNICODE.get(node_type, "")
         renaming = self._rename_node == row["name"]
+        has_mask = row["has_mask"]
+        mask_inverted = has_mask and lf.ui.get_invert_masks()
         return {
             "present": True,
             "name": row["name"],
@@ -624,6 +666,8 @@ class ScenePanel(RmlPanel):
             "renaming": renaming,
             "rename_value": self._rename_buffer if renaming else "",
             "drop_target": self._drop_target == row["name"],
+            "has_mask": has_mask,
+            "mask_inverted": mask_inverted,
         }
 
     def _make_placeholder_row(self, absolute_index):
@@ -652,6 +696,8 @@ class ScenePanel(RmlPanel):
             "renaming": False,
             "rename_value": "",
             "drop_target": False,
+            "has_mask": False,
+            "mask_inverted": False,
         }
 
     def _set_row_visibility_state(self, node_name, visible):
@@ -1006,7 +1052,7 @@ class ScenePanel(RmlPanel):
             return 0
 
     def _show_context_menu(self, node_name, mouse_x="0", mouse_y="0"):
-        if not self._context_menu or not self.doc:
+        if not self._context_menu or not self.doc or not self._handle:
             return
 
         scene = lf.get_scene()
@@ -1023,16 +1069,21 @@ class ScenePanel(RmlPanel):
         draggable = _can_drag(node_type, parent_is_dataset)
 
         if len(self._selected_nodes) > 1:
-            html = self._build_multi_context_html(scene)
+            items = self._build_multi_context_items(scene)
         else:
-            html = self._build_single_context_html(scene, node, node_type, is_del, draggable)
+            items = self._build_single_context_items(
+                scene, node, node_type, is_del, draggable)
 
-        self._context_menu.set_inner_rml(html)
-        self._context_menu.set_class("visible", True)
+        if not items:
+            self._hide_context_menu()
+            return
 
-        item_count = html.count("context-menu-item")
-        label_count = html.count("context-menu-label")
-        sep_count = html.count("context-menu-separator")
+        self._handle.update_record_list("context_menu_entries", items)
+        self._context_menu_visible = True
+
+        item_count = sum(not item["is_label"] for item in items)
+        label_count = sum(item["is_label"] for item in items)
+        sep_count = sum(item["separator_before"] for item in items)
         estimated_h = item_count * 22 + label_count * 20 + sep_count * 5 + 8
         body = self.doc.get_element_by_id("body")
         panel_h = body.scroll_height if body else 600
@@ -1040,97 +1091,221 @@ class ScenePanel(RmlPanel):
         if my + estimated_h > panel_h:
             my = max(0, my - estimated_h)
 
-        self._context_menu.set_property("left", f"{mouse_x}px")
-        self._context_menu.set_property("top", f"{my:.0f}px")
+        self._context_menu_left = f"{mouse_x}px"
+        self._context_menu_top = f"{my:.0f}px"
         self._context_menu_node = node_name
+        self._dirty_model(
+            "context_menu_entries",
+            "context_menu_visible",
+            "context_menu_left",
+            "context_menu_top",
+        )
 
-    def _build_single_context_html(self, scene, node, node_type, is_deletable, can_drag):
-        html = ""
+    @staticmethod
+    def _context_menu_action(label, action, separator_before=False,
+                             is_submenu_item=False, is_active=False):
+        return {
+            "label": label,
+            "action": action,
+            "is_label": False,
+            "separator_before": separator_before,
+            "is_submenu_item": is_submenu_item,
+            "is_active": is_active,
+        }
+
+    @staticmethod
+    def _context_menu_label(label, separator_before=False):
+        return {
+            "label": label,
+            "action": "",
+            "is_label": True,
+            "separator_before": separator_before,
+            "is_submenu_item": False,
+            "is_active": False,
+        }
+
+    def _build_single_context_items(self, scene, node, node_type, is_deletable, can_drag):
+        items = []
 
         if node_type == "CAMERA":
-            html += f'<div class="context-menu-item" data-action="go_to_camera:{node.camera_uid}">{tr("scene.go_to_camera_view")}</div>'
-            html += '<div class="context-menu-separator"></div>'
-            if node.training_enabled:
-                html += f'<div class="context-menu-item" data-action="disable_train:{node.name}">{tr("scene.disable_for_training")}</div>'
-            else:
-                html += f'<div class="context-menu-item" data-action="enable_train:{node.name}">{tr("scene.enable_for_training")}</div>'
-            return html
+            items.append(self._context_menu_action(
+                tr("scene.go_to_camera_view"),
+                f"go_to_camera:{node.camera_uid}",
+            ))
+            items.append(self._context_menu_action(
+                tr("scene.disable_for_training") if node.training_enabled
+                else tr("scene.enable_for_training"),
+                f"disable_train:{node.name}" if node.training_enabled
+                else f"enable_train:{node.name}",
+                separator_before=True,
+            ))
+            return items
 
         if node_type == "KEYFRAME":
             kf = node.keyframe_data()
             if kf:
-                html += f'<div class="context-menu-item" data-action="go_to_kf:{kf.keyframe_index}">{tr("scene.go_to_keyframe")}</div>'
-                html += f'<div class="context-menu-item" data-action="update_kf:{kf.keyframe_index}">{tr("scene.update_keyframe")}</div>'
-                html += f'<div class="context-menu-item" data-action="select_kf:{kf.keyframe_index}">{tr("scene.select_in_timeline")}</div>'
-
-                html += '<div class="context-menu-separator"></div>'
-                html += f'<div class="context-menu-label">{tr("scene.keyframe_easing")}</div>'
+                items.extend([
+                    self._context_menu_action(
+                        tr("scene.go_to_keyframe"),
+                        f"go_to_kf:{kf.keyframe_index}",
+                    ),
+                    self._context_menu_action(
+                        tr("scene.update_keyframe"),
+                        f"update_kf:{kf.keyframe_index}",
+                    ),
+                    self._context_menu_action(
+                        tr("scene.select_in_timeline"),
+                        f"select_kf:{kf.keyframe_index}",
+                    ),
+                    self._context_menu_label(
+                        tr("scene.keyframe_easing"),
+                        separator_before=True,
+                    ),
+                ])
                 for easing_id, easing_key in EASING_TYPES:
-                    active = " active" if kf.easing == easing_id else ""
-                    html += f'<div class="context-menu-item submenu-item{active}" data-action="set_easing:{kf.keyframe_index}:{easing_id}">{tr(easing_key)}</div>'
+                    items.append(self._context_menu_action(
+                        tr(easing_key),
+                        f"set_easing:{kf.keyframe_index}:{easing_id}",
+                        is_submenu_item=True,
+                        is_active=(kf.easing == easing_id),
+                    ))
 
                 if kf.keyframe_index > 0:
-                    html += '<div class="context-menu-separator"></div>'
-                    html += f'<div class="context-menu-item" data-action="delete_kf:{kf.keyframe_index}">{tr("scene.delete")}</div>'
-            return html
+                    items.append(self._context_menu_action(
+                        tr("scene.delete"),
+                        f"delete_kf:{kf.keyframe_index}",
+                        separator_before=True,
+                    ))
+            return items
 
         if node_type == "KEYFRAME_GROUP":
-            html += f'<div class="context-menu-item" data-action="add_kf">{tr("scene.add_keyframe_scene")}</div>'
-            return html
+            items.append(self._context_menu_action(
+                tr("scene.add_keyframe_scene"),
+                "add_kf",
+            ))
+            return items
 
         if node_type == "CAMERA_GROUP":
-            html += f'<div class="context-menu-item" data-action="enable_all_train:{node.name}">{tr("scene.enable_all_training")}</div>'
-            html += f'<div class="context-menu-item" data-action="disable_all_train:{node.name}">{tr("scene.disable_all_training")}</div>'
-            return html
+            items.extend([
+                self._context_menu_action(
+                    tr("scene.enable_all_training"),
+                    f"enable_all_train:{node.name}",
+                ),
+                self._context_menu_action(
+                    tr("scene.disable_all_training"),
+                    f"disable_all_train:{node.name}",
+                ),
+            ])
+            return items
 
         if node_type == "DATASET":
-            html += f'<div class="context-menu-item" data-action="delete:{node.name}">{tr("scene.delete")}</div>'
-            return html
+            items.append(self._context_menu_action(
+                tr("scene.delete"),
+                f"delete:{node.name}",
+            ))
+            return items
 
         if node_type == "CROPBOX":
-            html += f'<div class="context-menu-item" data-action="apply_cropbox">{tr("common.apply")}</div>'
-            html += '<div class="context-menu-separator"></div>'
-            html += f'<div class="context-menu-item" data-action="fit_cropbox:0">{tr("scene.fit_to_scene")}</div>'
-            html += f'<div class="context-menu-item" data-action="fit_cropbox:1">{tr("scene.fit_to_scene_trimmed")}</div>'
-            html += f'<div class="context-menu-item" data-action="reset_cropbox">{tr("scene.reset_crop")}</div>'
-            html += '<div class="context-menu-separator"></div>'
-            html += f'<div class="context-menu-item" data-action="delete:{node.name}">{tr("scene.delete")}</div>'
-            return html
+            items.extend([
+                self._context_menu_action(tr("common.apply"), "apply_cropbox"),
+                self._context_menu_action(
+                    tr("scene.fit_to_scene"),
+                    "fit_cropbox:0",
+                    separator_before=True,
+                ),
+                self._context_menu_action(
+                    tr("scene.fit_to_scene_trimmed"),
+                    "fit_cropbox:1",
+                ),
+                self._context_menu_action(
+                    tr("scene.reset_crop"),
+                    "reset_cropbox",
+                ),
+                self._context_menu_action(
+                    tr("scene.delete"),
+                    f"delete:{node.name}",
+                    separator_before=True,
+                ),
+            ])
+            return items
 
         if node_type == "ELLIPSOID":
-            html += f'<div class="context-menu-item" data-action="apply_ellipsoid">{tr("common.apply")}</div>'
-            html += '<div class="context-menu-separator"></div>'
-            html += f'<div class="context-menu-item" data-action="fit_ellipsoid:0">{tr("scene.fit_to_scene")}</div>'
-            html += f'<div class="context-menu-item" data-action="fit_ellipsoid:1">{tr("scene.fit_to_scene_trimmed")}</div>'
-            html += f'<div class="context-menu-item" data-action="reset_ellipsoid">{tr("scene.reset_crop")}</div>'
-            html += '<div class="context-menu-separator"></div>'
-            html += f'<div class="context-menu-item" data-action="delete:{node.name}">{tr("scene.delete")}</div>'
-            return html
+            items.extend([
+                self._context_menu_action(tr("common.apply"), "apply_ellipsoid"),
+                self._context_menu_action(
+                    tr("scene.fit_to_scene"),
+                    "fit_ellipsoid:0",
+                    separator_before=True,
+                ),
+                self._context_menu_action(
+                    tr("scene.fit_to_scene_trimmed"),
+                    "fit_ellipsoid:1",
+                ),
+                self._context_menu_action(
+                    tr("scene.reset_crop"),
+                    "reset_ellipsoid",
+                ),
+                self._context_menu_action(
+                    tr("scene.delete"),
+                    f"delete:{node.name}",
+                    separator_before=True,
+                ),
+            ])
+            return items
 
         if node_type == "GROUP" and not AppState.has_trainer.value:
-            html += f'<div class="context-menu-item" data-action="add_group:{node.name}">{tr("scene.add_group_ellipsis")}</div>'
-            html += f'<div class="context-menu-item" data-action="merge_group:{node.name}">{tr("scene.merge_to_single_ply")}</div>'
-            html += '<div class="context-menu-separator"></div>'
+            items.extend([
+                self._context_menu_action(
+                    tr("scene.add_group_ellipsis"),
+                    f"add_group:{node.name}",
+                ),
+                self._context_menu_action(
+                    tr("scene.merge_to_single_ply"),
+                    f"merge_group:{node.name}",
+                ),
+            ])
 
         if node_type in ("SPLAT", "POINTCLOUD"):
-            html += f'<div class="context-menu-item" data-action="add_cropbox:{node.name}">{tr("scene.add_crop_box")}</div>'
-            html += f'<div class="context-menu-item" data-action="add_ellipsoid:{node.name}">{tr("scene.add_crop_ellipsoid")}</div>'
-            html += f'<div class="context-menu-item" data-action="save_node:{node.name}">{tr("scene.save_to_disk")}</div>'
-            html += '<div class="context-menu-separator"></div>'
+            separator_before = bool(items)
+            items.extend([
+                self._context_menu_action(
+                    tr("scene.add_crop_box"),
+                    f"add_cropbox:{node.name}",
+                    separator_before=separator_before,
+                ),
+                self._context_menu_action(
+                    tr("scene.add_crop_ellipsoid"),
+                    f"add_ellipsoid:{node.name}",
+                ),
+                self._context_menu_action(
+                    tr("scene.save_to_disk"),
+                    f"save_node:{node.name}",
+                ),
+            ])
 
         if is_deletable:
-            html += f'<div class="context-menu-item" data-action="rename:{node.name}">{tr("scene.rename")}</div>'
+            items.append(self._context_menu_action(
+                tr("scene.rename"),
+                f"rename:{node.name}",
+                separator_before=bool(items),
+            ))
 
-        html += f'<div class="context-menu-item" data-action="duplicate:{node.name}">{tr("scene.duplicate")}</div>'
+        items.append(self._context_menu_action(
+            tr("scene.duplicate"),
+            f"duplicate:{node.name}",
+        ))
 
         if can_drag:
-            html += self._build_move_to_items(scene, node.name)
+            items.extend(self._build_move_to_items(scene, node.name))
 
         if is_deletable:
-            html += '<div class="context-menu-separator"></div>'
-            html += f'<div class="context-menu-item" data-action="delete:{node.name}">{tr("scene.delete")}</div>'
+            items.append(self._context_menu_action(
+                tr("scene.delete"),
+                f"delete:{node.name}",
+                separator_before=True,
+            ))
 
-        return html
+        return items
 
     def _build_move_to_items(self, scene, node_name):
         groups = []
@@ -1139,16 +1314,25 @@ class ScenePanel(RmlPanel):
                 groups.append(n.name)
 
         if not groups:
-            return ""
+            return []
 
-        html = '<div class="context-menu-separator"></div>'
-        html += f'<div class="context-menu-label">{tr("scene.move_to")}</div>'
-        html += f'<div class="context-menu-item submenu-item" data-action="reparent:{node_name}:">{tr("scene.move_to_root")}</div>'
+        items = [
+            self._context_menu_label(tr("scene.move_to"), separator_before=True),
+            self._context_menu_action(
+                tr("scene.move_to_root"),
+                f"reparent:{node_name}:",
+                is_submenu_item=True,
+            ),
+        ]
         for group_name in groups:
-            html += f'<div class="context-menu-item submenu-item" data-action="reparent:{node_name}:{group_name}">{group_name}</div>'
-        return html
+            items.append(self._context_menu_action(
+                group_name,
+                f"reparent:{node_name}:{group_name}",
+                is_submenu_item=True,
+            ))
+        return items
 
-    def _build_multi_context_html(self, scene):
+    def _build_multi_context_items(self, scene):
         types = set()
         deletable = []
         for name in self._selected_nodes:
@@ -1161,22 +1345,34 @@ class ScenePanel(RmlPanel):
             if _is_deletable(ntype, parent_is_dataset):
                 deletable.append(name)
 
-        html = ""
+        items = []
         if types == {"CAMERA"} or types == {"CAMERA_GROUP"}:
-            html += f'<div class="context-menu-item" data-action="enable_all_selected_train">{tr("scene.enable_all_training")}</div>'
-            html += f'<div class="context-menu-item" data-action="disable_all_selected_train">{tr("scene.disable_all_training")}</div>'
+            items.extend([
+                self._context_menu_action(
+                    tr("scene.enable_all_training"),
+                    "enable_all_selected_train",
+                ),
+                self._context_menu_action(
+                    tr("scene.disable_all_training"),
+                    "disable_all_selected_train",
+                ),
+            ])
 
         if deletable:
-            if html:
-                html += '<div class="context-menu-separator"></div>'
-            html += f'<div class="context-menu-item" data-action="delete_selected">{tr("scene.delete")} ({len(deletable)})</div>'
+            items.append(self._context_menu_action(
+                f"{tr('scene.delete')} ({len(deletable)})",
+                "delete_selected",
+                separator_before=bool(items),
+            ))
 
-        return html
+        return items
 
     def _hide_context_menu(self):
-        if self._context_menu:
-            self._context_menu.set_class("visible", False)
-            self._context_menu_node = None
+        if not self._context_menu_visible and self._context_menu_node is None:
+            return
+        self._context_menu_visible = False
+        self._context_menu_node = None
+        self._dirty_model("context_menu_visible")
 
     def _execute_action(self, action_str):
         if not action_str:

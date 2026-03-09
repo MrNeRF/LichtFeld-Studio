@@ -5,32 +5,32 @@
   "palette": {
     "_info": "Colors are [R, G, B, A] with values 0.0-1.0",
 
-    "background":     [0.12, 0.11, 0.11, 1.0],
-    "_background":    "Main window background - warm dark gray",
+    "background":     [0.09, 0.10, 0.12, 1.0],
+    "_background":    "Main window background - deep slate",
 
-    "surface":        [0.16, 0.15, 0.15, 1.0],
-    "_surface":       "Panel backgrounds, buttons - warm gray",
+    "surface":        [0.14, 0.15, 0.18, 1.0],
+    "_surface":       "Panel backgrounds, buttons - elevated slate",
 
-    "surface_bright": [0.24, 0.22, 0.21, 1.0],
-    "_surface_bright": "Hovered buttons, highlighted areas - warm light gray",
+    "surface_bright": [0.20, 0.22, 0.27, 1.0],
+    "_surface_bright": "Hovered buttons, highlighted areas - brighter slate",
 
-    "primary":        [0.30, 0.62, 1.00, 1.0],
+    "primary":        [0.35, 0.64, 1.00, 1.0],
     "_primary":       "Main accent color (selection, active items) - Bright blue",
 
-    "primary_dim":    [0.22, 0.50, 0.82, 1.0],
+    "primary_dim":    [0.26, 0.50, 0.82, 1.0],
     "_primary_dim":   "Dimmed accent for less emphasis",
 
     "secondary":      [0.65, 0.42, 0.85, 1.0],
     "_secondary":     "Secondary accent - Purple",
 
-    "text":           [0.96, 0.94, 0.92, 1.0],
-    "_text":          "Main text color - Warm white",
+    "text":           [0.97, 0.98, 1.00, 1.0],
+    "_text":          "Main text color - Cool white",
 
-    "text_dim":       [0.55, 0.53, 0.50, 1.0],
-    "_text_dim":      "Disabled/secondary text - Warm gray",
+    "text_dim":       [0.62, 0.66, 0.74, 1.0],
+    "_text_dim":      "Disabled/secondary text - Cool gray",
 
-    "border":         [0.28, 0.26, 0.25, 1.0],
-    "_border":        "Panel borders, separators - Warm dark",
+    "border":         [0.29, 0.33, 0.42, 1.0],
+    "_border":        "Panel borders, separators - Slate edge",
 
     "success":        [0.25, 0.82, 0.32, 1.0],
     "_success":       "Success indicators - Green",
@@ -82,11 +82,11 @@
   "fonts": {
     "regular_path": "Inter-Regular.ttf",
     "bold_path": "Inter-SemiBold.ttf",
-    "base_size": 12.0,
+    "base_size": 12.5,
     "small_size": 12.0,
-    "large_size": 16.0,
-    "heading_size": 18.0,
-    "section_size": 13.0
+    "large_size": 17.0,
+    "heading_size": 20.0,
+    "section_size": 14.0
   },
 
   "menu": {
@@ -141,9 +141,9 @@
     "_info": "Shadow settings for floating panels",
 
     "enabled": true,
-    "offset": [3.0, 3.0],
-    "blur": 12.0,
-    "alpha": 0.65
+    "offset": [0.0, 10.0],
+    "blur": 18.0,
+    "alpha": 0.48
   },
 
   "vignette": {

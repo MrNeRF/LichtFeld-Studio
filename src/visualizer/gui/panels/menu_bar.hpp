@@ -4,12 +4,10 @@
 
 #pragma once
 
-#include "gui/ui_context.hpp"
 #include "python/python_runtime.hpp"
 
 #include <functional>
 #include <future>
-#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -21,11 +19,8 @@ namespace lfs::vis::gui {
         ~MenuBar();
 
         void render();
-        void setFonts(const FontSet& fonts) { fonts_ = fonts; }
 
         void setOnShowPythonConsole(std::function<void()> callback);
-
-        void renderPluginInstallPopup();
 
         bool hasMenuEntries() const;
         std::vector<python::MenuBarEntry> getMenuEntries() const;
@@ -42,8 +37,6 @@ namespace lfs::vis::gui {
         uint64_t getThumbnailTexture(const std::string& video_id) const;
 
     private:
-        void openURL(const char* url);
-
         struct Thumbnail {
             unsigned int texture = 0;
             enum class State { PENDING,
@@ -57,13 +50,6 @@ namespace lfs::vis::gui {
         void updateThumbnails();
 
         std::function<void()> on_show_python_console_;
-
-        bool show_plugin_install_popup_ = false;
-        std::string plugin_install_url_;
-        std::string plugin_status_message_;
-        bool plugin_status_is_error_ = false;
-
-        FontSet fonts_;
         std::unordered_map<std::string, Thumbnail> thumbnails_;
     };
 

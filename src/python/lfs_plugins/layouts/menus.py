@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import lichtfeld as lf
+
 # Global list of menu classes - populated at import time
 _MENU_CLASSES: list[type] = []
 
@@ -27,11 +29,65 @@ def register_menu(menu_class: type) -> type:
             location = "MENU_BAR"
             order = 10
 
-            def draw(self, layout):
+            def menu_items(self):
                 ...
     """
     _MENU_CLASSES.append(menu_class)
     return menu_class
+
+
+def menu_separator() -> dict[str, Any]:
+    """Create a separator entry for a declarative menu schema."""
+    return {"type": "separator"}
+
+
+def menu_submenu(label: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Create a submenu entry for a declarative menu schema."""
+    return {"type": "submenu", "label": label, "items": list(items)}
+
+
+def menu_operator(operator_cls_or_id: Any, label: str = "") -> dict[str, Any]:
+    """Create an operator-backed menu entry.
+
+    Accepts either an operator class or an operator id string.
+    """
+    operator_id = operator_cls_or_id
+    resolved_label = label
+
+    if hasattr(operator_cls_or_id, "_class_id"):
+        operator_id = operator_cls_or_id._class_id()
+        if not resolved_label:
+            resolved_label = lf.ui.tr(getattr(operator_cls_or_id, "label", operator_id))
+
+    return {
+        "type": "operator",
+        "operator_id": str(operator_id),
+        "label": resolved_label,
+    }
+
+
+def menu_action(label: str, callback: Any, shortcut: str = "", enabled: bool = True) -> dict[str, Any]:
+    """Create a plain callback-backed menu entry."""
+    return {
+        "type": "item",
+        "label": label,
+        "callback": callback,
+        "shortcut": shortcut,
+        "enabled": enabled,
+    }
+
+
+def menu_toggle(label: str, callback: Any, selected: bool,
+                shortcut: str = "", enabled: bool = True) -> dict[str, Any]:
+    """Create a toggle menu entry with a checkmark state."""
+    return {
+        "type": "toggle",
+        "label": label,
+        "callback": callback,
+        "shortcut": shortcut,
+        "enabled": enabled,
+        "selected": selected,
+    }
 
 
 def get_menu_classes() -> list[type]:

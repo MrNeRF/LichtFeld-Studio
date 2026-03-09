@@ -10,9 +10,21 @@
 
 #include <RmlUi/Core/ElementDocument.h>
 #include <cassert>
+#include <mutex>
 #include <imgui.h>
 
 namespace lfs::vis::gui {
+
+    namespace {
+        void warnLegacyImModePathOnce() {
+            static std::once_flag once;
+            std::call_once(once, [] {
+                LOG_WARN("Rml transition: RmlImModePanelAdapter is a legacy compatibility path. "
+                         "Keep existing panels working, but migrate new and touched panels to "
+                         "retained Rml data models.");
+            });
+        }
+    } // namespace
 
     static constexpr const char* IM_MODE_RML = "rmlui/im_mode_panel.rml";
 
@@ -34,6 +46,7 @@ namespace lfs::vis::gui {
     void RmlImModePanelAdapter::ensureHost() {
         if (host_)
             return;
+        warnLegacyImModePathOnce();
         const auto& ops = lfs::python::get_rml_panel_host_ops();
         assert(ops.create);
 

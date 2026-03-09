@@ -3,7 +3,11 @@
 
 body {
     font-family: Inter;
-    padding: 2dp 6dp;
+    padding: 0;
+}
+
+#content-wrap {
+    padding: 6dp;
 }
 
 .color-picker-popup {

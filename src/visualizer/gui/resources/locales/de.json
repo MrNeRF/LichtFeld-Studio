@@ -93,7 +93,7 @@
     "section.initialization": "Initialisierung",
     "section.thresholds": "Schwellenwerte",
     "section.save_steps": "Speicherschritte",
-    "section.basic_params": "Basis-Trainingsparameter",
+    "section.basic_params": "Trainingsparameter",
     "section.advanced_params": "Erweiterte Trainingsparameter",
     "section.sparsity": "Sparsity Einstellungen",
     "section.pruning_growing": "Pruning/Growing",

@@ -11,7 +11,6 @@
 #include <optional>
 #include <string>
 #include <vector>
-#include <ImGuizmo.h>
 
 namespace Rml {
     class Context;
@@ -63,7 +62,7 @@ namespace lfs::vis::gui {
 
         void showContextMenu(float screen_x, float screen_y,
                              std::optional<size_t> keyframe_index,
-                             ImGuizmo::OPERATION gizmo_op);
+                             int gizmo_op);
         void hideContextMenu();
 
         void showTimeEdit(size_t index, float current_time);
@@ -75,6 +74,7 @@ namespace lfs::vis::gui {
 
         void processInput(const lfs::vis::PanelInputState& input);
         void render(int screen_w, int screen_h);
+        void compositeToScreen(int screen_w, int screen_h) const;
         void destroyGLResources();
 
         [[nodiscard]] bool isContextMenuOpen() const { return context_menu_open_; }
@@ -92,7 +92,7 @@ namespace lfs::vis::gui {
         std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
         void cacheElements();
         std::string buildContextMenuHTML(std::optional<size_t> keyframe,
-                                         ImGuizmo::OPERATION gizmo_op) const;
+                                         int gizmo_op) const;
         void submitTimeEdit();
         void submitFocalEdit();
 

@@ -6,6 +6,7 @@
 #include "core/logger.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/ui_context.hpp"
+#include "gui/ui_widgets.hpp"
 #include "python/python_runtime.hpp"
 #include "theme/theme.hpp"
 
@@ -18,6 +19,21 @@ namespace lfs::vis::gui {
     PanelRegistry& PanelRegistry::instance() {
         static PanelRegistry registry;
         return registry;
+    }
+
+    uint64_t PanelRegistry::alloc_float_stack_order_locked() {
+        return next_float_stack_order_++;
+    }
+
+    void PanelRegistry::ensure_float_stack_order_locked(PanelInfo& panel) {
+        if (panel.space == PanelSpace::Floating && panel.float_stack_order == 0)
+            panel.float_stack_order = alloc_float_stack_order_locked();
+    }
+
+    void PanelRegistry::bring_floating_panel_to_front_locked(PanelInfo& panel) {
+        if (panel.space != PanelSpace::Floating)
+            return;
+        panel.float_stack_order = alloc_float_stack_order_locked();
     }
 
     void PanelRegistry::register_panel(PanelInfo info) {
@@ -33,11 +49,16 @@ namespace lfs::vis::gui {
 
         for (auto& p : panels_) {
             if (p.idname == info.idname) {
+                if (info.space == PanelSpace::Floating && info.float_stack_order == 0 &&
+                    p.float_stack_order != 0)
+                    info.float_stack_order = p.float_stack_order;
+                ensure_float_stack_order_locked(info);
                 p = std::move(info);
                 return;
             }
         }
 
+        ensure_float_stack_order_locked(info);
         panels_.push_back(std::move(info));
         std::stable_sort(panels_.begin(), panels_.end(), [](const PanelInfo& a, const PanelInfo& b) {
             if (a.order != b.order)
@@ -122,20 +143,187 @@ namespace lfs::vis::gui {
                     snapshots.push_back({i, p.panel.get(), p.label, p.idname,
                                          p.parent_idname, p.options, p.is_native,
                                          p.poll_deps, p.initial_width, p.initial_height,
-                                         p.float_x, p.float_y});
+                                         p.float_x, p.float_y, p.order, p.float_stack_order});
                 }
             }
         }
 
-        for (auto& snap : snapshots) {
-            bool draw_succeeded = false;
+        if (space == PanelSpace::Floating) {
+            std::stable_sort(snapshots.begin(), snapshots.end(),
+                             [](const PanelSnapshot& a, const PanelSnapshot& b) {
+                                 if (a.float_stack_order != b.float_stack_order)
+                                     return a.float_stack_order < b.float_stack_order;
+                                 if (a.order != b.order)
+                                     return a.order < b.order;
+                                 return a.label < b.label;
+                             });
+        }
+
+        std::vector<bool> should_draw(snapshots.size(), false);
+        for (size_t i = 0; i < snapshots.size(); ++i) {
+            auto& snap = snapshots[i];
             try {
-                if (!check_poll(snap, ctx))
-                    continue;
+                should_draw[i] = check_poll(snap, ctx);
             } catch (const std::exception& e) {
                 LOG_ERROR("Panel '{}' poll error: {}", snap.label, e.what());
-                continue;
             }
+        }
+
+        struct FloatingDirectLayout {
+            bool valid = false;
+            float width = 0.0f;
+            float height = 0.0f;
+            float pos_x = 0.0f;
+            float pos_y = 0.0f;
+            float drawn_height = 0.0f;
+            bool has_user_height = false;
+            float forced_height = 0.0f;
+            bool mouse_in_panel = false;
+            bool mouse_in_titlebar = false;
+            bool mouse_in_resize_grip = false;
+            int8_t hover_dir_x = 0;
+            int8_t hover_dir_y = 0;
+        };
+
+        std::vector<FloatingDirectLayout> floating_direct_layouts(snapshots.size());
+        int hovered_floating_direct = -1;
+
+        constexpr float kTitleH = 28.0f;
+        constexpr float kResizeEdge = 6.0f;
+        constexpr float kVisibleFrac = 0.1f;
+
+        auto prepare_floating_direct_layout = [&](const PanelSnapshot& snap,
+                                                  FloatingDirectLayout& layout) {
+            layout = {};
+
+            if (space != PanelSpace::Floating || !snap.panel->supportsDirectDraw() ||
+                snap.has_option(PanelOption::SELF_MANAGED))
+                return;
+
+            auto* vp = ImGui::GetMainViewport();
+            if (!vp)
+                return;
+
+            float w = snap.initial_width > 0 ? snap.initial_width : 560.0f;
+            const float max_h = snap.initial_height > 0
+                                    ? std::min(snap.initial_height, vp->WorkSize.y)
+                                    : vp->WorkSize.y;
+            float drawn_h = snap.panel->getDirectDrawHeight();
+            if (drawn_h <= 0.0f) {
+                float prev_h = -1.0f;
+                for (int pass = 0; pass < 3; ++pass) {
+                    snap.panel->preloadDirect(w, max_h, ctx);
+                    drawn_h = snap.panel->getDirectDrawHeight();
+
+                    const bool stable_height =
+                        prev_h > 0.0f && std::abs(drawn_h - prev_h) <= 1.0f;
+                    if (drawn_h > 0.0f && stable_height &&
+                        !snap.panel->needsAnimationFrame())
+                        break;
+
+                    prev_h = drawn_h;
+                }
+            }
+
+            float h = 0.0f;
+            bool has_user_height = false;
+            {
+                std::lock_guard lock(mutex_);
+                if (snap.index < panels_.size() && panels_[snap.index].idname == snap.idname &&
+                    panels_[snap.index].float_user_height > 0) {
+                    h = panels_[snap.index].float_user_height;
+                    has_user_height = true;
+                } else if (drawn_h > 0) {
+                    h = std::min(drawn_h, max_h);
+                } else if (snap.initial_height > 0) {
+                    h = snap.initial_height;
+                } else {
+                    h = 400.0f;
+                }
+            }
+
+            if (!has_user_height && drawn_h > 0 && h > drawn_h)
+                h = drawn_h;
+
+            float px = snap.float_x;
+            float py = snap.float_y;
+            if (std::isnan(px) || std::isnan(py)) {
+                px = vp->WorkPos.x + (vp->WorkSize.x - w) * 0.5f;
+                py = vp->WorkPos.y + (vp->WorkSize.y - h) * 0.5f;
+            }
+
+            const float vx = vp->WorkPos.x;
+            const float vy = vp->WorkPos.y;
+            const float vw = vp->WorkSize.x;
+            const float vh = vp->WorkSize.y;
+            px = std::clamp(px, vx - w * (1.0f - kVisibleFrac), vx + vw - w * kVisibleFrac);
+            py = std::clamp(py, vy, vy + vh - kTitleH);
+
+            layout.valid = true;
+            layout.width = w;
+            layout.height = h;
+            layout.pos_x = px;
+            layout.pos_y = py;
+            layout.drawn_height = drawn_h;
+            layout.has_user_height = has_user_height;
+            layout.forced_height = (has_user_height && drawn_h > 0 && h > drawn_h) ? h : 0.0f;
+
+            if (!input)
+                return;
+
+            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            layout.mouse_in_panel =
+                mouse.x >= px && mouse.x < px + w && mouse.y >= py && mouse.y < py + h;
+            layout.mouse_in_titlebar =
+                mouse.x >= px && mouse.x < px + w && mouse.y >= py && mouse.y < py + kTitleH;
+
+            const bool on_left =
+                mouse.x >= px - kResizeEdge && mouse.x < px + kResizeEdge;
+            const bool on_right =
+                mouse.x >= px + w - kResizeEdge && mouse.x < px + w + kResizeEdge;
+            const bool on_top =
+                mouse.y >= py - kResizeEdge && mouse.y < py + kResizeEdge;
+            const bool on_bottom =
+                mouse.y >= py + h - kResizeEdge && mouse.y < py + h + kResizeEdge;
+            const bool on_edge_x = on_left || on_right;
+            const bool on_edge_y = on_top || on_bottom;
+            const bool in_y_range =
+                mouse.y >= py - kResizeEdge && mouse.y < py + h + kResizeEdge;
+            const bool in_x_range =
+                mouse.x >= px - kResizeEdge && mouse.x < px + w + kResizeEdge;
+
+            layout.mouse_in_resize_grip =
+                (on_edge_x && on_edge_y) ||
+                (on_edge_x && !on_edge_y && in_y_range) ||
+                (on_edge_y && !on_edge_x && in_x_range);
+            layout.hover_dir_x = on_left ? int8_t(-1) : (on_right ? int8_t(1) : int8_t(0));
+            layout.hover_dir_y = on_top ? int8_t(-1) : (on_bottom ? int8_t(1) : int8_t(0));
+        };
+
+        if (space == PanelSpace::Floating) {
+            for (size_t i = 0; i < snapshots.size(); ++i) {
+                if (should_draw[i])
+                    prepare_floating_direct_layout(snapshots[i], floating_direct_layouts[i]);
+            }
+
+            if (input) {
+                for (int i = static_cast<int>(snapshots.size()) - 1; i >= 0; --i) {
+                    const auto& layout = floating_direct_layouts[static_cast<size_t>(i)];
+                    if (!layout.valid)
+                        continue;
+                    if (layout.mouse_in_panel || layout.mouse_in_resize_grip) {
+                        hovered_floating_direct = i;
+                        break;
+                    }
+                }
+            }
+        }
+
+        for (size_t snap_idx = 0; snap_idx < snapshots.size(); ++snap_idx) {
+            auto& snap = snapshots[snap_idx];
+            bool draw_succeeded = false;
+            if (!should_draw[snap_idx])
+                continue;
 
             try {
                 ImGui::PushID(snap.idname.c_str());
@@ -145,114 +333,69 @@ namespace lfs::vis::gui {
                     if (snap.has_option(PanelOption::SELF_MANAGED)) {
                         snap.panel->draw(ctx);
                     } else if (snap.panel->supportsDirectDraw()) {
-                        float w = snap.initial_width > 0 ? snap.initial_width : 560.0f;
-                        const auto* vp = ImGui::GetMainViewport();
-                        const float max_h = snap.initial_height > 0
-                                                ? std::min(snap.initial_height, vp->WorkSize.y)
-                                                : vp->WorkSize.y;
-                        float drawn_h = snap.panel->getDirectDrawHeight();
-                        if (drawn_h <= 0.0f) {
-                            float prev_h = -1.0f;
-                            for (int pass = 0; pass < 3; ++pass) {
-                                snap.panel->preloadDirect(w, max_h, ctx);
-                                drawn_h = snap.panel->getDirectDrawHeight();
-
-                                const bool stable_height =
-                                    prev_h > 0.0f && std::abs(drawn_h - prev_h) <= 1.0f;
-                                if (drawn_h > 0.0f && stable_height &&
-                                    !snap.panel->needsAnimationFrame())
-                                    break;
-
-                                prev_h = drawn_h;
-                            }
-                        }
-                        float h;
-                        bool has_user_height = false;
-                        {
-                            std::lock_guard lock(mutex_);
-                            if (snap.index < panels_.size() && panels_[snap.index].idname == snap.idname &&
-                                panels_[snap.index].float_user_height > 0) {
-                                h = panels_[snap.index].float_user_height;
-                                has_user_height = true;
-                            } else if (drawn_h > 0)
-                                h = std::min(drawn_h, max_h);
-                            else if (snap.initial_height > 0)
-                                h = snap.initial_height;
-                            else
-                                h = 400.0f;
-                        }
-
-                        if (!has_user_height && drawn_h > 0 && h > drawn_h)
-                            h = drawn_h;
-
-                        float px = snap.float_x;
-                        float py = snap.float_y;
-                        if (std::isnan(px) || std::isnan(py)) {
-                            px = vp->WorkPos.x + (vp->WorkSize.x - w) * 0.5f;
-                            py = vp->WorkPos.y + (vp->WorkSize.y - h) * 0.5f;
-                        }
+                        auto& layout = floating_direct_layouts[snap_idx];
+                        if (!layout.valid)
+                            prepare_floating_direct_layout(snap, layout);
 
                         ImGuiIO& io = ImGui::GetIO();
-                        const ImVec2 mouse = io.MousePos;
-                        const bool mouse_in_panel = mouse.x >= px && mouse.x < px + w &&
-                                                    mouse.y >= py && mouse.y < py + h;
-                        const bool mouse_in_titlebar = mouse.x >= px && mouse.x < px + w &&
-                                                       mouse.y >= py && mouse.y < py + 28.0f;
-                        constexpr float kResizeEdge = 6.0f;
+                        float w = layout.width;
+                        float h = layout.height;
+                        float px = layout.pos_x;
+                        float py = layout.pos_y;
+                        float drawn_h = layout.drawn_height;
+                        bool has_user_height = layout.has_user_height;
+
                         constexpr float kMinPanelWidth = 300.0f;
                         constexpr float kMinPanelHeight = 150.0f;
-                        const bool on_left = mouse.x >= px - kResizeEdge && mouse.x < px + kResizeEdge;
-                        const bool on_right = mouse.x >= px + w - kResizeEdge && mouse.x < px + w + kResizeEdge;
-                        const bool on_top = mouse.y >= py - kResizeEdge && mouse.y < py + kResizeEdge;
-                        const bool on_bottom = mouse.y >= py + h - kResizeEdge && mouse.y < py + h + kResizeEdge;
-                        const bool on_edge_x = on_left || on_right;
-                        const bool on_edge_y = on_top || on_bottom;
-                        const bool in_y_range = mouse.y >= py - kResizeEdge && mouse.y < py + h + kResizeEdge;
-                        const bool in_x_range = mouse.x >= px - kResizeEdge && mouse.x < px + w + kResizeEdge;
-                        const bool mouse_in_resize_grip =
-                            (on_edge_x && on_edge_y) ||
-                            (on_edge_x && !on_edge_y && in_y_range) ||
-                            (on_edge_y && !on_edge_x && in_x_range);
-                        const int8_t hover_dir_x = on_left ? int8_t(-1) : (on_right ? int8_t(1) : int8_t(0));
-                        const int8_t hover_dir_y = on_top ? int8_t(-1) : (on_bottom ? int8_t(1) : int8_t(0));
 
                         {
                             std::lock_guard lock(mutex_);
                             if (snap.index < panels_.size() && panels_[snap.index].idname == snap.idname) {
                                 auto& pi = panels_[snap.index];
+                                const bool active_this_panel = pi.float_dragging || pi.float_resizing;
+                                const bool hovered_this_panel =
+                                    static_cast<int>(snap_idx) == hovered_floating_direct;
+                                const bool interactive = active_this_panel || hovered_this_panel;
 
                                 bool any_active = std::any_of(panels_.begin(), panels_.end(),
                                                               [](const PanelInfo& p) { return p.float_dragging || p.float_resizing; });
 
-                                if (mouse_in_resize_grip && !any_active && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                                if (interactive && (layout.mouse_in_panel || layout.mouse_in_resize_grip) &&
+                                    ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                                    bring_floating_panel_to_front_locked(pi);
+                                }
+
+                                if (interactive && layout.mouse_in_resize_grip && !any_active &&
+                                    ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                                     pi.float_resizing = true;
                                     pi.float_resize_start_w = w;
                                     pi.float_resize_start_h = h;
-                                    pi.float_resize_start_mx = mouse.x;
-                                    pi.float_resize_start_my = mouse.y;
+                                    pi.float_resize_start_mx = io.MousePos.x;
+                                    pi.float_resize_start_my = io.MousePos.y;
                                     pi.float_resize_start_px = px;
                                     pi.float_resize_start_py = py;
-                                    pi.float_resize_dir_x = hover_dir_x;
-                                    pi.float_resize_dir_y = hover_dir_y;
-                                } else if (mouse_in_titlebar && !mouse_in_resize_grip && !any_active &&
+                                    pi.float_resize_dir_x = layout.hover_dir_x;
+                                    pi.float_resize_dir_y = layout.hover_dir_y;
+                                } else if (interactive && layout.mouse_in_titlebar &&
+                                           !layout.mouse_in_resize_grip && !any_active &&
                                            ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                                     pi.float_dragging = true;
-                                    pi.float_drag_ox = mouse.x - px;
-                                    pi.float_drag_oy = mouse.y - py;
+                                    pi.float_drag_ox = io.MousePos.x - px;
+                                    pi.float_drag_oy = io.MousePos.y - py;
                                 }
 
                                 if (pi.float_dragging) {
                                     if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                                        px = mouse.x - pi.float_drag_ox;
-                                        py = mouse.y - pi.float_drag_oy;
+                                        px = io.MousePos.x - pi.float_drag_ox;
+                                        py = io.MousePos.y - pi.float_drag_oy;
                                     } else {
                                         pi.float_dragging = false;
                                     }
                                 }
                                 if (pi.float_resizing) {
                                     if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                                        const float dx = mouse.x - pi.float_resize_start_mx;
-                                        const float dy = mouse.y - pi.float_resize_start_my;
+                                        const float dx = io.MousePos.x - pi.float_resize_start_mx;
+                                        const float dy = io.MousePos.y - pi.float_resize_start_my;
                                         if (pi.float_resize_dir_x == 1) {
                                             w = std::max(kMinPanelWidth, pi.float_resize_start_w + dx);
                                             pi.initial_width = w;
@@ -282,8 +425,7 @@ namespace lfs::vis::gui {
                                 }
                                 has_user_height = pi.float_user_height > 0.0f;
 
-                                constexpr float kTitleH = 28.0f;
-                                constexpr float kVisibleFrac = 0.1f;
+                                const auto* vp = ImGui::GetMainViewport();
                                 const float vx = vp->WorkPos.x;
                                 const float vy = vp->WorkPos.y;
                                 const float vw = vp->WorkSize.x;
@@ -296,23 +438,34 @@ namespace lfs::vis::gui {
                             }
                         }
 
-                        if (mouse_in_panel || mouse_in_resize_grip)
-                            io.WantCaptureMouse = true;
-
                         {
                             std::lock_guard lock(mutex_);
                             if (snap.index < panels_.size() && panels_[snap.index].idname == snap.idname) {
                                 const auto& pi = panels_[snap.index];
-                                const int8_t dx = pi.float_resizing ? pi.float_resize_dir_x : hover_dir_x;
-                                const int8_t dy = pi.float_resizing ? pi.float_resize_dir_y : hover_dir_y;
-                                if (dx && dy) {
-                                    const bool nw_se = (dx == dy);
-                                    ImGui::SetMouseCursor(nw_se ? ImGuiMouseCursor_ResizeNWSE
-                                                                : ImGuiMouseCursor_ResizeNESW);
-                                } else if (dx) {
-                                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
-                                } else if (dy) {
-                                    ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+                                const bool interactive =
+                                    pi.float_dragging || pi.float_resizing ||
+                                    static_cast<int>(snap_idx) == hovered_floating_direct;
+
+                                if (pi.float_dragging || pi.float_resizing ||
+                                    (interactive &&
+                                     (layout.mouse_in_panel || layout.mouse_in_resize_grip))) {
+                                    io.WantCaptureMouse = true;
+                                }
+
+                                if (interactive) {
+                                    const int8_t dx =
+                                        pi.float_resizing ? pi.float_resize_dir_x : layout.hover_dir_x;
+                                    const int8_t dy =
+                                        pi.float_resizing ? pi.float_resize_dir_y : layout.hover_dir_y;
+                                    if (dx && dy) {
+                                        const bool nw_se = (dx == dy);
+                                        ImGui::SetMouseCursor(nw_se ? ImGuiMouseCursor_ResizeNWSE
+                                                                    : ImGuiMouseCursor_ResizeNESW);
+                                    } else if (dx) {
+                                        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+                                    } else if (dy) {
+                                        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+                                    }
                                 }
                             }
                         }
@@ -321,6 +474,10 @@ namespace lfs::vis::gui {
                         snap.panel->setForcedHeight(forced);
                         try {
                             snap.panel->setInput(input);
+                            if (snap.panel->wantsExternalFloatingShadow()) {
+                                widgets::DrawFloatingWindowShadow({px, py}, {w, h},
+                                                                  theme().sizes.window_rounding);
+                            }
                             snap.panel->drawDirect(px, py, w, h, ctx);
                         } catch (...) {
                             snap.panel->setForcedHeight(0.0f);
@@ -332,6 +489,10 @@ namespace lfs::vis::gui {
                             ImGui::SetNextWindowSize(ImVec2(snap.initial_width, snap.initial_height), ImGuiCond_Appearing);
                         bool open = true;
                         if (ImGui::Begin(snap.label.c_str(), &open)) {
+                            if (!ImGui::IsWindowDocked()) {
+                                widgets::DrawFloatingWindowShadow(ImGui::GetWindowPos(), ImGui::GetWindowSize(),
+                                                                  ImGui::GetStyle().WindowRounding);
+                            }
                             snap.panel->draw(ctx);
                         }
                         ImGui::End();
@@ -368,6 +529,10 @@ namespace lfs::vis::gui {
                             ImGui::SetNextWindowSize(ImVec2(snap.initial_width, snap.initial_height), ImGuiCond_Appearing);
                         bool open = true;
                         if (ImGui::Begin(snap.label.c_str(), &open)) {
+                            if (!ImGui::IsWindowDocked()) {
+                                widgets::DrawFloatingWindowShadow(ImGui::GetWindowPos(), ImGui::GetWindowSize(),
+                                                                  ImGui::GetStyle().WindowRounding);
+                            }
                             snap.panel->draw(ctx);
                         }
                         ImGui::End();
@@ -438,7 +603,7 @@ namespace lfs::vis::gui {
                     snapshots.push_back({i, p.panel.get(), p.label, p.idname,
                                          p.parent_idname, p.options, p.is_native,
                                          p.poll_deps, p.initial_width, p.initial_height,
-                                         p.float_x, p.float_y});
+                                         p.float_x, p.float_y, p.order, p.float_stack_order});
                 }
             }
         }
@@ -656,6 +821,7 @@ namespace lfs::vis::gui {
                     p.initial_width = p.original_width;
                     p.initial_height = p.original_height;
                     p.float_user_height = 0;
+                    bring_floating_panel_to_front_locked(p);
                 }
                 return;
             }
@@ -725,6 +891,7 @@ namespace lfs::vis::gui {
         for (auto& p : panels_) {
             if (p.idname == idname) {
                 p.space = new_space;
+                ensure_float_stack_order_locked(p);
                 return true;
             }
         }

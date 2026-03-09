@@ -7,12 +7,12 @@
 
   <div id="transform-wrap" class="hidden">
 
-    <div class="section-header is-expanded" id="hdr-transform">
-      <span class="section-arrow is-expanded" id="arrow-transform">&#x25B6;</span>
+    <div class="section-header" id="hdr-transform">
+      <span class="section-arrow" id="arrow-transform">&#x25B6;</span>
       <span>{{tool_label}}</span>
     </div>
 
-    <div id="transform-section" class="section-content">
+    <div id="transform-section" class="section-content collapsed">
       <div class="info-row" data-if="is_single">
         <span class="info-label">{{node_name}}</span>
       </div>

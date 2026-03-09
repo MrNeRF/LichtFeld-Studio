@@ -83,6 +83,7 @@ class TransformControlsPanel(RmlPanel):
     order = 120
     rml_template = "rmlui/transform_controls.rml"
     rml_height_mode = "content"
+    update_interval_ms = 16
 
     def __init__(self):
         self._state = TransformPanelState()
@@ -91,7 +92,7 @@ class TransformControlsPanel(RmlPanel):
         self._visible = False
         self._active_tool = ""
         self._selected = []
-        self._collapsed = False
+        self._collapsed = True
 
         self._trans = [0.0, 0.0, 0.0]
         self._euler = [0.0, 0.0, 0.0]

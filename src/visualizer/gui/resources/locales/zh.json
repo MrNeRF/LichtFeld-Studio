@@ -93,7 +93,7 @@
     "section.initialization": "初始化",
     "section.thresholds": "阈值",
     "section.save_steps": "保存步骤",
-    "section.basic_params": "基本训练参数",
+    "section.basic_params": "训练参数",
     "section.advanced_params": "高级训练参数",
     "section.sparsity": "稀疏性设置",
     "section.pruning_growing": "修剪/生长",

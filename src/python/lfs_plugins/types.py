@@ -97,9 +97,12 @@ class Operator(PropertyGroup):
 
 
 class Panel:
-    """Base class for UI panels.
+    """Legacy immediate-mode base class for UI panels.
 
-    This is a minimal base class. Panels define:
+    This compatibility base remains available for existing plugins, but new
+    panels should prefer RmlPanel.
+
+    Panels define:
     - label: Display name
     - draw(layout): Render the panel content
     - poll(context): Optional visibility check
@@ -122,13 +125,14 @@ class Panel:
 
 
 class RmlPanel:
-    """Base class for Python panels using RmlUI DOM."""
+    """Preferred base class for Python panels using retained RmlUI DOM."""
 
     idname: str = ""
     label: str = ""
     space: str = "SCENE_HEADER"
     order: int = 0
     rml_template: str = ""
+    update_interval_ms: int = 100
 
     @classmethod
     def _class_id(cls) -> str:
@@ -147,7 +151,7 @@ class RmlPanel:
                 "click", lambda _ev: lf.ui.set_panel_enabled(self.idname, False))
 
     def on_update(self, doc):
-        """Called each frame after the host renders."""
+        """Called periodically while the panel is visible."""
         pass
 
     def on_scene_changed(self, doc):
@@ -156,13 +160,18 @@ class RmlPanel:
 
 
 class Menu:
-    """Base class for menu definitions."""
+    """Base class for menu definitions.
+
+    New menus should prefer menu_items() and return a declarative schema.
+    draw(layout) remains available as a legacy fallback.
+    """
 
     label: str = ""
     location: str = "FILE"
     order: int = 100
 
+    def menu_items(self):
+        return []
+
     def draw(self, layout):
         pass
-
-

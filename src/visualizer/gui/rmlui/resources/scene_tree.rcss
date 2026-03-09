@@ -45,6 +45,18 @@ body {
     border-width: 0;
 }
 
+#filter-clear {
+    width: 12dp;
+    height: 12dp;
+    margin-left: 4dp;
+    image-color: #6c7086;
+    cursor: pointer;
+}
+
+#filter-clear:hover {
+    image-color: #cdd6f4;
+}
+
 #tree-container {
     flex: 1;
     overflow: auto;
@@ -146,6 +158,17 @@ body {
     height: 12dp;
     margin-right: 4dp;
     image-color: #a6adc8;
+}
+
+.row-icon.mask-icon {
+    width: 12dp;
+    height: 12dp;
+    margin-right: 2dp;
+    image-color: rgba(148, 226, 213, 200);
+}
+
+.row-icon.mask-icon.mask-inverted {
+    transform: rotate(180deg);
 }
 
 /* Visibility toggle */

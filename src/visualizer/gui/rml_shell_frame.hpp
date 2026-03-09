@@ -7,7 +7,6 @@
 #include "gui/rmlui/rml_fbo.hpp"
 #include <cstddef>
 #include <string>
-#include <imgui.h>
 
 namespace Rml {
     class Context;
@@ -22,13 +21,18 @@ namespace lfs::vis::gui {
 
     class RmlUIManager;
 
+    struct ShellRect {
+        float x = 0;
+        float y = 0;
+        float w = 0;
+        float h = 0;
+    };
+
     struct ShellRegions {
-        ImVec2 menu_pos{0, 0};
-        ImVec2 menu_size{0, 0};
-        ImVec2 right_panel_pos{0, 0};
-        ImVec2 right_panel_size{0, 0};
-        ImVec2 status_pos{0, 0};
-        ImVec2 status_size{0, 0};
+        ShellRect screen;
+        ShellRect menu;
+        ShellRect right_panel;
+        ShellRect status;
     };
 
     class RmlShellFrame {

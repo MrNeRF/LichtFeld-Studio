@@ -26,6 +26,7 @@
 #include <cassert>
 #include <format>
 #include <imgui.h>
+#include <ImGuizmo.h>
 
 namespace lfs::vis::gui {
 
@@ -199,7 +200,8 @@ namespace lfs::vis::gui {
 
     std::string RmlSequencerOverlay::buildContextMenuHTML(
         std::optional<size_t> keyframe,
-        ImGuizmo::OPERATION gizmo_op) const {
+        const int gizmo_op_mask) const {
+        const auto gizmo_op = static_cast<ImGuizmo::OPERATION>(gizmo_op_mask);
 
         const auto& timeline = controller_.timeline();
         std::string html;
@@ -271,7 +273,7 @@ namespace lfs::vis::gui {
 
     void RmlSequencerOverlay::showContextMenu(float screen_x, float screen_y,
                                               std::optional<size_t> keyframe_index,
-                                              ImGuizmo::OPERATION gizmo_op) {
+                                              const int gizmo_op) {
         if (!rml_context_)
             initContext();
         if (!elements_cached_)
@@ -551,13 +553,13 @@ namespace lfs::vis::gui {
             render_iface->SetTargetFramebuffer(0);
             fbo_.unbind(prev_fbo);
         }
+    }
 
-        if (fbo_.valid()) {
-            auto* vp = ImGui::GetMainViewport();
-            const ImVec2 pos(0, 0);
-            const ImVec2 size(static_cast<float>(screen_w), static_cast<float>(screen_h));
-            fbo_.blitToDrawList(ImGui::GetForegroundDrawList(vp), pos, size);
-        }
+    void RmlSequencerOverlay::compositeToScreen(const int screen_w, const int screen_h) const {
+        if (!fbo_.valid() || screen_w <= 0 || screen_h <= 0)
+            return;
+        fbo_.blitToScreen(0.0f, 0.0f, static_cast<float>(screen_w), static_cast<float>(screen_h),
+                          screen_w, screen_h);
     }
 
     void RmlSequencerOverlay::destroyGLResources() {

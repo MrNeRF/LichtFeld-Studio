@@ -12,14 +12,27 @@
 #include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
 #include "internal/resource_paths.hpp"
+#include "python/python_runtime.hpp"
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/ElementInstancer.h>
 #include <RmlUi/Core/Factory.h>
+#include <RmlUi/Debugger.h>
 #include <cassert>
+#include <cstdlib>
 #include <filesystem>
+#include <string_view>
 
 namespace lfs::vis::gui {
+
+    namespace {
+        bool envFlagEnabled(const char* name) {
+            const char* value = std::getenv(name);
+            if (!value || !*value)
+                return false;
+            return std::string_view(value) != "0";
+        }
+    } // namespace
 
     RmlUIManager::RmlUIManager() = default;
 
@@ -35,6 +48,7 @@ namespace lfs::vis::gui {
 
         dp_ratio_ = dp_ratio;
         window_ = window;
+        debugger_enabled_ = envFlagEnabled("LFS_RML_DEBUGGER");
 
         system_interface_ = std::make_unique<RmlSystemInterface>(window);
         render_interface_ = std::make_unique<RmlRenderInterface>();
@@ -103,6 +117,11 @@ namespace lfs::vis::gui {
         if (!initialized_)
             return;
 
+        if (debugger_initialized_) {
+            Rml::Debugger::Shutdown();
+            debugger_initialized_ = false;
+        }
+
         for (auto& [name, ctx] : contexts_) {
             Rml::RemoveContext(name);
         }
@@ -145,6 +164,17 @@ namespace lfs::vis::gui {
         ctx->SetDefaultScrollBehavior(Rml::ScrollBehavior::Instant, 1.0f);
         if (!active_theme_id_.empty())
             ctx->ActivateTheme(active_theme_id_, true);
+
+        if (debugger_enabled_ && !debugger_initialized_) {
+            debugger_initialized_ = Rml::Debugger::Initialise(ctx);
+            if (debugger_initialized_) {
+                Rml::Debugger::SetVisible(true);
+                LOG_INFO("RmlUI debugger enabled on context '{}'", name);
+            } else {
+                LOG_WARN("RmlUI debugger requested but failed to initialize on context '{}'", name);
+            }
+        }
+
         contexts_[name] = ctx;
         return ctx;
     }
@@ -157,6 +187,8 @@ namespace lfs::vis::gui {
     void RmlUIManager::destroyContext(const std::string& name) {
         auto it = contexts_.find(name);
         if (it != contexts_.end()) {
+            if (auto fn = lfs::python::get_rml_context_destroy_handler())
+                fn(it->second);
             Rml::RemoveContext(name);
             contexts_.erase(it);
         }

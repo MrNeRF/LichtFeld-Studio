@@ -12,6 +12,7 @@
 #include "theme/theme.hpp"
 #include "training/training_manager.hpp"
 #include "visualizer_impl.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstdarg>
 #include <glad/glad.h>
@@ -288,33 +289,123 @@ namespace lfs::vis::gui::widgets {
         DrawModeStatus(ctx);
     }
 
-    void DrawWindowShadow(const ImVec2& pos, const ImVec2& size, const float rounding) {
+    void DrawShadowRect(ImDrawList* draw_list, const ImVec2& pos, const ImVec2& size,
+                        const float rounding, const float alpha_scale,
+                        const float blur_scale, const float offset_scale) {
         const auto& t = theme();
-        if (!t.shadows.enabled)
+        if (!t.shadows.enabled || !draw_list)
             return;
 
-        constexpr int LAYER_COUNT = 8;
-        constexpr float FALLOFF_SCALE = 0.18f;
-        constexpr float ROUNDING_SCALE = 0.3f;
+        constexpr int LAYER_COUNT = 12;
+        constexpr float FALLOFF_SCALE = 0.34f;
+        constexpr float ROUNDING_SCALE = 0.18f;
 
-        auto* const draw_list = ImGui::GetBackgroundDrawList();
+        const ImVec4 shadow_tint = t.isLightTheme()
+                                       ? ImVec4{0.08f, 0.10f, 0.16f, 1.0f}
+                                       : ImVec4{0.0f, 0.0f, 0.0f, 1.0f};
+        const float theme_alpha_scale = t.isLightTheme() ? 0.82f : 1.0f;
         const ImVec2& off = t.shadows.offset;
-        const float blur = t.shadows.blur;
-        const float base_alpha = t.shadows.alpha * 255.0f;
+        const float blur = std::max(0.0f, t.shadows.blur * blur_scale);
+        const float min_expand = std::max(1.0f, blur * 0.14f);
+        const float base_alpha =
+            std::clamp(t.shadows.alpha * theme_alpha_scale * alpha_scale, 0.0f, 1.0f);
 
         for (int i = 0; i < LAYER_COUNT; ++i) {
             const float t_val = static_cast<float>(i) / (LAYER_COUNT - 1);
             const float inv_t = 1.0f - t_val;
-            const float falloff = inv_t * inv_t * inv_t;
-            const int alpha = static_cast<int>(base_alpha * falloff * FALLOFF_SCALE);
-            if (alpha < 1)
+            const float falloff = std::pow(inv_t, 1.65f);
+            const float alpha = base_alpha * falloff * FALLOFF_SCALE;
+            if (alpha <= 0.0025f)
                 continue;
 
-            const float expand = blur * t_val;
-            const ImVec2 p1 = {pos.x + off.x - expand, pos.y + off.y - expand};
-            const ImVec2 p2 = {pos.x + size.x + off.x + expand, pos.y + size.y + off.y + expand};
-            draw_list->AddRectFilled(p1, p2, IM_COL32(0, 0, 0, alpha), rounding + expand * ROUNDING_SCALE);
+            const float expand = min_expand + blur * (0.2f + 0.8f * t_val);
+            const ImVec2 layer_off = {
+                off.x * offset_scale * (0.45f + 0.55f * t_val),
+                off.y * offset_scale * (0.45f + 0.55f * t_val)};
+            const ImVec2 p1 = {pos.x + layer_off.x - expand, pos.y + layer_off.y - expand};
+            const ImVec2 p2 = {pos.x + size.x + layer_off.x + expand, pos.y + size.y + layer_off.y + expand};
+            draw_list->AddRectFilled(p1, p2, toU32WithAlpha(shadow_tint, alpha),
+                                     rounding + expand * ROUNDING_SCALE);
         }
+    }
+
+    void DrawShadowRectOutside(ImDrawList* draw_list, const ImVec2& pos, const ImVec2& size,
+                               const float rounding, const float alpha_scale,
+                               const float blur_scale, const float offset_scale) {
+        const auto& t = theme();
+        if (!t.shadows.enabled || !draw_list)
+            return;
+
+        constexpr int LAYER_COUNT = 12;
+        constexpr float FALLOFF_SCALE = 0.34f;
+        constexpr float ROUNDING_SCALE = 0.18f;
+
+        const ImVec4 shadow_tint = t.isLightTheme()
+                                       ? ImVec4{0.08f, 0.10f, 0.16f, 1.0f}
+                                       : ImVec4{0.0f, 0.0f, 0.0f, 1.0f};
+        const float theme_alpha_scale = t.isLightTheme() ? 0.82f : 1.0f;
+        const ImVec2& off = t.shadows.offset;
+        const float blur = std::max(0.0f, t.shadows.blur * blur_scale);
+        const float min_expand = std::max(1.0f, blur * 0.14f);
+        const float base_alpha =
+            std::clamp(t.shadows.alpha * theme_alpha_scale * alpha_scale, 0.0f, 1.0f);
+        const ImVec2 inner_min = pos;
+        const ImVec2 inner_max = {pos.x + size.x, pos.y + size.y};
+
+        for (int i = 0; i < LAYER_COUNT; ++i) {
+            const float t_val = static_cast<float>(i) / (LAYER_COUNT - 1);
+            const float inv_t = 1.0f - t_val;
+            const float falloff = std::pow(inv_t, 1.65f);
+            const float alpha = base_alpha * falloff * FALLOFF_SCALE;
+            if (alpha <= 0.0025f)
+                continue;
+
+            const float expand = min_expand + blur * (0.2f + 0.8f * t_val);
+            const ImVec2 layer_off = {
+                off.x * offset_scale * (0.45f + 0.55f * t_val),
+                off.y * offset_scale * (0.45f + 0.55f * t_val)};
+            const ImVec2 p1 = {pos.x + layer_off.x - expand, pos.y + layer_off.y - expand};
+            const ImVec2 p2 = {pos.x + size.x + layer_off.x + expand,
+                               pos.y + size.y + layer_off.y + expand};
+            const float layer_rounding = rounding + expand * ROUNDING_SCALE;
+            const ImU32 col = toU32WithAlpha(shadow_tint, alpha);
+
+            const auto draw_band = [&](const ImVec2 clip_min, const ImVec2 clip_max) {
+                if (clip_max.x <= clip_min.x || clip_max.y <= clip_min.y)
+                    return;
+                draw_list->PushClipRect(clip_min, clip_max, true);
+                draw_list->AddRectFilled(p1, p2, col, layer_rounding);
+                draw_list->PopClipRect();
+            };
+
+            draw_band(p1, {p2.x, inner_min.y});
+            draw_band({p1.x, inner_max.y}, p2);
+            draw_band({p1.x, inner_min.y}, {inner_min.x, inner_max.y});
+            draw_band({inner_max.x, inner_min.y}, {p2.x, inner_max.y});
+        }
+    }
+
+    void DrawFloatingWindowShadow(ImDrawList* draw_list, const ImVec2& pos, const ImVec2& size,
+                                  const float rounding) {
+        DrawShadowRect(draw_list, pos, size, rounding, 0.36f, 0.82f, 0.58f);
+    }
+
+    void DrawFloatingWindowShadow(const ImVec2& pos, const ImVec2& size, const float rounding) {
+        DrawFloatingWindowShadow(ImGui::GetBackgroundDrawList(), pos, size, rounding);
+    }
+
+    void DrawPopoverShadowOverlay(ImDrawList* draw_list, const ImVec2& pos, const ImVec2& size,
+                                  const float rounding) {
+        DrawShadowRectOutside(draw_list, pos, size, rounding, 0.46f, 0.92f, 0.72f);
+    }
+
+    void DrawModalShadow(ImDrawList* draw_list, const ImVec2& pos, const ImVec2& size,
+                         const float rounding) {
+        DrawShadowRect(draw_list, pos, size, rounding, 0.68f, 1.08f, 0.92f);
+    }
+
+    void DrawWindowShadow(const ImVec2& pos, const ImVec2& size, const float rounding) {
+        DrawFloatingWindowShadow(pos, size, rounding);
     }
 
     void DrawViewportVignette(const ImVec2& pos, const ImVec2& size) {

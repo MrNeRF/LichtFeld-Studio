@@ -50,7 +50,9 @@ namespace lfs::vis::gui {
         void processInput(const RightPanelLayout& layout, const PanelInputState& input);
         void render(const RightPanelLayout& layout,
                     const std::vector<TabSnapshot>& tabs,
-                    const std::string& active_tab);
+                    const std::string& active_tab,
+                    float screen_x, float screen_y,
+                    int screen_w, int screen_h);
 
         bool wantsInput() const { return wants_input_; }
         bool needsAnimationFrame() const;

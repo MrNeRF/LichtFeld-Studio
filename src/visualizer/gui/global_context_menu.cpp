@@ -32,6 +32,9 @@ namespace lfs::vis::gui {
     }
 
     GlobalContextMenu::~GlobalContextMenu() {
+        menu_model_ = {};
+        items_.clear();
+        pending_items_.clear();
         fbo_.destroy();
         if (ctx_ && mgr_)
             mgr_->destroyContext("global_context_menu");
@@ -48,6 +51,21 @@ namespace lfs::vis::gui {
         }
 
         ctx_->EnableMouseCursor(false);
+
+        auto ctor = ctx_->CreateDataModel("global_context_menu");
+        assert(ctor);
+
+        if (auto handle = ctor.RegisterStruct<ContextMenuItem>()) {
+            handle.RegisterMember("label", &ContextMenuItem::label);
+            handle.RegisterMember("action", &ContextMenuItem::action);
+            handle.RegisterMember("separator_before", &ContextMenuItem::separator_before);
+            handle.RegisterMember("is_label", &ContextMenuItem::is_label);
+            handle.RegisterMember("is_submenu_item", &ContextMenuItem::is_submenu_item);
+            handle.RegisterMember("is_active", &ContextMenuItem::is_active);
+        }
+        ctor.RegisterArray<std::vector<ContextMenuItem>>();
+        ctor.Bind("items", &items_);
+        menu_model_ = ctor.GetModelHandle();
 
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/global_context_menu.rml");
@@ -110,33 +128,6 @@ namespace lfs::vis::gui {
         rml_theme::applyTheme(doc_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
     }
 
-    std::string GlobalContextMenu::buildInnerRML(const std::vector<ContextMenuItem>& items) const {
-        std::string html;
-        html.reserve(512);
-
-        for (const auto& item : items) {
-            if (item.separator_before)
-                html += R"(<div class="context-menu-separator"></div>)";
-
-            if (item.is_label) {
-                html += std::format(R"(<div class="context-menu-label">{}</div>)", item.label);
-                continue;
-            }
-
-            std::string cls = "context-menu-item";
-            if (item.is_submenu_item)
-                cls += " submenu-item";
-            if (item.is_active)
-                cls += " active";
-
-            html += std::format(
-                R"(<div class="{}" data-ctx-action="{}">{}</div>)",
-                cls, item.action, item.label);
-        }
-
-        return html;
-    }
-
     void GlobalContextMenu::request(std::vector<ContextMenuItem> items, float screen_x, float screen_y) {
         pending_items_ = std::move(items);
         pending_x_ = screen_x;
@@ -163,8 +154,8 @@ namespace lfs::vis::gui {
         if (!open_ || !ctx_ || !doc_ || !el_backdrop_ || !el_ctx_menu_)
             return;
 
-        const float mx = input.mouse_x;
-        const float my = input.mouse_y;
+        const float mx = input.mouse_x - input.screen_x;
+        const float my = input.mouse_y - input.screen_y;
 
         ctx_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), 0);
 
@@ -184,7 +175,8 @@ namespace lfs::vis::gui {
             hide();
     }
 
-    void GlobalContextMenu::render(int screen_w, int screen_h) {
+    void GlobalContextMenu::render(int screen_w, int screen_h,
+                                   float screen_x, float screen_y) {
         if (!open_ && !pending_open_)
             return;
 
@@ -198,10 +190,10 @@ namespace lfs::vis::gui {
             pending_open_ = false;
 
             if (el_ctx_menu_ && el_backdrop_) {
-                const std::string html = buildInnerRML(pending_items_);
-                el_ctx_menu_->SetInnerRML(html);
-                el_ctx_menu_->SetProperty("left", std::format("{:.0f}dp", pending_x_));
-                el_ctx_menu_->SetProperty("top", std::format("{:.0f}dp", pending_y_));
+                items_ = pending_items_;
+                menu_model_.DirtyVariable("items");
+                el_ctx_menu_->SetProperty("left", std::format("{:.0f}dp", pending_x_ - screen_x));
+                el_ctx_menu_->SetProperty("top", std::format("{:.0f}dp", pending_y_ - screen_y));
                 el_ctx_menu_->SetClass("visible", true);
                 el_backdrop_->SetProperty("display", "block");
                 open_ = true;
@@ -249,12 +241,9 @@ namespace lfs::vis::gui {
             fbo_.unbind(prev_fbo);
         }
 
-        if (fbo_.valid()) {
-            auto* vp = ImGui::GetMainViewport();
-            const ImVec2 pos(0, 0);
-            const ImVec2 size(static_cast<float>(screen_w), static_cast<float>(screen_h));
-            fbo_.blitToDrawList(ImGui::GetForegroundDrawList(vp), pos, size);
-        }
+        if (fbo_.valid())
+            fbo_.blitToScreen(0.0f, 0.0f, static_cast<float>(screen_w), static_cast<float>(screen_h),
+                              screen_w, screen_h);
     }
 
     void GlobalContextMenu::destroyGLResources() {

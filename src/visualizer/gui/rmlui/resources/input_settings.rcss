@@ -16,6 +16,7 @@
 }
 
 .is-hint {
+    display: block;
     font-size: 11dp;
     color: #a6adc8;
     margin-bottom: 4dp;

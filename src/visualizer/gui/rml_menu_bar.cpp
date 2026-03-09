@@ -24,19 +24,148 @@
 namespace lfs::vis::gui {
 
     namespace {
-        std::string escapeRml(const std::string& s) {
-            std::string out;
-            out.reserve(s.size());
-            for (char c : s) {
-                switch (c) {
-                case '<': out += "&lt;"; break;
-                case '>': out += "&gt;"; break;
-                case '&': out += "&amp;"; break;
-                case '"': out += "&quot;"; break;
-                default: out += c; break;
+        MenuDropdownLeafView makeLeafItemView(const MenuItemDesc& item) {
+            MenuDropdownLeafView view;
+            view.label = item.label;
+            view.enabled = item.enabled;
+            view.callback_index = item.callback_index;
+
+            switch (item.type) {
+            case MenuItemDesc::Type::Operator:
+                view.action = "operator";
+                view.operator_id = item.operator_id;
+                break;
+            case MenuItemDesc::Type::Toggle:
+                view.action = "callback";
+                view.has_shortcut = !item.shortcut.empty();
+                view.shortcut = item.shortcut;
+                view.show_checkmark = true;
+                view.checkmark = item.selected ? "\u2713" : "";
+                break;
+            case MenuItemDesc::Type::ShortcutItem:
+            case MenuItemDesc::Type::Item:
+                view.action = "callback";
+                view.has_shortcut = !item.shortcut.empty();
+                view.shortcut = item.shortcut;
+                break;
+            case MenuItemDesc::Type::Separator:
+            case MenuItemDesc::Type::SubMenuBegin:
+            case MenuItemDesc::Type::SubMenuEnd:
+                break;
+            }
+
+            return view;
+        }
+
+        MenuDropdownLeafView makeSubmenuLabelView(const std::string& label) {
+            MenuDropdownLeafView view;
+            view.label = label;
+            view.enabled = false;
+            view.is_label = true;
+            return view;
+        }
+
+        std::vector<MenuDropdownLeafView> buildChildMenuItems(const std::vector<MenuItemDesc>& items,
+                                                              std::size_t& pos,
+                                                              bool& warned_nested_submenu) {
+            std::vector<MenuDropdownLeafView> result;
+            bool separator_before = false;
+
+            while (pos < items.size()) {
+                const auto& item = items[pos];
+                switch (item.type) {
+                case MenuItemDesc::Type::Separator:
+                    separator_before = true;
+                    ++pos;
+                    break;
+                case MenuItemDesc::Type::SubMenuBegin: {
+                    if (!warned_nested_submenu) {
+                        warned_nested_submenu = true;
+                        LOG_WARN("RmlMenuBar: nested submenu depth > 1 is flattened in the retained Rml menu model.");
+                    }
+                    MenuDropdownLeafView label_view = makeSubmenuLabelView(item.label);
+                    label_view.separator_before = separator_before;
+                    separator_before = false;
+                    result.push_back(std::move(label_view));
+                    ++pos;
+
+                    auto nested_items = buildChildMenuItems(items, pos, warned_nested_submenu);
+                    for (auto& nested : nested_items)
+                        result.push_back(std::move(nested));
+                    break;
+                }
+                case MenuItemDesc::Type::SubMenuEnd:
+                    ++pos;
+                    return result;
+                case MenuItemDesc::Type::Operator:
+                case MenuItemDesc::Type::Toggle:
+                case MenuItemDesc::Type::ShortcutItem:
+                case MenuItemDesc::Type::Item: {
+                    MenuDropdownLeafView view = makeLeafItemView(item);
+                    view.separator_before = separator_before;
+                    separator_before = false;
+                    result.push_back(std::move(view));
+                    ++pos;
+                    break;
+                }
                 }
             }
-            return out;
+
+            return result;
+        }
+
+        std::vector<MenuDropdownRootView> buildRootMenuItems(const std::vector<MenuItemDesc>& items) {
+            std::vector<MenuDropdownRootView> result;
+            std::size_t pos = 0;
+            bool separator_before = false;
+            bool warned_nested_submenu = false;
+
+            while (pos < items.size()) {
+                const auto& item = items[pos];
+                switch (item.type) {
+                case MenuItemDesc::Type::Separator:
+                    separator_before = true;
+                    ++pos;
+                    break;
+                case MenuItemDesc::Type::SubMenuEnd:
+                    ++pos;
+                    break;
+                case MenuItemDesc::Type::SubMenuBegin: {
+                    MenuDropdownRootView view;
+                    view.label = item.label;
+                    view.has_children = true;
+                    view.separator_before = separator_before;
+                    separator_before = false;
+                    ++pos;
+                    view.children = buildChildMenuItems(items, pos, warned_nested_submenu);
+                    result.push_back(std::move(view));
+                    break;
+                }
+                case MenuItemDesc::Type::Operator:
+                case MenuItemDesc::Type::Toggle:
+                case MenuItemDesc::Type::ShortcutItem:
+                case MenuItemDesc::Type::Item: {
+                    MenuDropdownRootView view;
+                    const auto leaf = makeLeafItemView(item);
+                    view.label = leaf.label;
+                    view.action = leaf.action;
+                    view.operator_id = leaf.operator_id;
+                    view.shortcut = leaf.shortcut;
+                    view.checkmark = leaf.checkmark;
+                    view.enabled = leaf.enabled;
+                    view.separator_before = separator_before;
+                    view.has_shortcut = leaf.has_shortcut;
+                    view.show_checkmark = leaf.show_checkmark;
+                    view.callback_index = leaf.callback_index;
+                    separator_before = false;
+                    result.push_back(std::move(view));
+                    ++pos;
+                    break;
+                }
+                }
+            }
+
+            return result;
         }
     } // namespace
 
@@ -55,6 +184,48 @@ namespace lfs::vis::gui {
             return;
         }
 
+        auto ctor = rml_context_->CreateDataModel("menu_bar");
+        assert(ctor);
+
+        if (auto handle = ctor.RegisterStruct<MenuLabelView>()) {
+            handle.RegisterMember("index", &MenuLabelView::index);
+            handle.RegisterMember("label", &MenuLabelView::label);
+            handle.RegisterMember("active", &MenuLabelView::active);
+        }
+        if (auto handle = ctor.RegisterStruct<MenuDropdownLeafView>()) {
+            handle.RegisterMember("label", &MenuDropdownLeafView::label);
+            handle.RegisterMember("action", &MenuDropdownLeafView::action);
+            handle.RegisterMember("operator_id", &MenuDropdownLeafView::operator_id);
+            handle.RegisterMember("shortcut", &MenuDropdownLeafView::shortcut);
+            handle.RegisterMember("checkmark", &MenuDropdownLeafView::checkmark);
+            handle.RegisterMember("enabled", &MenuDropdownLeafView::enabled);
+            handle.RegisterMember("separator_before", &MenuDropdownLeafView::separator_before);
+            handle.RegisterMember("has_shortcut", &MenuDropdownLeafView::has_shortcut);
+            handle.RegisterMember("show_checkmark", &MenuDropdownLeafView::show_checkmark);
+            handle.RegisterMember("is_label", &MenuDropdownLeafView::is_label);
+            handle.RegisterMember("callback_index", &MenuDropdownLeafView::callback_index);
+        }
+        ctor.RegisterArray<std::vector<MenuLabelView>>();
+        ctor.RegisterArray<std::vector<MenuDropdownLeafView>>();
+        if (auto handle = ctor.RegisterStruct<MenuDropdownRootView>()) {
+            handle.RegisterMember("label", &MenuDropdownRootView::label);
+            handle.RegisterMember("action", &MenuDropdownRootView::action);
+            handle.RegisterMember("operator_id", &MenuDropdownRootView::operator_id);
+            handle.RegisterMember("shortcut", &MenuDropdownRootView::shortcut);
+            handle.RegisterMember("checkmark", &MenuDropdownRootView::checkmark);
+            handle.RegisterMember("enabled", &MenuDropdownRootView::enabled);
+            handle.RegisterMember("separator_before", &MenuDropdownRootView::separator_before);
+            handle.RegisterMember("has_shortcut", &MenuDropdownRootView::has_shortcut);
+            handle.RegisterMember("show_checkmark", &MenuDropdownRootView::show_checkmark);
+            handle.RegisterMember("has_children", &MenuDropdownRootView::has_children);
+            handle.RegisterMember("callback_index", &MenuDropdownRootView::callback_index);
+            handle.RegisterMember("children", &MenuDropdownRootView::children);
+        }
+        ctor.RegisterArray<std::vector<MenuDropdownRootView>>();
+        ctor.Bind("menu_labels", &menu_labels_);
+        ctor.Bind("dropdown_items", &dropdown_items_);
+        menu_model_ = ctor.GetModelHandle();
+
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/menubar.rml");
             document_ = rml_context_->LoadDocument(rml_path.string());
@@ -69,45 +240,78 @@ namespace lfs::vis::gui {
         }
 
         menu_items_ = document_->GetElementById("menu-items");
-        bottom_border_ = document_->GetElementById("bottom-border");
         dropdown_overlay_ = document_->GetElementById("dropdown-overlay");
         dropdown_container_ = document_->GetElementById("dropdown-container");
 
+        render_needed_ = true;
         updateTheme();
     }
 
     void RmlMenuBar::shutdown() {
+        menu_model_ = {};
+        menu_labels_.clear();
+        dropdown_items_.clear();
+        open_menu_idname_.clear();
         fbo_.destroy();
         if (rml_context_ && rml_manager_)
             rml_manager_->destroyContext("menu_bar");
         rml_context_ = nullptr;
         document_ = nullptr;
         menu_items_ = nullptr;
-        bottom_border_ = nullptr;
         dropdown_container_ = nullptr;
         dropdown_overlay_ = nullptr;
+    }
+
+    void RmlMenuBar::suspend() {
+        wants_input_ = false;
+        mouse_pos_valid_ = false;
+        last_mouse_x_ = 0;
+        last_mouse_y_ = 0;
+
+        if (open_menu_index_ >= 0)
+            closeDropdown();
     }
 
     void RmlMenuBar::updateLabels(const std::vector<std::string>& labels,
                                   const std::vector<std::string>& idnames) {
         assert(labels.size() == idnames.size());
-        if (labels == current_labels_)
+        if (labels == current_labels_ && idnames == current_idnames_)
             return;
         current_labels_ = labels;
         current_idnames_ = idnames;
+        render_needed_ = true;
+
+        if (open_menu_index_ >= static_cast<int>(current_idnames_.size())) {
+            closeDropdown();
+        }
+
         rebuildLabels();
     }
 
     void RmlMenuBar::rebuildLabels() {
-        if (!menu_items_)
+        menu_labels_.clear();
+        menu_labels_.reserve(current_labels_.size());
+        for (size_t i = 0; i < current_labels_.size(); ++i) {
+            menu_labels_.push_back(MenuLabelView{
+                .index = static_cast<int>(i),
+                .label = current_labels_[i],
+                .active = static_cast<int>(i) == active_index_,
+            });
+        }
+        menu_model_.DirtyVariable("menu_labels");
+        render_needed_ = true;
+    }
+
+    void RmlMenuBar::syncActiveLabelState() {
+        const int display_active = open_menu_index_ >= 0 ? open_menu_index_ : -1;
+        if (display_active == active_index_)
             return;
 
-        std::string rml;
-        for (size_t i = 0; i < current_labels_.size(); ++i) {
-            rml += std::format("<span class=\"menu-label\" data-index=\"{}\">{}</span>",
-                               i, escapeRml(current_labels_[i]));
-        }
-        menu_items_->SetInnerRML(rml);
+        active_index_ = display_active;
+        for (size_t i = 0; i < menu_labels_.size(); ++i)
+            menu_labels_[i].active = static_cast<int>(i) == active_index_;
+        menu_model_.DirtyVariable("menu_labels");
+        render_needed_ = true;
     }
 
     void RmlMenuBar::processInput(const PanelInputState& input) {
@@ -116,12 +320,28 @@ namespace lfs::vis::gui {
 
         wants_input_ = false;
 
-        const float mx = input.mouse_x;
-        const float my = input.mouse_y;
-
-        rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), 0);
-
+        const float mx = input.mouse_x - input.screen_x;
+        const float my = input.mouse_y - input.screen_y;
         const bool is_open = open_menu_index_ >= 0;
+        const int ctx_w = input.screen_w;
+        const int ctx_h = is_open
+                              ? input.screen_h
+                              : static_cast<int>(bar_height_ * rml_manager_->getDpRatio());
+        const int rml_mx = static_cast<int>(mx);
+        const int rml_my = static_cast<int>(my);
+        const bool was_in_context = mouse_pos_valid_ &&
+                                    last_mouse_x_ >= 0 && last_mouse_x_ < ctx_w &&
+                                    last_mouse_y_ >= 0 && last_mouse_y_ < ctx_h;
+        const bool is_in_context = rml_mx >= 0 && rml_mx < ctx_w &&
+                                   rml_my >= 0 && rml_my < ctx_h;
+        if ((!mouse_pos_valid_ || rml_mx != last_mouse_x_ || rml_my != last_mouse_y_) &&
+            (is_open || was_in_context || is_in_context)) {
+            mouse_pos_valid_ = true;
+            last_mouse_x_ = rml_mx;
+            last_mouse_y_ = rml_my;
+            render_needed_ = true;
+            rml_context_->ProcessMouseMove(rml_mx, rml_my, 0);
+        }
 
         const int count = menu_items_->GetNumChildren();
         int hovered_label = -1;
@@ -159,15 +379,15 @@ namespace lfs::vis::gui {
                                     const std::string action = clicked->GetAttribute<Rml::String>("data-action", "");
                                     if (action == "operator") {
                                         const std::string op_id = clicked->GetAttribute<Rml::String>("data-operator-id", "");
-                                        if (!op_id.empty() && clicked->GetAttribute<Rml::String>("data-disabled", "") != "true") {
+                                        if (!op_id.empty() && !clicked->HasAttribute("disabled")) {
                                             op::operators().invoke(op_id);
                                         }
                                         closeDropdown();
                                         return;
                                     } else if (action == "callback") {
                                         const int cb_idx = clicked->GetAttribute<int>("data-callback-index", -1);
-                                        if (cb_idx >= 0 && clicked->GetAttribute<Rml::String>("data-disabled", "") != "true") {
-                                            python::execute_menu_callback(open_content_.menu_idname, cb_idx);
+                                        if (cb_idx >= 0 && !clicked->HasAttribute("disabled")) {
+                                            python::execute_menu_callback(open_menu_idname_, cb_idx);
                                         }
                                         closeDropdown();
                                         return;
@@ -193,20 +413,14 @@ namespace lfs::vis::gui {
         }
 
         // Update active label highlighting
-        int display_active = is_open ? open_menu_index_ : -1;
-        if (display_active != active_index_) {
-            if (active_index_ >= 0 && active_index_ < count)
-                menu_items_->GetChild(active_index_)->SetClass("active", false);
-            active_index_ = display_active;
-            if (active_index_ >= 0 && active_index_ < count)
-                menu_items_->GetChild(active_index_)->SetClass("active", true);
-        }
+        syncActiveLabelState();
     }
 
     void RmlMenuBar::openDropdown(int index) {
         assert(index >= 0 && index < static_cast<int>(current_idnames_.size()));
 
         open_menu_index_ = index;
+        open_menu_idname_ = current_idnames_[index];
 
         MenuDropdownContent content;
         content.menu_idname = current_idnames_[index];
@@ -227,126 +441,27 @@ namespace lfs::vis::gui {
             },
             &content);
 
-        open_content_ = std::move(content);
+        dropdown_items_ = buildRootMenuItems(content.items);
         rebuildDropdownDOM();
-
-        // Update active highlighting
-        const int count = menu_items_->GetNumChildren();
-        if (active_index_ >= 0 && active_index_ < count)
-            menu_items_->GetChild(active_index_)->SetClass("active", false);
-        active_index_ = open_menu_index_;
-        if (active_index_ >= 0 && active_index_ < count)
-            menu_items_->GetChild(active_index_)->SetClass("active", true);
+        syncActiveLabelState();
+        render_needed_ = true;
     }
 
     void RmlMenuBar::closeDropdown() {
         open_menu_index_ = -1;
-        open_content_.items.clear();
+        open_menu_idname_.clear();
+        dropdown_items_.clear();
+        menu_model_.DirtyVariable("dropdown_items");
 
         if (dropdown_container_) {
-            dropdown_container_->SetInnerRML("");
             dropdown_container_->SetClass("visible", false);
         }
         if (dropdown_overlay_)
             dropdown_overlay_->SetClass("visible", false);
 
-        const int count = menu_items_ ? menu_items_->GetNumChildren() : 0;
-        if (active_index_ >= 0 && active_index_ < count)
-            menu_items_->GetChild(active_index_)->SetClass("active", false);
-        active_index_ = -1;
-
-        wants_input_ = false;
+        syncActiveLabelState();
+        render_needed_ = true;
     }
-
-    namespace {
-        std::string buildMenuItemsRml(const std::vector<MenuItemDesc>& items, size_t& pos) {
-            std::string rml;
-            while (pos < items.size()) {
-                const auto& item = items[pos];
-                switch (item.type) {
-                case MenuItemDesc::Type::Operator: {
-                    std::string cls = "menu-item";
-                    if (!item.enabled)
-                        cls += " disabled";
-                    rml += std::format(
-                        "<div class=\"{}\" data-action=\"operator\" data-operator-id=\"{}\"{}>"
-                        "<span class=\"label\">{}</span>"
-                        "</div>",
-                        cls, escapeRml(item.operator_id),
-                        item.enabled ? "" : " data-disabled=\"true\"",
-                        escapeRml(item.label));
-                    ++pos;
-                    break;
-                }
-                case MenuItemDesc::Type::Separator:
-                    rml += "<div class=\"menu-separator\"></div>";
-                    ++pos;
-                    break;
-                case MenuItemDesc::Type::SubMenuBegin: {
-                    rml += std::format(
-                        "<div class=\"submenu-container\">"
-                        "<div class=\"menu-item\">"
-                        "<span class=\"label\">{}</span>"
-                        "<span class=\"submenu-arrow\">&gt;</span>"
-                        "</div>"
-                        "<div class=\"submenu-popup dropdown-popup\">",
-                        escapeRml(item.label));
-                    ++pos;
-                    rml += buildMenuItemsRml(items, pos);
-                    rml += "</div></div>";
-                    break;
-                }
-                case MenuItemDesc::Type::SubMenuEnd:
-                    ++pos;
-                    return rml;
-                case MenuItemDesc::Type::Toggle: {
-                    std::string cls = "menu-item";
-                    const std::string check = item.selected ? "&#x2713;" : "";
-                    rml += std::format(
-                        "<div class=\"{}\" data-action=\"callback\" data-callback-index=\"{}\">"
-                        "<span class=\"label\">{}</span>"
-                        "<span class=\"shortcut\">{}</span>"
-                        "<span class=\"checkmark\">{}</span>"
-                        "</div>",
-                        cls, item.callback_index,
-                        escapeRml(item.label), escapeRml(item.shortcut), check);
-                    ++pos;
-                    break;
-                }
-                case MenuItemDesc::Type::ShortcutItem: {
-                    std::string cls = "menu-item";
-                    if (!item.enabled)
-                        cls += " disabled";
-                    rml += std::format(
-                        "<div class=\"{}\" data-action=\"callback\" data-callback-index=\"{}\"{}>"
-                        "<span class=\"label\">{}</span>"
-                        "<span class=\"shortcut\">{}</span>"
-                        "</div>",
-                        cls, item.callback_index,
-                        item.enabled ? "" : " data-disabled=\"true\"",
-                        escapeRml(item.label), escapeRml(item.shortcut));
-                    ++pos;
-                    break;
-                }
-                case MenuItemDesc::Type::Item: {
-                    std::string cls = "menu-item";
-                    if (!item.enabled)
-                        cls += " disabled";
-                    rml += std::format(
-                        "<div class=\"{}\" data-action=\"callback\" data-callback-index=\"{}\"{}>"
-                        "<span class=\"label\">{}</span>"
-                        "</div>",
-                        cls, item.callback_index,
-                        item.enabled ? "" : " data-disabled=\"true\"",
-                        escapeRml(item.label));
-                    ++pos;
-                    break;
-                }
-                }
-            }
-            return rml;
-        }
-    } // namespace
 
     void RmlMenuBar::rebuildDropdownDOM() {
         if (!dropdown_container_ || !dropdown_overlay_ || !menu_items_)
@@ -360,15 +475,12 @@ namespace lfs::vis::gui {
         const auto label_offset = label_el->GetAbsoluteOffset(Rml::BoxArea::Border);
         const auto label_size = label_el->GetBox().GetSize(Rml::BoxArea::Border);
 
-        size_t pos = 0;
-        std::string items_rml = buildMenuItemsRml(open_content_.items, pos);
-        std::string popup_rml = std::format("<div class=\"dropdown-popup\">{}</div>", items_rml);
-
-        dropdown_container_->SetInnerRML(popup_rml);
+        menu_model_.DirtyVariable("dropdown_items");
         dropdown_container_->SetProperty("left", std::format("{}px", label_offset.x));
         dropdown_container_->SetProperty("top", std::format("{}px", label_offset.y + label_size.y));
         dropdown_container_->SetClass("visible", true);
         dropdown_overlay_->SetClass("visible", true);
+        render_needed_ = true;
     }
 
     std::string RmlMenuBar::generateThemeRCSS(const lfs::vis::Theme& t) const {
@@ -400,13 +512,13 @@ namespace lfs::vis::gui {
             hover, text_dim, text_dim, popup_border);
     }
 
-    void RmlMenuBar::updateTheme() {
+    bool RmlMenuBar::updateTheme() {
         if (!document_)
-            return;
+            return false;
 
         const std::size_t theme_signature = rml_theme::currentThemeSignature();
         if (has_theme_signature_ && theme_signature == last_theme_signature_)
-            return;
+            return false;
         last_theme_signature_ = theme_signature;
         has_theme_signature_ = true;
 
@@ -414,6 +526,7 @@ namespace lfs::vis::gui {
             base_rcss_ = rml_theme::loadBaseRCSS("rmlui/menubar.rcss");
 
         rml_theme::applyTheme(document_, base_rcss_, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
+        return true;
     }
 
     void RmlMenuBar::draw(int screen_w, int screen_h) {
@@ -421,7 +534,7 @@ namespace lfs::vis::gui {
             return;
         if (rml_manager_->shouldDeferFboUpdate(fbo_))
             return;
-        updateTheme();
+        const bool theme_changed = updateTheme();
 
         const float dp_ratio = rml_manager_->getDpRatio();
         const int bar_h = static_cast<int>(bar_height_ * dp_ratio);
@@ -435,8 +548,16 @@ namespace lfs::vis::gui {
             ctx_h = bar_h;
         }
 
+        const bool size_changed = (ctx_w != last_ctx_w_ || ctx_h != last_ctx_h_);
+        const bool needs_render = render_needed_ || theme_changed || size_changed;
+        if (!needs_render)
+            return;
+
         rml_context_->SetDimensions(Rml::Vector2i(ctx_w, ctx_h));
-        document_->SetProperty("height", std::format("{}px", ctx_h));
+        if (ctx_h != last_document_h_) {
+            document_->SetProperty("height", std::format("{}px", ctx_h));
+            last_document_h_ = ctx_h;
+        }
         rml_context_->Update();
 
         fbo_.ensure(ctx_w, ctx_h);
@@ -457,6 +578,10 @@ namespace lfs::vis::gui {
 
         render->SetTargetFramebuffer(0);
         fbo_.unbind(prev_fbo);
+
+        last_ctx_w_ = ctx_w;
+        last_ctx_h_ = ctx_h;
+        render_needed_ = false;
     }
 
 } // namespace lfs::vis::gui

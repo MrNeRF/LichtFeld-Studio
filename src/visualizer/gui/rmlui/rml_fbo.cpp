@@ -25,27 +25,23 @@ namespace lfs::vis::gui {
             glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
                                 GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
         }
-
-        constexpr float kShrinkThreshold = 1.5f;
-        constexpr auto kShrinkCooldown = std::chrono::seconds(2);
     } // namespace
 
     RmlFBO::~RmlFBO() { destroy(); }
 
-    void RmlFBO::ensure(int w, int h) {
+    bool RmlFBO::ensure(int w, int h) {
         assert(w > 0 && h > 0);
         if (w <= 0 || h <= 0)
-            return;
+            return false;
 
         width_ = w;
         height_ = h;
 
-        if (fbo_ && w <= alloc_w_ && h <= alloc_h_) {
-            maybeShrink();
-            return;
-        }
+        if (fbo_ && w <= alloc_w_ && h <= alloc_h_)
+            return false;
 
         reallocate(std::max(w, alloc_w_), std::max(h, alloc_h_));
+        return true;
     }
 
     void RmlFBO::reallocate(int w, int h) {
@@ -57,7 +53,6 @@ namespace lfs::vis::gui {
         height_ = target_h;
         alloc_w_ = w;
         alloc_h_ = h;
-        last_resize_time_ = std::chrono::steady_clock::now();
 
         glGenFramebuffers(1, &fbo_);
         glGenTextures(1, &texture_);
@@ -91,18 +86,6 @@ namespace lfs::vis::gui {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
-    void RmlFBO::maybeShrink() {
-        if (alloc_w_ <= static_cast<int>(width_ * kShrinkThreshold) &&
-            alloc_h_ <= static_cast<int>(height_ * kShrinkThreshold))
-            return;
-
-        const auto now = std::chrono::steady_clock::now();
-        if (now - last_resize_time_ < kShrinkCooldown)
-            return;
-
-        reallocate(width_, height_);
-    }
-
     void RmlFBO::bind(GLint* prev_fbo) {
         assert(fbo_);
         assert(prev_fbo);
@@ -126,42 +109,6 @@ namespace lfs::vis::gui {
 
     void RmlFBO::unbind(GLint prev_fbo) {
         glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
-    }
-
-    void RmlFBO::blitToDrawList(ImDrawList* dl, ImVec2 pos, ImVec2 size) const {
-        assert(dl);
-        assert(texture_);
-        const float us = u_scale();
-        const float vs = v_scale();
-        dl->AddCallback(setPremultipliedBlend, nullptr);
-        const ImVec2 p1 = {pos.x + size.x, pos.y + size.y};
-        dl->AddImage(static_cast<ImTextureID>(static_cast<uintptr_t>(texture_)),
-                     pos, p1, {0, vs}, {us, 0});
-        dl->AddCallback(restoreStandardBlend, nullptr);
-    }
-
-    void RmlFBO::blitToDrawListOpaque(void* draw_list, float x, float y, float w, float h) const {
-        assert(draw_list);
-        assert(texture_);
-        const float us = u_scale();
-        const float vs = v_scale();
-        auto* dl = static_cast<ImDrawList*>(draw_list);
-        dl->AddCallback(setPremultipliedBlend, nullptr);
-        const ImVec2 p0(x, y);
-        const ImVec2 p1(x + w, y + h);
-        dl->AddImage(static_cast<ImTextureID>(static_cast<uintptr_t>(texture_)),
-                     p0, p1, {0, vs}, {us, 0});
-        dl->AddCallback(restoreStandardBlend, nullptr);
-    }
-
-    void RmlFBO::pushDrawListClipRect(void* draw_list, float x1, float y1, float x2, float y2) {
-        assert(draw_list);
-        static_cast<ImDrawList*>(draw_list)->PushClipRect(ImVec2(x1, y1), ImVec2(x2, y2), true);
-    }
-
-    void RmlFBO::popDrawListClipRect(void* draw_list) {
-        assert(draw_list);
-        static_cast<ImDrawList*>(draw_list)->PopClipRect();
     }
 
     void RmlFBO::blitAsImage(float w, float h) {
@@ -233,8 +180,21 @@ namespace lfs::vis::gui {
     }
 
     void RmlFBO::blitToScreen(float x, float y, float w, float h, int screen_w, int screen_h) const {
+        blitToScreenClipped(x, y, w, h, screen_w, screen_h, 0.0f, 0.0f,
+                            static_cast<float>(screen_w), static_cast<float>(screen_h));
+    }
+
+    void RmlFBO::blitToScreenClipped(float x, float y, float w, float h,
+                                     int screen_w, int screen_h,
+                                     float clip_x1, float clip_y1,
+                                     float clip_x2, float clip_y2) const {
         assert(texture_);
         assert(screen_w > 0 && screen_h > 0);
+        (void)screen_w;
+        if (w <= 0.0f || h <= 0.0f)
+            return;
+        if (clip_x2 <= clip_x1 || clip_y2 <= clip_y1)
+            return;
 
         ensureBlitProgram();
 
@@ -291,8 +251,11 @@ namespace lfs::vis::gui {
         glEnable(GL_BLEND);
         glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
         glDisable(GL_DEPTH_TEST);
-        if (!prev_scissor)
-            glDisable(GL_SCISSOR_TEST);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(static_cast<GLint>(clip_x1),
+                  screen_h - static_cast<GLint>(clip_y2),
+                  static_cast<GLsizei>(clip_x2 - clip_x1),
+                  static_cast<GLsizei>(clip_y2 - clip_y1));
 
         glUseProgram(blit_program_);
         glActiveTexture(GL_TEXTURE0);

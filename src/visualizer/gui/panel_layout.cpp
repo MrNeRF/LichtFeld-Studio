@@ -40,7 +40,7 @@ namespace lfs::vis::gui {
                                               const ScreenState& screen) {
         cursor_request_ = CursorRequest::None;
 
-        if (!show_main_panel || ui_hidden) {
+        if (!show_main_panel || ui_hidden || screen.work_size.x <= 0 || screen.work_size.y <= 0) {
             python_console_hovering_edge_ = false;
             python_console_resizing_ = false;
             return;
@@ -118,10 +118,6 @@ namespace lfs::vis::gui {
         const float tab_content_y = content_top + scene_h + splitter_h + tab_bar_h;
         const float tab_content_h = std::max(0.0f, content_top + avail_h - tab_content_y);
 
-        RmlFBO::pushDrawListClipRect(input.bg_draw_list,
-                                     content_x, tab_content_y,
-                                     content_x + content_w, tab_content_y + tab_content_h);
-
         const float clip_y_min = tab_content_y;
         const float clip_y_max = tab_content_y + tab_content_h;
         constexpr float kPreloadMaxHeight = 100000.0f;
@@ -156,8 +152,6 @@ namespace lfs::vis::gui {
             background_preload_index_ = idx + 1;
             break;
         }
-
-        RmlFBO::popDrawListClipRect(input.bg_draw_list);
 
         tab_content_total_h_ = main_h + child_h;
 

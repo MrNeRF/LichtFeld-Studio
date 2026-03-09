@@ -311,11 +311,13 @@ namespace lfs::python {
         Mesh2SplatStartFn start,
         std::function<bool()> is_active,
         std::function<float()> get_progress,
+        std::function<std::string()> get_stage,
         std::function<std::string()> get_error);
     LFS_PYTHON_RUNTIME_API void invoke_mesh2splat_start(std::shared_ptr<core::MeshData> mesh, const std::string& name,
                                                         const core::Mesh2SplatOptions& options);
     LFS_PYTHON_RUNTIME_API bool invoke_mesh2splat_active();
     LFS_PYTHON_RUNTIME_API float invoke_mesh2splat_progress();
+    LFS_PYTHON_RUNTIME_API std::string invoke_mesh2splat_stage();
     LFS_PYTHON_RUNTIME_API std::string invoke_mesh2splat_error();
 
     // Scene panel state callbacks
@@ -570,6 +572,10 @@ namespace lfs::python {
 
     LFS_PYTHON_RUNTIME_API void set_rml_manager(void* manager);
     LFS_PYTHON_RUNTIME_API void* get_rml_manager();
+
+    using RmlContextDestroyFn = void (*)(void* context);
+    LFS_PYTHON_RUNTIME_API void set_rml_context_destroy_handler(RmlContextDestroyFn fn);
+    LFS_PYTHON_RUNTIME_API RmlContextDestroyFn get_rml_context_destroy_handler();
 
     // RmlPanelHost opaque operations — function pointers set by the exe
     // to avoid linking RmlUI code into the Python module (.so)

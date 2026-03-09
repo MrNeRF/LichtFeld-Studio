@@ -37,7 +37,10 @@ namespace lfs::vis::gui::rml_theme {
 
     std::string loadBaseRCSS(const std::string& asset_name) {
         try {
-            auto rcss_path = lfs::vis::getAssetPath(asset_name);
+            const auto requested_path = std::filesystem::path(asset_name);
+            const auto rcss_path = requested_path.is_absolute()
+                                       ? requested_path
+                                       : lfs::vis::getAssetPath(asset_name);
             std::ifstream f(rcss_path);
             if (f) {
                 return {std::istreambuf_iterator<char>(f),
@@ -144,14 +147,31 @@ namespace lfs::vis::gui::rml_theme {
             hashColor(seed, overlay.selection_flash);
         }
 
-        std::string shadowToRml(const Theme& t, float blur_scale = 1.0f, float alpha_scale = 1.0f) {
-            const float alpha = std::clamp(t.shadows.alpha * alpha_scale, 0.0f, 1.0f);
-            return std::format(
-                "{} {:.1f}dp {:.1f}dp {:.1f}dp",
-                colorToRmlAlpha({0.0f, 0.0f, 0.0f, 1.0f}, alpha),
-                t.shadows.offset.x,
-                t.shadows.offset.y,
-                std::max(0.0f, t.shadows.blur * blur_scale));
+        std::string layeredShadow(const Theme& t, int elevation) {
+            const float a = t.shadows.alpha;
+            const float blur = t.shadows.blur;
+
+            struct ElevationParams {
+                float tight_y, tight_blur, tight_alpha;
+                float ambient_y, ambient_blur_scale, ambient_alpha;
+            };
+
+            static constexpr ElevationParams levels[] = {
+                {1.0f, 2.0f, 0.40f, 3.0f, 0.5f, 0.20f},
+                {1.0f, 3.0f, 0.35f, 5.0f, 1.0f, 0.18f},
+                {2.0f, 4.0f, 0.32f, 8.0f, 1.3f, 0.16f},
+                {3.0f, 6.0f, 0.30f, 14.0f, 2.0f, 0.15f},
+            };
+
+            const int i = std::clamp(elevation - 1, 0, 3);
+            const auto& lv = levels[i];
+            const float ta = std::clamp(a * lv.tight_alpha, 0.0f, 1.0f);
+            const float aa = std::clamp(a * lv.ambient_alpha, 0.0f, 1.0f);
+
+            return std::format("{} 0dp {:.1f}dp {:.1f}dp, {} 0dp {:.1f}dp {:.1f}dp",
+                               colorToRmlAlpha({0, 0, 0, 1}, ta), lv.tight_y, lv.tight_blur,
+                               colorToRmlAlpha({0, 0, 0, 1}, aa), lv.ambient_y,
+                               std::max(0.0f, blur * lv.ambient_blur_scale));
         }
 
     } // namespace
@@ -165,8 +185,11 @@ namespace lfs::vis::gui::rml_theme {
         const auto primary = colorToRml(p.primary);
         const auto primary_dim = colorToRml(p.primary_dim);
         const auto background = colorToRml(p.background);
+        const auto shell_bg = colorToRml(t.menu_background());
         const auto border = colorToRml(p.border);
         const auto primary_select = colorToRmlAlpha(p.primary, 0.18f);
+        const auto primary_select_strong = colorToRmlAlpha(p.primary, 0.28f);
+        const auto surface_bright_soft = colorToRmlAlpha(p.surface_bright, 0.55f);
 
         std::string check_path;
         try {
@@ -194,6 +217,12 @@ namespace lfs::vis::gui::rml_theme {
         const auto btn_error = colorToRml(blend(p.surface, p.error, tn));
         const auto btn_error_h = colorToRml(blend(p.surface, p.error, th));
         const auto btn_error_a = colorToRml(blend(p.surface, p.error, ta));
+        const auto window_surface =
+            colorToRml(t.isLightTheme() ? lighten(p.surface, 0.015f) : lighten(p.surface, 0.02f));
+        const auto title_surface_col = t.isLightTheme() ? darken(p.surface, 0.02f) : lighten(p.surface, 0.045f);
+        const auto title_surface = colorToRml(title_surface_col);
+        const auto title_grad = std::format("decorator: vertical-gradient({} {}); background-color: transparent",
+                                            colorToRml(lighten(title_surface_col, 0.12f)), colorToRml(title_surface_col));
 
         const auto success = colorToRml(p.success);
         const auto warning = colorToRml(p.warning);
@@ -211,6 +240,14 @@ namespace lfs::vis::gui::rml_theme {
         const int inner_gap = static_cast<int>(t.sizes.item_inner_spacing.x);
         const int fp_x = static_cast<int>(t.sizes.frame_padding.x);
         const int fp_y = static_cast<int>(t.sizes.frame_padding.y);
+        const int window_rounding = std::max(4, static_cast<int>(t.sizes.window_rounding));
+        const int scrollbar_size = static_cast<int>(t.sizes.scrollbar_size);
+        const auto border_soft = colorToRmlAlpha(p.border, 0.3f);
+        const auto border_med = colorToRmlAlpha(p.border, 0.5f);
+        const auto text_hi = colorToRmlAlpha(p.text, 0.9f);
+        const auto scroll_track = colorToRmlAlpha(p.background, 0.5f);
+        const auto scroll_thumb = colorToRmlAlpha(p.text_dim, 0.63f);
+        const auto scroll_hover = colorToRmlAlpha(p.primary, 0.78f);
 
         const auto check_decorator =
             check_path.empty()
@@ -225,8 +262,8 @@ namespace lfs::vis::gui::rml_theme {
         const auto error_col = colorToRml(p.error);
 
         return std::format(
-                   "#window-frame {{ background-color: {0}; border-color: {1}; }}\n"
-                   "#title-bar {{ background-color: {2}; }}\n"
+                   "#window-frame {{ background-color: {0}; border-color: {1}; border-radius: {7}dp; }}\n"
+                   "#title-bar {{ {8}; border-top-left-radius: {7}dp; border-top-right-radius: {7}dp; border-bottom-color: {1}; }}\n"
                    "#title-text {{ color: {3}; }}\n"
                    "#close-btn {{ color: {4}; }}\n"
                    "#close-btn:hover {{ color: {5}; }}\n"
@@ -243,8 +280,8 @@ namespace lfs::vis::gui::rml_theme {
                    ".video-card:hover .card-body {{ border-color: {6}; background-color: {2}; }}\n"
                    ".play-icon {{ color: {6}; }}\n"
                    ".card-title {{ color: {4}; }}\n",
-                   surface, border, surface_bright, text, text_dim,
-                   error_col, primary) +
+                   window_surface, border, title_surface, text, text_dim,
+                   error_col, primary, window_rounding, title_grad) +
                    check_decorator +
                    arrow_decorator +
                    std::format(
@@ -265,11 +302,17 @@ namespace lfs::vis::gui::rml_theme {
                        ".setting-label {{ color: {0}; }}\n"
                        ".prop-label {{ color: {0}; }}\n"
                        ".slider-value {{ color: {1}; }}\n"
-                       ".section-header {{ color: {0}; {6}; }}\n"
-                       ".section-header:hover {{ {7}; }}\n"
+                       ".section-header {{ color: {0}; border-color: {11}; }}\n"
+                       ".section-header:hover {{ color: {0}; border-color: {11}; }}\n"
+                       ".section-header.is-expanded {{ border-color: {11}; }}\n"
+                       ".section-gap {{ border-color: {11}; }}\n"
+                       ".section-content {{ border-color: {11}; }}\n"
                        ".section-arrow {{ color: {1}; }}\n"
                        ".separator {{ background-color: {5}; }}\n"
                        ".text-disabled {{ color: {1}; }}\n"
+                       ".text-default {{ color: {0}; }}\n"
+                       ".text-muted {{ color: {1}; }}\n"
+                       ".text-accent {{ color: {4}; }}\n"
                        ".section-label {{ color: {1}; }}\n"
                        ".empty-message {{ color: {1}; }}\n"
                        ".color-swatch {{ border-color: {5}; }}\n"
@@ -285,9 +328,10 @@ namespace lfs::vis::gui::rml_theme {
                        ".btn:active {{ background-color: {2}; }}\n"
                        ".btn--secondary {{ background-color: transparent; border-color: {5}; color: {0}; }}\n"
                        ".btn--secondary:hover {{ background-color: {2}; }}\n"
+                       ".border-error {{ border-color: {10}; }}\n"
                        ".icon-btn.selected {{ background-color: {4}; }}\n",
                        text, text_dim, surface, surface_bright, primary, border,
-                       header_decor, header_hover_decor, rounding, prog_fill_decor) +
+                       header_decor, header_hover_decor, rounding, prog_fill_decor, error, shell_bg) +
                    std::format(
                        ".btn--primary {{ background-color: {0}; border-color: {0}; color: {6}; }}\n"
                        ".btn--primary:hover {{ background-color: {1}; border-color: {1}; }}\n"
@@ -310,8 +354,14 @@ namespace lfs::vis::gui::rml_theme {
                        ".status-success {{ color: {0}; }}\n"
                        ".status-error {{ color: {1}; }}\n"
                        ".status-muted {{ color: {2}; }}\n"
-                       ".status-info {{ color: {3}; }}\n",
-                       success, error, text_dim, info) +
+                       ".status-info {{ color: {3}; }}\n"
+                       ".interactive-row:hover {{ background-color: {4}; }}\n"
+                       ".interactive-row.selected {{ background-color: {5}; }}\n"
+                       ".select-chip {{ color: {6}; background-color: {7}; }}\n"
+                       ".select-chip:hover {{ background-color: {4}; }}\n"
+                       ".select-chip.selected {{ color: {6}; background-color: {8}; }}\n",
+                       success, error, text_dim, info, primary_select,
+                       primary_select_strong, text, surface_bright_soft, primary) +
                    std::format(
                        ".setting-row {{ padding: {0}dp 0; }}\n"
                        ".indent {{ margin-left: {1}dp; }}\n"
@@ -351,22 +401,46 @@ namespace lfs::vis::gui::rml_theme {
                        ".btn-copy:hover {{ background-color: {3}; }}\n",
                        background, surface, border, surface_bright, text_dim,
                        text, primary_select, primary, primary_dim) +
+                   std::format(
+                       "#window-frame {{ border-color: {}; border-radius: {}dp; }}\n",
+                       colorToRmlAlpha(p.border, 0.4f),
+                       static_cast<int>(t.sizes.window_rounding)) +
+                   std::format(
+                       "scrollbarvertical {{ width: {}dp; }}\n"
+                       "scrollbarvertical slidertrack {{ background-color: {}; }}\n"
+                       "scrollbarvertical sliderbar {{ background-color: {}; }}\n"
+                       "scrollbarvertical sliderbar:hover {{ background-color: {}; }}\n"
+                       "scrollbarhorizontal {{ height: {}dp; }}\n"
+                       "scrollbarhorizontal slidertrack {{ background-color: {}; }}\n"
+                       "scrollbarhorizontal sliderbar {{ background-color: {}; }}\n"
+                       "scrollbarhorizontal sliderbar:hover {{ background-color: {}; }}\n",
+                       scrollbar_size, scroll_track, scroll_thumb, scroll_hover,
+                       scrollbar_size, scroll_track, scroll_thumb, scroll_hover) +
+                   std::format(
+                       ".icon-btn:hover {{ background-color: {}; }}\n"
+                       ".icon-btn:active {{ background-color: {}; }}\n"
+                       ".icon-btn img {{ image-color: {}; }}\n"
+                       ".icon-btn.selected img {{ image-color: {}; }}\n"
+                       ".section-header:hover .section-arrow,\n"
+                       ".section-header.is-expanded .section-arrow {{ color: {}; }}\n"
+                       ".context-menu-label {{ color: {}; }}\n",
+                       border_soft, border_med, text_hi, background, text, text_dim) +
                    [&]() -> std::string {
             if (!t.shadows.enabled)
                 return {};
+            const auto inset = std::format(", {} 0dp 0dp 0dp 1dp inset",
+                                           colorToRmlAlpha(p.surface_bright, 0.35f));
             return std::format(
-                "#window-frame {{ box-shadow: {}; }}\n"
+                "#window-frame {{ box-shadow: {}{}; }}\n"
                 ".context-menu {{ box-shadow: {}; }}\n"
                 "selectbox {{ box-shadow: {}; }}\n"
-                ".modal-dialog {{ box-shadow: {}; }}\n"
-                ".color-picker-popup {{ box-shadow: {}; }}\n"
-                ".confirm-dialog {{ box-shadow: {}; }}\n",
-                shadowToRml(t, 1.0f),
-                shadowToRml(t, 0.85f),
-                shadowToRml(t, 0.75f),
-                shadowToRml(t, 1.35f),
-                shadowToRml(t, 0.9f),
-                shadowToRml(t, 0.9f));
+                ".modal-dialog {{ box-shadow: {}{}; }}\n"
+                ".confirm-dialog {{ box-shadow: {}{}; }}\n",
+                layeredShadow(t, 2), inset,
+                layeredShadow(t, 3),
+                layeredShadow(t, 1),
+                layeredShadow(t, 4), inset,
+                layeredShadow(t, 4), inset);
         }();
     }
 

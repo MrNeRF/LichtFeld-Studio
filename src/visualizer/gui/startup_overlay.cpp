@@ -15,6 +15,7 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/string_keys.hpp"
+#include "gui/ui_widgets.hpp"
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
 
@@ -359,25 +360,7 @@ namespace lfs::vis::gui {
                 static constexpr float ROUNDING = 12.0f;
 
                 auto* draw = ImGui::GetWindowDrawList();
-                if (t.shadows.enabled) {
-                    constexpr int SHADOW_LAYERS = 8;
-                    constexpr float SHADOW_FALLOFF_SCALE = 0.18f;
-                    constexpr float SHADOW_ROUNDING_SCALE = 0.25f;
-                    const ImVec2& shadow_offset = t.shadows.offset;
-                    const float shadow_blur = std::max(0.0f, t.shadows.blur);
-
-                    for (int i = 0; i < SHADOW_LAYERS; ++i) {
-                        const float t_val = static_cast<float>(i) / static_cast<float>(SHADOW_LAYERS - 1);
-                        const float inv_t = 1.0f - t_val;
-                        const float falloff = inv_t * inv_t * inv_t;
-                        const float alpha = t.shadows.alpha * falloff * SHADOW_FALLOFF_SCALE;
-                        const float expand = shadow_blur * t_val;
-                        draw->AddRectFilled({p1.x + shadow_offset.x - expand, p1.y + shadow_offset.y - expand},
-                                            {p2.x + shadow_offset.x + expand, p2.y + shadow_offset.y + expand},
-                                            to_u32(ImVec4(0, 0, 0, 1), alpha),
-                                            ROUNDING + expand * SHADOW_ROUNDING_SCALE);
-                    }
-                }
+                widgets::DrawModalShadow(draw, p1, overlay_box_size, ROUNDING);
 
                 const ImVec4 base_color = blend(p.surface, p.text, is_light ? 0.04f : 0.10f);
                 const ImVec4 border_color = blend(p.border, p.text, is_light ? 0.28f : 0.38f);

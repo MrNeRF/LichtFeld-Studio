@@ -9,7 +9,15 @@
     <!-- Format selection -->
     <div class="ep-section">
       <span class="ep-section-title">{{format_label}}</span>
-      <div id="format-list" class="ep-format-list"></div>
+      <div id="format-list" class="ep-format-list">
+        <div class="ep-format-option"
+             data-for="format : formats"
+             data-class-selected="format.selected"
+             data-attr-data-format-idx="format.index">
+          <div class="ep-format-dot"></div>
+          <span class="ep-format-name">{{ format.label }}</span>
+        </div>
+      </div>
     </div>
 
     <div class="separator"></div>
@@ -21,7 +29,20 @@
         <button id="btn-select-all" class="btn btn--secondary ep-small-btn">{{all_label}}</button>
         <button id="btn-select-none" class="btn btn--secondary ep-small-btn">{{none_label}}</button>
       </div>
-      <div id="model-list" class="ep-model-list"></div>
+      <div id="model-list" class="ep-model-list">
+        <span class="ep-no-models" data-if="show_no_models">{{no_models_label}}</span>
+        <div class="ep-model-row"
+             data-for="model : models"
+             data-attr-data-node-name="model.name">
+          <label class="setting-label">
+            <input type="checkbox"
+                   data-attr-data-node-name="model.name"
+                   data-attrif-checked="model.selected" />
+            <span class="ep-model-name">{{ model.name }}</span>
+          </label>
+          <span class="ep-model-count">{{ model.count_text }}</span>
+        </div>
+      </div>
     </div>
 
     <div class="separator"></div>
@@ -38,9 +59,11 @@
     <div class="separator"></div>
 
     <!-- Action buttons -->
-    <span id="export-error" class="ep-error hidden">{{select_at_least_one}}</span>
+    <span id="export-error" class="ep-error hidden" data-class-hidden="can_export">{{select_at_least_one}}</span>
     <div class="ep-buttons">
-      <button id="btn-export" class="btn btn--primary ep-action-btn" data-event-click="do_export">{{export_label}}</button>
+      <button id="btn-export" class="btn btn--primary ep-action-btn"
+              data-event-click="do_export"
+              data-attrif-disabled="!can_export">{{export_label}}</button>
       <button class="btn btn--secondary ep-action-btn" data-event-click="do_cancel">{{cancel_label}}</button>
     </div>
   </div>
@@ -50,7 +73,7 @@
       <span class="ep-section-title">{{progress_title}}</span>
     </div>
     <div class="ep-progress-wrap">
-      <progress id="export-progress" class="ep-progress" max="1" />
+      <progress id="export-progress" class="ep-progress" max="1" data-attr-value="progress_value" />
       <span class="progress__text">{{progress_pct}}</span>
     </div>
     <span class="ep-stage-text">{{progress_stage}}</span>

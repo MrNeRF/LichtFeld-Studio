@@ -3,41 +3,16 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/panels/menu_bar.hpp"
-#include "config.h"
 #include "core/image_io.hpp"
-#include "core/logger.hpp"
-#include "core/tensor_trace.hpp"
-#include "core/training_snapshot.hpp"
 #include "python/python_runtime.hpp"
-#ifdef WIN32
-#include <shellapi.h>
-#include <winsock2.h>
-#endif
-#include "core/event_bridge/localization_manager.hpp"
-#include "gui/string_keys.hpp"
-#include "gui/ui_widgets.hpp"
-#include "gui/utils/windows_utils.hpp"
-#include "theme/theme.hpp"
-
-using namespace lichtfeld::Strings;
 
 #include <glad/glad.h>
-#include <imgui.h>
 
 #include <atomic>
-#include <cfloat>
 #include <chrono>
-#include <cstdlib>
 #include <mutex>
 #include <thread>
 #include <vector>
-
-#include "python/gil.hpp"
-#include "python/runner.hpp"
-#include <Python.h>
-#ifdef PLATFORM
-#undef PLATFORM
-#endif
 
 #define CPPHTTPLIB_OPENSSL_SUPPORT
 #include <httplib.h>
@@ -186,111 +161,10 @@ namespace lfs::vis::gui {
             g_menu_entries_loading.store(false, std::memory_order_release);
             start_menu_entry_preload_once();
         }
-
-        renderPluginInstallPopup();
-    }
-
-    void MenuBar::openURL(const char* url) {
-#ifdef _WIN32
-        ShellExecuteA(nullptr, "open", url, nullptr, nullptr, SW_SHOWNORMAL);
-#else
-        std::string cmd = "xdg-open " + std::string(url);
-        system(cmd.c_str());
-#endif
     }
 
     void MenuBar::setOnShowPythonConsole(std::function<void()> callback) {
         on_show_python_console_ = std::move(callback);
-    }
-
-    void MenuBar::renderPluginInstallPopup() {
-        if (!show_plugin_install_popup_)
-            return;
-
-        lfs::python::ensure_initialized();
-
-        const float scale = lfs::python::get_shared_dpi_scale();
-        const auto& t = theme();
-
-        ImGui::SetNextWindowSize({400.0f * scale, 0}, ImGuiCond_Always);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 8.0f * scale);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.0f * scale, 16.0f * scale));
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, withAlpha(t.palette.surface, 0.98f));
-
-        if (ImGui::Begin("Install Plugin", &show_plugin_install_popup_,
-                         ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_AlwaysAutoResize)) {
-
-            ImGui::Text("GitHub URL or shorthand:");
-            ImGui::SetNextItemWidth(-1);
-
-            char buf[512];
-            strncpy(buf, plugin_install_url_.c_str(), sizeof(buf) - 1);
-            buf[sizeof(buf) - 1] = '\0';
-            if (ImGui::InputText("##url", buf, sizeof(buf))) {
-                plugin_install_url_ = buf;
-            }
-
-            ImGui::Spacing();
-            ImGui::TextDisabled("Examples: owner/repo, github:owner/repo");
-            ImGui::Spacing();
-
-            if (!plugin_status_message_.empty()) {
-                if (plugin_status_is_error_) {
-                    ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "%s", plugin_status_message_.c_str());
-                } else {
-                    ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "%s", plugin_status_message_.c_str());
-                }
-                ImGui::Spacing();
-            }
-
-            if (widgets::ColoredButton("Install", widgets::ButtonStyle::Success, {100 * scale, 0})) {
-                if (!plugin_install_url_.empty()) {
-                    const lfs::python::GilAcquire gil;
-
-                    PyObject* const lf_mod = PyImport_ImportModule("lichtfeld");
-                    if (lf_mod) {
-                        PyObject* const plugins_mod = PyObject_GetAttrString(lf_mod, "plugins");
-                        if (plugins_mod) {
-                            PyObject* const result = PyObject_CallMethod(plugins_mod, "install", "s", plugin_install_url_.c_str());
-                            if (result) {
-                                const char* const name = PyUnicode_AsUTF8(result);
-                                plugin_status_message_ = std::string("Installed: ") + (name ? name : "");
-                                plugin_status_is_error_ = false;
-                                plugin_install_url_.clear();
-                                Py_DECREF(result);
-                            } else {
-                                PyObject *type, *value, *tb;
-                                PyErr_Fetch(&type, &value, &tb);
-                                if (value) {
-                                    PyObject* const str = PyObject_Str(value);
-                                    if (str) {
-                                        plugin_status_message_ = PyUnicode_AsUTF8(str);
-                                        Py_DECREF(str);
-                                    }
-                                    Py_XDECREF(type);
-                                    Py_XDECREF(value);
-                                    Py_XDECREF(tb);
-                                } else {
-                                    plugin_status_message_ = "Install failed";
-                                }
-                                plugin_status_is_error_ = true;
-                            }
-                            Py_DECREF(plugins_mod);
-                        }
-                        Py_DECREF(lf_mod);
-                    }
-                    PyErr_Clear();
-                }
-            }
-            ImGui::SameLine();
-            if (widgets::ColoredButton("Cancel", widgets::ButtonStyle::Secondary, {100 * scale, 0})) {
-                show_plugin_install_popup_ = false;
-            }
-        }
-        ImGui::End();
-
-        ImGui::PopStyleColor();
-        ImGui::PopStyleVar(2);
     }
 
 } // namespace lfs::vis::gui

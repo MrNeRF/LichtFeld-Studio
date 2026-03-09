@@ -86,8 +86,6 @@ namespace lfs::vis::gui {
             draw(ctx);
         }
         virtual float getDirectDrawHeight() const { return 0.0f; }
-        virtual bool hasImguiOverlay() const { return false; }
-        virtual void drawImguiOverlay(const PanelDrawContext& ctx) { (void)ctx; }
         virtual void setInputClipY(float y_min, float y_max) {
             (void)y_min;
             (void)y_max;
@@ -96,6 +94,7 @@ namespace lfs::vis::gui {
         virtual void setForcedHeight(float h) { (void)h; }
         virtual bool wantsKeyboard() const { return false; }
         virtual bool needsAnimationFrame() const { return false; }
+        virtual bool wantsExternalFloatingShadow() const { return true; }
     };
 
     struct PanelInfo {
@@ -117,6 +116,7 @@ namespace lfs::vis::gui {
         float original_height = 0;
         float float_x = NAN;
         float float_y = NAN;
+        uint64_t float_stack_order = 0;
         bool float_dragging = false;
         float float_drag_ox = 0;
         float float_drag_oy = 0;
@@ -158,6 +158,8 @@ namespace lfs::vis::gui {
         float initial_height;
         float float_x;
         float float_y;
+        int order = 100;
+        uint64_t float_stack_order = 0;
 
         bool has_option(PanelOption opt) const {
             return (options & static_cast<uint32_t>(opt)) != 0;
@@ -232,12 +234,16 @@ namespace lfs::vis::gui {
 
         bool check_poll(const PanelSnapshot& snap, const PanelDrawContext& ctx);
         void track_draw_result(const PanelSnapshot& snap, bool draw_succeeded);
+        uint64_t alloc_float_stack_order_locked();
+        void ensure_float_stack_order_locked(PanelInfo& panel);
+        void bring_floating_panel_to_front_locked(PanelInfo& panel);
 
         mutable std::mutex mutex_;
         mutable std::mutex poll_mutex_;
         std::vector<PanelInfo> panels_;
         std::unordered_set<std::string> disabled_overrides_;
         mutable std::unordered_map<std::string, PollCacheEntry> poll_cache_;
+        uint64_t next_float_stack_order_ = 1;
     };
 
 } // namespace lfs::vis::gui

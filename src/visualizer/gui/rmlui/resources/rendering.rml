@@ -91,14 +91,12 @@
     </div>
   </div>
 
-  <div class="separator"></div>
-
   <!-- Selection Colors (collapsible) -->
-  <div class="section-header is-expanded" id="hdr-selection-colors" data-event-click="toggle_section('selection_colors')" data-tooltip="tooltip.selection_colors">
-    <span class="section-arrow is-expanded" id="arrow-selection-colors">&#x25B6;</span>
+  <div class="section-header" id="hdr-selection-colors" data-event-click="toggle_section('selection_colors')" data-tooltip="tooltip.selection_colors">
+    <span class="section-arrow" id="arrow-selection-colors">&#x25B6;</span>
     <span>{{label_hdr_selection_colors}}</span>
   </div>
-  <div class="section-content" id="sec-selection-colors">
+  <div class="section-content collapsed" id="sec-selection-colors">
     <div class="setting-row">
       <span class="color-comp">{{selection_color_committed_r}}</span>
       <span class="color-comp">{{selection_color_committed_g}}</span>
@@ -138,8 +136,6 @@
       <span>{{label_desaturate_cropping}}</span>
     </label>
   </div>
-
-  <div class="separator"></div>
 
   <!-- Focal Length -->
   <div class="setting-row" data-tooltip="tooltip.focal_length">
@@ -189,14 +185,12 @@
     <span class="prop-label">{{label_render_scale}}</span>
   </div>
 
-  <div class="separator"></div>
-
   <!-- Mesh (collapsible) -->
-  <div class="section-header is-expanded" id="hdr-mesh" data-event-click="toggle_section('mesh')">
-    <span class="section-arrow is-expanded" id="arrow-mesh">&#x25B6;</span>
+  <div class="section-header" id="hdr-mesh" data-event-click="toggle_section('mesh')">
+    <span class="section-arrow" id="arrow-mesh">&#x25B6;</span>
     <span>{{label_hdr_mesh}}</span>
   </div>
-  <div class="section-content" id="sec-mesh">
+  <div class="section-content collapsed" id="sec-mesh">
     <div class="setting-row">
       <label class="setting-label">
         <input type="checkbox" data-checked="mesh_wireframe" />
@@ -252,8 +246,6 @@
       </div>
     </div>
   </div>
-
-  <div class="separator"></div>
 
   <!-- PPISP Appearance Correction -->
   <div class="setting-row" data-tooltip="tooltip.appearance_correction">
@@ -318,11 +310,11 @@
       </div>
 
       <!-- CRF (collapsible) -->
-      <div class="section-header is-expanded" id="hdr-ppisp-crf" data-event-click="toggle_section('ppisp_crf')">
-        <span class="section-arrow is-expanded" id="arrow-ppisp-crf">&#x25B6;</span>
+      <div class="section-header" id="hdr-ppisp-crf" data-event-click="toggle_section('ppisp_crf')">
+        <span class="section-arrow" id="arrow-ppisp-crf">&#x25B6;</span>
         <span>{{label_ppisp_crf}}</span>
       </div>
-      <div class="section-content" id="sec-ppisp-crf">
+      <div class="section-content collapsed" id="sec-ppisp-crf">
         <crf-curve
           data-attr-gamma="ppisp_gamma_multiplier"
           data-attr-toe="ppisp_crf_toe"
@@ -360,7 +352,6 @@
     </div>
   </div>
 
-  <div class="separator"></div>
   <div data-if="is_windows">
     <button class="btn btn--secondary btn--full"
             data-event-click="toggle_console">{{label_console}}</button>

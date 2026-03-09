@@ -93,7 +93,7 @@
     "section.initialization": "Inicjalizacja",
     "section.thresholds": "Progi",
     "section.save_steps": "Kroki Zapisu",
-    "section.basic_params": "Podstawowe Parametry Treningu",
+    "section.basic_params": "Parametry Treningu",
     "section.advanced_params": "Zaawansowane Parametry Treningu",
     "section.sparsity": "Ustawienia Rzadkości",
     "section.pruning_growing": "Przycinanie/Rozrost",

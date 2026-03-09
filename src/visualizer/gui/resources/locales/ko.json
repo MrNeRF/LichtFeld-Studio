@@ -93,7 +93,7 @@
     "section.initialization": "초기화",
     "section.thresholds": "임계값",
     "section.save_steps": "저장 단계",
-    "section.basic_params": "기본 학습 파라미터",
+    "section.basic_params": "학습 파라미터",
     "section.advanced_params": "고급 학습 파라미터",
     "section.sparsity": "희소성 설정",
     "section.pruning_growing": "가지치기/성장",

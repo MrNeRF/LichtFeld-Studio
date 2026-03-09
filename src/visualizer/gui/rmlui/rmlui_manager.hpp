@@ -52,6 +52,8 @@ namespace lfs::vis::gui {
         float dp_ratio_ = 1.0f;
         std::string active_theme_id_;
         bool resize_deferring_ = false;
+        bool debugger_enabled_ = false;
+        bool debugger_initialized_ = false;
         bool initialized_ = false;
     };
 

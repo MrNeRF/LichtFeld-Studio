@@ -36,6 +36,7 @@ namespace lfs::python {
         };
 
         std::atomic<PythonHookInvoker> g_hook_invoker{nullptr};
+        std::atomic<PythonDocumentHookInvoker> g_document_hook_invoker{nullptr};
         std::atomic<PythonHookChecker> g_hook_checker{nullptr};
     } // namespace
 
@@ -129,12 +130,17 @@ namespace lfs::python {
         g_hook_invoker.store(invoker, std::memory_order_release);
     }
 
+    void set_python_document_hook_invoker(const PythonDocumentHookInvoker invoker) {
+        g_document_hook_invoker.store(invoker, std::memory_order_release);
+    }
+
     void set_python_hook_checker(const PythonHookChecker checker) {
         g_hook_checker.store(checker, std::memory_order_release);
     }
 
     void clear_python_hook_invoker() {
         g_hook_invoker.store(nullptr, std::memory_order_release);
+        g_document_hook_invoker.store(nullptr, std::memory_order_release);
         g_hook_checker.store(nullptr, std::memory_order_release);
     }
 
@@ -145,6 +151,16 @@ namespace lfs::python {
         if (bridge().prepare_ui)
             bridge().prepare_ui();
         invoker(panel.c_str(), section.c_str(), prepend);
+    }
+
+    void invoke_python_document_hooks(const std::string& panel, const std::string& section,
+                                      void* document, const bool prepend) {
+        const auto invoker = g_document_hook_invoker.load(std::memory_order_acquire);
+        if (!invoker)
+            return;
+        if (bridge().prepare_ui)
+            bridge().prepare_ui();
+        invoker(panel.c_str(), section.c_str(), document, prepend);
     }
 
     bool has_python_hooks(const std::string& panel, const std::string& section) {

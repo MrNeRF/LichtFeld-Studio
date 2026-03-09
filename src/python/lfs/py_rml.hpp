@@ -240,6 +240,7 @@ namespace lfs::python {
 
     bool consume_document_dirty(Rml::ElementDocument* doc);
     bool is_document_dirty(Rml::ElementDocument* doc);
+    void release_rml_context_state(Rml::Context* context);
 
     void register_rml_bindings(nb::module_& m);
     void dirty_all_data_models();

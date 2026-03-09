@@ -6,6 +6,7 @@
     <div id="search-container">
         <img id="search-icon" class="row-icon" src="../icon/scene/search.png" />
         <input id="filter-input" type="text" data-attr-placeholder="search_placeholder" />
+        <img id="filter-clear" src="../icon/scene/x.png" data-if="show_filter_clear" />
     </div>
     <div id="tree-container">
         <div class="empty-state" data-if="show_empty_state">
@@ -47,6 +48,11 @@
                     <span data-if="row.use_unicode_icon"
                           data-attr-class="'node-icon ' + row.type_class">{{ row.unicode_icon }}</span>
 
+                    <img data-if="row.has_mask"
+                         class="row-icon mask-icon"
+                         data-class-mask-inverted="row.mask_inverted"
+                         src="../icon/scene/mask.png" />
+
                     <span class="expand-toggle"
                           data-if="row.has_children"
                           data-attr-data-target="row.children_target">{{ row.expand_glyph }}</span>
@@ -67,7 +73,20 @@
             <div class="virtual-spacer" data-style-height="bottom_spacer_height"></div>
         </div>
     </div>
-    <div id="context-menu" class="context-menu">
+    <div id="context-menu"
+         class="context-menu"
+         data-class-visible="context_menu_visible"
+         data-style-left="context_menu_left"
+         data-style-top="context_menu_top">
+        <div data-for="item : context_menu_entries">
+            <div class="context-menu-separator" data-if="item.separator_before"></div>
+            <div class="context-menu-label" data-if="item.is_label">{{ item.label }}</div>
+            <div class="context-menu-item"
+                 data-if="!item.is_label"
+                 data-class-submenu-item="item.is_submenu_item"
+                 data-class-active="item.is_active"
+                 data-attr-data-action="item.action">{{ item.label }}</div>
+        </div>
     </div>
 </body>
 </rml>

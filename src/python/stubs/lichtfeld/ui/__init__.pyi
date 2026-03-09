@@ -205,7 +205,7 @@ class PanelSpace(enum.Enum):
     STATUS_BAR = 6
 
 def register_panel(cls: object) -> None:
-    """Register a panel class for rendering in the UI"""
+    """Register a legacy immediate-mode panel class for rendering in the UI"""
 
 def register_rml_panel(cls: object) -> None:
     """Register an RmlUI panel class"""
@@ -1883,10 +1883,10 @@ def loc_clear_all() -> None:
     """Clear all localization overrides"""
 
 def register_popup_draw_callback(callback: object) -> None:
-    """Register a callback for drawing popup content"""
+    """Register a legacy immediate-mode callback for drawing popup content"""
 
 def unregister_popup_draw_callback(callback: object) -> None:
-    """Unregister the popup draw callback"""
+    """Unregister a legacy popup draw callback"""
 
 def on_show_dataset_load_popup(callback: object) -> None:
     """Register callback for ShowDatasetLoadPopup event"""

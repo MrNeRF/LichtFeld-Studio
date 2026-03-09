@@ -93,7 +93,7 @@
     "section.initialization": "初期化",
     "section.thresholds": "しきい値",
     "section.save_steps": "保存ステップ",
-    "section.basic_params": "基本トレーニングパラメータ",
+    "section.basic_params": "トレーニングパラメータ",
     "section.advanced_params": "詳細トレーニングパラメータ",
     "section.sparsity": "スパース設定",
     "section.pruning_growing": "プルーニング/グロウイング",

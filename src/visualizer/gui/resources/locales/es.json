@@ -93,7 +93,7 @@
     "section.initialization": "Inicialización",
     "section.thresholds": "Umbrales",
     "section.save_steps": "Pasos de Guardado",
-    "section.basic_params": "Parámetros Básicos de Entrenamiento",
+    "section.basic_params": "Parámetros de Entrenamiento",
     "section.advanced_params": "Parámetros Avanzados de Entrenamiento",
     "section.sparsity": "Configuración de Dispersión",
     "section.pruning_growing": "Poda/Crecimiento",

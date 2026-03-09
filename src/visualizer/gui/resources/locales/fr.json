@@ -93,7 +93,7 @@
     "section.initialization": "Initialisation",
     "section.thresholds": "Seuils",
     "section.save_steps": "Étapes de Sauvegarde",
-    "section.basic_params": "Paramètres d'Entraînement de Base",
+    "section.basic_params": "Paramètres d'Entraînement",
     "section.advanced_params": "Paramètres d'Entraînement Avancés",
     "section.sparsity": "Paramètres de Sparsité",
     "section.pruning_growing": "Élagage/Croissance",

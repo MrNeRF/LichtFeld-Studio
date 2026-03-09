@@ -18,6 +18,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <memory>
 #include <optional>
+#include <imgui.h>
 #include <ImGuizmo.h>
 
 namespace lfs::vis::gui {
@@ -37,6 +38,7 @@ namespace lfs::vis {
 
             void setupEvents();
             void render(const UIContext& ctx, const ViewportLayout& viewport);
+            void compositeOverlays(int screen_w, int screen_h) const;
 
             void destroyGLResources();
 

@@ -5,31 +5,31 @@
   "palette": {
     "_info": "Colors are [R, G, B, A] with values 0.0-1.0",
 
-    "background":     [0.82, 0.82, 0.84, 1.0],
-    "_background":    "Main window background",
+    "background":     [0.93, 0.94, 0.96, 1.0],
+    "_background":    "Main window background - cool paper",
 
-    "surface":        [0.88, 0.88, 0.90, 1.0],
-    "_surface":       "Panel backgrounds, buttons",
+    "surface":        [0.97, 0.98, 0.99, 1.0],
+    "_surface":       "Panel backgrounds, buttons - soft white",
 
-    "surface_bright": [0.92, 0.92, 0.94, 1.0],
+    "surface_bright": [1.00, 1.00, 1.00, 1.0],
     "_surface_bright": "Hovered buttons, highlighted areas",
 
-    "primary":        [0.20, 0.50, 0.90, 1.0],
+    "primary":        [0.18, 0.46, 0.88, 1.0],
     "_primary":       "Main accent color (selection, active items) - Blue",
 
-    "primary_dim":    [0.30, 0.55, 0.85, 1.0],
+    "primary_dim":    [0.28, 0.54, 0.86, 1.0],
     "_primary_dim":   "Dimmed accent for less emphasis",
 
     "secondary":      [0.50, 0.30, 0.70, 1.0],
     "_secondary":     "Secondary accent - Purple",
 
-    "text":           [0.10, 0.10, 0.12, 1.0],
-    "_text":          "Main text color - Dark",
+    "text":           [0.10, 0.12, 0.16, 1.0],
+    "_text":          "Main text color - Ink",
 
-    "text_dim":       [0.40, 0.40, 0.45, 1.0],
-    "_text_dim":      "Disabled/secondary text - Gray",
+    "text_dim":       [0.41, 0.46, 0.56, 1.0],
+    "_text_dim":      "Disabled/secondary text - Blue gray",
 
-    "border":         [0.68, 0.68, 0.72, 1.0],
+    "border":         [0.77, 0.80, 0.86, 1.0],
     "_border":        "Panel borders, separators",
 
     "success":        [0.15, 0.60, 0.15, 1.0],
@@ -82,11 +82,11 @@
   "fonts": {
     "regular_path": "Inter-Regular.ttf",
     "bold_path": "Inter-SemiBold.ttf",
-    "base_size": 12.0,
+    "base_size": 12.5,
     "small_size": 12.0,
-    "large_size": 16.0,
-    "heading_size": 18.0,
-    "section_size": 13.0
+    "large_size": 17.0,
+    "heading_size": 20.0,
+    "section_size": 14.0
   },
 
   "menu": {
@@ -135,6 +135,15 @@
 
     "border_darken": 0.12,
     "_border_darken": "How much to darken border from background"
+  },
+
+  "shadows": {
+    "_info": "Shadow settings for floating panels",
+
+    "enabled": true,
+    "offset": [0.0, 12.0],
+    "blur": 24.0,
+    "alpha": 0.22
   },
 
   "button": {

@@ -54,6 +54,7 @@
 #include <cstring>
 #include <future>
 #include <implot.h>
+#include <mutex>
 #include <stack>
 #include <string_view>
 #include <thread>
@@ -229,6 +230,20 @@ namespace lfs::python {
 
         // Redraw request flag for hot-reload notification
         std::atomic<bool> g_redraw_requested{false};
+
+        constexpr std::string_view LEGACY_POPUP_PANEL = "__legacy_popup__";
+        constexpr std::string_view LEGACY_POPUP_SECTION = "draw";
+        const std::string LEGACY_POPUP_PANEL_STR{LEGACY_POPUP_PANEL};
+        const std::string LEGACY_POPUP_SECTION_STR{LEGACY_POPUP_SECTION};
+
+        void warnLegacyPopupDrawCallbackOnce() {
+            static std::once_flag once;
+            std::call_once(once, [] {
+                LOG_WARN("Rml transition: 'register_popup_draw_callback' is a legacy immediate-mode "
+                         "compatibility path. Keep existing plugins working, but prefer retained "
+                         "Rml panels or UI hooks for new UI.");
+            });
+        }
 
         // Speed overlay state for status bar
         struct SpeedOverlayState {
@@ -3785,27 +3800,34 @@ namespace lfs::python {
         m.def(
             "register_popup_draw_callback",
             [](nb::object callback) {
+                warnLegacyPopupDrawCallbackOnce();
+                auto& hooks = PyUIHookRegistry::instance();
+                if (g_popup_draw_callback && !g_popup_draw_callback.is_none()) {
+                    hooks.remove_hook(LEGACY_POPUP_PANEL_STR,
+                                      LEGACY_POPUP_SECTION_STR,
+                                      g_popup_draw_callback);
+                }
                 g_popup_draw_callback = callback;
-                set_popup_draw_callback([]() {
-                    if (g_popup_draw_callback && !g_popup_draw_callback.is_none()) {
-                        try {
-                            PyUILayout layout;
-                            g_popup_draw_callback(layout);
-                        } catch (const std::exception& e) {
-                            LOG_ERROR("Popup callback error: {}", e.what());
-                        }
-                    }
-                });
+                if (g_popup_draw_callback && !g_popup_draw_callback.is_none()) {
+                    hooks.add_hook(LEGACY_POPUP_PANEL_STR,
+                                   LEGACY_POPUP_SECTION_STR,
+                                   g_popup_draw_callback,
+                                   PyHookPosition::Append);
+                }
             },
-            nb::arg("callback"), "Register a callback for drawing popup content");
+            nb::arg("callback"), "Register a legacy immediate-mode callback for drawing popup content");
 
         m.def(
             "unregister_popup_draw_callback",
-            [](nb::object) {
-                g_popup_draw_callback = nb::none();
-                set_popup_draw_callback(nullptr);
+            [](nb::object callback) {
+                PyUIHookRegistry::instance().remove_hook(LEGACY_POPUP_PANEL_STR,
+                                                         LEGACY_POPUP_SECTION_STR,
+                                                         callback);
+                if (g_popup_draw_callback.is_valid() && g_popup_draw_callback.is(callback)) {
+                    g_popup_draw_callback = nb::none();
+                }
             },
-            nb::arg("callback"), "Unregister the popup draw callback");
+            nb::arg("callback"), "Unregister a legacy popup draw callback");
 
         m.def(
             "on_show_dataset_load_popup",
@@ -4991,8 +5013,27 @@ namespace lfs::python {
             }
         });
 
+        set_python_document_hook_invoker([](const char* panel, const char* section,
+                                            void* document, bool prepend) {
+            auto& registry = PyUIHookRegistry::instance();
+            if (registry.has_hooks(panel, section)) {
+                registry.invoke_document(
+                    panel, section, static_cast<Rml::ElementDocument*>(document),
+                    prepend ? PyHookPosition::Prepend : PyHookPosition::Append);
+            }
+        });
+
         set_python_hook_checker([](const char* panel, const char* section) -> bool {
             return PyUIHookRegistry::instance().has_hooks(panel, section);
+        });
+
+        set_popup_draw_callback([]() {
+            auto& registry = PyUIHookRegistry::instance();
+            if (registry.has_hooks(LEGACY_POPUP_PANEL_STR, LEGACY_POPUP_SECTION_STR)) {
+                registry.invoke(LEGACY_POPUP_PANEL_STR,
+                                LEGACY_POPUP_SECTION_STR,
+                                PyHookPosition::Append);
+            }
         });
     }
 

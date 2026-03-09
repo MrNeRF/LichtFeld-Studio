@@ -48,16 +48,6 @@ class CardOpState:
     progress: float = 0.0
     output_lines: List[str] = field(default_factory=list)
     finished_at: float = 0.0
-
-
-def _xml_escape(text: str) -> str:
-    return (text
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;"))
-
-
 class PluginMarketplacePanel(RmlPanel):
     """Floating plugin window for browsing, installing, and managing plugins."""
 
@@ -68,6 +58,7 @@ class PluginMarketplacePanel(RmlPanel):
     rml_template = "rmlui/plugin_marketplace.rml"
     rml_height_mode = "content"
     initial_width = 770
+    update_interval_ms = 100
 
     def __init__(self):
         self._catalog = PluginMarketplaceCatalog()
@@ -87,7 +78,7 @@ class PluginMarketplacePanel(RmlPanel):
         self._handle = None
         self._last_card_phases: Dict[str, Tuple] = {}
         self._entries_dirty = True
-        self._catalog_updated = False
+        self._needs_resort = True
         self._prev_snapshot_key: Optional[Tuple] = None
         self._cached_entries: List[MarketplacePluginEntry] = []
         self._cached_card_ids: List[str] = []
@@ -169,6 +160,7 @@ class PluginMarketplacePanel(RmlPanel):
         if idx != self._install_filter_idx:
             self._install_filter_idx = idx
             self._entries_dirty = True
+            self._needs_resort = True
 
     def _set_sort_idx(self, v):
         try:
@@ -178,6 +170,7 @@ class PluginMarketplacePanel(RmlPanel):
         if idx != self._sort_idx:
             self._sort_idx = idx
             self._entries_dirty = True
+            self._needs_resort = True
 
     # ── Lifecycle ─────────────────────────────────────────────
 
@@ -198,6 +191,7 @@ class PluginMarketplacePanel(RmlPanel):
         grid_el = doc.get_element_by_id("card-grid")
         if grid_el:
             grid_el.add_event_listener("click", self._on_card_click)
+            grid_el.add_event_listener("change", self._on_card_click)
 
     def on_update(self, doc):
         from .manager import PluginManager
@@ -211,17 +205,16 @@ class PluginMarketplacePanel(RmlPanel):
         if snapshot_key != self._prev_snapshot_key:
             self._prev_snapshot_key = snapshot_key
             self._entries_dirty = True
-            self._catalog_updated = True
 
         if self._entries_dirty:
             self._entries_dirty = False
-            catalog_updated = self._catalog_updated
-            self._catalog_updated = False
             entries = self._with_local_plugins(entries_raw, mgr)
             installed_lookup = self._get_installed_plugin_lookup(mgr)
             installed_versions = self._get_installed_plugin_versions(mgr)
             installed_names = set(installed_lookup.values())
-            preserve = catalog_updated and bool(self._cached_card_ids)
+            needs_resort = self._needs_resort
+            self._needs_resort = False
+            preserve = not needs_resort and bool(self._cached_card_ids)
             entries = self._filter_and_sort_entries(
                 entries, set(installed_lookup.keys()), installed_names,
                 preserve_order=preserve,
@@ -324,12 +317,10 @@ class PluginMarketplacePanel(RmlPanel):
         is_remote_installed = is_installed and not is_local
         is_local_with_github = is_installed and is_local and has_github
 
-        show_startup_checked = False
-        show_startup_unchecked = False
-        if buttons_idle and is_installed and plugin_name:
-            startup = SettingsManager.instance().get(plugin_name).get("load_on_startup", False)
-            show_startup_checked = startup
-            show_startup_unchecked = not startup
+        show_startup = buttons_idle and is_installed and bool(plugin_name)
+        startup_checked = False
+        if show_startup:
+            startup_checked = SettingsManager.instance().get(plugin_name).get("load_on_startup", False)
 
         return {
             "card_id": card_id,
@@ -357,8 +348,8 @@ class PluginMarketplacePanel(RmlPanel):
             "show_reload": buttons_idle and is_remote_installed and plugin_state == PluginState.ACTIVE,
             "show_update": buttons_idle and (is_local_with_github or (is_remote_installed and plugin_state != PluginState.ACTIVE)),
             "show_uninstall": buttons_idle and is_installed,
-            "show_startup_checked": show_startup_checked,
-            "show_startup_unchecked": show_startup_unchecked,
+            "show_startup": show_startup,
+            "startup_checked": startup_checked,
         }
 
     # ── Card state updates (per-frame, minimal DOM touches) ───
@@ -389,25 +380,7 @@ class PluginMarketplacePanel(RmlPanel):
             card_el.set_class("card--in-progress", state.phase == CardOpPhase.IN_PROGRESS)
             card_el.set_class("card--success", state.phase == CardOpPhase.SUCCESS)
             card_el.set_class("card--error", state.phase == CardOpPhase.ERROR)
-
-            feedback_el = doc.get_element_by_id(f"feedback-{card_id}")
-            if feedback_el:
-                if state.phase == CardOpPhase.IN_PROGRESS:
-                    msg = _xml_escape(state.message or tr("plugin_manager.working"))
-                    feedback_el.set_inner_rml(
-                        f'<progress class="card-progress" value="{state.progress:.2f}" max="1" />'
-                        f'<span class="card-progress-text">{msg}</span>'
-                    )
-                elif state.phase == CardOpPhase.SUCCESS:
-                    feedback_el.set_inner_rml(
-                        f'<span class="status-text status-success">{_xml_escape(state.message)}</span>'
-                    )
-                elif state.phase == CardOpPhase.ERROR:
-                    feedback_el.set_inner_rml(
-                        f'<span class="status-text status-error">{_xml_escape(state.message)}</span>'
-                    )
-                else:
-                    feedback_el.set_inner_rml("")
+            self._sync_feedback_state(doc, f"feedback-{card_id}", state, tr("plugin_manager.working"))
 
     def _update_manual_feedback(self, doc):
         card_id = "__manual_url__"
@@ -427,33 +400,48 @@ class PluginMarketplacePanel(RmlPanel):
 
         btn = doc.get_element_by_id("btn-install-url")
 
-        if state.phase == CardOpPhase.IN_PROGRESS:
-            msg = _xml_escape(state.message or tr("plugin_manager.working"))
-            feedback_el.set_inner_rml(
-                f'<progress class="card-progress" value="{state.progress:.2f}" max="1" />'
-                f'<span class="card-progress-text">{msg}</span>'
-            )
-            if btn:
+        self._sync_feedback_state(doc, "manual-feedback", state, tr("plugin_manager.working"))
+
+        if btn:
+            if state.phase == CardOpPhase.IN_PROGRESS:
                 btn.set_attribute("disabled", "disabled")
-        elif state.phase == CardOpPhase.SUCCESS:
-            feedback_el.set_inner_rml(
-                f'<span class="status-text status-success">{_xml_escape(state.message)}</span>'
-            )
-            if btn:
+            else:
                 btn.remove_attribute("disabled")
+
+        if state.phase == CardOpPhase.SUCCESS:
             self._manual_url = ""
             if self._handle:
                 self._handle.dirty("manual_url")
-        elif state.phase == CardOpPhase.ERROR:
-            feedback_el.set_inner_rml(
-                f'<span class="status-text status-error">{_xml_escape(state.message)}</span>'
-            )
-            if btn:
-                btn.remove_attribute("disabled")
-        else:
-            feedback_el.set_inner_rml("")
-            if btn:
-                btn.remove_attribute("disabled")
+
+    def _sync_feedback_state(self, doc, element_prefix: str, state: CardOpState, working_text: str):
+        feedback_el = doc.get_element_by_id(element_prefix)
+        if not feedback_el:
+            return
+
+        show_progress = state.phase == CardOpPhase.IN_PROGRESS
+        show_success = state.phase == CardOpPhase.SUCCESS
+        show_error = state.phase == CardOpPhase.ERROR
+
+        progress_el = doc.get_element_by_id(f"{element_prefix}-progress")
+        progress_text_el = doc.get_element_by_id(f"{element_prefix}-progress-text")
+        success_el = doc.get_element_by_id(f"{element_prefix}-success")
+        error_el = doc.get_element_by_id(f"{element_prefix}-error")
+
+        feedback_el.set_class("hidden", not (show_progress or show_success or show_error))
+
+        if progress_el:
+            progress_el.set_class("hidden", not show_progress)
+            if show_progress:
+                progress_el.set_attribute("value", f"{state.progress:.2f}")
+        if progress_text_el:
+            progress_text_el.set_class("hidden", not show_progress)
+            progress_text_el.set_text(state.message or working_text if show_progress else "")
+        if success_el:
+            success_el.set_class("hidden", not show_success)
+            success_el.set_text(state.message if show_success else "")
+        if error_el:
+            error_el.set_class("hidden", not show_error)
+            error_el.set_text(state.message if show_error else "")
 
     # ── Event handlers ────────────────────────────────────────
 
@@ -516,11 +504,12 @@ class PluginMarketplacePanel(RmlPanel):
 
         if action == "startup":
             if plugin_name:
-                prefs = SettingsManager.instance().get(plugin_name)
                 cb_el = self._find_element_with_attr(target, "type", "checkbox")
-                checked = cb_el.has_attribute("checked") if cb_el else not prefs.get("load_on_startup", False)
-                prefs.set("load_on_startup", checked)
-                self._entries_dirty = True
+                checked = cb_el.has_attribute("checked") if cb_el else False
+                prefs = SettingsManager.instance().get(plugin_name)
+                if prefs.get("load_on_startup", False) != checked:
+                    prefs.set("load_on_startup", checked)
+                    self._entries_dirty = True
             return
 
         if not card_id:
@@ -599,9 +588,7 @@ class PluginMarketplacePanel(RmlPanel):
 
         msg_el = doc.get_element_by_id("confirm-message")
         if msg_el:
-            msg_el.set_inner_rml(
-                _xml_escape(tr("plugin_marketplace.confirm_uninstall_message").format(name=name))
-            )
+            msg_el.set_text(tr("plugin_marketplace.confirm_uninstall_message").format(name=name))
         overlay = doc.get_element_by_id("confirm-overlay")
         if overlay:
             overlay.set_class("hidden", False)
@@ -852,8 +839,14 @@ class PluginMarketplacePanel(RmlPanel):
 
         tr = lf.ui.tr
 
-        def do_reload(on_progress):
-            mgr.unload(name)
+        if not mgr.unload(name):
+            with self._lock:
+                state = self._card_ops.setdefault(card_id, CardOpState())
+                state.phase = CardOpPhase.ERROR
+                state.message = tr("plugin_manager.status.unload_failed")
+            return
+
+        def do_load(on_progress):
             ok = mgr.load(name, on_progress=on_progress)
             if not ok:
                 err = mgr.get_error(name) or tr("plugin_manager.status.reload_failed")
@@ -863,7 +856,7 @@ class PluginMarketplacePanel(RmlPanel):
 
         self._run_async(
             card_id,
-            do_reload,
+            do_load,
             tr("plugin_manager.status.reloaded").format(name=name),
             tr("plugin_manager.status.reload_failed"),
         )

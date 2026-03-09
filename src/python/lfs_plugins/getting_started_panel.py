@@ -43,6 +43,7 @@ class GettingStartedPanel(RmlPanel):
     rml_template = "rmlui/getting_started.rml"
     rml_height_mode = "content"
     initial_width = 560
+    update_interval_ms = 100
 
     WIKI_URL = "https://github.com/MrNeRF/LichtFeld-Studio/wiki"
 

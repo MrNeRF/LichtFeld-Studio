@@ -25,10 +25,6 @@ FORMAT_INFO = (
 )
 
 
-def _xml_escape(text):
-    return html.escape(str(text), quote=True)
-
-
 def _xml_unescape(text):
     return html.unescape(text or "")
 
@@ -41,18 +37,20 @@ class ExportPanel(RmlPanel):
     rml_template = "rmlui/export_panel.rml"
     rml_height_mode = "content"
     initial_width = 320
+    update_interval_ms = 100
 
     def __init__(self):
         self._format = ExportFormat.PLY
         self._selected_nodes: Set[str] = set()
         self._export_sh_degree = 3
         self._selection_seeded = False
-        self._doc = None
         self._handle = None
         self._last_node_key = None
         self._last_lang = ""
         self._exporting = False
         self._last_progress = -1.0
+        self._progress_value = "0"
+        self._has_models = False
         self._cached_export_state = {}
 
     # ── Data model ────────────────────────────────────────────
@@ -73,6 +71,10 @@ class ExportPanel(RmlPanel):
         model.bind_func("export_label", self._get_export_label)
         model.bind_func("cancel_label", lambda: tr("export.cancel"))
         model.bind_func("select_at_least_one", lambda: tr("export.select_at_least_one"))
+        model.bind_func("no_models_label", lambda: tr("export_dialog.no_models"))
+        model.bind_func("show_no_models", lambda: not self._has_models)
+        model.bind_func("can_export", lambda: bool(self._selected_nodes))
+        model.bind_func("progress_value", lambda: self._progress_value)
 
         model.bind(
             "sh_degree",
@@ -89,6 +91,8 @@ class ExportPanel(RmlPanel):
         model.bind_event("do_export", self._on_export)
         model.bind_event("do_cancel", self._on_cancel)
         model.bind_event("do_cancel_export", self._on_cancel_export)
+        model.bind_record_list("formats")
+        model.bind_record_list("models")
 
         self._handle = model.get_handle()
 
@@ -108,7 +112,6 @@ class ExportPanel(RmlPanel):
 
     def on_load(self, doc):
         super().on_load(doc)
-        self._doc = doc
         self._exporting = False
         self._last_progress = -1.0
         self._cached_export_state = {}
@@ -133,15 +136,16 @@ class ExportPanel(RmlPanel):
             model_list.add_event_listener("change", self._on_model_toggle)
             model_list.add_event_listener("click", self._on_model_toggle)
 
-        self._rebuild_formats(doc)
-        self._update_export_state(doc)
+        self._rebuild_format_records()
+        self._rebuild_model_records(self._get_splat_nodes())
 
     def on_update(self, doc):
         if self._exporting:
-            return self._update_export_progress(doc)
+            return self._update_export_progress()
 
         if self._last_progress >= 0.0:
             self._last_progress = -1.0
+            self._progress_value = "0"
             self._dirty_model("show_form", "show_progress")
             return True
 
@@ -150,7 +154,7 @@ class ExportPanel(RmlPanel):
         if current_lang != self._last_lang:
             self._last_lang = current_lang
             self._dirty_model()
-            self._rebuild_formats(doc)
+            self._rebuild_format_records()
             self._last_node_key = None
             dirty = True
 
@@ -158,14 +162,14 @@ class ExportPanel(RmlPanel):
         node_key = tuple((n.name, n.gaussian_count) for n in nodes)
 
         if self._sync_selection(nodes):
-            self._dirty_model("export_label")
-            self._update_export_state(doc)
+            self._rebuild_model_records(nodes)
+            self._dirty_model("export_label", "can_export")
             dirty = True
 
         if node_key != self._last_node_key:
             self._last_node_key = node_key
-            self._rebuild_models(doc, nodes)
-            self._update_export_state(doc)
+            self._rebuild_model_records(nodes)
+            self._dirty_model("show_no_models", "can_export")
             dirty = True
 
         return dirty
@@ -238,66 +242,39 @@ class ExportPanel(RmlPanel):
 
         return checkbox, node_name
 
-    # ── DOM builders ──────────────────────────────────────────
+    # ── Retained model updates ────────────────────────────────
 
-    def _rebuild_formats(self, doc):
-        el = doc.get_element_by_id("format-list")
-        if not el:
+    def _rebuild_format_records(self):
+        if not self._handle:
             return
         tr = lf.ui.tr
-        parts = []
-        for fmt, key in FORMAT_INFO:
-            idx = int(fmt)
-            selected = "selected" if fmt == self._format else ""
-            parts.append(
-                f'<div class="ep-format-option {selected}" data-format-idx="{idx}">'
-                f'<div class="ep-format-dot"></div>'
-                f'<span class="ep-format-name">{_xml_escape(tr(key))}</span>'
-                f'</div>'
-            )
-        el.set_inner_rml("".join(parts))
+        self._handle.update_record_list(
+            "formats",
+            [
+                {
+                    "index": str(int(fmt)),
+                    "label": tr(key),
+                    "selected": fmt == self._format,
+                }
+                for fmt, key in FORMAT_INFO
+            ],
+        )
 
-    def _rebuild_models(self, doc, nodes):
-        el = doc.get_element_by_id("model-list")
-        if not el:
+    def _rebuild_model_records(self, nodes):
+        if not self._handle:
             return
-        tr = lf.ui.tr
-
-        if not nodes:
-            el.set_inner_rml(
-                f'<span class="ep-no-models">{_xml_escape(tr("export_dialog.no_models"))}</span>'
-            )
-            return
-
-        parts = []
-        for node in nodes:
-            name = _xml_escape(node.name)
-            checked = "checked" if node.name in self._selected_nodes else ""
-            parts.append(
-                f'<div class="ep-model-row" data-node-name="{name}">'
-                f'<label class="setting-label">'
-                f'<input type="checkbox" {checked} data-node-name="{name}" />'
-                f'<span class="ep-model-name">{name}</span>'
-                f'</label>'
-                f'<span class="ep-model-count">({node.gaussian_count})</span>'
-                f'</div>'
-            )
-        el.set_inner_rml("".join(parts))
-
-    def _update_export_state(self, doc):
-        can_export = len(self._selected_nodes) > 0
-        self._dirty_model("export_label")
-
-        error_el = doc.get_element_by_id("export-error")
-        if error_el:
-            error_el.set_class("hidden", can_export)
-
-        btn = doc.get_element_by_id("btn-export")
-        if btn:
-            if can_export:
-                btn.remove_attribute("disabled")
-            else:
-                btn.set_attribute("disabled", "disabled")
+        self._handle.update_record_list(
+            "models",
+            [
+                {
+                    "name": node.name,
+                    "selected": node.name in self._selected_nodes,
+                    "count_text": f"({node.gaussian_count})",
+                }
+                for node in nodes
+            ],
+        )
+        self._has_models = bool(nodes)
 
     # ── Event handlers ────────────────────────────────────────
 
@@ -316,8 +293,7 @@ class ExportPanel(RmlPanel):
             return
 
         self._format = new_format
-        if self._doc:
-            self._rebuild_formats(self._doc)
+        self._rebuild_format_records()
 
     def _on_model_toggle(self, ev):
         checkbox, node_name = self._get_checkbox_from_event(ev)
@@ -329,21 +305,19 @@ class ExportPanel(RmlPanel):
         else:
             self._selected_nodes.discard(node_name)
 
-        if self._doc:
-            self._update_export_state(self._doc)
+        self._rebuild_model_records(self._get_splat_nodes())
+        self._dirty_model("can_export", "export_label")
 
     def _on_select_all(self, _ev):
         nodes = self._get_splat_nodes()
         self._selected_nodes = {node.name for node in nodes}
-        if self._doc:
-            self._rebuild_models(self._doc, nodes)
-            self._update_export_state(self._doc)
+        self._rebuild_model_records(nodes)
+        self._dirty_model("can_export", "export_label")
 
     def _on_select_none(self, _ev):
         self._selected_nodes.clear()
-        if self._doc:
-            self._rebuild_models(self._doc, self._get_splat_nodes())
-            self._update_export_state(self._doc)
+        self._rebuild_model_records(self._get_splat_nodes())
+        self._dirty_model("can_export", "export_label")
 
     def _on_export(self, _handle, _ev, _args):
         if not self._selected_nodes:
@@ -395,8 +369,7 @@ class ExportPanel(RmlPanel):
     def _do_export(self):
         selected_nodes = self._get_selected_node_names()
         if not selected_nodes:
-            if self._doc:
-                self._update_export_state(self._doc)
+            self._dirty_model("can_export")
             return
 
         default_name = selected_nodes[0]
@@ -406,8 +379,9 @@ class ExportPanel(RmlPanel):
             lf.export_scene(int(self._format), path, selected_nodes, self._export_sh_degree)
             self._exporting = True
             self._last_progress = -1.0
+            self._progress_value = "0"
             self._dirty_model("show_form", "show_progress", "progress_title",
-                              "progress_pct", "progress_stage")
+                              "progress_pct", "progress_stage", "progress_value")
 
     # ── Progress helpers ─────────────────────────────────────
 
@@ -421,7 +395,7 @@ class ExportPanel(RmlPanel):
     def _get_progress_stage(self):
         return self._cached_export_state.get("stage", "")
 
-    def _update_export_progress(self, doc):
+    def _update_export_progress(self):
         state = lf.ui.get_export_state()
         self._cached_export_state = state
         if not state.get("active", False):
@@ -433,10 +407,8 @@ class ExportPanel(RmlPanel):
         progress = state.get("progress", 0.0)
         if progress != self._last_progress:
             self._last_progress = progress
-            prog = doc.get_element_by_id("export-progress")
-            if prog:
-                prog.set_attribute("value", str(progress))
-            self._dirty_model("progress_pct", "progress_stage")
+            self._progress_value = str(progress)
+            self._dirty_model("progress_value", "progress_pct", "progress_stage")
             return True
 
         return False

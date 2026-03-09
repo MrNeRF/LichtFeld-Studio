@@ -19,7 +19,6 @@
 #include <RmlUi/Core/Element.h>
 #include <cassert>
 #include <format>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
 
@@ -291,7 +290,9 @@ namespace lfs::vis::gui {
 
     void RmlRightPanel::render(const RightPanelLayout& layout,
                                const std::vector<TabSnapshot>& tabs,
-                               const std::string& active_tab) {
+                               const std::string& active_tab,
+                               float screen_x, float screen_y,
+                               int screen_w, int screen_h) {
         if (!rml_context_ || !document_)
             return;
         if (layout.size.x <= 0 || layout.size.y <= 0)
@@ -369,12 +370,11 @@ namespace lfs::vis::gui {
             input_dirty_ = false;
         }
 
-        if (fbo_.valid()) {
-            auto* vp = ImGui::GetMainViewport();
-            fbo_.blitToDrawList(ImGui::GetForegroundDrawList(vp),
-                                {layout.pos.x, layout.pos.y},
-                                {layout.size.x, layout.size.y});
-        }
+        if (fbo_.valid())
+            fbo_.blitToScreen(layout.pos.x - screen_x,
+                              layout.pos.y - screen_y,
+                              layout.size.x, layout.size.y,
+                              screen_w, screen_h);
     }
 
 } // namespace lfs::vis::gui

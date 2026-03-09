@@ -98,6 +98,7 @@ namespace lfs::python {
     public:
         explicit SlotEventListener(SlotEventState* state) : state_(state) {}
         void ProcessEvent(Rml::Event& event) override;
+        void OnDetach(Rml::Element*) override { delete this; }
 
     private:
         SlotEventState* state_;
@@ -406,7 +407,9 @@ namespace lfs::python {
         void finish_current_line();
         void prune_excess_slots(ContainerLevel& level);
         std::string build_id(const std::string& key) const;
+        std::string build_slot_id(const char* prefix, const std::string* label = nullptr) const;
         std::string color_to_css(nb::object color) const;
+        static std::string stable_label_token(const std::string& label);
 
         void warn_unsupported(const char* method);
 
@@ -420,8 +423,6 @@ namespace lfs::python {
         int disabled_depth_ = 0;
         std::vector<std::string> id_stack_;
         bool force_next_open_ = false;
-
-        std::vector<std::unique_ptr<SlotEventListener>> listeners_;
         std::vector<Rml::ElementPtr> removed_elements_;
         std::unordered_set<std::string> warned_methods_;
 

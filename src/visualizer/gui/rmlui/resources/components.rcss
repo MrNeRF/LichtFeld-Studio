@@ -8,7 +8,7 @@ div {
 
 body {
     font-family: Inter;
-    font-size: 10dp;
+    font-size: 11dp;
     display: flex;
     flex-direction: column;
     width: 100%;
@@ -35,24 +35,27 @@ body.docked-panel {
     height: 28dp;
     display: flex;
     align-items: center;
-    padding: 0 8dp;
+    padding: 0 10dp;
+    border-bottom-width: 1dp;
+    border-bottom-color: rgba(88, 91, 112, 128);
 }
 
 #title-text {
     flex: 1;
-    font-size: 10dp;
+    font-size: 11dp;
 }
 
 #close-btn {
-    font-size: 12dp;
+    font-size: 16dp;
     cursor: pointer;
-    padding: 0 4dp;
+    padding: 0 6dp;
+    line-height: 28dp;
 }
 
 #content-wrap {
     display: flex;
     flex-direction: column;
-    padding: 8dp 12dp;
+    padding: 10dp 14dp;
     flex: 1;
     overflow-y: auto;
 }
@@ -102,7 +105,7 @@ input[type="checkbox"] {
     border-color: #585b70;
     margin: 0 6dp 0 0;
     padding: 0;
-    transition: background-color border-color 0.12s quadratic-out;
+    transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out;
 }
 
 input[type="checkbox"]:checked {
@@ -146,7 +149,7 @@ input[type="range"] sliderarrowinc {
 /* ── Form: Text Input ───────────────────────────────────── */
 
 input[type="text"] {
-    font-size: 10dp;
+    font-size: 11dp;
     color: #cdd6f4;
     background-color: #313244;
     border-width: 1dp;
@@ -162,7 +165,7 @@ input[type="text"]:focus {
 /* ── Form: Select ───────────────────────────────────────── */
 
 select {
-    font-size: 10dp;
+    font-size: 11dp;
     color: #cdd6f4;
     background-color: #313244;
     border-width: 1dp;
@@ -223,7 +226,7 @@ progress fill {
     left: 0;
     right: 0;
     text-align: center;
-    font-size: 10dp;
+    font-size: 11dp;
     color: #cdd6f4;
 }
 
@@ -232,21 +235,21 @@ progress fill {
 .setting-row {
     display: flex;
     align-items: center;
-    padding: 1dp 0;
-    min-height: 20dp;
+    padding: 2dp 0;
+    min-height: 22dp;
 }
 
 .setting-label {
     display: flex;
     align-items: center;
     color: #cdd6f4;
-    font-size: 10dp;
+    font-size: 11dp;
 }
 
 .prop-label {
     min-width: 80dp;
     text-align: left;
-    font-size: 10dp;
+    font-size: 11dp;
     color: #cdd6f4;
     margin-left: 4dp;
     flex-shrink: 0;
@@ -273,37 +276,33 @@ progress fill {
     display: flex;
     align-items: center;
     gap: 4dp;
-    padding: 4dp 6dp;
-    margin-top: 2dp;
+    padding: 5dp 6dp;
+    margin: 0 -6dp;
     font-weight: bold;
     color: #cdd6f4;
     cursor: pointer;
     font-size: 10dp;
-    border-width: 1dp;
-    border-radius: 4dp;
-    border-color: rgba(137, 180, 250, 42);
-    background-color: rgba(137, 180, 250, 36);
-    transition: background-color border-color 0.16s cubic-out;
+    border-width: 0;
+    border-top-width: 4dp;
+    border-radius: 0;
+    border-color: #1e1e2e;
+    background-color: transparent;
 }
 
 .section-header:hover {
-    background-color: rgba(137, 180, 250, 72);
-    border-color: rgba(137, 180, 250, 96);
 }
 
 .section-header.is-expanded {
-    background-color: rgba(137, 180, 250, 56);
-    border-color: rgba(137, 180, 250, 128);
 }
 
 .section-arrow {
     display: inline-block;
-    width: 12dp;
+    width: 10dp;
     font-size: 10dp;
     color: #cdd6f4;
     text-align: center;
     transform: rotate(0deg);
-    transition: transform color opacity 0.18s cubic-out;
+    transition: transform 0.18s cubic-out, color 0.18s cubic-out, opacity 0.18s cubic-out;
 }
 
 .section-header:hover .section-arrow,
@@ -318,13 +317,29 @@ progress fill {
 .section-content {
     overflow: hidden;
     opacity: 1;
+    margin: 0 -6dp;
+    padding: 0 6dp;
+    border-width: 0;
+    border-bottom-width: 4dp;
+    border-color: #1e1e2e;
 }
 
 .section-content.collapsed {
-    display: block;
     max-height: 0;
     opacity: 0;
+    overflow: hidden;
     pointer-events: none;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-bottom-width: 0;
+}
+
+.section-gap {
+    border-width: 0;
+    border-top-width: 4dp;
+    border-color: #1e1e2e;
+    margin: 0 -6dp;
+    padding: 0 6dp;
 }
 
 /* ── Color Controls ─────────────────────────────────────── */
@@ -342,7 +357,7 @@ progress fill {
 
 .color-comp {
     display: inline-block;
-    width: 44dp;
+    min-width: 30dp;
     font-size: 11dp;
     color: #a6adc8;
     background-color: #313244;
@@ -351,7 +366,7 @@ progress fill {
     padding: 1dp 4dp;
     margin-right: 2dp;
     text-align: right;
-    flex-shrink: 0;
+    flex: 1;
 }
 
 .color-hex {
@@ -460,7 +475,7 @@ progress fill {
     border-color: #585b70;
     cursor: pointer;
     text-align: center;
-    transition: background-color border-color 0.12s quadratic-out;
+    transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out;
 }
 
 .btn:hover {
@@ -480,7 +495,7 @@ progress fill {
     background-color: #89b4fa;
     border-color: #89b4fa;
     color: #1e1e2e;
-    transition: background-color border-color 0.12s quadratic-out;
+    transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out;
 }
 
 .btn--primary:hover {
@@ -497,7 +512,7 @@ progress fill {
     background-color: #a6e3a1;
     border-color: #a6e3a1;
     color: #1e1e2e;
-    transition: background-color border-color 0.12s quadratic-out;
+    transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out;
 }
 
 .btn--success:hover {
@@ -514,7 +529,7 @@ progress fill {
     background-color: #f9e2af;
     border-color: #f9e2af;
     color: #1e1e2e;
-    transition: background-color border-color 0.12s quadratic-out;
+    transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out;
 }
 
 .btn--warning:hover {
@@ -531,7 +546,7 @@ progress fill {
     background-color: #f38ba8;
     border-color: #f38ba8;
     color: #1e1e2e;
-    transition: background-color border-color 0.12s quadratic-out;
+    transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out;
 }
 
 .btn--error:hover {
@@ -627,6 +642,18 @@ progress fill {
     padding: 0 0 0 2dp;
 }
 
+.text-default {
+    color: #cdd6f4;
+}
+
+.text-muted {
+    color: #a6adc8;
+}
+
+.text-accent {
+    color: #89b4fa;
+}
+
 .empty-message {
     display: block;
     padding: 8dp 6dp;
@@ -665,14 +692,15 @@ crf-curve {
 .num-step-btn {
     width: 20dp;
     height: 18dp;
-    padding: 0;
+    padding: 0 0 1dp 0;
     text-align: center;
+    line-height: 16dp;
     font-size: 10dp;
     border-width: 1dp;
     margin-left: 2dp;
     flex-shrink: 0;
     cursor: pointer;
-    transition: background-color border-color 0.12s quadratic-out;
+    transition: background-color 0.12s quadratic-out, border-color 0.12s quadratic-out;
 }
 
 /* ── Full-width button ─────────────────────────────────── */
@@ -699,6 +727,10 @@ crf-curve {
     padding: 2dp 0;
 }
 
+.border-error {
+    border-color: #f38ba8;
+}
+
 .status-success {
     color: #a6e3a1;
 }
@@ -713,4 +745,31 @@ crf-curve {
 
 .status-info {
     color: #cdd6f4;
+}
+
+.interactive-row {
+    transition: background-color 0.1s quadratic-out;
+}
+
+.interactive-row:hover {
+    background-color: rgba(137, 180, 250, 40);
+}
+
+.interactive-row.selected {
+    background-color: rgba(137, 180, 250, 64);
+}
+
+.select-chip {
+    color: #cdd6f4;
+    background-color: rgba(255, 255, 255, 18);
+    transition: background-color 0.1s quadratic-out, color 0.1s quadratic-out;
+}
+
+.select-chip:hover {
+    background-color: rgba(137, 180, 250, 40);
+}
+
+.select-chip.selected {
+    color: #1e1e2e;
+    background-color: #89b4fa;
 }

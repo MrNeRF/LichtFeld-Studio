@@ -17,6 +17,12 @@ namespace lfs::vis::gui {
     }
 
     bool RmlSystemInterface::LogMessage(Rml::Log::Type type, const Rml::String& message) {
+        if (type == Rml::Log::LT_WARNING &&
+            (message.find("Data array index out of bounds") != Rml::String::npos ||
+             message.find("Could not get value from data variable") != Rml::String::npos)) {
+            return true;
+        }
+
         switch (type) {
         case Rml::Log::LT_ERROR:
         case Rml::Log::LT_ASSERT:

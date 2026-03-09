@@ -41,10 +41,6 @@ _CHANNEL_NAMES = {1: "Gray", 2: "Gray+A", 3: "RGB", 4: "RGBA"}
 _instance = None
 
 
-def _xml_escape(s: str) -> str:
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-
-
 class ImagePreviewPanel(RmlPanel):
     idname = "lfs.image_preview"
     label = "Image Preview"
@@ -53,6 +49,7 @@ class ImagePreviewPanel(RmlPanel):
     rml_template = "rmlui/image_preview.rml"
     initial_width = 900
     initial_height = 600
+    update_interval_ms = 16
 
     def __init__(self):
         global _instance
@@ -433,7 +430,7 @@ class ImagePreviewPanel(RmlPanel):
                 mask_img.set_property("decorator", "none")
             if no_text:
                 no_text.set_attribute("class", "")
-                no_text.set_inner_rml(_xml_escape(lf.ui.tr("image_preview.no_images_loaded")))
+                no_text.set_text(lf.ui.tr("image_preview.no_images_loaded"))
             self._prev_image_index = -1
             self._crossfade_pending = False
             return
@@ -755,7 +752,7 @@ class ImagePreviewPanel(RmlPanel):
 def _set_text(doc, element_id: str, text: str):
     el = doc.get_element_by_id(element_id)
     if el:
-        el.set_inner_rml(_xml_escape(text))
+        el.set_text(text)
 
 
 def open_image_preview(image_paths: list[Path], mask_paths: list[Path], start_index: int):

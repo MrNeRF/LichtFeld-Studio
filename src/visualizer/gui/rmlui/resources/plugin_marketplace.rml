@@ -34,7 +34,12 @@
       <input type="text" id="manual-url-input" class="mp-url-input" data-value="manual_url" />
       <button id="btn-install-url" class="btn btn--success mp-install-btn" data-event-click="install_from_url">{{install_btn_label}}</button>
     </div>
-    <div id="manual-feedback"></div>
+    <div id="manual-feedback" class="card-feedback hidden">
+      <progress id="manual-feedback-progress" class="card-progress hidden" max="1" value="0" />
+      <span id="manual-feedback-progress-text" class="card-progress-text hidden"></span>
+      <span id="manual-feedback-success" class="status-text status-success hidden"></span>
+      <span id="manual-feedback-error" class="status-text status-error hidden"></span>
+    </div>
 
     <!-- Supported formats (collapsible) -->
     <div id="formats-header" class="section-header mp-formats-header">
@@ -79,22 +84,28 @@
         <div class="separator"></div>
       </div>
 
-      <div class="card-feedback" data-attr-id="'feedback-' + p.card_id"></div>
-
-      <!-- Startup checkbox (two variants for checked state) -->
-      <div class="card-startup-row" data-if="p.show_startup_checked">
-        <input type="checkbox" checked="checked"
-               data-action="startup"
-               data-attr-data-card-id="p.card_id"
-               data-attr-data-plugin="p.plugin_name" />
-        <span class="card-startup-label text-disabled">{{ startup_label }}</span>
+      <div class="card-feedback hidden" data-attr-id="'feedback-' + p.card_id">
+        <progress class="card-progress hidden"
+                  max="1"
+                  value="0"
+                  data-attr-id="'feedback-' + p.card_id + '-progress'"></progress>
+        <span class="card-progress-text hidden"
+              data-attr-id="'feedback-' + p.card_id + '-progress-text'"></span>
+        <span class="status-text status-success hidden"
+              data-attr-id="'feedback-' + p.card_id + '-success'"></span>
+        <span class="status-text status-error hidden"
+              data-attr-id="'feedback-' + p.card_id + '-error'"></span>
       </div>
-      <div class="card-startup-row" data-if="p.show_startup_unchecked">
-        <input type="checkbox"
-               data-action="startup"
-               data-attr-data-card-id="p.card_id"
-               data-attr-data-plugin="p.plugin_name" />
-        <span class="card-startup-label text-disabled">{{ startup_label }}</span>
+
+      <div class="card-startup-row" data-if="p.show_startup">
+        <label>
+          <input type="checkbox"
+                 data-attrif-checked="p.startup_checked"
+                 data-action="startup"
+                 data-attr-data-card-id="p.card_id"
+                 data-attr-data-plugin="p.plugin_name" />
+          <span class="card-startup-label text-disabled">{{ startup_label }}</span>
+        </label>
       </div>
 
       <!-- Action buttons -->

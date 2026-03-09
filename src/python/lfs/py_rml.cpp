@@ -20,7 +20,7 @@
 
 namespace lfs::python {
 
-    void register_builtin_transforms(Rml::DataModelConstructor& ctor);
+    void register_builtin_transforms(Rml::DataModelConstructor& ctor, Rml::Context* context);
     nb::object variant_to_python(const Rml::Variant& v);
     Rml::Variant python_to_variant(const nb::handle& obj);
 
@@ -29,8 +29,10 @@ namespace lfs::python {
         std::unordered_set<Rml::ElementDocument*> s_dirty_documents;
         std::map<std::string, DataModelArrayStorage> s_model_storage;
         std::unordered_map<std::string, Rml::DataModelHandle> s_active_handles;
+        std::unordered_map<std::string, Rml::Context*> s_model_contexts;
         std::unordered_set<Rml::Context*> s_string_array_type_contexts;
         std::unordered_set<Rml::Context*> s_record_array_type_contexts;
+        std::unordered_set<Rml::Context*> s_builtin_transform_contexts;
         std::unordered_map<Rml::Context*, class DynamicRecordDefinition*> s_record_definitions;
 
         class DynamicFieldDefinition final : public Rml::VariableDefinition {
@@ -212,13 +214,15 @@ namespace lfs::python {
         auto ctor = ctx_->CreateDataModel(name);
         if (!ctor)
             return nb::none();
-        register_builtin_transforms(ctor);
+        s_model_contexts[name] = ctx_;
+        register_builtin_transforms(ctor, ctx_);
         return nb::cast(PyDataModelConstructor(std::move(ctor), name, ctx_));
     }
 
     bool PyRmlContext::remove_data_model(const std::string& name) {
         s_model_storage.erase(name);
         s_active_handles.erase(name);
+        s_model_contexts.erase(name);
         return ctx_->RemoveDataModel(name);
     }
 
@@ -354,7 +358,7 @@ namespace lfs::python {
     std::string PyRmlElement::get_inner_rml() { return elem_->GetInnerRML(); }
 
     void PyRmlElement::set_text(const std::string& text) {
-        elem_->SetInnerRML(text);
+        elem_->SetInnerRML(Rml::StringUtilities::EncodeRml(text));
         mark_document_dirty(elem_);
     }
 
@@ -597,7 +601,8 @@ namespace lfs::python {
         auto ctor = ctx->CreateDataModel(name);
         if (!ctor)
             return nb::none();
-        register_builtin_transforms(ctor);
+        s_model_contexts[name] = ctx;
+        register_builtin_transforms(ctor, ctx);
         return nb::cast(PyDataModelConstructor(std::move(ctor), name, ctx));
     }
 
@@ -606,6 +611,7 @@ namespace lfs::python {
         assert(ctx);
         s_model_storage.erase(name);
         s_active_handles.erase(name);
+        s_model_contexts.erase(name);
         return ctx->RemoveDataModel(name);
     }
 
@@ -761,7 +767,10 @@ namespace lfs::python {
         return PyDataModelHandle(handle, model_name_, context_);
     }
 
-    void register_builtin_transforms(Rml::DataModelConstructor& ctor) {
+    void register_builtin_transforms(Rml::DataModelConstructor& ctor, Rml::Context* context) {
+        if (context && s_builtin_transform_contexts.contains(context))
+            return;
+
         ctor.RegisterTransformFunc("format_float",
                                    [](const Rml::VariantList& args) -> Rml::Variant {
                                        if (args.empty())
@@ -801,6 +810,9 @@ namespace lfs::python {
                                        std::snprintf(buf, sizeof(buf), "%.1f\xC2\xB0", deg);
                                        return Rml::Variant(Rml::String(buf));
                                    });
+
+        if (context)
+            s_builtin_transform_contexts.insert(context);
     }
 
     void dirty_all_data_models() {
@@ -847,9 +859,31 @@ namespace lfs::python {
         return it != documents_.end() ? it->second : nullptr;
     }
 
+    void release_rml_context_state(Rml::Context* context) {
+        if (!context)
+            return;
+
+        std::erase_if(s_model_contexts, [context](const auto& entry) {
+            if (entry.second != context)
+                return false;
+            s_model_storage.erase(entry.first);
+            s_active_handles.erase(entry.first);
+            return true;
+        });
+
+        s_string_array_type_contexts.erase(context);
+        s_record_array_type_contexts.erase(context);
+        s_builtin_transform_contexts.erase(context);
+        s_record_definitions.erase(context);
+    }
+
     // --- Nanobind registration ---
 
     void register_rml_bindings(nb::module_& m) {
+        set_rml_context_destroy_handler([](void* ctx) {
+            release_rml_context_state(static_cast<Rml::Context*>(ctx));
+        });
+
         auto rml = m.def_submodule("rml", "RmlUI DOM API");
 
         nb::class_<PyRmlContext>(rml, "RmlContext")

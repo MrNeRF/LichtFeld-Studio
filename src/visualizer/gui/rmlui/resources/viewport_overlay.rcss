@@ -1,4 +1,4 @@
-/* Viewport overlay — toolbar layout only.
+/* Viewport overlay: toolbars plus retained status dialogs.
  * Shared widget styles are in components.rcss (auto-included via applyTheme). */
 
 body {
@@ -50,6 +50,63 @@ body {
     width: auto;
     height: 1dp;
     margin: 0 2dp;
+}
+
+.viewport-status-overlay {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.viewport-status-backdrop {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+}
+
+.viewport-status-panel {
+    position: relative;
+    min-width: 320dp;
+    max-width: 420dp;
+    padding: 16dp 18dp;
+    border-width: 1dp;
+    display: flex;
+    flex-direction: column;
+    gap: 8dp;
+}
+
+.viewport-status-title {
+    font-size: 13dp;
+    font-weight: bold;
+}
+
+.viewport-status-path,
+.viewport-status-stage,
+.viewport-status-panel .status-success,
+.viewport-status-panel .status-error {
+    line-height: 1.3;
+}
+
+.viewport-status-progress {
+    position: relative;
+    width: 100%;
+}
+
+.viewport-status-progress progress {
+    width: 100%;
+}
+
+.viewport-status-actions {
+    display: flex;
+    justify-content: center;
+    margin-top: 4dp;
 }
 
 .hidden {

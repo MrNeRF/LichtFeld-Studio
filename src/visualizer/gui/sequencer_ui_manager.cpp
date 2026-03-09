@@ -148,6 +148,12 @@ namespace lfs::vis::gui {
             ImGui::GetIO().WantCaptureMouse = true;
     }
 
+    void SequencerUIManager::compositeOverlays(const int screen_w, const int screen_h) const {
+        if (!overlay_)
+            return;
+        overlay_->compositeToScreen(screen_w, screen_h);
+    }
+
     void SequencerUIManager::renderSequencerPanel(const UIContext& /*ctx*/, const ViewportLayout& viewport) {
         const auto& io = ImGui::GetIO();
         controller_.update(io.DeltaTime);

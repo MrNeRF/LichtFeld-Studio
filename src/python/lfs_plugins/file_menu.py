@@ -4,11 +4,8 @@
 
 import lichtfeld as lf
 from .types import Operator
-from .layouts.menus import register_menu
-from .popups import SaveDirectoryPopup, ResumeCheckpointPopup
-
-_save_dir_popup = SaveDirectoryPopup()
-_resume_popup = ResumeCheckpointPopup()
+from .layouts.menus import register_menu, menu_operator, menu_separator
+from .import_panels import open_dataset_import_panel, open_resume_checkpoint_panel
 
 
 class NewProjectOperator(Operator):
@@ -27,7 +24,7 @@ class ImportDatasetOperator(Operator):
     def execute(self, context) -> set:
         path = lf.ui.open_dataset_folder_dialog()
         if path:
-            _save_dir_popup.show(path, on_confirm=_on_dataset_load)
+            open_dataset_import_panel(path)
         return {"FINISHED"}
 
 
@@ -60,7 +57,7 @@ class ImportCheckpointOperator(Operator):
     def execute(self, context) -> set:
         path = lf.ui.open_checkpoint_file_dialog()
         if path:
-            _resume_popup.show(path, on_confirm=_on_checkpoint_load)
+            open_resume_checkpoint_panel(path)
         return {"FINISHED"}
 
 
@@ -135,32 +132,12 @@ class ExitOperator(Operator):
         return {"FINISHED"}
 
 
-def _on_dataset_load(params):
-    lf.load_file(
-        str(params.dataset_path),
-        is_dataset=True,
-        output_path=str(params.output_path),
-        init_path=str(params.init_path) if params.init_path else "",
-    )
-
-
-def _on_checkpoint_load(params):
-    lf.load_checkpoint_for_training(
-        str(params.checkpoint_path), str(params.dataset_path), str(params.output_path)
-    )
-
-
 def _on_show_dataset_load_popup(path: str):
-    _save_dir_popup.show(path, on_confirm=_on_dataset_load)
+    open_dataset_import_panel(path)
 
 
 def _on_show_resume_checkpoint_popup(path: str):
-    _resume_popup.show(path, on_confirm=_on_checkpoint_load)
-
-
-def _draw_popups(layout):
-    _save_dir_popup.draw(layout)
-    _resume_popup.draw(layout)
+    open_resume_checkpoint_panel(path)
 
 
 @register_menu
@@ -171,22 +148,24 @@ class FileMenu:
     location = "MENU_BAR"
     order = 10
 
-    def draw(self, layout):
-        layout.operator_(NewProjectOperator._class_id())
-        layout.separator()
-        layout.operator_(ImportDatasetOperator._class_id())
-        layout.operator_(ImportPlyOperator._class_id())
-        layout.operator_(ImportMeshOperator._class_id())
-        layout.operator_(ImportCheckpointOperator._class_id())
-        layout.operator_(ImportConfigOperator._class_id())
-        layout.separator()
-        layout.operator_(ExportOperator._class_id())
-        layout.operator_(ExportConfigOperator._class_id())
-        layout.separator()
-        layout.operator_(Mesh2SplatOperator._class_id())
-        layout.operator_(ExtractVideoFramesOperator._class_id())
-        layout.separator()
-        layout.operator_(ExitOperator._class_id())
+    def menu_items(self):
+        return [
+            menu_operator(NewProjectOperator),
+            menu_separator(),
+            menu_operator(ImportDatasetOperator),
+            menu_operator(ImportPlyOperator),
+            menu_operator(ImportMeshOperator),
+            menu_operator(ImportCheckpointOperator),
+            menu_operator(ImportConfigOperator),
+            menu_separator(),
+            menu_operator(ExportOperator),
+            menu_operator(ExportConfigOperator),
+            menu_separator(),
+            menu_operator(Mesh2SplatOperator),
+            menu_operator(ExtractVideoFramesOperator),
+            menu_separator(),
+            menu_operator(ExitOperator),
+        ]
 
 
 _operator_classes = [
@@ -208,14 +187,11 @@ def register():
     for cls in _operator_classes:
         lf.register_class(cls)
 
-    lf.ui.register_popup_draw_callback(_draw_popups)
     lf.ui.on_show_dataset_load_popup(_on_show_dataset_load_popup)
     lf.ui.on_show_resume_checkpoint_popup(_on_show_resume_checkpoint_popup)
     lf.ui.on_request_exit(lambda: lf.ui.execute_operator(ExitOperator._class_id()))
 
 
 def unregister():
-    lf.ui.unregister_popup_draw_callback(_draw_popups)
-
     for cls in reversed(_operator_classes):
         lf.unregister_class(cls)

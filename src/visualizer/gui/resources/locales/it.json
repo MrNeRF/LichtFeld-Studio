@@ -93,7 +93,7 @@
     "section.initialization": "Inizializzazione",
     "section.thresholds": "Soglie",
     "section.save_steps": "Passi di Salvataggio",
-    "section.basic_params": "Parametri Base di Addestramento",
+    "section.basic_params": "Parametri di Addestramento",
     "section.advanced_params": "Parametri Avanzati di Addestramento",
     "section.sparsity": "Impostazioni di Sparsità",
     "section.pruning_growing": "Potatura/Crescita",

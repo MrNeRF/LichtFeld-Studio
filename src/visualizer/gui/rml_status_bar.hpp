@@ -7,6 +7,7 @@
 #include "gui/gpu_memory_query.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/rmlui/rml_fbo.hpp"
+#include <RmlUi/Core/DataModelHandle.h>
 #include <chrono>
 #include <cstddef>
 #include <string>
@@ -31,14 +32,16 @@ namespace lfs::vis::gui {
         void draw(const PanelDrawContext& ctx);
 
     private:
-        void cacheElements();
-        void updateContent(const PanelDrawContext& ctx);
-        void updateTheme();
+        bool updateContent(const PanelDrawContext& ctx, bool force_refresh);
+        bool updateTheme();
         std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
+        void setModelString(const char* name, std::string& field, std::string value);
+        void setModelBool(const char* name, bool& field, bool value);
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
+        Rml::DataModelHandle model_handle_;
 
         RmlFBO fbo_;
 
@@ -65,66 +68,59 @@ namespace lfs::vis::gui {
         SpeedOverlayState speed_state_;
         bool speed_events_initialized_ = false;
 
-        // Cached element pointers
-        Rml::Element* mode_text_ = nullptr;
-        Rml::Element* training_section_ = nullptr;
-        Rml::Element* progress_fill_ = nullptr;
-        Rml::Element* progress_text_ = nullptr;
-        Rml::Element* step_label_ = nullptr;
-        Rml::Element* step_value_ = nullptr;
-        Rml::Element* loss_label_ = nullptr;
-        Rml::Element* loss_value_ = nullptr;
-        Rml::Element* gaussians_label_ = nullptr;
-        Rml::Element* gaussians_value_ = nullptr;
-        Rml::Element* time_value_ = nullptr;
-        Rml::Element* eta_label_ = nullptr;
-        Rml::Element* eta_value_ = nullptr;
-        Rml::Element* splat_section_ = nullptr;
-        Rml::Element* splat_text_ = nullptr;
-        Rml::Element* split_section_ = nullptr;
-        Rml::Element* split_mode_ = nullptr;
-        Rml::Element* split_detail_ = nullptr;
-        Rml::Element* wasd_section_ = nullptr;
-        Rml::Element* wasd_text_ = nullptr;
-        Rml::Element* zoom_section_ = nullptr;
-        Rml::Element* zoom_text_ = nullptr;
-        Rml::Element* gpu_icon_ = nullptr;
-        Rml::Element* lfs_mem_ = nullptr;
-        Rml::Element* gpu_mem_ = nullptr;
-        Rml::Element* fps_value_ = nullptr;
-        Rml::Element* fps_label_ = nullptr;
-        Rml::Element* git_commit_ = nullptr;
-
-        // Cached last-frame values for dirty checking
-        struct CachedState {
-            std::string mode_rml;
+        struct ModelState {
+            std::string mode_text;
             std::string mode_color;
             bool show_training = false;
-            int current_iter = -1;
-            int total_iter = -1;
-            float loss = -1.0f;
-            int num_splats = -1;
-            int max_gaussians = -1;
-            float elapsed = -1.0f;
-            float eta = -1.0f;
+            std::string progress_width = "0%";
+            std::string progress_text;
+            std::string step_label;
+            std::string step_value;
+            std::string loss_label;
+            std::string loss_value;
+            std::string gaussians_label;
+            std::string gaussians_value;
+            std::string time_value;
+            std::string eta_label;
+            std::string eta_value;
             bool show_splats = false;
-            std::string splat_rml;
-            bool split_enabled = false;
-            std::string split_mode_rml;
-            std::string split_detail_rml;
-            std::string wasd_rml;
-            float wasd_alpha = -1.0f;
-            std::string zoom_rml;
-            float zoom_alpha = -1.0f;
-            std::string lfs_mem_rml;
-            std::string gpu_mem_rml;
+            std::string splat_text;
+            std::string splat_color;
+            bool show_split = false;
+            std::string split_mode;
+            std::string split_mode_color;
+            std::string split_detail;
+            bool show_wasd = false;
+            std::string wasd_text;
+            std::string wasd_color;
+            std::string wasd_sep_color;
+            bool show_zoom = false;
+            std::string zoom_text;
+            std::string zoom_color;
+            std::string zoom_sep_color;
+            std::string lfs_mem_text;
+            std::string lfs_mem_color;
+            std::string gpu_mem_text;
             std::string gpu_mem_color;
-            std::string fps_rml;
+            std::string fps_value;
             std::string fps_color;
-            bool git_set = false;
+            std::string fps_label;
+            std::string git_commit;
         };
 
-        CachedState cache_;
+        ModelState model_;
+        GpuMemoryInfo cached_gpu_mem_;
+        std::chrono::steady_clock::time_point next_refresh_at_{};
+        std::chrono::steady_clock::time_point next_gpu_refresh_at_{};
+        bool model_dirty_ = true;
+        bool animation_active_ = false;
+        int last_render_w_ = 0;
+        int last_render_h_ = 0;
+        int last_document_h_ = 0;
+        static constexpr auto kIdleRefreshInterval = std::chrono::milliseconds(200);
+        static constexpr auto kBusyRefreshInterval = std::chrono::milliseconds(100);
+        static constexpr auto kAnimatedRefreshInterval = std::chrono::milliseconds(16);
+        static constexpr auto kGpuRefreshInterval = std::chrono::milliseconds(250);
     };
 
 } // namespace lfs::vis::gui

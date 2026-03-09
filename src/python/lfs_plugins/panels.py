@@ -20,9 +20,11 @@ def register_builtin_panels():
         from .scene_panel import ScenePanel
         lf.ui.register_rml_panel(ScenePanel)
 
-        from .toolbar import GizmoToolbar, UtilityToolbar
-        lf.register_class(UtilityToolbar)
-        lf.register_class(GizmoToolbar)
+        from .import_panels import DatasetImportPanel, ResumeCheckpointPanel
+        lf.ui.register_rml_panel(DatasetImportPanel)
+        lf.ui.set_panel_enabled("lfs.dataset_import", False)
+        lf.ui.register_rml_panel(ResumeCheckpointPanel)
+        lf.ui.set_panel_enabled("lfs.resume_checkpoint", False)
 
         from . import selection_groups
         selection_groups.register()
@@ -66,12 +68,16 @@ def register_builtin_panels():
         lf.ui.on_open_camera_preview(open_camera_preview_by_uid)
 
         from .scripts_panel import ScriptsPanel
-        lf.register_class(ScriptsPanel)
+        lf.ui.register_rml_panel(ScriptsPanel)
         lf.ui.set_panel_enabled("lfs.scripts", False)
 
         from .input_settings_panel import InputSettingsPanel
         lf.ui.register_rml_panel(InputSettingsPanel)
         lf.ui.set_panel_enabled("lfs.input_settings", False)
+
+        from .mesh2splat_panel import Mesh2SplatPanel
+        lf.ui.register_rml_panel(Mesh2SplatPanel)
+        lf.ui.set_panel_enabled("native.mesh2splat", False)
 
         lf.ui.register_rml_panel(PluginMarketplacePanel)
         lf.ui.set_panel_enabled("lfs.plugin_marketplace", False)

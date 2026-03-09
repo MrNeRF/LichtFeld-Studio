@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "core/logger.hpp"
+#include "py_rml.hpp"
 #include "py_ui.hpp"
 
 #include <algorithm>
@@ -63,7 +64,15 @@ namespace lfs::python {
     void PyUIHookRegistry::invoke(const std::string& panel,
                                   const std::string& section,
                                   PyHookPosition position) {
+        invoke_document(panel, section, nullptr, position);
+    }
+
+    void PyUIHookRegistry::invoke_document(const std::string& panel,
+                                           const std::string& section,
+                                           Rml::ElementDocument* document,
+                                           PyHookPosition position) {
         std::vector<nb::object> callbacks;
+        nb::gil_scoped_acquire gil;
         {
             std::lock_guard lock(mutex_);
             const std::string key = panel + ":" + section;
@@ -82,11 +91,14 @@ namespace lfs::python {
             return;
         }
 
-        nb::gil_scoped_acquire gil;
         for (const auto& cb : callbacks) {
             try {
-                PyUILayout layout;
-                cb(layout);
+                if (document) {
+                    cb(PyRmlDocument(document));
+                } else {
+                    PyUILayout layout;
+                    cb(layout);
+                }
             } catch (const std::exception& e) {
                 LOG_ERROR("Hook {}:{} error: {}", panel, section, e.what());
             }

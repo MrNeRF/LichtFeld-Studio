@@ -5,6 +5,7 @@
 #pragma once
 
 #include "gui/rmlui/rml_fbo.hpp"
+#include <chrono>
 #include <cstddef>
 #include <glm/glm.hpp>
 #include <string>
@@ -26,14 +27,17 @@ namespace lfs::vis::gui {
     public:
         void init(RmlUIManager* mgr);
         void shutdown();
-        void setViewportBounds(glm::vec2 pos, glm::vec2 size);
+        void setViewportBounds(glm::vec2 pos, glm::vec2 size, glm::vec2 screen_origin);
         void render();
+        void compositeToScreen(int screen_w, int screen_h) const;
         void processInput();
         bool wantsInput() const { return wants_input_; }
 
     private:
-        void updateTheme();
+        bool updateTheme();
         std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
+        void ensureBodyDataModelBound(Rml::Element* body);
+        bool shouldRunDocumentHooks(bool force) const;
 
         RmlUIManager* rml_manager_ = nullptr;
         Rml::Context* rml_context_ = nullptr;
@@ -43,11 +47,21 @@ namespace lfs::vis::gui {
 
         glm::vec2 vp_pos_{0, 0};
         glm::vec2 vp_size_{0, 0};
+        glm::vec2 screen_origin_{0, 0};
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;
         std::string base_rcss_;
         bool wants_input_ = false;
         bool doc_registered_ = false;
+        bool render_needed_ = true;
+        bool animation_active_ = false;
+        bool mouse_pos_valid_ = false;
+        int last_mouse_x_ = 0;
+        int last_mouse_y_ = 0;
+        int last_render_w_ = 0;
+        int last_render_h_ = 0;
+        std::chrono::steady_clock::time_point last_document_hook_run_{};
+        static constexpr auto kDocumentHookPollInterval = std::chrono::milliseconds(100);
     };
 
 } // namespace lfs::vis::gui

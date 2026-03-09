@@ -9,6 +9,7 @@
 #include <core/export.hpp>
 #include <cstddef>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -52,6 +53,8 @@ namespace lfs::vis::gui {
         static std::string consumeFrameTooltip();
         static void setFrameTooltip(const std::string& tip);
         static bool consumeFrameWantsKeyboard();
+        static void clearQueuedForegroundComposites();
+        static void flushQueuedForegroundComposites(int screen_w, int screen_h);
 
         void setHeightMode(HeightMode mode) { height_mode_ = mode; }
         HeightMode getHeightMode() const { return height_mode_; }
@@ -74,7 +77,18 @@ namespace lfs::vis::gui {
         static void pushTextInput(const std::string& text);
 
     private:
+        struct ShadowRect {
+            float x = 0.0f;
+            float y = 0.0f;
+            float w = 0.0f;
+            float h = 0.0f;
+            float rounding = 0.0f;
+        };
+
         static std::vector<uint32_t> drainTextInput();
+        std::optional<ShadowRect> collectVisibleColorPickerPopupShadow(float panel_screen_x,
+                                                                       float panel_screen_y) const;
+        bool hitTestPanelShape(float local_x, float local_y, float logical_w, float logical_h);
         bool forwardInput(float panel_x, float panel_y);
         bool syncThemeProperties();
         std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
@@ -85,13 +99,29 @@ namespace lfs::vis::gui {
         float clampScrollTop(float scroll_top) const;
         void restoreScrollTop(float scroll_top);
         void resolveDirectRenderHeight(float requested_h, int& ph, float& display_h) const;
+        bool updateContextLayout(int pw, int ph);
         void renderIfDirty(int pw, int ph, float& display_h);
+        void compositeDirectToScreen(float x, float y, float w, float h) const;
+
+        struct CompositeCommand {
+            const RmlFBO* fbo = nullptr;
+            float x = 0.0f;
+            float y = 0.0f;
+            float w = 0.0f;
+            float h = 0.0f;
+            float clip_x1 = 0.0f;
+            float clip_y1 = 0.0f;
+            float clip_x2 = 0.0f;
+            float clip_y2 = 0.0f;
+            std::optional<ShadowRect> popover_shadow;
+        };
 
         RmlUIManager* manager_;
         std::string context_name_;
         std::string rml_path_;
         Rml::Context* rml_context_ = nullptr;
         Rml::ElementDocument* document_ = nullptr;
+        Rml::Element* frame_el_ = nullptr;
         Rml::Element* content_wrap_el_ = nullptr;
         Rml::Element* content_el_ = nullptr;
         Rml::Element* scroll_el_ = nullptr;
@@ -124,6 +154,8 @@ namespace lfs::vis::gui {
         int last_forwarded_mx_ = -1;
         int last_forwarded_my_ = -1;
         bool last_hovered_ = false;
+
+        static std::vector<CompositeCommand> queued_foreground_composites_;
     };
 
 } // namespace lfs::vis::gui

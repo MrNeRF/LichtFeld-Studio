@@ -134,6 +134,14 @@ namespace lfs::vis {
             return brightness >= LIGHT_POPUP_BG_THRESHOLD;
         }
 
+        ImVec4 mix(const ImVec4& a, const ImVec4& b, const float factor) {
+            return {
+                a.x + (b.x - a.x) * factor,
+                a.y + (b.y - a.y) * factor,
+                a.z + (b.z - a.z) * factor,
+                a.w + (b.w - a.w) * factor};
+        }
+
     } // namespace
 
     // Color utilities
@@ -329,23 +337,33 @@ namespace lfs::vis {
 
         const bool is_light = g_current_theme.isLightTheme();
         const bool is_light_popup = useLightPopupBackground(g_current_theme);
+        const ImVec4 window_bg = p.surface;
+        const ImVec4 child_bg = is_light ? darken(p.surface, 0.015f) : darken(p.surface, 0.025f);
+        const ImVec4 popup_bg = is_light_popup ? lighten(p.surface, 0.02f) : lighten(p.surface, 0.01f);
+        const ImVec4 title_bg = is_light ? darken(p.surface, 0.02f) : lighten(p.surface, 0.035f);
+        const ImVec4 title_bg_active = is_light ? mix(p.surface, p.surface_bright, 0.55f)
+                                                : mix(p.surface, p.surface_bright, 0.75f);
+        const ImVec4 button_bg = is_light ? darken(p.surface, 0.01f) : darken(p.surface, 0.015f);
+        const ImVec4 tab_bg = is_light ? darken(p.surface, 0.01f) : darken(p.surface, 0.008f);
+        const ImVec4 tab_active_bg = is_light ? mix(p.surface_bright, p.primary_dim, 0.10f)
+                                              : mix(p.surface_bright, p.primary_dim, 0.18f);
         ImVec4* const colors = style.Colors;
         colors[ImGuiCol_Text] = p.text;
         colors[ImGuiCol_TextDisabled] = p.text_dim;
-        colors[ImGuiCol_WindowBg] = p.background;
-        colors[ImGuiCol_ChildBg] = p.background;
-        colors[ImGuiCol_PopupBg] = is_light_popup ? p.background : p.surface;
+        colors[ImGuiCol_WindowBg] = window_bg;
+        colors[ImGuiCol_ChildBg] = child_bg;
+        colors[ImGuiCol_PopupBg] = popup_bg;
         colors[ImGuiCol_Border] = p.border;
         colors[ImGuiCol_BorderShadow] = ImVec4(0, 0, 0, 0);
 
         const float frame_darken = g_current_theme.frameDarkenAmount();
-        colors[ImGuiCol_FrameBg] = darken(p.surface, frame_darken);
+        colors[ImGuiCol_FrameBg] = darken(window_bg, frame_darken);
         colors[ImGuiCol_FrameBgHovered] = is_light ? darken(p.surface, 0.08f) : p.surface_bright;
         colors[ImGuiCol_FrameBgActive] = p.primary_dim;
-        colors[ImGuiCol_TitleBg] = p.surface;
-        colors[ImGuiCol_TitleBgActive] = p.surface;
-        colors[ImGuiCol_TitleBgCollapsed] = p.surface;
-        colors[ImGuiCol_MenuBarBg] = p.surface;
+        colors[ImGuiCol_TitleBg] = title_bg;
+        colors[ImGuiCol_TitleBgActive] = title_bg_active;
+        colors[ImGuiCol_TitleBgCollapsed] = title_bg;
+        colors[ImGuiCol_MenuBarBg] = title_bg;
         colors[ImGuiCol_ScrollbarBg] = darken(p.background, 0.05f);
         colors[ImGuiCol_ScrollbarGrab] = p.surface_bright;
         colors[ImGuiCol_ScrollbarGrabHovered] = lighten(p.surface_bright, 0.1f);
@@ -353,7 +371,7 @@ namespace lfs::vis {
         colors[ImGuiCol_CheckMark] = p.primary;
         colors[ImGuiCol_SliderGrab] = p.primary;
         colors[ImGuiCol_SliderGrabActive] = lighten(p.primary, 0.1f);
-        colors[ImGuiCol_Button] = p.surface;
+        colors[ImGuiCol_Button] = button_bg;
         colors[ImGuiCol_ButtonHovered] = p.surface_bright;
         colors[ImGuiCol_ButtonActive] = p.primary_dim;
         colors[ImGuiCol_Header] = withAlpha(p.primary, 0.25f);
@@ -365,20 +383,20 @@ namespace lfs::vis {
         colors[ImGuiCol_ResizeGrip] = withAlpha(p.primary, 0.2f);
         colors[ImGuiCol_ResizeGripHovered] = withAlpha(p.primary, 0.6f);
         colors[ImGuiCol_ResizeGripActive] = p.primary;
-        colors[ImGuiCol_Tab] = p.surface;
+        colors[ImGuiCol_Tab] = tab_bg;
         colors[ImGuiCol_TabHovered] = p.surface_bright;
-        colors[ImGuiCol_TabActive] = p.primary_dim;
-        colors[ImGuiCol_TabUnfocused] = p.surface;
-        colors[ImGuiCol_TabUnfocusedActive] = p.surface_bright;
+        colors[ImGuiCol_TabActive] = tab_active_bg;
+        colors[ImGuiCol_TabUnfocused] = tab_bg;
+        colors[ImGuiCol_TabUnfocusedActive] = tab_active_bg;
         colors[ImGuiCol_PlotLines] = p.primary;
         colors[ImGuiCol_PlotLinesHovered] = lighten(p.primary, 0.2f);
         colors[ImGuiCol_PlotHistogram] = p.primary;
         colors[ImGuiCol_PlotHistogramHovered] = lighten(p.primary, 0.2f);
-        colors[ImGuiCol_TableHeaderBg] = p.surface;
+        colors[ImGuiCol_TableHeaderBg] = title_bg;
         colors[ImGuiCol_TableBorderStrong] = p.border;
-        colors[ImGuiCol_TableBorderLight] = withAlpha(p.border, 0.5f);
+        colors[ImGuiCol_TableBorderLight] = withAlpha(p.border, 0.65f);
         colors[ImGuiCol_TableRowBg] = ImVec4(0, 0, 0, 0);
-        colors[ImGuiCol_TableRowBgAlt] = withAlpha(p.surface, 0.3f);
+        colors[ImGuiCol_TableRowBgAlt] = withAlpha(p.surface_bright, is_light ? 0.16f : 0.14f);
         colors[ImGuiCol_TextSelectedBg] = withAlpha(p.primary, 0.35f);
         colors[ImGuiCol_DragDropTarget] = p.primary;
         colors[ImGuiCol_NavHighlight] = p.primary;
