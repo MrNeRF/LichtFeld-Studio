@@ -142,6 +142,8 @@ namespace lfs::python {
         pc_->scaling = pc_->scaling.is_valid() ? pc_->scaling[mask_dev] : pc_->scaling;
         pc_->rotation = pc_->rotation.is_valid() ? pc_->rotation[mask_dev] : pc_->rotation;
 
+        if (scene_)
+            scene_->setPointCloudModified(true);
         return old_size - pc_->size();
     }
 
@@ -162,6 +164,8 @@ namespace lfs::python {
         pc_->scaling = pc_->scaling.is_valid() ? pc_->scaling[idx_dev] : pc_->scaling;
         pc_->rotation = pc_->rotation.is_valid() ? pc_->rotation[idx_dev] : pc_->rotation;
 
+        if (scene_)
+            scene_->setPointCloudModified(true);
         return old_size - pc_->size();
     }
 
@@ -185,6 +189,7 @@ namespace lfs::python {
             }
         }
         if (scene_) {
+            scene_->setPointCloudModified(true);
             scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         }
     }
@@ -195,6 +200,7 @@ namespace lfs::python {
         assert(cols.shape()[0] == pc_->size());
         pc_->colors = cols.to(core::Device::CUDA);
         if (scene_) {
+            scene_->setPointCloudModified(true);
             scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         }
     }
@@ -210,6 +216,7 @@ namespace lfs::python {
             node_->centroid = glm::vec3(acc(0), acc(1), acc(2));
         }
         if (scene_) {
+            scene_->setPointCloudModified(true);
             scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
         }
     }
@@ -848,12 +855,14 @@ Returns:
             .def("get_node_bounds", &PyScene::get_node_bounds, nb::arg("id"), "Get axis-aligned bounding box as ((min_x, min_y, min_z), (max_x, max_y, max_z))")
             .def("get_node_bounds_center", &PyScene::get_node_bounds_center, nb::arg("id"), "Get center of the node bounding box as (x, y, z)")
             // Bounds (by name)
-            .def("get_node_bounds", [](PyScene& self, const std::string& name) {
+            .def(
+                "get_node_bounds", [](PyScene& self, const std::string& name) {
                     auto node = self.get_node(name);
                     if (!node)
                         return decltype(self.get_node_bounds(0)){std::nullopt};
                     return self.get_node_bounds(node->id()); }, nb::arg("name"), "Get axis-aligned bounding box by node name")
-            .def("get_node_bounds_center", [](PyScene& self, const std::string& name) {
+            .def(
+                "get_node_bounds_center", [](PyScene& self, const std::string& name) {
                     auto node = self.get_node(name);
                     if (!node)
                         throw std::runtime_error("Node not found: " + name);
@@ -887,6 +896,7 @@ Returns:
             .def("get_active_cameras", &PyScene::get_active_cameras, "Get camera nodes enabled for training")
             // Training data
             .def("has_training_data", &PyScene::has_training_data, "Check if training dataset is loaded")
+            .def_prop_rw("is_point_cloud_modified", &PyScene::is_point_cloud_modified, &PyScene::set_point_cloud_modified, "Whether the point cloud has been modified since loading")
             .def_prop_ro("scene_center", &PyScene::scene_center, "Scene center position as a [3] tensor")
             // Counts
             .def_prop_ro("node_count", &PyScene::node_count, "Total number of nodes in the scene")
