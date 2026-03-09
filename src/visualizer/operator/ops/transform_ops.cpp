@@ -228,7 +228,20 @@ namespace lfs::vis::op {
         return true;
     }
 
-    OperatorResult TransformApplyBatchOperator::invoke(OperatorContext& /*ctx*/, OperatorProperties& /*props*/) {
+    OperatorResult TransformApplyBatchOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
+        auto node_names = props.get<std::vector<std::string>>("node_names");
+        auto old_transforms = props.get<std::vector<glm::mat4>>("old_transforms");
+        if (!node_names || !old_transforms || node_names->empty()) {
+            return OperatorResult::CANCELLED;
+        }
+
+        auto entry = std::make_unique<SceneSnapshot>(ctx.scene(), "transform.batch");
+        if (!entry->captureTransformsBefore(*node_names, *old_transforms)) {
+            return OperatorResult::CANCELLED;
+        }
+        entry->captureAfter();
+        undoHistory().push(std::move(entry));
+
         return OperatorResult::FINISHED;
     }
 

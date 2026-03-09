@@ -3,8 +3,11 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "edit_ops.hpp"
+#include "core/services.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
+#include "rendering/dirty_flags.hpp"
+#include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 
 namespace lfs::vis::op {
@@ -27,6 +30,9 @@ namespace lfs::vis::op {
 
     OperatorResult UndoOperator::invoke(OperatorContext& /*ctx*/, OperatorProperties& /*props*/) {
         undoHistory().undo();
+        if (auto* rm = services().renderingOrNull()) {
+            rm->markDirty(DirtyFlag::ALL);
+        }
         return OperatorResult::FINISHED;
     }
 
@@ -48,6 +54,9 @@ namespace lfs::vis::op {
 
     OperatorResult RedoOperator::invoke(OperatorContext& /*ctx*/, OperatorProperties& /*props*/) {
         undoHistory().redo();
+        if (auto* rm = services().renderingOrNull()) {
+            rm->markDirty(DirtyFlag::ALL);
+        }
         return OperatorResult::FINISHED;
     }
 

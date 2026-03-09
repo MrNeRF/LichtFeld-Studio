@@ -12,6 +12,8 @@
 #include "core/scene.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/ui_widgets.hpp"
+#include "operation/undo_entry.hpp"
+#include "operation/undo_history.hpp"
 #include "operator/operator_id.hpp"
 #include "operator/operator_registry.hpp"
 #include "python/python_runtime.hpp"
@@ -895,6 +897,8 @@ namespace lfs::vis::gui {
         if (is_using && !cropbox_gizmo_active_) {
             cropbox_gizmo_active_ = true;
             cropbox_node_name_ = cropbox_node->name;
+            cropbox_data_before_drag_ = *cropbox_node->cropbox;
+            cropbox_transform_before_drag_ = scene_manager->getNodeTransform(cropbox_node->name);
 
             gizmo_context_ = gizmo_ops::captureCropBox(
                 scene_manager->getScene(),
@@ -936,12 +940,19 @@ namespace lfs::vis::gui {
 
             auto* node = scene_manager->getScene().getMutableNode(cropbox_node_name_);
             if (node && node->cropbox) {
-                using namespace lfs::core::events;
-                ui::CropBoxChanged{
-                    .min_bounds = node->cropbox->min,
-                    .max_bounds = node->cropbox->max,
-                    .enabled = settings.use_crop_box}
-                    .emit();
+                auto entry = std::make_unique<op::CropBoxUndoEntry>(
+                    *scene_manager, cropbox_node_name_,
+                    cropbox_data_before_drag_, cropbox_transform_before_drag_);
+                if (entry->hasChanges()) {
+                    op::undoHistory().push(std::move(entry));
+
+                    using namespace lfs::core::events;
+                    ui::CropBoxChanged{
+                        .min_bounds = node->cropbox->min,
+                        .max_bounds = node->cropbox->max,
+                        .enabled = settings.use_crop_box}
+                        .emit();
+                }
             }
         }
 
@@ -1064,6 +1075,8 @@ namespace lfs::vis::gui {
         if (is_using && !ellipsoid_gizmo_active_) {
             ellipsoid_gizmo_active_ = true;
             ellipsoid_node_name_ = ellipsoid_node->name;
+            ellipsoid_data_before_drag_ = *ellipsoid_node->ellipsoid;
+            ellipsoid_transform_before_drag_ = scene_manager->getNodeTransform(ellipsoid_node->name);
 
             gizmo_context_ = gizmo_ops::captureEllipsoid(
                 scene_manager->getScene(),
@@ -1105,11 +1118,18 @@ namespace lfs::vis::gui {
 
             auto* node = scene_manager->getScene().getMutableNode(ellipsoid_node_name_);
             if (node && node->ellipsoid) {
-                using namespace lfs::core::events;
-                ui::EllipsoidChanged{
-                    .radii = node->ellipsoid->radii,
-                    .enabled = settings.use_ellipsoid}
-                    .emit();
+                auto entry = std::make_unique<op::EllipsoidUndoEntry>(
+                    *scene_manager, ellipsoid_node_name_,
+                    ellipsoid_data_before_drag_, ellipsoid_transform_before_drag_);
+                if (entry->hasChanges()) {
+                    op::undoHistory().push(std::move(entry));
+
+                    using namespace lfs::core::events;
+                    ui::EllipsoidChanged{
+                        .radii = node->ellipsoid->radii,
+                        .enabled = settings.use_ellipsoid}
+                        .emit();
+                }
             }
         }
 

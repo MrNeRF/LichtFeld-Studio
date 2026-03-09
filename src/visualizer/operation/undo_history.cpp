@@ -3,9 +3,26 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "undo_history.hpp"
+#include "core/services.hpp"
 #include "core/logger.hpp"
+#include "operator/operator_registry.hpp"
+#include "rendering/dirty_flags.hpp"
+#include "rendering/rendering_manager.hpp"
 
 namespace lfs::vis::op {
+
+    namespace {
+        void invalidateUndoRedoPollState() {
+            operators().invalidatePollCache();
+        }
+
+        void refreshAfterHistoryPlayback() {
+            invalidateUndoRedoPollState();
+            if (auto* rm = services().renderingOrNull()) {
+                rm->markDirty(DirtyFlag::ALL);
+            }
+        }
+    } // namespace
 
     UndoHistory& UndoHistory::instance() {
         static UndoHistory instance;
@@ -17,55 +34,67 @@ namespace lfs::vis::op {
             return;
         }
 
-        std::lock_guard lock(mutex_);
+        {
+            std::lock_guard lock(mutex_);
 
-        redo_stack_.clear();
+            redo_stack_.clear();
 
-        undo_stack_.push_back(std::move(entry));
+            undo_stack_.push_back(std::move(entry));
 
-        while (undo_stack_.size() > MAX_ENTRIES) {
-            undo_stack_.pop_front();
+            while (undo_stack_.size() > MAX_ENTRIES) {
+                undo_stack_.pop_front();
+            }
+
+            LOG_DEBUG("Pushed undo entry: {} (stack size: {})", undo_stack_.back()->name(), undo_stack_.size());
         }
-
-        LOG_DEBUG("Pushed undo entry: {} (stack size: {})", undo_stack_.back()->name(), undo_stack_.size());
+        invalidateUndoRedoPollState();
     }
 
     void UndoHistory::undo() {
-        std::lock_guard lock(mutex_);
+        {
+            std::lock_guard lock(mutex_);
 
-        if (undo_stack_.empty()) {
-            return;
+            if (undo_stack_.empty()) {
+                return;
+            }
+
+            auto entry = std::move(undo_stack_.back());
+            undo_stack_.pop_back();
+
+            LOG_DEBUG("Undoing: {}", entry->name());
+            entry->undo();
+
+            redo_stack_.push_back(std::move(entry));
         }
-
-        auto entry = std::move(undo_stack_.back());
-        undo_stack_.pop_back();
-
-        LOG_DEBUG("Undoing: {}", entry->name());
-        entry->undo();
-
-        redo_stack_.push_back(std::move(entry));
+        refreshAfterHistoryPlayback();
     }
 
     void UndoHistory::redo() {
-        std::lock_guard lock(mutex_);
+        {
+            std::lock_guard lock(mutex_);
 
-        if (redo_stack_.empty()) {
-            return;
+            if (redo_stack_.empty()) {
+                return;
+            }
+
+            auto entry = std::move(redo_stack_.back());
+            redo_stack_.pop_back();
+
+            LOG_DEBUG("Redoing: {}", entry->name());
+            entry->redo();
+
+            undo_stack_.push_back(std::move(entry));
         }
-
-        auto entry = std::move(redo_stack_.back());
-        redo_stack_.pop_back();
-
-        LOG_DEBUG("Redoing: {}", entry->name());
-        entry->redo();
-
-        undo_stack_.push_back(std::move(entry));
+        refreshAfterHistoryPlayback();
     }
 
     void UndoHistory::clear() {
-        std::lock_guard lock(mutex_);
-        undo_stack_.clear();
-        redo_stack_.clear();
+        {
+            std::lock_guard lock(mutex_);
+            undo_stack_.clear();
+            redo_stack_.clear();
+        }
+        invalidateUndoRedoPollState();
     }
 
     bool UndoHistory::canUndo() const {

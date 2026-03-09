@@ -143,6 +143,15 @@ namespace lfs::vis {
             case input::Action::SELECT_MODE_POLYGON:
             case input::Action::SELECT_MODE_LASSO:
             case input::Action::SELECT_MODE_RINGS:
+            case input::Action::UNDO:
+            case input::Action::REDO:
+            case input::Action::DELETE_SELECTED:
+            case input::Action::DELETE_NODE:
+            case input::Action::INVERT_SELECTION:
+            case input::Action::DESELECT_ALL:
+            case input::Action::SELECT_ALL:
+            case input::Action::COPY_SELECTION:
+            case input::Action::PASTE_SELECTION:
                 return true;
             default:
                 return false;
