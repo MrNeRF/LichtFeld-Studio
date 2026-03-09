@@ -1152,7 +1152,7 @@ class TrainingPanel(RmlPanel):
                 try:
                     self._save_modified_pc()
                 except Exception as e:
-                    lf.log_error(f"Failed to save point cloud: {e}")
+                    lf.log.error(f"Failed to save point cloud: {e}")
                 lf.start_training()
             elif button == _k:
                 lf.start_training()
@@ -1175,10 +1175,13 @@ class TrainingPanel(RmlPanel):
         if not scene:
             return
         for node in scene.get_nodes():
-            if node.type_name == "POINTCLOUD" and node.point_cloud():
-                lf.io.save_point_cloud_ply(node.point_cloud(), save_path)
-                scene.is_point_cloud_modified = False
-                return
+            if node.type == lf.scene.NodeType.POINTCLOUD:
+                pc = node.point_cloud()
+                if pc:
+                    lf.io.save_point_cloud_ply(pc, save_path)
+                    lf.log.info(f"Saved point cloud ({pc.size} points) to {save_path}")
+                    scene.is_point_cloud_modified = False
+                    return
 
     def _on_remove_step_event(self, handle, event, args):
         if not args:
