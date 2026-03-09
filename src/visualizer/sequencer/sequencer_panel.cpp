@@ -5,6 +5,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/services.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "gui/string_keys.hpp"
 #include "rendering/render_constants.hpp"
 #include "theme/theme.hpp"
@@ -314,7 +315,7 @@ namespace lfs::vis {
                                        mouse.y >= bar_min.y - RULER_HEIGHT && mouse.y <= bar_max.y;
 
         // Timeline zoom with scroll wheel
-        if (mouse_in_timeline && !ImGui::GetIO().WantCaptureMouse) {
+        if (mouse_in_timeline && !gui::guiFocusState().want_capture_mouse) {
             const float wheel = ImGui::GetIO().MouseWheel;
             if (std::abs(wheel) > 0.01f) {
                 const float old_zoom = zoom_level_;

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "input/frame_input_buffer.hpp"
 #include <atomic>
 #include <filesystem>
 #include <glm/glm.hpp>
@@ -51,6 +52,7 @@ namespace lfs::vis {
 
         void setCallbackHandler(void* handler) { callback_handler_ = handler; }
         void setInputController(InputController* ic) { input_controller_ = ic; }
+        [[nodiscard]] const FrameInputBuffer& frameInput() const { return frame_input_; }
 
     private:
         void processEvent(const ::SDL_Event& event);
@@ -71,6 +73,7 @@ namespace lfs::vis {
 
         static void* callback_handler_;
         InputController* input_controller_ = nullptr;
+        FrameInputBuffer frame_input_;
         mutable std::atomic<bool> needs_redraw_{false};
         std::vector<std::string> pending_drop_files_;
     };

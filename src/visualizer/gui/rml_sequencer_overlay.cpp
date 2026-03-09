@@ -10,7 +10,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
-#include "gui/rmlui/rml_input_utils.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
@@ -20,12 +20,13 @@
 #include "sequencer/sequencer_controller.hpp"
 #include "theme/theme.hpp"
 
+#include "gui/rmlui/sdl_rml_key_mapping.hpp"
+
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Input.h>
 #include <cassert>
 #include <format>
-#include <imgui.h>
 #include <ImGuizmo.h>
 
 namespace lfs::vis::gui {
@@ -291,8 +292,7 @@ namespace lfs::vis::gui {
         syncTheme();
         rml_context_->Update();
         const float menu_h = el_context_menu_->GetClientHeight();
-        const float screen_h = ImGui::GetIO().DisplaySize.y;
-        const float y = (screen_y + menu_h > screen_h)
+        const float y = (screen_y + menu_h > static_cast<float>(height_))
                             ? std::max(0.0f, screen_y - menu_h)
                             : screen_y;
 
@@ -319,9 +319,8 @@ namespace lfs::vis::gui {
 
         el_time_input_->SetAttribute("value", std::format("{:.2f}", current_time));
 
-        const auto& io = ImGui::GetIO();
-        const float popup_x = io.DisplaySize.x * 0.5f - 110.0f;
-        const float popup_y = io.DisplaySize.y * 0.5f - 60.0f;
+        const float popup_x = static_cast<float>(width_) * 0.5f - 110.0f;
+        const float popup_y = static_cast<float>(height_) * 0.5f - 60.0f;
         el_time_popup_->SetProperty("left", std::format("{:.0f}dp", popup_x));
         el_time_popup_->SetProperty("top", std::format("{:.0f}dp", popup_y));
         el_time_popup_->SetProperty("display", "block");
@@ -340,9 +339,8 @@ namespace lfs::vis::gui {
 
         el_focal_input_->SetAttribute("value", std::format("{:.1f}", current_focal_mm));
 
-        const auto& io = ImGui::GetIO();
-        const float popup_x = io.DisplaySize.x * 0.5f - 110.0f;
-        const float popup_y = io.DisplaySize.y * 0.5f - 60.0f;
+        const float popup_x = static_cast<float>(width_) * 0.5f - 110.0f;
+        const float popup_y = static_cast<float>(height_) * 0.5f - 60.0f;
         el_focal_popup_->SetProperty("left", std::format("{:.0f}dp", popup_x));
         el_focal_popup_->SetProperty("top", std::format("{:.0f}dp", popup_y));
         el_focal_popup_->SetProperty("display", "block");
@@ -453,34 +451,37 @@ namespace lfs::vis::gui {
         const bool need_keyboard = has_text_focus_ || context_menu_open_ ||
                                    time_edit_active_ || focal_edit_active_;
         if (need_keyboard) {
-            ImGuiIO& io = ImGui::GetIO();
-            io.WantCaptureKeyboard = true;
+            auto& focus = gui::guiFocusState();
+            focus.want_capture_keyboard = true;
+            if (has_text_focus_ || time_edit_active_ || focal_edit_active_)
+                focus.want_text_input = true;
 
-            const int mods = buildRmlModifiers();
-            for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
-                const auto imgui_key = static_cast<ImGuiKey>(k);
-                const auto rml_key = imguiKeyToRml(imgui_key);
-                if (rml_key == Rml::Input::KI_UNKNOWN)
-                    continue;
-                if (ImGui::IsKeyPressed(imgui_key, false))
+            const int mods = gui::sdlModsToRml(input.key_ctrl, input.key_shift,
+                                               input.key_alt, input.key_super);
+            for (int sc : input.keys_pressed) {
+                const auto rml_key = gui::sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
+                if (rml_key != Rml::Input::KI_UNKNOWN)
                     rml_context_->ProcessKeyDown(rml_key, mods);
-                if (ImGui::IsKeyReleased(imgui_key))
+            }
+            for (int sc : input.keys_released) {
+                const auto rml_key = gui::sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
+                if (rml_key != Rml::Input::KI_UNKNOWN)
                     rml_context_->ProcessKeyUp(rml_key, mods);
             }
 
             if (has_text_focus_) {
-                for (int i = 0; i < io.InputQueueCharacters.Size; i++)
-                    rml_context_->ProcessTextInput(
-                        static_cast<Rml::Character>(io.InputQueueCharacters[i]));
+                for (uint32_t cp : input.text_codepoints)
+                    rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
             }
 
-            if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
+            if (gui::hasKey(input.keys_pressed, SDL_SCANCODE_RETURN) ||
+                gui::hasKey(input.keys_pressed, SDL_SCANCODE_KP_ENTER)) {
                 if (time_edit_active_)
                     submitTimeEdit();
                 else if (focal_edit_active_)
                     submitFocalEdit();
             }
-            if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            if (gui::hasKey(input.keys_pressed, SDL_SCANCODE_ESCAPE)) {
                 if (time_edit_active_) {
                     time_edit_active_ = false;
                     has_text_focus_ = false;
@@ -498,9 +499,9 @@ namespace lfs::vis::gui {
         }
 
         if (edit_overlay_visible_ && !need_keyboard) {
-            if (ImGui::IsKeyPressed(ImGuiKey_U, false))
+            if (gui::hasKey(input.keys_pressed, SDL_SCANCODE_U))
                 pending_actions_.push_back({Action::APPLY_EDIT, 0, 0});
-            if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+            if (gui::hasKey(input.keys_pressed, SDL_SCANCODE_ESCAPE))
                 pending_actions_.push_back({Action::REVERT_EDIT, 0, 0});
         }
     }

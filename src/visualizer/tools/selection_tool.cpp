@@ -4,6 +4,7 @@
 
 #include "tools/selection_tool.hpp"
 #include "core/tensor.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "input/input_bindings.hpp"
 #include "input/key_codes.hpp"
 #include "input/sdl_key_mapping.hpp"
@@ -240,7 +241,7 @@ namespace lfs::vis::tools {
 
     void SelectionTool::renderUI([[maybe_unused]] const lfs::vis::gui::UIContext& ui_ctx,
                                  [[maybe_unused]] bool* p_open) {
-        if (!isEnabled() || !tool_context_ || ImGui::GetIO().WantCaptureMouse)
+        if (!isEnabled() || !tool_context_ || gui::guiFocusState().want_capture_mouse)
             return;
 
         auto sel_mode = lfs::rendering::SelectionMode::Centers;

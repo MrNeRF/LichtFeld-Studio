@@ -42,6 +42,7 @@ namespace lfs::vis::gui {
         bool key_super = false;
         std::vector<int> keys_pressed;
         std::vector<int> keys_released;
+        std::vector<uint32_t> text_codepoints;
         void* bg_draw_list = nullptr;
         void* fg_draw_list = nullptr;
     };

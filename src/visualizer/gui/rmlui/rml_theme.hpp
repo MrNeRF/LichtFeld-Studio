@@ -31,11 +31,11 @@ namespace lfs::vis::gui {
 
         template <typename T>
             requires requires(const T& v) {
-                         { v.x } -> std::convertible_to<float>;
-                         { v.y } -> std::convertible_to<float>;
-                         { v.z } -> std::convertible_to<float>;
-                         { v.w } -> std::convertible_to<float>;
-                     }
+                { v.x } -> std::convertible_to<float>;
+                { v.y } -> std::convertible_to<float>;
+                { v.z } -> std::convertible_to<float>;
+                { v.w } -> std::convertible_to<float>;
+            }
         RmlColor(const T& v) : r(v.x),
                                g(v.y),
                                b(v.z),

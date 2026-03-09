@@ -8,6 +8,7 @@
 
 #include "gui/rml_viewport_overlay.hpp"
 #include "core/logger.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
@@ -158,7 +159,7 @@ namespace lfs::vis::gui {
             return;
 
         ImGuiIO& io = ImGui::GetIO();
-        if (io.WantCaptureMouse)
+        if (guiFocusState().want_capture_mouse)
             return;
         float mx = io.MousePos.x - vp_pos_.x;
         float my = io.MousePos.y - vp_pos_.y;
@@ -185,6 +186,7 @@ namespace lfs::vis::gui {
 
         if (over_interactive) {
             wants_input_ = true;
+            guiFocusState().want_capture_mouse = true;
             io.WantCaptureMouse = true;
 
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {

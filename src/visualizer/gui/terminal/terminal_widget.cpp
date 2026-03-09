@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "terminal_widget.hpp"
+#include "gui/gui_focus_state.hpp"
 #include <algorithm>
 #include <core/logger.hpp>
 #include <cstring>
@@ -272,6 +273,8 @@ namespace lfs::vis::terminal {
 
         if (is_focused_ && !read_only_) {
             ImGui::GetIO().WantCaptureKeyboard = true;
+            gui::guiFocusState().want_capture_keyboard = true;
+            gui::guiFocusState().want_text_input = true;
             processInput();
             ImGui::GetIO().InputQueueCharacters.resize(0);
         }

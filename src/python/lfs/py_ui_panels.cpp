@@ -205,13 +205,25 @@ namespace lfs::python {
             idname = get_class_id(panel_class);
         }
 
-        gui::PanelRegistry::instance().unregister_panel(idname);
+        if (on_gl_thread()) {
+            gui::PanelRegistry::instance().unregister_panel(idname);
+        } else {
+            schedule_gl_callback([id = idname]() {
+                gui::PanelRegistry::instance().unregister_panel(id);
+            });
+        }
         panels_.erase(idname);
     }
 
     void PyPanelRegistry::unregister_all() {
         std::lock_guard lock(mutex_);
-        gui::PanelRegistry::instance().unregister_all_non_native();
+        if (on_gl_thread()) {
+            gui::PanelRegistry::instance().unregister_all_non_native();
+        } else {
+            schedule_gl_callback([]() {
+                gui::PanelRegistry::instance().unregister_all_non_native();
+            });
+        }
         panels_.clear();
     }
 
@@ -226,7 +238,13 @@ namespace lfs::python {
         }
 
         for (const auto& idname : to_remove) {
-            gui::PanelRegistry::instance().unregister_panel(idname);
+            if (on_gl_thread()) {
+                gui::PanelRegistry::instance().unregister_panel(idname);
+            } else {
+                schedule_gl_callback([id = idname]() {
+                    gui::PanelRegistry::instance().unregister_panel(id);
+                });
+            }
             panels_.erase(idname);
             LOG_INFO("Unregistered panel '{}' for module '{}'", idname, prefix);
         }

@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -613,6 +614,12 @@ namespace lfs::python {
                                                                RmlDocUnregisterCallback unreg_cb);
     LFS_PYTHON_RUNTIME_API void register_rml_document(const char* name, void* doc);
     LFS_PYTHON_RUNTIME_API void unregister_rml_document(const char* name);
+
+    // GL-thread callback queue — schedule work that requires the GL context
+    LFS_PYTHON_RUNTIME_API void set_gl_thread_id(std::thread::id id);
+    LFS_PYTHON_RUNTIME_API bool on_gl_thread();
+    LFS_PYTHON_RUNTIME_API void schedule_gl_callback(std::function<void()> fn);
+    LFS_PYTHON_RUNTIME_API void flush_gl_callbacks();
 
     // Exit popup state - thread-safe flag for window close callback
     LFS_PYTHON_RUNTIME_API bool is_exit_popup_open();

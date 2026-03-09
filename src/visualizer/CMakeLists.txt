@@ -152,7 +152,6 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         gui/rmlui/rmlui_gl3_backend.cpp
         gui/rmlui/rmlui_manager.cpp
         gui/rmlui/rml_fbo.cpp
-        gui/rmlui/rml_input_utils.cpp
         gui/rmlui/rml_panel_host.cpp
         gui/rmlui/rml_theme.cpp
         gui/rmlui/elements/chromaticity_element.cpp

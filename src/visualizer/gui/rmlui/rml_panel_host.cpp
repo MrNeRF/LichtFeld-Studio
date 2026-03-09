@@ -17,11 +17,12 @@
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
 
+#include "gui/rmlui/sdl_rml_key_mapping.hpp"
+
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Input.h>
 #include <SDL3/SDL_keyboard.h>
-#include <SDL3/SDL_scancode.h>
 #include <algorithm>
 #include <cassert>
 #include <cfloat>
@@ -36,56 +37,10 @@ namespace lfs::vis::gui {
 
     constexpr int kMaxFboSize = 8192;
 
-    static std::mutex s_text_mutex;
-    static std::vector<uint32_t> s_text_queue;
-
     static std::string s_frame_tooltip;
     static bool s_frame_wants_keyboard = false;
+    static bool s_frame_wants_text_input = false;
     std::vector<RmlPanelHost::CompositeCommand> RmlPanelHost::queued_foreground_composites_;
-
-    void RmlPanelHost::pushTextInput(const std::string& text) {
-        std::lock_guard lock(s_text_mutex);
-        for (size_t i = 0; i < text.size();) {
-            uint32_t cp = 0;
-            auto c = static_cast<unsigned char>(text[i]);
-            if (c < 0x80) {
-                cp = c;
-                i += 1;
-            } else if ((c >> 5) == 0x06) {
-                cp = (c & 0x1F) << 6;
-                if (i + 1 < text.size())
-                    cp |= static_cast<unsigned char>(text[i + 1]) & 0x3F;
-                i += 2;
-            } else if ((c >> 4) == 0x0E) {
-                cp = (c & 0x0F) << 12;
-                if (i + 1 < text.size())
-                    cp |= (static_cast<unsigned char>(text[i + 1]) & 0x3F) << 6;
-                if (i + 2 < text.size())
-                    cp |= static_cast<unsigned char>(text[i + 2]) & 0x3F;
-                i += 3;
-            } else if ((c >> 3) == 0x1E) {
-                cp = (c & 0x07) << 18;
-                if (i + 1 < text.size())
-                    cp |= (static_cast<unsigned char>(text[i + 1]) & 0x3F) << 12;
-                if (i + 2 < text.size())
-                    cp |= (static_cast<unsigned char>(text[i + 2]) & 0x3F) << 6;
-                if (i + 3 < text.size())
-                    cp |= static_cast<unsigned char>(text[i + 3]) & 0x3F;
-                i += 4;
-            } else {
-                i += 1;
-                continue;
-            }
-            s_text_queue.push_back(cp);
-        }
-    }
-
-    std::vector<uint32_t> RmlPanelHost::drainTextInput() {
-        std::lock_guard lock(s_text_mutex);
-        std::vector<uint32_t> result;
-        result.swap(s_text_queue);
-        return result;
-    }
 
     std::string RmlPanelHost::consumeFrameTooltip() {
         std::string result;
@@ -100,6 +55,12 @@ namespace lfs::vis::gui {
     bool RmlPanelHost::consumeFrameWantsKeyboard() {
         bool result = s_frame_wants_keyboard;
         s_frame_wants_keyboard = false;
+        return result;
+    }
+
+    bool RmlPanelHost::consumeFrameWantsTextInput() {
+        const bool result = s_frame_wants_text_input;
+        s_frame_wants_text_input = false;
         return result;
     }
 
@@ -223,70 +184,6 @@ namespace lfs::vis::gui {
                    input_type == "search" || input_type == "email" || input_type == "url";
         }
 
-        Rml::Input::KeyIdentifier sdlScancodeToRml(int scancode) {
-            // clang-format off
-            switch (scancode) {
-            case SDL_SCANCODE_SPACE:     return Rml::Input::KI_SPACE;
-            case SDL_SCANCODE_BACKSPACE: return Rml::Input::KI_BACK;
-            case SDL_SCANCODE_TAB:       return Rml::Input::KI_TAB;
-            case SDL_SCANCODE_RETURN:    return Rml::Input::KI_RETURN;
-            case SDL_SCANCODE_ESCAPE:    return Rml::Input::KI_ESCAPE;
-            case SDL_SCANCODE_DELETE:    return Rml::Input::KI_DELETE;
-            case SDL_SCANCODE_INSERT:    return Rml::Input::KI_INSERT;
-            case SDL_SCANCODE_HOME:      return Rml::Input::KI_HOME;
-            case SDL_SCANCODE_END:       return Rml::Input::KI_END;
-            case SDL_SCANCODE_PAGEUP:    return Rml::Input::KI_PRIOR;
-            case SDL_SCANCODE_PAGEDOWN:  return Rml::Input::KI_NEXT;
-            case SDL_SCANCODE_LEFT:      return Rml::Input::KI_LEFT;
-            case SDL_SCANCODE_UP:        return Rml::Input::KI_UP;
-            case SDL_SCANCODE_RIGHT:     return Rml::Input::KI_RIGHT;
-            case SDL_SCANCODE_DOWN:      return Rml::Input::KI_DOWN;
-            case SDL_SCANCODE_F1:  return Rml::Input::KI_F1;
-            case SDL_SCANCODE_F2:  return Rml::Input::KI_F2;
-            case SDL_SCANCODE_F3:  return Rml::Input::KI_F3;
-            case SDL_SCANCODE_F4:  return Rml::Input::KI_F4;
-            case SDL_SCANCODE_F5:  return Rml::Input::KI_F5;
-            case SDL_SCANCODE_F6:  return Rml::Input::KI_F6;
-            case SDL_SCANCODE_F7:  return Rml::Input::KI_F7;
-            case SDL_SCANCODE_F8:  return Rml::Input::KI_F8;
-            case SDL_SCANCODE_F9:  return Rml::Input::KI_F9;
-            case SDL_SCANCODE_F10: return Rml::Input::KI_F10;
-            case SDL_SCANCODE_F11: return Rml::Input::KI_F11;
-            case SDL_SCANCODE_F12: return Rml::Input::KI_F12;
-            case SDL_SCANCODE_EQUALS:   return Rml::Input::KI_OEM_PLUS;
-            case SDL_SCANCODE_MINUS:    return Rml::Input::KI_OEM_MINUS;
-            case SDL_SCANCODE_KP_PLUS:  return Rml::Input::KI_ADD;
-            case SDL_SCANCODE_KP_MINUS: return Rml::Input::KI_SUBTRACT;
-            case SDL_SCANCODE_KP_ENTER: return Rml::Input::KI_NUMPADENTER;
-            default: break;
-            }
-            // clang-format on
-
-            if (scancode >= SDL_SCANCODE_A && scancode <= SDL_SCANCODE_Z)
-                return static_cast<Rml::Input::KeyIdentifier>(
-                    Rml::Input::KI_A + (scancode - SDL_SCANCODE_A));
-
-            if (scancode == SDL_SCANCODE_0)
-                return Rml::Input::KI_0;
-            if (scancode >= SDL_SCANCODE_1 && scancode <= SDL_SCANCODE_9)
-                return static_cast<Rml::Input::KeyIdentifier>(
-                    Rml::Input::KI_1 + (scancode - SDL_SCANCODE_1));
-
-            return Rml::Input::KI_UNKNOWN;
-        }
-
-        int buildRmlModifiers(const PanelInputState& input) {
-            int mods = 0;
-            if (input.key_ctrl)
-                mods |= Rml::Input::KM_CTRL;
-            if (input.key_shift)
-                mods |= Rml::Input::KM_SHIFT;
-            if (input.key_alt)
-                mods |= Rml::Input::KM_ALT;
-            if (input.key_super)
-                mods |= Rml::Input::KM_META;
-            return mods;
-        }
     } // namespace
 
     RmlPanelHost::RmlPanelHost(RmlUIManager* manager, std::string context_name,
@@ -914,20 +811,14 @@ namespace lfs::vis::gui {
                 return;
 
             has_text_focus_ = want_text;
-            auto* const win = manager_->getWindow();
-            if (has_text_focus_)
-                SDL_StartTextInput(win);
-            else
-                SDL_StopTextInput(win);
         };
         const auto flush_pending_text_input = [&]() {
             if (!has_text_focus_)
                 return;
 
-            auto chars = drainTextInput();
-            if (!chars.empty())
+            if (!input.text_codepoints.empty())
                 had_input = true;
-            for (uint32_t cp : chars)
+            for (const uint32_t cp : input.text_codepoints)
                 rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
         };
         const auto blur_focused_text = [&]() {
@@ -1012,9 +903,10 @@ namespace lfs::vis::gui {
         bool forward_keys = has_text_focus_ || hovered;
         bool commit_requested = false;
         if (forward_keys) {
-            int mods = buildRmlModifiers(input);
+            const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
+                                          input.key_alt, input.key_super);
             for (int sc : input.keys_pressed) {
-                auto rml_key = sdlScancodeToRml(sc);
+                auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
                 if (rml_key != Rml::Input::KI_UNKNOWN) {
                     rml_context_->ProcessKeyDown(rml_key, mods);
                     had_input = true;
@@ -1023,7 +915,7 @@ namespace lfs::vis::gui {
                     commit_requested = true;
             }
             for (int sc : input.keys_released) {
-                auto rml_key = sdlScancodeToRml(sc);
+                auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
                 if (rml_key != Rml::Input::KI_UNKNOWN) {
                     rml_context_->ProcessKeyUp(rml_key, mods);
                     had_input = true;
@@ -1041,6 +933,7 @@ namespace lfs::vis::gui {
             s_frame_wants_keyboard = true;
 
         if (has_text_focus_) {
+            s_frame_wants_text_input = true;
             flush_pending_text_input();
         }
 

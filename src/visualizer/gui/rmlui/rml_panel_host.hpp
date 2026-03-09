@@ -53,6 +53,7 @@ namespace lfs::vis::gui {
         static std::string consumeFrameTooltip();
         static void setFrameTooltip(const std::string& tip);
         static bool consumeFrameWantsKeyboard();
+        static bool consumeFrameWantsTextInput();
         static void clearQueuedForegroundComposites();
         static void flushQueuedForegroundComposites(int screen_w, int screen_h);
 
@@ -74,8 +75,6 @@ namespace lfs::vis::gui {
         Rml::Context* getContext() { return rml_context_; }
         bool isDocumentLoaded() const { return document_ != nullptr; }
 
-        static void pushTextInput(const std::string& text);
-
     private:
         struct ShadowRect {
             float x = 0.0f;
@@ -85,7 +84,6 @@ namespace lfs::vis::gui {
             float rounding = 0.0f;
         };
 
-        static std::vector<uint32_t> drainTextInput();
         std::optional<ShadowRect> collectVisibleColorPickerPopupShadow(float panel_screen_x,
                                                                        float panel_screen_y) const;
         bool hitTestPanelShape(float local_x, float local_y, float logical_w, float logical_h);
