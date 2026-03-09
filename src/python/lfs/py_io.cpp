@@ -197,7 +197,8 @@ namespace lfs::python {
         m.def(
             "save_point_cloud_ply",
             [](const PyPointCloud& pc, const std::filesystem::path& path) {
-                assert(pc.data() && "Point cloud data must not be null");
+                if (!pc.data())
+                    throw std::runtime_error("Point cloud data must not be null");
                 io::PlySaveOptions options;
                 options.output_path = path;
                 options.binary = true;
