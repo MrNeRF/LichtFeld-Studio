@@ -48,6 +48,8 @@ class CardOpState:
     progress: float = 0.0
     output_lines: List[str] = field(default_factory=list)
     finished_at: float = 0.0
+
+
 class PluginMarketplacePanel(RmlPanel):
     """Floating plugin window for browsing, installing, and managing plugins."""
 
@@ -191,7 +193,7 @@ class PluginMarketplacePanel(RmlPanel):
         grid_el = doc.get_element_by_id("card-grid")
         if grid_el:
             grid_el.add_event_listener("click", self._on_card_click)
-            grid_el.add_event_listener("change", self._on_card_click)
+            grid_el.add_event_listener("change", self._on_card_change)
 
     def on_update(self, doc):
         from .manager import PluginManager
@@ -269,7 +271,7 @@ class PluginMarketplacePanel(RmlPanel):
         is_local_only = self._is_local_only_entry(entry)
         has_github = bool(entry.github_url)
         card_state = self._get_card_state(card_id)
-        buttons_idle = card_state.phase == CardOpPhase.IDLE
+        buttons_busy = card_state.phase == CardOpPhase.IN_PROGRESS
 
         name = entry.name or entry.repo or tr("plugin_marketplace.unknown_plugin")
 
@@ -317,7 +319,7 @@ class PluginMarketplacePanel(RmlPanel):
         is_remote_installed = is_installed and not is_local
         is_local_with_github = is_installed and is_local and has_github
 
-        show_startup = buttons_idle and is_installed and bool(plugin_name)
+        show_startup = (not buttons_busy) and is_installed and bool(plugin_name)
         startup_checked = False
         if show_startup:
             startup_checked = SettingsManager.instance().get(plugin_name).get("load_on_startup", False)
@@ -342,12 +344,12 @@ class PluginMarketplacePanel(RmlPanel):
             "info_action": "open-url" if has_github else "",
             "github_url": entry.github_url or "",
             "plugin_name": plugin_name or "",
-            "show_install": buttons_idle and not is_installed and not is_local_only and not entry.error,
-            "show_load": buttons_idle and is_installed and plugin_state != PluginState.ACTIVE,
-            "show_unload": buttons_idle and is_installed and plugin_state == PluginState.ACTIVE,
-            "show_reload": buttons_idle and is_remote_installed and plugin_state == PluginState.ACTIVE,
-            "show_update": buttons_idle and (is_local_with_github or (is_remote_installed and plugin_state != PluginState.ACTIVE)),
-            "show_uninstall": buttons_idle and is_installed,
+            "show_install": (not buttons_busy) and not is_installed and not is_local_only and not entry.error,
+            "show_load": (not buttons_busy) and is_installed and plugin_state != PluginState.ACTIVE,
+            "show_unload": (not buttons_busy) and is_installed and plugin_state == PluginState.ACTIVE,
+            "show_reload": (not buttons_busy) and is_remote_installed and plugin_state == PluginState.ACTIVE,
+            "show_update": (not buttons_busy) and (is_local_with_github or (is_remote_installed and plugin_state != PluginState.ACTIVE)),
+            "show_uninstall": (not buttons_busy) and is_installed,
             "show_startup": show_startup,
             "startup_checked": startup_checked,
         }
@@ -369,9 +371,8 @@ class PluginMarketplacePanel(RmlPanel):
             self._last_card_phases[card_id] = phase_key
 
             prev_phase = prev_key[0] if prev_key else CardOpPhase.IDLE
-            if state.phase == CardOpPhase.IDLE and prev_phase != CardOpPhase.IDLE:
+            if state.phase != prev_phase and state.phase != CardOpPhase.IN_PROGRESS:
                 self._entries_dirty = True
-                continue
 
             card_el = doc.get_element_by_id(f"card-{card_id}")
             if not card_el:
@@ -484,7 +485,6 @@ class PluginMarketplacePanel(RmlPanel):
     def _on_card_click(self, ev):
         import lichtfeld as lf
         from .manager import PluginManager
-        from .settings import SettingsManager
 
         target = ev.target()
         if target is None:
@@ -503,13 +503,6 @@ class PluginMarketplacePanel(RmlPanel):
             return
 
         if action == "startup":
-            if plugin_name:
-                cb_el = self._find_element_with_attr(target, "type", "checkbox")
-                checked = cb_el.has_attribute("checked") if cb_el else False
-                prefs = SettingsManager.instance().get(plugin_name)
-                if prefs.get("load_on_startup", False) != checked:
-                    prefs.set("load_on_startup", checked)
-                    self._entries_dirty = True
             return
 
         if not card_id:
@@ -534,6 +527,17 @@ class PluginMarketplacePanel(RmlPanel):
             self._update_plugin(mgr, plugin_name, card_id)
         elif action == "uninstall" and plugin_name:
             self._request_uninstall_confirmation(plugin_name, card_id, ev)
+
+    def _on_card_change(self, ev):
+        target = ev.target()
+        if target is None:
+            return
+
+        action, _card_id, plugin_name = self._find_card_action(target)
+        if action != "startup" or not plugin_name:
+            return
+
+        self._set_startup_preference(target, plugin_name)
 
     def _find_card_action(self, element):
         for _ in range(6):
@@ -574,6 +578,18 @@ class PluginMarketplacePanel(RmlPanel):
                 return None
             element = p
         return None
+
+    def _set_startup_preference(self, element, plugin_name: str):
+        from .settings import SettingsManager
+
+        cb_el = self._find_element_with_attr(element, "type", "checkbox")
+        checked = cb_el.has_attribute("checked") if cb_el else False
+        prefs = SettingsManager.instance().get(plugin_name)
+        if prefs.get("load_on_startup", False) == checked:
+            return
+
+        prefs.set("load_on_startup", checked)
+        self._entries_dirty = True
 
     def _request_uninstall_confirmation(self, name, card_id, ev):
         import lichtfeld as lf

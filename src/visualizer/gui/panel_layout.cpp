@@ -8,6 +8,7 @@
 #include "python/python_runtime.hpp"
 #include "theme/theme.hpp"
 #include "visualizer_impl.hpp"
+#include <imgui.h>
 #include <algorithm>
 
 namespace lfs::vis::gui {
@@ -133,13 +134,90 @@ namespace lfs::vis::gui {
             std::max(0.0f, preloaded_total_h - tab_content_h);
         tab_scroll_offset_ = std::clamp(tab_scroll_offset_, 0.0f, preloaded_max_scroll);
 
+        const auto& t = lfs::vis::theme();
+        const float scrollbar_w =
+            std::clamp(t.sizes.scrollbar_size * 0.55f, 6.0f, 10.0f);
+        const float scrollbar_pad = 2.0f;
+        const float scrollbar_gutter =
+            (preloaded_max_scroll > 0.0f && tab_content_h > 0.0f)
+                ? (scrollbar_w + scrollbar_pad * 2.0f)
+                : 0.0f;
+        const float content_draw_w = std::max(0.0f, content_w - scrollbar_gutter);
+        const bool over_tab_content =
+            input.mouse_x >= content_x && input.mouse_x < content_x + content_w &&
+            input.mouse_y >= tab_content_y && input.mouse_y < tab_content_y + tab_content_h;
+
+        bool suppress_content_input = false;
+        if (!input.mouse_down[0])
+            tab_scrollbar_dragging_ = false;
+
+        if (preloaded_max_scroll > 0.0f && tab_content_h > 0.0f) {
+            const float track_x = content_x + content_draw_w + scrollbar_pad;
+            const float track_y = tab_content_y;
+            const float track_h = tab_content_h;
+            const float ratio = tab_content_h / preloaded_total_h;
+            const float thumb_h = std::max(20.0f, track_h * ratio);
+            const float thumb_range = std::max(0.0f, track_h - thumb_h);
+            const float scroll_frac = preloaded_max_scroll > 0.0f
+                                          ? (tab_scroll_offset_ / preloaded_max_scroll)
+                                          : 0.0f;
+            const float thumb_y = track_y + scroll_frac * thumb_range;
+            const bool over_scrollbar =
+                input.mouse_x >= content_x + content_draw_w &&
+                input.mouse_x < content_x + content_w &&
+                input.mouse_y >= track_y &&
+                input.mouse_y < track_y + track_h;
+
+            if (tab_scrollbar_dragging_) {
+                suppress_content_input = true;
+                if (thumb_range > 0.0f) {
+                    const float clamped_thumb_y = std::clamp(
+                        input.mouse_y - tab_scrollbar_drag_offset_,
+                        track_y,
+                        track_y + thumb_range);
+                    const float next_frac = (clamped_thumb_y - track_y) / thumb_range;
+                    tab_scroll_offset_ = next_frac * preloaded_max_scroll;
+                }
+            } else if (over_scrollbar && input.mouse_clicked[0]) {
+                suppress_content_input = true;
+                if (input.mouse_y >= thumb_y && input.mouse_y <= thumb_y + thumb_h) {
+                    tab_scrollbar_dragging_ = true;
+                    tab_scrollbar_drag_offset_ = input.mouse_y - thumb_y;
+                } else if (thumb_range > 0.0f) {
+                    const float target_thumb_y = std::clamp(
+                        input.mouse_y - thumb_h * 0.5f,
+                        track_y,
+                        track_y + thumb_range);
+                    const float next_frac = (target_thumb_y - track_y) / thumb_range;
+                    tab_scroll_offset_ = next_frac * preloaded_max_scroll;
+                    tab_scrollbar_dragging_ = true;
+                    tab_scrollbar_drag_offset_ = input.mouse_y - target_thumb_y;
+                }
+            }
+        } else {
+            tab_scrollbar_dragging_ = false;
+        }
+
+        if (over_tab_content && input.mouse_wheel != 0.0f) {
+            tab_scroll_offset_ -= input.mouse_wheel * 30.0f;
+            tab_scroll_offset_ = std::clamp(tab_scroll_offset_, 0.0f, preloaded_max_scroll);
+        }
+
+        PanelInputState content_input = input;
+        if (tab_scrollbar_dragging_ || suppress_content_input) {
+            content_input.mouse_down[0] = false;
+            content_input.mouse_clicked[0] = false;
+            content_input.mouse_released[0] = false;
+            content_input.mouse_wheel = 0.0f;
+        }
+
         const float y_cursor = tab_content_y - tab_scroll_offset_;
         const float main_h = reg.draw_single_panel_direct(active_tab_idname_,
-                                                          content_x, y_cursor, content_w, kPreloadMaxHeight, draw_ctx,
-                                                          clip_y_min, clip_y_max, &input);
+                                                          content_x, y_cursor, content_draw_w, kPreloadMaxHeight, draw_ctx,
+                                                          clip_y_min, clip_y_max, &content_input);
         const float child_h = reg.draw_child_panels_direct(active_tab_idname_,
-                                                           content_x, y_cursor + main_h, content_w, kPreloadMaxHeight, draw_ctx,
-                                                           clip_y_min, clip_y_max, &input);
+                                                           content_x, y_cursor + main_h, content_draw_w, kPreloadMaxHeight, draw_ctx,
+                                                           clip_y_min, clip_y_max, &content_input);
 
         for (size_t attempt = 0; attempt < main_tabs.size(); ++attempt) {
             const size_t idx = (background_preload_index_ + attempt) % main_tabs.size();
@@ -147,7 +225,7 @@ namespace lfs::vis::gui {
             if (tab.idname == active_tab_idname_)
                 continue;
 
-            reg.preload_single_panel_direct(tab.idname, content_w, tab_content_h, draw_ctx,
+            reg.preload_single_panel_direct(tab.idname, content_draw_w, tab_content_h, draw_ctx,
                                             clip_y_min, clip_y_max, &input);
             background_preload_index_ = idx + 1;
             break;
@@ -158,21 +236,9 @@ namespace lfs::vis::gui {
         const float max_scroll = std::max(0.0f, tab_content_total_h_ - tab_content_h);
         tab_scroll_offset_ = std::clamp(tab_scroll_offset_, 0.0f, max_scroll);
 
-        if (input.mouse_x >= content_x && input.mouse_x < content_x + content_w &&
-            input.mouse_y >= tab_content_y && input.mouse_y < tab_content_y + tab_content_h) {
-            if (input.mouse_wheel != 0.0f) {
-                tab_scroll_offset_ -= input.mouse_wheel * 30.0f;
-                tab_scroll_offset_ = std::clamp(tab_scroll_offset_, 0.0f, max_scroll);
-            }
-        }
-
         if (max_scroll > 0.0f && tab_content_h > 0.0f) {
             auto* dl = static_cast<ImDrawList*>(input.bg_draw_list);
-            const auto& t = lfs::vis::theme();
-            constexpr float SCROLLBAR_W = 4.0f;
-            constexpr float SCROLLBAR_PAD = 2.0f;
-
-            const float track_x = content_x + content_w - SCROLLBAR_W - SCROLLBAR_PAD;
+            const float track_x = content_x + content_draw_w + scrollbar_pad;
             const float track_y = tab_content_y;
             const float track_h = tab_content_h;
 
@@ -181,13 +247,27 @@ namespace lfs::vis::gui {
             const float scroll_frac = tab_scroll_offset_ / max_scroll;
             const float thumb_y = track_y + scroll_frac * (track_h - thumb_h);
 
-            const auto& style = ImGui::GetStyle();
-            const ImU32 col = ImGui::ColorConvertFloat4ToU32(style.Colors[ImGuiCol_ScrollbarGrab]);
             const float rounding = t.sizes.scrollbar_rounding;
+            const bool over_scrollbar =
+                input.mouse_x >= content_x + content_draw_w &&
+                input.mouse_x < content_x + content_w &&
+                input.mouse_y >= track_y &&
+                input.mouse_y < track_y + track_h;
 
+            const ImU32 track_col = ImGui::ColorConvertFloat4ToU32(
+                withAlpha(t.palette.background, 0.5f));
+            const ImU32 thumb_col = ImGui::ColorConvertFloat4ToU32(
+                withAlpha(tab_scrollbar_dragging_
+                              ? t.palette.primary
+                              : (over_scrollbar ? t.palette.primary_dim : t.palette.text_dim),
+                          tab_scrollbar_dragging_ ? 0.9f : (over_scrollbar ? 0.78f : 0.63f)));
+
+            dl->AddRectFilled(ImVec2(track_x, track_y),
+                              ImVec2(track_x + scrollbar_w, track_y + track_h),
+                              track_col, rounding);
             dl->AddRectFilled(ImVec2(track_x, thumb_y),
-                              ImVec2(track_x + SCROLLBAR_W, thumb_y + thumb_h),
-                              col, rounding);
+                              ImVec2(track_x + scrollbar_w, thumb_y + thumb_h),
+                              thumb_col, rounding);
         }
     }
 
