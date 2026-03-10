@@ -74,13 +74,16 @@ namespace lfs::vis::gui {
         glBindVertexArray(0);
     }
 
-    void GLLineRenderer::begin(int screen_w, int screen_h, int fb_w, int fb_h) {
+    void GLLineRenderer::begin(const int screen_w, const int screen_h,
+                               const int fb_w, const int fb_h,
+                               const std::optional<ClipRect> clip_rect) {
         assert(screen_w > 0 && screen_h > 0);
         assert(fb_w > 0 && fb_h > 0);
         screen_w_ = screen_w;
         screen_h_ = screen_h;
         fb_w_ = fb_w;
         fb_h_ = fb_h;
+        clip_rect_ = clip_rect;
         vertices_.clear();
     }
 
@@ -147,12 +150,14 @@ namespace lfs::vis::gui {
         GLint prev_blend = 0;
         GLint prev_depth = 0;
         GLint prev_scissor = 0;
+        GLint prev_scissor_box[4] = {};
         GLint prev_viewport[4] = {};
         glGetIntegerv(GL_CURRENT_PROGRAM, &prev_program);
         glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prev_vao);
         glGetIntegerv(GL_BLEND, &prev_blend);
         glGetIntegerv(GL_DEPTH_TEST, &prev_depth);
         glGetIntegerv(GL_SCISSOR_TEST, &prev_scissor);
+        glGetIntegerv(GL_SCISSOR_BOX, prev_scissor_box);
         glGetIntegerv(GL_VIEWPORT, prev_viewport);
 
         glViewport(0, 0, fb_w_, fb_h_);
@@ -160,7 +165,20 @@ namespace lfs::vis::gui {
         glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
                             GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
         glDisable(GL_DEPTH_TEST);
-        glDisable(GL_SCISSOR_TEST);
+        if (clip_rect_.has_value()) {
+            const auto& clip = *clip_rect_;
+            const float scale_x = static_cast<float>(fb_w_) / static_cast<float>(screen_w_);
+            const float scale_y = static_cast<float>(fb_h_) / static_cast<float>(screen_h_);
+            const int gl_x = std::max(0, static_cast<int>(std::lround(static_cast<float>(clip.x) * scale_x)));
+            const int gl_w = std::max(0, static_cast<int>(std::lround(static_cast<float>(clip.width) * scale_x)));
+            const int gl_h = std::max(0, static_cast<int>(std::lround(static_cast<float>(clip.height) * scale_y)));
+            const int gl_y = std::max(0, fb_h_ -
+                                             static_cast<int>(std::lround(static_cast<float>(clip.y + clip.height) * scale_y)));
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(gl_x, gl_y, gl_w, gl_h);
+        } else {
+            glDisable(GL_SCISSOR_TEST);
+        }
 
         glUseProgram(program_);
         glUniform2f(glGetUniformLocation(program_, "uScreenSize"),
@@ -188,6 +206,7 @@ namespace lfs::vis::gui {
             glEnable(GL_SCISSOR_TEST);
         else
             glDisable(GL_SCISSOR_TEST);
+        glScissor(prev_scissor_box[0], prev_scissor_box[1], prev_scissor_box[2], prev_scissor_box[3]);
     }
 
     void GLLineRenderer::destroyGLResources() {

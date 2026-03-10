@@ -87,7 +87,8 @@ namespace lfs::vis::gui {
             if (e.keyframe_index >= timeline.size())
                 return;
 
-            controller_.selectKeyframe(e.keyframe_index);
+            if (!controller_.selectKeyframe(e.keyframe_index))
+                return;
             if (auto* sm = viewer_->getSceneManager())
                 sm->clearSelection();
 
@@ -114,7 +115,8 @@ namespace lfs::vis::gui {
             if (e.keyframe_index >= timeline.size())
                 return;
 
-            controller_.selectKeyframe(e.keyframe_index);
+            if (!controller_.selectKeyframe(e.keyframe_index))
+                return;
             if (auto* sm = viewer_->getSceneManager())
                 sm->clearSelection();
         });
@@ -130,34 +132,33 @@ namespace lfs::vis::gui {
             const auto sel = controller_.selectedKeyframe();
             if (!sel.has_value())
                 return;
-            auto& timeline = controller_.timeline();
-            if (*sel >= timeline.size())
-                return;
-            timeline.setKeyframeFocalLength(*sel, *e.focal_length_mm);
-            controller_.updateLoopKeyframe();
+            if (controller_.setKeyframeFocalLength(*sel, *e.focal_length_mm)) {
+                state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
+            }
         });
 
         cmd::SequencerDeleteKeyframe::when([this](const auto& e) {
             if (e.keyframe_index == 0)
                 return;
 
-            auto& timeline = controller_.timeline();
+            const auto& timeline = controller_.timeline();
             if (e.keyframe_index >= timeline.size())
                 return;
 
-            controller_.selectKeyframe(e.keyframe_index);
+            if (!controller_.selectKeyframe(e.keyframe_index))
+                return;
             controller_.removeSelectedKeyframe();
 
             state::KeyframeListChanged{.count = timeline.size()}.emit();
         });
 
         cmd::SequencerSetKeyframeEasing::when([this](const auto& e) {
-            auto& timeline = controller_.timeline();
+            const auto& timeline = controller_.timeline();
             if (e.keyframe_index >= timeline.size())
                 return;
 
             const auto easing = static_cast<sequencer::EasingType>(e.easing_type);
-            timeline.setKeyframeEasing(e.keyframe_index, easing);
+            controller_.setKeyframeEasing(e.keyframe_index, easing);
 
             state::KeyframeListChanged{.count = timeline.size()}.emit();
         });

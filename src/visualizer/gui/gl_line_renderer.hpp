@@ -9,15 +9,24 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace lfs::vis::gui {
+
+    struct ClipRect {
+        int x = 0;
+        int y = 0;
+        int width = 0;
+        int height = 0;
+    };
 
     class LFS_VIS_API GLLineRenderer {
     public:
         GLLineRenderer() = default;
 
-        void begin(int screen_w, int screen_h, int fb_w, int fb_h);
+        void begin(int screen_w, int screen_h, int fb_w, int fb_h,
+                   std::optional<ClipRect> clip_rect = std::nullopt);
         void addLine(glm::vec2 p0, glm::vec2 p1, glm::vec4 color, float thickness = 1.0f);
         void addTriangleFilled(glm::vec2 p0, glm::vec2 p1, glm::vec2 p2, glm::vec4 color);
         void addCircleFilled(glm::vec2 center, float radius, glm::vec4 color, int segments = 16);
@@ -42,6 +51,7 @@ namespace lfs::vis::gui {
         int screen_h_ = 0;
         int fb_w_ = 0;
         int fb_h_ = 0;
+        std::optional<ClipRect> clip_rect_;
     };
 
 } // namespace lfs::vis::gui

@@ -7,6 +7,7 @@
 #include "gui/sequencer_ui_state.hpp"
 #include "sequencer_controller.hpp"
 #include <RmlUi/Core/EventListener.h>
+#include <cstdint>
 #include <optional>
 #include <set>
 #include <string>
@@ -129,6 +130,7 @@ namespace lfs::vis {
         [[nodiscard]] float cachedPlayheadScreenX() const { return cached_playhead_screen_x_; }
         [[nodiscard]] bool isPlayheadInRange() const { return playhead_in_range_; }
         [[nodiscard]] float getDisplayEndTime() const;
+        [[nodiscard]] std::optional<sequencer::KeyframeId> hoveredKeyframeId() const;
 
         [[nodiscard]] TimelineContextMenuState consumeContextMenu();
         [[nodiscard]] TransportContextMenuRequest consumeTransportContextMenu();
@@ -161,6 +163,7 @@ namespace lfs::vis {
         void handleTimelineInteraction(const Vec2& pos, float width, float height,
                                        const PanelInputState& input);
 
+        void clampPanOffset();
         [[nodiscard]] float timeToX(float time, float timeline_x, float timeline_width) const;
         [[nodiscard]] float xToTime(float x, float timeline_x, float timeline_width) const;
         [[nodiscard]] float snapTime(float time) const;
@@ -220,6 +223,10 @@ namespace lfs::vis {
         float last_ruler_zoom_ = -1.0f;
         float last_ruler_pan_ = -1.0f;
         float last_ruler_width_ = -1.0f;
+        float last_ruler_display_end_ = -1.0f;
+        uint64_t last_timeline_revision_ = 0;
+        uint64_t last_selection_revision_ = 0;
+        uint64_t last_selected_keyframes_signature_ = 0;
 
         float timelineWidth() const;
 
@@ -237,11 +244,11 @@ namespace lfs::vis {
         // Interaction state
         bool dragging_playhead_ = false;
         bool dragging_keyframe_ = false;
-        size_t dragged_keyframe_index_ = 0;
-        float drag_start_time_ = 0.0f;
+        bool dragged_keyframe_changed_ = false;
+        sequencer::KeyframeId dragged_keyframe_id_ = sequencer::INVALID_KEYFRAME_ID;
         float drag_start_mouse_x_ = 0.0f;
         std::optional<size_t> hovered_keyframe_;
-        std::set<size_t> selected_keyframes_;
+        std::set<sequencer::KeyframeId> selected_keyframes_;
 
         float zoom_level_ = 1.0f;
         float pan_offset_ = 0.0f;

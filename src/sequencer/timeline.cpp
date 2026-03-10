@@ -12,12 +12,26 @@
 namespace lfs::sequencer {
 
     namespace {
-        constexpr int JSON_VERSION = 2;
+        constexpr int JSON_VERSION = 3;
+
+        [[nodiscard]] float clampFocalLength(const float focal_length_mm) {
+            return std::clamp(focal_length_mm,
+                              lfs::rendering::MIN_FOCAL_LENGTH_MM,
+                              lfs::rendering::MAX_FOCAL_LENGTH_MM);
+        }
     } // namespace
 
-    void Timeline::addKeyframe(const Keyframe& keyframe) {
-        keyframes_.push_back(keyframe);
+    KeyframeId Timeline::addKeyframe(const Keyframe& keyframe) {
+        Keyframe inserted = keyframe;
+        if (inserted.id == INVALID_KEYFRAME_ID) {
+            inserted.id = next_keyframe_id_++;
+        } else {
+            next_keyframe_id_ = std::max(next_keyframe_id_, inserted.id + 1);
+        }
+
+        keyframes_.push_back(inserted);
         sortKeyframes();
+        return inserted.id;
     }
 
     void Timeline::removeKeyframe(const size_t index) {
@@ -26,43 +40,102 @@ namespace lfs::sequencer {
         keyframes_.erase(keyframes_.begin() + static_cast<ptrdiff_t>(index));
     }
 
-    void Timeline::setKeyframeTime(const size_t index, const float new_time, const bool sort) {
-        if (index >= keyframes_.size())
-            return;
-        keyframes_[index].time = new_time;
+    bool Timeline::removeKeyframeById(const KeyframeId id) {
+        const auto index = findKeyframeIndex(id);
+        if (!index.has_value())
+            return false;
+        removeKeyframe(*index);
+        return true;
+    }
+
+    bool Timeline::setKeyframeTimeById(const KeyframeId id, const float new_time, const bool sort) {
+        auto* const keyframe = getKeyframeById(id);
+        if (!keyframe)
+            return false;
+        keyframe->time = new_time;
         if (sort)
             sortKeyframes();
+        return true;
     }
 
-    void Timeline::updateKeyframe(const size_t index, const glm::vec3& position,
-                                  const glm::quat& rotation, const float focal_length_mm) {
-        if (index >= keyframes_.size())
-            return;
-        keyframes_[index].position = position;
-        keyframes_[index].rotation = rotation;
-        keyframes_[index].focal_length_mm = focal_length_mm;
+    bool Timeline::updateKeyframeById(const KeyframeId id, const glm::vec3& position,
+                                      const glm::quat& rotation, const float focal_length_mm) {
+        auto* const keyframe = getKeyframeById(id);
+        if (!keyframe)
+            return false;
+        keyframe->position = position;
+        keyframe->rotation = rotation;
+        keyframe->focal_length_mm = clampFocalLength(focal_length_mm);
+        return true;
     }
 
-    void Timeline::setKeyframeFocalLength(const size_t index, const float focal_length_mm) {
-        if (index >= keyframes_.size())
-            return;
-        keyframes_[index].focal_length_mm = std::clamp(focal_length_mm,
-                                                       lfs::rendering::MIN_FOCAL_LENGTH_MM,
-                                                       lfs::rendering::MAX_FOCAL_LENGTH_MM);
+    bool Timeline::setKeyframeFocalLengthById(const KeyframeId id, const float focal_length_mm) {
+        auto* const keyframe = getKeyframeById(id);
+        if (!keyframe)
+            return false;
+        keyframe->focal_length_mm = clampFocalLength(focal_length_mm);
+        return true;
     }
 
-    void Timeline::setKeyframeEasing(const size_t index, const EasingType easing) {
-        if (index >= keyframes_.size())
-            return;
-        keyframes_[index].easing = easing;
+    bool Timeline::setKeyframeEasingById(const KeyframeId id, const EasingType easing) {
+        auto* const keyframe = getKeyframeById(id);
+        if (!keyframe)
+            return false;
+        keyframe->easing = easing;
+        return true;
     }
 
     const Keyframe* Timeline::getKeyframe(const size_t index) const {
         return index < keyframes_.size() ? &keyframes_[index] : nullptr;
     }
 
+    Keyframe* Timeline::getKeyframe(const size_t index) {
+        return index < keyframes_.size() ? &keyframes_[index] : nullptr;
+    }
+
+    const Keyframe* Timeline::getKeyframeById(const KeyframeId id) const {
+        if (const auto index = findKeyframeIndex(id); index.has_value()) {
+            return &keyframes_[*index];
+        }
+        return nullptr;
+    }
+
+    Keyframe* Timeline::getKeyframeById(const KeyframeId id) {
+        if (const auto index = findKeyframeIndex(id); index.has_value()) {
+            return &keyframes_[*index];
+        }
+        return nullptr;
+    }
+
+    std::optional<size_t> Timeline::findKeyframeIndex(const KeyframeId id) const {
+        if (id == INVALID_KEYFRAME_ID)
+            return std::nullopt;
+
+        for (size_t i = 0; i < keyframes_.size(); ++i) {
+            if (keyframes_[i].id == id)
+                return i;
+        }
+        return std::nullopt;
+    }
+
     void Timeline::clear() {
         keyframes_.clear();
+        clip_.reset();
+        next_keyframe_id_ = 1;
+    }
+
+    size_t Timeline::realKeyframeCount() const {
+        return static_cast<size_t>(std::count_if(
+            keyframes_.begin(), keyframes_.end(),
+            [](const Keyframe& keyframe) { return !keyframe.is_loop_point; }));
+    }
+
+    float Timeline::realEndTime() const {
+        for (auto it = keyframes_.rbegin(); it != keyframes_.rend(); ++it) {
+            if (!it->is_loop_point)
+                return it->time;
+        }
+        return 0.0f;
     }
 
     float Timeline::duration() const {
@@ -96,6 +169,8 @@ namespace lfs::sequencer {
             j["keyframes"] = nlohmann::json::array();
 
             for (const auto& kf : keyframes_) {
+                if (kf.is_loop_point)
+                    continue;
                 j["keyframes"].push_back({{"time", kf.time},
                                           {"position", {kf.position.x, kf.position.y, kf.position.z}},
                                           {"rotation", {kf.rotation.w, kf.rotation.x, kf.rotation.y, kf.rotation.z}},
@@ -114,7 +189,7 @@ namespace lfs::sequencer {
                 return false;
             }
             file << j.dump(2);
-            LOG_INFO("Saved {} keyframes to {}", keyframes_.size(), path);
+            LOG_INFO("Saved {} keyframes to {}", realKeyframeCount(), path);
             return true;
         } catch (const std::exception& e) {
             LOG_ERROR("Timeline save failed: {}", e.what());
@@ -131,32 +206,35 @@ namespace lfs::sequencer {
             }
 
             const auto j = nlohmann::json::parse(file);
-            keyframes_.clear();
 
-            const int version = j.value("version", 1);
-            for (const auto& jkf : j["keyframes"]) {
+            std::vector<Keyframe> loaded_keyframes;
+            loaded_keyframes.reserve(j.at("keyframes").size());
+            KeyframeId next_keyframe_id = 1;
+
+            for (const auto& jkf : j.at("keyframes")) {
                 Keyframe kf;
-                kf.time = jkf["time"];
-                kf.position = {jkf["position"][0], jkf["position"][1], jkf["position"][2]};
-                kf.rotation = {jkf["rotation"][0], jkf["rotation"][1], jkf["rotation"][2], jkf["rotation"][3]};
-                if (jkf.contains("focal_length_mm")) {
-                    kf.focal_length_mm = std::clamp(jkf["focal_length_mm"].get<float>(),
-                                                    lfs::rendering::MIN_FOCAL_LENGTH_MM,
-                                                    lfs::rendering::MAX_FOCAL_LENGTH_MM);
-                } else if (version <= 1 && jkf.contains("fov")) {
-                    kf.focal_length_mm = lfs::rendering::vFovToFocalLength(jkf["fov"].get<float>());
-                } else {
-                    LOG_DEBUG("Keyframe at t={} missing focal length, using default", kf.time);
-                }
-                kf.easing = static_cast<EasingType>(jkf["easing"].get<int>());
-                keyframes_.push_back(kf);
+                kf.id = next_keyframe_id++;
+                kf.time = jkf.at("time").get<float>();
+                kf.position = {jkf.at("position").at(0).get<float>(),
+                               jkf.at("position").at(1).get<float>(),
+                               jkf.at("position").at(2).get<float>()};
+                kf.rotation = {jkf.at("rotation").at(0).get<float>(),
+                               jkf.at("rotation").at(1).get<float>(),
+                               jkf.at("rotation").at(2).get<float>(),
+                               jkf.at("rotation").at(3).get<float>()};
+                kf.focal_length_mm = clampFocalLength(jkf.at("focal_length_mm").get<float>());
+                kf.easing = static_cast<EasingType>(jkf.at("easing").get<int>());
+                loaded_keyframes.push_back(kf);
             }
 
-            // Load animation clip if present
+            std::unique_ptr<AnimationClip> loaded_clip;
             if (j.contains("animation_clip")) {
-                clip_ = std::make_unique<AnimationClip>(AnimationClip::fromJson(j["animation_clip"]));
+                loaded_clip = std::make_unique<AnimationClip>(AnimationClip::fromJson(j["animation_clip"]));
             }
 
+            keyframes_ = std::move(loaded_keyframes);
+            clip_ = std::move(loaded_clip);
+            next_keyframe_id_ = next_keyframe_id;
             sortKeyframes();
             LOG_INFO("Loaded {} keyframes from {}", keyframes_.size(), path);
             return true;

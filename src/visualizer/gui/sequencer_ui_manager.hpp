@@ -53,7 +53,8 @@ namespace lfs::vis {
             void handleOverlayActions();
             void renderKeyframeEditOverlay(const ViewportLayout& viewport);
             void renderFilmStrip(const UIContext& ctx);
-            void drawPlayheadLine();
+            void drawTimelineGuides();
+            void drawTimelineTooltip();
             void drawEasingCurves();
             void initPipPreview();
             void renderKeyframePreview(const UIContext& ctx);
@@ -75,6 +76,10 @@ namespace lfs::vis {
 
             float last_frustum_click_time_ = 0.0f;
             std::optional<size_t> last_frustum_clicked_;
+            bool film_strip_scrubbing_ = false;
+            bool timeline_tooltip_active_ = false;
+            ImVec2 timeline_tooltip_pos_{0.0f, 0.0f};
+            std::string timeline_tooltip_text_;
 
             static constexpr int PREVIEW_WIDTH = 320;
             static constexpr int PREVIEW_HEIGHT = 180;

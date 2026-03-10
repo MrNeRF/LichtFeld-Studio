@@ -47,6 +47,7 @@ namespace lfs::vis::gui {
             Action action{};
             size_t keyframe_index = 0;
             int easing_value = 0;
+            float time = 0.0f;
         };
 
         struct EditResult {
@@ -62,6 +63,7 @@ namespace lfs::vis::gui {
 
         void showContextMenu(float screen_x, float screen_y,
                              std::optional<size_t> keyframe_index,
+                             float time,
                              int gizmo_op);
         void hideContextMenu();
 
@@ -130,6 +132,7 @@ namespace lfs::vis::gui {
 
         bool context_menu_open_ = false;
         std::optional<size_t> context_menu_keyframe_;
+        float context_menu_time_ = 0.0f;
 
         bool time_edit_active_ = false;
         size_t time_edit_index_ = 0;

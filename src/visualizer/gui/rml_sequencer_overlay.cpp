@@ -215,6 +215,9 @@ namespace lfs::vis::gui {
 
         if (keyframe.has_value() && *keyframe < timeline.size()) {
             const size_t idx = *keyframe;
+            const auto* const keyframe_data = timeline.getKeyframe(idx);
+            if (!keyframe_data || keyframe_data->is_loop_point)
+                return html;
             const bool is_first = (idx == 0);
             const bool is_last = (idx == timeline.size() - 1);
 
@@ -274,6 +277,7 @@ namespace lfs::vis::gui {
 
     void RmlSequencerOverlay::showContextMenu(float screen_x, float screen_y,
                                               std::optional<size_t> keyframe_index,
+                                              const float time,
                                               const int gizmo_op) {
         if (!rml_context_)
             initContext();
@@ -281,6 +285,7 @@ namespace lfs::vis::gui {
             return;
 
         context_menu_keyframe_ = keyframe_index;
+        context_menu_time_ = time;
         context_menu_open_ = true;
         skip_next_click_ = true;
 
@@ -306,6 +311,7 @@ namespace lfs::vis::gui {
 
         context_menu_open_ = false;
         context_menu_keyframe_ = std::nullopt;
+        context_menu_time_ = 0.0f;
         el_context_menu_->SetClass("visible", false);
         el_menu_backdrop_->SetProperty("display", "none");
     }
@@ -616,41 +622,41 @@ namespace lfs::vis::gui {
         }
 
         if (id == "ctx-add") {
-            overlay->pending_actions_.push_back({RmlSequencerOverlay::Action::ADD_KEYFRAME, 0, 0});
+            overlay->pending_actions_.push_back({RmlSequencerOverlay::Action::ADD_KEYFRAME, 0, 0, overlay->context_menu_time_});
             overlay->hideContextMenu();
         } else if (id == "ctx-update") {
             if (overlay->context_menu_keyframe_) {
                 overlay->pending_actions_.push_back(
                     {RmlSequencerOverlay::Action::UPDATE_KEYFRAME,
-                     *overlay->context_menu_keyframe_, 0});
+                     *overlay->context_menu_keyframe_, 0, 0.0f});
             }
             overlay->hideContextMenu();
         } else if (id == "ctx-goto") {
             if (overlay->context_menu_keyframe_) {
                 overlay->pending_actions_.push_back(
                     {RmlSequencerOverlay::Action::GOTO_KEYFRAME,
-                     *overlay->context_menu_keyframe_, 0});
+                     *overlay->context_menu_keyframe_, 0, 0.0f});
             }
             overlay->hideContextMenu();
         } else if (id == "ctx-focal") {
             if (overlay->context_menu_keyframe_) {
                 overlay->pending_actions_.push_back(
                     {RmlSequencerOverlay::Action::EDIT_FOCAL_LENGTH,
-                     *overlay->context_menu_keyframe_, 0});
+                     *overlay->context_menu_keyframe_, 0, 0.0f});
             }
             overlay->hideContextMenu();
         } else if (id == "ctx-translate") {
             if (overlay->context_menu_keyframe_) {
                 overlay->pending_actions_.push_back(
                     {RmlSequencerOverlay::Action::SET_TRANSLATE,
-                     *overlay->context_menu_keyframe_, 0});
+                     *overlay->context_menu_keyframe_, 0, 0.0f});
             }
             overlay->hideContextMenu();
         } else if (id == "ctx-rotate") {
             if (overlay->context_menu_keyframe_) {
                 overlay->pending_actions_.push_back(
                     {RmlSequencerOverlay::Action::SET_ROTATE,
-                     *overlay->context_menu_keyframe_, 0});
+                     *overlay->context_menu_keyframe_, 0, 0.0f});
             }
             overlay->hideContextMenu();
         } else if (id.starts_with("ctx-easing-")) {
@@ -658,25 +664,25 @@ namespace lfs::vis::gui {
             if (easing_val >= 0 && easing_val < 4 && overlay->context_menu_keyframe_) {
                 overlay->pending_actions_.push_back(
                     {RmlSequencerOverlay::Action::SET_EASING,
-                     *overlay->context_menu_keyframe_, easing_val});
+                     *overlay->context_menu_keyframe_, easing_val, 0.0f});
             }
             overlay->hideContextMenu();
         } else if (id == "ctx-delete") {
             if (overlay->context_menu_keyframe_) {
                 overlay->pending_actions_.push_back(
                     {RmlSequencerOverlay::Action::DELETE_KEYFRAME,
-                     *overlay->context_menu_keyframe_, 0});
+                     *overlay->context_menu_keyframe_, 0, 0.0f});
             }
             overlay->hideContextMenu();
         } else if (id == "kf-close-btn") {
             overlay->pending_actions_.push_back(
-                {RmlSequencerOverlay::Action::DESELECT_KEYFRAME, 0, 0});
+                {RmlSequencerOverlay::Action::DESELECT_KEYFRAME, 0, 0, 0.0f});
         } else if (id == "kf-edit-apply") {
             overlay->pending_actions_.push_back(
-                {RmlSequencerOverlay::Action::APPLY_EDIT, 0, 0});
+                {RmlSequencerOverlay::Action::APPLY_EDIT, 0, 0, 0.0f});
         } else if (id == "kf-edit-revert") {
             overlay->pending_actions_.push_back(
-                {RmlSequencerOverlay::Action::REVERT_EDIT, 0, 0});
+                {RmlSequencerOverlay::Action::REVERT_EDIT, 0, 0, 0.0f});
         } else if (id == "time-edit-ok") {
             overlay->submitTimeEdit();
         } else if (id == "time-edit-cancel") {

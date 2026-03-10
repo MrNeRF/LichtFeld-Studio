@@ -6,6 +6,7 @@
 // clang-format on
 
 #include "sequencer/rml_sequencer_panel.hpp"
+#include "sequencer/timeline_view_math.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "gui/rmlui/rml_theme.hpp"
@@ -30,8 +31,6 @@
 namespace lfs::vis {
 
     namespace {
-        constexpr float DEFAULT_TIMELINE_DURATION = 10.0f;
-        constexpr float TIMELINE_END_PADDING = 1.0f;
         constexpr float MIN_KEYFRAME_SPACING = 0.1f;
         constexpr float DOUBLE_CLICK_TIME = 0.3f;
         constexpr float DRAG_THRESHOLD_PX = 3.0f;
@@ -77,6 +76,15 @@ namespace lfs::vis {
             return std::format("{}s", secs);
         }
 
+        [[nodiscard]] uint64_t selectedKeyframeSignature(const std::set<sequencer::KeyframeId>& selected_keyframes) {
+            uint64_t signature = 1469598103934665603ull;
+            for (const auto id : selected_keyframes) {
+                signature ^= id;
+                signature *= 1099511628211ull;
+            }
+            return signature;
+        }
+
     } // namespace
 
     using gui::rml_theme::colorToRml;
@@ -112,8 +120,10 @@ namespace lfs::vis {
             ctrl.togglePlayPause();
         else if (id == "btn-skip-forward")
             ctrl.seekToLastKeyframe();
-        else if (id == "btn-loop")
+        else if (id == "btn-loop") {
             ctrl.toggleLoop();
+            lfs::core::events::state::KeyframeListChanged{.count = ctrl.timeline().size()}.emit();
+        }
         else if (id == "btn-add")
             lfs::core::events::cmd::SequencerAddKeyframe{}.emit();
         else if (id == "btn-camera-path")
@@ -428,7 +438,7 @@ namespace lfs::vis {
         el_current_time_->SetInnerRML(formatTime(controller_.playhead()));
 
         const float end = controller_.timeline().empty()
-                              ? DEFAULT_TIMELINE_DURATION
+                              ? sequencer_ui::DEFAULT_TIMELINE_DURATION
                               : controller_.timeline().endTime();
         el_duration_->SetInnerRML(" / " + formatTime(end));
     }
@@ -441,12 +451,25 @@ namespace lfs::vis {
         const auto& keyframes = timeline.keyframes();
         const size_t count = keyframes.size();
 
+        for (auto it = selected_keyframes_.begin(); it != selected_keyframes_.end();) {
+            if (!timeline.findKeyframeIndex(*it).has_value())
+                it = selected_keyframes_.erase(it);
+            else
+                ++it;
+        }
+
         const float timeline_width = timelineWidth();
+        const uint64_t timeline_revision = controller_.timelineRevision();
+        const uint64_t selection_revision = controller_.selectionRevision();
+        const uint64_t selected_keyframes_signature = selectedKeyframeSignature(selected_keyframes_);
 
         if (!dragging_keyframe_ &&
             count == last_keyframe_count_ &&
             zoom_level_ == last_zoom_level_ &&
             pan_offset_ == last_pan_offset_ &&
+            timeline_revision == last_timeline_revision_ &&
+            selection_revision == last_selection_revision_ &&
+            selected_keyframes_signature == last_selected_keyframes_signature_ &&
             timeline_width == last_kf_width_) {
             return;
         }
@@ -454,6 +477,9 @@ namespace lfs::vis {
         last_zoom_level_ = zoom_level_;
         last_pan_offset_ = pan_offset_;
         last_kf_width_ = timeline_width;
+        last_timeline_revision_ = timeline_revision;
+        last_selection_revision_ = selection_revision;
+        last_selected_keyframes_signature_ = selected_keyframes_signature;
         if (timeline_width <= 0.0f)
             return;
 
@@ -488,7 +514,7 @@ namespace lfs::vis {
             auto* el = keyframe_elements_[i];
             const float x = timeToX(keyframes[i].time, 0.0f, timeline_width);
             const bool selected = controller_.selectedKeyframe() == i ||
-                                  selected_keyframes_.contains(i);
+                                  selected_keyframes_.contains(keyframes[i].id);
             const bool is_loop = keyframes[i].is_loop_point;
 
             const auto base = is_loop ? p.info : (i % 2 == 0 ? p.primary : p.secondary);
@@ -510,27 +536,32 @@ namespace lfs::vis {
             return;
 
         const float timeline_width = timelineWidth();
+        const float display_end_time = getDisplayEndTime();
 
         if (zoom_level_ == last_ruler_zoom_ &&
             pan_offset_ == last_ruler_pan_ &&
-            timeline_width == last_ruler_width_)
+            timeline_width == last_ruler_width_ &&
+            display_end_time == last_ruler_display_end_)
             return;
         last_ruler_zoom_ = zoom_level_;
         last_ruler_pan_ = pan_offset_;
         last_ruler_width_ = timeline_width;
+        last_ruler_display_end_ = display_end_time;
         if (timeline_width <= 0.0f)
             return;
 
-        const float end_time = getDisplayEndTime();
+        const float visible_duration = display_end_time;
+        const float visible_start = pan_offset_;
+        const float visible_end = visible_start + visible_duration;
 
         float major_interval = 1.0f;
-        if (end_time > 60.0f)
+        if (visible_duration > 60.0f)
             major_interval = 10.0f;
-        else if (end_time > 30.0f)
+        else if (visible_duration > 30.0f)
             major_interval = 5.0f;
-        else if (end_time > 10.0f)
+        else if (visible_duration > 10.0f)
             major_interval = 2.0f;
-        else if (end_time <= 2.0f)
+        else if (visible_duration <= 2.0f)
             major_interval = 0.5f;
 
         major_interval /= zoom_level_;
@@ -541,12 +572,17 @@ namespace lfs::vis {
 
         const float label_margin = 30.0f * cached_dp_ratio_;
 
-        for (float t_val = 0.0f; t_val <= end_time; t_val += minor_interval) {
-            const float x = (t_val / end_time) * timeline_width;
+        const float first_tick = std::floor(visible_start / minor_interval) * minor_interval;
+        for (float t_val = first_tick; t_val <= visible_end + minor_interval * 0.5f; t_val += minor_interval) {
+            if (t_val < 0.0f)
+                continue;
+
+            const float x = timeToX(t_val, 0.0f, timeline_width);
             if (x < 0.0f || x > timeline_width)
                 continue;
 
-            const bool is_major = std::fmod(t_val + 0.001f, major_interval) < 0.01f;
+            const float major_phase = std::fmod(t_val, major_interval);
+            const bool is_major = major_phase < 0.01f || (major_interval - major_phase) < 0.01f;
 
             if (is_major) {
                 html += std::format(
@@ -646,7 +682,8 @@ namespace lfs::vis {
         if (!elements_cached_)
             return;
 
-        const bool has_keyframes = !controller_.timeline().empty();
+        const bool has_camera_keyframes = controller_.timeline().realKeyframeCount() > 0;
+        const bool has_any_state = has_camera_keyframes || controller_.timeline().hasAnimationClip();
 
         if (el_btn_camera_path_)
             el_btn_camera_path_->SetClass("active", ui_state_.show_camera_path);
@@ -674,11 +711,11 @@ namespace lfs::vis {
             el_quality_value_->SetInnerRML(std::to_string(ui_state_.quality));
 
         if (el_btn_save_)
-            el_btn_save_->SetClass("disabled", !has_keyframes);
+            el_btn_save_->SetClass("disabled", !has_camera_keyframes);
         if (el_btn_export_)
-            el_btn_export_->SetClass("disabled", !has_keyframes);
+            el_btn_export_->SetClass("disabled", !has_camera_keyframes);
         if (el_btn_clear_)
-            el_btn_clear_->SetClass("disabled", !has_keyframes);
+            el_btn_clear_->SetClass("disabled", !has_any_state);
     }
 
     float RmlSequencerPanel::timelineWidth() const {
@@ -805,13 +842,22 @@ namespace lfs::vis {
         if (mouse_in_timeline && !input.want_capture_mouse) {
             const float wheel = input.mouse_wheel;
             if (std::abs(wheel) > 0.01f) {
-                const float old_zoom = zoom_level_;
-                zoom_level_ = std::clamp(zoom_level_ + wheel * ZOOM_SPEED, MIN_ZOOM, MAX_ZOOM);
-
-                if (zoom_level_ != old_zoom) {
+                if (input.key_ctrl || input.key_super) {
                     const float mouse_time = xToTime(mx, pos.x, width);
-                    pan_offset_ += (mouse_time - pan_offset_) * (1.0f - old_zoom / zoom_level_) * 0.5f;
-                    pan_offset_ = std::max(0.0f, pan_offset_);
+                    const float anchor_ratio = std::clamp((mx - pos.x) / width, 0.0f, 1.0f);
+                    const float old_zoom = zoom_level_;
+                    const float zoom_factor = std::pow(1.0f + ZOOM_SPEED, wheel);
+                    zoom_level_ = std::clamp(old_zoom * zoom_factor, MIN_ZOOM, MAX_ZOOM);
+
+                    if (zoom_level_ != old_zoom) {
+                        const float new_visible_duration = getDisplayEndTime();
+                        pan_offset_ = mouse_time - anchor_ratio * new_visible_duration;
+                        clampPanOffset();
+                    }
+                } else {
+                    const float pan_step = std::max(getDisplayEndTime() * 0.12f, 0.1f);
+                    pan_offset_ -= wheel * pan_step;
+                    clampPanOffset();
                 }
             }
         }
@@ -819,6 +865,8 @@ namespace lfs::vis {
         hovered_keyframe_ = std::nullopt;
         const auto& keyframes = timeline.keyframes();
         for (size_t i = 0; i < keyframes.size(); ++i) {
+            if (keyframes[i].is_loop_point)
+                continue;
             const float x = timeToX(keyframes[i].time, pos.x, width);
             const float dist = std::abs(mx - x);
             const bool hovered = mouse_in_timeline && dist < KEYFRAME_RADIUS * s * 2;
@@ -857,21 +905,24 @@ namespace lfs::vis {
                         const size_t lo = std::min(first_sel, i);
                         const size_t hi = std::max(first_sel, i);
                         selected_keyframes_.clear();
-                        for (size_t j = lo; j <= hi; ++j)
-                            selected_keyframes_.insert(j);
+                        for (size_t j = lo; j <= hi; ++j) {
+                            if (!keyframes[j].is_loop_point)
+                                selected_keyframes_.insert(keyframes[j].id);
+                        }
                     } else if (input.key_ctrl) {
-                        if (selected_keyframes_.contains(i))
-                            selected_keyframes_.erase(i);
+                        const auto id = keyframes[i].id;
+                        if (selected_keyframes_.contains(id))
+                            selected_keyframes_.erase(id);
                         else
-                            selected_keyframes_.insert(i);
+                            selected_keyframes_.insert(id);
                     } else {
                         selected_keyframes_.clear();
                         lfs::core::events::cmd::SequencerSelectKeyframe{.keyframe_index = i}.emit();
                         const bool is_first = (i == 0);
                         if (!is_first) {
                             dragging_keyframe_ = true;
-                            dragged_keyframe_index_ = i;
-                            drag_start_time_ = keyframes[i].time;
+                            dragged_keyframe_changed_ = false;
+                            dragged_keyframe_id_ = keyframes[i].id;
                             drag_start_mouse_x_ = mx;
                         } else {
                             lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = i}.emit();
@@ -905,37 +956,47 @@ namespace lfs::vis {
                 new_time = std::max(new_time, MIN_KEYFRAME_SPACING);
                 if (ui_state_.snap_to_grid)
                     new_time = snapTime(new_time);
-                controller_.timeline().setKeyframeTime(dragged_keyframe_index_, new_time, false);
+                if (controller_.previewKeyframeTimeById(dragged_keyframe_id_, new_time))
+                    dragged_keyframe_changed_ = true;
             } else {
-                if (std::abs(mx - drag_start_mouse_x_) < DRAG_THRESHOLD_PX) {
-                    lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = dragged_keyframe_index_}.emit();
+                if (dragged_keyframe_changed_)
+                    controller_.commitKeyframeTimeById(dragged_keyframe_id_);
+
+                if (!dragged_keyframe_changed_ && std::abs(mx - drag_start_mouse_x_) < DRAG_THRESHOLD_PX) {
+                    if (const auto index = controller_.timeline().findKeyframeIndex(dragged_keyframe_id_); index.has_value()) {
+                        lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = *index}.emit();
+                    }
                 }
-                controller_.timeline().sortKeyframes();
                 dragging_keyframe_ = false;
+                const bool emit_keyframe_change = dragged_keyframe_changed_;
+                dragged_keyframe_changed_ = false;
+                dragged_keyframe_id_ = sequencer::INVALID_KEYFRAME_ID;
+                if (emit_keyframe_change)
+                    lfs::core::events::state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
             }
         }
 
         if ((controller_.hasSelection() || !selected_keyframes_.empty()) &&
             input.key_delete_pressed) {
-            std::vector<size_t> to_delete;
+            std::vector<sequencer::KeyframeId> to_delete;
             if (!selected_keyframes_.empty())
                 to_delete.assign(selected_keyframes_.begin(), selected_keyframes_.end());
-            else if (controller_.hasSelection())
-                to_delete.push_back(*controller_.selectedKeyframe());
+            else if (auto selected_id = controller_.selectedKeyframeId(); selected_id.has_value())
+                to_delete.push_back(*selected_id);
 
-            std::sort(to_delete.begin(), to_delete.end(), std::greater<>());
-
-            for (const size_t idx : to_delete) {
-                if (idx == 0)
-                    continue;
-                controller_.timeline().removeKeyframe(idx);
-            }
+            bool removed_any = false;
+            for (const auto id : to_delete)
+                removed_any |= controller_.removeKeyframeById(id);
             selected_keyframes_.clear();
             controller_.deselectKeyframe();
+            if (removed_any)
+                lfs::core::events::state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
         }
 
         if (mouse_in_timeline && input.mouse_clicked[1]) {
-            context_menu_time_ = xToTime(mx, pos.x, width);
+            context_menu_time_ = std::max(0.0f, xToTime(mx, pos.x, width));
+            if (ui_state_.snap_to_grid)
+                context_menu_time_ = snapTime(context_menu_time_);
             context_menu_keyframe_ = hovered_keyframe_;
             context_menu_open_ = true;
             context_menu_x_ = mx;
@@ -953,22 +1014,29 @@ namespace lfs::vis {
     }
 
     float RmlSequencerPanel::getDisplayEndTime() const {
-        const auto& timeline = controller_.timeline();
-        if (timeline.size() < 2)
-            return DEFAULT_TIMELINE_DURATION / zoom_level_;
-        return std::max(timeline.endTime() + TIMELINE_END_PADDING, DEFAULT_TIMELINE_DURATION) / zoom_level_;
+        return sequencer_ui::displayEndTime(controller_.timeline(), zoom_level_);
+    }
+
+    std::optional<sequencer::KeyframeId> RmlSequencerPanel::hoveredKeyframeId() const {
+        if (!hovered_keyframe_.has_value())
+            return std::nullopt;
+        const auto* const keyframe = controller_.timeline().getKeyframe(*hovered_keyframe_);
+        if (!keyframe || keyframe->is_loop_point)
+            return std::nullopt;
+        return keyframe->id;
+    }
+
+    void RmlSequencerPanel::clampPanOffset() {
+        pan_offset_ = std::clamp(pan_offset_, 0.0f,
+                                 sequencer_ui::maxPanOffset(controller_.timeline(), zoom_level_));
     }
 
     float RmlSequencerPanel::timeToX(const float time, const float timeline_x, const float timeline_width) const {
-        const float end = getDisplayEndTime();
-        const float adjusted_time = (time - pan_offset_) * zoom_level_;
-        return timeline_x + (adjusted_time / (end * zoom_level_)) * timeline_width;
+        return sequencer_ui::timeToScreenX(time, timeline_x, timeline_width, getDisplayEndTime(), pan_offset_);
     }
 
     float RmlSequencerPanel::xToTime(const float x, const float timeline_x, const float timeline_width) const {
-        const float end = getDisplayEndTime();
-        const float t = ((x - timeline_x) / timeline_width) * end;
-        return t / zoom_level_ + pan_offset_;
+        return sequencer_ui::screenXToTime(x, timeline_x, timeline_width, getDisplayEndTime(), pan_offset_);
     }
 
     float RmlSequencerPanel::snapTime(const float time) const {
