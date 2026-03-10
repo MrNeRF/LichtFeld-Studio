@@ -195,6 +195,21 @@ namespace lfs::python {
             "Save splat data as PLY file");
 
         m.def(
+            "save_point_cloud_ply",
+            [](const PyPointCloud& pc, const std::filesystem::path& path) {
+                if (!pc.data())
+                    throw std::runtime_error("Point cloud data must not be null");
+                io::PlySaveOptions options;
+                options.output_path = path;
+                options.binary = true;
+                auto result = io::save_ply(*pc.data(), options);
+                if (!result)
+                    throw std::runtime_error(std::format("Failed to save point cloud PLY: {}", result.error().format()));
+            },
+            nb::arg("point_cloud"), nb::arg("path"),
+            "Save a point cloud as PLY file (xyz + colors)");
+
+        m.def(
             "save_sog",
             [](const PySplatData& data, const std::filesystem::path& path, int kmeans_iterations, bool use_gpu,
                nb::object progress) {

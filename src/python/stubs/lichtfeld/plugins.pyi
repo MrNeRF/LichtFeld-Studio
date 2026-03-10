@@ -1,3 +1,5 @@
+"""Plugin system - management, capabilities, panels, and settings"""
+
 from collections.abc import Callable
 
 

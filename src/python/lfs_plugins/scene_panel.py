@@ -422,6 +422,9 @@ class ScenePanel(RmlPanel):
                 lf.set_node_visibility(node_name, new_visible)
                 if self._set_row_visibility_state(node_name, new_visible):
                     self._render_tree_window(force=True)
+        elif action == "delete":
+            if node_name:
+                lf.remove_node(node_name, False)
 
     def _toggle_expand(self, target_id):
         if not target_id:
@@ -582,9 +585,11 @@ class ScenePanel(RmlPanel):
 
         for snapshot in snapshots.values():
             parent = snapshots.get(snapshot["parent_id"])
+            parent_is_dataset = bool(parent and parent["node_type"] == "DATASET")
             snapshot["draggable"] = _can_drag(
-                snapshot["node_type"],
-                bool(parent and parent["node_type"] == "DATASET"))
+                snapshot["node_type"], parent_is_dataset)
+            snapshot["deletable"] = _is_deletable(
+                snapshot["node_type"], parent_is_dataset)
 
         root_ids = [node.id for node in nodes if node.parent_id == -1]
         return snapshots, root_ids
@@ -602,6 +607,7 @@ class ScenePanel(RmlPanel):
             "training_enabled": snapshot["training_enabled"],
             "label": snapshot["label"],
             "has_mask": snapshot["has_mask"],
+            "deletable": snapshot["deletable"],
         }
 
     def _append_snapshot_rows(self, node_id, depth, rows, filter_text_lower):
@@ -668,6 +674,7 @@ class ScenePanel(RmlPanel):
             "drop_target": self._drop_target == row["name"],
             "has_mask": has_mask,
             "mask_inverted": mask_inverted,
+            "deletable": row["deletable"],
         }
 
     def _make_placeholder_row(self, absolute_index):
@@ -698,6 +705,7 @@ class ScenePanel(RmlPanel):
             "drop_target": False,
             "has_mask": False,
             "mask_inverted": False,
+            "deletable": False,
         }
 
     def _set_row_visibility_state(self, node_name, visible):

@@ -1,3 +1,5 @@
+"""Keymap configuration"""
+
 import enum
 
 

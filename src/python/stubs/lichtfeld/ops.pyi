@@ -1,3 +1,5 @@
+"""Operator system"""
+
 import enum
 
 import lichtfeld

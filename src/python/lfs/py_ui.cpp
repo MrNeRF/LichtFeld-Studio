@@ -12,6 +12,7 @@
 #include "core/property_registry.hpp"
 #include "core/scene.hpp"
 #include "gui/global_context_menu.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "gui/rml_menu_bar.hpp"
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/file_association.hpp"
@@ -110,7 +111,6 @@ namespace lfs::python {
 
         // Dynamic texture tracking
         std::atomic<bool> g_gl_alive{true};
-        std::thread::id g_gl_thread_id{};
         std::mutex g_dynamic_textures_mutex;
 
         class PyDynamicTexture;
@@ -186,12 +186,22 @@ namespace lfs::python {
             }
 
             void destroy() {
-                if (interop_ && g_gl_alive) {
+                if (!interop_)
+                    return;
+                if (!g_gl_alive) {
+                    interop_.release();
+                } else if (lfs::python::on_gl_thread()) {
                     interop_.reset();
                 } else {
-                    interop_.release();
+                    auto* raw = interop_.release();
+                    lfs::python::schedule_gl_callback([raw]() { delete raw; });
                 }
                 width_ = height_ = 0;
+            }
+
+            std::unique_ptr<rendering::CudaGLInteropTexture> release_interop() {
+                width_ = height_ = 0;
+                return std::move(interop_);
             }
 
             uint64_t texture_id() const {
@@ -428,27 +438,58 @@ namespace lfs::python {
                 }
             }
 
-            std::lock_guard lock(g_icon_cache_mutex);
-            for (const auto& key : keys_to_free) {
-                auto it = g_icon_cache.find(key);
-                if (it != g_icon_cache.end()) {
-                    lfs::python::delete_gl_texture(it->second);
-                    g_icon_cache.erase(it);
+            std::vector<uint32_t> tex_ids;
+            {
+                std::lock_guard lock(g_icon_cache_mutex);
+                for (const auto& key : keys_to_free) {
+                    auto it = g_icon_cache.find(key);
+                    if (it != g_icon_cache.end()) {
+                        tex_ids.push_back(it->second);
+                        g_icon_cache.erase(it);
+                    }
                 }
+            }
+
+            if (tex_ids.empty())
+                return;
+
+            if (lfs::python::on_gl_thread()) {
+                for (auto id : tex_ids)
+                    lfs::python::delete_gl_texture(id);
+            } else {
+                lfs::python::schedule_gl_callback([ids = std::move(tex_ids)]() {
+                    for (auto id : ids)
+                        lfs::python::delete_gl_texture(id);
+                });
             }
         }
 
         void free_plugin_textures(const std::string& plugin_name) {
-            assert(g_gl_thread_id == std::thread::id{} || std::this_thread::get_id() == g_gl_thread_id);
-            std::lock_guard lock(g_dynamic_textures_mutex);
-            auto it = g_plugin_textures.find(plugin_name);
-            if (it == g_plugin_textures.end())
-                return;
-            for (auto* tex : it->second) {
-                tex->destroy();
-                g_all_dynamic_textures.erase(tex);
+            const bool gl = lfs::python::on_gl_thread();
+            std::vector<rendering::CudaGLInteropTexture*> deferred;
+            {
+                std::lock_guard lock(g_dynamic_textures_mutex);
+                auto it = g_plugin_textures.find(plugin_name);
+                if (it == g_plugin_textures.end())
+                    return;
+                for (auto* tex : it->second) {
+                    if (gl) {
+                        tex->destroy();
+                    } else {
+                        auto interop = tex->release_interop();
+                        if (interop)
+                            deferred.push_back(interop.release());
+                    }
+                    g_all_dynamic_textures.erase(tex);
+                }
+                g_plugin_textures.erase(it);
             }
-            g_plugin_textures.erase(it);
+            if (!deferred.empty()) {
+                lfs::python::schedule_gl_callback([ptrs = std::move(deferred)]() {
+                    for (auto* p : ptrs)
+                        delete p;
+                });
+            }
         }
 
         // Thread-local layout stack for hierarchical layouts
@@ -2376,10 +2417,12 @@ namespace lfs::python {
 
     void PyUILayout::capture_keyboard_from_app(bool capture) {
         ImGui::GetIO().WantCaptureKeyboard = capture;
+        vis::gui::guiFocusState().want_capture_keyboard = capture;
     }
 
     void PyUILayout::capture_mouse_from_app(bool capture) {
         ImGui::GetIO().WantCaptureMouse = capture;
+        vis::gui::guiFocusState().want_capture_mouse = capture;
     }
 
     void PyUILayout::set_scroll_here_y(float center_y_ratio) {
@@ -3061,7 +3104,8 @@ namespace lfs::python {
     }
 
     void shutdown_dynamic_textures() {
-        assert(g_gl_thread_id == std::thread::id{} || std::this_thread::get_id() == g_gl_thread_id);
+        assert(lfs::python::on_gl_thread());
+        lfs::python::flush_gl_callbacks();
         decltype(g_tensor_cache) cache_to_destroy;
         {
             std::lock_guard lock(g_dynamic_textures_mutex);
@@ -3130,7 +3174,7 @@ namespace lfs::python {
 
     // Register UI classes with nanobind module
     void register_ui(nb::module_& m) {
-        g_gl_thread_id = std::this_thread::get_id();
+        lfs::python::set_gl_thread_id(std::this_thread::get_id());
 
         // Call sub-registration functions
         register_ui_context(m);
@@ -4672,6 +4716,8 @@ namespace lfs::python {
             void* const plot_ctx = get_implot_context();
             if (plot_ctx)
                 ImPlot::SetCurrentContext(static_cast<ImPlotContext*>(plot_ctx));
+
+            lfs::python::flush_gl_callbacks();
         };
         bridge.draw_menus = [](MenuLocation loc) { PyMenuRegistry::instance().draw_menu_items(loc); };
         bridge.has_menus = [](MenuLocation loc) { return PyMenuRegistry::instance().has_items(loc); };

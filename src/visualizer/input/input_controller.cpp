@@ -5,6 +5,7 @@
 #include "input/input_controller.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
 #include "input/key_codes.hpp"
 #include "input/sdl_key_mapping.hpp"
@@ -52,7 +53,7 @@ namespace lfs::vis {
             py_evt.mods = mods;
             py_evt.x = x;
             py_evt.y = y;
-            py_evt.over_gui = ImGui::GetIO().WantCaptureMouse;
+            py_evt.over_gui = gui::guiFocusState().want_capture_mouse;
 
             return python::dispatch_modal_event(py_evt);
         }
@@ -76,7 +77,7 @@ namespace lfs::vis {
             py_evt.mods = mods;
             py_evt.x = x;
             py_evt.y = y;
-            py_evt.over_gui = ImGui::GetIO().WantCaptureMouse;
+            py_evt.over_gui = gui::guiFocusState().want_capture_mouse;
 
             return python::dispatch_modal_event(py_evt);
         }
@@ -99,7 +100,7 @@ namespace lfs::vis {
             py_evt.y = y;
             py_evt.delta_x = delta_x;
             py_evt.delta_y = delta_y;
-            py_evt.over_gui = ImGui::GetIO().WantCaptureMouse;
+            py_evt.over_gui = gui::guiFocusState().want_capture_mouse;
 
             return python::dispatch_modal_event(py_evt);
         }
@@ -122,7 +123,7 @@ namespace lfs::vis {
             py_evt.scroll_y = yoff;
             py_evt.x = x;
             py_evt.y = y;
-            py_evt.over_gui = ImGui::GetIO().WantCaptureMouse;
+            py_evt.over_gui = gui::guiFocusState().want_capture_mouse;
 
             return python::dispatch_modal_event(py_evt);
         }
@@ -436,7 +437,7 @@ namespace lfs::vis {
             return;
         }
 
-        const bool over_gui = ImGui::GetIO().WantCaptureMouse ||
+        const bool over_gui = gui::guiFocusState().want_capture_mouse ||
                               (gui && gui->panelLayout().isResizingPanel());
         const bool over_gizmo = gui && gui->gizmo().isPositionInViewportGizmo(x, y);
 
@@ -888,7 +889,7 @@ namespace lfs::vis {
         if (drag_mode_ == DragMode::Gizmo || drag_mode_ == DragMode::Splitter)
             return;
 
-        if (!isInViewport(mouse_x, mouse_y) || ImGui::IsAnyItemActive() || ImGui::GetIO().WantCaptureMouse)
+        if (!isInViewport(mouse_x, mouse_y) || gui::guiFocusState().any_item_active || gui::guiFocusState().want_capture_mouse)
             return;
 
         const float delta = static_cast<float>(yoff);
@@ -967,9 +968,10 @@ namespace lfs::vis {
             }
         }
 
-        const bool wants_text_input = ImGui::GetIO().WantTextInput;
+        const auto& focus = gui::guiFocusState();
+        const bool wants_text_input = focus.want_text_input;
         const bool imgui_wants_keyboard =
-            ImGui::IsAnyItemActive() || wants_text_input || ImGui::GetIO().WantCaptureKeyboard;
+            focus.any_item_active || wants_text_input || focus.want_capture_keyboard;
 
         if (action != input::ACTION_PRESS && action != input::ACTION_REPEAT)
             return;
@@ -1576,13 +1578,11 @@ namespace lfs::vis {
             return false;
         }
 
-        // Block when ImGui wants keyboard input (text fields, etc.)
-        if (ImGui::GetIO().WantTextInput || ImGui::GetIO().WantCaptureKeyboard) {
+        const auto& focus = gui::guiFocusState();
+        if (focus.want_text_input || focus.want_capture_keyboard)
             return false;
-        }
 
-        // Only block when actively using a GUI widget
-        return !ImGui::IsAnyItemActive();
+        return !focus.any_item_active;
     }
 
     void InputController::updateCameraSpeed(const bool increase) {

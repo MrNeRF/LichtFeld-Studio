@@ -4,6 +4,7 @@
 
 #include "gui/panels/python_console_panel.hpp"
 #include "gui/editor/python_editor.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "gui/terminal/terminal_widget.hpp"
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/windows_utils.hpp"
@@ -586,7 +587,7 @@ namespace lfs::vis::gui::panels {
             }
 
             // Block editor input when terminal has focus or other widget wants text input
-            bool block_editor_input = ImGui::GetIO().WantTextInput;
+            bool block_editor_input = lfs::vis::gui::guiFocusState().want_text_input;
             if (auto* terminal = state.getTerminal()) {
                 block_editor_input |= terminal->isFocused();
             }
@@ -965,7 +966,7 @@ namespace lfs::vis::gui::panels {
                                      ImGui::GetContentRegionAvail().y);
 
             // Block editor input when terminal has focus or other widget wants text input
-            bool block_editor_input = ImGui::GetIO().WantTextInput;
+            bool block_editor_input = lfs::vis::gui::guiFocusState().want_text_input;
             if (auto* terminal = state.getTerminal()) {
                 block_editor_input |= terminal->isFocused();
             }

@@ -1,3 +1,5 @@
+"""File I/O operations"""
+
 import os
 
 import lichtfeld
@@ -45,6 +47,9 @@ def load_point_cloud(path: str | os.PathLike) -> tuple:
 
 def save_ply(data: lichtfeld.scene.SplatData, path: str | os.PathLike, binary: bool = True, progress: object | None = None) -> None:
     """Save splat data as PLY file"""
+
+def save_point_cloud_ply(point_cloud: lichtfeld.scene.PointCloud, path: str | os.PathLike) -> None:
+    """Save a point cloud as PLY file (xyz + colors)"""
 
 def save_sog(data: lichtfeld.scene.SplatData, path: str | os.PathLike, kmeans_iterations: int = 10, use_gpu: bool = True, progress: object | None = None) -> None:
     """Save splat data as SOG compressed file"""

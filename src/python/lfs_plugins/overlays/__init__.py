@@ -13,8 +13,6 @@ _HOOK_POSITION = "append"
 
 _MODEL_NAME = "viewport_overlay_status"
 _MODEL_MARKER = "data-viewport-overlay-status-bound"
-_AUTO_DISMISS_SECONDS = 2.0
-
 _document_controller = None
 _hook_registered = False
 
@@ -32,6 +30,7 @@ _BORDER_THICKNESS = 2.0
 _ICON_SIZE = 48.0
 _ANIM_SPEED = 30.0
 _MIN_VIEWPORT_SIZE = 200.0
+_AUTO_DISMISS_DELAY = 3.0
 
 _OVERLAY_FLAGS = (
     lf.ui.UILayout.WindowFlags.NoTitleBar
@@ -87,6 +86,7 @@ class _OverlayDocumentController:
         import_state = self._get_import_state()
         video_state = self._get_video_state()
 
+        seconds_since = import_state.get("seconds_since_completion", 0.0)
         import_signature = (
             import_state.get("active", False),
             import_state.get("show_completion", False),
@@ -98,6 +98,7 @@ class _OverlayDocumentController:
             import_state.get("num_images", 0),
             import_state.get("num_points", 0),
             import_state.get("error", ""),
+            round(seconds_since, 1),
         )
         video_signature = (
             video_state.get("active", False),
@@ -113,6 +114,12 @@ class _OverlayDocumentController:
             self._import_state = import_state
             self._last_import_signature = import_signature
             needs_dirty = True
+
+        if (import_state.get("show_completion", False)
+                and not import_state.get("active", False)
+                and import_state.get("success", False)
+                and seconds_since >= _AUTO_DISMISS_DELAY):
+            lf.ui.dismiss_import()
 
         if video_signature != self._last_video_signature:
             self._video_state = video_state
@@ -149,7 +156,7 @@ class _OverlayDocumentController:
         model.bind_func("import_title_class", self._import_title_class)
         model.bind_func("show_import_path", lambda: bool(self._import_state.get("path", "")))
         model.bind_func("import_path", self._import_path)
-        model.bind_func("show_import_progress", lambda: self._import_state.get("active", False))
+        model.bind_func("show_import_progress", self._show_import_progress)
         model.bind_func("import_progress_value", self._import_progress_value)
         model.bind_func("import_progress_pct", self._import_progress_pct)
         model.bind_func("show_import_stage", self._show_import_stage)
@@ -184,18 +191,7 @@ class _OverlayDocumentController:
         if not hasattr(lf.ui, "get_import_state"):
             return {}
 
-        state = dict(lf.ui.get_import_state())
-        is_active = state.get("active", False)
-        show_completion = state.get("show_completion", False)
-        if (
-            show_completion
-            and not is_active
-            and state.get("success", False)
-            and state.get("seconds_since_completion", 0.0) > _AUTO_DISMISS_SECONDS
-        ):
-            lf.ui.dismiss_import()
-            return {}
-        return state
+        return dict(lf.ui.get_import_state())
 
     def _get_video_state(self):
         if not hasattr(lf.ui, "get_video_export_state"):
@@ -205,6 +201,13 @@ class _OverlayDocumentController:
     def _show_import_overlay(self):
         state = self._import_state
         return state.get("active", False) or state.get("show_completion", False)
+
+    def _show_import_progress(self):
+        state = self._import_state
+        if state.get("active", False):
+            return True
+        return (state.get("show_completion", False)
+                and state.get("success", False))
 
     def _show_import_stage(self):
         return self._import_state.get("active", False) and bool(self._import_state.get("stage", ""))
@@ -216,14 +219,19 @@ class _OverlayDocumentController:
                 self._import_state.get("num_points", 0) > 0)
 
     def _show_import_dismiss(self):
-        return self._import_state.get("show_completion", False) and not self._import_state.get("active", False)
+        state = self._import_state
+        return (state.get("show_completion", False)
+                and not state.get("active", False)
+                and not state.get("success", False))
 
     def _import_title(self):
-        show_completion = self._import_state.get("show_completion", False)
-        if show_completion and not self._import_state.get("active", False):
-            key = "progress.import_complete_title" if self._import_state.get("success", False) else "progress.import_failed_title"
-            return lf.ui.tr(key)
-        dataset_type = self._import_state.get("dataset_type", "dataset") or "dataset"
+        state = self._import_state
+        show_completion = state.get("show_completion", False)
+        if show_completion and not state.get("active", False):
+            if state.get("success", False):
+                return lf.ui.tr("progress.import_complete_title")
+            return lf.ui.tr("progress.import_failed_title")
+        dataset_type = state.get("dataset_type", "dataset") or "dataset"
         return lf.ui.tr("progress.importing").replace("%s", dataset_type)
 
     def _import_title_class(self):
@@ -237,10 +245,16 @@ class _OverlayDocumentController:
         return f"Path: {path_str}" if path_str else ""
 
     def _import_progress_value(self):
-        return str(_clamp_progress(self._import_state.get("progress", 0.0)))
+        state = self._import_state
+        if state.get("show_completion", False) and state.get("success", False):
+            return "1"
+        return str(_clamp_progress(state.get("progress", 0.0)))
 
     def _import_progress_pct(self):
-        return f"{_clamp_progress(self._import_state.get('progress', 0.0)) * 100:.0f}%"
+        state = self._import_state
+        if state.get("show_completion", False) and state.get("success", False):
+            return "100%"
+        return f"{_clamp_progress(state.get('progress', 0.0)) * 100:.0f}%"
 
     def _import_counts(self):
         return f"{self._import_state.get('num_images', 0)} images, {self._import_state.get('num_points', 0)} points"

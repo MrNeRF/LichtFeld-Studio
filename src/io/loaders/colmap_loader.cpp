@@ -8,6 +8,7 @@
 #include "core/logger.hpp"
 #include "core/point_cloud.hpp"
 #include "formats/colmap.hpp"
+#include "formats/ply.hpp"
 #include "io/error.hpp"
 #include "io/filesystem_utils.hpp"
 #include <algorithm>
@@ -60,6 +61,8 @@ namespace lfs::io {
         auto images_txt = find_file_in_paths(search_paths, "images.txt");
         auto points_txt = find_file_in_paths(search_paths, "points3D.txt");
 
+        auto points_ply = find_file_in_paths(search_paths, "points3D.ply");
+
         bool has_cameras = !cameras_bin.empty();
         bool has_images = !images_bin.empty();
         bool has_points = !points_bin.empty();
@@ -67,6 +70,8 @@ namespace lfs::io {
         bool has_cameras_text = !cameras_txt.empty();
         bool has_images_text = !images_txt.empty();
         bool has_points_text = !points_txt.empty();
+
+        bool has_points_ply = !points_ply.empty();
 
         if ((has_cameras || has_images || has_points) &&
             (has_cameras_text || has_images_text || has_points_text)) {
@@ -162,7 +167,7 @@ namespace lfs::io {
                 .scene_center = Tensor::zeros({3}, Device::CPU),
                 .loader_used = name(),
                 .load_time = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time),
-                .warnings = (has_points || has_points_text) ? std::vector<std::string>{} : std::vector<std::string>{"No sparse point cloud found (points3D.bin|txt) - will use random initialization"}};
+                .warnings = (has_points || has_points_text || has_points_ply) ? std::vector<std::string>{} : std::vector<std::string>{"No sparse point cloud found (points3D.bin|txt|ply) - will use random initialization"}};
         }
 
         // Load cameras and images
@@ -212,19 +217,29 @@ namespace lfs::io {
                 options.progress(60.0f, "Loading point cloud...");
             }
 
-            // Load point cloud if it exists
+            // Load point cloud: points3D.ply > points3D.bin > points3D.txt
             std::shared_ptr<PointCloud> point_cloud;
-            if (has_points) {
+            if (has_points_ply) {
+                LOG_INFO("Loading custom point cloud from points3D.ply");
+                auto pc_result = load_ply_point_cloud(points_ply);
+                if (pc_result) {
+                    point_cloud = std::make_shared<PointCloud>(std::move(*pc_result));
+                    LOG_INFO("Loaded {} points from points3D.ply", point_cloud->size());
+                } else {
+                    LOG_WARN("Failed to load points3D.ply: {}, falling back", pc_result.error());
+                }
+            }
+            if (!point_cloud && has_points) {
                 LOG_DEBUG("Loading binary point cloud");
                 auto loaded_pc = read_colmap_point_cloud(path);
                 point_cloud = std::make_shared<PointCloud>(std::move(loaded_pc));
                 LOG_INFO("Loaded {} points from COLMAP", point_cloud->size());
-            } else if (has_points_text) {
+            } else if (!point_cloud && has_points_text) {
                 LOG_DEBUG("Loading text point cloud");
                 auto loaded_pc = read_colmap_point_cloud_text(path);
                 point_cloud = std::make_shared<PointCloud>(std::move(loaded_pc));
                 LOG_INFO("Loaded {} points from COLMAP text file", point_cloud->size());
-            } else {
+            } else if (!point_cloud) {
                 LOG_WARN("No point cloud found - will use random initialization");
                 point_cloud = std::make_shared<PointCloud>();
             }
@@ -249,7 +264,7 @@ namespace lfs::io {
                 .images_have_alpha = images_have_alpha,
                 .loader_used = name(),
                 .load_time = load_time,
-                .warnings = (has_points || has_points_text) ? std::vector<std::string>{} : std::vector<std::string>{"No sparse point cloud found - using random initialization"}};
+                .warnings = (has_points || has_points_text || has_points_ply) ? std::vector<std::string>{} : std::vector<std::string>{"No sparse point cloud found - using random initialization"}};
 
             LOG_INFO("COLMAP dataset loaded successfully in {}ms", load_time.count());
             LOG_INFO("  - {} cameras", num_cameras);

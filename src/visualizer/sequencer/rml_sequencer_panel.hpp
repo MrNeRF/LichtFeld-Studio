@@ -10,6 +10,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 namespace Rml {
     class Context;
@@ -33,12 +34,17 @@ namespace lfs::vis {
         float mouse_wheel = 0.0f;
         bool key_shift = false;
         bool key_ctrl = false;
+        bool key_alt = false;
+        bool key_super = false;
         bool key_delete_pressed = false;
         float time = 0.0f;
         float delta_time = 0.0f;
         bool want_capture_mouse = false;
         int screen_w = 0;
         int screen_h = 0;
+        std::vector<int> keys_pressed;
+        std::vector<int> keys_released;
+        std::vector<uint32_t> text_codepoints;
     };
 
     namespace panel_config {

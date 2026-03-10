@@ -42,6 +42,12 @@
                          data-attr-data-node="row.name"
                          data-action="toggle-vis" />
 
+                    <img data-if="row.deletable"
+                         class="row-icon trash-icon"
+                         src="../icon/scene/trash.png"
+                         data-attr-data-node="row.name"
+                         data-action="delete" />
+
                     <img data-if="row.use_type_icon"
                          data-attr-class="'row-icon type-icon ' + row.type_class"
                          data-attr-src="row.type_icon_src" />

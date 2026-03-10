@@ -312,6 +312,7 @@ namespace lfs::core {
         resetSelectionState();
 
         initial_point_cloud_.reset();
+        point_cloud_modified_ = false;
         training_model_node_.clear();
 
         cudaDeviceSynchronize();
@@ -2112,6 +2113,7 @@ namespace lfs::core {
 
     void Scene::setInitialPointCloud(std::shared_ptr<lfs::core::PointCloud> point_cloud) {
         initial_point_cloud_ = std::move(point_cloud);
+        point_cloud_modified_ = false;
         LOG_DEBUG("Set initial point cloud ({})", initial_point_cloud_ ? "valid" : "null");
     }
 

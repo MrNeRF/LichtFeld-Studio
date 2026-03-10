@@ -15,7 +15,6 @@
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/string_keys.hpp"
-#include "gui/ui_widgets.hpp"
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
 
@@ -172,17 +171,37 @@ namespace lfs::vis::gui {
 
     std::string StartupOverlay::generateThemeRCSS(const lfs::vis::Theme& t) const {
         const auto& p = t.palette;
+        const bool is_light = t.isLightTheme();
 
-        const auto border = colorToRmlAlpha(p.border, t.isLightTheme() ? 0.75f : 0.62f);
+        auto blend = [](const ImVec4& a, const ImVec4& b, float t_val) -> ImVec4 {
+            return {a.x + (b.x - a.x) * t_val,
+                    a.y + (b.y - a.y) * t_val,
+                    a.z + (b.z - a.z) * t_val,
+                    1.0f};
+        };
+
+        const auto border = colorToRmlAlpha(p.border, is_light ? 0.75f : 0.62f);
         const auto text = colorToRml(p.text);
         const auto text_dim_85 = colorToRmlAlpha(p.text_dim, 0.85f);
         const auto text_dim_50 = colorToRmlAlpha(p.text_dim, 0.50f);
-        const auto primary = colorToRmlAlpha(p.primary, t.isLightTheme() ? 0.78f : 0.62f);
-        const auto select_bg = colorToRmlAlpha(p.background, t.isLightTheme() ? 0.90f : 0.78f);
-        const auto selectbox_bg = colorToRmlAlpha(p.surface, t.isLightTheme() ? 0.95f : 0.90f);
+        const auto primary = colorToRmlAlpha(p.primary, is_light ? 0.78f : 0.62f);
+        const auto select_bg = colorToRmlAlpha(p.background, is_light ? 0.90f : 0.78f);
+        const auto selectbox_bg = colorToRmlAlpha(p.surface, is_light ? 0.95f : 0.90f);
+
+        const ImVec4 base_color = blend(p.surface, p.text, is_light ? 0.04f : 0.10f);
+        const ImVec4 border_color = blend(p.border, p.text, is_light ? 0.28f : 0.38f);
+        const float base_alpha = is_light ? 0.82f : 0.86f;
+        const float bdr_alpha = is_light ? 0.40f : 0.50f;
+        const float inset_alpha = is_light ? 0.08f : 0.05f;
+
+        std::string box_shadow;
+        if (t.shadows.enabled)
+            box_shadow = std::format("box-shadow: {}, {} 0dp 0dp 0dp 1dp inset;",
+                                     rml_theme::layeredShadow(t, 4),
+                                     colorToRmlAlpha(RmlColor{1, 1, 1, 1}, inset_alpha));
 
         return std::format(
-            "#overlay-box {{ background-color: rgba(0,0,0,0); border-color: rgba(0,0,0,0); }}\n"
+            "#overlay-box {{ background-color: {7}; border: 1dp {8}; border-radius: 12dp; {9} }}\n"
             ".dim-text {{ color: {2}; }}\n"
             ".hint-text {{ color: {3}; }}\n"
             ".social-link span {{ color: {2}; }}\n"
@@ -193,7 +212,10 @@ namespace lfs::vis::gui {
             "selectbox {{ background-color: {6}; border-color: {0}; }}\n"
             "selectbox option:hover {{ background-color: {4}; }}\n"
             "#lang-label {{ color: {2}; }}\n",
-            border, text, text_dim_85, text_dim_50, primary, select_bg, selectbox_bg);
+            border, text, text_dim_85, text_dim_50, primary, select_bg, selectbox_bg,
+            colorToRmlAlpha(base_color, base_alpha),
+            colorToRmlAlpha(border_color, bdr_alpha),
+            box_shadow);
     }
 
     void StartupOverlay::updateTheme() {
@@ -273,10 +295,6 @@ namespace lfs::vis::gui {
         if (!rml_context_ || !document_)
             return;
 
-        ImVec2 overlay_box_pos = {};
-        ImVec2 overlay_box_size = {};
-        bool overlay_box_valid = false;
-
         if (!rml_manager_->shouldDeferFboUpdate(fbo_)) {
             updateTheme();
             updateLocalizedText();
@@ -288,18 +306,6 @@ namespace lfs::vis::gui {
             document_->SetProperty("width", std::format("{}px", ctx_w));
             document_->SetProperty("height", std::format("{}px", ctx_h));
             rml_context_->Update();
-
-            if (auto* overlay_box = document_->GetElementById("overlay-box")) {
-                const auto abs_offset = overlay_box->GetAbsoluteOffset(Rml::BoxArea::Border);
-                const float box_w = overlay_box->GetOffsetWidth();
-                const float box_h = overlay_box->GetOffsetHeight();
-                if (box_w > 1.0f && box_h > 1.0f) {
-                    overlay_box_pos = {viewport.pos.x + abs_offset.x,
-                                       viewport.pos.y + abs_offset.y};
-                    overlay_box_size = {box_w, box_h};
-                    overlay_box_valid = overlay_box_size.x > 2.0f && overlay_box_size.y > 2.0f;
-                }
-            }
 
             fbo_.ensure(ctx_w, ctx_h);
             if (!fbo_.valid())
@@ -335,44 +341,6 @@ namespace lfs::vis::gui {
                              ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
                              ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus |
                              ImGuiWindowFlags_NoFocusOnAppearing)) {
-            if (overlay_box_valid) {
-                auto blend = [](const ImVec4& a, const ImVec4& b, float t_val) -> ImVec4 {
-                    return {a.x + (b.x - a.x) * t_val,
-                            a.y + (b.y - a.y) * t_val,
-                            a.z + (b.z - a.z) * t_val,
-                            1.0f};
-                };
-                auto to_u32 = [](const ImVec4& c, float alpha) -> ImU32 {
-                    const int r = static_cast<int>(std::clamp(c.x, 0.0f, 1.0f) * 255.0f);
-                    const int g = static_cast<int>(std::clamp(c.y, 0.0f, 1.0f) * 255.0f);
-                    const int b = static_cast<int>(std::clamp(c.z, 0.0f, 1.0f) * 255.0f);
-                    const int a = static_cast<int>(std::clamp(alpha, 0.0f, 1.0f) * 255.0f);
-                    return IM_COL32(r, g, b, a);
-                };
-
-                const auto& t = theme();
-                const auto& p = t.palette;
-                const bool is_light = t.isLightTheme();
-
-                const ImVec2 p1 = overlay_box_pos;
-                const ImVec2 p2 = {overlay_box_pos.x + overlay_box_size.x,
-                                   overlay_box_pos.y + overlay_box_size.y};
-                static constexpr float ROUNDING = 12.0f;
-
-                auto* draw = ImGui::GetWindowDrawList();
-                widgets::DrawModalShadow(draw, p1, overlay_box_size, ROUNDING);
-
-                const ImVec4 base_color = blend(p.surface, p.text, is_light ? 0.04f : 0.10f);
-                const ImVec4 border_color = blend(p.border, p.text, is_light ? 0.28f : 0.38f);
-                const float base_alpha = is_light ? 0.82f : 0.86f;
-
-                draw->AddRectFilled(p1, p2, to_u32(base_color, base_alpha), ROUNDING);
-
-                draw->AddRect(p1, p2, to_u32(border_color, is_light ? 0.40f : 0.50f), ROUNDING);
-                draw->AddRect({p1.x + 1.0f, p1.y + 1.0f}, {p2.x - 1.0f, p2.y - 1.0f},
-                              to_u32(ImVec4(1, 1, 1, 1), is_light ? 0.08f : 0.05f),
-                              ROUNDING - 1.0f);
-            }
             if (fbo_.valid())
                 fbo_.blitAsImage(viewport.size.x, viewport.size.y);
         }
@@ -400,6 +368,7 @@ namespace lfs::vis::gui {
                                     ImGui::IsKeyPressed(ImGuiKey_Enter);
 
             if (key_action) {
+                LOG_DEBUG("StartupOverlay: dismissed by key action");
                 visible_ = false;
             } else if (mouse_clicked) {
                 auto* overlay_box = document_->GetElementById("overlay-box");
@@ -412,6 +381,12 @@ namespace lfs::vis::gui {
                     float box_h = overlay_box->GetOffsetHeight();
                     inside = mx >= abs_offset.x && mx < abs_offset.x + box_w &&
                              my >= abs_offset.y && my < abs_offset.y + box_h;
+                    if (!inside)
+                        LOG_DEBUG("StartupOverlay: dismissed by click outside box "
+                                  "(mouse={:.0f},{:.0f} box={:.0f},{:.0f} {:.0f}x{:.0f})",
+                                  mx, my, abs_offset.x, abs_offset.y, box_w, box_h);
+                } else {
+                    LOG_DEBUG("StartupOverlay: dismissed - overlay-box element not found");
                 }
                 if (!inside)
                     visible_ = false;

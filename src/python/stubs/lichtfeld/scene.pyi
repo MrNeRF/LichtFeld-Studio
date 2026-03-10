@@ -1,3 +1,5 @@
+"""Scene graph API"""
+
 from collections.abc import Sequence
 import enum
 from typing import Annotated, overload
@@ -635,6 +637,13 @@ class Scene:
 
     def has_training_data(self) -> bool:
         """Check if training dataset is loaded"""
+
+    @property
+    def is_point_cloud_modified(self) -> bool:
+        """Whether the point cloud has been modified since loading"""
+
+    @is_point_cloud_modified.setter
+    def is_point_cloud_modified(self, arg: bool, /) -> None: ...
 
     @property
     def scene_center(self) -> lichtfeld.Tensor:

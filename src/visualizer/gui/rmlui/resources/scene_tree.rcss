@@ -98,11 +98,11 @@ body {
 
 /* selected MUST come after even/odd for cascade */
 .tree-row.selected {
-    background-color: #5572a3;
+    background-color: rgba(137, 180, 250, 71);
 }
 
 .tree-row.selected:hover {
-    background-color: #6483b7;
+    background-color: rgba(137, 180, 250, 97);
     border-left-color: rgba(180, 208, 251, 255);
 }
 
@@ -214,6 +214,21 @@ body {
 .node-icon.keyframe_group { color: rgba(230, 178, 77, 204); }
 .node-icon.keyframe       { color: rgba(255, 204, 51, 230); }
 
+
+.row-icon.trash-icon {
+    width: 14dp;
+    height: 14dp;
+    margin-right: 2dp;
+    image-color: rgba(180, 80, 80, 178);
+}
+
+.row-icon.trash-icon:hover {
+    image-color: rgba(243, 139, 168, 230);
+}
+
+.tree-row.selected .row-icon.trash-icon {
+    image-color: rgba(255, 153, 153, 230);
+}
 
 .node-name {
     display: block;

@@ -11,6 +11,7 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "gui/rml_sequencer_overlay.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/utils/windows_utils.hpp"
@@ -130,22 +131,29 @@ namespace lfs::vis::gui {
         renderKeyframeEditOverlay(viewport);
         handleOverlayActions();
 
-        const auto& io = ImGui::GetIO();
+        const auto& sdl_buf = viewer_->getWindowManager()->frameInput();
         lfs::vis::PanelInputState overlay_input;
-        overlay_input.mouse_x = io.MousePos.x;
-        overlay_input.mouse_y = io.MousePos.y;
-        overlay_input.mouse_down[0] = io.MouseDown[0];
-        overlay_input.mouse_down[1] = io.MouseDown[1];
-        overlay_input.mouse_clicked[0] = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
-        overlay_input.mouse_clicked[1] = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
+        overlay_input.mouse_x = sdl_buf.mouse_x;
+        overlay_input.mouse_y = sdl_buf.mouse_y;
+        overlay_input.mouse_down[0] = sdl_buf.mouse_down[0];
+        overlay_input.mouse_down[1] = sdl_buf.mouse_down[1];
+        overlay_input.mouse_clicked[0] = sdl_buf.mouse_clicked[0];
+        overlay_input.mouse_clicked[1] = sdl_buf.mouse_clicked[1];
+        overlay_input.key_ctrl = (sdl_buf.key_mods & SDL_KMOD_CTRL) != 0;
+        overlay_input.key_shift = (sdl_buf.key_mods & SDL_KMOD_SHIFT) != 0;
+        overlay_input.key_alt = (sdl_buf.key_mods & SDL_KMOD_ALT) != 0;
+        overlay_input.key_super = (sdl_buf.key_mods & SDL_KMOD_GUI) != 0;
+        for (auto sc : sdl_buf.keys_pressed)
+            overlay_input.keys_pressed.push_back(static_cast<int>(sc));
+        for (auto sc : sdl_buf.keys_released)
+            overlay_input.keys_released.push_back(static_cast<int>(sc));
+        overlay_input.text_codepoints = sdl_buf.text_codepoints;
         overlay_->processInput(overlay_input);
 
-        const int screen_w = static_cast<int>(io.DisplaySize.x);
-        const int screen_h = static_cast<int>(io.DisplaySize.y);
-        overlay_->render(screen_w, screen_h);
+        overlay_->render(sdl_buf.window_w, sdl_buf.window_h);
 
         if (overlay_->wantsInput())
-            ImGui::GetIO().WantCaptureMouse = true;
+            guiFocusState().want_capture_mouse = true;
     }
 
     void SequencerUIManager::compositeOverlays(const int screen_w, const int screen_h) const {
@@ -189,7 +197,7 @@ namespace lfs::vis::gui {
         input.key_delete_pressed = ImGui::IsKeyPressed(ImGuiKey_Delete);
         input.time = static_cast<float>(ImGui::GetTime());
         input.delta_time = io.DeltaTime;
-        input.want_capture_mouse = io.WantCaptureMouse;
+        input.want_capture_mouse = guiFocusState().want_capture_mouse;
         input.screen_w = static_cast<int>(io.DisplaySize.x);
         input.screen_h = static_cast<int>(io.DisplaySize.y);
 
@@ -198,7 +206,7 @@ namespace lfs::vis::gui {
                        viewport.pos.y + viewport.size.y - strip_offset, input);
 
         if (panel_->isHovered()) {
-            ImGui::GetIO().WantCaptureMouse = true;
+            guiFocusState().want_capture_mouse = true;
             auto tip = panel_->consumeTooltip();
             if (!tip.empty()) {
                 const ImVec2 cursor_pos = ImGui::GetMousePos();
@@ -758,7 +766,7 @@ namespace lfs::vis::gui {
         const float mx = io.MousePos.x;
         const float my = io.MousePos.y;
         if (mx >= px && mx < px + pw && my >= strip_y && my < strip_y + FilmStripRenderer::STRIP_HEIGHT)
-            ImGui::GetIO().WantCaptureMouse = true;
+            guiFocusState().want_capture_mouse = true;
     }
 
     void SequencerUIManager::drawEasingCurves() {
@@ -889,7 +897,7 @@ namespace lfs::vis::gui {
         const float my = io.MousePos.y;
         if (mx >= timeline_x && mx <= timeline_x + timeline_width &&
             my >= stripe_y && my <= stripe_y + stripe_h) {
-            ImGui::GetIO().WantCaptureMouse = true;
+            guiFocusState().want_capture_mouse = true;
 
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                 std::optional<size_t> nearest;

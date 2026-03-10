@@ -1,3 +1,5 @@
+"""Key codes"""
+
 
 
 SPACE: int = 32

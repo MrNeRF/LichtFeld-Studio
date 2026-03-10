@@ -27,6 +27,7 @@
 #include "tools/brush_tool.hpp"
 #include "tools/builtin_tools.hpp"
 #include "tools/selection_tool.hpp"
+#include <io/filesystem_utils.hpp>
 // clang-format off
 #include <glad/glad.h>
 // clang-format on
@@ -1159,7 +1160,15 @@ namespace lfs::vis {
             if (trainer_manager_) {
                 params.dataset = trainer_manager_->getEditableDatasetParams();
                 params.dataset.data_path = path;
-                params.init_path = init_path;
+
+                auto ply_in_sparse = lfs::io::find_file_in_paths(
+                    lfs::io::get_colmap_search_paths(path), "points3D.ply");
+                if (!ply_in_sparse.empty()) {
+                    params.init_path = std::nullopt;
+                    LOG_INFO("Reset: using points3D.ply from {}", lfs::core::path_to_utf8(ply_in_sparse));
+                } else {
+                    params.init_path = init_path;
+                }
             }
             data_loader_->setParameters(params);
         }

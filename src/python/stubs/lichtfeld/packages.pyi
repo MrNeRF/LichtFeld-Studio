@@ -1,3 +1,5 @@
+"""Package management via uv"""
+
 
 
 class PackageInfo:

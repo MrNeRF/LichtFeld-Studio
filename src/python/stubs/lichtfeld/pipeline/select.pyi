@@ -1,3 +1,5 @@
+"""Selection operations"""
+
 import lichtfeld.pipeline
 
 

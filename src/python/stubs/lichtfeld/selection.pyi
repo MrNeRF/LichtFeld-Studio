@@ -1,3 +1,5 @@
+"""Selection primitives for operators"""
+
 from collections.abc import Sequence
 import enum
 

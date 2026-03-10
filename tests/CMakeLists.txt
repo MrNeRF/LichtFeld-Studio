@@ -236,6 +236,7 @@ set(TEST_FILES
     test_fastgs_analytical_gradients.cpp
     test_background_image.cpp
     test_operator_return_value.cpp
+    test_sdl_rml_key_mapping.cpp
     test_tensor_storage_version.cpp
     test_modal_registry_regression.cpp
     # test_property_schema_thread_safety.cpp  # Disabled: API mismatch after merge

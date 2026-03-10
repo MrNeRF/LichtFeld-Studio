@@ -574,23 +574,22 @@ namespace lfs::python {
         auto& slot = ensure_slot(SlotType::Checkbox, build_slot_id("checkbox", &label));
 
         if (!slot.element) {
-            auto wrapper = doc_->CreateElement("div");
-            wrapper->SetClass("setting-row", true);
+            auto wrapper = doc_->CreateElement("label");
+            wrapper->SetClass("setting-label", true);
 
             auto input = doc_->CreateElement("input");
             input->SetAttribute("type", "checkbox");
             if (value)
                 input->SetAttribute("checked", "");
 
-            auto lbl = doc_->CreateElement("span");
-            lbl->SetClass("setting-label", true);
-            lbl->SetInnerRML(Rml::String(strip_imgui_id(label)));
+            auto text_span = doc_->CreateElement("span");
+            text_span->SetInnerRML(Rml::String(strip_imgui_id(label)));
 
             slot.events.bool_value = value;
             input->AddEventListener(Rml::EventId::Change, new SlotEventListener(&slot.events));
 
             wrapper->AppendChild(std::move(input));
-            wrapper->AppendChild(std::move(lbl));
+            wrapper->AppendChild(std::move(text_span));
             slot.element = line->AppendChild(std::move(wrapper));
         } else {
             if (slot.element->GetParentNode() != line)

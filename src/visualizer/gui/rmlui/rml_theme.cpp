@@ -19,18 +19,18 @@
 
 namespace lfs::vis::gui::rml_theme {
 
-    std::string colorToRml(const ImVec4& c) {
-        const auto r = static_cast<int>(c.x * 255.0f);
-        const auto g = static_cast<int>(c.y * 255.0f);
-        const auto b = static_cast<int>(c.z * 255.0f);
-        const auto a = static_cast<int>(c.w * 255.0f);
+    std::string colorToRml(const RmlColor& c) {
+        const auto r = static_cast<int>(c.r * 255.0f);
+        const auto g = static_cast<int>(c.g * 255.0f);
+        const auto b = static_cast<int>(c.b * 255.0f);
+        const auto a = static_cast<int>(c.a * 255.0f);
         return std::format("rgba({},{},{},{})", r, g, b, a);
     }
 
-    std::string colorToRmlAlpha(const ImVec4& c, float alpha) {
-        const auto r = static_cast<int>(c.x * 255.0f);
-        const auto g = static_cast<int>(c.y * 255.0f);
-        const auto b = static_cast<int>(c.z * 255.0f);
+    std::string colorToRmlAlpha(const RmlColor& c, float alpha) {
+        const auto r = static_cast<int>(c.r * 255.0f);
+        const auto g = static_cast<int>(c.g * 255.0f);
+        const auto b = static_cast<int>(c.b * 255.0f);
         const auto a = static_cast<int>(alpha * 255.0f);
         return std::format("rgba({},{},{},{})", r, g, b, a);
     }
@@ -147,34 +147,34 @@ namespace lfs::vis::gui::rml_theme {
             hashColor(seed, overlay.selection_flash);
         }
 
-        std::string layeredShadow(const Theme& t, int elevation) {
-            const float a = t.shadows.alpha;
-            const float blur = t.shadows.blur;
-
-            struct ElevationParams {
-                float tight_y, tight_blur, tight_alpha;
-                float ambient_y, ambient_blur_scale, ambient_alpha;
-            };
-
-            static constexpr ElevationParams levels[] = {
-                {1.0f, 2.0f, 0.40f, 3.0f, 0.5f, 0.20f},
-                {1.0f, 3.0f, 0.35f, 5.0f, 1.0f, 0.18f},
-                {2.0f, 4.0f, 0.32f, 8.0f, 1.3f, 0.16f},
-                {3.0f, 6.0f, 0.30f, 14.0f, 2.0f, 0.15f},
-            };
-
-            const int i = std::clamp(elevation - 1, 0, 3);
-            const auto& lv = levels[i];
-            const float ta = std::clamp(a * lv.tight_alpha, 0.0f, 1.0f);
-            const float aa = std::clamp(a * lv.ambient_alpha, 0.0f, 1.0f);
-
-            return std::format("{} 0dp {:.1f}dp {:.1f}dp, {} 0dp {:.1f}dp {:.1f}dp",
-                               colorToRmlAlpha({0, 0, 0, 1}, ta), lv.tight_y, lv.tight_blur,
-                               colorToRmlAlpha({0, 0, 0, 1}, aa), lv.ambient_y,
-                               std::max(0.0f, blur * lv.ambient_blur_scale));
-        }
-
     } // namespace
+
+    std::string layeredShadow(const Theme& t, int elevation) {
+        const float a = t.shadows.alpha;
+        const float blur = t.shadows.blur;
+
+        struct ElevationParams {
+            float tight_y, tight_blur, tight_alpha;
+            float ambient_y, ambient_blur_scale, ambient_alpha;
+        };
+
+        static constexpr ElevationParams levels[] = {
+            {1.0f, 2.0f, 0.40f, 3.0f, 0.5f, 0.20f},
+            {1.0f, 3.0f, 0.35f, 5.0f, 1.0f, 0.18f},
+            {2.0f, 4.0f, 0.32f, 8.0f, 1.3f, 0.16f},
+            {3.0f, 6.0f, 0.30f, 14.0f, 2.0f, 0.15f},
+        };
+
+        const int i = std::clamp(elevation - 1, 0, 3);
+        const auto& lv = levels[i];
+        const float ta = std::clamp(a * lv.tight_alpha, 0.0f, 1.0f);
+        const float aa = std::clamp(a * lv.ambient_alpha, 0.0f, 1.0f);
+
+        return std::format("{} 0dp {:.1f}dp {:.1f}dp, {} 0dp {:.1f}dp {:.1f}dp",
+                           colorToRmlAlpha({0, 0, 0, 1}, ta), lv.tight_y, lv.tight_blur,
+                           colorToRmlAlpha({0, 0, 0, 1}, aa), lv.ambient_y,
+                           std::max(0.0f, blur * lv.ambient_blur_scale));
+    }
 
     std::string generateComponentsThemeRCSS(const Theme& t) {
         const auto& p = t.palette;
@@ -510,8 +510,8 @@ namespace lfs::vis::gui::rml_theme {
         return cached;
     }
 
-    std::string darkenColorToRml(const ImVec4& c, float amount) {
-        return colorToRml({c.x - amount, c.y - amount, c.z - amount, c.w});
+    std::string darkenColorToRml(const RmlColor& c, float amount) {
+        return colorToRml({c.r - amount, c.g - amount, c.b - amount, c.a});
     }
 
     std::size_t currentThemeSignature() {

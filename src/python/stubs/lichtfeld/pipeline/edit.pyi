@@ -1,3 +1,5 @@
+"""Edit operations"""
+
 import lichtfeld.pipeline
 
 

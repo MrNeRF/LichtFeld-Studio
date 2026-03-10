@@ -10,6 +10,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/scene.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "gui/gui_manager.hpp"
 #include "gui/ui_widgets.hpp"
 #include "operation/undo_entry.hpp"
@@ -1167,7 +1168,7 @@ namespace lfs::vis::gui {
         const bool mouse_in_gizmo = mouse.x >= gizmo_x && mouse.x <= gizmo_x + VIEWPORT_GIZMO_SIZE &&
                                     mouse.y >= gizmo_y && mouse.y <= gizmo_y + VIEWPORT_GIZMO_SIZE;
 
-        const bool ui_wants_mouse = ImGui::GetIO().WantCaptureMouse;
+        const bool ui_wants_mouse = guiFocusState().want_capture_mouse;
         const int hovered_axis = ui_wants_mouse ? -1 : engine->hitTestViewportGizmo(glm::vec2(mouse.x, mouse.y), vp_pos, vp_size);
         engine->setViewportGizmoHover(hovered_axis);
 

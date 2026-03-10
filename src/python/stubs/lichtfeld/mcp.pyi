@@ -1,3 +1,5 @@
+"""MCP (Model Context Protocol) tool registration"""
+
 from collections.abc import Callable
 
 

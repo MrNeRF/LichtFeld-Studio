@@ -3,6 +3,7 @@
 
 #include "tools/align_tool.hpp"
 #include "core/services.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "internal/viewport.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "theme/theme.hpp"
@@ -60,7 +61,7 @@ namespace lfs::vis::tools {
         const ImVec2 mouse_pos = ImGui::GetMousePos();
         const auto& viewport = tool_context_->getViewport();
         auto* const rendering_manager = tool_context_->getRenderingManager();
-        const bool over_gui = ImGui::GetIO().WantCaptureMouse;
+        const bool over_gui = gui::guiFocusState().want_capture_mouse;
 
         constexpr float SPHERE_RADIUS = 0.05f;
         const auto& t = theme();

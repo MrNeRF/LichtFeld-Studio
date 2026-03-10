@@ -1131,8 +1131,57 @@ class TrainingPanel(RmlPanel):
                 tr("training.conflict.adc_gut_start_message"),
                 [btn_mcmc, btn_gut, btn_cancel],
                 _on_conflict)
+        elif self._should_offer_pc_save():
+            self._show_save_pc_dialog()
         else:
             lf.start_training()
+
+    def _should_offer_pc_save(self):
+        scene = lf.get_scene()
+        if scene is None or not scene.is_valid():
+            return False
+        return scene.is_point_cloud_modified
+
+    def _show_save_pc_dialog(self):
+        btn_save = tr("training.save_pc.btn_save_start")
+        btn_skip = tr("training.save_pc.btn_start_without")
+        btn_cancel = tr("training.conflict.btn_cancel")
+
+        def _on_result(button, _s=btn_save, _k=btn_skip):
+            if button == _s:
+                try:
+                    self._save_modified_pc()
+                except Exception as e:
+                    lf.log.error(f"Failed to save point cloud: {e}")
+                lf.start_training()
+            elif button == _k:
+                lf.start_training()
+
+        lf.ui.confirm_dialog(
+            tr("training.save_pc.title"),
+            tr("training.save_pc.message"),
+            [btn_save, btn_skip, btn_cancel],
+            _on_result)
+
+    def _save_modified_pc(self):
+        d = lf.dataset_params()
+        if not d or not d.has_params() or not d.data_path:
+            return
+        info = lf.detect_dataset_info(d.data_path)
+        if not info or not info.sparse_path:
+            return
+        save_path = os.path.join(str(info.sparse_path), "points3D.ply")
+        scene = lf.get_scene()
+        if not scene:
+            return
+        for node in scene.get_nodes():
+            if node.type == lf.scene.NodeType.POINTCLOUD:
+                pc = node.point_cloud()
+                if pc:
+                    lf.io.save_point_cloud_ply(pc, save_path)
+                    lf.log.info(f"Saved point cloud ({pc.size} points) to {save_path}")
+                    scene.is_point_cloud_modified = False
+                    return
 
     def _on_remove_step_event(self, handle, event, args):
         if not args:

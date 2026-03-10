@@ -1,3 +1,5 @@
+"""Modifier keys"""
+
 
 
 SHIFT: int = 1

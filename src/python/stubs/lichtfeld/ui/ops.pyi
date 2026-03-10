@@ -1,3 +1,5 @@
+"""Operator invocation"""
+
 import lichtfeld
 
 

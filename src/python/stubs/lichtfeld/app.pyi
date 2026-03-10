@@ -1,3 +1,5 @@
+"""Application-level operations"""
+
 
 
 def open(path: str) -> None:

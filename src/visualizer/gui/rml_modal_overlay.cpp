@@ -8,20 +8,21 @@
 
 #include "gui/rml_modal_overlay.hpp"
 #include "core/logger.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
-#include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
 
+#include "gui/rmlui/sdl_rml_key_mapping.hpp"
+
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Input.h>
 #include <cassert>
 #include <format>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
 
@@ -252,37 +253,39 @@ namespace lfs::vis::gui {
         if (!active_ || !rml_context_ || !elements_cached_)
             return;
 
-        ImGuiIO& io = ImGui::GetIO();
-        io.WantCaptureMouse = true;
-        io.WantCaptureKeyboard = true;
+        auto& focus = guiFocusState();
+        focus.want_capture_mouse = true;
+        focus.want_capture_keyboard = true;
+        if (active_->has_input)
+            focus.want_text_input = true;
 
         const float mx = input.mouse_x - input.screen_x;
         const float my = input.mouse_y - input.screen_y;
         rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), 0);
 
-        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        if (input.mouse_clicked[0])
             rml_context_->ProcessMouseButtonDown(0, 0);
-        if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+        if (input.mouse_released[0])
             rml_context_->ProcessMouseButtonUp(0, 0);
 
-        const int mods = buildRmlModifiers();
-        for (int k = ImGuiKey_NamedKey_BEGIN; k < ImGuiKey_NamedKey_END; ++k) {
-            const auto imgui_key = static_cast<ImGuiKey>(k);
-            const auto rml_key = imguiKeyToRml(imgui_key);
-            if (rml_key == Rml::Input::KI_UNKNOWN)
-                continue;
-            if (ImGui::IsKeyPressed(imgui_key, false))
+        const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
+                                      input.key_alt, input.key_super);
+        for (const int sc : input.keys_pressed) {
+            const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
+            if (rml_key != Rml::Input::KI_UNKNOWN)
                 rml_context_->ProcessKeyDown(rml_key, mods);
-            if (ImGui::IsKeyReleased(imgui_key))
+        }
+        for (const int sc : input.keys_released) {
+            const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
+            if (rml_key != Rml::Input::KI_UNKNOWN)
                 rml_context_->ProcessKeyUp(rml_key, mods);
         }
 
-        for (int i = 0; i < io.InputQueueCharacters.Size; i++)
-            rml_context_->ProcessTextInput(
-                static_cast<Rml::Character>(io.InputQueueCharacters[i]));
+        for (uint32_t cp : input.text_codepoints)
+            rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
 
-        if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
-            // Click first non-disabled primary/success button
+        if (hasKey(input.keys_pressed, SDL_SCANCODE_RETURN) ||
+            hasKey(input.keys_pressed, SDL_SCANCODE_KP_ENTER)) {
             for (size_t i = 0; i < active_->buttons.size(); ++i) {
                 if (!active_->buttons[i].disabled) {
                     dismiss(active_->buttons[i].label);
@@ -290,7 +293,7 @@ namespace lfs::vis::gui {
                 }
             }
         }
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+        if (hasKey(input.keys_pressed, SDL_SCANCODE_ESCAPE)) {
             cancel();
         }
     }

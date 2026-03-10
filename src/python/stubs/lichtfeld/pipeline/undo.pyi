@@ -1,3 +1,5 @@
+"""Unified undo system"""
+
 
 
 def undo() -> None:

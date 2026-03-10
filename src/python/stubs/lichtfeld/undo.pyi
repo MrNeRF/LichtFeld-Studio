@@ -1,3 +1,5 @@
+"""Undo/redo system"""
+
 
 
 def push(name: str, undo: object, redo: object, validate: bool = False) -> None:

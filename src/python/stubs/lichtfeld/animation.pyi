@@ -1,3 +1,5 @@
+"""Animation system API"""
+
 
 
 class AnimationTrack:

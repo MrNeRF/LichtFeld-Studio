@@ -469,6 +469,11 @@ namespace lfs::vis::gui {
 
         const auto result = scene_manager->applyLoadedDataset(path, params, std::move(*load_result));
 
+        if (result) {
+            if (auto* data_loader = viewer_->getDataLoader())
+                data_loader->setParameters(params);
+        }
+
         bool success_val;
         std::string error_val;
         size_t num_images_val, num_points_val;

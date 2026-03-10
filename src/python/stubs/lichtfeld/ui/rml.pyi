@@ -1,3 +1,5 @@
+"""RmlUI DOM API"""
+
 from collections.abc import Callable
 from typing import overload
 

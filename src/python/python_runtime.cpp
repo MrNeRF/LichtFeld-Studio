@@ -45,6 +45,11 @@ namespace lfs::python {
         // Exit popup state for window close callback (thread-safe)
         std::atomic<bool> g_exit_popup_open{false};
 
+        // GL-thread callback queue (set once during module init, before any reader threads)
+        std::thread::id g_gl_thread_id{};
+        std::mutex g_gl_callbacks_mutex;
+        std::vector<std::function<void()>> g_gl_callbacks;
+
         // Sequencer callbacks
         IsSequencerVisibleCallback g_is_sequencer_visible_cb = nullptr;
         SetSequencerVisibleCallback g_set_sequencer_visible_cb = nullptr;
@@ -982,6 +987,28 @@ namespace lfs::python {
 
     bool is_exit_popup_open() { return g_exit_popup_open.load(); }
     void set_exit_popup_open(bool open) { g_exit_popup_open.store(open); }
+
+    void set_gl_thread_id(std::thread::id id) { g_gl_thread_id = id; }
+
+    bool on_gl_thread() {
+        return g_gl_thread_id != std::thread::id{} &&
+               std::this_thread::get_id() == g_gl_thread_id;
+    }
+
+    void schedule_gl_callback(std::function<void()> fn) {
+        std::lock_guard lock(g_gl_callbacks_mutex);
+        g_gl_callbacks.push_back(std::move(fn));
+    }
+
+    void flush_gl_callbacks() {
+        std::vector<std::function<void()>> pending;
+        {
+            std::lock_guard lock(g_gl_callbacks_mutex);
+            pending.swap(g_gl_callbacks);
+        }
+        for (auto& fn : pending)
+            fn();
+    }
 
     void set_thumbnail_callbacks(RequestThumbnailCallback request_cb,
                                  ProcessThumbnailsCallback process_cb,

@@ -4,6 +4,7 @@
 
 #include "gui/panel_registry.hpp"
 #include "core/logger.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/ui_widgets.hpp"
@@ -449,6 +450,7 @@ namespace lfs::vis::gui {
                                 if (pi.float_dragging || pi.float_resizing ||
                                     (interactive &&
                                      (layout.mouse_in_panel || layout.mouse_in_resize_grip))) {
+                                    guiFocusState().want_capture_mouse = true;
                                     io.WantCaptureMouse = true;
                                 }
 

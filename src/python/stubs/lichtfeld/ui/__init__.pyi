@@ -1,3 +1,5 @@
+"""User interface API"""
+
 from collections.abc import Callable, Sequence
 import enum
 from typing import overload

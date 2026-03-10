@@ -8,20 +8,21 @@
 
 #include "gui/global_context_menu.hpp"
 #include "core/logger.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "gui/panel_layout.hpp"
-#include "gui/rmlui/rml_input_utils.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
 
+#include "gui/rmlui/sdl_rml_key_mapping.hpp"
+
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Input.h>
 #include <cassert>
 #include <format>
-#include <imgui.h>
 
 namespace lfs::vis::gui {
 
@@ -169,9 +170,9 @@ namespace lfs::vis::gui {
             return;
         }
 
-        ImGui::GetIO().WantCaptureMouse = true;
+        guiFocusState().want_capture_mouse = true;
 
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        if (hasKey(input.keys_pressed, SDL_SCANCODE_ESCAPE))
             hide();
     }
 

@@ -1,3 +1,5 @@
+"""Compositional operations system"""
+
 from typing import overload
 
 from . import (
