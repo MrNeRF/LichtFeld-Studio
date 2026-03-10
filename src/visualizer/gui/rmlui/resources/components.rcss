@@ -258,6 +258,7 @@ progress fill {
 .setting-slider {
     flex: 1;
     min-width: 60dp;
+    margin-top: 15dp;
 }
 
 .slider-value {
