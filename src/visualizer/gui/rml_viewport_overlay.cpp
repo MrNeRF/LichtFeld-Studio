@@ -155,6 +155,11 @@ namespace lfs::vis::gui {
             return;
         if (vp_size_.x <= 0 || vp_size_.y <= 0)
             return;
+        if (rml_manager_) {
+            rml_manager_->trackContextFrame(rml_context_,
+                                            static_cast<int>(vp_pos_.x - screen_origin_.x),
+                                            static_cast<int>(vp_pos_.y - screen_origin_.y));
+        }
 
         ImGuiIO& io = ImGui::GetIO();
         if (guiFocusState().want_capture_mouse)
@@ -288,6 +293,11 @@ namespace lfs::vis::gui {
         if (!needs_render)
             return;
 
+        if (rml_manager_) {
+            rml_manager_->trackContextFrame(rml_context_,
+                                            static_cast<int>(vp_pos_.x - screen_origin_.x),
+                                            static_cast<int>(vp_pos_.y - screen_origin_.y));
+        }
         rml_context_->SetDimensions(Rml::Vector2i(w, h));
         rml_context_->Update();
 

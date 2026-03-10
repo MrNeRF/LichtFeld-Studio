@@ -37,6 +37,9 @@
 namespace lfs::vis::gui {
 
     namespace {
+        constexpr size_t MIN_PATH_RENDER_SAMPLES = 128;
+        constexpr size_t MAX_PATH_RENDER_SAMPLES = 4096;
+        constexpr float PATH_SAMPLES_PER_VIEWPORT_PIXEL = 2.0f;
 
         [[nodiscard]] std::string formatTimelineTime(const float seconds) {
             const int mins = static_cast<int>(seconds) / 60;
@@ -222,6 +225,10 @@ namespace lfs::vis::gui {
         input.key_shift = io.KeyShift;
         input.key_ctrl = io.KeyCtrl;
         input.key_delete_pressed = ImGui::IsKeyPressed(ImGuiKey_Delete);
+        if (const ImGuiViewport* const main_viewport = ImGui::GetMainViewport()) {
+            input.screen_x = main_viewport->Pos.x;
+            input.screen_y = main_viewport->Pos.y;
+        }
         input.time = static_cast<float>(ImGui::GetTime());
         input.delta_time = io.DeltaTime;
         input.want_capture_mouse = guiFocusState().want_capture_mouse;
@@ -420,9 +427,10 @@ namespace lfs::vis::gui {
 
     void SequencerUIManager::renderCameraPath(const ViewportLayout& viewport) {
         constexpr float PATH_THICKNESS = 2.0f;
+        constexpr float PATH_SAMPLE_RADIUS = 2.5f;
         constexpr float FRUSTUM_THICKNESS = 1.5f;
         constexpr float NDC_CULL_MARGIN = 1.5f;
-        constexpr int PATH_SAMPLES = 20;
+        constexpr size_t MAX_PATH_SAMPLE_MARKERS = 2000;
         constexpr float FRUSTUM_DEPTH = 0.25f;
         constexpr float SENSOR_ASPECT = rendering::SENSOR_WIDTH_35MM / rendering::SENSOR_HEIGHT_35MM;
         constexpr float HIT_RADIUS = 15.0f;
@@ -477,14 +485,37 @@ namespace lfs::vis::gui {
                 static_cast<int>(std::round(viewport.size.x)),
                 static_cast<int>(std::round(viewport.size.y))});
 
-        const auto path_points = timeline.generatePath(PATH_SAMPLES);
+        const int path_framerate = std::max(ui_state_.framerate, 1);
+        const float base_path_time_step = 1.0f / static_cast<float>(path_framerate);
+        const float path_duration = std::max(timeline.endTime() - timeline.startTime(), 0.0f);
+        const size_t target_render_samples = std::clamp<size_t>(
+            static_cast<size_t>(
+                std::ceil(std::max(viewport.size.x, 1.0f) * PATH_SAMPLES_PER_VIEWPORT_PIXEL)),
+            MIN_PATH_RENDER_SAMPLES, MAX_PATH_RENDER_SAMPLES);
+        const float capped_path_time_step =
+            (path_duration > 0.0f && target_render_samples > 1)
+                ? path_duration / static_cast<float>(target_render_samples - 1)
+                : base_path_time_step;
+        const float path_time_step = std::max(base_path_time_step, capped_path_time_step);
+        const auto path_points = timeline.generatePathAtTimeStep(path_time_step);
         if (path_points.size() >= 2) {
             const glm::vec4 path_color = toColor(t.palette.primary, 0.8f);
+            const glm::vec4 sample_color = toColor(t.palette.primary, 0.45f);
             for (size_t i = 0; i + 1 < path_points.size(); ++i) {
                 if (!isVisible(path_points[i]) && !isVisible(path_points[i + 1]))
                     continue;
                 line_renderer_.addLine(projectToScreen(path_points[i]), projectToScreen(path_points[i + 1]),
                                        path_color, PATH_THICKNESS);
+            }
+
+            const size_t marker_stride =
+                std::max<size_t>(path_points.size() / MAX_PATH_SAMPLE_MARKERS, 1);
+            for (size_t i = 0; i < path_points.size(); i += marker_stride) {
+                if (!isVisible(path_points[i]))
+                    continue;
+                line_renderer_.addCircleFilled(projectToScreen(path_points[i]),
+                                               PATH_SAMPLE_RADIUS,
+                                               sample_color, 10);
             }
         }
 

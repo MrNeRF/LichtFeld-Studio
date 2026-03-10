@@ -210,6 +210,11 @@ namespace lfs::vis::gui {
             return;
         if (layout.size.x <= 0 || layout.size.y <= 0)
             return;
+        if (rml_manager_) {
+            rml_manager_->trackContextFrame(rml_context_,
+                                            static_cast<int>(layout.pos.x - input.screen_x),
+                                            static_cast<int>(layout.pos.y - input.screen_y));
+        }
 
         const float mx = input.mouse_x - layout.pos.x;
         const float my = input.mouse_y - layout.pos.y;
@@ -333,6 +338,11 @@ namespace lfs::vis::gui {
             return;
         if (layout.size.x <= 0 || layout.size.y <= 0)
             return;
+        if (rml_manager_) {
+            rml_manager_->trackContextFrame(rml_context_,
+                                            static_cast<int>(layout.pos.x - screen_x),
+                                            static_cast<int>(layout.pos.y - screen_y));
+        }
 
         const bool theme_changed = updateTheme();
 

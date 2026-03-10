@@ -49,6 +49,7 @@ namespace lfs::vis::gui {
         SDL_Window* getWindow() const { return window_; }
 
         void beginFrameCursorTracking();
+        void trackContextFrame(const Rml::Context* context, int window_x, int window_y);
         RmlCursorRequest consumeCursorRequest();
 
     private:

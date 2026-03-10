@@ -426,6 +426,8 @@ namespace lfs::vis::gui {
                                       focal_edit_active_ || edit_overlay_visible_;
         if (!anything_visible)
             return;
+        if (rml_manager_)
+            rml_manager_->trackContextFrame(rml_context_, 0, 0);
 
         const float mx = input.mouse_x;
         const float my = input.mouse_y;
@@ -550,6 +552,8 @@ namespace lfs::vis::gui {
         }
 
         if (!rml_manager_->shouldDeferFboUpdate(fbo_)) {
+            if (rml_manager_)
+                rml_manager_->trackContextFrame(rml_context_, 0, 0);
             syncTheme();
 
             const int w = screen_w;

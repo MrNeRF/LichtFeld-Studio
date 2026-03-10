@@ -193,6 +193,8 @@ namespace lfs::vis::gui {
     void RmlUIManager::destroyContext(const std::string& name) {
         auto it = contexts_.find(name);
         if (it != contexts_.end()) {
+            if (system_interface_)
+                system_interface_->releaseContext(it->second);
             if (auto fn = lfs::python::get_rml_context_destroy_handler())
                 fn(it->second);
             Rml::RemoveContext(name);
@@ -214,6 +216,13 @@ namespace lfs::vis::gui {
     void RmlUIManager::beginFrameCursorTracking() {
         if (system_interface_)
             system_interface_->beginFrame();
+    }
+
+    void RmlUIManager::trackContextFrame(const Rml::Context* const context,
+                                         const int window_x,
+                                         const int window_y) {
+        if (system_interface_)
+            system_interface_->trackContext(context, window_x, window_y);
     }
 
     RmlCursorRequest RmlUIManager::consumeCursorRequest() {

@@ -284,6 +284,8 @@ namespace lfs::vis::gui {
     void RmlModalOverlay::processInput(const PanelInputState& input) {
         if (!active_ || !rml_context_ || !elements_cached_)
             return;
+        if (rml_manager_)
+            rml_manager_->trackContextFrame(rml_context_, 0, 0);
 
         auto& focus = guiFocusState();
         focus.want_capture_mouse = true;
@@ -379,6 +381,8 @@ namespace lfs::vis::gui {
             return;
 
         if (!rml_manager_->shouldDeferFboUpdate(fbo_)) {
+            if (rml_manager_)
+                rml_manager_->trackContextFrame(rml_context_, 0, 0);
             syncTheme();
 
             const int w = screen_w;

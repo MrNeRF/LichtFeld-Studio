@@ -17,10 +17,45 @@ namespace lfs::vis::gui {
 
     RmlSystemInterface::RmlSystemInterface(SDL_Window* window) : window_(window) {}
 
-    void RmlSystemInterface::beginFrame() {}
+    void RmlSystemInterface::beginFrame() {
+        current_context_ = nullptr;
+        current_context_window_x_ = 0;
+        current_context_window_y_ = 0;
+        active_contexts_.clear();
+    }
+
+    void RmlSystemInterface::trackContext(const Rml::Context* const context,
+                                          const int window_x,
+                                          const int window_y) {
+        current_context_ = context;
+        current_context_window_x_ = window_x;
+        current_context_window_y_ = window_y;
+        if (context)
+            active_contexts_.insert(context);
+    }
+
+    void RmlSystemInterface::releaseContext(const Rml::Context* const context) {
+        if (!context)
+            return;
+
+        active_contexts_.erase(context);
+        if (current_context_ == context) {
+            current_context_ = nullptr;
+            current_context_window_x_ = 0;
+            current_context_window_y_ = 0;
+        }
+        if (cursor_context_ == context) {
+            cursor_context_ = nullptr;
+            cursor_request_ = RmlCursorRequest::None;
+        }
+    }
 
     RmlCursorRequest RmlSystemInterface::consumeCursorRequest() {
-        return frame_cursor_request_;
+        if (cursor_context_ && active_contexts_.find(cursor_context_) != active_contexts_.end())
+            return cursor_request_;
+        cursor_context_ = nullptr;
+        cursor_request_ = RmlCursorRequest::None;
+        return RmlCursorRequest::None;
     }
 
     double RmlSystemInterface::GetElapsedTime() {
@@ -65,7 +100,8 @@ namespace lfs::vis::gui {
     }
 
     void RmlSystemInterface::SetMouseCursor(const Rml::String& cursor_name) {
-        frame_cursor_request_ = mapCursorRequest(cursor_name);
+        cursor_context_ = current_context_;
+        cursor_request_ = mapCursorRequest(cursor_name);
     }
 
     void RmlSystemInterface::JoinPath(Rml::String& translated_path,
@@ -98,8 +134,8 @@ namespace lfs::vis::gui {
             return;
 
         SDL_Rect rect{};
-        rect.x = static_cast<int>(std::lround(caret_position.x));
-        rect.y = static_cast<int>(std::lround(caret_position.y));
+        rect.x = current_context_window_x_ + static_cast<int>(std::lround(caret_position.x));
+        rect.y = current_context_window_y_ + static_cast<int>(std::lround(caret_position.y));
         rect.w = 1;
         rect.h = std::max(1, static_cast<int>(std::lround(line_height)));
         SDL_SetTextInputArea(window_, &rect, 0);

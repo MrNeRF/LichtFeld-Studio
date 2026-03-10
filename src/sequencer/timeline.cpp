@@ -158,6 +158,30 @@ namespace lfs::sequencer {
         return generatePathPoints(keyframes_, samples_per_segment);
     }
 
+    std::vector<glm::vec3> Timeline::generatePathAtTimeStep(const float sample_step_seconds) const {
+        if (keyframes_.size() < 2) {
+            return keyframes_.empty() ? std::vector<glm::vec3>{}
+                                      : std::vector<glm::vec3>{keyframes_.front().position};
+        }
+
+        const float start = startTime();
+        const float end = endTime();
+        if (end <= start)
+            return {evaluate(start).position};
+
+        const float step = sample_step_seconds > 0.0f ? sample_step_seconds : 1.0f / 30.0f;
+
+        std::vector<glm::vec3> points;
+        const auto reserve_count =
+            static_cast<size_t>(std::ceil((end - start) / step)) + 1;
+        points.reserve(std::max<size_t>(reserve_count, 2));
+
+        for (float time = start; time < end; time += step)
+            points.push_back(evaluate(time).position);
+        points.push_back(evaluate(end).position);
+        return points;
+    }
+
     void Timeline::sortKeyframes() {
         std::sort(keyframes_.begin(), keyframes_.end());
     }

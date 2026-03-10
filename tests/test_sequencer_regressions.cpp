@@ -271,4 +271,23 @@ namespace {
             1.12f);
     }
 
+    TEST(SequencerTimelineRegressionTest, TimeSampledPathUsesTimelineEvaluationAtUniformTimes) {
+        Timeline timeline;
+
+        auto first = makeKeyframe(0.0f, {0.0f, 0.0f, 0.0f});
+        first.easing = EasingType::EASE_IN;
+        timeline.addKeyframe(first);
+        timeline.addKeyframe(makeKeyframe(1.0f, {1.0f, 2.0f, 0.0f}));
+        timeline.addKeyframe(makeKeyframe(4.0f, {5.0f, 3.0f, 0.0f}));
+
+        const auto points = timeline.generatePathAtTimeStep(1.0f);
+
+        ASSERT_EQ(points.size(), 5u);
+        expectVec3Eq(points[0], timeline.evaluate(0.0f).position);
+        expectVec3Eq(points[1], timeline.evaluate(1.0f).position);
+        expectVec3Eq(points[2], timeline.evaluate(2.0f).position);
+        expectVec3Eq(points[3], timeline.evaluate(3.0f).position);
+        expectVec3Eq(points[4], timeline.evaluate(4.0f).position);
+    }
+
 } // namespace

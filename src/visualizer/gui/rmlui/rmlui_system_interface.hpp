@@ -7,8 +7,13 @@
 #include <RmlUi/Core/SystemInterface.h>
 
 #include <cstdint>
+#include <unordered_set>
 
 struct SDL_Window;
+
+namespace Rml {
+    class Context;
+}
 
 namespace lfs::vis::gui {
 
@@ -30,6 +35,8 @@ namespace lfs::vis::gui {
         explicit RmlSystemInterface(SDL_Window* window);
 
         void beginFrame();
+        void trackContext(const Rml::Context* context, int window_x, int window_y);
+        void releaseContext(const Rml::Context* context);
         RmlCursorRequest consumeCursorRequest();
 
         double GetElapsedTime() override;
@@ -47,7 +54,12 @@ namespace lfs::vis::gui {
         RmlCursorRequest mapCursorRequest(const Rml::String& cursor_name) const;
 
         SDL_Window* window_;
-        RmlCursorRequest frame_cursor_request_ = RmlCursorRequest::None;
+        const Rml::Context* current_context_ = nullptr;
+        const Rml::Context* cursor_context_ = nullptr;
+        int current_context_window_x_ = 0;
+        int current_context_window_y_ = 0;
+        RmlCursorRequest cursor_request_ = RmlCursorRequest::None;
+        std::unordered_set<const Rml::Context*> active_contexts_;
     };
 
 } // namespace lfs::vis::gui

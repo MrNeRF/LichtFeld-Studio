@@ -166,6 +166,8 @@ namespace lfs::vis::gui {
     void GlobalContextMenu::processInput(const PanelInputState& input) {
         if (!open_ || !ctx_ || !doc_ || !el_backdrop_ || !el_ctx_menu_)
             return;
+        if (mgr_)
+            mgr_->trackContextFrame(ctx_, 0, 0);
 
         const float mx = input.mouse_x - input.screen_x;
         const float my = input.mouse_y - input.screen_y;

@@ -30,6 +30,8 @@ namespace lfs::vis {
     struct PanelInputState {
         float mouse_x = 0.0f;
         float mouse_y = 0.0f;
+        float screen_x = 0.0f;
+        float screen_y = 0.0f;
         bool mouse_down[3] = {};
         bool mouse_clicked[3] = {};
         float mouse_wheel = 0.0f;

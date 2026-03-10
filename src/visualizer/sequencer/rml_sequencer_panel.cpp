@@ -625,6 +625,11 @@ namespace lfs::vis {
     void RmlSequencerPanel::forwardInput(const PanelInputState& input) {
         if (!rml_context_)
             return;
+        if (rml_manager_) {
+            rml_manager_->trackContextFrame(rml_context_,
+                                            static_cast<int>(cached_panel_x_ - input.screen_x),
+                                            static_cast<int>(cached_panel_y_ - input.screen_y));
+        }
 
         const float local_x = input.mouse_x - cached_panel_x_;
         const float local_y = input.mouse_y - cached_panel_y_;
@@ -824,6 +829,11 @@ namespace lfs::vis {
         forwardInput(input);
 
         if (!rml_manager_->shouldDeferFboUpdate(fbo_)) {
+            if (rml_manager_) {
+                rml_manager_->trackContextFrame(rml_context_,
+                                                static_cast<int>(panel_x - input.screen_x),
+                                                static_cast<int>(panel_y - input.screen_y));
+            }
             rml_context_->SetDimensions(Rml::Vector2i(w, h));
             rml_context_->Update();
 

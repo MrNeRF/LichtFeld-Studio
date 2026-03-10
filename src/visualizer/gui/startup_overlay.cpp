@@ -261,6 +261,14 @@ namespace lfs::vis::gui {
     void StartupOverlay::forwardInput(float overlay_x, float overlay_y,
                                       float overlay_w, float overlay_h) {
         assert(rml_context_);
+        if (rml_manager_) {
+            const ImGuiViewport* const main_viewport = ImGui::GetMainViewport();
+            const float origin_x = main_viewport ? main_viewport->Pos.x : 0.0f;
+            const float origin_y = main_viewport ? main_viewport->Pos.y : 0.0f;
+            rml_manager_->trackContextFrame(rml_context_,
+                                            static_cast<int>(overlay_x - origin_x),
+                                            static_cast<int>(overlay_y - origin_y));
+        }
 
         const ImGuiIO& io = ImGui::GetIO();
         const float local_x = io.MousePos.x - overlay_x;

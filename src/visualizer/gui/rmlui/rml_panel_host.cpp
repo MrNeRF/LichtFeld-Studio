@@ -836,6 +836,11 @@ namespace lfs::vis::gui {
         bool had_input = false;
         const auto& input = *input_;
         auto* const text_input_handler = manager_ ? manager_->getTextInputHandler() : nullptr;
+        if (manager_) {
+            manager_->trackContextFrame(rml_context_,
+                                        static_cast<int>(panel_x - input.screen_x),
+                                        static_cast<int>(panel_y - input.screen_y));
+        }
         const float mouse_x = input.mouse_x;
         const float mouse_y = input.mouse_y;
         const auto sync_text_focus = [&]() {

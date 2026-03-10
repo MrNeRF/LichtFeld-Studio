@@ -319,6 +319,8 @@ namespace lfs::vis::gui {
             return;
 
         wants_input_ = false;
+        if (rml_manager_)
+            rml_manager_->trackContextFrame(rml_context_, 0, 0);
 
         const float mx = input.mouse_x - input.screen_x;
         const float my = input.mouse_y - input.screen_y;
