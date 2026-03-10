@@ -55,6 +55,8 @@ namespace lfs::training {
         // Reserve optimizer capacity for future growth (e.g., after checkpoint load)
         void reserve_optimizer_capacity(size_t capacity) override;
 
+        void set_training_dataset(std::shared_ptr<CameraDataset> views) override { _views = std::move(views); }
+
         // Get count of active (non-free) Gaussians
         size_t active_count() const;
 
@@ -63,9 +65,6 @@ namespace lfs::training {
 
         // Get indices of active (non-free) Gaussians for export
         lfs::core::Tensor get_active_indices() const;
-
-        // Setters
-        void set_views(std::shared_ptr<CameraDataset> views) noexcept { this->_views = views; }
 
     private:
         // Helper Functions
@@ -99,6 +98,7 @@ namespace lfs::training {
         int64_t _initial_points;
         int _current_step;
         int _total_steps;
+        bool _edges_initialized = false;
 
         std::vector<int64_t> _budget_schedule;
         lfs::core::Tensor _all_edges;

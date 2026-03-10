@@ -215,11 +215,9 @@ namespace lfs::training {
 
         // Initialize I-GS+ specifics
         this->_current_step = 0;
+        this->_edges_initialized = false;
 
         this->_budget_schedule = get_count_array();
-
-        // Get Laplacian images filtered & cache it at _views
-        get_all_edges();
     }
 
     const lfs::core::Tensor ImprovedGSPlus::compute_gaussian_score(const lfs::core::Tensor& gradients) {
@@ -468,6 +466,12 @@ namespace lfs::training {
         }
 
         if (is_refining(iter)) {
+            if (!_edges_initialized) {
+                assert(_views && "set_views() must be called before training");
+                get_all_edges();
+                _edges_initialized = true;
+            }
+
             const lfs::core::Tensor numer = _splat_data->_densification_info[1];
             const lfs::core::Tensor denom = _splat_data->_densification_info[0];
             const lfs::core::Tensor grads = numer / denom.clamp_min(1.0f);
@@ -570,8 +574,7 @@ namespace lfs::training {
     }
 
     // From ImprovedGS but not used
-    [[maybe_unused]]
-    void ImprovedGSPlus::prune_post_reset() {
+    [[maybe_unused]] void ImprovedGSPlus::prune_post_reset() {
         const float q = 0.2f;
         const lfs::core::Tensor opacity = _splat_data->get_opacity();
 
@@ -581,7 +584,6 @@ namespace lfs::training {
         int q_index = static_cast<int>(num_gaussians * q);
 
         float quantile_threshold = sorted_val[q_index].item_as<float>();
-
 
         const lfs::core::Tensor prune_mask = (opacity < quantile_threshold);
 

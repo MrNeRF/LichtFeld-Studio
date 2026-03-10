@@ -1584,6 +1584,13 @@ class OptimizationParams:
     def undistort(self, arg: bool, /) -> None: ...
 
     @property
+    def revised_opacity(self) -> bool:
+        """Use revised opacity calculation for ADC densification"""
+
+    @revised_opacity.setter
+    def revised_opacity(self, arg: bool, /) -> None: ...
+
+    @property
     def save_steps(self) -> list[int]:
         """List of iterations at which to save checkpoints"""
 

@@ -1188,6 +1188,11 @@ namespace lfs::python {
                 [](PyOptimizationParams& self) { return self.params().undistort; },
                 [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.undistort = v; }); },
                 "Undistort images on-the-fly before training")
+            .def_prop_rw(
+                "revised_opacity",
+                [](PyOptimizationParams& self) { return self.params().revised_opacity; },
+                [](PyOptimizationParams&, bool v) { modify_params([v](auto& p) { p.revised_opacity = v; }); },
+                "Use revised opacity calculation for ADC densification")
             .def_prop_ro(
                 "save_steps",
                 [](PyOptimizationParams& self) -> std::vector<size_t> {

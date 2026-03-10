@@ -346,6 +346,12 @@
             <button class="num-step-btn" data-event-mousedown="num_step('sh_degree_interval', -1)">-</button>
             <button class="num-step-btn" data-event-mousedown="num_step('sh_degree_interval', 1)">+</button>
           </div>
+          <div class="setting-row" data-if="dep_igs">
+            <span class="prop-label">{{label_prune_opacity}}</span>
+            <input type="text" class="number-input" data-value="prune_opacity_str" />
+            <button class="num-step-btn" data-event-mousedown="num_step('prune_opacity', -1)">-</button>
+            <button class="num-step-btn" data-event-mousedown="num_step('prune_opacity', 1)">+</button>
+          </div>
         </div>
       </div>
     </div>
