@@ -22,6 +22,7 @@ namespace lfs::vis {
 namespace lfs::vis::gui {
 
     class RmlUIManager;
+    struct PanelInputState;
 
     class RmlViewportOverlay {
     public:
@@ -30,7 +31,7 @@ namespace lfs::vis::gui {
         void setViewportBounds(glm::vec2 pos, glm::vec2 size, glm::vec2 screen_origin);
         void render();
         void compositeToScreen(int screen_w, int screen_h) const;
-        void processInput();
+        void processInput(const PanelInputState& input);
         bool wantsInput() const { return wants_input_; }
 
     private:

@@ -45,6 +45,7 @@ namespace lfs::vis::gui {
         void syncDirectLayout(float w, float h);
         bool ensureContext();
         bool ensureDocumentLoaded();
+        bool reloadDocument();
 
         void setInput(const PanelInputState* input) { input_ = input; }
         bool hasInput() const { return input_ != nullptr; }

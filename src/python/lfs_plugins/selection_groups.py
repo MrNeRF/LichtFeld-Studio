@@ -9,11 +9,6 @@ from .types import RmlPanel
 SELECTION_GROUPS_MODEL = "selection_groups"
 
 
-def _tr(key):
-    result = lf.ui.tr(key)
-    return result if result else key
-
-
 class SelectionGroupsPanel(RmlPanel):
     idname = "lfs.selection_groups"
     label = "Selection Groups"
@@ -32,7 +27,6 @@ class SelectionGroupsPanel(RmlPanel):
         self._context_menu_group_id = None
         self._picker_click_handled = False
         self._has_groups = False
-        self._last_lang = ""
 
     @classmethod
     def poll(cls, context):
@@ -44,9 +38,7 @@ class SelectionGroupsPanel(RmlPanel):
         if model is None:
             return
 
-        model.bind_func("groups_title", lambda: _tr("main_panel.selection_groups"))
-        model.bind_func("add_group_label", lambda: _tr("main_panel.add_group"))
-        model.bind_func("empty_message", lambda: _tr("main_panel.no_selection_groups"))
+        model.bind_func("panel_label", lambda: "@tr:main_panel.selection_groups")
         model.bind_func("show_empty_message", lambda: not self._has_groups)
         model.bind_record_list("groups")
         self._handle = model.get_handle()
@@ -54,7 +46,6 @@ class SelectionGroupsPanel(RmlPanel):
     def on_load(self, doc):
         super().on_load(doc)
         self.doc = doc
-        self._last_lang = lf.ui.get_current_language()
 
         header = doc.get_element_by_id("hdr-groups")
         if header:
@@ -94,13 +85,6 @@ class SelectionGroupsPanel(RmlPanel):
             wrap.set_class("hidden", not visible)
         if not visible:
             return
-
-        cur_lang = lf.ui.get_current_language()
-        if cur_lang != self._last_lang:
-            self._last_lang = cur_lang
-            if self._handle:
-                for name in ("groups_title", "add_group_label", "empty_message"):
-                    self._handle.dirty(name)
 
         action = lf.ui.poll_context_menu()
         if action and self._context_menu_group_id is not None:
@@ -289,11 +273,12 @@ class SelectionGroupsPanel(RmlPanel):
             return
 
         self._context_menu_group_id = gid
-        lock_label = _tr("selection_group.unlock") if group.locked else _tr("selection_group.lock")
+        tr = lf.ui.tr
+        lock_label = tr("selection_group.unlock") if group.locked else tr("selection_group.lock")
         items = [
             {"label": lock_label, "action": "lock"},
-            {"label": _tr("main_panel.clear"), "action": "clear"},
-            {"label": _tr("common.delete"), "action": "delete", "separator_before": True},
+            {"label": tr("main_panel.clear"), "action": "clear"},
+            {"label": tr("common.delete"), "action": "delete", "separator_before": True},
         ]
         sx, sy = lf.ui.get_mouse_screen_pos()
         lf.ui.show_context_menu(items, sx, sy)

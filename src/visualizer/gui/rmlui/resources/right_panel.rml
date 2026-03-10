@@ -7,12 +7,15 @@
     <div id="left-border"></div>
     <div id="splitter"></div>
     <div id="tab-bar">
-        <div data-for="tab : tabs"
-             class="tab"
-             data-class-active="tab.idname == active_tab"
-             data-event-click="tab_click(tab.idname)">
+        <button data-for="tab : tabs"
+                class="tab"
+                data-attr-id="tab.dom_id"
+                data-class-active="tab.idname == active_tab"
+                data-style-nav-left="tab.nav_left"
+                data-style-nav-right="tab.nav_right"
+                data-event-click="tab_click(tab.idname)">
             {{ tab.label }}
-        </div>
+        </button>
     </div>
     <div id="tab-separator"></div>
 </body>

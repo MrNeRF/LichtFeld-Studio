@@ -365,6 +365,8 @@ namespace lfs::vis {
     // Core handlers
     void InputController::handleMouseButton(int button, int action, double x, double y) {
         auto* gui = services().guiOrNull();
+        const bool over_gui = isPointerOverBlockingUi(x, y) ||
+                              ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow);
 
         // Consume all mouse events while pie menu is open
         if (gui && gui->gizmo().isPieMenuOpen()) {
@@ -386,7 +388,9 @@ namespace lfs::vis {
         }
 
         // Check for splitter drag FIRST
-        if (button == static_cast<int>(input::AppMouseButton::LEFT) && action == input::ACTION_PRESS) {
+        if (!over_gui &&
+            button == static_cast<int>(input::AppMouseButton::LEFT) &&
+            action == input::ACTION_PRESS) {
             // Check for double-click on camera frustum
             auto now = std::chrono::steady_clock::now();
             auto time_since_last = std::chrono::duration<double>(now - last_click_time_).count();
@@ -437,8 +441,6 @@ namespace lfs::vis {
             return;
         }
 
-        const bool over_gui = gui::guiFocusState().want_capture_mouse ||
-                              (gui && gui->panelLayout().isResizingPanel());
         const bool over_gizmo = gui && gui->gizmo().isPositionInViewportGizmo(x, y);
 
         // Single binding lookup with current tool mode
@@ -472,7 +474,7 @@ namespace lfs::vis {
         }
 
         if (action == input::ACTION_PRESS) {
-            if (over_gui || ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
+            if (over_gui) {
                 return;
             }
 
@@ -722,6 +724,9 @@ namespace lfs::vis {
             return;
         }
 
+        const bool over_gui = isPointerOverBlockingUi(x, y) ||
+                              ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow);
+
         if (drag_mode_ == DragMode::Splitter && services().renderingOrNull()) {
             const auto viewport_size = glm::ivec2(static_cast<int>(viewport_bounds_.width),
                                                   static_cast<int>(viewport_bounds_.height));
@@ -739,7 +744,7 @@ namespace lfs::vis {
         if (services().renderingOrNull() &&
             isInViewport(x, y) &&
             drag_mode_ == DragMode::None &&
-            !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow)) {
+            !over_gui) {
 
             // Additional throttling based on movement distance
             static glm::dvec2 last_pick_pos{-1, -1};
@@ -803,7 +808,7 @@ namespace lfs::vis {
             should_show_resize = (drag_mode_ == DragMode::None &&
                                   isInViewport(x, y) &&
                                   isNearSplitter(x) &&
-                                  !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow));
+                                  !over_gui);
         }
 
         if (should_show_resize && current_cursor_ != CursorType::Resize) {
@@ -863,6 +868,8 @@ namespace lfs::vis {
         float fx, fy;
         SDL_GetMouseState(&fx, &fy);
         double mouse_x = fx, mouse_y = fy;
+        const bool over_gui = isPointerOverBlockingUi(mouse_x, mouse_y) ||
+                              ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow);
 
         // Dispatch to modal operators first - if consumed, don't continue
         if (dispatchScrollToModals(xoff, yoff, mouse_x, mouse_y, getModifierKeys())) {
@@ -889,7 +896,7 @@ namespace lfs::vis {
         if (drag_mode_ == DragMode::Gizmo || drag_mode_ == DragMode::Splitter)
             return;
 
-        if (!isInViewport(mouse_x, mouse_y) || gui::guiFocusState().any_item_active || gui::guiFocusState().want_capture_mouse)
+        if (!isInViewport(mouse_x, mouse_y) || gui::guiFocusState().any_item_active || over_gui)
             return;
 
         const float delta = static_cast<float>(yoff);
@@ -1572,8 +1579,20 @@ namespace lfs::vis {
                y < viewport_bounds_.y + viewport_bounds_.height;
     }
 
+    bool InputController::isPointerOverBlockingUi(const double x, const double y) const {
+        const auto& focus = gui::guiFocusState();
+        if (focus.want_capture_mouse)
+            return true;
+
+        auto* gui = services().guiOrNull();
+        if (!gui)
+            return false;
+
+        return gui->panelLayout().isResizingPanel() ||
+               gui->isPositionOverFloatingPanel(x, y);
+    }
+
     bool InputController::shouldCameraHandleInput() const {
-        // Don't handle if gizmo or splitter is active
         if (drag_mode_ == DragMode::Gizmo || drag_mode_ == DragMode::Splitter) {
             return false;
         }

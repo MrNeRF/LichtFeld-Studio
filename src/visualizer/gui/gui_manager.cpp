@@ -18,10 +18,12 @@
 #include "gui/editor/python_editor.hpp"
 #include "gui/layout_state.hpp"
 #include "gui/native_panels.hpp"
+#include "gui/panel_input_utils.hpp"
 #include "gui/panel_registry.hpp"
 #include "gui/panels/python_console_panel.hpp"
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_theme.hpp"
+#include "gui/rmlui/rmlui_system_interface.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/file_association.hpp"
@@ -64,30 +66,15 @@ namespace lfs::vis::gui {
     namespace {
         const FrameInputBuffer* s_frame_input = nullptr;
 
-        PanelInputState buildPanelInputFromSDL(const FrameInputBuffer& buf) {
-            PanelInputState s;
-            s.mouse_x = buf.mouse_x;
-            s.mouse_y = buf.mouse_y;
-            for (int i = 0; i < 3; ++i) {
-                s.mouse_down[i] = buf.mouse_down[i];
-                s.mouse_clicked[i] = buf.mouse_clicked[i];
-                s.mouse_released[i] = buf.mouse_released[i];
+        std::string makeRmlTabDomId(const std::string& idname) {
+            std::string result = "rp-tab-";
+            result.reserve(result.size() + idname.size());
+            for (const char ch : idname) {
+                const bool keep = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                                  (ch >= '0' && ch <= '9') || ch == '-' || ch == '_';
+                result.push_back(keep ? ch : '-');
             }
-            s.mouse_wheel = buf.mouse_wheel;
-            s.screen_w = buf.window_w;
-            s.screen_h = buf.window_h;
-            s.key_ctrl = (buf.key_mods & SDL_KMOD_CTRL) != 0;
-            s.key_shift = (buf.key_mods & SDL_KMOD_SHIFT) != 0;
-            s.key_alt = (buf.key_mods & SDL_KMOD_ALT) != 0;
-            s.key_super = (buf.key_mods & SDL_KMOD_GUI) != 0;
-            s.keys_pressed.reserve(buf.keys_pressed.size());
-            for (auto sc : buf.keys_pressed)
-                s.keys_pressed.push_back(static_cast<int>(sc));
-            s.keys_released.reserve(buf.keys_released.size());
-            for (auto sc : buf.keys_released)
-                s.keys_released.push_back(static_cast<int>(sc));
-            s.text_codepoints = buf.text_codepoints;
-            return s;
+            return result;
         }
 
         void applyFrameInputCapture() {
@@ -120,7 +107,9 @@ namespace lfs::vis::gui {
             const auto& p = lfs::vis::theme().palette;
             auto* vp = ImGui::GetMainViewport();
             auto* fg = ImGui::GetForegroundDrawList(vp);
-            const ImVec2 mouse = ImGui::GetMousePos();
+            const ImVec2 mouse = s_frame_input
+                                     ? ImVec2(s_frame_input->mouse_x, s_frame_input->mouse_y)
+                                     : ImVec2(vp->Pos.x, vp->Pos.y);
             const ImVec2 pad(8, 6);
             const ImVec2 text_size = ImGui::CalcTextSize(tip.c_str());
             const float box_w = text_size.x + pad.x * 2;
@@ -729,6 +718,9 @@ namespace lfs::vis::gui {
         ops.ensure_document = [](void* host) -> bool {
             return static_cast<RmlPanelHost*>(host)->ensureDocumentLoaded();
         };
+        ops.reload_document = [](void* host) -> bool {
+            return static_cast<RmlPanelHost*>(host)->reloadDocument();
+        };
         ops.get_context = [](void* host) -> void* {
             return static_cast<RmlPanelHost*>(host)->getContext();
         };
@@ -824,7 +816,9 @@ namespace lfs::vis::gui {
         // Floating panels (self-managed windows)
         reg_panel("native.video_extractor", "Video Extractor",
                   make_panel(VideoExtractorPanel(video_extractor_dialog_.get())),
-                  PanelSpace::Floating, 11, 0, 750.0f);
+                  PanelSpace::Floating, 11,
+                  static_cast<uint32_t>(PanelOption::SELF_MANAGED),
+                  750.0f);
         reg.set_panel_enabled("native.video_extractor", false);
 
         // Viewport overlays (ordered by draw priority)
@@ -866,11 +860,7 @@ namespace lfs::vis::gui {
 
         reg_panel("native.startup_overlay", "Startup Overlay",
                   make_panel(StartupOverlayPanel(&startup_overlay_, &drag_drop_hovering_)),
-                  PanelSpace::ViewportOverlay, 1000);
-
-        reg_panel("native.status_bar", "##StatusBar",
-                  make_panel(RmlStatusBarPanel(&rml_status_bar_)),
-                  PanelSpace::StatusBar, 0);
+                  PanelSpace::ViewportOverlay, 0);
     }
 
     void GuiManager::render() {
@@ -900,10 +890,10 @@ namespace lfs::vis::gui {
         ImGui_ImplOpenGL3_NewFrame();
 
         ImGui_ImplSDL3_NewFrame();
+        const auto& sdl_input = viewer_->getWindowManager()->frameInput();
 
         // Check mouse state before ImGui::NewFrame() updates WantCaptureMouse
-        ImVec2 mouse_pos = ImGui::GetMousePos();
-        bool mouse_in_viewport = isPositionInViewport(mouse_pos.x, mouse_pos.y);
+        const bool mouse_in_viewport = isPositionInViewport(sdl_input.mouse_x, sdl_input.mouse_y);
 
         ImGui::NewFrame();
 
@@ -914,6 +904,7 @@ namespace lfs::vis::gui {
             focus.want_capture_keyboard = ImGui::GetIO().WantCaptureKeyboard;
             focus.want_text_input = ImGui::GetIO().WantTextInput;
         }
+        rmlui_manager_.beginFrameCursorTracking();
 
         if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
             ImGui::ClearActiveID();
@@ -971,16 +962,13 @@ namespace lfs::vis::gui {
                 vp->UpdateWorkRect();
             }
 
-            const auto& io = ImGui::GetIO();
-            PanelInputState menu_input;
-            menu_input.mouse_x = io.MousePos.x;
-            menu_input.mouse_y = io.MousePos.y;
-            menu_input.screen_x = ImGui::GetMainViewport()->Pos.x;
-            menu_input.screen_y = ImGui::GetMainViewport()->Pos.y;
-            menu_input.mouse_down[0] = ImGui::IsMouseDown(ImGuiMouseButton_Left);
-            menu_input.mouse_clicked[0] = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
-            menu_input.screen_w = static_cast<int>(ImGui::GetMainViewport()->Size.x);
-            menu_input.screen_h = static_cast<int>(ImGui::GetMainViewport()->Size.y);
+            PanelInputState menu_input = buildPanelInputFromSDL(sdl_input);
+            if (const ImGuiViewport* const main_viewport = ImGui::GetMainViewport()) {
+                menu_input.screen_x = main_viewport->Pos.x;
+                menu_input.screen_y = main_viewport->Pos.y;
+                menu_input.screen_w = static_cast<int>(main_viewport->Size.x);
+                menu_input.screen_h = static_cast<int>(main_viewport->Size.y);
+            }
 
             rml_menu_bar_.processInput(menu_input);
 
@@ -992,38 +980,44 @@ namespace lfs::vis::gui {
             rml_menu_bar_.suspend();
         }
 
-        updateInputOverrides(mouse_in_viewport);
+        PanelInputState frame_input = buildPanelInputFromSDL(sdl_input);
+        updateInputOverrides(frame_input, mouse_in_viewport);
 
-        // Create main dockspace
-        const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(main_viewport->WorkPos);
-        ImGui::SetNextWindowSize(main_viewport->WorkSize);
-        ImGui::SetNextWindowViewport(main_viewport->ID);
+        auto& reg = PanelRegistry::instance();
+        const bool has_dockable_panels = reg.has_panels(PanelSpace::Dockable);
+        const bool needs_imgui_dockspace =
+            reg.has_legacy_imgui_window_wrapped_panels(PanelSpace::Dockable);
+        if (needs_imgui_dockspace) {
+            const ImGuiViewport* main_viewport = ImGui::GetMainViewport();
+            ImGui::SetNextWindowPos(main_viewport->WorkPos);
+            ImGui::SetNextWindowSize(main_viewport->WorkSize);
+            ImGui::SetNextWindowViewport(main_viewport->ID);
 
-        ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDocking |
-                                        ImGuiWindowFlags_NoTitleBar |
-                                        ImGuiWindowFlags_NoCollapse |
-                                        ImGuiWindowFlags_NoResize |
-                                        ImGuiWindowFlags_NoMove |
-                                        ImGuiWindowFlags_NoBringToFrontOnFocus |
-                                        ImGuiWindowFlags_NoNavFocus |
-                                        ImGuiWindowFlags_NoBackground;
+            ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoDocking |
+                                            ImGuiWindowFlags_NoTitleBar |
+                                            ImGuiWindowFlags_NoCollapse |
+                                            ImGuiWindowFlags_NoResize |
+                                            ImGuiWindowFlags_NoMove |
+                                            ImGuiWindowFlags_NoBringToFrontOnFocus |
+                                            ImGuiWindowFlags_NoNavFocus |
+                                            ImGuiWindowFlags_NoBackground;
 
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
 
-        ImGui::Begin("DockSpace", nullptr, window_flags);
-        ImGui::PopStyleVar(3);
+            ImGui::Begin("DockSpace", nullptr, window_flags);
+            ImGui::PopStyleVar(3);
 
-        // DockSpace ID
-        ImGuiID dockspace_id = ImGui::GetID("MainDockSpace");
+            // DockSpace ID
+            ImGuiID dockspace_id = ImGui::GetID("MainDockSpace");
 
-        // Create dockspace
-        ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_PassthruCentralNode;
-        ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
+            // Create dockspace
+            ImGuiDockNodeFlags dockspace_flags = ImGuiDockNodeFlags_PassthruCentralNode;
+            ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), dockspace_flags);
 
-        ImGui::End();
+            ImGui::End();
+        }
 
         if (!ui_hidden_) {
             const auto* mvp = ImGui::GetMainViewport();
@@ -1084,15 +1078,12 @@ namespace lfs::vis::gui {
         if (auto* cc = lfs::event::command_center())
             draw_ctx.is_training = cc->snapshot().is_running;
 
-        auto& reg = PanelRegistry::instance();
-
         reg.preload_panels(PanelSpace::SceneHeader, draw_ctx);
         reg.preload_panels(PanelSpace::SidePanel, draw_ctx);
 
         auto* mvp_input = ImGui::GetMainViewport();
-        const auto& sdl_input = viewer_->getWindowManager()->frameInput();
         s_frame_input = &sdl_input;
-        PanelInputState panel_input = buildPanelInputFromSDL(sdl_input);
+        PanelInputState panel_input = frame_input;
         panel_input.screen_x = mvp_input->Pos.x;
         panel_input.screen_y = mvp_input->Pos.y;
         panel_input.bg_draw_list = ImGui::GetBackgroundDrawList(mvp_input);
@@ -1155,12 +1146,24 @@ namespace lfs::vis::gui {
 
             if (rml_right_panel_.wantsInput())
                 guiFocusState().want_capture_mouse = true;
+            if (rml_right_panel_.wantsKeyboard())
+                guiFocusState().want_capture_keyboard = true;
 
             const auto main_tabs = reg.get_panels_for_space(PanelSpace::MainPanelTab);
             std::vector<TabSnapshot> tab_snaps;
             tab_snaps.reserve(main_tabs.size());
-            for (const auto& t : main_tabs)
-                tab_snaps.push_back({t.idname, t.label});
+            for (size_t i = 0; i < main_tabs.size(); ++i) {
+                const auto& t = main_tabs[i];
+                tab_snaps.push_back({
+                    .idname = t.idname,
+                    .label = t.label,
+                    .dom_id = makeRmlTabDomId(t.idname),
+                    .nav_left = "#" + makeRmlTabDomId(
+                                          main_tabs[(i + main_tabs.size() - 1) % main_tabs.size()].idname),
+                    .nav_right = "#" + makeRmlTabDomId(
+                                           main_tabs[(i + 1) % main_tabs.size()].idname),
+                });
+            }
 
             rml_right_panel_.render(rp_layout, tab_snaps, panel_layout_.getActiveTab(),
                                     panel_input.screen_x, panel_input.screen_y,
@@ -1172,7 +1175,6 @@ namespace lfs::vis::gui {
 
         applyFrameInputCapture();
 
-        // Apply cursor requests from right panel and panel layout
         auto apply_cursor = [](CursorRequest req) {
             switch (req) {
             case CursorRequest::ResizeEW: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW); break;
@@ -1180,8 +1182,20 @@ namespace lfs::vis::gui {
             default: break;
             }
         };
-        apply_cursor(rml_right_panel_.getCursorRequest());
-        apply_cursor(panel_layout_.getCursorRequest());
+        auto apply_rml_cursor = [](RmlCursorRequest req) {
+            switch (req) {
+            case RmlCursorRequest::Arrow: ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow); break;
+            case RmlCursorRequest::TextInput: ImGui::SetMouseCursor(ImGuiMouseCursor_TextInput); break;
+            case RmlCursorRequest::Hand: ImGui::SetMouseCursor(ImGuiMouseCursor_Hand); break;
+            case RmlCursorRequest::ResizeEW: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW); break;
+            case RmlCursorRequest::ResizeNS: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS); break;
+            case RmlCursorRequest::ResizeNWSE: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE); break;
+            case RmlCursorRequest::ResizeNESW: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNESW); break;
+            case RmlCursorRequest::ResizeAll: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll); break;
+            case RmlCursorRequest::NotAllowed: ImGui::SetMouseCursor(ImGuiMouseCursor_NotAllowed); break;
+            case RmlCursorRequest::None: break;
+            }
+        };
 
         python::set_viewport_bounds(viewport_layout_.pos.x, viewport_layout_.pos.y,
                                     viewport_layout_.size.x, viewport_layout_.size.y);
@@ -1189,7 +1203,8 @@ namespace lfs::vis::gui {
         PanelInputState floating_input = panel_input;
         floating_input.bg_draw_list = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
         reg.draw_panels(PanelSpace::Floating, draw_ctx, &floating_input);
-        reg.draw_panels(PanelSpace::Dockable, draw_ctx);
+        if (has_dockable_panels)
+            reg.draw_panels(PanelSpace::Dockable, draw_ctx, &panel_input);
 
         applyFrameInputCapture();
 
@@ -1199,7 +1214,13 @@ namespace lfs::vis::gui {
         rml_viewport_overlay_.setViewportBounds(
             viewport_layout_.pos, viewport_layout_.size,
             {panel_input.screen_x, panel_input.screen_y});
-        rml_viewport_overlay_.processInput();
+        startup_overlay_.setInput(&panel_input);
+        if (startup_overlay_.isVisible()) {
+            auto& focus = guiFocusState();
+            focus.want_capture_mouse = true;
+            focus.want_capture_keyboard = true;
+        }
+        rml_viewport_overlay_.processInput(panel_input);
         if (lfs::python::has_python_hooks("viewport_overlay", "draw")) {
             lfs::python::invoke_python_hooks("viewport_overlay", "draw", true);
             lfs::python::invoke_python_hooks("viewport_overlay", "draw", false);
@@ -1216,7 +1237,16 @@ namespace lfs::vis::gui {
             show_main_panel_, ui_hidden_, window_states_["python_console"], screen);
 
         if (!ui_hidden_) {
-            reg.draw_panels(PanelSpace::StatusBar, draw_ctx);
+            const float status_bar_h =
+                PanelLayoutManager::STATUS_BAR_HEIGHT * lfs::python::get_shared_dpi_scale();
+            rml_status_bar_.render(draw_ctx,
+                                   screen.work_pos.x,
+                                   screen.work_pos.y + screen.work_size.y - status_bar_h,
+                                   screen.work_size.x,
+                                   status_bar_h,
+                                   panel_input.screen_w,
+                                   panel_input.screen_h);
+            reg.draw_panels(PanelSpace::StatusBar, draw_ctx, &panel_input);
         }
 
         python::draw_python_modals(scene);
@@ -1224,6 +1254,10 @@ namespace lfs::vis::gui {
 
         rml_modal_overlay_->processInput(panel_input);
         rml_viewport_overlay_.compositeToScreen(panel_input.screen_w, panel_input.screen_h);
+        if (ImGui::GetMouseCursor() == ImGuiMouseCursor_Arrow)
+            apply_rml_cursor(rmlui_manager_.consumeCursorRequest());
+        apply_cursor(rml_right_panel_.getCursorRequest());
+        apply_cursor(panel_layout_.getCursorRequest());
         syncWindowTextInput(viewer_->getWindow());
 
         ImGui::Render();
@@ -1408,7 +1442,10 @@ namespace lfs::vis::gui {
                     }
 
                     if (!closed) {
-                        const ImVec2 mouse_pos = ImGui::GetMousePos();
+                        const ImVec2 mouse_pos =
+                            s_frame_input
+                                ? ImVec2(s_frame_input->mouse_x, s_frame_input->mouse_y)
+                                : ImVec2(viewport_layout_.pos.x, viewport_layout_.pos.y);
                         draw_list->AddLine(screen_points.back(), mouse_pos, line_to_mouse_color, 1.0f);
 
                         constexpr float CLOSE_THRESHOLD = 12.0f;
@@ -1532,7 +1569,8 @@ namespace lfs::vis::gui {
         }
     }
 
-    void GuiManager::updateInputOverrides(bool mouse_in_viewport) {
+    void GuiManager::updateInputOverrides(const PanelInputState& input,
+                                          bool mouse_in_viewport) {
         if (rml_menu_bar_.wantsInput())
             return;
 
@@ -1547,12 +1585,10 @@ namespace lfs::vis::gui {
 
         if (mouse_in_viewport && !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow) &&
             !any_popup_or_modal_open && !imgui_wants_input) {
-            if (ImGui::IsMouseDown(ImGuiMouseButton_Right) ||
-                ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
+            if (input.mouse_down[1] || input.mouse_down[2]) {
                 focus.want_capture_mouse = false;
             }
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            if (input.mouse_clicked[0] || input.mouse_clicked[1]) {
                 ImGui::ClearActiveID();
                 focus.want_capture_keyboard = false;
                 if (auto* editor = panels::PythonConsoleState::getInstance().getEditor()) {
@@ -1597,6 +1633,10 @@ namespace lfs::vis::gui {
                 rel_x < viewport_layout_.pos.x + viewport_layout_.size.x &&
                 rel_y >= viewport_layout_.pos.y &&
                 rel_y < viewport_layout_.pos.y + viewport_layout_.size.y);
+    }
+
+    bool GuiManager::isPositionOverFloatingPanel(const double x, const double y) const {
+        return PanelRegistry::instance().isPositionOverFloatingPanel(x, y);
     }
 
     void GuiManager::setupEventHandlers() {

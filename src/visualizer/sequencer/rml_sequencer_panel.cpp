@@ -12,6 +12,7 @@
 #include "gui/rmlui/rml_tooltip.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
+#include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "gui/string_keys.hpp"
 #include "internal/resource_paths.hpp"
 #include "io/video/video_export_options.hpp"
@@ -83,6 +84,26 @@ namespace lfs::vis {
                 signature *= 1099511628211ull;
             }
             return signature;
+        }
+
+        [[nodiscard]] bool hasFocusedKeyboardTarget(Rml::Element* element) {
+            return element && element->GetTagName() != "body";
+        }
+
+        void forwardFocusedKeyboardInput(Rml::Context* const context,
+                                         const PanelInputState& input) {
+            const int mods = gui::sdlModsToRml(input.key_ctrl, input.key_shift,
+                                               input.key_alt, input.key_super);
+            for (const int sc : input.keys_pressed) {
+                const auto rml_key = gui::sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
+                if (rml_key != Rml::Input::KI_UNKNOWN)
+                    context->ProcessKeyDown(rml_key, mods);
+            }
+            for (const int sc : input.keys_released) {
+                const auto rml_key = gui::sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
+                if (rml_key != Rml::Input::KI_UNKNOWN)
+                    context->ProcessKeyUp(rml_key, mods);
+            }
         }
 
     } // namespace
@@ -604,6 +625,11 @@ namespace lfs::vis {
     void RmlSequencerPanel::forwardInput(const PanelInputState& input) {
         if (!rml_context_)
             return;
+        if (rml_manager_) {
+            rml_manager_->trackContextFrame(rml_context_,
+                                            static_cast<int>(cached_panel_x_ - input.screen_x),
+                                            static_cast<int>(cached_panel_y_ - input.screen_y));
+        }
 
         const float local_x = input.mouse_x - cached_panel_x_;
         const float local_y = input.mouse_y - cached_panel_y_;
@@ -611,8 +637,29 @@ namespace lfs::vis {
         const float total_h = (HEIGHT + EASING_STRIPE_HEIGHT) * cached_dp_ratio_;
         hovered_ = local_x >= 0 && local_y >= 0 &&
                    local_x < cached_panel_width_ && local_y < total_h;
-        if (!hovered_)
+
+        if (!hovered_) {
+            tooltip_.clear();
+            if (last_hovered_)
+                rml_context_->ProcessMouseLeave();
+            last_hovered_ = false;
+
+            if (input.mouse_clicked[0]) {
+                if (auto* const focused = rml_context_->GetFocusElement())
+                    focused->Blur();
+            }
+
+            auto* const focused = rml_context_->GetFocusElement();
+            if (hasFocusedKeyboardTarget(focused))
+                forwardFocusedKeyboardInput(rml_context_, input);
+
+            wants_keyboard_ = hasFocusedKeyboardTarget(focused) ||
+                              dragging_playhead_ || dragging_keyframe_ ||
+                              controller_.hasSelection() || !selected_keyframes_.empty();
             return;
+        }
+
+        last_hovered_ = true;
 
         rml_context_->ProcessMouseMove(static_cast<int>(local_x),
                                        static_cast<int>(local_y), 0);
@@ -645,6 +692,14 @@ namespace lfs::vis {
                 }
             }
         }
+
+        auto* const focused = rml_context_->GetFocusElement();
+        if (hasFocusedKeyboardTarget(focused))
+            forwardFocusedKeyboardInput(rml_context_, input);
+
+        wants_keyboard_ = hasFocusedKeyboardTarget(focused) ||
+                          dragging_playhead_ || dragging_keyframe_ ||
+                          controller_.hasSelection() || !selected_keyframes_.empty();
     }
 
     std::string RmlSequencerPanel::consumeTooltip() {
@@ -774,6 +829,11 @@ namespace lfs::vis {
         forwardInput(input);
 
         if (!rml_manager_->shouldDeferFboUpdate(fbo_)) {
+            if (rml_manager_) {
+                rml_manager_->trackContextFrame(rml_context_,
+                                                static_cast<int>(panel_x - input.screen_x),
+                                                static_cast<int>(panel_y - input.screen_y));
+            }
             rml_context_->SetDimensions(Rml::Vector2i(w, h));
             rml_context_->Update();
 

@@ -9,6 +9,7 @@
 #include "gui/rml_viewport_overlay.hpp"
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "gui/panel_layout.hpp"
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rml_tooltip.hpp"
@@ -38,8 +39,6 @@ namespace lfs::vis::gui {
             LOG_ERROR("RmlViewportOverlay: failed to create RML context");
             return;
         }
-
-        rml_context_->EnableMouseCursor(false);
 
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/viewport_overlay.rml");
@@ -151,18 +150,22 @@ namespace lfs::vis::gui {
         screen_origin_ = screen_origin;
     }
 
-    void RmlViewportOverlay::processInput() {
+    void RmlViewportOverlay::processInput(const PanelInputState& input) {
         wants_input_ = false;
         if (!rml_context_ || !document_)
             return;
         if (vp_size_.x <= 0 || vp_size_.y <= 0)
             return;
+        if (rml_manager_) {
+            rml_manager_->trackContextFrame(rml_context_,
+                                            static_cast<int>(vp_pos_.x - screen_origin_.x),
+                                            static_cast<int>(vp_pos_.y - screen_origin_.y));
+        }
 
-        ImGuiIO& io = ImGui::GetIO();
         if (guiFocusState().want_capture_mouse)
             return;
-        float mx = io.MousePos.x - vp_pos_.x;
-        float my = io.MousePos.y - vp_pos_.y;
+        const float mx = input.mouse_x - vp_pos_.x;
+        const float my = input.mouse_y - vp_pos_.y;
         const int rml_mx = static_cast<int>(mx);
         const int rml_my = static_cast<int>(my);
         const bool was_inside = mouse_pos_valid_ &&
@@ -187,23 +190,26 @@ namespace lfs::vis::gui {
         if (over_interactive) {
             wants_input_ = true;
             guiFocusState().want_capture_mouse = true;
-            io.WantCaptureMouse = true;
 
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            if (input.mouse_clicked[0]) {
                 render_needed_ = true;
                 rml_context_->ProcessMouseButtonDown(0, 0);
             }
-            if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+            if (input.mouse_released[0]) {
                 render_needed_ = true;
                 rml_context_->ProcessMouseButtonUp(0, 0);
             }
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            if (input.mouse_clicked[1]) {
                 render_needed_ = true;
                 rml_context_->ProcessMouseButtonDown(1, 0);
             }
-            if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+            if (input.mouse_released[1]) {
                 render_needed_ = true;
                 rml_context_->ProcessMouseButtonUp(1, 0);
+            }
+            if (input.mouse_wheel != 0.0f) {
+                render_needed_ = true;
+                rml_context_->ProcessMouseWheel(Rml::Vector2f(0.0f, -input.mouse_wheel), 0);
             }
 
             RmlPanelHost::setFrameTooltip(resolveRmlTooltip(hover));
@@ -290,6 +296,11 @@ namespace lfs::vis::gui {
         if (!needs_render)
             return;
 
+        if (rml_manager_) {
+            rml_manager_->trackContextFrame(rml_context_,
+                                            static_cast<int>(vp_pos_.x - screen_origin_.x),
+                                            static_cast<int>(vp_pos_.y - screen_origin_.y));
+        }
         rml_context_->SetDimensions(Rml::Vector2i(w, h));
         rml_context_->Update();
 

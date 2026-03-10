@@ -35,7 +35,6 @@ class Mesh2SplatPanel(RmlPanel):
         self._has_initial_conversion = False
         self._has_meshes = False
         self._last_mesh_key = None
-        self._last_lang = ""
         self._last_progress_value = "0"
         self._last_progress_stage = ""
         self._last_active = False
@@ -46,20 +45,7 @@ class Mesh2SplatPanel(RmlPanel):
         if model is None:
             return
 
-        tr = lf.ui.tr
-
-        model.bind_func("panel_label", lambda: tr("mesh2splat.title"))
-        model.bind_func("source_mesh_label", lambda: tr("mesh2splat.source_mesh"))
-        model.bind_func("gaussian_scale_label", lambda: tr("mesh2splat.gaussian_scale"))
-        model.bind_func("gaussian_scale_help", lambda: tr("mesh2splat.tooltip_gaussian_scale"))
-        model.bind_func("sampling_density_header", lambda: tr("mesh2splat.sampling_density_header"))
-        model.bind_func("sampling_density_label", lambda: tr("mesh2splat.sampling_density"))
-        model.bind_func("sampling_density_help", lambda: tr("mesh2splat.tooltip_quality"))
-        model.bind_func("max_resolution_label", lambda: tr("mesh2splat.max_resolution"))
-        model.bind_func("max_resolution_help", lambda: tr("mesh2splat.tooltip_max_resolution"))
-        model.bind_func("effective_resolution_label", lambda: tr("mesh2splat.effective_resolution"))
-        model.bind_func("convert_label", lambda: tr("mesh2splat.convert"))
-        model.bind_func("no_meshes_label", lambda: tr("mesh2splat.no_meshes"))
+        model.bind_func("panel_label", lambda: "@tr:mesh2splat.title")
 
         model.bind_func("gaussian_scale_text", lambda: f"{self._gaussian_scale:.2f}")
         model.bind_func("quality_text", lambda: f"{self._quality:.2f}")
@@ -101,7 +87,6 @@ class Mesh2SplatPanel(RmlPanel):
         if quality_slider:
             quality_slider.add_event_listener("change", self._on_parameter_commit)
 
-        self._last_lang = lf.ui.get_current_language()
         self._last_mesh_key = None
         self._refresh_scene_state(force=True)
         self._sync_conversion_state(force=True)
@@ -109,14 +94,6 @@ class Mesh2SplatPanel(RmlPanel):
     def on_update(self, doc):
         del doc
         dirty = False
-
-        current_lang = lf.ui.get_current_language()
-        if current_lang != self._last_lang:
-            self._last_lang = current_lang
-            self._rebuild_resolution_records()
-            self._last_mesh_key = None
-            self._dirty_model()
-            dirty = True
 
         if self._refresh_scene_state(force=False):
             dirty = True

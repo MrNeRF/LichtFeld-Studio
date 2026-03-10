@@ -60,18 +60,8 @@ class ExportPanel(RmlPanel):
         if model is None:
             return
 
-        tr = lf.ui.tr
-
-        model.bind_func("panel_label", lambda: tr("export.export"))
-        model.bind_func("format_label", lambda: tr("export_dialog.format"))
-        model.bind_func("models_label", lambda: tr("export_dialog.models"))
-        model.bind_func("sh_degree_label", lambda: tr("export_dialog.sh_degree"))
-        model.bind_func("all_label", lambda: tr("export.all"))
-        model.bind_func("none_label", lambda: tr("export.none"))
+        model.bind_func("panel_label", lambda: lf.ui.tr("export.export"))
         model.bind_func("export_label", self._get_export_label)
-        model.bind_func("cancel_label", lambda: tr("export.cancel"))
-        model.bind_func("select_at_least_one", lambda: tr("export.select_at_least_one"))
-        model.bind_func("no_models_label", lambda: tr("export_dialog.no_models"))
         model.bind_func("show_no_models", lambda: not self._has_models)
         model.bind_func("can_export", lambda: bool(self._selected_nodes))
         model.bind_func("progress_value", lambda: self._progress_value)
@@ -88,7 +78,6 @@ class ExportPanel(RmlPanel):
         model.bind_func("progress_pct", self._get_progress_pct)
         model.bind_func("progress_stage", self._get_progress_stage)
 
-        model.bind_event("do_export", self._on_export)
         model.bind_event("do_cancel", self._on_cancel)
         model.bind_event("do_cancel_export", self._on_cancel_export)
         model.bind_record_list("formats")
@@ -118,6 +107,10 @@ class ExportPanel(RmlPanel):
         self._selection_seeded = False
         self._last_node_key = None
         self._last_lang = lf.ui.get_current_language()
+
+        export_form = doc.get_element_by_id("export-form")
+        if export_form:
+            export_form.add_event_listener("submit", self._on_export_submit)
 
         format_list = doc.get_element_by_id("format-list")
         if format_list:
@@ -323,6 +316,11 @@ class ExportPanel(RmlPanel):
         if not self._selected_nodes:
             return
         self._do_export()
+
+    def _on_export_submit(self, ev):
+        if self._selected_nodes:
+            self._do_export()
+        ev.stop_propagation()
 
     def _on_cancel(self, _handle, _ev, _args):
         if self._exporting:

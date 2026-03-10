@@ -11,6 +11,7 @@
 #include <RmlUi/Core/DataModelHandle.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/ElementDocument.h>
+#include <RmlUi/Core/Elements/ElementForm.h>
 #include <RmlUi/Core/Event.h>
 #include <RmlUi/Core/EventListener.h>
 
@@ -50,6 +51,7 @@ namespace lfs::python {
         nb::object current_target();
         void stop_propagation();
         std::string get_parameter(const std::string& key, const std::string& default_val = "");
+        bool get_bool_parameter(const std::string& key, bool default_val = false);
 
     private:
         Rml::Event* event_;
@@ -123,6 +125,7 @@ namespace lfs::python {
         // Focus
         bool focus();
         void blur();
+        void submit(const std::string& name = "", const std::string& value = "");
 
         Rml::Element* raw() { return elem_; }
 
@@ -243,6 +246,5 @@ namespace lfs::python {
     void release_rml_context_state(Rml::Context* context);
 
     void register_rml_bindings(nb::module_& m);
-    void dirty_all_data_models();
 
 } // namespace lfs::python

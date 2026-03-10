@@ -70,6 +70,7 @@ namespace lfs::vis {
             glm::vec2 getViewportSize() const;
             bool isViewportFocused() const;
             bool isPositionInViewport(double x, double y) const;
+            bool isPositionOverFloatingPanel(double x, double y) const;
 
             bool isForceExit() const { return force_exit_; }
             void setForceExit(bool value) { force_exit_ = value; }
@@ -114,7 +115,7 @@ namespace lfs::vis {
             void applyDefaultStyle();
             void initMenuBar();
             void registerNativePanels();
-            void updateInputOverrides(bool mouse_in_viewport);
+            void updateInputOverrides(const PanelInputState& input, bool mouse_in_viewport);
             void applyUiScale(float scale);
             void rebuildFonts(float scale);
             void loadImGuiSettings();

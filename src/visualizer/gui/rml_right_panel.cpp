@@ -12,6 +12,7 @@
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
+#include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
 
@@ -32,14 +33,15 @@ namespace lfs::vis::gui {
             return;
         }
 
-        rml_context_->EnableMouseCursor(false);
-
         auto ctor = rml_context_->CreateDataModel("right_panel_tabs");
         assert(ctor);
 
         if (auto h = ctor.RegisterStruct<TabSnapshot>()) {
             h.RegisterMember("idname", &TabSnapshot::idname);
             h.RegisterMember("label", &TabSnapshot::label);
+            h.RegisterMember("dom_id", &TabSnapshot::dom_id);
+            h.RegisterMember("nav_left", &TabSnapshot::nav_left);
+            h.RegisterMember("nav_right", &TabSnapshot::nav_right);
         }
         ctor.RegisterArray<std::vector<TabSnapshot>>();
         ctor.Bind("tabs", &tabs_);
@@ -118,6 +120,7 @@ namespace lfs::vis::gui {
             "#splitter.dragging {{ background-color: {}; }}\n"
             ".tab {{ background-color: transparent; color: {}; }}\n"
             ".tab:hover {{ background-color: {}; }}\n"
+            ".tab:focus-visible {{ background-color: {}; color: {}; border-bottom-color: {}; }}\n"
             ".tab.active {{ background-color: {}; color: {}; "
             "border-bottom-color: {}; }}\n"
             "#left-border {{ background-color: {}; }}\n"
@@ -127,6 +130,7 @@ namespace lfs::vis::gui {
             splitter_bg, splitter_hover, splitter_active,
             tab_text_dim,
             tab_hover,
+            tab_hover, tab_text, tab_accent,
             tab_active_bg, tab_text, tab_accent,
             border_color,
             separator_color,
@@ -179,6 +183,10 @@ namespace lfs::vis::gui {
         return false;
     }
 
+    static bool hasFocusedKeyboardTarget(Rml::Element* el) {
+        return el && el->GetTagName() != "body";
+    }
+
     CursorRequest RmlRightPanel::getCursorRequest() const {
         return cursor_request_;
     }
@@ -189,6 +197,7 @@ namespace lfs::vis::gui {
 
     void RmlRightPanel::processInput(const RightPanelLayout& layout, const PanelInputState& input) {
         wants_input_ = false;
+        wants_keyboard_ = false;
         cursor_request_ = CursorRequest::None;
 
         const float delta_x = input.mouse_x - prev_mouse_x_;
@@ -201,9 +210,15 @@ namespace lfs::vis::gui {
             return;
         if (layout.size.x <= 0 || layout.size.y <= 0)
             return;
+        if (rml_manager_) {
+            rml_manager_->trackContextFrame(rml_context_,
+                                            static_cast<int>(layout.pos.x - input.screen_x),
+                                            static_cast<int>(layout.pos.y - input.screen_y));
+        }
 
         const float mx = input.mouse_x - layout.pos.x;
         const float my = input.mouse_y - layout.pos.y;
+        const bool inside_panel = mx >= 0.0f && my >= 0.0f && mx < layout.size.x && my < layout.size.y;
 
         if (mouse_moved)
             rml_context_->ProcessMouseMove(static_cast<int>(mx), static_cast<int>(my), 0);
@@ -285,7 +300,33 @@ namespace lfs::vis::gui {
                 if (input.mouse_released[0])
                     rml_context_->ProcessMouseButtonUp(0, 0);
             }
+        } else if (input.mouse_clicked[0]) {
+            if (auto* focused = rml_context_->GetFocusElement())
+                focused->Blur();
         }
+
+        if (inside_panel || hasFocusedKeyboardTarget(rml_context_->GetFocusElement())) {
+            const int mods = sdlModsToRml(input.key_ctrl, input.key_shift,
+                                          input.key_alt, input.key_super);
+            for (const int sc : input.keys_pressed) {
+                const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
+                if (rml_key != Rml::Input::KI_UNKNOWN) {
+                    rml_context_->ProcessKeyDown(rml_key, mods);
+                    input_dirty_ = true;
+                }
+            }
+            for (const int sc : input.keys_released) {
+                const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
+                if (rml_key != Rml::Input::KI_UNKNOWN) {
+                    rml_context_->ProcessKeyUp(rml_key, mods);
+                    input_dirty_ = true;
+                }
+            }
+        }
+
+        auto* focused = rml_context_->GetFocusElement();
+        wants_keyboard_ = hasFocusedKeyboardTarget(focused);
+        wants_input_ = wants_input_ || wants_keyboard_;
     }
 
     void RmlRightPanel::render(const RightPanelLayout& layout,
@@ -297,6 +338,11 @@ namespace lfs::vis::gui {
             return;
         if (layout.size.x <= 0 || layout.size.y <= 0)
             return;
+        if (rml_manager_) {
+            rml_manager_->trackContextFrame(rml_context_,
+                                            static_cast<int>(layout.pos.x - screen_x),
+                                            static_cast<int>(layout.pos.y - screen_y));
+        }
 
         const bool theme_changed = updateTheme();
 

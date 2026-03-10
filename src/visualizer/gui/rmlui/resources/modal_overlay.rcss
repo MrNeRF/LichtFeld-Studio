@@ -26,6 +26,10 @@ body {
     border-radius: 6dp;
 }
 
+#modal-form {
+    display: block;
+}
+
 .modal-title {
     display: block;
     font-size: 12dp;

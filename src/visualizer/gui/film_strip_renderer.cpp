@@ -129,6 +129,8 @@ namespace lfs::vis::gui {
         const float timeline_x = options.timeline_x;
         const float timeline_width = options.timeline_width;
         const float strip_y = options.strip_y;
+        const float mouse_x = options.mouse_x;
+        const float mouse_y = options.mouse_y;
         const float zoom_level = options.zoom_level;
         const float pan_offset = options.pan_offset;
         const float display_end_time = options.display_end_time;
@@ -150,9 +152,6 @@ namespace lfs::vis::gui {
         const ImVec2 groove_min(groove_x, strip_y + THUMB_PADDING);
         const ImVec2 groove_max(groove_x + groove_w, strip_y + STRIP_HEIGHT - THUMB_PADDING);
 
-        const auto& io = ImGui::GetIO();
-        const float mouse_x = io.MousePos.x;
-        const float mouse_y = io.MousePos.y;
         const bool mouse_in_strip = mouse_x >= timeline_x && mouse_x <= timeline_x + timeline_width &&
                                     mouse_y >= strip_y && mouse_y <= strip_y + STRIP_HEIGHT;
         if (mouse_in_strip) {

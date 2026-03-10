@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -19,6 +20,8 @@ namespace lfs::vis::gui {
     class RmlFBO;
     class RmlSystemInterface;
     class RmlRenderInterface;
+    class RmlTextInputHandler;
+    enum class RmlCursorRequest : uint8_t;
 
     class RmlUIManager {
     public:
@@ -42,11 +45,17 @@ namespace lfs::vis::gui {
         const std::string& activeThemeId() const { return active_theme_id_; }
 
         RmlRenderInterface* getRenderInterface() const { return render_interface_.get(); }
+        RmlTextInputHandler* getTextInputHandler() const { return text_input_handler_.get(); }
         SDL_Window* getWindow() const { return window_; }
+
+        void beginFrameCursorTracking();
+        void trackContextFrame(const Rml::Context* context, int window_x, int window_y);
+        RmlCursorRequest consumeCursorRequest();
 
     private:
         std::unique_ptr<RmlSystemInterface> system_interface_;
         std::unique_ptr<RmlRenderInterface> render_interface_;
+        std::unique_ptr<RmlTextInputHandler> text_input_handler_;
         std::unordered_map<std::string, Rml::Context*> contexts_;
         SDL_Window* window_ = nullptr;
         float dp_ratio_ = 1.0f;

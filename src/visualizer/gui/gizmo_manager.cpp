@@ -1164,19 +1164,26 @@ namespace lfs::vis::gui {
         const float gizmo_x = vp_pos.x + vp_size.x - VIEWPORT_GIZMO_SIZE - VIEWPORT_GIZMO_MARGIN_X;
         const float gizmo_y = vp_pos.y + VIEWPORT_GIZMO_MARGIN_Y;
 
-        const ImVec2 mouse = ImGui::GetMousePos();
-        const bool mouse_in_gizmo = mouse.x >= gizmo_x && mouse.x <= gizmo_x + VIEWPORT_GIZMO_SIZE &&
-                                    mouse.y >= gizmo_y && mouse.y <= gizmo_y + VIEWPORT_GIZMO_SIZE;
+        const auto& frame_input = viewer_->getWindowManager()->frameInput();
+        const float mouse_x = frame_input.mouse_x;
+        const float mouse_y = frame_input.mouse_y;
+        const bool mouse_in_gizmo = mouse_x >= gizmo_x &&
+                                    mouse_x <= gizmo_x + VIEWPORT_GIZMO_SIZE &&
+                                    mouse_y >= gizmo_y &&
+                                    mouse_y <= gizmo_y + VIEWPORT_GIZMO_SIZE;
 
         const bool ui_wants_mouse = guiFocusState().want_capture_mouse;
-        const int hovered_axis = ui_wants_mouse ? -1 : engine->hitTestViewportGizmo(glm::vec2(mouse.x, mouse.y), vp_pos, vp_size);
+        const int hovered_axis =
+            ui_wants_mouse ? -1
+                           : engine->hitTestViewportGizmo(glm::vec2(mouse_x, mouse_y),
+                                                          vp_pos, vp_size);
         engine->setViewportGizmoHover(hovered_axis);
 
         if (!ui_wants_mouse) {
-            const glm::vec2 capture_mouse_pos(mouse.x, mouse.y);
-            const float time = static_cast<float>(ImGui::GetTime());
+            const glm::vec2 capture_mouse_pos(mouse_x, mouse_y);
+            const float time = static_cast<float>(SDL_GetTicks()) / 1000.0f;
 
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mouse_in_gizmo) {
+            if (frame_input.mouse_clicked[0] && mouse_in_gizmo) {
                 if (hovered_axis >= 0 && hovered_axis <= 5) {
                     const int axis = hovered_axis % 3;
                     const bool negative = hovered_axis >= 3;
@@ -1208,7 +1215,7 @@ namespace lfs::vis::gui {
             }
 
             if (viewport_gizmo_dragging_) {
-                if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                if (frame_input.mouse_down[0]) {
                     vp.camera.updateRotateAroundCenter(capture_mouse_pos, time);
                     rendering_manager->markDirty(DirtyFlag::CAMERA);
                 } else {

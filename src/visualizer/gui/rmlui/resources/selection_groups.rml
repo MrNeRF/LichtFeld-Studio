@@ -7,30 +7,33 @@
 
   <div class="section-header" id="hdr-groups">
     <span class="section-arrow" id="arrow-groups">&#x25B6;</span>
-    <span id="title-groups">{{ groups_title }}</span>
+    <span id="title-groups">@tr:main_panel.selection_groups</span>
   </div>
   <div id="groups-section" class="section-content collapsed">
-    <button class="btn btn--secondary btn--full" id="btn-add-group">{{ add_group_label }}</button>
+    <button type="button" class="btn btn--secondary btn--full" id="btn-add-group">@tr:main_panel.add_group</button>
     <div id="groups-list">
       <div class="group-row"
            data-for="group : groups"
            data-class-active="group.active"
            data-attr-data-gid="group.gid">
-        <div class="icon-btn lock-btn"
+        <button type="button"
+             class="icon-btn lock-btn"
              data-action="lock"
              data-attr-data-gid="group.gid">
           <img data-attr-sprite="group.lock_sprite" />
-        </div>
-        <div class="color-swatch"
+        </button>
+        <button type="button"
+             class="color-swatch"
              data-action="color"
              data-attr-data-gid="group.gid"
-             data-style-background-color="group.color_css"></div>
-        <span class="group-name"
+             data-style-background-color="group.color_css"></button>
+        <button type="button"
+              class="group-name"
               data-action="select"
-              data-attr-data-gid="group.gid">{{ group.label }}</span>
+              data-attr-data-gid="group.gid">{{ group.label }}</button>
       </div>
     </div>
-    <span class="empty-message" id="no-groups-msg" data-if="show_empty_message">{{ empty_message }}</span>
+    <span class="empty-message" id="no-groups-msg" data-if="show_empty_message">@tr:main_panel.no_selection_groups</span>
   </div>
 
   <div id="color-picker-popup" class="color-picker-popup">

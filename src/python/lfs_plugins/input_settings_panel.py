@@ -106,19 +106,7 @@ class InputSettingsPanel(RmlPanel):
         if model is None:
             return
 
-        tr = lf.ui.tr
-
-        model.bind_func("panel_label", lambda: tr("input_settings.title"))
-        model.bind_func("profile_label", lambda: tr("input_settings.active_profile"))
-        model.bind_func("tool_mode_label", lambda: tr("input_settings.tool_mode"))
-        model.bind_func("tool_mode_hint", lambda: tr("input_settings.select_tool_mode"))
-        model.bind_func("bindings_label", lambda: tr("input_settings.current_bindings"))
-        model.bind_func("save_label", lambda: tr("input_settings.save_current_profile"))
-        model.bind_func("reset_label", lambda: tr("input_settings.reset_to_default"))
-        model.bind_func("export_label", lambda: tr("input_settings.export"))
-        model.bind_func("import_label", lambda: tr("input_settings.import"))
-        model.bind_func("save_hint", lambda: tr("input_settings.save_hint"))
-        model.bind_func("double_click_hint", lambda: tr("input_settings.double_click_hint"))
+        model.bind_func("panel_label", lambda: lf.ui.tr("input_settings.title"))
         model.bind_func("bindings_hint", self._get_bindings_hint)
         model.bind_func("is_capturing", lambda: lf.keymap.is_capturing())
 

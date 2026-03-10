@@ -30,6 +30,8 @@ namespace lfs::vis {
     struct PanelInputState {
         float mouse_x = 0.0f;
         float mouse_y = 0.0f;
+        float screen_x = 0.0f;
+        float screen_y = 0.0f;
         bool mouse_down[3] = {};
         bool mouse_clicked[3] = {};
         float mouse_wheel = 0.0f;
@@ -46,6 +48,11 @@ namespace lfs::vis {
         std::vector<int> keys_pressed;
         std::vector<int> keys_released;
         std::vector<uint32_t> text_codepoints;
+        std::vector<std::string> text_inputs;
+        std::string text_editing;
+        int text_editing_start = -1;
+        int text_editing_length = -1;
+        bool has_text_editing = false;
     };
 
     namespace panel_config {
@@ -120,6 +127,7 @@ namespace lfs::vis {
         void openFocalLengthEdit(size_t index, float current_focal_mm);
 
         [[nodiscard]] bool isHovered() const { return hovered_; }
+        [[nodiscard]] bool wantsKeyboard() const { return wants_keyboard_; }
 
         [[nodiscard]] float zoomLevel() const { return zoom_level_; }
         [[nodiscard]] float panOffset() const { return pan_offset_; }
@@ -286,6 +294,8 @@ namespace lfs::vis {
         std::optional<size_t> last_clicked_keyframe_;
 
         bool hovered_ = false;
+        bool wants_keyboard_ = false;
+        bool last_hovered_ = false;
         std::string tooltip_;
         std::string last_language_;
     };

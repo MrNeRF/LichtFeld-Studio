@@ -6,7 +6,9 @@
     <div id="search-container">
         <img id="search-icon" class="row-icon" src="../icon/scene/search.png" />
         <input id="filter-input" type="text" data-attr-placeholder="search_placeholder" />
-        <img id="filter-clear" src="../icon/scene/x.png" data-if="show_filter_clear" />
+        <button id="filter-clear" type="button" data-if="show_filter_clear">
+            <img src="../icon/scene/x.png" />
+        </button>
     </div>
     <div id="tree-container">
         <div class="empty-state" data-if="show_empty_state">

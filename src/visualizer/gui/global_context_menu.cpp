@@ -51,8 +51,6 @@ namespace lfs::vis::gui {
             return;
         }
 
-        ctx_->EnableMouseCursor(false);
-
         auto ctor = ctx_->CreateDataModel("global_context_menu");
         assert(ctor);
 
@@ -134,6 +132,7 @@ namespace lfs::vis::gui {
         pending_x_ = screen_x;
         pending_y_ = screen_y;
         pending_open_ = true;
+        focus_first_item_ = true;
     }
 
     std::string GlobalContextMenu::pollResult() {
@@ -147,13 +146,28 @@ namespace lfs::vis::gui {
             return;
 
         open_ = false;
+        focus_first_item_ = false;
         el_ctx_menu_->SetClass("visible", false);
         el_backdrop_->SetProperty("display", "none");
+    }
+
+    void GlobalContextMenu::focusFirstItem() {
+        if (!el_ctx_menu_)
+            return;
+
+        Rml::ElementList items;
+        el_ctx_menu_->GetElementsByClassName(items, "context-menu-item");
+        for (auto* item : items) {
+            if (item && item->Focus())
+                break;
+        }
     }
 
     void GlobalContextMenu::processInput(const PanelInputState& input) {
         if (!open_ || !ctx_ || !doc_ || !el_backdrop_ || !el_ctx_menu_)
             return;
+        if (mgr_)
+            mgr_->trackContextFrame(ctx_, 0, 0);
 
         const float mx = input.mouse_x - input.screen_x;
         const float my = input.mouse_y - input.screen_y;
@@ -170,10 +184,28 @@ namespace lfs::vis::gui {
             return;
         }
 
-        guiFocusState().want_capture_mouse = true;
+        auto& focus = guiFocusState();
+        focus.want_capture_mouse = true;
+        focus.want_capture_keyboard = true;
 
-        if (hasKey(input.keys_pressed, SDL_SCANCODE_ESCAPE))
-            hide();
+        const int mods = sdlModsToRml(input.key_ctrl, input.key_shift, input.key_alt, input.key_super);
+        for (const int sc : input.keys_pressed) {
+            if (sc == SDL_SCANCODE_ESCAPE) {
+                hide();
+                return;
+            }
+            const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
+            if (rml_key != Rml::Input::KI_UNKNOWN)
+                ctx_->ProcessKeyDown(rml_key, mods);
+        }
+        for (const int sc : input.keys_released) {
+            const auto rml_key = sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
+            if (rml_key != Rml::Input::KI_UNKNOWN)
+                ctx_->ProcessKeyUp(rml_key, mods);
+        }
+
+        if (input.mouse_clicked[0] || input.mouse_clicked[1])
+            focus_first_item_ = false;
     }
 
     void GlobalContextMenu::render(int screen_w, int screen_h,
@@ -221,6 +253,11 @@ namespace lfs::vis::gui {
             }
 
             ctx_->Update();
+            if (focus_first_item_) {
+                focusFirstItem();
+                focus_first_item_ = false;
+                ctx_->Update();
+            }
 
             fbo_.ensure(w, h);
             if (!fbo_.valid())

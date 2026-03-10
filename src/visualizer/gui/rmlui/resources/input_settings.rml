@@ -8,7 +8,7 @@
   <!-- Profile selection -->
   <div class="is-section">
     <div class="is-row">
-      <span class="is-label">{{profile_label}}</span>
+      <span class="is-label">@tr:input_settings.active_profile</span>
       <select id="profile-select" class="is-select" data-value="profile_idx"
               data-class-is-disabled-overlay="is_capturing">
         <option data-for="profile : profiles" data-attr-value="profile.index">{{ profile.label }}</option>
@@ -20,8 +20,8 @@
 
   <!-- Tool mode selection -->
   <div class="is-section">
-    <span class="is-section-title">{{tool_mode_label}}</span>
-    <span class="is-hint">{{tool_mode_hint}}</span>
+    <span class="is-section-title">@tr:input_settings.tool_mode</span>
+    <span class="is-hint">@tr:input_settings.select_tool_mode</span>
     <div class="is-row">
       <select id="mode-select" class="is-select" data-value="mode_idx"
               data-class-is-disabled-overlay="is_capturing">
@@ -34,7 +34,7 @@
 
   <!-- Bindings -->
   <div class="is-section">
-    <span class="is-section-title">{{bindings_label}}</span>
+    <span class="is-section-title">@tr:input_settings.current_bindings</span>
     <span class="is-hint" id="bindings-hint">{{bindings_hint}}</span>
     <div id="bindings-table" class="is-bindings-table">
       <div data-for="row : binding_rows">
@@ -55,17 +55,17 @@
 
   <!-- Action buttons -->
   <div class="is-buttons">
-    <button class="btn btn--success" data-event-click="save_profile">{{save_label}}</button>
-    <button class="btn btn--error" data-event-click="reset_default">{{reset_label}}</button>
+    <button class="btn btn--success" data-event-click="save_profile">@tr:input_settings.save_current_profile</button>
+    <button class="btn btn--error" data-event-click="reset_default">@tr:input_settings.reset_to_default</button>
   </div>
   <div class="is-buttons">
-    <button class="btn btn--secondary" data-event-click="export_profile">{{export_label}}</button>
-    <button class="btn btn--secondary" data-event-click="import_profile">{{import_label}}</button>
+    <button class="btn btn--secondary" data-event-click="export_profile">@tr:input_settings.export</button>
+    <button class="btn btn--secondary" data-event-click="import_profile">@tr:input_settings.import</button>
   </div>
 
   <!-- Hints -->
-  <span class="is-hint">{{save_hint}}</span>
-  <span class="is-hint">{{double_click_hint}}</span>
+  <span class="is-hint">@tr:input_settings.save_hint</span>
+  <span class="is-hint">@tr:input_settings.double_click_hint</span>
 
 </body>
 </rml>

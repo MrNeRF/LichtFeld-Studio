@@ -56,6 +56,7 @@ namespace lfs::vis::gui {
         void syncTheme();
         std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
         void hide();
+        void focusFirstItem();
 
         struct EventListener : Rml::EventListener {
             GlobalContextMenu* owner = nullptr;
@@ -74,6 +75,7 @@ namespace lfs::vis::gui {
 
         bool open_ = false;
         bool pending_open_ = false;
+        bool focus_first_item_ = false;
         std::vector<ContextMenuItem> items_;
         std::vector<ContextMenuItem> pending_items_;
         float pending_x_ = 0;

@@ -53,6 +53,7 @@ namespace lfs::vis::gui {
 
         void showNext();
         void dismiss(const std::string& button_label);
+        bool dismissFirstEnabledButton();
         void cancel();
         lfs::core::ModalResult collectFormValues() const;
 
@@ -71,6 +72,7 @@ namespace lfs::vis::gui {
         Rml::Element* el_backdrop_ = nullptr;
         Rml::Element* el_dialog_ = nullptr;
         Rml::Element* el_title_ = nullptr;
+        Rml::Element* el_form_ = nullptr;
         Rml::Element* el_content_ = nullptr;
         Rml::Element* el_input_row_ = nullptr;
         Rml::Element* el_input_ = nullptr;

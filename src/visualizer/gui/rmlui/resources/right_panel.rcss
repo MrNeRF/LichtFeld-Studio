@@ -4,6 +4,7 @@ body {
     height: 100%;
     font-family: Inter;
     font-size: 10dp;
+    nav: auto;
 }
 
 #resize-handle {
@@ -57,6 +58,8 @@ body {
     padding: 6dp 14dp;
     white-space: nowrap;
     cursor: pointer;
+    tab-index: auto;
+    nav: auto;
     border-top-left-radius: 4dp;
     border-top-right-radius: 4dp;
     border-bottom-width: 2dp;

@@ -29,6 +29,9 @@ namespace lfs::vis::gui {
     struct TabSnapshot {
         std::string idname;
         std::string label;
+        std::string dom_id;
+        std::string nav_left;
+        std::string nav_right;
         bool operator==(const TabSnapshot&) const = default;
     };
 
@@ -55,6 +58,7 @@ namespace lfs::vis::gui {
                     int screen_w, int screen_h);
 
         bool wantsInput() const { return wants_input_; }
+        bool wantsKeyboard() const { return wants_keyboard_; }
         bool needsAnimationFrame() const;
         CursorRequest getCursorRequest() const;
 
@@ -88,6 +92,7 @@ namespace lfs::vis::gui {
         bool has_theme_signature_ = false;
         std::string base_rcss_;
         bool wants_input_ = false;
+        bool wants_keyboard_ = false;
 
         bool splitter_dragging_ = false;
         float drag_start_y_ = 0;

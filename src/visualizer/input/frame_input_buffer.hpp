@@ -9,6 +9,7 @@
 #include <SDL3/SDL_mouse.h>
 #include <SDL3/SDL_video.h>
 #include <cassert>
+#include <string>
 #include <vector>
 
 namespace lfs::vis {
@@ -23,6 +24,11 @@ namespace lfs::vis {
         std::vector<SDL_Scancode> keys_pressed;
         std::vector<SDL_Scancode> keys_released;
         std::vector<uint32_t> text_codepoints;
+        std::vector<std::string> text_inputs;
+        std::string text_editing;
+        int text_editing_start = -1;
+        int text_editing_length = -1;
+        bool has_text_editing = false;
         SDL_Keymod key_mods = SDL_KMOD_NONE;
         int window_w = 0;
         int window_h = 0;
@@ -34,6 +40,11 @@ namespace lfs::vis {
             keys_pressed.clear();
             keys_released.clear();
             text_codepoints.clear();
+            text_inputs.clear();
+            text_editing.clear();
+            text_editing_start = -1;
+            text_editing_length = -1;
+            has_text_editing = false;
         }
 
         void processEvent(const SDL_Event& event, const SDL_WindowID target_window_id = 0) {
@@ -63,7 +74,15 @@ namespace lfs::vis {
                 keys_released.push_back(event.key.scancode);
                 break;
             case SDL_EVENT_TEXT_INPUT:
+                if (event.text.text)
+                    text_inputs.emplace_back(event.text.text);
                 decodeUtf8(event.text.text, text_codepoints);
+                break;
+            case SDL_EVENT_TEXT_EDITING:
+                text_editing = event.edit.text ? event.edit.text : "";
+                text_editing_start = event.edit.start;
+                text_editing_length = event.edit.length;
+                has_text_editing = true;
                 break;
             default:
                 break;
@@ -103,6 +122,8 @@ namespace lfs::vis {
                 return event.key.windowID == target_window_id;
             case SDL_EVENT_TEXT_INPUT:
                 return event.text.windowID == target_window_id;
+            case SDL_EVENT_TEXT_EDITING:
+                return event.edit.windowID == target_window_id;
             case SDL_EVENT_DROP_FILE:
             case SDL_EVENT_DROP_COMPLETE:
                 return event.drop.windowID == target_window_id;

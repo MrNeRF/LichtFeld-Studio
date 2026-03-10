@@ -11,6 +11,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "gui/rmlui/rml_text_input_handler.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
@@ -66,8 +67,6 @@ namespace lfs::vis::gui {
             LOG_ERROR("RmlSequencerOverlay: failed to create context");
             return;
         }
-
-        rml_context_->EnableMouseCursor(false);
 
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/sequencer_overlay.rml");
@@ -427,6 +426,8 @@ namespace lfs::vis::gui {
                                       focal_edit_active_ || edit_overlay_visible_;
         if (!anything_visible)
             return;
+        if (rml_manager_)
+            rml_manager_->trackContextFrame(rml_context_, 0, 0);
 
         const float mx = input.mouse_x;
         const float my = input.mouse_y;
@@ -462,32 +463,58 @@ namespace lfs::vis::gui {
             if (has_text_focus_ || time_edit_active_ || focal_edit_active_)
                 focus.want_text_input = true;
 
+            auto* const text_input_handler =
+                rml_manager_ ? rml_manager_->getTextInputHandler() : nullptr;
+            const bool composing = text_input_handler && text_input_handler->isComposing();
+
             const int mods = gui::sdlModsToRml(input.key_ctrl, input.key_shift,
                                                input.key_alt, input.key_super);
             for (int sc : input.keys_pressed) {
+                if (composing &&
+                    (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER ||
+                     sc == SDL_SCANCODE_ESCAPE)) {
+                    continue;
+                }
                 const auto rml_key = gui::sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
                 if (rml_key != Rml::Input::KI_UNKNOWN)
                     rml_context_->ProcessKeyDown(rml_key, mods);
             }
             for (int sc : input.keys_released) {
+                if (composing && (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER ||
+                                  sc == SDL_SCANCODE_ESCAPE))
+                    continue;
                 const auto rml_key = gui::sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
                 if (rml_key != Rml::Input::KI_UNKNOWN)
                     rml_context_->ProcessKeyUp(rml_key, mods);
             }
 
             if (has_text_focus_) {
-                for (uint32_t cp : input.text_codepoints)
-                    rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
+                if (text_input_handler && input.has_text_editing) {
+                    text_input_handler->handleTextEditing(
+                        input.text_editing, input.text_editing_start, input.text_editing_length);
+                }
+
+                bool forward_text_codepoints = input.text_inputs.empty();
+                for (const auto& text_input : input.text_inputs) {
+                    if (!text_input_handler || !text_input_handler->handleTextInput(text_input))
+                        forward_text_codepoints = true;
+                }
+
+                if (forward_text_codepoints) {
+                    for (uint32_t cp : input.text_codepoints)
+                        rml_context_->ProcessTextInput(static_cast<Rml::Character>(cp));
+                }
             }
 
-            if (gui::hasKey(input.keys_pressed, SDL_SCANCODE_RETURN) ||
-                gui::hasKey(input.keys_pressed, SDL_SCANCODE_KP_ENTER)) {
+            if (!composing &&
+                (gui::hasKey(input.keys_pressed, SDL_SCANCODE_RETURN) ||
+                 gui::hasKey(input.keys_pressed, SDL_SCANCODE_KP_ENTER))) {
                 if (time_edit_active_)
                     submitTimeEdit();
                 else if (focal_edit_active_)
                     submitFocalEdit();
             }
-            if (gui::hasKey(input.keys_pressed, SDL_SCANCODE_ESCAPE)) {
+            if (!composing && gui::hasKey(input.keys_pressed, SDL_SCANCODE_ESCAPE)) {
                 if (time_edit_active_) {
                     time_edit_active_ = false;
                     has_text_focus_ = false;
@@ -525,6 +552,8 @@ namespace lfs::vis::gui {
         }
 
         if (!rml_manager_->shouldDeferFboUpdate(fbo_)) {
+            if (rml_manager_)
+                rml_manager_->trackContextFrame(rml_context_, 0, 0);
             syncTheme();
 
             const int w = screen_w;

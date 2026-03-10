@@ -10,10 +10,12 @@
 #include "core/event_bridge/localization_manager.hpp"
 #include "core/image_io.hpp"
 #include "core/logger.hpp"
+#include "gui/gui_focus_state.hpp"
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_theme.hpp"
 #include "gui/rmlui/rmlui_manager.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
+#include "gui/rmlui/sdl_rml_key_mapping.hpp"
 #include "gui/string_keys.hpp"
 #include "internal/resource_paths.hpp"
 #include "theme/theme.hpp"
@@ -28,6 +30,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <format>
+#include <imgui_internal.h>
 #include <imgui.h>
 
 #ifdef _WIN32
@@ -258,13 +261,17 @@ namespace lfs::vis::gui {
         rml_theme::applyTheme(document_, base_rcss, rml_theme::generateAllThemeMedia([this](const auto& th) { return generateThemeRCSS(th); }));
     }
 
-    void StartupOverlay::forwardInput(float overlay_x, float overlay_y,
-                                      float overlay_w, float overlay_h) {
+    void StartupOverlay::forwardInput(const PanelInputState& input, float overlay_x,
+                                      float overlay_y, float overlay_w, float overlay_h) {
         assert(rml_context_);
+        if (rml_manager_) {
+            rml_manager_->trackContextFrame(rml_context_,
+                                            static_cast<int>(overlay_x - input.screen_x),
+                                            static_cast<int>(overlay_y - input.screen_y));
+        }
 
-        const ImGuiIO& io = ImGui::GetIO();
-        const float local_x = io.MousePos.x - overlay_x;
-        const float local_y = io.MousePos.y - overlay_y;
+        const float local_x = input.mouse_x - overlay_x;
+        const float local_y = input.mouse_y - overlay_y;
 
         const bool hovered = local_x >= 0 && local_y >= 0 &&
                              local_x < overlay_w && local_y < overlay_h;
@@ -273,14 +280,13 @@ namespace lfs::vis::gui {
             rml_context_->ProcessMouseMove(static_cast<int>(local_x),
                                            static_cast<int>(local_y), 0);
 
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            if (input.mouse_clicked[0])
                 rml_context_->ProcessMouseButtonDown(0, 0);
-            if (ImGui::IsMouseReleased(ImGuiMouseButton_Left))
+            if (input.mouse_released[0])
                 rml_context_->ProcessMouseButtonUp(0, 0);
 
-            float wheel = io.MouseWheel;
-            if (wheel != 0.0f)
-                rml_context_->ProcessMouseWheel(Rml::Vector2f(0, -wheel), 0);
+            if (input.mouse_wheel != 0.0f)
+                rml_context_->ProcessMouseWheel(Rml::Vector2f(0.0f, -input.mouse_wheel), 0);
         }
     }
 
@@ -294,6 +300,10 @@ namespace lfs::vis::gui {
 
         if (!rml_context_ || !document_)
             return;
+
+        auto& focus = guiFocusState();
+        focus.want_capture_mouse = true;
+        focus.want_capture_keyboard = true;
 
         if (!rml_manager_->shouldDeferFboUpdate(fbo_)) {
             updateTheme();
@@ -311,7 +321,10 @@ namespace lfs::vis::gui {
             if (!fbo_.valid())
                 return;
 
-            forwardInput(viewport.pos.x, viewport.pos.y, viewport.size.x, viewport.size.y);
+            if (input_) {
+                forwardInput(*input_, viewport.pos.x, viewport.pos.y,
+                             viewport.size.x, viewport.size.y);
+            }
 
             auto* render = rml_manager_->getRenderInterface();
             assert(render);
@@ -329,24 +342,33 @@ namespace lfs::vis::gui {
             fbo_.unbind(prev_fbo);
         }
 
-        ImGui::SetNextWindowPos(ImVec2(viewport.pos.x, viewport.pos.y));
-        ImGui::SetNextWindowSize(ImVec2(viewport.size.x, viewport.size.y));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
+        if (fbo_.valid()) {
+            auto* main_viewport = ImGui::GetMainViewport();
+            ImGui::SetNextWindowPos(ImVec2(viewport.pos.x, viewport.pos.y));
+            ImGui::SetNextWindowSize(ImVec2(viewport.size.x, viewport.size.y));
+            if (main_viewport)
+                ImGui::SetNextWindowViewport(main_viewport->ID);
+            ImGui::SetNextWindowBgAlpha(0.0f);
 
-        if (ImGui::Begin("##StartupOverlay", nullptr,
-                         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                             ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-                             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking |
-                             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus |
-                             ImGuiWindowFlags_NoFocusOnAppearing)) {
-            if (fbo_.valid())
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+            const ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
+                                           ImGuiWindowFlags_NoDocking |
+                                           ImGuiWindowFlags_NoMove |
+                                           ImGuiWindowFlags_NoSavedSettings |
+                                           ImGuiWindowFlags_NoScrollbar |
+                                           ImGuiWindowFlags_NoScrollWithMouse |
+                                           ImGuiWindowFlags_NoNav |
+                                           ImGuiWindowFlags_NoNavFocus;
+            if (ImGui::Begin("##StartupOverlayComposite", nullptr, flags)) {
+                ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+                // Keep the splash in ImGui's item stack so hover tests block viewport tools.
                 fbo_.blitAsImage(viewport.size.x, viewport.size.y);
+            }
+            ImGui::End();
+            ImGui::PopStyleVar(3);
         }
-        ImGui::End();
-        ImGui::PopStyleColor(1);
-        ImGui::PopStyleVar(2);
 
         ++shown_frames_;
 
@@ -358,14 +380,13 @@ namespace lfs::vis::gui {
                 rml_select_open = sel->IsSelectBoxVisible();
         }
 
-        if (shown_frames_ > 2 && !rml_select_open && !drag_hovering) {
-            const auto& io = ImGui::GetIO();
-            const bool mouse_clicked = ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                                       ImGui::IsMouseClicked(ImGuiMouseButton_Right) ||
-                                       ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
-            const bool key_action = ImGui::IsKeyPressed(ImGuiKey_Escape) ||
-                                    ImGui::IsKeyPressed(ImGuiKey_Space) ||
-                                    ImGui::IsKeyPressed(ImGuiKey_Enter);
+        if (shown_frames_ > 2 && !rml_select_open && !drag_hovering && input_) {
+            const bool mouse_clicked =
+                input_->mouse_clicked[0] || input_->mouse_clicked[1] || input_->mouse_clicked[2];
+            const bool key_action = hasKey(input_->keys_pressed, SDL_SCANCODE_ESCAPE) ||
+                                    hasKey(input_->keys_pressed, SDL_SCANCODE_SPACE) ||
+                                    hasKey(input_->keys_pressed, SDL_SCANCODE_RETURN) ||
+                                    hasKey(input_->keys_pressed, SDL_SCANCODE_KP_ENTER);
 
             if (key_action) {
                 LOG_DEBUG("StartupOverlay: dismissed by key action");
@@ -374,8 +395,8 @@ namespace lfs::vis::gui {
                 auto* overlay_box = document_->GetElementById("overlay-box");
                 bool inside = false;
                 if (overlay_box) {
-                    const float mx = io.MousePos.x - viewport.pos.x;
-                    const float my = io.MousePos.y - viewport.pos.y;
+                    const float mx = input_->mouse_x - viewport.pos.x;
+                    const float my = input_->mouse_y - viewport.pos.y;
                     auto abs_offset = overlay_box->GetAbsoluteOffset(Rml::BoxArea::Border);
                     float box_w = overlay_box->GetOffsetWidth();
                     float box_h = overlay_box->GetOffsetHeight();

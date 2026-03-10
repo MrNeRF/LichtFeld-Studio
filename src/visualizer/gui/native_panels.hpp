@@ -129,13 +129,4 @@ namespace lfs::vis::gui::native_panels {
         GuiManager* gui_;
     };
 
-    class RmlStatusBarPanel : public IPanel {
-    public:
-        explicit RmlStatusBarPanel(RmlStatusBar* sb);
-        void draw(const PanelDrawContext& ctx) override;
-
-    private:
-        RmlStatusBar* status_bar_;
-    };
-
 } // namespace lfs::vis::gui::native_panels

@@ -36,6 +36,8 @@ namespace lfs::vis::gui {
             float timeline_x = 0.0f;
             float timeline_width = 0.0f;
             float strip_y = 0.0f;
+            float mouse_x = 0.0f;
+            float mouse_y = 0.0f;
             float zoom_level = 1.0f;
             float pan_offset = 0.0f;
             float display_end_time = 0.0f;

@@ -80,14 +80,36 @@ namespace lfs::vis::gui {
         const lfs::python::GilAcquire gil;
 
         lfs::python::MouseState mouse;
-        auto& io = ImGui::GetIO();
-        mouse.pos_x = io.MousePos.x;
-        mouse.pos_y = io.MousePos.y;
-        mouse.delta_x = io.MouseDelta.x;
-        mouse.delta_y = io.MouseDelta.y;
-        mouse.wheel = io.MouseWheel;
-        mouse.double_clicked = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
-        mouse.dragging = ImGui::IsMouseDragging(ImGuiMouseButton_Left);
+        if (current_input_) {
+            mouse.pos_x = current_input_->mouse_x;
+            mouse.pos_y = current_input_->mouse_y;
+            if (have_prev_mouse_) {
+                mouse.delta_x = mouse.pos_x - prev_mouse_x_;
+                mouse.delta_y = mouse.pos_y - prev_mouse_y_;
+            }
+            mouse.wheel = current_input_->mouse_wheel;
+            if (current_input_->mouse_clicked[0]) {
+                constexpr auto kDoubleClickWindow = std::chrono::milliseconds(350);
+                const auto now = std::chrono::steady_clock::now();
+                mouse.double_clicked =
+                    have_left_click_time_ && (now - last_left_click_at_) <= kDoubleClickWindow;
+                last_left_click_at_ = now;
+                have_left_click_time_ = true;
+            }
+            mouse.dragging = current_input_->mouse_down[0];
+        } else {
+            auto& io = ImGui::GetIO();
+            mouse.pos_x = io.MousePos.x;
+            mouse.pos_y = io.MousePos.y;
+            mouse.delta_x = io.MouseDelta.x;
+            mouse.delta_y = io.MouseDelta.y;
+            mouse.wheel = io.MouseWheel;
+            mouse.double_clicked = ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left);
+            mouse.dragging = ImGui::IsMouseDragging(ImGuiMouseButton_Left);
+        }
+        prev_mouse_x_ = mouse.pos_x;
+        prev_mouse_y_ = mouse.pos_y;
+        have_prev_mouse_ = true;
 
         layout_.begin_frame(doc, mouse);
         try {
@@ -172,11 +194,17 @@ namespace lfs::vis::gui {
     }
 
     void RmlImModePanelAdapter::setInput(const PanelInputState* input) {
-        if (host_) {
-            const auto& ops = lfs::python::get_rml_panel_host_ops();
-            if (ops.set_input)
-                ops.set_input(host_, input);
-        }
+        if (input)
+            current_input_ = *input;
+        else
+            current_input_.reset();
+
+        if (!host_)
+            return;
+
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        if (ops.set_input)
+            ops.set_input(host_, input);
     }
 
     void RmlImModePanelAdapter::setForcedHeight(float h) {

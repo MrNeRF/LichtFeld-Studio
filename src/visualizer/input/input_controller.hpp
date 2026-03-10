@@ -103,6 +103,7 @@ namespace lfs::vis {
 
         // Helpers
         bool isInViewport(double x, double y) const;
+        bool isPointerOverBlockingUi(double x, double y) const;
         bool shouldCameraHandleInput() const;
         void selectCameraByUid(int uid);
         void updateCameraSpeed(bool increase);

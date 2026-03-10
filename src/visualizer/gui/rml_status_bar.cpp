@@ -25,11 +25,12 @@
 
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
+#include <SDL3/SDL_video.h>
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstring>
 #include <format>
-#include <imgui.h>
 
 #include "git_version.h"
 
@@ -64,6 +65,39 @@ namespace lfs::vis::gui {
             if (end == std::string::npos)
                 return s;
             return s.substr(0, end + 1);
+        }
+
+        struct FramebufferBlitRect {
+            float x = 0.0f;
+            float y = 0.0f;
+            float w = 0.0f;
+            float h = 0.0f;
+            int screen_w = 0;
+            int screen_h = 0;
+        };
+
+        FramebufferBlitRect toFramebufferBlitRect(SDL_Window* window,
+                                                  float x, float y, float w, float h,
+                                                  int screen_w, int screen_h) {
+            FramebufferBlitRect rect{x, y, w, h, screen_w, screen_h};
+            if (!window || screen_w <= 0 || screen_h <= 0)
+                return rect;
+
+            int framebuffer_w = 0;
+            int framebuffer_h = 0;
+            SDL_GetWindowSizeInPixels(window, &framebuffer_w, &framebuffer_h);
+            if (framebuffer_w <= 0 || framebuffer_h <= 0)
+                return rect;
+
+            const float scale_x = static_cast<float>(framebuffer_w) / static_cast<float>(screen_w);
+            const float scale_y = static_cast<float>(framebuffer_h) / static_cast<float>(screen_h);
+            rect.x = std::round(x * scale_x);
+            rect.y = std::round(y * scale_y);
+            rect.w = std::max(1.0f, std::round(w * scale_x));
+            rect.h = std::max(1.0f, std::round(h * scale_y));
+            rect.screen_w = framebuffer_w;
+            rect.screen_h = framebuffer_h;
+            return rect;
         }
     } // namespace
 
@@ -509,18 +543,20 @@ namespace lfs::vis::gui {
         return model_dirty_;
     }
 
-    void RmlStatusBar::draw(const PanelDrawContext& ctx) {
+    void RmlStatusBar::render(const PanelDrawContext& ctx, const float x, const float y,
+                              const float w_px, const float h_px,
+                              const int screen_w, const int screen_h) {
         if (!rml_context_ || !document_)
             return;
 
-        const float avail_w = ImGui::GetContentRegionAvail().x;
-        const float avail_h = ImGui::GetContentRegionAvail().y;
-        if (avail_w <= 0 || avail_h <= 0)
+        if (w_px <= 0.0f || h_px <= 0.0f || screen_w <= 0 || screen_h <= 0)
             return;
 
-        const int w = static_cast<int>(avail_w);
-        const int h = static_cast<int>(avail_h);
-        const bool size_changed = (w != last_render_w_ || h != last_render_h_);
+        const auto blit_rect = toFramebufferBlitRect(rml_manager_ ? rml_manager_->getWindow() : nullptr,
+                                                     x, y, w_px, h_px, screen_w, screen_h);
+        const int render_w = static_cast<int>(w_px);
+        const int render_h = static_cast<int>(h_px);
+        const bool size_changed = (render_w != last_render_w_ || render_h != last_render_h_);
         const bool had_pending_model_dirty = model_dirty_;
         const bool theme_changed = updateTheme();
         const auto now = std::chrono::steady_clock::now();
@@ -536,25 +572,26 @@ namespace lfs::vis::gui {
             if (needs_render)
                 model_dirty_ = true;
             if (fbo_.valid())
-                fbo_.blitAsImage(avail_w, avail_h);
+                fbo_.blitToScreen(blit_rect.x, blit_rect.y, blit_rect.w, blit_rect.h,
+                                  blit_rect.screen_w, blit_rect.screen_h);
             return;
         }
 
         if (needs_render) {
-            rml_context_->SetDimensions(Rml::Vector2i(w, h));
-            if (h != last_document_h_) {
-                document_->SetProperty("height", std::format("{}px", h));
-                last_document_h_ = h;
+            rml_context_->SetDimensions(Rml::Vector2i(render_w, render_h));
+            if (render_h != last_document_h_) {
+                document_->SetProperty("height", std::format("{}px", render_h));
+                last_document_h_ = render_h;
             }
             rml_context_->Update();
 
-            fbo_.ensure(w, h);
+            fbo_.ensure(render_w, render_h);
             if (!fbo_.valid())
                 return;
 
             auto* render = rml_manager_->getRenderInterface();
             assert(render);
-            render->SetViewport(w, h);
+            render->SetViewport(render_w, render_h);
 
             GLint prev_fbo = 0;
             fbo_.bind(&prev_fbo);
@@ -568,12 +605,13 @@ namespace lfs::vis::gui {
             fbo_.unbind(prev_fbo);
 
             animation_active_ = animation_active_ || (rml_context_->GetNextUpdateDelay() == 0);
-            last_render_w_ = w;
-            last_render_h_ = h;
+            last_render_w_ = render_w;
+            last_render_h_ = render_h;
         }
 
         if (fbo_.valid())
-            fbo_.blitAsImage(avail_w, avail_h);
+            fbo_.blitToScreen(blit_rect.x, blit_rect.y, blit_rect.w, blit_rect.h,
+                              blit_rect.screen_w, blit_rect.screen_h);
     }
 
 } // namespace lfs::vis::gui

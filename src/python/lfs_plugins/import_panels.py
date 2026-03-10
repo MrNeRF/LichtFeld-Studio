@@ -12,7 +12,6 @@ from .types import RmlPanel
 _dataset_import_panel = None
 _resume_checkpoint_panel = None
 
-KI_RETURN = 72
 KI_ESCAPE = 81
 
 
@@ -34,19 +33,40 @@ class _ImportDialogPanel(RmlPanel):
     """Common behavior for retained import dialogs."""
 
     update_interval_ms = 200
+    form_id = ""
 
     def on_load(self, doc):
         super().on_load(doc)
         doc.add_event_listener("keydown", self._on_keydown)
+        self._form = doc.get_element_by_id(self.form_id) if self.form_id else None
+        if self._form:
+            self._form.add_event_listener("submit", self._on_form_submit)
+            self._form.add_event_listener("change", self._on_form_change)
 
     def _on_keydown(self, event):
         key = int(event.get_parameter("key_identifier", "0"))
-        if key == KI_RETURN:
-            if self._can_submit_from_keyboard():
-                self._on_do_load()
-                event.stop_propagation()
-        elif key == KI_ESCAPE:
+        if key == KI_ESCAPE:
             self._on_do_cancel()
+            event.stop_propagation()
+
+    def _on_form_submit(self, event):
+        if self._can_submit_from_keyboard():
+            self._on_do_load()
+        event.stop_propagation()
+
+    def _on_form_change(self, event):
+        target = event.target()
+        if target is None or not event.get_bool_parameter("linebreak", False):
+            return
+        if target.tag_name != "input":
+            return
+
+        input_type = target.get_attribute("type", "text")
+        if input_type not in ("", "text", "password", "search", "email", "url"):
+            return
+
+        if self._form and self._can_submit_from_keyboard():
+            self._form.submit()
             event.stop_propagation()
 
     def _can_submit_from_keyboard(self) -> bool:
@@ -63,6 +83,7 @@ class DatasetImportPanel(_ImportDialogPanel):
     rml_template = "rmlui/dataset_import_panel.rml"
     rml_height_mode = "content"
     initial_width = 560
+    form_id = "dataset-import-form"
 
     def __init__(self):
         global _dataset_import_panel
@@ -72,26 +93,13 @@ class DatasetImportPanel(_ImportDialogPanel):
         self._dataset_info = None
         self._output_path = ""
         self._init_path = ""
-        self._last_lang = ""
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("dataset_import")
         if model is None:
             return
 
-        tr = lf.ui.tr
-
-        model.bind_func("panel_label", lambda: tr("load_dataset_popup.title"))
-        model.bind_func("configure_paths", lambda: tr("load_dataset_popup.configure_paths"))
-        model.bind_func("images_dir_label", lambda: tr("load_dataset_popup.images_dir"))
-        model.bind_func("sparse_dir_label", lambda: tr("load_dataset_popup.sparse_dir"))
-        model.bind_func("masks_dir_label", lambda: tr("load_dataset_popup.masks_dir"))
-        model.bind_func("output_dir_label", lambda: tr("load_dataset_popup.output_dir"))
-        model.bind_func("init_file_label", lambda: tr("load_dataset_popup.init_file"))
-        model.bind_func("help_text", lambda: tr("load_dataset_popup.help_text"))
-        model.bind_func("browse_label", lambda: tr("common.browse"))
-        model.bind_func("load_label", lambda: tr("common.load"))
-        model.bind_func("cancel_label", lambda: tr("common.cancel"))
+        model.bind_func("panel_label", lambda: lf.ui.tr("load_dataset_popup.title"))
 
         model.bind_func("images_path", lambda: self._string_attr("images_path"))
         model.bind_func("sparse_path", lambda: self._string_attr("sparse_path"))
@@ -106,19 +114,13 @@ class DatasetImportPanel(_ImportDialogPanel):
 
         model.bind_event("browse_output", self._on_browse_output)
         model.bind_event("browse_init", self._on_browse_init)
-        model.bind_event("do_load", self._on_do_load)
         model.bind_event("do_cancel", self._on_do_cancel)
 
         self._handle = model.get_handle()
 
     def on_update(self, doc):
         del doc
-        current_lang = lf.ui.get_current_language()
-        if current_lang == self._last_lang:
-            return False
-        self._last_lang = current_lang
-        self._dirty_model()
-        return True
+        return False
 
     def show(self, dataset_path: str) -> bool:
         info = lf.detect_dataset_info(dataset_path)
@@ -128,7 +130,6 @@ class DatasetImportPanel(_ImportDialogPanel):
         self._dataset_info = info
         self._output_path = str(Path(info.base_path) / "output")
         self._init_path = ""
-        self._last_lang = lf.ui.get_current_language()
         self._dirty_model()
         lf.ui.set_panel_enabled(self.idname, True)
         return True
@@ -216,6 +217,7 @@ class ResumeCheckpointPanel(_ImportDialogPanel):
     rml_template = "rmlui/resume_checkpoint_panel.rml"
     rml_height_mode = "content"
     initial_width = 580
+    form_id = "resume-checkpoint-form"
 
     def __init__(self):
         global _resume_checkpoint_panel
@@ -229,30 +231,13 @@ class ResumeCheckpointPanel(_ImportDialogPanel):
         self._output_path = ""
         self._dataset_valid = False
         self._stored_dataset_exists = False
-        self._last_lang = ""
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("resume_checkpoint")
         if model is None:
             return
 
-        tr = lf.ui.tr
-
-        model.bind_func("panel_label", lambda: tr("resume_checkpoint_popup.title"))
-        model.bind_func("checkpoint_badge", lambda: tr("resume_checkpoint_popup.checkpoint"))
-        model.bind_func("configure_paths", lambda: tr("resume_checkpoint_popup.configure_paths"))
-        model.bind_func("file_label", lambda: tr("resume_checkpoint_popup.file"))
-        model.bind_func("stored_path_label", lambda: tr("resume_checkpoint_popup.stored_path"))
-        model.bind_func("not_found_label", lambda: tr("resume_checkpoint_popup.not_found"))
-        model.bind_func("dataset_path_label", lambda: tr("resume_checkpoint_popup.dataset_path"))
-        model.bind_func("output_path_label", lambda: tr("resume_checkpoint_popup.output_path"))
-        model.bind_func("help_text", lambda: tr("resume_checkpoint_popup.help_text"))
-        model.bind_func("browse_label", lambda: tr("common.browse"))
-        model.bind_func("load_label", lambda: tr("common.load"))
-        model.bind_func("cancel_label", lambda: tr("common.cancel"))
-        model.bind_func("ok_label", lambda: tr("common.ok"))
-        model.bind_func("invalid_label", lambda: tr("resume_checkpoint_popup.invalid"))
-
+        model.bind_func("panel_label", lambda: lf.ui.tr("resume_checkpoint_popup.title"))
         model.bind_func("checkpoint_filename", self._checkpoint_filename)
         model.bind_func("checkpoint_metadata", self._checkpoint_metadata)
         model.bind_func("stored_path_text", lambda: self._stored_dataset_path)
@@ -267,19 +252,13 @@ class ResumeCheckpointPanel(_ImportDialogPanel):
 
         model.bind_event("browse_dataset", self._on_browse_dataset)
         model.bind_event("browse_output", self._on_browse_output)
-        model.bind_event("do_load", self._on_do_load)
         model.bind_event("do_cancel", self._on_do_cancel)
 
         self._handle = model.get_handle()
 
     def on_update(self, doc):
         del doc
-        current_lang = lf.ui.get_current_language()
-        if current_lang == self._last_lang:
-            return False
-        self._last_lang = current_lang
-        self._dirty_model()
-        return True
+        return False
 
     def show(self, checkpoint_path: str) -> bool:
         header = lf.read_checkpoint_header(checkpoint_path)
@@ -297,7 +276,6 @@ class ResumeCheckpointPanel(_ImportDialogPanel):
         self._output_path = str(params.output_path)
         self._stored_dataset_exists = self._validate_dataset(self._stored_dataset_path)
         self._dataset_valid = self._stored_dataset_exists
-        self._last_lang = lf.ui.get_current_language()
         self._dirty_model()
         lf.ui.set_panel_enabled(self.idname, True)
         return True
@@ -333,8 +311,7 @@ class ResumeCheckpointPanel(_ImportDialogPanel):
         return "impdlg-value text-default"
 
     def _dataset_status_text(self) -> str:
-        tr = lf.ui.tr
-        return tr("common.ok") if self._dataset_valid else tr("resume_checkpoint_popup.invalid")
+        return "@tr:common.ok" if self._dataset_valid else "@tr:resume_checkpoint_popup.invalid"
 
     def _dataset_status_class(self) -> str:
         if self._dataset_valid:

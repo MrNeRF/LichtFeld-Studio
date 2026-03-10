@@ -4656,8 +4656,7 @@ namespace lfs::python {
         m.def(
             "set_language",
             [](const std::string& lang_code) {
-                if (lfs::event::LocalizationManager::getInstance().setLanguage(lang_code))
-                    dirty_all_data_models();
+                lfs::event::LocalizationManager::getInstance().setLanguage(lang_code);
             },
             nb::arg("lang_code"), "Set language by code (e.g., 'en', 'de')");
 

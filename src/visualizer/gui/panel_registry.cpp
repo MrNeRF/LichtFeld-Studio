@@ -8,7 +8,6 @@
 #include "gui/panel_layout.hpp"
 #include "gui/ui_context.hpp"
 #include "gui/ui_widgets.hpp"
-#include "python/python_runtime.hpp"
 #include "theme/theme.hpp"
 
 #include <algorithm>
@@ -16,6 +15,66 @@
 #include <imgui.h>
 
 namespace lfs::vis::gui {
+
+    namespace {
+        bool pointInRoundedRect(const double x, const double y, const double w,
+                                const double h, const double radius) {
+            if (x < 0.0 || y < 0.0 || x >= w || y >= h)
+                return false;
+
+            const double clamped_radius = std::clamp(radius, 0.0, 0.5 * std::min(w, h));
+            if (clamped_radius <= 0.0)
+                return true;
+
+            const auto inside_corner = [x, y](const double min_x, const double min_y,
+                                              const double corner_radius,
+                                              const double center_x,
+                                              const double center_y) {
+                if (x < min_x || x > min_x + corner_radius ||
+                    y < min_y || y > min_y + corner_radius) {
+                    return true;
+                }
+
+                const double dx = x - center_x;
+                const double dy = y - center_y;
+                return (dx * dx + dy * dy) <= (corner_radius * corner_radius);
+            };
+
+            return inside_corner(0.0, 0.0, clamped_radius, clamped_radius, clamped_radius) &&
+                   inside_corner(w - clamped_radius, 0.0, clamped_radius,
+                                 w - clamped_radius, clamped_radius) &&
+                   inside_corner(w - clamped_radius, h - clamped_radius, clamped_radius,
+                                 w - clamped_radius, h - clamped_radius) &&
+                   inside_corner(0.0, h - clamped_radius, clamped_radius,
+                                 clamped_radius, h - clamped_radius);
+        }
+
+        void warnLegacyImguiWindowWrapperOnce(const PanelSpace space) {
+            static std::once_flag floating_once;
+            static std::once_flag dockable_once;
+
+            std::once_flag* flag = nullptr;
+            const char* space_name = nullptr;
+            switch (space) {
+            case PanelSpace::Floating:
+                flag = &floating_once;
+                space_name = "floating";
+                break;
+            case PanelSpace::Dockable:
+                flag = &dockable_once;
+                space_name = "dockable";
+                break;
+            default:
+                return;
+            }
+
+            std::call_once(*flag, [space_name] {
+                LOG_WARN("Rml migration: the legacy ImGui {} panel wrapper path is still active. "
+                         "Migrate those panels to direct or self-managed rendering before deleting this fallback.",
+                         space_name);
+            });
+        }
+    } // namespace
 
     PanelRegistry& PanelRegistry::instance() {
         static PanelRegistry registry;
@@ -137,6 +196,13 @@ namespace lfs::vis::gui {
         std::vector<PanelSnapshot> snapshots;
         {
             std::lock_guard lock(mutex_);
+            if (space == PanelSpace::Floating) {
+                for (auto& p : panels_) {
+                    if (p.space == PanelSpace::Floating) {
+                        p.float_last_bounds_valid = false;
+                    }
+                }
+            }
             snapshots.reserve(panels_.size());
             for (size_t i = 0; i < panels_.size(); ++i) {
                 auto& p = panels_[i];
@@ -193,6 +259,17 @@ namespace lfs::vis::gui {
         constexpr float kResizeEdge = 6.0f;
         constexpr float kVisibleFrac = 0.1f;
 
+        auto with_panel_input = [&](IPanel* panel, auto&& draw_fn) {
+            panel->setInput(input);
+            try {
+                draw_fn();
+            } catch (...) {
+                panel->setInput(nullptr);
+                throw;
+            }
+            panel->setInput(nullptr);
+        };
+
         auto prepare_floating_direct_layout = [&](const PanelSnapshot& snap,
                                                   FloatingDirectLayout& layout) {
             layout = {};
@@ -213,7 +290,9 @@ namespace lfs::vis::gui {
             if (drawn_h <= 0.0f) {
                 float prev_h = -1.0f;
                 for (int pass = 0; pass < 3; ++pass) {
-                    snap.panel->preloadDirect(w, max_h, ctx);
+                    with_panel_input(snap.panel, [&] {
+                        snap.panel->preloadDirect(w, max_h, ctx, -1.0f, -1.0f, input);
+                    });
                     drawn_h = snap.panel->getDirectDrawHeight();
 
                     const bool stable_height =
@@ -272,26 +351,27 @@ namespace lfs::vis::gui {
             if (!input)
                 return;
 
-            const ImVec2 mouse = ImGui::GetIO().MousePos;
+            const float mouse_x = input->mouse_x;
+            const float mouse_y = input->mouse_y;
             layout.mouse_in_panel =
-                mouse.x >= px && mouse.x < px + w && mouse.y >= py && mouse.y < py + h;
+                mouse_x >= px && mouse_x < px + w && mouse_y >= py && mouse_y < py + h;
             layout.mouse_in_titlebar =
-                mouse.x >= px && mouse.x < px + w && mouse.y >= py && mouse.y < py + kTitleH;
+                mouse_x >= px && mouse_x < px + w && mouse_y >= py && mouse_y < py + kTitleH;
 
             const bool on_left =
-                mouse.x >= px - kResizeEdge && mouse.x < px + kResizeEdge;
+                mouse_x >= px - kResizeEdge && mouse_x < px + kResizeEdge;
             const bool on_right =
-                mouse.x >= px + w - kResizeEdge && mouse.x < px + w + kResizeEdge;
+                mouse_x >= px + w - kResizeEdge && mouse_x < px + w + kResizeEdge;
             const bool on_top =
-                mouse.y >= py - kResizeEdge && mouse.y < py + kResizeEdge;
+                mouse_y >= py - kResizeEdge && mouse_y < py + kResizeEdge;
             const bool on_bottom =
-                mouse.y >= py + h - kResizeEdge && mouse.y < py + h + kResizeEdge;
+                mouse_y >= py + h - kResizeEdge && mouse_y < py + h + kResizeEdge;
             const bool on_edge_x = on_left || on_right;
             const bool on_edge_y = on_top || on_bottom;
             const bool in_y_range =
-                mouse.y >= py - kResizeEdge && mouse.y < py + h + kResizeEdge;
+                mouse_y >= py - kResizeEdge && mouse_y < py + h + kResizeEdge;
             const bool in_x_range =
-                mouse.x >= px - kResizeEdge && mouse.x < px + w + kResizeEdge;
+                mouse_x >= px - kResizeEdge && mouse_x < px + w + kResizeEdge;
 
             layout.mouse_in_resize_grip =
                 (on_edge_x && on_edge_y) ||
@@ -332,13 +412,12 @@ namespace lfs::vis::gui {
                 switch (space) {
                 case PanelSpace::Floating: {
                     if (snap.has_option(PanelOption::SELF_MANAGED)) {
-                        snap.panel->draw(ctx);
+                        with_panel_input(snap.panel, [&] { snap.panel->draw(ctx); });
                     } else if (snap.panel->supportsDirectDraw()) {
                         auto& layout = floating_direct_layouts[snap_idx];
                         if (!layout.valid)
                             prepare_floating_direct_layout(snap, layout);
 
-                        ImGuiIO& io = ImGui::GetIO();
                         float w = layout.width;
                         float h = layout.height;
                         float px = layout.pos_x;
@@ -357,46 +436,50 @@ namespace lfs::vis::gui {
                                 const bool hovered_this_panel =
                                     static_cast<int>(snap_idx) == hovered_floating_direct;
                                 const bool interactive = active_this_panel || hovered_this_panel;
+                                const bool mouse_clicked_left = input && input->mouse_clicked[0];
+                                const bool mouse_down_left = input && input->mouse_down[0];
+                                const float mouse_x = input ? input->mouse_x : px;
+                                const float mouse_y = input ? input->mouse_y : py;
 
                                 bool any_active = std::any_of(panels_.begin(), panels_.end(),
                                                               [](const PanelInfo& p) { return p.float_dragging || p.float_resizing; });
 
                                 if (interactive && (layout.mouse_in_panel || layout.mouse_in_resize_grip) &&
-                                    ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                                    mouse_clicked_left) {
                                     bring_floating_panel_to_front_locked(pi);
                                 }
 
                                 if (interactive && layout.mouse_in_resize_grip && !any_active &&
-                                    ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                                    mouse_clicked_left) {
                                     pi.float_resizing = true;
                                     pi.float_resize_start_w = w;
                                     pi.float_resize_start_h = h;
-                                    pi.float_resize_start_mx = io.MousePos.x;
-                                    pi.float_resize_start_my = io.MousePos.y;
+                                    pi.float_resize_start_mx = mouse_x;
+                                    pi.float_resize_start_my = mouse_y;
                                     pi.float_resize_start_px = px;
                                     pi.float_resize_start_py = py;
                                     pi.float_resize_dir_x = layout.hover_dir_x;
                                     pi.float_resize_dir_y = layout.hover_dir_y;
                                 } else if (interactive && layout.mouse_in_titlebar &&
                                            !layout.mouse_in_resize_grip && !any_active &&
-                                           ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                                           mouse_clicked_left) {
                                     pi.float_dragging = true;
-                                    pi.float_drag_ox = io.MousePos.x - px;
-                                    pi.float_drag_oy = io.MousePos.y - py;
+                                    pi.float_drag_ox = mouse_x - px;
+                                    pi.float_drag_oy = mouse_y - py;
                                 }
 
                                 if (pi.float_dragging) {
-                                    if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                                        px = io.MousePos.x - pi.float_drag_ox;
-                                        py = io.MousePos.y - pi.float_drag_oy;
+                                    if (mouse_down_left) {
+                                        px = mouse_x - pi.float_drag_ox;
+                                        py = mouse_y - pi.float_drag_oy;
                                     } else {
                                         pi.float_dragging = false;
                                     }
                                 }
                                 if (pi.float_resizing) {
-                                    if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                                        const float dx = io.MousePos.x - pi.float_resize_start_mx;
-                                        const float dy = io.MousePos.y - pi.float_resize_start_my;
+                                    if (mouse_down_left) {
+                                        const float dx = mouse_x - pi.float_resize_start_mx;
+                                        const float dy = mouse_y - pi.float_resize_start_my;
                                         if (pi.float_resize_dir_x == 1) {
                                             w = std::max(kMinPanelWidth, pi.float_resize_start_w + dx);
                                             pi.initial_width = w;
@@ -447,11 +530,16 @@ namespace lfs::vis::gui {
                                     pi.float_dragging || pi.float_resizing ||
                                     static_cast<int>(snap_idx) == hovered_floating_direct;
 
+                                panels_[snap.index].float_last_bounds_valid = true;
+                                panels_[snap.index].float_last_x = px;
+                                panels_[snap.index].float_last_y = py;
+                                panels_[snap.index].float_last_w = w;
+                                panels_[snap.index].float_last_h = h;
+
                                 if (pi.float_dragging || pi.float_resizing ||
                                     (interactive &&
                                      (layout.mouse_in_panel || layout.mouse_in_resize_grip))) {
                                     guiFocusState().want_capture_mouse = true;
-                                    io.WantCaptureMouse = true;
                                 }
 
                                 if (interactive) {
@@ -475,18 +563,20 @@ namespace lfs::vis::gui {
                         const float forced = (has_user_height && drawn_h > 0 && h > drawn_h) ? h : 0.0f;
                         snap.panel->setForcedHeight(forced);
                         try {
-                            snap.panel->setInput(input);
-                            if (snap.panel->wantsExternalFloatingShadow()) {
-                                widgets::DrawFloatingWindowShadow({px, py}, {w, h},
-                                                                  theme().sizes.window_rounding);
-                            }
-                            snap.panel->drawDirect(px, py, w, h, ctx);
+                            with_panel_input(snap.panel, [&] {
+                                if (snap.panel->wantsExternalFloatingShadow()) {
+                                    widgets::DrawFloatingWindowShadow({px, py}, {w, h},
+                                                                      theme().sizes.window_rounding);
+                                }
+                                snap.panel->drawDirect(px, py, w, h, ctx);
+                            });
                         } catch (...) {
                             snap.panel->setForcedHeight(0.0f);
                             throw;
                         }
                         snap.panel->setForcedHeight(0.0f);
                     } else {
+                        warnLegacyImguiWindowWrapperOnce(PanelSpace::Floating);
                         if (snap.initial_width > 0 || snap.initial_height > 0)
                             ImGui::SetNextWindowSize(ImVec2(snap.initial_width, snap.initial_height), ImGuiCond_Appearing);
                         bool open = true;
@@ -495,7 +585,7 @@ namespace lfs::vis::gui {
                                 widgets::DrawFloatingWindowShadow(ImGui::GetWindowPos(), ImGui::GetWindowSize(),
                                                                   ImGui::GetStyle().WindowRounding);
                             }
-                            snap.panel->draw(ctx);
+                            with_panel_input(snap.panel, [&] { snap.panel->draw(ctx); });
                         }
                         ImGui::End();
                         if (!open) {
@@ -525,8 +615,9 @@ namespace lfs::vis::gui {
 
                 case PanelSpace::Dockable: {
                     if (snap.has_option(PanelOption::SELF_MANAGED)) {
-                        snap.panel->draw(ctx);
+                        with_panel_input(snap.panel, [&] { snap.panel->draw(ctx); });
                     } else {
+                        warnLegacyImguiWindowWrapperOnce(PanelSpace::Dockable);
                         if (snap.initial_width > 0 || snap.initial_height > 0)
                             ImGui::SetNextWindowSize(ImVec2(snap.initial_width, snap.initial_height), ImGuiCond_Appearing);
                         bool open = true;
@@ -535,7 +626,7 @@ namespace lfs::vis::gui {
                                 widgets::DrawFloatingWindowShadow(ImGui::GetWindowPos(), ImGui::GetWindowSize(),
                                                                   ImGui::GetStyle().WindowRounding);
                             }
-                            snap.panel->draw(ctx);
+                            with_panel_input(snap.panel, [&] { snap.panel->draw(ctx); });
                         }
                         ImGui::End();
                         if (!open) {
@@ -547,39 +638,9 @@ namespace lfs::vis::gui {
                     }
                     break;
                 }
-                case PanelSpace::StatusBar: {
-                    const float status_bar_h = PanelLayoutManager::STATUS_BAR_HEIGHT * lfs::python::get_shared_dpi_scale();
-                    constexpr float PADDING = 8.0f;
-                    const auto* vp = ImGui::GetMainViewport();
-                    const ImVec2 bar_pos{vp->WorkPos.x, vp->WorkPos.y + vp->WorkSize.y - status_bar_h};
-                    const ImVec2 bar_size{vp->WorkSize.x, status_bar_h};
-
-                    ImGui::SetNextWindowPos(bar_pos, ImGuiCond_Always);
-                    ImGui::SetNextWindowSize(bar_size, ImGuiCond_Always);
-
-                    constexpr ImGuiWindowFlags FLAGS =
-                        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-                        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings |
-                        ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoFocusOnAppearing;
-
-                    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
-                    ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0, 0, 0, 0));
-                    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
-                    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {PADDING, 3.0f});
-                    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {6.0f, 0.0f});
-                    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-                    ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, {1.0f, 1.0f});
-
-                    if (ImGui::Begin("##StatusBar", nullptr, FLAGS)) {
-                        snap.panel->draw(ctx);
-                    }
-                    ImGui::End();
-
-                    ImGui::PopStyleVar(5);
-                    ImGui::PopStyleColor(2);
+                case PanelSpace::StatusBar:
+                    with_panel_input(snap.panel, [&] { snap.panel->draw(ctx); });
                     break;
-                }
                 case PanelSpace::MainPanelTab:
                     break;
                 }
@@ -625,6 +686,46 @@ namespace lfs::vis::gui {
                 LOG_ERROR("Panel '{}' preload error: {}", snap.label, e.what());
             }
         }
+    }
+
+    bool PanelRegistry::isPositionOverFloatingPanel(const double x, const double y) const {
+        constexpr double kResizeEdge = 6.0;
+        const double rounding = std::max(0.0f, theme().sizes.window_rounding);
+
+        std::lock_guard lock(mutex_);
+        for (const auto& panel : panels_) {
+            if (panel.space != PanelSpace::Floating || !panel.enabled || panel.error_disabled ||
+                !panel.parent_idname.empty() || !panel.float_last_bounds_valid) {
+                continue;
+            }
+
+            const double panel_x = static_cast<double>(panel.float_last_x);
+            const double panel_y = static_cast<double>(panel.float_last_y);
+            const double panel_w = static_cast<double>(panel.float_last_w);
+            const double panel_h = static_cast<double>(panel.float_last_h);
+
+            if (x < panel_x - kResizeEdge || x >= panel_x + panel_w + kResizeEdge ||
+                y < panel_y - kResizeEdge || y >= panel_y + panel_h + kResizeEdge) {
+                continue;
+            }
+
+            if (x < panel_x || x >= panel_x + panel_w ||
+                y < panel_y || y >= panel_y + panel_h) {
+                return true;
+            }
+
+            const double local_x = x - panel_x;
+            const double local_y = y - panel_y;
+            if (pointInRoundedRect(local_x, local_y, panel_w, panel_h, rounding))
+                return true;
+
+            if (local_x < kResizeEdge || local_x >= panel_w - kResizeEdge ||
+                local_y < kResizeEdge || local_y >= panel_h - kResizeEdge) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     float PanelRegistry::draw_panels_direct(PanelSpace space, float x, float y, float w,
@@ -778,6 +879,23 @@ namespace lfs::vis::gui {
         return false;
     }
 
+    bool PanelRegistry::has_legacy_imgui_window_wrapped_panels(PanelSpace space) const {
+        std::lock_guard lock(mutex_);
+        for (const auto& p : panels_) {
+            if (p.space != space || !p.enabled || p.error_disabled || !p.parent_idname.empty())
+                continue;
+
+            if (p.has_option(PanelOption::SELF_MANAGED))
+                continue;
+
+            if (space == PanelSpace::Floating && p.panel && p.panel->supportsDirectDraw())
+                continue;
+
+            return true;
+        }
+        return false;
+    }
+
     std::vector<PanelSummary> PanelRegistry::get_panels_for_space(PanelSpace space) {
         std::lock_guard lock(mutex_);
         std::vector<PanelSummary> result;
@@ -824,6 +942,11 @@ namespace lfs::vis::gui {
                     p.initial_height = p.original_height;
                     p.float_user_height = 0;
                     bring_floating_panel_to_front_locked(p);
+                } else if (!enabled) {
+                    p.float_last_bounds_valid = false;
+                    guiFocusState().want_capture_mouse = false;
+                    guiFocusState().want_capture_keyboard = false;
+                    guiFocusState().want_text_input = false;
                 }
                 return;
             }
@@ -836,6 +959,10 @@ namespace lfs::vis::gui {
         for (auto& p : panels_) {
             if (p.idname == idname) {
                 p.enabled = false;
+                p.float_last_bounds_valid = false;
+                guiFocusState().want_capture_mouse = false;
+                guiFocusState().want_capture_keyboard = false;
+                guiFocusState().want_text_input = false;
                 return;
             }
         }

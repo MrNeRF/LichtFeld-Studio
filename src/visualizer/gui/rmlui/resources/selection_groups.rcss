@@ -24,6 +24,8 @@ body {
     height: 20dp;
     padding: 2dp;
     flex-shrink: 0;
+    background-color: transparent;
+    border-width: 0;
 }
 
 .group-row .lock-btn img {
@@ -40,6 +42,10 @@ body {
     font-size: 10dp;
     overflow: hidden;
     white-space: nowrap;
+    background-color: transparent;
+    border-width: 0;
+    text-align: left;
+    padding: 0;
 }
 
 .color-picker-popup {
