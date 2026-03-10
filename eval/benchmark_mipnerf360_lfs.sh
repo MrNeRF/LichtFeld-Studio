@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SCENE_DIR="data"
-RESULT_DIR="results/benchmark_improved_gs_plus"
+RESULT_DIR="results/test"
 SCENE_LIST="garden bicycle stump bonsai counter kitchen room" # treehill flowers
 
 # Check if results directory exists and prompt for deletion
@@ -40,7 +40,7 @@ do
         --eval \
         --headless \
         --save-eval-images \
-        --config eval/improvedGSplus_optimization_params.json
+        --strategy brush
 
     echo "Completed $SCENE"
     echo
