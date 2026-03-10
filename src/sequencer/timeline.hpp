@@ -10,6 +10,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace lfs::sequencer {
@@ -19,20 +20,27 @@ namespace lfs::sequencer {
     class Timeline {
     public:
         // ========== Legacy Camera Keyframes ==========
-        void addKeyframe(const Keyframe& keyframe);
+        KeyframeId addKeyframe(const Keyframe& keyframe);
         void removeKeyframe(size_t index);
-        void setKeyframeTime(size_t index, float new_time, bool sort = true);
-        void updateKeyframe(size_t index, const glm::vec3& position, const glm::quat& rotation, float focal_length_mm);
-        void setKeyframeFocalLength(size_t index, float focal_length_mm);
-        void setKeyframeEasing(size_t index, EasingType easing);
+        bool removeKeyframeById(KeyframeId id);
+        bool setKeyframeTimeById(KeyframeId id, float new_time, bool sort = true);
+        bool updateKeyframeById(KeyframeId id, const glm::vec3& position, const glm::quat& rotation, float focal_length_mm);
+        bool setKeyframeFocalLengthById(KeyframeId id, float focal_length_mm);
+        bool setKeyframeEasingById(KeyframeId id, EasingType easing);
         void sortKeyframes();
         void clear();
 
         [[nodiscard]] const Keyframe* getKeyframe(size_t index) const;
+        [[nodiscard]] Keyframe* getKeyframe(size_t index);
+        [[nodiscard]] const Keyframe* getKeyframeById(KeyframeId id) const;
+        [[nodiscard]] Keyframe* getKeyframeById(KeyframeId id);
+        [[nodiscard]] std::optional<size_t> findKeyframeIndex(KeyframeId id) const;
 
         [[nodiscard]] bool empty() const { return keyframes_.empty(); }
         [[nodiscard]] size_t size() const { return keyframes_.size(); }
         [[nodiscard]] std::span<const Keyframe> keyframes() const { return keyframes_; }
+        [[nodiscard]] size_t realKeyframeCount() const;
+        [[nodiscard]] float realEndTime() const;
 
         [[nodiscard]] float duration() const;
         [[nodiscard]] float startTime() const;
@@ -59,6 +67,7 @@ namespace lfs::sequencer {
     private:
         std::vector<Keyframe> keyframes_;
         std::unique_ptr<AnimationClip> clip_;
+        KeyframeId next_keyframe_id_ = 1;
     };
 
 } // namespace lfs::sequencer

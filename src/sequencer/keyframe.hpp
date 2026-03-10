@@ -10,6 +10,8 @@
 
 namespace lfs::sequencer {
 
+    using KeyframeId = uint64_t;
+    inline constexpr KeyframeId INVALID_KEYFRAME_ID = 0;
     inline constexpr glm::quat IDENTITY_ROTATION{1, 0, 0, 0};
 
     enum class EasingType : uint8_t {
@@ -20,6 +22,7 @@ namespace lfs::sequencer {
     };
 
     struct Keyframe {
+        KeyframeId id = INVALID_KEYFRAME_ID;
         float time = 0.0f;
         glm::vec3 position{0.0f};
         glm::quat rotation = IDENTITY_ROTATION;

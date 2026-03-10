@@ -358,19 +358,31 @@ namespace lfs::vis {
         python::set_sequencer_timeline_callbacks(
             []() -> bool {
                 auto* gm = python::get_gui_manager();
-                return gm ? !gm->sequencer().timeline().empty() : false;
+                return gm ? (gm->sequencer().timeline().realKeyframeCount() > 0 ||
+                             gm->sequencer().timeline().hasAnimationClip())
+                          : false;
             },
             [](const std::string& path) -> bool {
                 auto* gm = python::get_gui_manager();
-                return gm ? gm->sequencer().timeline().saveToJson(path) : false;
+                return gm ? gm->sequencer().saveToJson(path) : false;
             },
             [](const std::string& path) -> bool {
                 auto* gm = python::get_gui_manager();
-                return gm ? gm->sequencer().timeline().loadFromJson(path) : false;
+                if (!gm)
+                    return false;
+                const bool loaded = gm->sequencer().loadFromJson(path);
+                if (loaded) {
+                    lfs::core::events::state::KeyframeListChanged{
+                        .count = gm->sequencer().timeline().size()}
+                        .emit();
+                }
+                return loaded;
             },
             []() {
-                if (auto* gm = python::get_gui_manager())
-                    gm->sequencer().timeline().clear();
+                if (auto* gm = python::get_gui_manager()) {
+                    gm->sequencer().clear();
+                    lfs::core::events::state::KeyframeListChanged{.count = 0}.emit();
+                }
             },
             [](float speed) {
                 if (auto* gm = python::get_gui_manager())
