@@ -45,7 +45,7 @@ namespace lfs::training {
         }
 
         // Input, expects Tensor [C,H,W] RGB format
-        lfs::core::Tensor apply_laplacian_filter(const lfs::core::Tensor& input_data) {
+        lfs::core::Tensor apply_canny_filter(const lfs::core::Tensor& input_data) {
 
             assert(input_data.dtype() == lfs::core::DataType::Float32);
             assert(input_data.device() == lfs::core::Device::CUDA);
@@ -183,7 +183,7 @@ namespace lfs::training {
             const CameraExample cam_img = _views->get(i);
             const lfs::core::Tensor image = cam_img.data.image;
 
-            lfs::core::Tensor laplacian = apply_laplacian_filter(image).unsqueeze(0);
+            lfs::core::Tensor laplacian = apply_canny_filter(image).unsqueeze(0);
 
             // Applies median normalization
             this->_all_edges.index_put_(idx, median_normalization(laplacian));
