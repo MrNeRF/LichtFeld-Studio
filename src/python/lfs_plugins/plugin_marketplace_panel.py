@@ -9,6 +9,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+import lichtfeld as lf
+
 from .marketplace import (
     MarketplacePluginEntry,
     PluginMarketplaceCatalog,
@@ -86,6 +88,7 @@ class PluginMarketplacePanel(RmlPanel):
         self._cached_installed_versions: Dict[str, str] = {}
         self._cached_installed_names: Set[str] = set()
         self._formats_open = False
+        self._last_lang = ""
 
     # ── Data model ────────────────────────────────────────────
 
@@ -96,28 +99,7 @@ class PluginMarketplacePanel(RmlPanel):
         if model is None:
             return
 
-        tr = lf.ui.tr
-
-        model.bind_func("panel_label", lambda: tr("menu.view.plugin_marketplace"))
-        model.bind_func("title_line", lambda: tr("plugin_marketplace.title_line"))
-        model.bind_func("warning_body", lambda: tr("plugin_marketplace.warning_body"))
-        model.bind_func("filter_label", lambda: tr("plugin_marketplace.filter_label"))
-        model.bind_func("sort_label", lambda: tr("plugin_marketplace.sort_label"))
-        model.bind_func("url_label", lambda: tr("plugin_manager.github_url_or_shorthand"))
-        model.bind_func("install_btn_label", lambda: tr("plugin_manager.button.install_plugin"))
-        model.bind_func("no_plugins_text", lambda: tr("plugin_marketplace.no_plugins"))
-        model.bind_func("edit_list_hint", lambda: tr("plugin_marketplace.edit_list_hint"))
-        model.bind_func("confirm_no_label", lambda: tr("plugin_marketplace.confirm_uninstall_no"))
-        model.bind_func("confirm_yes_label", lambda: tr("plugin_marketplace.confirm_uninstall_yes"))
-        model.bind_func("formats_label", lambda: tr("plugin_manager.supported_formats"))
-
-        model.bind_func("filter_all", lambda: tr("plugin_marketplace.filter.all"))
-        model.bind_func("filter_installed", lambda: tr("plugin_marketplace.filter.installed"))
-        model.bind_func("filter_not_installed", lambda: tr("plugin_marketplace.filter.not_installed"))
-        model.bind_func("sort_pop_desc", lambda: tr("plugin_marketplace.sort.popularity_desc"))
-        model.bind_func("sort_pop_asc", lambda: tr("plugin_marketplace.sort.popularity_asc"))
-        model.bind_func("sort_name_asc", lambda: tr("plugin_marketplace.sort.name_asc"))
-        model.bind_func("sort_name_desc", lambda: tr("plugin_marketplace.sort.name_desc"))
+        model.bind_func("panel_label", lambda: lf.ui.tr("menu.view.plugin_marketplace"))
 
         model.bind(
             "manual_url",
@@ -135,17 +117,6 @@ class PluginMarketplacePanel(RmlPanel):
             self._set_sort_idx,
         )
 
-        model.bind_func("install_label", lambda: tr("plugin_marketplace.button.install"))
-        model.bind_func("load_label", lambda: tr("plugin_manager.button.load"))
-        model.bind_func("unload_label", lambda: tr("plugin_manager.button.unload"))
-        model.bind_func("reload_label", lambda: tr("plugin_manager.button.reload"))
-        model.bind_func("update_label", lambda: tr("plugin_manager.button.update"))
-        model.bind_func("uninstall_label", lambda: tr("plugin_manager.button.uninstall"))
-        model.bind_func("startup_label", lambda: tr("plugin_marketplace.load_on_startup"))
-        model.bind_func("local_label", lambda: tr("plugin_marketplace.local_install"))
-        model.bind_func("error_label", lambda: tr("plugin_marketplace.invalid_link"))
-
-        model.bind_event("install_from_url", self._on_install_from_url)
         model.bind_event("confirm_yes", self._on_confirm_yes)
         model.bind_event("confirm_no", self._on_confirm_no)
 
@@ -177,6 +148,9 @@ class PluginMarketplacePanel(RmlPanel):
     def on_load(self, doc):
         super().on_load(doc)
         self._doc = doc
+        self._last_lang = lf.ui.get_current_language()
+        self._entries_dirty = True
+        self._last_card_phases.clear()
 
         formats_header = doc.get_element_by_id("formats-header")
         if formats_header:
@@ -193,11 +167,22 @@ class PluginMarketplacePanel(RmlPanel):
             grid_el.add_event_listener("click", self._on_card_click)
             grid_el.add_event_listener("change", self._on_card_click)
 
+        manual_form = doc.get_element_by_id("manual-install-form")
+        if manual_form:
+            manual_form.add_event_listener("submit", self._on_manual_form_submit)
+            manual_form.add_event_listener("change", self._on_manual_form_change)
+
     def on_update(self, doc):
         from .manager import PluginManager
 
         mgr = PluginManager.instance()
         self._ensure_loaded()
+
+        current_lang = lf.ui.get_current_language()
+        if current_lang != self._last_lang:
+            self._last_lang = current_lang
+            self._entries_dirty = True
+            self._last_card_phases.clear()
 
         entries_raw, is_loading = self._catalog.snapshot()
 
@@ -456,10 +441,23 @@ class PluginMarketplacePanel(RmlPanel):
             w.animate_section_toggle(content, self._formats_open, arrow,
                                      header_element=header)
 
-    def _on_install_from_url(self, handle, event, args):
+    def _on_manual_form_submit(self, ev):
         from .manager import PluginManager
         mgr = PluginManager.instance()
         self._install_plugin_from_url(mgr, self._manual_url, "__manual_url__")
+        ev.stop_propagation()
+
+    def _on_manual_form_change(self, ev):
+        target = ev.target()
+        if target is None or not ev.get_bool_parameter("linebreak", False):
+            return
+        if target.get_attribute("id", "") != "manual-url-input":
+            return
+
+        form = ev.current_target()
+        if form is not None:
+            form.submit()
+            ev.stop_propagation()
 
     def _on_confirm_yes(self, handle, event, args):
         from .manager import PluginManager

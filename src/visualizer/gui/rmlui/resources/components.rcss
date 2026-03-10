@@ -6,6 +6,10 @@ div {
     display: block;
 }
 
+form {
+    display: block;
+}
+
 body {
     font-family: Inter;
     font-size: 11dp;
@@ -13,6 +17,7 @@ body {
     flex-direction: column;
     width: 100%;
     height: 100%;
+    nav: auto;
 }
 
 body.docked-panel {
@@ -96,6 +101,19 @@ scrollbarhorizontal sliderbar:hover {
     background-color: rgba(137, 180, 250, 200);
 }
 
+button,
+input[type="text"],
+input[type="checkbox"],
+input[type="range"],
+select,
+textarea,
+.btn,
+.context-menu-item,
+.section-header {
+    tab-index: auto;
+    nav: auto;
+}
+
 /* ── Form: Checkbox ─────────────────────────────────────── */
 
 input[type="checkbox"] {
@@ -160,6 +178,16 @@ input[type="text"] {
 
 input[type="text"]:focus {
     border-color: #89b4fa;
+}
+
+input[type="text"]:focus-visible,
+select:focus-visible,
+button:focus-visible,
+.btn:focus-visible,
+.context-menu-item:focus-visible,
+.section-header:focus-visible {
+    border-color: #89b4fa;
+    box-shadow: 0 0 0 1dp rgba(137, 180, 250, 160);
 }
 
 /* ── Form: Select ───────────────────────────────────────── */
@@ -414,6 +442,10 @@ progress fill {
     cursor: pointer;
     color: #cdd6f4;
     font-size: 10dp;
+    width: 100%;
+    text-align: left;
+    background-color: transparent;
+    border-width: 0;
     transition: background-color 0.1s quadratic-out;
 }
 
@@ -489,6 +521,10 @@ progress fill {
 .btn:disabled {
     opacity: 0.5;
     cursor: default;
+}
+
+.submit-proxy {
+    display: none;
 }
 
 .btn--primary {

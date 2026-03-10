@@ -148,6 +148,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
 
         # RmlUI integration
         gui/rmlui/rmlui_system_interface.cpp
+        gui/rmlui/rml_text_input_handler.cpp
         gui/rmlui/rmlui_render_interface.cpp
         gui/rmlui/rmlui_gl3_backend.cpp
         gui/rmlui/rmlui_manager.cpp

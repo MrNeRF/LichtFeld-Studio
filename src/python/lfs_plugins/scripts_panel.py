@@ -25,23 +25,13 @@ class ScriptsPanel(RmlPanel):
         self._handle = None
         self._has_scripts = False
         self._last_signature = None
-        self._last_lang = ""
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("scripts_panel")
         if model is None:
             return
 
-        tr = lf.ui.tr
-
         model.bind_func("panel_label", lambda: self.label)
-        model.bind_func("actions_label", lambda: tr("scripts_panel.actions"))
-        model.bind_func("reload_all_label", lambda: tr("scripts_panel.reload_all"))
-        model.bind_func("clear_all_label", lambda: tr("scripts_panel.clear_all"))
-        model.bind_func("no_scripts_loaded", lambda: tr("scripts_panel.no_scripts_loaded"))
-        model.bind_func("load_hint", lambda: tr("scripts_panel.load_hint"))
-        model.bind_func("loaded_scripts_label", lambda: tr("scripts_panel.loaded_scripts"))
-        model.bind_func("reload_label", lambda: tr("scripts_panel.reload"))
         model.bind_func("show_empty_state", lambda: not self._has_scripts)
         model.bind_func("show_script_list", lambda: self._has_scripts)
         model.bind_func("has_scripts", lambda: self._has_scripts)
@@ -54,7 +44,6 @@ class ScriptsPanel(RmlPanel):
 
     def on_load(self, doc):
         super().on_load(doc)
-        self._last_lang = lf.ui.get_current_language()
 
         scripts_list = doc.get_element_by_id("scripts-list")
         if scripts_list:
@@ -65,17 +54,7 @@ class ScriptsPanel(RmlPanel):
 
     def on_update(self, doc):
         del doc
-        dirty = False
-
-        current_lang = lf.ui.get_current_language()
-        if current_lang != self._last_lang:
-            self._last_lang = current_lang
-            self._refresh_scripts(force=True)
-            self._dirty_model()
-            dirty = True
-
-        dirty |= self._refresh_scripts(force=False)
-        return dirty
+        return self._refresh_scripts(force=False)
 
     def _dirty_model(self, *fields):
         if not self._handle:
@@ -101,7 +80,6 @@ class ScriptsPanel(RmlPanel):
         )
 
     def _build_script_records(self, scripts):
-        tr = lf.ui.tr
         records = []
         for index, script in enumerate(scripts):
             path = script["path"]
@@ -110,13 +88,10 @@ class ScriptsPanel(RmlPanel):
             records.append({
                 "index": str(index),
                 "filename": filename,
-                "path_text": f"{tr('scripts_panel.path')}: {path}",
+                "path": path,
                 "enabled": bool(script["enabled"]),
                 "has_error": has_error,
-                "error_text": (
-                    f"{tr('scripts_panel.error')}: {script['error_message']}"
-                    if has_error else ""
-                ),
+                "error_message": script["error_message"] if has_error else "",
             })
         return records
 

@@ -3492,7 +3492,8 @@ namespace lfs::python {
                                  {0, 0}, {u1, v1}, t, {0, 0, 0, 0});
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def("image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def(
+                "image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);
@@ -4656,8 +4657,7 @@ namespace lfs::python {
         m.def(
             "set_language",
             [](const std::string& lang_code) {
-                if (lfs::event::LocalizationManager::getInstance().setLanguage(lang_code))
-                    dirty_all_data_models();
+                lfs::event::LocalizationManager::getInstance().setLanguage(lang_code);
             },
             nb::arg("lang_code"), "Set language by code (e.g., 'en', 'de')");
 

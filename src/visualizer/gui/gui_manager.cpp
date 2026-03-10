@@ -22,6 +22,7 @@
 #include "gui/panels/python_console_panel.hpp"
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_theme.hpp"
+#include "gui/rmlui/rmlui_system_interface.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_widgets.hpp"
 #include "gui/utils/file_association.hpp"
@@ -64,6 +65,17 @@ namespace lfs::vis::gui {
     namespace {
         const FrameInputBuffer* s_frame_input = nullptr;
 
+        std::string makeRmlTabDomId(const std::string& idname) {
+            std::string result = "rp-tab-";
+            result.reserve(result.size() + idname.size());
+            for (const char ch : idname) {
+                const bool keep = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+                                  (ch >= '0' && ch <= '9') || ch == '-' || ch == '_';
+                result.push_back(keep ? ch : '-');
+            }
+            return result;
+        }
+
         PanelInputState buildPanelInputFromSDL(const FrameInputBuffer& buf) {
             PanelInputState s;
             s.mouse_x = buf.mouse_x;
@@ -87,6 +99,11 @@ namespace lfs::vis::gui {
             for (auto sc : buf.keys_released)
                 s.keys_released.push_back(static_cast<int>(sc));
             s.text_codepoints = buf.text_codepoints;
+            s.text_inputs = buf.text_inputs;
+            s.text_editing = buf.text_editing;
+            s.text_editing_start = buf.text_editing_start;
+            s.text_editing_length = buf.text_editing_length;
+            s.has_text_editing = buf.has_text_editing;
             return s;
         }
 
@@ -729,6 +746,9 @@ namespace lfs::vis::gui {
         ops.ensure_document = [](void* host) -> bool {
             return static_cast<RmlPanelHost*>(host)->ensureDocumentLoaded();
         };
+        ops.reload_document = [](void* host) -> bool {
+            return static_cast<RmlPanelHost*>(host)->reloadDocument();
+        };
         ops.get_context = [](void* host) -> void* {
             return static_cast<RmlPanelHost*>(host)->getContext();
         };
@@ -914,6 +934,7 @@ namespace lfs::vis::gui {
             focus.want_capture_keyboard = ImGui::GetIO().WantCaptureKeyboard;
             focus.want_text_input = ImGui::GetIO().WantTextInput;
         }
+        rmlui_manager_.beginFrameCursorTracking();
 
         if (ImGui::IsKeyPressed(ImGuiKey_Escape) && !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
             ImGui::ClearActiveID();
@@ -1155,12 +1176,24 @@ namespace lfs::vis::gui {
 
             if (rml_right_panel_.wantsInput())
                 guiFocusState().want_capture_mouse = true;
+            if (rml_right_panel_.wantsKeyboard())
+                guiFocusState().want_capture_keyboard = true;
 
             const auto main_tabs = reg.get_panels_for_space(PanelSpace::MainPanelTab);
             std::vector<TabSnapshot> tab_snaps;
             tab_snaps.reserve(main_tabs.size());
-            for (const auto& t : main_tabs)
-                tab_snaps.push_back({t.idname, t.label});
+            for (size_t i = 0; i < main_tabs.size(); ++i) {
+                const auto& t = main_tabs[i];
+                tab_snaps.push_back({
+                    .idname = t.idname,
+                    .label = t.label,
+                    .dom_id = makeRmlTabDomId(t.idname),
+                    .nav_left = "#" + makeRmlTabDomId(
+                                          main_tabs[(i + main_tabs.size() - 1) % main_tabs.size()].idname),
+                    .nav_right = "#" + makeRmlTabDomId(
+                                           main_tabs[(i + 1) % main_tabs.size()].idname),
+                });
+            }
 
             rml_right_panel_.render(rp_layout, tab_snaps, panel_layout_.getActiveTab(),
                                     panel_input.screen_x, panel_input.screen_y,
@@ -1172,7 +1205,6 @@ namespace lfs::vis::gui {
 
         applyFrameInputCapture();
 
-        // Apply cursor requests from right panel and panel layout
         auto apply_cursor = [](CursorRequest req) {
             switch (req) {
             case CursorRequest::ResizeEW: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW); break;
@@ -1180,8 +1212,20 @@ namespace lfs::vis::gui {
             default: break;
             }
         };
-        apply_cursor(rml_right_panel_.getCursorRequest());
-        apply_cursor(panel_layout_.getCursorRequest());
+        auto apply_rml_cursor = [](RmlCursorRequest req) {
+            switch (req) {
+            case RmlCursorRequest::Arrow: ImGui::SetMouseCursor(ImGuiMouseCursor_Arrow); break;
+            case RmlCursorRequest::TextInput: ImGui::SetMouseCursor(ImGuiMouseCursor_TextInput); break;
+            case RmlCursorRequest::Hand: ImGui::SetMouseCursor(ImGuiMouseCursor_Hand); break;
+            case RmlCursorRequest::ResizeEW: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW); break;
+            case RmlCursorRequest::ResizeNS: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS); break;
+            case RmlCursorRequest::ResizeNWSE: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNWSE); break;
+            case RmlCursorRequest::ResizeNESW: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNESW); break;
+            case RmlCursorRequest::ResizeAll: ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll); break;
+            case RmlCursorRequest::NotAllowed: ImGui::SetMouseCursor(ImGuiMouseCursor_NotAllowed); break;
+            case RmlCursorRequest::None: break;
+            }
+        };
 
         python::set_viewport_bounds(viewport_layout_.pos.x, viewport_layout_.pos.y,
                                     viewport_layout_.size.x, viewport_layout_.size.y);
@@ -1224,6 +1268,10 @@ namespace lfs::vis::gui {
 
         rml_modal_overlay_->processInput(panel_input);
         rml_viewport_overlay_.compositeToScreen(panel_input.screen_w, panel_input.screen_h);
+        if (ImGui::GetMouseCursor() == ImGuiMouseCursor_Arrow)
+            apply_rml_cursor(rmlui_manager_.consumeCursorRequest());
+        apply_cursor(rml_right_panel_.getCursorRequest());
+        apply_cursor(panel_layout_.getCursorRequest());
         syncWindowTextInput(viewer_->getWindow());
 
         ImGui::Render();
@@ -1597,6 +1645,10 @@ namespace lfs::vis::gui {
                 rel_x < viewport_layout_.pos.x + viewport_layout_.size.x &&
                 rel_y >= viewport_layout_.pos.y &&
                 rel_y < viewport_layout_.pos.y + viewport_layout_.size.y);
+    }
+
+    bool GuiManager::isPositionOverFloatingPanel(const double x, const double y) const {
+        return PanelRegistry::instance().isPositionOverFloatingPanel(x, y);
     }
 
     void GuiManager::setupEventHandlers() {

@@ -36,6 +36,10 @@
     justify-content: space-between;
     gap: 8dp;
     padding: 4dp 6dp;
+    width: 100%;
+    text-align: left;
+    background-color: transparent;
+    border-width: 0;
     cursor: pointer;
 }
 
@@ -66,6 +70,8 @@
     text-align: center;
     font-size: 10dp;
     border-radius: 999dp;
+    background-color: transparent;
+    border-width: 1dp;
     cursor: pointer;
 }
 

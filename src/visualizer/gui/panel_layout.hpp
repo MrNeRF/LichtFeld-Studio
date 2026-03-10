@@ -43,6 +43,11 @@ namespace lfs::vis::gui {
         std::vector<int> keys_pressed;
         std::vector<int> keys_released;
         std::vector<uint32_t> text_codepoints;
+        std::vector<std::string> text_inputs;
+        std::string text_editing;
+        int text_editing_start = -1;
+        int text_editing_length = -1;
+        bool has_text_editing = false;
         void* bg_draw_list = nullptr;
         void* fg_draw_list = nullptr;
     };

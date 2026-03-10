@@ -9,6 +9,7 @@
 #include "gui/rmlui/elements/crf_curve_element.hpp"
 #include "gui/rmlui/elements/loss_graph_element.hpp"
 #include "gui/rmlui/rml_fbo.hpp"
+#include "gui/rmlui/rml_text_input_handler.hpp"
 #include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
 #include "internal/resource_paths.hpp"
@@ -52,9 +53,11 @@ namespace lfs::vis::gui {
 
         system_interface_ = std::make_unique<RmlSystemInterface>(window);
         render_interface_ = std::make_unique<RmlRenderInterface>();
+        text_input_handler_ = std::make_unique<RmlTextInputHandler>();
 
         Rml::SetSystemInterface(system_interface_.get());
         Rml::SetRenderInterface(render_interface_.get());
+        Rml::SetTextInputHandler(text_input_handler_.get());
 
         if (!Rml::Initialise()) {
             LOG_ERROR("Failed to initialize RmlUI");
@@ -127,8 +130,11 @@ namespace lfs::vis::gui {
         }
         contexts_.clear();
 
+        if (Rml::GetTextInputHandler() == text_input_handler_.get())
+            Rml::SetTextInputHandler(nullptr);
         Rml::Shutdown();
         render_interface_.reset();
+        text_input_handler_.reset();
         system_interface_.reset();
         resize_deferring_ = false;
         initialized_ = false;
@@ -203,6 +209,16 @@ namespace lfs::vis::gui {
             ctx->ActivateTheme(theme_id, true);
         }
         active_theme_id_ = theme_id;
+    }
+
+    void RmlUIManager::beginFrameCursorTracking() {
+        if (system_interface_)
+            system_interface_->beginFrame();
+    }
+
+    RmlCursorRequest RmlUIManager::consumeCursorRequest() {
+        return system_interface_ ? system_interface_->consumeCursorRequest()
+                                 : RmlCursorRequest::None;
     }
 
     bool RmlUIManager::shouldDeferFboUpdate(const RmlFBO& fbo) const {

@@ -130,6 +130,11 @@ namespace lfs::vis::gui {
         int8_t float_resize_dir_x = 0;
         int8_t float_resize_dir_y = 0;
         float float_user_height = 0;
+        bool float_last_bounds_valid = false;
+        float float_last_x = 0;
+        float float_last_y = 0;
+        float float_last_w = 0;
+        float float_last_h = 0;
         static constexpr int MAX_CONSECUTIVE_ERRORS = 3;
 
         bool has_option(PanelOption opt) const {
@@ -216,6 +221,7 @@ namespace lfs::vis::gui {
         std::vector<PanelSummary> get_panels_for_space(PanelSpace space);
         std::vector<std::string> get_panel_names(PanelSpace space) const;
         std::optional<PanelSummary> get_panel(const std::string& idname);
+        bool isPositionOverFloatingPanel(double x, double y) const;
         void set_panel_enabled(const std::string& idname, bool enabled);
         void set_panel_disabled_override(const std::string& idname);
         bool is_panel_enabled(const std::string& idname) const;

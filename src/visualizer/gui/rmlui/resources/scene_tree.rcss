@@ -49,11 +49,20 @@ body {
     width: 12dp;
     height: 12dp;
     margin-left: 4dp;
-    image-color: #6c7086;
+    background-color: transparent;
+    border-width: 0;
     cursor: pointer;
+    padding: 0;
 }
 
-#filter-clear:hover {
+#filter-clear img {
+    width: 12dp;
+    height: 12dp;
+    image-color: #6c7086;
+}
+
+#filter-clear:hover img,
+#filter-clear:focus-visible img {
     image-color: #cdd6f4;
 }
 

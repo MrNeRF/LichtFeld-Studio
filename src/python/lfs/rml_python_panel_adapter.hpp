@@ -48,6 +48,9 @@ namespace lfs::vis::gui {
         void cachePythonCapabilities();
         void bindModelIfNeeded();
         Rml::ElementDocument* ensureDocumentInitialized();
+        bool reloadDocumentForLanguage(const std::string& language);
+        void callOnUnload(Rml::ElementDocument* doc);
+        void callOnLoad(Rml::ElementDocument* doc);
         void syncDirectLayout(float w, float h);
         Rml::ElementDocument* prepareForRender(const PanelDrawContext* ctx);
         std::chrono::milliseconds updateInterval() const;
@@ -72,6 +75,7 @@ namespace lfs::vis::gui {
         bool has_update_interval_ = false;
         int update_interval_ms_ = 100;
         std::chrono::steady_clock::time_point next_update_at_{};
+        std::string last_language_;
     };
 
 } // namespace lfs::vis::gui

@@ -39,8 +39,6 @@ namespace lfs::vis::gui {
             return;
         }
 
-        rml_context_->EnableMouseCursor(false);
-
         try {
             const auto rml_path = lfs::vis::getAssetPath("rmlui/viewport_overlay.rml");
             document_ = rml_context_->LoadDocument(rml_path.string());

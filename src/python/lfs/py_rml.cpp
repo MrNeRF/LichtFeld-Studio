@@ -211,6 +211,7 @@ namespace lfs::python {
     // --- PyRmlContext ---
 
     nb::object PyRmlContext::create_data_model(const std::string& name) {
+        remove_data_model(name);
         auto ctor = ctx_->CreateDataModel(name);
         if (!ctor)
             return nb::none();
@@ -248,6 +249,10 @@ namespace lfs::python {
 
     std::string PyRmlEvent::get_parameter(const std::string& key, const std::string& default_val) {
         return event_->GetParameter<Rml::String>(key, default_val);
+    }
+
+    bool PyRmlEvent::get_bool_parameter(const std::string& key, const bool default_val) {
+        return event_->GetParameter<bool>(key, default_val);
     }
 
     // --- PyRmlElement ---
@@ -558,6 +563,18 @@ namespace lfs::python {
     bool PyRmlElement::focus() { return elem_->Focus(); }
     void PyRmlElement::blur() { elem_->Blur(); }
 
+    void PyRmlElement::submit(const std::string& name, const std::string& value) {
+        Rml::Element* element = elem_;
+        while (element) {
+            if (auto* form = rmlui_dynamic_cast<Rml::ElementForm*>(element)) {
+                form->Submit(name, value);
+                mark_document_dirty(form);
+                return;
+            }
+            element = element->GetParentNode();
+        }
+    }
+
     // --- PyRmlDocument ---
 
     nb::object PyRmlDocument::create_element(const std::string& tag) {
@@ -598,6 +615,7 @@ namespace lfs::python {
     nb::object PyRmlDocument::create_data_model(const std::string& name) {
         auto* ctx = doc_->GetContext();
         assert(ctx);
+        remove_data_model(name);
         auto ctor = ctx->CreateDataModel(name);
         if (!ctor)
             return nb::none();
@@ -815,11 +833,6 @@ namespace lfs::python {
             s_builtin_transform_contexts.insert(context);
     }
 
-    void dirty_all_data_models() {
-        for (auto& [name, handle] : s_active_handles)
-            handle.DirtyAllVariables();
-    }
-
     // --- PyEventListener ---
 
     void PyEventListener::ProcessEvent(Rml::Event& event) {
@@ -896,7 +909,9 @@ namespace lfs::python {
             .def("current_target", &PyRmlEvent::current_target)
             .def("stop_propagation", &PyRmlEvent::stop_propagation)
             .def("get_parameter", &PyRmlEvent::get_parameter, nb::arg("key"),
-                 nb::arg("default_val") = "");
+                 nb::arg("default_val") = "")
+            .def("get_bool_parameter", &PyRmlEvent::get_bool_parameter, nb::arg("key"),
+                 nb::arg("default_val") = false);
 
         nb::class_<PyRmlElement>(rml, "RmlElement")
             .def("get_element_by_id", &PyRmlElement::get_element_by_id)
@@ -946,7 +961,9 @@ namespace lfs::python {
             .def("scroll_into_view", &PyRmlElement::scroll_into_view,
                  nb::arg("align_top") = true)
             .def("focus", &PyRmlElement::focus)
-            .def("blur", &PyRmlElement::blur);
+            .def("blur", &PyRmlElement::blur)
+            .def("submit", &PyRmlElement::submit, nb::arg("name") = "",
+                 nb::arg("value") = "");
 
         nb::class_<PyRmlDocument, PyRmlElement>(rml, "RmlDocument")
             .def("create_element", &PyRmlDocument::create_element)

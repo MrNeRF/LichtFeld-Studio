@@ -595,6 +595,7 @@ namespace lfs::python {
         float (*get_content_height)(void* host);
         bool (*ensure_context)(void* host);
         bool (*ensure_document)(void* host);
+        bool (*reload_document)(void* host);
         void* (*get_context)(void* host);
         void (*set_foreground)(void* host, bool fg);
         void (*mark_content_dirty)(void* host);

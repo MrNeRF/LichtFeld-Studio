@@ -6,23 +6,24 @@
 <body template="floating-window" data-model="mesh2splat">
 
   <div class="m2s-section">
-    <span class="m2s-section-title text-accent">{{source_mesh_label}}</span>
+    <span class="m2s-section-title text-accent">@tr:mesh2splat.source_mesh</span>
     <div id="mesh-list" class="m2s-list">
-      <span class="m2s-empty text-muted" data-if="show_no_meshes">{{no_meshes_label}}</span>
-      <div class="m2s-list-row interactive-row"
+      <span class="m2s-empty text-muted" data-if="show_no_meshes">@tr:mesh2splat.no_meshes</span>
+      <button type="button"
+           class="m2s-list-row interactive-row"
            data-for="mesh : meshes"
            data-class-selected="mesh.selected"
            data-attr-data-mesh-name="mesh.name">
         <span class="m2s-list-name text-default">{{mesh.name}}</span>
         <span class="m2s-list-meta text-muted">{{mesh.stats_text}}</span>
-      </div>
+      </button>
     </div>
   </div>
 
   <div class="separator"></div>
 
   <div class="m2s-section">
-    <span class="m2s-section-title text-accent">{{gaussian_scale_label}}</span>
+    <span class="m2s-section-title text-accent">@tr:mesh2splat.gaussian_scale</span>
     <div class="setting-row">
       <input id="gaussian-scale-slider"
              type="range"
@@ -33,15 +34,15 @@
              step="0.01" />
       <span class="slider-value">{{gaussian_scale_text}}</span>
     </div>
-    <span class="m2s-help text-muted">{{gaussian_scale_help}}</span>
+    <span class="m2s-help text-muted">@tr:mesh2splat.tooltip_gaussian_scale</span>
   </div>
 
   <div class="separator"></div>
 
   <div class="m2s-section">
-    <span class="m2s-section-title text-accent">{{sampling_density_header}}</span>
+    <span class="m2s-section-title text-accent">@tr:mesh2splat.sampling_density_header</span>
 
-    <span class="m2s-label text-default">{{sampling_density_label}}</span>
+    <span class="m2s-label text-default">@tr:mesh2splat.sampling_density</span>
     <div class="setting-row">
       <input id="quality-slider"
              type="range"
@@ -52,22 +53,23 @@
              step="0.01" />
       <span class="slider-value">{{quality_text}}</span>
     </div>
-    <span class="m2s-help text-muted">{{sampling_density_help}}</span>
+    <span class="m2s-help text-muted">@tr:mesh2splat.tooltip_quality</span>
 
-    <span class="m2s-label m2s-label--spaced text-default">{{max_resolution_label}}</span>
+    <span class="m2s-label m2s-label--spaced text-default">@tr:mesh2splat.max_resolution</span>
     <div id="resolution-list" class="m2s-chip-list">
-      <div class="m2s-chip select-chip"
+      <button type="button"
+           class="m2s-chip select-chip"
            data-for="option : resolutions"
            data-class-selected="option.selected"
-           data-attr-data-resolution-index="option.index">{{option.label}}</div>
+           data-attr-data-resolution-index="option.index">{{option.label}}</button>
     </div>
-    <span class="m2s-help text-muted">{{max_resolution_help}}</span>
+    <span class="m2s-help text-muted">@tr:mesh2splat.tooltip_max_resolution</span>
   </div>
 
   <div class="separator"></div>
 
   <div class="m2s-summary-row">
-    <span class="m2s-summary-label text-muted">{{effective_resolution_label}}</span>
+    <span class="m2s-summary-label text-muted">@tr:mesh2splat.effective_resolution</span>
     <span class="m2s-summary-value text-default">{{effective_resolution}}</span>
   </div>
 
@@ -82,7 +84,7 @@
   <div class="m2s-buttons">
     <button class="btn btn--primary m2s-action-btn"
             data-event-click="do_convert"
-            data-attrif-disabled="!can_convert">{{convert_label}}</button>
+            data-attrif-disabled="!can_convert">@tr:mesh2splat.convert</button>
   </div>
 
 </body>

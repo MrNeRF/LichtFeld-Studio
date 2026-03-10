@@ -137,6 +137,13 @@ namespace lfs::vis::gui {
         std::vector<PanelSnapshot> snapshots;
         {
             std::lock_guard lock(mutex_);
+            if (space == PanelSpace::Floating) {
+                for (auto& p : panels_) {
+                    if (p.space == PanelSpace::Floating) {
+                        p.float_last_bounds_valid = false;
+                    }
+                }
+            }
             snapshots.reserve(panels_.size());
             for (size_t i = 0; i < panels_.size(); ++i) {
                 auto& p = panels_[i];
@@ -447,6 +454,12 @@ namespace lfs::vis::gui {
                                     pi.float_dragging || pi.float_resizing ||
                                     static_cast<int>(snap_idx) == hovered_floating_direct;
 
+                                panels_[snap.index].float_last_bounds_valid = true;
+                                panels_[snap.index].float_last_x = px;
+                                panels_[snap.index].float_last_y = py;
+                                panels_[snap.index].float_last_w = w;
+                                panels_[snap.index].float_last_h = h;
+
                                 if (pi.float_dragging || pi.float_resizing ||
                                     (interactive &&
                                      (layout.mouse_in_panel || layout.mouse_in_resize_grip))) {
@@ -625,6 +638,27 @@ namespace lfs::vis::gui {
                 LOG_ERROR("Panel '{}' preload error: {}", snap.label, e.what());
             }
         }
+    }
+
+    bool PanelRegistry::isPositionOverFloatingPanel(const double x, const double y) const {
+        constexpr double kResizeEdge = 6.0;
+
+        std::lock_guard lock(mutex_);
+        for (const auto& panel : panels_) {
+            if (panel.space != PanelSpace::Floating || !panel.enabled || panel.error_disabled ||
+                !panel.parent_idname.empty() || !panel.float_last_bounds_valid) {
+                continue;
+            }
+
+            if (x >= static_cast<double>(panel.float_last_x) - kResizeEdge &&
+                x < static_cast<double>(panel.float_last_x + panel.float_last_w) + kResizeEdge &&
+                y >= static_cast<double>(panel.float_last_y) - kResizeEdge &&
+                y < static_cast<double>(panel.float_last_y + panel.float_last_h) + kResizeEdge) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     float PanelRegistry::draw_panels_direct(PanelSpace space, float x, float y, float w,
@@ -824,6 +858,11 @@ namespace lfs::vis::gui {
                     p.initial_height = p.original_height;
                     p.float_user_height = 0;
                     bring_floating_panel_to_front_locked(p);
+                } else if (!enabled) {
+                    p.float_last_bounds_valid = false;
+                    guiFocusState().want_capture_mouse = false;
+                    guiFocusState().want_capture_keyboard = false;
+                    guiFocusState().want_text_input = false;
                 }
                 return;
             }
@@ -836,6 +875,10 @@ namespace lfs::vis::gui {
         for (auto& p : panels_) {
             if (p.idname == idname) {
                 p.enabled = false;
+                p.float_last_bounds_valid = false;
+                guiFocusState().want_capture_mouse = false;
+                guiFocusState().want_capture_keyboard = false;
+                guiFocusState().want_text_input = false;
                 return;
             }
         }

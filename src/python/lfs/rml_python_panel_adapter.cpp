@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "rml_python_panel_adapter.hpp"
+#include "core/event_bridge/localization_manager.hpp"
 #include "core/logger.hpp"
 #include "py_rml.hpp"
 #include "py_ui.hpp"
@@ -98,6 +99,39 @@ namespace lfs::vis::gui {
         }
     }
 
+    void RmlPythonPanelAdapter::callOnUnload(Rml::ElementDocument* doc) {
+        if (!doc || !loaded_ || !lfs::python::can_acquire_gil())
+            return;
+
+        const lfs::python::GilAcquire gil;
+        if (!nb::hasattr(panel_instance_, "on_unload"))
+            return;
+
+        try {
+            auto py_doc = lfs::python::PyRmlDocument(doc);
+            panel_instance_.attr("on_unload")(py_doc);
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlPanel on_unload error: {}", e.what());
+        }
+    }
+
+    void RmlPythonPanelAdapter::callOnLoad(Rml::ElementDocument* doc) {
+        if (!doc || !lfs::python::can_acquire_gil())
+            return;
+
+        const lfs::python::GilAcquire gil;
+        cachePythonCapabilities();
+        lfs::python::RmlDocumentRegistry::instance().register_document(context_name_, doc);
+        try {
+            auto py_doc = lfs::python::PyRmlDocument(doc);
+            panel_instance_.attr("on_load")(py_doc);
+            content_dirty_ = true;
+        } catch (const std::exception& e) {
+            LOG_ERROR("RmlPanel on_load error: {}", e.what());
+        }
+        loaded_ = true;
+    }
+
     Rml::ElementDocument* RmlPythonPanelAdapter::ensureDocumentInitialized() {
         if (!ensureHost())
             return nullptr;
@@ -112,21 +146,50 @@ namespace lfs::vis::gui {
         if (!doc)
             return nullptr;
 
-        if (!loaded_ && lfs::python::can_acquire_gil()) {
-            const lfs::python::GilAcquire gil;
-            cachePythonCapabilities();
-            lfs::python::RmlDocumentRegistry::instance().register_document(context_name_, doc);
-            try {
-                auto py_doc = lfs::python::PyRmlDocument(doc);
-                panel_instance_.attr("on_load")(py_doc);
-                content_dirty_ = true;
-            } catch (const std::exception& e) {
-                LOG_ERROR("RmlPanel on_load error: {}", e.what());
-            }
-            loaded_ = true;
-        }
+        if (!loaded_)
+            callOnLoad(doc);
+
+        if (loaded_ && last_language_.empty())
+            last_language_ = lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
 
         return doc;
+    }
+
+    bool RmlPythonPanelAdapter::reloadDocumentForLanguage(const std::string& language) {
+        if (!loaded_ || language.empty() || !lfs::python::can_acquire_gil())
+            return false;
+
+        const auto& ops = lfs::python::get_rml_panel_host_ops();
+        if (!ops.reload_document || !ops.get_document || !ops.get_context)
+            return false;
+
+        const lfs::python::GilAcquire gil;
+
+        auto* current_doc = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
+        callOnUnload(current_doc);
+        lfs::python::RmlDocumentRegistry::instance().unregister_document(context_name_);
+
+        model_bound_ = false;
+        bindModelIfNeeded();
+
+        if (!ops.reload_document(host_)) {
+            LOG_ERROR("RmlPanel reload_document failed for '{}'", context_name_);
+            loaded_ = false;
+            return false;
+        }
+
+        loaded_ = false;
+        content_dirty_ = true;
+        last_prepare_frame_ = 0;
+        next_update_at_ = std::chrono::steady_clock::time_point{};
+
+        auto* new_doc = static_cast<Rml::ElementDocument*>(ops.get_document(host_));
+        if (!new_doc)
+            return false;
+
+        callOnLoad(new_doc);
+        last_language_ = language;
+        return true;
     }
 
     void RmlPythonPanelAdapter::syncDirectLayout(float w, float h) {
@@ -148,6 +211,16 @@ namespace lfs::vis::gui {
             return doc;
 
         const auto& ops = lfs::python::get_rml_panel_host_ops();
+        const auto& current_language =
+            lfs::event::LocalizationManager::getInstance().getCurrentLanguage();
+        if (!current_language.empty() && current_language != last_language_) {
+            reloadDocumentForLanguage(current_language);
+            doc = ops.get_document ? static_cast<Rml::ElementDocument*>(ops.get_document(host_))
+                                   : nullptr;
+            if (!doc)
+                return nullptr;
+        }
+
         const uint64_t frame_serial = ctx ? ctx->frame_serial : 0;
         if (frame_serial != 0 && last_prepare_frame_ == frame_serial)
             return doc;
@@ -211,25 +284,11 @@ namespace lfs::vis::gui {
             return;
 
         const auto& ops = lfs::python::get_rml_panel_host_ops();
-        if (lfs::python::can_acquire_gil()) {
-            const lfs::python::GilAcquire gil;
-            if (loaded_ && nb::hasattr(panel_instance_, "on_unload")) {
-                try {
-                    auto* doc = static_cast<Rml::ElementDocument*>(
-                        ops.get_document(host_));
-                    if (doc) {
-                        auto py_doc = lfs::python::PyRmlDocument(doc);
-                        panel_instance_.attr("on_unload")(py_doc);
-                    }
-                } catch (const std::exception& e) {
-                    LOG_ERROR("RmlPanel on_unload error: {}", e.what());
-                }
-            }
-            assert(ops.destroy);
-            ops.destroy(host_);
-        } else {
-            ops.destroy(host_);
-        }
+        if (ops.get_document)
+            callOnUnload(static_cast<Rml::ElementDocument*>(ops.get_document(host_)));
+        lfs::python::RmlDocumentRegistry::instance().unregister_document(context_name_);
+        assert(ops.destroy);
+        ops.destroy(host_);
     }
 
     void RmlPythonPanelAdapter::draw(const PanelDrawContext& ctx) {

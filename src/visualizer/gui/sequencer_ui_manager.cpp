@@ -148,6 +148,11 @@ namespace lfs::vis::gui {
         for (auto sc : sdl_buf.keys_released)
             overlay_input.keys_released.push_back(static_cast<int>(sc));
         overlay_input.text_codepoints = sdl_buf.text_codepoints;
+        overlay_input.text_inputs = sdl_buf.text_inputs;
+        overlay_input.text_editing = sdl_buf.text_editing;
+        overlay_input.text_editing_start = sdl_buf.text_editing_start;
+        overlay_input.text_editing_length = sdl_buf.text_editing_length;
+        overlay_input.has_text_editing = sdl_buf.has_text_editing;
         overlay_->processInput(overlay_input);
 
         overlay_->render(sdl_buf.window_w, sdl_buf.window_h);

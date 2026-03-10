@@ -35,6 +35,9 @@
     color: #89b4fa;
     cursor: pointer;
     font-size: 10dp;
+    background-color: transparent;
+    border-width: 0;
+    padding: 0;
 }
 
 .link-url:hover {

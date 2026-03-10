@@ -5,46 +5,49 @@
 </head>
 <body template="floating-window" data-model="plugin_marketplace">
 
-  <span class="status-text status-info">{{title_line}}</span>
-  <span class="mp-warning-text">{{warning_body}}</span>
+  <span class="status-text status-info">@tr:plugin_marketplace.title_line</span>
+  <span class="mp-warning-text">@tr:plugin_marketplace.warning_body</span>
 
   <div class="separator"></div>
 
   <!-- Filter / Sort controls -->
   <div class="mp-controls">
-    <span class="text-disabled">{{filter_label}}</span>
+    <span class="text-disabled">@tr:plugin_marketplace.filter_label</span>
     <select data-value="filter_idx" class="mp-select">
-      <option value="0">{{filter_all}}</option>
-      <option value="1">{{filter_installed}}</option>
-      <option value="2">{{filter_not_installed}}</option>
+      <option value="0">@tr:plugin_marketplace.filter.all</option>
+      <option value="1">@tr:plugin_marketplace.filter.installed</option>
+      <option value="2">@tr:plugin_marketplace.filter.not_installed</option>
     </select>
-    <span class="text-disabled mp-sort-label">{{sort_label}}</span>
+    <span class="text-disabled mp-sort-label">@tr:plugin_marketplace.sort_label</span>
     <select data-value="sort_idx" class="mp-select-sort">
-      <option value="0">{{sort_pop_desc}}</option>
-      <option value="1">{{sort_pop_asc}}</option>
-      <option value="2">{{sort_name_asc}}</option>
-      <option value="3">{{sort_name_desc}}</option>
+      <option value="0">@tr:plugin_marketplace.sort.popularity_desc</option>
+      <option value="1">@tr:plugin_marketplace.sort.popularity_asc</option>
+      <option value="2">@tr:plugin_marketplace.sort.name_asc</option>
+      <option value="3">@tr:plugin_marketplace.sort.name_desc</option>
     </select>
   </div>
 
   <!-- Manual URL install -->
   <div class="mp-manual-section">
-    <span class="text-disabled">{{url_label}}</span>
-    <div class="mp-manual-row">
-      <input type="text" id="manual-url-input" class="mp-url-input" data-value="manual_url" />
-      <button id="btn-install-url" class="btn btn--success mp-install-btn" data-event-click="install_from_url">{{install_btn_label}}</button>
-    </div>
-    <div id="manual-feedback" class="card-feedback hidden">
-      <progress id="manual-feedback-progress" class="card-progress hidden" max="1" value="0" />
-      <span id="manual-feedback-progress-text" class="card-progress-text hidden"></span>
-      <span id="manual-feedback-success" class="status-text status-success hidden"></span>
-      <span id="manual-feedback-error" class="status-text status-error hidden"></span>
-    </div>
+    <span class="text-disabled">@tr:plugin_manager.github_url_or_shorthand</span>
+    <form id="manual-install-form">
+      <div class="mp-manual-row">
+        <input type="text" id="manual-url-input" class="mp-url-input" data-value="manual_url" />
+        <button id="btn-install-url" type="submit" class="btn btn--success mp-install-btn">@tr:plugin_manager.button.install_plugin</button>
+      </div>
+      <div id="manual-feedback" class="card-feedback hidden">
+        <progress id="manual-feedback-progress" class="card-progress hidden" max="1" value="0" />
+        <span id="manual-feedback-progress-text" class="card-progress-text hidden"></span>
+        <span id="manual-feedback-success" class="status-text status-success hidden"></span>
+        <span id="manual-feedback-error" class="status-text status-error hidden"></span>
+      </div>
+      <input class="submit-proxy" type="submit" />
+    </form>
 
     <!-- Supported formats (collapsible) -->
     <div id="formats-header" class="section-header mp-formats-header">
       <span class="section-arrow" id="formats-arrow">&#x25B6;</span>
-      <span>{{formats_label}}</span>
+      <span>@tr:plugin_manager.supported_formats</span>
     </div>
     <div id="formats-content" class="section-content collapsed">
       <div class="mp-format-item">https://github.com/owner/repo</div>
@@ -57,8 +60,8 @@
 
   <!-- Empty state -->
   <div id="empty-state" class="hidden">
-    <span class="text-disabled">{{no_plugins_text}}</span>
-    <span class="text-disabled">{{edit_list_hint}}</span>
+    <span class="text-disabled">@tr:plugin_marketplace.no_plugins</span>
+    <span class="text-disabled">@tr:plugin_marketplace.edit_list_hint</span>
   </div>
 
   <!-- Card grid (data-for driven) -->
@@ -76,10 +79,10 @@
         <span class="card-repo text-disabled" data-if="p.has_repo">{{ p.repo_label }}</span>
         <span class="card-metrics mp-warning-text" data-if="p.has_metrics">{{ p.metrics_text }}</span>
         <span class="card-tags text-disabled" data-if="p.has_tags">{{ p.tags_text }}</span>
-        <span class="card-local status-info" data-if="p.is_local">{{ local_label }}</span>
+        <span class="card-local status-info" data-if="p.is_local">@tr:plugin_marketplace.local_install</span>
         <span data-if="p.is_installed"
               data-attr-class="'card-status ' + p.status_class">{{ p.status_text }}</span>
-        <span class="card-error status-error" data-if="p.has_error">{{ error_label }}</span>
+        <span class="card-error status-error" data-if="p.has_error">@tr:plugin_marketplace.invalid_link</span>
         <span class="card-description text-disabled" data-if="!p.has_error">{{ p.description }}</span>
         <div class="separator"></div>
       </div>
@@ -104,7 +107,7 @@
                  data-action="startup"
                  data-attr-data-card-id="p.card_id"
                  data-attr-data-plugin="p.plugin_name" />
-          <span class="card-startup-label text-disabled">{{ startup_label }}</span>
+          <span class="card-startup-label text-disabled">@tr:plugin_marketplace.load_on_startup</span>
         </label>
       </div>
 
@@ -112,27 +115,27 @@
       <div class="card-buttons" data-attr-id="'btns-' + p.card_id">
         <button class="btn btn--success" data-if="p.show_install"
                 data-action="install"
-                data-attr-data-card-id="p.card_id">{{ install_label }}</button>
+                data-attr-data-card-id="p.card_id">@tr:plugin_marketplace.button.install</button>
         <button class="btn btn--success" data-if="p.show_load"
                 data-action="load"
                 data-attr-data-card-id="p.card_id"
-                data-attr-data-plugin="p.plugin_name">{{ load_label }}</button>
+                data-attr-data-plugin="p.plugin_name">@tr:plugin_manager.button.load</button>
         <button class="btn btn--warning" data-if="p.show_unload"
                 data-action="unload"
                 data-attr-data-card-id="p.card_id"
-                data-attr-data-plugin="p.plugin_name">{{ unload_label }}</button>
+                data-attr-data-plugin="p.plugin_name">@tr:plugin_manager.button.unload</button>
         <button class="btn btn--primary" data-if="p.show_reload"
                 data-action="reload"
                 data-attr-data-card-id="p.card_id"
-                data-attr-data-plugin="p.plugin_name">{{ reload_label }}</button>
+                data-attr-data-plugin="p.plugin_name">@tr:plugin_manager.button.reload</button>
         <button class="btn btn--primary" data-if="p.show_update"
                 data-action="update"
                 data-attr-data-card-id="p.card_id"
-                data-attr-data-plugin="p.plugin_name">{{ update_label }}</button>
+                data-attr-data-plugin="p.plugin_name">@tr:plugin_manager.button.update</button>
         <button class="btn btn--error" data-if="p.show_uninstall"
                 data-action="uninstall"
                 data-attr-data-card-id="p.card_id"
-                data-attr-data-plugin="p.plugin_name">{{ uninstall_label }}</button>
+                data-attr-data-plugin="p.plugin_name">@tr:plugin_manager.button.uninstall</button>
       </div>
     </div>
   </div>
@@ -143,8 +146,8 @@
       <span id="confirm-message" class="confirm-message"></span>
       <div class="separator"></div>
       <div class="confirm-buttons">
-        <button class="btn btn--secondary" data-event-click="confirm_no">{{confirm_no_label}}</button>
-        <button class="btn btn--error" data-event-click="confirm_yes">{{confirm_yes_label}}</button>
+        <button class="btn btn--secondary" data-event-click="confirm_no">@tr:plugin_marketplace.confirm_uninstall_no</button>
+        <button class="btn btn--error" data-event-click="confirm_yes">@tr:plugin_marketplace.confirm_uninstall_yes</button>
       </div>
     </div>
   </div>
