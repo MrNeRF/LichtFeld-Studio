@@ -4,12 +4,14 @@
 
 #pragma once
 
-#include "gui/panel_registry.hpp"
+#include "gui/panel_layout.hpp"
 #include "rml_im_mode_layout.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <nanobind/nanobind.h>
+#include <optional>
 #include <string>
 
 namespace nb = nanobind;
@@ -44,6 +46,12 @@ namespace lfs::vis::gui {
         bool has_poll_;
         lfs::python::RmlImModeLayout layout_;
         uint64_t last_layout_frame_ = 0;
+        std::optional<PanelInputState> current_input_;
+        float prev_mouse_x_ = 0.0f;
+        float prev_mouse_y_ = 0.0f;
+        bool have_prev_mouse_ = false;
+        bool have_left_click_time_ = false;
+        std::chrono::steady_clock::time_point last_left_click_at_{};
     };
 
 } // namespace lfs::vis::gui

@@ -74,7 +74,7 @@ namespace lfs::vis {
             glm::vec3 keyframe_pos_before_drag_{0.0f};
             glm::quat keyframe_rot_before_drag_{1.0f, 0.0f, 0.0f, 0.0f};
 
-            float last_frustum_click_time_ = 0.0f;
+            std::chrono::steady_clock::time_point last_frustum_click_time_{};
             std::optional<size_t> last_frustum_clicked_;
             bool film_strip_scrubbing_ = false;
             bool timeline_tooltip_active_ = false;

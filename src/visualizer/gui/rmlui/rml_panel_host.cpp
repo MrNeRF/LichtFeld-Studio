@@ -953,7 +953,7 @@ namespace lfs::vis::gui {
             }
         }
 
-        bool forward_keys = hasFocusedKeyboardTarget(rml_context_->GetFocusElement()) || hovered;
+        bool forward_keys = hasFocusedKeyboardTarget(rml_context_->GetFocusElement());
         bool commit_requested = false;
         const bool composing = text_input_handler && text_input_handler->isComposing();
         if (forward_keys) {
@@ -990,7 +990,7 @@ namespace lfs::vis::gui {
         sync_text_focus();
 
         auto* const focused = rml_context_->GetFocusElement();
-        wants_keyboard_ = hasFocusedKeyboardTarget(focused) || (foreground_ && hovered);
+        wants_keyboard_ = hasFocusedKeyboardTarget(focused);
         if (wants_keyboard_)
             s_frame_wants_keyboard = true;
 

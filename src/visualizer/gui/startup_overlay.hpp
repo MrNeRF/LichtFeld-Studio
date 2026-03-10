@@ -27,6 +27,7 @@ namespace lfs::vis::gui {
     public:
         void init(RmlUIManager* mgr);
         void shutdown();
+        void setInput(const PanelInputState* input) { input_ = input; }
         void render(const ViewportLayout& viewport, bool drag_hovering);
         void dismiss() { visible_ = false; }
         [[nodiscard]] bool isVisible() const { return visible_; }
@@ -38,7 +39,8 @@ namespace lfs::vis::gui {
         void populateLanguages();
         void updateTheme();
         void updateLocalizedText();
-        void forwardInput(float overlay_x, float overlay_y, float overlay_w, float overlay_h);
+        void forwardInput(const PanelInputState& input, float overlay_x, float overlay_y,
+                          float overlay_w, float overlay_h);
         std::string generateThemeRCSS(const lfs::vis::Theme& t) const;
 
         bool visible_ = true;
@@ -52,6 +54,7 @@ namespace lfs::vis::gui {
 
         std::size_t last_theme_signature_ = 0;
         bool has_theme_signature_ = false;
+        const PanelInputState* input_ = nullptr;
 
         Rml::EventListener* link_listener_ = nullptr;
         Rml::EventListener* lang_listener_ = nullptr;

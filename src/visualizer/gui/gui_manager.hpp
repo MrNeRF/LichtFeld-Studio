@@ -115,7 +115,7 @@ namespace lfs::vis {
             void applyDefaultStyle();
             void initMenuBar();
             void registerNativePanels();
-            void updateInputOverrides(bool mouse_in_viewport);
+            void updateInputOverrides(const PanelInputState& input, bool mouse_in_viewport);
             void applyUiScale(float scale);
             void rebuildFonts(float scale);
             void loadImGuiSettings();

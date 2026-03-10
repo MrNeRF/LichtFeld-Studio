@@ -12,6 +12,7 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "gui/gui_focus_state.hpp"
+#include "gui/panel_input_utils.hpp"
 #include "gui/rml_sequencer_overlay.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/utils/windows_utils.hpp"
@@ -40,6 +41,7 @@ namespace lfs::vis::gui {
         constexpr size_t MIN_PATH_RENDER_SAMPLES = 128;
         constexpr size_t MAX_PATH_RENDER_SAMPLES = 4096;
         constexpr float PATH_SAMPLES_PER_VIEWPORT_PIXEL = 2.0f;
+        constexpr auto FRUSTUM_DOUBLE_CLICK_WINDOW = std::chrono::milliseconds(350);
 
         [[nodiscard]] std::string formatTimelineTime(const float seconds) {
             const int mins = static_cast<int>(seconds) / 60;
@@ -212,19 +214,8 @@ namespace lfs::vis::gui {
 
         panel_->setFilmStripAttached(ui_state_.show_film_strip);
 
-        lfs::vis::PanelInputState input;
-        input.mouse_x = io.MousePos.x;
-        input.mouse_y = io.MousePos.y;
-        input.mouse_down[0] = io.MouseDown[0];
-        input.mouse_down[1] = io.MouseDown[1];
-        input.mouse_down[2] = io.MouseDown[2];
-        input.mouse_clicked[0] = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
-        input.mouse_clicked[1] = ImGui::IsMouseClicked(ImGuiMouseButton_Right);
-        input.mouse_clicked[2] = ImGui::IsMouseClicked(ImGuiMouseButton_Middle);
-        input.mouse_wheel = io.MouseWheel;
-        input.key_shift = io.KeyShift;
-        input.key_ctrl = io.KeyCtrl;
-        input.key_delete_pressed = ImGui::IsKeyPressed(ImGuiKey_Delete);
+        lfs::vis::PanelInputState input =
+            buildSequencerPanelInputFromSDL(viewer_->getWindowManager()->frameInput());
         if (const ImGuiViewport* const main_viewport = ImGui::GetMainViewport()) {
             input.screen_x = main_viewport->Pos.x;
             input.screen_y = main_viewport->Pos.y;
@@ -232,8 +223,6 @@ namespace lfs::vis::gui {
         input.time = static_cast<float>(ImGui::GetTime());
         input.delta_time = io.DeltaTime;
         input.want_capture_mouse = guiFocusState().want_capture_mouse;
-        input.screen_w = static_cast<int>(io.DisplaySize.x);
-        input.screen_h = static_cast<int>(io.DisplaySize.y);
 
         const float strip_offset = ui_state_.show_film_strip ? FilmStripRenderer::STRIP_HEIGHT : 0.0f;
         panel_->render(viewport.pos.x, viewport.size.x,
@@ -244,7 +233,7 @@ namespace lfs::vis::gui {
             auto tip = panel_->consumeTooltip();
             if (!tip.empty()) {
                 timeline_tooltip_active_ = true;
-                timeline_tooltip_pos_ = ImGui::GetMousePos();
+                timeline_tooltip_pos_ = {input.mouse_x, input.mouse_y};
                 timeline_tooltip_text_ = std::move(tip);
             }
         }
@@ -472,11 +461,13 @@ namespace lfs::vis::gui {
         if (timeline.empty())
             return;
 
-        const auto& io = ImGui::GetIO();
-        const int screen_w = static_cast<int>(io.DisplaySize.x);
-        const int screen_h = static_cast<int>(io.DisplaySize.y);
-        const int fb_w = static_cast<int>(io.DisplaySize.x * io.DisplayFramebufferScale.x);
-        const int fb_h = static_cast<int>(io.DisplaySize.y * io.DisplayFramebufferScale.y);
+        const auto* const wm = viewer_->getWindowManager();
+        const glm::ivec2 screen_size = wm ? wm->getWindowSize() : glm::ivec2{};
+        const glm::ivec2 framebuffer_size = wm ? wm->getFramebufferSize() : glm::ivec2{};
+        const int screen_w = screen_size.x;
+        const int screen_h = screen_size.y;
+        const int fb_w = framebuffer_size.x;
+        const int fb_h = framebuffer_size.y;
         line_renderer_.begin(
             screen_w, screen_h, fb_w, fb_h,
             gui::ClipRect{
@@ -519,9 +510,13 @@ namespace lfs::vis::gui {
             }
         }
 
-        const ImVec2 mouse = ImGui::GetMousePos();
-        const bool mouse_in_viewport = mouse.x >= viewport.pos.x && mouse.x <= viewport.pos.x + viewport.size.x &&
-                                       mouse.y >= viewport.pos.y && mouse.y <= viewport.pos.y + viewport.size.y;
+        const auto& input = viewer_->getWindowManager()->frameInput();
+        const float mouse_x = input.mouse_x;
+        const float mouse_y = input.mouse_y;
+        const bool mouse_in_viewport = mouse_x >= viewport.pos.x &&
+                                       mouse_x <= viewport.pos.x + viewport.size.x &&
+                                       mouse_y >= viewport.pos.y &&
+                                       mouse_y <= viewport.pos.y + viewport.size.y;
 
         std::optional<size_t> hovered_keyframe;
         float closest_dist = HIT_RADIUS;
@@ -538,8 +533,8 @@ namespace lfs::vis::gui {
             const glm::vec2 s_apex = projectToScreen(kf.position);
 
             if (mouse_in_viewport) {
-                const float dx = mouse.x - s_apex.x;
-                const float dy = mouse.y - s_apex.y;
+                const float dx = mouse_x - s_apex.x;
+                const float dy = mouse_y - s_apex.y;
                 const float dist = std::sqrt(dx * dx + dy * dy);
                 if (dist < closest_dist) {
                     closest_dist = dist;
@@ -640,10 +635,11 @@ namespace lfs::vis::gui {
         line_renderer_.end();
 
         if (mouse_in_viewport && !ImGui::IsAnyItemHovered()) {
-            if (hovered_keyframe.has_value() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !ImGuizmo::IsOver()) {
-                const float now = static_cast<float>(ImGui::GetTime());
+            if (hovered_keyframe.has_value() && input.mouse_clicked[0] && !ImGuizmo::IsOver()) {
+                const auto now = std::chrono::steady_clock::now();
                 if (last_frustum_clicked_ == *hovered_keyframe &&
-                    (now - last_frustum_click_time_) < ImGui::GetIO().MouseDoubleClickTime) {
+                    last_frustum_click_time_ != std::chrono::steady_clock::time_point{} &&
+                    (now - last_frustum_click_time_) < FRUSTUM_DOUBLE_CLICK_WINDOW) {
                     lfs::core::events::cmd::SequencerGoToKeyframe{.keyframe_index = *hovered_keyframe}.emit();
                     last_frustum_clicked_ = std::nullopt;
                 } else {
@@ -854,6 +850,9 @@ namespace lfs::vis::gui {
         options.timeline_x = timeline_x;
         options.timeline_width = timeline_width;
         options.strip_y = strip_y;
+        const auto& input = viewer_->getWindowManager()->frameInput();
+        options.mouse_x = input.mouse_x;
+        options.mouse_y = input.mouse_y;
         options.zoom_level = panel_->zoomLevel();
         options.pan_offset = panel_->panOffset();
         options.display_end_time = panel_->getDisplayEndTime();
@@ -863,17 +862,16 @@ namespace lfs::vis::gui {
         options.hovered_keyframe_time = hovered_keyframe_time;
         film_strip_.render(controller_, rm, sm, options);
 
-        const auto& io = ImGui::GetIO();
         const bool can_scrub = controller_.timeline().size() >= 2;
         const float scrub_time = can_scrub
                                      ? std::clamp(
-                                           sequencer_ui::screenXToTime(io.MousePos.x, timeline_x, timeline_width,
+                                           sequencer_ui::screenXToTime(input.mouse_x, timeline_x, timeline_width,
                                                                        panel_->getDisplayEndTime(), panel_->panOffset()),
                                            controller_.timeline().startTime(), controller_.timeline().endTime())
                                      : 0.0f;
 
         if (film_strip_scrubbing_) {
-            if (io.MouseDown[0] && can_scrub) {
+            if (input.mouse_down[0] && can_scrub) {
                 controller_.scrub(scrub_time);
             } else {
                 film_strip_scrubbing_ = false;
@@ -884,7 +882,7 @@ namespace lfs::vis::gui {
         if (const auto& hover = film_strip_.hoverState(); hover.has_value()) {
             guiFocusState().want_capture_mouse = true;
 
-            if (can_scrub && !overlay_->wantsInput() && !film_strip_scrubbing_ && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            if (can_scrub && !overlay_->wantsInput() && !film_strip_scrubbing_ && input.mouse_clicked[0]) {
                 film_strip_scrubbing_ = true;
                 controller_.beginScrub();
                 controller_.scrub(scrub_time);
@@ -898,7 +896,7 @@ namespace lfs::vis::gui {
                                        formatTimelineTime(hover->interval_end_time));
             }
             timeline_tooltip_active_ = true;
-            timeline_tooltip_pos_ = ImGui::GetMousePos();
+            timeline_tooltip_pos_ = {input.mouse_x, input.mouse_y};
             timeline_tooltip_text_ = std::move(tooltip);
         }
     }
@@ -1024,14 +1022,14 @@ namespace lfs::vis::gui {
 
         dl->PopClipRect();
 
-        const auto& io = ImGui::GetIO();
-        const float mx = io.MousePos.x;
-        const float my = io.MousePos.y;
+        const auto& input = viewer_->getWindowManager()->frameInput();
+        const float mx = input.mouse_x;
+        const float my = input.mouse_y;
         if (mx >= timeline_x && mx <= timeline_x + timeline_width &&
             my >= stripe_y && my <= stripe_y + stripe_h) {
             guiFocusState().want_capture_mouse = true;
 
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+            if (input.mouse_clicked[1]) {
                 std::optional<size_t> nearest;
                 float best_dist = panel_config::KEYFRAME_RADIUS * 3.0f * dp;
                 for (size_t i = 0; i < keyframes.size(); ++i) {
@@ -1046,7 +1044,7 @@ namespace lfs::vis::gui {
                                           keyframe_gizmo_op_);
             }
 
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            if (input.mouse_clicked[0]) {
                 std::optional<size_t> nearest;
                 float best_dist = panel_config::KEYFRAME_RADIUS * 2.0f * dp;
                 for (size_t i = 0; i < keyframes.size(); ++i) {
@@ -1147,7 +1145,9 @@ namespace lfs::vis::gui {
                 total_height += line_gap;
         }
 
-        const ImVec2 display = ImGui::GetIO().DisplaySize;
+        const glm::ivec2 display_size = viewer_->getWindowManager()->getWindowSize();
+        const ImVec2 display(static_cast<float>(display_size.x),
+                             static_cast<float>(display_size.y));
         ImVec2 box_min(timeline_tooltip_pos_.x + offset_x, timeline_tooltip_pos_.y + offset_y - total_height);
         ImVec2 box_max(box_min.x + max_width + pad_x * 2.0f, box_min.y + total_height);
 

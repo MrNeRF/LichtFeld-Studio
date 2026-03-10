@@ -193,6 +193,7 @@ namespace lfs::vis::gui {
         void draw_single_panel(const std::string& idname, const PanelDrawContext& ctx);
         void draw_child_panels(const std::string& parent_idname, const PanelDrawContext& ctx);
         bool has_panels(PanelSpace space) const;
+        bool has_legacy_imgui_window_wrapped_panels(PanelSpace space) const;
 
         float draw_panels_direct(PanelSpace space, float x, float y, float w, float max_h,
                                  const PanelDrawContext& ctx,

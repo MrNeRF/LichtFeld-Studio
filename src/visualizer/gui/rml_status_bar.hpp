@@ -29,7 +29,8 @@ namespace lfs::vis::gui {
     public:
         void init(RmlUIManager* mgr);
         void shutdown();
-        void draw(const PanelDrawContext& ctx);
+        void render(const PanelDrawContext& ctx, float x, float y, float w, float h,
+                    int screen_w, int screen_h);
 
     private:
         bool updateContent(const PanelDrawContext& ctx, bool force_refresh);

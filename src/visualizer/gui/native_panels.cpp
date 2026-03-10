@@ -152,11 +152,4 @@ namespace lfs::vis::gui::native_panels {
                                         ImGui::GetBackgroundDrawList());
     }
 
-    RmlStatusBarPanel::RmlStatusBarPanel(RmlStatusBar* sb)
-        : status_bar_(sb) {}
-
-    void RmlStatusBarPanel::draw(const PanelDrawContext& ctx) {
-        status_bar_->draw(ctx);
-    }
-
 } // namespace lfs::vis::gui::native_panels
