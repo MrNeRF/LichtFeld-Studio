@@ -125,6 +125,7 @@ namespace lfs::vis {
         void openFocalLengthEdit(size_t index, float current_focal_mm);
 
         [[nodiscard]] bool isHovered() const { return hovered_; }
+        [[nodiscard]] bool wantsKeyboard() const { return wants_keyboard_; }
 
         [[nodiscard]] float zoomLevel() const { return zoom_level_; }
         [[nodiscard]] float panOffset() const { return pan_offset_; }
@@ -291,6 +292,8 @@ namespace lfs::vis {
         std::optional<size_t> last_clicked_keyframe_;
 
         bool hovered_ = false;
+        bool wants_keyboard_ = false;
+        bool last_hovered_ = false;
         std::string tooltip_;
         std::string last_language_;
     };

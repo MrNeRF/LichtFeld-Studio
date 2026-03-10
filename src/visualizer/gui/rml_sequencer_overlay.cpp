@@ -478,7 +478,8 @@ namespace lfs::vis::gui {
                     rml_context_->ProcessKeyDown(rml_key, mods);
             }
             for (int sc : input.keys_released) {
-                if (composing && (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER))
+                if (composing && (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER ||
+                                  sc == SDL_SCANCODE_ESCAPE))
                     continue;
                 const auto rml_key = gui::sdlScancodeToRml(static_cast<SDL_Scancode>(sc));
                 if (rml_key != Rml::Input::KI_UNKNOWN)

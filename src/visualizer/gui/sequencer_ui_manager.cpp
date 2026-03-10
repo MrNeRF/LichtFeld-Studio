@@ -241,6 +241,8 @@ namespace lfs::vis::gui {
                 timeline_tooltip_text_ = std::move(tip);
             }
         }
+        if (panel_->wantsKeyboard())
+            guiFocusState().want_capture_keyboard = true;
 
         const auto timeline_menu = panel_->consumeContextMenu();
         if (timeline_menu.open) {
