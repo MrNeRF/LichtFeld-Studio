@@ -140,6 +140,7 @@ namespace lfs::core {
             // Factory methods for strategy presets
             static OptimizationParameters mcmc_defaults();
             static OptimizationParameters adc_defaults();
+            static OptimizationParameters igs_plus_defaults();
         };
 
         struct LFS_CORE_API LoadingParams {

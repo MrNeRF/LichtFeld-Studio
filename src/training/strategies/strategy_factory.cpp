@@ -32,7 +32,7 @@ namespace lfs::training {
             return std::make_unique<MCMC>(model);
         };
 
-        registry_["IGS+"] = [](core::SplatData& model)
+        registry_["igs+"] = [](core::SplatData& model)
             -> std::expected<std::unique_ptr<IStrategy>, std::string> {
             return std::make_unique<ImprovedGSPlus>(model);
         };

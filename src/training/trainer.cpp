@@ -509,7 +509,7 @@ namespace lfs::training {
             }
 
             auto& splat = strategy_->get_model();
-            if (strategy_->strategy_type() == "IGS+") {
+            if (strategy_->strategy_type() == "igs+") {
                 ImprovedGSPlus* improved_gs_plus = dynamic_cast<ImprovedGSPlus*>(strategy_.get());
                 improved_gs_plus->set_views(train_dataset_);
             }

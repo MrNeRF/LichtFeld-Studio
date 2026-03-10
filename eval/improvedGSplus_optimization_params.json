@@ -19,7 +19,7 @@
     "init_scaling": 0.2,
     "max_cap": 1000000,
     "render_mode": "RGB",
-    "strategy": "IGS+",
+    "strategy": "igs+",
     "eval_steps": [ 7000, 30000 ],
     "save_steps": [ 7000, 30000 ],
     "enable_eval": false,

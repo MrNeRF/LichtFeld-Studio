@@ -179,6 +179,24 @@ namespace lfs::core {
             return p;
         }
 
+        OptimizationParameters OptimizationParameters::igs_plus_defaults() {
+            auto p = OptimizationParameters{};
+            p.strategy = "igs+";
+            p.means_lr = 0.000128f;
+            p.shs_lr = 0.005f;
+            p.scaling_lr = 0.020f;
+            p.rotation_lr = 0.0015f;
+            p.stop_refine = 15'000;
+            p.refine_every = 500;
+            p.opacity_reg = 0.0f;
+            p.scale_reg = 0.0f;
+            p.init_opacity = 0.3f;
+            p.init_scaling = 0.2f;
+            p.revised_opacity = true;
+            p.tv_loss_weight = 5.0f;
+            return p;
+        }
+
         OptimizationParameters OptimizationParameters::from_json(const nlohmann::json& json) {
 
             OptimizationParameters params;
@@ -214,7 +232,7 @@ namespace lfs::core {
 
             if (json.contains("strategy")) {
                 std::string strategy = json["strategy"];
-                if (strategy == "mcmc" || strategy == "adc" || strategy == "IGS+") {
+                if (strategy == "mcmc" || strategy == "adc" || strategy == "igs+") {
                     params.strategy = strategy;
                 } else {
                     LOG_WARN("Invalid strategy '{}' in JSON, using default", strategy);

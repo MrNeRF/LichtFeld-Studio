@@ -50,7 +50,7 @@ namespace lfs::training {
         // Serialization for checkpoints
         void serialize(std::ostream& os) const override;
         void deserialize(std::istream& is) override;
-        const char* strategy_type() const override { return "IGS+"; }
+        const char* strategy_type() const override { return "igs+"; }
 
         // Reserve optimizer capacity for future growth (e.g., after checkpoint load)
         void reserve_optimizer_capacity(size_t capacity) override;

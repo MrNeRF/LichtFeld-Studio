@@ -30,7 +30,7 @@ namespace {
         Help
     };
 
-    const std::set<std::string> VALID_STRATEGIES = {"mcmc", "adc", "IGS+"};
+    const std::set<std::string> VALID_STRATEGIES = {"mcmc", "adc", "igs+"};
 
     // Parse log level from string
     lfs::core::LogLevel parse_log_level(const std::string& level_str) {
@@ -685,9 +685,12 @@ lfs::core::args::parse_args_and_params(int argc, const char* const argv[]) {
             return std::unexpected("--strategy conflicts with config file");
         }
     } else {
-        params->optimization = (strategy == "adc")
-                                   ? lfs::core::param::OptimizationParameters::adc_defaults()
-                                   : lfs::core::param::OptimizationParameters::mcmc_defaults();
+        if (strategy == "adc")
+            params->optimization = lfs::core::param::OptimizationParameters::adc_defaults();
+        else if (strategy == "igs+")
+            params->optimization = lfs::core::param::OptimizationParameters::igs_plus_defaults();
+        else
+            params->optimization = lfs::core::param::OptimizationParameters::mcmc_defaults();
     }
 
     params->dataset.loading_params = lfs::core::param::LoadingParams{};
