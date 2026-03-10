@@ -373,6 +373,13 @@ namespace lfs::python {
     }
 
     bool PyRmlElement::has_attribute(const std::string& name) {
+        if (name == "checked" && elem_->GetTagName() == "input") {
+            const auto input_type = elem_->GetAttribute<Rml::String>("type", "");
+            if (input_type == "checkbox" || input_type == "radio") {
+                // RmlUi tracks live checkbox/radio state via pseudo-classes.
+                return elem_->IsPseudoClassSet("checked");
+            }
+        }
         return elem_->HasAttribute(name);
     }
 

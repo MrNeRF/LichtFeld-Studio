@@ -32,6 +32,33 @@ namespace {
             return {};
         return label.substr(pos + 2);
     }
+
+    bool is_checkbox_or_radio(const Rml::Element* element) {
+        if (!element || element->GetTagName() != "input")
+            return false;
+        const auto input_type = element->GetAttribute<Rml::String>("type", "");
+        return input_type == "checkbox" || input_type == "radio";
+    }
+
+    bool get_checked_state(const Rml::Element* element) {
+        if (!element || !is_checkbox_or_radio(element))
+            return false;
+        // RmlUi tracks live form state via pseudo-classes; the "checked" attribute
+        // can be stale after user interaction.
+        return element->IsPseudoClassSet("checked");
+    }
+
+    float compute_slider_step(float min, float max) {
+        const float range = std::fabs(max - min);
+        if (!std::isfinite(range) || range <= 0.0f)
+            return 0.01f;
+        // Use a small explicit step; "any" is effectively quantized on some RmlUi builds.
+        return std::max(range / 1000.0f, 0.0001f);
+    }
+
+    Rml::String step_to_string(float step) {
+        return Rml::String(std::format("{:.6g}", step));
+    }
 } // namespace
 
 namespace lfs::python {
@@ -50,7 +77,7 @@ namespace lfs::python {
             if (tag == "input") {
                 const auto input_type = el->GetAttribute<Rml::String>("type", "");
                 if (input_type == "checkbox") {
-                    state_->bool_value = el->HasAttribute("checked");
+                    state_->bool_value = get_checked_state(el);
                 } else if (input_type == "range") {
                     state_->float_value = el->GetAttribute<float>("value", 0.0f);
                 } else if (input_type == "text") {
@@ -595,10 +622,10 @@ namespace lfs::python {
             if (slot.element->GetParentNode() != line)
                 line->AppendChild(slot.element->GetParentNode()->RemoveChild(slot.element));
             auto* input = slot.element->GetChild(0);
-            if (input) {
-                if (value && !input->HasAttribute("checked"))
+            if (input && !slot.events.changed) {
+                if (value)
                     input->SetAttribute("checked", "");
-                else if (!value && input->HasAttribute("checked"))
+                else
                     input->RemoveAttribute("checked");
             }
         }
@@ -665,6 +692,9 @@ namespace lfs::python {
             return {false, value};
         auto* line = ensure_line_container();
         auto& slot = ensure_slot(SlotType::SliderFloat, build_slot_id("slider_float", &label));
+        const auto min_text = Rml::String(std::to_string(min));
+        const auto max_text = Rml::String(std::to_string(max));
+        const auto step_text = step_to_string(compute_slider_step(min, max));
 
         if (!slot.element) {
             auto wrapper = doc_->CreateElement("div");
@@ -676,9 +706,9 @@ namespace lfs::python {
 
             auto input = doc_->CreateElement("input");
             input->SetAttribute("type", "range");
-            input->SetAttribute("min", Rml::String(std::to_string(min)));
-            input->SetAttribute("max", Rml::String(std::to_string(max)));
-            input->SetAttribute("step", "any");
+            input->SetAttribute("min", min_text);
+            input->SetAttribute("max", max_text);
+            input->SetAttribute("step", step_text);
             input->SetAttribute("value", Rml::String(std::to_string(value)));
             input->SetClass("setting-slider", true);
 
@@ -698,6 +728,11 @@ namespace lfs::python {
             if (slot.element->GetParentNode() != line)
                 line->AppendChild(slot.element->GetParentNode()->RemoveChild(slot.element));
             auto* input = slot.element->GetChild(1);
+            if (input) {
+                input->SetAttribute("min", min_text);
+                input->SetAttribute("max", max_text);
+                input->SetAttribute("step", step_text);
+            }
             if (input && !slot.events.changed)
                 input->SetAttribute("value", Rml::String(std::to_string(value)));
             auto* val_text = slot.element->GetChild(2);
@@ -796,13 +831,135 @@ namespace lfs::python {
     // ── Drags ───────────────────────────────────────────────
 
     std::tuple<bool, float> RmlImModeLayout::drag_float(const std::string& label, float value,
-                                                        float /*speed*/, float min, float max) {
-        return slider_float(label, value, min, max);
+                                                        float speed, float min, float max) {
+        if (!doc_)
+            return {false, value};
+        auto* line = ensure_line_container();
+        auto& slot = ensure_slot(SlotType::DragFloat, build_slot_id("drag_float", &label));
+        const auto min_text = Rml::String(std::to_string(min));
+        const auto max_text = Rml::String(std::to_string(max));
+        const float step = (speed > 0.0f) ? std::fabs(speed) : compute_slider_step(min, max);
+        const auto step_text = step_to_string(step);
+
+        if (!slot.element) {
+            auto wrapper = doc_->CreateElement("div");
+            wrapper->SetClass("setting-row", true);
+
+            auto lbl = doc_->CreateElement("span");
+            lbl->SetClass("prop-label", true);
+            lbl->SetInnerRML(Rml::String(strip_imgui_id(label)));
+
+            auto input = doc_->CreateElement("input");
+            input->SetAttribute("type", "range");
+            input->SetAttribute("min", min_text);
+            input->SetAttribute("max", max_text);
+            input->SetAttribute("step", step_text);
+            input->SetAttribute("value", Rml::String(std::to_string(value)));
+            input->SetClass("setting-slider", true);
+
+            slot.events.float_value = value;
+            input->AddEventListener(Rml::EventId::Change, new SlotEventListener(&slot.events));
+
+            auto val_text = doc_->CreateElement("span");
+            val_text->SetClass("slider-value", true);
+            val_text->SetInnerRML(Rml::String(std::format("{:.2f}", value)));
+
+            wrapper->AppendChild(std::move(lbl));
+            wrapper->AppendChild(std::move(input));
+            wrapper->AppendChild(std::move(val_text));
+            slot.element = line->AppendChild(std::move(wrapper));
+            apply_item_width(slot.element);
+        } else {
+            if (slot.element->GetParentNode() != line)
+                line->AppendChild(slot.element->GetParentNode()->RemoveChild(slot.element));
+            auto* input = slot.element->GetChild(1);
+            if (input) {
+                input->SetAttribute("min", min_text);
+                input->SetAttribute("max", max_text);
+                input->SetAttribute("step", step_text);
+            }
+            if (input && !slot.events.changed)
+                input->SetAttribute("value", Rml::String(std::to_string(value)));
+            auto* val_text = slot.element->GetChild(2);
+            if (val_text) {
+                float display_val = slot.events.changed ? slot.events.float_value : value;
+                val_text->SetInnerRML(Rml::String(std::format("{:.2f}", display_val)));
+            }
+        }
+
+        last_element_ = slot.element;
+        last_clicked_ = false;
+        if (slot.events.changed) {
+            slot.events.changed = false;
+            return {true, slot.events.float_value};
+        }
+        return {false, value};
     }
 
     std::tuple<bool, int> RmlImModeLayout::drag_int(const std::string& label, int value,
-                                                    float /*speed*/, int min, int max) {
-        return slider_int(label, value, min, max);
+                                                    float speed, int min, int max) {
+        if (!doc_)
+            return {false, value};
+        auto* line = ensure_line_container();
+        auto& slot = ensure_slot(SlotType::DragInt, build_slot_id("drag_int", &label));
+        const auto min_text = Rml::String(std::to_string(min));
+        const auto max_text = Rml::String(std::to_string(max));
+        const int step = std::max(1, static_cast<int>(std::lround(std::fabs(speed))));
+        const auto step_text = Rml::String(std::to_string(step));
+
+        if (!slot.element) {
+            auto wrapper = doc_->CreateElement("div");
+            wrapper->SetClass("setting-row", true);
+
+            auto lbl = doc_->CreateElement("span");
+            lbl->SetClass("prop-label", true);
+            lbl->SetInnerRML(Rml::String(strip_imgui_id(label)));
+
+            auto input = doc_->CreateElement("input");
+            input->SetAttribute("type", "range");
+            input->SetAttribute("min", min_text);
+            input->SetAttribute("max", max_text);
+            input->SetAttribute("step", step_text);
+            input->SetAttribute("value", Rml::String(std::to_string(value)));
+            input->SetClass("setting-slider", true);
+
+            slot.events.float_value = static_cast<float>(value);
+            input->AddEventListener(Rml::EventId::Change, new SlotEventListener(&slot.events));
+
+            auto val_text = doc_->CreateElement("span");
+            val_text->SetClass("slider-value", true);
+            val_text->SetInnerRML(Rml::String(std::to_string(value)));
+
+            wrapper->AppendChild(std::move(lbl));
+            wrapper->AppendChild(std::move(input));
+            wrapper->AppendChild(std::move(val_text));
+            slot.element = line->AppendChild(std::move(wrapper));
+            apply_item_width(slot.element);
+        } else {
+            if (slot.element->GetParentNode() != line)
+                line->AppendChild(slot.element->GetParentNode()->RemoveChild(slot.element));
+            auto* input = slot.element->GetChild(1);
+            if (input) {
+                input->SetAttribute("min", min_text);
+                input->SetAttribute("max", max_text);
+                input->SetAttribute("step", step_text);
+            }
+            if (input && !slot.events.changed)
+                input->SetAttribute("value", Rml::String(std::to_string(value)));
+            auto* val_text = slot.element->GetChild(2);
+            if (val_text) {
+                int display_val = slot.events.changed ? static_cast<int>(slot.events.float_value) : value;
+                val_text->SetInnerRML(Rml::String(std::to_string(display_val)));
+            }
+        }
+
+        last_element_ = slot.element;
+        last_clicked_ = false;
+        if (slot.events.changed) {
+            slot.events.changed = false;
+            return {true, static_cast<int>(std::round(slot.events.float_value))};
+        }
+        return {false, value};
     }
 
     // ── Input ───────────────────────────────────────────────
