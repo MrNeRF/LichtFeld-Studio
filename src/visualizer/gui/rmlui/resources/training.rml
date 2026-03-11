@@ -65,7 +65,7 @@
         <select data-value="strategy">
           <option value="mcmc">MCMC</option>
           <option value="adc">ADC</option>
-          <option value="igs+">IGS+</option>
+          <option value="igs+">igs+</option>
         </select>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.iterations">

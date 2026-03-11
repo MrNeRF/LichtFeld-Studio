@@ -8,7 +8,7 @@ add_subdirectory(rasterization/fastgs)
 # Add LibTorch-free gsplat backend
 add_subdirectory(rasterization/gsplat)
 
-# Add IGS+ edge-compute rasterizer
+# Add igs+ edge-compute rasterizer
 add_subdirectory(rasterization/edge_compute)
 
 # LibTorch-free CUDA kernels
