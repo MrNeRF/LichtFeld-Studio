@@ -374,7 +374,9 @@ namespace edge_compute::rasterization::kernels::forward {
         uint* __restrict__ bucket_checkpoint_uint8,
         const uint width,
         const uint height,
-        const uint grid_width) {
+        const uint grid_width,
+        const float* __restrict__ pixel_weights,
+        float* accum_weights) {
         auto block = cg::this_thread_block();
         const dim3 group_index = block.group_index();
         const dim3 thread_index = block.thread_index();
@@ -398,6 +400,8 @@ namespace edge_compute::rasterization::kernels::forward {
         __shared__ float2 collected_mean2d[config::block_size_blend];
         __shared__ float4 collected_conic_opacity[config::block_size_blend];
         __shared__ float3 collected_color[config::block_size_blend];
+
+        __shared__ uint collected_primitive_idx[config::block_size_blend];
         // initialize local storage
         float3 color_pixel = make_float3(0.0f);
         float transmittance = 1.0f;
@@ -414,6 +418,8 @@ namespace edge_compute::rasterization::kernels::forward {
                 collected_conic_opacity[thread_rank] = primitive_conic_opacity[primitive_idx];
                 const float3 color = fminf(fmaxf(primitive_color[primitive_idx], 0.0f), config::max_checkpoint_color);
                 collected_color[thread_rank] = color;
+
+                collected_primitive_idx[thread_rank] = primitive_idx;
             }
             block.sync();
             const int current_batch_size = min(config::block_size_blend, n_points_remaining);
@@ -442,6 +448,11 @@ namespace edge_compute::rasterization::kernels::forward {
                 color_pixel += transmittance * alpha * collected_color[j];
                 transmittance *= (1.0f - alpha);
                 n_contributions = n_possible_contributions;
+                const int pixel_idx = width * pixel_coords.y + pixel_coords.x;
+                const float visible_contribution = transmittance * alpha;
+
+                atomicAdd(&accum_weights[collected_primitive_idx[j]], pixel_weights[pixel_idx] * visible_contribution);
+
                 if (transmittance < config::transmittance_threshold) {
                     done = true;
                     continue;
