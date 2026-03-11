@@ -14,6 +14,8 @@
 #include "kernels/densification_kernels.hpp"
 #include "kernels/image_kernels.hpp"
 
+#include "edge_rasterizer.hpp"
+
 #include <numeric>
 #include <random>
 
@@ -246,8 +248,10 @@ namespace lfs::training {
 
             lfs::core::Tensor bg;
             // Rendering for edge_scores
-            const RenderOutput score_render = gsplat_rasterize(*my_viewpoint_cam, this->get_model(), bg, 1.0f, false,
-                                                               lfs::training::GsplatRenderMode::RGB, false, pixel_weights);
+            //const RenderOutput score_render = gsplat_rasterize(*my_viewpoint_cam, this->get_model(), bg, 1.0f, false,
+            //                                                   lfs::training::GsplatRenderMode::RGB, false, pixel_weights);
+
+            const RenderOutput score_render = edge_rasterize(*my_viewpoint_cam, this->get_model(), bg, pixel_weights);
 
             const lfs::core::Tensor edge_scores = score_render.edges_score;
 

@@ -18,7 +18,7 @@
 
 namespace edge_compute::rasterization {
 
-    ForwardContext forward_raw(
+    ForwardContext edge_forward_raw(
         const float* means_ptr,
         const float* scales_raw_ptr,
         const float* rotations_raw_ptr,
@@ -40,7 +40,8 @@ namespace edge_compute::rasterization {
         float center_y,
         float near_plane,
         float far_plane,
-        bool mip_filter) {
+        const float* pixel_weights,
+        float* accum_weights) {
         printf("forward_raw, rasterization_api.cu - edge_compute\n");
         // Validate inputs using pure CUDA validation
         CHECK_CUDA_PTR(means_ptr, "means_ptr");
@@ -173,7 +174,8 @@ namespace edge_compute::rasterization {
                                                                  center_y,
                                                                  near_plane,
                                                                  far_plane,
-                                                                 mip_filter);
+                                                                 pixel_weights,
+                                                                 accum_weights);
 
             // Verify allocations happened
             if (n_instances > 0 && !per_instance_buffers_blob) {

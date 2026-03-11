@@ -36,6 +36,7 @@ namespace edge_compute::rasterization {
         const float cy,
         const float near,
         const float far,
-        bool mip_filter);
+        const float* pixel_weights,
+        float* accum_weights);
 
 }

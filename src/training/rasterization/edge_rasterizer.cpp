@@ -84,11 +84,22 @@ namespace lfs::training {
             last_height = height;
         }
 
+        // Input pixel_weights pointer and output accum_weights
+        const float* pixel_weights_ptr = pixel_weights.ptr<float>();
+
+        float* accum_weights_out;
+        const size_t acumm_weights_size = sizeof(float) * n_primitives;
+
+        cudaMalloc(&accum_weights_out, acumm_weights_size);
+        cudaMemsetAsync(accum_weights_out, 0, acumm_weights_size, nullptr);
+
+
+
         // Call forward_raw with raw pointers (no PyTorch wrappers)
         // Use adjusted cx/cy for tile rendering
         edge_compute::rasterization::ForwardContext forward_ctx;
         try {
-            forward_ctx = edge_compute::rasterization::forward_raw(
+            forward_ctx = edge_compute::rasterization::edge_forward_raw(
                 means.ptr<float>(),
                 raw_scales.ptr<float>(),
                 raw_rotations.ptr<float>(),
@@ -110,7 +121,8 @@ namespace lfs::training {
                 cy_adjusted, // Use adjusted cy for tile offset
                 near_plane,
                 far_plane,
-                mip_filter);
+                pixel_weights_ptr,
+                accum_weights_out);
         } catch (const std::exception& e) {
            
         }

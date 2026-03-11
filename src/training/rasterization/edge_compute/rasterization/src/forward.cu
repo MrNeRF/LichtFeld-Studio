@@ -38,7 +38,8 @@ std::tuple<int, int, int, int, int> edge_compute::rasterization::edge_forward(
     const float cy,
     const float near_, // near and far are macros in windows
     const float far_,
-    bool mip_filter) {
+    const float* pixel_weights,
+    float* accum_weights) {
     printf("edge_forward() - forward.cu");
     const dim3 grid(div_round_up(width, config::tile_width), div_round_up(height, config::tile_height), 1);
     const dim3 block(config::tile_width, config::tile_height, 1);
@@ -103,7 +104,7 @@ std::tuple<int, int, int, int, int> edge_compute::rasterization::edge_forward(
         cy,
         near_,
         far_,
-        mip_filter);
+        false);
     CHECK_CUDA(config::debug, "preprocess")
 
     int n_visible_primitives;

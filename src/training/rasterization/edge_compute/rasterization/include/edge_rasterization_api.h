@@ -46,7 +46,7 @@ namespace edge_compute::rasterization {
         const char* error_message;
     };
 
-    ForwardContext forward_raw(
+    ForwardContext edge_forward_raw(
         const float* means_ptr,                // Device pointer [N*3]
         const float* scales_raw_ptr,           // Device pointer [N*3]
         const float* rotations_raw_ptr,        // Device pointer [N*4]
@@ -68,7 +68,8 @@ namespace edge_compute::rasterization {
         float center_y,
         float near_plane,
         float far_plane,
-        bool mip_filter = false);
+        const float* pixel_weights,
+        float* accum_weights);
 
     // Pre-compile all CUDA kernels to avoid JIT delays during rendering
     void warmup_kernels();
