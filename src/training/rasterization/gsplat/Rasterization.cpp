@@ -46,7 +46,6 @@ namespace gsplat_lfs {
         float* renders,
         float* alphas,
         int32_t* last_ids,
-        ImprovedGSPlusData& i_gsplus_data,
         cudaStream_t stream) {
         GSPLAT_CHECK_CUDA_PTR(means, "means");
         GSPLAT_CHECK_CUDA_PTR(quats, "quats");
@@ -70,79 +69,31 @@ namespace gsplat_lfs {
             renders, alphas, last_ids, stream);                      \
         break;
 
-// New macro for Improved-GS+ forward rasterization
-#define __LAUNCH_KERNEL_WITH_WEIGHTS__(CDIM)                                  \
-    case CDIM:                                                                \
-         launch_rasterize_to_pixels_from_world_3dgs_fwd_kernel_tam<CDIM>(     \
-             means, quats, scales, colors, opacities,                         \
-             backgrounds, bg_images, masks, C, N, n_isects,                   \
-             image_width, image_height, tile_size,                            \
-             viewmats0, viewmats1, Ks, camera_model,                          \
-             ut_params, rs_type,                                              \
-             radial_coeffs, tangential_coeffs, thin_prism_coeffs,             \
-             tile_offsets, flatten_ids,                                       \
-             renders, alphas, last_ids, i_gsplus_data.pixel_weights_ptr,      \
-            i_gsplus_data.accum_weights_ptr_out, stream);                     \
-        break;
-
-        if (i_gsplus_data.accum_weights_ptr_out != nullptr && i_gsplus_data.pixel_weights_ptr != nullptr) {
-            switch (channels) {
-                GSPLAT_CHECK_CUDA_PTR(i_gsplus_data.pixel_weights_ptr, "pixel_weights");
-                GSPLAT_CHECK_CUDA_PTR(i_gsplus_data.accum_weights_ptr_out, "accum_weights");
-
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(1)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(2)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(3)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(4)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(5)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(8)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(9)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(16)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(17)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(32)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(33)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(64)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(65)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(128)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(129)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(256)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(257)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(512)
-                __LAUNCH_KERNEL_WITH_WEIGHTS__(513)
-            default:
-                fprintf(stderr, "GSPLAT ERROR: Unsupported number of channels: %u [LAUNCH_KERNEL_WITH_WEIGHTS]\n", channels);
-                assert(false && "Unsupported number of channels");
-            }
-        } else {
-            switch (channels) {
-                __LAUNCH_KERNEL__(1)
-                __LAUNCH_KERNEL__(2)
-                __LAUNCH_KERNEL__(3)
-                __LAUNCH_KERNEL__(4)
-                __LAUNCH_KERNEL__(5)
-                __LAUNCH_KERNEL__(8)
-                __LAUNCH_KERNEL__(9)
-                __LAUNCH_KERNEL__(16)
-                __LAUNCH_KERNEL__(17)
-                __LAUNCH_KERNEL__(32)
-                __LAUNCH_KERNEL__(33)
-                __LAUNCH_KERNEL__(64)
-                __LAUNCH_KERNEL__(65)
-                __LAUNCH_KERNEL__(128)
-                __LAUNCH_KERNEL__(129)
-                __LAUNCH_KERNEL__(256)
-                __LAUNCH_KERNEL__(257)
-                __LAUNCH_KERNEL__(512)
-                __LAUNCH_KERNEL__(513)
-            default:
-                fprintf(stderr, "GSPLAT ERROR: Unsupported number of channels: %u\n", channels);
-                assert(false && "Unsupported number of channels");
-            }
+        switch (channels) {
+            __LAUNCH_KERNEL__(1)
+            __LAUNCH_KERNEL__(2)
+            __LAUNCH_KERNEL__(3)
+            __LAUNCH_KERNEL__(4)
+            __LAUNCH_KERNEL__(5)
+            __LAUNCH_KERNEL__(8)
+            __LAUNCH_KERNEL__(9)
+            __LAUNCH_KERNEL__(16)
+            __LAUNCH_KERNEL__(17)
+            __LAUNCH_KERNEL__(32)
+            __LAUNCH_KERNEL__(33)
+            __LAUNCH_KERNEL__(64)
+            __LAUNCH_KERNEL__(65)
+            __LAUNCH_KERNEL__(128)
+            __LAUNCH_KERNEL__(129)
+            __LAUNCH_KERNEL__(256)
+            __LAUNCH_KERNEL__(257)
+            __LAUNCH_KERNEL__(512)
+            __LAUNCH_KERNEL__(513)
+        default:
+            fprintf(stderr, "GSPLAT ERROR: Unsupported number of channels: %u\n", channels);
+            assert(false && "Unsupported number of channels");
         }
-        
-
 #undef __LAUNCH_KERNEL__
-#undef __LAUNCH_KERNEL_WITH_WEIGHTS__ // Improved-GS+ macro
     }
 
     //=========================================================================
@@ -284,7 +235,6 @@ namespace gsplat_lfs {
         const float* tangential_coeffs,
         const float* thin_prism_coeffs,
         RasterizeWithSHResult& result,
-        ImprovedGSPlusData& i_gsplus_data,
         cudaStream_t stream) {
         GSPLAT_CHECK_CUDA_PTR(means, "means");
         GSPLAT_CHECK_CUDA_PTR(quats, "quats");
@@ -357,7 +307,7 @@ namespace gsplat_lfs {
             radial_coeffs, tangential_coeffs, thin_prism_coeffs,
             result.tile_offsets, result.flatten_ids,
             result.render_colors, result.render_alphas, result.last_ids,
-            i_gsplus_data, stream);
+            stream);
     }
 
     //=========================================================================

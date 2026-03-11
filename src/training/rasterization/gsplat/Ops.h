@@ -10,7 +10,6 @@
 #include <tuple>
 
 namespace gsplat_lfs {
-    struct ImprovedGSPlusData; // Forward declaration
 
     //=========================================================================
     // Spherical Harmonics
@@ -196,7 +195,6 @@ namespace gsplat_lfs {
         float* renders,    // [C, image_height, image_width, channels]
         float* alphas,     // [C, image_height, image_width, 1]
         int32_t* last_ids, // [C, image_height, image_width]
-        ImprovedGSPlusData& i_gsplus_data,
         cudaStream_t stream = nullptr);
 
     //=========================================================================
@@ -274,11 +272,6 @@ namespace gsplat_lfs {
         int32_t n_isects;
     };
 
-    struct ImprovedGSPlusData {
-        const float* pixel_weights_ptr;
-        float* accum_weights_ptr_out;
-    };
-
     void rasterize_from_world_with_sh_fwd(
         // Gaussian parameters
         const float* means,     // [N, 3]
@@ -317,7 +310,6 @@ namespace gsplat_lfs {
         const float* thin_prism_coeffs, // optional
         // outputs (result struct with pre-allocated buffers)
         RasterizeWithSHResult& result,
-        ImprovedGSPlusData& i_gsplus_data,
         cudaStream_t stream = nullptr);
 
     void rasterize_from_world_with_sh_bwd(
