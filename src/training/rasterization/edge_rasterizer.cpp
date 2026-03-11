@@ -25,7 +25,6 @@ namespace lfs::training {
         int tile_height,
         bool mip_filter,
         const core::Tensor& bg_image) {
-        printf("Edge rasterizer.cpp\n");
         // Get camera parameters
         const int full_width = viewpoint_camera.image_width();
         const int full_height = viewpoint_camera.image_height();
@@ -46,11 +45,6 @@ namespace lfs::training {
         auto& raw_opacities = gaussian_model.opacity_raw();
         auto& raw_scales = gaussian_model.scaling_raw();
         auto& raw_rotations = gaussian_model.rotation_raw();
-        auto& sh0 = gaussian_model.sh0();
-        auto& shN = gaussian_model.shN();
-
-        const int sh_degree = gaussian_model.get_active_sh_degree();
-        const int active_sh_bases = (sh_degree + 1) * (sh_degree + 1);
 
         constexpr float near_plane = 0.01f;
         constexpr float far_plane = 1e10f;
@@ -60,40 +54,31 @@ namespace lfs::training {
         const float* cam_position_ptr = viewpoint_camera.cam_position_ptr();
 
         const int n_primitives = static_cast<int>(means.shape()[0]);
-        const int total_bases_sh_rest = (shN.is_valid() && shN.ndim() >= 2)
-                                            ? static_cast<int>(shN.shape()[1])
-                                            : 0;
 
         if (n_primitives == 0) {
             return std::unexpected("n_primitives is 0 - model has no gaussians");
         }
 
         // Pre-allocate output tensors (reused across iterations)
-        thread_local core::Tensor image;
         thread_local core::Tensor alpha;
-        thread_local core::Tensor output_image;
         thread_local int last_width = -1;
         thread_local int last_height = -1;
 
         // Only reallocate if dimensions changed
         if (last_width != width || last_height != height) {
-            image = core::Tensor::empty({3, static_cast<size_t>(height), static_cast<size_t>(width)});
             alpha = core::Tensor::empty({1, static_cast<size_t>(height), static_cast<size_t>(width)});
-            output_image = core::Tensor::empty({3, static_cast<size_t>(height), static_cast<size_t>(width)}, core::Device::CUDA);
             last_width = width;
             last_height = height;
         }
 
         // Input pixel_weights pointer and output accum_weights
-        const float* pixel_weights_ptr = pixel_weights.ptr<float>();
+        const float* pixel_weights_ptr = pixel_weights.contiguous().ptr<float>();
 
         float* accum_weights_out;
         const size_t acumm_weights_size = sizeof(float) * n_primitives;
 
         cudaMalloc(&accum_weights_out, acumm_weights_size);
         cudaMemsetAsync(accum_weights_out, 0, acumm_weights_size, nullptr);
-
-
 
         // Call forward_raw with raw pointers (no PyTorch wrappers)
         // Use adjusted cx/cy for tile rendering
@@ -104,15 +89,10 @@ namespace lfs::training {
                 raw_scales.ptr<float>(),
                 raw_rotations.ptr<float>(),
                 raw_opacities.ptr<float>(),
-                sh0.ptr<float>(),
-                shN.ptr<float>(),
                 w2c_ptr,
                 cam_position_ptr,
-                image.ptr<float>(),
                 alpha.ptr<float>(),
                 n_primitives,
-                active_sh_bases,
-                total_bases_sh_rest,
                 width,
                 height,
                 fx,
@@ -134,15 +114,17 @@ namespace lfs::training {
 
         // Prepare render output
         RenderOutput render_output;
-        // output = image + (1 - alpha) * bg_color (or bg_image)
-        // (output_image is pre-allocated above)
 
-        const cudaStream_t stream = output_image.stream();
+        render_output.edges_score = core::Tensor::from_blob(accum_weights_out, {static_cast<size_t>(n_primitives)},
+                                                            core::Device::CUDA, core::DataType::Float32)
+                                        .clone();
 
-        render_output.image = output_image;
+        render_output.image = core::Tensor();
         render_output.alpha = alpha;
         render_output.width = width;
         render_output.height = height;
+
+        cudaFree(accum_weights_out);
 
         return std::pair{render_output, FastRasterizeContext{}};
     }

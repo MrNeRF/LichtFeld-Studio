@@ -20,8 +20,6 @@ namespace edge_compute::rasterization::kernels::forward {
         const float3* __restrict__ raw_scales,
         const float4* __restrict__ raw_rotations,
         const float* __restrict__ raw_opacities,
-        const float3* __restrict__ sh_coefficients_0,
-        const float3* __restrict__ sh_coefficients_rest,
         const float4* __restrict__ w2c,
         const float3* __restrict__ cam_position,
         uint* __restrict__ primitive_depth_keys,
@@ -30,14 +28,11 @@ namespace edge_compute::rasterization::kernels::forward {
         ushort4* __restrict__ primitive_screen_bounds,
         float2* __restrict__ primitive_mean2d,
         float4* __restrict__ primitive_conic_opacity,
-        float3* __restrict__ primitive_color,
         uint* __restrict__ n_visible_primitives,
         uint* __restrict__ n_instances,
         const uint n_primitives,
         const uint grid_width,
         const uint grid_height,
-        const uint active_sh_bases,
-        const uint total_bases_sh_rest,
         const float w,
         const float h,
         const float fx,
@@ -196,10 +191,6 @@ namespace edge_compute::rasterization::kernels::forward {
             static_cast<ushort>(screen_bounds.w));
         primitive_mean2d[primitive_idx] = mean2d;
         primitive_conic_opacity[primitive_idx] = make_float4(conic, output_opacity);
-        primitive_color[primitive_idx] = convert_sh_to_color(
-            sh_coefficients_0, sh_coefficients_rest,
-            mean3d, cam_position[0],
-            primitive_idx, active_sh_bases, total_bases_sh_rest);
 
         const uint offset = atomicAdd(n_visible_primitives, 1);
         const uint depth_key = __float_as_uint(depth);
@@ -359,28 +350,22 @@ namespace edge_compute::rasterization::kernels::forward {
         tile_n_buckets[tile_idx] = n_buckets;
     }
 
-    __global__ void __launch_bounds__(config::block_size_blend) blend_cu(
+    __global__ void __launch_bounds__(config::block_size_blend) edge_blend_cu(
         const uint2* __restrict__ tile_instance_ranges,
-        const uint* __restrict__ tile_bucket_offsets,
         const uint* __restrict__ instance_primitive_indices,
         const float2* __restrict__ primitive_mean2d,
         const float4* __restrict__ primitive_conic_opacity,
-        const float3* __restrict__ primitive_color,
-        float* __restrict__ image,
         float* __restrict__ alpha_map,
-        uint* __restrict__ tile_max_n_contributions,
-        uint* __restrict__ tile_n_contributions,
-        uint* __restrict__ bucket_tile_index,
-        uint* __restrict__ bucket_checkpoint_uint8,
         const uint width,
         const uint height,
         const uint grid_width,
         const float* __restrict__ pixel_weights,
-        float* accum_weights) {
+        float* __restrict__ accum_weights) {
         auto block = cg::this_thread_block();
         const dim3 group_index = block.group_index();
         const dim3 thread_index = block.thread_index();
         const uint thread_rank = block.thread_rank();
+
         const uint2 pixel_coords = make_uint2(group_index.x * config::tile_width + thread_index.x, group_index.y * config::tile_height + thread_index.y);
         const bool inside = pixel_coords.x < width && pixel_coords.y < height;
         const float2 pixel = make_float2(__uint2float_rn(pixel_coords.x), __uint2float_rn(pixel_coords.y)) + 0.5f;
@@ -389,24 +374,21 @@ namespace edge_compute::rasterization::kernels::forward {
         const uint2 tile_range = tile_instance_ranges[tile_idx];
         const int n_points_total = tile_range.y - tile_range.x;
 
-        uint bucket_offset = tile_idx == 0 ? 0 : tile_bucket_offsets[tile_idx - 1];
-        const int n_buckets = div_round_up(n_points_total, config::checkpoint_interval); // re-computing is faster than reading from tile_n_buckets
-        for (int n_buckets_remaining = n_buckets, current_bucket_idx = thread_rank; n_buckets_remaining > 0; n_buckets_remaining -= config::block_size_blend, current_bucket_idx += config::block_size_blend) {
-            if (current_bucket_idx < n_buckets)
-                bucket_tile_index[bucket_offset + current_bucket_idx] = tile_idx;
+        // Fetch pixel weight once in register
+        float thread_pixel_weight = 0.0f;
+        int pixel_idx = 0;
+        if (inside) {
+            pixel_idx = width * pixel_coords.y + pixel_coords.x;
+            thread_pixel_weight = pixel_weights[pixel_idx];
         }
 
         // setup shared memory
         __shared__ float2 collected_mean2d[config::block_size_blend];
         __shared__ float4 collected_conic_opacity[config::block_size_blend];
-        __shared__ float3 collected_color[config::block_size_blend];
-
         __shared__ uint collected_primitive_idx[config::block_size_blend];
+
         // initialize local storage
-        float3 color_pixel = make_float3(0.0f);
         float transmittance = 1.0f;
-        uint n_possible_contributions = 0;
-        uint n_contributions = 0;
         bool done = !inside;
         // collaborative loading and processing
         for (int n_points_remaining = n_points_total, current_fetch_idx = tile_range.x + thread_rank; n_points_remaining > 0; n_points_remaining -= config::block_size_blend, current_fetch_idx += config::block_size_blend) {
@@ -416,42 +398,32 @@ namespace edge_compute::rasterization::kernels::forward {
                 const uint primitive_idx = instance_primitive_indices[current_fetch_idx];
                 collected_mean2d[thread_rank] = primitive_mean2d[primitive_idx];
                 collected_conic_opacity[thread_rank] = primitive_conic_opacity[primitive_idx];
-                const float3 color = fminf(fmaxf(primitive_color[primitive_idx], 0.0f), config::max_checkpoint_color);
-                collected_color[thread_rank] = color;
-
                 collected_primitive_idx[thread_rank] = primitive_idx;
             }
             block.sync();
             const int current_batch_size = min(config::block_size_blend, n_points_remaining);
             for (int j = 0; !done && j < current_batch_size; ++j) {
-                if (j % config::checkpoint_interval == 0) {
-                    constexpr float COLOR_SCALE = 255.0f / config::max_checkpoint_color;
-                    const uint r = static_cast<uint>(color_pixel.x * COLOR_SCALE + 0.5f);
-                    const uint g = static_cast<uint>(color_pixel.y * COLOR_SCALE + 0.5f);
-                    const uint b = static_cast<uint>(color_pixel.z * COLOR_SCALE + 0.5f);
-                    const uint t = min(static_cast<uint>(fmaxf(transmittance, 0.0f) * 255.0f + 0.5f), 255u);
-                    bucket_checkpoint_uint8[bucket_offset * config::block_size_blend + thread_rank] = r | (g << 8) | (b << 16) | (t << 24);
-                    bucket_offset++;
-                }
-                n_possible_contributions++;
                 const float4 conic_opacity = collected_conic_opacity[j];
                 const float3 conic = make_float3(conic_opacity);
                 const float2 delta = collected_mean2d[j] - pixel;
                 const float opacity = conic_opacity.w;
+
                 const float sigma_over_2 = 0.5f * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) + conic.y * delta.x * delta.y;
-                if (sigma_over_2 < 0.0f)
+                if (sigma_over_2 < 0.0f) {
                     continue;
+                }
+
                 const float gaussian = expf(-sigma_over_2);
                 const float alpha = fminf(opacity * gaussian, config::max_fragment_alpha);
-                if (alpha < config::min_alpha_threshold)
+                if (alpha < config::min_alpha_threshold) {
                     continue;
-                color_pixel += transmittance * alpha * collected_color[j];
-                transmittance *= (1.0f - alpha);
-                n_contributions = n_possible_contributions;
-                const int pixel_idx = width * pixel_coords.y + pixel_coords.x;
-                const float visible_contribution = transmittance * alpha;
+                }
 
-                atomicAdd(&accum_weights[collected_primitive_idx[j]], pixel_weights[pixel_idx] * visible_contribution);
+                const float contribution_factor = transmittance * alpha;
+
+                transmittance *= (1.0f - alpha);
+      
+                atomicAdd(&accum_weights[collected_primitive_idx[j]], thread_pixel_weight * contribution_factor);
 
                 if (transmittance < config::transmittance_threshold) {
                     done = true;
@@ -460,22 +432,9 @@ namespace edge_compute::rasterization::kernels::forward {
             }
         }
         if (inside) {
-            const int pixel_idx = width * pixel_coords.y + pixel_coords.x;
-            const int n_pixels = width * height;
             // store results
-            image[pixel_idx] = color_pixel.x;
-            image[pixel_idx + n_pixels] = color_pixel.y;
-            image[pixel_idx + n_pixels * 2] = color_pixel.z;
             alpha_map[pixel_idx] = 1.0f - transmittance;
-            tile_n_contributions[pixel_idx] = n_contributions;
         }
-
-        // max reduce the number of contributions
-        typedef cub::BlockReduce<uint, config::tile_width, cub::BLOCK_REDUCE_WARP_REDUCTIONS, config::tile_height> BlockReduce;
-        __shared__ typename BlockReduce::TempStorage temp_storage;
-        n_contributions = BlockReduce(temp_storage).Reduce(n_contributions, thrust::maximum<uint>());
-        if (thread_rank == 0)
-            tile_max_n_contributions[tile_idx] = n_contributions;
     }
 
 } // namespace edge_compute::rasterization::kernels::forward

@@ -75,7 +75,6 @@ namespace lfs::training {
         lfs::core::SplatData& gaussian_model,
         lfs::core::Tensor& bg_color,
         const lfs::core::Tensor& pixel_weights) {
-        printf("edge_rasterizer.hpp\n");
         auto result = edge_rasterize_forward(viewpoint_camera, gaussian_model, bg_color, pixel_weights);
         if (!result) {
             throw std::runtime_error(result.error());
