@@ -8,6 +8,9 @@ add_subdirectory(rasterization/fastgs)
 # Add LibTorch-free gsplat backend
 add_subdirectory(rasterization/gsplat)
 
+# Add IGS+ edge-compute rasterizer
+add_subdirectory(rasterization/edge_compute)
+
 # LibTorch-free CUDA kernels
 set(LFS_TRAINING_KERNEL_SOURCES
     kernels/ssim.cu
@@ -76,6 +79,7 @@ set(TRAINING_NEW_SOURCES
     strategies/improved_gs_plus.cpp
     rasterization/fast_rasterizer.cpp
     rasterization/gsplat_rasterizer.cpp
+    rasterization/edge_rasterizer.cpp
     components/bilateral_grid.cpp
     components/ppisp.cpp
     components/ppisp_controller.cu
@@ -105,6 +109,8 @@ target_include_directories(lfs_training
         ${CMAKE_CURRENT_SOURCE_DIR}/rasterization/fastgs/rasterization/include  # For rasterization_api.h
         ${CMAKE_CURRENT_SOURCE_DIR}/rasterization/fastgs/optimizer/include
         ${CMAKE_CURRENT_SOURCE_DIR}/rasterization/fastgs/utils
+	${CMAKE_CURRENT_SOURCE_DIR}/rasterization/edge_compute/rasterization/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/rasterization/edge_compute/utils
         ${CMAKE_CURRENT_SOURCE_DIR}/rasterization  # For gsplat headers
 )
 
@@ -117,6 +123,7 @@ target_link_libraries(lfs_training
         lfs_training_kernels    # LibTorch-free SSIM kernels
         fastlfs_backend         # For adam_step_raw CUDA kernel (LibTorch-free)
         gsplat_backend_lfs      # LibTorch-free gsplat rasterization backend
+	edge_compute_backend    # For igs+ edge score rasterization
     PRIVATE
         lfs_python_utils
 )
