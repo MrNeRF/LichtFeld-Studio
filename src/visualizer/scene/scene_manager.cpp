@@ -71,6 +71,10 @@ namespace lfs::vis {
             setPLYVisibility(cmd.name, cmd.visible);
         });
 
+        cmd::SetNodeLocked::when([this](const auto& cmd) {
+            scene_.setNodeLocked(cmd.name, cmd.locked);
+        });
+
         cmd::ClearScene::when([this](const auto&) {
             clear();
         });

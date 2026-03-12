@@ -49,6 +49,11 @@ namespace lfs::core {
                 scene_->notifyMutation(Scene::MutationType::VISIBILITY_CHANGED);
             }
         });
+        locked.setCallback([this] {
+            if (scene_) {
+                scene_->notifyMutation(Scene::MutationType::MODEL_CHANGED);
+            }
+        });
     }
 
     Scene::Scene() {
@@ -263,6 +268,13 @@ namespace lfs::core {
         auto it = name_to_id_.find(name);
         if (it != name_to_id_.end()) {
             setNodeVisibilityById(it->second, visible);
+        }
+    }
+
+    void Scene::setNodeLocked(const std::string& name, const bool locked) {
+        auto* node = getMutableNode(name);
+        if (node) {
+            node->locked = locked;
         }
     }
 

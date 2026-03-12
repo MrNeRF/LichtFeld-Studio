@@ -6,9 +6,11 @@
 #include "app/mcp_gui_tools.hpp"
 
 #include "core/base64.hpp"
+#include "core/event_bridge/scoped_handler.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
+#include "core/path_utils.hpp"
 #include "core/scene.hpp"
 #include "core/splat_data_transform.hpp"
 #include "core/tensor.hpp"
@@ -18,7 +20,10 @@
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/gs_rasterizer_tensor.hpp"
+#include "visualizer/gui/html_viewer_export.hpp"
+#include "sequencer/keyframe.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
+#include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_entry.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -28,13 +33,19 @@
 
 #include <stb_image_write.h>
 
+#include <algorithm>
+#include <chrono>
 #include <atomic>
 #include <cassert>
+#include <deque>
 #include <future>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -448,6 +459,999 @@ namespace lfs::app {
             return vis::cap::resetCropBox(scene_manager, rendering_manager, cropbox_id);
         }
 
+        json view_info_json(const vis::ViewInfo& info) {
+            const json rotation = json::array({
+                json::array({info.rotation[0], info.rotation[1], info.rotation[2]}),
+                json::array({info.rotation[3], info.rotation[4], info.rotation[5]}),
+                json::array({info.rotation[6], info.rotation[7], info.rotation[8]}),
+            });
+
+            return json{
+                {"success", true},
+                {"camera", {
+                    {"eye", json::array({info.translation[0], info.translation[1], info.translation[2]})},
+                    {"target", json::array({info.pivot[0], info.pivot[1], info.pivot[2]})},
+                    {"pivot", json::array({info.pivot[0], info.pivot[1], info.pivot[2]})},
+                    {"up", json::array({info.rotation[1], info.rotation[4], info.rotation[7]})},
+                    {"forward", json::array({info.rotation[2], info.rotation[5], info.rotation[8]})},
+                    {"rotation_matrix", rotation},
+                    {"width", info.width},
+                    {"height", info.height},
+                    {"fov_degrees", info.fov},
+                }},
+            };
+        }
+
+        json render_settings_json(const vis::RenderSettingsProxy& settings) {
+            return json{
+                {"success", true},
+                {"settings", {
+                    {"focal_length_mm", settings.focal_length_mm},
+                    {"scaling_modifier", settings.scaling_modifier},
+                    {"antialiasing", settings.antialiasing},
+                    {"mip_filter", settings.mip_filter},
+                    {"sh_degree", settings.sh_degree},
+                    {"render_scale", settings.render_scale},
+                    {"show_crop_box", settings.show_crop_box},
+                    {"use_crop_box", settings.use_crop_box},
+                    {"show_ellipsoid", settings.show_ellipsoid},
+                    {"use_ellipsoid", settings.use_ellipsoid},
+                    {"desaturate_unselected", settings.desaturate_unselected},
+                    {"desaturate_cropping", settings.desaturate_cropping},
+                    {"crop_filter_for_selection", settings.crop_filter_for_selection},
+                    {"apply_appearance_correction", settings.apply_appearance_correction},
+                    {"ppisp_mode", settings.ppisp_mode},
+                    {"ppisp", {
+                        {"exposure_offset", settings.ppisp.exposure_offset},
+                        {"vignette_enabled", settings.ppisp.vignette_enabled},
+                        {"vignette_strength", settings.ppisp.vignette_strength},
+                        {"wb_temperature", settings.ppisp.wb_temperature},
+                        {"wb_tint", settings.ppisp.wb_tint},
+                        {"color_red_x", settings.ppisp.color_red_x},
+                        {"color_red_y", settings.ppisp.color_red_y},
+                        {"color_green_x", settings.ppisp.color_green_x},
+                        {"color_green_y", settings.ppisp.color_green_y},
+                        {"color_blue_x", settings.ppisp.color_blue_x},
+                        {"color_blue_y", settings.ppisp.color_blue_y},
+                        {"gamma_multiplier", settings.ppisp.gamma_multiplier},
+                        {"gamma_red", settings.ppisp.gamma_red},
+                        {"gamma_green", settings.ppisp.gamma_green},
+                        {"gamma_blue", settings.ppisp.gamma_blue},
+                        {"crf_toe", settings.ppisp.crf_toe},
+                        {"crf_shoulder", settings.ppisp.crf_shoulder},
+                    }},
+                    {"background_color", json::array({settings.background_color[0], settings.background_color[1], settings.background_color[2]})},
+                    {"show_coord_axes", settings.show_coord_axes},
+                    {"axes_size", settings.axes_size},
+                    {"axes_visibility", json::array({settings.axes_visibility[0], settings.axes_visibility[1], settings.axes_visibility[2]})},
+                    {"show_grid", settings.show_grid},
+                    {"grid_plane", settings.grid_plane},
+                    {"grid_opacity", settings.grid_opacity},
+                    {"point_cloud_mode", settings.point_cloud_mode},
+                    {"voxel_size", settings.voxel_size},
+                    {"show_rings", settings.show_rings},
+                    {"ring_width", settings.ring_width},
+                    {"show_center_markers", settings.show_center_markers},
+                    {"show_camera_frustums", settings.show_camera_frustums},
+                    {"camera_frustum_scale", settings.camera_frustum_scale},
+                    {"train_camera_color", json::array({settings.train_camera_color[0], settings.train_camera_color[1], settings.train_camera_color[2]})},
+                    {"eval_camera_color", json::array({settings.eval_camera_color[0], settings.eval_camera_color[1], settings.eval_camera_color[2]})},
+                    {"show_pivot", settings.show_pivot},
+                    {"split_view_mode", settings.split_view_mode},
+                    {"split_position", settings.split_position},
+                    {"gut", settings.gut},
+                    {"equirectangular", settings.equirectangular},
+                    {"orthographic", settings.orthographic},
+                    {"ortho_scale", settings.ortho_scale},
+                    {"selection_color_committed", json::array({settings.selection_color_committed[0], settings.selection_color_committed[1], settings.selection_color_committed[2]})},
+                    {"selection_color_preview", json::array({settings.selection_color_preview[0], settings.selection_color_preview[1], settings.selection_color_preview[2]})},
+                    {"selection_color_center_marker", json::array({settings.selection_color_center_marker[0], settings.selection_color_center_marker[1], settings.selection_color_center_marker[2]})},
+                    {"depth_clip_enabled", settings.depth_clip_enabled},
+                    {"depth_clip_far", settings.depth_clip_far},
+                    {"mesh_wireframe", settings.mesh_wireframe},
+                    {"mesh_wireframe_color", json::array({settings.mesh_wireframe_color[0], settings.mesh_wireframe_color[1], settings.mesh_wireframe_color[2]})},
+                    {"mesh_wireframe_width", settings.mesh_wireframe_width},
+                    {"mesh_light_dir", json::array({settings.mesh_light_dir[0], settings.mesh_light_dir[1], settings.mesh_light_dir[2]})},
+                    {"mesh_light_intensity", settings.mesh_light_intensity},
+                    {"mesh_ambient", settings.mesh_ambient},
+                    {"mesh_backface_culling", settings.mesh_backface_culling},
+                    {"mesh_shadow_enabled", settings.mesh_shadow_enabled},
+                    {"mesh_shadow_resolution", settings.mesh_shadow_resolution},
+                    {"depth_filter_enabled", settings.depth_filter_enabled},
+                    {"depth_filter_min", json::array({settings.depth_filter_min[0], settings.depth_filter_min[1], settings.depth_filter_min[2]})},
+                    {"depth_filter_max", json::array({settings.depth_filter_max[0], settings.depth_filter_max[1], settings.depth_filter_max[2]})},
+                }},
+            };
+        }
+
+        std::expected<void, std::string> apply_render_settings_patch(const json& args, vis::RenderSettingsProxy& settings) {
+            bool touched = false;
+
+            const auto set_bool = [&args, &touched](const char* key, bool& field) {
+                if (args.contains(key)) {
+                    field = args[key].get<bool>();
+                    touched = true;
+                }
+            };
+
+            const auto set_int = [&args, &touched](const char* key, int& field) {
+                if (args.contains(key)) {
+                    field = args[key].get<int>();
+                    touched = true;
+                }
+            };
+
+            const auto set_float = [&args, &touched](const char* key, float& field) {
+                if (args.contains(key)) {
+                    field = args[key].get<float>();
+                    touched = true;
+                }
+            };
+
+            const auto set_vec3 = [&args, &touched](const char* key,
+                                                    std::array<float, 3>& field) -> std::expected<void, std::string> {
+                if (!args.contains(key))
+                    return {};
+                const auto vec = optional_vec3_arg(args, key);
+                if (!vec)
+                    return std::unexpected(vec.error());
+                if (!vec->has_value())
+                    return std::unexpected(std::string("Field '") + key + "' must be provided");
+                field = {(**vec).x, (**vec).y, (**vec).z};
+                touched = true;
+                return {};
+            };
+
+            const auto set_bool3 = [&args, &touched](const char* key,
+                                                     std::array<bool, 3>& field) -> std::expected<void, std::string> {
+                if (!args.contains(key))
+                    return {};
+                const auto& value = args[key];
+                if (!value.is_array() || value.size() != 3)
+                    return std::unexpected(std::string("Field '") + key + "' must be a 3-element array");
+                field = {value[0].get<bool>(), value[1].get<bool>(), value[2].get<bool>()};
+                touched = true;
+                return {};
+            };
+
+            set_float("focal_length_mm", settings.focal_length_mm);
+            set_float("scaling_modifier", settings.scaling_modifier);
+            set_bool("antialiasing", settings.antialiasing);
+            set_bool("mip_filter", settings.mip_filter);
+            set_int("sh_degree", settings.sh_degree);
+            set_float("render_scale", settings.render_scale);
+            set_bool("show_crop_box", settings.show_crop_box);
+            set_bool("use_crop_box", settings.use_crop_box);
+            set_bool("show_ellipsoid", settings.show_ellipsoid);
+            set_bool("use_ellipsoid", settings.use_ellipsoid);
+            set_bool("desaturate_unselected", settings.desaturate_unselected);
+            set_bool("desaturate_cropping", settings.desaturate_cropping);
+            set_bool("crop_filter_for_selection", settings.crop_filter_for_selection);
+            set_bool("apply_appearance_correction", settings.apply_appearance_correction);
+            set_int("ppisp_mode", settings.ppisp_mode);
+            set_bool("show_coord_axes", settings.show_coord_axes);
+            set_float("axes_size", settings.axes_size);
+            set_bool("show_grid", settings.show_grid);
+            set_int("grid_plane", settings.grid_plane);
+            set_float("grid_opacity", settings.grid_opacity);
+            set_bool("point_cloud_mode", settings.point_cloud_mode);
+            set_float("voxel_size", settings.voxel_size);
+            set_bool("show_rings", settings.show_rings);
+            set_float("ring_width", settings.ring_width);
+            set_bool("show_center_markers", settings.show_center_markers);
+            set_bool("show_camera_frustums", settings.show_camera_frustums);
+            set_float("camera_frustum_scale", settings.camera_frustum_scale);
+            set_bool("show_pivot", settings.show_pivot);
+            set_int("split_view_mode", settings.split_view_mode);
+            set_float("split_position", settings.split_position);
+            set_bool("gut", settings.gut);
+            set_bool("equirectangular", settings.equirectangular);
+            set_bool("orthographic", settings.orthographic);
+            set_float("ortho_scale", settings.ortho_scale);
+            set_bool("depth_clip_enabled", settings.depth_clip_enabled);
+            set_float("depth_clip_far", settings.depth_clip_far);
+            set_bool("mesh_wireframe", settings.mesh_wireframe);
+            set_float("mesh_wireframe_width", settings.mesh_wireframe_width);
+            set_float("mesh_light_intensity", settings.mesh_light_intensity);
+            set_float("mesh_ambient", settings.mesh_ambient);
+            set_bool("mesh_backface_culling", settings.mesh_backface_culling);
+            set_bool("mesh_shadow_enabled", settings.mesh_shadow_enabled);
+            set_int("mesh_shadow_resolution", settings.mesh_shadow_resolution);
+            set_bool("depth_filter_enabled", settings.depth_filter_enabled);
+            if (auto result = set_vec3("background_color", settings.background_color); !result)
+                return result;
+            if (auto result = set_bool3("axes_visibility", settings.axes_visibility); !result)
+                return result;
+            if (auto result = set_vec3("train_camera_color", settings.train_camera_color); !result)
+                return result;
+            if (auto result = set_vec3("eval_camera_color", settings.eval_camera_color); !result)
+                return result;
+            if (auto result = set_vec3("selection_color_committed", settings.selection_color_committed); !result)
+                return result;
+            if (auto result = set_vec3("selection_color_preview", settings.selection_color_preview); !result)
+                return result;
+            if (auto result = set_vec3("selection_color_center_marker", settings.selection_color_center_marker); !result)
+                return result;
+            if (auto result = set_vec3("mesh_wireframe_color", settings.mesh_wireframe_color); !result)
+                return result;
+            if (auto result = set_vec3("mesh_light_dir", settings.mesh_light_dir); !result)
+                return result;
+            if (auto result = set_vec3("depth_filter_min", settings.depth_filter_min); !result)
+                return result;
+            if (auto result = set_vec3("depth_filter_max", settings.depth_filter_max); !result)
+                return result;
+
+            if (args.contains("ppisp_exposure")) {
+                settings.ppisp.exposure_offset = args["ppisp_exposure"].get<float>();
+                touched = true;
+            }
+
+            if (args.contains("ppisp")) {
+                const auto& ppisp = args["ppisp"];
+                if (!ppisp.is_object())
+                    return std::unexpected("Field 'ppisp' must be an object");
+
+                const auto set_ppisp_bool = [&ppisp, &touched](const char* key, bool& field) {
+                    if (ppisp.contains(key)) {
+                        field = ppisp[key].get<bool>();
+                        touched = true;
+                    }
+                };
+                const auto set_ppisp_float = [&ppisp, &touched](const char* key, float& field) {
+                    if (ppisp.contains(key)) {
+                        field = ppisp[key].get<float>();
+                        touched = true;
+                    }
+                };
+
+                set_ppisp_float("exposure_offset", settings.ppisp.exposure_offset);
+                set_ppisp_bool("vignette_enabled", settings.ppisp.vignette_enabled);
+                set_ppisp_float("vignette_strength", settings.ppisp.vignette_strength);
+                set_ppisp_float("wb_temperature", settings.ppisp.wb_temperature);
+                set_ppisp_float("wb_tint", settings.ppisp.wb_tint);
+                set_ppisp_float("color_red_x", settings.ppisp.color_red_x);
+                set_ppisp_float("color_red_y", settings.ppisp.color_red_y);
+                set_ppisp_float("color_green_x", settings.ppisp.color_green_x);
+                set_ppisp_float("color_green_y", settings.ppisp.color_green_y);
+                set_ppisp_float("color_blue_x", settings.ppisp.color_blue_x);
+                set_ppisp_float("color_blue_y", settings.ppisp.color_blue_y);
+                set_ppisp_float("gamma_multiplier", settings.ppisp.gamma_multiplier);
+                set_ppisp_float("gamma_red", settings.ppisp.gamma_red);
+                set_ppisp_float("gamma_green", settings.ppisp.gamma_green);
+                set_ppisp_float("gamma_blue", settings.ppisp.gamma_blue);
+                set_ppisp_float("crf_toe", settings.ppisp.crf_toe);
+                set_ppisp_float("crf_shoulder", settings.ppisp.crf_shoulder);
+            }
+
+            if (!touched)
+                return std::unexpected("No render settings fields were provided");
+
+            return {};
+        }
+
+        json history_json() {
+            auto& history = vis::op::undoHistory();
+            return json{
+                {"success", true},
+                {"can_undo", history.canUndo()},
+                {"can_redo", history.canRedo()},
+                {"undo_count", static_cast<int64_t>(history.undoCount())},
+                {"redo_count", static_cast<int64_t>(history.redoCount())},
+                {"undo_name", history.undoName()},
+                {"redo_name", history.redoName()},
+            };
+        }
+
+        json camera_node_json(const core::Scene& scene, const core::SceneNode& node) {
+            assert(node.camera);
+
+            std::vector<float> position = node.camera->cam_position().to(core::Device::CPU).to(core::DataType::Float32).contiguous().to_vector();
+            if (position.size() < 3)
+                position = {0.0f, 0.0f, 0.0f};
+
+            const auto [focal_x, focal_y, center_x, center_y] = node.camera->get_intrinsics();
+
+            json camera{
+                {"name", node.name},
+                {"uid", node.camera_uid},
+                {"camera_id", node.camera->camera_id()},
+                {"image_name", node.camera->image_name()},
+                {"image_path", core::path_to_utf8(node.camera->image_path())},
+                {"mask_path", core::path_to_utf8(node.camera->mask_path())},
+                {"camera_width", node.camera->camera_width()},
+                {"camera_height", node.camera->camera_height()},
+                {"image_width", node.camera->image_width()},
+                {"image_height", node.camera->image_height()},
+                {"focal_x", focal_x},
+                {"focal_y", focal_y},
+                {"center_x", center_x},
+                {"center_y", center_y},
+                {"fov_x_radians", node.camera->FoVx()},
+                {"fov_y_radians", node.camera->FoVy()},
+                {"position", json::array({position[0], position[1], position[2]})},
+                {"training_enabled", node.training_enabled},
+                {"visible", static_cast<bool>(node.visible)},
+            };
+
+            if (node.parent_id != core::NULL_NODE) {
+                if (const auto* const parent = scene.getNodeById(node.parent_id))
+                    camera["parent"] = parent->name;
+            }
+
+            return camera;
+        }
+
+        json dataset_info_json(const vis::SceneManager& scene_manager) {
+            const auto info = scene_manager.getSceneInfo();
+            const auto& scene = scene_manager.getScene();
+
+            int64_t total_cameras = 0;
+            int64_t active_cameras = 0;
+            int64_t masked_cameras = 0;
+            json camera_groups = json::array();
+            for (const auto* const node : scene.getNodes()) {
+                if (!node)
+                    continue;
+                if (node->type == core::NodeType::CAMERA && node->camera) {
+                    ++total_cameras;
+                    if (node->training_enabled)
+                        ++active_cameras;
+                    if (node->camera->has_mask())
+                        ++masked_cameras;
+                } else if (node->type == core::NodeType::CAMERA_GROUP) {
+                    camera_groups.push_back(node_summary_json(scene, *node));
+                }
+            }
+
+            return json{
+                {"success", true},
+                {"dataset", {
+                    {"path", core::path_to_utf8(scene_manager.getDatasetPath())},
+                    {"source_type", info.source_type},
+                    {"source_path", core::path_to_utf8(info.source_path)},
+                    {"has_model", info.has_model},
+                    {"num_gaussians", static_cast<int64_t>(info.num_gaussians)},
+                    {"num_nodes", static_cast<int64_t>(info.num_nodes)},
+                    {"camera_count", total_cameras},
+                    {"active_camera_count", active_cameras},
+                    {"masked_camera_count", masked_cameras},
+                    {"camera_groups", camera_groups},
+                }},
+            };
+        }
+
+        json ellipsoid_info_json(const vis::SceneManager& scene_manager,
+                                 const vis::RenderingManager* rendering_manager,
+                                 const core::NodeId ellipsoid_id) {
+            const auto& scene = scene_manager.getScene();
+            const auto* const node = scene.getNodeById(ellipsoid_id);
+            assert(node && node->ellipsoid);
+
+            const auto components = decompose_transform(scene.getNodeTransform(node->name));
+            json ellipsoid{
+                {"node", node->name},
+                {"type", node_type_to_string(node->type)},
+                {"radii", vec3_to_json(node->ellipsoid->radii)},
+                {"inverse", node->ellipsoid->inverse},
+                {"enabled", node->ellipsoid->enabled},
+                {"translation", vec3_to_json(components.translation)},
+                {"rotation", vec3_to_json(components.rotation)},
+                {"scale", vec3_to_json(components.scale)},
+                {"local_matrix", mat4_to_json(scene.getNodeTransform(node->name))},
+                {"world_matrix", mat4_to_json(scene.getWorldTransform(ellipsoid_id))},
+            };
+
+            if (node->parent_id != core::NULL_NODE) {
+                if (const auto* const parent = scene.getNodeById(node->parent_id))
+                    ellipsoid["parent"] = parent->name;
+            }
+
+            if (rendering_manager) {
+                const auto settings = rendering_manager->getSettings();
+                ellipsoid["show"] = settings.show_ellipsoid;
+                ellipsoid["use"] = settings.use_ellipsoid;
+            }
+
+            return json{{"success", true}, {"ellipsoid", ellipsoid}};
+        }
+
+        std::expected<core::NodeId, std::string> resolve_ellipsoid_parent_id(
+            const vis::SceneManager& scene_manager,
+            const std::optional<std::string>& requested_node) {
+            return vis::cap::resolveEllipsoidParentId(scene_manager, requested_node);
+        }
+
+        std::expected<core::NodeId, std::string> resolve_ellipsoid_id(
+            const vis::SceneManager& scene_manager,
+            const std::optional<std::string>& requested_node) {
+            return vis::cap::resolveEllipsoidId(scene_manager, requested_node);
+        }
+
+        std::expected<core::NodeId, std::string> ensure_ellipsoid(
+            vis::SceneManager& scene_manager,
+            vis::RenderingManager* rendering_manager,
+            const core::NodeId parent_id) {
+            return vis::cap::ensureEllipsoid(scene_manager, rendering_manager, parent_id);
+        }
+
+        std::expected<void, std::string> fit_ellipsoid_to_parent(
+            vis::SceneManager& scene_manager,
+            vis::RenderingManager* rendering_manager,
+            const core::NodeId ellipsoid_id,
+            const bool use_percentile) {
+            return vis::cap::fitEllipsoidToParent(scene_manager, rendering_manager, ellipsoid_id, use_percentile);
+        }
+
+        std::expected<void, std::string> reset_ellipsoid(
+            vis::SceneManager& scene_manager,
+            vis::RenderingManager* rendering_manager,
+            const core::NodeId ellipsoid_id) {
+            return vis::cap::resetEllipsoid(scene_manager, rendering_manager, ellipsoid_id);
+        }
+
+        const char* export_format_name(const core::ExportFormat format) {
+            switch (format) {
+            case core::ExportFormat::PLY: return "ply";
+            case core::ExportFormat::SOG: return "sog";
+            case core::ExportFormat::SPZ: return "spz";
+            case core::ExportFormat::HTML_VIEWER: return "html";
+            }
+            return "unknown";
+        }
+
+        void collect_exportable_splats(const core::Scene& scene,
+                                       const core::SceneNode& node,
+                                       std::vector<std::string>& out,
+                                       std::unordered_set<std::string>& seen) {
+            if (node.type == core::NodeType::SPLAT && node.model) {
+                if (seen.insert(node.name).second)
+                    out.push_back(node.name);
+                return;
+            }
+
+            for (const auto child_id : node.children) {
+                const auto* const child = scene.getNodeById(child_id);
+                if (child)
+                    collect_exportable_splats(scene, *child, out, seen);
+            }
+        }
+
+        std::expected<std::vector<std::string>, std::string> resolve_export_nodes(
+            const vis::SceneManager& scene_manager,
+            const json& args) {
+            const auto& scene = scene_manager.getScene();
+
+            std::vector<std::string> requested;
+            if (args.contains("nodes")) {
+                const auto& nodes = args["nodes"];
+                if (!nodes.is_array())
+                    return std::unexpected("Field 'nodes' must be an array of node names");
+                requested.reserve(nodes.size());
+                for (const auto& item : nodes)
+                    requested.push_back(item.get<std::string>());
+            } else if (const auto node = optional_string_arg(args, "node")) {
+                requested.push_back(*node);
+            } else {
+                requested = scene_manager.getSelectedNodeNames();
+                if (requested.empty()) {
+                    const auto& training_name = scene.getTrainingModelNodeName();
+                    if (!training_name.empty())
+                        requested.push_back(training_name);
+                }
+            }
+
+            if (requested.empty())
+                return std::unexpected("No exportable node specified and no suitable selection found");
+
+            std::vector<std::string> export_nodes;
+            std::unordered_set<std::string> seen;
+            for (const auto& name : requested) {
+                const auto* const node = scene.getNode(name);
+                if (!node)
+                    return std::unexpected("Node not found: " + name);
+                collect_exportable_splats(scene, *node, export_nodes, seen);
+            }
+
+            if (export_nodes.empty())
+                return std::unexpected("The requested node set does not contain any splat nodes");
+
+            return export_nodes;
+        }
+
+        void truncate_sh_degree(core::SplatData& splat, const int target_degree) {
+            if (target_degree >= splat.get_max_sh_degree())
+                return;
+
+            if (target_degree == 0) {
+                splat.shN() = core::Tensor{};
+            } else {
+                const size_t keep_coeffs = static_cast<size_t>((target_degree + 1) * (target_degree + 1) - 1);
+                auto& sh_n = splat.shN();
+                if (sh_n.is_valid() && sh_n.ndim() >= 2 && sh_n.shape()[1] > keep_coeffs) {
+                    if (sh_n.ndim() == 3) {
+                        sh_n = sh_n.slice(1, 0, static_cast<int64_t>(keep_coeffs)).contiguous();
+                    } else {
+                        constexpr size_t channels = 3;
+                        sh_n = sh_n.slice(1, 0, static_cast<int64_t>(keep_coeffs * channels)).contiguous();
+                    }
+                }
+            }
+
+            splat.set_max_sh_degree(target_degree);
+            splat.set_active_sh_degree(target_degree);
+        }
+
+        std::expected<void, std::string> export_scene_nodes(const vis::SceneManager& scene_manager,
+                                                            const std::vector<std::string>& node_names,
+                                                            const core::ExportFormat format,
+                                                            const std::filesystem::path& path,
+                                                            const int sh_degree) {
+            const auto& scene = scene_manager.getScene();
+            std::vector<std::pair<const core::SplatData*, glm::mat4>> splats;
+            splats.reserve(node_names.size());
+            for (const auto& name : node_names) {
+                const auto* const node = scene.getNode(name);
+                if (node && node->type == core::NodeType::SPLAT && node->model) {
+                    splats.emplace_back(node->model.get(), scene.getWorldTransform(node->id));
+                }
+            }
+
+            if (splats.empty())
+                return std::unexpected("The requested node set does not contain any splat nodes");
+
+            auto merged = core::Scene::mergeSplatsWithTransforms(splats);
+            if (!merged)
+                return std::unexpected("Failed to merge scene nodes for export");
+
+            truncate_sh_degree(*merged, sh_degree);
+
+            switch (format) {
+            case core::ExportFormat::PLY: {
+                if (auto result = io::save_ply(*merged, io::PlySaveOptions{.output_path = path, .binary = true}); !result)
+                    return std::unexpected(result.error().message);
+                break;
+            }
+            case core::ExportFormat::SOG: {
+                if (auto result = io::save_sog(*merged, io::SogSaveOptions{.output_path = path, .kmeans_iterations = 10}); !result)
+                    return std::unexpected(result.error().message);
+                break;
+            }
+            case core::ExportFormat::SPZ: {
+                if (auto result = io::save_spz(*merged, io::SpzSaveOptions{.output_path = path}); !result)
+                    return std::unexpected(result.error().message);
+                break;
+            }
+            case core::ExportFormat::HTML_VIEWER: {
+                if (auto result = vis::gui::export_html_viewer(*merged, vis::gui::HtmlViewerExportOptions{.output_path = path}); !result)
+                    return std::unexpected(result.error());
+                break;
+            }
+            }
+
+            return {};
+        }
+
+        const char* keyframe_easing_name(const uint8_t easing) {
+            switch (easing) {
+            case 0: return "linear";
+            case 1: return "ease_in";
+            case 2: return "ease_out";
+            case 3: return "ease_in_out";
+            default: return "unknown";
+            }
+        }
+
+        json keyframe_node_json(const core::SceneNode& node) {
+            assert(node.keyframe);
+
+            const auto& keyframe = *node.keyframe;
+            return json{
+                {"name", node.name},
+                {"index", static_cast<int64_t>(keyframe.keyframe_index)},
+                {"time", keyframe.time},
+                {"position", vec3_to_json(keyframe.position)},
+                {"rotation_quat", json::array({keyframe.rotation.w, keyframe.rotation.x, keyframe.rotation.y, keyframe.rotation.z})},
+                {"focal_length_mm", keyframe.focal_length_mm},
+                {"easing", keyframe.easing},
+                {"easing_name", keyframe_easing_name(keyframe.easing)},
+            };
+        }
+
+        json sequencer_state_json(const vis::SceneManager& scene_manager) {
+            const auto& scene = scene_manager.getScene();
+
+            std::vector<const core::SceneNode*> keyframes;
+            for (const auto* const node : scene.getNodes()) {
+                if (node && node->type == core::NodeType::KEYFRAME && node->keyframe)
+                    keyframes.push_back(node);
+            }
+
+            std::sort(keyframes.begin(), keyframes.end(), [](const auto* lhs, const auto* rhs) {
+                return lhs->keyframe->keyframe_index < rhs->keyframe->keyframe_index;
+            });
+
+            json keyframe_list = json::array();
+            for (const auto* const node : keyframes)
+                keyframe_list.push_back(keyframe_node_json(*node));
+
+            const auto* const ui_state = python::get_sequencer_ui_state();
+            return json{
+                {"success", true},
+                {"visible", python::is_sequencer_visible()},
+                {"has_keyframes", python::has_keyframes()},
+                {"selected_keyframe", ui_state ? ui_state->selected_keyframe : -1},
+                {"playback_speed", ui_state ? ui_state->playback_speed : 1.0f},
+                {"show_camera_path", ui_state ? ui_state->show_camera_path : true},
+                {"follow_playback", ui_state ? ui_state->follow_playback : false},
+                {"keyframe_count", keyframe_list.size()},
+                {"keyframes", keyframe_list},
+            };
+        }
+
+        std::expected<std::string, std::string> resolve_gaussian_node_name(
+            const vis::SceneManager& scene_manager,
+            const std::optional<std::string>& requested_node) {
+            const auto& scene = scene_manager.getScene();
+            if (requested_node) {
+                const auto* const node = scene.getNode(*requested_node);
+                if (!node)
+                    return std::unexpected("Node not found: " + *requested_node);
+                if (!node->model)
+                    return std::unexpected("Node does not contain gaussian data: " + *requested_node);
+                return *requested_node;
+            }
+
+            const auto selected_name = scene_manager.getSelectedNodeName();
+            if (!selected_name.empty()) {
+                const auto* const node = scene.getNode(selected_name);
+                if (node && node->model)
+                    return selected_name;
+            }
+
+            const auto& training_name = scene.getTrainingModelNodeName();
+            if (!training_name.empty()) {
+                const auto* const node = scene.getNode(training_name);
+                if (node && node->model)
+                    return training_name;
+            }
+
+            return std::unexpected("No gaussian node specified and no suitable selected/training node is available");
+        }
+
+        core::Tensor* resolve_gaussian_field(core::SplatData& splat_data, std::string_view field_name) {
+            if (field_name == "means")
+                return &splat_data.means_raw();
+            if (field_name == "scales" || field_name == "scaling" || field_name == "scaling_raw")
+                return &splat_data.scaling_raw();
+            if (field_name == "rotations" || field_name == "rotation" || field_name == "rotation_raw")
+                return &splat_data.rotation_raw();
+            if (field_name == "opacities" || field_name == "opacity" || field_name == "opacity_raw")
+                return &splat_data.opacity_raw();
+            if (field_name == "sh0")
+                return &splat_data.sh0_raw();
+            if (field_name == "shN")
+                return &splat_data.shN_raw();
+            return nullptr;
+        }
+
+        const core::Tensor* resolve_gaussian_field(const core::SplatData& splat_data, std::string_view field_name) {
+            return resolve_gaussian_field(const_cast<core::SplatData&>(splat_data), field_name);
+        }
+
+        json tensor_payload_json(const core::Tensor& tensor) {
+            json shape = json::array();
+            for (const auto dim : tensor.shape().dims())
+                shape.push_back(static_cast<int64_t>(dim));
+
+            const auto cpu_tensor = tensor.to(core::Device::CPU).to(core::DataType::Float32).contiguous();
+            return json{
+                {"shape", shape},
+                {"values", cpu_tensor.to_vector()},
+            };
+        }
+
+        std::expected<std::vector<int>, std::string> parse_int_array(const json& value, const char* field_name) {
+            if (!value.is_array())
+                return std::unexpected(std::string("Field '") + field_name + "' must be an array of integers");
+
+            std::vector<int> result;
+            result.reserve(value.size());
+            for (const auto& item : value)
+                result.push_back(item.get<int>());
+            return result;
+        }
+
+        std::expected<std::vector<float>, std::string> parse_float_array(const json& value, const char* field_name) {
+            if (!value.is_array())
+                return std::unexpected(std::string("Field '") + field_name + "' must be an array of numbers");
+
+            std::vector<float> result;
+            result.reserve(value.size());
+            for (const auto& item : value)
+                result.push_back(item.get<float>());
+            return result;
+        }
+
+        size_t product_of_tail_dims(const core::Tensor& tensor) {
+            size_t product = 1;
+            const auto& shape = tensor.shape();
+            for (size_t i = 1; i < shape.rank(); ++i)
+                product *= shape[i];
+            return product;
+        }
+
+        json supported_event_types_json() {
+            return json::array({
+                "scene.loaded",
+                "scene.cleared",
+                "scene.changed",
+                "scene.node_added",
+                "scene.node_removed",
+                "scene.node_reparented",
+                "selection.changed",
+                "training.started",
+                "training.progress",
+                "training.paused",
+                "training.resumed",
+                "training.completed",
+                "training.stopped",
+                "dataset.load_started",
+                "dataset.load_progress",
+                "dataset.load_completed",
+                "render.frame",
+                "checkpoint.saved",
+                "keyframes.changed",
+                "export.failed",
+            });
+        }
+
+        class EventSubscriptionRegistry {
+        public:
+            static EventSubscriptionRegistry& instance() {
+                static EventSubscriptionRegistry registry;
+                return registry;
+            }
+
+            std::expected<int64_t, std::string> subscribe(const std::vector<std::string>& types, const size_t max_queue) {
+                std::unordered_set<std::string> supported;
+                for (const auto& value : supported_event_types_json())
+                    supported.insert(value.get<std::string>());
+
+                for (const auto& type : types) {
+                    if (type != "*" && !supported.contains(type))
+                        return std::unexpected("Unsupported event type: " + type);
+                }
+
+                std::lock_guard lock(mutex_);
+                const int64_t id = next_id_++;
+                Subscription sub;
+                sub.max_queue = std::max<size_t>(1, max_queue);
+                for (const auto& type : types)
+                    sub.types.insert(type);
+                subscriptions_.emplace(id, std::move(sub));
+                return id;
+            }
+
+            json poll(const int64_t id, const size_t max_events, const bool clear) {
+                std::lock_guard lock(mutex_);
+                const auto it = subscriptions_.find(id);
+                if (it == subscriptions_.end())
+                    return json{{"error", "Unknown subscription id"}};
+
+                auto& sub = it->second;
+                const size_t count = std::min(max_events, sub.queue.size());
+                json events = json::array();
+                for (size_t i = 0; i < count; ++i)
+                    events.push_back(sub.queue[i]);
+                if (clear) {
+                    for (size_t i = 0; i < count; ++i)
+                        sub.queue.pop_front();
+                }
+
+                return json{
+                    {"success", true},
+                    {"subscription_id", id},
+                    {"available", static_cast<int64_t>(sub.queue.size())},
+                    {"returned", static_cast<int64_t>(events.size())},
+                    {"dropped", static_cast<int64_t>(sub.dropped)},
+                    {"events", events},
+                };
+            }
+
+            bool unsubscribe(const int64_t id) {
+                std::lock_guard lock(mutex_);
+                return subscriptions_.erase(id) > 0;
+            }
+
+            json list() {
+                std::lock_guard lock(mutex_);
+                json subscriptions = json::array();
+                for (const auto& [id, sub] : subscriptions_) {
+                    json types = json::array();
+                    for (const auto& type : sub.types)
+                        types.push_back(type);
+                    subscriptions.push_back({
+                        {"subscription_id", id},
+                        {"types", types},
+                        {"queued", static_cast<int64_t>(sub.queue.size())},
+                        {"dropped", static_cast<int64_t>(sub.dropped)},
+                        {"max_queue", static_cast<int64_t>(sub.max_queue)},
+                    });
+                }
+
+                return json{
+                    {"success", true},
+                    {"supported_types", supported_event_types_json()},
+                    {"subscriptions", subscriptions},
+                };
+            }
+
+        private:
+            struct Subscription {
+                std::unordered_set<std::string> types;
+                std::deque<json> queue;
+                size_t dropped = 0;
+                size_t max_queue = 256;
+            };
+
+            std::mutex mutex_;
+            std::unordered_map<int64_t, Subscription> subscriptions_;
+            int64_t next_id_ = 1;
+            event::ScopedHandler handlers_;
+
+            EventSubscriptionRegistry() {
+                register_handler<core::events::state::SceneLoaded>("scene.loaded", [](const auto& event) {
+                    return json{
+                        {"path", core::path_to_utf8(event.path)},
+                        {"type", static_cast<int>(event.type)},
+                        {"num_gaussians", static_cast<int64_t>(event.num_gaussians)},
+                        {"checkpoint_iteration", event.checkpoint_iteration},
+                    };
+                });
+                register_handler<core::events::state::SceneCleared>("scene.cleared", [](const auto&) { return json::object(); });
+                register_handler<core::events::state::SceneChanged>("scene.changed", [](const auto& event) {
+                    return json{{"mutation_flags", event.mutation_flags}};
+                });
+                register_handler<core::events::state::PLYAdded>("scene.node_added", [](const auto& event) {
+                    return json{
+                        {"name", event.name},
+                        {"node_gaussians", static_cast<int64_t>(event.node_gaussians)},
+                        {"total_gaussians", static_cast<int64_t>(event.total_gaussians)},
+                        {"is_visible", event.is_visible},
+                        {"parent_name", event.parent_name},
+                        {"is_group", event.is_group},
+                        {"node_type", event.node_type},
+                    };
+                });
+                register_handler<core::events::state::PLYRemoved>("scene.node_removed", [](const auto& event) {
+                    return json{
+                        {"name", event.name},
+                        {"children_kept", event.children_kept},
+                        {"parent_of_removed", event.parent_of_removed},
+                    };
+                });
+                register_handler<core::events::state::NodeReparented>("scene.node_reparented", [](const auto& event) {
+                    return json{
+                        {"name", event.name},
+                        {"old_parent", event.old_parent},
+                        {"new_parent", event.new_parent},
+                    };
+                });
+                register_handler<core::events::state::SelectionChanged>("selection.changed", [](const auto& event) {
+                    return json{
+                        {"has_selection", event.has_selection},
+                        {"count", event.count},
+                    };
+                });
+                register_handler<core::events::state::TrainingStarted>("training.started", [](const auto& event) {
+                    return json{{"total_iterations", event.total_iterations}};
+                });
+                register_handler<core::events::state::TrainingProgress>("training.progress", [](const auto& event) {
+                    return json{
+                        {"iteration", event.iteration},
+                        {"loss", event.loss},
+                        {"num_gaussians", static_cast<int64_t>(event.num_gaussians)},
+                        {"is_refining", event.is_refining},
+                    };
+                });
+                register_handler<core::events::state::TrainingPaused>("training.paused", [](const auto& event) {
+                    return json{{"iteration", event.iteration}};
+                });
+                register_handler<core::events::state::TrainingResumed>("training.resumed", [](const auto& event) {
+                    return json{{"iteration", event.iteration}};
+                });
+                register_handler<core::events::state::TrainingCompleted>("training.completed", [](const auto& event) {
+                    json result{
+                        {"iteration", event.iteration},
+                        {"final_loss", event.final_loss},
+                        {"elapsed_seconds", event.elapsed_seconds},
+                        {"success", event.success},
+                        {"user_stopped", event.user_stopped},
+                    };
+                    if (event.error)
+                        result["error"] = *event.error;
+                    return result;
+                });
+                register_handler<core::events::state::TrainingStopped>("training.stopped", [](const auto& event) {
+                    return json{
+                        {"iteration", event.iteration},
+                        {"user_requested", event.user_requested},
+                    };
+                });
+                register_handler<core::events::state::DatasetLoadStarted>("dataset.load_started", [](const auto& event) {
+                    return json{{"path", core::path_to_utf8(event.path)}};
+                });
+                register_handler<core::events::state::DatasetLoadProgress>("dataset.load_progress", [](const auto& event) {
+                    return json{
+                        {"path", core::path_to_utf8(event.path)},
+                        {"progress", event.progress},
+                        {"step", event.step},
+                    };
+                });
+                register_handler<core::events::state::DatasetLoadCompleted>("dataset.load_completed", [](const auto& event) {
+                    json result{
+                        {"path", core::path_to_utf8(event.path)},
+                        {"success", event.success},
+                        {"num_images", static_cast<int64_t>(event.num_images)},
+                        {"num_points", static_cast<int64_t>(event.num_points)},
+                    };
+                    if (event.error)
+                        result["error"] = *event.error;
+                    return result;
+                });
+                register_handler<core::events::state::FrameRendered>("render.frame", [](const auto& event) {
+                    return json{
+                        {"render_ms", event.render_ms},
+                        {"fps", event.fps},
+                        {"num_gaussians", event.num_gaussians},
+                    };
+                });
+                register_handler<core::events::state::CheckpointSaved>("checkpoint.saved", [](const auto& event) {
+                    return json{
+                        {"iteration", event.iteration},
+                        {"path", core::path_to_utf8(event.path)},
+                    };
+                });
+                register_handler<core::events::state::KeyframeListChanged>("keyframes.changed", [](const auto& event) {
+                    return json{{"count", static_cast<int64_t>(event.count)}};
+                });
+                register_handler<core::events::state::ExportFailed>("export.failed", [](const auto& event) {
+                    return json{{"error", event.error}};
+                });
+            }
+
+            template <typename Event, typename Builder>
+            void register_handler(const std::string& type, Builder&& builder) {
+                handlers_.subscribe<Event>(
+                    [this, type, builder = std::forward<Builder>(builder)](const Event& event) mutable {
+                        publish(type, builder(event));
+                    });
+            }
+
+            void publish(const std::string& type, json payload) {
+                const auto timestamp_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                              std::chrono::system_clock::now().time_since_epoch())
+                                              .count();
+
+                std::lock_guard lock(mutex_);
+                for (auto& [_, sub] : subscriptions_) {
+                    if (!sub.types.empty() && !sub.types.contains("*") && !sub.types.contains(type))
+                        continue;
+
+                    if (sub.queue.size() >= sub.max_queue) {
+                        sub.queue.pop_front();
+                        ++sub.dropped;
+                    }
+
+                    sub.queue.push_back(json{
+                        {"type", type},
+                        {"timestamp_ms", timestamp_ms},
+                        {"data", payload},
+                    });
+                }
+            }
+        };
+
     } // namespace
 
     void register_gui_scene_tools(vis::Visualizer* viewer) {
@@ -620,6 +1624,705 @@ namespace lfs::app {
                     response["mime_type"] = "image/png";
                     response["data"] = *result;
                     return response;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "camera.get",
+                .description = "Get the current interactive viewport camera state",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    const auto info = vis::get_current_view_info();
+                    if (!info)
+                        return json{{"error", "Viewport camera bridge is not available"}};
+                    return view_info_json(*info);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "camera.set_view",
+                .description = "Set the interactive viewport camera by eye/target/up, with optional FOV override",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"eye", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Camera eye position [x,y,z]"}}},
+                        {"target", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Camera target/pivot position [x,y,z]"}}},
+                        {"up", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional up vector [x,y,z], defaults to [0,1,0]"}}},
+                        {"fov_degrees", json{{"type", "number"}, {"description", "Optional vertical field of view in degrees"}}}},
+                    .required = {"eye", "target"}}},
+            [viewer_impl](const json& args) -> json {
+                auto eye = optional_vec3_arg(args, "eye");
+                if (!eye)
+                    return json{{"error", eye.error()}};
+                auto target = optional_vec3_arg(args, "target");
+                if (!target)
+                    return json{{"error", target.error()}};
+                auto up = optional_vec3_arg(args, "up");
+                if (!up)
+                    return json{{"error", up.error()}};
+                if (!eye->has_value() || !target->has_value())
+                    return json{{"error", "Fields 'eye' and 'target' must be provided"}};
+
+                const glm::vec3 up_value = up->value_or(glm::vec3(0.0f, 1.0f, 0.0f));
+                const std::optional<float> fov = args.contains("fov_degrees")
+                                                     ? std::optional<float>(args["fov_degrees"].get<float>())
+                                                     : std::nullopt;
+
+                return post_and_wait(viewer_impl, [eye = **eye, target = **target, up_value, fov]() -> json {
+                    vis::apply_set_view(vis::SetViewParams{
+                        .eye = {eye.x, eye.y, eye.z},
+                        .target = {target.x, target.y, target.z},
+                        .up = {up_value.x, up_value.y, up_value.z},
+                    });
+                    if (fov)
+                        vis::apply_set_fov(*fov);
+
+                    const auto info = vis::get_current_view_info();
+                    if (!info)
+                        return json{{"success", true}};
+                    return view_info_json(*info);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "camera.reset",
+                .description = "Reset the interactive viewport camera to its saved home position",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    core::events::cmd::ResetCamera{}.emit();
+                    const auto info = vis::get_current_view_info();
+                    if (!info)
+                        return json{{"success", true}};
+                    return view_info_json(*info);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "camera.list",
+                .description = "List dataset camera nodes currently available in the shared GUI scene",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    const auto& scene = scene_manager->getScene();
+                    json cameras = json::array();
+                    for (const auto* const node : scene.getNodes()) {
+                        if (node && node->type == core::NodeType::CAMERA && node->camera)
+                            cameras.push_back(camera_node_json(scene, *node));
+                    }
+
+                    return json{{"success", true}, {"count", cameras.size()}, {"cameras", cameras}};
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "camera.go_to_dataset_camera",
+                .description = "Move the interactive viewport to a dataset camera by UID or camera node name",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"uid", json{{"type", "integer"}, {"description", "Dataset camera UID"}}},
+                        {"node", json{{"type", "string"}, {"description", "Dataset camera node name"}}}},
+                    .required = {}}},
+            [viewer_impl](const json& args) -> json {
+                const std::optional<int> uid = args.contains("uid")
+                                                   ? std::optional<int>(args["uid"].get<int>())
+                                                   : std::nullopt;
+                const auto node_name = optional_string_arg(args, "node");
+                if (!uid && !node_name)
+                    return json{{"error", "Either 'uid' or 'node' must be provided"}};
+
+                return post_and_wait(viewer_impl, [viewer_impl, uid, node_name]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    const auto& scene = scene_manager->getScene();
+                    const core::SceneNode* target = nullptr;
+                    if (node_name) {
+                        target = scene.getNode(*node_name);
+                        if (!target || target->type != core::NodeType::CAMERA || !target->camera)
+                            return json{{"error", "Camera node not found: " + *node_name}};
+                    } else {
+                        for (const auto* const node : scene.getNodes()) {
+                            if (node && node->type == core::NodeType::CAMERA && node->camera &&
+                                node->camera_uid == *uid) {
+                                target = node;
+                                break;
+                            }
+                        }
+                        if (!target)
+                            return json{{"error", "Camera UID not found: " + std::to_string(*uid)}};
+                    }
+
+                    core::events::cmd::GoToCamView{.cam_id = target->camera_uid}.emit();
+                    return json{{"success", true}, {"camera", camera_node_json(scene, *target)}};
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "history.get",
+                .description = "Inspect the shared undo/redo history state",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    return history_json();
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "history.undo",
+                .description = "Undo the most recent shared scene operation",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    if (!vis::op::undoHistory().canUndo())
+                        return json{{"error", "Nothing to undo"}};
+                    core::events::cmd::Undo{}.emit();
+                    auto result = history_json();
+                    result["performed"] = "undo";
+                    return result;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "history.redo",
+                .description = "Redo the next shared scene operation",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    if (!vis::op::undoHistory().canRedo())
+                        return json{{"error", "Nothing to redo"}};
+                    core::events::cmd::Redo{}.emit();
+                    auto result = history_json();
+                    result["performed"] = "redo";
+                    return result;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "render.settings.get",
+                .description = "Read the current viewport render settings",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    const auto settings = vis::get_render_settings();
+                    if (!settings)
+                        return json{{"error", "Render settings bridge is not available"}};
+                    return render_settings_json(*settings);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "render.settings.set",
+                .description = "Update one or more viewport render settings",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"focal_length_mm", json{{"type", "number"}}},
+                        {"render_scale", json{{"type", "number"}}},
+                        {"background_color", json{{"type", "array"}, {"items", json{{"type", "number"}}}}},
+                        {"antialiasing", json{{"type", "boolean"}}},
+                        {"show_grid", json{{"type", "boolean"}}},
+                        {"show_camera_frustums", json{{"type", "boolean"}}},
+                        {"point_cloud_mode", json{{"type", "boolean"}}},
+                        {"show_crop_box", json{{"type", "boolean"}}},
+                        {"use_crop_box", json{{"type", "boolean"}}},
+                        {"show_ellipsoid", json{{"type", "boolean"}}},
+                        {"use_ellipsoid", json{{"type", "boolean"}}},
+                        {"ppisp_exposure", json{{"type", "number"}}},
+                        {"ppisp", json{{"type", "object"}}}},
+                    .required = {}}},
+            [viewer_impl](const json& args) -> json {
+                return post_and_wait(viewer_impl, [args]() -> json {
+                    auto settings = vis::get_render_settings();
+                    if (!settings)
+                        return json{{"error", "Render settings bridge is not available"}};
+
+                    if (auto result = apply_render_settings_patch(args, *settings); !result)
+                        return json{{"error", result.error()}};
+
+                    vis::update_render_settings(*settings);
+                    const auto updated = vis::get_render_settings();
+                    if (!updated)
+                        return json{{"success", true}};
+                    return render_settings_json(*updated);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "dataset.get_info",
+                .description = "Inspect the current dataset/training scene metadata",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+                    return dataset_info_json(*scene_manager);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.set_node_visibility",
+                .description = "Show or hide a scene node using the same command path as the UI",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"name", json{{"type", "string"}, {"description", "Node name"}}},
+                        {"visible", json{{"type", "boolean"}, {"description", "Whether the node should be visible"}}}},
+                    .required = {"name", "visible"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::string name = args["name"].get<std::string>();
+                const bool visible = args["visible"].get<bool>();
+
+                return post_and_wait(viewer_impl, [viewer_impl, name, visible]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+                    const auto& scene = scene_manager->getScene();
+                    if (!scene.getNode(name))
+                        return json{{"error", "Node not found: " + name}};
+
+                    core::events::cmd::SetPLYVisibility{.name = name, .visible = visible}.emit();
+                    if (const auto* const node = scene.getNode(name))
+                        return json{{"success", true}, {"node", node_summary_json(scene, *node)}};
+                    return json{{"success", true}, {"name", name}, {"visible", visible}};
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.set_node_locked",
+                .description = "Lock or unlock a scene node for editing",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"name", json{{"type", "string"}, {"description", "Node name"}}},
+                        {"locked", json{{"type", "boolean"}, {"description", "Whether the node should be locked"}}}},
+                    .required = {"name", "locked"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::string name = args["name"].get<std::string>();
+                const bool locked = args["locked"].get<bool>();
+
+                return post_and_wait(viewer_impl, [viewer_impl, name, locked]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+                    const auto& scene = scene_manager->getScene();
+                    if (!scene.getNode(name))
+                        return json{{"error", "Node not found: " + name}};
+
+                    core::events::cmd::SetNodeLocked{.name = name, .locked = locked}.emit();
+                    if (const auto* const node = scene.getNode(name))
+                        return json{{"success", true}, {"node", node_summary_json(scene, *node)}};
+                    return json{{"success", true}, {"name", name}, {"locked", locked}};
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.rename_node",
+                .description = "Rename a scene node",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"old_name", json{{"type", "string"}, {"description", "Current node name"}}},
+                        {"new_name", json{{"type", "string"}, {"description", "New node name"}}}},
+                    .required = {"old_name", "new_name"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::string old_name = args["old_name"].get<std::string>();
+                const std::string new_name = args["new_name"].get<std::string>();
+
+                return post_and_wait(viewer_impl, [viewer_impl, old_name, new_name]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+                    const auto& scene = scene_manager->getScene();
+                    if (!scene.getNode(old_name))
+                        return json{{"error", "Node not found: " + old_name}};
+
+                    core::events::cmd::RenamePLY{.old_name = old_name, .new_name = new_name}.emit();
+                    if (const auto* const node = scene.getNode(new_name))
+                        return json{{"success", true}, {"node", node_summary_json(scene, *node)}};
+                    return json{{"error", "Rename did not produce a node named: " + new_name}};
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.reparent_node",
+                .description = "Reparent a scene node under another node or move it to the root",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"name", json{{"type", "string"}, {"description", "Node to move"}}},
+                        {"parent", json{{"type", "string"}, {"description", "New parent node; omit or null for root"}}}},
+                    .required = {"name"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::string name = args["name"].get<std::string>();
+                const auto parent = optional_string_arg(args, "parent");
+
+                return post_and_wait(viewer_impl, [viewer_impl, name, parent]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+                    const auto& scene = scene_manager->getScene();
+                    if (!scene.getNode(name))
+                        return json{{"error", "Node not found: " + name}};
+                    if (parent && !scene.getNode(*parent))
+                        return json{{"error", "Parent node not found: " + *parent}};
+
+                    core::events::cmd::ReparentNode{.node_name = name, .new_parent_name = parent.value_or("")}.emit();
+                    if (const auto* const node = scene.getNode(name))
+                        return json{{"success", true}, {"node", node_summary_json(scene, *node)}};
+                    return json{{"error", "Node disappeared after reparent: " + name}};
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.add_group",
+                .description = "Create a new empty group node",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"name", json{{"type", "string"}, {"description", "Requested group name"}}},
+                        {"parent", json{{"type", "string"}, {"description", "Optional parent node name"}}}},
+                    .required = {"name"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::string name = args["name"].get<std::string>();
+                const auto parent = optional_string_arg(args, "parent");
+
+                return post_and_wait(viewer_impl, [viewer_impl, name, parent]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+                    const auto& scene = scene_manager->getScene();
+                    if (parent && !scene.getNode(*parent))
+                        return json{{"error", "Parent node not found: " + *parent}};
+
+                    std::unordered_set<std::string> before;
+                    for (const auto* const node : scene.getNodes()) {
+                        if (node)
+                            before.insert(node->name);
+                    }
+
+                    core::events::cmd::AddGroup{.name = name, .parent_name = parent.value_or("")}.emit();
+
+                    for (const auto* const node : scene.getNodes()) {
+                        if (node && node->type == core::NodeType::GROUP && !before.contains(node->name))
+                            return json{{"success", true}, {"node", node_summary_json(scene, *node)}};
+                    }
+
+                    return json{{"error", "Group creation did not add a new group node"}};
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.duplicate_node",
+                .description = "Duplicate a scene node and its descendants",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"name", json{{"type", "string"}, {"description", "Node to duplicate"}}}},
+                    .required = {"name"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::string name = args["name"].get<std::string>();
+
+                return post_and_wait(viewer_impl, [viewer_impl, name]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+                    const auto& scene = scene_manager->getScene();
+                    if (!scene.getNode(name))
+                        return json{{"error", "Node not found: " + name}};
+
+                    std::unordered_set<std::string> before;
+                    for (const auto* const node : scene.getNodes()) {
+                        if (node)
+                            before.insert(node->name);
+                    }
+
+                    core::events::cmd::DuplicateNode{.name = name}.emit();
+
+                    json nodes = json::array();
+                    for (const auto* const node : scene.getNodes()) {
+                        if (node && !before.contains(node->name))
+                            nodes.push_back(node_summary_json(scene, *node));
+                    }
+
+                    if (nodes.empty())
+                        return json{{"error", "Node duplication did not add any nodes"}};
+                    return json{{"success", true}, {"count", nodes.size()}, {"nodes", nodes}};
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.merge_group",
+                .description = "Merge the splat children of a group into a single splat node",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"name", json{{"type", "string"}, {"description", "Group node to merge"}}}},
+                    .required = {"name"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::string name = args["name"].get<std::string>();
+
+                return post_and_wait(viewer_impl, [viewer_impl, name]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+                    const auto& scene = scene_manager->getScene();
+                    const auto* const group = scene.getNode(name);
+                    if (!group)
+                        return json{{"error", "Node not found: " + name}};
+                    if (group->type != core::NodeType::GROUP)
+                        return json{{"error", "Node is not a group: " + name}};
+
+                    std::unordered_set<std::string> before;
+                    for (const auto* const node : scene.getNodes()) {
+                        if (node)
+                            before.insert(node->name);
+                    }
+
+                    core::events::cmd::MergeGroup{.name = name}.emit();
+
+                    for (const auto* const node : scene.getNodes()) {
+                        if (node && !before.contains(node->name))
+                            return json{{"success", true}, {"node", node_summary_json(scene, *node)}};
+                    }
+
+                    return json{{"error", "Group merge did not create a merged node"}};
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.delete_node",
+                .description = "Delete a scene node, optionally keeping its children attached to the parent",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"name", json{{"type", "string"}, {"description", "Node to remove"}}},
+                        {"keep_children", json{{"type", "boolean"}, {"description", "Keep the children and reparent them to the removed node's parent (default: false)"}}}},
+                    .required = {"name"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::string name = args["name"].get<std::string>();
+                const bool keep_children = args.value("keep_children", false);
+
+                return post_and_wait(viewer_impl, [viewer_impl, name, keep_children]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+                    const auto& scene = scene_manager->getScene();
+                    if (!scene.getNode(name))
+                        return json{{"error", "Node not found: " + name}};
+
+                    core::events::cmd::RemovePLY{.name = name, .keep_children = keep_children}.emit();
+                    return json{{"success", true}, {"removed", name}, {"keep_children", keep_children}};
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.export_ply",
+                .description = "Start an asynchronous export of one or more scene nodes to PLY",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
+                        {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
+                        {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                    .required = {"path"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::filesystem::path path = args["path"].get<std::string>();
+                const int sh_degree = args.value("sh_degree", 3);
+
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    auto node_names = resolve_export_nodes(*scene_manager, args);
+                    if (!node_names)
+                        return json{{"error", node_names.error()}};
+
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::PLY, path, sh_degree); !result)
+                        return json{{"error", result.error()}};
+
+                    return json{
+                        {"success", true},
+                        {"started", false},
+                        {"completed", true},
+                        {"format", "ply"},
+                        {"path", core::path_to_utf8(path)},
+                        {"nodes", *node_names},
+                    };
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.export_sog",
+                .description = "Start an asynchronous export of one or more scene nodes to SOG",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
+                        {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
+                        {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                    .required = {"path"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::filesystem::path path = args["path"].get<std::string>();
+                const int sh_degree = args.value("sh_degree", 3);
+
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    auto node_names = resolve_export_nodes(*scene_manager, args);
+                    if (!node_names)
+                        return json{{"error", node_names.error()}};
+
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SOG, path, sh_degree); !result)
+                        return json{{"error", result.error()}};
+
+                    return json{
+                        {"success", true},
+                        {"started", false},
+                        {"completed", true},
+                        {"format", "sog"},
+                        {"path", core::path_to_utf8(path)},
+                        {"nodes", *node_names},
+                    };
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.export_spz",
+                .description = "Start an asynchronous export of one or more scene nodes to SPZ",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
+                        {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
+                        {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                    .required = {"path"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::filesystem::path path = args["path"].get<std::string>();
+                const int sh_degree = args.value("sh_degree", 3);
+
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    auto node_names = resolve_export_nodes(*scene_manager, args);
+                    if (!node_names)
+                        return json{{"error", node_names.error()}};
+
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::SPZ, path, sh_degree); !result)
+                        return json{{"error", result.error()}};
+
+                    return json{
+                        {"success", true},
+                        {"started", false},
+                        {"completed", true},
+                        {"format", "spz"},
+                        {"path", core::path_to_utf8(path)},
+                        {"nodes", *node_names},
+                    };
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.export_html",
+                .description = "Start an asynchronous export of one or more scene nodes to the standalone HTML viewer",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"path", json{{"type", "string"}, {"description", "Destination file path"}}},
+                        {"node", json{{"type", "string"}, {"description", "Optional node name"}}},
+                        {"nodes", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Optional list of node names"}}},
+                        {"sh_degree", json{{"type", "integer"}, {"description", "Optional SH degree to keep in the export"}}}},
+                    .required = {"path"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::filesystem::path path = args["path"].get<std::string>();
+                const int sh_degree = args.value("sh_degree", 3);
+
+                return post_and_wait(viewer_impl, [viewer_impl, args, path, sh_degree]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    auto node_names = resolve_export_nodes(*scene_manager, args);
+                    if (!node_names)
+                        return json{{"error", node_names.error()}};
+
+                    if (auto result = export_scene_nodes(*scene_manager, *node_names, core::ExportFormat::HTML_VIEWER, path, sh_degree); !result)
+                        return json{{"error", result.error()}};
+
+                    return json{
+                        {"success", true},
+                        {"started", false},
+                        {"completed", true},
+                        {"format", "html"},
+                        {"path", core::path_to_utf8(path)},
+                        {"nodes", *node_names},
+                    };
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.export_status",
+                .description = "Report the export execution mode for scene exports",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    return json{
+                        {"success", true},
+                        {"active", false},
+                        {"mode", "synchronous"},
+                        {"stage", "idle"},
+                    };
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "scene.export_cancel",
+                .description = "Scene exports run synchronously and cannot be cancelled once started",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    return json{{"error", "Scene exports run synchronously and cannot be cancelled"}};
                 });
             });
 
@@ -1370,6 +3073,203 @@ namespace lfs::app {
                 });
             });
 
+        registry.register_tool(
+            McpTool{
+                .name = "ellipsoid.add",
+                .description = "Add or reuse an ellipsoid helper for a node in the shared GUI scene",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"node", json{{"type", "string"}, {"description", "Optional splat or pointcloud node name; defaults to the current selected node"}}}},
+                    .required = {}}},
+            [viewer_impl](const json& args) -> json {
+                const auto requested_node = optional_string_arg(args, "node");
+
+                return post_and_wait(viewer_impl, [viewer_impl, requested_node]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    auto* const rendering_manager = viewer_impl->getRenderingManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    auto parent_id = resolve_ellipsoid_parent_id(*scene_manager, requested_node);
+                    if (!parent_id)
+                        return json{{"error", parent_id.error()}};
+
+                    auto ellipsoid_id = ensure_ellipsoid(*scene_manager, rendering_manager, *parent_id);
+                    if (!ellipsoid_id)
+                        return json{{"error", ellipsoid_id.error()}};
+
+                    return ellipsoid_info_json(*scene_manager, rendering_manager, *ellipsoid_id);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "ellipsoid.get",
+                .description = "Inspect an ellipsoid helper in the shared GUI scene",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"node", json{{"type", "string"}, {"description", "Optional ellipsoid node or parent node name; defaults to the current selected ellipsoid"}}}},
+                    .required = {}}},
+            [viewer_impl](const json& args) -> json {
+                const auto requested_node = optional_string_arg(args, "node");
+
+                return post_and_wait(viewer_impl, [viewer_impl, requested_node]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    auto* const rendering_manager = viewer_impl->getRenderingManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    auto ellipsoid_id = resolve_ellipsoid_id(*scene_manager, requested_node);
+                    if (!ellipsoid_id)
+                        return json{{"error", ellipsoid_id.error()}};
+
+                    return ellipsoid_info_json(*scene_manager, rendering_manager, *ellipsoid_id);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "ellipsoid.set",
+                .description = "Update ellipsoid radii, transform, or render toggles in the shared GUI scene",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"node", json{{"type", "string"}, {"description", "Optional ellipsoid node or parent node name; defaults to the current selected ellipsoid"}}},
+                        {"radii", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional ellipsoid radii"}}},
+                        {"translation", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local XYZ translation"}}},
+                        {"rotation", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local XYZ Euler rotation in radians"}}},
+                        {"scale", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional local XYZ scale"}}},
+                        {"inverse", json{{"type", "boolean"}, {"description", "Invert the ellipsoid selection volume"}}},
+                        {"enabled", json{{"type", "boolean"}, {"description", "Enable ellipsoid filtering for this helper"}}},
+                        {"show", json{{"type", "boolean"}, {"description", "Show ellipsoids in the viewport"}}},
+                        {"use", json{{"type", "boolean"}, {"description", "Use ellipsoid filtering in rendering"}}}},
+                    .required = {}}},
+            [viewer_impl](const json& args) -> json {
+                const auto requested_node = optional_string_arg(args, "node");
+                auto radii = optional_vec3_arg(args, "radii");
+                if (!radii)
+                    return json{{"error", radii.error()}};
+                auto translation = optional_vec3_arg(args, "translation");
+                if (!translation)
+                    return json{{"error", translation.error()}};
+                auto rotation = optional_vec3_arg(args, "rotation");
+                if (!rotation)
+                    return json{{"error", rotation.error()}};
+                auto scale = optional_vec3_arg(args, "scale");
+                if (!scale)
+                    return json{{"error", scale.error()}};
+
+                const bool has_inverse = args.contains("inverse");
+                const bool has_enabled = args.contains("enabled");
+                const bool has_show = args.contains("show");
+                const bool has_use = args.contains("use");
+
+                if (!radii->has_value() && !translation->has_value() && !rotation->has_value() &&
+                    !scale->has_value() && !has_inverse && !has_enabled && !has_show && !has_use) {
+                    return json{{"error", "No ellipsoid fields were provided"}};
+                }
+
+                const bool inverse = has_inverse ? args["inverse"].get<bool>() : false;
+                const bool enabled = has_enabled ? args["enabled"].get<bool>() : false;
+                const bool show = has_show ? args["show"].get<bool>() : false;
+                const bool use = has_use ? args["use"].get<bool>() : false;
+
+                return post_and_wait(viewer_impl, [viewer_impl, requested_node, radii = *radii, translation = *translation, rotation = *rotation, scale = *scale, has_inverse, inverse, has_enabled, enabled, has_show, show, has_use, use]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    auto* const rendering_manager = viewer_impl->getRenderingManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    auto ellipsoid_id = resolve_ellipsoid_id(*scene_manager, requested_node);
+                    if (!ellipsoid_id)
+                        return json{{"error", ellipsoid_id.error()}};
+
+                    vis::cap::EllipsoidUpdate update;
+                    update.radii = radii;
+                    update.translation = translation;
+                    update.rotation = rotation;
+                    update.scale = scale;
+                    update.has_inverse = has_inverse;
+                    update.inverse = inverse;
+                    update.has_enabled = has_enabled;
+                    update.enabled = enabled;
+                    update.has_show = has_show;
+                    update.show = show;
+                    update.has_use = has_use;
+                    update.use = use;
+
+                    if (auto result = vis::cap::updateEllipsoid(
+                            *scene_manager, rendering_manager, *ellipsoid_id, update);
+                        !result) {
+                        return json{{"error", result.error()}};
+                    }
+
+                    return ellipsoid_info_json(*scene_manager, rendering_manager, *ellipsoid_id);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "ellipsoid.fit",
+                .description = "Fit an ellipsoid helper to its parent node bounds",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"node", json{{"type", "string"}, {"description", "Optional ellipsoid node or parent node name; defaults to the current selected ellipsoid"}}},
+                        {"use_percentile", json{{"type", "boolean"}, {"description", "Use percentile bounds instead of strict min/max (default: true)"}}}},
+                    .required = {}}},
+            [viewer_impl](const json& args) -> json {
+                const auto requested_node = optional_string_arg(args, "node");
+                const bool use_percentile = args.value("use_percentile", true);
+
+                return post_and_wait(viewer_impl, [viewer_impl, requested_node, use_percentile]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    auto* const rendering_manager = viewer_impl->getRenderingManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    auto ellipsoid_id = resolve_ellipsoid_id(*scene_manager, requested_node);
+                    if (!ellipsoid_id)
+                        return json{{"error", ellipsoid_id.error()}};
+
+                    if (auto result = fit_ellipsoid_to_parent(*scene_manager, rendering_manager, *ellipsoid_id, use_percentile); !result)
+                        return json{{"error", result.error()}};
+
+                    return ellipsoid_info_json(*scene_manager, rendering_manager, *ellipsoid_id);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "ellipsoid.reset",
+                .description = "Reset an ellipsoid helper to default radii and identity transform",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"node", json{{"type", "string"}, {"description", "Optional ellipsoid node or parent node name; defaults to the current selected ellipsoid"}}}},
+                    .required = {}}},
+            [viewer_impl](const json& args) -> json {
+                const auto requested_node = optional_string_arg(args, "node");
+
+                return post_and_wait(viewer_impl, [viewer_impl, requested_node]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    auto* const rendering_manager = viewer_impl->getRenderingManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    auto ellipsoid_id = resolve_ellipsoid_id(*scene_manager, requested_node);
+                    if (!ellipsoid_id)
+                        return json{{"error", ellipsoid_id.error()}};
+
+                    if (auto result = reset_ellipsoid(*scene_manager, rendering_manager, *ellipsoid_id); !result)
+                        return json{{"error", result.error()}};
+
+                    return ellipsoid_info_json(*scene_manager, rendering_manager, *ellipsoid_id);
+                });
+            });
+
         // --- Editor tools ---
 
         registry.register_tool(
@@ -1545,6 +3445,609 @@ namespace lfs::app {
                         {"was_running", was_running},
                         {"running", console.isScriptRunning()},
                     };
+                });
+            });
+
+        // --- Event, Tensor, and Sequencer tools ---
+
+        registry.register_tool(
+            McpTool{
+                .name = "events.subscribe",
+                .description = "Create a polling subscription for shared scene/training/render events",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"types", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Event types to receive; omit or use ['*'] for all supported types"}}},
+                        {"max_queue", json{{"type", "integer"}, {"description", "Maximum queued events to retain before dropping oldest events (default: 256)"}}}},
+                    .required = {}}},
+            [](const json& args) -> json {
+                std::vector<std::string> types;
+                if (args.contains("types")) {
+                    const auto& value = args["types"];
+                    if (!value.is_array())
+                        return json{{"error", "Field 'types' must be an array of strings"}};
+                    types.reserve(value.size());
+                    for (const auto& item : value)
+                        types.push_back(item.get<std::string>());
+                }
+                if (types.empty())
+                    types.push_back("*");
+
+                const size_t max_queue = static_cast<size_t>(args.value("max_queue", 256));
+                auto subscription_id = EventSubscriptionRegistry::instance().subscribe(types, max_queue);
+                if (!subscription_id)
+                    return json{{"error", subscription_id.error()}};
+
+                return json{
+                    {"success", true},
+                    {"subscription_id", *subscription_id},
+                    {"types", types},
+                    {"max_queue", static_cast<int64_t>(max_queue)},
+                    {"supported_types", supported_event_types_json()},
+                };
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "events.poll",
+                .description = "Poll queued events for a subscription created with events.subscribe",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"subscription_id", json{{"type", "integer"}, {"description", "Subscription identifier"}}},
+                        {"max_events", json{{"type", "integer"}, {"description", "Maximum queued events to return (default: 100)"}}},
+                        {"clear", json{{"type", "boolean"}, {"description", "Remove returned events from the queue (default: true)"}}}},
+                    .required = {"subscription_id"}}},
+            [](const json& args) -> json {
+                const int64_t subscription_id = args["subscription_id"].get<int64_t>();
+                const size_t max_events = static_cast<size_t>(args.value("max_events", 100));
+                const bool clear = args.value("clear", true);
+                return EventSubscriptionRegistry::instance().poll(subscription_id, max_events, clear);
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "events.unsubscribe",
+                .description = "Remove an events polling subscription",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"subscription_id", json{{"type", "integer"}, {"description", "Subscription identifier"}}}},
+                    .required = {"subscription_id"}}},
+            [](const json& args) -> json {
+                const int64_t subscription_id = args["subscription_id"].get<int64_t>();
+                return json{
+                    {"success", EventSubscriptionRegistry::instance().unsubscribe(subscription_id)},
+                    {"subscription_id", subscription_id},
+                };
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "events.list",
+                .description = "List active event subscriptions and supported event types",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [](const json&) -> json {
+                return EventSubscriptionRegistry::instance().list();
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "gaussians.read",
+                .description = "Read raw gaussian parameter tensors for a node and index set",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"node", json{{"type", "string"}, {"description", "Optional gaussian node name; defaults to the selected or training node"}}},
+                        {"fields", json{{"type", "array"}, {"items", json{{"type", "string"}}}, {"description", "Field names to read (means, scales/scaling_raw, rotations/rotation_raw, opacities/opacity_raw, sh0, shN)"}}},
+                        {"indices", json{{"type", "array"}, {"items", json{{"type", "integer"}}}, {"description", "Optional gaussian indices to read"}}},
+                        {"limit", json{{"type", "integer"}, {"description", "When indices are omitted, read the first N rows (default: 256)"}}}},
+                    .required = {"fields"}}},
+            [viewer_impl](const json& args) -> json {
+                const auto requested_node = optional_string_arg(args, "node");
+                if (!args.contains("fields") || !args["fields"].is_array())
+                    return json{{"error", "Field 'fields' must be an array of field names"}};
+
+                std::vector<std::string> fields;
+                fields.reserve(args["fields"].size());
+                for (const auto& item : args["fields"])
+                    fields.push_back(item.get<std::string>());
+
+                std::optional<std::vector<int>> indices;
+                if (args.contains("indices")) {
+                    auto parsed = parse_int_array(args["indices"], "indices");
+                    if (!parsed)
+                        return json{{"error", parsed.error()}};
+                    indices = std::move(*parsed);
+                }
+                const int limit = args.value("limit", 256);
+
+                return post_and_wait(viewer_impl, [viewer_impl, requested_node, fields = std::move(fields), indices = std::move(indices), limit]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    auto node_name = resolve_gaussian_node_name(*scene_manager, requested_node);
+                    if (!node_name)
+                        return json{{"error", node_name.error()}};
+
+                    const auto& scene = scene_manager->getScene();
+                    const auto* const node = scene.getNode(*node_name);
+                    if (!node || !node->model)
+                        return json{{"error", "Gaussian node not found: " + *node_name}};
+
+                    std::vector<int> resolved_indices = indices.value_or(std::vector<int>{});
+                    if (!indices) {
+                        const int max_count = std::max(0, std::min(limit, static_cast<int>(node->model->size())));
+                        resolved_indices.reserve(static_cast<size_t>(max_count));
+                        for (int i = 0; i < max_count; ++i)
+                            resolved_indices.push_back(i);
+                    }
+
+                    for (const int index : resolved_indices) {
+                        if (index < 0 || static_cast<size_t>(index) >= node->model->size())
+                            return json{{"error", "Gaussian index out of range: " + std::to_string(index)}};
+                    }
+
+                    const auto index_tensor = core::Tensor::from_vector(
+                        resolved_indices,
+                        {resolved_indices.size()},
+                        node->model->means_raw().device());
+
+                    json field_payloads = json::object();
+                    for (const auto& field_name : fields) {
+                        const auto* const field = resolve_gaussian_field(*node->model, field_name);
+                        if (!field)
+                            return json{{"error", "Unsupported gaussian field: " + field_name}};
+
+                        field_payloads[field_name] = tensor_payload_json(field->index_select(0, index_tensor));
+                    }
+
+                    return json{
+                        {"success", true},
+                        {"node", *node_name},
+                        {"count", static_cast<int64_t>(resolved_indices.size())},
+                        {"indices", resolved_indices},
+                        {"fields", field_payloads},
+                    };
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "gaussians.write",
+                .description = "Write raw gaussian parameter tensor rows for a node and index set",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"node", json{{"type", "string"}, {"description", "Optional gaussian node name; defaults to the selected or training node"}}},
+                        {"field", json{{"type", "string"}, {"description", "Field name to update (means, scales/scaling_raw, rotations/rotation_raw, opacities/opacity_raw, sh0, shN)"}}},
+                        {"indices", json{{"type", "array"}, {"items", json{{"type", "integer"}}}, {"description", "Gaussian row indices to update"}}},
+                        {"values", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Flat row-major values for the selected tensor slice"}}}},
+                    .required = {"field", "indices", "values"}}},
+            [viewer_impl](const json& args) -> json {
+                const auto requested_node = optional_string_arg(args, "node");
+                const std::string field_name = args["field"].get<std::string>();
+                auto indices = parse_int_array(args["indices"], "indices");
+                if (!indices)
+                    return json{{"error", indices.error()}};
+                auto values = parse_float_array(args["values"], "values");
+                if (!values)
+                    return json{{"error", values.error()}};
+
+                return post_and_wait(viewer_impl, [viewer_impl, requested_node, field_name, indices = std::move(*indices), values = std::move(*values)]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    auto* const rendering_manager = viewer_impl->getRenderingManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    auto node_name = resolve_gaussian_node_name(*scene_manager, requested_node);
+                    if (!node_name)
+                        return json{{"error", node_name.error()}};
+
+                    auto& scene = scene_manager->getScene();
+                    auto* const node = scene.getMutableNode(*node_name);
+                    if (!node || !node->model)
+                        return json{{"error", "Gaussian node not found: " + *node_name}};
+
+                    auto* const field = resolve_gaussian_field(*node->model, field_name);
+                    if (!field)
+                        return json{{"error", "Unsupported gaussian field: " + field_name}};
+
+                    for (const int index : indices) {
+                        if (index < 0 || static_cast<size_t>(index) >= node->model->size())
+                            return json{{"error", "Gaussian index out of range: " + std::to_string(index)}};
+                    }
+
+                    const size_t row_width = product_of_tail_dims(*field);
+                    const size_t expected_values = row_width * indices.size();
+                    if (values.size() != expected_values) {
+                        return json{{"error", "Field slice expects " + std::to_string(expected_values) +
+                                                   " values but received " + std::to_string(values.size())}};
+                    }
+
+                    const auto& field_shape = field->shape();
+                    if (field_shape.rank() == 0)
+                        return json{{"error", "Gaussian tensor field has invalid rank"}};
+                    auto shape_dims = field_shape.dims();
+                    shape_dims[0] = indices.size();
+
+                    const auto index_tensor = core::Tensor::from_vector(indices, {indices.size()}, field->device());
+                    const auto src_tensor = core::Tensor::from_vector(values, core::TensorShape(shape_dims), field->device());
+                    field->index_copy_(0, index_tensor, src_tensor);
+
+                    scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+                    if (rendering_manager)
+                        rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+
+                    return json{
+                        {"success", true},
+                        {"node", *node_name},
+                        {"field", field_name},
+                        {"updated_count", static_cast<int64_t>(indices.size())},
+                    };
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "sequencer.get",
+                .description = "Inspect sequencer visibility, selected keyframe, and the mirrored keyframe scene nodes",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+                    return sequencer_state_json(*scene_manager);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "sequencer.add_keyframe",
+                .description = "Add a keyframe at the current viewport camera, optionally setting the camera first",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"eye", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera eye position [x,y,z]"}}},
+                        {"target", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera target [x,y,z]"}}},
+                        {"up", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera up vector [x,y,z]"}}},
+                        {"fov_degrees", json{{"type", "number"}, {"description", "Optional camera FOV override"}}},
+                        {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel before operating (default: true)"}}}},
+                    .required = {}}},
+            [viewer_impl](const json& args) -> json {
+                auto eye = optional_vec3_arg(args, "eye");
+                if (!eye)
+                    return json{{"error", eye.error()}};
+                auto target = optional_vec3_arg(args, "target");
+                if (!target)
+                    return json{{"error", target.error()}};
+                auto up = optional_vec3_arg(args, "up");
+                if (!up)
+                    return json{{"error", up.error()}};
+                if (eye->has_value() != target->has_value())
+                    return json{{"error", "Fields 'eye' and 'target' must either both be provided or both be omitted"}};
+
+                const std::optional<float> fov = args.contains("fov_degrees")
+                                                     ? std::optional<float>(args["fov_degrees"].get<float>())
+                                                     : std::nullopt;
+                const bool show_sequencer = args.value("show_sequencer", true);
+
+                return post_and_wait(viewer_impl, [viewer_impl, eye = *eye, target = *target, up = *up, fov, show_sequencer]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    if (show_sequencer)
+                        python::set_sequencer_visible(true);
+                    if (eye && target) {
+                        const glm::vec3 up_value = up.value_or(glm::vec3(0.0f, 1.0f, 0.0f));
+                        vis::apply_set_view(vis::SetViewParams{
+                            .eye = {eye->x, eye->y, eye->z},
+                            .target = {target->x, target->y, target->z},
+                            .up = {up_value.x, up_value.y, up_value.z},
+                        });
+                    }
+                    if (fov)
+                        vis::apply_set_fov(*fov);
+
+                    core::events::cmd::SequencerAddKeyframe{}.emit();
+                    return sequencer_state_json(*scene_manager);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "sequencer.update_keyframe",
+                .description = "Update the selected keyframe, optionally selecting it and/or setting the viewport camera first",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"keyframe_index", json{{"type", "integer"}, {"description", "Optional keyframe index to select before updating"}}},
+                        {"eye", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera eye position [x,y,z]"}}},
+                        {"target", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera target [x,y,z]"}}},
+                        {"up", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera up vector [x,y,z]"}}},
+                        {"fov_degrees", json{{"type", "number"}, {"description", "Optional camera FOV override"}}},
+                        {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel before operating (default: true)"}}}},
+                    .required = {}}},
+            [viewer_impl](const json& args) -> json {
+                auto eye = optional_vec3_arg(args, "eye");
+                if (!eye)
+                    return json{{"error", eye.error()}};
+                auto target = optional_vec3_arg(args, "target");
+                if (!target)
+                    return json{{"error", target.error()}};
+                auto up = optional_vec3_arg(args, "up");
+                if (!up)
+                    return json{{"error", up.error()}};
+                if (eye->has_value() != target->has_value())
+                    return json{{"error", "Fields 'eye' and 'target' must either both be provided or both be omitted"}};
+
+                const std::optional<size_t> keyframe_index = args.contains("keyframe_index")
+                                                                 ? std::optional<size_t>(args["keyframe_index"].get<size_t>())
+                                                                 : std::nullopt;
+                const std::optional<float> fov = args.contains("fov_degrees")
+                                                     ? std::optional<float>(args["fov_degrees"].get<float>())
+                                                     : std::nullopt;
+                const bool show_sequencer = args.value("show_sequencer", true);
+
+                return post_and_wait(viewer_impl, [viewer_impl, keyframe_index, eye = *eye, target = *target, up = *up, fov, show_sequencer]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    if (show_sequencer)
+                        python::set_sequencer_visible(true);
+                    if (keyframe_index)
+                        core::events::cmd::SequencerSelectKeyframe{.keyframe_index = *keyframe_index}.emit();
+                    if (eye && target) {
+                        const glm::vec3 up_value = up.value_or(glm::vec3(0.0f, 1.0f, 0.0f));
+                        vis::apply_set_view(vis::SetViewParams{
+                            .eye = {eye->x, eye->y, eye->z},
+                            .target = {target->x, target->y, target->z},
+                            .up = {up_value.x, up_value.y, up_value.z},
+                        });
+                    }
+                    if (fov)
+                        vis::apply_set_fov(*fov);
+
+                    core::events::cmd::SequencerUpdateKeyframe{}.emit();
+                    return sequencer_state_json(*scene_manager);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "sequencer.select_keyframe",
+                .description = "Select a keyframe in the shared sequencer timeline",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"keyframe_index", json{{"type", "integer"}, {"description", "Keyframe index"}}},
+                        {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel before operating (default: true)"}}}},
+                    .required = {"keyframe_index"}}},
+            [viewer_impl](const json& args) -> json {
+                const size_t keyframe_index = args["keyframe_index"].get<size_t>();
+                const bool show_sequencer = args.value("show_sequencer", true);
+
+                return post_and_wait(viewer_impl, [viewer_impl, keyframe_index, show_sequencer]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+                    if (show_sequencer)
+                        python::set_sequencer_visible(true);
+
+                    core::events::cmd::SequencerSelectKeyframe{.keyframe_index = keyframe_index}.emit();
+                    return sequencer_state_json(*scene_manager);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "sequencer.go_to_keyframe",
+                .description = "Move the viewport camera to a sequencer keyframe",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"keyframe_index", json{{"type", "integer"}, {"description", "Keyframe index"}}},
+                        {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel before operating (default: true)"}}}},
+                    .required = {"keyframe_index"}}},
+            [viewer_impl](const json& args) -> json {
+                const size_t keyframe_index = args["keyframe_index"].get<size_t>();
+                const bool show_sequencer = args.value("show_sequencer", true);
+
+                return post_and_wait(viewer_impl, [viewer_impl, keyframe_index, show_sequencer]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+                    if (show_sequencer)
+                        python::set_sequencer_visible(true);
+
+                    core::events::cmd::SequencerGoToKeyframe{.keyframe_index = keyframe_index}.emit();
+                    json result = sequencer_state_json(*scene_manager);
+                    const auto info = vis::get_current_view_info();
+                    if (info)
+                        result["camera"] = view_info_json(*info)["camera"];
+                    return result;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "sequencer.delete_keyframe",
+                .description = "Delete a keyframe from the shared sequencer timeline",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"keyframe_index", json{{"type", "integer"}, {"description", "Keyframe index"}}}},
+                    .required = {"keyframe_index"}}},
+            [viewer_impl](const json& args) -> json {
+                const size_t keyframe_index = args["keyframe_index"].get<size_t>();
+
+                return post_and_wait(viewer_impl, [viewer_impl, keyframe_index]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = keyframe_index}.emit();
+                    return sequencer_state_json(*scene_manager);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "sequencer.set_easing",
+                .description = "Set the easing mode for a keyframe",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"keyframe_index", json{{"type", "integer"}, {"description", "Keyframe index"}}},
+                        {"easing", json{{"oneOf", json::array({
+                            json{{"type", "integer"}},
+                            json{{"type", "string"}, {"enum", json::array({"linear", "ease_in", "ease_out", "ease_in_out"})}}
+                        })}, {"description", "Easing mode as integer or name"}}}},
+                    .required = {"keyframe_index", "easing"}}},
+            [viewer_impl](const json& args) -> json {
+                const size_t keyframe_index = args["keyframe_index"].get<size_t>();
+                int easing = 0;
+                if (args["easing"].is_string()) {
+                    const std::string value = args["easing"].get<std::string>();
+                    if (value == "linear")
+                        easing = 0;
+                    else if (value == "ease_in")
+                        easing = 1;
+                    else if (value == "ease_out")
+                        easing = 2;
+                    else if (value == "ease_in_out")
+                        easing = 3;
+                    else
+                        return json{{"error", "Unsupported easing mode: " + value}};
+                } else {
+                    easing = args["easing"].get<int>();
+                }
+
+                return post_and_wait(viewer_impl, [viewer_impl, keyframe_index, easing]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    core::events::cmd::SequencerSetKeyframeEasing{.keyframe_index = keyframe_index, .easing_type = easing}.emit();
+                    return sequencer_state_json(*scene_manager);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "sequencer.play_pause",
+                .description = "Toggle sequencer playback",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    core::events::cmd::SequencerPlayPause{}.emit();
+                    json result = sequencer_state_json(*scene_manager);
+                    result["toggled"] = true;
+                    return result;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "sequencer.clear",
+                .description = "Clear all sequencer keyframes",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    python::clear_keyframes();
+                    return sequencer_state_json(*scene_manager);
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "sequencer.save_path",
+                .description = "Save the sequencer camera path to JSON",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"path", json{{"type", "string"}, {"description", "Destination JSON path"}}}},
+                    .required = {"path"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::string path = args["path"].get<std::string>();
+
+                return post_and_wait(viewer_impl, [viewer_impl, path]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    const bool saved = python::save_camera_path(path);
+                    if (!saved)
+                        return json{{"error", "Failed to save camera path"}};
+
+                    json result = sequencer_state_json(*scene_manager);
+                    result["path"] = path;
+                    return result;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "sequencer.load_path",
+                .description = "Load the sequencer camera path from JSON",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"path", json{{"type", "string"}, {"description", "Source JSON path"}}},
+                        {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel before operating (default: true)"}}}},
+                    .required = {"path"}}},
+            [viewer_impl](const json& args) -> json {
+                const std::string path = args["path"].get<std::string>();
+                const bool show_sequencer = args.value("show_sequencer", true);
+
+                return post_and_wait(viewer_impl, [viewer_impl, path, show_sequencer]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+                    if (show_sequencer)
+                        python::set_sequencer_visible(true);
+
+                    const bool loaded = python::load_camera_path(path);
+                    if (!loaded)
+                        return json{{"error", "Failed to load camera path"}};
+
+                    json result = sequencer_state_json(*scene_manager);
+                    result["path"] = path;
+                    return result;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "sequencer.set_playback_speed",
+                .description = "Set the sequencer playback speed multiplier",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"speed", json{{"type", "number"}, {"description", "Playback speed multiplier"}}}},
+                    .required = {"speed"}}},
+            [viewer_impl](const json& args) -> json {
+                const float speed = args["speed"].get<float>();
+
+                return post_and_wait(viewer_impl, [viewer_impl, speed]() -> json {
+                    auto* const scene_manager = viewer_impl->getSceneManager();
+                    if (!scene_manager)
+                        return json{{"error", "Scene manager not initialized"}};
+
+                    python::set_playback_speed(speed);
+                    return sequencer_state_json(*scene_manager);
                 });
             });
 

@@ -166,6 +166,7 @@ namespace lfs::core {
         void removeNode(const std::string& name, bool keep_children = false);
         void replaceNodeModel(const std::string& name, std::unique_ptr<lfs::core::SplatData> model);
         void setNodeVisibility(const std::string& name, bool visible);
+        void setNodeLocked(const std::string& name, bool locked);
         void setNodeTransform(const std::string& name, const glm::mat4& transform);
         glm::mat4 getNodeTransform(const std::string& name) const;
         bool renameNode(const std::string& old_name, const std::string& new_name);

@@ -489,4 +489,269 @@ namespace lfs::vis::cap {
         return {};
     }
 
+    std::expected<core::NodeId, std::string> resolveEllipsoidParentId(const SceneManager& scene_manager,
+                                                                      const std::optional<std::string>& requested_node) {
+        const auto& scene = scene_manager.getScene();
+        const auto resolve = [&scene](const core::SceneNode* node) -> std::expected<core::NodeId, std::string> {
+            if (!node)
+                return std::unexpected("Node not found");
+            if (node->type == core::NodeType::ELLIPSOID)
+                return node->parent_id;
+            if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD)
+                return node->id;
+            return std::unexpected("Ellipsoids can only target splat or pointcloud nodes");
+        };
+
+        if (requested_node)
+            return resolve(scene.getNode(*requested_node));
+
+        const auto selected_name = scene_manager.getSelectedNodeName();
+        if (selected_name.empty())
+            return std::unexpected("No node specified and no node selected");
+        return resolve(scene.getNode(selected_name));
+    }
+
+    std::expected<core::NodeId, std::string> resolveEllipsoidId(const SceneManager& scene_manager,
+                                                                const std::optional<std::string>& requested_node) {
+        const auto& scene = scene_manager.getScene();
+        if (requested_node) {
+            const auto* const node = scene.getNode(*requested_node);
+            if (!node)
+                return std::unexpected("Node not found: " + *requested_node);
+
+            if (node->type == core::NodeType::ELLIPSOID && node->ellipsoid)
+                return node->id;
+
+            if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) {
+                const core::NodeId ellipsoid_id = scene.getEllipsoidForSplat(node->id);
+                if (ellipsoid_id == core::NULL_NODE)
+                    return std::unexpected("Node has no ellipsoid: " + *requested_node);
+                return ellipsoid_id;
+            }
+
+            return std::unexpected("Node does not reference an ellipsoid: " + *requested_node);
+        }
+
+        const core::NodeId ellipsoid_id = scene_manager.getSelectedNodeEllipsoidId();
+        if (ellipsoid_id == core::NULL_NODE)
+            return std::unexpected("No ellipsoid specified and no ellipsoid selected");
+        return ellipsoid_id;
+    }
+
+    std::expected<core::NodeId, std::string> ensureEllipsoid(SceneManager& scene_manager,
+                                                             RenderingManager* rendering_manager,
+                                                             const core::NodeId parent_id) {
+        constexpr float CIRCUMSCRIBE_FACTOR = 1.732050808f; // sqrt(3)
+
+        auto& scene = scene_manager.getScene();
+        const auto* const parent = scene.getNodeById(parent_id);
+        if (!parent)
+            return std::unexpected("Target node not found");
+
+        if (parent->type != core::NodeType::SPLAT && parent->type != core::NodeType::POINTCLOUD)
+            return std::unexpected("Ellipsoids can only be attached to splat or pointcloud nodes");
+
+        if (const core::NodeId existing = scene.getEllipsoidForSplat(parent_id); existing != core::NULL_NODE) {
+            if (rendering_manager) {
+                auto settings = rendering_manager->getSettings();
+                settings.show_ellipsoid = true;
+                rendering_manager->updateSettings(settings);
+            }
+            return existing;
+        }
+
+        const std::string ellipsoid_name = parent->name + "_ellipsoid";
+        const core::NodeId ellipsoid_id = scene.addEllipsoid(ellipsoid_name, parent_id);
+        if (ellipsoid_id == core::NULL_NODE)
+            return std::unexpected("Failed to create ellipsoid for node: " + parent->name);
+
+        core::EllipsoidData data;
+        glm::vec3 min_bounds, max_bounds;
+        if (scene.getNodeBounds(parent_id, min_bounds, max_bounds)) {
+            const glm::vec3 center = (min_bounds + max_bounds) * 0.5f;
+            const glm::vec3 half_size = (max_bounds - min_bounds) * 0.5f;
+            data.radii = half_size * CIRCUMSCRIBE_FACTOR;
+            scene.setNodeTransform(ellipsoid_name, glm::translate(glm::mat4(1.0f), center));
+        }
+        data.enabled = true;
+        scene.setEllipsoidData(ellipsoid_id, data);
+
+        if (const auto* const ellipsoid_node = scene.getNodeById(ellipsoid_id)) {
+            core::events::state::PLYAdded{
+                .name = ellipsoid_node->name,
+                .node_gaussians = 0,
+                .total_gaussians = scene.getTotalGaussianCount(),
+                .is_visible = ellipsoid_node->visible,
+                .parent_name = parent->name,
+                .is_group = false,
+                .node_type = static_cast<int>(core::NodeType::ELLIPSOID)}
+                .emit();
+        }
+
+        if (rendering_manager) {
+            auto settings = rendering_manager->getSettings();
+            settings.show_ellipsoid = true;
+            rendering_manager->updateSettings(settings);
+        }
+
+        scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        return ellipsoid_id;
+    }
+
+    std::expected<void, std::string> updateEllipsoid(SceneManager& scene_manager,
+                                                     RenderingManager* rendering_manager,
+                                                     const core::NodeId ellipsoid_id,
+                                                     const EllipsoidUpdate& update) {
+        auto& scene = scene_manager.getScene();
+        const auto* const ellipsoid_node = scene.getNodeById(ellipsoid_id);
+        if (!ellipsoid_node || !ellipsoid_node->ellipsoid)
+            return std::unexpected("Invalid ellipsoid target");
+
+        const auto before_data = *ellipsoid_node->ellipsoid;
+        const auto before_transform = scene_manager.getNodeTransform(ellipsoid_node->name);
+
+        auto updated_data = before_data;
+        auto updated_components = decomposeTransform(before_transform);
+
+        bool ellipsoid_changed = false;
+        bool transform_changed = false;
+
+        if (update.radii) {
+            updated_data.radii = glm::max(*update.radii, glm::vec3(1e-4f));
+            ellipsoid_changed = true;
+        }
+        if (update.has_inverse) {
+            updated_data.inverse = update.inverse;
+            ellipsoid_changed = true;
+        }
+        if (update.has_enabled) {
+            updated_data.enabled = update.enabled;
+            ellipsoid_changed = true;
+        }
+        if (update.translation) {
+            updated_components.translation = *update.translation;
+            transform_changed = true;
+        }
+        if (update.rotation) {
+            updated_components.rotation = *update.rotation;
+            transform_changed = true;
+        }
+        if (update.scale) {
+            updated_components.scale = *update.scale;
+            transform_changed = true;
+        }
+
+        if (ellipsoid_changed)
+            scene.setEllipsoidData(ellipsoid_id, updated_data);
+        if (transform_changed)
+            scene_manager.setNodeTransform(ellipsoid_node->name, composeTransform(updated_components));
+
+        if (rendering_manager && (ellipsoid_changed || transform_changed))
+            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+
+        if (rendering_manager && (update.has_show || update.has_use)) {
+            auto settings = rendering_manager->getSettings();
+            if (update.has_show)
+                settings.show_ellipsoid = update.show;
+            if (update.has_use)
+                settings.use_ellipsoid = update.use;
+            rendering_manager->updateSettings(settings);
+        }
+
+        if (ellipsoid_changed)
+            scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+
+        if (ellipsoid_changed || transform_changed) {
+            auto entry = std::make_unique<vis::op::EllipsoidUndoEntry>(
+                scene_manager, ellipsoid_node->name, before_data, before_transform);
+            if (entry->hasChanges())
+                vis::op::undoHistory().push(std::move(entry));
+        }
+
+        return {};
+    }
+
+    std::expected<void, std::string> fitEllipsoidToParent(SceneManager& scene_manager,
+                                                          RenderingManager* rendering_manager,
+                                                          const core::NodeId ellipsoid_id,
+                                                          const bool use_percentile) {
+        constexpr float CIRCUMSCRIBE_FACTOR = 1.732050808f; // sqrt(3)
+
+        auto& scene = scene_manager.getScene();
+        const auto* const ellipsoid_node = scene.getNodeById(ellipsoid_id);
+        if (!ellipsoid_node || ellipsoid_node->type != core::NodeType::ELLIPSOID || !ellipsoid_node->ellipsoid)
+            return std::unexpected("Invalid ellipsoid target");
+
+        const auto* const parent = scene.getNodeById(ellipsoid_node->parent_id);
+        if (!parent)
+            return std::unexpected("Ellipsoid parent not found");
+
+        glm::vec3 min_bounds, max_bounds;
+        bool bounds_valid = false;
+        if (parent->type == core::NodeType::SPLAT && parent->model && parent->model->size() > 0) {
+            bounds_valid = core::compute_bounds(*parent->model, min_bounds, max_bounds, 0.0f, use_percentile);
+        } else if (parent->type == core::NodeType::POINTCLOUD && parent->point_cloud && parent->point_cloud->size() > 0) {
+            bounds_valid = core::compute_bounds(*parent->point_cloud, min_bounds, max_bounds, 0.0f, use_percentile);
+        }
+
+        if (!bounds_valid)
+            return std::unexpected("Cannot compute bounds for node: " + parent->name);
+
+        const auto before_data = *ellipsoid_node->ellipsoid;
+        const auto before_transform = scene_manager.getNodeTransform(ellipsoid_node->name);
+
+        auto updated_data = before_data;
+        updated_data.radii = glm::max((max_bounds - min_bounds) * 0.5f * CIRCUMSCRIBE_FACTOR, glm::vec3(1e-4f));
+        scene.setEllipsoidData(ellipsoid_id, updated_data);
+        scene_manager.setNodeTransform(
+            ellipsoid_node->name,
+            glm::translate(glm::mat4(1.0f), (min_bounds + max_bounds) * 0.5f));
+
+        if (rendering_manager)
+            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+
+        scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+
+        auto entry = std::make_unique<vis::op::EllipsoidUndoEntry>(
+            scene_manager, ellipsoid_node->name, before_data, before_transform);
+        if (entry->hasChanges())
+            vis::op::undoHistory().push(std::move(entry));
+
+        return {};
+    }
+
+    std::expected<void, std::string> resetEllipsoid(SceneManager& scene_manager,
+                                                    RenderingManager* rendering_manager,
+                                                    const core::NodeId ellipsoid_id) {
+        auto& scene = scene_manager.getScene();
+        const auto* const ellipsoid_node = scene.getNodeById(ellipsoid_id);
+        if (!ellipsoid_node || ellipsoid_node->type != core::NodeType::ELLIPSOID || !ellipsoid_node->ellipsoid)
+            return std::unexpected("Invalid ellipsoid target");
+
+        const auto before_data = *ellipsoid_node->ellipsoid;
+        const auto before_transform = scene_manager.getNodeTransform(ellipsoid_node->name);
+
+        auto reset_data = before_data;
+        reset_data.radii = glm::vec3(1.0f);
+        reset_data.inverse = false;
+        scene.setEllipsoidData(ellipsoid_id, reset_data);
+        scene_manager.setNodeTransform(ellipsoid_node->name, glm::mat4(1.0f));
+
+        if (rendering_manager) {
+            auto settings = rendering_manager->getSettings();
+            settings.use_ellipsoid = false;
+            rendering_manager->updateSettings(settings);
+            rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
+        }
+
+        scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+
+        auto entry = std::make_unique<vis::op::EllipsoidUndoEntry>(
+            scene_manager, ellipsoid_node->name, before_data, before_transform);
+        if (entry->hasChanges())
+            vis::op::undoHistory().push(std::move(entry));
+
+        return {};
+    }
+
 } // namespace lfs::vis::cap

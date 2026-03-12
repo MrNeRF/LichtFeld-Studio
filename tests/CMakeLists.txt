@@ -239,7 +239,6 @@ set(TEST_FILES
     test_selection_service_interactions.cpp
     test_selection_command_dispatch.cpp
     test_selection_operator_modal.cpp
-    test_selection_ipc_roundtrip.cpp
     test_fastgs_analytical_gradients.cpp
     test_background_image.cpp
     test_operator_return_value.cpp

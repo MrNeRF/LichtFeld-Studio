@@ -50,6 +50,21 @@ namespace lfs::vis::cap {
         bool use = false;
     };
 
+    struct LFS_VIS_API EllipsoidUpdate {
+        std::optional<glm::vec3> radii;
+        std::optional<glm::vec3> translation;
+        std::optional<glm::vec3> rotation;
+        std::optional<glm::vec3> scale;
+        bool has_inverse = false;
+        bool inverse = false;
+        bool has_enabled = false;
+        bool enabled = false;
+        bool has_show = false;
+        bool show = false;
+        bool has_use = false;
+        bool use = false;
+    };
+
     [[nodiscard]] LFS_VIS_API TransformComponents decomposeTransform(const glm::mat4& matrix);
     [[nodiscard]] LFS_VIS_API glm::mat4 composeTransform(const TransformComponents& components);
 
@@ -114,5 +129,30 @@ namespace lfs::vis::cap {
         SceneManager& scene_manager,
         RenderingManager* rendering_manager,
         core::NodeId cropbox_id);
+
+    [[nodiscard]] LFS_VIS_API std::expected<core::NodeId, std::string> resolveEllipsoidParentId(
+        const SceneManager& scene_manager,
+        const std::optional<std::string>& requested_node);
+    [[nodiscard]] LFS_VIS_API std::expected<core::NodeId, std::string> resolveEllipsoidId(
+        const SceneManager& scene_manager,
+        const std::optional<std::string>& requested_node);
+    [[nodiscard]] LFS_VIS_API std::expected<core::NodeId, std::string> ensureEllipsoid(
+        SceneManager& scene_manager,
+        RenderingManager* rendering_manager,
+        core::NodeId parent_id);
+    [[nodiscard]] LFS_VIS_API std::expected<void, std::string> updateEllipsoid(
+        SceneManager& scene_manager,
+        RenderingManager* rendering_manager,
+        core::NodeId ellipsoid_id,
+        const EllipsoidUpdate& update);
+    [[nodiscard]] LFS_VIS_API std::expected<void, std::string> fitEllipsoidToParent(
+        SceneManager& scene_manager,
+        RenderingManager* rendering_manager,
+        core::NodeId ellipsoid_id,
+        bool use_percentile);
+    [[nodiscard]] LFS_VIS_API std::expected<void, std::string> resetEllipsoid(
+        SceneManager& scene_manager,
+        RenderingManager* rendering_manager,
+        core::NodeId ellipsoid_id);
 
 } // namespace lfs::vis::cap
