@@ -7,6 +7,7 @@
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/logger.hpp"
 
+#include <algorithm>
 #include <cassert>
 
 namespace lfs::mcp {
@@ -65,6 +66,9 @@ namespace lfs::mcp {
         for (const auto& [name, reg] : tools_) {
             result.push_back(reg.tool);
         }
+        std::sort(result.begin(), result.end(), [](const McpTool& a, const McpTool& b) {
+            return a.name < b.name;
+        });
         return result;
     }
 
@@ -115,6 +119,9 @@ namespace lfs::mcp {
         for (const auto& [uri, reg] : resources_) {
             result.push_back(reg.resource);
         }
+        std::sort(result.begin(), result.end(), [](const McpResource& a, const McpResource& b) {
+            return a.uri < b.uri;
+        });
         return result;
     }
 
@@ -174,6 +181,8 @@ namespace lfs::mcp {
         std::string target_str = target_to_string(op.target);
         tool.name = target_str + "." + op.name;
         tool.description = op.description;
+        tool.metadata.category = target_str;
+        tool.metadata.kind = "command";
 
         json properties;
         std::vector<std::string> required;
@@ -328,7 +337,8 @@ namespace lfs::mcp {
             McpTool{
                 .name = "training.get_state",
                 .description = "Get current training state snapshot",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = McpToolMetadata{.category = "training", .kind = "query"}},
             [](const json&) -> json {
                 auto* cc = event::command_center();
                 if (!cc) {
@@ -350,7 +360,8 @@ namespace lfs::mcp {
             McpTool{
                 .name = "training.list_operations",
                 .description = "List all available CommandCenter operations",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = McpToolMetadata{.category = "training", .kind = "query"}},
             [](const json&) -> json {
                 auto* cc = event::command_center();
                 if (!cc) {

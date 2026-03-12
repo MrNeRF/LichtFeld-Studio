@@ -4,8 +4,9 @@
 #include "mcp_training_context.hpp"
 #include "llm_client.hpp"
 #include "mcp_tools.hpp"
+#include "render_capture_utils.hpp"
+#include "shared_scene_tools.hpp"
 
-#include "core/base64.hpp"
 #include "core/checkpoint_format.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/logger.hpp"
@@ -20,8 +21,6 @@
 #include "training/training_setup.hpp"
 #include "visualizer/selection/selection_group_mask.hpp"
 
-#include <stb_image_write.h>
-
 #include <cassert>
 #include <cuda_runtime.h>
 #include <limits>
@@ -30,12 +29,6 @@
 namespace lfs::mcp {
 
     namespace {
-        void stbi_write_callback(void* context, void* data, int size) {
-            auto* buf = static_cast<std::vector<uint8_t>*>(context);
-            auto* bytes = static_cast<const uint8_t*>(data);
-            buf->insert(buf->end(), bytes, bytes + size);
-        }
-
         core::Tensor ensure_cuda_bool_mask(const core::Tensor& mask) {
             auto result = (mask.dtype() == core::DataType::Bool) ? mask : mask.to(core::DataType::Bool);
             if (result.device() != core::Device::CUDA) {
@@ -434,28 +427,7 @@ namespace lfs::mcp {
 
         try {
             auto [image, alpha] = rendering::rasterize_tensor(*camera, *model, bg);
-
-            image = image.clone().to(core::Device::CPU).to(core::DataType::Float32);
-            if (image.ndim() == 4)
-                image = image.squeeze(0);
-            if (image.ndim() == 3 && image.shape()[0] <= 4)
-                image = image.permute({1, 2, 0});
-            image = (image.clamp(0, 1) * 255.0f).to(core::DataType::UInt8).contiguous();
-
-            const int h = static_cast<int>(image.shape()[0]);
-            const int w = static_cast<int>(image.shape()[1]);
-            const int c = static_cast<int>(image.shape()[2]);
-            assert(c >= 1 && c <= 4);
-
-            std::vector<uint8_t> png_buf;
-            png_buf.reserve(static_cast<size_t>(w) * h * c);
-            int ok = stbi_write_png_to_func(
-                stbi_write_callback, &png_buf, w, h, c,
-                image.ptr<uint8_t>(), w * c);
-            if (!ok)
-                return std::unexpected("PNG encoding failed");
-
-            return core::base64_encode(png_buf);
+            return encode_render_tensor_to_base64(std::move(image), width, height);
         } catch (const std::exception& e) {
             return std::unexpected(std::string("Render failed: ") + e.what());
         }
@@ -556,157 +528,67 @@ namespace lfs::mcp {
     }
 
     void register_scene_tools() {
+        register_shared_scene_tools(SharedSceneToolBackend{
+            .runtime = "headless",
+            .thread_affinity = "training_context",
+            .load_dataset =
+                [](const std::filesystem::path& path,
+                   const core::param::TrainingParameters& params) {
+                    return TrainingContext::instance().load_dataset(path, params);
+                },
+            .load_checkpoint =
+                [](const std::filesystem::path& path) {
+                    return TrainingContext::instance().load_checkpoint(path);
+                },
+            .save_checkpoint =
+                [](const std::optional<std::filesystem::path>& path)
+                -> std::expected<std::filesystem::path, std::string> {
+                    auto& ctx = TrainingContext::instance();
+                    auto* const trainer = ctx.trainer();
+                    if (!trainer)
+                        return std::unexpected("No training session to save");
+
+                    const bool training_active = ctx.is_training();
+                    if (training_active) {
+                        if (path) {
+                            return std::unexpected(
+                                "Custom checkpoint output paths are not supported while training is active");
+                        }
+                        trainer->request_save();
+                        return ctx.params().dataset.output_path;
+                    }
+
+                    if (path) {
+                        if (auto result = ctx.save_checkpoint(*path); !result)
+                            return std::unexpected(result.error());
+                        return *path;
+                    }
+
+                    if (auto result = trainer->save_checkpoint(trainer->get_current_iteration()); !result)
+                        return std::unexpected(result.error());
+                    return trainer->get_output_path();
+                },
+            .save_ply =
+                [](const std::filesystem::path& path) {
+                    return TrainingContext::instance().save_ply(path);
+                },
+            .start_training =
+                []() {
+                    return TrainingContext::instance().start_training();
+                },
+            .render_capture =
+                [](int camera_index, int width, int height) {
+                    return TrainingContext::instance().render_to_base64(camera_index, width, height);
+                },
+            .gaussian_count =
+                []() -> std::expected<int64_t, std::string> {
+                    auto scene = TrainingContext::instance().scene();
+                    if (!scene)
+                        return std::unexpected("No scene loaded");
+                    return scene->getTotalGaussianCount();
+                }});
+
         auto& registry = ToolRegistry::instance();
-
-        registry.register_tool(
-            McpTool{
-                .name = "scene.load_dataset",
-                .description = "Load a COLMAP dataset for training",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Path to COLMAP dataset directory"}}},
-                        {"images_folder", json{{"type", "string"}, {"description", "Images subfolder (default: images)"}}},
-                        {"max_iterations", json{{"type", "integer"}, {"description", "Maximum training iterations (default: 30000)"}}},
-                        {"strategy", json{{"type", "string"}, {"enum", json::array({"mcmc", "default"})}, {"description", "Training strategy"}}}},
-                    .required = {"path"}}},
-            [](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
-
-                core::param::TrainingParameters params;
-                params.dataset.data_path = path;
-
-                if (args.contains("images_folder")) {
-                    params.dataset.images = args["images_folder"].get<std::string>();
-                }
-                if (args.contains("max_iterations")) {
-                    params.optimization.iterations = args["max_iterations"].get<size_t>();
-                }
-                if (args.contains("strategy")) {
-                    params.optimization.strategy = args["strategy"].get<std::string>();
-                }
-
-                auto result = TrainingContext::instance().load_dataset(path, params);
-                if (!result) {
-                    return json{{"error", result.error()}};
-                }
-
-                json response;
-                response["success"] = true;
-                response["path"] = path.string();
-
-                auto scene = TrainingContext::instance().scene();
-                if (scene) {
-                    response["num_gaussians"] = scene->getTotalGaussianCount();
-                }
-
-                return response;
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "scene.load_checkpoint",
-                .description = "Load a training checkpoint (.resume file)",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Path to checkpoint file"}}}},
-                    .required = {"path"}}},
-            [](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
-
-                auto result = TrainingContext::instance().load_checkpoint(path);
-                if (!result) {
-                    return json{{"error", result.error()}};
-                }
-
-                json response;
-                response["success"] = true;
-                response["path"] = path.string();
-
-                return response;
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "scene.save_checkpoint",
-                .description = "Save current training state to checkpoint file",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Path to save checkpoint"}}}},
-                    .required = {"path"}}},
-            [](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
-
-                auto result = TrainingContext::instance().save_checkpoint(path);
-                if (!result) {
-                    return json{{"error", result.error()}};
-                }
-
-                return json{{"success", true}, {"path", path.string()}};
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "scene.save_ply",
-                .description = "Save current model as PLY file",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Path to save PLY file"}}}},
-                    .required = {"path"}}},
-            [](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
-
-                auto result = TrainingContext::instance().save_ply(path);
-                if (!result) {
-                    return json{{"error", result.error()}};
-                }
-
-                return json{{"success", true}, {"path", path.string()}};
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "training.start",
-                .description = "Start training in background",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [](const json&) -> json {
-                auto result = TrainingContext::instance().start_training();
-                if (!result) {
-                    return json{{"error", result.error()}};
-                }
-                return json{{"success", true}, {"message", "Training started"}};
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "render.capture",
-                .description = "Render current scene and return as base64 PNG",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"camera_index", json{{"type", "integer"}, {"description", "Camera index (default: 0)"}}},
-                        {"width", json{{"type", "integer"}, {"description", "Output width (default: camera native)"}}},
-                        {"height", json{{"type", "integer"}, {"description", "Output height (default: camera native)"}}}},
-                    .required = {}}},
-            [](const json& args) -> json {
-                int camera_index = args.contains("camera_index") ? args["camera_index"].get<int>() : 0;
-                int width = args.contains("width") ? args["width"].get<int>() : 0;
-                int height = args.contains("height") ? args["height"].get<int>() : 0;
-
-                auto result = TrainingContext::instance().render_to_base64(camera_index, width, height);
-                if (!result) {
-                    return json{{"error", result.error()}};
-                }
-
-                json response;
-                response["success"] = true;
-                response["mime_type"] = "image/png";
-                response["data"] = *result;
-                return response;
-            });
 
         registry.register_tool(
             McpTool{

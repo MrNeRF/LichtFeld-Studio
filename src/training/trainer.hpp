@@ -125,6 +125,7 @@ namespace lfs::training {
 
         // Get current training state
         int get_current_iteration() const { return current_iteration_.load(); }
+        const std::filesystem::path& get_output_path() const { return params_.dataset.output_path; }
         float get_current_loss() const { return current_loss_.load(); }
 
         // just for viewer to get model
@@ -165,6 +166,7 @@ namespace lfs::training {
 
         // Checkpoint methods
         std::expected<void, std::string> save_checkpoint(int iteration);
+        std::expected<void, std::string> save_checkpoint_to(const std::filesystem::path& output_path, int iteration);
         std::expected<int, std::string> load_checkpoint(const std::filesystem::path& checkpoint_path);
         void save_final_ply_and_checkpoint(int iteration);
 

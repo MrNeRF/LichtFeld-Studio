@@ -46,7 +46,8 @@ namespace lfs::vis::op {
         .poll_deps = PollDependency::SCENE,
     };
 
-    bool BrushStrokeOperator::poll(const OperatorContext& ctx) const {
+    bool BrushStrokeOperator::poll(const OperatorContext& ctx,
+                                   const OperatorProperties* /*props*/) const {
         return ctx.scene().getScene().getTotalGaussianCount() > 0;
     }
 

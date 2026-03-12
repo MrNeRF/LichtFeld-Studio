@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace lfs::core {
@@ -61,7 +62,8 @@ namespace lfs::vis {
         virtual bool postWork(WorkItem work) = 0;
         virtual void setShutdownRequestedCallback(std::function<void()> callback) = 0;
         virtual std::expected<void, std::string> startTraining() = 0;
-        virtual std::expected<void, std::string> saveCheckpoint() = 0;
+        virtual std::expected<std::filesystem::path, std::string> saveCheckpoint(
+            const std::optional<std::filesystem::path>& path = std::nullopt) = 0;
 
         virtual ~Visualizer() = default;
     };

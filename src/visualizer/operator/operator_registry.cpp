@@ -152,7 +152,23 @@ namespace lfs::vis::op {
         return it != python_operators_.end() ? &it->second.descriptor : nullptr;
     }
 
-    bool OperatorRegistry::pollImpl(const RegisteredOperator& reg) const {
+    bool OperatorRegistry::pollImpl(const RegisteredOperator& reg, const OperatorProperties* props) const {
+        if (props != nullptr) {
+            if (reg.poll_fn) {
+                return reg.poll_fn();
+            }
+
+            if (reg.factory) {
+                auto op = reg.factory();
+                if (op) {
+                    auto local_ctx = makeContext();
+                    return local_ctx && op->poll(*local_ctx, props);
+                }
+            }
+
+            return false;
+        }
+
         const auto& ctx = python::context();
         const uint64_t gen = ctx.scene_generation;
         const bool has_sel = scene_manager_ && scene_manager_->hasSelectedNode();
@@ -188,7 +204,7 @@ namespace lfs::vis::op {
             auto op = reg.factory();
             if (op) {
                 auto local_ctx = makeContext();
-                result = local_ctx && op->poll(*local_ctx);
+                result = local_ctx && op->poll(*local_ctx, nullptr);
             }
         }
 
@@ -295,7 +311,7 @@ namespace lfs::vis::op {
             return OperatorReturnValue::cancelled();
         }
 
-        if (!op->poll(*ctx)) {
+        if (!op->poll(*ctx, &props_ref)) {
             return OperatorReturnValue::cancelled();
         }
 

@@ -361,6 +361,7 @@ add_executable(${PROJECT_NAME}
     src/app/main.cpp
     src/app/application.cpp
     src/app/mcp_gui_tools.cpp
+    src/app/mcp_operator_tools.cpp
     src/app/converter.cpp
     src/app/splash_screen.cpp
     resources/lichtfeld-studio.rc

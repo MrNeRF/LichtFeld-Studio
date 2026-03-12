@@ -201,6 +201,7 @@ set(TEST_FILES
     test_tensor_zero_dimension.cpp
     test_mask_loss.cpp
     test_checkpoint_resume.cpp
+    test_mcp_protocol.cpp
     test_video_color_convert.cpp
     test_python_integration.cpp
     test_python_lsp_client.cpp
@@ -239,6 +240,7 @@ set(TEST_FILES
     test_selection_service_interactions.cpp
     test_selection_command_dispatch.cpp
     test_selection_operator_modal.cpp
+    test_operator_registry_props.cpp
     test_fastgs_analytical_gradients.cpp
     test_background_image.cpp
     test_operator_return_value.cpp

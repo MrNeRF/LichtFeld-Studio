@@ -63,7 +63,8 @@ namespace lfs::vis {
         bool postWork(WorkItem work) override;
         void setShutdownRequestedCallback(std::function<void()> callback) override;
         std::expected<void, std::string> startTraining() override;
-        std::expected<void, std::string> saveCheckpoint() override;
+        std::expected<std::filesystem::path, std::string> saveCheckpoint(
+            const std::optional<std::filesystem::path>& path = std::nullopt) override;
 
         // Getters for GUI (delegating to state manager)
         lfs::training::Trainer* getTrainer() const { return trainer_manager_->getTrainer(); }

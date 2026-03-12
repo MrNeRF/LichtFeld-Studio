@@ -107,13 +107,18 @@ namespace lfs::mcp {
         json arguments = params.value("arguments", json::object());
 
         json result = ToolRegistry::instance().call_tool(tool_name, arguments);
+        const bool is_error = result.is_object() && result.contains("error");
 
         json content = json::array();
         content.push_back(json{
             {"type", "text"},
             {"text", result.dump(2)}});
 
-        return make_success_response(req.id, json{{"content", content}});
+        return make_success_response(req.id, json{
+                                                 {"content", content},
+                                                 {"structuredContent", result},
+                                                 {"isError", is_error},
+                                             });
     }
 
     JsonRpcResponse McpServer::handle_resources_list(const JsonRpcRequest& req) {

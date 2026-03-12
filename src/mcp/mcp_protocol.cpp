@@ -75,6 +75,21 @@ namespace lfs::mcp {
         }
         j["inputSchema"] = schema;
 
+        json annotations{
+            {"readOnlyHint", tool.metadata.kind == "query"},
+            {"destructiveHint", tool.metadata.destructive},
+            {"idempotentHint", tool.metadata.kind == "query"},
+            {"x-lfs-category", tool.metadata.category},
+            {"x-lfs-kind", tool.metadata.kind},
+            {"x-lfs-runtime", tool.metadata.runtime},
+            {"x-lfs-thread-affinity", tool.metadata.thread_affinity},
+            {"x-lfs-user-visible", tool.metadata.user_visible},
+        };
+        if (tool.metadata.long_running) {
+            annotations["x-lfs-long-running"] = true;
+        }
+        j["annotations"] = std::move(annotations);
+
         return j;
     }
 

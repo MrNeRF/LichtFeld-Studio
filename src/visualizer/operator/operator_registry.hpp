@@ -85,7 +85,8 @@ namespace lfs::vis::op {
         };
 
         [[nodiscard]] std::optional<OperatorContext> makeContext() const;
-        [[nodiscard]] bool pollImpl(const RegisteredOperator& reg) const;
+        [[nodiscard]] bool pollImpl(const RegisteredOperator& reg,
+                                    const OperatorProperties* props = nullptr) const;
         OperatorReturnValue invokeImpl(RegisteredOperator& reg, const std::string& id,
                                        OperatorProperties* props);
 

@@ -64,10 +64,21 @@ namespace lfs::mcp {
         std::vector<std::string> required;
     };
 
+    struct McpToolMetadata {
+        std::string category;
+        std::string kind = "command";
+        std::string runtime = "shared";
+        std::string thread_affinity = "any";
+        bool destructive = false;
+        bool long_running = false;
+        bool user_visible = true;
+    };
+
     struct McpTool {
         std::string name;
         std::string description;
         McpToolInputSchema input_schema;
+        McpToolMetadata metadata;
     };
 
     struct McpResource {

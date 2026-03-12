@@ -44,7 +44,10 @@ namespace lfs::vis::op {
         virtual ~Operator() = default;
 
         [[nodiscard]] virtual const OperatorDescriptor& descriptor() const = 0;
-        [[nodiscard]] virtual bool poll(const OperatorContext& /*ctx*/) const { return true; }
+        [[nodiscard]] virtual bool poll(const OperatorContext& /*ctx*/,
+                                        const OperatorProperties* /*props*/ = nullptr) const {
+            return true;
+        }
         virtual OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) = 0;
         virtual OperatorResult modal(OperatorContext& /*ctx*/, OperatorProperties& /*props*/) {
             return OperatorResult::FINISHED;

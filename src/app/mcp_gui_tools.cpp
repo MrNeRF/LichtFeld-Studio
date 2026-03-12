@@ -4,8 +4,8 @@
 #define GLM_ENABLE_EXPERIMENTAL
 
 #include "app/mcp_gui_tools.hpp"
+#include "app/mcp_operator_tools.hpp"
 
-#include "core/base64.hpp"
 #include "core/event_bridge/scoped_handler.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
 #include "core/events.hpp"
@@ -16,6 +16,8 @@
 #include "core/tensor.hpp"
 #include "io/exporter.hpp"
 #include "mcp/llm_client.hpp"
+#include "mcp/render_capture_utils.hpp"
+#include "mcp/shared_scene_tools.hpp"
 #include "mcp/mcp_tools.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
@@ -26,12 +28,11 @@
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_entry.hpp"
 #include "visualizer/operation/undo_history.hpp"
+#include "visualizer/operator/operator_properties.hpp"
 #include "visualizer/gui_capabilities.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/visualizer.hpp"
-
-#include <stb_image_write.h>
 
 #include <algorithm>
 #include <chrono>
@@ -73,15 +74,11 @@ namespace lfs::app {
 
         using TransformComponents = vis::cap::TransformComponents;
 
-        void stbi_write_callback(void* context, void* data, int size) {
-            auto* buf = static_cast<std::vector<uint8_t>*>(context);
-            auto* bytes = static_cast<const uint8_t*>(data);
-            buf->insert(buf->end(), bytes, bytes + size);
-        }
-
         std::expected<std::string, std::string> render_scene_to_base64(
             core::Scene& scene,
-            int camera_index = 0) {
+            int camera_index = 0,
+            int width = 0,
+            int height = 0) {
 
             auto* model = scene.getTrainingModel();
             if (!model)
@@ -102,28 +99,7 @@ namespace lfs::app {
 
             try {
                 auto [image, alpha] = rendering::rasterize_tensor(*camera, *model, bg);
-
-                image = image.clone().to(core::Device::CPU).to(core::DataType::Float32);
-                if (image.ndim() == 4)
-                    image = image.squeeze(0);
-                if (image.ndim() == 3 && image.shape()[0] <= 4)
-                    image = image.permute({1, 2, 0});
-                image = (image.clamp(0, 1) * 255.0f).to(core::DataType::UInt8).contiguous();
-
-                const int h = static_cast<int>(image.shape()[0]);
-                const int w = static_cast<int>(image.shape()[1]);
-                const int c = static_cast<int>(image.shape()[2]);
-                assert(c >= 1 && c <= 4);
-
-                std::vector<uint8_t> png_buf;
-                png_buf.reserve(static_cast<size_t>(w) * h * c);
-                int ok = stbi_write_png_to_func(
-                    stbi_write_callback, &png_buf, w, h, c,
-                    image.ptr<uint8_t>(), w * c);
-                if (!ok)
-                    return std::unexpected("PNG encoding failed");
-
-                return core::base64_encode(png_buf);
+                return mcp::encode_render_tensor_to_base64(std::move(image), width, height);
             } catch (const std::exception& e) {
                 return std::unexpected(std::string("Render failed: ") + e.what());
             }
@@ -740,6 +716,93 @@ namespace lfs::app {
                 {"undo_name", history.undoName()},
                 {"redo_name", history.redoName()},
             };
+        }
+
+        std::expected<void, std::string> prepare_delete_operator(vis::Visualizer& viewer,
+                                                                 const json& /*args*/,
+                                                                 vis::op::OperatorProperties& props) {
+            auto* const scene_manager = viewer.getSceneManager();
+            if (!scene_manager)
+                return std::unexpected("Scene manager not initialized");
+
+            if (const auto name = props.get<std::string>("name"); name && !name->empty()) {
+                if (!scene_manager->getScene().getNode(*name))
+                    return std::unexpected("Node not found: " + *name);
+                return {};
+            }
+
+            if (!scene_manager->hasSelectedNode())
+                return std::unexpected("No node specified and no node selected");
+
+            return {};
+        }
+
+        json delete_operator_result(vis::Visualizer& /*viewer*/,
+                                    const json& args,
+                                    const vis::op::OperatorProperties& props,
+                                    const vis::op::OperatorReturnValue& /*result*/) {
+            const auto removed_nodes = props.get<std::vector<std::string>>("resolved_node_names").value_or(
+                std::vector<std::string>{});
+            const bool keep_children = props.get_or<bool>("keep_children", false);
+
+            json payload{
+                {"success", true},
+                {"removed_count", removed_nodes.size()},
+                {"removed_nodes", removed_nodes},
+                {"keep_children", keep_children},
+            };
+            if (args.contains("name") && args["name"].is_string())
+                payload["removed"] = args["name"].get<std::string>();
+            return payload;
+        }
+
+        std::expected<void, std::string> prepare_transform_operator(vis::Visualizer& viewer,
+                                                                    const json& /*args*/,
+                                                                    vis::op::OperatorProperties& props) {
+            auto* const scene_manager = viewer.getSceneManager();
+            if (!scene_manager)
+                return std::unexpected("Scene manager not initialized");
+
+            const auto requested_node = props.get<std::string>("node");
+            if (requested_node && !requested_node->empty()) {
+                if (!scene_manager->getScene().getNode(*requested_node))
+                    return std::unexpected("Node not found: " + *requested_node);
+                return {};
+            }
+
+            if (!scene_manager->hasSelectedNode())
+                return std::unexpected("No node specified and no node selected");
+
+            return {};
+        }
+
+        std::expected<void, std::string> prepare_transform_set_operator(vis::Visualizer& viewer,
+                                                                        const json& args,
+                                                                        vis::op::OperatorProperties& props) {
+            if (!props.has("translation") && !props.has("rotation") && !props.has("scale")) {
+                return std::unexpected("At least one of translation, rotation, or scale must be provided");
+            }
+            return prepare_transform_operator(viewer, args, props);
+        }
+
+        json transform_operator_result(vis::Visualizer& viewer,
+                                       const json& /*args*/,
+                                       const vis::op::OperatorProperties& props,
+                                       const vis::op::OperatorReturnValue& /*result*/) {
+            auto* const scene_manager = viewer.getSceneManager();
+            if (!scene_manager)
+                return json{{"error", "Scene manager not initialized"}};
+
+            const auto resolved_nodes = props.get<std::vector<std::string>>("resolved_node_names").value_or(
+                std::vector<std::string>{});
+
+            json nodes = json::array();
+            for (const auto& name : resolved_nodes) {
+                if (const auto* const node = scene_manager->getScene().getNode(name))
+                    nodes.push_back(transform_info_json(scene_manager->getScene(), *node));
+            }
+
+            return json{{"success", true}, {"count", nodes.size()}, {"nodes", nodes}};
         }
 
         json camera_node_json(const core::Scene& scene, const core::SceneNode& node) {
@@ -1483,149 +1546,68 @@ namespace lfs::app {
                 return json{{"success", true}, {"path", path.string()}};
             });
 
-        registry.register_tool(
-            McpTool{
-                .name = "scene.load_dataset",
-                .description = "Load a COLMAP dataset for training",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Path to COLMAP dataset directory"}}},
-                        {"images_folder", json{{"type", "string"}, {"description", "Images subfolder (default: images)"}}},
-                        {"max_iterations", json{{"type", "integer"}, {"description", "Maximum training iterations (default: 30000)"}}},
-                        {"strategy", json{{"type", "string"}, {"enum", json::array({"mcmc", "default"})}, {"description", "Training strategy"}}}},
-                    .required = {"path"}}},
-            [viewer](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
+        mcp::register_shared_scene_tools(mcp::SharedSceneToolBackend{
+            .runtime = "gui",
+            .thread_affinity = "gui_thread",
+            .load_dataset =
+                [viewer](const std::filesystem::path& path,
+                         const core::param::TrainingParameters& params) {
+                    auto immediate_params = params;
+                    immediate_params.dataset.data_path.clear();
+                    return post_and_wait(viewer, [viewer, params = std::move(immediate_params), path]() {
+                        viewer->setParameters(params);
+                        return viewer->loadDataset(path);
+                    });
+                },
+            .load_checkpoint =
+                [viewer](const std::filesystem::path& path) {
+                    return post_and_wait(viewer, [viewer, path]() {
+                        return viewer->loadCheckpointForTraining(path);
+                    });
+                },
+            .save_checkpoint =
+                [viewer](const std::optional<std::filesystem::path>& path)
+                -> std::expected<std::filesystem::path, std::string> {
+                    return post_and_wait(viewer, [viewer, path]() {
+                        return viewer->saveCheckpoint(path);
+                    });
+                },
+            .save_ply =
+                [viewer](const std::filesystem::path& path) {
+                    return post_and_wait(viewer, [viewer, path]() -> std::expected<void, std::string> {
+                        auto& scene = viewer->getScene();
+                        auto* model = scene.getTrainingModel();
+                        if (!model)
+                            return std::unexpected("No model to save");
 
-                core::param::TrainingParameters params;
-                params.dataset.data_path = path;
-                if (args.contains("images_folder"))
-                    params.dataset.images = args["images_folder"].get<std::string>();
-                if (args.contains("max_iterations"))
-                    params.optimization.iterations = args["max_iterations"].get<size_t>();
-                if (args.contains("strategy"))
-                    params.optimization.strategy = args["strategy"].get<std::string>();
-
-                auto immediate_params = params;
-                immediate_params.dataset.data_path.clear();
-
-                auto result = post_and_wait(viewer, [viewer, params = std::move(immediate_params), path]() {
-                    viewer->setParameters(params);
-                    return viewer->loadDataset(path);
-                });
-
-                if (!result)
-                    return json{{"error", result.error()}};
-
-                return json{{"success", true}, {"path", path.string()}};
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "scene.load_checkpoint",
-                .description = "Load a training checkpoint (.resume file)",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Path to checkpoint file"}}}},
-                    .required = {"path"}}},
-            [viewer](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
-
-                auto result = post_and_wait(viewer, [viewer, path]() {
-                    return viewer->loadCheckpointForTraining(path);
-                });
-
-                if (!result)
-                    return json{{"error", result.error()}};
-
-                return json{{"success", true}, {"path", path.string()}};
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "scene.save_checkpoint",
-                .description = "Save current training state to checkpoint (uses configured output path)",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [viewer](const json&) -> json {
-                auto result = post_and_wait(viewer, [viewer]() {
-                    return viewer->saveCheckpoint();
-                });
-
-                if (!result)
-                    return json{{"error", result.error()}};
-
-                return json{{"success", true}};
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "training.start",
-                .description = "Start training in background",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [viewer](const json&) -> json {
-                auto result = post_and_wait(viewer, [viewer]() {
-                    return viewer->startTraining();
-                });
-
-                if (!result)
-                    return json{{"error", result.error()}};
-
-                return json{{"success", true}, {"message", "Training started"}};
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "scene.save_ply",
-                .description = "Save current model as PLY file",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Path to save PLY file"}}}},
-                    .required = {"path"}}},
-            [viewer](const json& args) -> json {
-                std::filesystem::path path = args["path"].get<std::string>();
-
-                return post_and_wait(viewer, [viewer, path]() -> json {
-                    auto& scene = viewer->getScene();
-                    auto* model = scene.getTrainingModel();
-                    if (!model)
-                        return json{{"error", "No model to save"}};
-
-                    io::PlySaveOptions options{.output_path = path, .binary = true};
-                    auto result = io::save_ply(*model, options);
-                    if (!result)
-                        return json{{"error", result.error().message}};
-
-                    return json{{"success", true}, {"path", path.string()}};
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "render.capture",
-                .description = "Render current scene and return as base64 PNG",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"camera_index", json{{"type", "integer"}, {"description", "Camera index (default: 0)"}}}},
-                    .required = {}}},
-            [viewer](const json& args) -> json {
-                int camera_index = args.value("camera_index", 0);
-
-                return post_and_wait(viewer, [viewer, camera_index]() -> json {
-                    auto result = render_scene_to_base64(viewer->getScene(), camera_index);
-                    if (!result)
-                        return json{{"error", result.error()}};
-
-                    json response;
-                    response["success"] = true;
-                    response["mime_type"] = "image/png";
-                    response["data"] = *result;
-                    return response;
-                });
-            });
+                        io::PlySaveOptions options{.output_path = path, .binary = true};
+                        auto result = io::save_ply(*model, options);
+                        if (!result)
+                            return std::unexpected(result.error().message);
+                        return {};
+                    });
+                },
+            .start_training =
+                [viewer]() {
+                    return post_and_wait(viewer, [viewer]() {
+                        return viewer->startTraining();
+                    });
+                },
+            .render_capture =
+                [viewer](int camera_index, int width, int height) {
+                    return post_and_wait(viewer, [viewer, camera_index, width, height]() {
+                        return render_scene_to_base64(viewer->getScene(), camera_index, width, height);
+                    });
+                },
+            .gaussian_count =
+                [viewer]() -> std::expected<int64_t, std::string> {
+                    return post_and_wait(viewer, [viewer]() -> std::expected<int64_t, std::string> {
+                        auto& scene = viewer->getScene();
+                        if (!scene.getTrainingModel())
+                            return std::unexpected("No model loaded");
+                        return scene.getTotalGaussianCount();
+                    });
+                }});
 
         registry.register_tool(
             McpTool{
@@ -1781,36 +1763,52 @@ namespace lfs::app {
                 });
             });
 
-        registry.register_tool(
-            McpTool{
-                .name = "history.undo",
+        register_gui_operator_tool(
+            registry, viewer_impl,
+            GuiOperatorToolBinding{
+                .tool_name = "history.undo",
+                .operator_id = vis::op::BuiltinOp::Undo,
+                .category = "history",
                 .description = "Undo the most recent shared scene operation",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
-                    if (!vis::op::undoHistory().canUndo())
-                        return json{{"error", "Nothing to undo"}};
-                    core::events::cmd::Undo{}.emit();
-                    auto result = history_json();
-                    result["performed"] = "undo";
-                    return result;
-                });
+                .prepare =
+                    [](vis::Visualizer& /*viewer*/, const json& /*args*/,
+                       vis::op::OperatorProperties& /*props*/) -> std::expected<void, std::string> {
+                        if (!vis::op::undoHistory().canUndo())
+                            return std::unexpected("Nothing to undo");
+                        return {};
+                    },
+                .on_success =
+                    [](vis::Visualizer& /*viewer*/, const json& /*args*/,
+                       const vis::op::OperatorProperties& /*props*/,
+                       const vis::op::OperatorReturnValue& /*result*/) {
+                        auto payload = history_json();
+                        payload["performed"] = "undo";
+                        return payload;
+                    },
             });
 
-        registry.register_tool(
-            McpTool{
-                .name = "history.redo",
+        register_gui_operator_tool(
+            registry, viewer_impl,
+            GuiOperatorToolBinding{
+                .tool_name = "history.redo",
+                .operator_id = vis::op::BuiltinOp::Redo,
+                .category = "history",
                 .description = "Redo the next shared scene operation",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, []() -> json {
-                    if (!vis::op::undoHistory().canRedo())
-                        return json{{"error", "Nothing to redo"}};
-                    core::events::cmd::Redo{}.emit();
-                    auto result = history_json();
-                    result["performed"] = "redo";
-                    return result;
-                });
+                .prepare =
+                    [](vis::Visualizer& /*viewer*/, const json& /*args*/,
+                       vis::op::OperatorProperties& /*props*/) -> std::expected<void, std::string> {
+                        if (!vis::op::undoHistory().canRedo())
+                            return std::unexpected("Nothing to redo");
+                        return {};
+                    },
+                .on_success =
+                    [](vis::Visualizer& /*viewer*/, const json& /*args*/,
+                       const vis::op::OperatorProperties& /*props*/,
+                       const vis::op::OperatorReturnValue& /*result*/) {
+                        auto payload = history_json();
+                        payload["performed"] = "redo";
+                        return payload;
+                    },
             });
 
         registry.register_tool(
@@ -2116,31 +2114,16 @@ namespace lfs::app {
                 });
             });
 
-        registry.register_tool(
-            McpTool{
-                .name = "scene.delete_node",
+        register_gui_operator_tool(
+            registry, viewer_impl,
+            GuiOperatorToolBinding{
+                .tool_name = "scene.delete_node",
+                .operator_id = vis::op::BuiltinOp::Delete,
+                .category = "scene",
                 .description = "Delete a scene node, optionally keeping its children attached to the parent",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"name", json{{"type", "string"}, {"description", "Node to remove"}}},
-                        {"keep_children", json{{"type", "boolean"}, {"description", "Keep the children and reparent them to the removed node's parent (default: false)"}}}},
-                    .required = {"name"}}},
-            [viewer_impl](const json& args) -> json {
-                const std::string name = args["name"].get<std::string>();
-                const bool keep_children = args.value("keep_children", false);
-
-                return post_and_wait(viewer_impl, [viewer_impl, name, keep_children]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-                    const auto& scene = scene_manager->getScene();
-                    if (!scene.getNode(name))
-                        return json{{"error", "Node not found: " + name}};
-
-                    core::events::cmd::RemovePLY{.name = name, .keep_children = keep_children}.emit();
-                    return json{{"success", true}, {"removed", name}, {"keep_children", keep_children}};
-                });
+                .destructive = true,
+                .prepare = prepare_delete_operator,
+                .on_success = delete_operator_result,
             });
 
         registry.register_tool(
@@ -2688,184 +2671,51 @@ namespace lfs::app {
                 });
             });
 
-        registry.register_tool(
-            McpTool{
-                .name = "transform.set",
+        register_gui_operator_tool(
+            registry, viewer_impl,
+            GuiOperatorToolBinding{
+                .tool_name = "transform.set",
+                .operator_id = vis::op::BuiltinOp::TransformSet,
+                .category = "transform",
                 .description = "Set absolute local transform components for a node or the current shared node selection",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"node", json{{"type", "string"}, {"description", "Optional node name; defaults to the current selected node(s)"}}},
-                        {"translation", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional XYZ translation"}}},
-                        {"rotation", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional XYZ Euler rotation in radians"}}},
-                        {"scale", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional XYZ scale"}}}},
-                    .required = {}}},
-            [viewer_impl](const json& args) -> json {
-                const auto requested_node = optional_string_arg(args, "node");
-                auto translation = optional_vec3_arg(args, "translation");
-                if (!translation)
-                    return json{{"error", translation.error()}};
-                auto rotation = optional_vec3_arg(args, "rotation");
-                if (!rotation)
-                    return json{{"error", rotation.error()}};
-                auto scale = optional_vec3_arg(args, "scale");
-                if (!scale)
-                    return json{{"error", scale.error()}};
-                if (!translation->has_value() && !rotation->has_value() && !scale->has_value())
-                    return json{{"error", "At least one of translation, rotation, or scale must be provided"}};
-
-                return post_and_wait(viewer_impl, [viewer_impl, requested_node, translation = *translation, rotation = *rotation, scale = *scale]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    auto targets = resolve_transform_targets(*scene_manager, requested_node);
-                    if (!targets)
-                        return json{{"error", targets.error()}};
-
-                    if (auto result = vis::cap::setTransform(
-                            *scene_manager, *targets, translation, rotation, scale, "mcp.transform.set");
-                        !result) {
-                        return json{{"error", result.error()}};
-                    }
-
-                    json nodes = json::array();
-                    for (const auto& name : *targets) {
-                        if (const auto* const node = scene_manager->getScene().getNode(name))
-                            nodes.push_back(transform_info_json(scene_manager->getScene(), *node));
-                    }
-
-                    return json{{"success", true}, {"count", nodes.size()}, {"nodes", nodes}};
-                });
+                .prepare = prepare_transform_set_operator,
+                .on_success = transform_operator_result,
             });
 
-        registry.register_tool(
-            McpTool{
-                .name = "transform.translate",
+        register_gui_operator_tool(
+            registry, viewer_impl,
+            GuiOperatorToolBinding{
+                .tool_name = "transform.translate",
+                .operator_id = vis::op::BuiltinOp::TransformTranslate,
+                .category = "transform",
                 .description = "Translate a node or the current shared node selection",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"node", json{{"type", "string"}, {"description", "Optional node name; defaults to the current selected node(s)"}}},
-                        {"value", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "XYZ translation delta"}}}},
-                    .required = {"value"}}},
-            [viewer_impl](const json& args) -> json {
-                const auto requested_node = optional_string_arg(args, "node");
-                auto value = optional_vec3_arg(args, "value");
-                if (!value)
-                    return json{{"error", value.error()}};
-                if (!value->has_value())
-                    return json{{"error", "Field 'value' must be provided"}};
-
-                return post_and_wait(viewer_impl, [viewer_impl, requested_node, value = **value]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    auto targets = resolve_transform_targets(*scene_manager, requested_node);
-                    if (!targets)
-                        return json{{"error", targets.error()}};
-
-                    if (auto result = vis::cap::translateNodes(
-                            *scene_manager, *targets, value, "mcp.transform.translate");
-                        !result) {
-                        return json{{"error", result.error()}};
-                    }
-
-                    json nodes = json::array();
-                    for (const auto& name : *targets) {
-                        if (const auto* const node = scene_manager->getScene().getNode(name))
-                            nodes.push_back(transform_info_json(scene_manager->getScene(), *node));
-                    }
-
-                    return json{{"success", true}, {"count", nodes.size()}, {"nodes", nodes}};
-                });
+                .required = {"value"},
+                .prepare = prepare_transform_operator,
+                .on_success = transform_operator_result,
             });
 
-        registry.register_tool(
-            McpTool{
-                .name = "transform.rotate",
+        register_gui_operator_tool(
+            registry, viewer_impl,
+            GuiOperatorToolBinding{
+                .tool_name = "transform.rotate",
+                .operator_id = vis::op::BuiltinOp::TransformRotate,
+                .category = "transform",
                 .description = "Rotate a node or the current shared node selection by XYZ Euler deltas in radians",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"node", json{{"type", "string"}, {"description", "Optional node name; defaults to the current selected node(s)"}}},
-                        {"value", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "XYZ Euler delta in radians"}}}},
-                    .required = {"value"}}},
-            [viewer_impl](const json& args) -> json {
-                const auto requested_node = optional_string_arg(args, "node");
-                auto value = optional_vec3_arg(args, "value");
-                if (!value)
-                    return json{{"error", value.error()}};
-                if (!value->has_value())
-                    return json{{"error", "Field 'value' must be provided"}};
-
-                return post_and_wait(viewer_impl, [viewer_impl, requested_node, value = **value]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    auto targets = resolve_transform_targets(*scene_manager, requested_node);
-                    if (!targets)
-                        return json{{"error", targets.error()}};
-
-                    if (auto result = vis::cap::rotateNodes(
-                            *scene_manager, *targets, value, "mcp.transform.rotate");
-                        !result) {
-                        return json{{"error", result.error()}};
-                    }
-
-                    json nodes = json::array();
-                    for (const auto& name : *targets) {
-                        if (const auto* const node = scene_manager->getScene().getNode(name))
-                            nodes.push_back(transform_info_json(scene_manager->getScene(), *node));
-                    }
-
-                    return json{{"success", true}, {"count", nodes.size()}, {"nodes", nodes}};
-                });
+                .required = {"value"},
+                .prepare = prepare_transform_operator,
+                .on_success = transform_operator_result,
             });
 
-        registry.register_tool(
-            McpTool{
-                .name = "transform.scale",
+        register_gui_operator_tool(
+            registry, viewer_impl,
+            GuiOperatorToolBinding{
+                .tool_name = "transform.scale",
+                .operator_id = vis::op::BuiltinOp::TransformScale,
+                .category = "transform",
                 .description = "Scale a node or the current shared node selection by XYZ factors",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"node", json{{"type", "string"}, {"description", "Optional node name; defaults to the current selected node(s)"}}},
-                        {"value", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "XYZ scale multiplier"}}}},
-                    .required = {"value"}}},
-            [viewer_impl](const json& args) -> json {
-                const auto requested_node = optional_string_arg(args, "node");
-                auto value = optional_vec3_arg(args, "value");
-                if (!value)
-                    return json{{"error", value.error()}};
-                if (!value->has_value())
-                    return json{{"error", "Field 'value' must be provided"}};
-
-                return post_and_wait(viewer_impl, [viewer_impl, requested_node, value = **value]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    auto targets = resolve_transform_targets(*scene_manager, requested_node);
-                    if (!targets)
-                        return json{{"error", targets.error()}};
-
-                    if (auto result = vis::cap::scaleNodes(
-                            *scene_manager, *targets, value, "mcp.transform.scale");
-                        !result) {
-                        return json{{"error", result.error()}};
-                    }
-
-                    json nodes = json::array();
-                    for (const auto& name : *targets) {
-                        if (const auto* const node = scene_manager->getScene().getNode(name))
-                            nodes.push_back(transform_info_json(scene_manager->getScene(), *node));
-                    }
-
-                    return json{{"success", true}, {"count", nodes.size()}, {"nodes", nodes}};
-                });
+                .required = {"value"},
+                .prepare = prepare_transform_operator,
+                .on_success = transform_operator_result,
             });
 
         registry.register_tool(

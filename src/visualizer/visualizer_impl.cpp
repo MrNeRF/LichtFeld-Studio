@@ -1177,13 +1177,31 @@ namespace lfs::vis {
         return {};
     }
 
-    std::expected<void, std::string> VisualizerImpl::saveCheckpoint() {
+    std::expected<std::filesystem::path, std::string> VisualizerImpl::saveCheckpoint(
+        const std::optional<std::filesystem::path>& path) {
         if (!trainer_manager_ || !trainer_manager_->getTrainer())
             return std::unexpected("No active training session");
-        if (!trainer_manager_->isTrainingActive())
-            return std::unexpected("Training is not active");
-        trainer_manager_->requestSaveCheckpoint();
-        return {};
+
+        auto* const trainer = trainer_manager_->getTrainer();
+        if (trainer_manager_->isTrainingActive()) {
+            if (path) {
+                return std::unexpected(
+                    "Custom checkpoint output paths are not supported while training is active");
+            }
+            trainer_manager_->requestSaveCheckpoint();
+            return trainer->get_output_path();
+        }
+
+        const int iteration = trainer->get_current_iteration();
+        if (path) {
+            if (auto result = trainer->save_checkpoint_to(*path, iteration); !result)
+                return std::unexpected(result.error());
+            return *path;
+        }
+
+        if (auto result = trainer->save_checkpoint(iteration); !result)
+            return std::unexpected(result.error());
+        return trainer->get_output_path();
     }
 
     void VisualizerImpl::performReset() {

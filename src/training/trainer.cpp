@@ -2074,6 +2074,21 @@ namespace lfs::training {
                                               bilateral_grid_.get(), ppisp_.get(), controller_to_save);
     }
 
+    std::expected<void, std::string> Trainer::save_checkpoint_to(const std::filesystem::path& output_path,
+                                                                 int iteration) {
+        if (!strategy_) {
+            return std::unexpected("Cannot save checkpoint: no strategy initialized");
+        }
+
+        PPISPControllerPool* controller_to_save = nullptr;
+        if (ppisp_controller_pool_ && iteration >= params_.optimization.ppisp_controller_activation_step) {
+            controller_to_save = ppisp_controller_pool_.get();
+        }
+
+        return lfs::training::save_checkpoint(output_path, iteration, *strategy_, params_,
+                                              bilateral_grid_.get(), ppisp_.get(), controller_to_save);
+    }
+
     lfs::core::Tensor Trainer::applyPPISPForViewport(const lfs::core::Tensor& rgb, const int camera_uid,
                                                      const PPISPViewportOverrides& overrides,
                                                      const bool use_controller) const {

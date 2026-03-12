@@ -6,9 +6,26 @@
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
+#include "operator/property_schema.hpp"
 #include "visualizer/gui_capabilities.hpp"
 
 namespace lfs::vis::op {
+
+    namespace {
+
+        std::expected<std::vector<std::string>, std::string> resolve_transform_targets_from_props(
+            const OperatorContext& ctx,
+            const OperatorProperties* props) {
+            std::optional<std::string> requested_node;
+            if (props) {
+                if (const auto node = props->get<std::string>("node"); node && !node->empty()) {
+                    requested_node = *node;
+                }
+            }
+            return cap::resolveTransformTargets(ctx.scene(), requested_node);
+        }
+
+    } // namespace
 
     const OperatorDescriptor TransformSetOperator::DESCRIPTOR = {
         .builtin_id = BuiltinOp::TransformSet,
@@ -21,21 +38,34 @@ namespace lfs::vis::op {
         .source = OperatorSource::CPP,
     };
 
-    bool TransformSetOperator::poll(const OperatorContext& ctx) const {
-        return ctx.hasSelection();
+    bool TransformSetOperator::poll(const OperatorContext& ctx, const OperatorProperties* props) const {
+        if (!props) {
+            return ctx.hasSelection();
+        }
+
+        const auto targets = resolve_transform_targets_from_props(ctx, props);
+        if (!targets) {
+            return false;
+        }
+
+        return props->has("translation") || props->has("rotation") || props->has("scale");
     }
 
     OperatorResult TransformSetOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
-        const auto nodes = ctx.selectedNodes();
-        if (nodes.empty()) {
+        const auto nodes = resolve_transform_targets_from_props(ctx, &props);
+        if (!nodes) {
             return OperatorResult::CANCELLED;
         }
 
-        const auto translation = props.get_or<glm::vec3>("translation", glm::vec3(0.0f));
-        const auto rotation = props.get_or<glm::vec3>("rotation", glm::vec3(0.0f));
-        const auto scale = props.get_or<glm::vec3>("scale", glm::vec3(1.0f));
+        const auto translation = props.has("translation") ? std::optional(props.get_or<glm::vec3>("translation", glm::vec3(0.0f)))
+                                                          : std::nullopt;
+        const auto rotation = props.has("rotation") ? std::optional(props.get_or<glm::vec3>("rotation", glm::vec3(0.0f)))
+                                                    : std::nullopt;
+        const auto scale = props.has("scale") ? std::optional(props.get_or<glm::vec3>("scale", glm::vec3(1.0f)))
+                                              : std::nullopt;
+        props.set("resolved_node_names", *nodes);
         const auto result = cap::setTransform(
-            ctx.scene(), nodes, translation, rotation, scale, "transform.set");
+            ctx.scene(), *nodes, translation, rotation, scale, "transform.set");
         return result ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
     }
 
@@ -50,18 +80,24 @@ namespace lfs::vis::op {
         .source = OperatorSource::CPP,
     };
 
-    bool TransformTranslateOperator::poll(const OperatorContext& ctx) const {
-        return ctx.hasSelection();
+    bool TransformTranslateOperator::poll(const OperatorContext& ctx, const OperatorProperties* props) const {
+        if (!props) {
+            return ctx.hasSelection();
+        }
+
+        const auto targets = resolve_transform_targets_from_props(ctx, props);
+        return targets && props->has("value");
     }
 
     OperatorResult TransformTranslateOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
-        const auto nodes = ctx.selectedNodes();
-        if (nodes.empty()) {
+        const auto nodes = resolve_transform_targets_from_props(ctx, &props);
+        if (!nodes || !props.has("value")) {
             return OperatorResult::CANCELLED;
         }
 
         const auto value = props.get_or<glm::vec3>("value", glm::vec3(0.0f));
-        const auto result = cap::translateNodes(ctx.scene(), nodes, value, "transform.translate");
+        props.set("resolved_node_names", *nodes);
+        const auto result = cap::translateNodes(ctx.scene(), *nodes, value, "transform.translate");
         return result ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
     }
 
@@ -76,18 +112,24 @@ namespace lfs::vis::op {
         .source = OperatorSource::CPP,
     };
 
-    bool TransformRotateOperator::poll(const OperatorContext& ctx) const {
-        return ctx.hasSelection();
+    bool TransformRotateOperator::poll(const OperatorContext& ctx, const OperatorProperties* props) const {
+        if (!props) {
+            return ctx.hasSelection();
+        }
+
+        const auto targets = resolve_transform_targets_from_props(ctx, props);
+        return targets && props->has("value");
     }
 
     OperatorResult TransformRotateOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
-        const auto nodes = ctx.selectedNodes();
-        if (nodes.empty()) {
+        const auto nodes = resolve_transform_targets_from_props(ctx, &props);
+        if (!nodes || !props.has("value")) {
             return OperatorResult::CANCELLED;
         }
 
         const auto value = props.get_or<glm::vec3>("value", glm::vec3(0.0f));
-        const auto result = cap::rotateNodes(ctx.scene(), nodes, value, "transform.rotate");
+        props.set("resolved_node_names", *nodes);
+        const auto result = cap::rotateNodes(ctx.scene(), *nodes, value, "transform.rotate");
         return result ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
     }
 
@@ -102,18 +144,24 @@ namespace lfs::vis::op {
         .source = OperatorSource::CPP,
     };
 
-    bool TransformScaleOperator::poll(const OperatorContext& ctx) const {
-        return ctx.hasSelection();
+    bool TransformScaleOperator::poll(const OperatorContext& ctx, const OperatorProperties* props) const {
+        if (!props) {
+            return ctx.hasSelection();
+        }
+
+        const auto targets = resolve_transform_targets_from_props(ctx, props);
+        return targets && props->has("value");
     }
 
     OperatorResult TransformScaleOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
-        const auto nodes = ctx.selectedNodes();
-        if (nodes.empty()) {
+        const auto nodes = resolve_transform_targets_from_props(ctx, &props);
+        if (!nodes || !props.has("value")) {
             return OperatorResult::CANCELLED;
         }
 
         const auto value = props.get_or<glm::vec3>("value", glm::vec3(1.0f));
-        const auto result = cap::scaleNodes(ctx.scene(), nodes, value, "transform.scale");
+        props.set("resolved_node_names", *nodes);
+        const auto result = cap::scaleNodes(ctx.scene(), *nodes, value, "transform.scale");
         return result ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
     }
 
@@ -128,7 +176,8 @@ namespace lfs::vis::op {
         .source = OperatorSource::CPP,
     };
 
-    bool TransformApplyBatchOperator::poll(const OperatorContext& /*ctx*/) const {
+    bool TransformApplyBatchOperator::poll(const OperatorContext& /*ctx*/,
+                                           const OperatorProperties* /*props*/) const {
         return true;
     }
 
@@ -150,6 +199,50 @@ namespace lfs::vis::op {
     }
 
     void registerTransformOperators() {
+        const auto make_schema = [](std::string name, std::string description, PropertyType type,
+                                    std::optional<int> size = std::nullopt) {
+            PropertySchema schema{};
+            schema.name = std::move(name);
+            schema.description = std::move(description);
+            schema.type = type;
+            schema.size = size;
+            return schema;
+        };
+
+        propertySchemas().registerSchema(
+            TransformSetOperator::DESCRIPTOR.id(),
+            {
+                make_schema("node", "Optional node name; defaults to the current selected node(s)",
+                            PropertyType::STRING),
+                make_schema("translation", "Optional XYZ translation", PropertyType::FLOAT_VECTOR, 3),
+                make_schema("rotation", "Optional XYZ Euler rotation in radians",
+                            PropertyType::FLOAT_VECTOR, 3),
+                make_schema("scale", "Optional XYZ scale", PropertyType::FLOAT_VECTOR, 3),
+            });
+        propertySchemas().registerSchema(
+            TransformTranslateOperator::DESCRIPTOR.id(),
+            {
+                make_schema("node", "Optional node name; defaults to the current selected node(s)",
+                            PropertyType::STRING),
+                make_schema("value", "XYZ translation delta", PropertyType::FLOAT_VECTOR, 3),
+            });
+        propertySchemas().registerSchema(
+            TransformRotateOperator::DESCRIPTOR.id(),
+            {
+                make_schema("node", "Optional node name; defaults to the current selected node(s)",
+                            PropertyType::STRING),
+                make_schema("value", "XYZ Euler delta in radians", PropertyType::FLOAT_VECTOR, 3),
+            });
+        propertySchemas().registerSchema(
+            TransformScaleOperator::DESCRIPTOR.id(),
+            {
+                make_schema("node", "Optional node name; defaults to the current selected node(s)",
+                            PropertyType::STRING),
+                make_schema("value", "XYZ scale multiplier", PropertyType::FLOAT_VECTOR, 3),
+            });
+        propertySchemas().registerSchema(
+            TransformApplyBatchOperator::DESCRIPTOR.id(),
+            {});
         operators().registerOperator(BuiltinOp::TransformSet, TransformSetOperator::DESCRIPTOR,
                                      [] { return std::make_unique<TransformSetOperator>(); });
         operators().registerOperator(BuiltinOp::TransformTranslate, TransformTranslateOperator::DESCRIPTOR,
@@ -168,6 +261,11 @@ namespace lfs::vis::op {
         operators().unregisterOperator(BuiltinOp::TransformRotate);
         operators().unregisterOperator(BuiltinOp::TransformScale);
         operators().unregisterOperator(BuiltinOp::TransformApplyBatch);
+        propertySchemas().unregisterSchema(TransformSetOperator::DESCRIPTOR.id());
+        propertySchemas().unregisterSchema(TransformTranslateOperator::DESCRIPTOR.id());
+        propertySchemas().unregisterSchema(TransformRotateOperator::DESCRIPTOR.id());
+        propertySchemas().unregisterSchema(TransformScaleOperator::DESCRIPTOR.id());
+        propertySchemas().unregisterSchema(TransformApplyBatchOperator::DESCRIPTOR.id());
     }
 
 } // namespace lfs::vis::op

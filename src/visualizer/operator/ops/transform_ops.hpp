@@ -13,7 +13,7 @@ namespace lfs::vis::op {
         static const OperatorDescriptor DESCRIPTOR;
 
         [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
-        [[nodiscard]] bool poll(const OperatorContext& ctx) const override;
+        [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;
         OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
     };
 
@@ -22,7 +22,7 @@ namespace lfs::vis::op {
         static const OperatorDescriptor DESCRIPTOR;
 
         [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
-        [[nodiscard]] bool poll(const OperatorContext& ctx) const override;
+        [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;
         OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
     };
 
@@ -31,7 +31,7 @@ namespace lfs::vis::op {
         static const OperatorDescriptor DESCRIPTOR;
 
         [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
-        [[nodiscard]] bool poll(const OperatorContext& ctx) const override;
+        [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;
         OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
     };
 
@@ -40,7 +40,7 @@ namespace lfs::vis::op {
         static const OperatorDescriptor DESCRIPTOR;
 
         [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
-        [[nodiscard]] bool poll(const OperatorContext& ctx) const override;
+        [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;
         OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
     };
 
@@ -49,7 +49,7 @@ namespace lfs::vis::op {
         static const OperatorDescriptor DESCRIPTOR;
 
         [[nodiscard]] const OperatorDescriptor& descriptor() const override { return DESCRIPTOR; }
-        [[nodiscard]] bool poll(const OperatorContext& ctx) const override;
+        [[nodiscard]] bool poll(const OperatorContext& ctx, const OperatorProperties* props = nullptr) const override;
         OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
     };
 
