@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "sequencer/keyframe.hpp"
 #include "sequencer/timeline.hpp"
 #include <algorithm>
@@ -27,7 +28,7 @@ namespace lfs::vis {
         PING_PONG
     };
 
-    class SequencerController {
+    class LFS_VIS_API SequencerController {
     public:
         [[nodiscard]] sequencer::Timeline& timeline() { return timeline_; }
         [[nodiscard]] const sequencer::Timeline& timeline() const { return timeline_; }

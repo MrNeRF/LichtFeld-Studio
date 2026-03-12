@@ -314,6 +314,7 @@ target_compile_definitions(lichtfeld_tests PRIVATE
 target_link_libraries(lichtfeld_tests PRIVATE
     # LFS modules
     lfs_visualizer
+    lfs_sequencer
     lfs_rendering
     lfs_training
     lfs_core
