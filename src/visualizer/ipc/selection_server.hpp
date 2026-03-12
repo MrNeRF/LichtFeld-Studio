@@ -13,6 +13,8 @@
 #include <variant>
 #include <vector>
 
+#include "core/export.hpp"
+
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -66,7 +68,7 @@ namespace lfs::vis {
 
     using InvokeCapabilityCallback = std::function<CapabilityInvokeResult(const std::string& name, const std::string& args)>;
 
-    class SelectionServer {
+    class LFS_VIS_API SelectionServer {
     public:
         static constexpr const char* SOCKET_PATH = "/tmp/lichtfeld-selection.sock";
 

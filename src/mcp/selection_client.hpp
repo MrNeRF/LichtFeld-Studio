@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "core/export.hpp"
+
 namespace lfs::mcp {
 
     struct CapabilityCallResult {
@@ -16,7 +18,7 @@ namespace lfs::mcp {
         std::string error;
     };
 
-    class SelectionClient {
+    class LFS_MCP_API SelectionClient {
     public:
         static constexpr const char* SOCKET_PATH = "/tmp/lichtfeld-selection.sock";
 
