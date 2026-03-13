@@ -4,11 +4,12 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "operator/operator.hpp"
 
 namespace lfs::vis::op {
 
-    class TransformSetOperator : public Operator {
+    class LFS_VIS_API TransformSetOperator : public Operator {
     public:
         static const OperatorDescriptor DESCRIPTOR;
 
@@ -17,7 +18,7 @@ namespace lfs::vis::op {
         OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
     };
 
-    class TransformTranslateOperator : public Operator {
+    class LFS_VIS_API TransformTranslateOperator : public Operator {
     public:
         static const OperatorDescriptor DESCRIPTOR;
 
@@ -26,7 +27,7 @@ namespace lfs::vis::op {
         OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
     };
 
-    class TransformRotateOperator : public Operator {
+    class LFS_VIS_API TransformRotateOperator : public Operator {
     public:
         static const OperatorDescriptor DESCRIPTOR;
 
@@ -35,7 +36,7 @@ namespace lfs::vis::op {
         OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
     };
 
-    class TransformScaleOperator : public Operator {
+    class LFS_VIS_API TransformScaleOperator : public Operator {
     public:
         static const OperatorDescriptor DESCRIPTOR;
 
@@ -44,7 +45,7 @@ namespace lfs::vis::op {
         OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
     };
 
-    class TransformApplyBatchOperator : public Operator {
+    class LFS_VIS_API TransformApplyBatchOperator : public Operator {
     public:
         static const OperatorDescriptor DESCRIPTOR;
 
@@ -53,7 +54,7 @@ namespace lfs::vis::op {
         OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
     };
 
-    void registerTransformOperators();
-    void unregisterTransformOperators();
+    LFS_VIS_API void registerTransformOperators();
+    LFS_VIS_API void unregisterTransformOperators();
 
 } // namespace lfs::vis::op

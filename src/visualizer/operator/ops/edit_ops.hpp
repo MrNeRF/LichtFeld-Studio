@@ -4,11 +4,12 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "operator/operator.hpp"
 
 namespace lfs::vis::op {
 
-    class UndoOperator : public Operator {
+    class LFS_VIS_API UndoOperator : public Operator {
     public:
         static const OperatorDescriptor DESCRIPTOR;
 
@@ -17,7 +18,7 @@ namespace lfs::vis::op {
         OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
     };
 
-    class RedoOperator : public Operator {
+    class LFS_VIS_API RedoOperator : public Operator {
     public:
         static const OperatorDescriptor DESCRIPTOR;
 
@@ -26,7 +27,7 @@ namespace lfs::vis::op {
         OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
     };
 
-    class DeleteOperator : public Operator {
+    class LFS_VIS_API DeleteOperator : public Operator {
     public:
         static const OperatorDescriptor DESCRIPTOR;
 
@@ -35,7 +36,7 @@ namespace lfs::vis::op {
         OperatorResult invoke(OperatorContext& ctx, OperatorProperties& props) override;
     };
 
-    void registerEditOperators();
-    void unregisterEditOperators();
+    LFS_VIS_API void registerEditOperators();
+    LFS_VIS_API void unregisterEditOperators();
 
 } // namespace lfs::vis::op

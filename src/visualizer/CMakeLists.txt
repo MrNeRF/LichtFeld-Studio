@@ -242,9 +242,9 @@ if(NOT WIN32)
         LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
     )
 
-    target_link_libraries(lfs_visualizer PRIVATE lfs_rmlui)
+    target_link_libraries(lfs_visualizer PUBLIC lfs_rmlui)
 else()
-    target_link_libraries(lfs_visualizer PRIVATE RmlUi::RmlUi)
+    target_link_libraries(lfs_visualizer PUBLIC RmlUi::RmlUi)
 endif()
 
 # Set C++ standard

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <RmlUi/Core/Core.h>
 #include <RmlUi/Core/Input.h>
 #include <RmlUi/Core/TextInputContext.h>
@@ -13,7 +15,7 @@
 
 namespace lfs::vis::gui {
 
-    class RmlTextInputHandler final : public Rml::TextInputHandler {
+    class LFS_VIS_API RmlTextInputHandler final : public Rml::TextInputHandler {
     public:
         void OnActivate(Rml::TextInputContext* input_context) override;
         void OnDeactivate(Rml::TextInputContext* input_context) override;
