@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/events.hpp"
 #include "core/mesh2splat.hpp"
 #include "core/parameters.hpp"
@@ -30,7 +31,7 @@ namespace lfs::vis {
 
     namespace gui {
 
-        class AsyncTaskManager {
+        class LFS_VIS_API AsyncTaskManager {
         public:
             explicit AsyncTaskManager(VisualizerImpl* viewer);
             ~AsyncTaskManager();

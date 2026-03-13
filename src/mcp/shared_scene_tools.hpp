@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/parameters.hpp"
 
 #include <cstdint>
@@ -41,6 +42,6 @@ namespace lfs::mcp {
         GaussianCountHandler gaussian_count;
     };
 
-    void register_shared_scene_tools(const SharedSceneToolBackend& backend);
+    LFS_MCP_API void register_shared_scene_tools(const SharedSceneToolBackend& backend);
 
 } // namespace lfs::mcp

@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "core/export.hpp"
+
 #include <expected>
 #include <future>
 #include <memory>
@@ -45,7 +47,7 @@ namespace lfs::mcp {
         std::string error;
     };
 
-    class LLMClient {
+    class LFS_MCP_API LLMClient {
     public:
         LLMClient();
         ~LLMClient();
@@ -68,7 +70,7 @@ namespace lfs::mcp {
         std::unique_ptr<Impl> impl_;
     };
 
-    std::expected<LLMResponse, std::string> ask_training_advisor(
+    LFS_MCP_API std::expected<LLMResponse, std::string> ask_training_advisor(
         LLMClient& client,
         int iteration,
         float loss,

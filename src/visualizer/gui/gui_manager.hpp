@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/cuda_version.hpp"
 #include "core/events.hpp"
 #include "core/parameters.hpp"
@@ -39,7 +40,7 @@ namespace lfs::vis {
     class VisualizerImpl;
 
     namespace gui {
-        class GuiManager {
+        class LFS_VIS_API GuiManager {
         public:
             GuiManager(VisualizerImpl* viewer);
             ~GuiManager();
