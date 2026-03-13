@@ -13,6 +13,12 @@ jobs:
   build-windows:
     if: github.repository == 'MrNeRF/LichtFeld-Studio'
     runs-on: windows-2022
+    outputs:
+      artifact_name: ${{ steps.package.outputs.artifact_name }}
+      package_name: ${{ steps.package.outputs.package_name }}
+      short_sha: ${{ steps.package.outputs.short_sha }}
+      full_sha: ${{ steps.package.outputs.full_sha }}
+      built_at: ${{ steps.package.outputs.built_at }}
     env:
       VCPKG_ROOT: ${{ github.workspace }}\..\vcpkg
       VCPKG_BUILD_TYPE: release
@@ -35,25 +41,79 @@ jobs:
           echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           echo "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8\libnvvp" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Cache vcpkg tool
+        id: cache-vcpkg-tool
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_ROOT }}
+          key: vcpkg-tool-${{ runner.os }}-2026-03-12
+          restore-keys: vcpkg-tool-${{ runner.os }}-
+
       - name: Setup vcpkg
+        if: steps.cache-vcpkg-tool.outputs.cache-hit != 'true'
         run: |
           cd ..
           git clone https://github.com/microsoft/vcpkg.git
           .\vcpkg\bootstrap-vcpkg.bat -disableMetrics
-          Add-Content -Path "$env:VCPKG_ROOT\triplets\x64-windows.cmake" -Value "set(VCPKG_MAX_CONCURRENCY 2)"
 
-      - name: Cache vcpkg
+      - name: Configure vcpkg triplet
+        run: |
+          $triplet = "$env:VCPKG_ROOT\triplets\x64-windows.cmake"
+          if (-not (Select-String -Path $triplet -Pattern "VCPKG_MAX_CONCURRENCY" -Quiet)) {
+            Add-Content -Path $triplet -Value "set(VCPKG_MAX_CONCURRENCY 2)"
+          }
+
+      - name: Cache vcpkg packages
         uses: actions/cache@v4
         with:
           path: C:\Users\runneradmin\AppData\Local\vcpkg\archives
-          key: vcpkg-${{ runner.os }}-${{ hashFiles('**/vcpkg.json') }}
-          restore-keys: vcpkg-${{ runner.os }}-
+          key: vcpkg-pkgs-${{ runner.os }}-${{ hashFiles('**/vcpkg.json') }}
+          restore-keys: vcpkg-pkgs-${{ runner.os }}-
 
       - name: Configure
-        shell: cmd
+        shell: pwsh
         run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_PORTABLE=ON -DBUILD_PYTHON_STUBS=OFF
+          $ErrorActionPreference = 'Stop'
+          $cmakeArgs = '-B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_PORTABLE=ON -DBUILD_PYTHON_STUBS=OFF'
+          $retryablePatterns = @(
+            'status code 5\d\d',
+            'timed out',
+            'timeout',
+            'connection reset',
+            'failed to connect',
+            'temporarily unavailable',
+            'tls',
+            'ssl'
+          )
+
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            Write-Host "Configure attempt $attempt/3"
+            cmd /c "call `"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat`" && cmake $cmakeArgs"
+
+            if ($LASTEXITCODE -eq 0) {
+              exit 0
+            }
+
+            $shouldRetry = $false
+            if (Test-Path 'build\vcpkg-manifest-install.log') {
+              foreach ($pattern in $retryablePatterns) {
+                if (Select-String -Path 'build\vcpkg-manifest-install.log' -Pattern $pattern -Quiet) {
+                  $shouldRetry = $true
+                  break
+                }
+              }
+            }
+
+            if (-not $shouldRetry -or $attempt -eq 3) {
+              exit $LASTEXITCODE
+            }
+
+            Write-Warning "Retryable configure failure detected, cleaning build tree before retry."
+            if (Test-Path 'build') {
+              Remove-Item -Recurse -Force 'build'
+            }
+            Start-Sleep -Seconds (15 * $attempt)
+          }
 
       - name: Build
         shell: cmd
@@ -61,19 +121,68 @@ jobs:
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
           cmake --build build -j %NUMBER_OF_PROCESSORS%
 
-      - name: Package
+      - name: Dump failure diagnostics
+        if: failure()
+        shell: pwsh
         run: |
-          $date = Get-Date -Format "yyyy-MM-dd"
-          $sha = git rev-parse --short HEAD
+          $ErrorActionPreference = 'Continue'
+          $paths = @(
+            'build\vcpkg-manifest-install.log',
+            'build\vcpkg_installed\vcpkg\issue_body.md',
+            'build\CMakeFiles\CMakeConfigureLog.yaml',
+            'build\CMakeFiles\CMakeError.log',
+            'build\CMakeFiles\CMakeOutput.log',
+            'build\CMakeCache.txt'
+          )
+
+          foreach ($path in $paths) {
+            if (Test-Path $path) {
+              Write-Host "::group::$path"
+              Get-Content $path -Tail 400
+              Write-Host "::endgroup::"
+            }
+          }
+
+      - name: Upload failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-nightly-diagnostics-${{ github.run_number }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: |
+            build/CMakeCache.txt
+            build/CMakeFiles/CMakeConfigureLog.yaml
+            build/CMakeFiles/CMakeError.log
+            build/CMakeFiles/CMakeOutput.log
+            build/vcpkg-manifest-install.log
+            build/vcpkg_installed/vcpkg/issue_body.md
+            build/vcpkg_installed/vcpkg/blds/**/*.log
+
+      - name: Package
+        id: package
+        shell: pwsh
+        run: |
+          $date = Get-Date -AsUTC -Format "yyyy-MM-dd"
+          $builtAt = Get-Date -AsUTC -Format "yyyy-MM-ddTHH:mm:ssZ"
+          $shortSha = (git rev-parse --short HEAD).Trim()
+          $fullSha = (git rev-parse HEAD).Trim()
+          $packageName = "LichtFeld-Studio-windows-nightly-$date-$shortSha.zip"
+          $artifactName = "windows-portable-$date-$shortSha"
           cmake --install build --prefix dist
-          Compress-Archive -Path dist\* -DestinationPath "LichtFeld-Studio-windows-nightly-$date-$sha.zip"
-          echo "PACKAGE_NAME=LichtFeld-Studio-windows-nightly-$date-$sha.zip" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Compress-Archive -Path dist\* -DestinationPath $packageName
+          "artifact_name=$artifactName" >> $env:GITHUB_OUTPUT
+          "package_name=$packageName" >> $env:GITHUB_OUTPUT
+          "short_sha=$shortSha" >> $env:GITHUB_OUTPUT
+          "full_sha=$fullSha" >> $env:GITHUB_OUTPUT
+          "built_at=$builtAt" >> $env:GITHUB_OUTPUT
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windows-portable
-          path: ${{ env.PACKAGE_NAME }}
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: ${{ steps.package.outputs.package_name }}
+          if-no-files-found: error
 
   publish:
     needs: build-windows
@@ -85,19 +194,51 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: windows-portable
+          name: ${{ needs.build-windows.outputs.artifact_name }}
 
       - name: Update nightly release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: nightly
           name: Nightly Build
+          overwrite_files: true
           prerelease: true
-          files: LichtFeld-Studio-windows-nightly-*-*.zip
+          target_commitish: ${{ needs.build-windows.outputs.full_sha }}
+          files: ${{ needs.build-windows.outputs.package_name }}
           body: |
-            Automated nightly build from `${{ github.sha }}`
+            Automated nightly build from `${{ needs.build-windows.outputs.full_sha }}`
 
-            **Built:** ${{ github.event.repository.updated_at }}
-            **Branch:** ${{ github.ref_name }}
+            **Built:** ${{ needs.build-windows.outputs.built_at }}
+            **Branch:** ${{ github.event.repository.default_branch }}
+            **Assets retained:** latest 7 builds
 
             This is an unstable development build. For stable releases, see the [Releases](../../releases) page.
+
+      - name: Trim nightly assets to latest 7 builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          release_json=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/nightly")
+          mapfile -t old_assets < <(
+            printf '%s' "$release_json" | jq -r '
+              [.assets[]
+               | select(.name | test("^LichtFeld-Studio-windows-nightly-.*\\.zip$"))
+               | {id, name, created_at}]
+              | sort_by(.created_at)
+              | reverse
+              | .[7:]
+              | .[]
+              | @base64'
+          )
+
+          for encoded in "${old_assets[@]}"; do
+            asset=$(printf '%s' "$encoded" | base64 --decode)
+            asset_id=$(printf '%s' "$asset" | jq -r '.id')
+            asset_name=$(printf '%s' "$asset" | jq -r '.name')
+            echo "Deleting old nightly asset: $asset_name"
+            gh api \
+              --method DELETE \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+          done

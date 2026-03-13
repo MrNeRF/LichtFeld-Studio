@@ -1872,6 +1872,7 @@ namespace lfs::training {
 
             auto train_dataloader = create_infinite_pipelined_dataloader(
                 train_dataset_, pipelined_config, mask_pipeline_config);
+            strategy_->set_image_loader(train_dataloader->get_loader());
 
             LOG_DEBUG("Starting training iterations");
             while (iter <= params_.optimization.iterations) {
@@ -1919,11 +1920,11 @@ namespace lfs::training {
                         LOG_INFO("OOM recovery: retrying iteration {}", iter);
                         step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
                         if (!step_result) {
-                            // If retry also failed, propagate the error
+                            strategy_->set_image_loader(nullptr);
                             return std::unexpected(step_result.error());
                         }
                     } else {
-                        // Regular error - propagate
+                        strategy_->set_image_loader(nullptr);
                         return std::unexpected(step_result.error());
                     }
                 }
@@ -1957,6 +1958,8 @@ namespace lfs::training {
 
                 ++iter;
             }
+
+            strategy_->set_image_loader(nullptr);
 
             // Ensure callback is finished before final save
             if (callback_busy_.load()) {

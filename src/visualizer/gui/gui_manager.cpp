@@ -23,6 +23,7 @@
 #include "gui/panels/python_console_panel.hpp"
 #include "gui/rmlui/rml_panel_host.hpp"
 #include "gui/rmlui/rml_theme.hpp"
+#include "gui/rmlui/rmlui_render_interface.hpp"
 #include "gui/rmlui/rmlui_system_interface.hpp"
 #include "gui/string_keys.hpp"
 #include "gui/ui_widgets.hpp"
@@ -825,6 +826,11 @@ namespace lfs::vis::gui {
     }
 
     void GuiManager::render() {
+        if (auto* ri = rmlui_manager_.getRenderInterface()) {
+            auto* sm = viewer_->getSceneManager();
+            ri->set_scene(sm ? &sm->getScene() : nullptr);
+        }
+
         if (pending_cuda_warning_) {
             constexpr int MIN_MAJOR = lfs::core::MIN_CUDA_VERSION / 1000;
             constexpr int MIN_MINOR = (lfs::core::MIN_CUDA_VERSION % 1000) / 10;
@@ -1266,6 +1272,19 @@ namespace lfs::vis::gui {
         if (!ui_hidden_ && !mouse_over_ui && viewport_layout_.size.x > 0 && viewport_layout_.size.y > 0) {
             auto* rm = ctx.viewer->getRenderingManager();
             auto* draw_list = ImGui::GetForegroundDrawList();
+            const glm::ivec2 rendered_size = rm ? rm->getRenderedSize() : glm::ivec2(0);
+            const float render_to_screen_x =
+                (rendered_size.x > 0)
+                    ? (viewport_layout_.size.x / static_cast<float>(rendered_size.x))
+                    : (1.0f / std::max(rm ? rm->getSettings().render_scale : 1.0f, 0.001f));
+            const float render_to_screen_y =
+                (rendered_size.y > 0)
+                    ? (viewport_layout_.size.y / static_cast<float>(rendered_size.y))
+                    : (1.0f / std::max(rm ? rm->getSettings().render_scale : 1.0f, 0.001f));
+            const auto render_to_screen = [&](const float x, const float y) {
+                return ImVec2(viewport_layout_.pos.x + x * render_to_screen_x,
+                              viewport_layout_.pos.y + y * render_to_screen_y);
+            };
 
             if (rm && rm->isBrushActive()) {
                 const auto& t = theme();
@@ -1273,10 +1292,8 @@ namespace lfs::vis::gui {
                 bool add_mode;
                 rm->getBrushState(bx, by, br, add_mode);
 
-                const float render_scale = rm->getSettings().render_scale;
-                const ImVec2 screen_pos(viewport_layout_.pos.x + bx / render_scale,
-                                        viewport_layout_.pos.y + by / render_scale);
-                const float screen_radius = br / render_scale;
+                const ImVec2 screen_pos = render_to_screen(bx, by);
+                const float screen_radius = br * render_to_screen_x;
 
                 const ImU32 brush_color = add_mode
                                               ? toU32WithAlpha(t.palette.success, 0.8f)
@@ -1291,9 +1308,8 @@ namespace lfs::vis::gui {
                 bool add_mode;
                 rm->getRectPreview(rx0, ry0, rx1, ry1, add_mode);
 
-                const float render_scale = rm->getSettings().render_scale;
-                const ImVec2 p0(viewport_layout_.pos.x + rx0 / render_scale, viewport_layout_.pos.y + ry0 / render_scale);
-                const ImVec2 p1(viewport_layout_.pos.x + rx1 / render_scale, viewport_layout_.pos.y + ry1 / render_scale);
+                const ImVec2 p0 = render_to_screen(rx0, ry0);
+                const ImVec2 p1 = render_to_screen(rx1, ry1);
 
                 const ImU32 fill_color = add_mode
                                              ? toU32WithAlpha(t.palette.success, 0.15f)
@@ -1309,30 +1325,54 @@ namespace lfs::vis::gui {
             if (rm && rm->isPolygonPreviewActive()) {
                 const auto& t = theme();
                 const auto& points = rm->getPolygonPoints();
+                const auto& world_points = rm->getPolygonWorldPoints();
                 const bool closed = rm->isPolygonClosed();
                 const bool add_mode = rm->isPolygonAddMode();
 
-                if (!points.empty()) {
+                if (!points.empty() || !world_points.empty()) {
                     const ImU32 line_color = add_mode
                                                  ? toU32WithAlpha(t.palette.success, 0.8f)
                                                  : toU32WithAlpha(t.palette.error, 0.8f);
                     const ImU32 fill_color = add_mode
                                                  ? toU32WithAlpha(t.palette.success, 0.15f)
                                                  : toU32WithAlpha(t.palette.error, 0.15f);
-                    const ImU32 vertex_color = add_mode
-                                                   ? toU32WithAlpha(t.palette.success, 1.0f)
-                                                   : toU32WithAlpha(t.palette.error, 1.0f);
+                    const ImU32 vertex_color = t.polygon_vertex_u32();
+                    const ImU32 vertex_hover_color = t.polygon_vertex_hover_u32();
+                    const ImU32 close_hint_color = t.polygon_close_hint_u32();
                     const ImU32 line_to_mouse_color = add_mode
                                                           ? toU32WithAlpha(t.palette.success, 0.5f)
                                                           : toU32WithAlpha(t.palette.error, 0.5f);
 
                     std::vector<ImVec2> screen_points;
-                    screen_points.reserve(points.size());
-                    const float render_scale = rm->getSettings().render_scale;
-                    for (const auto& [px, py] : points) {
-                        screen_points.emplace_back(
-                            viewport_layout_.pos.x + px / render_scale,
-                            viewport_layout_.pos.y + py / render_scale);
+                    if (rm->isPolygonPreviewWorldSpace()) {
+                        screen_points.reserve(world_points.size());
+
+                        const auto& viewport = ctx.viewer->getViewport();
+                        const glm::mat4 vp_matrix =
+                            viewport.getProjectionMatrix(rm->getFocalLengthMm()) * viewport.getViewMatrix();
+
+                        bool all_visible = true;
+                        for (const auto& world_point : world_points) {
+                            const glm::vec4 clip = vp_matrix * glm::vec4(world_point, 1.0f);
+                            if (clip.w <= 0.0f) {
+                                all_visible = false;
+                                break;
+                            }
+
+                            const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                            screen_points.emplace_back(
+                                viewport_layout_.pos.x + (ndc.x * 0.5f + 0.5f) * viewport_layout_.size.x,
+                                viewport_layout_.pos.y + (1.0f - (ndc.y * 0.5f + 0.5f)) * viewport_layout_.size.y);
+                        }
+
+                        if (!all_visible) {
+                            screen_points.clear();
+                        }
+                    } else {
+                        screen_points.reserve(points.size());
+                        for (const auto& [px, py] : points) {
+                            screen_points.push_back(render_to_screen(px, py));
+                        }
                     }
 
                     const ImVec2 clip_min(viewport_layout_.pos.x, viewport_layout_.pos.y);
@@ -1357,25 +1397,49 @@ namespace lfs::vis::gui {
                         draw_list->AddLine(screen_points.back(), screen_points.front(), line_color, 2.0f);
                     }
 
-                    if (!closed) {
-                        const ImVec2 mouse_pos =
-                            s_frame_input
-                                ? ImVec2(s_frame_input->mouse_x, s_frame_input->mouse_y)
-                                : ImVec2(viewport_layout_.pos.x, viewport_layout_.pos.y);
-                        draw_list->AddLine(screen_points.back(), mouse_pos, line_to_mouse_color, 1.0f);
-
-                        constexpr float CLOSE_THRESHOLD = 12.0f;
-                        if (screen_points.size() >= 3) {
-                            const float dx = mouse_pos.x - screen_points.front().x;
-                            const float dy = mouse_pos.y - screen_points.front().y;
-                            if (dx * dx + dy * dy < CLOSE_THRESHOLD * CLOSE_THRESHOLD) {
-                                draw_list->AddCircle(screen_points.front(), 9.0f, vertex_color, 16, 2.0f);
-                            }
+                    const ImVec2 mouse_pos =
+                        s_frame_input
+                            ? ImVec2(s_frame_input->mouse_x, s_frame_input->mouse_y)
+                            : ImVec2(viewport_layout_.pos.x, viewport_layout_.pos.y);
+                    constexpr float CLOSE_THRESHOLD = 12.0f;
+                    constexpr float VERTEX_RADIUS = 5.0f;
+                    const auto distance_sq = [](const ImVec2 a, const ImVec2 b) {
+                        const float dx = a.x - b.x;
+                        const float dy = a.y - b.y;
+                        return dx * dx + dy * dy;
+                    };
+                    const bool can_close = !closed && screen_points.size() >= 3 &&
+                                           distance_sq(mouse_pos, screen_points.front()) <
+                                               CLOSE_THRESHOLD * CLOSE_THRESHOLD;
+                    int hovered_idx = -1;
+                    for (size_t i = 0; i < screen_points.size(); ++i) {
+                        if (distance_sq(mouse_pos, screen_points[i]) <= VERTEX_RADIUS * VERTEX_RADIUS) {
+                            hovered_idx = static_cast<int>(i);
+                            break;
                         }
                     }
 
-                    for (const auto& sp : screen_points) {
-                        draw_list->AddCircleFilled(sp, 5.0f, vertex_color);
+                    if (!closed) {
+                        draw_list->AddLine(screen_points.back(), mouse_pos, line_to_mouse_color, 1.0f);
+
+                        if (can_close) {
+                            draw_list->AddCircle(screen_points.front(), 9.0f, close_hint_color, 16, 2.0f);
+                        }
+                    }
+
+                    for (size_t i = 0; i < screen_points.size(); ++i) {
+                        const ImU32 color = (static_cast<int>(i) == hovered_idx || (can_close && i == 0))
+                                                ? vertex_hover_color
+                                                : vertex_color;
+                        draw_list->AddCircleFilled(screen_points[i], VERTEX_RADIUS, color);
+                        draw_list->AddCircle(screen_points[i], VERTEX_RADIUS, line_color, 16, 1.5f);
+                    }
+
+                    if (!screen_points.empty()) {
+                        const float initial_ring_radius = can_close ? 9.0f : 8.0f;
+                        const float initial_ring_thickness = can_close ? 2.0f : 1.5f;
+                        draw_list->AddCircle(screen_points.front(), initial_ring_radius,
+                                             close_hint_color, 24, initial_ring_thickness);
                     }
 
                     if (closed && screen_points.size() >= 3) {
@@ -1387,7 +1451,7 @@ namespace lfs::vis::gui {
                         cx /= static_cast<float>(screen_points.size());
                         cy /= static_cast<float>(screen_points.size());
 
-                        const char* hint = "Enter to confirm";
+                        const char* hint = "Enter to confirm\nShift-click edge: add\nCtrl-click vertex: remove";
                         const ImVec2 text_size = ImGui::CalcTextSize(hint);
                         draw_list->AddText(
                             ImVec2(cx - text_size.x * 0.5f, cy - text_size.y * 0.5f),
@@ -1404,16 +1468,13 @@ namespace lfs::vis::gui {
                 const bool add_mode = rm->isLassoAddMode();
 
                 if (points.size() >= 2) {
-                    const float render_scale = rm->getSettings().render_scale;
                     const ImU32 line_color = add_mode
                                                  ? toU32WithAlpha(t.palette.success, 0.8f)
                                                  : toU32WithAlpha(t.palette.error, 0.8f);
 
-                    ImVec2 prev(viewport_layout_.pos.x + points[0].first / render_scale,
-                                viewport_layout_.pos.y + points[0].second / render_scale);
+                    ImVec2 prev = render_to_screen(points[0].first, points[0].second);
                     for (size_t i = 1; i < points.size(); ++i) {
-                        ImVec2 curr(viewport_layout_.pos.x + points[i].first / render_scale,
-                                    viewport_layout_.pos.y + points[i].second / render_scale);
+                        ImVec2 curr = render_to_screen(points[i].first, points[i].second);
                         draw_list->AddLine(prev, curr, line_color, 2.0f);
                         prev = curr;
                     }

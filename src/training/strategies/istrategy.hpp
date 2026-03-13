@@ -11,6 +11,10 @@
 #include <memory>
 #include <ostream>
 
+namespace lfs::io {
+    class PipelinedImageLoader;
+}
+
 namespace lfs::training {
 
     class CameraDataset;
@@ -58,5 +62,7 @@ namespace lfs::training {
 
         // Optional hook for strategies that need the training dataset (e.g., for view-based scoring)
         virtual void set_training_dataset(std::shared_ptr<CameraDataset>) {}
+
+        virtual void set_image_loader(lfs::io::PipelinedImageLoader*) {}
     };
 } // namespace lfs::training

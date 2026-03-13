@@ -1277,14 +1277,28 @@ namespace lfs::vis {
     void RenderingManager::setPolygonPreview(const std::vector<std::pair<float, float>>& points, bool closed, bool add_mode) {
         polygon_preview_active_ = true;
         polygon_points_ = points;
+        polygon_world_points_.clear();
         polygon_closed_ = closed;
         polygon_add_mode_ = add_mode;
+        polygon_preview_world_space_ = false;
+    }
+
+    void RenderingManager::setPolygonPreviewWorldSpace(const std::vector<glm::vec3>& world_points,
+                                                       const bool closed, const bool add_mode) {
+        polygon_preview_active_ = true;
+        polygon_points_.clear();
+        polygon_world_points_ = world_points;
+        polygon_closed_ = closed;
+        polygon_add_mode_ = add_mode;
+        polygon_preview_world_space_ = true;
     }
 
     void RenderingManager::clearPolygonPreview() {
         polygon_preview_active_ = false;
         polygon_points_.clear();
+        polygon_world_points_.clear();
         polygon_closed_ = false;
+        polygon_preview_world_space_ = false;
     }
 
     void RenderingManager::setLassoPreview(const std::vector<std::pair<float, float>>& points, bool add_mode) {

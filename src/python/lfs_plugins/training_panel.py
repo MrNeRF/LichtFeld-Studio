@@ -485,15 +485,8 @@ class TrainingPanel(Panel):
                     self._text_bufs[k] = _fmt_num(getattr(p(), pr, 0), dt, f) if p() and p().has_params() else ""
                 return self._text_bufs[k]
 
-            def setter(v, k=key, pr=prop, dt=dtype, f=fmt, mn=min_v, mx=max_v):
-                value = str(v)
-                self._text_bufs[k] = value
-                if self._set_num_prop(pr, value, dt, mn, mx):
-                    self._text_bufs[k] = _fmt_num(getattr(p(), pr, 0), dt, f) if p() and p().has_params() else ""
-                    self._mark_text_buf_dirty(k)
-                elif not value.strip():
-                    self._text_bufs[k] = None
-                    self._mark_text_buf_dirty(k)
+            def setter(v, k=key):
+                self._text_bufs[k] = str(v)
 
             model.bind(key, getter, setter)
 
@@ -508,18 +501,7 @@ class TrainingPanel(Panel):
             return self._text_bufs["ppisp_activation_step_str"]
 
         def ppisp_activation_step_setter(v):
-            value = str(v)
-            self._text_bufs["ppisp_activation_step_str"] = value
-            if self._set_ppisp_activation_step(value):
-                self._text_bufs["ppisp_activation_step_str"] = (
-                    f"{p().ppisp_controller_activation_step:,}"
-                    if p() and p().has_params() and p().ppisp_controller_activation_step >= 0
-                    else ""
-                )
-                self._mark_text_buf_dirty("ppisp_activation_step_str")
-            elif not value.strip():
-                self._text_bufs["ppisp_activation_step_str"] = None
-                self._mark_text_buf_dirty("ppisp_activation_step_str")
+            self._text_bufs["ppisp_activation_step_str"] = str(v)
 
         model.bind("ppisp_activation_step_str",
                     ppisp_activation_step_getter,
@@ -534,16 +516,7 @@ class TrainingPanel(Panel):
             return self._text_bufs["max_width_str"]
 
         def max_width_setter(v):
-            value = str(v)
-            self._text_bufs["max_width_str"] = value
-            if self._set_max_width(value):
-                self._text_bufs["max_width_str"] = (
-                    f"{d().max_width:,}" if d() and d().has_params() else ""
-                )
-                self._mark_text_buf_dirty("max_width_str")
-            elif not value.strip():
-                self._text_bufs["max_width_str"] = None
-                self._mark_text_buf_dirty("max_width_str")
+            self._text_bufs["max_width_str"] = str(v)
 
         model.bind("max_width_str",
                     max_width_getter,
@@ -556,14 +529,7 @@ class TrainingPanel(Panel):
             return self._text_bufs["new_step_str"]
 
         def new_step_setter(v):
-            value = str(v)
-            self._text_bufs["new_step_str"] = value
-            if self._set_new_step_val(value):
-                self._text_bufs["new_step_str"] = f"{self._new_save_step:,}"
-                self._mark_text_buf_dirty("new_step_str")
-            elif not value.strip():
-                self._text_bufs["new_step_str"] = None
-                self._mark_text_buf_dirty("new_step_str")
+            self._text_bufs["new_step_str"] = str(v)
 
         model.bind("new_step_str",
                     new_step_getter,
@@ -598,6 +564,20 @@ class TrainingPanel(Panel):
         return None
 
     def _commit_number_input_key(self, key):
+        buf_val = self._text_bufs.get(key)
+        if buf_val is not None and buf_val.strip() and key.endswith("_str"):
+            prop = key[:-4]
+            entry = _NUM_PROP_LOOKUP.get(prop)
+            if entry:
+                dtype, _fmt, min_v, max_v, _step = entry
+                self._set_num_prop(prop, buf_val, dtype, min_v, max_v)
+            elif prop == "ppisp_activation_step":
+                self._set_ppisp_activation_step(buf_val)
+            elif prop == "max_width":
+                self._set_max_width(buf_val)
+            elif prop == "new_step":
+                self._set_new_step_val(buf_val)
+
         canonical = self._canonical_text_buf_value(key)
         if canonical is None:
             return

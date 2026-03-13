@@ -20,6 +20,8 @@ ZOOM_MAX = 10.0
 PRECISE_SCROLL_STEP = 32.0
 CROSSFADE_DURATION = 0.2
 SCROLL_DURATION = 0.15
+FILMSTRIP_WINDOW = 40
+THUMB_MAX_PX = 256
 
 _CHANNEL_NAMES = {1: "Gray", 2: "Gray+A", 3: "RGB", 4: "RGBA"}
 
@@ -41,6 +43,7 @@ class ImagePreviewPanel(Panel):
 
         self._image_paths: list[Path] = []
         self._mask_paths: list[Optional[Path]] = []
+        self._camera_uids: list[int] = []
         self._current_index = 0
 
         self._zoom = 1.0
@@ -71,6 +74,7 @@ class ImagePreviewPanel(Panel):
         self._scroll_start_time = 0.0
 
         self._image_info_cache: dict[str, tuple[int, int, int]] = {}
+        self._last_training_params: tuple[int, int, bool] = (1, 0, False)
 
     def _get_title(self) -> str:
         if self._image_paths:
@@ -139,6 +143,11 @@ class ImagePreviewPanel(Panel):
         if not self._fit_to_window and self._image_paths and self._hover_image:
             lf.ui.set_mouse_cursor_hand()
 
+        current_params = self._get_training_params()
+        if current_params != self._last_training_params:
+            self._last_training_params = current_params
+            self._dirty = True
+
         needs_redraw = False
 
         if self._crossfade_pending:
@@ -157,13 +166,16 @@ class ImagePreviewPanel(Panel):
 
         return needs_redraw
 
-    def open(self, image_paths: list[Path], mask_paths: list[Optional[Path]], start_index: int):
+    def open(self, image_paths: list[Path], mask_paths: list[Optional[Path]],
+             start_index: int, camera_uids: list[int] | None = None):
         if not image_paths:
             return
 
         self._image_paths = [p.resolve() for p in image_paths]
         self._mask_paths = [p.resolve() if p else None for p in mask_paths] if mask_paths else [None] * len(image_paths)
+        self._camera_uids = camera_uids if camera_uids is not None else [-1] * len(image_paths)
         self._current_index = min(start_index, len(image_paths) - 1)
+        self._last_training_params = self._get_training_params()
         self._reset_view()
         self._dirty = True
         self._prev_image_index = -1
@@ -255,6 +267,21 @@ class ImagePreviewPanel(Panel):
                 return f"{best[0]}:{best[1]}"
             return f"{w / h:.2f}:1"
         return f"{rw}:{rh}"
+
+    def _get_training_params(self) -> tuple[int, int, bool]:
+        try:
+            dp = lf.dataset_params()
+            if dp.has_params():
+                op = lf.optimization_params()
+                return (dp.resize_factor, dp.max_width, op.undistort)
+        except Exception:
+            pass
+        return (1, 0, False)
+
+    def _make_preview_url(self, path: Path, cam_uid: int, thumb: int = 0) -> str:
+        rf, mw, ud = self._last_training_params
+        return (f"preview://cam={cam_uid}&thumb={thumb}"
+                f"&rf={rf}&mw={mw}&ud={1 if ud else 0}&path={path}")
 
     def _on_filmstrip_click(self, event):
         el = event.target()
@@ -420,6 +447,8 @@ class ImagePreviewPanel(Panel):
             return
 
         path = self._image_paths[self._current_index]
+        uid = self._camera_uids[self._current_index] if self._current_index < len(self._camera_uids) else -1
+        preview_dec = f"image({self._make_preview_url(path, uid)})"
         active_layer = doc.get_element_by_id(self._get_active_layer_id())
         inactive_layer = doc.get_element_by_id(self._get_inactive_layer_id())
 
@@ -428,7 +457,7 @@ class ImagePreviewPanel(Panel):
 
         if self._prev_image_index == -1:
             if active_layer:
-                active_layer.set_property("decorator", f"image({path})")
+                active_layer.set_property("decorator", preview_dec)
                 active_layer.set_attribute("class", "image-layer")
                 self._apply_zoom(active_layer, path)
             if inactive_layer:
@@ -441,7 +470,7 @@ class ImagePreviewPanel(Panel):
                 inactive_layer.set_property("decorator", "none")
 
             if inactive_layer:
-                inactive_layer.set_property("decorator", f"image({path})")
+                inactive_layer.set_property("decorator", preview_dec)
                 inactive_layer.set_attribute("class", "image-layer")
                 self._apply_zoom(inactive_layer, path)
             if active_layer:
@@ -453,7 +482,7 @@ class ImagePreviewPanel(Panel):
             self._prev_image_index = self._current_index
         else:
             if active_layer:
-                active_layer.set_property("decorator", f"image({path})")
+                active_layer.set_property("decorator", preview_dec)
                 self._apply_zoom(active_layer, path)
 
         active_layer = doc.get_element_by_id(self._get_active_layer_id())
@@ -490,13 +519,23 @@ class ImagePreviewPanel(Panel):
             self._handle.update_record_list("thumbs", [])
             return
 
+        half = FILMSTRIP_WINDOW // 2
+        n = len(self._image_paths)
+        lo = max(0, self._current_index - half)
+        hi = min(n, self._current_index + half)
+
         records = []
         for i, path in enumerate(self._image_paths):
+            if lo <= i < hi:
+                uid = self._camera_uids[i] if i < len(self._camera_uids) else -1
+                dec = f"image({self._make_preview_url(path, uid, THUMB_MAX_PX)})"
+            else:
+                dec = "none"
             records.append({
                 "index": i,
                 "label": f"{i + 1:02d}",
                 "selected": i == self._current_index,
-                "decorator": f"image({path})",
+                "decorator": dec,
             })
         self._handle.update_record_list("thumbs", records)
 
@@ -739,9 +778,10 @@ def _set_text(doc, element_id: str, text: str):
         el.set_text(text)
 
 
-def open_image_preview(image_paths: list[Path], mask_paths: list[Path], start_index: int):
+def open_image_preview(image_paths: list[Path], mask_paths: list[Path],
+                       start_index: int, camera_uids: list[int] | None = None):
     if _instance:
-        _instance.open(image_paths, mask_paths, start_index)
+        _instance.open(image_paths, mask_paths, start_index, camera_uids)
     lf.ui.set_panel_enabled("lfs.image_preview", True)
 
 
@@ -762,6 +802,7 @@ def open_camera_preview_by_uid(cam_uid: int):
 
     image_paths = []
     mask_paths = []
+    camera_uids = []
     start_index = 0
     for cid in child_ids:
         child = scene.get_node_by_id(cid)
@@ -771,6 +812,7 @@ def open_camera_preview_by_uid(cam_uid: int):
             start_index = len(image_paths)
         image_paths.append(Path(child.image_path))
         mask_paths.append(Path(child.mask_path) if child.mask_path else None)
+        camera_uids.append(child.camera_uid)
 
     if image_paths:
-        open_image_preview(image_paths, mask_paths, start_index)
+        open_image_preview(image_paths, mask_paths, start_index, camera_uids)

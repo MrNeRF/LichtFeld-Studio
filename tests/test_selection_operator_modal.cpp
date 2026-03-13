@@ -323,3 +323,112 @@ TEST_F(SelectionOperatorModalTest, PolygonOperatorRightClickUndoesAndEscapeCance
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{1, 0}));
     EXPECT_FALSE(service().isInteractiveSelectionActive());
 }
+
+TEST_F(SelectionOperatorModalTest, ClosedPolygonVertexDragConsumesMouseMoveUntilRelease) {
+    set_initial_selection({1, 0});
+
+    SelectionStrokeOperator op;
+    OperatorProperties props;
+    props.set("mode", 2);
+    props.set("op", 0);
+    props.set("x", 0.0);
+    props.set("y", 0.0);
+
+    EXPECT_EQ(op.invoke(*context_, props), OperatorResult::RUNNING_MODAL);
+    EXPECT_EQ(dispatch(op,
+                       mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                                    lfs::vis::input::ACTION_PRESS, 30.0, 0.0),
+                       props),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_EQ(dispatch(op,
+                       mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                                    lfs::vis::input::ACTION_PRESS, 0.0, 30.0),
+                       props),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_EQ(dispatch(op,
+                       mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                                    lfs::vis::input::ACTION_PRESS, 0.0, 0.0),
+                       props),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_TRUE(service().isInteractiveSelectionClosed());
+
+    EXPECT_EQ(dispatch(op,
+                       mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                                    lfs::vis::input::ACTION_PRESS, 30.0, 0.0),
+                       props),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_TRUE(service().isInteractivePolygonVertexDragActive());
+    EXPECT_EQ(dispatch(op, mouse_move(40.0, 0.0, 10.0, 0.0), props), OperatorResult::RUNNING_MODAL);
+    EXPECT_EQ(dispatch(op,
+                       mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                                    lfs::vis::input::ACTION_RELEASE, 40.0, 0.0),
+                       props),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_FALSE(service().isInteractivePolygonVertexDragActive());
+}
+
+TEST_F(SelectionOperatorModalTest, ClosedPolygonShiftAddsVertexAndCtrlRemovesVertex) {
+    set_initial_selection({1, 0});
+
+    SelectionStrokeOperator op;
+    OperatorProperties props;
+    props.set("mode", 2);
+    props.set("op", 0);
+    props.set("x", 0.0);
+    props.set("y", 0.0);
+
+    EXPECT_EQ(op.invoke(*context_, props), OperatorResult::RUNNING_MODAL);
+    EXPECT_EQ(dispatch(op,
+                       mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                                    lfs::vis::input::ACTION_PRESS, 30.0, 0.0),
+                       props),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_EQ(dispatch(op,
+                       mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                                    lfs::vis::input::ACTION_PRESS, 0.0, 30.0),
+                       props),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_EQ(dispatch(op,
+                       mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                                    lfs::vis::input::ACTION_PRESS, 0.0, 0.0),
+                       props),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_TRUE(service().isInteractiveSelectionClosed());
+
+    EXPECT_EQ(dispatch(op,
+                       mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                                    lfs::vis::input::ACTION_PRESS,
+                                    15.0,
+                                    15.0,
+                                    lfs::vis::input::KEYMOD_SHIFT),
+                       props),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_TRUE(service().isInteractivePolygonVertexDragActive());
+    EXPECT_EQ(dispatch(op, mouse_move(18.0, 15.0, 3.0, 0.0), props), OperatorResult::RUNNING_MODAL);
+    EXPECT_EQ(dispatch(op,
+                       mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                                    lfs::vis::input::ACTION_RELEASE, 18.0, 15.0),
+                       props),
+              OperatorResult::RUNNING_MODAL);
+    EXPECT_FALSE(service().isInteractivePolygonVertexDragActive());
+
+    service().refreshInteractivePreview();
+    ASSERT_TRUE(rendering_manager_->isPolygonPreviewActive());
+    const auto& inserted_points = rendering_manager_->getPolygonPoints();
+    ASSERT_EQ(inserted_points.size(), 4u);
+    EXPECT_FLOAT_EQ(inserted_points[2].first, 18.0f);
+    EXPECT_FLOAT_EQ(inserted_points[2].second, 15.0f);
+
+    EXPECT_EQ(dispatch(op,
+                       mouse_button(static_cast<int>(lfs::vis::input::AppMouseButton::LEFT),
+                                    lfs::vis::input::ACTION_PRESS,
+                                    18.0,
+                                    15.0,
+                                    lfs::vis::input::KEYMOD_CTRL),
+                       props),
+              OperatorResult::RUNNING_MODAL);
+
+    service().refreshInteractivePreview();
+    const auto& reduced_points = rendering_manager_->getPolygonPoints();
+    ASSERT_EQ(reduced_points.size(), 3u);
+}

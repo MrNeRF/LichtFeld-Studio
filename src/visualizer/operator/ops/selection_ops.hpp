@@ -4,12 +4,13 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "operator/operator.hpp"
 #include "selection/selection_service.hpp"
 
 namespace lfs::vis::op {
 
-    class SelectionStrokeOperator : public Operator {
+    class LFS_VIS_API SelectionStrokeOperator : public Operator {
     public:
         static const OperatorDescriptor DESCRIPTOR;
 

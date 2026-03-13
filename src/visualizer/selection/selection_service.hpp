@@ -8,6 +8,7 @@
 #include <array>
 #include <cstdint>
 #include <glm/vec2.hpp>
+#include <glm/vec3.hpp>
 #include <memory>
 #include <optional>
 #include <string>
@@ -97,6 +98,10 @@ namespace lfs::vis {
                                        float brush_radius, SelectionFilterState filters = {});
         void updateInteractiveSelection(glm::vec2 cursor_pos);
         bool appendInteractivePolygonVertex(glm::vec2 point);
+        bool insertInteractivePolygonVertex(glm::vec2 point);
+        bool beginInteractivePolygonVertexDrag(glm::vec2 point);
+        bool removeInteractivePolygonVertex(glm::vec2 point);
+        void endInteractivePolygonVertexDrag();
         bool undoInteractivePolygonVertex();
         [[nodiscard]] SelectionResult finishInteractiveSelection();
         void cancelInteractiveSelection();
@@ -104,6 +109,9 @@ namespace lfs::vis {
         [[nodiscard]] bool isInteractiveSelectionActive() const { return interactive_selection_.active; }
         [[nodiscard]] SelectionShape getInteractiveSelectionShape() const { return interactive_selection_.shape; }
         [[nodiscard]] bool isInteractiveSelectionClosed() const { return interactive_selection_.polygon_closed; }
+        [[nodiscard]] bool isInteractivePolygonVertexDragActive() const {
+            return interactive_selection_.dragged_polygon_vertex >= 0;
+        }
         void setInteractiveSelectionMode(SelectionMode mode) { interactive_selection_.mode = mode; }
         void setTestingScreenPositions(std::shared_ptr<core::Tensor> screen_positions);
         void setTestingScreenPositionsForCamera(int camera_index, std::shared_ptr<core::Tensor> screen_positions);
@@ -121,7 +129,9 @@ namespace lfs::vis {
             glm::vec2 start_pos{0.0f};
             glm::vec2 cursor_pos{0.0f};
             std::vector<glm::vec2> points;
+            std::vector<glm::vec3> polygon_world_points;
             bool polygon_closed = false;
+            int dragged_polygon_vertex = -1;
             bool preview_dirty = false;
             core::Tensor working_selection;
         };
@@ -152,8 +162,15 @@ namespace lfs::vis {
                                                    core::Tensor& selection_out) const;
         [[nodiscard]] bool buildPolygonSelection(const std::vector<glm::vec2>& points,
                                                  core::Tensor& selection_out) const;
+        [[nodiscard]] bool buildWorldPolygonSelection(const std::vector<glm::vec3>& world_points,
+                                                      core::Tensor& selection_out) const;
         [[nodiscard]] bool buildRingSelection(glm::vec2 cursor_pos, core::Tensor& selection_out) const;
         [[nodiscard]] std::vector<glm::vec2> getPolygonPreviewPoints() const;
+        [[nodiscard]] std::optional<glm::vec2> resolveInteractivePolygonDisplayPoint(size_t index) const;
+        [[nodiscard]] int findInteractivePolygonVertexAt(glm::vec2 screen_point) const;
+        [[nodiscard]] int findInteractivePolygonEdgeAt(glm::vec2 screen_point) const;
+        [[nodiscard]] std::optional<glm::vec3> resolveInteractivePolygonWorldPoint(glm::vec2 screen_point) const;
+        [[nodiscard]] std::optional<glm::vec2> projectInteractivePolygonWorldPoint(glm::vec3 world_point) const;
         [[nodiscard]] bool shouldClosePolygonPreview() const;
         void applyFilters(core::Tensor& selection, const SelectionFilterState& filters,
                           const std::vector<bool>& node_mask) const;

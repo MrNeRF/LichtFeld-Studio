@@ -152,6 +152,74 @@ TEST_F(SelectionServiceInteractionsTest, PolygonCommitUsesCurrentScreenPositions
     EXPECT_EQ(selection_values(*scene_manager_), (std::vector<uint8_t>{0, 1}));
 }
 
+TEST_F(SelectionServiceInteractionsTest, ClosedPolygonDragUpdatesVertexPosition) {
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Polygon,
+        lfs::vis::SelectionMode::Replace,
+        {0.0f, 0.0f},
+        0.0f));
+    ASSERT_TRUE(service_->appendInteractivePolygonVertex({30.0f, 0.0f}));
+    ASSERT_TRUE(service_->appendInteractivePolygonVertex({0.0f, 30.0f}));
+    ASSERT_TRUE(service_->appendInteractivePolygonVertex({0.0f, 0.0f}));
+    ASSERT_TRUE(service_->isInteractiveSelectionClosed());
+
+    ASSERT_TRUE(service_->beginInteractivePolygonVertexDrag({30.0f, 0.0f}));
+    service_->updateInteractiveSelection({40.0f, 0.0f});
+    service_->endInteractivePolygonVertexDrag();
+    service_->refreshInteractivePreview();
+
+    ASSERT_TRUE(rendering_manager_->isPolygonPreviewActive());
+    ASSERT_FALSE(rendering_manager_->isPolygonPreviewWorldSpace());
+    const auto& points = rendering_manager_->getPolygonPoints();
+    ASSERT_EQ(points.size(), 3u);
+    EXPECT_FLOAT_EQ(points[0].first, 0.0f);
+    EXPECT_FLOAT_EQ(points[0].second, 0.0f);
+    EXPECT_FLOAT_EQ(points[1].first, 40.0f);
+    EXPECT_FLOAT_EQ(points[1].second, 0.0f);
+    EXPECT_FLOAT_EQ(points[2].first, 0.0f);
+    EXPECT_FLOAT_EQ(points[2].second, 30.0f);
+}
+
+TEST_F(SelectionServiceInteractionsTest, ClosedPolygonInsertAndRemoveVertexUpdatePreview) {
+    ASSERT_TRUE(service_->beginInteractiveSelection(
+        lfs::vis::SelectionShape::Polygon,
+        lfs::vis::SelectionMode::Replace,
+        {0.0f, 0.0f},
+        0.0f));
+    ASSERT_TRUE(service_->appendInteractivePolygonVertex({30.0f, 0.0f}));
+    ASSERT_TRUE(service_->appendInteractivePolygonVertex({0.0f, 30.0f}));
+    ASSERT_TRUE(service_->appendInteractivePolygonVertex({0.0f, 0.0f}));
+    ASSERT_TRUE(service_->isInteractiveSelectionClosed());
+
+    ASSERT_TRUE(service_->insertInteractivePolygonVertex({15.0f, 15.0f}));
+    service_->endInteractivePolygonVertexDrag();
+    service_->refreshInteractivePreview();
+
+    ASSERT_TRUE(rendering_manager_->isPolygonPreviewActive());
+    const auto& inserted_points = rendering_manager_->getPolygonPoints();
+    ASSERT_EQ(inserted_points.size(), 4u);
+    EXPECT_FLOAT_EQ(inserted_points[0].first, 0.0f);
+    EXPECT_FLOAT_EQ(inserted_points[0].second, 0.0f);
+    EXPECT_FLOAT_EQ(inserted_points[1].first, 30.0f);
+    EXPECT_FLOAT_EQ(inserted_points[1].second, 0.0f);
+    EXPECT_FLOAT_EQ(inserted_points[2].first, 15.0f);
+    EXPECT_FLOAT_EQ(inserted_points[2].second, 15.0f);
+    EXPECT_FLOAT_EQ(inserted_points[3].first, 0.0f);
+    EXPECT_FLOAT_EQ(inserted_points[3].second, 30.0f);
+
+    ASSERT_TRUE(service_->removeInteractivePolygonVertex({15.0f, 15.0f}));
+    service_->refreshInteractivePreview();
+
+    const auto& reduced_points = rendering_manager_->getPolygonPoints();
+    ASSERT_EQ(reduced_points.size(), 3u);
+    EXPECT_FLOAT_EQ(reduced_points[0].first, 0.0f);
+    EXPECT_FLOAT_EQ(reduced_points[0].second, 0.0f);
+    EXPECT_FLOAT_EQ(reduced_points[1].first, 30.0f);
+    EXPECT_FLOAT_EQ(reduced_points[1].second, 0.0f);
+    EXPECT_FLOAT_EQ(reduced_points[2].first, 0.0f);
+    EXPECT_FLOAT_EQ(reduced_points[2].second, 30.0f);
+}
+
 TEST_F(SelectionServiceInteractionsTest, CancelInteractiveSelectionLeavesSelectionAndUndoUntouched) {
     set_initial_selection({1, 0});
     service_->setTestingScreenPositions(make_screen_positions({

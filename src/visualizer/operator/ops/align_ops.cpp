@@ -42,7 +42,7 @@ namespace lfs::vis::op {
         const auto y = props.get_or<double>("y", 0.0);
 
         const glm::vec3 world_pos = unprojectScreenPoint(x, y);
-        if (world_pos.x <= -1e9f) {
+        if (!Viewport::isValidWorldPosition(world_pos)) {
             return OperatorResult::CANCELLED;
         }
 
@@ -75,7 +75,7 @@ namespace lfs::vis::op {
 
             if (mb->button == static_cast<int>(lfs::vis::input::AppMouseButton::LEFT)) {
                 const glm::vec3 world_pos = unprojectScreenPoint(mb->position.x, mb->position.y);
-                if (world_pos.x <= -1e9f) {
+                if (!Viewport::isValidWorldPosition(world_pos)) {
                     return OperatorResult::RUNNING_MODAL;
                 }
 
@@ -114,17 +114,15 @@ namespace lfs::vis::op {
     }
 
     glm::vec3 AlignPickPointOperator::unprojectScreenPoint(double x, double y) const {
-        constexpr glm::vec3 INVALID_POS(-1e10f);
-
         auto* rm = services().renderingOrNull();
         auto* gm = services().guiOrNull();
         if (!rm || !gm || !gm->getViewer()) {
-            return INVALID_POS;
+            return glm::vec3(Viewport::INVALID_WORLD_POS);
         }
 
         const float depth = rm->getDepthAtPixel(static_cast<int>(x), static_cast<int>(y));
         if (depth < 0.0f) {
-            return INVALID_POS;
+            return glm::vec3(Viewport::INVALID_WORLD_POS);
         }
 
         const auto& viewport = gm->getViewer()->getViewport();

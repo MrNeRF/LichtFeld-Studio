@@ -87,8 +87,12 @@ namespace lfs::vis::op {
             }
 
             service->updateInteractiveSelection(glm::vec2(move->position));
-            return (shape_ == lfs::vis::SelectionShape::Polygon) ? OperatorResult::PASS_THROUGH
-                                                                 : OperatorResult::RUNNING_MODAL;
+            if (shape_ == lfs::vis::SelectionShape::Polygon) {
+                return service->isInteractivePolygonVertexDragActive()
+                           ? OperatorResult::RUNNING_MODAL
+                           : OperatorResult::PASS_THROUGH;
+            }
+            return OperatorResult::RUNNING_MODAL;
         }
 
         if (event->type == ModalEvent::Type::MOUSE_BUTTON) {
@@ -100,7 +104,28 @@ namespace lfs::vis::op {
             if (shape_ == lfs::vis::SelectionShape::Polygon) {
                 if (mb->button == static_cast<int>(input::AppMouseButton::LEFT) &&
                     mb->action == input::ACTION_PRESS) {
+                    if (service->isInteractiveSelectionClosed()) {
+                        if (mb->mods & input::KEYMOD_SHIFT) {
+                            (void)service->insertInteractivePolygonVertex(glm::vec2(mb->position));
+                            return OperatorResult::RUNNING_MODAL;
+                        }
+                        if (mb->mods & input::KEYMOD_CTRL) {
+                            (void)service->removeInteractivePolygonVertex(glm::vec2(mb->position));
+                            return OperatorResult::RUNNING_MODAL;
+                        }
+                    }
+
+                    if (service->beginInteractivePolygonVertexDrag(glm::vec2(mb->position))) {
+                        return OperatorResult::RUNNING_MODAL;
+                    }
                     service->appendInteractivePolygonVertex(glm::vec2(mb->position));
+                    return OperatorResult::RUNNING_MODAL;
+                }
+
+                if (mb->button == static_cast<int>(input::AppMouseButton::LEFT) &&
+                    mb->action == input::ACTION_RELEASE &&
+                    service->isInteractivePolygonVertexDragActive()) {
+                    service->endInteractivePolygonVertexDrag();
                     return OperatorResult::RUNNING_MODAL;
                 }
 

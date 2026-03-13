@@ -238,6 +238,7 @@ set(TEST_FILES
     # test_property_system.cpp  # Disabled: needs API update after merge
     test_scene_validity.cpp
     test_selection_rasterization_ops.cpp
+    test_viewport.cpp
     test_selection_service_interactions.cpp
     test_selection_command_dispatch.cpp
     test_selection_operator_modal.cpp

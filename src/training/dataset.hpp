@@ -210,6 +210,11 @@ namespace lfs::training {
             LOG_INFO("Dataset created with {} images (split: {})", indices_.size(), static_cast<int>(split_));
         }
 
+        lfs::core::Camera* get_camera(size_t index) const {
+            assert(index < indices_.size());
+            return cameras_[indices_[index]].get();
+        }
+
         /// Get single example by index
         CameraExample get(size_t index) const {
             if (index >= indices_.size()) {
@@ -588,6 +593,8 @@ namespace lfs::training {
         }
 
         auto get_stats() const { return loader_->get_stats(); }
+
+        lfs::io::PipelinedImageLoader* get_loader() const { return loader_.get(); }
 
     private:
         void prefetch_next_batch() {

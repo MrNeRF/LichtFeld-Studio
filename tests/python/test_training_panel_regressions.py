@@ -230,17 +230,29 @@ def test_integer_commas_are_normalized_while_float_decimal_commas_still_fail(tra
         ("new_step_str", "7,000"),
     ],
 )
-def test_cleared_numeric_fields_restore_model_value(training_panel_module, binding_name, expected_text):
+def test_cleared_numeric_fields_restore_model_value(training_panel_module, monkeypatch, binding_name, expected_text):
     panel = training_panel_module.TrainingPanel()
+    panel._handle = _HandleStub()
     model = _ModelStub()
     params = _ParamsStub()
     dataset = _DatasetStub()
+
+    monkeypatch.setattr(
+        training_panel_module,
+        "lf",
+        SimpleNamespace(
+            optimization_params=lambda: params,
+            dataset_params=lambda: dataset,
+        ),
+    )
 
     panel._bind_num_props(model, lambda: params, lambda: dataset)
 
     getter, setter = model.bindings[binding_name]
     setter("")
+    assert getter() == ""
 
+    panel._commit_number_input_key(binding_name)
     assert getter() == expected_text
 
 
@@ -275,7 +287,10 @@ def test_committed_numeric_fields_reformat_and_dirty(
 
     getter, setter = model.bindings[binding_name]
     setter(input_text)
+    assert getter() == input_text
+    assert panel._handle.dirty_fields == []
 
+    panel._commit_number_input_key(binding_name)
     assert getter() == expected_text
     assert panel._handle.dirty_fields == [binding_name]
 
@@ -312,6 +327,7 @@ def test_integer_fields_strip_arbitrary_commas_and_reformat(
     getter, setter = model.bindings[binding_name]
     setter(input_text)
 
+    panel._commit_number_input_key(binding_name)
     assert getter() == expected_text
     assert panel._handle.dirty_fields == [binding_name]
 

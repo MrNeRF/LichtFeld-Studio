@@ -4,17 +4,15 @@
 
 #include "improved_gs_plus.hpp"
 
+#include "edge_rasterizer.hpp"
 #include "gsplat_rasterizer.hpp"
 #include "strategy_utils.hpp"
 
-#include "optimizer/adam_optimizer.hpp"
-
 #include "core/tensor/internal/memory_pool.hpp"
-
+#include "io/pipelined_image_loader.hpp"
 #include "kernels/densification_kernels.hpp"
 #include "kernels/image_kernels.hpp"
-
-#include "edge_rasterizer.hpp"
+#include "optimizer/adam_optimizer.hpp"
 
 #include <numeric>
 #include <random>
@@ -46,94 +44,57 @@ namespace lfs::training {
             return quantile_threshold;
         }
 
-        // Input, expects Tensor [C,H,W] RGB format
-        lfs::core::Tensor apply_canny_filter(const lfs::core::Tensor& input_data) {
+        struct CannyWorkspace {
+            lfs::core::Tensor grayscale;
+            lfs::core::Tensor blurred;
+            lfs::core::Tensor magnitude;
+            lfs::core::Tensor angle;
+            lfs::core::Tensor nms_output;
+        };
 
+        CannyWorkspace create_canny_workspace(int height, int width) {
+            const size_t hw = static_cast<size_t>(height) * static_cast<size_t>(width);
+            const auto dev = lfs::core::Device::CUDA;
+            const auto dt = lfs::core::DataType::Float32;
+            return {
+                lfs::core::Tensor::zeros({hw}, dev, dt),
+                lfs::core::Tensor::zeros({hw}, dev, dt),
+                lfs::core::Tensor::zeros({hw}, dev, dt),
+                lfs::core::Tensor::zeros({hw}, dev, dt),
+                lfs::core::Tensor::zeros({static_cast<size_t>(height), static_cast<size_t>(width)}, dev, dt)};
+        }
+
+        void apply_canny_filter(const lfs::core::Tensor& input_data, CannyWorkspace& ws) {
             assert(input_data.dtype() == lfs::core::DataType::Float32);
             assert(input_data.device() == lfs::core::Device::CUDA);
             assert(input_data.ndim() == 3);
 
             const int width = input_data.shape()[2];
             const int height = input_data.shape()[1];
-            const int channels = input_data.shape()[0];
 
-            const float* d_input = static_cast<float*>(input_data.clone().data_ptr());
+            ws.grayscale.zero_();
+            ws.blurred.zero_();
+            ws.magnitude.zero_();
+            ws.angle.zero_();
+            ws.nms_output.zero_();
 
-            // Raw grayscale output memory in CUDA
-            float* d_output_grayscale;
-            cudaMalloc(&d_output_grayscale, sizeof(float) * width * height);
-            cudaMemset(d_output_grayscale, 0, sizeof(float) * width * height);
-
-            // Step 1: Grayscale
-            kernels::launch_grayscale_filter(d_input, d_output_grayscale, height, width);
-
-            // Raw Gaussian blur output memory in CUDA
-            float* d_output_blur_grayscale;
-            cudaMalloc(&d_output_blur_grayscale, sizeof(float) * width * height);
-            cudaMemset(d_output_blur_grayscale, 0, sizeof(float) * width * height);
-
-            // Step 2: Gaussian blur
-            kernels::launch_gausssian_blur(d_output_grayscale, d_output_blur_grayscale, 3, height, width);
-
-            // Step 3: Gradients intensity
-            float *d_magnitude, *d_angle;
-            cudaMalloc(&d_magnitude, sizeof(float) * width * height);
-            cudaMalloc(&d_angle, sizeof(float) * width * height);
-            cudaMemset(d_magnitude, 0, sizeof(float) * width * height);
-            cudaMemset(d_angle, 0, sizeof(float) * width * height);
-
-            kernels::launch_sobel_gradient_filter(d_output_blur_grayscale, d_magnitude, d_angle, height, width);
-
-            // Step 4: Non-Maximum-Suppresion
-            float* d_output_filter;
-            cudaMalloc(&d_output_filter, sizeof(float) * width * height);
-            cudaMemset(d_output_filter, 0, sizeof(float) * width * height);
-
-            kernels::launch_nms_kernel(d_magnitude, d_angle, d_output_filter, height, width);
-
-            lfs::core::Tensor laplacian = lfs::core::Tensor::from_blob(d_output_filter, lfs::core::TensorShape{static_cast<unsigned int>(height), static_cast<unsigned int>(width)},
-                                                                       lfs::core::Device::CUDA, lfs::core::DataType::Float32)
-                                              .clone(); // gives ownership to Tensor
-
-            // Free all memory used in GPU
-            cudaFree(d_angle);
-            cudaFree(d_output_filter);
-            cudaFree(d_magnitude);
-            cudaFree(d_output_blur_grayscale);
-            cudaFree(d_output_grayscale);
-            return laplacian;
+            auto input_contig = input_data.contiguous();
+            kernels::launch_grayscale_filter(input_contig.ptr<float>(), ws.grayscale.ptr<float>(), height, width);
+            kernels::launch_gausssian_blur(ws.grayscale.ptr<float>(), ws.blurred.ptr<float>(), 3, height, width);
+            kernels::launch_sobel_gradient_filter(ws.blurred.ptr<float>(), ws.magnitude.ptr<float>(), ws.angle.ptr<float>(), height, width);
+            kernels::launch_nms_kernel(ws.magnitude.ptr<float>(), ws.angle.ptr<float>(), ws.nms_output.ptr<float>(), height, width);
         }
 
-        lfs::core::Tensor median_normalization(const lfs::core::Tensor& value_tensor) {
-            // Handle NaNs
-            lfs::core::Tensor clean_tensor = value_tensor.masked_fill(value_tensor.isnan(), 0.0f);
-
-            // Create a mask (> 0)
-            lfs::core::Tensor mask = clean_tensor > 0.0f;
-
-            // only valid values to find the median
-            lfs::core::Tensor valid_values = clean_tensor.masked_select(mask);
-
-            // If no valid values exist,
-            if (valid_values.numel() == 0) {
-                return lfs::core::Tensor::zeros_like(clean_tensor);
+        void normalize_by_positive_median_inplace(lfs::core::Tensor& tensor) {
+            tensor.masked_fill_(tensor.isnan(), 0.0f);
+            auto valid = tensor.masked_select(tensor > 0.0f);
+            if (valid.numel() == 0) {
+                tensor.zero_();
+                return;
             }
-
-            // Calculate Median using Sort
-            auto [sorted_vals, sorted_indices] = valid_values.sort(0, false);
-
-            // Get the middle index & value
-            size_t mid_idx = valid_values.numel() / 2;
-            float median_val = sorted_vals[mid_idx].item_as<float>();
-
-            // Safety check prevent division by zero
-            if (median_val < 1e-9f) {
-                median_val = 1e-9f;
-            }
-
-            // Apply the scaling
-            lfs::core::Tensor ret_value = clean_tensor.div(median_val);
-            return ret_value;
+            auto [sorted, _] = valid.sort();
+            float median = sorted[valid.numel() / 2].item_as<float>();
+            tensor.div_(std::max(median, 1e-9f));
         }
     } // namespace
 
@@ -166,32 +127,6 @@ namespace lfs::training {
         return values;
     }
 
-    void ImprovedGSPlus::get_all_edges() {
-
-        const size_t num_views = _views->size();
-
-        // Prepare tensor size: [Views, H, W]
-        lfs::core::Tensor image_sample = _views->get(0).data.image;
-        lfs::core::TensorShape all_egdes_shape = lfs::core::TensorShape({num_views, image_sample.shape()[1], image_sample.shape()[2]});
-
-        this->_all_edges = lfs::core::Tensor::zeros(all_egdes_shape, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
-
-        lfs::core::Tensor d_indices = lfs::core::Tensor::arange(0, num_views, 1).to(lfs::core::DataType::Int32);
-
-        // Iterate over the views, get edges and emplace it into _all_edges
-        for (int i = 0; i < num_views; i++) {
-            lfs::core::Tensor idx = d_indices.slice(0, i, i + 1);
-
-            const CameraExample cam_img = _views->get(i);
-            const lfs::core::Tensor image = cam_img.data.image;
-
-            lfs::core::Tensor laplacian = apply_canny_filter(image).unsqueeze(0);
-
-            // Applies median normalization
-            this->_all_edges.index_put_(idx, median_normalization(laplacian));
-        }
-    }
-
     void ImprovedGSPlus::initialize(const lfs::core::param::OptimizationParameters& optimParams) {
         _params = std::make_unique<const lfs::core::param::OptimizationParameters>(optimParams);
 
@@ -217,51 +152,62 @@ namespace lfs::training {
 
         // Initialize I-GS+ specifics
         this->_current_step = 0;
-        this->_edges_initialized = false;
 
         this->_budget_schedule = get_count_array();
     }
 
     const lfs::core::Tensor ImprovedGSPlus::compute_gaussian_score(const lfs::core::Tensor& gradients) {
-        const int64_t current_gaussian_count = _splat_data->size();
+        const int64_t N = _splat_data->size();
 
-        auto [cam_list, cam_idx] = random_cam_sample();
-        const int num_views = cam_list.size();
+        auto view_indices = random_cam_indices();
+        const int num_views = static_cast<int>(view_indices.size());
+        assert(num_views > 0);
 
-        // Indices
-        const lfs::core::Tensor d_indices = lfs::core::Tensor::arange(0, num_views, 1).to(lfs::core::DataType::Int32);
+        CannyWorkspace canny_ws;
+        auto gaussian_scores = lfs::core::Tensor::zeros(
+            {static_cast<size_t>(N)}, lfs::core::Device::CUDA, lfs::core::DataType::Float32);
 
-        // Initialize tensor in which storees gaussian importance in device
-        lfs::core::TensorShape scores_shape = lfs::core::TensorShape(
-            {static_cast<unsigned long>(num_views),
-             static_cast<unsigned long>(current_gaussian_count)});
-
-        lfs::core::Tensor gaussian_scores = lfs::core::Tensor::zeros(scores_shape,
-                                                                     lfs::core::Device::CUDA,
-                                                                     lfs::core::DataType::Float32);
         for (int view = 0; view < num_views; view++) {
-            // Retrieves camera for render
-            const CameraExample cam = cam_list[view];
-            lfs::core::Camera* my_viewpoint_cam = cam.data.camera;
+            const int idx = view_indices[view];
+            lfs::core::Camera* cam = _views->get_camera(idx);
 
-            const lfs::core::Tensor pixel_weights = _all_edges[cam_idx[view]];
+            lfs::core::Tensor image;
+            if (_image_loader) {
+                lfs::io::LoadParams params;
+                params.resize_factor = _views->get_resize_factor();
+                params.max_width = _views->get_max_width();
+                if (cam->is_undistort_prepared()) {
+                    params.undistort = &cam->undistort_params();
+                }
+                auto cached = _image_loader->decode_cached_image(cam->image_path(), params);
+                if (cached) {
+                    image = std::move(*cached);
+                }
+            }
+            if (!image.is_valid()) {
+                const CameraExample fallback = _views->get(idx);
+                image = fallback.data.image;
+            }
+
+            const int img_h = image.shape()[1];
+            const int img_w = image.shape()[2];
+            if (view == 0 ||
+                img_h != static_cast<int>(canny_ws.nms_output.shape()[0]) ||
+                img_w != static_cast<int>(canny_ws.nms_output.shape()[1])) {
+                canny_ws = create_canny_workspace(img_h, img_w);
+            }
+
+            apply_canny_filter(image, canny_ws);
+            normalize_by_positive_median_inplace(canny_ws.nms_output);
 
             lfs::core::Tensor bg;
-            // Rendering for edge_scores
-            // const RenderOutput score_render = gsplat_rasterize(*my_viewpoint_cam, this->get_model(), bg, 1.0f, false,
-            //                                                   lfs::training::GsplatRenderMode::RGB, false, pixel_weights);
+            auto score_render = edge_rasterize(*cam, this->get_model(), bg, canny_ws.nms_output);
 
-            const RenderOutput score_render = edge_rasterize(*my_viewpoint_cam, this->get_model(), bg, pixel_weights);
-
-            const lfs::core::Tensor edge_scores = score_render.edges_score;
-
-            // Compute photometric importance, view dependent
-            const lfs::core::Tensor edge_score = median_normalization(edge_scores);
-            // Aggregation
-            const lfs::core::Tensor idx = d_indices.slice(0, view, view + 1);
-            gaussian_scores.index_put_(idx, edge_score.unsqueeze(0));
+            normalize_by_positive_median_inplace(score_render.edges_score);
+            gaussian_scores.add_(score_render.edges_score);
         }
-        gaussian_scores = gaussian_scores.mean(0);
+
+        gaussian_scores.div_(static_cast<float>(num_views));
         return gaussian_scores;
     }
 
@@ -465,11 +411,7 @@ namespace lfs::training {
         if (!is_refining(iter))
             return;
 
-        if (!_edges_initialized) {
-            assert(_views && "set_views() must be called before training");
-            get_all_edges();
-            _edges_initialized = true;
-        }
+        assert(_views && "set_views() must be called before training");
 
         const lfs::core::Tensor numer = _splat_data->_densification_info[1];
         const lfs::core::Tensor denom = _splat_data->_densification_info[0];
@@ -493,6 +435,7 @@ namespace lfs::training {
             assert(_precompute_valid);
 
             densify_with_score(_precomputed_scores, _precomputed_grads, get_current_budget());
+
             opacity_prune(iter);
 
             lfs::core::Tensor::trim_memory_pool();
@@ -514,7 +457,6 @@ namespace lfs::training {
 
         if (iter == _params->stop_refine) {
             _splat_data->_densification_info = lfs::core::Tensor::empty({0});
-            this->_all_edges = lfs::core::Tensor::empty({0});
 
             lfs::core::CudaMemoryPool::instance().trim_cached_memory();
         }
@@ -553,11 +495,10 @@ namespace lfs::training {
         }
     }
 
-    const std::pair<std::vector<CameraExample>, std::vector<int>> ImprovedGSPlus::random_cam_sample(const int N) const {
+    std::vector<int> ImprovedGSPlus::random_cam_indices(const int N) const {
         const int num_cam_dataset = _views->size();
         int num_samples = 0;
 
-        // Minimum sample is 10 or all cameras if lower. Otherwise 8% of camera dataset
         if (num_cam_dataset < N) {
             num_samples = num_cam_dataset;
         } else {
@@ -565,27 +506,14 @@ namespace lfs::training {
             num_samples = std::max(N, min_cam_dataset);
         }
 
-        // Create vector for CameraExample and Camera idx
-        std::vector<CameraExample> samples;
-        std::vector<int> indices;
-        samples.reserve(num_samples);
-        indices.reserve(num_samples);
-
         std::vector<int> all_indices(num_cam_dataset);
         std::iota(all_indices.begin(), all_indices.end(), 0);
 
-        unsigned seed = global_seed();
-        std::default_random_engine rng(seed);
-
+        std::default_random_engine rng(global_seed());
         std::shuffle(all_indices.begin(), all_indices.end(), rng);
 
-        // Select the first num_samples
-        for (int i = 0; i < num_samples; ++i) {
-            samples.push_back(_views->get(all_indices[i]));
-            indices.push_back(all_indices[i]);
-        }
-
-        return {samples, indices};
+        all_indices.resize(num_samples);
+        return all_indices;
     }
 
     // From ImprovedGS but not used

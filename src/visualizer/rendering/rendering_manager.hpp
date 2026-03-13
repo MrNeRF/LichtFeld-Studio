@@ -240,11 +240,16 @@ namespace lfs::vis {
 
         // Polygon preview (render-space points, same coordinate system as screen_positions output)
         void setPolygonPreview(const std::vector<std::pair<float, float>>& points, bool closed, bool add_mode = true);
+        // Interactive polygon preview in world-space coordinates.
+        void setPolygonPreviewWorldSpace(const std::vector<glm::vec3>& world_points, bool closed,
+                                         bool add_mode = true);
         void clearPolygonPreview();
         [[nodiscard]] bool isPolygonPreviewActive() const { return polygon_preview_active_; }
         [[nodiscard]] const std::vector<std::pair<float, float>>& getPolygonPoints() const { return polygon_points_; }
+        [[nodiscard]] const std::vector<glm::vec3>& getPolygonWorldPoints() const { return polygon_world_points_; }
         [[nodiscard]] bool isPolygonClosed() const { return polygon_closed_; }
         [[nodiscard]] bool isPolygonAddMode() const { return polygon_add_mode_; }
+        [[nodiscard]] bool isPolygonPreviewWorldSpace() const { return polygon_preview_world_space_; }
 
         // Lasso preview
         void setLassoPreview(const std::vector<std::pair<float, float>>& points, bool add_mode = true);
@@ -398,8 +403,10 @@ namespace lfs::vis {
 
         bool polygon_preview_active_ = false;
         std::vector<std::pair<float, float>> polygon_points_;
+        std::vector<glm::vec3> polygon_world_points_;
         bool polygon_closed_ = false;
         bool polygon_add_mode_ = true;
+        bool polygon_preview_world_space_ = false;
 
         bool lasso_preview_active_ = false;
         std::vector<std::pair<float, float>> lasso_points_;

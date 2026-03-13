@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstddef>
 #include <cstring>
 #include <cuda_runtime.h>
 #include <glm/geometric.hpp>
@@ -28,6 +29,8 @@ namespace lfs::vis {
     namespace {
         constexpr float POLYGON_CLOSE_DISTANCE_PX = 12.0f;
         constexpr float POLYGON_CURSOR_APPEND_EPSILON_PX = 0.5f;
+        constexpr float POLYGON_VERTEX_HIT_RADIUS_PX = 8.0f;
+        constexpr float POLYGON_EDGE_HIT_RADIUS_PX = 10.0f;
 
         [[nodiscard]] glm::vec2 screenToRender(const glm::vec2& screen, const SelectionService::ViewportInfo& info) {
             const float scale_x = static_cast<float>(info.render_width) / info.width;
@@ -81,12 +84,54 @@ namespace lfs::vis {
             return device_buffer;
         }
 
+        [[nodiscard]] std::optional<core::Tensor> projectWorldPolygonToRenderSpace(
+            const std::vector<glm::vec3>& world_points,
+            const Viewport& viewport,
+            const float focal_mm,
+            const int render_width,
+            const int render_height) {
+            auto polygon = core::Tensor::empty({world_points.size(), size_t{2}},
+                                               core::Device::CPU,
+                                               core::DataType::Float32);
+            auto* data = polygon.ptr<float>();
+            const glm::mat4 vp = viewport.getProjectionMatrix(focal_mm) * viewport.getViewMatrix();
+            for (size_t i = 0; i < world_points.size(); ++i) {
+                const glm::vec4 clip = vp * glm::vec4(world_points[i], 1.0f);
+                if (clip.w <= 0.0f) {
+                    return std::nullopt;
+                }
+                const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+                data[i * 2] = (ndc.x * 0.5f + 0.5f) * static_cast<float>(render_width);
+                data[i * 2 + 1] = (1.0f - (ndc.y * 0.5f + 0.5f)) * static_cast<float>(render_height);
+            }
+            return polygon;
+        }
+
         [[nodiscard]] size_t countSelected(const core::Tensor& mask) {
             if (!mask.is_valid()) {
                 return 0;
             }
             const auto bool_mask = (mask.dtype() == core::DataType::Bool) ? mask : mask.to(core::DataType::Bool);
             return static_cast<size_t>(bool_mask.sum_scalar());
+        }
+
+        [[nodiscard]] float distanceSquaredToSegment(const glm::vec2 point,
+                                                     const glm::vec2 segment_start,
+                                                     const glm::vec2 segment_end,
+                                                     float* out_t = nullptr) {
+            const glm::vec2 delta = segment_end - segment_start;
+            const float length_sq = glm::dot(delta, delta);
+            const float t =
+                (length_sq > 0.0f)
+                    ? glm::clamp(glm::dot(point - segment_start, delta) / length_sq, 0.0f, 1.0f)
+                    : 0.0f;
+            if (out_t) {
+                *out_t = t;
+            }
+
+            const glm::vec2 closest = segment_start + delta * t;
+            const glm::vec2 offset = point - closest;
+            return glm::dot(offset, offset);
         }
 
         [[nodiscard]] core::Tensor ensureCudaBoolMask(const core::Tensor& mask) {
@@ -439,6 +484,12 @@ namespace lfs::vis {
             break;
         }
 
+        if (shape == SelectionShape::Polygon) {
+            if (const auto world_point = resolveInteractivePolygonWorldPoint(start_pos)) {
+                interactive_selection_.polygon_world_points.push_back(*world_point);
+            }
+        }
+
         refreshInteractivePreview();
         return true;
     }
@@ -463,8 +514,18 @@ namespace lfs::vis {
             }
             break;
         case SelectionShape::Rectangle:
-        case SelectionShape::Polygon:
         case SelectionShape::Rings:
+            break;
+        case SelectionShape::Polygon:
+            if (session.dragged_polygon_vertex >= 0 &&
+                static_cast<size_t>(session.dragged_polygon_vertex) < session.points.size()) {
+                session.points[session.dragged_polygon_vertex] = cursor_pos;
+                if (static_cast<size_t>(session.dragged_polygon_vertex) < session.polygon_world_points.size()) {
+                    if (const auto world_point = resolveInteractivePolygonWorldPoint(cursor_pos)) {
+                        session.polygon_world_points[session.dragged_polygon_vertex] = *world_point;
+                    }
+                }
+            }
             break;
         }
 
@@ -478,13 +539,107 @@ namespace lfs::vis {
         }
 
         session.cursor_pos = point;
+        glm::vec2 close_anchor = session.points.front();
+        if (!session.polygon_world_points.empty()) {
+            if (const auto projected = projectInteractivePolygonWorldPoint(session.polygon_world_points.front())) {
+                close_anchor = *projected;
+            }
+        }
+
         if (session.points.size() >= 3 &&
-            glm::distance(session.points.front(), point) < POLYGON_CLOSE_DISTANCE_PX) {
+            glm::distance(close_anchor, point) < POLYGON_CLOSE_DISTANCE_PX) {
             session.polygon_closed = true;
         } else {
             session.points.push_back(point);
+            if (const auto world_point = resolveInteractivePolygonWorldPoint(point)) {
+                session.polygon_world_points.push_back(*world_point);
+            }
         }
 
+        session.preview_dirty = true;
+        return true;
+    }
+
+    bool SelectionService::beginInteractivePolygonVertexDrag(const glm::vec2 point) {
+        auto& session = interactive_selection_;
+        if (!session.active || session.shape != SelectionShape::Polygon || !session.polygon_closed) {
+            return false;
+        }
+
+        const int vertex = findInteractivePolygonVertexAt(point);
+        if (vertex < 0) {
+            return false;
+        }
+
+        session.dragged_polygon_vertex = vertex;
+        session.cursor_pos = point;
+        session.preview_dirty = true;
+        return true;
+    }
+
+    bool SelectionService::insertInteractivePolygonVertex(const glm::vec2 point) {
+        auto& session = interactive_selection_;
+        if (!session.active || session.shape != SelectionShape::Polygon || !session.polygon_closed) {
+            return false;
+        }
+
+        const int edge = findInteractivePolygonEdgeAt(point);
+        if (edge < 0) {
+            return false;
+        }
+
+        const size_t insert_at = static_cast<size_t>(edge + 1);
+        session.points.insert(session.points.begin() + static_cast<std::ptrdiff_t>(insert_at), point);
+
+        if (!session.polygon_world_points.empty()) {
+            const auto world_point = resolveInteractivePolygonWorldPoint(point);
+            if (!world_point || session.polygon_world_points.size() + 1 != session.points.size()) {
+                session.points.erase(session.points.begin() + static_cast<std::ptrdiff_t>(insert_at));
+                return false;
+            }
+
+            session.polygon_world_points.insert(
+                session.polygon_world_points.begin() + static_cast<std::ptrdiff_t>(insert_at), *world_point);
+        }
+
+        session.dragged_polygon_vertex = static_cast<int>(insert_at);
+        session.cursor_pos = point;
+        session.preview_dirty = true;
+        return true;
+    }
+
+    void SelectionService::endInteractivePolygonVertexDrag() {
+        auto& session = interactive_selection_;
+        if (!session.active || session.shape != SelectionShape::Polygon) {
+            return;
+        }
+        session.dragged_polygon_vertex = -1;
+        session.preview_dirty = true;
+    }
+
+    bool SelectionService::removeInteractivePolygonVertex(const glm::vec2 point) {
+        auto& session = interactive_selection_;
+        if (!session.active || session.shape != SelectionShape::Polygon || !session.polygon_closed ||
+            session.points.size() <= 3) {
+            return false;
+        }
+
+        const int vertex = findInteractivePolygonVertexAt(point);
+        if (vertex < 0) {
+            return false;
+        }
+
+        if (!session.polygon_world_points.empty()) {
+            if (static_cast<size_t>(vertex) >= session.polygon_world_points.size()) {
+                return false;
+            }
+            session.polygon_world_points.erase(
+                session.polygon_world_points.begin() + static_cast<std::ptrdiff_t>(vertex));
+        }
+        session.points.erase(session.points.begin() + static_cast<std::ptrdiff_t>(vertex));
+
+        session.dragged_polygon_vertex = -1;
+        session.cursor_pos = point;
         session.preview_dirty = true;
         return true;
     }
@@ -499,6 +654,12 @@ namespace lfs::vis {
         }
 
         session.points.pop_back();
+        if (session.polygon_world_points.size() >= session.points.size() + 1) {
+            session.polygon_world_points.pop_back();
+        }
+        if (session.dragged_polygon_vertex >= static_cast<int>(session.points.size())) {
+            session.dragged_polygon_vertex = -1;
+        }
         session.polygon_closed = false;
         session.preview_dirty = true;
         return true;
@@ -568,10 +729,17 @@ namespace lfs::vis {
             break;
         }
         case SelectionShape::Polygon: {
-            rendering_manager_->setPolygonPreview(
-                screenPointsToRender(getPolygonPreviewPoints(), *info),
-                shouldClosePolygonPreview(),
-                add_mode);
+            if (!session.polygon_world_points.empty()) {
+                rendering_manager_->setPolygonPreviewWorldSpace(
+                    session.polygon_world_points,
+                    shouldClosePolygonPreview(),
+                    add_mode);
+            } else {
+                rendering_manager_->setPolygonPreview(
+                    screenPointsToRender(getPolygonPreviewPoints(), *info),
+                    shouldClosePolygonPreview(),
+                    add_mode);
+            }
             break;
         }
         case SelectionShape::Lasso:
@@ -981,8 +1149,12 @@ namespace lfs::vis {
             success = buildRectangleSelection(session.start_pos, session.cursor_pos, selection_out);
             break;
         case SelectionShape::Polygon: {
-            const auto polygon_points = include_polygon_cursor ? getPolygonPreviewPoints() : session.points;
-            success = buildPolygonSelection(polygon_points, selection_out);
+            if (!session.polygon_world_points.empty()) {
+                success = buildWorldPolygonSelection(session.polygon_world_points, selection_out);
+            } else {
+                const auto polygon_points = include_polygon_cursor ? getPolygonPreviewPoints() : session.points;
+                success = buildPolygonSelection(polygon_points, selection_out);
+            }
             break;
         }
         case SelectionShape::Lasso:
@@ -1075,6 +1247,33 @@ namespace lfs::vis {
         return true;
     }
 
+    bool SelectionService::buildWorldPolygonSelection(const std::vector<glm::vec3>& world_points,
+                                                      core::Tensor& selection_out) const {
+        if (world_points.size() < 3) {
+            return false;
+        }
+
+        auto* const gm = services().guiOrNull();
+        const auto info = resolveViewportInfo();
+        const auto screen_positions = getScreenPositions();
+        if (!gm || !gm->getViewer() || !info || !screen_positions || !screen_positions->is_valid() ||
+            !rendering_manager_) {
+            return false;
+        }
+
+        const auto polygon = projectWorldPolygonToRenderSpace(world_points,
+                                                              gm->getViewer()->getViewport(),
+                                                              rendering_manager_->getFocalLengthMm(),
+                                                              info->render_width,
+                                                              info->render_height);
+        if (!polygon) {
+            return false;
+        }
+
+        rendering::polygon_select_tensor(*screen_positions, polygon->cuda(), selection_out);
+        return true;
+    }
+
     bool SelectionService::buildRingSelection(const glm::vec2 /*cursor_pos*/, core::Tensor& selection_out) const {
         if (!rendering_manager_) {
             return false;
@@ -1101,8 +1300,13 @@ namespace lfs::vis {
             return preview_points;
         }
 
+        glm::vec2 close_anchor = preview_points.front();
+        if (const auto projected = resolveInteractivePolygonDisplayPoint(0)) {
+            close_anchor = *projected;
+        }
+
         const bool can_preview_close = preview_points.size() >= 3 &&
-                                       glm::distance(preview_points.front(), session.cursor_pos) < POLYGON_CLOSE_DISTANCE_PX;
+                                       glm::distance(close_anchor, session.cursor_pos) < POLYGON_CLOSE_DISTANCE_PX;
         if (!can_preview_close &&
             glm::distance(preview_points.back(), session.cursor_pos) > POLYGON_CURSOR_APPEND_EPSILON_PX) {
             preview_points.push_back(session.cursor_pos);
@@ -1110,14 +1314,146 @@ namespace lfs::vis {
         return preview_points;
     }
 
+    std::optional<glm::vec2> SelectionService::resolveInteractivePolygonDisplayPoint(const size_t index) const {
+        const auto& session = interactive_selection_;
+        if (!session.active || session.shape != SelectionShape::Polygon || index >= session.points.size()) {
+            return std::nullopt;
+        }
+
+        if (index < session.polygon_world_points.size()) {
+            if (const auto projected = projectInteractivePolygonWorldPoint(session.polygon_world_points[index])) {
+                return projected;
+            }
+        }
+
+        return session.points[index];
+    }
+
+    int SelectionService::findInteractivePolygonVertexAt(const glm::vec2 screen_point) const {
+        const auto& session = interactive_selection_;
+        if (!session.active || session.shape != SelectionShape::Polygon) {
+            return -1;
+        }
+
+        const float radius_sq = POLYGON_VERTEX_HIT_RADIUS_PX * POLYGON_VERTEX_HIT_RADIUS_PX;
+        for (size_t i = 0; i < session.points.size(); ++i) {
+            if (const auto vertex = resolveInteractivePolygonDisplayPoint(i)) {
+                const glm::vec2 delta = screen_point - *vertex;
+                if (glm::dot(delta, delta) <= radius_sq) {
+                    return static_cast<int>(i);
+                }
+            }
+        }
+        return -1;
+    }
+
+    int SelectionService::findInteractivePolygonEdgeAt(const glm::vec2 screen_point) const {
+        const auto& session = interactive_selection_;
+        if (!session.active || session.shape != SelectionShape::Polygon || !session.polygon_closed ||
+            session.points.size() < 3) {
+            return -1;
+        }
+
+        const float edge_radius_sq = POLYGON_EDGE_HIT_RADIUS_PX * POLYGON_EDGE_HIT_RADIUS_PX;
+        const float vertex_radius_sq = POLYGON_VERTEX_HIT_RADIUS_PX * POLYGON_VERTEX_HIT_RADIUS_PX;
+        float best_distance_sq = edge_radius_sq;
+        int best_edge = -1;
+
+        for (size_t i = 0; i < session.points.size(); ++i) {
+            const size_t next = (i + 1) % session.points.size();
+            const auto start = resolveInteractivePolygonDisplayPoint(i);
+            const auto end = resolveInteractivePolygonDisplayPoint(next);
+            if (!start || !end) {
+                continue;
+            }
+
+            if (glm::dot(screen_point - *start, screen_point - *start) <= vertex_radius_sq ||
+                glm::dot(screen_point - *end, screen_point - *end) <= vertex_radius_sq) {
+                continue;
+            }
+
+            float t = 0.0f;
+            const float distance_sq = distanceSquaredToSegment(screen_point, *start, *end, &t);
+            if (distance_sq <= best_distance_sq && t > 0.0f && t < 1.0f) {
+                best_distance_sq = distance_sq;
+                best_edge = static_cast<int>(i);
+            }
+        }
+
+        return best_edge;
+    }
+
+    std::optional<glm::vec3> SelectionService::resolveInteractivePolygonWorldPoint(const glm::vec2 screen_point) const {
+        auto* const gm = services().guiOrNull();
+        const auto info = resolveViewportInfo();
+        if (!gm || !gm->getViewer() || !info || !rendering_manager_) {
+            return std::nullopt;
+        }
+
+        const auto& viewport = gm->getViewer()->getViewport();
+        const float local_x = screen_point.x - info->x;
+        const float local_y = screen_point.y - info->y;
+        const float focal_length_mm = rendering_manager_->getFocalLengthMm();
+        const float depth = rendering_manager_->getDepthAtPixel(
+            static_cast<int>(local_x), static_cast<int>(local_y));
+
+        if (depth > 0.0f) {
+            const glm::vec3 world = viewport.unprojectPixel(local_x, local_y, depth, focal_length_mm);
+            if (Viewport::isValidWorldPosition(world)) {
+                return world;
+            }
+        }
+
+        const float pivot_distance = glm::length(viewport.camera.pivot - viewport.camera.t);
+        const float fallback_distance = pivot_distance > 0.1f ? pivot_distance : 10.0f;
+        const glm::vec3 fallback_world =
+            viewport.unprojectPixel(local_x, local_y, fallback_distance, focal_length_mm);
+        if (Viewport::isValidWorldPosition(fallback_world)) {
+            return fallback_world;
+        }
+
+        const glm::vec3 forward = glm::normalize(viewport.camera.R * glm::vec3(0.0f, 0.0f, 1.0f));
+        return viewport.camera.t + forward * fallback_distance;
+    }
+
+    std::optional<glm::vec2> SelectionService::projectInteractivePolygonWorldPoint(const glm::vec3 world_point) const {
+        auto* const gm = services().guiOrNull();
+        const auto info = resolveViewportInfo();
+        if (!gm || !gm->getViewer() || !info || !rendering_manager_) {
+            return std::nullopt;
+        }
+
+        const auto& viewport = gm->getViewer()->getViewport();
+        const glm::vec4 clip =
+            viewport.getProjectionMatrix(rendering_manager_->getFocalLengthMm()) *
+            viewport.getViewMatrix() * glm::vec4(world_point, 1.0f);
+        if (clip.w <= 0.0f) {
+            return std::nullopt;
+        }
+
+        const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+        return glm::vec2(info->x + (ndc.x * 0.5f + 0.5f) * info->width,
+                         info->y + (1.0f - (ndc.y * 0.5f + 0.5f)) * info->height);
+    }
+
     bool SelectionService::shouldClosePolygonPreview() const {
         const auto& session = interactive_selection_;
         if (!session.active || session.shape != SelectionShape::Polygon) {
             return false;
         }
-        return session.polygon_closed ||
-               (session.points.size() >= 3 &&
-                glm::distance(session.points.front(), session.cursor_pos) < POLYGON_CLOSE_DISTANCE_PX);
+        if (session.polygon_closed) {
+            return true;
+        }
+
+        glm::vec2 close_anchor = session.points.front();
+        if (!session.polygon_world_points.empty()) {
+            if (const auto projected = projectInteractivePolygonWorldPoint(session.polygon_world_points.front())) {
+                close_anchor = *projected;
+            }
+        }
+
+        return session.points.size() >= 3 &&
+               glm::distance(close_anchor, session.cursor_pos) < POLYGON_CLOSE_DISTANCE_PX;
     }
 
     void SelectionService::applyFilters(core::Tensor& selection, const SelectionFilterState& filters,

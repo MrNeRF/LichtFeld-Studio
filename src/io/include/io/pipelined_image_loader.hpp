@@ -120,6 +120,9 @@ namespace lfs::io {
         std::optional<ReadyImage> try_get();
         std::optional<ReadyImage> try_get_for(std::chrono::milliseconds timeout);
 
+        std::optional<lfs::core::Tensor> decode_cached_image(
+            const std::filesystem::path& path, const LoadParams& params);
+
         size_t ready_count() const;
         size_t in_flight_count() const;
         void clear();

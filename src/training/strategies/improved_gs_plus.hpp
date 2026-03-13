@@ -59,6 +59,8 @@ namespace lfs::training {
 
         void set_training_dataset(std::shared_ptr<CameraDataset> views) override { _views = std::move(views); }
 
+        void set_image_loader(lfs::io::PipelinedImageLoader* loader) override { _image_loader = loader; }
+
         // Get count of active (non-free) Gaussians
         size_t active_count() const;
 
@@ -71,11 +73,10 @@ namespace lfs::training {
     private:
         // Helper Functions
         inline const int64_t get_current_budget() const noexcept { return _budget_schedule[_current_step + 1]; }
-        inline const unsigned global_seed() const noexcept { return _current_step; }                             // for camera sampling
-        const std::pair<std::vector<CameraExample>, std::vector<int>> random_cam_sample(const int N = 10) const; // N minimum
+        inline const unsigned global_seed() const noexcept { return _current_step; } // for camera sampling
+        std::vector<int> random_cam_indices(const int N = 10) const;                 // N minimum
 
         std::vector<int64_t> get_count_array();
-        void get_all_edges();
 
         const lfs::core::Tensor compute_gaussian_score(const lfs::core::Tensor& gradients);
         void densify_with_score(const lfs::core::Tensor& scores, const lfs::core::Tensor& grads, const int64_t budget);
@@ -100,13 +101,12 @@ namespace lfs::training {
         int64_t _initial_points;
         int _current_step;
         int _total_steps;
-        bool _edges_initialized = false;
 
         std::vector<int64_t> _budget_schedule;
-        lfs::core::Tensor _all_edges;
 
         // Pointers to external data
         std::shared_ptr<CameraDataset> _views;
+        lfs::io::PipelinedImageLoader* _image_loader = nullptr;
 
         // Member variables
         std::unique_ptr<AdamOptimizer> _optimizer;

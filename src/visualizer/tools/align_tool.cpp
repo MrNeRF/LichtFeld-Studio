@@ -98,7 +98,7 @@ namespace lfs::vis::tools {
             if (depth > 0.0f && depth < 1e9f) {
                 const glm::vec3 preview_point = viewport.unprojectPixel(
                     mouse_pos.x, mouse_pos.y, depth, rendering_manager->getFocalLengthMm());
-                if (preview_point.x > -1e9f) {
+                if (Viewport::isValidWorldPosition(preview_point)) {
                     const ImVec2 screen_pos = projectToScreen(preview_point, viewport);
                     const float screen_radius = calculateScreenRadius(preview_point, SPHERE_RADIUS, viewport);
 
@@ -119,7 +119,7 @@ namespace lfs::vis::tools {
             if (depth > 0.0f && depth < 1e9f) {
                 const glm::vec3 p2 = viewport.unprojectPixel(
                     mouse_pos.x, mouse_pos.y, depth, rendering_manager->getFocalLengthMm());
-                if (p2.x > -1e9f) {
+                if (Viewport::isValidWorldPosition(p2)) {
                     const glm::vec3& p0 = picked_points[0];
                     const glm::vec3& p1 = picked_points[1];
 

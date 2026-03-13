@@ -162,6 +162,20 @@ namespace lfs::vis {
             }
         }
 
+        bool isViewportMovementAction(const input::Action action) {
+            switch (action) {
+            case input::Action::CAMERA_MOVE_FORWARD:
+            case input::Action::CAMERA_MOVE_BACKWARD:
+            case input::Action::CAMERA_MOVE_LEFT:
+            case input::Action::CAMERA_MOVE_RIGHT:
+            case input::Action::CAMERA_MOVE_UP:
+            case input::Action::CAMERA_MOVE_DOWN:
+                return true;
+            default:
+                return false;
+            }
+        }
+
         bool handleSelectionModeShortcut(const input::Action action, gui::GuiManager* gui) {
             if (!gui)
                 return false;
@@ -252,6 +266,7 @@ namespace lfs::vis {
 
         internal::WindowFocusLost::when([this](const auto&) {
             drag_mode_ = DragMode::None;
+            viewport_keyboard_focus_ = false;
             std::fill(std::begin(keys_movement_), std::end(keys_movement_), false);
             hovered_camera_id_ = -1;
 
@@ -313,6 +328,7 @@ namespace lfs::vis {
     }
 
     void InputController::onWindowFocusLost() {
+        viewport_keyboard_focus_ = false;
         if (current_cursor_ != CursorType::Default) {
             SDL_SetCursor(SDL_GetDefaultCursor());
             current_cursor_ = CursorType::Default;
@@ -368,8 +384,14 @@ namespace lfs::vis {
     // Core handlers
     void InputController::handleMouseButton(int button, int action, double x, double y) {
         auto* gui = services().guiOrNull();
+        const bool in_viewport = isInViewport(x, y);
         const bool over_gui = isPointerOverBlockingUi(x, y) ||
                               ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow);
+        const bool over_gizmo = gui && gui->gizmo().isPositionInViewportGizmo(x, y);
+
+        if (action == input::ACTION_PRESS) {
+            viewport_keyboard_focus_ = in_viewport && !over_gui && !over_gizmo;
+        }
 
         // Consume all mouse events while pie menu is open
         if (gui && gui->gizmo().isPieMenuOpen()) {
@@ -443,8 +465,6 @@ namespace lfs::vis {
             LOG_TRACE("Ended splitter drag");
             return;
         }
-
-        const bool over_gizmo = gui && gui->gizmo().isPositionInViewportGizmo(x, y);
 
         // Single binding lookup with current tool mode
         const int mods = getModifierKeys();
@@ -1009,6 +1029,11 @@ namespace lfs::vis {
 
         const auto tool_mode = getCurrentToolMode();
         const auto bound_action = bindings_.getActionForKey(tool_mode, key, mods);
+        const bool allow_viewport_movement =
+            viewport_keyboard_focus_ &&
+            isViewportMovementAction(bound_action) &&
+            !wants_text_input &&
+            !(gui && gui->isModalWindowOpen());
 
         // Global shortcuts bypass ImGui keyboard capture (except text input)
         if (action == input::ACTION_PRESS && !wants_text_input) {
@@ -1031,7 +1056,8 @@ namespace lfs::vis {
 
         const bool is_always_active = isAlwaysActiveKeyAction(bound_action);
 
-        if (imgui_wants_keyboard && (!is_always_active || wants_text_input))
+        if (imgui_wants_keyboard && !allow_viewport_movement &&
+            (!is_always_active || wants_text_input))
             return;
 
         // Only speed controls support key repeat
@@ -1636,7 +1662,15 @@ namespace lfs::vis {
         }
 
         const auto& focus = gui::guiFocusState();
-        if (focus.want_text_input || focus.want_capture_keyboard)
+        if (focus.want_text_input)
+            return false;
+
+        if (viewport_keyboard_focus_) {
+            auto* gui = services().guiOrNull();
+            return !(gui && gui->isModalWindowOpen());
+        }
+
+        if (focus.want_capture_keyboard)
             return false;
 
         return !focus.any_item_active;
@@ -1717,58 +1751,32 @@ namespace lfs::vis {
 
     glm::vec3 InputController::unprojectScreenPoint(double x, double y, float fallback_distance) const {
         if (!services().renderingOrNull()) {
-            const glm::vec3 forward = viewport_.camera.R * glm::vec3(0, 0, 1);
+            const glm::vec3 forward = glm::normalize(viewport_.camera.R * glm::vec3(0, 0, 1));
             return viewport_.camera.t + forward * fallback_distance;
         }
 
         const float local_x = static_cast<float>(x) - viewport_bounds_.x;
         const float local_y = static_cast<float>(y) - viewport_bounds_.y;
+        const float focal_length_mm = services().renderingOrNull()->getFocalLengthMm();
 
         const float depth = services().renderingOrNull()->getDepthAtPixel(
             static_cast<int>(local_x), static_cast<int>(local_y));
 
-        if (depth < 0.0f) {
-            const glm::vec3 forward = viewport_.camera.R * glm::vec3(0, 0, 1);
-            return viewport_.camera.t + forward * fallback_distance;
+        if (depth > 0.0f) {
+            const glm::vec3 world = viewport_.unprojectPixel(local_x, local_y, depth, focal_length_mm);
+            if (Viewport::isValidWorldPosition(world)) {
+                return world;
+            }
         }
 
-        // Use viewport dimensions for unprojection
-        const float width = viewport_bounds_.width;
-        const float height = viewport_bounds_.height;
+        const glm::vec3 fallback_world =
+            viewport_.unprojectPixel(local_x, local_y, fallback_distance, focal_length_mm);
+        if (Viewport::isValidWorldPosition(fallback_world)) {
+            return fallback_world;
+        }
 
-        // Pinhole camera unprojection matching the rasterizer
-        const float fov_y = glm::radians(services().renderingOrNull()->getFovDegrees());
-        const float aspect = width / height;
-        const float fov_x = 2.0f * std::atan(std::tan(fov_y / 2.0f) * aspect);
-
-        const float fx = width / (2.0f * std::tan(fov_x / 2.0f));
-        const float fy = height / (2.0f * std::tan(fov_y / 2.0f));
-        const float cx = width / 2.0f;
-        const float cy = height / 2.0f;
-
-        // Point in camera space (using viewport-local coordinates)
-        const glm::vec4 view_pos(
-            (local_x - cx) * depth / fx,
-            (local_y - cy) * depth / fy,
-            depth,
-            1.0f);
-
-        // Build world-to-camera matrix matching rasterizer: w2c = [R^T | -R^T*t]
-        const glm::mat3 R = viewport_.getRotationMatrix();
-        const glm::vec3 t = viewport_.getTranslation();
-        const glm::mat3 R_inv = glm::transpose(R);
-        const glm::vec3 t_inv = -R_inv * t;
-
-        glm::mat4 w2c(1.0f);
-        for (int i = 0; i < 3; ++i)
-            for (int j = 0; j < 3; ++j)
-                w2c[i][j] = R_inv[i][j];
-        w2c[3][0] = t_inv.x;
-        w2c[3][1] = t_inv.y;
-        w2c[3][2] = t_inv.z;
-
-        // Transform from camera space to world space
-        return glm::vec3(glm::inverse(w2c) * view_pos);
+        const glm::vec3 forward = glm::normalize(viewport_.camera.R * glm::vec3(0, 0, 1));
+        return viewport_.camera.t + forward * fallback_distance;
     }
 
     std::pair<glm::vec3, glm::vec3> InputController::computePickRay(double x, double y) const {

@@ -237,6 +237,22 @@ namespace lfs::io {
         return s;
     }
 
+    std::optional<lfs::core::Tensor> PipelinedImageLoader::decode_cached_image(
+        const std::filesystem::path& path, const LoadParams& params) {
+        auto key = make_cache_key(path, params);
+        auto jpeg_data = get_from_jpeg_cache(key);
+        if (!jpeg_data)
+            return std::nullopt;
+
+        auto& nvcodec = get_nvcodec_loader();
+        auto tensor = nvcodec.load_image_from_memory_gpu(
+            *jpeg_data, params.resize_factor, params.max_width, nullptr);
+        if (!tensor.is_valid() || tensor.numel() == 0)
+            return std::nullopt;
+
+        return tensor;
+    }
+
     std::string PipelinedImageLoader::make_cache_key(const std::filesystem::path& path, const LoadParams& params) const {
         auto key = lfs::core::path_to_utf8(path) + ":rf" + std::to_string(params.resize_factor) + "_mw" + std::to_string(params.max_width);
         if (params.undistort)

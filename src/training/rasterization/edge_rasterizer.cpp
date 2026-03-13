@@ -75,11 +75,9 @@ namespace lfs::training {
         // Input pixel_weights pointer and output accum_weights
         const float* pixel_weights_ptr = pixel_weights.contiguous().ptr<float>();
 
-        float* accum_weights_out;
-        const size_t acumm_weights_size = sizeof(float) * n_primitives;
-
-        cudaMalloc(&accum_weights_out, acumm_weights_size);
-        cudaMemsetAsync(accum_weights_out, 0, acumm_weights_size, nullptr);
+        auto accum_weights = core::Tensor::zeros(
+            {static_cast<size_t>(n_primitives)}, core::Device::CUDA, core::DataType::Float32);
+        float* accum_weights_out = accum_weights.ptr<float>();
 
         // Call forward_raw with raw pointers (no PyTorch wrappers)
         // Use adjusted cx/cy for tile rendering
@@ -119,16 +117,11 @@ namespace lfs::training {
         // Prepare render output
         RenderOutput render_output;
 
-        render_output.edges_score = core::Tensor::from_blob(accum_weights_out, {static_cast<size_t>(n_primitives)},
-                                                            core::Device::CUDA, core::DataType::Float32)
-                                        .clone();
-
+        render_output.edges_score = std::move(accum_weights);
         render_output.image = core::Tensor();
         render_output.alpha = alpha;
         render_output.width = width;
         render_output.height = height;
-
-        cudaFree(accum_weights_out);
 
         return std::pair{render_output, FastRasterizeContext{}};
     }
