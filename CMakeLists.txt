@@ -634,6 +634,9 @@ elseif(WIN32)
             RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${CMAKE_BINARY_DIR}"
             RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL "${CMAKE_BINARY_DIR}"
     )
+    if(MSVC)
+        target_compile_options(${PROJECT_NAME} PRIVATE /bigobj)
+    endif()
 endif()
 
 # Build type configuration function

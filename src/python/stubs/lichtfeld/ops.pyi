@@ -37,6 +37,26 @@ class BuiltinOp(enum.Enum):
 
     Delete = 10
 
+    SelectionClear = 11
+
+    SceneSelectNode = 12
+
+    CropBoxAdd = 13
+
+    CropBoxSet = 14
+
+    CropBoxFit = 15
+
+    CropBoxReset = 16
+
+    EllipsoidAdd = 17
+
+    EllipsoidSet = 18
+
+    EllipsoidFit = 19
+
+    EllipsoidReset = 20
+
 class BuiltinTool(enum.Enum):
     Select = 0
 

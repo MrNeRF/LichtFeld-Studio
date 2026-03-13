@@ -21,7 +21,7 @@ def describe_tools() -> list:
 def list_resources() -> list[str]:
     """List all registered MCP resources"""
 
-def read_resource(uri: str) -> list[dict]:
+def read_resource(uri: str) -> list:
     """Read one registered MCP resource"""
 
 def call_tool(name: str, args: object | None = None) -> object:
