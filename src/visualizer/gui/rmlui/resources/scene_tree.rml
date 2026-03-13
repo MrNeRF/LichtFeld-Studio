@@ -3,6 +3,18 @@
     <link type="text/rcss" href="scene_tree.rcss"/>
 </head>
 <body id="body" data-model="scene_panel">
+    <div class="scene-header">
+        <div class="scene-header-row">
+            <span class="scene-title">{{ scene_title }}</span>
+            <div class="scene-chip-row" data-if="show_tree">
+                <span class="scene-chip scene-chip--accent">{{ summary_model_chip }}</span>
+                <span class="scene-chip">{{ summary_node_chip }}</span>
+                <span class="scene-chip">{{ summary_selection_chip }}</span>
+                <span class="scene-chip" data-if="show_filter_chip">{{ summary_filter_chip }}</span>
+            </div>
+        </div>
+    </div>
+
     <div id="search-container">
         <img id="search-icon" class="row-icon" src="../icon/scene/search.png" />
         <input id="filter-input" type="text" data-attr-placeholder="search_placeholder" />

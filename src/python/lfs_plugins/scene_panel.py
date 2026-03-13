@@ -160,6 +160,7 @@ class ScenePanel(Panel):
         if model is None:
             return
 
+        model.bind_func("scene_title", lambda: "Scene")
         model.bind_func("search_placeholder", lambda: tr("scene.search"))
         model.bind_func("show_tree", lambda: self._scene_has_nodes)
         model.bind_func("show_empty_state", lambda: not self._scene_has_nodes)
@@ -168,6 +169,11 @@ class ScenePanel(Panel):
         model.bind_func("models_collapsed", lambda: self._models_collapsed)
         model.bind_func("models_header_text",
                         lambda: tr("scene.models").format(self._root_count))
+        model.bind_func("summary_model_chip", self._summary_model_chip)
+        model.bind_func("summary_node_chip", self._summary_node_chip)
+        model.bind_func("summary_selection_chip", self._summary_selection_chip)
+        model.bind_func("summary_filter_chip", self._summary_filter_chip)
+        model.bind_func("show_filter_chip", lambda: bool(self._filter_text))
         model.bind_func("top_spacer_height", lambda: self._top_spacer_height)
         model.bind_func("bottom_spacer_height", lambda: self._bottom_spacer_height)
         model.bind_func("context_menu_visible", lambda: self._context_menu_visible)
@@ -728,6 +734,23 @@ class ScenePanel(Panel):
         self._tree_revision += 1
         self._last_render_key = None
 
+    @staticmethod
+    def _pluralize(count, singular, plural=None):
+        suffix = singular if count == 1 else (plural or singular + "s")
+        return f"{count} {suffix}"
+
+    def _summary_model_chip(self):
+        return self._pluralize(self._root_count, "model")
+
+    def _summary_node_chip(self):
+        return self._pluralize(len(self._node_snapshots), "node")
+
+    def _summary_selection_chip(self):
+        return self._pluralize(len(self._selected_nodes), "selected item", "selected items")
+
+    def _summary_filter_chip(self):
+        return f'Filter: "{self._filter_text}"' if self._filter_text else ""
+
     def _reindex_flat_rows(self):
         self._flat_index_by_id = {
             row["id"]: index
@@ -922,6 +945,11 @@ class ScenePanel(Panel):
                      "show_empty_state",
                      "models_collapsed",
                      "models_header_text",
+                     "summary_model_chip",
+                     "summary_node_chip",
+                     "summary_selection_chip",
+                     "summary_filter_chip",
+                     "show_filter_chip",
                      "top_spacer_height",
                      "bottom_spacer_height"):
             self._handle.dirty(name)

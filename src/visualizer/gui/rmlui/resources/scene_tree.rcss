@@ -13,6 +13,51 @@ body {
     flex-direction: column;
 }
 
+.scene-header {
+    display: block;
+    padding: 5dp 6dp 3dp;
+}
+
+.scene-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6dp;
+}
+
+.scene-title {
+    display: inline-block;
+    color: #f5f7ff;
+    font-size: 12dp;
+    font-weight: bold;
+    flex-shrink: 0;
+}
+
+.scene-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4dp;
+    justify-content: flex-end;
+    flex: 1;
+    min-width: 0;
+}
+
+.scene-chip {
+    display: inline-block;
+    padding: 2dp 7dp;
+    font-size: 9dp;
+    color: #cdd6f4;
+    background-color: #313244;
+    border-width: 1dp;
+    border-color: #45475a;
+}
+
+.scene-chip--accent {
+    color: #f5f7ff;
+    background-color: rgba(137, 180, 250, 72);
+    border-color: rgba(137, 180, 250, 150);
+}
+
 /* Search container */
 #search-container {
     display: flex;
