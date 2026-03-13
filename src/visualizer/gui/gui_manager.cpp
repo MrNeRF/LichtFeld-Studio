@@ -100,33 +100,51 @@ namespace lfs::vis::gui {
                 SDL_StopTextInput(window);
         }
 
-        void drawFrameTooltip(const std::string& tip) {
+        void drawFrameTooltip(const std::string& tip, int screen_w, int screen_h) {
             if (tip.empty())
                 return;
 
             const auto& p = lfs::vis::theme().palette;
-            auto* vp = ImGui::GetMainViewport();
-            auto* fg = ImGui::GetForegroundDrawList(vp);
+            auto* font = ImGui::GetFont();
+            const float font_size = ImGui::GetFontSize();
             const ImVec2 mouse = s_frame_input
                                      ? ImVec2(s_frame_input->mouse_x, s_frame_input->mouse_y)
-                                     : ImVec2(vp->Pos.x, vp->Pos.y);
+                                     : ImVec2(0, 0);
             const ImVec2 pad(8, 6);
-            const ImVec2 text_size = ImGui::CalcTextSize(tip.c_str());
+            const ImVec2 text_size = font->CalcTextSizeA(font_size, FLT_MAX, 0.0f, tip.c_str());
             const float box_w = text_size.x + pad.x * 2;
             const float box_h = text_size.y + pad.y * 2;
 
+            const float sw = static_cast<float>(screen_w);
+            const float sh = static_cast<float>(screen_h);
             ImVec2 box_min(mouse.x + 14, mouse.y + 18);
-            if (box_min.x + box_w > vp->Pos.x + vp->Size.x)
+            if (box_min.x + box_w > sw)
                 box_min.x = mouse.x - 14 - box_w;
-            if (box_min.y + box_h > vp->Pos.y + vp->Size.y)
+            if (box_min.y + box_h > sh)
                 box_min.y = mouse.y - 18 - box_h;
 
             const ImVec2 box_max(box_min.x + box_w, box_min.y + box_h);
-            fg->AddRectFilled(box_min, box_max,
-                              ImGui::ColorConvertFloat4ToU32(p.surface_bright), 4.0f);
-            fg->AddRect(box_min, box_max, ImGui::ColorConvertFloat4ToU32(p.border), 4.0f);
-            fg->AddText(ImVec2(box_min.x + pad.x, box_min.y + pad.y),
-                        ImGui::ColorConvertFloat4ToU32(p.text), tip.c_str());
+            const ImU32 col_bg = ImGui::ColorConvertFloat4ToU32(p.surface_bright);
+            const ImU32 col_border = ImGui::ColorConvertFloat4ToU32(p.border);
+            const ImU32 col_text = ImGui::ColorConvertFloat4ToU32(p.text);
+
+            ImDrawList dl(ImGui::GetDrawListSharedData());
+            dl._ResetForNewFrame();
+            dl.PushTextureID(ImGui::GetIO().Fonts->TexID);
+            dl.PushClipRectFullScreen();
+            dl.AddRectFilled(box_min, box_max, col_bg, 4.0f);
+            dl.AddRect(box_min, box_max, col_border, 4.0f);
+            dl.AddText(font, font_size,
+                       ImVec2(box_min.x + pad.x, box_min.y + pad.y), col_text, tip.c_str());
+            dl.PopClipRect();
+
+            ImDrawData draw_data{};
+            draw_data.DisplayPos = ImVec2(0.0f, 0.0f);
+            draw_data.DisplaySize = ImVec2(sw, sh);
+            draw_data.FramebufferScale = ImGui::GetIO().DisplayFramebufferScale;
+            draw_data.Valid = true;
+            draw_data.AddDrawList(&dl);
+            ImGui_ImplOpenGL3_RenderDrawData(&draw_data);
         }
     } // namespace
 
@@ -1080,9 +1098,25 @@ namespace lfs::vis::gui {
             rp_layout.scene_h = scene_h + 8.0f;
             rp_layout.splitter_h = splitter_h;
 
-            rml_right_panel_.processInput(rp_layout, panel_input);
+            const bool float_blocks_rp = reg.isPositionOverFloatingPanel(
+                panel_input.mouse_x, panel_input.mouse_y);
+            if (float_blocks_rp) {
+                PanelInputState masked_input = panel_input;
+                masked_input.mouse_x = -1.0e9f;
+                masked_input.mouse_y = -1.0e9f;
+                for (auto& v : masked_input.mouse_clicked)
+                    v = false;
+                for (auto& v : masked_input.mouse_released)
+                    v = false;
+                for (auto& v : masked_input.mouse_down)
+                    v = false;
+                masked_input.mouse_wheel = 0;
+                rml_right_panel_.processInput(rp_layout, masked_input);
+            } else {
+                rml_right_panel_.processInput(rp_layout, panel_input);
+            }
 
-            if (rml_right_panel_.wantsInput())
+            if (rml_right_panel_.wantsInput() && !float_blocks_rp)
                 guiFocusState().want_capture_mouse = true;
             if (rml_right_panel_.wantsKeyboard())
                 guiFocusState().want_capture_keyboard = true;
@@ -1166,7 +1200,7 @@ namespace lfs::vis::gui {
         rml_viewport_overlay_.render();
 
         applyFrameInputCapture();
-        drawFrameTooltip(RmlPanelHost::consumeFrameTooltip());
+        const std::string frame_tooltip = RmlPanelHost::consumeFrameTooltip();
 
         // Recompute viewport layout
         viewport_layout_ = panel_layout_.computeViewportLayout(
@@ -1210,6 +1244,7 @@ namespace lfs::vis::gui {
 
         RmlPanelHost::flushQueuedForegroundComposites(panel_input.screen_w, panel_input.screen_h);
         sequencer_ui_.compositeOverlays(panel_input.screen_w, panel_input.screen_h);
+        drawFrameTooltip(frame_tooltip, panel_input.screen_w, panel_input.screen_h);
 
         if (menu_bar_ && !ui_hidden_ && rml_menu_bar_.fbo().valid()) {
             const float menu_height = rml_menu_bar_.isOpen()

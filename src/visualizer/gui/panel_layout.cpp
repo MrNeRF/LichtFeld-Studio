@@ -91,10 +91,27 @@ namespace lfs::vis::gui {
         const float scene_h = std::max(min_h, avail_h * scene_panel_ratio_ - splitter_h * 0.5f);
 
         auto& reg = PanelRegistry::instance();
+        const bool float_blocks_scene_header =
+            reg.isPositionOverFloatingPanel(input.mouse_x, input.mouse_y);
+        const auto mask_mouse_input = [&](const PanelInputState& src) {
+            PanelInputState masked = src;
+            masked.mouse_x = -1.0e9f;
+            masked.mouse_y = -1.0e9f;
+            for (auto& v : masked.mouse_clicked)
+                v = false;
+            for (auto& v : masked.mouse_released)
+                v = false;
+            for (auto& v : masked.mouse_down)
+                v = false;
+            masked.mouse_wheel = 0.0f;
+            return masked;
+        };
+        const PanelInputState scene_header_input =
+            float_blocks_scene_header ? mask_mouse_input(input) : input;
         reg.preload_panels_direct(PanelSpace::SceneHeader, content_w, scene_h, draw_ctx,
-                                  -1.0f, -1.0f, &input);
+                                  -1.0f, -1.0f, &scene_header_input);
         reg.draw_panels_direct(PanelSpace::SceneHeader, content_x, content_top,
-                               content_w, scene_h, draw_ctx, &input);
+                               content_w, scene_h, draw_ctx, &scene_header_input);
 
         const auto main_tabs = reg.get_panels_for_space(PanelSpace::MainPanelTab);
 
