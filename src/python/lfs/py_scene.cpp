@@ -5,9 +5,12 @@
 #include "py_scene.hpp"
 #include "core/camera.hpp"
 #include "core/events.hpp"
+#include "core/logger.hpp"
 #include "core/path_utils.hpp"
 #include "core/property_registry.hpp"
 #include "python/python_runtime.hpp"
+#include "visualizer/gui_capabilities.hpp"
+#include "visualizer/scene/scene_manager.hpp"
 #include <nanobind/ndarray.h>
 
 namespace lfs::python {
@@ -90,6 +93,24 @@ namespace lfs::python {
             }
         }
         return m;
+    }
+
+    void apply_node_transform_with_undo(const std::string& name,
+                                        const glm::mat4& transform,
+                                        core::Scene* scene) {
+        if (auto* const scene_manager = get_scene_manager()) {
+            if (auto result = vis::cap::setTransformMatrix(*scene_manager, {name}, transform,
+                                                           "python.scene.set_node_transform");
+                !result) {
+                LOG_WARN("PyScene::set_node_transform fell back to direct update for '{}': {}",
+                         name, result.error());
+                scene_manager->setNodeTransform(name, transform);
+            }
+            return;
+        }
+
+        if (scene)
+            scene->setNodeTransform(name, transform);
     }
 
     // PySceneNode implementation
@@ -445,7 +466,7 @@ namespace lfs::python {
     }
 
     void PyScene::set_node_transform(const std::string& name, nb::ndarray<float, nb::shape<4, 4>> transform) {
-        scene_->setNodeTransform(name, ndarray_to_mat4(transform));
+        apply_node_transform_with_undo(name, ndarray_to_mat4(transform), scene_);
     }
 
     void PyScene::set_node_transform_tensor(const std::string& name, const PyTensor& transform) {
@@ -460,7 +481,7 @@ namespace lfs::python {
                 m[j][i] = data[i * 4 + j];
             }
         }
-        scene_->setNodeTransform(name, m);
+        apply_node_transform_with_undo(name, m, scene_);
     }
 
     std::optional<PySplatData> PyScene::combined_model() {

@@ -18,6 +18,7 @@
 
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <expected>
 #include <future>
 #include <optional>
@@ -149,8 +150,46 @@ namespace lfs::app {
         }
 
         bool looks_like_localization_key(const std::string_view value) {
-            return !value.empty() && value.find('.') != std::string_view::npos &&
-                   value.find_first_of(" \t\r\n") == std::string_view::npos;
+            if (value.empty() || value.find('.') == std::string_view::npos)
+                return false;
+
+            bool has_dot = false;
+            bool segment_has_content = false;
+            for (const unsigned char ch : value) {
+                if (ch == '.') {
+                    if (!segment_has_content)
+                        return false;
+                    has_dot = true;
+                    segment_has_content = false;
+                    continue;
+                }
+
+                if (!(std::islower(ch) || std::isdigit(ch) || ch == '_' || ch == '-'))
+                    return false;
+
+                segment_has_content = true;
+            }
+
+            return has_dot && segment_has_content;
+        }
+
+        vis::VisualizerImpl* as_visualizer_impl(vis::Visualizer* viewer);
+
+        std::string effective_active_tool_id(vis::Visualizer* viewer) {
+            const std::string registry_active_tool_id = vis::UnifiedToolRegistry::instance().getActiveTool();
+            auto* const impl = as_visualizer_impl(viewer);
+            if (!impl)
+                return registry_active_tool_id;
+
+            const auto& editor = impl->getEditorContext();
+            if (editor.hasActiveOperator())
+                return editor.getActiveOperator();
+
+            const std::string editor_tool_id = builtin_tool_id(editor.getActiveTool());
+            if (!editor_tool_id.empty())
+                return editor_tool_id;
+
+            return registry_active_tool_id;
         }
 
         std::string display_menu_label(const std::string_view value) {
@@ -511,6 +550,7 @@ namespace lfs::app {
 
             json payload{
                 {"registry_active_tool_id", active_tool_id},
+                {"effective_active_tool_id", effective_active_tool_id(viewer)},
                 {"active_submode_id", active_submode_id},
                 {"panel_count", panel_count},
                 {"panel_counts", std::move(panel_counts)},
@@ -589,7 +629,7 @@ namespace lfs::app {
 
         std::expected<json, std::string> list_tools_payload(vis::Visualizer* viewer,
                                                             const bool include_poll) {
-            const std::string active_tool_id = vis::UnifiedToolRegistry::instance().getActiveTool();
+            const std::string active_tool_id = effective_active_tool_id(viewer);
             const std::string active_submode_id = vis::UnifiedToolRegistry::instance().getActiveSubmode();
 
             json tools = json::array();
@@ -610,7 +650,7 @@ namespace lfs::app {
         std::expected<json, std::string> describe_tool_payload(vis::Visualizer* viewer,
                                                                const std::string& tool_id,
                                                                const bool include_poll) {
-            const std::string active_tool_id = vis::UnifiedToolRegistry::instance().getActiveTool();
+            const std::string active_tool_id = effective_active_tool_id(viewer);
             const std::string active_submode_id = vis::UnifiedToolRegistry::instance().getActiveSubmode();
 
             for (const auto* tool : vis::UnifiedToolRegistry::instance().getAllTools()) {

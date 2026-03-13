@@ -1344,6 +1344,13 @@ namespace lfs::vis {
             return node->id;
         }
 
+        for (const core::NodeId child_id : node->children) {
+            const auto* const child = scene_.getNodeById(child_id);
+            if (child && child->type == core::NodeType::CROPBOX) {
+                return child_id;
+            }
+        }
+
         // If selected node is a splat or pointcloud, return its cropbox child
         if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) {
             return scene_.getCropBoxForSplat(node->id);
@@ -1413,6 +1420,13 @@ namespace lfs::vis {
 
         if (node->type == core::NodeType::ELLIPSOID) {
             return node->id;
+        }
+
+        for (const core::NodeId child_id : node->children) {
+            const auto* const child = scene_.getNodeById(child_id);
+            if (child && child->type == core::NodeType::ELLIPSOID) {
+                return child_id;
+            }
         }
 
         if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) {

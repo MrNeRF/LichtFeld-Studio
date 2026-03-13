@@ -32,6 +32,7 @@
 #include <unistd.h>
 #else
 #include <processthreadsapi.h>
+#include <windows.h>
 #endif
 
 namespace lfs::vis::editor {
@@ -179,6 +180,71 @@ namespace lfs::vis::editor {
             }
         }
 
+        bool is_executable_file(const fs::path& path) {
+            std::error_code ec;
+            if (!fs::exists(path, ec) || ec) {
+                return false;
+            }
+#ifdef _WIN32
+            return fs::is_regular_file(path, ec);
+#else
+            return ::access(path.c_str(), X_OK) == 0;
+#endif
+        }
+
+        std::optional<std::string> resolve_program_path(const std::string_view program) {
+            if (program.empty()) {
+                return std::nullopt;
+            }
+
+            const fs::path candidate(program);
+            if (candidate.has_parent_path() || candidate.is_absolute()) {
+                if (!is_executable_file(candidate)) {
+                    return std::nullopt;
+                }
+                return lfs::core::path_to_utf8(candidate);
+            }
+
+#ifdef _WIN32
+            const DWORD buffer_size = SearchPathA(nullptr, std::string(program).c_str(), nullptr, 0, nullptr, nullptr);
+            if (buffer_size == 0) {
+                return std::nullopt;
+            }
+
+            std::string buffer(static_cast<size_t>(buffer_size), '\0');
+            if (SearchPathA(nullptr, std::string(program).c_str(), nullptr, buffer_size, buffer.data(), nullptr) == 0) {
+                return std::nullopt;
+            }
+            if (!buffer.empty() && buffer.back() == '\0') {
+                buffer.pop_back();
+            }
+            return buffer;
+#else
+            const char* const path_env = std::getenv("PATH");
+            if (!path_env || !*path_env) {
+                return std::nullopt;
+            }
+
+            std::string_view remaining(path_env);
+            while (true) {
+                const size_t separator = remaining.find(':');
+                const std::string_view entry = remaining.substr(0, separator);
+                const fs::path dir = entry.empty() ? fs::current_path() : fs::path(entry);
+                const fs::path resolved = dir / candidate;
+                if (is_executable_file(resolved)) {
+                    return lfs::core::path_to_utf8(resolved);
+                }
+
+                if (separator == std::string_view::npos) {
+                    break;
+                }
+                remaining.remove_prefix(separator + 1);
+            }
+
+            return std::nullopt;
+#endif
+        }
+
         std::vector<ServerCommand> discover_server_commands() {
             std::vector<ServerCommand> commands;
             std::unordered_set<std::string> seen;
@@ -211,7 +277,7 @@ namespace lfs::vis::editor {
 
             for (const auto relative : DIRECT_EXECUTABLES) {
                 const fs::path candidate = project_root / relative;
-                if (!fs::exists(candidate)) {
+                if (!is_executable_file(candidate)) {
                     continue;
                 }
 
@@ -223,19 +289,25 @@ namespace lfs::vis::editor {
                                   .label = is_basedpyright ? "basedpyright" : "pyright"});
             }
 
-            append_candidate(commands, seen,
-                             {.program = "basedpyright-langserver",
-                              .args = {"--stdio"},
-                              .label = "basedpyright"});
-            append_candidate(commands, seen,
-                             {.program = "pyright-langserver",
-                              .args = {"--stdio"},
-                              .label = "pyright"});
-            append_candidate(commands, seen,
-                             {.program = "uv",
-                              .args = {"tool", "run", "--from", "basedpyright",
-                                       "basedpyright-langserver", "--stdio"},
-                              .label = "basedpyright via uv"});
+            if (const auto resolved = resolve_program_path("basedpyright-langserver")) {
+                append_candidate(commands, seen,
+                                 {.program = *resolved,
+                                  .args = {"--stdio"},
+                                  .label = "basedpyright"});
+            }
+            if (const auto resolved = resolve_program_path("pyright-langserver")) {
+                append_candidate(commands, seen,
+                                 {.program = *resolved,
+                                  .args = {"--stdio"},
+                                  .label = "pyright"});
+            }
+            if (const auto resolved = resolve_program_path("uv")) {
+                append_candidate(commands, seen,
+                                 {.program = *resolved,
+                                  .args = {"tool", "run", "--from", "basedpyright",
+                                           "basedpyright-langserver", "--stdio"},
+                                  .label = "basedpyright via uv"});
+            }
             return commands;
         }
 

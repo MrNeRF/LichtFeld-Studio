@@ -158,7 +158,7 @@ namespace lfs::vis {
         // Transition to Idle
         updateResourceTracking();
 
-        if (!state_machine_.transitionTo(TrainingState::Idle)) {
+        if (getState() != TrainingState::Idle && !state_machine_.transitionTo(TrainingState::Idle)) {
             LOG_WARN("Failed to transition to Idle");
         }
 

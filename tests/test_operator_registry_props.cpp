@@ -17,6 +17,7 @@
 #include "visualizer/gui_capabilities.hpp"
 
 #include <gtest/gtest.h>
+#include <glm/gtc/matrix_transform.hpp>
 #include <memory>
 #include <vector>
 
@@ -141,6 +142,47 @@ TEST_F(OperatorRegistryPropsTest, TransformTranslateOperatorUsesNamedNodeWithout
     ASSERT_TRUE(resolved.has_value());
     ASSERT_EQ(resolved->size(), 1u);
     EXPECT_EQ(resolved->front(), "move_me");
+}
+
+TEST_F(OperatorRegistryPropsTest, ResolveCropBoxIdFindsAttachedChildForParentNodeAndSelection) {
+    auto& scene = scene_manager_->getScene();
+    const auto parent_id = scene.addGroup("crop_parent");
+    ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+
+    const auto cropbox_id = scene.addCropBox("crop_parent_cropbox", parent_id);
+    ASSERT_NE(cropbox_id, lfs::core::NULL_NODE);
+
+    auto explicit_result = lfs::vis::cap::resolveCropBoxId(*scene_manager_, std::string("crop_parent"));
+    ASSERT_TRUE(explicit_result.has_value());
+    EXPECT_EQ(*explicit_result, cropbox_id);
+
+    scene_manager_->selectNode("crop_parent");
+    auto selected_result = lfs::vis::cap::resolveCropBoxId(*scene_manager_, std::nullopt);
+    ASSERT_TRUE(selected_result.has_value());
+    EXPECT_EQ(*selected_result, cropbox_id);
+}
+
+TEST_F(OperatorRegistryPropsTest, SetTransformMatrixCreatesUndoableEntry) {
+    add_node("matrix_target");
+
+    const glm::mat4 transform = glm::translate(glm::mat4(1.0f), glm::vec3(3.0f, -2.0f, 1.5f));
+    auto result = lfs::vis::cap::setTransformMatrix(*scene_manager_, {"matrix_target"}, transform,
+                                                    "python.set_node_transform");
+    ASSERT_TRUE(result.has_value());
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 1u);
+
+    auto components = lfs::vis::cap::decomposeTransform(
+        scene_manager_->getScene().getNodeTransform("matrix_target"));
+    EXPECT_FLOAT_EQ(components.translation.x, 3.0f);
+    EXPECT_FLOAT_EQ(components.translation.y, -2.0f);
+    EXPECT_FLOAT_EQ(components.translation.z, 1.5f);
+
+    lfs::vis::op::undoHistory().undo();
+    components = lfs::vis::cap::decomposeTransform(
+        scene_manager_->getScene().getNodeTransform("matrix_target"));
+    EXPECT_FLOAT_EQ(components.translation.x, 0.0f);
+    EXPECT_FLOAT_EQ(components.translation.y, 0.0f);
+    EXPECT_FLOAT_EQ(components.translation.z, 0.0f);
 }
 
 TEST_F(OperatorRegistryPropsTest, BuiltinOperatorSchemasAreRegistered) {

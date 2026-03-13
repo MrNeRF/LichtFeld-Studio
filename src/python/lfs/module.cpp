@@ -58,6 +58,7 @@
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/core/parameter_manager.hpp"
 #include "visualizer/core/services.hpp"
+#include "visualizer/gui_capabilities.hpp"
 #include "visualizer/gui/panel_registry.hpp"
 #include "visualizer/operator/operator_registry.hpp"
 #include "visualizer/scene/scene_manager.hpp"
@@ -910,7 +911,11 @@ NB_MODULE(lichtfeld, m) {
                 return;
             glm::mat4 m;
             std::memcpy(&m[0][0], mat.data(), 16 * sizeof(float));
-            sm->setSelectedNodeTransform(m);
+            const auto target = sm->getSelectedNodeName();
+            if (auto result = lfs::vis::cap::setTransformMatrix(*sm, {target}, m, "python.set_selected_node_transform"); !result) {
+                LOG_WARN("set_selected_node_transform fell back to direct update: {}", result.error());
+                sm->setSelectedNodeTransform(m);
+            }
         },
         nb::arg("matrix"), "Set transform matrix (16 floats, column-major) of selected node");
 
@@ -1000,7 +1005,10 @@ NB_MODULE(lichtfeld, m) {
                 return;
             glm::mat4 transform;
             std::memcpy(&transform[0][0], mat.data(), 16 * sizeof(float));
-            sm->setNodeTransform(name, transform);
+            if (auto result = lfs::vis::cap::setTransformMatrix(*sm, {name}, transform, "python.set_node_transform"); !result) {
+                LOG_WARN("set_node_transform fell back to direct update for '{}': {}", name, result.error());
+                sm->setNodeTransform(name, transform);
+            }
         },
         nb::arg("name"), nb::arg("matrix"), "Set node transform matrix (16 floats, column-major)");
 

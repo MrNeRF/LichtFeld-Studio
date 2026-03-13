@@ -94,7 +94,8 @@ namespace lfs::mcp {
 
     void ResourceRegistry::register_resource(McpResource resource, ResourceHandler handler) {
         std::lock_guard lock(mutex_);
-        resources_[resource.uri] = RegisteredResource{std::move(resource), std::move(handler)};
+        const std::string uri = resource.uri;
+        resources_[uri] = RegisteredResource{std::move(resource), handler};
     }
 
     void ResourceRegistry::unregister_resource(const std::string& uri) {
@@ -104,7 +105,8 @@ namespace lfs::mcp {
 
     void ResourceRegistry::register_resource_prefix(std::string uri_prefix, ResourceHandler handler) {
         std::lock_guard lock(mutex_);
-        prefix_handlers_[std::move(uri_prefix)] = std::move(handler);
+        const std::string prefix = uri_prefix;
+        prefix_handlers_[prefix] = handler;
     }
 
     void ResourceRegistry::unregister_resource_prefix(const std::string& uri_prefix) {
@@ -131,7 +133,16 @@ namespace lfs::mcp {
             std::lock_guard lock(mutex_);
             if (const auto it = resources_.find(uri); it != resources_.end()) {
                 handler = it->second.handler;
-            } else {
+            }
+            if (!handler) {
+                for (const auto& [key, reg] : resources_) {
+                    if (reg.resource.uri == uri && reg.handler) {
+                        handler = reg.handler;
+                        break;
+                    }
+                }
+            }
+            if (!handler) {
                 size_t best_prefix_len = 0;
                 for (const auto& [prefix, prefix_handler] : prefix_handlers_) {
                     if (!uri.starts_with(prefix) || prefix.size() < best_prefix_len)

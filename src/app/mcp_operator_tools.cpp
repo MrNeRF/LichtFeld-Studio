@@ -443,12 +443,18 @@ namespace lfs::app {
             return;
         }
 
+        auto input_schema = build_input_schema(descriptor->id(), binding.required);
+        auto metadata = build_metadata(binding, *descriptor);
+        std::string tool_name = binding.tool_name;
+        std::string description =
+            binding.description.empty() ? descriptor->description : binding.description;
+
         registry.register_tool(
             mcp::McpTool{
-                .name = binding.tool_name,
-                .description = binding.description.empty() ? descriptor->description : binding.description,
-                .input_schema = build_input_schema(descriptor->id(), binding.required),
-                .metadata = build_metadata(binding, *descriptor),
+                .name = std::move(tool_name),
+                .description = std::move(description),
+                .input_schema = std::move(input_schema),
+                .metadata = std::move(metadata),
             },
             [viewer, binding = std::move(binding)](const json& args) -> json {
                 return post_and_wait(viewer, [viewer, binding, args]() -> json {

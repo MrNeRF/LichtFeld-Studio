@@ -4064,6 +4064,9 @@ namespace lfs::python {
                 };
                 auto it = tool_map.find(id);
                 if (it != tool_map.end()) {
+                    if (auto* const editor = get_editor_context()) {
+                        editor->setActiveTool(it->second);
+                    }
                     lfs::core::events::tools::SetToolbarTool{.tool_mode = static_cast<int>(it->second)}.emit();
                 }
             },

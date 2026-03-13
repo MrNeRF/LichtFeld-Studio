@@ -18,6 +18,12 @@ def list_python_tools() -> list[str]:
 def describe_tools() -> list:
     """Describe all registered shared capabilities/tools"""
 
+def list_resources() -> list[str]:
+    """List all registered MCP resources"""
+
+def read_resource(uri: str) -> list[dict]:
+    """Read one registered MCP resource"""
+
 def call_tool(name: str, args: object | None = None) -> object:
     """Invoke a registered shared capability/tool"""
 

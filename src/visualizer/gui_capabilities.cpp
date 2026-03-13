@@ -19,6 +19,29 @@
 
 namespace lfs::vis::cap {
 
+    namespace {
+
+        core::NodeId find_attached_child_node(const core::Scene& scene,
+                                              const core::NodeId parent_id,
+                                              const core::NodeType type) {
+            if (parent_id == core::NULL_NODE)
+                return core::NULL_NODE;
+
+            const auto* const parent = scene.getNodeById(parent_id);
+            if (!parent)
+                return core::NULL_NODE;
+
+            for (const core::NodeId child_id : parent->children) {
+                const auto* const child = scene.getNodeById(child_id);
+                if (child && child->type == type)
+                    return child_id;
+            }
+
+            return core::NULL_NODE;
+        }
+
+    } // namespace
+
     TransformComponents decomposeTransform(const glm::mat4& matrix) {
         TransformComponents result;
         result.translation = glm::vec3(matrix[3]);
@@ -164,6 +187,24 @@ namespace lfs::vis::cap {
         return {};
     }
 
+    std::expected<void, std::string> setTransformMatrix(SceneManager& scene_manager,
+                                                        const std::vector<std::string>& targets,
+                                                        const glm::mat4& transform,
+                                                        const std::string_view undo_label) {
+        if (targets.empty())
+            return std::unexpected("No transform targets provided");
+
+        auto entry = std::make_unique<vis::op::SceneSnapshot>(scene_manager, std::string(undo_label));
+        entry->captureTransforms(targets);
+
+        for (const auto& name : targets)
+            scene_manager.setNodeTransform(name, transform);
+
+        entry->captureAfter();
+        vis::op::undoHistory().push(std::move(entry));
+        return {};
+    }
+
     std::expected<void, std::string> translateNodes(SceneManager& scene_manager,
                                                     const std::vector<std::string>& targets,
                                                     const glm::vec3& value,
@@ -263,6 +304,10 @@ namespace lfs::vis::cap {
 
             if (node->type == core::NodeType::CROPBOX && node->cropbox)
                 return node->id;
+
+            if (const core::NodeId attached_cropbox = find_attached_child_node(scene, node->id, core::NodeType::CROPBOX);
+                attached_cropbox != core::NULL_NODE)
+                return attached_cropbox;
 
             if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) {
                 const core::NodeId cropbox_id = scene.getCropBoxForSplat(node->id);
@@ -521,6 +566,11 @@ namespace lfs::vis::cap {
 
             if (node->type == core::NodeType::ELLIPSOID && node->ellipsoid)
                 return node->id;
+
+            if (const core::NodeId attached_ellipsoid =
+                    find_attached_child_node(scene, node->id, core::NodeType::ELLIPSOID);
+                attached_ellipsoid != core::NULL_NODE)
+                return attached_ellipsoid;
 
             if (node->type == core::NodeType::SPLAT || node->type == core::NodeType::POINTCLOUD) {
                 const core::NodeId ellipsoid_id = scene.getEllipsoidForSplat(node->id);

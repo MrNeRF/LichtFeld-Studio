@@ -70,20 +70,18 @@ namespace lfs::mcp {
 
     } // namespace detail
 
-    inline std::expected<std::string, std::string> encode_render_tensor_to_base64(core::Tensor image,
-                                                                                   int width = 0,
-                                                                                   int height = 0) {
-        image = image.clone().to(core::Device::CPU).to(core::DataType::Float32);
-        if (image.ndim() == 4)
-            image = image.squeeze(0);
-        if (image.ndim() == 3 && image.shape()[0] <= 4)
-            image = image.permute({1, 2, 0});
-        image = (image.clamp(0, 1) * 255.0f).to(core::DataType::UInt8).contiguous();
-
-        const int src_height = static_cast<int>(image.shape()[0]);
-        const int src_width = static_cast<int>(image.shape()[1]);
-        const int channels = static_cast<int>(image.shape()[2]);
-        assert(channels >= 1 && channels <= 4);
+    inline std::expected<std::string, std::string> encode_pixels_to_base64(const uint8_t* src_pixels,
+                                                                            int src_width,
+                                                                            int src_height,
+                                                                            int channels,
+                                                                            int width = 0,
+                                                                            int height = 0) {
+        if (!src_pixels)
+            return std::unexpected("Pixel buffer is null");
+        if (src_width <= 0 || src_height <= 0)
+            return std::unexpected("Pixel buffer dimensions must be positive");
+        if (channels < 1 || channels > 4)
+            return std::unexpected("Pixel buffer channel count must be between 1 and 4");
 
         const auto size = detail::resolve_capture_size(src_width, src_height, width, height);
         if (!size)
@@ -91,7 +89,7 @@ namespace lfs::mcp {
 
         const auto [out_width, out_height] = *size;
 
-        const uint8_t* pixels = image.ptr<uint8_t>();
+        const uint8_t* pixels = src_pixels;
         std::vector<uint8_t> resized;
         if (out_width != src_width || out_height != src_height) {
             resized = detail::resize_image_nearest(
@@ -113,6 +111,24 @@ namespace lfs::mcp {
             return std::unexpected("PNG encoding failed");
 
         return core::base64_encode(png_buf);
+    }
+
+    inline std::expected<std::string, std::string> encode_render_tensor_to_base64(core::Tensor image,
+                                                                                   int width = 0,
+                                                                                   int height = 0) {
+        image = image.clone().to(core::Device::CPU).to(core::DataType::Float32);
+        if (image.ndim() == 4)
+            image = image.squeeze(0);
+        if (image.ndim() == 3 && image.shape()[0] <= 4)
+            image = image.permute({1, 2, 0});
+        image = (image.clamp(0, 1) * 255.0f).to(core::DataType::UInt8).contiguous();
+
+        const int src_height = static_cast<int>(image.shape()[0]);
+        const int src_width = static_cast<int>(image.shape()[1]);
+        const int channels = static_cast<int>(image.shape()[2]);
+        assert(channels >= 1 && channels <= 4);
+
+        return encode_pixels_to_base64(image.ptr<uint8_t>(), src_width, src_height, channels, width, height);
     }
 
 } // namespace lfs::mcp

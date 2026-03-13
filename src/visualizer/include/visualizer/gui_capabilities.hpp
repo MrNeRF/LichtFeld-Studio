@@ -89,6 +89,11 @@ namespace lfs::vis::cap {
         const std::optional<glm::vec3>& rotation,
         const std::optional<glm::vec3>& scale,
         std::string_view undo_label = "transform.set");
+    [[nodiscard]] LFS_VIS_API std::expected<void, std::string> setTransformMatrix(
+        SceneManager& scene_manager,
+        const std::vector<std::string>& targets,
+        const glm::mat4& transform,
+        std::string_view undo_label = "transform.set_matrix");
     [[nodiscard]] LFS_VIS_API std::expected<void, std::string> translateNodes(
         SceneManager& scene_manager,
         const std::vector<std::string>& targets,

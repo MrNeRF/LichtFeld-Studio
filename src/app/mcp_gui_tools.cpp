@@ -37,6 +37,9 @@
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/visualizer.hpp"
+#include "visualizer/visualizer_impl.hpp"
+
+#include <glad/glad.h>
 
 #include <algorithm>
 #include <atomic>
@@ -99,6 +102,93 @@ namespace lfs::app {
             } catch (const std::exception& e) {
                 return std::unexpected(std::string("Render failed: ") + e.what());
             }
+        }
+
+        std::expected<std::string, std::string> capture_live_viewport_to_base64(
+            vis::Visualizer* viewer,
+            int width = 0,
+            int height = 0) {
+            auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
+            if (!viewer_impl)
+                return std::unexpected("Live viewport capture requires a GUI visualizer");
+
+            auto* const gui_manager = viewer_impl->getGuiManager();
+            auto* const window_manager = viewer_impl->getWindowManager();
+            if (!gui_manager || !window_manager)
+                return std::unexpected("Viewport capture is not initialized");
+
+            const glm::vec2 viewport_pos = gui_manager->getViewportPos();
+            const glm::vec2 viewport_size = gui_manager->getViewportSize();
+            const glm::ivec2 window_size = window_manager->getWindowSize();
+            const glm::ivec2 framebuffer_size = window_manager->getFramebufferSize();
+            if (window_size.x <= 0 || window_size.y <= 0 ||
+                framebuffer_size.x <= 0 || framebuffer_size.y <= 0) {
+                return std::unexpected("Window framebuffer size is unavailable");
+            }
+
+            const float scale_x = static_cast<float>(framebuffer_size.x) / static_cast<float>(window_size.x);
+            const float scale_y = static_cast<float>(framebuffer_size.y) / static_cast<float>(window_size.y);
+
+            const int capture_x = std::max(0, static_cast<int>(viewport_pos.x * scale_x));
+            const int capture_y_top = std::max(0, static_cast<int>(viewport_pos.y * scale_y));
+            const int capture_width = std::min(
+                framebuffer_size.x - capture_x,
+                std::max(1, static_cast<int>(viewport_size.x * scale_x)));
+            const int capture_height = std::min(
+                framebuffer_size.y - capture_y_top,
+                std::max(1, static_cast<int>(viewport_size.y * scale_y)));
+            if (capture_width <= 0 || capture_height <= 0)
+                return std::unexpected("Viewport capture size is empty");
+
+            const int capture_y_bottom = framebuffer_size.y - capture_y_top - capture_height;
+            if (capture_y_bottom < 0)
+                return std::unexpected("Viewport capture bounds are invalid");
+
+            std::vector<uint8_t> pixels(static_cast<size_t>(capture_width) * capture_height * 4u);
+
+            GLint previous_read_fbo = 0;
+            GLint previous_read_buffer = GL_BACK;
+            GLint previous_pack_alignment = 4;
+            glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read_fbo);
+            glGetIntegerv(GL_READ_BUFFER, &previous_read_buffer);
+            glGetIntegerv(GL_PACK_ALIGNMENT, &previous_pack_alignment);
+
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+            glReadBuffer(GL_FRONT);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glFinish();
+            glReadPixels(
+                capture_x,
+                capture_y_bottom,
+                capture_width,
+                capture_height,
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                pixels.data());
+            const GLenum read_error = glGetError();
+
+            glPixelStorei(GL_PACK_ALIGNMENT, previous_pack_alignment);
+            glReadBuffer(static_cast<GLenum>(previous_read_buffer));
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previous_read_fbo));
+
+            if (read_error != GL_NO_ERROR)
+                return std::unexpected("glReadPixels failed while capturing the live viewport");
+
+            const size_t row_bytes = static_cast<size_t>(capture_width) * 4u;
+            std::vector<uint8_t> flipped(pixels.size());
+            for (int row = 0; row < capture_height; ++row) {
+                const size_t src_offset = static_cast<size_t>(capture_height - 1 - row) * row_bytes;
+                const size_t dst_offset = static_cast<size_t>(row) * row_bytes;
+                std::copy_n(pixels.data() + src_offset, row_bytes, flipped.data() + dst_offset);
+            }
+
+            return mcp::encode_pixels_to_base64(
+                flipped.data(),
+                capture_width,
+                capture_height,
+                4,
+                width,
+                height);
         }
 
         json selection_state_json(core::Scene& scene, const int max_indices = 100000) {
@@ -4262,11 +4352,26 @@ namespace lfs::app {
             McpResource{
                 .uri = "lichtfeld://render/current",
                 .name = "Current Render",
-                .description = "Base64-encoded PNG render from the current GUI scene using camera 0",
+                .description = "Base64-encoded PNG capture of the current GUI viewport",
                 .mime_type = "image/png"},
             [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
                 auto result = post_and_wait(viewer, [viewer]() {
-                    return render_scene_to_base64(viewer->getScene(), 0);
+                    return capture_live_viewport_to_base64(viewer);
+                });
+                if (!result)
+                    return std::unexpected(result.error());
+
+                return single_blob_resource(uri, "image/png", *result);
+            });
+
+        registry.register_resource_prefix(
+            "lichtfeld://render/",
+            [viewer](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
+                if (uri != "lichtfeld://render/current")
+                    return std::unexpected("Unknown resource URI: " + uri);
+
+                auto result = post_and_wait(viewer, [viewer]() {
+                    return capture_live_viewport_to_base64(viewer);
                 });
                 if (!result)
                     return std::unexpected(result.error());
