@@ -80,8 +80,8 @@ namespace lfs::mcp {
         mutable std::mutex mutex_;
     };
 
-    void register_core_tools();
-    void register_core_resources();
-    void register_builtin_tools();
+    LFS_MCP_API void register_core_tools();
+    LFS_MCP_API void register_core_resources();
+    LFS_MCP_API void register_builtin_tools();
 
 } // namespace lfs::mcp

@@ -118,6 +118,6 @@ namespace lfs::mcp {
         mutable std::mutex selection_mutex_;
     };
 
-    void register_scene_tools();
+    LFS_MCP_API void register_scene_tools();
 
 } // namespace lfs::mcp
