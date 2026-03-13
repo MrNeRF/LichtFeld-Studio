@@ -82,7 +82,7 @@ Join our growing community for discussions, support, and updates:
 ## Installation
 Find out how to install in our [LichtFeld Studio Wiki](https://github.com/MrNeRF/LichtFeld-Studio/wiki/).  
 
-Pre-built binaries for Windows are available as [releases](https://github.com/MrNeRF/LichtFeld-Studio/releases) and [nightly bulds](https://github.com/MrNeRF/LichtFeld-Studio/releases/tag/nightly) and are for users who would like to try out the software.  
+Pre-built binaries for Windows are available as [releases](https://github.com/MrNeRF/LichtFeld-Studio/releases) and [nightly builds](https://github.com/MrNeRF/LichtFeld-Studio/releases/tag/nightly) and are for users who would like to try out the software.  
 Simply download, unzip and run the .exe in the bin folder, no compilation necessary.  
 Make sure your Nvidia driver version is 570 or newer.
 
