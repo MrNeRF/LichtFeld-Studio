@@ -49,6 +49,14 @@ namespace lfs::vis {
                 std::lock_guard lock(export_state_.mutex);
                 return export_state_.stage;
             }
+            [[nodiscard]] std::string getExportError() const {
+                std::lock_guard lock(export_state_.mutex);
+                return export_state_.error;
+            }
+            [[nodiscard]] std::filesystem::path getExportPath() const {
+                std::lock_guard lock(export_state_.mutex);
+                return export_state_.path;
+            }
             [[nodiscard]] lfs::core::ExportFormat getExportFormat() const {
                 std::lock_guard lock(export_state_.mutex);
                 return export_state_.format;
@@ -105,6 +113,14 @@ namespace lfs::vis {
                 std::lock_guard lock(video_export_state_.mutex);
                 return video_export_state_.stage;
             }
+            [[nodiscard]] std::string getVideoExportError() const {
+                std::lock_guard lock(video_export_state_.mutex);
+                return video_export_state_.error;
+            }
+            [[nodiscard]] std::filesystem::path getVideoExportPath() const {
+                std::lock_guard lock(video_export_state_.mutex);
+                return video_export_state_.path;
+            }
             void cancelVideoExport();
 
             // Mesh to Splat conversion
@@ -121,6 +137,10 @@ namespace lfs::vis {
             [[nodiscard]] std::string getMesh2SplatError() const {
                 std::lock_guard lock(mesh2splat_state_.mutex);
                 return mesh2splat_state_.error;
+            }
+            [[nodiscard]] std::string getMesh2SplatSourceName() const {
+                std::lock_guard lock(mesh2splat_state_.mutex);
+                return mesh2splat_state_.source_name;
             }
 
         private:
@@ -142,6 +162,7 @@ namespace lfs::vis {
                 lfs::core::ExportFormat format{lfs::core::ExportFormat::PLY};
                 std::string stage;
                 std::string error;
+                std::filesystem::path path;
                 mutable std::mutex mutex;
                 std::optional<std::jthread> thread;
             };
@@ -155,6 +176,7 @@ namespace lfs::vis {
                 std::atomic<int> total_frames{0};
                 std::string stage;
                 std::string error;
+                std::filesystem::path path;
                 mutable std::mutex mutex;
                 std::optional<std::jthread> thread;
             };

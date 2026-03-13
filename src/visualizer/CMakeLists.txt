@@ -119,6 +119,7 @@ add_library(lfs_visualizer ${LFS_VIS_LIB_TYPE}
         operator/ops/align_ops.cpp
         operator/ops/brush_ops.cpp
         operator/ops/edit_ops.cpp
+        operator/ops/scene_ops.cpp
         operator/ops/selection_ops.cpp
         operator/ops/transform_ops.cpp
 

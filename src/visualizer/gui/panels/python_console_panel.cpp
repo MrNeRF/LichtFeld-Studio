@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "gui/panels/python_console_panel.hpp"
+#include "core/events.hpp"
 #include "gui/editor/python_editor.hpp"
 #include "gui/gui_focus_state.hpp"
 #include "gui/terminal/terminal_widget.hpp"
@@ -348,9 +349,21 @@ namespace lfs::vis::gui::panels {
         clear();
         setActiveTab(0);
 
+        const auto script_path = script_path_;
+        const auto code_chars = code.size();
+
         script_running_ = true;
         script_thread_id_ = 0;
-        script_thread_ = std::thread([this, code]() {
+        core::events::state::EditorScriptStarted{
+            .path = script_path,
+            .code_chars = code_chars,
+        }
+            .emit();
+
+        script_thread_ = std::thread([this, code, script_path, code_chars]() {
+            bool success = true;
+            bool interrupted = false;
+
             {
                 const python::GilAcquire gil;
 
@@ -366,12 +379,23 @@ namespace lfs::vis::gui::panels {
                 lfs::python::SceneContextGuard ctx(scene);
                 const int result = PyRun_SimpleString(code.c_str());
                 if (result != 0) {
+                    success = false;
+                    interrupted = PyErr_ExceptionMatches(PyExc_KeyboardInterrupt);
                     PyErr_Print();
                 }
 
                 script_thread_id_ = 0;
             }
             script_running_ = false;
+
+            core::events::state::EditorScriptCompleted{
+                .path = script_path,
+                .code_chars = code_chars,
+                .output_chars = getOutputText().size(),
+                .success = success,
+                .interrupted = interrupted,
+            }
+                .emit();
         });
     }
 

@@ -6,12 +6,12 @@
 #include "core/services.hpp"
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
+#include "operation/undo_history.hpp"
 #include "operator/operator_properties.hpp"
 #include "operator/operator_registry.hpp"
-#include "operator/property_schema.hpp"
-#include "operation/undo_history.hpp"
 #include "operator/ops/edit_ops.hpp"
 #include "operator/ops/transform_ops.hpp"
+#include "operator/property_schema.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "visualizer/gui_capabilities.hpp"
@@ -155,4 +155,89 @@ TEST_F(OperatorRegistryPropsTest, BuiltinOperatorSchemasAreRegistered) {
     ASSERT_EQ(translate_schema->size(), 2u);
     EXPECT_EQ(translate_schema->at(0).name, "node");
     EXPECT_EQ(translate_schema->at(1).name, "value");
+}
+
+TEST_F(OperatorRegistryPropsTest, CallbackInvokeReleasesRegistryMutexDuringInvoke) {
+    bool callback_called = false;
+    bool mutex_was_unlocked = false;
+
+    lfs::vis::op::operators().registerCallbackOperator(
+        lfs::vis::op::OperatorDescriptor{
+            .python_class_id = "test.callback.unlock",
+            .label = "Test Callback Unlock",
+            .description = "Regression test callback operator",
+        },
+        lfs::vis::op::CallbackOperator{
+            .poll = [] { return true; },
+            .invoke =
+                [&](lfs::vis::op::OperatorProperties&) {
+                    callback_called = true;
+                    mutex_was_unlocked = lfs::vis::op::operators().canLockMutexForTest();
+                    return lfs::vis::op::OperatorResult::FINISHED;
+                },
+        });
+
+    const auto result = lfs::vis::op::operators().invoke("test.callback.unlock");
+    ASSERT_TRUE(result.is_finished());
+    EXPECT_TRUE(callback_called);
+    EXPECT_TRUE(mutex_was_unlocked);
+}
+
+TEST_F(OperatorRegistryPropsTest, CallbackInvokeCanSelfUnregisterWhileEnteringModal) {
+    constexpr const char* kOperatorId = "test.callback.self_unregister.invoke";
+
+    lfs::vis::op::operators().registerCallbackOperator(
+        lfs::vis::op::OperatorDescriptor{
+            .python_class_id = kOperatorId,
+            .label = "Self Unregister Invoke",
+            .description = "Regression test for callback invoke self-unregister",
+        },
+        lfs::vis::op::CallbackOperator{
+            .invoke =
+                [](lfs::vis::op::OperatorProperties&) {
+                    lfs::vis::op::operators().unregisterOperator("test.callback.self_unregister.invoke");
+                    return lfs::vis::op::OperatorResult::RUNNING_MODAL;
+                },
+            .modal =
+                [](const lfs::vis::op::ModalEvent&, lfs::vis::op::OperatorProperties&) {
+                    return lfs::vis::op::OperatorResult::CANCELLED;
+                },
+        });
+
+    const auto result = lfs::vis::op::operators().invoke(kOperatorId);
+    EXPECT_EQ(result.status, lfs::vis::op::OperatorResult::RUNNING_MODAL);
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent({}), lfs::vis::op::OperatorResult::CANCELLED);
+}
+
+TEST_F(OperatorRegistryPropsTest, CallbackModalCanSelfUnregisterWithoutDoubleCancel) {
+    constexpr const char* kOperatorId = "test.callback.self_unregister.modal";
+    int cancel_count = 0;
+
+    lfs::vis::op::operators().registerCallbackOperator(
+        lfs::vis::op::OperatorDescriptor{
+            .python_class_id = kOperatorId,
+            .label = "Self Unregister Modal",
+            .description = "Regression test for callback modal self-unregister",
+        },
+        lfs::vis::op::CallbackOperator{
+            .invoke =
+                [](lfs::vis::op::OperatorProperties&) {
+                    return lfs::vis::op::OperatorResult::RUNNING_MODAL;
+                },
+            .modal =
+                [](const lfs::vis::op::ModalEvent&, lfs::vis::op::OperatorProperties&) {
+                    lfs::vis::op::operators().unregisterOperator("test.callback.self_unregister.modal");
+                    return lfs::vis::op::OperatorResult::CANCELLED;
+                },
+            .cancel =
+                [&cancel_count] {
+                    ++cancel_count;
+                },
+        });
+
+    const auto invoke_result = lfs::vis::op::operators().invoke(kOperatorId);
+    ASSERT_EQ(invoke_result.status, lfs::vis::op::OperatorResult::RUNNING_MODAL);
+
+    EXPECT_EQ(lfs::vis::op::operators().dispatchModalEvent({}), lfs::vis::op::OperatorResult::CANCELLED);
+    EXPECT_EQ(cancel_count, 1);
 }

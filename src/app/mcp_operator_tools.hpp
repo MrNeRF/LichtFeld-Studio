@@ -18,7 +18,7 @@ namespace lfs::vis {
 namespace lfs::vis::op {
     class OperatorProperties;
     struct OperatorReturnValue;
-}
+} // namespace lfs::vis::op
 
 namespace lfs::app {
 
@@ -43,5 +43,11 @@ namespace lfs::app {
     void register_gui_operator_tool(mcp::ToolRegistry& registry,
                                     vis::Visualizer* viewer,
                                     GuiOperatorToolBinding binding);
+
+    void register_generic_gui_operator_tools(mcp::ToolRegistry& registry,
+                                             vis::Visualizer* viewer);
+
+    void register_generic_gui_operator_resources(mcp::ResourceRegistry& registry,
+                                                 vis::Visualizer* viewer);
 
 } // namespace lfs::app

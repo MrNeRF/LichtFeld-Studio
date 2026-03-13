@@ -740,6 +740,81 @@ namespace lfs::python {
             return schemas;
         }
 
+        void apply_operator_props_to_python_instance(const std::string& operator_id,
+                                                     const vis::op::OperatorProperties& props,
+                                                     nb::object instance) {
+            const auto* schemas = vis::op::propertySchemas().getSchema(operator_id);
+            if (!schemas || !instance.is_valid() || instance.is_none()) {
+                return;
+            }
+
+            for (const auto& schema : *schemas) {
+                if (!props.has(schema.name)) {
+                    continue;
+                }
+
+                try {
+                    switch (schema.type) {
+                    case vis::op::PropertyType::BOOL:
+                        if (const auto value = props.get<bool>(schema.name)) {
+                            nb::setattr(instance, schema.name.c_str(), nb::bool_(*value));
+                        }
+                        break;
+                    case vis::op::PropertyType::INT:
+                        if (const auto value = props.get<int>(schema.name)) {
+                            nb::setattr(instance, schema.name.c_str(), nb::int_(*value));
+                        }
+                        break;
+                    case vis::op::PropertyType::FLOAT:
+                        if (const auto value = props.get<float>(schema.name)) {
+                            nb::setattr(instance, schema.name.c_str(), nb::float_(*value));
+                        }
+                        break;
+                    case vis::op::PropertyType::STRING:
+                    case vis::op::PropertyType::ENUM:
+                        if (const auto value = props.get<std::string>(schema.name)) {
+                            nb::setattr(instance, schema.name.c_str(), nb::str(value->c_str()));
+                        }
+                        break;
+                    case vis::op::PropertyType::FLOAT_VECTOR: {
+                        nb::list values;
+                        if (schema.size && *schema.size == 3) {
+                            if (const auto value = props.get<glm::vec3>(schema.name)) {
+                                values.append(nb::float_(value->x));
+                                values.append(nb::float_(value->y));
+                                values.append(nb::float_(value->z));
+                                nb::setattr(instance, schema.name.c_str(), values);
+                            }
+                        } else if (const auto value = props.get<std::vector<float>>(schema.name)) {
+                            for (float item : *value) {
+                                values.append(nb::float_(item));
+                            }
+                            nb::setattr(instance, schema.name.c_str(), values);
+                        }
+                        break;
+                    }
+                    case vis::op::PropertyType::INT_VECTOR: {
+                        if (const auto value = props.get<std::vector<int>>(schema.name)) {
+                            nb::list values;
+                            for (int item : *value) {
+                                values.append(nb::int_(item));
+                            }
+                            nb::setattr(instance, schema.name.c_str(), values);
+                        }
+                        break;
+                    }
+                    case vis::op::PropertyType::TENSOR:
+                        LOG_DEBUG("Skipping tensor property '{}' for Python operator '{}'",
+                                  schema.name, operator_id);
+                        break;
+                    }
+                } catch (const std::exception& e) {
+                    LOG_ERROR("Failed to assign Python operator property '{}.{}': {}",
+                              operator_id, schema.name, e.what());
+                }
+            }
+        }
+
         void register_python_operator_to_cpp(nb::object cls) {
             std::string id = get_class_id(cls);
             std::string label;
@@ -801,7 +876,7 @@ namespace lfs::python {
             }
 
             if (has_invoke || has_execute) {
-                callbacks.invoke = [class_id = id, has_invoke](vis::op::OperatorProperties& /*props*/) -> vis::op::OperatorResult {
+                callbacks.invoke = [class_id = id, has_invoke](vis::op::OperatorProperties& props) -> vis::op::OperatorResult {
                     nb::gil_scoped_acquire gil;
                     nb::object instance = get_python_operator_instance(class_id);
                     if (!instance.is_valid() || instance.is_none()) {
@@ -809,6 +884,7 @@ namespace lfs::python {
                         return vis::op::OperatorResult::CANCELLED;
                     }
                     try {
+                        apply_operator_props_to_python_instance(class_id, props, instance);
                         nb::object result;
                         if (has_invoke) {
                             PyEvent py_event;
@@ -3492,7 +3568,8 @@ namespace lfs::python {
                                  {0, 0}, {u1, v1}, t, {0, 0, 0, 0});
                 },
                 nb::arg("texture"), nb::arg("size"), nb::arg("tint") = nb::none(), "Draw a DynamicTexture with automatic UV scaling")
-            .def("image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
+            .def(
+                "image_tensor", [](PyUILayout& /*self*/, const std::string& label, PyTensor& tensor, std::tuple<float, float> size, nb::object tint) {
                     PyDynamicTexture* tex_ptr = nullptr;
                     {
                         std::lock_guard lock(g_dynamic_textures_mutex);

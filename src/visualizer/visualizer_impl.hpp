@@ -25,6 +25,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 struct SDL_Window;
@@ -61,6 +62,10 @@ namespace lfs::vis {
         void clearScene() override;
         core::Scene& getScene() override { return scene_manager_->getScene(); }
         bool postWork(WorkItem work) override;
+        [[nodiscard]] bool isOnViewerThread() const override {
+            return std::this_thread::get_id() == viewer_thread_id_;
+        }
+        [[nodiscard]] bool acceptsPostedWork() const override;
         void setShutdownRequestedCallback(std::function<void()> callback) override;
         std::expected<void, std::string> startTraining() override;
         std::expected<std::filesystem::path, std::string> saveCheckpoint(
@@ -203,8 +208,9 @@ namespace lfs::vis {
         // Centralized editor state
         EditorContext editor_context_;
 
-        std::mutex work_queue_mutex_;
+        mutable std::mutex work_queue_mutex_;
         std::vector<WorkItem> work_queue_;
+        std::thread::id viewer_thread_id_;
         bool accepting_work_ = true;
         bool shutdown_started_ = false;
 

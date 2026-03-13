@@ -4,10 +4,14 @@
 #define GLM_ENABLE_EXPERIMENTAL
 
 #include "app/mcp_gui_tools.hpp"
+#include "app/mcp_app_utils.hpp"
+#include "app/mcp_event_handlers.hpp"
 #include "app/mcp_operator_tools.hpp"
+#include "app/mcp_runtime_tools.hpp"
+#include "app/mcp_ui_registry_tools.hpp"
 
-#include "core/event_bridge/scoped_handler.hpp"
 #include "core/event_bridge/command_center_bridge.hpp"
+#include "core/event_bridge/scoped_handler.hpp"
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/path_utils.hpp"
@@ -16,34 +20,35 @@
 #include "core/tensor.hpp"
 #include "io/exporter.hpp"
 #include "mcp/llm_client.hpp"
+#include "mcp/mcp_tools.hpp"
 #include "mcp/render_capture_utils.hpp"
 #include "mcp/shared_scene_tools.hpp"
-#include "mcp/mcp_tools.hpp"
 #include "python/python_runtime.hpp"
 #include "python/runner.hpp"
 #include "rendering/gs_rasterizer_tensor.hpp"
-#include "visualizer/gui/html_viewer_export.hpp"
 #include "sequencer/keyframe.hpp"
+#include "visualizer/gui/html_viewer_export.hpp"
 #include "visualizer/gui/panels/python_console_panel.hpp"
+#include "visualizer/gui_capabilities.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/operation/undo_entry.hpp"
 #include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_properties.hpp"
-#include "visualizer/gui_capabilities.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/visualizer.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <atomic>
 #include <cassert>
+#include <chrono>
 #include <deque>
 #include <future>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -62,15 +67,6 @@ namespace lfs::app {
     using mcp::ToolRegistry;
 
     namespace {
-
-        template <typename T>
-        struct dependent_false : std::false_type {};
-
-        template <typename T>
-        struct is_string_expected : std::false_type {};
-
-        template <typename T>
-        struct is_string_expected<std::expected<T, std::string>> : std::true_type {};
 
         using TransformComponents = vis::cap::TransformComponents;
 
@@ -105,27 +101,6 @@ namespace lfs::app {
             }
         }
 
-        std::expected<std::vector<McpResourceContent>, std::string> single_json_resource(
-            const std::string& uri,
-            json payload) {
-            return std::vector<McpResourceContent>{
-                McpResourceContent{
-                    .uri = uri,
-                    .mime_type = "application/json",
-                    .content = payload.dump(2)}};
-        }
-
-        std::expected<std::vector<McpResourceContent>, std::string> single_blob_resource(
-            const std::string& uri,
-            const std::string& mime_type,
-            std::string base64_payload) {
-            return std::vector<McpResourceContent>{
-                McpResourceContent{
-                    .uri = uri,
-                    .mime_type = mime_type,
-                    .content = std::move(base64_payload)}};
-        }
-
         json selection_state_json(core::Scene& scene, const int max_indices = 100000) {
             auto mask = scene.getSelectionMask();
             if (!mask)
@@ -147,56 +122,6 @@ namespace lfs::app {
                 {"selected_count", count},
                 {"indices", indices},
                 {"truncated", count > static_cast<int64_t>(indices.size())}};
-        }
-
-        template <typename R>
-        R make_post_failure(const std::string& error) {
-            if constexpr (std::is_same_v<R, json>) {
-                return json{{"error", error}};
-            } else if constexpr (is_string_expected<R>::value) {
-                return std::unexpected(error);
-            } else {
-                static_assert(dependent_false<R>::value, "Unsupported post_and_wait return type");
-            }
-        }
-
-        template <typename F>
-        auto post_and_wait(vis::Visualizer* viewer, F&& fn) {
-            using R = std::invoke_result_t<F>;
-            constexpr const char* shutdown_error = "Viewer is shutting down";
-
-            auto task = std::make_shared<std::decay_t<F>>(std::forward<F>(fn));
-            auto promise = std::make_shared<std::promise<R>>();
-            auto completed = std::make_shared<std::atomic_bool>(false);
-            auto future = promise->get_future();
-
-            auto finish_with_value = [promise, completed](auto&& value) mutable {
-                if (!completed->exchange(true))
-                    promise->set_value(std::forward<decltype(value)>(value));
-            };
-            auto finish_with_exception = [promise, completed](std::exception_ptr error) {
-                if (!completed->exchange(true))
-                    promise->set_exception(std::move(error));
-            };
-
-            const bool posted = viewer->postWork(vis::Visualizer::WorkItem{
-                .run =
-                    [task, finish_with_value, finish_with_exception]() mutable {
-                        try {
-                            finish_with_value(std::invoke(*task));
-                        } catch (...) {
-                            finish_with_exception(std::current_exception());
-                        }
-                    },
-                .cancel =
-                    [finish_with_value]() mutable {
-                        finish_with_value(make_post_failure<R>(shutdown_error));
-                    }});
-
-            if (!posted)
-                return make_post_failure<R>(shutdown_error);
-
-            return future.get();
         }
 
         json vec3_to_json(const glm::vec3& value) {
@@ -358,6 +283,74 @@ namespace lfs::app {
             };
         }
 
+        struct EditorOutputObservation {
+            std::string text;
+            int64_t total_chars = 0;
+            bool running = false;
+            bool completed = false;
+            bool timed_out = false;
+            bool saw_output = false;
+        };
+
+        json editor_output_json(const std::string& text, const int max_chars, const bool tail = true) {
+            auto payload = text_payload_json(text, max_chars, tail);
+            payload["total_chars"] = static_cast<int64_t>(text.size());
+            return payload;
+        }
+
+        EditorOutputObservation observe_editor_output(vis::gui::panels::PythonConsoleState& console,
+                                                      const bool wait_for_completion,
+                                                      const bool wait_for_output,
+                                                      const int timeout_ms) {
+            using Clock = std::chrono::steady_clock;
+
+            constexpr auto POLL_INTERVAL = std::chrono::milliseconds(25);
+            const int bounded_timeout_ms = std::max(timeout_ms, 0);
+            const auto deadline = Clock::now() + std::chrono::milliseconds(bounded_timeout_ms);
+
+            EditorOutputObservation observation;
+            while (true) {
+                observation.text = console.getOutputText();
+                observation.total_chars = static_cast<int64_t>(observation.text.size());
+                observation.running = console.isScriptRunning();
+                observation.completed = !observation.running;
+                observation.saw_output = !observation.text.empty();
+
+                const bool output_ready = !wait_for_output || observation.saw_output || observation.completed;
+                const bool completion_ready = !wait_for_completion || observation.completed;
+                if (output_ready && completion_ready) {
+                    observation.timed_out = false;
+                    return observation;
+                }
+
+                if (bounded_timeout_ms == 0 || Clock::now() >= deadline) {
+                    observation.timed_out = true;
+                    return observation;
+                }
+
+                std::this_thread::sleep_for(POLL_INTERVAL);
+            }
+        }
+
+        json editor_output_response_json(vis::gui::panels::PythonConsoleState& console,
+                                         const bool wait_for_completion,
+                                         const bool wait_for_output,
+                                         const int timeout_ms,
+                                         const int output_max_chars,
+                                         const bool output_tail) {
+            auto observation = observe_editor_output(
+                console, wait_for_completion, wait_for_output, timeout_ms);
+
+            json response{
+                {"running", observation.running},
+                {"completed", observation.completed},
+                {"timed_out", observation.timed_out},
+                {"saw_output", observation.saw_output},
+            };
+            response["output"] = editor_output_json(observation.text, output_max_chars, output_tail);
+            return response;
+        }
+
         std::expected<std::vector<std::string>, std::string> resolve_transform_targets(
             const vis::SceneManager& scene_manager,
             const std::optional<std::string>& requested_node) {
@@ -445,16 +438,16 @@ namespace lfs::app {
             return json{
                 {"success", true},
                 {"camera", {
-                    {"eye", json::array({info.translation[0], info.translation[1], info.translation[2]})},
-                    {"target", json::array({info.pivot[0], info.pivot[1], info.pivot[2]})},
-                    {"pivot", json::array({info.pivot[0], info.pivot[1], info.pivot[2]})},
-                    {"up", json::array({info.rotation[1], info.rotation[4], info.rotation[7]})},
-                    {"forward", json::array({info.rotation[2], info.rotation[5], info.rotation[8]})},
-                    {"rotation_matrix", rotation},
-                    {"width", info.width},
-                    {"height", info.height},
-                    {"fov_degrees", info.fov},
-                }},
+                               {"eye", json::array({info.translation[0], info.translation[1], info.translation[2]})},
+                               {"target", json::array({info.pivot[0], info.pivot[1], info.pivot[2]})},
+                               {"pivot", json::array({info.pivot[0], info.pivot[1], info.pivot[2]})},
+                               {"up", json::array({info.rotation[1], info.rotation[4], info.rotation[7]})},
+                               {"forward", json::array({info.rotation[2], info.rotation[5], info.rotation[8]})},
+                               {"rotation_matrix", rotation},
+                               {"width", info.width},
+                               {"height", info.height},
+                               {"fov_degrees", info.fov},
+                           }},
             };
         }
 
@@ -462,81 +455,81 @@ namespace lfs::app {
             return json{
                 {"success", true},
                 {"settings", {
-                    {"focal_length_mm", settings.focal_length_mm},
-                    {"scaling_modifier", settings.scaling_modifier},
-                    {"antialiasing", settings.antialiasing},
-                    {"mip_filter", settings.mip_filter},
-                    {"sh_degree", settings.sh_degree},
-                    {"render_scale", settings.render_scale},
-                    {"show_crop_box", settings.show_crop_box},
-                    {"use_crop_box", settings.use_crop_box},
-                    {"show_ellipsoid", settings.show_ellipsoid},
-                    {"use_ellipsoid", settings.use_ellipsoid},
-                    {"desaturate_unselected", settings.desaturate_unselected},
-                    {"desaturate_cropping", settings.desaturate_cropping},
-                    {"crop_filter_for_selection", settings.crop_filter_for_selection},
-                    {"apply_appearance_correction", settings.apply_appearance_correction},
-                    {"ppisp_mode", settings.ppisp_mode},
-                    {"ppisp", {
-                        {"exposure_offset", settings.ppisp.exposure_offset},
-                        {"vignette_enabled", settings.ppisp.vignette_enabled},
-                        {"vignette_strength", settings.ppisp.vignette_strength},
-                        {"wb_temperature", settings.ppisp.wb_temperature},
-                        {"wb_tint", settings.ppisp.wb_tint},
-                        {"color_red_x", settings.ppisp.color_red_x},
-                        {"color_red_y", settings.ppisp.color_red_y},
-                        {"color_green_x", settings.ppisp.color_green_x},
-                        {"color_green_y", settings.ppisp.color_green_y},
-                        {"color_blue_x", settings.ppisp.color_blue_x},
-                        {"color_blue_y", settings.ppisp.color_blue_y},
-                        {"gamma_multiplier", settings.ppisp.gamma_multiplier},
-                        {"gamma_red", settings.ppisp.gamma_red},
-                        {"gamma_green", settings.ppisp.gamma_green},
-                        {"gamma_blue", settings.ppisp.gamma_blue},
-                        {"crf_toe", settings.ppisp.crf_toe},
-                        {"crf_shoulder", settings.ppisp.crf_shoulder},
-                    }},
-                    {"background_color", json::array({settings.background_color[0], settings.background_color[1], settings.background_color[2]})},
-                    {"show_coord_axes", settings.show_coord_axes},
-                    {"axes_size", settings.axes_size},
-                    {"axes_visibility", json::array({settings.axes_visibility[0], settings.axes_visibility[1], settings.axes_visibility[2]})},
-                    {"show_grid", settings.show_grid},
-                    {"grid_plane", settings.grid_plane},
-                    {"grid_opacity", settings.grid_opacity},
-                    {"point_cloud_mode", settings.point_cloud_mode},
-                    {"voxel_size", settings.voxel_size},
-                    {"show_rings", settings.show_rings},
-                    {"ring_width", settings.ring_width},
-                    {"show_center_markers", settings.show_center_markers},
-                    {"show_camera_frustums", settings.show_camera_frustums},
-                    {"camera_frustum_scale", settings.camera_frustum_scale},
-                    {"train_camera_color", json::array({settings.train_camera_color[0], settings.train_camera_color[1], settings.train_camera_color[2]})},
-                    {"eval_camera_color", json::array({settings.eval_camera_color[0], settings.eval_camera_color[1], settings.eval_camera_color[2]})},
-                    {"show_pivot", settings.show_pivot},
-                    {"split_view_mode", settings.split_view_mode},
-                    {"split_position", settings.split_position},
-                    {"gut", settings.gut},
-                    {"equirectangular", settings.equirectangular},
-                    {"orthographic", settings.orthographic},
-                    {"ortho_scale", settings.ortho_scale},
-                    {"selection_color_committed", json::array({settings.selection_color_committed[0], settings.selection_color_committed[1], settings.selection_color_committed[2]})},
-                    {"selection_color_preview", json::array({settings.selection_color_preview[0], settings.selection_color_preview[1], settings.selection_color_preview[2]})},
-                    {"selection_color_center_marker", json::array({settings.selection_color_center_marker[0], settings.selection_color_center_marker[1], settings.selection_color_center_marker[2]})},
-                    {"depth_clip_enabled", settings.depth_clip_enabled},
-                    {"depth_clip_far", settings.depth_clip_far},
-                    {"mesh_wireframe", settings.mesh_wireframe},
-                    {"mesh_wireframe_color", json::array({settings.mesh_wireframe_color[0], settings.mesh_wireframe_color[1], settings.mesh_wireframe_color[2]})},
-                    {"mesh_wireframe_width", settings.mesh_wireframe_width},
-                    {"mesh_light_dir", json::array({settings.mesh_light_dir[0], settings.mesh_light_dir[1], settings.mesh_light_dir[2]})},
-                    {"mesh_light_intensity", settings.mesh_light_intensity},
-                    {"mesh_ambient", settings.mesh_ambient},
-                    {"mesh_backface_culling", settings.mesh_backface_culling},
-                    {"mesh_shadow_enabled", settings.mesh_shadow_enabled},
-                    {"mesh_shadow_resolution", settings.mesh_shadow_resolution},
-                    {"depth_filter_enabled", settings.depth_filter_enabled},
-                    {"depth_filter_min", json::array({settings.depth_filter_min[0], settings.depth_filter_min[1], settings.depth_filter_min[2]})},
-                    {"depth_filter_max", json::array({settings.depth_filter_max[0], settings.depth_filter_max[1], settings.depth_filter_max[2]})},
-                }},
+                                 {"focal_length_mm", settings.focal_length_mm},
+                                 {"scaling_modifier", settings.scaling_modifier},
+                                 {"antialiasing", settings.antialiasing},
+                                 {"mip_filter", settings.mip_filter},
+                                 {"sh_degree", settings.sh_degree},
+                                 {"render_scale", settings.render_scale},
+                                 {"show_crop_box", settings.show_crop_box},
+                                 {"use_crop_box", settings.use_crop_box},
+                                 {"show_ellipsoid", settings.show_ellipsoid},
+                                 {"use_ellipsoid", settings.use_ellipsoid},
+                                 {"desaturate_unselected", settings.desaturate_unselected},
+                                 {"desaturate_cropping", settings.desaturate_cropping},
+                                 {"crop_filter_for_selection", settings.crop_filter_for_selection},
+                                 {"apply_appearance_correction", settings.apply_appearance_correction},
+                                 {"ppisp_mode", settings.ppisp_mode},
+                                 {"ppisp", {
+                                               {"exposure_offset", settings.ppisp.exposure_offset},
+                                               {"vignette_enabled", settings.ppisp.vignette_enabled},
+                                               {"vignette_strength", settings.ppisp.vignette_strength},
+                                               {"wb_temperature", settings.ppisp.wb_temperature},
+                                               {"wb_tint", settings.ppisp.wb_tint},
+                                               {"color_red_x", settings.ppisp.color_red_x},
+                                               {"color_red_y", settings.ppisp.color_red_y},
+                                               {"color_green_x", settings.ppisp.color_green_x},
+                                               {"color_green_y", settings.ppisp.color_green_y},
+                                               {"color_blue_x", settings.ppisp.color_blue_x},
+                                               {"color_blue_y", settings.ppisp.color_blue_y},
+                                               {"gamma_multiplier", settings.ppisp.gamma_multiplier},
+                                               {"gamma_red", settings.ppisp.gamma_red},
+                                               {"gamma_green", settings.ppisp.gamma_green},
+                                               {"gamma_blue", settings.ppisp.gamma_blue},
+                                               {"crf_toe", settings.ppisp.crf_toe},
+                                               {"crf_shoulder", settings.ppisp.crf_shoulder},
+                                           }},
+                                 {"background_color", json::array({settings.background_color[0], settings.background_color[1], settings.background_color[2]})},
+                                 {"show_coord_axes", settings.show_coord_axes},
+                                 {"axes_size", settings.axes_size},
+                                 {"axes_visibility", json::array({settings.axes_visibility[0], settings.axes_visibility[1], settings.axes_visibility[2]})},
+                                 {"show_grid", settings.show_grid},
+                                 {"grid_plane", settings.grid_plane},
+                                 {"grid_opacity", settings.grid_opacity},
+                                 {"point_cloud_mode", settings.point_cloud_mode},
+                                 {"voxel_size", settings.voxel_size},
+                                 {"show_rings", settings.show_rings},
+                                 {"ring_width", settings.ring_width},
+                                 {"show_center_markers", settings.show_center_markers},
+                                 {"show_camera_frustums", settings.show_camera_frustums},
+                                 {"camera_frustum_scale", settings.camera_frustum_scale},
+                                 {"train_camera_color", json::array({settings.train_camera_color[0], settings.train_camera_color[1], settings.train_camera_color[2]})},
+                                 {"eval_camera_color", json::array({settings.eval_camera_color[0], settings.eval_camera_color[1], settings.eval_camera_color[2]})},
+                                 {"show_pivot", settings.show_pivot},
+                                 {"split_view_mode", settings.split_view_mode},
+                                 {"split_position", settings.split_position},
+                                 {"gut", settings.gut},
+                                 {"equirectangular", settings.equirectangular},
+                                 {"orthographic", settings.orthographic},
+                                 {"ortho_scale", settings.ortho_scale},
+                                 {"selection_color_committed", json::array({settings.selection_color_committed[0], settings.selection_color_committed[1], settings.selection_color_committed[2]})},
+                                 {"selection_color_preview", json::array({settings.selection_color_preview[0], settings.selection_color_preview[1], settings.selection_color_preview[2]})},
+                                 {"selection_color_center_marker", json::array({settings.selection_color_center_marker[0], settings.selection_color_center_marker[1], settings.selection_color_center_marker[2]})},
+                                 {"depth_clip_enabled", settings.depth_clip_enabled},
+                                 {"depth_clip_far", settings.depth_clip_far},
+                                 {"mesh_wireframe", settings.mesh_wireframe},
+                                 {"mesh_wireframe_color", json::array({settings.mesh_wireframe_color[0], settings.mesh_wireframe_color[1], settings.mesh_wireframe_color[2]})},
+                                 {"mesh_wireframe_width", settings.mesh_wireframe_width},
+                                 {"mesh_light_dir", json::array({settings.mesh_light_dir[0], settings.mesh_light_dir[1], settings.mesh_light_dir[2]})},
+                                 {"mesh_light_intensity", settings.mesh_light_intensity},
+                                 {"mesh_ambient", settings.mesh_ambient},
+                                 {"mesh_backface_culling", settings.mesh_backface_culling},
+                                 {"mesh_shadow_enabled", settings.mesh_shadow_enabled},
+                                 {"mesh_shadow_resolution", settings.mesh_shadow_resolution},
+                                 {"depth_filter_enabled", settings.depth_filter_enabled},
+                                 {"depth_filter_min", json::array({settings.depth_filter_min[0], settings.depth_filter_min[1], settings.depth_filter_min[2]})},
+                                 {"depth_filter_max", json::array({settings.depth_filter_max[0], settings.depth_filter_max[1], settings.depth_filter_max[2]})},
+                             }},
             };
         }
 
@@ -741,8 +734,7 @@ namespace lfs::app {
                                     const json& args,
                                     const vis::op::OperatorProperties& props,
                                     const vis::op::OperatorReturnValue& /*result*/) {
-            const auto removed_nodes = props.get<std::vector<std::string>>("resolved_node_names").value_or(
-                std::vector<std::string>{});
+            const auto removed_nodes = props.get<std::vector<std::string>>("resolved_node_names").value_or(std::vector<std::string>{});
             const bool keep_children = props.get_or<bool>("keep_children", false);
 
             json payload{
@@ -793,8 +785,7 @@ namespace lfs::app {
             if (!scene_manager)
                 return json{{"error", "Scene manager not initialized"}};
 
-            const auto resolved_nodes = props.get<std::vector<std::string>>("resolved_node_names").value_or(
-                std::vector<std::string>{});
+            const auto resolved_nodes = props.get<std::vector<std::string>>("resolved_node_names").value_or(std::vector<std::string>{});
 
             json nodes = json::array();
             for (const auto& name : resolved_nodes) {
@@ -803,6 +794,179 @@ namespace lfs::app {
             }
 
             return json{{"success", true}, {"count", nodes.size()}, {"nodes", nodes}};
+        }
+
+        std::expected<void, std::string> prepare_scene_select_node_operator(
+            vis::Visualizer& viewer,
+            const json& /*args*/,
+            vis::op::OperatorProperties& props) {
+            auto* const scene_manager = viewer.getSceneManager();
+            if (!scene_manager)
+                return std::unexpected("Scene manager not initialized");
+
+            const auto name = props.get<std::string>("name");
+            if (!name || name->empty())
+                return std::unexpected("Field 'name' must be provided");
+            if (!scene_manager->getScene().getNode(*name))
+                return std::unexpected("Node not found: " + *name);
+
+            const auto mode = props.get_or<std::string>("mode", "replace");
+            if (mode != "replace" && mode != "add")
+                return std::unexpected("Unsupported node selection mode: " + mode);
+
+            return {};
+        }
+
+        json scene_select_node_result(vis::Visualizer& viewer,
+                                      const json& /*args*/,
+                                      const vis::op::OperatorProperties& /*props*/,
+                                      const vis::op::OperatorReturnValue& /*result*/) {
+            auto* const scene_manager = viewer.getSceneManager();
+            if (!scene_manager)
+                return json{{"error", "Scene manager not initialized"}};
+
+            const auto& scene = scene_manager->getScene();
+            json nodes = json::array();
+            for (const auto& selected_name : scene_manager->getSelectedNodeNames()) {
+                if (const auto* const node = scene.getNode(selected_name))
+                    nodes.push_back(node_summary_json(scene, *node));
+            }
+
+            return json{{"success", true}, {"count", nodes.size()}, {"nodes", nodes}};
+        }
+
+        std::expected<void, std::string> prepare_crop_box_add_operator(
+            vis::Visualizer& viewer,
+            const json& /*args*/,
+            vis::op::OperatorProperties& props) {
+            auto* const scene_manager = viewer.getSceneManager();
+            if (!scene_manager)
+                return std::unexpected("Scene manager not initialized");
+
+            auto parent_id = vis::cap::resolveCropBoxParentId(
+                *scene_manager, props.get<std::string>("node"));
+            if (!parent_id)
+                return std::unexpected(parent_id.error());
+            return {};
+        }
+
+        std::expected<void, std::string> prepare_crop_box_set_operator(
+            vis::Visualizer& viewer,
+            const json& /*args*/,
+            vis::op::OperatorProperties& props) {
+            auto* const scene_manager = viewer.getSceneManager();
+            if (!scene_manager)
+                return std::unexpected("Scene manager not initialized");
+
+            auto cropbox_id = vis::cap::resolveCropBoxId(*scene_manager, props.get<std::string>("node"));
+            if (!cropbox_id)
+                return std::unexpected(cropbox_id.error());
+
+            if (!props.has("min") && !props.has("max") &&
+                !props.has("translation") && !props.has("rotation") && !props.has("scale") &&
+                !props.has("inverse") && !props.has("enabled") && !props.has("show") && !props.has("use")) {
+                return std::unexpected("No crop box fields were provided");
+            }
+            return {};
+        }
+
+        std::expected<void, std::string> prepare_crop_box_target_operator(
+            vis::Visualizer& viewer,
+            const json& /*args*/,
+            vis::op::OperatorProperties& props) {
+            auto* const scene_manager = viewer.getSceneManager();
+            if (!scene_manager)
+                return std::unexpected("Scene manager not initialized");
+
+            auto cropbox_id = vis::cap::resolveCropBoxId(*scene_manager, props.get<std::string>("node"));
+            if (!cropbox_id)
+                return std::unexpected(cropbox_id.error());
+            return {};
+        }
+
+        json crop_box_operator_result(vis::Visualizer& viewer,
+                                      const json& /*args*/,
+                                      const vis::op::OperatorProperties& props,
+                                      const vis::op::OperatorReturnValue& /*result*/) {
+            auto* const scene_manager = viewer.getSceneManager();
+            auto* const rendering_manager = viewer.getRenderingManager();
+            if (!scene_manager)
+                return json{{"error", "Scene manager not initialized"}};
+
+            const auto cropbox_id = props.get<core::NodeId>("resolved_cropbox_id");
+            if (!cropbox_id)
+                return json{{"error", "Crop box result did not resolve a target"}};
+
+            return crop_box_info_json(*scene_manager, rendering_manager, *cropbox_id);
+        }
+
+        json ellipsoid_info_json(const vis::SceneManager& scene_manager,
+                                 const vis::RenderingManager* rendering_manager,
+                                 const core::NodeId ellipsoid_id);
+
+        std::expected<void, std::string> prepare_ellipsoid_add_operator(
+            vis::Visualizer& viewer,
+            const json& /*args*/,
+            vis::op::OperatorProperties& props) {
+            auto* const scene_manager = viewer.getSceneManager();
+            if (!scene_manager)
+                return std::unexpected("Scene manager not initialized");
+
+            auto parent_id = vis::cap::resolveEllipsoidParentId(
+                *scene_manager, props.get<std::string>("node"));
+            if (!parent_id)
+                return std::unexpected(parent_id.error());
+            return {};
+        }
+
+        std::expected<void, std::string> prepare_ellipsoid_set_operator(
+            vis::Visualizer& viewer,
+            const json& /*args*/,
+            vis::op::OperatorProperties& props) {
+            auto* const scene_manager = viewer.getSceneManager();
+            if (!scene_manager)
+                return std::unexpected("Scene manager not initialized");
+
+            auto ellipsoid_id = vis::cap::resolveEllipsoidId(*scene_manager, props.get<std::string>("node"));
+            if (!ellipsoid_id)
+                return std::unexpected(ellipsoid_id.error());
+
+            if (!props.has("radii") && !props.has("translation") && !props.has("rotation") &&
+                !props.has("scale") && !props.has("inverse") && !props.has("enabled") &&
+                !props.has("show") && !props.has("use")) {
+                return std::unexpected("No ellipsoid fields were provided");
+            }
+            return {};
+        }
+
+        std::expected<void, std::string> prepare_ellipsoid_target_operator(
+            vis::Visualizer& viewer,
+            const json& /*args*/,
+            vis::op::OperatorProperties& props) {
+            auto* const scene_manager = viewer.getSceneManager();
+            if (!scene_manager)
+                return std::unexpected("Scene manager not initialized");
+
+            auto ellipsoid_id = vis::cap::resolveEllipsoidId(*scene_manager, props.get<std::string>("node"));
+            if (!ellipsoid_id)
+                return std::unexpected(ellipsoid_id.error());
+            return {};
+        }
+
+        json ellipsoid_operator_result(vis::Visualizer& viewer,
+                                       const json& /*args*/,
+                                       const vis::op::OperatorProperties& props,
+                                       const vis::op::OperatorReturnValue& /*result*/) {
+            auto* const scene_manager = viewer.getSceneManager();
+            auto* const rendering_manager = viewer.getRenderingManager();
+            if (!scene_manager)
+                return json{{"error", "Scene manager not initialized"}};
+
+            const auto ellipsoid_id = props.get<core::NodeId>("resolved_ellipsoid_id");
+            if (!ellipsoid_id)
+                return json{{"error", "Ellipsoid result did not resolve a target"}};
+
+            return ellipsoid_info_json(*scene_manager, rendering_manager, *ellipsoid_id);
         }
 
         json camera_node_json(const core::Scene& scene, const core::SceneNode& node) {
@@ -869,17 +1033,17 @@ namespace lfs::app {
             return json{
                 {"success", true},
                 {"dataset", {
-                    {"path", core::path_to_utf8(scene_manager.getDatasetPath())},
-                    {"source_type", info.source_type},
-                    {"source_path", core::path_to_utf8(info.source_path)},
-                    {"has_model", info.has_model},
-                    {"num_gaussians", static_cast<int64_t>(info.num_gaussians)},
-                    {"num_nodes", static_cast<int64_t>(info.num_nodes)},
-                    {"camera_count", total_cameras},
-                    {"active_camera_count", active_cameras},
-                    {"masked_camera_count", masked_cameras},
-                    {"camera_groups", camera_groups},
-                }},
+                                {"path", core::path_to_utf8(scene_manager.getDatasetPath())},
+                                {"source_type", info.source_type},
+                                {"source_path", core::path_to_utf8(info.source_path)},
+                                {"has_model", info.has_model},
+                                {"num_gaussians", static_cast<int64_t>(info.num_gaussians)},
+                                {"num_nodes", static_cast<int64_t>(info.num_nodes)},
+                                {"camera_count", total_cameras},
+                                {"active_camera_count", active_cameras},
+                                {"masked_camera_count", masked_cameras},
+                                {"camera_groups", camera_groups},
+                            }},
             };
         }
 
@@ -950,16 +1114,6 @@ namespace lfs::app {
             vis::RenderingManager* rendering_manager,
             const core::NodeId ellipsoid_id) {
             return vis::cap::resetEllipsoid(scene_manager, rendering_manager, ellipsoid_id);
-        }
-
-        const char* export_format_name(const core::ExportFormat format) {
-            switch (format) {
-            case core::ExportFormat::PLY: return "ply";
-            case core::ExportFormat::SOG: return "sog";
-            case core::ExportFormat::SPZ: return "spz";
-            case core::ExportFormat::HTML_VIEWER: return "html";
-            }
-            return "unknown";
         }
 
         void collect_exportable_splats(const core::Scene& scene,
@@ -1243,31 +1397,6 @@ namespace lfs::app {
             return product;
         }
 
-        json supported_event_types_json() {
-            return json::array({
-                "scene.loaded",
-                "scene.cleared",
-                "scene.changed",
-                "scene.node_added",
-                "scene.node_removed",
-                "scene.node_reparented",
-                "selection.changed",
-                "training.started",
-                "training.progress",
-                "training.paused",
-                "training.resumed",
-                "training.completed",
-                "training.stopped",
-                "dataset.load_started",
-                "dataset.load_progress",
-                "dataset.load_completed",
-                "render.frame",
-                "checkpoint.saved",
-                "keyframes.changed",
-                "export.failed",
-            });
-        }
-
         class EventSubscriptionRegistry {
         public:
             static EventSubscriptionRegistry& instance() {
@@ -1277,8 +1406,8 @@ namespace lfs::app {
 
             std::expected<int64_t, std::string> subscribe(const std::vector<std::string>& types, const size_t max_queue) {
                 std::unordered_set<std::string> supported;
-                for (const auto& value : supported_event_types_json())
-                    supported.insert(value.get<std::string>());
+                for (const auto type : kMcpSubscriptionEventTypes)
+                    supported.insert(std::string(type));
 
                 for (const auto& type : types) {
                     if (type != "*" && !supported.contains(type))
@@ -1344,7 +1473,7 @@ namespace lfs::app {
 
                 return json{
                     {"success", true},
-                    {"supported_types", supported_event_types_json()},
+                    {"supported_types", mcp_subscription_event_types_json()},
                     {"subscriptions", subscriptions},
                 };
             }
@@ -1363,131 +1492,11 @@ namespace lfs::app {
             event::ScopedHandler handlers_;
 
             EventSubscriptionRegistry() {
-                register_handler<core::events::state::SceneLoaded>("scene.loaded", [](const auto& event) {
-                    return json{
-                        {"path", core::path_to_utf8(event.path)},
-                        {"type", static_cast<int>(event.type)},
-                        {"num_gaussians", static_cast<int64_t>(event.num_gaussians)},
-                        {"checkpoint_iteration", event.checkpoint_iteration},
-                    };
-                });
-                register_handler<core::events::state::SceneCleared>("scene.cleared", [](const auto&) { return json::object(); });
-                register_handler<core::events::state::SceneChanged>("scene.changed", [](const auto& event) {
-                    return json{{"mutation_flags", event.mutation_flags}};
-                });
-                register_handler<core::events::state::PLYAdded>("scene.node_added", [](const auto& event) {
-                    return json{
-                        {"name", event.name},
-                        {"node_gaussians", static_cast<int64_t>(event.node_gaussians)},
-                        {"total_gaussians", static_cast<int64_t>(event.total_gaussians)},
-                        {"is_visible", event.is_visible},
-                        {"parent_name", event.parent_name},
-                        {"is_group", event.is_group},
-                        {"node_type", event.node_type},
-                    };
-                });
-                register_handler<core::events::state::PLYRemoved>("scene.node_removed", [](const auto& event) {
-                    return json{
-                        {"name", event.name},
-                        {"children_kept", event.children_kept},
-                        {"parent_of_removed", event.parent_of_removed},
-                    };
-                });
-                register_handler<core::events::state::NodeReparented>("scene.node_reparented", [](const auto& event) {
-                    return json{
-                        {"name", event.name},
-                        {"old_parent", event.old_parent},
-                        {"new_parent", event.new_parent},
-                    };
-                });
-                register_handler<core::events::state::SelectionChanged>("selection.changed", [](const auto& event) {
-                    return json{
-                        {"has_selection", event.has_selection},
-                        {"count", event.count},
-                    };
-                });
-                register_handler<core::events::state::TrainingStarted>("training.started", [](const auto& event) {
-                    return json{{"total_iterations", event.total_iterations}};
-                });
-                register_handler<core::events::state::TrainingProgress>("training.progress", [](const auto& event) {
-                    return json{
-                        {"iteration", event.iteration},
-                        {"loss", event.loss},
-                        {"num_gaussians", static_cast<int64_t>(event.num_gaussians)},
-                        {"is_refining", event.is_refining},
-                    };
-                });
-                register_handler<core::events::state::TrainingPaused>("training.paused", [](const auto& event) {
-                    return json{{"iteration", event.iteration}};
-                });
-                register_handler<core::events::state::TrainingResumed>("training.resumed", [](const auto& event) {
-                    return json{{"iteration", event.iteration}};
-                });
-                register_handler<core::events::state::TrainingCompleted>("training.completed", [](const auto& event) {
-                    json result{
-                        {"iteration", event.iteration},
-                        {"final_loss", event.final_loss},
-                        {"elapsed_seconds", event.elapsed_seconds},
-                        {"success", event.success},
-                        {"user_stopped", event.user_stopped},
-                    };
-                    if (event.error)
-                        result["error"] = *event.error;
-                    return result;
-                });
-                register_handler<core::events::state::TrainingStopped>("training.stopped", [](const auto& event) {
-                    return json{
-                        {"iteration", event.iteration},
-                        {"user_requested", event.user_requested},
-                    };
-                });
-                register_handler<core::events::state::DatasetLoadStarted>("dataset.load_started", [](const auto& event) {
-                    return json{{"path", core::path_to_utf8(event.path)}};
-                });
-                register_handler<core::events::state::DatasetLoadProgress>("dataset.load_progress", [](const auto& event) {
-                    return json{
-                        {"path", core::path_to_utf8(event.path)},
-                        {"progress", event.progress},
-                        {"step", event.step},
-                    };
-                });
-                register_handler<core::events::state::DatasetLoadCompleted>("dataset.load_completed", [](const auto& event) {
-                    json result{
-                        {"path", core::path_to_utf8(event.path)},
-                        {"success", event.success},
-                        {"num_images", static_cast<int64_t>(event.num_images)},
-                        {"num_points", static_cast<int64_t>(event.num_points)},
-                    };
-                    if (event.error)
-                        result["error"] = *event.error;
-                    return result;
-                });
-                register_handler<core::events::state::FrameRendered>("render.frame", [](const auto& event) {
-                    return json{
-                        {"render_ms", event.render_ms},
-                        {"fps", event.fps},
-                        {"num_gaussians", event.num_gaussians},
-                    };
-                });
-                register_handler<core::events::state::CheckpointSaved>("checkpoint.saved", [](const auto& event) {
-                    return json{
-                        {"iteration", event.iteration},
-                        {"path", core::path_to_utf8(event.path)},
-                    };
-                });
-                register_handler<core::events::state::KeyframeListChanged>("keyframes.changed", [](const auto& event) {
-                    return json{{"count", static_cast<int64_t>(event.count)}};
-                });
-                register_handler<core::events::state::ExportFailed>("export.failed", [](const auto& event) {
-                    return json{{"error", event.error}};
-                });
-            }
-
-            template <typename Event, typename Builder>
-            void register_handler(const std::string& type, Builder&& builder) {
-                handlers_.subscribe<Event>(
-                    [this, type, builder = std::forward<Builder>(builder)](const Event& event) mutable {
-                        publish(type, builder(event));
+                register_mcp_event_handlers(
+                    handlers_,
+                    McpEventStreamKind::SubscriptionQueue,
+                    [this](const std::string& type, json payload) {
+                        publish(type, std::move(payload));
                     });
             }
 
@@ -1521,6 +1530,10 @@ namespace lfs::app {
         assert(viewer);
         auto* const viewer_impl = viewer;
         auto& registry = ToolRegistry::instance();
+
+        register_generic_gui_operator_tools(registry, viewer);
+        register_generic_gui_runtime_tools(registry, viewer);
+        register_generic_gui_ui_tools(registry, viewer);
 
         // --- Scene operations (posted to GUI thread) ---
 
@@ -1568,10 +1581,10 @@ namespace lfs::app {
             .save_checkpoint =
                 [viewer](const std::optional<std::filesystem::path>& path)
                 -> std::expected<std::filesystem::path, std::string> {
-                    return post_and_wait(viewer, [viewer, path]() {
-                        return viewer->saveCheckpoint(path);
-                    });
-                },
+                return post_and_wait(viewer, [viewer, path]() {
+                    return viewer->saveCheckpoint(path);
+                });
+            },
             .save_ply =
                 [viewer](const std::filesystem::path& path) {
                     return post_and_wait(viewer, [viewer, path]() -> std::expected<void, std::string> {
@@ -1601,13 +1614,13 @@ namespace lfs::app {
                 },
             .gaussian_count =
                 [viewer]() -> std::expected<int64_t, std::string> {
-                    return post_and_wait(viewer, [viewer]() -> std::expected<int64_t, std::string> {
-                        auto& scene = viewer->getScene();
-                        if (!scene.getTrainingModel())
-                            return std::unexpected("No model loaded");
-                        return scene.getTotalGaussianCount();
-                    });
-                }});
+                return post_and_wait(viewer, [viewer]() -> std::expected<int64_t, std::string> {
+                    auto& scene = viewer->getScene();
+                    if (!scene.getTrainingModel())
+                        return std::unexpected("No model loaded");
+                    return scene.getTotalGaussianCount();
+                });
+            }});
 
         registry.register_tool(
             McpTool{
@@ -1773,10 +1786,10 @@ namespace lfs::app {
                 .prepare =
                     [](vis::Visualizer& /*viewer*/, const json& /*args*/,
                        vis::op::OperatorProperties& /*props*/) -> std::expected<void, std::string> {
-                        if (!vis::op::undoHistory().canUndo())
-                            return std::unexpected("Nothing to undo");
-                        return {};
-                    },
+                    if (!vis::op::undoHistory().canUndo())
+                        return std::unexpected("Nothing to undo");
+                    return {};
+                },
                 .on_success =
                     [](vis::Visualizer& /*viewer*/, const json& /*args*/,
                        const vis::op::OperatorProperties& /*props*/,
@@ -1797,10 +1810,10 @@ namespace lfs::app {
                 .prepare =
                     [](vis::Visualizer& /*viewer*/, const json& /*args*/,
                        vis::op::OperatorProperties& /*props*/) -> std::expected<void, std::string> {
-                        if (!vis::op::undoHistory().canRedo())
-                            return std::unexpected("Nothing to redo");
-                        return {};
-                    },
+                    if (!vis::op::undoHistory().canRedo())
+                        return std::unexpected("Nothing to redo");
+                    return {};
+                },
                 .on_success =
                     [](vis::Visualizer& /*viewer*/, const json& /*args*/,
                        const vis::op::OperatorProperties& /*props*/,
@@ -3160,18 +3173,28 @@ namespace lfs::app {
         registry.register_tool(
             McpTool{
                 .name = "editor.run",
-                .description = "Run code through the integrated Python console; optionally replace the visible editor contents first",
+                .description = "Run code through the integrated Python console, optionally wait for completion, and return the latest captured output",
                 .input_schema = {
                     .type = "object",
                     .properties = json{
                         {"code", json{{"type", "string"}, {"description", "Optional Python code to set and run; defaults to current editor contents"}}},
-                        {"show_console", json{{"type", "boolean"}, {"description", "Show the Python console window (default: true)"}}}},
+                        {"show_console", json{{"type", "boolean"}, {"description", "Show the Python console window (default: true)"}}},
+                        {"wait_for_completion", json{{"type", "boolean"}, {"description", "Wait for the script to finish before returning when possible (default: true)"}}},
+                        {"wait_for_output", json{{"type", "boolean"}, {"description", "Wait until output appears or the script finishes before returning (default: true)"}}},
+                        {"timeout_ms", json{{"type", "integer"}, {"description", "Maximum time to wait for completion/output before returning a partial snapshot (default: 2000)"}}},
+                        {"output_max_chars", json{{"type", "integer"}, {"description", "Maximum output characters to include in the response (default: 20000)"}}},
+                        {"output_tail", json{{"type", "boolean"}, {"description", "Return the newest output when truncating (default: true)"}}}},
                     .required = {}}},
             [viewer_impl](const json& args) -> json {
                 const auto code = optional_string_arg(args, "code");
                 const bool show_console_window = args.value("show_console", true);
+                const bool wait_for_completion = args.value("wait_for_completion", true);
+                const bool wait_for_output = args.value("wait_for_output", true);
+                const int timeout_ms = args.value("timeout_ms", 2000);
+                const int output_max_chars = args.value("output_max_chars", 20000);
+                const bool output_tail = args.value("output_tail", true);
 
-                return post_and_wait(viewer_impl, [code, show_console_window]() -> json {
+                auto response = post_and_wait(viewer_impl, [code, show_console_window]() -> json {
                     if (show_console_window)
                         show_python_console();
 
@@ -3202,6 +3225,26 @@ namespace lfs::app {
                         {"running", console.isScriptRunning()},
                     };
                 });
+
+                if (response.contains("error"))
+                    return response;
+
+                auto& console = vis::gui::panels::PythonConsoleState::getInstance();
+                auto observed = editor_output_response_json(
+                    console,
+                    wait_for_completion,
+                    wait_for_output,
+                    timeout_ms,
+                    output_max_chars,
+                    output_tail);
+                for (auto& [key, value] : observed.items()) {
+                    response[key] = std::move(value);
+                }
+
+                response["wait_for_completion"] = wait_for_completion;
+                response["wait_for_output"] = wait_for_output;
+                response["timeout_ms"] = timeout_ms;
+                return response;
             });
 
         registry.register_tool(
@@ -3254,12 +3297,52 @@ namespace lfs::app {
                         return json{{"error", "Python output terminal not initialized"}};
 
                     std::string text = console.getOutputText();
-                    auto result = text_payload_json(text, max_chars, tail);
+                    auto result = editor_output_json(text, max_chars, tail);
                     result["success"] = true;
-                    result["total_chars"] = static_cast<int64_t>(text.size());
                     result["running"] = console.isScriptRunning();
                     return result;
                 });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "editor.wait",
+                .description = "Wait for the currently running editor script to finish or emit output, then return the latest output snapshot",
+                .input_schema = {
+                    .type = "object",
+                    .properties = json{
+                        {"wait_for_completion", json{{"type", "boolean"}, {"description", "Wait for the script to finish before returning when possible (default: true)"}}},
+                        {"wait_for_output", json{{"type", "boolean"}, {"description", "Wait until output appears or the script finishes before returning (default: true)"}}},
+                        {"timeout_ms", json{{"type", "integer"}, {"description", "Maximum time to wait before returning a partial snapshot (default: 2000)"}}},
+                        {"output_max_chars", json{{"type", "integer"}, {"description", "Maximum output characters to include in the response (default: 20000)"}}},
+                        {"output_tail", json{{"type", "boolean"}, {"description", "Return the newest output when truncating (default: true)"}}}},
+                    .required = {}}},
+            [](const json& args) -> json {
+                const bool wait_for_completion = args.value("wait_for_completion", true);
+                const bool wait_for_output = args.value("wait_for_output", true);
+                const int timeout_ms = args.value("timeout_ms", 2000);
+                const int output_max_chars = args.value("output_max_chars", 20000);
+                const bool output_tail = args.value("output_tail", true);
+
+                auto& console = vis::gui::panels::PythonConsoleState::getInstance();
+                json response{
+                    {"success", true},
+                    {"wait_for_completion", wait_for_completion},
+                    {"wait_for_output", wait_for_output},
+                    {"timeout_ms", timeout_ms},
+                };
+
+                auto observed = editor_output_response_json(
+                    console,
+                    wait_for_completion,
+                    wait_for_output,
+                    timeout_ms,
+                    output_max_chars,
+                    output_tail);
+                for (auto& [key, value] : observed.items()) {
+                    response[key] = std::move(value);
+                }
+                return response;
             });
 
         registry.register_tool(
@@ -3333,7 +3416,7 @@ namespace lfs::app {
                     {"subscription_id", *subscription_id},
                     {"types", types},
                     {"max_queue", static_cast<int64_t>(max_queue)},
-                    {"supported_types", supported_event_types_json()},
+                    {"supported_types", mcp_subscription_event_types_json()},
                 };
             });
 
@@ -3513,7 +3596,7 @@ namespace lfs::app {
                     const size_t expected_values = row_width * indices.size();
                     if (values.size() != expected_values) {
                         return json{{"error", "Field slice expects " + std::to_string(expected_values) +
-                                                   " values but received " + std::to_string(values.size())}};
+                                                  " values but received " + std::to_string(values.size())}};
                     }
 
                     const auto& field_shape = field->shape();
@@ -3753,10 +3836,9 @@ namespace lfs::app {
                     .type = "object",
                     .properties = json{
                         {"keyframe_index", json{{"type", "integer"}, {"description", "Keyframe index"}}},
-                        {"easing", json{{"oneOf", json::array({
-                            json{{"type", "integer"}},
-                            json{{"type", "string"}, {"enum", json::array({"linear", "ease_in", "ease_out", "ease_in_out"})}}
-                        })}, {"description", "Easing mode as integer or name"}}}},
+                        {"easing", json{{"oneOf", json::array({json{{"type", "integer"}},
+                                                               json{{"type", "string"}, {"enum", json::array({"linear", "ease_in", "ease_out", "ease_in_out"})}}})},
+                                        {"description", "Easing mode as integer or name"}}}},
                     .required = {"keyframe_index", "easing"}}},
             [viewer_impl](const json& args) -> json {
                 const size_t keyframe_index = args["keyframe_index"].get<size_t>();
@@ -4103,6 +4185,78 @@ namespace lfs::app {
         assert(viewer);
         auto* const viewer_impl = viewer;
         auto& registry = ResourceRegistry::instance();
+
+        register_generic_gui_operator_resources(registry, viewer);
+        register_generic_gui_runtime_resources(registry, viewer);
+        register_generic_gui_ui_resources(registry, viewer);
+
+        registry.register_resource(
+            McpResource{
+                .uri = "lichtfeld://editor/code",
+                .name = "Editor Code",
+                .description = "Current contents of the integrated Python editor",
+                .mime_type = "text/x-python"},
+            [viewer_impl](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
+                return post_and_wait(viewer_impl, [uri]() -> std::expected<std::vector<McpResourceContent>, std::string> {
+                    auto& console = vis::gui::panels::PythonConsoleState::getInstance();
+                    auto* const editor = console.getEditor();
+                    if (!editor)
+                        return std::unexpected("Python editor not initialized");
+
+                    return std::vector<McpResourceContent>{
+                        McpResourceContent{
+                            .uri = uri,
+                            .mime_type = "text/x-python",
+                            .content = console.getEditorText()}};
+                });
+            });
+
+        registry.register_resource(
+            McpResource{
+                .uri = "lichtfeld://editor/output",
+                .name = "Editor Output",
+                .description = "Captured output from the integrated Python editor console",
+                .mime_type = "text/plain"},
+            [viewer_impl](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
+                return post_and_wait(viewer_impl, [uri]() -> std::expected<std::vector<McpResourceContent>, std::string> {
+                    auto& console = vis::gui::panels::PythonConsoleState::getInstance();
+                    auto* const output = console.getOutputTerminal();
+                    if (!output)
+                        return std::unexpected("Python output terminal not initialized");
+
+                    return std::vector<McpResourceContent>{
+                        McpResourceContent{
+                            .uri = uri,
+                            .mime_type = "text/plain",
+                            .content = console.getOutputText()}};
+                });
+            });
+
+        registry.register_resource(
+            McpResource{
+                .uri = "lichtfeld://editor/state",
+                .name = "Editor State",
+                .description = "Current state of the integrated Python editor and console",
+                .mime_type = "application/json"},
+            [viewer_impl](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
+                return post_and_wait(viewer_impl, [uri]() -> std::expected<std::vector<McpResourceContent>, std::string> {
+                    auto& console = vis::gui::panels::PythonConsoleState::getInstance();
+                    auto* const editor = console.getEditor();
+                    auto* const output = console.getOutputTerminal();
+                    if (!editor || !output)
+                        return std::unexpected("Python editor resources are not initialized");
+
+                    json payload{
+                        {"running", console.isScriptRunning()},
+                        {"modified", console.isModified()},
+                        {"output_total_chars", static_cast<int64_t>(console.getOutputText().size())},
+                    };
+                    if (!console.getScriptPath().empty())
+                        payload["path"] = console.getScriptPath().string();
+
+                    return single_json_resource(uri, std::move(payload));
+                });
+            });
 
         registry.register_resource(
             McpResource{

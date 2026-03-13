@@ -60,6 +60,8 @@ namespace lfs::vis::op {
 
         [[nodiscard]] bool hasModalOperator() const;
         [[nodiscard]] ModalState modalState() const;
+        [[nodiscard]] std::string activeModalId() const;
+        [[nodiscard]] bool canLockMutexForTest() const;
         OperatorResult dispatchModalEvent(const ModalEvent& event);
         void cancelModalOperator();
 
@@ -87,7 +89,8 @@ namespace lfs::vis::op {
         [[nodiscard]] std::optional<OperatorContext> makeContext() const;
         [[nodiscard]] bool pollImpl(const RegisteredOperator& reg,
                                     const OperatorProperties* props = nullptr) const;
-        OperatorReturnValue invokeImpl(RegisteredOperator& reg, const std::string& id,
+        OperatorReturnValue invokeImpl(std::unique_lock<std::mutex>& lock,
+                                       RegisteredOperator& reg, const std::string& id,
                                        OperatorProperties* props);
 
         mutable std::mutex mutex_;

@@ -60,6 +60,8 @@ namespace lfs::vis {
         virtual RenderingManager* getRenderingManager() = 0;
 
         virtual bool postWork(WorkItem work) = 0;
+        [[nodiscard]] virtual bool isOnViewerThread() const { return false; }
+        [[nodiscard]] virtual bool acceptsPostedWork() const { return true; }
         virtual void setShutdownRequestedCallback(std::function<void()> callback) = 0;
         virtual std::expected<void, std::string> startTraining() = 0;
         virtual std::expected<std::filesystem::path, std::string> saveCheckpoint(

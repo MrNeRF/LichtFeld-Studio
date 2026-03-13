@@ -133,7 +133,7 @@ namespace lfs::core {
             EVENT(SetSelectionSubMode, int selection_mode;);
             EVENT(ExecuteMirror, int axis;); // 0=X, 1=Y, 2=Z
             EVENT(CancelActiveOperator, );   // Cancel and revert current operator
-        } // namespace tools
+        }                                    // namespace tools
 
         // ============================================================================
         // State - Notifications about what has happened (broadcasts)
@@ -187,7 +187,15 @@ namespace lfs::core {
                   int num_gaussians;);
 
             // System state
+            EVENT(EditorScriptStarted, std::filesystem::path path; size_t code_chars;);
+            EVENT(EditorScriptCompleted,
+                  std::filesystem::path path;
+                  size_t code_chars;
+                  size_t output_chars;
+                  bool success;
+                  bool interrupted;);
             EVENT(CheckpointSaved, int iteration; std::filesystem::path path;);
+            EVENT(ExportCompleted, std::filesystem::path path; ExportFormat format;);
             EVENT(DiskSpaceSaveFailed,
                   int iteration;
                   std::filesystem::path path;
@@ -207,7 +215,9 @@ namespace lfs::core {
             EVENT(KeyframeListChanged, size_t count;);
 
             EVENT(ExportFailed, std::string error;);
+            EVENT(VideoExportCompleted, std::filesystem::path path; int total_frames;);
             EVENT(VideoExportFailed, std::string error;);
+            EVENT(Mesh2SplatCompleted, std::string source_name; std::string node_name; size_t num_gaussians;);
             EVENT(Mesh2SplatFailed, std::string error;);
 
             // CUDA version check
@@ -268,8 +278,8 @@ namespace lfs::core {
             EVENT(WindowFocusLost, );
             EVENT(DisplayScaleChanged, float scale;);
             EVENT(UiScaleChangeRequested, float scale;); // 0 = auto (from OS)
-        } // namespace internal
-    } // namespace events
+        }                                                // namespace internal
+    }                                                    // namespace events
 
     // ============================================================================
     // Convenience functions

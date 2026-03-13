@@ -212,6 +212,7 @@ namespace lfs::vis::gui {
             export_state_.format = format;
             export_state_.stage = "Starting";
             export_state_.error.clear();
+            export_state_.path = path;
         }
 
         auto splat_data = std::shared_ptr<lfs::core::SplatData>(std::move(data));
@@ -301,13 +302,21 @@ namespace lfs::vis::gui {
 
                 if (success) {
                     LOG_INFO("Export completed: {}", lfs::core::path_to_utf8(path));
-                    const std::lock_guard lock(export_state_.mutex);
-                    export_state_.stage = "Complete";
+                    {
+                        const std::lock_guard lock(export_state_.mutex);
+                        export_state_.stage = "Complete";
+                    }
+                    lfs::core::events::state::ExportCompleted{
+                        .path = path,
+                        .format = format}
+                        .emit();
                 } else {
                     LOG_ERROR("Export failed: {}", error_msg);
-                    const std::lock_guard lock(export_state_.mutex);
-                    export_state_.error = error_msg;
-                    export_state_.stage = "Failed";
+                    {
+                        const std::lock_guard lock(export_state_.mutex);
+                        export_state_.error = error_msg;
+                        export_state_.stage = "Failed";
+                    }
                     lfs::core::events::state::ExportFailed{
                         .error = error_msg}
                         .emit();
@@ -574,6 +583,7 @@ namespace lfs::vis::gui {
             std::lock_guard lock(video_export_state_.mutex);
             video_export_state_.stage = "Initializing";
             video_export_state_.error.clear();
+            video_export_state_.path = path;
         }
 
         LOG_INFO("Starting video export: {} frames at {}x{}", total_frames, width, height);
@@ -681,10 +691,20 @@ namespace lfs::vis::gui {
                     video_export_state_.stage = "Failed";
                     LOG_ERROR("Failed to close encoder: {}", close_result.error());
                 } else {
-                    std::lock_guard lock(video_export_state_.mutex);
-                    if (video_export_state_.error.empty() && !video_export_state_.cancel_requested.load()) {
-                        video_export_state_.stage = "Complete";
-                        LOG_INFO("Video export completed: {}", path.string());
+                    bool emit_completed = false;
+                    {
+                        std::lock_guard lock(video_export_state_.mutex);
+                        if (video_export_state_.error.empty() && !video_export_state_.cancel_requested.load()) {
+                            video_export_state_.stage = "Complete";
+                            LOG_INFO("Video export completed: {}", path.string());
+                            emit_completed = true;
+                        }
+                    }
+                    if (emit_completed) {
+                        lfs::core::events::state::VideoExportCompleted{
+                            .path = path,
+                            .total_frames = total_frames}
+                            .emit();
                     }
                 }
 
@@ -835,6 +855,16 @@ namespace lfs::vis::gui {
             const std::lock_guard lock(mesh2splat_state_.mutex);
             mesh2splat_state_.stage = "Complete";
         }
+
+        const auto* const added_node = scene.getNode(node_name);
+        const size_t num_gaussians =
+            added_node && added_node->model ? added_node->model->size() : 0;
+
+        lfs::core::events::state::Mesh2SplatCompleted{
+            .source_name = source_name,
+            .node_name = node_name,
+            .num_gaussians = num_gaussians}
+            .emit();
 
         LOG_INFO("Mesh2Splat: added splat node '{}'", node_name);
     }

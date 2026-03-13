@@ -37,7 +37,17 @@ namespace lfs::python {
             .value("AlignPickPoint", vis::op::BuiltinOp::AlignPickPoint)
             .value("Undo", vis::op::BuiltinOp::Undo)
             .value("Redo", vis::op::BuiltinOp::Redo)
-            .value("Delete", vis::op::BuiltinOp::Delete);
+            .value("Delete", vis::op::BuiltinOp::Delete)
+            .value("SelectionClear", vis::op::BuiltinOp::SelectionClear)
+            .value("SceneSelectNode", vis::op::BuiltinOp::SceneSelectNode)
+            .value("CropBoxAdd", vis::op::BuiltinOp::CropBoxAdd)
+            .value("CropBoxSet", vis::op::BuiltinOp::CropBoxSet)
+            .value("CropBoxFit", vis::op::BuiltinOp::CropBoxFit)
+            .value("CropBoxReset", vis::op::BuiltinOp::CropBoxReset)
+            .value("EllipsoidAdd", vis::op::BuiltinOp::EllipsoidAdd)
+            .value("EllipsoidSet", vis::op::BuiltinOp::EllipsoidSet)
+            .value("EllipsoidFit", vis::op::BuiltinOp::EllipsoidFit)
+            .value("EllipsoidReset", vis::op::BuiltinOp::EllipsoidReset);
 
         nb::enum_<vis::op::BuiltinTool>(ops, "BuiltinTool")
             .value("Select", vis::op::BuiltinTool::Select)

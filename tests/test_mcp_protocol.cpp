@@ -23,6 +23,17 @@ namespace lfs::mcp {
             std::string name_;
         };
 
+        class ScopedResourcePrefixRegistration {
+        public:
+            explicit ScopedResourcePrefixRegistration(std::string prefix) : prefix_(std::move(prefix)) {}
+            ~ScopedResourcePrefixRegistration() {
+                ResourceRegistry::instance().unregister_resource_prefix(prefix_);
+            }
+
+        private:
+            std::string prefix_;
+        };
+
     } // namespace
 
     TEST(McpProtocolTest, ToolJsonIncludesCapabilityAnnotations) {
@@ -91,6 +102,58 @@ namespace lfs::mcp {
         ASSERT_TRUE(result["content"].is_array());
         ASSERT_FALSE(result["content"].empty());
         EXPECT_NE(result["content"][0]["text"].get<std::string>().find("\"echo\": 42"), std::string::npos);
+    }
+
+    TEST(McpProtocolTest, ResourceReadUsesMostSpecificPrefixHandler) {
+        static constexpr std::string_view broad_prefix = "lichtfeld://test/";
+        static constexpr std::string_view narrow_prefix = "lichtfeld://test/items/";
+        ScopedResourcePrefixRegistration cleanup_broad{std::string(broad_prefix)};
+        ScopedResourcePrefixRegistration cleanup_narrow{std::string(narrow_prefix)};
+
+        ResourceRegistry::instance().register_resource_prefix(
+            std::string(broad_prefix),
+            [](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
+                return std::vector<McpResourceContent>{
+                    McpResourceContent{
+                        .uri = uri,
+                        .mime_type = "application/json",
+                        .content = json{{"handler", "broad"}}.dump()}};
+            });
+
+        ResourceRegistry::instance().register_resource_prefix(
+            std::string(narrow_prefix),
+            [](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
+                return std::vector<McpResourceContent>{
+                    McpResourceContent{
+                        .uri = uri,
+                        .mime_type = "application/json",
+                        .content = json{
+                            {"handler", "narrow"},
+                            {"id", uri.substr(narrow_prefix.size())}}
+                                       .dump()}};
+            });
+
+        McpServer server;
+        const auto init_response = server.handle_request(JsonRpcRequest{
+            .id = int64_t{1},
+            .method = "initialize",
+            .params = json::object()});
+        ASSERT_TRUE(init_response.result.has_value());
+
+        const auto response = server.handle_request(JsonRpcRequest{
+            .id = int64_t{2},
+            .method = "resources/read",
+            .params = json{{"uri", "lichtfeld://test/items/example"}}});
+
+        ASSERT_TRUE(response.result.has_value());
+        const auto& result = *response.result;
+        ASSERT_TRUE(result.contains("contents"));
+        ASSERT_TRUE(result["contents"].is_array());
+        ASSERT_EQ(result["contents"].size(), 1);
+
+        const auto parsed = json::parse(result["contents"][0]["text"].get<std::string>());
+        EXPECT_EQ(parsed["handler"], "narrow");
+        EXPECT_EQ(parsed["id"], "example");
     }
 
 } // namespace lfs::mcp

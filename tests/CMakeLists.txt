@@ -202,6 +202,7 @@ set(TEST_FILES
     test_mask_loss.cpp
     test_checkpoint_resume.cpp
     test_mcp_protocol.cpp
+    test_mcp_app_utils.cpp
     test_video_color_convert.cpp
     test_python_integration.cpp
     test_python_lsp_client.cpp

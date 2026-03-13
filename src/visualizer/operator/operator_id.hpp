@@ -26,6 +26,16 @@ namespace lfs::vis::op {
         Undo,
         Redo,
         Delete,
+        SelectionClear,
+        SceneSelectNode,
+        CropBoxAdd,
+        CropBoxSet,
+        CropBoxFit,
+        CropBoxReset,
+        EllipsoidAdd,
+        EllipsoidSet,
+        EllipsoidFit,
+        EllipsoidReset,
 
         _Count
     };
