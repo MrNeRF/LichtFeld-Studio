@@ -396,6 +396,7 @@ target_link_libraries(${PROJECT_NAME}
         PRIVATE
         lfs_visualizer
         lfs_mcp
+        lfs_sequencer
         lfs_rendering
         lfs_training
         lfs_geometry
