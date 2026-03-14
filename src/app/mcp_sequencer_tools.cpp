@@ -136,6 +136,8 @@ namespace lfs::app {
 
         json sequencer_state_json(const SequencerToolBackend& backend, const vis::SequencerController& controller) {
             const auto& timeline = controller.timeline();
+            const bool has_any_timeline_state =
+                timeline.realKeyframeCount() > 0 || timeline.hasAnimationClip();
             json keyframe_list = json::array();
             int64_t visible_index = 0;
             for (const auto& keyframe : timeline.keyframes()) {
@@ -149,7 +151,7 @@ namespace lfs::app {
             json result = json{
                 {"success", true},
                 {"visible", backend.is_visible ? backend.is_visible() : false},
-                {"has_keyframes", timeline.realKeyframeCount() > 0},
+                {"has_keyframes", has_any_timeline_state},
                 {"playback_speed", controller.playbackSpeed()},
                 {"show_camera_path", ui_state ? ui_state->show_camera_path : true},
                 {"follow_playback", ui_state ? ui_state->follow_playback : false},

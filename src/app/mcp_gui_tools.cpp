@@ -1610,12 +1610,18 @@ namespace lfs::app {
 
     void register_gui_scene_tools(vis::Visualizer* viewer) {
         assert(viewer);
-        auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
         auto& registry = ToolRegistry::instance();
 
         register_generic_gui_operator_tools(registry, viewer);
         register_generic_gui_runtime_tools(registry, viewer);
         register_generic_gui_ui_tools(registry, viewer);
+
+        auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
+        assert(viewer_impl);
+        if (!viewer_impl) {
+            LOG_ERROR("GUI-native MCP scene tools require a GUI VisualizerImpl");
+            return;
+        }
 
         // --- Scene operations (posted to GUI thread) ---
 

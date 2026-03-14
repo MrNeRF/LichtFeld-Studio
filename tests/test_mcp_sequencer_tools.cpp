@@ -5,6 +5,7 @@
 #include "core/scene.hpp"
 #include "mcp/mcp_tools.hpp"
 #include "python/python_runtime.hpp"
+#include "sequencer/animation_clip.hpp"
 #include "sequencer/keyframe.hpp"
 #include "visualizer/ipc/view_context.hpp"
 #include "visualizer/sequencer/sequencer_controller.hpp"
@@ -328,6 +329,19 @@ TEST_F(McpSequencerToolsTest, GetUsesStableIdsAndSkipsLoopPoint) {
     EXPECT_EQ(result["keyframes"][1]["id"], id_b);
     EXPECT_FALSE(result["keyframes"][0].contains("index"));
     EXPECT_FALSE(result["keyframes"][1].contains("index"));
+}
+
+TEST_F(McpSequencerToolsTest, GetTreatsClipOnlyTimelineAsNonEmpty) {
+    auto clip = std::make_unique<lfs::sequencer::AnimationClip>("clip-only");
+    clip->addTrack(lfs::sequencer::ValueType::Float, "camera.exposure");
+    backend_.controller.timeline().setAnimationClip(std::move(clip));
+
+    const auto result = lfs::mcp::ToolRegistry::instance().call_tool("sequencer.get", json::object());
+
+    ASSERT_TRUE(result["success"].get<bool>());
+    EXPECT_TRUE(result["has_keyframes"].get<bool>());
+    EXPECT_EQ(result["keyframe_count"], 0);
+    EXPECT_TRUE(result["keyframes"].empty());
 }
 
 TEST_F(McpSequencerToolsTest, SelectKeyframeResolvesByIdAfterReorder) {
