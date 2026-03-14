@@ -188,6 +188,11 @@ namespace lfs::python {
             "Get estimated bytes retained by redo history");
 
         undo.def(
+            "transaction_bytes",
+            []() { return vis::op::undoHistory().transactionBytes(); },
+            "Get estimated bytes retained by active grouped history transactions");
+
+        undo.def(
             "total_bytes",
             []() { return vis::op::undoHistory().totalBytes(); },
             "Get estimated bytes retained by undo and redo history");
@@ -249,6 +254,7 @@ namespace lfs::python {
                 payload["redo"] = redo_items;
                 payload["undo_bytes"] = vis::op::undoHistory().undoBytes();
                 payload["redo_bytes"] = vis::op::undoHistory().redoBytes();
+                payload["transaction_bytes"] = vis::op::undoHistory().transactionBytes();
                 payload["total_bytes"] = vis::op::undoHistory().totalBytes();
                 payload["transaction_active"] = vis::op::undoHistory().hasActiveTransaction();
                 payload["transaction_depth"] = vis::op::undoHistory().transactionDepth();

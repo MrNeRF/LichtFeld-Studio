@@ -4,9 +4,11 @@
 
 #pragma once
 
+#include "core/export.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
 #include <any>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -23,14 +25,14 @@ namespace lfs::vis {
 
 namespace lfs::vis::op {
 
-    struct UndoMetadata {
+    struct LFS_VIS_API UndoMetadata {
         std::string id;
         std::string label;
         std::string source = "system";
         std::string scope = "general";
     };
 
-    class UndoEntry {
+    class LFS_VIS_API UndoEntry {
     public:
         virtual ~UndoEntry() = default;
         virtual void undo() = 0;
@@ -44,6 +46,10 @@ namespace lfs::vis::op {
             };
         }
         [[nodiscard]] virtual size_t estimatedBytes() const { return 0; }
+        virtual bool tryMerge(const UndoEntry& incoming) {
+            (void)incoming;
+            return false;
+        }
     };
 
     using UndoEntryPtr = std::unique_ptr<UndoEntry>;
@@ -117,7 +123,7 @@ namespace lfs::vis::op {
         [[nodiscard]] bool hasChanges() const;
         [[nodiscard]] std::string name() const override { return "cropbox.transform"; }
         [[nodiscard]] UndoMetadata metadata() const override;
-        [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this); }
+        [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this) + node_name_.size(); }
 
     private:
         void captureAfter();
@@ -140,7 +146,7 @@ namespace lfs::vis::op {
         [[nodiscard]] bool hasChanges() const;
         [[nodiscard]] std::string name() const override { return "ellipsoid.transform"; }
         [[nodiscard]] UndoMetadata metadata() const override;
-        [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this); }
+        [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this) + node_name_.size(); }
 
     private:
         void captureAfter();
@@ -165,6 +171,7 @@ namespace lfs::vis::op {
         [[nodiscard]] std::string name() const override { return label_; }
         [[nodiscard]] UndoMetadata metadata() const override;
         [[nodiscard]] size_t estimatedBytes() const override { return estimated_bytes_; }
+        bool tryMerge(const UndoEntry& incoming) override;
 
     private:
         std::string property_path_;
@@ -173,6 +180,7 @@ namespace lfs::vis::op {
         std::any after_;
         std::function<void(const std::any&)> applier_;
         size_t estimated_bytes_ = 0;
+        std::chrono::steady_clock::time_point updated_at_;
     };
 
     enum class SceneGraphCaptureMode : uint8_t {

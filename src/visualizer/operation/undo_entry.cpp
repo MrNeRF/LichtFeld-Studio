@@ -18,6 +18,7 @@ namespace lfs::vis::op {
         using lfs::core::events::state::PLYAdded;
         using lfs::core::events::state::PLYRemoved;
         using lfs::core::events::state::SceneCleared;
+        constexpr auto PROPERTY_COALESCE_WINDOW = std::chrono::milliseconds(500);
 
         bool cropBoxesEqual(const lfs::core::CropBoxData& lhs, const lfs::core::CropBoxData& rhs) {
             return lhs.min == rhs.min &&
@@ -836,7 +837,8 @@ namespace lfs::vis::op {
           before_(std::move(before)),
           after_(std::move(after)),
           applier_(std::move(applier)),
-          estimated_bytes_(estimateAnyBytes(before_) + estimateAnyBytes(after_)) {}
+          estimated_bytes_(estimateAnyBytes(before_) + estimateAnyBytes(after_)),
+          updated_at_(std::chrono::steady_clock::now()) {}
 
     void PropertyChangeUndoEntry::undo() {
         applier_(before_);
@@ -853,6 +855,22 @@ namespace lfs::vis::op {
             .source = "property",
             .scope = propertyUndoScope(property_path_),
         };
+    }
+
+    bool PropertyChangeUndoEntry::tryMerge(const UndoEntry& incoming) {
+        const auto* next = dynamic_cast<const PropertyChangeUndoEntry*>(&incoming);
+        if (!next || next->property_path_ != property_path_ || next->updated_at_ < updated_at_) {
+            return false;
+        }
+
+        if ((next->updated_at_ - updated_at_) > PROPERTY_COALESCE_WINDOW) {
+            return false;
+        }
+
+        after_ = next->after_;
+        updated_at_ = next->updated_at_;
+        estimated_bytes_ = estimateAnyBytes(before_) + estimateAnyBytes(after_);
+        return true;
     }
 
     std::vector<SceneGraphNodeMetadataSnapshot> SceneGraphMetadataEntry::captureNodes(

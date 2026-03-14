@@ -8,6 +8,8 @@
 #include "operator/operator_registry.hpp"
 #include "rendering/dirty_flags.hpp"
 #include "rendering/rendering_manager.hpp"
+#include <cctype>
+#include <string_view>
 #include <utility>
 
 namespace lfs::vis::op {
@@ -29,12 +31,44 @@ namespace lfs::vis::op {
             }
         }
 
+        [[nodiscard]] std::string sanitizeHistoryId(std::string_view value) {
+            std::string sanitized;
+            sanitized.reserve(value.size());
+
+            bool last_was_underscore = false;
+            for (const unsigned char ch : value) {
+                if (std::isalnum(ch)) {
+                    sanitized.push_back(static_cast<char>(std::tolower(ch)));
+                    last_was_underscore = false;
+                    continue;
+                }
+
+                if (!last_was_underscore) {
+                    sanitized.push_back('_');
+                    last_was_underscore = true;
+                }
+            }
+
+            while (!sanitized.empty() && sanitized.front() == '_') {
+                sanitized.erase(sanitized.begin());
+            }
+            while (!sanitized.empty() && sanitized.back() == '_') {
+                sanitized.pop_back();
+            }
+
+            if (sanitized.empty()) {
+                return "grouped_changes";
+            }
+            return sanitized;
+        }
+
         class CompoundUndoEntry final : public UndoEntry {
         public:
             CompoundUndoEntry(std::string name, std::vector<UndoEntryPtr> entries, size_t estimated_bytes)
                 : name_(std::move(name)),
                   entries_(std::move(entries)),
-                  estimated_bytes_(estimated_bytes) {}
+                  estimated_bytes_(estimated_bytes),
+                  metadata_id_("history.transaction." + sanitizeHistoryId(name_)) {}
 
             void undo() override {
                 size_t undone_count = 0;
@@ -77,7 +111,7 @@ namespace lfs::vis::op {
             [[nodiscard]] std::string name() const override { return name_; }
             [[nodiscard]] UndoMetadata metadata() const override {
                 return UndoMetadata{
-                    .id = "history.transaction",
+                    .id = metadata_id_,
                     .label = name_,
                     .source = "history",
                     .scope = "grouped",
@@ -89,6 +123,7 @@ namespace lfs::vis::op {
             std::string name_;
             std::vector<UndoEntryPtr> entries_;
             size_t estimated_bytes_ = 0;
+            std::string metadata_id_;
         };
 
         void invalidateUndoRedoPollState() {
@@ -104,6 +139,26 @@ namespace lfs::vis::op {
 
         [[nodiscard]] size_t entryBytes(const UndoEntryPtr& entry) {
             return entry ? entry->estimatedBytes() : 0;
+        }
+
+        template <typename Container>
+        bool tryMergeBackEntry(Container& container, size_t& total_bytes, UndoEntryPtr& incoming) {
+            if (container.empty() || !incoming || !container.back()) {
+                return false;
+            }
+
+            const size_t before = entryBytes(container.back());
+            if (!container.back()->tryMerge(*incoming)) {
+                return false;
+            }
+
+            const size_t after = entryBytes(container.back());
+            if (after >= before) {
+                total_bytes += after - before;
+            } else {
+                total_bytes -= before - after;
+            }
+            return true;
         }
 
         [[nodiscard]] UndoStackItem stackItem(const UndoEntryPtr& entry) {
@@ -175,6 +230,17 @@ namespace lfs::vis::op {
         }
     }
 
+    void UndoHistory::trimRedoStack() {
+        while (redo_stack_.size() > MAX_ENTRIES || redo_bytes_ > MAX_BYTES) {
+            if (redo_stack_.empty()) {
+                redo_bytes_ = 0;
+                break;
+            }
+            redo_bytes_ -= entryBytes(redo_stack_.front());
+            redo_stack_.pop_front();
+        }
+    }
+
     void UndoHistory::resetRedoStack() {
         clearStack(redo_stack_, redo_bytes_);
     }
@@ -184,25 +250,43 @@ namespace lfs::vis::op {
             return;
         }
 
+        const size_t entry_bytes = entryBytes(entry);
         bool changed = false;
+        bool merged = false;
         {
             std::lock_guard lock(mutex_);
 
             if (!transactions_.empty()) {
                 auto& frame = transactions_.back();
-                frame.estimated_bytes += entryBytes(entry);
+                if (tryMergeBackEntry(frame.entries, frame.estimated_bytes, entry)) {
+                    return;
+                }
+                frame.estimated_bytes += entry_bytes;
                 frame.entries.push_back(std::move(entry));
                 return;
             }
 
             resetRedoStack();
-            undo_stack_.push_back(std::move(entry));
-            undo_bytes_ += entryBytes(undo_stack_.back());
-            trimUndoStack();
-            bumpGenerationLocked();
-            changed = true;
-
-            LOG_DEBUG("Pushed undo entry: {} (stack size: {})", undo_stack_.back()->name(), undo_stack_.size());
+            if (tryMergeBackEntry(undo_stack_, undo_bytes_, entry)) {
+                trimUndoStack();
+                bumpGenerationLocked();
+                changed = true;
+                merged = true;
+            } else {
+                undo_stack_.push_back(std::move(entry));
+                undo_bytes_ += entry_bytes;
+                trimUndoStack();
+                bumpGenerationLocked();
+                changed = true;
+            }
+            if (!undo_stack_.empty()) {
+                LOG_DEBUG("{} undo entry: {} (stack size: {})",
+                          merged ? "Merged" : "Pushed",
+                          undo_stack_.back()->name(),
+                          undo_stack_.size());
+            } else {
+                LOG_DEBUG("Dropped undo entry after trimming oversized history payload");
+            }
         }
         if (changed) {
             invalidateUndoRedoPollState();
@@ -307,7 +391,9 @@ namespace lfs::vis::op {
                 auto& target_bytes = undo_direction ? redo_bytes_ : undo_bytes_;
                 target_stack.push_back(std::move(entry));
                 target_bytes += bytes;
-                if (!undo_direction) {
+                if (undo_direction) {
+                    trimRedoStack();
+                } else {
                     trimUndoStack();
                 }
                 bumpGenerationLocked();
@@ -395,21 +481,27 @@ namespace lfs::vis::op {
                     return;
                 }
 
+                const size_t committed_bytes = entryBytes(committed_entry);
+
                 if (!transactions_.empty()) {
                     auto& parent = transactions_.back();
-                    parent.estimated_bytes += entryBytes(committed_entry);
+                    parent.estimated_bytes += committed_bytes;
                     parent.entries.push_back(std::move(committed_entry));
                     bumpGenerationLocked();
                     changed = true;
                 } else {
                     resetRedoStack();
-                    undo_bytes_ += entryBytes(committed_entry);
+                    undo_bytes_ += committed_bytes;
                     undo_stack_.push_back(std::move(committed_entry));
                     trimUndoStack();
                     bumpGenerationLocked();
                     changed = true;
-                    LOG_DEBUG("Committed history transaction '{}' (stack size: {})",
-                              undo_stack_.back()->name(), undo_stack_.size());
+                    if (!undo_stack_.empty()) {
+                        LOG_DEBUG("Committed history transaction '{}' (stack size: {})",
+                                  undo_stack_.back()->name(), undo_stack_.size());
+                    } else {
+                        LOG_DEBUG("Dropped committed history transaction after trimming oversized payload");
+                    }
                 }
             }
         }
@@ -567,6 +659,15 @@ namespace lfs::vis::op {
     size_t UndoHistory::redoBytes() const {
         std::lock_guard lock(mutex_);
         return redo_bytes_;
+    }
+
+    size_t UndoHistory::transactionBytes() const {
+        std::lock_guard lock(mutex_);
+        size_t total = 0;
+        for (const auto& frame : transactions_) {
+            total += frame.estimated_bytes;
+        }
+        return total;
     }
 
     size_t UndoHistory::totalBytes() const {

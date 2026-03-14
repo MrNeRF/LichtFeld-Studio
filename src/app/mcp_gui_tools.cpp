@@ -864,6 +864,7 @@ namespace lfs::app {
                 {"redo_items", std::move(redo_items)},
                 {"undo_bytes", static_cast<int64_t>(history.undoBytes())},
                 {"redo_bytes", static_cast<int64_t>(history.redoBytes())},
+                {"transaction_bytes", static_cast<int64_t>(history.transactionBytes())},
                 {"total_bytes", static_cast<int64_t>(history.totalBytes())},
                 {"max_entries", static_cast<int64_t>(vis::op::UndoHistory::MAX_ENTRIES)},
                 {"max_bytes", static_cast<int64_t>(vis::op::UndoHistory::MAX_BYTES)},

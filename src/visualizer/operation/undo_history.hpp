@@ -17,12 +17,12 @@
 
 namespace lfs::vis::op {
 
-    struct UndoStackItem {
+    struct LFS_VIS_API UndoStackItem {
         UndoMetadata metadata;
         size_t estimated_bytes = 0;
     };
 
-    struct HistoryResult {
+    struct LFS_VIS_API HistoryResult {
         bool success = false;
         bool changed = false;
         size_t steps_performed = 0;
@@ -59,6 +59,7 @@ namespace lfs::vis::op {
         [[nodiscard]] size_t redoCount() const;
         [[nodiscard]] size_t undoBytes() const;
         [[nodiscard]] size_t redoBytes() const;
+        [[nodiscard]] size_t transactionBytes() const;
         [[nodiscard]] size_t totalBytes() const;
         [[nodiscard]] bool hasActiveTransaction() const;
         [[nodiscard]] size_t transactionDepth() const;
@@ -84,6 +85,7 @@ namespace lfs::vis::op {
 
         void clearStack(std::deque<UndoEntryPtr>& stack, size_t& bytes);
         void trimUndoStack();
+        void trimRedoStack();
         void resetRedoStack();
         void notifyObservers();
         void bumpGenerationLocked();

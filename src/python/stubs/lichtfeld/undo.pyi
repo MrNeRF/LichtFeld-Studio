@@ -42,6 +42,9 @@ def undo_bytes() -> int:
 def redo_bytes() -> int:
     """Get estimated bytes retained by redo history"""
 
+def transaction_bytes() -> int:
+    """Get estimated bytes retained by active grouped history transactions"""
+
 def total_bytes() -> int:
     """Get estimated bytes retained by undo and redo history"""
 

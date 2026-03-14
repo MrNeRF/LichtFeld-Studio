@@ -29,7 +29,7 @@ class HistoryPanel(Panel):
     template = "rmlui/history_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (440, 0)
-    update_interval_ms = 1000
+    update_interval_ms = 5000
 
     def __init__(self):
         self._handle = None
@@ -68,9 +68,7 @@ class HistoryPanel(Panel):
     def on_mount(self, doc):
         del doc
         self._last_state_key = None
-        subscribe = getattr(lf.undo, "subscribe", None)
-        if callable(subscribe):
-            self._subscription_id = int(subscribe(self._on_history_changed) or 0)
+        self._subscription_id = int(lf.undo.subscribe(self._on_history_changed) or 0)
         self._refresh(force=True)
 
     def on_update(self, doc):
@@ -84,9 +82,8 @@ class HistoryPanel(Panel):
         self._last_state_key = None
 
     def on_unmount(self, doc):
-        unsubscribe = getattr(lf.undo, "unsubscribe", None)
-        if self._subscription_id and callable(unsubscribe):
-            unsubscribe(self._subscription_id)
+        if self._subscription_id:
+            lf.undo.unsubscribe(self._subscription_id)
         self._subscription_id = 0
         doc.remove_data_model("history_panel")
         self._handle = None
@@ -108,19 +105,7 @@ class HistoryPanel(Panel):
         count = max(0, int(args[1]))
         if count <= 0:
             return
-        jump = getattr(lf.undo, "jump", None)
-        if callable(jump):
-            jump(stack, count)
-        elif stack == "undo":
-            for _ in range(count):
-                if not lf.undo.can_undo():
-                    break
-                lf.undo.undo()
-        elif stack == "redo":
-            for _ in range(count):
-                if not lf.undo.can_redo():
-                    break
-                lf.undo.redo()
+        lf.undo.jump(stack, count)
         self._last_state_key = None
 
     def _on_history_changed(self):

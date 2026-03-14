@@ -24,6 +24,7 @@ namespace lfs::python {
         void redo() override;
         [[nodiscard]] std::string name() const override { return name_; }
         [[nodiscard]] vis::op::UndoMetadata metadata() const override;
+        [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this) + name_.size() + 128; }
 
     private:
         std::string name_;

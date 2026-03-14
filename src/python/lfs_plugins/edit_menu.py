@@ -16,18 +16,17 @@ class EditMenu:
 
     def menu_items(self):
         current = lf.ui.get_current_language()
-        undo_api = getattr(lf, "undo", None)
-        undo_name = undo_api.get_undo_name() if undo_api else ""
-        redo_name = undo_api.get_redo_name() if undo_api else ""
+        undo_name = lf.undo.get_undo_name()
+        redo_name = lf.undo.get_redo_name()
         undo_label = f"Undo {undo_name}" if undo_name else "Undo"
         redo_label = f"Redo {redo_name}" if redo_name else "Redo"
         undo_history_items = [
-            menu_action(name, lambda: None, enabled=False)
-            for name in (undo_api.undo_names() if undo_api else [])
+            menu_action(name, lambda steps=index + 1: lf.undo.jump("undo", steps))
+            for index, name in enumerate(lf.undo.undo_names())
         ] or [menu_action("Nothing to undo", lambda: None, enabled=False)]
         redo_history_items = [
-            menu_action(name, lambda: None, enabled=False)
-            for name in (undo_api.redo_names() if undo_api else [])
+            menu_action(name, lambda steps=index + 1: lf.undo.jump("redo", steps))
+            for index, name in enumerate(lf.undo.redo_names())
         ] or [menu_action("Nothing to redo", lambda: None, enabled=False)]
         language_items = [
             menu_toggle(
@@ -41,15 +40,15 @@ class EditMenu:
         return [
             menu_action(
                 undo_label,
-                undo_api.undo if undo_api else (lambda: None),
+                lf.undo.undo,
                 shortcut="Ctrl+Z",
-                enabled=undo_api.can_undo() if undo_api else False,
+                enabled=lf.undo.can_undo(),
             ),
             menu_action(
                 redo_label,
-                undo_api.redo if undo_api else (lambda: None),
+                lf.undo.redo,
                 shortcut="Ctrl+Shift+Z",
-                enabled=undo_api.can_redo() if undo_api else False,
+                enabled=lf.undo.can_redo(),
             ),
             menu_submenu("Undo Stack", undo_history_items),
             menu_submenu("Redo Stack", redo_history_items),
