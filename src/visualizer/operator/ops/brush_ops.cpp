@@ -312,7 +312,30 @@ namespace lfs::vis::op {
         cumulative_selection_ = lfs::core::Tensor();
     }
 
-    void BrushStrokeOperator::finalizeSaturationStroke(OperatorContext& /*ctx*/) {
+    void BrushStrokeOperator::finalizeSaturationStroke(OperatorContext& ctx) {
+        if (sh0_before_ && sh0_before_->is_valid() && !saturation_node_name_.empty()) {
+            auto entry = std::make_unique<TensorUndoEntry>(
+                "brush.saturation",
+                UndoMetadata{
+                    .id = "tensor.saturation",
+                    .label = "Saturation Brush",
+                    .source = "operator",
+                    .scope = "tensor",
+                },
+                saturation_node_name_ + ".sh0",
+                sh0_before_->clone(),
+                [&scene_manager = ctx.scene(), node_name = saturation_node_name_]() -> lfs::core::Tensor* {
+                    auto* node = scene_manager.getScene().getMutableNode(node_name);
+                    if (!node || !node->model) {
+                        return nullptr;
+                    }
+                    return &node->model->sh0();
+                });
+            entry->captureAfter();
+            if (entry->hasChanges()) {
+                undoHistory().push(std::move(entry));
+            }
+        }
         sh0_before_.reset();
         saturation_node_name_.clear();
     }

@@ -3,7 +3,7 @@
 from collections.abc import Callable
 
 
-def push(name: str, undo: object, redo: object, validate: bool = False) -> None:
+def push(name: str, undo: object, redo: object, validate: bool = False, id: str = '', source: str = 'python', scope: str = 'custom', estimated_bytes: int = 0, dirty_flags: int = 0, merge_window_ms: int = 0) -> None:
     """Push an undo step with undo/redo functions"""
 
 def undo() -> bool:
@@ -45,6 +45,12 @@ def redo_bytes() -> int:
 def transaction_bytes() -> int:
     """Get estimated bytes retained by active grouped history transactions"""
 
+def max_bytes() -> int:
+    """Get the configured total retained history byte budget"""
+
+def set_max_bytes(max_bytes: int) -> None:
+    """Set the retained history byte budget"""
+
 def total_bytes() -> int:
     """Get estimated bytes retained by undo and redo history"""
 
@@ -60,6 +66,9 @@ def has_active_transaction() -> bool:
 def transaction_depth() -> int:
     """Get the current grouped history transaction nesting depth"""
 
+def transaction_age_ms() -> int:
+    """Get the age of the active grouped history transaction in milliseconds"""
+
 def active_transaction_name() -> str:
     """Get the current grouped history transaction label"""
 
@@ -72,6 +81,11 @@ def subscribe(callback: Callable) -> int:
 def unsubscribe(subscription_id: int) -> None:
     """Unsubscribe a shared history observer"""
 
+def shrink_to_fit(target_gpu_bytes: int) -> None:
+    """
+    Offload history to CPU and evict cold entries until GPU usage fits the requested budget
+    """
+
 def stack() -> dict:
     """Get the structured undo/redo stack state"""
 
@@ -81,7 +95,7 @@ class Transaction:
     def __enter__(self) -> Transaction:
         """Begin transaction context"""
 
-    def __exit__(self, arg0: object, arg1: object, arg2: object, /) -> bool:
+    def __exit__(self, *args) -> bool:
         """Commit transaction on context exit"""
 
     def add(self, undo: object, redo: object) -> None:

@@ -8,6 +8,7 @@
 #include "operator/operator_registry.hpp"
 #include "rendering/dirty_flags.hpp"
 #include "rendering/rendering_manager.hpp"
+#include <algorithm>
 #include <cctype>
 #include <string_view>
 #include <utility>
@@ -15,6 +16,23 @@
 namespace lfs::vis::op {
 
     namespace {
+        template <typename Fn>
+        class ScopeExit final {
+        public:
+            explicit ScopeExit(Fn fn) : fn_(std::move(fn)) {}
+            ScopeExit(const ScopeExit&) = delete;
+            ScopeExit& operator=(const ScopeExit&) = delete;
+            ~ScopeExit() {
+                if (active_) {
+                    fn_();
+                }
+            }
+
+        private:
+            Fn fn_;
+            bool active_ = true;
+        };
+
         void restoreUndoneTail(const std::vector<UndoEntryPtr>& entries, const size_t undone_count) {
             if (undone_count == 0) {
                 return;
@@ -82,8 +100,12 @@ namespace lfs::vis::op {
                         restoreUndoneTail(entries_, undone_count);
                     } catch (const std::exception& rollback_error) {
                         LOG_ERROR("Compound undo rollback failed for '{}': {}", name_, rollback_error.what());
+                        throw HistoryCorruptionError("Compound undo rollback failed for '" + name_ +
+                                                     "': " + rollback_error.what());
                     } catch (...) {
                         LOG_ERROR("Compound undo rollback failed for '{}': unknown exception", name_);
+                        throw HistoryCorruptionError("Compound undo rollback failed for '" + name_ +
+                                                     "': unknown exception");
                     }
                     throw;
                 }
@@ -101,8 +123,12 @@ namespace lfs::vis::op {
                         restoreRedoneHead(entries_, redone_count);
                     } catch (const std::exception& rollback_error) {
                         LOG_ERROR("Compound redo rollback failed for '{}': {}", name_, rollback_error.what());
+                        throw HistoryCorruptionError("Compound redo rollback failed for '" + name_ +
+                                                     "': " + rollback_error.what());
                     } catch (...) {
                         LOG_ERROR("Compound redo rollback failed for '{}': unknown exception", name_);
+                        throw HistoryCorruptionError("Compound redo rollback failed for '" + name_ +
+                                                     "': unknown exception");
                     }
                     throw;
                 }
@@ -141,6 +167,15 @@ namespace lfs::vis::op {
                     }
                 }
             }
+            [[nodiscard]] DirtyMask dirtyFlags() const override {
+                DirtyMask flags = 0;
+                for (const auto& entry : entries_) {
+                    if (entry) {
+                        flags |= entry->dirtyFlags();
+                    }
+                }
+                return flags == 0 ? DirtyFlag::ALL : flags;
+            }
 
         private:
             std::string name_;
@@ -153,10 +188,10 @@ namespace lfs::vis::op {
             operators().invalidatePollCache();
         }
 
-        void refreshAfterHistoryPlayback() {
+        void refreshAfterHistoryPlayback(const DirtyMask flags = DirtyFlag::ALL) {
             invalidateUndoRedoPollState();
             if (auto* rm = services().renderingOrNull()) {
-                rm->markDirty(DirtyFlag::ALL);
+                rm->markDirty(flags == 0 ? DirtyFlag::ALL : flags);
             }
         }
 
@@ -208,6 +243,63 @@ namespace lfs::vis::op {
 
     } // namespace
 
+    TransactionGuard::TransactionGuard(std::string name) {
+        undoHistory().beginTransaction(std::move(name));
+        active_ = true;
+    }
+
+    TransactionGuard::~TransactionGuard() {
+        if (!active_) {
+            return;
+        }
+        try {
+            undoHistory().rollbackTransaction();
+        } catch (...) {
+            LOG_ERROR("TransactionGuard rollback failed during destruction");
+        }
+    }
+
+    void TransactionGuard::commit() {
+        if (!active_) {
+            return;
+        }
+        undoHistory().commitTransaction();
+        active_ = false;
+    }
+
+    void TransactionGuard::rollback() {
+        if (!active_) {
+            return;
+        }
+        undoHistory().rollbackTransaction();
+        active_ = false;
+    }
+
+    void TransactionGuard::release() {
+        active_ = false;
+    }
+
+    TransactionGuard::TransactionGuard(TransactionGuard&& other) noexcept
+        : active_(other.active_) {
+        other.active_ = false;
+    }
+
+    TransactionGuard& TransactionGuard::operator=(TransactionGuard&& other) noexcept {
+        if (this == &other) {
+            return *this;
+        }
+        if (active_) {
+            try {
+                undoHistory().rollbackTransaction();
+            } catch (...) {
+                LOG_ERROR("TransactionGuard rollback failed during move assignment");
+            }
+        }
+        active_ = other.active_;
+        other.active_ = false;
+        return *this;
+    }
+
     UndoHistory& UndoHistory::instance() {
         static UndoHistory instance;
         return instance;
@@ -218,8 +310,20 @@ namespace lfs::vis::op {
         bytes = 0;
     }
 
+    void UndoHistory::clearLocked() {
+        clearStack(undo_stack_, undo_bytes_);
+        clearStack(redo_stack_, redo_bytes_);
+        transactions_.clear();
+        updateAvailabilityLocked();
+    }
+
     void UndoHistory::bumpGenerationLocked() {
-        ++generation_;
+        generation_.fetch_add(1, std::memory_order_release);
+    }
+
+    void UndoHistory::updateAvailabilityLocked() {
+        can_undo_.store(!undo_stack_.empty(), std::memory_order_release);
+        can_redo_.store(!redo_stack_.empty(), std::memory_order_release);
     }
 
     size_t UndoHistory::transactionBytesLocked() const {
@@ -284,44 +388,59 @@ namespace lfs::vis::op {
     }
 
     void UndoHistory::notifyObservers() {
-        std::vector<Observer> observers;
+        std::vector<std::pair<ObserverId, Observer>> observers;
         {
             std::lock_guard lock(mutex_);
             observers.reserve(observers_.size());
-            for (const auto& [_, observer] : observers_) {
+            for (const auto& [id, observer] : observers_) {
                 if (observer) {
-                    observers.push_back(observer);
+                    observers.emplace_back(id, observer);
                 }
             }
         }
 
-        for (const auto& observer : observers) {
+        std::vector<ObserverId> failed_ids;
+        for (const auto& [id, observer] : observers) {
             try {
                 observer();
             } catch (const std::exception& e) {
                 LOG_ERROR("UndoHistory observer failed: {}", e.what());
+                failed_ids.push_back(id);
             } catch (...) {
                 LOG_ERROR("UndoHistory observer failed: unknown exception");
+                failed_ids.push_back(id);
+            }
+        }
+
+        if (!failed_ids.empty()) {
+            std::lock_guard lock(mutex_);
+            for (const auto id : failed_ids) {
+                if (observers_.erase(id) > 0) {
+                    LOG_WARN("UndoHistory observer {} unsubscribed after throwing", id);
+                }
             }
         }
     }
 
     void UndoHistory::trimUndoStack() {
-        while (undo_stack_.size() > 1 && (undo_stack_.size() > MAX_ENTRIES || undo_bytes_ > MAX_BYTES)) {
+        while (undo_stack_.size() > 1 && (undo_stack_.size() > MAX_ENTRIES || undo_bytes_ > max_bytes_)) {
             undo_bytes_ -= entryBytes(undo_stack_.front());
             undo_stack_.pop_front();
         }
+        updateAvailabilityLocked();
     }
 
     void UndoHistory::trimRedoStack() {
-        while (redo_stack_.size() > 1 && (redo_stack_.size() > MAX_ENTRIES || redo_bytes_ > MAX_BYTES)) {
+        while (redo_stack_.size() > 1 && (redo_stack_.size() > MAX_ENTRIES || redo_bytes_ > max_bytes_)) {
             redo_bytes_ -= entryBytes(redo_stack_.front());
             redo_stack_.pop_front();
         }
+        updateAvailabilityLocked();
     }
 
     void UndoHistory::resetRedoStack() {
         clearStack(redo_stack_, redo_bytes_);
+        updateAvailabilityLocked();
     }
 
     void UndoHistory::push(UndoEntryPtr entry) {
@@ -332,45 +451,63 @@ namespace lfs::vis::op {
         const size_t entry_bytes = entryBytes(entry);
         bool changed = false;
         bool merged = false;
+        bool invalidate_poll = false;
+        std::unique_lock playback_lock(playback_mutex_);
         {
             std::lock_guard lock(mutex_);
+            if (playback_depth_ > 0 && playback_thread_id_ == std::this_thread::get_id()) {
+                LOG_WARN("Ignoring history push '{}' during playback", entry->name());
+                return;
+            }
 
             if (!transactions_.empty()) {
                 auto& frame = transactions_.back();
                 if (tryMergeBackEntry(frame.entries, frame.estimated_bytes, entry)) {
-                    return;
+                    bumpGenerationLocked();
+                    changed = true;
+                    merged = true;
+                } else {
+                    frame.estimated_bytes += entry_bytes;
+                    frame.entries.push_back(std::move(entry));
+                    bumpGenerationLocked();
+                    changed = true;
                 }
-                frame.estimated_bytes += entry_bytes;
-                frame.entries.push_back(std::move(entry));
-                return;
-            }
-
-            resetRedoStack();
-            if (tryMergeBackEntry(undo_stack_, undo_bytes_, entry)) {
-                trimUndoStack();
-                refreshResidencyLocked();
-                bumpGenerationLocked();
-                changed = true;
-                merged = true;
+                LOG_DEBUG("{} transaction entry in '{}': {} (transaction size: {})",
+                          merged ? "Merged" : "Queued",
+                          frame.name,
+                          frame.entries.back()->name(),
+                          frame.entries.size());
             } else {
-                undo_stack_.push_back(std::move(entry));
-                undo_bytes_ += entry_bytes;
-                trimUndoStack();
-                refreshResidencyLocked();
-                bumpGenerationLocked();
-                changed = true;
-            }
-            if (!undo_stack_.empty()) {
-                LOG_DEBUG("{} undo entry: {} (stack size: {})",
-                          merged ? "Merged" : "Pushed",
-                          undo_stack_.back()->name(),
-                          undo_stack_.size());
-            } else {
-                LOG_DEBUG("Dropped undo entry after trimming oversized history payload");
+                resetRedoStack();
+                invalidate_poll = true;
+                if (tryMergeBackEntry(undo_stack_, undo_bytes_, entry)) {
+                    trimUndoStack();
+                    refreshResidencyLocked();
+                    bumpGenerationLocked();
+                    changed = true;
+                    merged = true;
+                } else {
+                    undo_stack_.push_back(std::move(entry));
+                    undo_bytes_ += entry_bytes;
+                    trimUndoStack();
+                    refreshResidencyLocked();
+                    bumpGenerationLocked();
+                    changed = true;
+                }
+                if (undo_stack_.empty()) {
+                    LOG_DEBUG("Dropped undo entry after trimming oversized history payload");
+                } else {
+                    LOG_DEBUG("{} undo entry: {} (stack size: {})",
+                              merged ? "Merged" : "Pushed",
+                              undo_stack_.back()->name(),
+                              undo_stack_.size());
+                }
             }
         }
         if (changed) {
-            invalidateUndoRedoPollState();
+            if (invalidate_poll) {
+                invalidateUndoRedoPollState();
+            }
             notifyObservers();
         }
     }
@@ -395,16 +532,42 @@ namespace lfs::vis::op {
             };
         }
 
+        {
+            std::lock_guard lock(mutex_);
+            if (playback_depth_ > 0 && playback_thread_id_ == std::this_thread::get_id()) {
+                return HistoryResult{
+                    .success = false,
+                    .changed = false,
+                    .steps_performed = 0,
+                    .error = "History playback already in progress",
+                };
+            }
+            ++playback_depth_;
+            playback_thread_id_ = std::this_thread::get_id();
+        }
+        ScopeExit playback_guard([this]() {
+            std::lock_guard lock(mutex_);
+            if (playback_depth_ == 0) {
+                return;
+            }
+            --playback_depth_;
+            if (playback_depth_ == 0) {
+                playback_thread_id_ = {};
+            }
+        });
+
         HistoryResult result{
             .success = true,
             .changed = false,
             .steps_performed = 0,
             .error = {},
         };
+        DirtyMask dirty_flags = 0;
 
         for (size_t step = 0; step < count; ++step) {
             UndoEntryPtr entry;
             size_t bytes = 0;
+            DirtyMask entry_dirty_flags = DirtyFlag::ALL;
             {
                 std::lock_guard lock(mutex_);
                 auto& source_stack = undo_direction ? undo_stack_ : redo_stack_;
@@ -419,7 +582,9 @@ namespace lfs::vis::op {
                 entry = std::move(source_stack.back());
                 source_stack.pop_back();
                 bytes = entryBytes(entry);
+                entry_dirty_flags = entry ? entry->dirtyFlags() : DirtyFlag::ALL;
                 source_bytes -= bytes;
+                updateAvailabilityLocked();
             }
 
             LOG_DEBUG("{}ing: {}", undo_direction ? "Undo" : "Redo", entry->name());
@@ -431,6 +596,19 @@ namespace lfs::vis::op {
                 } else {
                     entry->redo();
                 }
+            } catch (const HistoryCorruptionError& e) {
+                LOG_ERROR("Fatal {} failure for '{}': {}",
+                          undo_direction ? "undo" : "redo", entry->name(), e.what());
+                {
+                    std::lock_guard lock(mutex_);
+                    clearLocked();
+                    bumpGenerationLocked();
+                }
+                result.success = false;
+                result.error = e.what();
+                refreshAfterHistoryPlayback();
+                notifyObservers();
+                return result;
             } catch (const std::exception& e) {
                 LOG_ERROR("{} failed for '{}': {}",
                           undo_direction ? "Undo" : "Redo", entry->name(), e.what());
@@ -441,11 +619,12 @@ namespace lfs::vis::op {
                     source_stack.push_back(std::move(entry));
                     source_bytes += bytes;
                     refreshResidencyLocked();
+                    updateAvailabilityLocked();
                 }
                 result.success = false;
                 result.error = e.what();
                 if (result.changed) {
-                    refreshAfterHistoryPlayback();
+                    refreshAfterHistoryPlayback(dirty_flags);
                     notifyObservers();
                 }
                 return result;
@@ -459,11 +638,12 @@ namespace lfs::vis::op {
                     source_stack.push_back(std::move(entry));
                     source_bytes += bytes;
                     refreshResidencyLocked();
+                    updateAvailabilityLocked();
                 }
                 result.success = false;
                 result.error = "unknown exception";
                 if (result.changed) {
-                    refreshAfterHistoryPlayback();
+                    refreshAfterHistoryPlayback(dirty_flags);
                     notifyObservers();
                 }
                 return result;
@@ -481,15 +661,17 @@ namespace lfs::vis::op {
                     trimUndoStack();
                 }
                 refreshResidencyLocked();
+                updateAvailabilityLocked();
                 bumpGenerationLocked();
             }
 
+            dirty_flags |= entry_dirty_flags;
             result.changed = true;
             ++result.steps_performed;
         }
 
         if (result.changed) {
-            refreshAfterHistoryPlayback();
+            refreshAfterHistoryPlayback(dirty_flags);
             notifyObservers();
         }
         return result;
@@ -513,12 +695,15 @@ namespace lfs::vis::op {
 
     void UndoHistory::clear() {
         bool changed = false;
+        std::unique_lock playback_lock(playback_mutex_);
         {
             std::lock_guard lock(mutex_);
+            if (playback_depth_ > 0 && playback_thread_id_ == std::this_thread::get_id()) {
+                LOG_WARN("Ignoring history clear during playback");
+                return;
+            }
             changed = !undo_stack_.empty() || !redo_stack_.empty() || !transactions_.empty();
-            clearStack(undo_stack_, undo_bytes_);
-            clearStack(redo_stack_, redo_bytes_);
-            transactions_.clear();
+            clearLocked();
             if (changed) {
                 bumpGenerationLocked();
             }
@@ -530,12 +715,18 @@ namespace lfs::vis::op {
     }
 
     void UndoHistory::beginTransaction(std::string name) {
+        std::unique_lock playback_lock(playback_mutex_);
         {
             std::lock_guard lock(mutex_);
+            if (playback_depth_ > 0 && playback_thread_id_ == std::this_thread::get_id()) {
+                LOG_WARN("Ignoring history transaction begin during playback");
+                return;
+            }
             transactions_.push_back(TransactionFrame{
                 .name = std::move(name),
                 .entries = {},
                 .estimated_bytes = 0,
+                .started_at = std::chrono::steady_clock::now(),
             });
             bumpGenerationLocked();
         }
@@ -545,9 +736,15 @@ namespace lfs::vis::op {
     void UndoHistory::commitTransaction() {
         UndoEntryPtr committed_entry;
         bool changed = false;
+        bool invalidate_poll = false;
 
+        std::unique_lock playback_lock(playback_mutex_);
         {
             std::lock_guard lock(mutex_);
+            if (playback_depth_ > 0 && playback_thread_id_ == std::this_thread::get_id()) {
+                LOG_WARN("Ignoring history transaction commit during playback");
+                return;
+            }
             if (transactions_.empty()) {
                 return;
             }
@@ -576,10 +773,12 @@ namespace lfs::vis::op {
                     changed = true;
                 } else {
                     resetRedoStack();
+                    invalidate_poll = true;
                     undo_bytes_ += committed_bytes;
                     undo_stack_.push_back(std::move(committed_entry));
                     trimUndoStack();
                     refreshResidencyLocked();
+                    updateAvailabilityLocked();
                     bumpGenerationLocked();
                     changed = true;
                     if (!undo_stack_.empty()) {
@@ -593,16 +792,35 @@ namespace lfs::vis::op {
         }
 
         if (changed) {
-            invalidateUndoRedoPollState();
+            if (invalidate_poll) {
+                invalidateUndoRedoPollState();
+            }
             notifyObservers();
         }
     }
 
     HistoryResult UndoHistory::rollbackTransaction() {
-        std::vector<UndoEntryPtr> entries;
+        std::unique_lock playback_lock(playback_mutex_, std::try_to_lock);
+        if (!playback_lock.owns_lock()) {
+            return HistoryResult{
+                .success = false,
+                .changed = false,
+                .steps_performed = 0,
+                .error = "History playback already in progress",
+            };
+        }
 
+        TransactionFrame frame;
         {
             std::lock_guard lock(mutex_);
+            if (playback_depth_ > 0 && playback_thread_id_ == std::this_thread::get_id()) {
+                return HistoryResult{
+                    .success = false,
+                    .changed = false,
+                    .steps_performed = 0,
+                    .error = "History playback already in progress",
+                };
+            }
             if (transactions_.empty()) {
                 return HistoryResult{
                     .success = false,
@@ -612,10 +830,22 @@ namespace lfs::vis::op {
                 };
             }
 
-            entries = std::move(transactions_.back().entries);
+            ++playback_depth_;
+            playback_thread_id_ = std::this_thread::get_id();
+            frame = std::move(transactions_.back());
             transactions_.pop_back();
             bumpGenerationLocked();
         }
+        ScopeExit playback_guard([this]() {
+            std::lock_guard lock(mutex_);
+            if (playback_depth_ == 0) {
+                return;
+            }
+            --playback_depth_;
+            if (playback_depth_ == 0) {
+                playback_thread_id_ = {};
+            }
+        });
 
         HistoryResult result{
             .success = true,
@@ -623,52 +853,94 @@ namespace lfs::vis::op {
             .steps_performed = 0,
             .error = {},
         };
+        DirtyMask dirty_flags = 0;
 
+        auto restore_transaction = [this, &frame]() {
+            std::lock_guard lock(mutex_);
+            transactions_.push_back(std::move(frame));
+            bumpGenerationLocked();
+        };
+        auto clear_history = [this]() {
+            std::lock_guard lock(mutex_);
+            clearLocked();
+            bumpGenerationLocked();
+        };
+
+        auto& entries = frame.entries;
         if (entries.empty()) {
             notifyObservers();
             return result;
         }
 
-        std::unique_lock playback_lock(playback_mutex_, std::try_to_lock);
-        if (!playback_lock.owns_lock()) {
-            notifyObservers();
-            return HistoryResult{
-                .success = false,
-                .changed = false,
-                .steps_performed = 0,
-                .error = "History playback already in progress",
-            };
-        }
-
         size_t undone_count = 0;
         for (auto it = entries.rbegin(); it != entries.rend(); ++it) {
             try {
+                (*it)->restoreToPreferredDevice();
                 (*it)->undo();
                 ++undone_count;
+                dirty_flags |= (*it)->dirtyFlags();
+            } catch (const HistoryCorruptionError& e) {
+                LOG_ERROR("Rollback encountered fatal history corruption for '{}': {}", (*it)->name(), e.what());
+                clear_history();
+                result.success = false;
+                result.error = "Rollback failed and history was cleared: " + std::string(e.what());
+                refreshAfterHistoryPlayback();
+                notifyObservers();
+                return result;
             } catch (const std::exception& e) {
                 LOG_ERROR("Rollback failed for '{}': {}", (*it)->name(), e.what());
                 try {
                     restoreUndoneTail(entries, undone_count);
+                    restore_transaction();
                 } catch (const std::exception& rollback_error) {
                     LOG_ERROR("Rollback compensation failed: {}", rollback_error.what());
+                    clear_history();
+                    result.success = false;
+                    result.error =
+                        "Rollback failed and compensation failed; history cleared: " + std::string(rollback_error.what());
+                    refreshAfterHistoryPlayback();
+                    notifyObservers();
+                    return result;
                 } catch (...) {
                     LOG_ERROR("Rollback compensation failed: unknown exception");
+                    clear_history();
+                    result.success = false;
+                    result.error = "Rollback failed and compensation failed; history cleared: unknown exception";
+                    refreshAfterHistoryPlayback();
+                    notifyObservers();
+                    return result;
                 }
                 result.success = false;
                 result.error = e.what();
+                refreshAfterHistoryPlayback();
                 notifyObservers();
                 return result;
             } catch (...) {
                 LOG_ERROR("Rollback failed for '{}': unknown exception", (*it)->name());
                 try {
                     restoreUndoneTail(entries, undone_count);
+                    restore_transaction();
                 } catch (const std::exception& rollback_error) {
                     LOG_ERROR("Rollback compensation failed: {}", rollback_error.what());
+                    clear_history();
+                    result.success = false;
+                    result.error =
+                        "Rollback failed and compensation failed; history cleared: " + std::string(rollback_error.what());
+                    refreshAfterHistoryPlayback();
+                    notifyObservers();
+                    return result;
                 } catch (...) {
                     LOG_ERROR("Rollback compensation failed: unknown exception");
+                    clear_history();
+                    result.success = false;
+                    result.error = "Rollback failed and compensation failed; history cleared: unknown exception";
+                    refreshAfterHistoryPlayback();
+                    notifyObservers();
+                    return result;
                 }
                 result.success = false;
                 result.error = "unknown exception";
+                refreshAfterHistoryPlayback();
                 notifyObservers();
                 return result;
             }
@@ -676,19 +948,17 @@ namespace lfs::vis::op {
 
         result.changed = undone_count > 0;
         result.steps_performed = undone_count;
-        refreshAfterHistoryPlayback();
+        refreshAfterHistoryPlayback(dirty_flags);
         notifyObservers();
         return result;
     }
 
     bool UndoHistory::canUndo() const {
-        std::lock_guard lock(mutex_);
-        return !undo_stack_.empty();
+        return can_undo_.load(std::memory_order_acquire);
     }
 
     bool UndoHistory::canRedo() const {
-        std::lock_guard lock(mutex_);
-        return !redo_stack_.empty();
+        return can_redo_.load(std::memory_order_acquire);
     }
 
     std::string UndoHistory::undoName() const {
@@ -757,6 +1027,11 @@ namespace lfs::vis::op {
         return totalBytesLocked();
     }
 
+    size_t UndoHistory::maxBytes() const {
+        std::lock_guard lock(mutex_);
+        return max_bytes_;
+    }
+
     UndoMemoryBreakdown UndoHistory::undoMemory() const {
         std::lock_guard lock(mutex_);
         return stackMemoryLocked(undo_stack_);
@@ -787,6 +1062,15 @@ namespace lfs::vis::op {
         return transactions_.size();
     }
 
+    uint64_t UndoHistory::transactionAgeMs() const {
+        std::lock_guard lock(mutex_);
+        if (transactions_.empty()) {
+            return 0;
+        }
+        const auto age = std::chrono::steady_clock::now() - transactions_.back().started_at;
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(age).count());
+    }
+
     std::string UndoHistory::activeTransactionName() const {
         std::lock_guard lock(mutex_);
         return transactions_.empty() ? std::string{} : transactions_.back().name;
@@ -813,8 +1097,82 @@ namespace lfs::vis::op {
     }
 
     uint64_t UndoHistory::generation() const {
-        std::lock_guard lock(mutex_);
-        return generation_;
+        return generation_.load(std::memory_order_acquire);
+    }
+
+    void UndoHistory::setMaxBytes(const size_t max_bytes) {
+        bool changed = false;
+        std::unique_lock playback_lock(playback_mutex_);
+        {
+            std::lock_guard lock(mutex_);
+            max_bytes_ = std::max<size_t>(1, max_bytes);
+            const auto before_undo = undo_stack_.size();
+            const auto before_redo = redo_stack_.size();
+            trimUndoStack();
+            trimRedoStack();
+            refreshResidencyLocked();
+            changed = before_undo != undo_stack_.size() || before_redo != redo_stack_.size();
+            if (changed) {
+                bumpGenerationLocked();
+            }
+        }
+
+        if (changed) {
+            invalidateUndoRedoPollState();
+            notifyObservers();
+        }
+    }
+
+    void UndoHistory::shrinkToFit(const size_t target_gpu_bytes) {
+        bool changed = false;
+        std::unique_lock playback_lock(playback_mutex_);
+        {
+            std::lock_guard lock(mutex_);
+            const auto before_memory = totalMemoryLocked();
+
+            const auto offload_entries = [](auto& entries) {
+                for (auto& entry : entries) {
+                    if (entry) {
+                        entry->offloadToCPU();
+                    }
+                }
+            };
+
+            offload_entries(undo_stack_);
+            offload_entries(redo_stack_);
+            for (auto& frame : transactions_) {
+                offload_entries(frame.entries);
+            }
+
+            while (totalMemoryLocked().gpu_bytes > target_gpu_bytes) {
+                if (!undo_stack_.empty()) {
+                    undo_bytes_ -= entryBytes(undo_stack_.front());
+                    undo_stack_.pop_front();
+                    changed = true;
+                    continue;
+                }
+                if (!redo_stack_.empty()) {
+                    redo_bytes_ -= entryBytes(redo_stack_.front());
+                    redo_stack_.pop_front();
+                    changed = true;
+                    continue;
+                }
+                break;
+            }
+
+            updateAvailabilityLocked();
+            const auto after_memory = totalMemoryLocked();
+            changed = changed || before_memory.cpu_bytes != after_memory.cpu_bytes ||
+                      before_memory.gpu_bytes != after_memory.gpu_bytes;
+            if (changed) {
+                bumpGenerationLocked();
+            }
+        }
+
+        if (changed) {
+            invalidateUndoRedoPollState();
+            notifyObservers();
+        }
     }
 
     UndoHistory::ObserverId UndoHistory::subscribe(Observer observer) {

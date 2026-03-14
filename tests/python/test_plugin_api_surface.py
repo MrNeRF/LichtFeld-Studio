@@ -179,3 +179,12 @@ def test_panel_core_sources_use_v1_internal_names():
     assert ".id = t.id" in gui_manager_text
     assert "makeRmlTabDomId(t.id)" in gui_manager_text
     assert ".idname = t.idname" not in gui_manager_text
+
+
+def test_python_undo_surface_has_single_entry_point(lf):
+    assert hasattr(lf, "undo")
+    assert not hasattr(lf.ops, "undo")
+    assert not hasattr(lf.ops, "redo")
+    assert not hasattr(lf.ops, "can_undo")
+    assert not hasattr(lf.ops, "can_redo")
+    assert not hasattr(lf.pipeline, "undo")

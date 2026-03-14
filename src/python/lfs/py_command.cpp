@@ -10,13 +10,50 @@
 #include <nanobind/stl/vector.h>
 
 #include <algorithm>
+#include <cstdint>
 
 namespace lfs::python {
 
-    PyUndoEntry::PyUndoEntry(std::string name, nb::object undo_fn, nb::object redo_fn)
+    namespace {
+        vis::DirtyMask normalize_dirty_flags(const uint32_t flags) {
+            return flags == 0 ? vis::DirtyFlag::ALL : static_cast<vis::DirtyMask>(flags);
+        }
+
+        void validate_undo_callback(const nb::object& callback, const char* name) {
+            if (callback.is_none()) {
+                return;
+            }
+            if (!nb::isinstance<nb::callable>(callback)) {
+                throw nb::type_error((std::string(name) + " must be callable or None").c_str());
+            }
+        }
+    } // namespace
+
+    PyUndoEntry::PyUndoEntry(std::string name,
+                             nb::object undo_fn,
+                             nb::object redo_fn,
+                             std::string id,
+                             std::string source,
+                             std::string scope,
+                             const size_t estimated_bytes,
+                             const vis::DirtyMask dirty_flags,
+                             const std::chrono::milliseconds merge_window)
         : name_(std::move(name)),
+          id_(std::move(id)),
+          source_(std::move(source)),
+          scope_(std::move(scope)),
           undo_fn_(std::move(undo_fn)),
-          redo_fn_(std::move(redo_fn)) {}
+          redo_fn_(std::move(redo_fn)),
+          estimated_bytes_(estimated_bytes),
+          dirty_flags_(dirty_flags == 0 ? vis::DirtyFlag::ALL : dirty_flags),
+          updated_at_(std::chrono::steady_clock::now()),
+          merge_window_(merge_window) {}
+
+    PyUndoEntry::~PyUndoEntry() {
+        nb::gil_scoped_acquire gil;
+        undo_fn_ = nb::object();
+        redo_fn_ = nb::object();
+    }
 
     void PyUndoEntry::undo() {
         nb::gil_scoped_acquire gil;
@@ -44,15 +81,63 @@ namespace lfs::python {
 
     vis::op::UndoMetadata PyUndoEntry::metadata() const {
         return vis::op::UndoMetadata{
-            .id = "python.custom",
+            .id = id_.empty() ? std::string("python.custom") : id_,
             .label = name_,
-            .source = "python",
-            .scope = "custom",
+            .source = source_.empty() ? std::string("python") : source_,
+            .scope = scope_.empty() ? std::string("custom") : scope_,
         };
+    }
+
+    size_t PyUndoEntry::estimatedBytes() const {
+        if (estimated_bytes_ > 0) {
+            return estimated_bytes_;
+        }
+        return sizeof(*this) + name_.size() + id_.size() + source_.size() + scope_.size() + 128;
+    }
+
+    vis::DirtyMask PyUndoEntry::dirtyFlags() const {
+        return dirty_flags_;
+    }
+
+    bool PyUndoEntry::tryMerge(const vis::op::UndoEntry& incoming) {
+        if (merge_window_.count() <= 0 || id_.empty()) {
+            return false;
+        }
+
+        const auto* other = dynamic_cast<const PyUndoEntry*>(&incoming);
+        if (!other || other->id_ != id_ || other->merge_window_.count() <= 0) {
+            return false;
+        }
+
+        const auto elapsed = other->updated_at_ - updated_at_;
+        if (elapsed < std::chrono::milliseconds{0} || elapsed > merge_window_) {
+            return false;
+        }
+
+        nb::gil_scoped_acquire gil;
+        name_ = other->name_;
+        redo_fn_ = other->redo_fn_;
+        estimated_bytes_ = std::max(estimated_bytes_, other->estimated_bytes_);
+        dirty_flags_ |= other->dirty_flags_;
+        updated_at_ = other->updated_at_;
+        return true;
     }
 
     PyTransaction::PyTransaction(std::string name)
         : name_(std::move(name)) {}
+
+    PyTransaction::~PyTransaction() {
+        if (!active_) {
+            return;
+        }
+        try {
+            exit(false);
+        } catch (const std::exception& e) {
+            LOG_ERROR("PyTransaction destructor rollback failed: {}", e.what());
+        } catch (...) {
+            LOG_ERROR("PyTransaction destructor rollback failed: unknown exception");
+        }
+    }
 
     void PyTransaction::enter() {
         vis::op::undoHistory().beginTransaction(name_);
@@ -74,6 +159,8 @@ namespace lfs::python {
 
     void PyTransaction::add(nb::object undo_fn, nb::object redo_fn) {
         nb::gil_scoped_acquire gil;
+        validate_undo_callback(undo_fn, "undo");
+        validate_undo_callback(redo_fn, "redo");
         try {
             if (redo_fn.is_valid() && !redo_fn.is_none())
                 redo_fn();
@@ -82,7 +169,13 @@ namespace lfs::python {
             throw;
         }
 
-        auto entry = std::make_unique<PyUndoEntry>(name_, std::move(undo_fn), std::move(redo_fn));
+        auto entry = std::make_unique<PyUndoEntry>(
+            name_,
+            std::move(undo_fn),
+            std::move(redo_fn),
+            "python.transaction",
+            "python",
+            "grouped");
         vis::op::undoHistory().push(std::move(entry));
     }
 
@@ -112,7 +205,18 @@ namespace lfs::python {
 
         undo.def(
             "push",
-            [](const std::string& name, nb::object undo_fn, nb::object redo_fn, bool validate) {
+            [](const std::string& name,
+               nb::object undo_fn,
+               nb::object redo_fn,
+               bool validate,
+               const std::string& id,
+               const std::string& source,
+               const std::string& scope,
+               const size_t estimated_bytes,
+               const uint32_t dirty_flags,
+               const uint64_t merge_window_ms) {
+                validate_undo_callback(undo_fn, "undo");
+                validate_undo_callback(redo_fn, "redo");
                 if (validate) {
                     size_t dot_count = std::count(name.begin(), name.end(), '.');
                     bool has_space = name.find(' ') != std::string::npos;
@@ -120,10 +224,28 @@ namespace lfs::python {
                         LOG_WARN("lf.undo.push(): Operation name '{}' should be 'category.action' format", name);
                     }
                 }
-                auto entry = std::make_unique<PyUndoEntry>(name, std::move(undo_fn), std::move(redo_fn));
+                auto entry = std::make_unique<PyUndoEntry>(
+                    name,
+                    std::move(undo_fn),
+                    std::move(redo_fn),
+                    id,
+                    source,
+                    scope,
+                    estimated_bytes,
+                    normalize_dirty_flags(dirty_flags),
+                    std::chrono::milliseconds(merge_window_ms));
                 vis::op::undoHistory().push(std::move(entry));
             },
-            nb::arg("name"), nb::arg("undo"), nb::arg("redo"), nb::arg("validate") = false,
+            nb::arg("name"),
+            nb::arg("undo"),
+            nb::arg("redo"),
+            nb::arg("validate") = false,
+            nb::arg("id") = "",
+            nb::arg("source") = "python",
+            nb::arg("scope") = "custom",
+            nb::arg("estimated_bytes") = 0,
+            nb::arg("dirty_flags") = 0,
+            nb::arg("merge_window_ms") = 0,
             "Push an undo step with undo/redo functions");
 
         undo.def(
@@ -193,6 +315,15 @@ namespace lfs::python {
             "transaction_bytes",
             []() { return vis::op::undoHistory().transactionBytes(); },
             "Get estimated bytes retained by active grouped history transactions");
+        undo.def(
+            "max_bytes",
+            []() { return vis::op::undoHistory().maxBytes(); },
+            "Get the configured total retained history byte budget");
+        undo.def(
+            "set_max_bytes",
+            [](size_t max_bytes) { vis::op::undoHistory().setMaxBytes(max_bytes); },
+            nb::arg("max_bytes"),
+            "Set the retained history byte budget");
 
         undo.def(
             "total_bytes",
@@ -216,6 +347,10 @@ namespace lfs::python {
             "transaction_depth",
             []() { return vis::op::undoHistory().transactionDepth(); },
             "Get the current grouped history transaction nesting depth");
+        undo.def(
+            "transaction_age_ms",
+            []() { return vis::op::undoHistory().transactionAgeMs(); },
+            "Get the age of the active grouped history transaction in milliseconds");
 
         undo.def(
             "active_transaction_name",
@@ -247,6 +382,11 @@ namespace lfs::python {
             [](uint64_t subscription_id) { vis::op::undoHistory().unsubscribe(subscription_id); },
             nb::arg("subscription_id"),
             "Unsubscribe a shared history observer");
+        undo.def(
+            "shrink_to_fit",
+            [](size_t target_gpu_bytes) { vis::op::undoHistory().shrinkToFit(target_gpu_bytes); },
+            nb::arg("target_gpu_bytes"),
+            "Offload history to CPU and evict cold entries until GPU usage fits the requested budget");
 
         undo.def(
             "stack",
@@ -266,6 +406,7 @@ namespace lfs::python {
                 payload["redo_bytes"] = vis::op::undoHistory().redoBytes();
                 payload["transaction_bytes"] = vis::op::undoHistory().transactionBytes();
                 payload["total_bytes"] = vis::op::undoHistory().totalBytes();
+                payload["max_bytes"] = vis::op::undoHistory().maxBytes();
                 const auto undo_memory = vis::op::undoHistory().undoMemory();
                 const auto redo_memory = vis::op::undoHistory().redoMemory();
                 const auto transaction_memory = vis::op::undoHistory().transactionMemory();
@@ -281,6 +422,7 @@ namespace lfs::python {
                 payload["transaction_active"] = vis::op::undoHistory().hasActiveTransaction();
                 payload["transaction_depth"] = vis::op::undoHistory().transactionDepth();
                 payload["transaction_name"] = vis::op::undoHistory().activeTransactionName();
+                payload["transaction_age_ms"] = vis::op::undoHistory().transactionAgeMs();
                 payload["generation"] = vis::op::undoHistory().generation();
                 return payload;
             },
@@ -291,8 +433,9 @@ namespace lfs::python {
             .def(
                 "__enter__", [](PyTransaction& self) { self.enter(); return &self; }, "Begin transaction context")
             .def(
-                "__exit__", [](PyTransaction& self, nb::object exc_type, nb::object, nb::object) {
-                    self.exit(exc_type.is_none());
+                "__exit__", [](PyTransaction& self, nb::args args) {
+                    const bool commit = args.size() > 0 ? args[0].is_none() : true;
+                    self.exit(commit);
                     return false;
                 },
                 "Commit transaction on context exit")

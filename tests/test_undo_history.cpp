@@ -11,8 +11,10 @@
 #include "scene/scene_manager.hpp"
 
 #include <gtest/gtest.h>
+#include <glm/gtc/matrix_transform.hpp>
 #include <any>
 #include <condition_variable>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -62,6 +64,13 @@ namespace {
         void undo() override { throw std::runtime_error("undo failed"); }
         void redo() override {}
         [[nodiscard]] std::string name() const override { return "throwing.undo"; }
+    };
+
+    class UndoSucceedsRedoThrowsEntry final : public lfs::vis::op::UndoEntry {
+    public:
+        void undo() override {}
+        void redo() override { throw std::runtime_error("redo failed"); }
+        [[nodiscard]] std::string name() const override { return "undo.ok.redo.throws"; }
     };
 
     class BlockingUndoEntry final : public lfs::vis::op::UndoEntry {
@@ -201,10 +210,12 @@ protected:
         lfs::core::event::bus().clear_all();
         lfs::vis::services().clear();
         lfs::vis::op::undoHistory().clear();
+        lfs::vis::op::undoHistory().setMaxBytes(lfs::vis::op::UndoHistory::MAX_BYTES);
     }
 
     void TearDown() override {
         lfs::vis::op::undoHistory().clear();
+        lfs::vis::op::undoHistory().setMaxBytes(lfs::vis::op::UndoHistory::MAX_BYTES);
         lfs::vis::services().clear();
         lfs::core::event::bus().clear_all();
         lfs::event::EventBridge::instance().clear_all();
@@ -263,6 +274,37 @@ TEST_F(UndoHistoryTest, EmptyTransactionCommitCreatesNoUndoEntry) {
     EXPECT_FALSE(history.hasActiveTransaction());
 }
 
+TEST_F(UndoHistoryTest, TransactionGuardCommitsAndRollsBackSafely) {
+    auto& history = lfs::vis::op::undoHistory();
+    int value = 0;
+
+    {
+        lfs::vis::op::TransactionGuard guard("guard.commit");
+        history.push(std::make_unique<CountingEntry>("guard.step", value, 1));
+        value += 1;
+        guard.commit();
+    }
+
+    EXPECT_EQ(history.undoCount(), 1u);
+    EXPECT_EQ(history.undoName(), "guard.commit");
+
+    history.undo();
+    EXPECT_EQ(value, 0);
+
+    history.clear();
+    value = 0;
+
+    {
+        lfs::vis::op::TransactionGuard guard("guard.rollback");
+        history.push(std::make_unique<CountingEntry>("guard.step", value, 2));
+        value += 2;
+    }
+
+    EXPECT_EQ(value, 0);
+    EXPECT_EQ(history.undoCount(), 0u);
+    EXPECT_FALSE(history.hasActiveTransaction());
+}
+
 TEST_F(UndoHistoryTest, NestedTransactionsCollapseIntoSingleUndoStep) {
     auto& history = lfs::vis::op::undoHistory();
     int value = 0;
@@ -296,6 +338,22 @@ TEST_F(UndoHistoryTest, EstimatedByteBudgetEvictsOldestUndoEntries) {
     EXPECT_EQ(history.undoCount(), 2u);
     EXPECT_EQ(history.undoNames(), (std::vector<std::string>{"large.three", "large.two"}));
     EXPECT_LE(history.undoBytes(), lfs::vis::op::UndoHistory::MAX_BYTES);
+}
+
+TEST_F(UndoHistoryTest, ConfigurableByteBudgetTrimsHistoryAndUpdatesGetter) {
+    auto& history = lfs::vis::op::undoHistory();
+    int value = 0;
+
+    history.setMaxBytes(256u);
+    EXPECT_EQ(history.maxBytes(), 256u);
+
+    history.push(std::make_unique<CountingEntry>("budget.one", value, 1, 128u));
+    history.push(std::make_unique<CountingEntry>("budget.two", value, 1, 128u));
+    history.push(std::make_unique<CountingEntry>("budget.three", value, 1, 128u));
+
+    EXPECT_EQ(history.undoCount(), 2u);
+    EXPECT_EQ(history.undoNames(), (std::vector<std::string>{"budget.three", "budget.two"}));
+    EXPECT_LE(history.undoBytes(), 256u);
 }
 
 TEST_F(UndoHistoryTest, OversizedSingleUndoEntryIsRetained) {
@@ -484,6 +542,41 @@ TEST_F(UndoHistoryTest, FailedGroupedUndoCompensatesAlreadyUndoneChildren) {
     EXPECT_FALSE(history.canRedo());
 }
 
+TEST_F(UndoHistoryTest, RollbackFailureRestoresActiveTransactionWhenCompensationSucceeds) {
+    auto& history = lfs::vis::op::undoHistory();
+    int value = 1;
+
+    history.beginTransaction("rollback.failure");
+    history.push(std::make_unique<ThrowingUndoEntry>());
+    history.push(std::make_unique<CountingEntry>("change.one", value, 1));
+    value += 1;
+
+    const auto result = history.rollbackTransaction();
+    EXPECT_FALSE(result.success);
+    EXPECT_EQ(value, 2);
+    EXPECT_TRUE(history.hasActiveTransaction());
+    EXPECT_EQ(history.transactionDepth(), 1u);
+    EXPECT_EQ(history.activeTransactionName(), "rollback.failure");
+
+    history.commitTransaction();
+    EXPECT_EQ(history.undoCount(), 1u);
+}
+
+TEST_F(UndoHistoryTest, RollbackFailureClearsHistoryAfterCompensationFailure) {
+    auto& history = lfs::vis::op::undoHistory();
+
+    history.beginTransaction("rollback.fatal");
+    history.push(std::make_unique<ThrowingUndoEntry>());
+    history.push(std::make_unique<UndoSucceedsRedoThrowsEntry>());
+
+    const auto result = history.rollbackTransaction();
+    EXPECT_FALSE(result.success);
+    EXPECT_NE(result.error.find("history cleared"), std::string::npos);
+    EXPECT_FALSE(history.hasActiveTransaction());
+    EXPECT_EQ(history.undoCount(), 0u);
+    EXPECT_EQ(history.redoCount(), 0u);
+}
+
 TEST_F(UndoHistoryTest, ConcurrentPlaybackIsRejected) {
     auto& history = lfs::vis::op::undoHistory();
     std::mutex mutex;
@@ -516,6 +609,52 @@ TEST_F(UndoHistoryTest, ConcurrentPlaybackIsRejected) {
 
     EXPECT_TRUE(worker_result.success);
     EXPECT_TRUE(history.canRedo());
+}
+
+TEST_F(UndoHistoryTest, PushWaitsForPlaybackAndAppliesAfterUndoCompletes) {
+    auto& history = lfs::vis::op::undoHistory();
+    int value = 0;
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool started = false;
+    bool released = false;
+    lfs::vis::op::HistoryResult worker_result;
+
+    history.push(std::make_unique<CountingEntry>("step.one", value, 1));
+    value += 1;
+    history.push(std::make_unique<BlockingUndoEntry>(mutex, cv, started, released));
+
+    std::thread worker([&]() { worker_result = history.undo(); });
+
+    {
+        std::unique_lock lock(mutex);
+        cv.wait(lock, [&]() { return started; });
+    }
+
+    std::promise<void> push_finished;
+    auto push_done = push_finished.get_future();
+    std::thread pusher([&]() {
+        history.push(std::make_unique<CountingEntry>("step.two", value, 2));
+        value += 2;
+        push_finished.set_value();
+    });
+
+    EXPECT_EQ(push_done.wait_for(std::chrono::milliseconds(50)), std::future_status::timeout);
+
+    {
+        std::lock_guard lock(mutex);
+        released = true;
+    }
+    cv.notify_all();
+
+    worker.join();
+    pusher.join();
+
+    EXPECT_TRUE(worker_result.success);
+    EXPECT_EQ(value, 3);
+    EXPECT_EQ(history.redoCount(), 0u);
+    EXPECT_EQ(history.undoCount(), 2u);
+    EXPECT_EQ(history.undoName(), "step.two");
 }
 
 TEST_F(UndoHistoryTest, PushInsideActiveTransactionKeepsRedoUntilCommit) {
@@ -582,6 +721,70 @@ TEST_F(UndoHistoryTest, OlderTensorEntriesOffloadToCPUAndRestoreBeforePlayback) 
     EXPECT_EQ(entries.front()->undoDevice(), Device::CUDA);
 }
 
+TEST_F(UndoHistoryTest, ShrinkToFitOffloadsHistoryToMeetGpuBudget) {
+    auto& history = lfs::vis::op::undoHistory();
+    std::vector<TensorResidencyEntry*> entries;
+
+    for (size_t i = 0; i < lfs::vis::op::UndoHistory::HOT_ENTRIES + 2; ++i) {
+        auto entry = std::make_unique<TensorResidencyEntry>("tensor.entry." + std::to_string(i));
+        entries.push_back(entry.get());
+        history.push(std::move(entry));
+    }
+
+    const auto generation_before = history.generation();
+    ASSERT_GT(history.totalMemory().gpu_bytes, 0u);
+
+    history.shrinkToFit(0u);
+
+    EXPECT_EQ(history.totalMemory().gpu_bytes, 0u);
+    EXPECT_EQ(history.undoCount(), lfs::vis::op::UndoHistory::HOT_ENTRIES + 2);
+    EXPECT_GT(history.generation(), generation_before);
+    for (auto* entry : entries) {
+        ASSERT_NE(entry, nullptr);
+        EXPECT_EQ(entry->device(), Device::CPU);
+    }
+}
+
+TEST_F(UndoHistoryTest, TensorUndoEntryRestoresTensorRoundTrip) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addNode("model", make_linear_test_splat(2));
+    auto* node = scene_manager->getScene().getMutableNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+
+    const auto before = node->model->sh0().clone();
+    auto entry = std::make_unique<lfs::vis::op::TensorUndoEntry>(
+        "brush.saturation",
+        lfs::vis::op::UndoMetadata{
+            .id = "tensor.saturation",
+            .label = "Saturation Brush",
+            .source = "operator",
+            .scope = "tensor",
+        },
+        "model.sh0",
+        before.clone(),
+        [&]() -> Tensor* { return &node->model->sh0(); });
+
+    node->model->sh0() = Tensor::ones({2, size_t{1}, size_t{3}}, Device::CUDA, DataType::Float32);
+    const auto after = node->model->sh0().clone();
+
+    entry->captureAfter();
+    ASSERT_TRUE(entry->hasChanges());
+    lfs::vis::op::undoHistory().push(std::move(entry));
+
+    const auto undo_result = lfs::vis::op::undoHistory().undo();
+    EXPECT_TRUE(undo_result.success);
+    EXPECT_TRUE((node->model->sh0() == before).all().item<bool>());
+
+    const auto redo_result = lfs::vis::op::undoHistory().redo();
+    EXPECT_TRUE(redo_result.success);
+    EXPECT_TRUE((node->model->sh0() == after).all().item<bool>());
+}
+
 TEST_F(UndoHistoryTest, ObserversReceiveNotificationsUntilUnsubscribed) {
     auto& history = lfs::vis::op::undoHistory();
     int value = 0;
@@ -597,6 +800,176 @@ TEST_F(UndoHistoryTest, ObserversReceiveNotificationsUntilUnsubscribed) {
     history.clear();
 
     EXPECT_GE(notifications, 3);
+}
+
+TEST_F(UndoHistoryTest, ThrowingObserversAreAutomaticallyUnsubscribed) {
+    auto& history = lfs::vis::op::undoHistory();
+    int value = 0;
+    int throwing_notifications = 0;
+    int healthy_notifications = 0;
+
+    const auto throwing_id = history.subscribe([&]() {
+        ++throwing_notifications;
+        throw std::runtime_error("observer failed");
+    });
+    const auto healthy_id = history.subscribe([&]() { ++healthy_notifications; });
+
+    history.push(std::make_unique<CountingEntry>("first", value, 1));
+    value += 1;
+    history.push(std::make_unique<CountingEntry>("second", value, 1));
+    value += 1;
+
+    EXPECT_EQ(throwing_notifications, 1);
+    EXPECT_EQ(healthy_notifications, 2);
+
+    history.unsubscribe(throwing_id);
+    history.unsubscribe(healthy_id);
+}
+
+TEST_F(UndoHistoryTest, SceneGraphMetadataEntryRollsBackEarlierDiffsOnFailure) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+
+    scene_manager->getScene().addNode("first", make_linear_test_splat(1));
+    scene_manager->getScene().addNode("second", make_linear_test_splat(1));
+
+    const auto before = lfs::vis::op::SceneGraphMetadataEntry::captureNodes(*scene_manager, {"first", "second"});
+    ASSERT_EQ(before.size(), 2u);
+
+    auto first_after = before[0];
+    first_after.name = "first_renamed";
+
+    auto second_after = before[1];
+    second_after.name = "second_renamed";
+    second_after.parent_name = "missing_parent";
+
+    lfs::vis::op::SceneGraphMetadataEntry entry(
+        *scene_manager,
+        "Rename Node",
+        {
+            lfs::vis::op::SceneGraphNodeMetadataDiff{.before = before[0], .after = first_after},
+            lfs::vis::op::SceneGraphNodeMetadataDiff{.before = before[1], .after = second_after},
+        });
+
+    EXPECT_THROW(entry.redo(), std::runtime_error);
+    EXPECT_NE(scene_manager->getScene().getNode("first"), nullptr);
+    EXPECT_NE(scene_manager->getScene().getNode("second"), nullptr);
+    EXPECT_EQ(scene_manager->getScene().getNode("first_renamed"), nullptr);
+    EXPECT_EQ(scene_manager->getScene().getNode("second_renamed"), nullptr);
+}
+
+TEST_F(UndoHistoryTest, SparseSelectionUndoIsRejectedAfterTopologyChange) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+
+    scene_manager->getScene().addNode("model", make_linear_test_splat(32));
+
+    auto snapshot = std::make_unique<lfs::vis::op::SceneSnapshot>(*scene_manager, "selection.change");
+    snapshot->captureSelection();
+    scene_manager->getScene().setSelectionMask(std::make_shared<Tensor>(make_uint8_mask(
+        [] {
+            std::vector<uint8_t> values(32, 0);
+            values[3] = 1;
+            return values;
+        }())));
+    snapshot->captureAfter();
+    ASSERT_TRUE(snapshot->hasChanges());
+
+    scene_manager->getScene().removeNode("model", false);
+    scene_manager->getScene().addNode("model_replaced", make_linear_test_splat(48));
+
+    EXPECT_THROW(snapshot->undo(), std::runtime_error);
+}
+
+TEST_F(UndoHistoryTest, CropBoxUndoEntryRoundTripsAndHandlesDeletedNode) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+
+    scene_manager->getScene().addNode("model", make_linear_test_splat(2));
+    const auto parent_id = scene_manager->getScene().getNodeIdByName("model");
+    ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+
+    const auto cropbox_id = scene_manager->getScene().addCropBox("model_cropbox", parent_id);
+    ASSERT_NE(cropbox_id, lfs::core::NULL_NODE);
+    auto* cropbox_node = scene_manager->getScene().getMutableNode("model_cropbox");
+    ASSERT_NE(cropbox_node, nullptr);
+    ASSERT_NE(cropbox_node->cropbox, nullptr);
+
+    const auto before_data = *cropbox_node->cropbox;
+    const auto before_transform = scene_manager->getNodeTransform(cropbox_node->name);
+    lfs::vis::op::CropBoxUndoEntry noop(*scene_manager, cropbox_node->name, before_data, before_transform);
+    EXPECT_FALSE(noop.hasChanges());
+    EXPECT_GT(noop.estimatedBytes(), cropbox_node->name.size());
+
+    auto changed_data = before_data;
+    changed_data.min = glm::vec3(-2.0f);
+    changed_data.max = glm::vec3(3.0f);
+    scene_manager->getScene().setCropBoxData(cropbox_id, changed_data);
+    scene_manager->setNodeTransform(cropbox_node->name, glm::translate(glm::mat4(1.0f), glm::vec3(1.0f, 2.0f, 3.0f)));
+
+    lfs::vis::op::CropBoxUndoEntry entry(*scene_manager, cropbox_node->name, before_data, before_transform);
+    ASSERT_TRUE(entry.hasChanges());
+
+    entry.undo();
+    EXPECT_EQ(cropbox_node->cropbox->min, before_data.min);
+    EXPECT_EQ(cropbox_node->cropbox->max, before_data.max);
+    EXPECT_EQ(cropbox_node->cropbox->inverse, before_data.inverse);
+    EXPECT_EQ(cropbox_node->cropbox->enabled, before_data.enabled);
+    EXPECT_EQ(scene_manager->getNodeTransform(cropbox_node->name), before_transform);
+
+    entry.redo();
+    EXPECT_EQ(cropbox_node->cropbox->min, changed_data.min);
+    EXPECT_EQ(cropbox_node->cropbox->max, changed_data.max);
+    EXPECT_EQ(cropbox_node->cropbox->inverse, changed_data.inverse);
+    EXPECT_EQ(cropbox_node->cropbox->enabled, changed_data.enabled);
+
+    scene_manager->getScene().removeNode(cropbox_node->name, false);
+    entry.undo();
+    entry.redo();
+}
+
+TEST_F(UndoHistoryTest, EllipsoidUndoEntryRoundTripsAndHandlesDeletedNode) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    lfs::vis::services().set(scene_manager.get());
+
+    scene_manager->getScene().addNode("model", make_linear_test_splat(2));
+    const auto parent_id = scene_manager->getScene().getNodeIdByName("model");
+    ASSERT_NE(parent_id, lfs::core::NULL_NODE);
+
+    const auto ellipsoid_id = scene_manager->getScene().addEllipsoid("model_ellipsoid", parent_id);
+    ASSERT_NE(ellipsoid_id, lfs::core::NULL_NODE);
+    auto* ellipsoid_node = scene_manager->getScene().getMutableNode("model_ellipsoid");
+    ASSERT_NE(ellipsoid_node, nullptr);
+    ASSERT_NE(ellipsoid_node->ellipsoid, nullptr);
+
+    const auto before_data = *ellipsoid_node->ellipsoid;
+    const auto before_transform = scene_manager->getNodeTransform(ellipsoid_node->name);
+    lfs::vis::op::EllipsoidUndoEntry noop(*scene_manager, ellipsoid_node->name, before_data, before_transform);
+    EXPECT_FALSE(noop.hasChanges());
+    EXPECT_GT(noop.estimatedBytes(), ellipsoid_node->name.size());
+
+    auto changed_data = before_data;
+    changed_data.radii = glm::vec3(4.0f, 5.0f, 6.0f);
+    scene_manager->getScene().setEllipsoidData(ellipsoid_id, changed_data);
+    scene_manager->setNodeTransform(ellipsoid_node->name, glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 1.0f)));
+
+    lfs::vis::op::EllipsoidUndoEntry entry(*scene_manager, ellipsoid_node->name, before_data, before_transform);
+    ASSERT_TRUE(entry.hasChanges());
+
+    entry.undo();
+    EXPECT_EQ(ellipsoid_node->ellipsoid->radii, before_data.radii);
+    EXPECT_EQ(ellipsoid_node->ellipsoid->inverse, before_data.inverse);
+    EXPECT_EQ(ellipsoid_node->ellipsoid->enabled, before_data.enabled);
+    EXPECT_EQ(scene_manager->getNodeTransform(ellipsoid_node->name), before_transform);
+
+    entry.redo();
+    EXPECT_EQ(ellipsoid_node->ellipsoid->radii, changed_data.radii);
+    EXPECT_EQ(ellipsoid_node->ellipsoid->inverse, changed_data.inverse);
+    EXPECT_EQ(ellipsoid_node->ellipsoid->enabled, changed_data.enabled);
+
+    scene_manager->getScene().removeNode(ellipsoid_node->name, false);
+    entry.undo();
+    entry.redo();
 }
 
 TEST_F(UndoHistoryTest, TopologyUndoRestoresSoftDeletedMasks) {

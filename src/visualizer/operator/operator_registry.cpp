@@ -41,6 +41,27 @@ namespace lfs::vis::op {
             return fallback_id;
         }
 
+        void finalizeUndoTransaction(TransactionGuard* transaction,
+                                     const OperatorResult result,
+                                     bool& modal_transaction_active) {
+            if (!transaction) {
+                return;
+            }
+
+            if (result == OperatorResult::RUNNING_MODAL) {
+                modal_transaction_active = true;
+                transaction->release();
+                return;
+            }
+
+            modal_transaction_active = false;
+            if (result == OperatorResult::FINISHED) {
+                transaction->commit();
+            } else {
+                transaction->rollback();
+            }
+        }
+
         void finalizeUndoTransaction(const bool active, const OperatorResult result, bool& modal_transaction_active) {
             if (!active) {
                 return;
@@ -326,16 +347,13 @@ namespace lfs::vis::op {
         const auto invoke_fn = reg.invoke_fn;
         const auto modal_fn = reg.modal_fn;
         const bool history_txn = requiresUndoTransaction(reg.descriptor);
+        std::optional<TransactionGuard> transaction;
         if (history_txn) {
-            undoHistory().beginTransaction(historyLabel(reg.descriptor, id));
+            transaction.emplace(historyLabel(reg.descriptor, id));
         }
 
         if (invoke_fn) {
             if (poll_fn && !poll_fn()) {
-                if (history_txn) {
-                    ScopedUnlock unlock(lock);
-                    undoHistory().rollbackTransaction();
-                }
                 return OperatorReturnValue::cancelled();
             }
 
@@ -356,7 +374,9 @@ namespace lfs::vis::op {
 
             {
                 ScopedUnlock unlock(lock);
-                finalizeUndoTransaction(history_txn, result, active_modal_has_undo_transaction_);
+                finalizeUndoTransaction(transaction ? &*transaction : nullptr,
+                                        result,
+                                        active_modal_has_undo_transaction_);
             }
 
             return {result, {}};
@@ -364,38 +384,22 @@ namespace lfs::vis::op {
 
         if (!reg.factory) {
             LOG_ERROR("Operator has no factory or invoke callback: {}", id);
-            if (history_txn) {
-                ScopedUnlock unlock(lock);
-                undoHistory().rollbackTransaction();
-            }
             return OperatorReturnValue::cancelled();
         }
 
         auto op = reg.factory();
         if (!op) {
             LOG_ERROR("Failed to create operator: {}", id);
-            if (history_txn) {
-                ScopedUnlock unlock(lock);
-                undoHistory().rollbackTransaction();
-            }
             return OperatorReturnValue::cancelled();
         }
 
         auto ctx = makeContext();
         if (!ctx) {
             LOG_ERROR("No scene manager for operator context");
-            if (history_txn) {
-                ScopedUnlock unlock(lock);
-                undoHistory().rollbackTransaction();
-            }
             return OperatorReturnValue::cancelled();
         }
 
         if (!op->poll(*ctx, &props_ref)) {
-            if (history_txn) {
-                ScopedUnlock unlock(lock);
-                undoHistory().rollbackTransaction();
-            }
             return OperatorReturnValue::cancelled();
         }
 
@@ -416,7 +420,9 @@ namespace lfs::vis::op {
 
         {
             ScopedUnlock unlock(lock);
-            finalizeUndoTransaction(history_txn, result, active_modal_has_undo_transaction_);
+            finalizeUndoTransaction(transaction ? &*transaction : nullptr,
+                                    result,
+                                    active_modal_has_undo_transaction_);
         }
 
         return {result, {}};

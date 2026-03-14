@@ -11,6 +11,7 @@
 #include "undo_history.hpp"
 #include <algorithm>
 #include <cuda_runtime.h>
+#include <limits>
 #include <set>
 #include <stdexcept>
 
@@ -18,6 +19,7 @@ namespace lfs::vis::op {
 
     namespace {
         using lfs::core::events::state::PLYAdded;
+        using lfs::core::events::state::NodeReparented;
         using lfs::core::events::state::PLYRemoved;
         using lfs::core::events::state::SceneCleared;
         constexpr auto PROPERTY_COALESCE_WINDOW = std::chrono::milliseconds(500);
@@ -107,6 +109,25 @@ namespace lfs::vis::op {
             return sizeof(std::any);
         }
 
+        DirtyMask propertyDirtyFlags(const std::string& property_path) {
+            if (property_path.ends_with(".transform")) {
+                return DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY;
+            }
+            if (property_path.ends_with(".visible")) {
+                return DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY;
+            }
+            if (property_path.ends_with(".locked")) {
+                return DirtyFlag::OVERLAY;
+            }
+            if (property_path.contains("crop_box") || property_path.contains("ellipsoid")) {
+                return DirtyFlag::SPLATS | DirtyFlag::OVERLAY;
+            }
+            if (property_path.contains("scene_node")) {
+                return DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY;
+            }
+            return DirtyFlag::ALL;
+        }
+
         std::string snapshotScope(const ModifiesFlag captured) {
             const bool selection = hasFlag(captured, ModifiesFlag::SELECTION);
             const bool transforms = hasFlag(captured, ModifiesFlag::TRANSFORMS);
@@ -124,6 +145,160 @@ namespace lfs::vis::op {
                 return "scene";
             }
             return "general";
+        }
+
+        DirtyMask snapshotDirtyFlags(const ModifiesFlag captured) {
+            DirtyMask flags = 0;
+            if (hasFlag(captured, ModifiesFlag::SELECTION)) {
+                flags |= DirtyFlag::SELECTION;
+            }
+            if (hasFlag(captured, ModifiesFlag::TRANSFORMS)) {
+                flags |= DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY;
+            }
+            if (hasFlag(captured, ModifiesFlag::TOPOLOGY)) {
+                flags |= DirtyFlag::SPLATS | DirtyFlag::SELECTION;
+            }
+            return flags == 0 ? DirtyFlag::ALL : flags;
+        }
+
+        DirtyMask sceneGraphMetadataDirtyFlags() {
+            return DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY | DirtyFlag::SELECTION;
+        }
+
+        SceneGraphNodeMetadataSnapshot captureNodeMetadataSnapshot(const SceneManager& scene_manager,
+                                                                  const lfs::core::SceneNode& node);
+
+        void restorePlyPathForSnapshot(SceneManager& scene_manager,
+                                       const std::string& node_name,
+                                       const std::optional<std::filesystem::path>& source_path) {
+            if (source_path) {
+                scene_manager.setPlyPath(node_name, *source_path);
+            } else {
+                scene_manager.clearPlyPath(node_name);
+            }
+        }
+
+        [[nodiscard]] std::string resolveExistingNodeName(const lfs::core::Scene& scene,
+                                                          const std::vector<std::string>& candidates) {
+            std::set<std::string> seen;
+            for (const auto& candidate : candidates) {
+                if (candidate.empty() || !seen.insert(candidate).second) {
+                    continue;
+                }
+                if (scene.getNode(candidate)) {
+                    return candidate;
+                }
+            }
+            return {};
+        }
+
+        void applyNodeMetadataSnapshotUnchecked(SceneManager& scene_manager,
+                                                const SceneGraphNodeMetadataSnapshot& target,
+                                                std::string current_name,
+                                                const bool emit_reparent_event) {
+            auto& scene = scene_manager.getScene();
+
+            auto* node = scene.getMutableNode(current_name);
+            if (!node) {
+                throw std::runtime_error("Cannot restore scene node metadata for '" + target.name + "'");
+            }
+
+            if (current_name != target.name) {
+                if (!scene.renameNode(current_name, target.name)) {
+                    throw std::runtime_error("Failed to rename node '" + current_name + "' to '" + target.name + "'");
+                }
+                scene_manager.movePlyPath(current_name, target.name);
+                current_name = target.name;
+                node = scene.getMutableNode(current_name);
+                if (!node) {
+                    throw std::runtime_error("Renamed node not found: '" + current_name + "'");
+                }
+            }
+
+            lfs::core::NodeId desired_parent = lfs::core::NULL_NODE;
+            if (!target.parent_name.empty()) {
+                desired_parent = scene.getNodeIdByName(target.parent_name);
+                if (desired_parent == lfs::core::NULL_NODE) {
+                    throw std::runtime_error("Missing parent '" + target.parent_name + "' for node '" + target.name + "'");
+                }
+            }
+
+            if (node->parent_id != desired_parent) {
+                std::string old_parent_name;
+                if (node->parent_id != lfs::core::NULL_NODE) {
+                    if (const auto* old_parent = scene.getNodeById(node->parent_id)) {
+                        old_parent_name = old_parent->name;
+                    }
+                }
+
+                scene.reparent(node->id, desired_parent);
+                node = scene.getMutableNode(current_name);
+                if (!node || node->parent_id != desired_parent) {
+                    throw std::runtime_error("Failed to reparent node '" + current_name + "'");
+                }
+
+                scene_manager.invalidateNodeSelectionMask();
+                if (emit_reparent_event) {
+                    NodeReparented{
+                        .name = target.name,
+                        .old_parent = old_parent_name,
+                        .new_parent = target.parent_name,
+                        .from_history = true}
+                        .emit();
+                }
+            }
+
+            scene.setNodeTransform(current_name, target.local_transform);
+            node->visible.set(target.visible, false);
+            node->locked.set(target.locked, false);
+            node->training_enabled = target.training_enabled;
+            restorePlyPathForSnapshot(scene_manager, current_name, target.source_path);
+        }
+
+        void applyNodeMetadataSnapshot(SceneManager& scene_manager,
+                                       const SceneGraphNodeMetadataSnapshot& target,
+                                       const std::vector<std::string>& candidates,
+                                       const bool emit_reparent_event) {
+            auto& scene = scene_manager.getScene();
+            const std::string current_name = resolveExistingNodeName(scene, candidates);
+            if (current_name.empty()) {
+                throw std::runtime_error("Cannot restore scene node metadata for '" + target.name + "'");
+            }
+
+            const auto* current_node = scene.getNode(current_name);
+            if (!current_node) {
+                throw std::runtime_error("Cannot restore scene node metadata for '" + target.name + "'");
+            }
+            const auto before = captureNodeMetadataSnapshot(scene_manager, *current_node);
+
+            try {
+                applyNodeMetadataSnapshotUnchecked(scene_manager, target, current_name, emit_reparent_event);
+            } catch (const HistoryCorruptionError&) {
+                throw;
+            } catch (...) {
+                try {
+                    const std::vector<std::string> rollback_candidates{
+                        before.name,
+                        target.name,
+                        current_name,
+                    };
+                    const auto rollback_name = resolveExistingNodeName(
+                        scene,
+                        rollback_candidates);
+                    if (rollback_name.empty()) {
+                        throw std::runtime_error("Rollback target node missing");
+                    }
+                    applyNodeMetadataSnapshotUnchecked(scene_manager, before, rollback_name, false);
+                } catch (const std::exception& rollback_error) {
+                    throw HistoryCorruptionError(
+                        "Failed to rollback scene node metadata for '" + target.name + "': " +
+                        std::string(rollback_error.what()));
+                } catch (...) {
+                    throw HistoryCorruptionError(
+                        "Failed to rollback scene node metadata for '" + target.name + "': unknown exception");
+                }
+                throw;
+            }
         }
 
         size_t tensorBytes(const lfs::core::Tensor& tensor) {
@@ -290,6 +465,21 @@ namespace lfs::vis::op {
                 if (!storage.indices.is_valid() || storage.indices.numel() == 0) {
                     return;
                 }
+                if (!live_tensor.is_valid()) {
+                    throw std::runtime_error("Cannot replay sparse tensor history against a missing tensor");
+                }
+                if (live_tensor.numel() < storage.total_size) {
+                    throw std::runtime_error("Cannot replay sparse tensor history after tensor resized");
+                }
+                if (!storage.stored_values.is_valid() || storage.stored_values.numel() != storage.indices.numel()) {
+                    throw std::runtime_error("Cannot replay sparse tensor history with invalid stored values");
+                }
+
+                const auto max_index = storage.indices.max().item<int32_t>();
+                if (max_index < 0 || static_cast<size_t>(max_index) >= live_tensor.numel()) {
+                    throw std::runtime_error("Cannot replay sparse tensor history: indices out of bounds");
+                }
+
                 auto current_values = live_tensor.index_select(0, storage.indices).contiguous();
                 live_tensor.scatter_(0, storage.indices, storage.stored_values);
                 if (live_tensor.is_valid() && live_tensor.device() == lfs::core::Device::CUDA) {
@@ -1041,6 +1231,11 @@ namespace lfs::vis::op {
                                            }
                                          : selection_after_metadata_;
 
+        if (selection_mask_storage_.mode == TensorSwapStorageMode::SPARSE &&
+            scene_.getScene().getTotalGaussianCount() != selection_mask_storage_.total_size) {
+            throw std::runtime_error("Cannot replay sparse selection history after topology changed");
+        }
+
         auto current_selection = scene_.getScene().getSelectionMask();
         const size_t total_size = std::max({selection_mask_storage_.total_size,
                                             scene_.getScene().getTotalGaussianCount(),
@@ -1070,6 +1265,11 @@ namespace lfs::vis::op {
             auto* node = scene_.getScene().getMutableNode(node_name);
             if (!node || !node->model) {
                 continue;
+            }
+
+            if (storage.mode == TensorSwapStorageMode::SPARSE &&
+                node->model->size() != storage.total_size) {
+                throw std::runtime_error("Cannot replay sparse topology history after gaussian count changed");
             }
 
             const bool target_present = undo_direction ? storage.before_present : storage.after_present;
@@ -1143,6 +1343,10 @@ namespace lfs::vis::op {
         return total;
     }
 
+    DirtyMask SceneSnapshot::dirtyFlags() const {
+        return snapshotDirtyFlags(captured_);
+    }
+
     UndoMemoryBreakdown SceneSnapshot::memoryBreakdown() const {
         UndoMemoryBreakdown total = selection_mask_storage_.memoryBreakdown();
         for (const auto& [_, storage] : deleted_mask_storage_) {
@@ -1188,6 +1392,99 @@ namespace lfs::vis::op {
         return true;
     }
 
+    TensorUndoEntry::TensorUndoEntry(std::string name,
+                                     UndoMetadata metadata,
+                                     std::string target_name,
+                                     lfs::core::Tensor before,
+                                     TensorAccessor accessor)
+        : name_(std::move(name)),
+          metadata_(std::move(metadata)),
+          target_name_(std::move(target_name)),
+          accessor_(std::move(accessor)),
+          before_(std::move(before)) {
+        if (!metadata_.label.size()) {
+            metadata_.label = name_;
+        }
+        if (!before_.is_valid()) {
+            return;
+        }
+
+        tensor_shape_ = before_.shape();
+        element_count_ = before_.numel();
+        dtype_ = before_.dtype();
+        storage_.device = before_.device();
+        storage_.dtype = dtype_;
+        storage_.total_size = element_count_;
+        storage_.before_present = true;
+    }
+
+    void TensorUndoEntry::captureAfter() {
+        captured_after_ = true;
+        auto* current = accessor_ ? accessor_() : nullptr;
+        if (!before_.is_valid() || !current || !current->is_valid()) {
+            LOG_WARN("Tensor undo capture skipped for '{}': missing tensor target '{}'",
+                     name_, target_name_);
+            return;
+        }
+        if (current->dtype() != dtype_ || current->numel() != element_count_) {
+            LOG_WARN("Tensor undo capture skipped for '{}': incompatible tensor state on '{}'",
+                     name_, target_name_);
+            return;
+        }
+        if (element_count_ > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            LOG_WARN("Tensor undo capture skipped for '{}': tensor '{}' exceeds supported reshape size",
+                     name_, target_name_);
+            return;
+        }
+
+        const int flat_size = static_cast<int>(element_count_);
+        auto before_flat = before_.contiguous().reshape({flat_size});
+        auto after_flat = current->contiguous().reshape({flat_size});
+        auto before_ptr = std::make_shared<lfs::core::Tensor>(std::move(before_flat));
+        storage_ = buildTensorSwapStorage(before_ptr,
+                                          &after_flat,
+                                          element_count_,
+                                          current->device(),
+                                          dtype_,
+                                          true,
+                                          true);
+        before_ = lfs::core::Tensor{};
+    }
+
+    bool TensorUndoEntry::hasChanges() const {
+        return captured_after_ && storage_.hasChanges();
+    }
+
+    void TensorUndoEntry::apply() {
+        auto* current = accessor_ ? accessor_() : nullptr;
+        if (!current || !current->is_valid()) {
+            throw std::runtime_error("Missing tensor target for undo entry '" + target_name_ + "'");
+        }
+        if (current->dtype() != dtype_ || current->numel() != element_count_) {
+            throw std::runtime_error("Incompatible tensor target for undo entry '" + target_name_ + "'");
+        }
+        if (element_count_ > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            throw std::runtime_error("Tensor target for undo entry '" + target_name_ + "' exceeds supported reshape size");
+        }
+
+        const int flat_size = static_cast<int>(element_count_);
+        auto flat = current->contiguous().reshape({flat_size});
+        applyTensorSwapStorage(flat, storage_);
+        *current = flat.reshape(tensor_shape_).contiguous();
+    }
+
+    void TensorUndoEntry::undo() {
+        apply();
+    }
+
+    void TensorUndoEntry::redo() {
+        apply();
+    }
+
+    DirtyMask TensorUndoEntry::dirtyFlags() const {
+        return DirtyFlag::SPLATS;
+    }
+
     CropBoxUndoEntry::CropBoxUndoEntry(SceneManager& scene, std::string node_name,
                                        lfs::core::CropBoxData before, glm::mat4 transform_before)
         : scene_(scene),
@@ -1199,7 +1496,12 @@ namespace lfs::vis::op {
 
     void CropBoxUndoEntry::captureAfter() {
         const auto* node = scene_.getScene().getNode(node_name_);
-        assert(node && node->cropbox);
+        if (!node || !node->cropbox) {
+            LOG_WARN("CropBox node '{}' removed during undo capture", node_name_);
+            after_ = before_;
+            transform_after_ = transform_before_;
+            return;
+        }
         after_ = *node->cropbox;
         transform_after_ = scene_.getNodeTransform(node_name_);
     }
@@ -1233,6 +1535,10 @@ namespace lfs::vis::op {
         };
     }
 
+    DirtyMask CropBoxUndoEntry::dirtyFlags() const {
+        return DirtyFlag::SPLATS | DirtyFlag::OVERLAY;
+    }
+
     EllipsoidUndoEntry::EllipsoidUndoEntry(SceneManager& scene, std::string node_name,
                                            lfs::core::EllipsoidData before, glm::mat4 transform_before)
         : scene_(scene),
@@ -1244,7 +1550,12 @@ namespace lfs::vis::op {
 
     void EllipsoidUndoEntry::captureAfter() {
         const auto* node = scene_.getScene().getNode(node_name_);
-        assert(node && node->ellipsoid);
+        if (!node || !node->ellipsoid) {
+            LOG_WARN("Ellipsoid node '{}' removed during undo capture", node_name_);
+            after_ = before_;
+            transform_after_ = transform_before_;
+            return;
+        }
         after_ = *node->ellipsoid;
         transform_after_ = scene_.getNodeTransform(node_name_);
     }
@@ -1276,6 +1587,10 @@ namespace lfs::vis::op {
             .source = "ui",
             .scope = "ellipsoid",
         };
+    }
+
+    DirtyMask EllipsoidUndoEntry::dirtyFlags() const {
+        return DirtyFlag::SPLATS | DirtyFlag::OVERLAY;
     }
 
     PropertyChangeUndoEntry::PropertyChangeUndoEntry(std::string property_path,
@@ -1323,6 +1638,10 @@ namespace lfs::vis::op {
         return true;
     }
 
+    DirtyMask PropertyChangeUndoEntry::dirtyFlags() const {
+        return propertyDirtyFlags(property_path_);
+    }
+
     std::vector<SceneGraphNodeMetadataSnapshot> SceneGraphMetadataEntry::captureNodes(
         const SceneManager& scene_manager,
         const std::vector<std::string>& node_names) {
@@ -1350,69 +1669,56 @@ namespace lfs::vis::op {
           diffs_(std::move(diffs)) {}
 
     void SceneGraphMetadataEntry::apply(const bool use_after_state) {
-        auto& scene = scene_.getScene();
+        lfs::core::Scene::Transaction txn(scene_.getScene());
+
+        struct AppliedMetadataSnapshot {
+            SceneGraphNodeMetadataSnapshot original;
+            std::vector<std::string> candidates;
+        };
+
+        std::vector<AppliedMetadataSnapshot> applied;
+        applied.reserve(diffs_.size());
+
         for (const auto& diff : diffs_) {
             const auto& target = use_after_state ? diff.after : diff.before;
             const auto& alternate = use_after_state ? diff.before : diff.after;
-
-            std::string current_name = target.name;
-            if (!scene.getNode(current_name)) {
-                current_name = alternate.name;
-            }
-
-            auto* node = scene.getMutableNode(current_name);
-            if (!node) {
+            const std::vector<std::string> candidates{target.name, alternate.name};
+            const auto current_name = resolveExistingNodeName(scene_.getScene(), candidates);
+            if (current_name.empty()) {
                 throw std::runtime_error("Cannot restore scene node metadata for '" + target.name + "'");
             }
 
-            if (current_name != target.name) {
-                if (!scene.renameNode(current_name, target.name)) {
-                    throw std::runtime_error("Failed to rename node '" + current_name + "' to '" + target.name + "'");
-                }
-                scene_.movePlyPath(current_name, target.name);
-                current_name = target.name;
-                node = scene.getMutableNode(current_name);
-                if (!node) {
-                    throw std::runtime_error("Renamed node not found: '" + current_name + "'");
-                }
+            const auto* current_node = scene_.getScene().getNode(current_name);
+            if (!current_node) {
+                throw std::runtime_error("Cannot restore scene node metadata for '" + target.name + "'");
             }
 
-            lfs::core::NodeId desired_parent = lfs::core::NULL_NODE;
-            if (!target.parent_name.empty()) {
-                desired_parent = scene.getNodeIdByName(target.parent_name);
-                if (desired_parent == lfs::core::NULL_NODE) {
-                    throw std::runtime_error("Missing parent '" + target.parent_name + "' for node '" + target.name + "'");
-                }
-            }
+            AppliedMetadataSnapshot rollback_state{
+                .original = captureNodeMetadataSnapshot(scene_, *current_node),
+                .candidates = {current_name, target.name, alternate.name},
+            };
 
-            if (node->parent_id != desired_parent) {
-                std::string old_parent_name;
-                if (node->parent_id != lfs::core::NULL_NODE) {
-                    if (const auto* old_parent = scene.getNodeById(node->parent_id)) {
-                        old_parent_name = old_parent->name;
+            try {
+                applyNodeMetadataSnapshot(scene_, target, rollback_state.candidates, true);
+            } catch (const HistoryCorruptionError&) {
+                throw;
+            } catch (...) {
+                try {
+                    for (auto it = applied.rbegin(); it != applied.rend(); ++it) {
+                        applyNodeMetadataSnapshot(scene_, it->original, it->candidates, false);
                     }
+                } catch (const std::exception& rollback_error) {
+                    throw HistoryCorruptionError(
+                        "Failed to rollback scene graph metadata entry '" + name_ + "': " +
+                        std::string(rollback_error.what()));
+                } catch (...) {
+                    throw HistoryCorruptionError(
+                        "Failed to rollback scene graph metadata entry '" + name_ + "': unknown exception");
                 }
-                scene.reparent(node->id, desired_parent);
-                scene_.invalidateNodeSelectionMask();
-                lfs::core::events::state::NodeReparented{
-                    .name = target.name,
-                    .old_parent = old_parent_name,
-                    .new_parent = target.parent_name,
-                    .from_history = true}
-                    .emit();
-                node = scene.getMutableNode(current_name);
+                throw;
             }
 
-            scene.setNodeTransform(current_name, target.local_transform);
-            node->visible.set(target.visible, false);
-            node->locked.set(target.locked, false);
-            node->training_enabled = target.training_enabled;
-
-            if (target.source_path) {
-                scene_.setPlyPath(current_name, *target.source_path);
-            } else {
-                scene_.clearPlyPath(current_name);
-            }
+            applied.push_back(std::move(rollback_state));
         }
     }
 
@@ -1440,6 +1746,10 @@ namespace lfs::vis::op {
             .source = "core",
             .scope = "scene_graph",
         };
+    }
+
+    DirtyMask SceneGraphMetadataEntry::dirtyFlags() const {
+        return sceneGraphMetadataDirtyFlags();
     }
 
     SceneGraphStateSnapshot SceneGraphPatchEntry::captureState(const SceneManager& scene_manager,
@@ -1628,6 +1938,17 @@ namespace lfs::vis::op {
             .source = "core",
             .scope = "scene_graph",
         };
+    }
+
+    DirtyMask SceneGraphPatchEntry::dirtyFlags() const {
+        DirtyMask flags = DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY;
+        if (before_.selected_node_names || after_.selected_node_names) {
+            flags |= DirtyFlag::SELECTION;
+        }
+        if (before_.context || after_.context) {
+            return DirtyFlag::ALL;
+        }
+        return flags;
     }
 
 } // namespace lfs::vis::op

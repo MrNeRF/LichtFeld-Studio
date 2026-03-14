@@ -4,7 +4,6 @@
 
 #include "py_operator.hpp"
 #include "py_ui.hpp"
-#include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator.hpp"
 #include "visualizer/operator/operator_id.hpp"
 #include "visualizer/operator/operator_registry.hpp"
@@ -16,16 +15,6 @@
 namespace nb = nanobind;
 
 namespace lfs::python {
-
-    namespace {
-        void warn_deprecated_ops_alias(const char* alias_name) {
-            const std::string message =
-                std::string(alias_name) + " is deprecated; use lf.undo instead.";
-            if (PyErr_WarnEx(PyExc_DeprecationWarning, message.c_str(), 1) < 0) {
-                throw nb::python_error();
-            }
-        }
-    } // namespace
 
     void register_operators(nb::module_& m) {
         auto ops = m.def_submodule("ops", "Operator system");
@@ -156,31 +145,6 @@ namespace lfs::python {
             },
             nb::arg("id"),
             "Get operator descriptor by ID (None if not found)");
-
-        ops.def(
-            "undo", [] {
-                warn_deprecated_ops_alias("lf.ops.undo()");
-                vis::op::undoHistory().undo();
-            },
-            "Deprecated alias for lf.undo.undo()");
-        ops.def(
-            "redo", [] {
-                warn_deprecated_ops_alias("lf.ops.redo()");
-                vis::op::undoHistory().redo();
-            },
-            "Deprecated alias for lf.undo.redo()");
-        ops.def(
-            "can_undo", [] {
-                warn_deprecated_ops_alias("lf.ops.can_undo()");
-                return vis::op::undoHistory().canUndo();
-            },
-            "Deprecated alias for lf.undo.can_undo()");
-        ops.def(
-            "can_redo", [] {
-                warn_deprecated_ops_alias("lf.ops.can_redo()");
-                return vis::op::undoHistory().canRedo();
-            },
-            "Deprecated alias for lf.undo.can_redo()");
         ops.def(
             "has_modal", [] { return vis::op::operators().hasModalOperator(); },
             "Check if a modal operator is running");

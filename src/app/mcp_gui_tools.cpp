@@ -882,10 +882,11 @@ namespace lfs::app {
                 {"total_cpu_bytes", static_cast<int64_t>(total_memory.cpu_bytes)},
                 {"total_gpu_bytes", static_cast<int64_t>(total_memory.gpu_bytes)},
                 {"max_entries", static_cast<int64_t>(vis::op::UndoHistory::MAX_ENTRIES)},
-                {"max_bytes", static_cast<int64_t>(vis::op::UndoHistory::MAX_BYTES)},
+                {"max_bytes", static_cast<int64_t>(history.maxBytes())},
                 {"transaction_active", history.hasActiveTransaction()},
                 {"transaction_depth", static_cast<int64_t>(history.transactionDepth())},
                 {"transaction_name", history.activeTransactionName()},
+                {"transaction_age_ms", static_cast<int64_t>(history.transactionAgeMs())},
                 {"generation", static_cast<int64_t>(history.generation())},
             };
         }
@@ -2095,6 +2096,28 @@ namespace lfs::app {
                     payload["performed"] = "jump";
                     payload["stack"] = stack;
                     payload["requested_count"] = static_cast<int64_t>(count);
+                    return payload;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "history.shrink",
+                .description = "Offload shared history to CPU and evict cold entries until GPU usage fits the requested budget",
+                .input_schema =
+                    {.type = "object",
+                     .properties = {{"target_gpu_bytes", {{"type", "integer"}, {"minimum", 0}}}},
+                     .required = {"target_gpu_bytes"}},
+                .metadata = {.category = "history", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread"}},
+            [viewer_impl](const json& args) -> json {
+                const auto target_gpu_bytes =
+                    static_cast<size_t>(std::max<int64_t>(0, args.value("target_gpu_bytes", 0)));
+                return post_and_wait(viewer_impl, [target_gpu_bytes]() -> json {
+                    vis::op::undoHistory().shrinkToFit(target_gpu_bytes);
+                    auto payload = history_json();
+                    payload["success"] = true;
+                    payload["performed"] = "shrink";
+                    payload["target_gpu_bytes"] = static_cast<int64_t>(target_gpu_bytes);
                     return payload;
                 });
             });

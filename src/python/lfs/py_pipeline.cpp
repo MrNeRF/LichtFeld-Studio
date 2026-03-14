@@ -3,14 +3,12 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "py_pipeline.hpp"
-#include "core/logger.hpp"
 #include "visualizer/core/services.hpp"
 #include "visualizer/operation/operation.hpp"
 #include "visualizer/operation/ops/edit_ops.hpp"
 #include "visualizer/operation/ops/select_ops.hpp"
 #include "visualizer/operation/ops/transform_ops.hpp"
 #include "visualizer/operation/pipeline.hpp"
-#include "visualizer/operation/undo_history.hpp"
 
 #include <glm/glm.hpp>
 #include <nanobind/stl/optional.h>
@@ -20,14 +18,6 @@
 namespace lfs::python {
 
     namespace {
-        void warn_deprecated_undo_alias(const char* alias_name) {
-            const std::string message =
-                std::string(alias_name) + " is deprecated; use lf.undo instead.";
-            if (PyErr_WarnEx(PyExc_DeprecationWarning, message.c_str(), 1) < 0) {
-                throw nb::python_error();
-            }
-        }
-
         vis::op::OperatorProperties dict_to_props(const nb::dict& properties) {
             vis::op::OperatorProperties props;
             for (const auto& [key, value] : properties) {
@@ -173,43 +163,6 @@ namespace lfs::python {
             "scale", [](nb::kwargs kwargs) { return make_stage<vis::op::TransformScale>(kwargs); }, "Create scale stage");
         transform.def(
             "set", [](nb::kwargs kwargs) { return make_stage<vis::op::TransformSet>(kwargs); }, "Create set-transform stage");
-
-        auto undo = pipe.def_submodule("undo", "Unified undo system");
-        undo.def(
-            "undo", [] {
-                warn_deprecated_undo_alias("lf.pipeline.undo.undo()");
-                vis::op::undoHistory().undo();
-            }, "Deprecated alias for lf.undo.undo()");
-        undo.def(
-            "redo", [] {
-                warn_deprecated_undo_alias("lf.pipeline.undo.redo()");
-                vis::op::undoHistory().redo();
-            }, "Deprecated alias for lf.undo.redo()");
-        undo.def(
-            "can_undo", [] {
-                warn_deprecated_undo_alias("lf.pipeline.undo.can_undo()");
-                return vis::op::undoHistory().canUndo();
-            }, "Deprecated alias for lf.undo.can_undo()");
-        undo.def(
-            "can_redo", [] {
-                warn_deprecated_undo_alias("lf.pipeline.undo.can_redo()");
-                return vis::op::undoHistory().canRedo();
-            }, "Deprecated alias for lf.undo.can_redo()");
-        undo.def(
-            "undo_name", [] {
-                warn_deprecated_undo_alias("lf.pipeline.undo.undo_name()");
-                return vis::op::undoHistory().undoName();
-            }, "Deprecated alias for lf.undo.get_undo_name()");
-        undo.def(
-            "redo_name", [] {
-                warn_deprecated_undo_alias("lf.pipeline.undo.redo_name()");
-                return vis::op::undoHistory().redoName();
-            }, "Deprecated alias for lf.undo.get_redo_name()");
-        undo.def(
-            "clear", [] {
-                warn_deprecated_undo_alias("lf.pipeline.undo.clear()");
-                vis::op::undoHistory().clear();
-            }, "Deprecated alias for lf.undo.clear()");
     }
 
 } // namespace lfs::python

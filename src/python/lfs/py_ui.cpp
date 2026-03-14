@@ -335,9 +335,13 @@ namespace lfs::python {
                 return;
             }
 
-            auto entry = std::make_unique<lfs::python::PyUndoEntry>(label,
-                                                                    instance.attr("undo"),
-                                                                    instance.attr("redo"));
+            auto entry = std::make_unique<lfs::python::PyUndoEntry>(
+                label,
+                instance.attr("undo"),
+                instance.attr("redo"),
+                "python.operator",
+                "python",
+                "operator");
             vis::op::undoHistory().push(std::move(entry));
         }
 

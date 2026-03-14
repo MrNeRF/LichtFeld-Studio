@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 #include "core/scene.hpp"
 #include "core/tensor.hpp"
+#include "rendering/dirty_flags.hpp"
 #include <any>
 #include <chrono>
 #include <cstdint>
@@ -15,6 +16,7 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -45,6 +47,11 @@ namespace lfs::vis::op {
         std::string scope = "general";
     };
 
+    class LFS_VIS_API HistoryCorruptionError : public std::runtime_error {
+    public:
+        using std::runtime_error::runtime_error;
+    };
+
     class LFS_VIS_API UndoEntry {
     public:
         virtual ~UndoEntry() = default;
@@ -71,6 +78,7 @@ namespace lfs::vis::op {
         }
         virtual void offloadToCPU() {}
         virtual void restoreToPreferredDevice() {}
+        [[nodiscard]] virtual DirtyMask dirtyFlags() const { return DirtyFlag::ALL; }
     };
 
     using UndoEntryPtr = std::unique_ptr<UndoEntry>;
@@ -164,6 +172,7 @@ namespace lfs::vis::op {
         [[nodiscard]] UndoMemoryBreakdown memoryBreakdown() const override;
         void offloadToCPU() override;
         void restoreToPreferredDevice() override;
+        [[nodiscard]] DirtyMask dirtyFlags() const override;
 
     private:
         SceneManager& scene_;
@@ -193,6 +202,44 @@ namespace lfs::vis::op {
 
     LFS_VIS_API bool pushSceneSnapshotIfChanged(std::unique_ptr<SceneSnapshot> snapshot);
 
+    class TensorUndoEntry : public UndoEntry {
+    public:
+        using TensorAccessor = std::function<lfs::core::Tensor*()>;
+
+        TensorUndoEntry(std::string name,
+                        UndoMetadata metadata,
+                        std::string target_name,
+                        lfs::core::Tensor before,
+                        TensorAccessor accessor);
+
+        void captureAfter();
+        [[nodiscard]] bool hasChanges() const;
+
+        void undo() override;
+        void redo() override;
+        [[nodiscard]] std::string name() const override { return name_; }
+        [[nodiscard]] UndoMetadata metadata() const override { return metadata_; }
+        [[nodiscard]] size_t estimatedBytes() const override { return storage_.estimatedBytes(); }
+        [[nodiscard]] UndoMemoryBreakdown memoryBreakdown() const override { return storage_.memoryBreakdown(); }
+        void offloadToCPU() override { storage_.offloadToCPU(); }
+        void restoreToPreferredDevice() override { storage_.restoreToDevice(); }
+        [[nodiscard]] DirtyMask dirtyFlags() const override;
+
+    private:
+        void apply();
+
+        std::string name_;
+        UndoMetadata metadata_;
+        std::string target_name_;
+        TensorAccessor accessor_;
+        lfs::core::Tensor before_;
+        TensorSwapStorage storage_;
+        lfs::core::TensorShape tensor_shape_;
+        size_t element_count_ = 0;
+        lfs::core::DataType dtype_ = lfs::core::DataType::Float32;
+        bool captured_after_ = false;
+    };
+
     class CropBoxUndoEntry : public UndoEntry {
     public:
         CropBoxUndoEntry(SceneManager& scene, std::string node_name,
@@ -204,6 +251,7 @@ namespace lfs::vis::op {
         [[nodiscard]] std::string name() const override { return "cropbox.transform"; }
         [[nodiscard]] UndoMetadata metadata() const override;
         [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this) + node_name_.size(); }
+        [[nodiscard]] DirtyMask dirtyFlags() const override;
 
     private:
         void captureAfter();
@@ -227,6 +275,7 @@ namespace lfs::vis::op {
         [[nodiscard]] std::string name() const override { return "ellipsoid.transform"; }
         [[nodiscard]] UndoMetadata metadata() const override;
         [[nodiscard]] size_t estimatedBytes() const override { return sizeof(*this) + node_name_.size(); }
+        [[nodiscard]] DirtyMask dirtyFlags() const override;
 
     private:
         void captureAfter();
@@ -252,6 +301,7 @@ namespace lfs::vis::op {
         [[nodiscard]] UndoMetadata metadata() const override;
         [[nodiscard]] size_t estimatedBytes() const override { return estimated_bytes_; }
         bool tryMerge(const UndoEntry& incoming) override;
+        [[nodiscard]] DirtyMask dirtyFlags() const override;
 
     private:
         std::string property_path_;
@@ -359,6 +409,7 @@ namespace lfs::vis::op {
         [[nodiscard]] std::string name() const override { return name_; }
         [[nodiscard]] UndoMetadata metadata() const override;
         [[nodiscard]] size_t estimatedBytes() const override;
+        [[nodiscard]] DirtyMask dirtyFlags() const override;
 
     private:
         void apply(bool use_after_state);
@@ -387,6 +438,7 @@ namespace lfs::vis::op {
         [[nodiscard]] UndoMemoryBreakdown memoryBreakdown() const override;
         void offloadToCPU() override;
         void restoreToPreferredDevice() override;
+        [[nodiscard]] DirtyMask dirtyFlags() const override;
 
     private:
         void applyState(const SceneGraphStateSnapshot& desired,

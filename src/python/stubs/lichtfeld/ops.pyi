@@ -145,18 +145,6 @@ def get_all() -> list[str]:
 def get_descriptor(id: str) -> OperatorDescriptor | None:
     """Get operator descriptor by ID (None if not found)"""
 
-def undo() -> None:
-    """Deprecated alias for lf.undo.undo()"""
-
-def redo() -> None:
-    """Deprecated alias for lf.undo.redo()"""
-
-def can_undo() -> bool:
-    """Deprecated alias for lf.undo.can_undo()"""
-
-def can_redo() -> bool:
-    """Deprecated alias for lf.undo.can_redo()"""
-
 def has_modal() -> bool:
     """Check if a modal operator is running"""
 
