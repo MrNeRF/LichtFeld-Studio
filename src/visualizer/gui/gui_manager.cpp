@@ -53,6 +53,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <format>
 #include <fstream>
 #include <imgui_impl_opengl3.h>
@@ -60,11 +61,21 @@
 #include <imgui_internal.h>
 #include <iterator>
 #include <ImGuizmo.h>
+#include <string_view>
 
 namespace lfs::vis::gui {
 
     namespace {
         const FrameInputBuffer* s_frame_input = nullptr;
+
+#ifndef LFS_BUILD_PORTABLE
+        [[nodiscard]] bool envFlagEnabled(const char* name) {
+            const char* value = std::getenv(name);
+            if (!value || !*value)
+                return false;
+            return std::string_view(value) != "0";
+        }
+#endif
 
         std::string makeRmlTabDomId(const std::string& id) {
             std::string result = "rp-tab-";
@@ -593,6 +604,16 @@ namespace lfs::vis::gui {
         lfs::python::set_rml_manager(&rmlui_manager_);
 
         startup_overlay_.init(&rmlui_manager_);
+#ifdef LFS_BUILD_PORTABLE
+        const bool startup_overlay_enabled = true;
+#else
+        const bool startup_overlay_enabled =
+            viewer_->options_.show_startup_overlay && !envFlagEnabled("LFS_DISABLE_STARTUP_OVERLAY");
+#endif
+        if (!startup_overlay_enabled) {
+            LOG_INFO("Startup overlay disabled");
+            startup_overlay_.dismiss();
+        }
         rml_shell_frame_.init(&rmlui_manager_);
         rml_right_panel_.init(&rmlui_manager_);
         rml_right_panel_.on_tab_changed = [this](const std::string& id) {

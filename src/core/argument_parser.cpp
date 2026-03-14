@@ -199,7 +199,9 @@ namespace {
             ::args::Group ui_group(parser, "UI OPTIONS:");
             ::args::Flag headless(ui_group, "headless", "Disable visualization during training", {"headless"});
             ::args::Flag auto_train(ui_group, "train", "Start training immediately on startup", {"train"});
+#ifndef LFS_BUILD_PORTABLE
             ::args::Flag no_splash(ui_group, "no_splash", "Skip splash screen on startup", {"no-splash"});
+#endif
             ::args::Flag no_interop(ui_group, "no_interop", "Disable CUDA-GL interop (use CPU fallback for display)", {"no-interop"});
             ::args::Flag debug_python(ui_group, "debug_python", "Start debugpy listener on port 5678 for plugin debugging", {"debug-python"});
             ::args::ValueFlag<int> debug_python_port(ui_group, "port", "Port for debugpy listener (default: 5678)", {"debug-python-port"});
@@ -527,7 +529,11 @@ namespace {
                                         enable_eval_flag = bool(enable_eval),
                                         headless_flag = bool(headless),
                                         auto_train_flag = bool(auto_train),
+#ifdef LFS_BUILD_PORTABLE
+                                        no_splash_flag = false,
+#else
                                         no_splash_flag = bool(no_splash),
+#endif
                                         no_interop_flag = bool(no_interop),
                                         debug_python_flag = bool(debug_python),
                                         debug_python_port_val = debug_python_port ? std::optional<int>(::args::get(debug_python_port)) : std::optional<int>(),

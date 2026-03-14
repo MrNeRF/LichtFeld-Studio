@@ -86,6 +86,7 @@ option(BUILD_PORTABLE "Build portable distribution" OFF)
 if(BUILD_PORTABLE)
     set(BUILD_CUDA_PTX_ONLY ON CACHE BOOL "" FORCE)
     set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    add_compile_definitions(LFS_BUILD_PORTABLE=1)
     message(STATUS "Portable: PTX-only, tests disabled")
 endif()
 

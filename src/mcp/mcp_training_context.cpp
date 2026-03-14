@@ -21,6 +21,7 @@
 #include "training/training_setup.hpp"
 #include "visualizer/selection/selection_group_mask.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <cuda_runtime.h>
 #include <limits>
@@ -29,6 +30,22 @@
 namespace lfs::mcp {
 
     namespace {
+        struct ScreenRect {
+            float x0;
+            float y0;
+            float x1;
+            float y1;
+        };
+
+        [[nodiscard]] ScreenRect normalize_screen_rect(const float x0, const float y0, const float x1, const float y1) {
+            return {
+                .x0 = std::min(x0, x1),
+                .y0 = std::min(y0, y1),
+                .x1 = std::max(x0, x1),
+                .y1 = std::max(y0, y1),
+            };
+        }
+
         core::Tensor ensure_cuda_bool_mask(const core::Tensor& mask) {
             auto result = (mask.dtype() == core::DataType::Bool) ? mask : mask.to(core::DataType::Bool);
             if (result.device() != core::Device::CUDA) {
@@ -728,14 +745,21 @@ namespace lfs::mcp {
 
                 const auto& screen_positions = *screen_pos_result;
                 const auto N = static_cast<size_t>(screen_positions.shape()[0]);
+                const auto rect = normalize_screen_rect(x0, y0, x1, y1);
                 return ctx.with_selection_workspace([&](TrainingContext::SelectionWorkspace& workspace) -> json {
                     auto& selection = reset_cuda_bool_scratch(workspace.selection_scratch_buffer, N);
 
                     if (mode == "replace") {
-                        rendering::rect_select_tensor(screen_positions, x0, y0, x1, y1, selection);
+                        rendering::rect_select_tensor(screen_positions, rect.x0, rect.y0, rect.x1, rect.y1, selection);
                     } else {
                         const bool add_mode = (mode == "add");
-                        rendering::rect_select_mode_tensor(screen_positions, x0, y0, x1, y1, selection, add_mode);
+                        rendering::rect_select_mode_tensor(screen_positions,
+                                                           rect.x0,
+                                                           rect.y0,
+                                                           rect.x1,
+                                                           rect.y1,
+                                                           selection,
+                                                           add_mode);
                     }
 
                     auto result = apply_headless_selection(*scene,
@@ -1165,6 +1189,7 @@ namespace lfs::mcp {
                 const float y0 = bbox["y0"].get<float>();
                 const float x1 = bbox["x1"].get<float>();
                 const float y1 = bbox["y1"].get<float>();
+                const auto rect = normalize_screen_rect(x0, y0, x1, y1);
                 auto screen_pos_result = compute_screen_positions_for_scene(scene, camera_index);
                 if (!screen_pos_result) {
                     return json{{"error", screen_pos_result.error()}};
@@ -1174,7 +1199,7 @@ namespace lfs::mcp {
                 const auto N = static_cast<size_t>(screen_positions.shape()[0]);
                 return ctx.with_selection_workspace([&](TrainingContext::SelectionWorkspace& workspace) -> json {
                     auto& selection = reset_cuda_bool_scratch(workspace.selection_scratch_buffer, N);
-                    rendering::rect_select_tensor(screen_positions, x0, y0, x1, y1, selection);
+                    rendering::rect_select_tensor(screen_positions, rect.x0, rect.y0, rect.x1, rect.y1, selection);
 
                     auto selection_result = apply_headless_selection(*scene,
                                                                      workspace.locked_groups_device_mask,

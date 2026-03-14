@@ -31,6 +31,7 @@ namespace lfs::vis {
         int height = 720;
         bool antialiasing = false;
         bool enable_cuda_interop = true;
+        bool show_startup_overlay = true;
         bool gut = false;
         int monitor_x = 0; // Monitor hint for window placement
         int monitor_y = 0;

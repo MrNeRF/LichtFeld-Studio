@@ -229,7 +229,14 @@ namespace lfs::app {
                 vis::gui::panels::PythonScriptManagerState::getInstance().setScripts(params->python_scripts);
             }
 
-            if (params->optimization.no_splash) {
+            const bool disable_splash =
+#ifdef LFS_BUILD_PORTABLE
+                false;
+#else
+                params->optimization.no_splash;
+#endif
+
+            if (disable_splash) {
                 warmupCuda();
             } else {
                 SplashScreen::runWithDelay([]() { warmupCuda(); return 0; });
@@ -250,6 +257,7 @@ namespace lfs::app {
                 .height = 720,
                 .antialiasing = false,
                 .enable_cuda_interop = true,
+                .show_startup_overlay = !disable_splash,
                 .gut = params->optimization.gut,
             });
 

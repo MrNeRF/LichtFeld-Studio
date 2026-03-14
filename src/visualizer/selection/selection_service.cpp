@@ -263,7 +263,12 @@ namespace lfs::vis {
         }
 
         auto& selection = resetBoolScratchBuffer(command_selection_buffer_, screen_positions->size(0));
-        rendering::rect_select_tensor(*screen_positions, x0, y0, x1, y1, selection);
+        rendering::rect_select_tensor(*screen_positions,
+                                      std::min(x0, x1),
+                                      std::min(y0, y1),
+                                      std::max(x0, x1),
+                                      std::max(y0, y1),
+                                      selection);
         return commitSelection(selection, mode, effectiveNodeMask(true), defaultFilterState(), "selection.rect");
     }
 
