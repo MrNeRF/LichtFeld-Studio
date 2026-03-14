@@ -477,6 +477,12 @@ namespace lfs::app {
             return vis::cap::resolveTransformTargets(scene_manager, requested_node);
         }
 
+        std::expected<std::vector<std::string>, std::string> resolve_editable_transform_targets(
+            const vis::SceneManager& scene_manager,
+            const std::optional<std::string>& requested_node) {
+            return vis::cap::resolveEditableTransformTargets(scene_manager, requested_node);
+        }
+
         std::expected<core::NodeId, std::string> resolve_cropbox_parent_id(
             const vis::SceneManager& scene_manager,
             const std::optional<std::string>& requested_node) {
@@ -875,16 +881,15 @@ namespace lfs::app {
             if (!scene_manager)
                 return std::unexpected("Scene manager not initialized");
 
-            const auto requested_node = props.get<std::string>("node");
-            if (requested_node && !requested_node->empty()) {
-                if (!scene_manager->getScene().getNode(*requested_node))
-                    return std::unexpected("Node not found: " + *requested_node);
-                return {};
-            }
+            std::optional<std::string> requested_node;
+            if (const auto node = props.get<std::string>("node"); node && !node->empty())
+                requested_node = *node;
 
-            if (!scene_manager->hasSelectedNode())
-                return std::unexpected("No node specified and no node selected");
+            auto targets = resolve_editable_transform_targets(*scene_manager, requested_node);
+            if (!targets)
+                return std::unexpected(targets.error());
 
+            props.set("resolved_node_names", *targets);
             return {};
         }
 

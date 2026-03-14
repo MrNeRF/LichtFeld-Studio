@@ -139,6 +139,10 @@ namespace lfs::vis {
         ToolType active_tool_ = ToolType::None;
         bool has_selection_ = false;
         bool has_gaussians_ = false;
+        bool has_transformable_selection_ = false;
+        bool has_editable_transform_selection_ = false;
+        bool has_splat_selection_ = false;
+        bool has_editable_splat_selection_ = false;
 
         // String-based operator system
         std::string active_operator_id_;

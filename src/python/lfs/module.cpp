@@ -1050,7 +1050,7 @@ NB_MODULE(lichtfeld, m) {
             const glm::vec3 translation(m[3]);
 
             glm::vec3 col0(m[0]), col1(m[1]), col2(m[2]);
-            const glm::vec3 scale(glm::length(col0), glm::length(col1), glm::length(col2));
+            glm::vec3 scale(glm::length(col0), glm::length(col1), glm::length(col2));
 
             if (scale.x > 0.0f)
                 col0 /= scale.x;
@@ -1058,6 +1058,12 @@ NB_MODULE(lichtfeld, m) {
                 col1 /= scale.y;
             if (scale.z > 0.0f)
                 col2 /= scale.z;
+
+            if (scale.x > 0.0f && scale.y > 0.0f && scale.z > 0.0f &&
+                glm::dot(col0, glm::cross(col1, col2)) < 0.0f) {
+                scale.x = -scale.x;
+                col0 = -col0;
+            }
 
             const glm::mat3 rot_mat(col0, col1, col2);
             const glm::quat quat = glm::quat_cast(rot_mat);

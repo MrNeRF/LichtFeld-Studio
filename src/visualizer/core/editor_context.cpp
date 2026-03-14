@@ -13,6 +13,10 @@ namespace lfs::vis {
             mode_ = EditorMode::EMPTY;
             has_selection_ = false;
             has_gaussians_ = false;
+            has_transformable_selection_ = false;
+            has_editable_transform_selection_ = false;
+            has_splat_selection_ = false;
+            has_editable_splat_selection_ = false;
             selected_node_type_ = core::NodeType::SPLAT;
             return;
         }
@@ -47,6 +51,33 @@ namespace lfs::vis {
         // Update selection state
         has_selection_ = scene_manager->hasSelectedNode();
         selected_node_type_ = has_selection_ ? scene_manager->getSelectedNodeType() : core::NodeType::SPLAT;
+        has_transformable_selection_ = false;
+        has_editable_transform_selection_ = false;
+        has_splat_selection_ = false;
+        has_editable_splat_selection_ = false;
+
+        if (has_selection_) {
+            const auto& scene = scene_manager->getScene();
+            for (const auto& name : scene_manager->getSelectedNodeNames()) {
+                const auto* const node = scene.getNode(name);
+                if (!node)
+                    continue;
+
+                const bool locked = static_cast<bool>(node->locked);
+
+                if (isTransformableNodeType(node->type)) {
+                    has_transformable_selection_ = true;
+                    if (!locked)
+                        has_editable_transform_selection_ = true;
+                }
+
+                if (node->type == core::NodeType::SPLAT) {
+                    has_splat_selection_ = true;
+                    if (!locked)
+                        has_editable_splat_selection_ = true;
+                }
+            }
+        }
 
         has_gaussians_ = (mode_ == EditorMode::VIEWING_SPLATS ||
                           mode_ == EditorMode::TRAINING ||
@@ -63,7 +94,7 @@ namespace lfs::vis {
     }
 
     bool EditorContext::canTransformSelectedNode() const {
-        return has_selection_ && !isToolsDisabled() && isTransformableNodeType(selected_node_type_);
+        return has_selection_ && !isToolsDisabled() && has_editable_transform_selection_;
     }
 
     bool EditorContext::canSelectGaussians() const {
@@ -81,14 +112,15 @@ namespace lfs::vis {
             return true;
         case ToolType::Selection:
         case ToolType::Brush:
-        case ToolType::Mirror:
             return has_gaussians_;
+        case ToolType::Mirror:
+            return has_gaussians_ && has_editable_splat_selection_;
         case ToolType::Translate:
         case ToolType::Rotate:
         case ToolType::Scale:
             return canTransformSelectedNode();
         case ToolType::Align:
-            return selected_node_type_ == core::NodeType::SPLAT;
+            return has_editable_splat_selection_;
         }
         return false;
     }
@@ -103,15 +135,31 @@ namespace lfs::vis {
         case ToolType::None:
             return nullptr;
         case ToolType::Selection:
-        case ToolType::Brush:
-        case ToolType::Mirror:
             return has_gaussians_ ? nullptr : "no gaussians";
+        case ToolType::Brush:
+            return has_gaussians_ ? nullptr : "no gaussians";
+        case ToolType::Mirror:
+            if (!has_gaussians_)
+                return "no gaussians";
+            if (has_editable_splat_selection_)
+                return nullptr;
+            if (has_splat_selection_)
+                return "selection is locked";
+            return "select PLY node";
         case ToolType::Translate:
         case ToolType::Rotate:
         case ToolType::Scale:
-            return isTransformableNodeType(selected_node_type_) ? nullptr : "select parent node";
+            if (has_editable_transform_selection_)
+                return nullptr;
+            if (has_transformable_selection_)
+                return "selection is locked";
+            return "select parent node";
         case ToolType::Align:
-            return selected_node_type_ == core::NodeType::SPLAT ? nullptr : "select PLY node";
+            if (has_editable_splat_selection_)
+                return nullptr;
+            if (has_splat_selection_)
+                return "selection is locked";
+            return "select PLY node";
         }
         return nullptr;
     }

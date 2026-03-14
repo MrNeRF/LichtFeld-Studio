@@ -21,6 +21,93 @@ namespace lfs::vis::cap {
 
     namespace {
 
+        constexpr float kTransformEpsilon = 1e-6f;
+
+        bool is_transformable_node_type(const core::NodeType type) {
+            return type == core::NodeType::DATASET ||
+                   type == core::NodeType::SPLAT ||
+                   type == core::NodeType::CROPBOX ||
+                   type == core::NodeType::ELLIPSOID ||
+                   type == core::NodeType::MESH;
+        }
+
+        bool normalize_rotation_basis(glm::vec3& col0,
+                                      glm::vec3& col1,
+                                      glm::vec3& col2,
+                                      glm::vec3& scale) {
+            scale.x = glm::length(col0);
+            scale.y = glm::length(col1);
+            scale.z = glm::length(col2);
+
+            if (scale.x > kTransformEpsilon)
+                col0 /= scale.x;
+            if (scale.y > kTransformEpsilon)
+                col1 /= scale.y;
+            if (scale.z > kTransformEpsilon)
+                col2 /= scale.z;
+
+            if (scale.x <= kTransformEpsilon ||
+                scale.y <= kTransformEpsilon ||
+                scale.z <= kTransformEpsilon) {
+                return false;
+            }
+
+            if (glm::dot(col0, glm::cross(col1, col2)) < 0.0f) {
+                scale.x = -scale.x;
+                col0 = -col0;
+            }
+
+            return true;
+        }
+
+        std::expected<std::vector<std::string>, std::string> filter_editable_transform_targets(
+            const SceneManager& scene_manager,
+            const std::vector<std::string>& names,
+            const std::optional<std::string>& requested_node) {
+            const auto& scene = scene_manager.getScene();
+            std::vector<std::string> editable;
+            editable.reserve(names.size());
+
+            bool found_locked = false;
+            bool found_untransformable = false;
+
+            for (const auto& name : names) {
+                const auto* const node = scene.getNode(name);
+                if (!node)
+                    return std::unexpected("Node not found: " + name);
+
+                if (!is_transformable_node_type(node->type)) {
+                    found_untransformable = true;
+                    continue;
+                }
+
+                if (static_cast<bool>(node->locked)) {
+                    found_locked = true;
+                    continue;
+                }
+
+                editable.push_back(name);
+            }
+
+            if (!editable.empty())
+                return editable;
+
+            if (requested_node) {
+                if (found_locked)
+                    return std::unexpected("Node is locked: " + *requested_node);
+                if (found_untransformable)
+                    return std::unexpected("Node cannot be transformed: " + *requested_node);
+            }
+
+            if (found_locked && found_untransformable)
+                return std::unexpected("No editable transformable nodes selected");
+            if (found_locked)
+                return std::unexpected("No editable nodes selected");
+            if (found_untransformable)
+                return std::unexpected("Selected nodes cannot be transformed");
+            return std::unexpected("No transform targets provided");
+        }
+
         core::NodeId find_attached_child_node(const core::Scene& scene,
                                               const core::NodeId parent_id,
                                               const core::NodeType type) {
@@ -50,19 +137,11 @@ namespace lfs::vis::cap {
         glm::vec3 col1 = glm::vec3(matrix[1]);
         glm::vec3 col2 = glm::vec3(matrix[2]);
 
-        result.scale.x = glm::length(col0);
-        result.scale.y = glm::length(col1);
-        result.scale.z = glm::length(col2);
-
-        if (result.scale.x > 0.0f)
-            col0 /= result.scale.x;
-        if (result.scale.y > 0.0f)
-            col1 /= result.scale.y;
-        if (result.scale.z > 0.0f)
-            col2 /= result.scale.z;
-
-        const glm::mat3 rotation_matrix(col0, col1, col2);
-        glm::extractEulerAngleXYZ(glm::mat4(rotation_matrix), result.rotation.x, result.rotation.y, result.rotation.z);
+        const bool have_rotation_basis = normalize_rotation_basis(col0, col1, col2, result.scale);
+        if (have_rotation_basis) {
+            const glm::mat3 rotation_matrix(col0, col1, col2);
+            glm::extractEulerAngleXYZ(glm::mat4(rotation_matrix), result.rotation.x, result.rotation.y, result.rotation.z);
+        }
 
         return result;
     }
@@ -155,6 +234,15 @@ namespace lfs::vis::cap {
         if (names.empty())
             return std::unexpected("No node specified and no node selected");
         return names;
+    }
+
+    std::expected<std::vector<std::string>, std::string> resolveEditableTransformTargets(
+        const SceneManager& scene_manager,
+        const std::optional<std::string>& requested_node) {
+        auto targets = resolveTransformTargets(scene_manager, requested_node);
+        if (!targets)
+            return std::unexpected(targets.error());
+        return filter_editable_transform_targets(scene_manager, *targets, requested_node);
     }
 
     std::expected<void, std::string> setTransform(SceneManager& scene_manager,

@@ -82,6 +82,9 @@ namespace lfs::vis::cap {
     [[nodiscard]] LFS_VIS_API std::expected<std::vector<std::string>, std::string> resolveTransformTargets(
         const SceneManager& scene_manager,
         const std::optional<std::string>& requested_node);
+    [[nodiscard]] LFS_VIS_API std::expected<std::vector<std::string>, std::string> resolveEditableTransformTargets(
+        const SceneManager& scene_manager,
+        const std::optional<std::string>& requested_node);
     [[nodiscard]] LFS_VIS_API std::expected<void, std::string> setTransform(
         SceneManager& scene_manager,
         const std::vector<std::string>& targets,

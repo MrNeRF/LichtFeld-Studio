@@ -22,7 +22,7 @@ namespace lfs::vis::op {
                     requested_node = *node;
                 }
             }
-            return cap::resolveTransformTargets(ctx.scene(), requested_node);
+            return cap::resolveEditableTransformTargets(ctx.scene(), requested_node);
         }
 
     } // namespace
@@ -40,7 +40,7 @@ namespace lfs::vis::op {
 
     bool TransformSetOperator::poll(const OperatorContext& ctx, const OperatorProperties* props) const {
         if (!props) {
-            return ctx.hasSelection();
+            return cap::resolveEditableTransformTargets(ctx.scene(), std::nullopt).has_value();
         }
 
         const auto targets = resolve_transform_targets_from_props(ctx, props);
@@ -82,7 +82,7 @@ namespace lfs::vis::op {
 
     bool TransformTranslateOperator::poll(const OperatorContext& ctx, const OperatorProperties* props) const {
         if (!props) {
-            return ctx.hasSelection();
+            return cap::resolveEditableTransformTargets(ctx.scene(), std::nullopt).has_value();
         }
 
         const auto targets = resolve_transform_targets_from_props(ctx, props);
@@ -114,7 +114,7 @@ namespace lfs::vis::op {
 
     bool TransformRotateOperator::poll(const OperatorContext& ctx, const OperatorProperties* props) const {
         if (!props) {
-            return ctx.hasSelection();
+            return cap::resolveEditableTransformTargets(ctx.scene(), std::nullopt).has_value();
         }
 
         const auto targets = resolve_transform_targets_from_props(ctx, props);
@@ -146,7 +146,7 @@ namespace lfs::vis::op {
 
     bool TransformScaleOperator::poll(const OperatorContext& ctx, const OperatorProperties* props) const {
         if (!props) {
-            return ctx.hasSelection();
+            return cap::resolveEditableTransformTargets(ctx.scene(), std::nullopt).has_value();
         }
 
         const auto targets = resolve_transform_targets_from_props(ctx, props);

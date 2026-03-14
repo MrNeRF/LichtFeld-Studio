@@ -10,12 +10,26 @@
 
 namespace lfs::vis::op {
 
+    namespace {
+
+        std::vector<std::string> editable_selected_nodes(SceneManager& scene) {
+            std::vector<std::string> editable;
+            for (const auto& name : scene.getSelectedNodeNames()) {
+                const auto* const node = scene.getScene().getNode(name);
+                if (node && !static_cast<bool>(node->locked))
+                    editable.push_back(name);
+            }
+            return editable;
+        }
+
+    } // namespace
+
     OperationResult TransformTranslate::execute(SceneManager& scene,
                                                 const OperatorProperties& props,
                                                 const std::any& /*input*/) {
-        auto selected = scene.getSelectedNodeNames();
+        auto selected = editable_selected_nodes(scene);
         if (selected.empty()) {
-            return OperationResult::failure("No nodes selected");
+            return OperationResult::failure("No editable nodes selected");
         }
 
         auto delta = props.get_or<glm::vec3>("delta", glm::vec3(0.0f));
@@ -30,15 +44,15 @@ namespace lfs::vis::op {
     }
 
     bool TransformTranslate::poll(SceneManager& scene) const {
-        return scene.hasSelectedNode();
+        return !editable_selected_nodes(scene).empty();
     }
 
     OperationResult TransformRotate::execute(SceneManager& scene,
                                              const OperatorProperties& props,
                                              const std::any& /*input*/) {
-        auto selected = scene.getSelectedNodeNames();
+        auto selected = editable_selected_nodes(scene);
         if (selected.empty()) {
-            return OperationResult::failure("No nodes selected");
+            return OperationResult::failure("No editable nodes selected");
         }
 
         auto axis = props.get_or<glm::vec3>("axis", glm::vec3(0.0f, 1.0f, 0.0f));
@@ -57,15 +71,15 @@ namespace lfs::vis::op {
     }
 
     bool TransformRotate::poll(SceneManager& scene) const {
-        return scene.hasSelectedNode();
+        return !editable_selected_nodes(scene).empty();
     }
 
     OperationResult TransformScale::execute(SceneManager& scene,
                                             const OperatorProperties& props,
                                             const std::any& /*input*/) {
-        auto selected = scene.getSelectedNodeNames();
+        auto selected = editable_selected_nodes(scene);
         if (selected.empty()) {
-            return OperationResult::failure("No nodes selected");
+            return OperationResult::failure("No editable nodes selected");
         }
 
         auto scale = props.get_or<glm::vec3>("scale", glm::vec3(1.0f));
@@ -83,15 +97,15 @@ namespace lfs::vis::op {
     }
 
     bool TransformScale::poll(SceneManager& scene) const {
-        return scene.hasSelectedNode();
+        return !editable_selected_nodes(scene).empty();
     }
 
     OperationResult TransformSet::execute(SceneManager& scene,
                                           const OperatorProperties& props,
                                           const std::any& /*input*/) {
-        auto selected = scene.getSelectedNodeNames();
+        auto selected = editable_selected_nodes(scene);
         if (selected.empty()) {
-            return OperationResult::failure("No nodes selected");
+            return OperationResult::failure("No editable nodes selected");
         }
 
         auto transform = props.get_or<glm::mat4>("transform", glm::mat4(1.0f));
@@ -104,7 +118,7 @@ namespace lfs::vis::op {
     }
 
     bool TransformSet::poll(SceneManager& scene) const {
-        return scene.hasSelectedNode();
+        return !editable_selected_nodes(scene).empty();
     }
 
 } // namespace lfs::vis::op

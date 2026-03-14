@@ -3082,13 +3082,13 @@ namespace lfs::vis {
             nodes.reserve(sel_ids.size());
             for (const auto id : sel_ids) {
                 auto* n = scene_.getNodeById(id);
-                if (n && n->type == core::NodeType::SPLAT && n->model)
+                if (n && n->type == core::NodeType::SPLAT && n->model && !static_cast<bool>(n->locked))
                     nodes.push_back(n);
             }
         }
 
         if (nodes.empty()) {
-            LOG_WARN("Mirror: no SPLAT nodes selected");
+            LOG_WARN("Mirror: no editable SPLAT nodes selected");
             return false;
         }
 
