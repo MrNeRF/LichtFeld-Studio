@@ -3,13 +3,22 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "undo_entry.hpp"
+#include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/scene.hpp"
+#include "python/python_runtime.hpp"
 #include "scene/scene_manager.hpp"
+#include <algorithm>
+#include <set>
+#include <stdexcept>
 
 namespace lfs::vis::op {
 
     namespace {
+        using lfs::core::events::state::PLYAdded;
+        using lfs::core::events::state::PLYRemoved;
+        using lfs::core::events::state::SceneCleared;
+
         bool cropBoxesEqual(const lfs::core::CropBoxData& lhs, const lfs::core::CropBoxData& rhs) {
             return lhs.min == rhs.min &&
                    lhs.max == rhs.max &&
@@ -28,17 +37,592 @@ namespace lfs::vis::op {
                    lhs.line_width == rhs.line_width &&
                    lhs.flash_intensity == rhs.flash_intensity;
         }
+
+        std::string propertyUndoLabel(const std::string& property_path) {
+            if (property_path.ends_with(".transform")) {
+                return "Set Transform";
+            }
+            if (property_path.ends_with(".visible")) {
+                return "Set Visibility";
+            }
+            if (property_path.ends_with(".locked")) {
+                return "Set Lock State";
+            }
+            return "Set Property";
+        }
+
+        std::string propertyUndoScope(const std::string& property_path) {
+            if (property_path.contains("scene_node")) {
+                return "scene_graph";
+            }
+            if (property_path.contains("crop_box")) {
+                return "cropbox";
+            }
+            if (property_path.contains("ellipsoid")) {
+                return "ellipsoid";
+            }
+            return "property";
+        }
+
+        size_t estimateAnyBytes(const std::any& value) {
+            if (!value.has_value()) {
+                return 0;
+            }
+            if (value.type() == typeid(bool)) {
+                return sizeof(bool);
+            }
+            if (value.type() == typeid(int)) {
+                return sizeof(int);
+            }
+            if (value.type() == typeid(size_t)) {
+                return sizeof(size_t);
+            }
+            if (value.type() == typeid(float)) {
+                return sizeof(float);
+            }
+            if (value.type() == typeid(double)) {
+                return sizeof(double);
+            }
+            if (value.type() == typeid(glm::vec2)) {
+                return sizeof(glm::vec2);
+            }
+            if (value.type() == typeid(glm::vec3)) {
+                return sizeof(glm::vec3);
+            }
+            if (value.type() == typeid(glm::vec4)) {
+                return sizeof(glm::vec4);
+            }
+            if (value.type() == typeid(glm::mat4)) {
+                return sizeof(glm::mat4);
+            }
+            if (value.type() == typeid(std::string)) {
+                return std::any_cast<const std::string&>(value).size();
+            }
+            if (value.type() == typeid(std::filesystem::path)) {
+                return std::any_cast<const std::filesystem::path&>(value).native().size();
+            }
+            return sizeof(std::any);
+        }
+
+        std::string snapshotScope(const ModifiesFlag captured) {
+            const bool selection = hasFlag(captured, ModifiesFlag::SELECTION);
+            const bool transforms = hasFlag(captured, ModifiesFlag::TRANSFORMS);
+            const bool topology = hasFlag(captured, ModifiesFlag::TOPOLOGY);
+            if (selection && !transforms && !topology) {
+                return "selection";
+            }
+            if (transforms && !selection && !topology) {
+                return "transform";
+            }
+            if (topology && !selection && !transforms) {
+                return "topology";
+            }
+            if (selection || transforms || topology) {
+                return "scene";
+            }
+            return "general";
+        }
+
+        size_t tensorBytes(const lfs::core::Tensor& tensor) {
+            return tensor.is_valid() ? tensor.bytes() : 0;
+        }
+
+        bool tensorSnapshotsEqual(const std::shared_ptr<lfs::core::Tensor>& lhs,
+                                  const std::shared_ptr<lfs::core::Tensor>& rhs) {
+            const bool lhs_valid = lhs && lhs->is_valid();
+            const bool rhs_valid = rhs && rhs->is_valid();
+            if (!lhs_valid || !rhs_valid)
+                return lhs_valid == rhs_valid;
+            if (lhs->shape() != rhs->shape() ||
+                lhs->dtype() != rhs->dtype() ||
+                lhs->bytes() != rhs->bytes()) {
+                return false;
+            }
+
+            try {
+                const auto rhs_same_device = rhs->device() == lhs->device() ? *rhs : rhs->to(lhs->device());
+                return lhs->eq(rhs_same_device).all().item<bool>();
+            } catch (const std::exception& e) {
+                LOG_WARN("Falling back to CPU tensor snapshot compare: {}", e.what());
+            } catch (...) {
+                LOG_WARN("Falling back to CPU tensor snapshot compare: unknown exception");
+            }
+
+            const auto lhs_values = lhs->cpu().to(lfs::core::DataType::UInt8).to_vector_uint8();
+            const auto rhs_values = rhs->cpu().to(lfs::core::DataType::UInt8).to_vector_uint8();
+            return lhs_values == rhs_values;
+        }
+
+        bool selectionGroupsEqual(const std::vector<lfs::core::SelectionGroup>& lhs,
+                                  const std::vector<lfs::core::SelectionGroup>& rhs) {
+            if (lhs.size() != rhs.size())
+                return false;
+            for (size_t i = 0; i < lhs.size(); ++i) {
+                const auto& a = lhs[i];
+                const auto& b = rhs[i];
+                if (a.id != b.id || a.name != b.name || a.color != b.color || a.count != b.count ||
+                    a.locked != b.locked) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        bool selectionStateEqual(const lfs::core::Scene::SelectionStateSnapshot& lhs,
+                                 const lfs::core::Scene::SelectionStateSnapshot& rhs) {
+            return lhs.has_selection == rhs.has_selection &&
+                   lhs.active_group_id == rhs.active_group_id &&
+                   lhs.next_group_id == rhs.next_group_id &&
+                   selectionGroupsEqual(lhs.groups, rhs.groups) &&
+                   tensorSnapshotsEqual(lhs.mask, rhs.mask);
+        }
+
+        bool deletedMaskMapsEqual(const std::unordered_map<std::string, std::shared_ptr<lfs::core::Tensor>>& lhs,
+                                  const std::unordered_map<std::string, std::shared_ptr<lfs::core::Tensor>>& rhs) {
+            if (lhs.size() != rhs.size())
+                return false;
+            for (const auto& [name, lhs_tensor] : lhs) {
+                const auto it = rhs.find(name);
+                if (it == rhs.end() || !tensorSnapshotsEqual(lhs_tensor, it->second)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        std::unique_ptr<lfs::core::SplatData> cloneSplatData(const lfs::core::SplatData& src) {
+            auto cloned = std::make_unique<lfs::core::SplatData>(
+                src.get_max_sh_degree(),
+                src.means_raw().clone(),
+                src.sh0_raw().clone(),
+                src.shN_raw().is_valid() ? src.shN_raw().clone() : lfs::core::Tensor{},
+                src.scaling_raw().clone(),
+                src.rotation_raw().clone(),
+                src.opacity_raw().clone(),
+                src.get_scene_scale());
+            cloned->set_active_sh_degree(src.get_active_sh_degree());
+            cloned->set_max_sh_degree(src.get_max_sh_degree());
+            if (src.has_deleted_mask()) {
+                cloned->deleted() = src.deleted().clone();
+            }
+            if (src._densification_info.is_valid()) {
+                cloned->_densification_info = src._densification_info.clone();
+            }
+            return cloned;
+        }
+
+        std::shared_ptr<lfs::core::PointCloud> clonePointCloud(const lfs::core::PointCloud& src) {
+            auto cloned = std::make_shared<lfs::core::PointCloud>();
+            cloned->means = src.means.is_valid() ? src.means.clone() : src.means;
+            cloned->colors = src.colors.is_valid() ? src.colors.clone() : src.colors;
+            cloned->normals = src.normals.is_valid() ? src.normals.clone() : src.normals;
+            cloned->sh0 = src.sh0.is_valid() ? src.sh0.clone() : src.sh0;
+            cloned->shN = src.shN.is_valid() ? src.shN.clone() : src.shN;
+            cloned->opacity = src.opacity.is_valid() ? src.opacity.clone() : src.opacity;
+            cloned->scaling = src.scaling.is_valid() ? src.scaling.clone() : src.scaling;
+            cloned->rotation = src.rotation.is_valid() ? src.rotation.clone() : src.rotation;
+            cloned->attribute_names = src.attribute_names;
+            return cloned;
+        }
+
+        std::shared_ptr<lfs::core::MeshData> cloneMeshData(const lfs::core::MeshData& src) {
+            auto cloned = std::make_shared<lfs::core::MeshData>();
+            cloned->vertices = src.vertices.is_valid() ? src.vertices.clone() : src.vertices;
+            cloned->normals = src.normals.is_valid() ? src.normals.clone() : src.normals;
+            cloned->tangents = src.tangents.is_valid() ? src.tangents.clone() : src.tangents;
+            cloned->texcoords = src.texcoords.is_valid() ? src.texcoords.clone() : src.texcoords;
+            cloned->colors = src.colors.is_valid() ? src.colors.clone() : src.colors;
+            cloned->indices = src.indices.is_valid() ? src.indices.clone() : src.indices;
+            cloned->materials = src.materials;
+            cloned->submeshes = src.submeshes;
+            cloned->texture_images = src.texture_images;
+            cloned->generation_.store(src.generation(), std::memory_order_relaxed);
+            return cloned;
+        }
+
+        SceneGraphCameraSnapshot captureCameraSnapshot(const lfs::core::Camera& camera) {
+            SceneGraphCameraSnapshot snapshot;
+            snapshot.R = camera.R().clone();
+            snapshot.T = camera.T().clone();
+            snapshot.radial_distortion =
+                camera.radial_distortion().is_valid() ? camera.radial_distortion().clone() : lfs::core::Tensor{};
+            snapshot.tangential_distortion =
+                camera.tangential_distortion().is_valid() ? camera.tangential_distortion().clone() : lfs::core::Tensor{};
+            snapshot.camera_model_type = camera.camera_model_type();
+            snapshot.image_name = camera.image_name();
+            snapshot.image_path = camera.image_path();
+            snapshot.mask_path = camera.mask_path();
+            snapshot.focal_x = camera.focal_x();
+            snapshot.focal_y = camera.focal_y();
+            snapshot.center_x = camera.center_x();
+            snapshot.center_y = camera.center_y();
+            snapshot.camera_width = camera.camera_width();
+            snapshot.camera_height = camera.camera_height();
+            snapshot.image_width = camera.image_width();
+            snapshot.image_height = camera.image_height();
+            snapshot.uid = camera.uid();
+            snapshot.camera_id = camera.camera_id();
+            return snapshot;
+        }
+
+        std::shared_ptr<lfs::core::Camera> restoreCamera(const SceneGraphCameraSnapshot& snapshot) {
+            auto camera = std::make_shared<lfs::core::Camera>(
+                snapshot.R.clone(),
+                snapshot.T.clone(),
+                snapshot.focal_x,
+                snapshot.focal_y,
+                snapshot.center_x,
+                snapshot.center_y,
+                snapshot.radial_distortion.is_valid() ? snapshot.radial_distortion.clone() : lfs::core::Tensor{},
+                snapshot.tangential_distortion.is_valid() ? snapshot.tangential_distortion.clone() : lfs::core::Tensor{},
+                snapshot.camera_model_type,
+                snapshot.image_name,
+                snapshot.image_path,
+                snapshot.mask_path,
+                snapshot.camera_width,
+                snapshot.camera_height,
+                snapshot.uid,
+                snapshot.camera_id);
+            camera->set_image_dimensions(snapshot.image_width, snapshot.image_height);
+            return camera;
+        }
+
+        SceneGraphNodeMetadataSnapshot captureNodeMetadataSnapshot(const SceneManager& scene_manager,
+                                                                  const lfs::core::SceneNode& node) {
+            SceneGraphNodeMetadataSnapshot snapshot;
+            snapshot.name = node.name;
+            snapshot.parent_name.clear();
+            snapshot.local_transform = node.local_transform.get();
+            snapshot.visible = node.visible.get();
+            snapshot.locked = node.locked.get();
+            snapshot.training_enabled = node.training_enabled;
+
+            if (node.parent_id != lfs::core::NULL_NODE) {
+                if (const auto* parent = scene_manager.getScene().getNodeById(node.parent_id)) {
+                    snapshot.parent_name = parent->name;
+                }
+            }
+
+            if (auto path = scene_manager.getPlyPath(node.name); path) {
+                snapshot.source_path = *path;
+            }
+
+            return snapshot;
+        }
+
+        SceneGraphNodeSnapshot captureNodeSnapshot(const SceneManager& scene_manager,
+                                                   const lfs::core::SceneNode& node,
+                                                   const SceneGraphCaptureMode mode) {
+            SceneGraphNodeSnapshot snapshot;
+            snapshot.name = node.name;
+            snapshot.type = node.type;
+            snapshot.local_transform = node.local_transform.get();
+            snapshot.visible = node.visible.get();
+            snapshot.locked = node.locked.get();
+            snapshot.training_enabled = node.training_enabled;
+            snapshot.gaussian_count = node.gaussian_count;
+            snapshot.centroid = node.centroid;
+
+            if (node.parent_id != lfs::core::NULL_NODE) {
+                if (const auto* parent = scene_manager.getScene().getNodeById(node.parent_id)) {
+                    snapshot.parent_name = parent->name;
+                }
+            }
+
+            if (auto path = scene_manager.getPlyPath(node.name); path) {
+                snapshot.source_path = *path;
+            }
+
+            if (mode == SceneGraphCaptureMode::FULL && node.model) {
+                snapshot.model = cloneSplatData(*node.model);
+            }
+            if (mode == SceneGraphCaptureMode::FULL && node.point_cloud) {
+                snapshot.point_cloud = clonePointCloud(*node.point_cloud);
+            }
+            if (mode == SceneGraphCaptureMode::FULL && node.mesh) {
+                snapshot.mesh = cloneMeshData(*node.mesh);
+            }
+            if (node.cropbox) {
+                snapshot.cropbox = std::make_unique<lfs::core::CropBoxData>(*node.cropbox);
+            }
+            if (node.ellipsoid) {
+                snapshot.ellipsoid = std::make_unique<lfs::core::EllipsoidData>(*node.ellipsoid);
+            }
+            if (node.keyframe) {
+                snapshot.keyframe = std::make_unique<lfs::core::KeyframeData>(*node.keyframe);
+            }
+            if (node.camera) {
+                snapshot.camera = captureCameraSnapshot(*node.camera);
+            }
+
+            for (const auto child_id : node.children) {
+                if (const auto* child = scene_manager.getScene().getNodeById(child_id)) {
+                    snapshot.children.push_back(captureNodeSnapshot(scene_manager, *child, mode));
+                }
+            }
+
+            return snapshot;
+        }
+
+        std::vector<std::string> rootNames(const SceneGraphStateSnapshot& state) {
+            std::vector<std::string> names;
+            names.reserve(state.roots.size());
+            for (const auto& root : state.roots) {
+                names.push_back(root.name);
+            }
+            return names;
+        }
+
+        size_t estimateSnapshotBytes(const SceneGraphNodeSnapshot& snapshot) {
+            size_t total = 0;
+            if (snapshot.model) {
+                total += tensorBytes(snapshot.model->means_raw());
+                total += tensorBytes(snapshot.model->sh0_raw());
+                total += tensorBytes(snapshot.model->shN_raw());
+                total += tensorBytes(snapshot.model->scaling_raw());
+                total += tensorBytes(snapshot.model->rotation_raw());
+                total += tensorBytes(snapshot.model->opacity_raw());
+                total += tensorBytes(snapshot.model->deleted());
+                total += tensorBytes(snapshot.model->_densification_info);
+            }
+            if (snapshot.point_cloud) {
+                total += tensorBytes(snapshot.point_cloud->means);
+                total += tensorBytes(snapshot.point_cloud->colors);
+                total += tensorBytes(snapshot.point_cloud->normals);
+                total += tensorBytes(snapshot.point_cloud->sh0);
+                total += tensorBytes(snapshot.point_cloud->shN);
+                total += tensorBytes(snapshot.point_cloud->opacity);
+                total += tensorBytes(snapshot.point_cloud->scaling);
+                total += tensorBytes(snapshot.point_cloud->rotation);
+            }
+            if (snapshot.mesh) {
+                total += tensorBytes(snapshot.mesh->vertices);
+                total += tensorBytes(snapshot.mesh->normals);
+                total += tensorBytes(snapshot.mesh->tangents);
+                total += tensorBytes(snapshot.mesh->texcoords);
+                total += tensorBytes(snapshot.mesh->colors);
+                total += tensorBytes(snapshot.mesh->indices);
+            }
+            if (snapshot.camera) {
+                total += tensorBytes(snapshot.camera->R);
+                total += tensorBytes(snapshot.camera->T);
+                total += tensorBytes(snapshot.camera->radial_distortion);
+                total += tensorBytes(snapshot.camera->tangential_distortion);
+            }
+            for (const auto& child : snapshot.children) {
+                total += estimateSnapshotBytes(child);
+            }
+            return total;
+        }
+
+        size_t estimateMetadataBytes(const SceneGraphNodeMetadataSnapshot& snapshot) {
+            size_t total = snapshot.name.size() + snapshot.parent_name.size();
+            if (snapshot.source_path) {
+                total += snapshot.source_path->native().size();
+            }
+            total += sizeof(snapshot.local_transform) + sizeof(bool) * 3;
+            return total;
+        }
+
+        void emitRemovedEvents(const SceneGraphNodeSnapshot& snapshot) {
+            for (const auto& child : snapshot.children) {
+                emitRemovedEvents(child);
+            }
+            PLYRemoved{
+                .name = snapshot.name,
+                .children_kept = false,
+                .parent_of_removed = {},
+                .from_history = true,
+            }
+                .emit();
+        }
+
+        void emitAddedEvents(const SceneManager& scene_manager, const SceneGraphNodeSnapshot& snapshot) {
+            if (const auto* node = scene_manager.getScene().getNode(snapshot.name)) {
+                PLYAdded{
+                    .name = node->name,
+                    .node_gaussians = node->gaussian_count,
+                    .total_gaussians = scene_manager.getScene().getTotalGaussianCount(),
+                    .is_visible = node->visible,
+                    .parent_name = snapshot.parent_name,
+                    .is_group = node->type == lfs::core::NodeType::GROUP,
+                    .node_type = static_cast<int>(node->type),
+                    .from_history = true}
+                    .emit();
+            }
+            for (const auto& child : snapshot.children) {
+                emitAddedEvents(scene_manager, child);
+            }
+        }
+
+        bool restoreNodeSnapshot(SceneManager& scene_manager, const SceneGraphNodeSnapshot& snapshot) {
+            auto& scene = scene_manager.getScene();
+            lfs::core::NodeId parent_id = lfs::core::NULL_NODE;
+            if (!snapshot.parent_name.empty()) {
+                parent_id = scene.getNodeIdByName(snapshot.parent_name);
+                if (parent_id == lfs::core::NULL_NODE) {
+                    LOG_ERROR("Cannot restore node '{}': missing parent '{}'",
+                              snapshot.name, snapshot.parent_name);
+                    return false;
+                }
+            }
+
+            lfs::core::NodeId node_id = lfs::core::NULL_NODE;
+            switch (snapshot.type) {
+            case lfs::core::NodeType::GROUP:
+                node_id = scene.addGroup(snapshot.name, parent_id);
+                break;
+            case lfs::core::NodeType::SPLAT:
+                if (!snapshot.model)
+                    return false;
+                node_id = scene.addSplat(snapshot.name, cloneSplatData(*snapshot.model), parent_id);
+                break;
+            case lfs::core::NodeType::POINTCLOUD:
+                if (!snapshot.point_cloud)
+                    return false;
+                node_id = scene.addPointCloud(snapshot.name, clonePointCloud(*snapshot.point_cloud), parent_id);
+                break;
+            case lfs::core::NodeType::MESH:
+                if (!snapshot.mesh)
+                    return false;
+                node_id = scene.addMesh(snapshot.name, cloneMeshData(*snapshot.mesh), parent_id);
+                break;
+            case lfs::core::NodeType::CROPBOX:
+                node_id = scene.addCropBox(snapshot.name, parent_id);
+                if (node_id != lfs::core::NULL_NODE && snapshot.cropbox) {
+                    scene.setCropBoxData(node_id, *snapshot.cropbox);
+                }
+                break;
+            case lfs::core::NodeType::ELLIPSOID:
+                node_id = scene.addEllipsoid(snapshot.name, parent_id);
+                if (node_id != lfs::core::NULL_NODE && snapshot.ellipsoid) {
+                    scene.setEllipsoidData(node_id, *snapshot.ellipsoid);
+                }
+                break;
+            case lfs::core::NodeType::DATASET:
+                node_id = scene.addDataset(snapshot.name);
+                break;
+            case lfs::core::NodeType::CAMERA_GROUP:
+                node_id = scene.addCameraGroup(snapshot.name, parent_id, snapshot.gaussian_count);
+                break;
+            case lfs::core::NodeType::CAMERA:
+                if (!snapshot.camera)
+                    return false;
+                node_id = scene.addCamera(snapshot.name, parent_id, restoreCamera(*snapshot.camera));
+                break;
+            case lfs::core::NodeType::KEYFRAME_GROUP:
+                node_id = scene.addKeyframeGroup(snapshot.name, parent_id);
+                break;
+            case lfs::core::NodeType::KEYFRAME:
+                if (!snapshot.keyframe)
+                    return false;
+                node_id = scene.addKeyframe(snapshot.name, parent_id,
+                                            std::make_unique<lfs::core::KeyframeData>(*snapshot.keyframe));
+                break;
+            default:
+                throw std::runtime_error("Unsupported node type in scene graph undo");
+            }
+
+            if (node_id == lfs::core::NULL_NODE) {
+                return false;
+            }
+
+            auto* restored = scene.getMutableNode(snapshot.name);
+            if (!restored) {
+                return false;
+            }
+            restored->local_transform.setQuiet(snapshot.local_transform);
+            restored->visible.setQuiet(snapshot.visible);
+            restored->locked.setQuiet(snapshot.locked);
+            restored->training_enabled = snapshot.training_enabled;
+            restored->gaussian_count = snapshot.gaussian_count;
+            restored->centroid = snapshot.centroid;
+            restored->transform_dirty = true;
+
+            if (snapshot.source_path) {
+                scene_manager.setPlyPath(snapshot.name, *snapshot.source_path);
+            }
+
+            for (const auto& child : snapshot.children) {
+                if (!restoreNodeSnapshot(scene_manager, child)) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        void restoreNodeSelection(SceneManager& scene_manager,
+                                  const std::vector<std::string>& selected_node_names) {
+            scene_manager.clearSelection();
+            if (selected_node_names.size() == 1) {
+                scene_manager.selectNode(selected_node_names.front());
+                return;
+            }
+            if (!selected_node_names.empty()) {
+                scene_manager.selectNodes(selected_node_names);
+            }
+        }
     } // namespace
 
     SceneSnapshot::SceneSnapshot(SceneManager& scene, std::string name)
         : scene_(scene),
           name_(std::move(name)) {}
 
-    void SceneSnapshot::captureSelection() {
-        auto mask = scene_.getScene().getSelectionMask();
-        if (mask) {
-            selection_before_ = std::make_shared<lfs::core::Tensor>(mask->clone());
+    void SceneSnapshot::captureDeletedMasks(
+        std::unordered_map<std::string, std::shared_ptr<lfs::core::Tensor>>& target) {
+        target.clear();
+
+        for (const auto* node : scene_.getScene().getNodes()) {
+            if (!node || !node->model) {
+                continue;
+            }
+
+            if (!node->model->has_deleted_mask()) {
+                target[node->name] = nullptr;
+                continue;
+            }
+
+            target[node->name] = std::make_shared<lfs::core::Tensor>(node->model->deleted().clone());
         }
+    }
+
+    void SceneSnapshot::restoreDeletedMasks(
+        const std::unordered_map<std::string, std::shared_ptr<lfs::core::Tensor>>& source) {
+        bool restored_any = false;
+
+        for (const auto* node : scene_.getScene().getNodes()) {
+            if (!node || !node->model) {
+                continue;
+            }
+
+            const auto it = source.find(node->name);
+            if (it == source.end() || !it->second || !it->second->is_valid()) {
+                if (node->model->has_deleted_mask()) {
+                    node->model->clear_deleted();
+                    restored_any = true;
+                }
+                continue;
+            }
+
+            node->model->deleted() = it->second->clone();
+            restored_any = true;
+        }
+
+        if (restored_any) {
+            scene_.getScene().markDirty();
+        }
+    }
+
+    size_t SceneSnapshot::selectionBytes(const lfs::core::Scene::SelectionStateSnapshot& snapshot) const {
+        if (!snapshot.mask || !snapshot.mask->is_valid()) {
+            return 0;
+        }
+        return snapshot.mask->bytes();
+    }
+
+    void SceneSnapshot::captureSelection() {
+        selection_before_ = scene_.getScene().captureSelectionState();
         captured_ = captured_ | ModifiesFlag::SELECTION;
     }
 
@@ -64,15 +648,13 @@ namespace lfs::vis::op {
     }
 
     void SceneSnapshot::captureTopology() {
+        captureDeletedMasks(deleted_masks_before_);
         captured_ = captured_ | ModifiesFlag::TOPOLOGY;
     }
 
     void SceneSnapshot::captureAfter() {
         if (hasFlag(captured_, ModifiesFlag::SELECTION)) {
-            auto mask = scene_.getScene().getSelectionMask();
-            if (mask) {
-                selection_after_ = std::make_shared<lfs::core::Tensor>(mask->clone());
-            }
+            selection_after_ = scene_.getScene().captureSelectionState();
         }
 
         if (hasFlag(captured_, ModifiesFlag::TRANSFORMS)) {
@@ -80,16 +662,32 @@ namespace lfs::vis::op {
                 transforms_after_[node_name] = scene_.getNodeTransform(node_name);
             }
         }
+
+        if (hasFlag(captured_, ModifiesFlag::TOPOLOGY)) {
+            captureDeletedMasks(deleted_masks_after_);
+        }
+    }
+
+    bool SceneSnapshot::hasChanges() const {
+        if (hasFlag(captured_, ModifiesFlag::SELECTION) && !selectionStateEqual(selection_before_, selection_after_)) {
+            return true;
+        }
+
+        if (hasFlag(captured_, ModifiesFlag::TRANSFORMS) && transforms_before_ != transforms_after_) {
+            return true;
+        }
+
+        if (hasFlag(captured_, ModifiesFlag::TOPOLOGY) &&
+            !deletedMaskMapsEqual(deleted_masks_before_, deleted_masks_after_)) {
+            return true;
+        }
+
+        return false;
     }
 
     void SceneSnapshot::undo() {
         if (hasFlag(captured_, ModifiesFlag::SELECTION)) {
-            if (selection_before_) {
-                auto mask = std::make_shared<lfs::core::Tensor>(selection_before_->clone());
-                scene_.getScene().setSelectionMask(mask);
-            } else {
-                scene_.getScene().clearSelection();
-            }
+            scene_.getScene().restoreSelectionState(selection_before_);
         }
 
         if (hasFlag(captured_, ModifiesFlag::TRANSFORMS)) {
@@ -97,16 +695,15 @@ namespace lfs::vis::op {
                 scene_.setNodeTransform(node_name, transform);
             }
         }
+
+        if (hasFlag(captured_, ModifiesFlag::TOPOLOGY)) {
+            restoreDeletedMasks(deleted_masks_before_);
+        }
     }
 
     void SceneSnapshot::redo() {
         if (hasFlag(captured_, ModifiesFlag::SELECTION)) {
-            if (selection_after_) {
-                auto mask = std::make_shared<lfs::core::Tensor>(selection_after_->clone());
-                scene_.getScene().setSelectionMask(mask);
-            } else {
-                scene_.getScene().clearSelection();
-            }
+            scene_.getScene().restoreSelectionState(selection_after_);
         }
 
         if (hasFlag(captured_, ModifiesFlag::TRANSFORMS)) {
@@ -114,6 +711,30 @@ namespace lfs::vis::op {
                 scene_.setNodeTransform(node_name, transform);
             }
         }
+
+        if (hasFlag(captured_, ModifiesFlag::TOPOLOGY)) {
+            restoreDeletedMasks(deleted_masks_after_);
+        }
+    }
+
+    size_t SceneSnapshot::estimatedBytes() const {
+        size_t total = selectionBytes(selection_before_) + selectionBytes(selection_after_);
+        for (const auto& [_, tensor] : deleted_masks_before_) {
+            total += tensor ? tensor->bytes() : 0;
+        }
+        for (const auto& [_, tensor] : deleted_masks_after_) {
+            total += tensor ? tensor->bytes() : 0;
+        }
+        return total;
+    }
+
+    UndoMetadata SceneSnapshot::metadata() const {
+        return UndoMetadata{
+            .id = "scene.snapshot",
+            .label = name_,
+            .source = "core",
+            .scope = snapshotScope(captured_),
+        };
     }
 
     CropBoxUndoEntry::CropBoxUndoEntry(SceneManager& scene, std::string node_name,
@@ -152,6 +773,15 @@ namespace lfs::vis::op {
         return !cropBoxesEqual(before_, after_) || transform_before_ != transform_after_;
     }
 
+    UndoMetadata CropBoxUndoEntry::metadata() const {
+        return UndoMetadata{
+            .id = "cropbox.transform",
+            .label = "Crop Box Transform",
+            .source = "ui",
+            .scope = "cropbox",
+        };
+    }
+
     EllipsoidUndoEntry::EllipsoidUndoEntry(SceneManager& scene, std::string node_name,
                                            lfs::core::EllipsoidData before, glm::mat4 transform_before)
         : scene_(scene),
@@ -186,6 +816,303 @@ namespace lfs::vis::op {
 
     bool EllipsoidUndoEntry::hasChanges() const {
         return !ellipsoidsEqual(before_, after_) || transform_before_ != transform_after_;
+    }
+
+    UndoMetadata EllipsoidUndoEntry::metadata() const {
+        return UndoMetadata{
+            .id = "ellipsoid.transform",
+            .label = "Ellipsoid Transform",
+            .source = "ui",
+            .scope = "ellipsoid",
+        };
+    }
+
+    PropertyChangeUndoEntry::PropertyChangeUndoEntry(std::string property_path,
+                                                     std::any before,
+                                                     std::any after,
+                                                     std::function<void(const std::any&)> applier)
+        : property_path_(std::move(property_path)),
+          label_(propertyUndoLabel(property_path_)),
+          before_(std::move(before)),
+          after_(std::move(after)),
+          applier_(std::move(applier)),
+          estimated_bytes_(estimateAnyBytes(before_) + estimateAnyBytes(after_)) {}
+
+    void PropertyChangeUndoEntry::undo() {
+        applier_(before_);
+    }
+
+    void PropertyChangeUndoEntry::redo() {
+        applier_(after_);
+    }
+
+    UndoMetadata PropertyChangeUndoEntry::metadata() const {
+        return UndoMetadata{
+            .id = property_path_,
+            .label = label_,
+            .source = "property",
+            .scope = propertyUndoScope(property_path_),
+        };
+    }
+
+    std::vector<SceneGraphNodeMetadataSnapshot> SceneGraphMetadataEntry::captureNodes(
+        const SceneManager& scene_manager,
+        const std::vector<std::string>& node_names) {
+        std::vector<SceneGraphNodeMetadataSnapshot> snapshots;
+        std::set<std::string> seen;
+        snapshots.reserve(node_names.size());
+        for (const auto& node_name : node_names) {
+            if (node_name.empty() || !seen.insert(node_name).second) {
+                continue;
+            }
+            const auto* node = scene_manager.getScene().getNode(node_name);
+            if (!node) {
+                continue;
+            }
+            snapshots.push_back(captureNodeMetadataSnapshot(scene_manager, *node));
+        }
+        return snapshots;
+    }
+
+    SceneGraphMetadataEntry::SceneGraphMetadataEntry(SceneManager& scene,
+                                                     std::string name,
+                                                     std::vector<SceneGraphNodeMetadataDiff> diffs)
+        : scene_(scene),
+          name_(std::move(name)),
+          diffs_(std::move(diffs)) {}
+
+    void SceneGraphMetadataEntry::apply(const bool use_after_state) {
+        auto& scene = scene_.getScene();
+        for (const auto& diff : diffs_) {
+            const auto& target = use_after_state ? diff.after : diff.before;
+            const auto& alternate = use_after_state ? diff.before : diff.after;
+
+            std::string current_name = target.name;
+            if (!scene.getNode(current_name)) {
+                current_name = alternate.name;
+            }
+
+            auto* node = scene.getMutableNode(current_name);
+            if (!node) {
+                throw std::runtime_error("Cannot restore scene node metadata for '" + target.name + "'");
+            }
+
+            if (current_name != target.name) {
+                if (!scene.renameNode(current_name, target.name)) {
+                    throw std::runtime_error("Failed to rename node '" + current_name + "' to '" + target.name + "'");
+                }
+                scene_.movePlyPath(current_name, target.name);
+                current_name = target.name;
+                node = scene.getMutableNode(current_name);
+                if (!node) {
+                    throw std::runtime_error("Renamed node not found: '" + current_name + "'");
+                }
+            }
+
+            lfs::core::NodeId desired_parent = lfs::core::NULL_NODE;
+            if (!target.parent_name.empty()) {
+                desired_parent = scene.getNodeIdByName(target.parent_name);
+                if (desired_parent == lfs::core::NULL_NODE) {
+                    throw std::runtime_error("Missing parent '" + target.parent_name + "' for node '" + target.name + "'");
+                }
+            }
+
+            if (node->parent_id != desired_parent) {
+                std::string old_parent_name;
+                if (node->parent_id != lfs::core::NULL_NODE) {
+                    if (const auto* old_parent = scene.getNodeById(node->parent_id)) {
+                        old_parent_name = old_parent->name;
+                    }
+                }
+                scene.reparent(node->id, desired_parent);
+                scene_.invalidateNodeSelectionMask();
+                lfs::core::events::state::NodeReparented{
+                    .name = target.name,
+                    .old_parent = old_parent_name,
+                    .new_parent = target.parent_name,
+                    .from_history = true}
+                    .emit();
+                node = scene.getMutableNode(current_name);
+            }
+
+            scene.setNodeTransform(current_name, target.local_transform);
+            node->visible.set(target.visible, false);
+            node->locked.set(target.locked, false);
+            node->training_enabled = target.training_enabled;
+
+            if (target.source_path) {
+                scene_.setPlyPath(current_name, *target.source_path);
+            } else {
+                scene_.clearPlyPath(current_name);
+            }
+        }
+    }
+
+    void SceneGraphMetadataEntry::undo() {
+        apply(false);
+    }
+
+    void SceneGraphMetadataEntry::redo() {
+        apply(true);
+    }
+
+    size_t SceneGraphMetadataEntry::estimatedBytes() const {
+        size_t total = 0;
+        for (const auto& diff : diffs_) {
+            total += estimateMetadataBytes(diff.before);
+            total += estimateMetadataBytes(diff.after);
+        }
+        return total;
+    }
+
+    UndoMetadata SceneGraphMetadataEntry::metadata() const {
+        return UndoMetadata{
+            .id = "scene_graph.metadata",
+            .label = name_,
+            .source = "core",
+            .scope = "scene_graph",
+        };
+    }
+
+    SceneGraphStateSnapshot SceneGraphPatchEntry::captureState(const SceneManager& scene_manager,
+                                                               const std::vector<std::string>& root_names,
+                                                               const SceneGraphCaptureOptions options) {
+        SceneGraphStateSnapshot snapshot;
+        if (options.include_selected_nodes) {
+            snapshot.selected_node_names = scene_manager.getSelectedNodeNames();
+        }
+        if (options.include_scene_context) {
+            snapshot.context = SceneGraphContextSnapshot{
+                .content_type = static_cast<int>(scene_manager.getContentType()),
+                .dataset_path = scene_manager.getDatasetPath(),
+                .training_model_node_name = scene_manager.getScene().getTrainingModelNodeName(),
+            };
+        }
+
+        std::vector<std::string> unique_names;
+        unique_names.reserve(root_names.size());
+        std::set<std::string> seen;
+        for (const auto& name : root_names) {
+            if (!name.empty() && seen.insert(name).second) {
+                unique_names.push_back(name);
+            }
+        }
+
+        const std::set<std::string> requested(unique_names.begin(), unique_names.end());
+        for (const auto& name : unique_names) {
+            const auto* node = scene_manager.getScene().getNode(name);
+            if (!node) {
+                continue;
+            }
+
+            bool covered_by_parent = false;
+            for (auto parent_id = node->parent_id; parent_id != lfs::core::NULL_NODE;) {
+                const auto* parent = scene_manager.getScene().getNodeById(parent_id);
+                if (!parent) {
+                    break;
+                }
+                if (requested.contains(parent->name)) {
+                    covered_by_parent = true;
+                    break;
+                }
+                parent_id = parent->parent_id;
+            }
+
+            if (!covered_by_parent) {
+                snapshot.roots.push_back(captureNodeSnapshot(scene_manager, *node, options.mode));
+            }
+        }
+
+        return snapshot;
+    }
+
+    SceneGraphPatchEntry::SceneGraphPatchEntry(SceneManager& scene,
+                                               std::string name,
+                                               SceneGraphStateSnapshot before,
+                                               SceneGraphStateSnapshot after)
+        : scene_(scene),
+          name_(std::move(name)),
+          before_(std::move(before)),
+          after_(std::move(after)) {}
+
+    void SceneGraphPatchEntry::applyState(const SceneGraphStateSnapshot& desired,
+                                          const SceneGraphStateSnapshot& current) {
+        auto& scene = scene_.getScene();
+
+        {
+            lfs::core::Scene::Transaction txn(scene);
+
+            std::set<std::string> names_to_remove;
+            for (const auto& name : rootNames(desired))
+                names_to_remove.insert(name);
+            for (const auto& name : rootNames(current))
+                names_to_remove.insert(name);
+
+            for (const auto& name : names_to_remove) {
+                if (scene.getNode(name)) {
+                    scene.removeNode(name, false);
+                }
+            }
+
+            for (const auto& root : desired.roots) {
+                if (!restoreNodeSnapshot(scene_, root)) {
+                    throw std::runtime_error("Failed to restore scene graph snapshot for '" + root.name + "'");
+                }
+            }
+        }
+
+        for (const auto& root : current.roots) {
+            emitRemovedEvents(root);
+        }
+        for (const auto& root : desired.roots) {
+            emitAddedEvents(scene_, root);
+        }
+
+        if (desired.context) {
+            scene.setTrainingModelNode(desired.context->training_model_node_name);
+            scene_.setDatasetPath(desired.context->dataset_path);
+            scene_.changeContentType(static_cast<SceneManager::ContentType>(desired.context->content_type));
+
+            if (scene.getNodeCount() == 0 &&
+                desired.context->content_type == static_cast<int>(SceneManager::ContentType::Empty)) {
+                python::set_application_scene(nullptr);
+                SceneCleared{.from_history = true}.emit();
+            } else {
+                python::set_application_scene(&scene);
+            }
+        }
+
+        if (desired.selected_node_names) {
+            restoreNodeSelection(scene_, *desired.selected_node_names);
+        }
+    }
+
+    void SceneGraphPatchEntry::undo() {
+        applyState(before_, after_);
+    }
+
+    void SceneGraphPatchEntry::redo() {
+        applyState(after_, before_);
+    }
+
+    size_t SceneGraphPatchEntry::estimatedBytes() const {
+        size_t total = 0;
+        for (const auto& root : before_.roots) {
+            total += estimateSnapshotBytes(root);
+        }
+        for (const auto& root : after_.roots) {
+            total += estimateSnapshotBytes(root);
+        }
+        return total;
+    }
+
+    UndoMetadata SceneGraphPatchEntry::metadata() const {
+        return UndoMetadata{
+            .id = "scene_graph.patch",
+            .label = name_,
+            .source = "core",
+            .scope = "scene_graph",
+        };
     }
 
 } // namespace lfs::vis::op

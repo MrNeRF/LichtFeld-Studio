@@ -521,6 +521,12 @@ namespace lfs::vis::cap {
             return existing;
         }
 
+        const vis::op::SceneGraphCaptureOptions history_options{
+            .mode = vis::op::SceneGraphCaptureMode::FULL,
+            .include_selected_nodes = false,
+            .include_scene_context = false,
+        };
+        auto history_before = vis::op::SceneGraphPatchEntry::captureState(scene_manager, {}, history_options);
         const std::string cropbox_name = parent->name + "_cropbox";
         const core::NodeId cropbox_id = scene.addCropBox(cropbox_name, parent_id);
         if (cropbox_id == core::NULL_NODE)
@@ -552,6 +558,12 @@ namespace lfs::vis::cap {
             settings.show_crop_box = true;
             rendering_manager->updateSettings(settings);
         }
+
+        vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+            scene_manager,
+            "Add Crop Box",
+            std::move(history_before),
+            vis::op::SceneGraphPatchEntry::captureState(scene_manager, {cropbox_name}, history_options)));
 
         return cropbox_id;
     }
@@ -786,6 +798,12 @@ namespace lfs::vis::cap {
             return existing;
         }
 
+        const vis::op::SceneGraphCaptureOptions history_options{
+            .mode = vis::op::SceneGraphCaptureMode::FULL,
+            .include_selected_nodes = false,
+            .include_scene_context = false,
+        };
+        auto history_before = vis::op::SceneGraphPatchEntry::captureState(scene_manager, {}, history_options);
         const std::string ellipsoid_name = parent->name + "_ellipsoid";
         const core::NodeId ellipsoid_id = scene.addEllipsoid(ellipsoid_name, parent_id);
         if (ellipsoid_id == core::NULL_NODE)
@@ -821,6 +839,11 @@ namespace lfs::vis::cap {
         }
 
         scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
+        vis::op::undoHistory().push(std::make_unique<vis::op::SceneGraphPatchEntry>(
+            scene_manager,
+            "Add Ellipsoid",
+            std::move(history_before),
+            vis::op::SceneGraphPatchEntry::captureState(scene_manager, {ellipsoid_name}, history_options)));
         return ellipsoid_id;
     }
 

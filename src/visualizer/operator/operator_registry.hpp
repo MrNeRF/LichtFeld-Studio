@@ -99,6 +99,7 @@ namespace lfs::vis::op {
         OperatorPtr active_modal_;
         std::string active_modal_id_;
         std::optional<BuiltinOp> active_modal_builtin_;
+        bool active_modal_has_undo_transaction_ = false;
         OperatorProperties modal_props_;
         SceneManager* scene_manager_ = nullptr;
         mutable std::unordered_map<std::string, PollCacheEntry> poll_cache_;

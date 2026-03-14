@@ -7,28 +7,68 @@
 #include "core/export.hpp"
 
 #include "undo_entry.hpp"
+#include <cstdint>
 #include <deque>
+#include <functional>
 #include <mutex>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace lfs::vis::op {
+
+    struct UndoStackItem {
+        UndoMetadata metadata;
+        size_t estimated_bytes = 0;
+    };
+
+    struct HistoryResult {
+        bool success = false;
+        bool changed = false;
+        size_t steps_performed = 0;
+        std::string error;
+    };
 
     class LFS_VIS_API UndoHistory {
     public:
         static constexpr size_t MAX_ENTRIES = 100;
+        static constexpr size_t MAX_BYTES = 512ull * 1024ull * 1024ull;
+        using ObserverId = uint64_t;
+        using Observer = std::function<void()>;
 
         static UndoHistory& instance();
 
         void push(UndoEntryPtr entry);
-        void undo();
-        void redo();
+        HistoryResult undo();
+        HistoryResult redo();
+        HistoryResult undoMultiple(size_t count);
+        HistoryResult redoMultiple(size_t count);
         void clear();
+
+        void beginTransaction(std::string name);
+        void commitTransaction();
+        HistoryResult rollbackTransaction();
 
         [[nodiscard]] bool canUndo() const;
         [[nodiscard]] bool canRedo() const;
         [[nodiscard]] std::string undoName() const;
         [[nodiscard]] std::string redoName() const;
+        [[nodiscard]] std::vector<std::string> undoNames() const;
+        [[nodiscard]] std::vector<std::string> redoNames() const;
         [[nodiscard]] size_t undoCount() const;
         [[nodiscard]] size_t redoCount() const;
+        [[nodiscard]] size_t undoBytes() const;
+        [[nodiscard]] size_t redoBytes() const;
+        [[nodiscard]] size_t totalBytes() const;
+        [[nodiscard]] bool hasActiveTransaction() const;
+        [[nodiscard]] size_t transactionDepth() const;
+        [[nodiscard]] std::string activeTransactionName() const;
+        [[nodiscard]] std::vector<UndoStackItem> undoItems() const;
+        [[nodiscard]] std::vector<UndoStackItem> redoItems() const;
+        [[nodiscard]] uint64_t generation() const;
+
+        ObserverId subscribe(Observer observer);
+        void unsubscribe(ObserverId id);
 
     private:
         UndoHistory() = default;
@@ -36,9 +76,29 @@ namespace lfs::vis::op {
         UndoHistory(const UndoHistory&) = delete;
         UndoHistory& operator=(const UndoHistory&) = delete;
 
+        struct TransactionFrame {
+            std::string name;
+            std::vector<UndoEntryPtr> entries;
+            size_t estimated_bytes = 0;
+        };
+
+        void clearStack(std::deque<UndoEntryPtr>& stack, size_t& bytes);
+        void trimUndoStack();
+        void resetRedoStack();
+        void notifyObservers();
+        void bumpGenerationLocked();
+        HistoryResult performPlayback(bool undo_direction, size_t count);
+
         std::deque<UndoEntryPtr> undo_stack_;
         std::deque<UndoEntryPtr> redo_stack_;
+        std::vector<TransactionFrame> transactions_;
+        std::unordered_map<ObserverId, Observer> observers_;
+        size_t undo_bytes_ = 0;
+        size_t redo_bytes_ = 0;
+        uint64_t generation_ = 0;
+        ObserverId next_observer_id_ = 1;
         mutable std::mutex mutex_;
+        std::mutex playback_mutex_;
     };
 
     inline UndoHistory& undoHistory() {

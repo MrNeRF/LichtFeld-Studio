@@ -182,7 +182,7 @@ namespace lfs::vis::op {
         .description = "Clear the current gaussian selection",
         .icon = "",
         .shortcut = "",
-        .flags = OperatorFlags::REGISTER,
+        .flags = OperatorFlags::REGISTER | OperatorFlags::UNDO,
         .source = OperatorSource::CPP,
         .poll_deps = PollDependency::SCENE,
     };

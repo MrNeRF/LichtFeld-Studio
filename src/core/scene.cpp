@@ -274,7 +274,7 @@ namespace lfs::core {
     void Scene::setNodeLocked(const std::string& name, const bool locked) {
         auto* node = getMutableNode(name);
         if (node) {
-            node->locked = locked;
+            node->locked.set(locked, false);
         }
     }
 
@@ -284,7 +284,7 @@ namespace lfs::core {
             return;
 
         SceneNode* node = nodes_[idx_it->second].get();
-        node->visible = visible;
+        node->visible.set(visible, false);
 
         for (const NodeId child_id : node->children) {
             setNodeVisibilityById(child_id, visible);
@@ -294,7 +294,7 @@ namespace lfs::core {
     void Scene::setNodeTransform(const std::string& name, const glm::mat4& transform) {
         auto* node = getMutableNode(name);
         if (node) {
-            node->local_transform = transform;
+            node->local_transform.set(transform, false);
         }
     }
 
@@ -881,6 +881,45 @@ namespace lfs::core {
         return has_selection_;
     }
 
+    Scene::SelectionStateSnapshot Scene::captureSelectionState() const {
+        SelectionStateSnapshot snapshot;
+        {
+            std::shared_lock lock(selection_mutex_);
+            snapshot.has_selection = has_selection_;
+            if (selection_mask_ && selection_mask_->is_valid()) {
+                snapshot.mask = std::make_shared<lfs::core::Tensor>(selection_mask_->clone());
+            }
+        }
+        snapshot.groups = selection_groups_;
+        snapshot.active_group_id = active_selection_group_;
+        snapshot.next_group_id = next_group_id_;
+        return snapshot;
+    }
+
+    void Scene::restoreSelectionState(const SelectionStateSnapshot& snapshot) {
+        int count = 0;
+        const bool has_selection =
+            snapshot.has_selection && snapshot.mask && snapshot.mask->is_valid() && snapshot.mask->numel() > 0;
+
+        {
+            std::unique_lock lock(selection_mutex_);
+            selection_mask_ = has_selection
+                                  ? std::make_shared<lfs::core::Tensor>(snapshot.mask->clone())
+                                  : nullptr;
+            has_selection_ = has_selection;
+            if (has_selection_) {
+                count = static_cast<int>(selection_mask_->ne(0).to(core::DataType::Float32).sum_scalar());
+            }
+        }
+
+        selection_groups_ = snapshot.groups;
+        active_selection_group_ = snapshot.active_group_id;
+        next_group_id_ = snapshot.next_group_id == 0 ? 1 : snapshot.next_group_id;
+
+        events::state::SelectionChanged{.has_selection = has_selection_, .count = count}.emit();
+        notifyMutation(MutationType::SELECTION_CHANGED);
+    }
+
     bool Scene::renameNode(const std::string& old_name, const std::string& new_name) {
         if (old_name == new_name)
             return true;
@@ -972,11 +1011,14 @@ namespace lfs::core {
         selection_groups_.push_back(group);
         active_selection_group_ = group.id;
 
+        notifyMutation(MutationType::SELECTION_CHANGED);
         LOG_DEBUG("Added selection group '{}' (ID {})", group.name, group.id);
         return group.id;
     }
 
     void Scene::removeSelectionGroup(const uint8_t id) {
+        Transaction txn(*this);
+
         const auto it = std::find_if(selection_groups_.begin(), selection_groups_.end(),
                                      [id](const SelectionGroup& g) { return g.id == id; });
         if (it == selection_groups_.end())
@@ -990,24 +1032,28 @@ namespace lfs::core {
             active_selection_group_ = selection_groups_.empty() ? 0 : selection_groups_.back().id;
         }
 
+        notifyMutation(MutationType::SELECTION_CHANGED);
         LOG_DEBUG("Removed selection group '{}' (ID {})", name, id);
     }
 
     void Scene::renameSelectionGroup(const uint8_t id, const std::string& name) {
         if (auto* group = findGroup(id)) {
             group->name = name;
+            notifyMutation(MutationType::SELECTION_CHANGED);
         }
     }
 
     void Scene::setSelectionGroupColor(const uint8_t id, const glm::vec3& color) {
         if (auto* group = findGroup(id)) {
             group->color = color;
+            notifyMutation(MutationType::SELECTION_CHANGED);
         }
     }
 
     void Scene::setSelectionGroupLocked(const uint8_t id, const bool locked) {
         if (auto* group = findGroup(id)) {
             group->locked = locked;
+            notifyMutation(MutationType::SELECTION_CHANGED);
         }
     }
 
@@ -1018,6 +1064,15 @@ namespace lfs::core {
 
     const SelectionGroup* Scene::getSelectionGroup(const uint8_t id) const {
         return findGroup(id);
+    }
+
+    void Scene::setActiveSelectionGroup(const uint8_t id) {
+        if (active_selection_group_ == id)
+            return;
+        if (id != 0 && !findGroup(id))
+            return;
+        active_selection_group_ = id;
+        notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
     void Scene::updateSelectionGroupCounts() {
@@ -1082,6 +1137,7 @@ namespace lfs::core {
     }
 
     void Scene::resetSelectionState() {
+        Transaction txn(*this);
         {
             std::unique_lock lock(selection_mutex_);
             selection_mask_.reset();

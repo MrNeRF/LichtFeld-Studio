@@ -7,6 +7,7 @@
 #include "visualizer/operation/undo_history.hpp"
 
 #include <nanobind/stl/string.h>
+#include <nanobind/stl/vector.h>
 
 #include <algorithm>
 
@@ -25,6 +26,7 @@ namespace lfs::python {
             }
         } catch (const std::exception& e) {
             LOG_ERROR("PyUndoEntry undo: {}", e.what());
+            throw;
         }
     }
 
@@ -36,15 +38,25 @@ namespace lfs::python {
             }
         } catch (const std::exception& e) {
             LOG_ERROR("PyUndoEntry redo: {}", e.what());
+            throw;
         }
+    }
+
+    vis::op::UndoMetadata PyUndoEntry::metadata() const {
+        return vis::op::UndoMetadata{
+            .id = "python.custom",
+            .label = name_,
+            .source = "python",
+            .scope = "custom",
+        };
     }
 
     PyTransaction::PyTransaction(std::string name)
         : name_(std::move(name)) {}
 
     void PyTransaction::enter() {
+        vis::op::undoHistory().beginTransaction(name_);
         active_ = true;
-        entries_.clear();
     }
 
     void PyTransaction::exit(const bool commit) {
@@ -52,69 +64,47 @@ namespace lfs::python {
             return;
         active_ = false;
 
-        if (!commit || entries_.empty())
-            return;
-
-        class CompoundEntry final : public vis::op::UndoEntry {
-        public:
-            CompoundEntry(std::string name, std::vector<std::pair<nb::object, nb::object>> entries)
-                : name_(std::move(name)),
-                  entries_(std::move(entries)) {}
-
-            void undo() override {
-                nb::gil_scoped_acquire gil;
-                for (auto it = entries_.rbegin(); it != entries_.rend(); ++it) {
-                    try {
-                        if (it->first.is_valid() && !it->first.is_none())
-                            it->first();
-                    } catch (const std::exception& e) {
-                        LOG_ERROR("CompoundEntry undo: {}", e.what());
-                    }
-                }
-            }
-
-            void redo() override {
-                nb::gil_scoped_acquire gil;
-                for (auto& entry : entries_) {
-                    try {
-                        if (entry.second.is_valid() && !entry.second.is_none())
-                            entry.second();
-                    } catch (const std::exception& e) {
-                        LOG_ERROR("CompoundEntry redo: {}", e.what());
-                    }
-                }
-            }
-
-            [[nodiscard]] std::string name() const override { return name_; }
-
-        private:
-            std::string name_;
-            std::vector<std::pair<nb::object, nb::object>> entries_;
-        };
-
-        auto compound = std::make_unique<CompoundEntry>(name_, std::move(entries_));
-        vis::op::undoHistory().push(std::move(compound));
-    }
-
-    void PyTransaction::add(nb::object undo_fn, nb::object redo_fn) {
-        if (!active_) {
-            auto entry = std::make_unique<PyUndoEntry>(name_, std::move(undo_fn), std::move(redo_fn));
-            entry->redo();
-            vis::op::undoHistory().push(std::move(entry));
+        if (!commit) {
+            vis::op::undoHistory().rollbackTransaction();
             return;
         }
 
+        vis::op::undoHistory().commitTransaction();
+    }
+
+    void PyTransaction::add(nb::object undo_fn, nb::object redo_fn) {
         nb::gil_scoped_acquire gil;
         try {
             if (redo_fn.is_valid() && !redo_fn.is_none())
                 redo_fn();
         } catch (const std::exception& e) {
             LOG_ERROR("Transaction add: {}", e.what());
+            throw;
         }
-        entries_.emplace_back(std::move(undo_fn), std::move(redo_fn));
+
+        auto entry = std::make_unique<PyUndoEntry>(name_, std::move(undo_fn), std::move(redo_fn));
+        vis::op::undoHistory().push(std::move(entry));
     }
 
     void register_commands(nb::module_& m) {
+        const auto stack_item_to_dict = [](const vis::op::UndoStackItem& item) {
+            nb::dict result;
+            result["id"] = item.metadata.id;
+            result["label"] = item.metadata.label;
+            result["source"] = item.metadata.source;
+            result["scope"] = item.metadata.scope;
+            result["estimated_bytes"] = item.estimated_bytes;
+            return result;
+        };
+        const auto history_result_to_dict = [](const vis::op::HistoryResult& result) {
+            nb::dict payload;
+            payload["success"] = result.success;
+            payload["changed"] = result.changed;
+            payload["steps_performed"] = result.steps_performed;
+            payload["error"] = result.error;
+            return payload;
+        };
+
         // lf.undo submodule - main undo API
         auto undo = m.def_submodule("undo", "Undo/redo system");
 
@@ -135,9 +125,23 @@ namespace lfs::python {
             "Push an undo step with undo/redo functions");
 
         undo.def(
-            "undo", []() { vis::op::undoHistory().undo(); }, "Undo last operation");
+            "undo", []() { return vis::op::undoHistory().undo().success; }, "Undo last operation");
         undo.def(
-            "redo", []() { vis::op::undoHistory().redo(); }, "Redo last undone operation");
+            "redo", []() { return vis::op::undoHistory().redo().success; }, "Redo last undone operation");
+        undo.def(
+            "jump",
+            [history_result_to_dict](const std::string& stack, size_t count) {
+                if (stack == "undo") {
+                    return history_result_to_dict(vis::op::undoHistory().undoMultiple(count));
+                }
+                if (stack == "redo") {
+                    return history_result_to_dict(vis::op::undoHistory().redoMultiple(count));
+                }
+                throw std::runtime_error("stack must be 'undo' or 'redo'");
+            },
+            nb::arg("stack"),
+            nb::arg("count"),
+            "Apply multiple undo/redo steps for history navigation");
         undo.def(
             "can_undo", []() { return vis::op::undoHistory().canUndo(); }, "Check if undo is available");
         undo.def(
@@ -163,13 +167,104 @@ namespace lfs::python {
             },
             "Get name of next redo operation");
 
+        undo.def(
+            "undo_names",
+            []() { return vis::op::undoHistory().undoNames(); },
+            "Get the undo stack names, newest first");
+
+        undo.def(
+            "redo_names",
+            []() { return vis::op::undoHistory().redoNames(); },
+            "Get the redo stack names, newest first");
+
+        undo.def(
+            "undo_bytes",
+            []() { return vis::op::undoHistory().undoBytes(); },
+            "Get estimated bytes retained by undo history");
+
+        undo.def(
+            "redo_bytes",
+            []() { return vis::op::undoHistory().redoBytes(); },
+            "Get estimated bytes retained by redo history");
+
+        undo.def(
+            "total_bytes",
+            []() { return vis::op::undoHistory().totalBytes(); },
+            "Get estimated bytes retained by undo and redo history");
+
+        undo.def(
+            "has_active_transaction",
+            []() { return vis::op::undoHistory().hasActiveTransaction(); },
+            "Check if a grouped history transaction is active");
+
+        undo.def(
+            "transaction_depth",
+            []() { return vis::op::undoHistory().transactionDepth(); },
+            "Get the current grouped history transaction nesting depth");
+
+        undo.def(
+            "active_transaction_name",
+            []() { return vis::op::undoHistory().activeTransactionName(); },
+            "Get the current grouped history transaction label");
+        undo.def(
+            "generation",
+            []() { return vis::op::undoHistory().generation(); },
+            "Get the shared history change generation");
+        undo.def(
+            "subscribe",
+            [](nb::callable callback) {
+                nb::object cb = nb::borrow<nb::object>(callback);
+                return vis::op::undoHistory().subscribe([cb]() {
+                    nb::gil_scoped_acquire gil;
+                    try {
+                        cb();
+                    } catch (const std::exception& e) {
+                        LOG_ERROR("lf.undo.subscribe callback failed: {}", e.what());
+                    } catch (...) {
+                        LOG_ERROR("lf.undo.subscribe callback failed: unknown exception");
+                    }
+                });
+            },
+            nb::arg("callback"),
+            "Subscribe to shared history changes and return a subscription id");
+        undo.def(
+            "unsubscribe",
+            [](uint64_t subscription_id) { vis::op::undoHistory().unsubscribe(subscription_id); },
+            nb::arg("subscription_id"),
+            "Unsubscribe a shared history observer");
+
+        undo.def(
+            "stack",
+            [stack_item_to_dict]() {
+                nb::dict payload;
+                nb::list undo_items;
+                for (const auto& item : vis::op::undoHistory().undoItems()) {
+                    undo_items.append(stack_item_to_dict(item));
+                }
+                nb::list redo_items;
+                for (const auto& item : vis::op::undoHistory().redoItems()) {
+                    redo_items.append(stack_item_to_dict(item));
+                }
+                payload["undo"] = undo_items;
+                payload["redo"] = redo_items;
+                payload["undo_bytes"] = vis::op::undoHistory().undoBytes();
+                payload["redo_bytes"] = vis::op::undoHistory().redoBytes();
+                payload["total_bytes"] = vis::op::undoHistory().totalBytes();
+                payload["transaction_active"] = vis::op::undoHistory().hasActiveTransaction();
+                payload["transaction_depth"] = vis::op::undoHistory().transactionDepth();
+                payload["transaction_name"] = vis::op::undoHistory().activeTransactionName();
+                payload["generation"] = vis::op::undoHistory().generation();
+                return payload;
+            },
+            "Get the structured undo/redo stack state");
+
         nb::class_<PyTransaction>(undo, "Transaction")
             .def(nb::init<const std::string&>(), nb::arg("name") = "Grouped Changes")
             .def(
                 "__enter__", [](PyTransaction& self) { self.enter(); return &self; }, "Begin transaction context")
             .def(
-                "__exit__", [](PyTransaction& self, nb::args) {
-                    self.exit(true);
+                "__exit__", [](PyTransaction& self, nb::object exc_type, nb::object, nb::object) {
+                    self.exit(exc_type.is_none());
                     return false;
                 },
                 "Commit transaction on context exit")

@@ -3,22 +3,22 @@
 
 
 def undo() -> None:
-    """Undo last operation"""
+    """Deprecated alias for lf.undo.undo()"""
 
 def redo() -> None:
-    """Redo last undone operation"""
+    """Deprecated alias for lf.undo.redo()"""
 
 def can_undo() -> bool:
-    """Check if undo is available"""
+    """Deprecated alias for lf.undo.can_undo()"""
 
 def can_redo() -> bool:
-    """Check if redo is available"""
+    """Deprecated alias for lf.undo.can_redo()"""
 
 def undo_name() -> str:
-    """Get name of next undo operation"""
+    """Deprecated alias for lf.undo.get_undo_name()"""
 
 def redo_name() -> str:
-    """Get name of next redo operation"""
+    """Deprecated alias for lf.undo.get_redo_name()"""
 
 def clear() -> None:
-    """Clear undo history"""
+    """Deprecated alias for lf.undo.clear()"""

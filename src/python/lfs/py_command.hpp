@@ -23,6 +23,7 @@ namespace lfs::python {
         void undo() override;
         void redo() override;
         [[nodiscard]] std::string name() const override { return name_; }
+        [[nodiscard]] vis::op::UndoMetadata metadata() const override;
 
     private:
         std::string name_;
@@ -40,7 +41,6 @@ namespace lfs::python {
 
     private:
         std::string name_;
-        std::vector<std::pair<nb::object, nb::object>> entries_;
         bool active_ = false;
     };
 

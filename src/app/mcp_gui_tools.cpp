@@ -830,6 +830,26 @@ namespace lfs::app {
 
         json history_json() {
             auto& history = vis::op::undoHistory();
+            const auto item_json = [](const vis::op::UndoStackItem& item) {
+                return json{
+                    {"id", item.metadata.id},
+                    {"label", item.metadata.label},
+                    {"source", item.metadata.source},
+                    {"scope", item.metadata.scope},
+                    {"estimated_bytes", static_cast<int64_t>(item.estimated_bytes)},
+                };
+            };
+
+            json undo_items = json::array();
+            for (const auto& item : history.undoItems()) {
+                undo_items.push_back(item_json(item));
+            }
+
+            json redo_items = json::array();
+            for (const auto& item : history.redoItems()) {
+                redo_items.push_back(item_json(item));
+            }
+
             return json{
                 {"success", true},
                 {"can_undo", history.canUndo()},
@@ -838,7 +858,27 @@ namespace lfs::app {
                 {"redo_count", static_cast<int64_t>(history.redoCount())},
                 {"undo_name", history.undoName()},
                 {"redo_name", history.redoName()},
+                {"undo_names", history.undoNames()},
+                {"redo_names", history.redoNames()},
+                {"undo_items", std::move(undo_items)},
+                {"redo_items", std::move(redo_items)},
+                {"undo_bytes", static_cast<int64_t>(history.undoBytes())},
+                {"redo_bytes", static_cast<int64_t>(history.redoBytes())},
+                {"total_bytes", static_cast<int64_t>(history.totalBytes())},
+                {"max_entries", static_cast<int64_t>(vis::op::UndoHistory::MAX_ENTRIES)},
+                {"max_bytes", static_cast<int64_t>(vis::op::UndoHistory::MAX_BYTES)},
+                {"transaction_active", history.hasActiveTransaction()},
+                {"transaction_depth", static_cast<int64_t>(history.transactionDepth())},
+                {"transaction_name", history.activeTransactionName()},
+                {"generation", static_cast<int64_t>(history.generation())},
             };
+        }
+
+        void append_history_result(json& payload, const vis::op::HistoryResult& result) {
+            payload["success"] = result.success;
+            payload["changed"] = result.changed;
+            payload["steps_performed"] = static_cast<int64_t>(result.steps_performed);
+            payload["error"] = result.error;
         }
 
         std::expected<void, std::string> prepare_delete_operator(vis::Visualizer& viewer,
@@ -1913,52 +1953,134 @@ namespace lfs::app {
                 });
             });
 
-        register_gui_operator_tool(
-            registry, viewer_impl,
-            GuiOperatorToolBinding{
-                .tool_name = "history.undo",
-                .operator_id = vis::op::BuiltinOp::Undo,
-                .category = "history",
-                .description = "Undo the most recent shared scene operation",
-                .prepare =
-                    [](vis::Visualizer& /*viewer*/, const json& /*args*/,
-                       vis::op::OperatorProperties& /*props*/) -> std::expected<void, std::string> {
-                    if (!vis::op::undoHistory().canUndo())
-                        return std::unexpected("Nothing to undo");
-                    return {};
-                },
-                .on_success =
-                    [](vis::Visualizer& /*viewer*/, const json& /*args*/,
-                       const vis::op::OperatorProperties& /*props*/,
-                       const vis::op::OperatorReturnValue& /*result*/) {
-                        auto payload = history_json();
-                        payload["performed"] = "undo";
-                        return payload;
-                    },
+        registry.register_tool(
+            McpTool{
+                .name = "history.list",
+                .description = "List the full undo and redo stacks for the shared history service",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    auto payload = history_json();
+                    payload["performed"] = "list";
+                    return payload;
+                });
             });
 
-        register_gui_operator_tool(
-            registry, viewer_impl,
-            GuiOperatorToolBinding{
-                .tool_name = "history.redo",
-                .operator_id = vis::op::BuiltinOp::Redo,
-                .category = "history",
+        registry.register_tool(
+            McpTool{
+                .name = "history.begin_transaction",
+                .description = "Begin a grouped transaction in the shared undo/redo history service",
+                .input_schema =
+                    {.type = "object",
+                     .properties = {{"name", {{"type", "string"}}}},
+                     .required = {}}},
+            [viewer_impl](const json& args) -> json {
+                const auto name = args.contains("name") && args["name"].is_string()
+                                      ? args["name"].get<std::string>()
+                                      : std::string("MCP Transaction");
+                return post_and_wait(viewer_impl, [name]() -> json {
+                    vis::op::undoHistory().beginTransaction(name);
+                    auto payload = history_json();
+                    payload["performed"] = "begin_transaction";
+                    return payload;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "history.commit_transaction",
+                .description = "Commit the current grouped transaction in the shared undo/redo history service",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    if (!vis::op::undoHistory().hasActiveTransaction())
+                        return json{{"error", "No active history transaction"}};
+                    vis::op::undoHistory().commitTransaction();
+                    auto payload = history_json();
+                    payload["performed"] = "commit_transaction";
+                    return payload;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "history.rollback_transaction",
+                .description = "Rollback the current grouped transaction in the shared undo/redo history service",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    if (!vis::op::undoHistory().hasActiveTransaction())
+                        return json{{"error", "No active history transaction"}};
+                    const auto result = vis::op::undoHistory().rollbackTransaction();
+                    auto payload = history_json();
+                    append_history_result(payload, result);
+                    payload["performed"] = "rollback_transaction";
+                    return payload;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "history.undo",
+                .description = "Undo the most recent shared scene operation",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = {.category = "history", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread"}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    const auto result = vis::op::undoHistory().undo();
+                    auto payload = history_json();
+                    append_history_result(payload, result);
+                    payload["performed"] = "undo";
+                    return payload;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "history.redo",
                 .description = "Redo the next shared scene operation",
-                .prepare =
-                    [](vis::Visualizer& /*viewer*/, const json& /*args*/,
-                       vis::op::OperatorProperties& /*props*/) -> std::expected<void, std::string> {
-                    if (!vis::op::undoHistory().canRedo())
-                        return std::unexpected("Nothing to redo");
-                    return {};
-                },
-                .on_success =
-                    [](vis::Visualizer& /*viewer*/, const json& /*args*/,
-                       const vis::op::OperatorProperties& /*props*/,
-                       const vis::op::OperatorReturnValue& /*result*/) {
-                        auto payload = history_json();
-                        payload["performed"] = "redo";
-                        return payload;
-                    },
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = {.category = "history", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread"}},
+            [viewer_impl](const json&) -> json {
+                return post_and_wait(viewer_impl, []() -> json {
+                    const auto result = vis::op::undoHistory().redo();
+                    auto payload = history_json();
+                    append_history_result(payload, result);
+                    payload["performed"] = "redo";
+                    return payload;
+                });
+            });
+
+        registry.register_tool(
+            McpTool{
+                .name = "history.jump",
+                .description = "Apply multiple undo or redo steps to navigate to a shared history state",
+                .input_schema =
+                    {.type = "object",
+                     .properties = {
+                         {"stack", {{"type", "string"}, {"enum", json::array({"undo", "redo"})}}},
+                         {"count", {{"type", "integer"}, {"minimum", 1}}}},
+                     .required = {"stack", "count"}},
+                .metadata = {.category = "history", .kind = "mutation", .runtime = "gui", .thread_affinity = "gui_thread"}},
+            [viewer_impl](const json& args) -> json {
+                const auto stack = args.value("stack", std::string{});
+                const auto count = static_cast<size_t>(std::max<int64_t>(1, args.value("count", 1)));
+                return post_and_wait(viewer_impl, [stack, count]() -> json {
+                    vis::op::HistoryResult result;
+                    if (stack == "undo") {
+                        result = vis::op::undoHistory().undoMultiple(count);
+                    } else if (stack == "redo") {
+                        result = vis::op::undoHistory().redoMultiple(count);
+                    } else {
+                        return json{{"error", "stack must be 'undo' or 'redo'"}};
+                    }
+                    auto payload = history_json();
+                    append_history_result(payload, result);
+                    payload["performed"] = "jump";
+                    payload["stack"] = stack;
+                    payload["requested_count"] = static_cast<int64_t>(count);
+                    return payload;
+                });
             });
 
         registry.register_tool(
@@ -4481,6 +4603,32 @@ namespace lfs::app {
                 return post_and_wait(viewer, [viewer, uri]() -> std::expected<std::vector<McpResourceContent>, std::string> {
                     auto payload = selection_state_json(viewer->getScene());
                     payload["success"] = true;
+                    return single_json_resource(uri, std::move(payload));
+                });
+            });
+
+        registry.register_resource(
+            McpResource{
+                .uri = "lichtfeld://history/state",
+                .name = "History State",
+                .description = "Current undo/redo state for the shared GUI history service",
+                .mime_type = "application/json"},
+            [viewer_impl](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
+                return post_and_wait(viewer_impl, [uri]() -> std::expected<std::vector<McpResourceContent>, std::string> {
+                    return single_json_resource(uri, history_json());
+                });
+            });
+
+        registry.register_resource(
+            McpResource{
+                .uri = "lichtfeld://history/stack",
+                .name = "History Stack",
+                .description = "Full undo and redo stacks for the shared GUI history service",
+                .mime_type = "application/json"},
+            [viewer_impl](const std::string& uri) -> std::expected<std::vector<McpResourceContent>, std::string> {
+                return post_and_wait(viewer_impl, [uri]() -> std::expected<std::vector<McpResourceContent>, std::string> {
+                    auto payload = history_json();
+                    payload["performed"] = "stack";
                     return single_json_resource(uri, std::move(payload));
                 });
             });

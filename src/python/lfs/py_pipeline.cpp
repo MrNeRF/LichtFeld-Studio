@@ -20,6 +20,13 @@
 namespace lfs::python {
 
     namespace {
+        void warn_deprecated_undo_alias(const char* alias_name) {
+            const std::string message =
+                std::string(alias_name) + " is deprecated; use lf.undo instead.";
+            if (PyErr_WarnEx(PyExc_DeprecationWarning, message.c_str(), 1) < 0) {
+                throw nb::python_error();
+            }
+        }
 
         vis::op::OperatorProperties dict_to_props(const nb::dict& properties) {
             vis::op::OperatorProperties props;
@@ -169,19 +176,40 @@ namespace lfs::python {
 
         auto undo = pipe.def_submodule("undo", "Unified undo system");
         undo.def(
-            "undo", [] { vis::op::undoHistory().undo(); }, "Undo last operation");
+            "undo", [] {
+                warn_deprecated_undo_alias("lf.pipeline.undo.undo()");
+                vis::op::undoHistory().undo();
+            }, "Deprecated alias for lf.undo.undo()");
         undo.def(
-            "redo", [] { vis::op::undoHistory().redo(); }, "Redo last undone operation");
+            "redo", [] {
+                warn_deprecated_undo_alias("lf.pipeline.undo.redo()");
+                vis::op::undoHistory().redo();
+            }, "Deprecated alias for lf.undo.redo()");
         undo.def(
-            "can_undo", [] { return vis::op::undoHistory().canUndo(); }, "Check if undo is available");
+            "can_undo", [] {
+                warn_deprecated_undo_alias("lf.pipeline.undo.can_undo()");
+                return vis::op::undoHistory().canUndo();
+            }, "Deprecated alias for lf.undo.can_undo()");
         undo.def(
-            "can_redo", [] { return vis::op::undoHistory().canRedo(); }, "Check if redo is available");
+            "can_redo", [] {
+                warn_deprecated_undo_alias("lf.pipeline.undo.can_redo()");
+                return vis::op::undoHistory().canRedo();
+            }, "Deprecated alias for lf.undo.can_redo()");
         undo.def(
-            "undo_name", [] { return vis::op::undoHistory().undoName(); }, "Get name of next undo operation");
+            "undo_name", [] {
+                warn_deprecated_undo_alias("lf.pipeline.undo.undo_name()");
+                return vis::op::undoHistory().undoName();
+            }, "Deprecated alias for lf.undo.get_undo_name()");
         undo.def(
-            "redo_name", [] { return vis::op::undoHistory().redoName(); }, "Get name of next redo operation");
+            "redo_name", [] {
+                warn_deprecated_undo_alias("lf.pipeline.undo.redo_name()");
+                return vis::op::undoHistory().redoName();
+            }, "Deprecated alias for lf.undo.get_redo_name()");
         undo.def(
-            "clear", [] { vis::op::undoHistory().clear(); }, "Clear undo history");
+            "clear", [] {
+                warn_deprecated_undo_alias("lf.pipeline.undo.clear()");
+                vis::op::undoHistory().clear();
+            }, "Deprecated alias for lf.undo.clear()");
     }
 
 } // namespace lfs::python

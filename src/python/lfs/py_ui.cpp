@@ -22,6 +22,7 @@
 #include "py_gizmo.hpp"
 #include "py_keymap.hpp"
 #include "py_params.hpp"
+#include "py_command.hpp"
 #include "py_prop_registry.hpp"
 #include "py_rml.hpp"
 #include "py_signals.hpp"
@@ -34,6 +35,7 @@
 #include "rendering/render_constants.hpp"
 #include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui/panel_registry.hpp"
+#include "visualizer/operation/undo_history.hpp"
 #include "visualizer/operator/operator_context.hpp"
 #include "visualizer/operator/operator_registry.hpp"
 #include "visualizer/operator/property_schema.hpp"
@@ -323,6 +325,20 @@ namespace lfs::python {
         void remove_python_operator_instance(const std::string& id) {
             std::lock_guard lock(g_python_operator_mutex);
             g_python_operator_instances.erase(id);
+        }
+
+        void push_python_operator_undo_entry(const std::string& label, nb::object instance) {
+            if (!instance.is_valid() || instance.is_none()) {
+                return;
+            }
+            if (!nb::hasattr(instance, "undo") || !nb::hasattr(instance, "redo")) {
+                return;
+            }
+
+            auto entry = std::make_unique<lfs::python::PyUndoEntry>(label,
+                                                                    instance.attr("undo"),
+                                                                    instance.attr("redo"));
+            vis::op::undoHistory().push(std::move(entry));
         }
 
         unsigned int load_icon_from_path(const std::filesystem::path& path, const std::string& cache_key) {
@@ -876,7 +892,7 @@ namespace lfs::python {
             }
 
             if (has_invoke || has_execute) {
-                callbacks.invoke = [class_id = id, has_invoke](vis::op::OperatorProperties& props) -> vis::op::OperatorResult {
+                callbacks.invoke = [class_id = id, label = desc.label, has_invoke, has_undo](vis::op::OperatorProperties& props) -> vis::op::OperatorResult {
                     nb::gil_scoped_acquire gil;
                     nb::object instance = get_python_operator_instance(class_id);
                     if (!instance.is_valid() || instance.is_none()) {
@@ -894,7 +910,11 @@ namespace lfs::python {
                         } else {
                             result = instance.attr("execute")(nb::none());
                         }
-                        return parse_operator_result(result, instance);
+                        const auto status = parse_operator_result(result, instance);
+                        if (has_undo && status == vis::op::OperatorResult::FINISHED) {
+                            push_python_operator_undo_entry(label.empty() ? class_id : label, instance);
+                        }
+                        return status;
                     } catch (const std::exception& e) {
                         LOG_ERROR("Operator invoke error: {}", e.what());
                         return vis::op::OperatorResult::CANCELLED;
@@ -903,8 +923,8 @@ namespace lfs::python {
             }
 
             if (has_modal) {
-                callbacks.modal = [class_id = id](const vis::op::ModalEvent& event,
-                                                  vis::op::OperatorProperties& /*props*/) -> vis::op::OperatorResult {
+                callbacks.modal = [class_id = id, label = desc.label, has_undo](const vis::op::ModalEvent& event,
+                                                                                 vis::op::OperatorProperties& /*props*/) -> vis::op::OperatorResult {
                     nb::gil_scoped_acquire gil;
                     nb::object instance = get_python_operator_instance(class_id);
                     if (!instance.is_valid() || instance.is_none()) {
@@ -914,7 +934,11 @@ namespace lfs::python {
                     try {
                         PyEvent py_event = convert_modal_event(event);
                         nb::object result = instance.attr("modal")(nb::none(), py_event);
-                        return parse_operator_result(result, instance);
+                        const auto status = parse_operator_result(result, instance);
+                        if (has_undo && status == vis::op::OperatorResult::FINISHED) {
+                            push_python_operator_undo_entry(label.empty() ? class_id : label, instance);
+                        }
+                        return status;
                     } catch (const std::exception& e) {
                         LOG_ERROR("Operator modal error: {}", e.what());
                         return vis::op::OperatorResult::CANCELLED;

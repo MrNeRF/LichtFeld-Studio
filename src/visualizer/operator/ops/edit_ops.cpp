@@ -44,11 +44,11 @@ namespace lfs::vis::op {
     }
 
     OperatorResult UndoOperator::invoke(OperatorContext& /*ctx*/, OperatorProperties& /*props*/) {
-        undoHistory().undo();
+        const auto result = undoHistory().undo();
         if (auto* rm = services().renderingOrNull()) {
             rm->markDirty(DirtyFlag::ALL);
         }
-        return OperatorResult::FINISHED;
+        return result.success ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
     }
 
     const OperatorDescriptor RedoOperator::DESCRIPTOR = {
@@ -68,11 +68,11 @@ namespace lfs::vis::op {
     }
 
     OperatorResult RedoOperator::invoke(OperatorContext& /*ctx*/, OperatorProperties& /*props*/) {
-        undoHistory().redo();
+        const auto result = undoHistory().redo();
         if (auto* rm = services().renderingOrNull()) {
             rm->markDirty(DirtyFlag::ALL);
         }
-        return OperatorResult::FINISHED;
+        return result.success ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
     }
 
     const OperatorDescriptor DeleteOperator::DESCRIPTOR = {

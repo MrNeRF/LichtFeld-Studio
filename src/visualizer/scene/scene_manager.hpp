@@ -20,6 +20,7 @@
 #include <expected>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 
 namespace lfs::vis {
 
@@ -86,6 +87,11 @@ namespace lfs::vis {
             std::lock_guard<std::mutex> lock(state_mutex_);
             return dataset_path_;
         }
+        [[nodiscard]] std::optional<std::filesystem::path> getPlyPath(const std::string& name) const;
+        void setPlyPath(const std::string& name, const std::filesystem::path& path);
+        void clearPlyPath(const std::string& name);
+        void movePlyPath(const std::string& old_name, const std::string& new_name);
+        void setDatasetPath(const std::filesystem::path& path);
 
         // Scene access
         core::Scene& getScene() { return scene_; }
@@ -119,6 +125,7 @@ namespace lfs::vis {
         [[nodiscard]] std::vector<bool> getSelectedNodeMask() const;
         [[nodiscard]] int getSelectedCameraUid() const;
         [[nodiscard]] const SelectionState& selectionState() const { return selection_; }
+        void invalidateNodeSelectionMask();
 
         // Node picking
         [[nodiscard]] std::string pickNodeByRay(const glm::vec3& ray_origin, const glm::vec3& ray_dir) const;
@@ -199,6 +206,10 @@ namespace lfs::vis {
 
         bool renamePLY(const std::string& old_name, const std::string& new_name);
         void updatePlyPath(const std::string& ply_name, const std::filesystem::path& ply_path);
+        bool reparentNode(const std::string& node_name, const std::string& new_parent_name);
+        std::string addGroupNode(const std::string& name, const std::string& parent_name = "");
+        std::string duplicateNodeTree(const std::string& name);
+        std::string mergeGroupNode(const std::string& name);
 
         // Permanently remove soft-deleted gaussians from all nodes
         size_t applyDeleted();
@@ -254,10 +265,6 @@ namespace lfs::vis {
         void handleCropActivePly(const lfs::geometry::BoundingBox& crop_box, bool inverse);
         void handleCropByEllipsoid(const glm::mat4& world_transform, const glm::vec3& radii, bool inverse);
         void handleRenamePly(const lfs::core::events::cmd::RenamePLY& event);
-        void handleReparentNode(const std::string& node_name, const std::string& new_parent_name);
-        void handleAddGroup(const std::string& name, const std::string& parent_name);
-        void handleDuplicateNode(const std::string& name);
-        void handleMergeGroup(const std::string& name);
         void handleAddCropBox(const std::string& node_name);
         void handleAddCropEllipsoid(const std::string& node_name);
         void handleResetCropBox();

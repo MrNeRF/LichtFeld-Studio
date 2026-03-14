@@ -129,6 +129,14 @@ namespace lfs::core {
     public:
         using Node = SceneNode;
 
+        struct SelectionStateSnapshot {
+            std::shared_ptr<lfs::core::Tensor> mask;
+            std::vector<SelectionGroup> groups;
+            uint8_t active_group_id = 0;
+            uint8_t next_group_id = 1;
+            bool has_selection = false;
+        };
+
         enum class MutationType : uint32_t {
             NODE_ADDED = 1 << 0,
             NODE_REMOVED = 1 << 1,
@@ -261,6 +269,8 @@ namespace lfs::core {
         void setSelectionMask(std::shared_ptr<lfs::core::Tensor> mask);
         void clearSelection();
         bool hasSelection() const;
+        [[nodiscard]] SelectionStateSnapshot captureSelectionState() const;
+        void restoreSelectionState(const SelectionStateSnapshot& snapshot);
 
         uint8_t addSelectionGroup(const std::string& name, const glm::vec3& color);
         void removeSelectionGroup(uint8_t id);
@@ -268,7 +278,7 @@ namespace lfs::core {
         void setSelectionGroupColor(uint8_t id, const glm::vec3& color);
         void setSelectionGroupLocked(uint8_t id, bool locked);
         [[nodiscard]] bool isSelectionGroupLocked(uint8_t id) const;
-        void setActiveSelectionGroup(uint8_t id) { active_selection_group_ = id; }
+        void setActiveSelectionGroup(uint8_t id);
         [[nodiscard]] uint8_t getActiveSelectionGroup() const { return active_selection_group_; }
         [[nodiscard]] const std::vector<SelectionGroup>& getSelectionGroups() const { return selection_groups_; }
         [[nodiscard]] const SelectionGroup* getSelectionGroup(uint8_t id) const;

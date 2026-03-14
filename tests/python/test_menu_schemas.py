@@ -26,6 +26,8 @@ def _install_lichtfeld_stub(monkeypatch):
         "theme": "dark",
         "ui_scale": 1.0,
         "python_console_shown": 0,
+        "undo_called": False,
+        "redo_called": False,
     }
 
     ui = SimpleNamespace(
@@ -45,6 +47,16 @@ def _install_lichtfeld_stub(monkeypatch):
 
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = ui
+    lf_stub.undo = SimpleNamespace(
+        get_undo_name=lambda: "Rename Node",
+        get_redo_name=lambda: "",
+        undo_names=lambda: ["Rename Node", "Move Group"],
+        redo_names=lambda: [],
+        can_undo=lambda: True,
+        can_redo=lambda: False,
+        undo=lambda: state.__setitem__("undo_called", True),
+        redo=lambda: state.__setitem__("redo_called", True),
+    )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
     return state
 
@@ -78,9 +90,17 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     edit_items = edit_mod.EditMenu().menu_items()
     assert edit_items[0]["type"] == "item"
     edit_items[0]["callback"]()
-    assert state["enabled_panels"] == [("lfs.input_settings", True)]
+    assert state["undo_called"] is True
     assert edit_items[2]["type"] == "submenu"
-    assert edit_items[2]["items"][0]["type"] == "toggle"
+    assert edit_items[2]["items"][0]["label"] == "Rename Node"
+    assert edit_items[5]["type"] == "item"
+    edit_items[5]["callback"]()
+    assert state["enabled_panels"] == [("lfs.history", True)]
+    assert edit_items[7]["type"] == "item"
+    edit_items[7]["callback"]()
+    assert state["enabled_panels"] == [("lfs.history", True), ("lfs.input_settings", True)]
+    assert edit_items[9]["type"] == "submenu"
+    assert edit_items[9]["items"][0]["type"] == "toggle"
 
     view_items = view_mod.ViewMenu().menu_items()
     assert view_items[0]["type"] == "submenu"

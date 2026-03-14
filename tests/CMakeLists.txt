@@ -241,6 +241,7 @@ set(TEST_FILES
     test_selection_rasterization_ops.cpp
     test_viewport.cpp
     test_selection_service_interactions.cpp
+    test_undo_history.cpp
     test_selection_command_dispatch.cpp
     test_selection_operator_modal.cpp
     test_operator_registry_props.cpp

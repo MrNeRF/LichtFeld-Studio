@@ -34,6 +34,8 @@
 #include "py_uilist.hpp"
 #include "py_viewport.hpp"
 #include "python/viewport_overlay.hpp"
+#include "visualizer/operation/undo_entry.hpp"
+#include "visualizer/operation/undo_history.hpp"
 
 #include "control/command_api.hpp"
 #include "control/control_boundary.hpp"
@@ -835,6 +837,26 @@ NB_MODULE(lichtfeld, m) {
             auto* scene = get_scene_internal();
             if (!scene)
                 return;
+            if (auto* sm = lfs::python::get_scene_manager()) {
+                const auto* node = scene->getNode(name);
+                if (!node || node->training_enabled == enabled)
+                    return;
+
+                const auto before = lfs::vis::op::SceneGraphMetadataEntry::captureNodes(*sm, {name});
+                scene->setCameraTrainingEnabled(name, enabled);
+                std::vector<lfs::vis::op::SceneGraphNodeMetadataDiff> diffs;
+                const auto after = lfs::vis::op::SceneGraphMetadataEntry::captureNodes(*sm, {name});
+                if (!before.empty() && !after.empty()) {
+                    diffs.push_back(lfs::vis::op::SceneGraphNodeMetadataDiff{
+                        .before = before.front(),
+                        .after = after.front(),
+                    });
+                    lfs::vis::op::undoHistory().push(
+                        std::make_unique<lfs::vis::op::SceneGraphMetadataEntry>(
+                            *sm, "Set Camera Training", std::move(diffs)));
+                }
+                return;
+            }
             scene->setCameraTrainingEnabled(name, enabled);
         },
         nb::arg("name"), nb::arg("enabled"), "Enable or disable a camera for training by name");

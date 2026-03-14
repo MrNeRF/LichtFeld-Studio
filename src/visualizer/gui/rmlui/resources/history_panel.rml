@@ -1,0 +1,57 @@
+<rml>
+<head>
+  <link type="text/template" href="floating_window.rml"/>
+  <link type="text/rcss" href="history_panel.rcss"/>
+</head>
+<body template="floating-window" data-model="history_panel">
+
+  <div class="history-summary">
+    <span class="history-summary__label text-muted">Shared History</span>
+    <span class="history-summary__value text-default">{{summary_text}}</span>
+  </div>
+
+  <div class="history-transaction status-info" data-if="show_transaction">{{transaction_label}}</div>
+
+  <div class="history-actions">
+    <button class="btn btn--primary history-action"
+            data-event-click="do_undo"
+            data-attrif-disabled="!has_undo">{{undo_label}}</button>
+    <button class="btn btn--secondary history-action"
+            data-event-click="do_redo"
+            data-attrif-disabled="!has_redo">{{redo_label}}</button>
+  </div>
+
+  <div class="separator"></div>
+
+  <div class="history-section">
+    <span class="history-section__title text-accent">Undo Stack</span>
+    <div class="history-list">
+      <span class="history-empty text-muted" data-if="!has_undo">{{empty_text}}</span>
+      <div class="history-row"
+           data-for="item : undo_items"
+           data-class-is-next="item.is_next"
+           data-event-click="jump_to(item.kind, item.steps)">
+        <span class="history-row__label text-default">{{item.label}}</span>
+        <span class="history-row__meta text-muted">{{item.meta}}</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="separator"></div>
+
+  <div class="history-section">
+    <span class="history-section__title text-accent">Redo Stack</span>
+    <div class="history-list">
+      <span class="history-empty text-muted" data-if="!has_redo">{{empty_text}}</span>
+      <div class="history-row history-row--redo"
+           data-for="item : redo_items"
+           data-class-is-next="item.is_next"
+           data-event-click="jump_to(item.kind, item.steps)">
+        <span class="history-row__label text-default">{{item.label}}</span>
+        <span class="history-row__meta text-muted">{{item.meta}}</span>
+      </div>
+    </div>
+  </div>
+
+</body>
+</rml>

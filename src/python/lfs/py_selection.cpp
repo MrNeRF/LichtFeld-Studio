@@ -11,6 +11,8 @@
 #include "rendering/rasterizer/rasterization/include/rasterization_api_tensor.h"
 #include "visualizer/internal/viewport.hpp"
 #include "visualizer/ipc/view_context.hpp"
+#include "visualizer/operation/undo_entry.hpp"
+#include "visualizer/operation/undo_history.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
 #include "visualizer/scene/scene_manager.hpp"
 #include "visualizer/selection/selection_service.hpp"
@@ -37,6 +39,20 @@ namespace lfs::python {
         vis::SceneManager* get_sm() { return get_scene_manager(); }
 
         vis::SelectionService* get_ss() { return get_selection_service(); }
+
+        template <typename Mutator>
+        void apply_selection_state_with_undo(vis::SceneManager& scene_manager,
+                                             const std::string& undo_label,
+                                             Mutator&& mutator) {
+            auto snapshot = std::make_unique<vis::op::SceneSnapshot>(scene_manager, undo_label);
+            snapshot->captureSelection();
+            mutator(scene_manager.getScene());
+            snapshot->captureAfter();
+            if (!snapshot->hasChanges()) {
+                return;
+            }
+            vis::op::undoHistory().push(std::move(snapshot));
+        }
 
         void configure_depth_filter(vis::RenderSettings& settings, const bool enabled,
                                     const float depth_near, const float depth_far,
@@ -536,7 +552,9 @@ namespace lfs::python {
                 auto* sm = get_sm();
                 if (!sm)
                     return;
-                sm->getScene().setActiveSelectionGroup(static_cast<uint8_t>(group_id));
+                apply_selection_state_with_undo(
+                    *sm, "selection_group.set_active",
+                    [group_id](core::Scene& scene) { scene.setActiveSelectionGroup(static_cast<uint8_t>(group_id)); });
             },
             nb::arg("group_id"), "Set the active selection group ID");
 
@@ -569,7 +587,11 @@ namespace lfs::python {
                 auto current = *mask;
                 for (int i = 0; i < iterations; ++i)
                     current = core::cuda::selection_grow(current, model->means(), radius, group_id);
-                scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(current)));
+                apply_selection_state_with_undo(
+                    *sm, "selection.grow",
+                    [updated = std::move(current)](core::Scene& target_scene) mutable {
+                        target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
+                    });
                 if (auto* rm = get_rm())
                     rm->markDirty(vis::DirtyFlag::SELECTION);
             },
@@ -590,7 +612,11 @@ namespace lfs::python {
                 auto current = *mask;
                 for (int i = 0; i < iterations; ++i)
                     current = core::cuda::selection_shrink(current, model->means(), radius);
-                scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(current)));
+                apply_selection_state_with_undo(
+                    *sm, "selection.shrink",
+                    [updated = std::move(current)](core::Scene& target_scene) mutable {
+                        target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
+                    });
                 if (auto* rm = get_rm())
                     rm->markDirty(vis::DirtyFlag::SELECTION);
             },
@@ -607,7 +633,11 @@ namespace lfs::python {
                     return;
                 const auto group_id = scene.getActiveSelectionGroup();
                 auto mask = core::cuda::select_by_opacity(model->opacity_raw(), min_opacity, max_opacity, group_id);
-                scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(mask)));
+                apply_selection_state_with_undo(
+                    *sm, "selection.by_opacity",
+                    [updated = std::move(mask)](core::Scene& target_scene) mutable {
+                        target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
+                    });
                 if (auto* rm = get_rm())
                     rm->markDirty(vis::DirtyFlag::SELECTION);
             },
@@ -624,7 +654,11 @@ namespace lfs::python {
                     return;
                 const auto group_id = scene.getActiveSelectionGroup();
                 auto mask = core::cuda::select_by_scale(model->scaling_raw(), max_scale, group_id);
-                scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(mask)));
+                apply_selection_state_with_undo(
+                    *sm, "selection.by_scale",
+                    [updated = std::move(mask)](core::Scene& target_scene) mutable {
+                        target_scene.setSelectionMask(std::make_shared<core::Tensor>(std::move(updated)));
+                    });
                 if (auto* rm = get_rm())
                     rm->markDirty(vis::DirtyFlag::SELECTION);
             },

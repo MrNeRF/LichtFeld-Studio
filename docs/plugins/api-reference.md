@@ -1292,7 +1292,12 @@ lf.save_config_file(path: str)
 
 ```python
 lf.undo.push(name: str, undo: Callable, redo: Callable, validate: Callable | None = None)
+lf.undo.transaction(name: str = "Grouped Changes") -> Transaction
+lf.undo.stack() -> dict
 ```
+
+- `lf.undo.transaction(...)` groups multiple undoable mutations into one history step.
+- `lf.undo.stack()` returns structured undo/redo items with `id`, `label`, `source`, `scope`, and `estimated_bytes`.
 
 ### UI Functions
 

@@ -430,7 +430,7 @@ namespace lfs::python {
                            int uid = -1);
         void remove_node(const std::string& name, bool keep_children = false);
         bool rename_node(const std::string& old_name, const std::string& new_name);
-        void clear() { scene_->clear(); }
+        void clear();
 
         // Hierarchy
         void reparent(int32_t node_id, int32_t new_parent_id);
@@ -453,9 +453,7 @@ namespace lfs::python {
         // Combined model
         std::optional<PySplatData> combined_model();
         std::optional<PySplatData> training_model();
-        void set_training_model_node(const std::string& name) {
-            scene_->setTrainingModelNode(name);
-        }
+        void set_training_model_node(const std::string& name);
         std::string training_model_node_name() const {
             return scene_->getTrainingModelNodeName();
         }
@@ -469,49 +467,37 @@ namespace lfs::python {
         int32_t get_cropbox_for_splat(int32_t splat_id) const {
             return scene_->getCropBoxForSplat(splat_id);
         }
-        int32_t get_or_create_cropbox_for_splat(int32_t splat_id) {
-            return scene_->getOrCreateCropBoxForSplat(splat_id);
-        }
+        int32_t get_or_create_cropbox_for_splat(int32_t splat_id);
         std::optional<PyCropBox> get_cropbox_data(int32_t cropbox_id);
         void set_cropbox_data(int32_t cropbox_id, const PyCropBox& data);
 
         // Selection (auto-invalidate + redraw for UI update)
         std::optional<PyTensor> selection_mask() const;
-        void set_selection(const std::vector<size_t>& indices) { scene_->setSelection(indices); }
-        void set_selection_mask(const PyTensor& mask) {
-            scene_->setSelectionMask(std::make_shared<core::Tensor>(mask.tensor()));
-        }
-        void clear_selection() { scene_->clearSelection(); }
+        void set_selection(const std::vector<size_t>& indices);
+        void set_selection_mask(const PyTensor& mask);
+        void clear_selection();
         bool has_selection() const { return scene_->hasSelection(); }
 
         // Selection groups
         uint8_t add_selection_group(const std::string& name, std::tuple<float, float, float> color);
-        void remove_selection_group(uint8_t id) { scene_->removeSelectionGroup(id); }
-        void rename_selection_group(uint8_t id, const std::string& name) {
-            scene_->renameSelectionGroup(id, name);
-        }
+        void remove_selection_group(uint8_t id);
+        void rename_selection_group(uint8_t id, const std::string& name);
         void set_selection_group_color(uint8_t id, std::tuple<float, float, float> color);
-        void set_selection_group_locked(uint8_t id, bool locked) {
-            scene_->setSelectionGroupLocked(id, locked);
-        }
+        void set_selection_group_locked(uint8_t id, bool locked);
         bool is_selection_group_locked(uint8_t id) const {
             return scene_->isSelectionGroupLocked(id);
         }
-        void set_active_selection_group(uint8_t id) {
-            scene_->setActiveSelectionGroup(id);
-        }
+        void set_active_selection_group(uint8_t id);
         uint8_t active_selection_group() const {
             return scene_->getActiveSelectionGroup();
         }
         std::vector<PySelectionGroup> selection_groups() const;
         void update_selection_group_counts() { scene_->updateSelectionGroupCounts(); }
-        void clear_selection_group(uint8_t id) { scene_->clearSelectionGroup(id); }
-        void reset_selection_state() { scene_->resetSelectionState(); }
+        void clear_selection_group(uint8_t id);
+        void reset_selection_state();
 
         // Camera training control
-        void set_camera_training_enabled(const std::string& name, bool enabled) {
-            scene_->setCameraTrainingEnabled(name, enabled);
-        }
+        void set_camera_training_enabled(const std::string& name, bool enabled);
         size_t active_camera_count() const { return scene_->getActiveCameraCount(); }
         std::vector<PySceneNode> get_active_cameras();
 
@@ -530,12 +516,8 @@ namespace lfs::python {
         size_t apply_deleted() { return scene_->applyDeleted(); }
         void invalidate_cache() { scene_->invalidateCache(); }
         void notify_changed() { scene_->notifyMutation(core::Scene::MutationType::MODEL_CHANGED); }
-        std::string duplicate_node(const std::string& name) {
-            return scene_->duplicateNode(name);
-        }
-        std::string merge_group(const std::string& group_name) {
-            return scene_->mergeGroup(group_name);
-        }
+        std::string duplicate_node(const std::string& name);
+        std::string merge_group(const std::string& group_name);
 
         // Collection property for scene.nodes
         PyNodeCollection nodes() { return PyNodeCollection(scene_); }
