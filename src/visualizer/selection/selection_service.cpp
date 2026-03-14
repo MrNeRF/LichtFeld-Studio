@@ -805,7 +805,8 @@ namespace lfs::vis {
         auto entry = std::make_unique<op::SceneSnapshot>(*scene_manager_, undo_name);
         entry->captureSelection();
 
-        auto new_selection = std::make_shared<core::Tensor>(output_mask);
+        // Snapshot the selection result before reusing the rotating output buffer.
+        auto new_selection = std::make_shared<core::Tensor>(output_mask.clone());
         scene.setSelectionMask(new_selection);
 
         entry->captureAfter();

@@ -15,6 +15,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <memory>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -351,6 +352,7 @@ namespace lfs::core {
         mutable bool consolidated_ = false;
         mutable std::vector<NodeId> consolidated_node_ids_;
 
+        mutable std::shared_mutex selection_mutex_;
         mutable std::shared_ptr<lfs::core::Tensor> selection_mask_;
         mutable bool has_selection_ = false;
 

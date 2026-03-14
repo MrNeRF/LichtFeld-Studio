@@ -40,6 +40,16 @@ namespace lfs::vis {
     namespace {
         constexpr float DEFAULT_VOXEL_SIZE = 0.01f;
 
+        [[nodiscard]] std::vector<float> closeScreenPolygon(std::vector<float> points) {
+            if (points.size() >= 6 &&
+                (points[0] != points[points.size() - 2] ||
+                 points[1] != points[points.size() - 1])) {
+                points.push_back(points[0]);
+                points.push_back(points[1]);
+            }
+            return points;
+        }
+
         template <typename TRenderable>
         [[nodiscard]] bool containsRenderableNode(const std::vector<TRenderable>& renderables, const core::NodeId node_id) {
             return std::ranges::any_of(renderables, [node_id](const auto& item) { return item.node_id == node_id; });
@@ -3428,7 +3438,10 @@ namespace lfs::vis {
         else if (mode == "remove")
             sel_mode = SelectionMode::Remove;
 
-        auto vertices = core::Tensor::from_vector(points, {points.size() / 2, size_t{2}}, core::Device::CUDA);
+        auto closed_points = closeScreenPolygon(points);
+        auto vertices = core::Tensor::from_vector(closed_points,
+                                                  {closed_points.size() / 2, size_t{2}},
+                                                  core::Device::CUDA);
         return selection_service_->selectPolygon(vertices, sel_mode, camera_index);
     }
 

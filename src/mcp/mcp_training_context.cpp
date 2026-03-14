@@ -46,6 +46,16 @@ namespace lfs::mcp {
             };
         }
 
+        [[nodiscard]] std::vector<float> close_screen_polygon(std::vector<float> vertices) {
+            if (vertices.size() >= 6 &&
+                (vertices[0] != vertices[vertices.size() - 2] ||
+                 vertices[1] != vertices[vertices.size() - 1])) {
+                vertices.push_back(vertices[0]);
+                vertices.push_back(vertices[1]);
+            }
+            return vertices;
+        }
+
         core::Tensor ensure_cuda_bool_mask(const core::Tensor& mask) {
             auto result = (mask.dtype() == core::DataType::Bool) ? mask : mask.to(core::DataType::Bool);
             if (result.device() != core::Device::CUDA) {
@@ -370,7 +380,7 @@ namespace lfs::mcp {
                 {},
                 replace_mode);
 
-            auto new_selection = std::make_shared<core::Tensor>(output_mask);
+            auto new_selection = std::make_shared<core::Tensor>(output_mask.clone());
             const int64_t count = count_selected(*new_selection);
             scene.setSelectionMask(new_selection);
             return count;
@@ -803,6 +813,7 @@ namespace lfs::mcp {
                     vertex_data.push_back(pt[0].get<float>());
                     vertex_data.push_back(pt[1].get<float>());
                 }
+                vertex_data = close_screen_polygon(std::move(vertex_data));
 
                 const std::string mode = args.value("mode", "replace");
 

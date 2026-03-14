@@ -319,8 +319,6 @@ namespace lfs::core {
         consolidated_ = false;
         consolidated_node_ids_.clear();
 
-        selection_mask_.reset();
-        has_selection_ = false;
         resetSelectionState();
 
         initial_point_cloud_.reset();
@@ -804,6 +802,7 @@ namespace lfs::core {
     }
 
     std::shared_ptr<lfs::core::Tensor> Scene::getSelectionMask() const {
+        std::shared_lock lock(selection_mutex_);
         if (!has_selection_) {
             return nullptr;
         }
@@ -817,57 +816,68 @@ namespace lfs::core {
             return;
         }
 
-        if (!selection_mask_ || selection_mask_->size(0) != total) {
-            selection_mask_ = std::make_shared<lfs::core::Tensor>(
-                lfs::core::Tensor::zeros({total}, lfs::core::Device::CPU, lfs::core::DataType::UInt8));
-        } else {
-            auto mask_cpu = selection_mask_->cpu();
-            std::memset(mask_cpu.ptr<uint8_t>(), 0, total);
-            *selection_mask_ = mask_cpu;
-        }
-
-        if (!selected_indices.empty()) {
-            auto mask_cpu = selection_mask_->cpu();
-            uint8_t* mask_data = mask_cpu.ptr<uint8_t>();
-            for (size_t idx : selected_indices) {
-                if (idx < total) {
-                    mask_data[idx] = 1;
-                }
+        bool has_selection = false;
+        int count = 0;
+        {
+            std::unique_lock lock(selection_mutex_);
+            if (!selection_mask_ || selection_mask_->size(0) != total) {
+                selection_mask_ = std::make_shared<lfs::core::Tensor>(
+                    lfs::core::Tensor::zeros({total}, lfs::core::Device::CPU, lfs::core::DataType::UInt8));
+            } else {
+                auto mask_cpu = selection_mask_->cpu();
+                std::memset(mask_cpu.ptr<uint8_t>(), 0, total);
+                *selection_mask_ = mask_cpu;
             }
-            *selection_mask_ = mask_cpu.cuda();
-            has_selection_ = true;
-            events::state::SelectionChanged{
-                .has_selection = true,
-                .count = static_cast<int>(selected_indices.size())}
-                .emit();
-            notifyMutation(MutationType::SELECTION_CHANGED);
-        } else {
-            has_selection_ = false;
-            events::state::SelectionChanged{.has_selection = false, .count = 0}.emit();
-            notifyMutation(MutationType::SELECTION_CHANGED);
+
+            if (!selected_indices.empty()) {
+                auto mask_cpu = selection_mask_->cpu();
+                uint8_t* mask_data = mask_cpu.ptr<uint8_t>();
+                for (size_t idx : selected_indices) {
+                    if (idx < total) {
+                        mask_data[idx] = 1;
+                    }
+                }
+                *selection_mask_ = mask_cpu.cuda();
+                has_selection_ = true;
+                has_selection = true;
+                count = static_cast<int>(selected_indices.size());
+            } else {
+                has_selection_ = false;
+            }
         }
+        events::state::SelectionChanged{.has_selection = has_selection, .count = count}.emit();
+        notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
     void Scene::setSelectionMask(std::shared_ptr<lfs::core::Tensor> mask) {
-        selection_mask_ = std::move(mask);
-        has_selection_ = selection_mask_ && selection_mask_->is_valid() && selection_mask_->numel() > 0;
-
         int count = 0;
-        if (has_selection_) {
-            count = static_cast<int>(selection_mask_->ne(0).to(core::DataType::Float32).sum_scalar());
+        bool has_selection = false;
+        {
+            std::unique_lock lock(selection_mutex_);
+            selection_mask_ = std::move(mask);
+            has_selection_ = selection_mask_ && selection_mask_->is_valid() && selection_mask_->numel() > 0;
+            has_selection = has_selection_;
+
+            if (has_selection_) {
+                count = static_cast<int>(selection_mask_->ne(0).to(core::DataType::Float32).sum_scalar());
+            }
         }
-        events::state::SelectionChanged{.has_selection = has_selection_, .count = count}.emit();
+        events::state::SelectionChanged{.has_selection = has_selection, .count = count}.emit();
         notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
     void Scene::clearSelection() {
-        selection_mask_.reset();
-        has_selection_ = false;
+        {
+            std::unique_lock lock(selection_mutex_);
+            selection_mask_.reset();
+            has_selection_ = false;
+        }
         events::state::SelectionChanged{.has_selection = false, .count = 0}.emit();
         notifyMutation(MutationType::SELECTION_CHANGED);
     }
 
     bool Scene::hasSelection() const {
+        std::shared_lock lock(selection_mutex_);
         return has_selection_;
     }
 
@@ -1015,10 +1025,15 @@ namespace lfs::core {
             group.count = 0;
         }
 
-        if (!selection_mask_ || !selection_mask_->is_valid())
-            return;
+        std::shared_ptr<lfs::core::Tensor> selection_mask;
+        {
+            std::shared_lock lock(selection_mutex_);
+            if (!selection_mask_ || !selection_mask_->is_valid())
+                return;
+            selection_mask = selection_mask_;
+        }
 
-        const auto mask_cpu = selection_mask_->cpu();
+        const auto mask_cpu = selection_mask->cpu();
         const uint8_t* data = mask_cpu.ptr<uint8_t>();
         const size_t n = mask_cpu.numel();
 
@@ -1031,10 +1046,15 @@ namespace lfs::core {
     }
 
     void Scene::clearSelectionGroup(const uint8_t id) {
-        if (!selection_mask_ || !selection_mask_->is_valid())
-            return;
+        std::shared_ptr<lfs::core::Tensor> selection_mask;
+        {
+            std::shared_lock lock(selection_mutex_);
+            if (!selection_mask_ || !selection_mask_->is_valid())
+                return;
+            selection_mask = selection_mask_;
+        }
 
-        auto mask_cpu = selection_mask_->cpu();
+        auto mask_cpu = selection_mask->cpu();
         uint8_t* data = mask_cpu.ptr<uint8_t>();
         const size_t n = mask_cpu.numel();
 
@@ -1047,8 +1067,13 @@ namespace lfs::core {
             }
         }
 
-        *selection_mask_ = mask_cpu.cuda();
-        has_selection_ = any_remaining;
+        {
+            std::unique_lock lock(selection_mutex_);
+            *selection_mask = mask_cpu.cuda();
+            if (selection_mask_ == selection_mask) {
+                has_selection_ = any_remaining;
+            }
+        }
 
         if (auto* group = findGroup(id)) {
             group->count = 0;
@@ -1057,8 +1082,11 @@ namespace lfs::core {
     }
 
     void Scene::resetSelectionState() {
-        selection_mask_.reset();
-        has_selection_ = false;
+        {
+            std::unique_lock lock(selection_mutex_);
+            selection_mask_.reset();
+            has_selection_ = false;
+        }
         selection_groups_.clear();
         next_group_id_ = 1;
         addSelectionGroup("Group 1", glm::vec3(0.0f));
