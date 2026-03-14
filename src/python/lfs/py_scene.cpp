@@ -132,10 +132,7 @@ namespace lfs::python {
         snapshot->captureSelection();
         mutator(scene_manager.getScene());
         snapshot->captureAfter();
-        if (!snapshot->hasChanges()) {
-            return;
-        }
-        vis::op::undoHistory().push(std::move(snapshot));
+        vis::op::pushSceneSnapshotIfChanged(std::move(snapshot));
     }
 
     [[nodiscard]] vis::op::SceneGraphCaptureOptions scene_graph_history_options(

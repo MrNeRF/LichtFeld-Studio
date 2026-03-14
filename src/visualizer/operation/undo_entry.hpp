@@ -25,6 +25,19 @@ namespace lfs::vis {
 
 namespace lfs::vis::op {
 
+    struct LFS_VIS_API UndoMemoryBreakdown {
+        size_t cpu_bytes = 0;
+        size_t gpu_bytes = 0;
+
+        [[nodiscard]] size_t totalBytes() const { return cpu_bytes + gpu_bytes; }
+
+        UndoMemoryBreakdown& operator+=(const UndoMemoryBreakdown& other) {
+            cpu_bytes += other.cpu_bytes;
+            gpu_bytes += other.gpu_bytes;
+            return *this;
+        }
+    };
+
     struct LFS_VIS_API UndoMetadata {
         std::string id;
         std::string label;
@@ -46,10 +59,18 @@ namespace lfs::vis::op {
             };
         }
         [[nodiscard]] virtual size_t estimatedBytes() const { return 0; }
+        [[nodiscard]] virtual UndoMemoryBreakdown memoryBreakdown() const {
+            return UndoMemoryBreakdown{
+                .cpu_bytes = estimatedBytes(),
+                .gpu_bytes = 0,
+            };
+        }
         virtual bool tryMerge(const UndoEntry& incoming) {
             (void)incoming;
             return false;
         }
+        virtual void offloadToCPU() {}
+        virtual void restoreToPreferredDevice() {}
     };
 
     using UndoEntryPtr = std::unique_ptr<UndoEntry>;
@@ -73,6 +94,57 @@ namespace lfs::vis::op {
         return (static_cast<uint8_t>(flags) & static_cast<uint8_t>(flag)) != 0;
     }
 
+    enum class TensorSwapStorageMode : uint8_t {
+        NONE = 0,
+        DENSE = 1,
+        SPARSE = 2,
+    };
+
+    struct TensorSwapStorage {
+        TensorSwapStorageMode mode = TensorSwapStorageMode::NONE;
+        lfs::core::Tensor indices;
+        lfs::core::Tensor stored_values;
+        size_t total_size = 0;
+        lfs::core::Device device = lfs::core::Device::CUDA;
+        lfs::core::DataType dtype = lfs::core::DataType::UInt8;
+        bool before_present = false;
+        bool after_present = false;
+
+        [[nodiscard]] bool hasChanges() const {
+            switch (mode) {
+            case TensorSwapStorageMode::DENSE:
+                return stored_values.is_valid() || before_present != after_present;
+            case TensorSwapStorageMode::SPARSE:
+                return (indices.is_valid() && indices.numel() > 0) || before_present != after_present;
+            case TensorSwapStorageMode::NONE:
+            default:
+                return false;
+            }
+        }
+
+        [[nodiscard]] size_t estimatedBytes() const {
+            size_t total = 0;
+            if (indices.is_valid()) {
+                total += indices.bytes();
+            }
+            if (stored_values.is_valid()) {
+                total += stored_values.bytes();
+            }
+            return total;
+        }
+
+        [[nodiscard]] UndoMemoryBreakdown memoryBreakdown() const;
+        void offloadToCPU();
+        void restoreToDevice();
+    };
+
+    struct TensorPresenceSnapshot {
+        std::shared_ptr<lfs::core::Tensor> tensor;
+        size_t total_size = 0;
+        lfs::core::Device device = lfs::core::Device::CUDA;
+        bool present = false;
+    };
+
     class SceneSnapshot : public UndoEntry {
     public:
         explicit SceneSnapshot(SceneManager& scene, std::string name = "Operation");
@@ -89,29 +161,37 @@ namespace lfs::vis::op {
         [[nodiscard]] std::string name() const override { return name_; }
         [[nodiscard]] UndoMetadata metadata() const override;
         [[nodiscard]] bool hasChanges() const;
+        [[nodiscard]] UndoMemoryBreakdown memoryBreakdown() const override;
+        void offloadToCPU() override;
+        void restoreToPreferredDevice() override;
 
     private:
         SceneManager& scene_;
         std::string name_;
 
         lfs::core::Scene::SelectionStateSnapshot selection_before_;
-        lfs::core::Scene::SelectionStateSnapshot selection_after_;
+        lfs::core::Scene::SelectionStateMetadata selection_after_metadata_;
+        TensorSwapStorage selection_mask_storage_;
 
         std::unordered_map<std::string, glm::mat4> transforms_before_;
         std::unordered_map<std::string, glm::mat4> transforms_after_;
 
-        std::unordered_map<std::string, std::shared_ptr<lfs::core::Tensor>> deleted_masks_before_;
-        std::unordered_map<std::string, std::shared_ptr<lfs::core::Tensor>> deleted_masks_after_;
+        std::unordered_map<std::string, TensorPresenceSnapshot> deleted_masks_before_;
+        std::unordered_map<std::string, TensorSwapStorage> deleted_mask_storage_;
 
         ModifiesFlag captured_ = ModifiesFlag::NONE;
 
-        void captureDeletedMasks(std::unordered_map<std::string, std::shared_ptr<lfs::core::Tensor>>& target);
-        void restoreDeletedMasks(const std::unordered_map<std::string, std::shared_ptr<lfs::core::Tensor>>& source);
-        [[nodiscard]] size_t selectionBytes(const lfs::core::Scene::SelectionStateSnapshot& snapshot) const;
+        void captureDeletedMasks(std::unordered_map<std::string, TensorPresenceSnapshot>& target);
+        void compactSelection();
+        void compactTopology();
+        void applySelection(bool undo_direction);
+        void applyTopology(bool undo_direction);
 
     public:
         [[nodiscard]] size_t estimatedBytes() const override;
     };
+
+    LFS_VIS_API bool pushSceneSnapshotIfChanged(std::unique_ptr<SceneSnapshot> snapshot);
 
     class CropBoxUndoEntry : public UndoEntry {
     public:
@@ -199,6 +279,7 @@ namespace lfs::vis::op {
         lfs::core::Tensor T;
         lfs::core::Tensor radial_distortion;
         lfs::core::Tensor tangential_distortion;
+        lfs::core::Device device = lfs::core::Device::CUDA;
         lfs::core::CameraModelType camera_model_type = lfs::core::CameraModelType::PINHOLE;
         std::string image_name;
         std::filesystem::path image_path;
@@ -225,6 +306,7 @@ namespace lfs::vis::op {
         bool training_enabled = true;
         size_t gaussian_count = 0;
         glm::vec3 centroid{0.0f};
+        lfs::core::Device payload_device = lfs::core::Device::CUDA;
         std::optional<std::filesystem::path> source_path;
         std::unique_ptr<lfs::core::SplatData> model;
         std::shared_ptr<lfs::core::PointCloud> point_cloud;
@@ -302,6 +384,9 @@ namespace lfs::vis::op {
         [[nodiscard]] std::string name() const override { return name_; }
         [[nodiscard]] UndoMetadata metadata() const override;
         [[nodiscard]] size_t estimatedBytes() const override;
+        [[nodiscard]] UndoMemoryBreakdown memoryBreakdown() const override;
+        void offloadToCPU() override;
+        void restoreToPreferredDevice() override;
 
     private:
         void applyState(const SceneGraphStateSnapshot& desired,

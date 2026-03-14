@@ -8,7 +8,9 @@
 #include "core/scene.hpp"
 #include "python/python_runtime.hpp"
 #include "scene/scene_manager.hpp"
+#include "undo_history.hpp"
 #include <algorithm>
+#include <cuda_runtime.h>
 #include <set>
 #include <stdexcept>
 
@@ -128,30 +130,32 @@ namespace lfs::vis::op {
             return tensor.is_valid() ? tensor.bytes() : 0;
         }
 
-        bool tensorSnapshotsEqual(const std::shared_ptr<lfs::core::Tensor>& lhs,
-                                  const std::shared_ptr<lfs::core::Tensor>& rhs) {
-            const bool lhs_valid = lhs && lhs->is_valid();
-            const bool rhs_valid = rhs && rhs->is_valid();
-            if (!lhs_valid || !rhs_valid)
-                return lhs_valid == rhs_valid;
-            if (lhs->shape() != rhs->shape() ||
-                lhs->dtype() != rhs->dtype() ||
-                lhs->bytes() != rhs->bytes()) {
-                return false;
+        UndoMemoryBreakdown tensorMemory(const lfs::core::Tensor& tensor) {
+            if (!tensor.is_valid()) {
+                return {};
             }
-
-            try {
-                const auto rhs_same_device = rhs->device() == lhs->device() ? *rhs : rhs->to(lhs->device());
-                return lhs->eq(rhs_same_device).all().item<bool>();
-            } catch (const std::exception& e) {
-                LOG_WARN("Falling back to CPU tensor snapshot compare: {}", e.what());
-            } catch (...) {
-                LOG_WARN("Falling back to CPU tensor snapshot compare: unknown exception");
+            if (tensor.device() == lfs::core::Device::CUDA) {
+                return UndoMemoryBreakdown{
+                    .cpu_bytes = 0,
+                    .gpu_bytes = tensor.bytes(),
+                };
             }
+            return UndoMemoryBreakdown{
+                .cpu_bytes = tensor.bytes(),
+                .gpu_bytes = 0,
+            };
+        }
 
-            const auto lhs_values = lhs->cpu().to(lfs::core::DataType::UInt8).to_vector_uint8();
-            const auto rhs_values = rhs->cpu().to(lfs::core::DataType::UInt8).to_vector_uint8();
-            return lhs_values == rhs_values;
+        void offloadTensor(lfs::core::Tensor& tensor) {
+            if (tensor.is_valid() && tensor.device() != lfs::core::Device::CPU) {
+                tensor = tensor.to(lfs::core::Device::CPU).contiguous();
+            }
+        }
+
+        void restoreTensorToDevice(lfs::core::Tensor& tensor, const lfs::core::Device device) {
+            if (tensor.is_valid() && tensor.device() != device) {
+                tensor = tensor.to(device).contiguous();
+            }
         }
 
         bool selectionGroupsEqual(const std::vector<lfs::core::SelectionGroup>& lhs,
@@ -169,26 +173,260 @@ namespace lfs::vis::op {
             return true;
         }
 
-        bool selectionStateEqual(const lfs::core::Scene::SelectionStateSnapshot& lhs,
-                                 const lfs::core::Scene::SelectionStateSnapshot& rhs) {
+        bool selectionMetadataEqual(const lfs::core::Scene::SelectionStateSnapshot& lhs,
+                                    const lfs::core::Scene::SelectionStateMetadata& rhs) {
             return lhs.has_selection == rhs.has_selection &&
                    lhs.active_group_id == rhs.active_group_id &&
                    lhs.next_group_id == rhs.next_group_id &&
-                   selectionGroupsEqual(lhs.groups, rhs.groups) &&
-                   tensorSnapshotsEqual(lhs.mask, rhs.mask);
+                   selectionGroupsEqual(lhs.groups, rhs.groups);
         }
 
-        bool deletedMaskMapsEqual(const std::unordered_map<std::string, std::shared_ptr<lfs::core::Tensor>>& lhs,
-                                  const std::unordered_map<std::string, std::shared_ptr<lfs::core::Tensor>>& rhs) {
-            if (lhs.size() != rhs.size())
-                return false;
-            for (const auto& [name, lhs_tensor] : lhs) {
-                const auto it = rhs.find(name);
-                if (it == rhs.end() || !tensorSnapshotsEqual(lhs_tensor, it->second)) {
-                    return false;
-                }
+        size_t tensorNumel(const std::shared_ptr<lfs::core::Tensor>& tensor) {
+            return (tensor && tensor->is_valid()) ? tensor->numel() : 0;
+        }
+
+        size_t tensorNumel(const lfs::core::Tensor* tensor) {
+            return (tensor && tensor->is_valid()) ? tensor->numel() : 0;
+        }
+
+        lfs::core::Tensor materializeMaskTensor(const std::shared_ptr<lfs::core::Tensor>& tensor,
+                                                const size_t total_size,
+                                                const lfs::core::Device device,
+                                                const lfs::core::DataType dtype) {
+            if (tensor && tensor->is_valid()) {
+                auto materialized = tensor->device() == device ? *tensor : tensor->to(device);
+                return materialized.dtype() == dtype ? materialized : materialized.to(dtype);
             }
-            return true;
+            return total_size > 0 ? lfs::core::Tensor::zeros({total_size}, device, dtype) : lfs::core::Tensor{};
+        }
+
+        lfs::core::Tensor materializeMaskTensor(const lfs::core::Tensor* tensor,
+                                                const size_t total_size,
+                                                const lfs::core::Device device,
+                                                const lfs::core::DataType dtype) {
+            if (tensor && tensor->is_valid()) {
+                auto materialized = tensor->device() == device ? *tensor : tensor->to(device);
+                return materialized.dtype() == dtype ? materialized : materialized.to(dtype);
+            }
+            return total_size > 0 ? lfs::core::Tensor::zeros({total_size}, device, dtype) : lfs::core::Tensor{};
+        }
+
+        TensorSwapStorage buildTensorSwapStorage(const std::shared_ptr<lfs::core::Tensor>& before,
+                                                 const lfs::core::Tensor* after,
+                                                 const size_t total_size,
+                                                 const lfs::core::Device fallback_device,
+                                                 const lfs::core::DataType dtype,
+                                                 const bool before_present,
+                                                 const bool after_present) {
+            TensorSwapStorage storage;
+            storage.total_size = total_size;
+            storage.device = fallback_device;
+            storage.dtype = dtype;
+            storage.before_present = before_present;
+            storage.after_present = after_present;
+
+            if (total_size == 0) {
+                return storage;
+            }
+
+            const lfs::core::Device device =
+                (after && after->is_valid()) ? after->device()
+                                             : ((before && before->is_valid()) ? before->device() : fallback_device);
+            storage.device = device;
+
+            auto before_tensor = materializeMaskTensor(before, total_size, device, dtype);
+            auto after_tensor = materializeMaskTensor(after, total_size, device, dtype);
+            auto changed_mask =
+                ((dtype == lfs::core::DataType::UInt8) || (dtype == lfs::core::DataType::Bool))
+                    ? before_tensor.to(lfs::core::DataType::Int32).ne(after_tensor.to(lfs::core::DataType::Int32))
+                    : before_tensor.ne(after_tensor);
+            auto changed_indices = changed_mask.nonzero();
+            if (changed_indices.is_valid() && changed_indices.ndim() == 2 && changed_indices.size(1) == 1) {
+                changed_indices = changed_indices.squeeze(1);
+            }
+
+            const size_t changed_count = changed_indices.is_valid() ? changed_indices.numel() : 0;
+            if (changed_count == 0) {
+                if (before_present != after_present) {
+                    storage.mode = TensorSwapStorageMode::DENSE;
+                    storage.stored_values = std::move(before_tensor);
+                }
+                return storage;
+            }
+
+            auto indices_int32 = changed_indices.dtype() == lfs::core::DataType::Int32
+                                     ? changed_indices.contiguous()
+                                     : changed_indices.to(lfs::core::DataType::Int32).contiguous();
+            const size_t sparse_bytes =
+                indices_int32.bytes() + (changed_count * lfs::core::dtype_size(dtype));
+            const size_t dense_bytes = before_tensor.bytes();
+
+            if (sparse_bytes < dense_bytes) {
+                storage.mode = TensorSwapStorageMode::SPARSE;
+                storage.indices = std::move(indices_int32);
+                storage.stored_values = before_tensor.index_select(0, storage.indices).contiguous();
+            } else {
+                storage.mode = TensorSwapStorageMode::DENSE;
+                storage.stored_values = std::move(before_tensor);
+            }
+
+            return storage;
+        }
+
+        void applyTensorSwapStorage(lfs::core::Tensor& live_tensor, TensorSwapStorage& storage) {
+            switch (storage.mode) {
+            case TensorSwapStorageMode::DENSE: {
+                if (!live_tensor.is_valid()) {
+                    live_tensor = lfs::core::Tensor::zeros({storage.total_size}, storage.device, storage.dtype);
+                }
+                if (!storage.stored_values.is_valid()) {
+                    storage.stored_values =
+                        lfs::core::Tensor::zeros({storage.total_size}, storage.device, storage.dtype);
+                }
+                std::swap(live_tensor, storage.stored_values);
+                return;
+            }
+            case TensorSwapStorageMode::SPARSE: {
+                if (!storage.indices.is_valid() || storage.indices.numel() == 0) {
+                    return;
+                }
+                auto current_values = live_tensor.index_select(0, storage.indices).contiguous();
+                live_tensor.scatter_(0, storage.indices, storage.stored_values);
+                if (live_tensor.is_valid() && live_tensor.device() == lfs::core::Device::CUDA) {
+                    if (const cudaError_t err = cudaStreamSynchronize(live_tensor.stream()); err != cudaSuccess) {
+                        LOG_ERROR("Failed to synchronize sparse tensor swap replay: {}",
+                                  cudaGetErrorString(err));
+                    }
+                }
+                storage.stored_values = std::move(current_values);
+                return;
+            }
+            case TensorSwapStorageMode::NONE:
+            default:
+                return;
+            }
+        }
+
+        UndoMemoryBreakdown estimateSplatDataMemory(const lfs::core::SplatData& splat) {
+            UndoMemoryBreakdown total;
+            total += tensorMemory(splat.means_raw());
+            total += tensorMemory(splat.sh0_raw());
+            total += tensorMemory(splat.shN_raw());
+            total += tensorMemory(splat.scaling_raw());
+            total += tensorMemory(splat.rotation_raw());
+            total += tensorMemory(splat.opacity_raw());
+            total += tensorMemory(splat.deleted());
+            total += tensorMemory(splat._densification_info);
+            return total;
+        }
+
+        void offloadSplatData(lfs::core::SplatData& splat) {
+            offloadTensor(splat.means_raw());
+            offloadTensor(splat.sh0_raw());
+            offloadTensor(splat.shN_raw());
+            offloadTensor(splat.scaling_raw());
+            offloadTensor(splat.rotation_raw());
+            offloadTensor(splat.opacity_raw());
+            offloadTensor(splat.deleted());
+            offloadTensor(splat._densification_info);
+        }
+
+        void restoreSplatDataToDevice(lfs::core::SplatData& splat, const lfs::core::Device device) {
+            restoreTensorToDevice(splat.means_raw(), device);
+            restoreTensorToDevice(splat.sh0_raw(), device);
+            restoreTensorToDevice(splat.shN_raw(), device);
+            restoreTensorToDevice(splat.scaling_raw(), device);
+            restoreTensorToDevice(splat.rotation_raw(), device);
+            restoreTensorToDevice(splat.opacity_raw(), device);
+            restoreTensorToDevice(splat.deleted(), device);
+            restoreTensorToDevice(splat._densification_info, device);
+        }
+
+        UndoMemoryBreakdown estimatePointCloudMemory(const lfs::core::PointCloud& point_cloud) {
+            UndoMemoryBreakdown total;
+            total += tensorMemory(point_cloud.means);
+            total += tensorMemory(point_cloud.colors);
+            total += tensorMemory(point_cloud.normals);
+            total += tensorMemory(point_cloud.sh0);
+            total += tensorMemory(point_cloud.shN);
+            total += tensorMemory(point_cloud.opacity);
+            total += tensorMemory(point_cloud.scaling);
+            total += tensorMemory(point_cloud.rotation);
+            return total;
+        }
+
+        void offloadPointCloud(lfs::core::PointCloud& point_cloud) {
+            offloadTensor(point_cloud.means);
+            offloadTensor(point_cloud.colors);
+            offloadTensor(point_cloud.normals);
+            offloadTensor(point_cloud.sh0);
+            offloadTensor(point_cloud.shN);
+            offloadTensor(point_cloud.opacity);
+            offloadTensor(point_cloud.scaling);
+            offloadTensor(point_cloud.rotation);
+        }
+
+        void restorePointCloudToDevice(lfs::core::PointCloud& point_cloud, const lfs::core::Device device) {
+            restoreTensorToDevice(point_cloud.means, device);
+            restoreTensorToDevice(point_cloud.colors, device);
+            restoreTensorToDevice(point_cloud.normals, device);
+            restoreTensorToDevice(point_cloud.sh0, device);
+            restoreTensorToDevice(point_cloud.shN, device);
+            restoreTensorToDevice(point_cloud.opacity, device);
+            restoreTensorToDevice(point_cloud.scaling, device);
+            restoreTensorToDevice(point_cloud.rotation, device);
+        }
+
+        UndoMemoryBreakdown estimateMeshMemory(const lfs::core::MeshData& mesh) {
+            UndoMemoryBreakdown total;
+            total += tensorMemory(mesh.vertices);
+            total += tensorMemory(mesh.normals);
+            total += tensorMemory(mesh.tangents);
+            total += tensorMemory(mesh.texcoords);
+            total += tensorMemory(mesh.colors);
+            total += tensorMemory(mesh.indices);
+            return total;
+        }
+
+        void offloadMesh(lfs::core::MeshData& mesh) {
+            offloadTensor(mesh.vertices);
+            offloadTensor(mesh.normals);
+            offloadTensor(mesh.tangents);
+            offloadTensor(mesh.texcoords);
+            offloadTensor(mesh.colors);
+            offloadTensor(mesh.indices);
+        }
+
+        void restoreMeshToDevice(lfs::core::MeshData& mesh, const lfs::core::Device device) {
+            restoreTensorToDevice(mesh.vertices, device);
+            restoreTensorToDevice(mesh.normals, device);
+            restoreTensorToDevice(mesh.tangents, device);
+            restoreTensorToDevice(mesh.texcoords, device);
+            restoreTensorToDevice(mesh.colors, device);
+            restoreTensorToDevice(mesh.indices, device);
+        }
+
+        UndoMemoryBreakdown estimateCameraMemory(const SceneGraphCameraSnapshot& camera) {
+            UndoMemoryBreakdown total;
+            total += tensorMemory(camera.R);
+            total += tensorMemory(camera.T);
+            total += tensorMemory(camera.radial_distortion);
+            total += tensorMemory(camera.tangential_distortion);
+            return total;
+        }
+
+        void offloadCamera(SceneGraphCameraSnapshot& camera) {
+            offloadTensor(camera.R);
+            offloadTensor(camera.T);
+            offloadTensor(camera.radial_distortion);
+            offloadTensor(camera.tangential_distortion);
+        }
+
+        void restoreCameraToDevice(SceneGraphCameraSnapshot& camera) {
+            restoreTensorToDevice(camera.R, camera.device);
+            restoreTensorToDevice(camera.T, camera.device);
+            restoreTensorToDevice(camera.radial_distortion, camera.device);
+            restoreTensorToDevice(camera.tangential_distortion, camera.device);
         }
 
         std::unique_ptr<lfs::core::SplatData> cloneSplatData(const lfs::core::SplatData& src) {
@@ -249,6 +487,7 @@ namespace lfs::vis::op {
                 camera.radial_distortion().is_valid() ? camera.radial_distortion().clone() : lfs::core::Tensor{};
             snapshot.tangential_distortion =
                 camera.tangential_distortion().is_valid() ? camera.tangential_distortion().clone() : lfs::core::Tensor{};
+            snapshot.device = camera.R().device();
             snapshot.camera_model_type = camera.camera_model_type();
             snapshot.image_name = camera.image_name();
             snapshot.image_path = camera.image_path();
@@ -335,12 +574,15 @@ namespace lfs::vis::op {
             }
 
             if (mode == SceneGraphCaptureMode::FULL && node.model) {
+                snapshot.payload_device = node.model->means_raw().device();
                 snapshot.model = cloneSplatData(*node.model);
             }
             if (mode == SceneGraphCaptureMode::FULL && node.point_cloud) {
+                snapshot.payload_device = node.point_cloud->means.device();
                 snapshot.point_cloud = clonePointCloud(*node.point_cloud);
             }
             if (mode == SceneGraphCaptureMode::FULL && node.mesh) {
+                snapshot.payload_device = node.mesh->vertices.device();
                 snapshot.mesh = cloneMeshData(*node.mesh);
             }
             if (node.cropbox) {
@@ -414,6 +656,69 @@ namespace lfs::vis::op {
                 total += estimateSnapshotBytes(child);
             }
             return total;
+        }
+
+        UndoMemoryBreakdown snapshotMemoryBreakdown(const SceneGraphNodeSnapshot& snapshot) {
+            UndoMemoryBreakdown total;
+            total.cpu_bytes += snapshot.name.size() + snapshot.parent_name.size() + sizeof(snapshot.local_transform) +
+                               sizeof(snapshot.visible) + sizeof(snapshot.locked) +
+                               sizeof(snapshot.training_enabled) + sizeof(snapshot.gaussian_count) +
+                               sizeof(snapshot.centroid);
+            if (snapshot.source_path) {
+                total.cpu_bytes += snapshot.source_path->native().size();
+            }
+            if (snapshot.model) {
+                total += estimateSplatDataMemory(*snapshot.model);
+            }
+            if (snapshot.point_cloud) {
+                total += estimatePointCloudMemory(*snapshot.point_cloud);
+            }
+            if (snapshot.mesh) {
+                total += estimateMeshMemory(*snapshot.mesh);
+            }
+            if (snapshot.camera) {
+                total += estimateCameraMemory(*snapshot.camera);
+            }
+            for (const auto& child : snapshot.children) {
+                total += snapshotMemoryBreakdown(child);
+            }
+            return total;
+        }
+
+        void offloadSnapshot(SceneGraphNodeSnapshot& snapshot) {
+            if (snapshot.model) {
+                offloadSplatData(*snapshot.model);
+            }
+            if (snapshot.point_cloud) {
+                offloadPointCloud(*snapshot.point_cloud);
+            }
+            if (snapshot.mesh) {
+                offloadMesh(*snapshot.mesh);
+            }
+            if (snapshot.camera) {
+                offloadCamera(*snapshot.camera);
+            }
+            for (auto& child : snapshot.children) {
+                offloadSnapshot(child);
+            }
+        }
+
+        void restoreSnapshot(SceneGraphNodeSnapshot& snapshot) {
+            if (snapshot.model) {
+                restoreSplatDataToDevice(*snapshot.model, snapshot.payload_device);
+            }
+            if (snapshot.point_cloud) {
+                restorePointCloudToDevice(*snapshot.point_cloud, snapshot.payload_device);
+            }
+            if (snapshot.mesh) {
+                restoreMeshToDevice(*snapshot.mesh, snapshot.payload_device);
+            }
+            if (snapshot.camera) {
+                restoreCameraToDevice(*snapshot.camera);
+            }
+            for (auto& child : snapshot.children) {
+                restoreSnapshot(child);
+            }
         }
 
         size_t estimateMetadataBytes(const SceneGraphNodeMetadataSnapshot& snapshot) {
@@ -566,12 +871,29 @@ namespace lfs::vis::op {
         }
     } // namespace
 
+    UndoMemoryBreakdown TensorSwapStorage::memoryBreakdown() const {
+        UndoMemoryBreakdown total;
+        total += tensorMemory(indices);
+        total += tensorMemory(stored_values);
+        return total;
+    }
+
+    void TensorSwapStorage::offloadToCPU() {
+        offloadTensor(indices);
+        offloadTensor(stored_values);
+    }
+
+    void TensorSwapStorage::restoreToDevice() {
+        restoreTensorToDevice(indices, device);
+        restoreTensorToDevice(stored_values, device);
+    }
+
     SceneSnapshot::SceneSnapshot(SceneManager& scene, std::string name)
         : scene_(scene),
           name_(std::move(name)) {}
 
     void SceneSnapshot::captureDeletedMasks(
-        std::unordered_map<std::string, std::shared_ptr<lfs::core::Tensor>>& target) {
+        std::unordered_map<std::string, TensorPresenceSnapshot>& target) {
         target.clear();
 
         for (const auto* node : scene_.getScene().getNodes()) {
@@ -579,47 +901,15 @@ namespace lfs::vis::op {
                 continue;
             }
 
-            if (!node->model->has_deleted_mask()) {
-                target[node->name] = nullptr;
-                continue;
+            TensorPresenceSnapshot snapshot;
+            snapshot.total_size = node->model->size();
+            snapshot.device = node->model->means_raw().device();
+            snapshot.present = node->model->has_deleted_mask();
+            if (snapshot.present) {
+                snapshot.tensor = std::make_shared<lfs::core::Tensor>(node->model->deleted().clone());
             }
-
-            target[node->name] = std::make_shared<lfs::core::Tensor>(node->model->deleted().clone());
+            target[node->name] = std::move(snapshot);
         }
-    }
-
-    void SceneSnapshot::restoreDeletedMasks(
-        const std::unordered_map<std::string, std::shared_ptr<lfs::core::Tensor>>& source) {
-        bool restored_any = false;
-
-        for (const auto* node : scene_.getScene().getNodes()) {
-            if (!node || !node->model) {
-                continue;
-            }
-
-            const auto it = source.find(node->name);
-            if (it == source.end() || !it->second || !it->second->is_valid()) {
-                if (node->model->has_deleted_mask()) {
-                    node->model->clear_deleted();
-                    restored_any = true;
-                }
-                continue;
-            }
-
-            node->model->deleted() = it->second->clone();
-            restored_any = true;
-        }
-
-        if (restored_any) {
-            scene_.getScene().markDirty();
-        }
-    }
-
-    size_t SceneSnapshot::selectionBytes(const lfs::core::Scene::SelectionStateSnapshot& snapshot) const {
-        if (!snapshot.mask || !snapshot.mask->is_valid()) {
-            return 0;
-        }
-        return snapshot.mask->bytes();
     }
 
     void SceneSnapshot::captureSelection() {
@@ -653,9 +943,63 @@ namespace lfs::vis::op {
         captured_ = captured_ | ModifiesFlag::TOPOLOGY;
     }
 
+    void SceneSnapshot::compactSelection() {
+        selection_after_metadata_ = scene_.getScene().captureSelectionStateMetadata();
+
+        const auto selection_after = scene_.getScene().getSelectionMask();
+        const size_t total_size = std::max({scene_.getScene().getTotalGaussianCount(),
+                                            tensorNumel(selection_before_.mask),
+                                            tensorNumel(selection_after)});
+        const auto fallback_device =
+            (selection_after && selection_after->is_valid())
+                ? selection_after->device()
+                : ((selection_before_.mask && selection_before_.mask->is_valid())
+                       ? selection_before_.mask->device()
+                       : lfs::core::Device::CUDA);
+        selection_mask_storage_ = buildTensorSwapStorage(
+            selection_before_.mask,
+            selection_after.get(),
+            total_size,
+            fallback_device,
+            lfs::core::DataType::UInt8,
+            selection_before_.has_selection,
+            selection_after_metadata_.has_selection);
+        selection_before_.mask.reset();
+    }
+
+    void SceneSnapshot::compactTopology() {
+        deleted_mask_storage_.clear();
+
+        for (const auto& [node_name, before] : deleted_masks_before_) {
+            const auto* node = scene_.getScene().getNode(node_name);
+            if (!node || !node->model) {
+                continue;
+            }
+
+            const auto* after_tensor =
+                node->model->has_deleted_mask() ? &node->model->deleted() : nullptr;
+            const size_t total_size =
+                std::max({before.total_size, tensorNumel(before.tensor), tensorNumel(after_tensor), node->model->size()});
+
+            auto storage = buildTensorSwapStorage(
+                before.tensor,
+                after_tensor,
+                total_size,
+                before.device,
+                lfs::core::DataType::Bool,
+                before.present,
+                node->model->has_deleted_mask());
+            if (storage.hasChanges()) {
+                deleted_mask_storage_.emplace(node_name, std::move(storage));
+            }
+        }
+
+        deleted_masks_before_.clear();
+    }
+
     void SceneSnapshot::captureAfter() {
         if (hasFlag(captured_, ModifiesFlag::SELECTION)) {
-            selection_after_ = scene_.getScene().captureSelectionState();
+            compactSelection();
         }
 
         if (hasFlag(captured_, ModifiesFlag::TRANSFORMS)) {
@@ -665,12 +1009,14 @@ namespace lfs::vis::op {
         }
 
         if (hasFlag(captured_, ModifiesFlag::TOPOLOGY)) {
-            captureDeletedMasks(deleted_masks_after_);
+            compactTopology();
         }
     }
 
     bool SceneSnapshot::hasChanges() const {
-        if (hasFlag(captured_, ModifiesFlag::SELECTION) && !selectionStateEqual(selection_before_, selection_after_)) {
+        if (hasFlag(captured_, ModifiesFlag::SELECTION) &&
+            (selection_mask_storage_.hasChanges() ||
+             !selectionMetadataEqual(selection_before_, selection_after_metadata_))) {
             return true;
         }
 
@@ -678,17 +1024,82 @@ namespace lfs::vis::op {
             return true;
         }
 
-        if (hasFlag(captured_, ModifiesFlag::TOPOLOGY) &&
-            !deletedMaskMapsEqual(deleted_masks_before_, deleted_masks_after_)) {
+        if (hasFlag(captured_, ModifiesFlag::TOPOLOGY) && !deleted_mask_storage_.empty()) {
             return true;
         }
 
         return false;
     }
 
+    void SceneSnapshot::applySelection(const bool undo_direction) {
+        const auto target_metadata = undo_direction
+                                         ? lfs::core::Scene::SelectionStateMetadata{
+                                               .groups = selection_before_.groups,
+                                               .active_group_id = selection_before_.active_group_id,
+                                               .next_group_id = selection_before_.next_group_id,
+                                               .has_selection = selection_before_.has_selection,
+                                           }
+                                         : selection_after_metadata_;
+
+        auto current_selection = scene_.getScene().getSelectionMask();
+        const size_t total_size = std::max({selection_mask_storage_.total_size,
+                                            scene_.getScene().getTotalGaussianCount(),
+                                            tensorNumel(current_selection)});
+        auto working_mask = materializeMaskTensor(
+            current_selection, total_size, selection_mask_storage_.device, lfs::core::DataType::UInt8);
+
+        if (selection_mask_storage_.hasChanges()) {
+            applyTensorSwapStorage(working_mask, selection_mask_storage_);
+        }
+
+        lfs::core::Scene::SelectionStateSnapshot snapshot;
+        snapshot.groups = target_metadata.groups;
+        snapshot.active_group_id = target_metadata.active_group_id;
+        snapshot.next_group_id = target_metadata.next_group_id;
+        snapshot.has_selection = target_metadata.has_selection;
+        if (target_metadata.has_selection) {
+            snapshot.mask = std::make_shared<lfs::core::Tensor>(std::move(working_mask));
+        }
+        scene_.getScene().restoreSelectionState(snapshot);
+    }
+
+    void SceneSnapshot::applyTopology(const bool undo_direction) {
+        bool restored_any = false;
+
+        for (auto& [node_name, storage] : deleted_mask_storage_) {
+            auto* node = scene_.getScene().getMutableNode(node_name);
+            if (!node || !node->model) {
+                continue;
+            }
+
+            const bool target_present = undo_direction ? storage.before_present : storage.after_present;
+            const lfs::core::Tensor* current_deleted =
+                node->model->has_deleted_mask() ? &node->model->deleted() : nullptr;
+            const size_t total_size =
+                std::max({storage.total_size, node->model->size(), tensorNumel(current_deleted)});
+            auto working_mask = materializeMaskTensor(
+                current_deleted, total_size, storage.device, lfs::core::DataType::Bool);
+
+            if (storage.hasChanges()) {
+                applyTensorSwapStorage(working_mask, storage);
+            }
+
+            if (target_present) {
+                node->model->deleted() = std::move(working_mask);
+            } else {
+                node->model->deleted() = lfs::core::Tensor{};
+            }
+            restored_any = true;
+        }
+
+        if (restored_any) {
+            scene_.getScene().markDirty();
+        }
+    }
+
     void SceneSnapshot::undo() {
         if (hasFlag(captured_, ModifiesFlag::SELECTION)) {
-            scene_.getScene().restoreSelectionState(selection_before_);
+            applySelection(true);
         }
 
         if (hasFlag(captured_, ModifiesFlag::TRANSFORMS)) {
@@ -698,13 +1109,13 @@ namespace lfs::vis::op {
         }
 
         if (hasFlag(captured_, ModifiesFlag::TOPOLOGY)) {
-            restoreDeletedMasks(deleted_masks_before_);
+            applyTopology(true);
         }
     }
 
     void SceneSnapshot::redo() {
         if (hasFlag(captured_, ModifiesFlag::SELECTION)) {
-            scene_.getScene().restoreSelectionState(selection_after_);
+            applySelection(false);
         }
 
         if (hasFlag(captured_, ModifiesFlag::TRANSFORMS)) {
@@ -714,19 +1125,50 @@ namespace lfs::vis::op {
         }
 
         if (hasFlag(captured_, ModifiesFlag::TOPOLOGY)) {
-            restoreDeletedMasks(deleted_masks_after_);
+            applyTopology(false);
         }
     }
 
     size_t SceneSnapshot::estimatedBytes() const {
-        size_t total = selectionBytes(selection_before_) + selectionBytes(selection_after_);
-        for (const auto& [_, tensor] : deleted_masks_before_) {
-            total += tensor ? tensor->bytes() : 0;
+        size_t total = selection_mask_storage_.estimatedBytes();
+        for (const auto& [_, storage] : deleted_mask_storage_) {
+            total += storage.estimatedBytes();
         }
-        for (const auto& [_, tensor] : deleted_masks_after_) {
-            total += tensor ? tensor->bytes() : 0;
+        for (const auto& [node_name, _] : transforms_before_) {
+            total += sizeof(glm::mat4) + node_name.size();
+        }
+        for (const auto& [node_name, _] : transforms_after_) {
+            total += sizeof(glm::mat4) + node_name.size();
         }
         return total;
+    }
+
+    UndoMemoryBreakdown SceneSnapshot::memoryBreakdown() const {
+        UndoMemoryBreakdown total = selection_mask_storage_.memoryBreakdown();
+        for (const auto& [_, storage] : deleted_mask_storage_) {
+            total += storage.memoryBreakdown();
+        }
+        for (const auto& [node_name, _] : transforms_before_) {
+            total.cpu_bytes += sizeof(glm::mat4) + node_name.size();
+        }
+        for (const auto& [node_name, _] : transforms_after_) {
+            total.cpu_bytes += sizeof(glm::mat4) + node_name.size();
+        }
+        return total;
+    }
+
+    void SceneSnapshot::offloadToCPU() {
+        selection_mask_storage_.offloadToCPU();
+        for (auto& [_, storage] : deleted_mask_storage_) {
+            storage.offloadToCPU();
+        }
+    }
+
+    void SceneSnapshot::restoreToPreferredDevice() {
+        selection_mask_storage_.restoreToDevice();
+        for (auto& [_, storage] : deleted_mask_storage_) {
+            storage.restoreToDevice();
+        }
     }
 
     UndoMetadata SceneSnapshot::metadata() const {
@@ -736,6 +1178,14 @@ namespace lfs::vis::op {
             .source = "core",
             .scope = snapshotScope(captured_),
         };
+    }
+
+    bool pushSceneSnapshotIfChanged(std::unique_ptr<SceneSnapshot> snapshot) {
+        if (!snapshot || !snapshot->hasChanges()) {
+            return false;
+        }
+        undoHistory().push(std::move(snapshot));
+        return true;
     }
 
     CropBoxUndoEntry::CropBoxUndoEntry(SceneManager& scene, std::string node_name,
@@ -1122,6 +1572,53 @@ namespace lfs::vis::op {
             total += estimateSnapshotBytes(root);
         }
         return total;
+    }
+
+    UndoMemoryBreakdown SceneGraphPatchEntry::memoryBreakdown() const {
+        UndoMemoryBreakdown total;
+        for (const auto& root : before_.roots) {
+            total += snapshotMemoryBreakdown(root);
+        }
+        for (const auto& root : after_.roots) {
+            total += snapshotMemoryBreakdown(root);
+        }
+        if (before_.selected_node_names) {
+            for (const auto& name : *before_.selected_node_names) {
+                total.cpu_bytes += name.size();
+            }
+        }
+        if (after_.selected_node_names) {
+            for (const auto& name : *after_.selected_node_names) {
+                total.cpu_bytes += name.size();
+            }
+        }
+        if (before_.context) {
+            total.cpu_bytes += before_.context->dataset_path.native().size() +
+                               before_.context->training_model_node_name.size() + sizeof(int);
+        }
+        if (after_.context) {
+            total.cpu_bytes += after_.context->dataset_path.native().size() +
+                               after_.context->training_model_node_name.size() + sizeof(int);
+        }
+        return total;
+    }
+
+    void SceneGraphPatchEntry::offloadToCPU() {
+        for (auto& root : before_.roots) {
+            offloadSnapshot(root);
+        }
+        for (auto& root : after_.roots) {
+            offloadSnapshot(root);
+        }
+    }
+
+    void SceneGraphPatchEntry::restoreToPreferredDevice() {
+        for (auto& root : before_.roots) {
+            restoreSnapshot(root);
+        }
+        for (auto& root : after_.roots) {
+            restoreSnapshot(root);
+        }
     }
 
     UndoMetadata SceneGraphPatchEntry::metadata() const {

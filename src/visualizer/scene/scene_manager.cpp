@@ -3461,7 +3461,7 @@ namespace lfs::vis {
             scene_.clearSelection();
 
             entry->captureAfter();
-            op::undoHistory().push(std::move(entry));
+            op::pushSceneSnapshotIfChanged(std::move(entry));
 
             if (auto* rm = services().renderingOrNull())
                 rm->markDirty(DirtyFlag::SPLATS | DirtyFlag::SELECTION);
@@ -3484,7 +3484,7 @@ namespace lfs::vis {
         scene_.setSelectionMask(new_mask);
 
         entry->captureAfter();
-        op::undoHistory().push(std::move(entry));
+        op::pushSceneSnapshotIfChanged(std::move(entry));
 
         if (auto* rm = services().renderingOrNull())
             rm->markDirty(DirtyFlag::SELECTION);
@@ -3500,7 +3500,7 @@ namespace lfs::vis {
         scene_.clearSelection();
 
         entry->captureAfter();
-        op::undoHistory().push(std::move(entry));
+        op::pushSceneSnapshotIfChanged(std::move(entry));
 
         if (auto* rm = services().renderingOrNull())
             rm->markDirty(DirtyFlag::SELECTION);
@@ -3535,7 +3535,7 @@ namespace lfs::vis {
             scene_.setSelectionMask(new_mask);
 
             entry->captureAfter();
-            op::undoHistory().push(std::move(entry));
+            op::pushSceneSnapshotIfChanged(std::move(entry));
         } else {
             const auto nodes = scene_.getNodes();
             std::vector<std::string> splat_names;

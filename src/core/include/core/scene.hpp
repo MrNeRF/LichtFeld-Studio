@@ -137,6 +137,13 @@ namespace lfs::core {
             bool has_selection = false;
         };
 
+        struct SelectionStateMetadata {
+            std::vector<SelectionGroup> groups;
+            uint8_t active_group_id = 0;
+            uint8_t next_group_id = 1;
+            bool has_selection = false;
+        };
+
         enum class MutationType : uint32_t {
             NODE_ADDED = 1 << 0,
             NODE_REMOVED = 1 << 1,
@@ -269,6 +276,7 @@ namespace lfs::core {
         void setSelectionMask(std::shared_ptr<lfs::core::Tensor> mask);
         void clearSelection();
         bool hasSelection() const;
+        [[nodiscard]] SelectionStateMetadata captureSelectionStateMetadata() const;
         [[nodiscard]] SelectionStateSnapshot captureSelectionState() const;
         void restoreSelectionState(const SelectionStateSnapshot& snapshot);
 

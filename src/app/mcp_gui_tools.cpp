@@ -837,6 +837,8 @@ namespace lfs::app {
                     {"source", item.metadata.source},
                     {"scope", item.metadata.scope},
                     {"estimated_bytes", static_cast<int64_t>(item.estimated_bytes)},
+                    {"cpu_bytes", static_cast<int64_t>(item.cpu_bytes)},
+                    {"gpu_bytes", static_cast<int64_t>(item.gpu_bytes)},
                 };
             };
 
@@ -849,6 +851,11 @@ namespace lfs::app {
             for (const auto& item : history.redoItems()) {
                 redo_items.push_back(item_json(item));
             }
+
+            const auto undo_memory = history.undoMemory();
+            const auto redo_memory = history.redoMemory();
+            const auto transaction_memory = history.transactionMemory();
+            const auto total_memory = history.totalMemory();
 
             return json{
                 {"success", true},
@@ -866,6 +873,14 @@ namespace lfs::app {
                 {"redo_bytes", static_cast<int64_t>(history.redoBytes())},
                 {"transaction_bytes", static_cast<int64_t>(history.transactionBytes())},
                 {"total_bytes", static_cast<int64_t>(history.totalBytes())},
+                {"undo_cpu_bytes", static_cast<int64_t>(undo_memory.cpu_bytes)},
+                {"undo_gpu_bytes", static_cast<int64_t>(undo_memory.gpu_bytes)},
+                {"redo_cpu_bytes", static_cast<int64_t>(redo_memory.cpu_bytes)},
+                {"redo_gpu_bytes", static_cast<int64_t>(redo_memory.gpu_bytes)},
+                {"transaction_cpu_bytes", static_cast<int64_t>(transaction_memory.cpu_bytes)},
+                {"transaction_gpu_bytes", static_cast<int64_t>(transaction_memory.gpu_bytes)},
+                {"total_cpu_bytes", static_cast<int64_t>(total_memory.cpu_bytes)},
+                {"total_gpu_bytes", static_cast<int64_t>(total_memory.gpu_bytes)},
                 {"max_entries", static_cast<int64_t>(vis::op::UndoHistory::MAX_ENTRIES)},
                 {"max_bytes", static_cast<int64_t>(vis::op::UndoHistory::MAX_BYTES)},
                 {"transaction_active", history.hasActiveTransaction()},

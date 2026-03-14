@@ -28,6 +28,7 @@ def _install_lichtfeld_stub(monkeypatch):
         "python_console_shown": 0,
         "undo_called": False,
         "redo_called": False,
+        "jump_calls": [],
     }
 
     ui = SimpleNamespace(
@@ -56,6 +57,7 @@ def _install_lichtfeld_stub(monkeypatch):
         can_redo=lambda: False,
         undo=lambda: state.__setitem__("undo_called", True),
         redo=lambda: state.__setitem__("redo_called", True),
+        jump=lambda stack, count: state["jump_calls"].append((stack, count)),
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
     return state
@@ -93,6 +95,9 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert state["undo_called"] is True
     assert edit_items[2]["type"] == "submenu"
     assert edit_items[2]["items"][0]["label"] == "Rename Node"
+    assert edit_items[2]["items"][0]["enabled"] is True
+    edit_items[2]["items"][0]["callback"]()
+    assert state["jump_calls"] == [("undo", 1)]
     assert edit_items[5]["type"] == "item"
     edit_items[5]["callback"]()
     assert state["enabled_panels"] == [("lfs.history", True)]

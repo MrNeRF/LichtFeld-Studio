@@ -881,6 +881,18 @@ namespace lfs::core {
         return has_selection_;
     }
 
+    Scene::SelectionStateMetadata Scene::captureSelectionStateMetadata() const {
+        SelectionStateMetadata metadata;
+        {
+            std::shared_lock lock(selection_mutex_);
+            metadata.has_selection = has_selection_;
+        }
+        metadata.groups = selection_groups_;
+        metadata.active_group_id = active_selection_group_;
+        metadata.next_group_id = next_group_id_;
+        return metadata;
+    }
+
     Scene::SelectionStateSnapshot Scene::captureSelectionState() const {
         SelectionStateSnapshot snapshot;
         {
@@ -890,9 +902,11 @@ namespace lfs::core {
                 snapshot.mask = std::make_shared<lfs::core::Tensor>(selection_mask_->clone());
             }
         }
-        snapshot.groups = selection_groups_;
-        snapshot.active_group_id = active_selection_group_;
-        snapshot.next_group_id = next_group_id_;
+        const auto metadata = captureSelectionStateMetadata();
+        snapshot.groups = metadata.groups;
+        snapshot.active_group_id = metadata.active_group_id;
+        snapshot.next_group_id = metadata.next_group_id;
+        snapshot.has_selection = metadata.has_selection;
         return snapshot;
     }
 

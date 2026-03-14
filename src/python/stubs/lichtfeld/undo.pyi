@@ -48,6 +48,12 @@ def transaction_bytes() -> int:
 def total_bytes() -> int:
     """Get estimated bytes retained by undo and redo history"""
 
+def total_cpu_bytes() -> int:
+    """Get estimated CPU-resident bytes retained by history"""
+
+def total_gpu_bytes() -> int:
+    """Get estimated GPU-resident bytes retained by history"""
+
 def has_active_transaction() -> bool:
     """Check if a grouped history transaction is active"""
 

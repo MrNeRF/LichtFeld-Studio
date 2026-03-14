@@ -11,8 +11,12 @@
 #include "scene/scene_manager.hpp"
 
 #include <gtest/gtest.h>
+#include <any>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 using lfs::core::DataType;
@@ -60,6 +64,77 @@ namespace {
         [[nodiscard]] std::string name() const override { return "throwing.undo"; }
     };
 
+    class BlockingUndoEntry final : public lfs::vis::op::UndoEntry {
+    public:
+        BlockingUndoEntry(std::mutex& mutex, std::condition_variable& cv, bool& started, bool& released)
+            : mutex_(mutex),
+              cv_(cv),
+              started_(started),
+              released_(released) {}
+
+        void undo() override {
+            {
+                std::lock_guard lock(mutex_);
+                started_ = true;
+            }
+            cv_.notify_all();
+
+            std::unique_lock lock(mutex_);
+            cv_.wait(lock, [this]() { return released_; });
+        }
+
+        void redo() override {}
+        [[nodiscard]] std::string name() const override { return "blocking.undo"; }
+
+    private:
+        std::mutex& mutex_;
+        std::condition_variable& cv_;
+        bool& started_;
+        bool& released_;
+    };
+
+    class TensorResidencyEntry final : public lfs::vis::op::UndoEntry {
+    public:
+        explicit TensorResidencyEntry(std::string name)
+            : name_(std::move(name)),
+              tensor_(Tensor::ones({16}, Device::CUDA, DataType::Float32)) {}
+
+        void undo() override {
+            undo_device_ = tensor_.device();
+        }
+
+        void redo() override {
+            redo_device_ = tensor_.device();
+        }
+
+        [[nodiscard]] std::string name() const override { return name_; }
+        [[nodiscard]] size_t estimatedBytes() const override { return tensor_.bytes(); }
+        [[nodiscard]] lfs::vis::op::UndoMemoryBreakdown memoryBreakdown() const override {
+            return tensor_.device() == Device::CUDA
+                       ? lfs::vis::op::UndoMemoryBreakdown{.cpu_bytes = 0, .gpu_bytes = tensor_.bytes()}
+                       : lfs::vis::op::UndoMemoryBreakdown{.cpu_bytes = tensor_.bytes(), .gpu_bytes = 0};
+        }
+        void offloadToCPU() override {
+            if (tensor_.device() != Device::CPU) {
+                tensor_ = tensor_.to(Device::CPU).contiguous();
+            }
+        }
+        void restoreToPreferredDevice() override {
+            if (tensor_.device() != Device::CUDA) {
+                tensor_ = tensor_.to(Device::CUDA).contiguous();
+            }
+        }
+
+        [[nodiscard]] Device device() const { return tensor_.device(); }
+        [[nodiscard]] Device undoDevice() const { return undo_device_; }
+
+    private:
+        std::string name_;
+        Tensor tensor_;
+        Device undo_device_ = Device::CPU;
+        Device redo_device_ = Device::CPU;
+    };
+
     std::unique_ptr<lfs::core::SplatData> make_test_splat(const std::vector<float>& xyz) {
         const size_t count = xyz.size() / 3;
         auto means = Tensor::from_vector(xyz, {count, size_t{3}}, Device::CUDA).to(DataType::Float32);
@@ -83,6 +158,17 @@ namespace {
             std::move(rotation),
             std::move(opacity),
             1.0f);
+    }
+
+    std::unique_ptr<lfs::core::SplatData> make_linear_test_splat(const size_t count) {
+        std::vector<float> xyz;
+        xyz.reserve(count * 3);
+        for (size_t i = 0; i < count; ++i) {
+            xyz.push_back(static_cast<float>(i));
+            xyz.push_back(0.0f);
+            xyz.push_back(0.0f);
+        }
+        return make_test_splat(xyz);
     }
 
     std::vector<bool> deleted_mask_values(const lfs::core::SplatData& splat) {
@@ -164,6 +250,19 @@ TEST_F(UndoHistoryTest, TransactionRollbackRestoresAppliedStateWithoutCreatingHi
     EXPECT_EQ(history.redoCount(), 0u);
 }
 
+TEST_F(UndoHistoryTest, EmptyTransactionCommitCreatesNoUndoEntry) {
+    auto& history = lfs::vis::op::undoHistory();
+
+    history.beginTransaction("empty.transaction");
+    history.commitTransaction();
+
+    EXPECT_EQ(history.undoCount(), 0u);
+    EXPECT_EQ(history.redoCount(), 0u);
+    EXPECT_FALSE(history.canUndo());
+    EXPECT_FALSE(history.canRedo());
+    EXPECT_FALSE(history.hasActiveTransaction());
+}
+
 TEST_F(UndoHistoryTest, NestedTransactionsCollapseIntoSingleUndoStep) {
     auto& history = lfs::vis::op::undoHistory();
     int value = 0;
@@ -190,12 +289,24 @@ TEST_F(UndoHistoryTest, EstimatedByteBudgetEvictsOldestUndoEntries) {
     auto& history = lfs::vis::op::undoHistory();
     int value = 0;
 
-    history.push(std::make_unique<CountingEntry>("large.one", value, 1, 300ull * 1024ull * 1024ull));
-    history.push(std::make_unique<CountingEntry>("large.two", value, 1, 300ull * 1024ull * 1024ull));
+    history.push(std::make_unique<CountingEntry>("large.one", value, 1, 200ull * 1024ull * 1024ull));
+    history.push(std::make_unique<CountingEntry>("large.two", value, 1, 200ull * 1024ull * 1024ull));
+    history.push(std::make_unique<CountingEntry>("large.three", value, 1, 200ull * 1024ull * 1024ull));
+
+    EXPECT_EQ(history.undoCount(), 2u);
+    EXPECT_EQ(history.undoNames(), (std::vector<std::string>{"large.three", "large.two"}));
+    EXPECT_LE(history.undoBytes(), lfs::vis::op::UndoHistory::MAX_BYTES);
+}
+
+TEST_F(UndoHistoryTest, OversizedSingleUndoEntryIsRetained) {
+    auto& history = lfs::vis::op::undoHistory();
+    int value = 0;
+
+    history.push(std::make_unique<CountingEntry>("huge.entry", value, 1, 600ull * 1024ull * 1024ull));
 
     EXPECT_EQ(history.undoCount(), 1u);
-    EXPECT_EQ(history.undoName(), "large.two");
-    EXPECT_LE(history.undoBytes(), lfs::vis::op::UndoHistory::MAX_BYTES);
+    EXPECT_EQ(history.undoName(), "huge.entry");
+    EXPECT_EQ(history.undoBytes(), 600ull * 1024ull * 1024ull);
 }
 
 TEST_F(UndoHistoryTest, UndoAndRedoNamesReturnNewestFirst) {
@@ -224,7 +335,7 @@ TEST_F(UndoHistoryTest, StackItemsExposeStructuredMetadataAndTransactionState) {
 
     const auto items = history.undoItems();
     ASSERT_EQ(items.size(), 1u);
-    EXPECT_EQ(items.front().metadata.id, "history.transaction");
+    EXPECT_EQ(items.front().metadata.id, "history.transaction.grouped_transaction");
     EXPECT_EQ(items.front().metadata.label, "Grouped Transaction");
     EXPECT_EQ(items.front().metadata.source, "history");
     EXPECT_EQ(items.front().metadata.scope, "grouped");
@@ -232,6 +343,68 @@ TEST_F(UndoHistoryTest, StackItemsExposeStructuredMetadataAndTransactionState) {
     EXPECT_FALSE(history.hasActiveTransaction());
     EXPECT_EQ(history.transactionDepth(), 0u);
     EXPECT_TRUE(history.activeTransactionName().empty());
+}
+
+TEST_F(UndoHistoryTest, PropertyChangesCoalesceOnUndoStack) {
+    auto& history = lfs::vis::op::undoHistory();
+    float value = 0.0f;
+    auto applier = [&value](const std::any& applied) { value = std::any_cast<float>(applied); };
+
+    value = 0.5f;
+    history.push(std::make_unique<lfs::vis::op::PropertyChangeUndoEntry>(
+        "scene_node.model.opacity", 0.0f, 0.5f, applier));
+    value = 1.0f;
+    history.push(std::make_unique<lfs::vis::op::PropertyChangeUndoEntry>(
+        "scene_node.model.opacity", 0.5f, 1.0f, applier));
+
+    ASSERT_EQ(history.undoCount(), 1u);
+
+    const auto undo_result = history.undo();
+    EXPECT_TRUE(undo_result.success);
+    EXPECT_FLOAT_EQ(value, 0.0f);
+
+    const auto redo_result = history.redo();
+    EXPECT_TRUE(redo_result.success);
+    EXPECT_FLOAT_EQ(value, 1.0f);
+}
+
+TEST_F(UndoHistoryTest, PropertyChangesCoalesceInsideActiveTransaction) {
+    auto& history = lfs::vis::op::undoHistory();
+    float value = 0.0f;
+    auto applier = [&value](const std::any& applied) { value = std::any_cast<float>(applied); };
+
+    history.beginTransaction("drag.opacity");
+    value = 0.5f;
+    history.push(std::make_unique<lfs::vis::op::PropertyChangeUndoEntry>(
+        "scene_node.model.opacity", 0.0f, 0.5f, applier));
+    value = 1.0f;
+    history.push(std::make_unique<lfs::vis::op::PropertyChangeUndoEntry>(
+        "scene_node.model.opacity", 0.5f, 1.0f, applier));
+
+    EXPECT_GT(history.transactionBytes(), 0u);
+
+    const auto rollback = history.rollbackTransaction();
+    EXPECT_TRUE(rollback.success);
+    EXPECT_EQ(rollback.steps_performed, 1u);
+    EXPECT_FLOAT_EQ(value, 0.0f);
+    EXPECT_EQ(history.transactionBytes(), 0u);
+}
+
+TEST_F(UndoHistoryTest, TotalBytesIncludesActiveTransactionBytes) {
+    auto& history = lfs::vis::op::undoHistory();
+    int value = 0;
+
+    history.beginTransaction("memory.visible");
+    history.push(std::make_unique<CountingEntry>("pending.step", value, 1, 4096));
+
+    EXPECT_EQ(history.undoBytes(), 0u);
+    EXPECT_EQ(history.redoBytes(), 0u);
+    EXPECT_EQ(history.transactionBytes(), 4096u);
+    EXPECT_EQ(history.totalBytes(), 4096u);
+
+    history.commitTransaction();
+    EXPECT_EQ(history.transactionBytes(), 0u);
+    EXPECT_EQ(history.totalBytes(), history.undoBytes());
 }
 
 TEST_F(UndoHistoryTest, UndoAndRedoMultipleSupportHistoryNavigationChains) {
@@ -311,6 +484,104 @@ TEST_F(UndoHistoryTest, FailedGroupedUndoCompensatesAlreadyUndoneChildren) {
     EXPECT_FALSE(history.canRedo());
 }
 
+TEST_F(UndoHistoryTest, ConcurrentPlaybackIsRejected) {
+    auto& history = lfs::vis::op::undoHistory();
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool started = false;
+    bool released = false;
+    lfs::vis::op::HistoryResult worker_result;
+
+    history.push(std::make_unique<BlockingUndoEntry>(mutex, cv, started, released));
+
+    std::thread worker([&]() { worker_result = history.undo(); });
+
+    {
+        std::unique_lock lock(mutex);
+        cv.wait(lock, [&]() { return started; });
+    }
+
+    const auto result = history.undo();
+    EXPECT_FALSE(result.success);
+    EXPECT_FALSE(result.changed);
+    EXPECT_EQ(result.steps_performed, 0u);
+    EXPECT_EQ(result.error, "History playback already in progress");
+
+    {
+        std::lock_guard lock(mutex);
+        released = true;
+    }
+    cv.notify_all();
+    worker.join();
+
+    EXPECT_TRUE(worker_result.success);
+    EXPECT_TRUE(history.canRedo());
+}
+
+TEST_F(UndoHistoryTest, PushInsideActiveTransactionKeepsRedoUntilCommit) {
+    auto& history = lfs::vis::op::undoHistory();
+    int value = 0;
+
+    history.push(std::make_unique<CountingEntry>("step.one", value, 1));
+    value += 1;
+    history.push(std::make_unique<CountingEntry>("step.two", value, 1));
+    value += 1;
+    history.undo();
+    ASSERT_TRUE(history.canRedo());
+
+    history.beginTransaction("transactional.change");
+    history.push(std::make_unique<CountingEntry>("step.three", value, 5));
+    value += 5;
+    EXPECT_TRUE(history.canRedo());
+    history.commitTransaction();
+
+    EXPECT_FALSE(history.canRedo());
+}
+
+TEST_F(UndoHistoryTest, RedoStackStaysWithinConfiguredBoundsAfterUndoingHistory) {
+    auto& history = lfs::vis::op::undoHistory();
+    int value = 0;
+
+    for (size_t i = 0; i < lfs::vis::op::UndoHistory::MAX_ENTRIES + 5; ++i) {
+        history.push(std::make_unique<CountingEntry>("bounded.step", value, 1));
+        value += 1;
+    }
+
+    const auto result = history.undoMultiple(history.undoCount());
+    EXPECT_TRUE(result.success);
+    EXPECT_EQ(history.redoCount(), lfs::vis::op::UndoHistory::MAX_ENTRIES);
+    EXPECT_LE(history.redoBytes(), lfs::vis::op::UndoHistory::MAX_BYTES);
+}
+
+TEST_F(UndoHistoryTest, OlderTensorEntriesOffloadToCPUAndRestoreBeforePlayback) {
+    auto& history = lfs::vis::op::undoHistory();
+    std::vector<TensorResidencyEntry*> entries;
+
+    for (size_t i = 0; i < lfs::vis::op::UndoHistory::HOT_ENTRIES + 2; ++i) {
+        auto entry = std::make_unique<TensorResidencyEntry>("tensor.entry." + std::to_string(i));
+        entries.push_back(entry.get());
+        history.push(std::move(entry));
+    }
+
+    ASSERT_EQ(history.undoCount(), lfs::vis::op::UndoHistory::HOT_ENTRIES + 2);
+    EXPECT_EQ(entries.front()->device(), Device::CPU);
+    EXPECT_EQ(entries.back()->device(), Device::CUDA);
+
+    const auto memory = history.undoMemory();
+    EXPECT_GT(memory.cpu_bytes, 0u);
+    EXPECT_GT(memory.gpu_bytes, 0u);
+
+    const auto undo_items = history.undoItems();
+    ASSERT_EQ(undo_items.size(), lfs::vis::op::UndoHistory::HOT_ENTRIES + 2);
+    EXPECT_EQ(undo_items.front().gpu_bytes, entries.back()->estimatedBytes());
+    EXPECT_EQ(undo_items.back().gpu_bytes, 0u);
+    EXPECT_GT(undo_items.back().cpu_bytes, 0u);
+
+    const auto result = history.undoMultiple(history.undoCount());
+    EXPECT_TRUE(result.success);
+    EXPECT_EQ(entries.front()->undoDevice(), Device::CUDA);
+}
+
 TEST_F(UndoHistoryTest, ObserversReceiveNotificationsUntilUnsubscribed) {
     auto& history = lfs::vis::op::undoHistory();
     int value = 0;
@@ -356,11 +627,187 @@ TEST_F(UndoHistoryTest, TopologyUndoRestoresSoftDeletedMasks) {
     EXPECT_EQ(deleted_mask_values(*node->model), (std::vector<bool>{true, false}));
 
     lfs::vis::op::undoHistory().undo();
-    EXPECT_TRUE(deleted_mask_values(*node->model).empty() ||
-                deleted_mask_values(*node->model) == std::vector<bool>({false, false}));
+    EXPECT_FALSE(node->model->has_deleted_mask());
 
     lfs::vis::op::undoHistory().redo();
     EXPECT_EQ(deleted_mask_values(*node->model), (std::vector<bool>{true, false}));
+}
+
+TEST_F(UndoHistoryTest, SceneSnapshotCompactsSparseSelectionMasks) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addNode("model", make_linear_test_splat(16));
+
+    auto snapshot = std::make_unique<lfs::vis::op::SceneSnapshot>(*scene_manager, "selection.sparse");
+    snapshot->captureSelection();
+    scene_manager->getScene().setSelectionMask(
+        std::make_shared<Tensor>(make_uint8_mask({0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})));
+    snapshot->captureAfter();
+
+    EXPECT_LT(snapshot->estimatedBytes(), 16u);
+
+    lfs::vis::op::undoHistory().push(std::move(snapshot));
+    lfs::vis::op::undoHistory().undo();
+    EXPECT_TRUE(selection_mask_values(scene_manager->getScene()).empty());
+
+    lfs::vis::op::undoHistory().redo();
+    EXPECT_EQ(selection_mask_values(scene_manager->getScene()),
+              (std::vector<uint8_t>{0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}));
+}
+
+TEST_F(UndoHistoryTest, PushSceneSnapshotIfChangedSkipsNoOpSnapshots) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addNode("model", make_linear_test_splat(4));
+
+    auto snapshot = std::make_unique<lfs::vis::op::SceneSnapshot>(*scene_manager, "selection.noop");
+    snapshot->captureSelection();
+    snapshot->captureAfter();
+
+    EXPECT_FALSE(lfs::vis::op::pushSceneSnapshotIfChanged(std::move(snapshot)));
+    EXPECT_EQ(lfs::vis::op::undoHistory().undoCount(), 0u);
+}
+
+TEST_F(UndoHistoryTest, SceneSnapshotSparseSelectionRoundTripsDirectly) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addNode("model", make_linear_test_splat(16));
+
+    lfs::vis::op::SceneSnapshot snapshot(*scene_manager, "selection.direct");
+    snapshot.captureSelection();
+    scene_manager->getScene().setSelectionMask(
+        std::make_shared<Tensor>(make_uint8_mask({0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})));
+    snapshot.captureAfter();
+
+    snapshot.undo();
+    EXPECT_TRUE(selection_mask_values(scene_manager->getScene()).empty());
+
+    snapshot.redo();
+    EXPECT_EQ(selection_mask_values(scene_manager->getScene()),
+              (std::vector<uint8_t>{0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}));
+}
+
+TEST_F(UndoHistoryTest, OffloadedSceneSnapshotRestoresSelectionDuringPlayback) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addNode("model", make_linear_test_splat(16));
+
+    auto snapshot = std::make_unique<lfs::vis::op::SceneSnapshot>(*scene_manager, "selection.offloaded");
+    snapshot->captureSelection();
+    scene_manager->getScene().setSelectionMask(
+        std::make_shared<Tensor>(make_uint8_mask({0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})));
+    snapshot->captureAfter();
+    ASSERT_TRUE(lfs::vis::op::pushSceneSnapshotIfChanged(std::move(snapshot)));
+
+    int value = 0;
+    for (size_t i = 0; i < lfs::vis::op::UndoHistory::HOT_ENTRIES; ++i) {
+        lfs::vis::op::undoHistory().push(
+            std::make_unique<CountingEntry>("padding." + std::to_string(i), value, 1));
+        value += 1;
+    }
+
+    const auto items = lfs::vis::op::undoHistory().undoItems();
+    ASSERT_EQ(items.size(), lfs::vis::op::UndoHistory::HOT_ENTRIES + 1);
+    EXPECT_EQ(items.back().metadata.label, "selection.offloaded");
+    EXPECT_EQ(items.back().gpu_bytes, 0u);
+    EXPECT_GT(items.back().cpu_bytes, 0u);
+
+    const auto undo_result = lfs::vis::op::undoHistory().undoMultiple(lfs::vis::op::undoHistory().undoCount());
+    EXPECT_TRUE(undo_result.success);
+    EXPECT_TRUE(selection_mask_values(scene_manager->getScene()).empty());
+
+    const auto redo_result = lfs::vis::op::undoHistory().redoMultiple(lfs::vis::op::undoHistory().redoCount());
+    EXPECT_TRUE(redo_result.success);
+    EXPECT_EQ(selection_mask_values(scene_manager->getScene()),
+              (std::vector<uint8_t>{0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}));
+}
+
+TEST_F(UndoHistoryTest, SceneSnapshotEstimatedBytesIncludeTransformMaps) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addNode("model", make_linear_test_splat(2));
+
+    auto snapshot = std::make_unique<lfs::vis::op::SceneSnapshot>(*scene_manager, "transform.bytes");
+    snapshot->captureTransforms({"model"});
+
+    glm::mat4 transform(1.0f);
+    transform[3].x = 3.0f;
+    scene_manager->setNodeTransform("model", transform);
+    snapshot->captureAfter();
+
+    const size_t minimum_expected = 2 * (sizeof(glm::mat4) + std::string("model").size());
+    EXPECT_GE(snapshot->estimatedBytes(), minimum_expected);
+}
+
+TEST_F(UndoHistoryTest, SceneSnapshotFallsBackToDenseSelectionStorageForWideChanges) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addNode("model", make_linear_test_splat(16));
+
+    auto snapshot = std::make_unique<lfs::vis::op::SceneSnapshot>(*scene_manager, "selection.dense");
+    snapshot->captureSelection();
+    scene_manager->getScene().setSelectionMask(
+        std::make_shared<Tensor>(make_uint8_mask({1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1})));
+    snapshot->captureAfter();
+
+    EXPECT_EQ(snapshot->estimatedBytes(), 16u);
+
+    lfs::vis::op::undoHistory().push(std::move(snapshot));
+    lfs::vis::op::undoHistory().undo();
+    EXPECT_TRUE(selection_mask_values(scene_manager->getScene()).empty());
+
+    lfs::vis::op::undoHistory().redo();
+    EXPECT_EQ(selection_mask_values(scene_manager->getScene()),
+              (std::vector<uint8_t>{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}));
+}
+
+TEST_F(UndoHistoryTest, SceneSnapshotCompactsSparseDeletedMasksAndRestoresPresence) {
+    auto scene_manager = std::make_unique<lfs::vis::SceneManager>();
+    auto rendering_manager = std::make_unique<lfs::vis::RenderingManager>();
+    lfs::vis::services().set(scene_manager.get());
+    lfs::vis::services().set(rendering_manager.get());
+
+    scene_manager->getScene().addNode("model", make_linear_test_splat(16));
+    auto* node = scene_manager->getScene().getMutableNode("model");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->model, nullptr);
+
+    auto snapshot = std::make_unique<lfs::vis::op::SceneSnapshot>(*scene_manager, "delete.sparse");
+    snapshot->captureTopology();
+    node->model->soft_delete(make_uint8_mask({0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}).to(DataType::Bool));
+    snapshot->captureAfter();
+
+    EXPECT_LT(snapshot->estimatedBytes(), 16u);
+
+    lfs::vis::op::undoHistory().push(std::move(snapshot));
+    EXPECT_TRUE(node->model->has_deleted_mask());
+
+    lfs::vis::op::undoHistory().undo();
+    EXPECT_FALSE(node->model->has_deleted_mask());
+
+    lfs::vis::op::undoHistory().redo();
+    EXPECT_TRUE(node->model->has_deleted_mask());
+    EXPECT_EQ(deleted_mask_values(*node->model),
+              (std::vector<bool>{false, false, false, false, false, true, false, false,
+                                 false, false, false, false, false, false, false, false}));
 }
 
 TEST_F(UndoHistoryTest, SceneResetClearsHistory) {

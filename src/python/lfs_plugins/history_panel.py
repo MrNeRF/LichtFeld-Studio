@@ -122,18 +122,22 @@ class HistoryPanel(Panel):
         state_key = (
             tuple(
                 (item.get("id", ""), item.get("label", ""), item.get("source", ""),
-                 item.get("scope", ""), int(item.get("estimated_bytes", 0)))
+                 item.get("scope", ""), int(item.get("estimated_bytes", 0)),
+                 int(item.get("cpu_bytes", 0)), int(item.get("gpu_bytes", 0)))
                 for item in undo_items
             ),
             tuple(
                 (item.get("id", ""), item.get("label", ""), item.get("source", ""),
-                 item.get("scope", ""), int(item.get("estimated_bytes", 0)))
+                 item.get("scope", ""), int(item.get("estimated_bytes", 0)),
+                 int(item.get("cpu_bytes", 0)), int(item.get("gpu_bytes", 0)))
                 for item in redo_items
             ),
             bool(state.get("transaction_active", False)),
             int(state.get("transaction_depth", 0)),
             state.get("transaction_name", ""),
             int(state.get("total_bytes", 0)),
+            int(state.get("total_cpu_bytes", 0)),
+            int(state.get("total_gpu_bytes", 0)),
         )
 
         if not force and state_key == self._last_state_key:
@@ -144,12 +148,17 @@ class HistoryPanel(Panel):
         self._has_redo = bool(redo_items)
         self._undo_label = f"Undo {undo_items[0]['label']}" if undo_items else "Undo"
         self._redo_label = f"Redo {redo_items[0]['label']}" if redo_items else "Redo"
+        total_bytes = int(state.get("total_bytes", 0))
+        total_gpu_bytes = int(state.get("total_gpu_bytes", total_bytes))
         if not undo_items and not redo_items:
             self._summary_text = "No history yet"
-        else:
+        elif total_gpu_bytes < total_bytes:
             self._summary_text = (
-                f"{len(undo_items)} undo / {len(redo_items)} redo · {_format_bytes(int(state.get('total_bytes', 0)))}"
+                f"{len(undo_items)} undo / {len(redo_items)} redo · "
+                f"{_format_bytes(total_bytes)} total · {_format_bytes(total_gpu_bytes)} GPU"
             )
+        else:
+            self._summary_text = f"{len(undo_items)} undo / {len(redo_items)} redo · {_format_bytes(total_bytes)}"
         transaction_name = state.get("transaction_name", "") or "Grouped changes"
         transaction_depth = int(state.get("transaction_depth", 0))
         self._show_transaction = bool(state.get("transaction_active", False))
@@ -177,10 +186,16 @@ class HistoryPanel(Panel):
     def _build_rows(self, items, kind: str):
         rows = []
         for index, item in enumerate(items):
+            estimated_bytes = int(item.get("estimated_bytes", 0))
+            gpu_bytes = int(item.get("gpu_bytes", estimated_bytes))
+            if gpu_bytes < estimated_bytes:
+                size_meta = f"{_format_bytes(estimated_bytes)} · GPU {_format_bytes(gpu_bytes)}"
+            else:
+                size_meta = _format_bytes(estimated_bytes)
             rows.append(
                 {
                     "label": item.get("label", ""),
-                    "meta": f"{item.get('scope', 'general')} · {item.get('source', 'system')} · {_format_bytes(int(item.get('estimated_bytes', 0)))}",
+                    "meta": f"{item.get('scope', 'general')} · {item.get('source', 'system')} · {size_meta}",
                     "is_next": index == 0,
                     "kind": kind,
                     "steps": index + 1,

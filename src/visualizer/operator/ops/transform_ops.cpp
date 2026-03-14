@@ -189,7 +189,7 @@ namespace lfs::vis::op {
             return OperatorResult::CANCELLED;
         }
         entry->captureAfter();
-        undoHistory().push(std::move(entry));
+        pushSceneSnapshotIfChanged(std::move(entry));
 
         return OperatorResult::FINISHED;
     }

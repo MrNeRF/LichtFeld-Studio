@@ -359,7 +359,7 @@ namespace lfs::vis::cap {
         }
 
         entry->captureAfter();
-        vis::op::undoHistory().push(std::move(entry));
+        vis::op::pushSceneSnapshotIfChanged(std::move(entry));
         return {};
     }
 
@@ -377,7 +377,7 @@ namespace lfs::vis::cap {
             scene_manager.setNodeTransform(name, transform);
 
         entry->captureAfter();
-        vis::op::undoHistory().push(std::move(entry));
+        vis::op::pushSceneSnapshotIfChanged(std::move(entry));
         return {};
     }
 
@@ -398,7 +398,7 @@ namespace lfs::vis::cap {
         }
 
         entry->captureAfter();
-        vis::op::undoHistory().push(std::move(entry));
+        vis::op::pushSceneSnapshotIfChanged(std::move(entry));
         return {};
     }
 
@@ -423,7 +423,7 @@ namespace lfs::vis::cap {
         }
 
         entry->captureAfter();
-        vis::op::undoHistory().push(std::move(entry));
+        vis::op::pushSceneSnapshotIfChanged(std::move(entry));
         return {};
     }
 
@@ -444,7 +444,7 @@ namespace lfs::vis::cap {
         }
 
         entry->captureAfter();
-        vis::op::undoHistory().push(std::move(entry));
+        vis::op::pushSceneSnapshotIfChanged(std::move(entry));
         return {};
     }
 

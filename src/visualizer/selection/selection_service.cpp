@@ -810,7 +810,7 @@ namespace lfs::vis {
         scene.setSelectionMask(new_selection);
 
         entry->captureAfter();
-        op::undoHistory().push(std::move(entry));
+        op::pushSceneSnapshotIfChanged(std::move(entry));
 
         rendering_manager_->markDirty(DirtyFlag::SELECTION);
         return {true, countSelected(*new_selection), {}};

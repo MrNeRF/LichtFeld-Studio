@@ -20,6 +20,8 @@ namespace lfs::vis::op {
     struct LFS_VIS_API UndoStackItem {
         UndoMetadata metadata;
         size_t estimated_bytes = 0;
+        size_t cpu_bytes = 0;
+        size_t gpu_bytes = 0;
     };
 
     struct LFS_VIS_API HistoryResult {
@@ -33,6 +35,7 @@ namespace lfs::vis::op {
     public:
         static constexpr size_t MAX_ENTRIES = 100;
         static constexpr size_t MAX_BYTES = 512ull * 1024ull * 1024ull;
+        static constexpr size_t HOT_ENTRIES = 5;
         using ObserverId = uint64_t;
         using Observer = std::function<void()>;
 
@@ -61,6 +64,10 @@ namespace lfs::vis::op {
         [[nodiscard]] size_t redoBytes() const;
         [[nodiscard]] size_t transactionBytes() const;
         [[nodiscard]] size_t totalBytes() const;
+        [[nodiscard]] UndoMemoryBreakdown undoMemory() const;
+        [[nodiscard]] UndoMemoryBreakdown redoMemory() const;
+        [[nodiscard]] UndoMemoryBreakdown transactionMemory() const;
+        [[nodiscard]] UndoMemoryBreakdown totalMemory() const;
         [[nodiscard]] bool hasActiveTransaction() const;
         [[nodiscard]] size_t transactionDepth() const;
         [[nodiscard]] std::string activeTransactionName() const;
@@ -89,6 +96,12 @@ namespace lfs::vis::op {
         void resetRedoStack();
         void notifyObservers();
         void bumpGenerationLocked();
+        [[nodiscard]] size_t transactionBytesLocked() const;
+        [[nodiscard]] size_t totalBytesLocked() const;
+        [[nodiscard]] UndoMemoryBreakdown stackMemoryLocked(const std::deque<UndoEntryPtr>& stack) const;
+        [[nodiscard]] UndoMemoryBreakdown transactionMemoryLocked() const;
+        [[nodiscard]] UndoMemoryBreakdown totalMemoryLocked() const;
+        void refreshResidencyLocked();
         HistoryResult performPlayback(bool undo_direction, size_t count);
 
         std::deque<UndoEntryPtr> undo_stack_;

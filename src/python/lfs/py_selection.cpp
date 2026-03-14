@@ -48,10 +48,7 @@ namespace lfs::python {
             snapshot->captureSelection();
             mutator(scene_manager.getScene());
             snapshot->captureAfter();
-            if (!snapshot->hasChanges()) {
-                return;
-            }
-            vis::op::undoHistory().push(std::move(snapshot));
+            vis::op::pushSceneSnapshotIfChanged(std::move(snapshot));
         }
 
         void configure_depth_filter(vis::RenderSettings& settings, const bool enabled,

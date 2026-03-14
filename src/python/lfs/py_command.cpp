@@ -94,6 +94,8 @@ namespace lfs::python {
             result["source"] = item.metadata.source;
             result["scope"] = item.metadata.scope;
             result["estimated_bytes"] = item.estimated_bytes;
+            result["cpu_bytes"] = item.cpu_bytes;
+            result["gpu_bytes"] = item.gpu_bytes;
             return result;
         };
         const auto history_result_to_dict = [](const vis::op::HistoryResult& result) {
@@ -196,6 +198,14 @@ namespace lfs::python {
             "total_bytes",
             []() { return vis::op::undoHistory().totalBytes(); },
             "Get estimated bytes retained by undo and redo history");
+        undo.def(
+            "total_cpu_bytes",
+            []() { return vis::op::undoHistory().totalMemory().cpu_bytes; },
+            "Get estimated CPU-resident bytes retained by history");
+        undo.def(
+            "total_gpu_bytes",
+            []() { return vis::op::undoHistory().totalMemory().gpu_bytes; },
+            "Get estimated GPU-resident bytes retained by history");
 
         undo.def(
             "has_active_transaction",
@@ -256,6 +266,18 @@ namespace lfs::python {
                 payload["redo_bytes"] = vis::op::undoHistory().redoBytes();
                 payload["transaction_bytes"] = vis::op::undoHistory().transactionBytes();
                 payload["total_bytes"] = vis::op::undoHistory().totalBytes();
+                const auto undo_memory = vis::op::undoHistory().undoMemory();
+                const auto redo_memory = vis::op::undoHistory().redoMemory();
+                const auto transaction_memory = vis::op::undoHistory().transactionMemory();
+                const auto total_memory = vis::op::undoHistory().totalMemory();
+                payload["undo_cpu_bytes"] = undo_memory.cpu_bytes;
+                payload["undo_gpu_bytes"] = undo_memory.gpu_bytes;
+                payload["redo_cpu_bytes"] = redo_memory.cpu_bytes;
+                payload["redo_gpu_bytes"] = redo_memory.gpu_bytes;
+                payload["transaction_cpu_bytes"] = transaction_memory.cpu_bytes;
+                payload["transaction_gpu_bytes"] = transaction_memory.gpu_bytes;
+                payload["total_cpu_bytes"] = total_memory.cpu_bytes;
+                payload["total_gpu_bytes"] = total_memory.gpu_bytes;
                 payload["transaction_active"] = vis::op::undoHistory().hasActiveTransaction();
                 payload["transaction_depth"] = vis::op::undoHistory().transactionDepth();
                 payload["transaction_name"] = vis::op::undoHistory().activeTransactionName();

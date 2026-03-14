@@ -118,6 +118,29 @@ namespace lfs::vis::op {
                 };
             }
             [[nodiscard]] size_t estimatedBytes() const override { return estimated_bytes_; }
+            [[nodiscard]] UndoMemoryBreakdown memoryBreakdown() const override {
+                UndoMemoryBreakdown total;
+                for (const auto& entry : entries_) {
+                    if (entry) {
+                        total += entry->memoryBreakdown();
+                    }
+                }
+                return total;
+            }
+            void offloadToCPU() override {
+                for (auto& entry : entries_) {
+                    if (entry) {
+                        entry->offloadToCPU();
+                    }
+                }
+            }
+            void restoreToPreferredDevice() override {
+                for (auto& entry : entries_) {
+                    if (entry) {
+                        entry->restoreToPreferredDevice();
+                    }
+                }
+            }
 
         private:
             std::string name_;
@@ -168,6 +191,9 @@ namespace lfs::vis::op {
             }
             item.metadata = entry->metadata();
             item.estimated_bytes = entry->estimatedBytes();
+            const auto memory = entry->memoryBreakdown();
+            item.cpu_bytes = memory.cpu_bytes;
+            item.gpu_bytes = memory.gpu_bytes;
             return item;
         }
 
@@ -196,6 +222,67 @@ namespace lfs::vis::op {
         ++generation_;
     }
 
+    size_t UndoHistory::transactionBytesLocked() const {
+        size_t total = 0;
+        for (const auto& frame : transactions_) {
+            total += frame.estimated_bytes;
+        }
+        return total;
+    }
+
+    size_t UndoHistory::totalBytesLocked() const {
+        return undo_bytes_ + redo_bytes_ + transactionBytesLocked();
+    }
+
+    UndoMemoryBreakdown UndoHistory::stackMemoryLocked(const std::deque<UndoEntryPtr>& stack) const {
+        UndoMemoryBreakdown total;
+        for (const auto& entry : stack) {
+            if (entry) {
+                total += entry->memoryBreakdown();
+            }
+        }
+        return total;
+    }
+
+    UndoMemoryBreakdown UndoHistory::transactionMemoryLocked() const {
+        UndoMemoryBreakdown total;
+        for (const auto& frame : transactions_) {
+            for (const auto& entry : frame.entries) {
+                if (entry) {
+                    total += entry->memoryBreakdown();
+                }
+            }
+        }
+        return total;
+    }
+
+    UndoMemoryBreakdown UndoHistory::totalMemoryLocked() const {
+        auto total = stackMemoryLocked(undo_stack_);
+        total += stackMemoryLocked(redo_stack_);
+        total += transactionMemoryLocked();
+        return total;
+    }
+
+    void UndoHistory::refreshResidencyLocked() {
+        const auto refresh_stack = [](std::deque<UndoEntryPtr>& stack) {
+            const size_t hot_start = stack.size() > HOT_ENTRIES ? stack.size() - HOT_ENTRIES : 0;
+            for (size_t index = 0; index < stack.size(); ++index) {
+                auto& entry = stack[index];
+                if (!entry) {
+                    continue;
+                }
+                if (index < hot_start) {
+                    entry->offloadToCPU();
+                } else {
+                    entry->restoreToPreferredDevice();
+                }
+            }
+        };
+
+        refresh_stack(undo_stack_);
+        refresh_stack(redo_stack_);
+    }
+
     void UndoHistory::notifyObservers() {
         std::vector<Observer> observers;
         {
@@ -220,22 +307,14 @@ namespace lfs::vis::op {
     }
 
     void UndoHistory::trimUndoStack() {
-        while (undo_stack_.size() > MAX_ENTRIES || undo_bytes_ > MAX_BYTES) {
-            if (undo_stack_.empty()) {
-                undo_bytes_ = 0;
-                break;
-            }
+        while (undo_stack_.size() > 1 && (undo_stack_.size() > MAX_ENTRIES || undo_bytes_ > MAX_BYTES)) {
             undo_bytes_ -= entryBytes(undo_stack_.front());
             undo_stack_.pop_front();
         }
     }
 
     void UndoHistory::trimRedoStack() {
-        while (redo_stack_.size() > MAX_ENTRIES || redo_bytes_ > MAX_BYTES) {
-            if (redo_stack_.empty()) {
-                redo_bytes_ = 0;
-                break;
-            }
+        while (redo_stack_.size() > 1 && (redo_stack_.size() > MAX_ENTRIES || redo_bytes_ > MAX_BYTES)) {
             redo_bytes_ -= entryBytes(redo_stack_.front());
             redo_stack_.pop_front();
         }
@@ -269,6 +348,7 @@ namespace lfs::vis::op {
             resetRedoStack();
             if (tryMergeBackEntry(undo_stack_, undo_bytes_, entry)) {
                 trimUndoStack();
+                refreshResidencyLocked();
                 bumpGenerationLocked();
                 changed = true;
                 merged = true;
@@ -276,6 +356,7 @@ namespace lfs::vis::op {
                 undo_stack_.push_back(std::move(entry));
                 undo_bytes_ += entry_bytes;
                 trimUndoStack();
+                refreshResidencyLocked();
                 bumpGenerationLocked();
                 changed = true;
             }
@@ -344,6 +425,7 @@ namespace lfs::vis::op {
             LOG_DEBUG("{}ing: {}", undo_direction ? "Undo" : "Redo", entry->name());
 
             try {
+                entry->restoreToPreferredDevice();
                 if (undo_direction) {
                     entry->undo();
                 } else {
@@ -358,6 +440,7 @@ namespace lfs::vis::op {
                     auto& source_bytes = undo_direction ? undo_bytes_ : redo_bytes_;
                     source_stack.push_back(std::move(entry));
                     source_bytes += bytes;
+                    refreshResidencyLocked();
                 }
                 result.success = false;
                 result.error = e.what();
@@ -375,6 +458,7 @@ namespace lfs::vis::op {
                     auto& source_bytes = undo_direction ? undo_bytes_ : redo_bytes_;
                     source_stack.push_back(std::move(entry));
                     source_bytes += bytes;
+                    refreshResidencyLocked();
                 }
                 result.success = false;
                 result.error = "unknown exception";
@@ -396,6 +480,7 @@ namespace lfs::vis::op {
                 } else {
                     trimUndoStack();
                 }
+                refreshResidencyLocked();
                 bumpGenerationLocked();
             }
 
@@ -494,6 +579,7 @@ namespace lfs::vis::op {
                     undo_bytes_ += committed_bytes;
                     undo_stack_.push_back(std::move(committed_entry));
                     trimUndoStack();
+                    refreshResidencyLocked();
                     bumpGenerationLocked();
                     changed = true;
                     if (!undo_stack_.empty()) {
@@ -663,16 +749,32 @@ namespace lfs::vis::op {
 
     size_t UndoHistory::transactionBytes() const {
         std::lock_guard lock(mutex_);
-        size_t total = 0;
-        for (const auto& frame : transactions_) {
-            total += frame.estimated_bytes;
-        }
-        return total;
+        return transactionBytesLocked();
     }
 
     size_t UndoHistory::totalBytes() const {
         std::lock_guard lock(mutex_);
-        return undo_bytes_ + redo_bytes_;
+        return totalBytesLocked();
+    }
+
+    UndoMemoryBreakdown UndoHistory::undoMemory() const {
+        std::lock_guard lock(mutex_);
+        return stackMemoryLocked(undo_stack_);
+    }
+
+    UndoMemoryBreakdown UndoHistory::redoMemory() const {
+        std::lock_guard lock(mutex_);
+        return stackMemoryLocked(redo_stack_);
+    }
+
+    UndoMemoryBreakdown UndoHistory::transactionMemory() const {
+        std::lock_guard lock(mutex_);
+        return transactionMemoryLocked();
+    }
+
+    UndoMemoryBreakdown UndoHistory::totalMemory() const {
+        std::lock_guard lock(mutex_);
+        return totalMemoryLocked();
     }
 
     bool UndoHistory::hasActiveTransaction() const {

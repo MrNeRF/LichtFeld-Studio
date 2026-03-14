@@ -307,7 +307,7 @@ namespace lfs::vis::op {
         scene.setSelectionMask(std::make_shared<lfs::core::Tensor>(std::move(mask)));
 
         entry->captureAfter();
-        undoHistory().push(std::move(entry));
+        pushSceneSnapshotIfChanged(std::move(entry));
 
         cumulative_selection_ = lfs::core::Tensor();
     }
