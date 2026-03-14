@@ -11,9 +11,11 @@
 #include "operator/operator_registry.hpp"
 #include "operator/ops/edit_ops.hpp"
 #include "operator/ops/transform_ops.hpp"
+#include "operation/ops/transform_ops.hpp"
 #include "operator/property_schema.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "visualizer/core/editor_context.hpp"
 #include "visualizer/gui_capabilities.hpp"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -86,17 +88,18 @@ protected:
         lfs::core::event::bus().clear_all();
     }
 
-    void add_node(const std::string& name) {
+    void add_node(const std::string& name,
+                  const std::vector<float>& xyz = {
+                      0.0f,
+                      0.0f,
+                      0.0f,
+                      1.0f,
+                      0.0f,
+                      0.0f,
+                  }) {
         scene_manager_->getScene().addNode(
             name,
-            make_test_splat({
-                0.0f,
-                0.0f,
-                0.0f,
-                1.0f,
-                0.0f,
-                0.0f,
-            }));
+            make_test_splat(xyz));
     }
 
     std::unique_ptr<lfs::vis::RenderingManager> rendering_manager_;
@@ -142,6 +145,76 @@ TEST_F(OperatorRegistryPropsTest, TransformTranslateOperatorUsesNamedNodeWithout
     ASSERT_TRUE(resolved.has_value());
     ASSERT_EQ(resolved->size(), 1u);
     EXPECT_EQ(resolved->front(), "move_me");
+}
+
+TEST_F(OperatorRegistryPropsTest, EditorContextDisablesTransformToolsForMixedLockedSelection) {
+    add_node("editable");
+    add_node("locked");
+    scene_manager_->getScene().setNodeLocked("locked", true);
+    scene_manager_->selectNodes({"editable", "locked"});
+
+    lfs::vis::EditorContext editor;
+    editor.update(scene_manager_.get(), nullptr);
+
+    EXPECT_FALSE(editor.canTransformSelectedNode());
+    EXPECT_FALSE(editor.isToolAvailable(lfs::vis::ToolType::Translate));
+    EXPECT_STREQ(editor.getToolUnavailableReason(lfs::vis::ToolType::Translate),
+                 "selection contains locked nodes");
+}
+
+TEST_F(OperatorRegistryPropsTest, EditorContextDisablesTransformToolsForMixedUnsupportedSelection) {
+    add_node("editable");
+    ASSERT_NE(scene_manager_->getScene().addGroup("group"), lfs::core::NULL_NODE);
+    scene_manager_->selectNodes({"editable", "group"});
+
+    lfs::vis::EditorContext editor;
+    editor.update(scene_manager_.get(), nullptr);
+
+    EXPECT_FALSE(editor.canTransformSelectedNode());
+    EXPECT_FALSE(editor.isToolAvailable(lfs::vis::ToolType::Translate));
+    EXPECT_STREQ(editor.getToolUnavailableReason(lfs::vis::ToolType::Translate),
+                 "selection contains unsupported nodes");
+}
+
+TEST_F(OperatorRegistryPropsTest, LegacyTransformRotateUsesEditableTargetPivotOnly) {
+    add_node("editable", {
+                             0.0f,
+                             0.0f,
+                             0.0f,
+                             1.0f,
+                             0.0f,
+                             0.0f,
+                         });
+    add_node("locked", {
+                           10.0f,
+                           0.0f,
+                           0.0f,
+                           11.0f,
+                           0.0f,
+                           0.0f,
+                       });
+    scene_manager_->getScene().setNodeLocked("locked", true);
+    scene_manager_->selectNodes({"editable", "locked"});
+
+    lfs::vis::op::TransformRotate op;
+    lfs::vis::op::OperatorProperties props;
+    props.set("axis", glm::vec3(0.0f, 0.0f, 1.0f));
+    props.set("angle", 180.0f);
+
+    const auto result = op.execute(*scene_manager_, props, {});
+    ASSERT_TRUE(result.ok());
+
+    const auto components = lfs::vis::cap::decomposeTransform(
+        scene_manager_->getScene().getNodeTransform("editable"));
+    EXPECT_FLOAT_EQ(components.translation.x, 1.0f);
+    EXPECT_NEAR(components.translation.y, 0.0f, 1e-5f);
+    EXPECT_NEAR(components.translation.z, 0.0f, 1e-5f);
+
+    const auto locked_components = lfs::vis::cap::decomposeTransform(
+        scene_manager_->getScene().getNodeTransform("locked"));
+    EXPECT_FLOAT_EQ(locked_components.translation.x, 0.0f);
+    EXPECT_FLOAT_EQ(locked_components.translation.y, 0.0f);
+    EXPECT_FLOAT_EQ(locked_components.translation.z, 0.0f);
 }
 
 TEST_F(OperatorRegistryPropsTest, ResolveCropBoxIdFindsAttachedChildForParentNodeAndSelection) {

@@ -8,6 +8,8 @@
 #include "core/services.hpp"
 #include "unified_tool_registry.hpp"
 
+#include <initializer_list>
+
 namespace lfs::vis {
 
     namespace {

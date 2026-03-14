@@ -141,6 +141,8 @@ namespace lfs::vis {
         bool has_gaussians_ = false;
         bool has_transformable_selection_ = false;
         bool has_editable_transform_selection_ = false;
+        bool has_locked_transform_selection_ = false;
+        bool has_untransformable_selection_ = false;
         bool has_splat_selection_ = false;
         bool has_editable_splat_selection_ = false;
 

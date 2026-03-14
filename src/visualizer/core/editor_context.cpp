@@ -15,6 +15,8 @@ namespace lfs::vis {
             has_gaussians_ = false;
             has_transformable_selection_ = false;
             has_editable_transform_selection_ = false;
+            has_locked_transform_selection_ = false;
+            has_untransformable_selection_ = false;
             has_splat_selection_ = false;
             has_editable_splat_selection_ = false;
             selected_node_type_ = core::NodeType::SPLAT;
@@ -53,6 +55,8 @@ namespace lfs::vis {
         selected_node_type_ = has_selection_ ? scene_manager->getSelectedNodeType() : core::NodeType::SPLAT;
         has_transformable_selection_ = false;
         has_editable_transform_selection_ = false;
+        has_locked_transform_selection_ = false;
+        has_untransformable_selection_ = false;
         has_splat_selection_ = false;
         has_editable_splat_selection_ = false;
 
@@ -67,8 +71,13 @@ namespace lfs::vis {
 
                 if (isTransformableNodeType(node->type)) {
                     has_transformable_selection_ = true;
-                    if (!locked)
+                    if (locked) {
+                        has_locked_transform_selection_ = true;
+                    } else {
                         has_editable_transform_selection_ = true;
+                    }
+                } else {
+                    has_untransformable_selection_ = true;
                 }
 
                 if (node->type == core::NodeType::SPLAT) {
@@ -94,7 +103,11 @@ namespace lfs::vis {
     }
 
     bool EditorContext::canTransformSelectedNode() const {
-        return has_selection_ && !isToolsDisabled() && has_editable_transform_selection_;
+        return has_selection_ &&
+               !isToolsDisabled() &&
+               has_editable_transform_selection_ &&
+               !has_locked_transform_selection_ &&
+               !has_untransformable_selection_;
     }
 
     bool EditorContext::canSelectGaussians() const {
@@ -149,8 +162,14 @@ namespace lfs::vis {
         case ToolType::Translate:
         case ToolType::Rotate:
         case ToolType::Scale:
-            if (has_editable_transform_selection_)
+            if (canTransformSelectedNode())
                 return nullptr;
+            if (has_locked_transform_selection_ && has_untransformable_selection_)
+                return "selection contains locked or unsupported nodes";
+            if (has_locked_transform_selection_)
+                return has_editable_transform_selection_ ? "selection contains locked nodes" : "selection is locked";
+            if (has_untransformable_selection_)
+                return has_editable_transform_selection_ ? "selection contains unsupported nodes" : "select parent node";
             if (has_transformable_selection_)
                 return "selection is locked";
             return "select parent node";

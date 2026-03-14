@@ -15,6 +15,7 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtx/euler_angles.hpp>
+#include <limits>
 #include <memory>
 
 namespace lfs::vis::cap {
@@ -106,6 +107,57 @@ namespace lfs::vis::cap {
             if (found_untransformable)
                 return std::unexpected("Selected nodes cannot be transformed");
             return std::unexpected("No transform targets provided");
+        }
+
+        std::optional<glm::vec3> compute_transform_targets_center(const SceneManager& scene_manager,
+                                                                  const std::vector<std::string>& targets,
+                                                                  const bool world_space) {
+            if (targets.empty())
+                return std::nullopt;
+
+            const auto& scene = scene_manager.getScene();
+            glm::vec3 total_min(std::numeric_limits<float>::max());
+            glm::vec3 total_max(std::numeric_limits<float>::lowest());
+            bool has_bounds = false;
+
+            const auto expand_bounds = [&](const glm::vec3& point) {
+                total_min = glm::min(total_min, point);
+                total_max = glm::max(total_max, point);
+                has_bounds = true;
+            };
+
+            for (const auto& name : targets) {
+                const auto* const node = scene.getNode(name);
+                if (!node)
+                    continue;
+
+                glm::vec3 local_min, local_max;
+                if (!scene.getNodeBounds(node->id, local_min, local_max))
+                    continue;
+
+                if (!world_space) {
+                    expand_bounds(local_min);
+                    expand_bounds(local_max);
+                    continue;
+                }
+
+                const glm::mat4 world_transform = scene.getWorldTransform(node->id);
+                const glm::vec3 corners[8] = {
+                    {local_min.x, local_min.y, local_min.z},
+                    {local_max.x, local_min.y, local_min.z},
+                    {local_min.x, local_max.y, local_min.z},
+                    {local_max.x, local_max.y, local_min.z},
+                    {local_min.x, local_min.y, local_max.z},
+                    {local_max.x, local_min.y, local_max.z},
+                    {local_min.x, local_max.y, local_max.z},
+                    {local_max.x, local_max.y, local_max.z}};
+                for (const auto& corner : corners)
+                    expand_bounds(glm::vec3(world_transform * glm::vec4(corner, 1.0f)));
+            }
+
+            if (!has_bounds)
+                return std::nullopt;
+            return (total_min + total_max) * 0.5f;
         }
 
         core::NodeId find_attached_child_node(const core::Scene& scene,
@@ -243,6 +295,16 @@ namespace lfs::vis::cap {
         if (!targets)
             return std::unexpected(targets.error());
         return filter_editable_transform_targets(scene_manager, *targets, requested_node);
+    }
+
+    std::optional<glm::vec3> getTransformTargetsCenter(const SceneManager& scene_manager,
+                                                       const std::vector<std::string>& targets) {
+        return compute_transform_targets_center(scene_manager, targets, false);
+    }
+
+    std::optional<glm::vec3> getTransformTargetsWorldCenter(const SceneManager& scene_manager,
+                                                            const std::vector<std::string>& targets) {
+        return compute_transform_targets_center(scene_manager, targets, true);
     }
 
     std::expected<void, std::string> setTransform(SceneManager& scene_manager,
