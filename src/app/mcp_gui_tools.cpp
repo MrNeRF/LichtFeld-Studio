@@ -480,7 +480,11 @@ namespace lfs::app {
         std::expected<std::vector<std::string>, std::string> resolve_editable_transform_targets(
             const vis::SceneManager& scene_manager,
             const std::optional<std::string>& requested_node) {
-            return vis::cap::resolveEditableTransformTargets(scene_manager, requested_node);
+            auto resolved = vis::cap::resolveEditableTransformSelection(
+                scene_manager, requested_node, vis::cap::TransformTargetPolicy::AllowEditableSubset);
+            if (!resolved)
+                return std::unexpected(resolved.error());
+            return resolved->node_names;
         }
 
         std::expected<core::NodeId, std::string> resolve_cropbox_parent_id(

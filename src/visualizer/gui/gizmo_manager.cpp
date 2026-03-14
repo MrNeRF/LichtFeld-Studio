@@ -345,12 +345,12 @@ namespace lfs::vis::gui {
             return;
 
         const auto& scene = scene_manager->getScene();
-        const auto selected_names = scene_manager->getSelectedNodeNames();
-        const auto transform_targets = cap::resolveEditableTransformTargets(*scene_manager, std::nullopt);
-        if (!transform_targets || transform_targets->size() != selected_names.size())
+        const auto transform_targets = cap::resolveEditableTransformSelection(
+            *scene_manager, std::nullopt, cap::TransformTargetPolicy::RequireAllEditable);
+        if (!transform_targets)
             return;
 
-        const auto& target_names = *transform_targets;
+        const auto& target_names = transform_targets->node_names;
         bool any_visible = false;
         for (const auto& name : target_names) {
             if (const auto* node = scene.getNode(name)) {
@@ -380,8 +380,7 @@ namespace lfs::vis::gui {
 
         const glm::vec3 local_pivot = (pivot_mode_ == PivotMode::Origin)
                                           ? glm::vec3(0.0f)
-                                          : cap::getTransformTargetsCenter(*scene_manager, target_names)
-                                                .value_or(glm::vec3(0.0f));
+                                          : transform_targets->local_center;
 
         bool has_valid_bounds = false;
         const bool use_bounds_scale = !is_multi_selection && node_gizmo_operation_ == ImGuizmo::SCALE;
@@ -452,8 +451,7 @@ namespace lfs::vis::gui {
             const glm::vec3 gizmo_position = node_gizmo_active_
                                                  ? gizmo_pivot_
                                                  : (is_multi_selection
-                                                        ? cap::getTransformTargetsWorldCenter(*scene_manager, target_names)
-                                                              .value_or(glm::vec3(0.0f))
+                                                        ? transform_targets->world_center
                                                         : (first_node
                                                                ? glm::vec3(scene.getWorldTransform(first_node->id) *
                                                                            glm::vec4(local_pivot, 1.0f))
@@ -768,7 +766,7 @@ namespace lfs::vis::gui {
         }
 
         if (node_gizmo_active_ && render_manager) {
-            for (const auto& name : selected_names) {
+            for (const auto& name : target_names) {
                 const auto* node = scene.getNode(name);
                 if (!node || node->type != core::NodeType::SPLAT)
                     continue;

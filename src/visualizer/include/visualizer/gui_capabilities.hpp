@@ -7,6 +7,7 @@
 #include "core/export.hpp"
 #include "core/scene.hpp"
 
+#include <cstdint>
 #include <expected>
 #include <optional>
 #include <string>
@@ -22,10 +23,21 @@ namespace lfs::vis {
 
 namespace lfs::vis::cap {
 
+    enum class TransformTargetPolicy : uint8_t {
+        AllowEditableSubset,
+        RequireAllEditable,
+    };
+
     struct LFS_VIS_API TransformComponents {
         glm::vec3 translation{0.0f};
         glm::vec3 rotation{0.0f};
         glm::vec3 scale{1.0f};
+    };
+
+    struct LFS_VIS_API ResolvedTransformTargets {
+        std::vector<std::string> node_names;
+        glm::vec3 local_center{0.0f};
+        glm::vec3 world_center{0.0f};
     };
 
     struct LFS_VIS_API SelectionSnapshot {
@@ -82,15 +94,10 @@ namespace lfs::vis::cap {
     [[nodiscard]] LFS_VIS_API std::expected<std::vector<std::string>, std::string> resolveTransformTargets(
         const SceneManager& scene_manager,
         const std::optional<std::string>& requested_node);
-    [[nodiscard]] LFS_VIS_API std::expected<std::vector<std::string>, std::string> resolveEditableTransformTargets(
+    [[nodiscard]] LFS_VIS_API std::expected<ResolvedTransformTargets, std::string> resolveEditableTransformSelection(
         const SceneManager& scene_manager,
-        const std::optional<std::string>& requested_node);
-    [[nodiscard]] LFS_VIS_API std::optional<glm::vec3> getTransformTargetsCenter(
-        const SceneManager& scene_manager,
-        const std::vector<std::string>& targets);
-    [[nodiscard]] LFS_VIS_API std::optional<glm::vec3> getTransformTargetsWorldCenter(
-        const SceneManager& scene_manager,
-        const std::vector<std::string>& targets);
+        const std::optional<std::string>& requested_node,
+        TransformTargetPolicy policy = TransformTargetPolicy::AllowEditableSubset);
     [[nodiscard]] LFS_VIS_API std::expected<void, std::string> setTransform(
         SceneManager& scene_manager,
         const std::vector<std::string>& targets,

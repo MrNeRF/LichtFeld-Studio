@@ -5,6 +5,7 @@
 #include "core/editor_context.hpp"
 #include "scene/scene_manager.hpp"
 #include "training/training_manager.hpp"
+#include "visualizer/gui_capabilities.hpp"
 
 namespace lfs::vis {
 
@@ -13,12 +14,10 @@ namespace lfs::vis {
             mode_ = EditorMode::EMPTY;
             has_selection_ = false;
             has_gaussians_ = false;
-            has_transformable_selection_ = false;
             has_editable_transform_selection_ = false;
-            has_locked_transform_selection_ = false;
-            has_untransformable_selection_ = false;
             has_splat_selection_ = false;
             has_editable_splat_selection_ = false;
+            transform_selection_error_.clear();
             selected_node_type_ = core::NodeType::SPLAT;
             return;
         }
@@ -53,14 +52,18 @@ namespace lfs::vis {
         // Update selection state
         has_selection_ = scene_manager->hasSelectedNode();
         selected_node_type_ = has_selection_ ? scene_manager->getSelectedNodeType() : core::NodeType::SPLAT;
-        has_transformable_selection_ = false;
         has_editable_transform_selection_ = false;
-        has_locked_transform_selection_ = false;
-        has_untransformable_selection_ = false;
         has_splat_selection_ = false;
         has_editable_splat_selection_ = false;
+        transform_selection_error_.clear();
 
         if (has_selection_) {
+            const auto transform_selection = cap::resolveEditableTransformSelection(
+                *scene_manager, std::nullopt, cap::TransformTargetPolicy::RequireAllEditable);
+            has_editable_transform_selection_ = transform_selection.has_value();
+            if (!transform_selection)
+                transform_selection_error_ = transform_selection.error();
+
             const auto& scene = scene_manager->getScene();
             for (const auto& name : scene_manager->getSelectedNodeNames()) {
                 const auto* const node = scene.getNode(name);
@@ -68,17 +71,6 @@ namespace lfs::vis {
                     continue;
 
                 const bool locked = static_cast<bool>(node->locked);
-
-                if (isTransformableNodeType(node->type)) {
-                    has_transformable_selection_ = true;
-                    if (locked) {
-                        has_locked_transform_selection_ = true;
-                    } else {
-                        has_editable_transform_selection_ = true;
-                    }
-                } else {
-                    has_untransformable_selection_ = true;
-                }
 
                 if (node->type == core::NodeType::SPLAT) {
                     has_splat_selection_ = true;
@@ -94,20 +86,8 @@ namespace lfs::vis {
                           mode_ == EditorMode::FINISHED);
     }
 
-    bool EditorContext::isTransformableNodeType(const core::NodeType type) {
-        return type == core::NodeType::DATASET ||
-               type == core::NodeType::SPLAT ||
-               type == core::NodeType::CROPBOX ||
-               type == core::NodeType::ELLIPSOID ||
-               type == core::NodeType::MESH;
-    }
-
     bool EditorContext::canTransformSelectedNode() const {
-        return has_selection_ &&
-               !isToolsDisabled() &&
-               has_editable_transform_selection_ &&
-               !has_locked_transform_selection_ &&
-               !has_untransformable_selection_;
+        return has_selection_ && !isToolsDisabled() && has_editable_transform_selection_;
     }
 
     bool EditorContext::canSelectGaussians() const {
@@ -164,15 +144,7 @@ namespace lfs::vis {
         case ToolType::Scale:
             if (canTransformSelectedNode())
                 return nullptr;
-            if (has_locked_transform_selection_ && has_untransformable_selection_)
-                return "selection contains locked or unsupported nodes";
-            if (has_locked_transform_selection_)
-                return has_editable_transform_selection_ ? "selection contains locked nodes" : "selection is locked";
-            if (has_untransformable_selection_)
-                return has_editable_transform_selection_ ? "selection contains unsupported nodes" : "select parent node";
-            if (has_transformable_selection_)
-                return "selection is locked";
-            return "select parent node";
+            return transform_selection_error_.empty() ? "select parent node" : transform_selection_error_.c_str();
         case ToolType::Align:
             if (has_editable_splat_selection_)
                 return nullptr;

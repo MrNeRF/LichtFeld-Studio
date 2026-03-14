@@ -13,16 +13,43 @@ namespace lfs::vis::op {
 
     namespace {
 
-        std::expected<std::vector<std::string>, std::string> resolve_transform_targets_from_props(
+        std::optional<std::string> requested_transform_node(const OperatorProperties* props) {
+            if (!props)
+                return std::nullopt;
+            if (const auto node = props->get<std::string>("node"); node && !node->empty())
+                return *node;
+            return std::nullopt;
+        }
+
+        std::expected<cap::ResolvedTransformTargets, std::string> resolve_transform_targets_from_props(
             const OperatorContext& ctx,
             const OperatorProperties* props) {
-            std::optional<std::string> requested_node;
-            if (props) {
-                if (const auto node = props->get<std::string>("node"); node && !node->empty()) {
-                    requested_node = *node;
-                }
-            }
-            return cap::resolveEditableTransformTargets(ctx.scene(), requested_node);
+            return cap::resolveEditableTransformSelection(
+                ctx.scene(), requested_transform_node(props), cap::TransformTargetPolicy::AllowEditableSubset);
+        }
+
+        bool poll_transform_operator(const OperatorContext& ctx,
+                                     const OperatorProperties* props,
+                                     const bool require_value = true) {
+            const auto targets = resolve_transform_targets_from_props(ctx, props);
+            return targets && (!require_value || !props || props->has("value"));
+        }
+
+        template <typename ApplyFn>
+        OperatorResult invoke_value_transform_operator(
+            OperatorContext& ctx,
+            OperatorProperties& props,
+            const glm::vec3 default_value,
+            const std::string_view undo_label,
+            ApplyFn&& apply) {
+            const auto nodes = resolve_transform_targets_from_props(ctx, &props);
+            if (!nodes || !props.has("value"))
+                return OperatorResult::CANCELLED;
+
+            const auto value = props.get_or<glm::vec3>("value", default_value);
+            props.set("resolved_node_names", nodes->node_names);
+            const auto result = apply(ctx.scene(), nodes->node_names, value, undo_label);
+            return result ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
         }
 
     } // namespace
@@ -39,14 +66,10 @@ namespace lfs::vis::op {
     };
 
     bool TransformSetOperator::poll(const OperatorContext& ctx, const OperatorProperties* props) const {
-        if (!props) {
-            return cap::resolveEditableTransformTargets(ctx.scene(), std::nullopt).has_value();
-        }
-
-        const auto targets = resolve_transform_targets_from_props(ctx, props);
-        if (!targets) {
+        if (!props)
+            return poll_transform_operator(ctx, nullptr, false);
+        if (!poll_transform_operator(ctx, props, false))
             return false;
-        }
 
         return props->has("translation") || props->has("rotation") || props->has("scale");
     }
@@ -63,9 +86,9 @@ namespace lfs::vis::op {
                                                     : std::nullopt;
         const auto scale = props.has("scale") ? std::optional(props.get_or<glm::vec3>("scale", glm::vec3(1.0f)))
                                               : std::nullopt;
-        props.set("resolved_node_names", *nodes);
+        props.set("resolved_node_names", nodes->node_names);
         const auto result = cap::setTransform(
-            ctx.scene(), *nodes, translation, rotation, scale, "transform.set");
+            ctx.scene(), nodes->node_names, translation, rotation, scale, "transform.set");
         return result ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
     }
 
@@ -81,24 +104,15 @@ namespace lfs::vis::op {
     };
 
     bool TransformTranslateOperator::poll(const OperatorContext& ctx, const OperatorProperties* props) const {
-        if (!props) {
-            return cap::resolveEditableTransformTargets(ctx.scene(), std::nullopt).has_value();
-        }
-
-        const auto targets = resolve_transform_targets_from_props(ctx, props);
-        return targets && props->has("value");
+        return poll_transform_operator(ctx, props);
     }
 
     OperatorResult TransformTranslateOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
-        const auto nodes = resolve_transform_targets_from_props(ctx, &props);
-        if (!nodes || !props.has("value")) {
-            return OperatorResult::CANCELLED;
-        }
-
-        const auto value = props.get_or<glm::vec3>("value", glm::vec3(0.0f));
-        props.set("resolved_node_names", *nodes);
-        const auto result = cap::translateNodes(ctx.scene(), *nodes, value, "transform.translate");
-        return result ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
+        return invoke_value_transform_operator(
+            ctx, props, glm::vec3(0.0f), "transform.translate",
+            [](SceneManager& scene, const std::vector<std::string>& nodes, const glm::vec3& value, const std::string_view undo_label) {
+                return cap::translateNodes(scene, nodes, value, undo_label);
+            });
     }
 
     const OperatorDescriptor TransformRotateOperator::DESCRIPTOR = {
@@ -113,24 +127,15 @@ namespace lfs::vis::op {
     };
 
     bool TransformRotateOperator::poll(const OperatorContext& ctx, const OperatorProperties* props) const {
-        if (!props) {
-            return cap::resolveEditableTransformTargets(ctx.scene(), std::nullopt).has_value();
-        }
-
-        const auto targets = resolve_transform_targets_from_props(ctx, props);
-        return targets && props->has("value");
+        return poll_transform_operator(ctx, props);
     }
 
     OperatorResult TransformRotateOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
-        const auto nodes = resolve_transform_targets_from_props(ctx, &props);
-        if (!nodes || !props.has("value")) {
-            return OperatorResult::CANCELLED;
-        }
-
-        const auto value = props.get_or<glm::vec3>("value", glm::vec3(0.0f));
-        props.set("resolved_node_names", *nodes);
-        const auto result = cap::rotateNodes(ctx.scene(), *nodes, value, "transform.rotate");
-        return result ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
+        return invoke_value_transform_operator(
+            ctx, props, glm::vec3(0.0f), "transform.rotate",
+            [](SceneManager& scene, const std::vector<std::string>& nodes, const glm::vec3& value, const std::string_view undo_label) {
+                return cap::rotateNodes(scene, nodes, value, undo_label);
+            });
     }
 
     const OperatorDescriptor TransformScaleOperator::DESCRIPTOR = {
@@ -145,24 +150,15 @@ namespace lfs::vis::op {
     };
 
     bool TransformScaleOperator::poll(const OperatorContext& ctx, const OperatorProperties* props) const {
-        if (!props) {
-            return cap::resolveEditableTransformTargets(ctx.scene(), std::nullopt).has_value();
-        }
-
-        const auto targets = resolve_transform_targets_from_props(ctx, props);
-        return targets && props->has("value");
+        return poll_transform_operator(ctx, props);
     }
 
     OperatorResult TransformScaleOperator::invoke(OperatorContext& ctx, OperatorProperties& props) {
-        const auto nodes = resolve_transform_targets_from_props(ctx, &props);
-        if (!nodes || !props.has("value")) {
-            return OperatorResult::CANCELLED;
-        }
-
-        const auto value = props.get_or<glm::vec3>("value", glm::vec3(1.0f));
-        props.set("resolved_node_names", *nodes);
-        const auto result = cap::scaleNodes(ctx.scene(), *nodes, value, "transform.scale");
-        return result ? OperatorResult::FINISHED : OperatorResult::CANCELLED;
+        return invoke_value_transform_operator(
+            ctx, props, glm::vec3(1.0f), "transform.scale",
+            [](SceneManager& scene, const std::vector<std::string>& nodes, const glm::vec3& value, const std::string_view undo_label) {
+                return cap::scaleNodes(scene, nodes, value, undo_label);
+            });
     }
 
     const OperatorDescriptor TransformApplyBatchOperator::DESCRIPTOR = {
