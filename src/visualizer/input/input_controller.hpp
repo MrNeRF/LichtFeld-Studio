@@ -80,6 +80,7 @@ namespace lfs::vis {
                                      drag_mode_ == DragMode::Rotate;
             return movement_active || camera_drag;
         }
+        [[nodiscard]] bool hasViewportKeyboardFocus() const { return viewport_keyboard_focus_; }
 
         // Node rectangle selection state (for rendering)
         [[nodiscard]] bool isNodeRectDragging() const { return is_node_rect_dragging_; }

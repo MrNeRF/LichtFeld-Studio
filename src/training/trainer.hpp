@@ -72,6 +72,12 @@ namespace lfs::training {
 
     class Trainer {
     public:
+        struct GTLoadConfigSnapshot {
+            int resize_factor = 1;
+            int max_width = 0;
+            bool undistort = false;
+        };
+
         // Legacy constructor - takes ownership of strategy and shares datasets
         Trainer(std::shared_ptr<CameraDataset> dataset,
                 std::unique_ptr<IStrategy> strategy,
@@ -143,6 +149,8 @@ namespace lfs::training {
         void setOnIterationStart(std::function<void()> cb) { on_iteration_start_ = std::move(cb); }
 
         lfs::core::Scene* getScene() const { return scene_; }
+        std::shared_ptr<lfs::io::PipelinedImageLoader> getActiveImageLoader() const;
+        GTLoadConfigSnapshot getGTLoadConfigSnapshot() const;
 
         /// Apply PPISP correction to a rendered image for viewport display
         /// @param rgb rendered image [C,H,W] or [H,W,C]
@@ -213,6 +221,8 @@ namespace lfs::training {
             RenderMode render_mode,
             std::stop_token stop_token = {});
 
+        void setActiveImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader);
+
         // Compute photometric loss AND gradient manually (no autograd)
         // Returns GPU tensor for loss (avoid sync!)
         std::expected<std::pair<lfs::core::Tensor, lfs::core::Tensor>, std::string> compute_photometric_loss_with_gradient(
@@ -267,11 +277,13 @@ namespace lfs::training {
         void handle_control_requests(int iter, std::stop_token stop_token = {});
 
         void save_ply(const std::filesystem::path& save_path, int iter_num, bool join_threads = true);
+        void updateGTLoadConfigSnapshot(const lfs::core::param::TrainingParameters& params);
 
         lfs::core::Scene* scene_ = nullptr;
         std::shared_ptr<CameraDataset> base_dataset_;
         std::shared_ptr<CameraDataset> train_dataset_;
         std::shared_ptr<CameraDataset> val_dataset_;
+        std::shared_ptr<lfs::io::PipelinedImageLoader> active_image_loader_;
         std::unique_ptr<IStrategy> strategy_;
         lfs::core::param::TrainingParameters params_;
         std::optional<std::tuple<std::vector<std::string>, std::vector<std::string>>> provided_splits_;
@@ -321,6 +333,8 @@ namespace lfs::training {
 
         // Mutex for initialization to ensure thread safety
         mutable std::mutex init_mutex_;
+        mutable std::mutex active_image_loader_mutex_;
+        mutable std::mutex gt_load_config_mutex_;
 
         // Control flags for thread communication
         std::atomic<bool> pause_requested_{false};
@@ -346,5 +360,6 @@ namespace lfs::training {
         std::vector<std::filesystem::path> python_scripts_;
 
         std::function<void()> on_iteration_start_;
+        GTLoadConfigSnapshot gt_load_config_snapshot_;
     };
 } // namespace lfs::training

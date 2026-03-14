@@ -162,6 +162,16 @@ namespace lfs::vis {
             }
         }
 
+        bool isViewportFocusedShortcutAction(const input::Action action) {
+            switch (action) {
+            case input::Action::TOGGLE_GT_COMPARISON:
+            case input::Action::TOGGLE_SPLIT_VIEW:
+                return true;
+            default:
+                return false;
+            }
+        }
+
         bool isViewportMovementAction(const input::Action action) {
             switch (action) {
             case input::Action::CAMERA_MOVE_FORWARD:
@@ -1029,9 +1039,15 @@ namespace lfs::vis {
 
         const auto tool_mode = getCurrentToolMode();
         const auto bound_action = bindings_.getActionForKey(tool_mode, key, mods);
+        const bool is_viewport_focused_shortcut = isViewportFocusedShortcutAction(bound_action);
         const bool allow_viewport_movement =
             viewport_keyboard_focus_ &&
             isViewportMovementAction(bound_action) &&
+            !wants_text_input &&
+            !(gui && gui->isModalWindowOpen());
+        const bool allow_viewport_shortcut =
+            viewport_keyboard_focus_ &&
+            is_viewport_focused_shortcut &&
             !wants_text_input &&
             !(gui && gui->isModalWindowOpen());
 
@@ -1056,7 +1072,7 @@ namespace lfs::vis {
 
         const bool is_always_active = isAlwaysActiveKeyAction(bound_action);
 
-        if (imgui_wants_keyboard && !allow_viewport_movement &&
+        if (imgui_wants_keyboard && !allow_viewport_movement && !allow_viewport_shortcut &&
             (!is_always_active || wants_text_input))
             return;
 

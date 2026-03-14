@@ -453,6 +453,7 @@ namespace lfs::training {
 
         try {
             params_ = params;
+            updateGTLoadConfigSnapshot(params_);
 
             // Create DatasetConfig for lfs::training::CameraDataset
             lfs::training::DatasetConfig dataset_config;
@@ -744,6 +745,28 @@ namespace lfs::training {
         shutdown();
     }
 
+    std::shared_ptr<lfs::io::PipelinedImageLoader> Trainer::getActiveImageLoader() const {
+        std::lock_guard<std::mutex> lock(active_image_loader_mutex_);
+        return active_image_loader_;
+    }
+
+    Trainer::GTLoadConfigSnapshot Trainer::getGTLoadConfigSnapshot() const {
+        std::lock_guard<std::mutex> lock(gt_load_config_mutex_);
+        return gt_load_config_snapshot_;
+    }
+
+    void Trainer::updateGTLoadConfigSnapshot(const lfs::core::param::TrainingParameters& params) {
+        std::lock_guard<std::mutex> lock(gt_load_config_mutex_);
+        gt_load_config_snapshot_.resize_factor = std::max(1, params.dataset.resize_factor);
+        gt_load_config_snapshot_.max_width = params.dataset.max_width;
+        gt_load_config_snapshot_.undistort = params.optimization.undistort;
+    }
+
+    void Trainer::setActiveImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader) {
+        std::lock_guard<std::mutex> lock(active_image_loader_mutex_);
+        active_image_loader_ = std::move(loader);
+    }
+
     void Trainer::shutdown() {
         if (shutdown_complete_.exchange(true)) {
             return;
@@ -763,6 +786,7 @@ namespace lfs::training {
 
         cudaDeviceSynchronize();
 
+        setActiveImageLoader(nullptr);
         strategy_.reset();
         bilateral_grid_.reset();
         ppisp_.reset();
@@ -793,6 +817,7 @@ namespace lfs::training {
 
         // Update params first
         params_ = params;
+        updateGTLoadConfigSnapshot(params_);
 
         // Load/reload background image if needed
         if (bg_mode_is_image && bg_image_path_changed &&
@@ -1880,7 +1905,14 @@ namespace lfs::training {
 
             auto train_dataloader = create_infinite_pipelined_dataloader(
                 train_dataset_, pipelined_config, mask_pipeline_config);
+            setActiveImageLoader(train_dataloader->get_loader_shared());
             strategy_->set_image_loader(train_dataloader->get_loader());
+            const auto clear_active_image_loader = [this]() {
+                if (strategy_) {
+                    strategy_->set_image_loader(nullptr);
+                }
+                setActiveImageLoader(nullptr);
+            };
 
             LOG_DEBUG("Starting training iterations");
             while (iter <= params_.optimization.iterations) {
@@ -1928,11 +1960,11 @@ namespace lfs::training {
                         LOG_INFO("OOM recovery: retrying iteration {}", iter);
                         step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
                         if (!step_result) {
-                            strategy_->set_image_loader(nullptr);
+                            clear_active_image_loader();
                             return std::unexpected(step_result.error());
                         }
                     } else {
-                        strategy_->set_image_loader(nullptr);
+                        clear_active_image_loader();
                         return std::unexpected(step_result.error());
                     }
                 }
@@ -1967,7 +1999,7 @@ namespace lfs::training {
                 ++iter;
             }
 
-            strategy_->set_image_loader(nullptr);
+            clear_active_image_loader();
 
             // Ensure callback is finished before final save
             if (callback_busy_.load()) {

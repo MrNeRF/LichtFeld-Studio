@@ -995,6 +995,9 @@ namespace lfs::vis::gui {
 
         PanelInputState frame_input = buildPanelInputFromSDL(sdl_input);
         updateInputOverrides(frame_input, mouse_in_viewport);
+        if (auto* const ic = viewer_->getInputController()) {
+            frame_input.viewport_keyboard_focus = ic->hasViewportKeyboardFocus();
+        }
 
         auto& reg = PanelRegistry::instance();
 

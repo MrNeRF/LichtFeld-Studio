@@ -12,6 +12,15 @@
 
 namespace lfs::vis {
 
+    PointCloudPass::~PointCloudPass() {
+        if (render_depth_rbo_ != 0) {
+            glDeleteRenderbuffers(1, &render_depth_rbo_);
+        }
+        if (render_fbo_ != 0) {
+            glDeleteFramebuffers(1, &render_fbo_);
+        }
+    }
+
     bool PointCloudPass::shouldExecute(DirtyMask frame_dirty, const FrameContext& ctx) const {
         if (ctx.model && ctx.model->size() > 0)
             return false;
@@ -141,6 +150,12 @@ namespace lfs::vis {
             .crop_inverse = crop_inverse,
             .crop_desaturate = crop_desaturate};
 
+        if (ctx.settings.split_view_mode == SplitViewMode::GTComparison &&
+            res.gt_context && res.gt_context->valid()) {
+            renderToTexture(engine, ctx, res, *point_cloud_to_render, pc_transforms, pc_request);
+            return;
+        }
+
         auto render_result = engine.renderPointCloud(*point_cloud_to_render, pc_request);
         if (render_result) {
             res.cached_result = *render_result;
@@ -160,6 +175,90 @@ namespace lfs::vis {
             }
         } else {
             LOG_ERROR("Failed to render point cloud: {}", render_result.error());
+        }
+    }
+
+    void PointCloudPass::renderToTexture(lfs::rendering::RenderingEngine& engine,
+                                         const FrameContext& ctx,
+                                         FrameResources& res,
+                                         const lfs::core::PointCloud& point_cloud,
+                                         const std::vector<glm::mat4>& pc_transforms,
+                                         const lfs::rendering::RenderRequest& request) {
+        if (!res.gt_context || !res.gt_context->valid()) {
+            return;
+        }
+
+        const glm::ivec2 render_size = res.gt_context->dimensions;
+        const glm::ivec2 alloc_size(
+            ((render_size.x + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT,
+            ((render_size.y + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT);
+
+        if (alloc_size != texture_size_) {
+            glBindTexture(GL_TEXTURE_2D, ctx.cached_render_texture);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, alloc_size.x, alloc_size.y,
+                         0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            texture_size_ = alloc_size;
+        }
+
+        if (render_fbo_ == 0) {
+            glGenFramebuffers(1, &render_fbo_);
+            glGenRenderbuffers(1, &render_depth_rbo_);
+        }
+
+        GLint current_fbo;
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &current_fbo);
+        GLint saved_viewport[4];
+        glGetIntegerv(GL_VIEWPORT, saved_viewport);
+        const GLboolean scissor_was_enabled = glIsEnabled(GL_SCISSOR_TEST);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, render_fbo_);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, ctx.cached_render_texture, 0);
+        glDisable(GL_SCISSOR_TEST);
+
+        if (alloc_size != depth_buffer_size_) {
+            glBindRenderbuffer(GL_RENDERBUFFER, render_depth_rbo_);
+            glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, alloc_size.x, alloc_size.y);
+            depth_buffer_size_ = alloc_size;
+        }
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, render_depth_rbo_);
+
+        if (const GLenum fb_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+            fb_status != GL_FRAMEBUFFER_COMPLETE) {
+            LOG_ERROR("Point cloud GT FBO incomplete: 0x{:x}", fb_status);
+            glBindFramebuffer(GL_FRAMEBUFFER, current_fbo);
+            res.render_texture_valid = false;
+            return;
+        }
+
+        glViewport(0, 0, render_size.x, render_size.y);
+        glClearColor(ctx.settings.background_color.r, ctx.settings.background_color.g,
+                     ctx.settings.background_color.b, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        auto request_for_texture = request;
+        request_for_texture.viewport.size = render_size;
+        request_for_texture.model_transforms = &pc_transforms;
+
+        auto render_result = engine.renderPointCloud(point_cloud, request_for_texture);
+        if (render_result) {
+            res.cached_result = *render_result;
+            res.cached_result_size = render_size;
+
+            const auto present_result = engine.presentToScreen(res.cached_result, glm::ivec2(0), render_size);
+            res.render_texture_valid = present_result.has_value();
+            if (!present_result) {
+                LOG_ERROR("Failed to present point cloud GT render: {}", present_result.error());
+            }
+        } else {
+            LOG_ERROR("Failed to render point cloud: {}", render_result.error());
+            res.render_texture_valid = false;
+            res.cached_result_size = {0, 0};
+        }
+
+        glBindFramebuffer(GL_FRAMEBUFFER, current_fbo);
+        glViewport(saved_viewport[0], saved_viewport[1], saved_viewport[2], saved_viewport[3]);
+        if (scissor_was_enabled) {
+            glEnable(GL_SCISSOR_TEST);
         }
     }
 

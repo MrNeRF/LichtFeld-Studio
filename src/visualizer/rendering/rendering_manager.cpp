@@ -36,6 +36,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <shared_mutex>
 #include <stdexcept>
+#include <string_view>
 
 namespace lfs::vis {
 
@@ -48,6 +49,33 @@ namespace lfs::vis {
                 return item.node_id == node_id;
             });
             return it != renderables.end() ? &(*it) : nullptr;
+        }
+
+        [[nodiscard]] std::string makePipelineLoadSignature(
+            const std::filesystem::path& image_path,
+            const lfs::io::LoadParams& load_params) {
+            auto signature = lfs::core::path_to_utf8(image_path) +
+                             ":rf" + std::to_string(std::max(1, load_params.resize_factor)) +
+                             "_mw" + std::to_string(load_params.max_width);
+            if (load_params.undistort) {
+                signature += "_ud";
+            }
+            return signature;
+        }
+
+        [[nodiscard]] std::string makeFallbackLoadSignature(
+            const std::filesystem::path& image_path,
+            const std::string_view loader_kind) {
+            return lfs::core::path_to_utf8(image_path) + ":" + std::string(loader_kind);
+        }
+
+        [[nodiscard]] lfs::io::LoadParams normalizeGTLoadParams(const lfs::io::LoadParams& load_params) {
+            auto effective_params = load_params;
+            effective_params.resize_factor = std::max(1, effective_params.resize_factor);
+            if (effective_params.max_width <= 0 || effective_params.max_width > GTTextureCache::MAX_TEXTURE_DIM) {
+                effective_params.max_width = GTTextureCache::MAX_TEXTURE_DIM;
+            }
+            return effective_params;
         }
 
     } // namespace
@@ -69,8 +97,21 @@ namespace lfs::vis {
         texture_cache_.clear();
     }
 
-    GTTextureCache::TextureInfo GTTextureCache::getGTTexture(const int cam_id, const std::filesystem::path& image_path) {
-        if (const auto it = texture_cache_.find(cam_id); it != texture_cache_.end()) {
+    GTTextureCache::TextureInfo GTTextureCache::getGTTexture(
+        const int cam_id,
+        const std::filesystem::path& image_path,
+        lfs::io::PipelinedImageLoader* const pipeline_loader,
+        const lfs::io::LoadParams* const load_params) {
+        const std::optional<lfs::io::LoadParams> effective_load_params =
+            (pipeline_loader && load_params) ? std::optional<lfs::io::LoadParams>(normalizeGTLoadParams(*load_params))
+                                             : std::nullopt;
+        const std::string requested_signature =
+            effective_load_params
+                ? makePipelineLoadSignature(image_path, *effective_load_params)
+                : makeFallbackLoadSignature(image_path, "fallback");
+
+        if (const auto it = texture_cache_.find(cam_id);
+            it != texture_cache_.end() && it->second.load_signature == requested_signature) {
             it->second.last_access = std::chrono::steady_clock::now();
             const auto& entry = it->second;
             const unsigned int tex_id = entry.interop_texture ? entry.interop_texture->getTextureID() : entry.texture_id;
@@ -81,13 +122,20 @@ namespace lfs::vis {
             return {tex_id, entry.width, entry.height, entry.needs_flip, tex_scale};
         }
 
+        if (const auto it = texture_cache_.find(cam_id); it != texture_cache_.end()) {
+            if (!it->second.interop_texture && it->second.texture_id > 0) {
+                glDeleteTextures(1, &it->second.texture_id);
+            }
+            texture_cache_.erase(it);
+        }
+
         if (texture_cache_.size() >= MAX_CACHE_SIZE)
             evictOldest();
 
         const auto ext = image_path.extension().string();
         const bool is_jpeg = (ext == ".jpg" || ext == ".jpeg" || ext == ".JPG" || ext == ".JPEG");
 
-        auto& entry = texture_cache_[cam_id];
+        CacheEntry entry;
         entry.last_access = std::chrono::steady_clock::now();
 
         if (!nvcodec_loader_ && is_jpeg) {
@@ -100,8 +148,22 @@ namespace lfs::vis {
         }
 
         TextureInfo info{};
+        std::string actual_signature;
+        if (pipeline_loader && effective_load_params) {
+            info = loadTextureFromLoader(*pipeline_loader, image_path, *effective_load_params, entry);
+            if (info.texture_id != 0) {
+                actual_signature = requested_signature;
+            }
+        }
         if (nvcodec_loader_ && is_jpeg) {
-            info = loadTextureGPU(image_path, entry);
+            if (info.texture_id == 0) {
+                info = loadTextureGPU(image_path, entry);
+                if (info.texture_id != 0) {
+                    actual_signature = effective_load_params
+                                           ? makeFallbackLoadSignature(image_path, "nvcodec")
+                                           : requested_signature;
+                }
+            }
         }
 
         if (info.texture_id == 0) {
@@ -111,14 +173,18 @@ namespace lfs::vis {
                 entry.width = info.width;
                 entry.height = info.height;
                 entry.needs_flip = false;
+                actual_signature = effective_load_params
+                                       ? makeFallbackLoadSignature(image_path, "cpu")
+                                       : requested_signature;
             }
         }
 
         if (info.texture_id == 0) {
-            texture_cache_.erase(cam_id);
             return {};
         }
 
+        entry.load_signature = std::move(actual_signature);
+        texture_cache_[cam_id] = std::move(entry);
         return info;
     }
 
@@ -199,6 +265,131 @@ namespace lfs::vis {
 
             return {texture, out_width, out_height};
         } catch (...) {
+            return {};
+        }
+    }
+
+    GTTextureCache::TextureInfo GTTextureCache::loadTextureFromLoader(
+        lfs::io::PipelinedImageLoader& loader,
+        const std::filesystem::path& path,
+        const lfs::io::LoadParams& params,
+        CacheEntry& entry) {
+        if (!std::filesystem::exists(path))
+            return {};
+
+        try {
+            const auto tensor = loader.load_image_immediate(path, params);
+            if (tensor.numel() == 0)
+                return {};
+
+            const auto& shape = tensor.shape();
+            const int height = static_cast<int>(shape[1]);
+            const int width = static_cast<int>(shape[2]);
+            const auto hwc = tensor.permute({1, 2, 0}).contiguous();
+
+            entry.interop_texture = std::make_unique<lfs::rendering::CudaGLInteropTexture>();
+            if (auto result = entry.interop_texture->init(width, height); !result) {
+                LOG_WARN("Failed to init GT interop texture from loader: {}", result.error());
+                entry.interop_texture.reset();
+                return loadTextureFromTensor(tensor, entry);
+            }
+
+            if (auto result = entry.interop_texture->updateFromTensor(hwc); !result) {
+                LOG_WARN("Failed to upload GT texture from loader: {}", result.error());
+                entry.interop_texture.reset();
+                return loadTextureFromTensor(tensor, entry);
+            }
+
+            entry.width = width;
+            entry.height = height;
+            entry.needs_flip = true;
+
+            const glm::vec2 tex_scale(
+                entry.interop_texture->getTexcoordScaleX(),
+                entry.interop_texture->getTexcoordScaleY());
+
+            return {entry.interop_texture->getTextureID(), width, height, true, tex_scale};
+        } catch (const std::exception& e) {
+            LOG_WARN("GT loader path failed for {}: {}", lfs::core::path_to_utf8(path), e.what());
+            entry.interop_texture.reset();
+            return {};
+        }
+    }
+
+    GTTextureCache::TextureInfo GTTextureCache::loadTextureFromTensor(const lfs::core::Tensor& tensor, CacheEntry& entry) {
+        if (!tensor.is_valid() || tensor.ndim() != 3 || tensor.numel() == 0) {
+            return {};
+        }
+
+        try {
+            lfs::core::Tensor formatted = tensor;
+            int channels = 0;
+            int width = 0;
+            int height = 0;
+
+            const auto& shape = tensor.shape();
+            const int first_dim = static_cast<int>(shape[0]);
+            const int last_dim = static_cast<int>(shape[2]);
+
+            if (first_dim == 1 || first_dim == 3 || first_dim == 4) {
+                channels = first_dim;
+                height = static_cast<int>(shape[1]);
+                width = static_cast<int>(shape[2]);
+                formatted = tensor.permute({1, 2, 0}).contiguous();
+            } else if (last_dim == 1 || last_dim == 3 || last_dim == 4) {
+                channels = last_dim;
+                height = static_cast<int>(shape[0]);
+                width = static_cast<int>(shape[1]);
+                formatted = tensor.contiguous();
+            } else {
+                LOG_WARN("Unsupported GT tensor shape for CPU upload: [{}, {}, {}]",
+                         static_cast<int>(shape[0]), static_cast<int>(shape[1]), static_cast<int>(shape[2]));
+                return {};
+            }
+
+            if (formatted.device() == lfs::core::Device::CUDA) {
+                formatted = formatted.cpu();
+            }
+            formatted = formatted.contiguous();
+
+            if (formatted.dtype() != lfs::core::DataType::UInt8) {
+                formatted = (formatted.clamp(0.0f, 1.0f) * 255.0f).to(lfs::core::DataType::UInt8);
+            }
+
+            unsigned int texture = 0;
+            glGenTextures(1, &texture);
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+            const GLenum format = (channels == 1) ? GL_RED : (channels == 4) ? GL_RGBA
+                                                                             : GL_RGB;
+            const GLenum internal = (channels == 1) ? GL_R8 : (channels == 4) ? GL_RGBA8
+                                                                              : GL_RGB8;
+
+            glTexImage2D(GL_TEXTURE_2D, 0, internal, width, height, 0,
+                         format, GL_UNSIGNED_BYTE, formatted.ptr<unsigned char>());
+
+            if (const GLenum gl_err = glGetError(); gl_err != GL_NO_ERROR) {
+                glBindTexture(GL_TEXTURE_2D, 0);
+                glDeleteTextures(1, &texture);
+                LOG_WARN("Failed to upload GT texture through CPU path: {}", static_cast<int>(gl_err));
+                return {};
+            }
+            glBindTexture(GL_TEXTURE_2D, 0);
+
+            entry.interop_texture.reset();
+            entry.texture_id = texture;
+            entry.width = width;
+            entry.height = height;
+            entry.needs_flip = true;
+
+            return {texture, width, height, true};
+        } catch (const std::exception& e) {
+            LOG_WARN("GT tensor CPU upload failed: {}", e.what());
             return {};
         }
     }
@@ -323,13 +514,11 @@ namespace lfs::vis {
                     settings_.equirectangular = pre_gt_equirectangular_;
                     restore_equirectangular = pre_gt_equirectangular_;
                 } else {
-                    if (current_camera_id_ < 0)
-                        return;
                     pre_gt_equirectangular_ = settings_.equirectangular;
                     settings_.split_view_mode = SplitViewMode::GTComparison;
                     is_now_enabled = true;
                 }
-                markDirty(DirtyFlag::SPLIT_VIEW);
+                markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::SPLATS);
             }
 
             // Emit events outside the lock to avoid deadlock
@@ -819,33 +1008,49 @@ namespace lfs::vis {
         }
 
         if (settings_.split_view_mode == SplitViewMode::GTComparison) {
-            if (current_camera_id_ < 0) {
+            if (current_camera_id_ < 0 || (!model && !has_visible_point_cloud)) {
                 gt_context_.reset();
                 gt_context_camera_id_ = -1;
-            } else if (model) {
-                if (gt_context_camera_id_ != current_camera_id_ || !gt_context_) {
-                    gt_context_.reset();
-                    gt_context_camera_id_ = -1;
+            } else {
+                gt_context_.reset();
+                gt_context_camera_id_ = -1;
 
-                    if (auto* trainer_manager = scene_manager->getTrainerManager()) {
-                        if (trainer_manager->hasTrainer()) {
-                            if (const auto cam = trainer_manager->getCamById(current_camera_id_)) {
-                                const auto gt_info = gt_texture_cache_.getGTTexture(current_camera_id_, cam->image_path());
-                                if (gt_info.texture_id != 0) {
-                                    const glm::ivec2 dims(gt_info.width, gt_info.height);
-                                    const glm::ivec2 aligned(
-                                        ((dims.x + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT,
-                                        ((dims.y + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT);
-
-                                    gt_context_ = GTComparisonContext{
-                                        .gt_texture_id = gt_info.texture_id,
-                                        .dimensions = dims,
-                                        .gpu_aligned_dims = aligned,
-                                        .render_texcoord_scale = glm::vec2(dims) / glm::vec2(aligned),
-                                        .gt_texcoord_scale = gt_info.texcoord_scale,
-                                        .gt_needs_flip = gt_info.needs_flip};
-                                    gt_context_camera_id_ = current_camera_id_;
+                if (auto* trainer_manager = scene_manager->getTrainerManager();
+                    trainer_manager && trainer_manager->hasTrainer()) {
+                    if (const auto* trainer = trainer_manager->getTrainer()) {
+                        const auto loader_owner = trainer->getActiveImageLoader();
+                        if (const auto cam = trainer_manager->getCamById(current_camera_id_)) {
+                            lfs::io::LoadParams gt_load_params;
+                            const lfs::io::LoadParams* gt_load_params_ptr = nullptr;
+                            if (loader_owner) {
+                                const auto gt_load_config = trainer->getGTLoadConfigSnapshot();
+                                gt_load_params.resize_factor = gt_load_config.resize_factor;
+                                gt_load_params.max_width = gt_load_config.max_width;
+                                if (gt_load_config.undistort && cam->is_undistort_prepared()) {
+                                    gt_load_params.undistort = &cam->undistort_params();
                                 }
+                                gt_load_params_ptr = &gt_load_params;
+                            }
+
+                            const auto gt_info = gt_texture_cache_.getGTTexture(
+                                current_camera_id_,
+                                cam->image_path(),
+                                loader_owner.get(),
+                                gt_load_params_ptr);
+                            if (gt_info.texture_id != 0) {
+                                const glm::ivec2 dims(gt_info.width, gt_info.height);
+                                const glm::ivec2 aligned(
+                                    ((dims.x + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT,
+                                    ((dims.y + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT);
+
+                                gt_context_ = GTComparisonContext{
+                                    .gt_texture_id = gt_info.texture_id,
+                                    .dimensions = dims,
+                                    .gpu_aligned_dims = aligned,
+                                    .render_texcoord_scale = glm::vec2(dims) / glm::vec2(aligned),
+                                    .gt_texcoord_scale = gt_info.texcoord_scale,
+                                    .gt_needs_flip = gt_info.needs_flip};
+                                gt_context_camera_id_ = current_camera_id_;
                             }
                         }
                     }
@@ -1010,10 +1215,21 @@ namespace lfs::vis {
         }
 
         if (frame_ctx.settings.split_view_mode == SplitViewMode::GTComparison &&
-            resources.gt_context && resources.gt_context->valid() &&
-            (!resources.render_texture_valid || (frame_dirty & splat_raster_pass_->sensitivity()))) {
-            splat_raster_pass_->execute(*engine_, frame_ctx, resources);
-            resources.splat_pre_rendered = true;
+            resources.gt_context && resources.gt_context->valid()) {
+            const bool needs_gt_pre_render =
+                !resources.render_texture_valid ||
+                (has_splats && (frame_dirty & splat_raster_pass_->sensitivity())) ||
+                (has_point_cloud && point_cloud_pass_ && (frame_dirty & point_cloud_pass_->sensitivity()));
+
+            if (needs_gt_pre_render) {
+                if (has_splats) {
+                    splat_raster_pass_->execute(*engine_, frame_ctx, resources);
+                    resources.splat_pre_rendered = true;
+                } else if (has_point_cloud && point_cloud_pass_) {
+                    point_cloud_pass_->execute(*engine_, frame_ctx, resources);
+                    resources.splat_pre_rendered = true;
+                }
+            }
         }
 
         for (auto& pass : passes_) {

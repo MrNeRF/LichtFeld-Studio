@@ -18,9 +18,19 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+namespace lfs::io {
+    struct LoadParams;
+    class PipelinedImageLoader;
+}
+
+namespace lfs::core {
+    class Tensor;
+}
 
 namespace lfs::vis {
     class RenderPass;
@@ -45,7 +55,9 @@ namespace lfs::vis {
         GTTextureCache();
         ~GTTextureCache();
 
-        TextureInfo getGTTexture(int cam_id, const std::filesystem::path& image_path);
+        TextureInfo getGTTexture(int cam_id, const std::filesystem::path& image_path,
+                                 lfs::io::PipelinedImageLoader* pipeline_loader = nullptr,
+                                 const lfs::io::LoadParams* load_params = nullptr);
         void clear();
 
     private:
@@ -55,6 +67,7 @@ namespace lfs::vis {
             int width = 0;
             int height = 0;
             bool needs_flip = false;
+            std::string load_signature;
             std::chrono::steady_clock::time_point last_access;
         };
 
@@ -63,6 +76,11 @@ namespace lfs::vis {
         static constexpr size_t MAX_CACHE_SIZE = 20;
 
         void evictOldest();
+        TextureInfo loadTextureFromLoader(lfs::io::PipelinedImageLoader& loader,
+                                          const std::filesystem::path& path,
+                                          const lfs::io::LoadParams& params,
+                                          CacheEntry& entry);
+        TextureInfo loadTextureFromTensor(const lfs::core::Tensor& tensor, CacheEntry& entry);
         TextureInfo loadTexture(const std::filesystem::path& path);
         TextureInfo loadTextureGPU(const std::filesystem::path& path, CacheEntry& entry);
     };

@@ -527,7 +527,7 @@ namespace lfs::training {
               sampler_(std::move(sampler)),
               config_(config),
               mask_config_(mask_config),
-              loader_(std::make_unique<lfs::io::PipelinedImageLoader>(config)),
+              loader_(std::make_shared<lfs::io::PipelinedImageLoader>(config)),
               shutdown_(false) {
 
             // Prefetch initial batch
@@ -595,6 +595,7 @@ namespace lfs::training {
         auto get_stats() const { return loader_->get_stats(); }
 
         lfs::io::PipelinedImageLoader* get_loader() const { return loader_.get(); }
+        std::shared_ptr<lfs::io::PipelinedImageLoader> get_loader_shared() const { return loader_; }
 
     private:
         void prefetch_next_batch() {
@@ -636,7 +637,7 @@ namespace lfs::training {
         Sampler sampler_;
         lfs::io::PipelinedLoaderConfig config_;
         PipelinedMaskConfig mask_config_;
-        std::unique_ptr<lfs::io::PipelinedImageLoader> loader_;
+        std::shared_ptr<lfs::io::PipelinedImageLoader> loader_;
 
         std::unordered_map<size_t, size_t> sequence_to_camera_;
         size_t next_sequence_id_ = 0;

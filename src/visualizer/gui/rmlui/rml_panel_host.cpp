@@ -1007,7 +1007,13 @@ namespace lfs::vis::gui {
                 setFrameTooltip(resolveRmlTooltip(hover), hover);
         }
 
-        bool forward_keys = hasFocusedKeyboardTarget(rml_context_->GetFocusElement());
+        if (input.viewport_keyboard_focus) {
+            blur_focused_element();
+        }
+
+        bool forward_keys =
+            hasFocusedKeyboardTarget(rml_context_->GetFocusElement()) &&
+            !input.viewport_keyboard_focus;
         bool commit_requested = false;
         const bool composing = text_input_handler && text_input_handler->isComposing();
         if (forward_keys) {
