@@ -148,21 +148,12 @@ namespace lfs::vis {
         }
 
         TextureInfo info{};
-        std::string actual_signature;
         if (pipeline_loader && effective_load_params) {
             info = loadTextureFromLoader(*pipeline_loader, image_path, *effective_load_params, entry);
-            if (info.texture_id != 0) {
-                actual_signature = requested_signature;
-            }
         }
         if (nvcodec_loader_ && is_jpeg) {
             if (info.texture_id == 0) {
                 info = loadTextureGPU(image_path, entry);
-                if (info.texture_id != 0) {
-                    actual_signature = effective_load_params
-                                           ? makeFallbackLoadSignature(image_path, "nvcodec")
-                                           : requested_signature;
-                }
             }
         }
 
@@ -173,9 +164,6 @@ namespace lfs::vis {
                 entry.width = info.width;
                 entry.height = info.height;
                 entry.needs_flip = false;
-                actual_signature = effective_load_params
-                                       ? makeFallbackLoadSignature(image_path, "cpu")
-                                       : requested_signature;
             }
         }
 
@@ -183,7 +171,7 @@ namespace lfs::vis {
             return {};
         }
 
-        entry.load_signature = std::move(actual_signature);
+        entry.load_signature = requested_signature;
         texture_cache_[cam_id] = std::move(entry);
         return info;
     }

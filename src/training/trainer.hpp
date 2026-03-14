@@ -277,7 +277,8 @@ namespace lfs::training {
         void handle_control_requests(int iter, std::stop_token stop_token = {});
 
         void save_ply(const std::filesystem::path& save_path, int iter_num, bool join_threads = true);
-        void updateGTLoadConfigSnapshot(const lfs::core::param::TrainingParameters& params);
+        void updateGTLoadConfigSnapshot();
+        void clearActiveImageLoader();
 
         lfs::core::Scene* scene_ = nullptr;
         std::shared_ptr<CameraDataset> base_dataset_;

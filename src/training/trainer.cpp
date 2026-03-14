@@ -40,10 +40,46 @@
 #include <memory>
 #include <nvtx3/nvToolsExt.h>
 #include <thread>
+#include <utility>
 
 namespace lfs::training {
 
     namespace {
+        template <typename Fn>
+        class ScopeGuard {
+        public:
+            explicit ScopeGuard(Fn fn)
+                : fn_(std::move(fn)) {}
+
+            ScopeGuard(const ScopeGuard&) = delete;
+            ScopeGuard& operator=(const ScopeGuard&) = delete;
+
+            ScopeGuard(ScopeGuard&& other) noexcept
+                : fn_(std::move(other.fn_)),
+                  active_(other.active_) {
+                other.active_ = false;
+            }
+
+            ScopeGuard& operator=(ScopeGuard&&) = delete;
+
+            ~ScopeGuard() {
+                if (active_) {
+                    fn_();
+                }
+            }
+
+            void release() noexcept { active_ = false; }
+
+        private:
+            Fn fn_;
+            bool active_ = true;
+        };
+
+        template <typename Fn>
+        ScopeGuard<Fn> makeScopeGuard(Fn fn) {
+            return ScopeGuard<Fn>(std::move(fn));
+        }
+
         PPISPRenderOverrides toRenderOverrides(const PPISPViewportOverrides& ov) {
             PPISPRenderOverrides r;
             r.exposure_offset = ov.exposure_offset;
@@ -453,7 +489,6 @@ namespace lfs::training {
 
         try {
             params_ = params;
-            updateGTLoadConfigSnapshot(params_);
 
             // Create DatasetConfig for lfs::training::CameraDataset
             lfs::training::DatasetConfig dataset_config;
@@ -755,16 +790,34 @@ namespace lfs::training {
         return gt_load_config_snapshot_;
     }
 
-    void Trainer::updateGTLoadConfigSnapshot(const lfs::core::param::TrainingParameters& params) {
+    void Trainer::updateGTLoadConfigSnapshot() {
+        GTLoadConfigSnapshot snapshot;
+        if (train_dataset_) {
+            snapshot.resize_factor = std::max(1, train_dataset_->get_resize_factor());
+            snapshot.max_width = train_dataset_->get_max_width();
+
+            for (const auto& cam : train_dataset_->get_cameras()) {
+                if (cam && cam->is_undistort_prepared()) {
+                    snapshot.undistort = true;
+                    break;
+                }
+            }
+        }
+
         std::lock_guard<std::mutex> lock(gt_load_config_mutex_);
-        gt_load_config_snapshot_.resize_factor = std::max(1, params.dataset.resize_factor);
-        gt_load_config_snapshot_.max_width = params.dataset.max_width;
-        gt_load_config_snapshot_.undistort = params.optimization.undistort;
+        gt_load_config_snapshot_ = snapshot;
     }
 
     void Trainer::setActiveImageLoader(std::shared_ptr<lfs::io::PipelinedImageLoader> loader) {
         std::lock_guard<std::mutex> lock(active_image_loader_mutex_);
         active_image_loader_ = std::move(loader);
+    }
+
+    void Trainer::clearActiveImageLoader() {
+        if (strategy_) {
+            strategy_->set_image_loader(nullptr);
+        }
+        setActiveImageLoader(nullptr);
     }
 
     void Trainer::shutdown() {
@@ -786,7 +839,7 @@ namespace lfs::training {
 
         cudaDeviceSynchronize();
 
-        setActiveImageLoader(nullptr);
+        clearActiveImageLoader();
         strategy_.reset();
         bilateral_grid_.reset();
         ppisp_.reset();
@@ -817,7 +870,6 @@ namespace lfs::training {
 
         // Update params first
         params_ = params;
-        updateGTLoadConfigSnapshot(params_);
 
         // Load/reload background image if needed
         if (bg_mode_is_image && bg_image_path_changed &&
@@ -1905,14 +1957,12 @@ namespace lfs::training {
 
             auto train_dataloader = create_infinite_pipelined_dataloader(
                 train_dataset_, pipelined_config, mask_pipeline_config);
+            auto active_image_loader_guard = makeScopeGuard([this]() {
+                clearActiveImageLoader();
+            });
+            updateGTLoadConfigSnapshot();
             setActiveImageLoader(train_dataloader->get_loader_shared());
             strategy_->set_image_loader(train_dataloader->get_loader());
-            const auto clear_active_image_loader = [this]() {
-                if (strategy_) {
-                    strategy_->set_image_loader(nullptr);
-                }
-                setActiveImageLoader(nullptr);
-            };
 
             LOG_DEBUG("Starting training iterations");
             while (iter <= params_.optimization.iterations) {
@@ -1960,11 +2010,9 @@ namespace lfs::training {
                         LOG_INFO("OOM recovery: retrying iteration {}", iter);
                         step_result = train_step(iter, cam, gt_image, render_mode, stop_token);
                         if (!step_result) {
-                            clear_active_image_loader();
                             return std::unexpected(step_result.error());
                         }
                     } else {
-                        clear_active_image_loader();
                         return std::unexpected(step_result.error());
                     }
                 }
@@ -1999,7 +2047,8 @@ namespace lfs::training {
                 ++iter;
             }
 
-            clear_active_image_loader();
+            clearActiveImageLoader();
+            active_image_loader_guard.release();
 
             // Ensure callback is finished before final save
             if (callback_busy_.load()) {
