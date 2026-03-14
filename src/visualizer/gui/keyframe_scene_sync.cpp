@@ -133,7 +133,7 @@ namespace lfs::vis::gui {
             if (!sel.has_value())
                 return;
             if (controller_.setKeyframeFocalLength(*sel, *e.focal_length_mm)) {
-                state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
+                state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
             }
         });
 
@@ -149,7 +149,7 @@ namespace lfs::vis::gui {
                 return;
             controller_.removeSelectedKeyframe();
 
-            state::KeyframeListChanged{.count = timeline.size()}.emit();
+            state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
         });
 
         cmd::SequencerSetKeyframeEasing::when([this](const auto& e) {
@@ -160,7 +160,7 @@ namespace lfs::vis::gui {
             const auto easing = static_cast<sequencer::EasingType>(e.easing_type);
             controller_.setKeyframeEasing(e.keyframe_index, easing);
 
-            state::KeyframeListChanged{.count = timeline.size()}.emit();
+            state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
         });
     }
 

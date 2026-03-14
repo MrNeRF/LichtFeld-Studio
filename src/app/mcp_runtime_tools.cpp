@@ -421,6 +421,7 @@ namespace lfs::app {
                 {"active", active},
                 {"status",
                  active                                ? "running"
+                 : stage == "Cancelled"               ? "cancelled"
                  : !error.empty() || stage == "Failed" ? "failed"
                  : stage == "Complete"                 ? "finished"
                                                        : "idle"},

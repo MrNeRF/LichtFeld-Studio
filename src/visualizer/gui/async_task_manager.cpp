@@ -521,6 +521,10 @@ namespace lfs::vis::gui {
             return;
         LOG_INFO("Cancelling video export");
         video_export_state_.cancel_requested.store(true);
+        {
+            std::lock_guard lock(video_export_state_.mutex);
+            video_export_state_.stage = "Cancelling";
+        }
         if (video_export_state_.thread) {
             video_export_state_.thread->request_stop();
         }
@@ -596,6 +600,8 @@ namespace lfs::vis::gui {
              splat_ptr, engine, render_settings,
              frame_states = std::move(frame_states),
              export_pin = std::move(export_pin)](std::stop_token stop_token) {
+                bool cancelled = false;
+
                 auto encoder = lfs::gui::createVideoEncoder();
                 if (!encoder) {
                     std::lock_guard lock(video_export_state_.mutex);
@@ -631,6 +637,7 @@ namespace lfs::vis::gui {
                 for (int frame = 0; frame < total_frames; ++frame) {
                     if (stop_token.stop_requested() || video_export_state_.cancel_requested.load()) {
                         LOG_INFO("Video export cancelled at frame {}", frame);
+                        cancelled = true;
                         break;
                     }
 
@@ -650,7 +657,12 @@ namespace lfs::vis::gui {
                     auto render_result = engine->renderGaussians(*splat_ptr, request);
                     if (!render_result.has_value() || !render_result->valid || !render_result->image) {
                         LOG_ERROR("Failed to render frame {}", frame);
-                        continue;
+                        {
+                            std::lock_guard lock(video_export_state_.mutex);
+                            video_export_state_.error = std::format("Failed to render frame {}", frame + 1);
+                            video_export_state_.stage = "Render error";
+                        }
+                        break;
                     }
 
                     auto image_hwc = render_result->image->permute({1, 2, 0}).contiguous();
@@ -682,7 +694,11 @@ namespace lfs::vis::gui {
 
                 {
                     std::lock_guard lock(video_export_state_.mutex);
-                    video_export_state_.stage = "Finalizing";
+                    if (cancelled) {
+                        video_export_state_.stage = "Cancelled";
+                    } else if (video_export_state_.error.empty()) {
+                        video_export_state_.stage = "Finalizing";
+                    }
                 }
 
                 if (auto close_result = encoder->close(); !close_result) {
@@ -694,7 +710,9 @@ namespace lfs::vis::gui {
                     bool emit_completed = false;
                     {
                         std::lock_guard lock(video_export_state_.mutex);
-                        if (video_export_state_.error.empty() && !video_export_state_.cancel_requested.load()) {
+                        if (cancelled) {
+                            video_export_state_.stage = "Cancelled";
+                        } else if (video_export_state_.error.empty() && !video_export_state_.cancel_requested.load()) {
                             video_export_state_.stage = "Complete";
                             LOG_INFO("Video export completed: {}", path.string());
                             emit_completed = true;

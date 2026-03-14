@@ -450,7 +450,7 @@ namespace lfs::vis {
                 const bool loaded = gm->sequencer().loadFromJson(path);
                 if (loaded) {
                     lfs::core::events::state::KeyframeListChanged{
-                        .count = gm->sequencer().timeline().size()}
+                        .count = gm->sequencer().timeline().realKeyframeCount()}
                         .emit();
                 }
                 return loaded;
@@ -462,8 +462,10 @@ namespace lfs::vis {
                 }
             },
             [](float speed) {
-                if (auto* gm = python::get_gui_manager())
+                if (auto* gm = python::get_gui_manager()) {
                     gm->sequencer().setPlaybackSpeed(speed);
+                    gm->getSequencerUIState().playback_speed = gm->sequencer().playbackSpeed();
+                }
             });
         callback_cleanup_.add([] { python::set_sequencer_timeline_callbacks(nullptr, nullptr, nullptr, nullptr, nullptr); });
 
@@ -481,6 +483,8 @@ namespace lfs::vis {
                 state.snap_to_grid = s.snap_to_grid;
                 state.snap_interval = s.snap_interval;
                 state.playback_speed = s.playback_speed;
+                gm->sequencer().setPlaybackSpeed(state.playback_speed);
+                state.playback_speed = gm->sequencer().playbackSpeed();
                 state.follow_playback = s.follow_playback;
                 state.show_pip_preview = s.show_pip_preview;
                 state.pip_preview_scale = s.pip_preview_scale;
@@ -490,7 +494,7 @@ namespace lfs::vis {
             s.show_camera_path = state.show_camera_path;
             s.snap_to_grid = state.snap_to_grid;
             s.snap_interval = state.snap_interval;
-            s.playback_speed = state.playback_speed;
+            s.playback_speed = gm->sequencer().playbackSpeed();
             s.follow_playback = state.follow_playback;
             s.show_pip_preview = state.show_pip_preview;
             s.pip_preview_scale = state.pip_preview_scale;

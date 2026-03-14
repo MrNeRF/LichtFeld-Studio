@@ -100,7 +100,7 @@ namespace lfs::vis::gui {
             kf.focal_length_mm = focal_mm;
             controller_.addKeyframeAtTime(kf, time);
             controller_.seek(time);
-            state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
+            state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
         });
 
         cmd::SequencerUpdateKeyframe::when([this](const auto&) {
@@ -113,7 +113,7 @@ namespace lfs::vis::gui {
                 cam.t,
                 glm::quat_cast(cam.R),
                 focal_mm);
-            state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
+            state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
         });
 
         cmd::SequencerPlayPause::when([this](const auto&) {
@@ -270,7 +270,7 @@ namespace lfs::vis::gui {
                 if (controller_.loadFromJson(path.string())) {
                     LOG_INFO("Camera path loaded from {}", path.string());
                     lfs::core::events::state::KeyframeListChanged{
-                        .count = controller_.timeline().size()}
+                        .count = controller_.timeline().realKeyframeCount()}
                         .emit();
                     pip_needs_update_ = true;
                 } else {
@@ -527,6 +527,8 @@ namespace lfs::vis::gui {
 
         for (size_t i = 0; i < timeline.keyframes().size(); ++i) {
             const auto& kf = timeline.keyframes()[i];
+            if (kf.is_loop_point)
+                continue;
             if (!isVisible(kf.position))
                 continue;
 
@@ -719,7 +721,7 @@ namespace lfs::vis::gui {
 
         if (!is_using && keyframe_gizmo_active_) {
             keyframe_gizmo_active_ = false;
-            lfs::core::events::state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
+            lfs::core::events::state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
         }
 
         dl->PopClipRect();
@@ -743,7 +745,7 @@ namespace lfs::vis::gui {
                 kf.focal_length_mm = focal_mm;
                 controller_.addKeyframeAtTime(kf, time);
                 controller_.seek(time);
-                state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
+                state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
                 pip_needs_update_ = true;
             } break;
             case Action::UPDATE_KEYFRAME:
@@ -773,13 +775,13 @@ namespace lfs::vis::gui {
             case Action::SET_EASING: {
                 const auto easing = static_cast<sequencer::EasingType>(action->easing_value);
                 controller_.setKeyframeEasing(action->keyframe_index, easing);
-                state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
+                state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
                 break;
             }
             case Action::DELETE_KEYFRAME:
                 cmd::SequencerSelectKeyframe{.keyframe_index = action->keyframe_index}.emit();
                 controller_.removeSelectedKeyframe();
-                state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
+                state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
                 break;
             case Action::DESELECT_KEYFRAME:
                 controller_.deselectKeyframe();
@@ -798,14 +800,14 @@ namespace lfs::vis::gui {
 
         if (auto time_result = overlay_->consumeTimeEdit()) {
             if (controller_.setKeyframeTime(time_result->index, time_result->value)) {
-                state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
+                state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
                 pip_needs_update_ = true;
             }
         }
 
         if (auto focal_result = overlay_->consumeFocalEdit()) {
             if (controller_.setKeyframeFocalLength(focal_result->index, focal_result->value)) {
-                state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
+                state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
                 pip_needs_update_ = true;
             }
         }

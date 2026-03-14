@@ -8,6 +8,7 @@
 #include "app/mcp_event_handlers.hpp"
 #include "app/mcp_operator_tools.hpp"
 #include "app/mcp_runtime_tools.hpp"
+#include "app/mcp_sequencer_tools.hpp"
 #include "app/mcp_ui_registry_tools.hpp"
 
 #include "core/event_bridge/command_center_bridge.hpp"
@@ -1382,63 +1383,6 @@ namespace lfs::app {
             return {};
         }
 
-        const char* keyframe_easing_name(const uint8_t easing) {
-            switch (easing) {
-            case 0: return "linear";
-            case 1: return "ease_in";
-            case 2: return "ease_out";
-            case 3: return "ease_in_out";
-            default: return "unknown";
-            }
-        }
-
-        json keyframe_node_json(const core::SceneNode& node) {
-            assert(node.keyframe);
-
-            const auto& keyframe = *node.keyframe;
-            return json{
-                {"name", node.name},
-                {"index", static_cast<int64_t>(keyframe.keyframe_index)},
-                {"time", keyframe.time},
-                {"position", vec3_to_json(keyframe.position)},
-                {"rotation_quat", json::array({keyframe.rotation.w, keyframe.rotation.x, keyframe.rotation.y, keyframe.rotation.z})},
-                {"focal_length_mm", keyframe.focal_length_mm},
-                {"easing", keyframe.easing},
-                {"easing_name", keyframe_easing_name(keyframe.easing)},
-            };
-        }
-
-        json sequencer_state_json(const vis::SceneManager& scene_manager) {
-            const auto& scene = scene_manager.getScene();
-
-            std::vector<const core::SceneNode*> keyframes;
-            for (const auto* const node : scene.getNodes()) {
-                if (node && node->type == core::NodeType::KEYFRAME && node->keyframe)
-                    keyframes.push_back(node);
-            }
-
-            std::sort(keyframes.begin(), keyframes.end(), [](const auto* lhs, const auto* rhs) {
-                return lhs->keyframe->keyframe_index < rhs->keyframe->keyframe_index;
-            });
-
-            json keyframe_list = json::array();
-            for (const auto* const node : keyframes)
-                keyframe_list.push_back(keyframe_node_json(*node));
-
-            const auto* const ui_state = python::get_sequencer_ui_state();
-            return json{
-                {"success", true},
-                {"visible", python::is_sequencer_visible()},
-                {"has_keyframes", python::has_keyframes()},
-                {"selected_keyframe", ui_state ? ui_state->selected_keyframe : -1},
-                {"playback_speed", ui_state ? ui_state->playback_speed : 1.0f},
-                {"show_camera_path", ui_state ? ui_state->show_camera_path : true},
-                {"follow_playback", ui_state ? ui_state->follow_playback : false},
-                {"keyframe_count", keyframe_list.size()},
-                {"keyframes", keyframe_list},
-            };
-        }
-
         std::expected<std::string, std::string> resolve_gaussian_node_name(
             const vis::SceneManager& scene_manager,
             const std::optional<std::string>& requested_node) {
@@ -1666,7 +1610,7 @@ namespace lfs::app {
 
     void register_gui_scene_tools(vis::Visualizer* viewer) {
         assert(viewer);
-        auto* const viewer_impl = viewer;
+        auto* const viewer_impl = dynamic_cast<vis::VisualizerImpl*>(viewer);
         auto& registry = ToolRegistry::instance();
 
         register_generic_gui_operator_tools(registry, viewer);
@@ -3759,365 +3703,44 @@ namespace lfs::app {
                 });
             });
 
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.get",
-                .description = "Inspect sequencer visibility, selected keyframe, and the mirrored keyframe scene nodes",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-                    return sequencer_state_json(*scene_manager);
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.add_keyframe",
-                .description = "Add a keyframe at the current viewport camera, optionally setting the camera first",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"eye", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera eye position [x,y,z]"}}},
-                        {"target", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera target [x,y,z]"}}},
-                        {"up", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera up vector [x,y,z]"}}},
-                        {"fov_degrees", json{{"type", "number"}, {"description", "Optional camera FOV override"}}},
-                        {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel before operating (default: true)"}}}},
-                    .required = {}}},
-            [viewer_impl](const json& args) -> json {
-                auto eye = optional_vec3_arg(args, "eye");
-                if (!eye)
-                    return json{{"error", eye.error()}};
-                auto target = optional_vec3_arg(args, "target");
-                if (!target)
-                    return json{{"error", target.error()}};
-                auto up = optional_vec3_arg(args, "up");
-                if (!up)
-                    return json{{"error", up.error()}};
-                if (eye->has_value() != target->has_value())
-                    return json{{"error", "Fields 'eye' and 'target' must either both be provided or both be omitted"}};
-
-                const std::optional<float> fov = args.contains("fov_degrees")
-                                                     ? std::optional<float>(args["fov_degrees"].get<float>())
-                                                     : std::nullopt;
-                const bool show_sequencer = args.value("show_sequencer", true);
-
-                return post_and_wait(viewer_impl, [viewer_impl, eye = *eye, target = *target, up = *up, fov, show_sequencer]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    if (show_sequencer)
-                        python::set_sequencer_visible(true);
-                    if (eye && target) {
-                        const glm::vec3 up_value = up.value_or(glm::vec3(0.0f, 1.0f, 0.0f));
-                        vis::apply_set_view(vis::SetViewParams{
-                            .eye = {eye->x, eye->y, eye->z},
-                            .target = {target->x, target->y, target->z},
-                            .up = {up_value.x, up_value.y, up_value.z},
-                        });
-                    }
-                    if (fov)
-                        vis::apply_set_fov(*fov);
-
-                    core::events::cmd::SequencerAddKeyframe{}.emit();
-                    return sequencer_state_json(*scene_manager);
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.update_keyframe",
-                .description = "Update the selected keyframe, optionally selecting it and/or setting the viewport camera first",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"keyframe_index", json{{"type", "integer"}, {"description", "Optional keyframe index to select before updating"}}},
-                        {"eye", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera eye position [x,y,z]"}}},
-                        {"target", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera target [x,y,z]"}}},
-                        {"up", json{{"type", "array"}, {"items", json{{"type", "number"}}}, {"description", "Optional camera up vector [x,y,z]"}}},
-                        {"fov_degrees", json{{"type", "number"}, {"description", "Optional camera FOV override"}}},
-                        {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel before operating (default: true)"}}}},
-                    .required = {}}},
-            [viewer_impl](const json& args) -> json {
-                auto eye = optional_vec3_arg(args, "eye");
-                if (!eye)
-                    return json{{"error", eye.error()}};
-                auto target = optional_vec3_arg(args, "target");
-                if (!target)
-                    return json{{"error", target.error()}};
-                auto up = optional_vec3_arg(args, "up");
-                if (!up)
-                    return json{{"error", up.error()}};
-                if (eye->has_value() != target->has_value())
-                    return json{{"error", "Fields 'eye' and 'target' must either both be provided or both be omitted"}};
-
-                const std::optional<size_t> keyframe_index = args.contains("keyframe_index")
-                                                                 ? std::optional<size_t>(args["keyframe_index"].get<size_t>())
-                                                                 : std::nullopt;
-                const std::optional<float> fov = args.contains("fov_degrees")
-                                                     ? std::optional<float>(args["fov_degrees"].get<float>())
-                                                     : std::nullopt;
-                const bool show_sequencer = args.value("show_sequencer", true);
-
-                return post_and_wait(viewer_impl, [viewer_impl, keyframe_index, eye = *eye, target = *target, up = *up, fov, show_sequencer]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    if (show_sequencer)
-                        python::set_sequencer_visible(true);
-                    if (keyframe_index)
-                        core::events::cmd::SequencerSelectKeyframe{.keyframe_index = *keyframe_index}.emit();
-                    if (eye && target) {
-                        const glm::vec3 up_value = up.value_or(glm::vec3(0.0f, 1.0f, 0.0f));
-                        vis::apply_set_view(vis::SetViewParams{
-                            .eye = {eye->x, eye->y, eye->z},
-                            .target = {target->x, target->y, target->z},
-                            .up = {up_value.x, up_value.y, up_value.z},
-                        });
-                    }
-                    if (fov)
-                        vis::apply_set_fov(*fov);
-
-                    core::events::cmd::SequencerUpdateKeyframe{}.emit();
-                    return sequencer_state_json(*scene_manager);
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.select_keyframe",
-                .description = "Select a keyframe in the shared sequencer timeline",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"keyframe_index", json{{"type", "integer"}, {"description", "Keyframe index"}}},
-                        {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel before operating (default: true)"}}}},
-                    .required = {"keyframe_index"}}},
-            [viewer_impl](const json& args) -> json {
-                const size_t keyframe_index = args["keyframe_index"].get<size_t>();
-                const bool show_sequencer = args.value("show_sequencer", true);
-
-                return post_and_wait(viewer_impl, [viewer_impl, keyframe_index, show_sequencer]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-                    if (show_sequencer)
-                        python::set_sequencer_visible(true);
-
-                    core::events::cmd::SequencerSelectKeyframe{.keyframe_index = keyframe_index}.emit();
-                    return sequencer_state_json(*scene_manager);
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.go_to_keyframe",
-                .description = "Move the viewport camera to a sequencer keyframe",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"keyframe_index", json{{"type", "integer"}, {"description", "Keyframe index"}}},
-                        {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel before operating (default: true)"}}}},
-                    .required = {"keyframe_index"}}},
-            [viewer_impl](const json& args) -> json {
-                const size_t keyframe_index = args["keyframe_index"].get<size_t>();
-                const bool show_sequencer = args.value("show_sequencer", true);
-
-                return post_and_wait(viewer_impl, [viewer_impl, keyframe_index, show_sequencer]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-                    if (show_sequencer)
-                        python::set_sequencer_visible(true);
-
-                    core::events::cmd::SequencerGoToKeyframe{.keyframe_index = keyframe_index}.emit();
-                    json result = sequencer_state_json(*scene_manager);
-                    const auto info = vis::get_current_view_info();
-                    if (info)
-                        result["camera"] = view_info_json(*info)["camera"];
-                    return result;
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.delete_keyframe",
-                .description = "Delete a keyframe from the shared sequencer timeline",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"keyframe_index", json{{"type", "integer"}, {"description", "Keyframe index"}}}},
-                    .required = {"keyframe_index"}}},
-            [viewer_impl](const json& args) -> json {
-                const size_t keyframe_index = args["keyframe_index"].get<size_t>();
-
-                return post_and_wait(viewer_impl, [viewer_impl, keyframe_index]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = keyframe_index}.emit();
-                    return sequencer_state_json(*scene_manager);
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.set_easing",
-                .description = "Set the easing mode for a keyframe",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"keyframe_index", json{{"type", "integer"}, {"description", "Keyframe index"}}},
-                        {"easing", json{{"oneOf", json::array({json{{"type", "integer"}},
-                                                               json{{"type", "string"}, {"enum", json::array({"linear", "ease_in", "ease_out", "ease_in_out"})}}})},
-                                        {"description", "Easing mode as integer or name"}}}},
-                    .required = {"keyframe_index", "easing"}}},
-            [viewer_impl](const json& args) -> json {
-                const size_t keyframe_index = args["keyframe_index"].get<size_t>();
-                int easing = 0;
-                if (args["easing"].is_string()) {
-                    const std::string value = args["easing"].get<std::string>();
-                    if (value == "linear")
-                        easing = 0;
-                    else if (value == "ease_in")
-                        easing = 1;
-                    else if (value == "ease_out")
-                        easing = 2;
-                    else if (value == "ease_in_out")
-                        easing = 3;
-                    else
-                        return json{{"error", "Unsupported easing mode: " + value}};
-                } else {
-                    easing = args["easing"].get<int>();
-                }
-
-                return post_and_wait(viewer_impl, [viewer_impl, keyframe_index, easing]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    core::events::cmd::SequencerSetKeyframeEasing{.keyframe_index = keyframe_index, .easing_type = easing}.emit();
-                    return sequencer_state_json(*scene_manager);
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.play_pause",
-                .description = "Toggle sequencer playback",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    core::events::cmd::SequencerPlayPause{}.emit();
-                    json result = sequencer_state_json(*scene_manager);
-                    result["toggled"] = true;
-                    return result;
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.clear",
-                .description = "Clear all sequencer keyframes",
-                .input_schema = {.type = "object", .properties = json::object(), .required = {}}},
-            [viewer_impl](const json&) -> json {
-                return post_and_wait(viewer_impl, [viewer_impl]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    python::clear_keyframes();
-                    return sequencer_state_json(*scene_manager);
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.save_path",
-                .description = "Save the sequencer camera path to JSON",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Destination JSON path"}}}},
-                    .required = {"path"}}},
-            [viewer_impl](const json& args) -> json {
-                const std::string path = args["path"].get<std::string>();
-
-                return post_and_wait(viewer_impl, [viewer_impl, path]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    const bool saved = python::save_camera_path(path);
-                    if (!saved)
-                        return json{{"error", "Failed to save camera path"}};
-
-                    json result = sequencer_state_json(*scene_manager);
-                    result["path"] = path;
-                    return result;
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.load_path",
-                .description = "Load the sequencer camera path from JSON",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"path", json{{"type", "string"}, {"description", "Source JSON path"}}},
-                        {"show_sequencer", json{{"type", "boolean"}, {"description", "Show the sequencer panel before operating (default: true)"}}}},
-                    .required = {"path"}}},
-            [viewer_impl](const json& args) -> json {
-                const std::string path = args["path"].get<std::string>();
-                const bool show_sequencer = args.value("show_sequencer", true);
-
-                return post_and_wait(viewer_impl, [viewer_impl, path, show_sequencer]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-                    if (show_sequencer)
-                        python::set_sequencer_visible(true);
-
-                    const bool loaded = python::load_camera_path(path);
-                    if (!loaded)
-                        return json{{"error", "Failed to load camera path"}};
-
-                    json result = sequencer_state_json(*scene_manager);
-                    result["path"] = path;
-                    return result;
-                });
-            });
-
-        registry.register_tool(
-            McpTool{
-                .name = "sequencer.set_playback_speed",
-                .description = "Set the sequencer playback speed multiplier",
-                .input_schema = {
-                    .type = "object",
-                    .properties = json{
-                        {"speed", json{{"type", "number"}, {"description", "Playback speed multiplier"}}}},
-                    .required = {"speed"}}},
-            [viewer_impl](const json& args) -> json {
-                const float speed = args["speed"].get<float>();
-
-                return post_and_wait(viewer_impl, [viewer_impl, speed]() -> json {
-                    auto* const scene_manager = viewer_impl->getSceneManager();
-                    if (!scene_manager)
-                        return json{{"error", "Scene manager not initialized"}};
-
-                    python::set_playback_speed(speed);
-                    return sequencer_state_json(*scene_manager);
-                });
+        register_gui_sequencer_tools(
+            registry,
+            viewer,
+            SequencerToolBackend{
+                .ensure_ready =
+                    [viewer_impl]() -> std::expected<void, std::string> {
+                        if (!viewer_impl)
+                            return std::unexpected("Sequencer tools require a GUI visualizer");
+                        if (!viewer_impl->getSceneManager())
+                            return std::unexpected("Scene manager not initialized");
+                        if (!viewer_impl->getGuiManager())
+                            return std::unexpected("GUI manager not initialized");
+                        return {};
+                    },
+                .controller =
+                    [viewer_impl]() -> vis::SequencerController* {
+                        if (!viewer_impl)
+                            return nullptr;
+                        auto* const gui_manager = viewer_impl->getGuiManager();
+                        return gui_manager ? &gui_manager->sequencer() : nullptr;
+                    },
+                .is_visible = []() { return python::is_sequencer_visible(); },
+                .set_visible = [](const bool visible) { python::set_sequencer_visible(visible); },
+                .ui_state = []() { return python::get_sequencer_ui_state(); },
+                .add_keyframe = []() { core::events::cmd::SequencerAddKeyframe{}.emit(); },
+                .update_selected_keyframe = []() { core::events::cmd::SequencerUpdateKeyframe{}.emit(); },
+                .select_keyframe = [](const size_t index) { core::events::cmd::SequencerSelectKeyframe{.keyframe_index = index}.emit(); },
+                .go_to_keyframe = [](const size_t index) { core::events::cmd::SequencerGoToKeyframe{.keyframe_index = index}.emit(); },
+                .delete_keyframe = [](const size_t index) { core::events::cmd::SequencerDeleteKeyframe{.keyframe_index = index}.emit(); },
+                .set_keyframe_easing =
+                    [](const size_t index, const int easing) {
+                        core::events::cmd::SequencerSetKeyframeEasing{.keyframe_index = index, .easing_type = easing}.emit();
+                    },
+                .play_pause = []() { core::events::cmd::SequencerPlayPause{}.emit(); },
+                .clear = []() { python::clear_keyframes(); },
+                .save_path = [](const std::string& path) { return python::save_camera_path(path); },
+                .load_path = [](const std::string& path) { return python::load_camera_path(path); },
+                .set_playback_speed = [](const float speed) { python::set_playback_speed(speed); },
             });
 
         // --- Plugin tools ---

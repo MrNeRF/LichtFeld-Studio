@@ -26,6 +26,8 @@
 #include <RmlUi/Core.h>
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/Input.h>
+#include <SDL3/SDL_video.h>
+#include <algorithm>
 #include <cassert>
 #include <format>
 #include <ImGuizmo.h>
@@ -80,6 +82,27 @@ namespace lfs::vis::gui {
         } catch (const std::exception& e) {
             LOG_ERROR("RmlSequencerOverlay: resource not found: {}", e.what());
         }
+    }
+
+    bool RmlSequencerOverlay::ensureContextReady() {
+        if (!rml_context_)
+            initContext();
+        if (!rml_context_ || !document_ || !elements_cached_)
+            return false;
+
+        if (width_ <= 0 || height_ <= 0) {
+            int window_w = 800;
+            int window_h = 600;
+            if (auto* const window = rml_manager_ ? rml_manager_->getWindow() : nullptr)
+                SDL_GetWindowSize(window, &window_w, &window_h);
+
+            width_ = std::max(window_w, 1);
+            height_ = std::max(window_h, 1);
+            rml_context_->SetDimensions(Rml::Vector2i(width_, height_));
+        }
+
+        syncTheme();
+        return true;
     }
 
     void RmlSequencerOverlay::cacheElements() {
@@ -278,9 +301,7 @@ namespace lfs::vis::gui {
                                               std::optional<size_t> keyframe_index,
                                               const float time,
                                               const int gizmo_op) {
-        if (!rml_context_)
-            initContext();
-        if (!elements_cached_)
+        if (!ensureContextReady())
             return;
 
         context_menu_keyframe_ = keyframe_index;
@@ -293,7 +314,6 @@ namespace lfs::vis::gui {
         el_context_menu_->SetClass("visible", true);
         el_menu_backdrop_->SetProperty("display", "block");
 
-        syncTheme();
         rml_context_->Update();
         const float menu_h = el_context_menu_->GetClientHeight();
         const float y = (screen_y + menu_h > static_cast<float>(height_))
@@ -316,7 +336,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlSequencerOverlay::showTimeEdit(size_t index, float current_time) {
-        if (!elements_cached_)
+        if (!ensureContextReady())
             return;
 
         time_edit_active_ = true;
@@ -336,7 +356,7 @@ namespace lfs::vis::gui {
     }
 
     void RmlSequencerOverlay::showFocalEdit(size_t index, float current_focal_mm) {
-        if (!elements_cached_)
+        if (!ensureContextReady())
             return;
 
         focal_edit_active_ = true;
@@ -387,7 +407,7 @@ namespace lfs::vis::gui {
 
     void RmlSequencerOverlay::updateEditOverlay(size_t selected, float pos_delta, float rot_delta,
                                                 float right_x, float top_y) {
-        if (!elements_cached_)
+        if (!ensureContextReady())
             return;
 
         constexpr float MARGIN = 16.0f;
@@ -548,16 +568,12 @@ namespace lfs::vis::gui {
         if (!anything_visible)
             return;
 
-        if (!rml_context_) {
-            initContext();
-            if (!rml_context_)
-                return;
-        }
+        if (!ensureContextReady())
+            return;
 
         if (!rml_manager_->shouldDeferFboUpdate(fbo_)) {
             if (rml_manager_)
                 rml_manager_->trackContextFrame(rml_context_, 0, 0);
-            syncTheme();
 
             const int w = screen_w;
             const int h = screen_h;

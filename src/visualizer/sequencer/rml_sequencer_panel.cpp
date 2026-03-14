@@ -143,7 +143,7 @@ namespace lfs::vis {
             ctrl.seekToLastKeyframe();
         else if (id == "btn-loop") {
             ctrl.toggleLoop();
-            lfs::core::events::state::KeyframeListChanged{.count = ctrl.timeline().size()}.emit();
+            lfs::core::events::state::KeyframeListChanged{.count = ctrl.timeline().realKeyframeCount()}.emit();
         } else if (id == "btn-add")
             lfs::core::events::cmd::SequencerAddKeyframe{}.emit();
         else if (id == "btn-camera-path")
@@ -1031,7 +1031,7 @@ namespace lfs::vis {
                 dragged_keyframe_changed_ = false;
                 dragged_keyframe_id_ = sequencer::INVALID_KEYFRAME_ID;
                 if (emit_keyframe_change)
-                    lfs::core::events::state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
+                    lfs::core::events::state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
             }
         }
 
@@ -1043,13 +1043,20 @@ namespace lfs::vis {
             else if (auto selected_id = controller_.selectedKeyframeId(); selected_id.has_value())
                 to_delete.push_back(*selected_id);
 
+            const auto& keyframes = controller_.timeline().keyframes();
+            const auto first_real_it = std::find_if(
+                keyframes.begin(), keyframes.end(),
+                [](const sequencer::Keyframe& keyframe) { return !keyframe.is_loop_point; });
+            if (first_real_it != keyframes.end())
+                std::erase(to_delete, first_real_it->id);
+
             bool removed_any = false;
             for (const auto id : to_delete)
                 removed_any |= controller_.removeKeyframeById(id);
-            selected_keyframes_.clear();
-            controller_.deselectKeyframe();
+            for (const auto id : to_delete)
+                selected_keyframes_.erase(id);
             if (removed_any)
-                lfs::core::events::state::KeyframeListChanged{.count = controller_.timeline().size()}.emit();
+                lfs::core::events::state::KeyframeListChanged{.count = controller_.timeline().realKeyframeCount()}.emit();
         }
 
         if (mouse_in_timeline && input.mouse_clicked[1]) {

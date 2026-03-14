@@ -89,6 +89,7 @@ namespace lfs::vis::gui {
 
     private:
         void initContext();
+        [[nodiscard]] bool ensureContextReady();
         void syncTheme();
         void syncLocalization();
         std::string generateThemeRCSS(const lfs::vis::Theme& t) const;

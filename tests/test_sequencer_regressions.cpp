@@ -116,6 +116,47 @@ namespace {
         EXPECT_EQ(timeline.getKeyframe(1)->easing, EasingType::EASE_IN_OUT);
     }
 
+    TEST(SequencerTimelineRegressionTest, AnimationClipLoadPreservesSerializedTrackIds) {
+        nlohmann::json json;
+        json["name"] = "clip";
+        json["tracks"] = nlohmann::json::array({
+            {
+                {"id", 7u},
+                {"type", "float"},
+                {"target", "camera.exposure"},
+                {"keyframes", nlohmann::json::array({
+                    {
+                        {"time", 0.0f},
+                        {"value", 1.0f},
+                        {"easing", "linear"},
+                    },
+                })},
+            },
+            {
+                {"id", 42u},
+                {"type", "vec3"},
+                {"target", "light.color"},
+                {"keyframes", nlohmann::json::array({
+                    {
+                        {"time", 1.0f},
+                        {"value", {0.1f, 0.2f, 0.3f}},
+                        {"easing", "ease_out"},
+                    },
+                })},
+            },
+        });
+
+        auto clip = AnimationClip::fromJson(json);
+
+        ASSERT_EQ(clip.trackCount(), 2u);
+        ASSERT_NE(clip.getTrack(7u), nullptr);
+        ASSERT_NE(clip.getTrack(42u), nullptr);
+        ASSERT_NE(clip.getTrackByPath("camera.exposure"), nullptr);
+        ASSERT_NE(clip.getTrackByPath("light.color"), nullptr);
+        EXPECT_EQ(clip.getTrackByPath("camera.exposure")->id(), 7u);
+        EXPECT_EQ(clip.getTrackByPath("light.color")->id(), 42u);
+    }
+
     TEST(SequencerControllerRegressionTest, SelectionTracksKeyframeIdentityAcrossResort) {
         SequencerController controller;
         const auto first_id = controller.addKeyframe(makeKeyframe(1.0f, {1.0f, 0.0f, 0.0f}));
@@ -195,6 +236,20 @@ namespace {
         ASSERT_NE(loop_point, nullptr);
         EXPECT_TRUE(loop_point->is_loop_point);
         EXPECT_FLOAT_EQ(loop_point->time, 6.0f);
+    }
+
+    TEST(SequencerControllerRegressionTest, SeekToLastKeyframeSkipsSyntheticLoopPoint) {
+        SequencerController controller;
+        controller.addKeyframe(makeKeyframe(0.0f, {1.0f, 0.0f, 0.0f}));
+        controller.addKeyframe(makeKeyframe(2.0f, {2.0f, 0.0f, 0.0f}));
+        controller.toggleLoop();
+
+        ASSERT_EQ(controller.timeline().size(), 3u);
+        ASSERT_TRUE(controller.isLoopKeyframe(2));
+
+        controller.seekToLastKeyframe();
+
+        EXPECT_FLOAT_EQ(controller.playhead(), 2.0f);
     }
 
     TEST(SequencerMappingRegressionTest, TimeScreenMappingRoundTripsWithZoomAndPan) {

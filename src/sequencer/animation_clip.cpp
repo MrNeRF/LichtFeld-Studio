@@ -247,8 +247,16 @@ namespace lfs::sequencer {
         for (const auto& track_json : j["tracks"]) {
             const ValueType type = stringToValueType(track_json.value("type", "float"));
             const std::string target = track_json.value("target", "");
+            if (target.empty() || clip.path_to_track_.contains(target))
+                continue;
 
-            const TrackId id = clip.addTrack(type, target);
+            TrackId id = track_json.value("id", clip.next_track_id_);
+            if (id == 0 || clip.tracks_.contains(id))
+                id = clip.next_track_id_;
+
+            clip.tracks_[id] = std::make_unique<AnimationTrack>(id, type, target);
+            clip.path_to_track_[target] = id;
+            clip.next_track_id_ = std::max(clip.next_track_id_, id + 1);
             AnimationTrack* const track = clip.getTrack(id);
 
             if (track && track_json.contains("keyframes")) {

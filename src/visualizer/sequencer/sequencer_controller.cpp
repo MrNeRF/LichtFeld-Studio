@@ -52,7 +52,7 @@ namespace lfs::vis {
 
     void SequencerController::seekToLastKeyframe() {
         if (!timeline_.empty()) {
-            playhead_ = timeline_.endTime();
+            playhead_ = timeline_.realKeyframeCount() > 0 ? timeline_.realEndTime() : timeline_.endTime();
             if (state_ == PlaybackState::PLAYING) {
                 state_ = PlaybackState::PAUSED;
             }

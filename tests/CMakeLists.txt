@@ -204,6 +204,7 @@ set(TEST_FILES
     test_parameter_manager.cpp
     test_mcp_protocol.cpp
     test_mcp_app_utils.cpp
+    test_mcp_sequencer_tools.cpp
     test_video_color_convert.cpp
     test_python_integration.cpp
     test_python_lsp_client.cpp
@@ -279,6 +280,7 @@ endforeach()
 # PyModalRegistry data layer (no ImGui) for lock-order regression tests.
 list(APPEND TEST_SOURCES
     ${CMAKE_SOURCE_DIR}/src/python/lfs/py_modal_registry.cpp
+    ${CMAKE_SOURCE_DIR}/src/app/mcp_sequencer_tools.cpp
 )
 
 # Build benchmark sources list
