@@ -1063,6 +1063,58 @@ namespace lfs::vis::op {
         }
     } // namespace
 
+    SceneGraphNodeSnapshot::SceneGraphNodeSnapshot() = default;
+
+    SceneGraphNodeSnapshot::SceneGraphNodeSnapshot(const SceneGraphNodeSnapshot& other)
+        : name(other.name),
+          parent_name(other.parent_name),
+          type(other.type),
+          local_transform(other.local_transform),
+          visible(other.visible),
+          locked(other.locked),
+          training_enabled(other.training_enabled),
+          gaussian_count(other.gaussian_count),
+          centroid(other.centroid),
+          payload_device(other.payload_device),
+          source_path(other.source_path),
+          camera(other.camera),
+          children(other.children) {
+        if (other.model) {
+            model = cloneSplatData(*other.model);
+        }
+        if (other.point_cloud) {
+            point_cloud = clonePointCloud(*other.point_cloud);
+        }
+        if (other.mesh) {
+            mesh = cloneMeshData(*other.mesh);
+        }
+        if (other.cropbox) {
+            cropbox = std::make_unique<lfs::core::CropBoxData>(*other.cropbox);
+        }
+        if (other.ellipsoid) {
+            ellipsoid = std::make_unique<lfs::core::EllipsoidData>(*other.ellipsoid);
+        }
+        if (other.keyframe) {
+            keyframe = std::make_unique<lfs::core::KeyframeData>(*other.keyframe);
+        }
+    }
+
+    SceneGraphNodeSnapshot::SceneGraphNodeSnapshot(SceneGraphNodeSnapshot&& other) noexcept = default;
+
+    SceneGraphNodeSnapshot& SceneGraphNodeSnapshot::operator=(const SceneGraphNodeSnapshot& other) {
+        if (this == &other) {
+            return *this;
+        }
+
+        SceneGraphNodeSnapshot copy(other);
+        *this = std::move(copy);
+        return *this;
+    }
+
+    SceneGraphNodeSnapshot& SceneGraphNodeSnapshot::operator=(SceneGraphNodeSnapshot&& other) noexcept = default;
+
+    SceneGraphNodeSnapshot::~SceneGraphNodeSnapshot() = default;
+
     UndoMemoryBreakdown TensorSwapStorage::memoryBreakdown() const {
         UndoMemoryBreakdown total;
         total += tensorMemory(indices);

@@ -367,7 +367,14 @@ namespace lfs::vis::op {
         int camera_id = 0;
     };
 
-    struct SceneGraphNodeSnapshot {
+    struct LFS_VIS_API SceneGraphNodeSnapshot {
+        SceneGraphNodeSnapshot();
+        SceneGraphNodeSnapshot(const SceneGraphNodeSnapshot& other);
+        SceneGraphNodeSnapshot(SceneGraphNodeSnapshot&& other) noexcept;
+        SceneGraphNodeSnapshot& operator=(const SceneGraphNodeSnapshot& other);
+        SceneGraphNodeSnapshot& operator=(SceneGraphNodeSnapshot&& other) noexcept;
+        ~SceneGraphNodeSnapshot();
+
         std::string name;
         std::string parent_name;
         lfs::core::NodeType type = lfs::core::NodeType::SPLAT;
