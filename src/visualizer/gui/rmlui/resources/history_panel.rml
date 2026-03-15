@@ -6,8 +6,8 @@
 <body template="floating-window" data-model="history_panel">
 
   <div class="history-summary">
-    <span class="history-summary__label text-muted">Shared History</span>
-    <span class="history-summary__value text-default">{{summary_text}}</span>
+    <div class="history-summary__label text-muted">Shared History</div>
+    <div class="history-summary__value text-default">{{summary_text}}</div>
   </div>
 
   <div class="history-transaction status-info" data-if="show_transaction">{{transaction_label}}</div>

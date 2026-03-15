@@ -1,28 +1,38 @@
 <rml>
 <head>
     <link type="text/rcss" href="scene_tree.rcss"/>
+    <link type="text/rcss" href="history_panel.rcss"/>
 </head>
 <body id="body" data-model="scene_panel">
     <div class="scene-header">
         <div class="scene-header-row">
-            <span class="scene-title">{{ scene_title }}</span>
-            <div class="scene-chip-row" data-if="show_tree">
-                <span class="scene-chip scene-chip--accent">{{ summary_model_chip }}</span>
-                <span class="scene-chip">{{ summary_node_chip }}</span>
-                <span class="scene-chip">{{ summary_selection_chip }}</span>
-                <span class="scene-chip" data-if="show_filter_chip">{{ summary_filter_chip }}</span>
+            <div class="scene-tab-bar">
+                <button type="button"
+                        class="scene-tab"
+                        data-class-active="active_tab == 'scene'"
+                        data-event-click="switch_tab('scene')">Scene</button>
+                <button type="button"
+                        class="scene-tab"
+                        data-class-active="active_tab == 'history'"
+                        data-event-click="switch_tab('history')">History</button>
             </div>
+        </div>
+        <div class="scene-chip-row" data-if="show_tree" data-class-hidden="!show_scene_tab">
+            <span class="scene-chip scene-chip--accent">{{ summary_model_chip }}</span>
+            <span class="scene-chip">{{ summary_node_chip }}</span>
+            <span class="scene-chip">{{ summary_selection_chip }}</span>
+            <span class="scene-chip" data-if="show_filter_chip">{{ summary_filter_chip }}</span>
         </div>
     </div>
 
-    <div id="search-container">
+    <div id="search-container" data-class-hidden="!show_scene_tab">
         <img id="search-icon" class="row-icon" src="../icon/scene/search.png" />
         <input id="filter-input" type="text" data-attr-placeholder="search_placeholder" />
         <button id="filter-clear" type="button" data-if="show_filter_clear">
             <img src="../icon/scene/x.png" />
         </button>
     </div>
-    <div id="tree-container">
+    <div id="tree-container" data-class-hidden="!show_scene_tab">
         <div class="empty-state" data-if="show_empty_state">
             <div class="empty-message">{{ empty_message_primary }}</div>
             <div class="empty-message">{{ empty_message_secondary }}</div>
@@ -91,6 +101,58 @@
             </div>
 
             <div class="virtual-spacer" data-style-height="bottom_spacer_height"></div>
+        </div>
+    </div>
+    <div id="history-container" data-class-hidden="!show_history_tab">
+        <div class="history-summary">
+            <div class="history-summary__label text-muted">Shared History</div>
+            <div class="history-summary__value text-default">{{ history_summary_text }}</div>
+        </div>
+
+        <div class="history-transaction status-info"
+             data-if="history_show_transaction">{{ history_transaction_label }}</div>
+
+        <div class="history-actions">
+            <button class="btn btn--primary history-action"
+                    data-event-click="history_do_undo"
+                    data-attrif-disabled="!history_has_undo">{{ history_undo_label }}</button>
+            <button class="btn btn--secondary history-action"
+                    data-event-click="history_do_redo"
+                    data-attrif-disabled="!history_has_redo">{{ history_redo_label }}</button>
+        </div>
+
+        <div class="separator"></div>
+
+        <div class="history-section">
+            <span class="history-section__title text-accent">Undo Stack</span>
+            <div class="history-list">
+                <span class="history-empty text-muted"
+                      data-if="!history_has_undo">{{ history_empty_text }}</span>
+                <div class="history-row"
+                     data-for="item : history_undo_items"
+                     data-class-is-next="item.is_next"
+                     data-event-click="history_jump_to(item.kind, item.steps)">
+                    <span class="history-row__label text-default">{{ item.label }}</span>
+                    <span class="history-row__meta text-muted">{{ item.meta }}</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="separator"></div>
+
+        <div class="history-section">
+            <span class="history-section__title text-accent">Redo Stack</span>
+            <div class="history-list">
+                <span class="history-empty text-muted"
+                      data-if="!history_has_redo">{{ history_empty_text }}</span>
+                <div class="history-row history-row--redo"
+                     data-for="item : history_redo_items"
+                     data-class-is-next="item.is_next"
+                     data-event-click="history_jump_to(item.kind, item.steps)">
+                    <span class="history-row__label text-default">{{ item.label }}</span>
+                    <span class="history-row__meta text-muted">{{ item.meta }}</span>
+                </div>
+            </div>
         </div>
     </div>
     <div id="context-menu"

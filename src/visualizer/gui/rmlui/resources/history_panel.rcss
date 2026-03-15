@@ -1,17 +1,18 @@
 .history-summary {
-    display: flex;
-    flex-direction: column;
-    gap: 2dp;
+    display: block;
     margin-bottom: 6dp;
 }
 
 .history-summary__label {
+    display: block;
     font-size: 9dp;
     letter-spacing: 0.4dp;
     text-transform: uppercase;
+    margin-bottom: 2dp;
 }
 
 .history-summary__value {
+    display: block;
     font-size: 11dp;
     font-weight: bold;
 }

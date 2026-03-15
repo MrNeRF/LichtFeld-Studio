@@ -14,6 +14,8 @@ TREE_ROW_HEIGHT_DP = 20
 TREE_HEADER_HEIGHT_DP = 24
 TREE_OVERSCAN_ROWS = 10
 SCENE_MODEL_NAME = "scene_panel"
+SCENE_TAB_SCENE = "scene"
+SCENE_TAB_HISTORY = "history"
 
 SCENE_MUTATION_NODE_ADDED = 1 << 0
 SCENE_MUTATION_NODE_REMOVED = 1 << 1
@@ -92,6 +94,18 @@ def tr(key):
     return result if result else key
 
 
+def _format_bytes(value: int) -> str:
+    units = ("B", "KB", "MB", "GB")
+    amount = float(max(value, 0))
+    unit_index = 0
+    while amount >= 1024.0 and unit_index < len(units) - 1:
+        amount /= 1024.0
+        unit_index += 1
+    if unit_index == 0:
+        return f"{int(amount)} {units[unit_index]}"
+    return f"{amount:.1f} {units[unit_index]}"
+
+
 def _node_type(node):
     return str(node.type).split(".")[-1]
 
@@ -154,12 +168,26 @@ class ScenePanel(Panel):
         self._last_view_h = -1.0
         self._last_ui_scale = 0.0
         self._last_invert_masks = False
+        self._active_tab = SCENE_TAB_SCENE
+        self._history_subscription_id = 0
+        self._history_last_state_key = None
+        self._history_undo_label = "Undo"
+        self._history_redo_label = "Redo"
+        self._history_summary_text = "No history yet"
+        self._history_transaction_label = ""
+        self._history_empty_text = "Nothing recorded yet"
+        self._history_has_undo = False
+        self._history_has_redo = False
+        self._history_show_transaction = False
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model(SCENE_MODEL_NAME)
         if model is None:
             return
 
+        model.bind_func("active_tab", lambda: self._active_tab)
+        model.bind_func("show_scene_tab", lambda: self._active_tab == SCENE_TAB_SCENE)
+        model.bind_func("show_history_tab", lambda: self._active_tab == SCENE_TAB_HISTORY)
         model.bind_func("scene_title", lambda: "Scene")
         model.bind_func("search_placeholder", lambda: tr("scene.search"))
         model.bind_func("show_tree", lambda: self._scene_has_nodes)
@@ -180,8 +208,22 @@ class ScenePanel(Panel):
         model.bind_func("context_menu_left", lambda: self._context_menu_left)
         model.bind_func("context_menu_top", lambda: self._context_menu_top)
         model.bind_func("show_filter_clear", lambda: len(self._filter_text) > 0)
+        model.bind_func("history_undo_label", lambda: self._history_undo_label)
+        model.bind_func("history_redo_label", lambda: self._history_redo_label)
+        model.bind_func("history_summary_text", lambda: self._history_summary_text)
+        model.bind_func("history_transaction_label", lambda: self._history_transaction_label)
+        model.bind_func("history_show_transaction", lambda: self._history_show_transaction)
+        model.bind_func("history_empty_text", lambda: self._history_empty_text)
+        model.bind_func("history_has_undo", lambda: self._history_has_undo)
+        model.bind_func("history_has_redo", lambda: self._history_has_redo)
+        model.bind_event("switch_tab", self._on_switch_tab)
+        model.bind_event("history_do_undo", self._on_history_undo)
+        model.bind_event("history_do_redo", self._on_history_redo)
+        model.bind_event("history_jump_to", self._on_history_jump_to)
         model.bind_record_list("visible_rows")
         model.bind_record_list("context_menu_entries")
+        model.bind_record_list("history_undo_items")
+        model.bind_record_list("history_redo_items")
         self._handle = model.get_handle()
 
     def on_mount(self, doc):
@@ -215,6 +257,10 @@ class ScenePanel(Panel):
             body.add_event_listener("keydown", self._on_keydown)
             body.add_event_listener("click", self._on_body_click)
 
+        self._last_invert_masks = self._get_invert_masks()
+        self._history_last_state_key = None
+        self._history_subscription_id = self._subscribe_history()
+        self._refresh_history(force=True)
         self._rebuild_tree(force=True)
 
     def on_scene_changed(self, doc):
@@ -226,9 +272,7 @@ class ScenePanel(Panel):
             self._rebuild_tree(force=True)
 
     def on_update(self, doc):
-        dirty = False
-
-        self._capture_rename_buffer()
+        dirty = self._refresh_history(force=False)
 
         cur_lang = lf.ui.get_current_language()
         if cur_lang != self._last_lang:
@@ -242,7 +286,12 @@ class ScenePanel(Panel):
                     self._handle.dirty(name)
             dirty |= self._rebuild_tree(force=True)
 
-        cur_invert = lf.ui.get_invert_masks()
+        if self._active_tab != SCENE_TAB_SCENE:
+            return dirty
+
+        self._capture_rename_buffer()
+
+        cur_invert = self._get_invert_masks()
         if cur_invert != self._last_invert_masks:
             self._last_invert_masks = cur_invert
             dirty |= self._render_tree_window(force=True)
@@ -266,6 +315,203 @@ class ScenePanel(Panel):
                 dirty |= self._render_tree_window(force=False)
 
         return dirty
+
+    def on_unmount(self, doc):
+        undo_api = getattr(lf, "undo", None)
+        unsubscribe = getattr(undo_api, "unsubscribe", None)
+        if self._history_subscription_id and callable(unsubscribe):
+            unsubscribe(self._history_subscription_id)
+        self._history_subscription_id = 0
+        self._handle = None
+        doc.remove_data_model(SCENE_MODEL_NAME)
+
+    def _subscribe_history(self):
+        undo_api = getattr(lf, "undo", None)
+        subscribe = getattr(undo_api, "subscribe", None)
+        if not callable(subscribe):
+            return 0
+        try:
+            return int(subscribe(self._on_history_changed) or 0)
+        except (RuntimeError, TypeError, ValueError):
+            return 0
+
+    def _history_state(self):
+        undo_api = getattr(lf, "undo", None)
+        stack = getattr(undo_api, "stack", None)
+        if not callable(stack):
+            return {
+                "undo": [],
+                "redo": [],
+                "total_bytes": 0,
+                "transaction_active": False,
+                "transaction_depth": 0,
+                "transaction_name": "",
+            }
+        try:
+            state = stack()
+        except RuntimeError:
+            state = {}
+        return state if isinstance(state, dict) else {}
+
+    def _refresh_history(self, force: bool) -> bool:
+        if not self._handle:
+            return False
+
+        state = self._history_state()
+        undo_items = state.get("undo", [])
+        redo_items = state.get("redo", [])
+        state_key = (
+            tuple(
+                (item.get("id", ""), item.get("label", ""), item.get("source", ""),
+                 item.get("scope", ""), int(item.get("estimated_bytes", 0)),
+                 int(item.get("cpu_bytes", 0)), int(item.get("gpu_bytes", 0)))
+                for item in undo_items
+            ),
+            tuple(
+                (item.get("id", ""), item.get("label", ""), item.get("source", ""),
+                 item.get("scope", ""), int(item.get("estimated_bytes", 0)),
+                 int(item.get("cpu_bytes", 0)), int(item.get("gpu_bytes", 0)))
+                for item in redo_items
+            ),
+            bool(state.get("transaction_active", False)),
+            int(state.get("transaction_depth", 0)),
+            state.get("transaction_name", ""),
+            int(state.get("total_bytes", 0)),
+            int(state.get("total_cpu_bytes", 0)),
+            int(state.get("total_gpu_bytes", 0)),
+        )
+
+        if not force and state_key == self._history_last_state_key:
+            return False
+
+        self._history_last_state_key = state_key
+        self._history_has_undo = bool(undo_items)
+        self._history_has_redo = bool(redo_items)
+        self._history_undo_label = f"Undo {undo_items[0]['label']}" if undo_items else "Undo"
+        self._history_redo_label = f"Redo {redo_items[0]['label']}" if redo_items else "Redo"
+        total_bytes = int(state.get("total_bytes", 0))
+        total_gpu_bytes = int(state.get("total_gpu_bytes", total_bytes))
+        if not undo_items and not redo_items:
+            self._history_summary_text = "No history yet"
+        elif total_gpu_bytes < total_bytes:
+            self._history_summary_text = (
+                f"{len(undo_items)} undo / {len(redo_items)} redo · "
+                f"{_format_bytes(total_bytes)} total · {_format_bytes(total_gpu_bytes)} GPU"
+            )
+        else:
+            self._history_summary_text = (
+                f"{len(undo_items)} undo / {len(redo_items)} redo · {_format_bytes(total_bytes)}"
+            )
+        transaction_name = state.get("transaction_name", "") or "Grouped changes"
+        transaction_depth = int(state.get("transaction_depth", 0))
+        self._history_show_transaction = bool(state.get("transaction_active", False))
+        self._history_transaction_label = (
+            f"Transaction active: {transaction_name} (depth {transaction_depth})"
+            if self._history_show_transaction
+            else ""
+        )
+        self._history_empty_text = (
+            "Nothing recorded yet" if not undo_items and not redo_items else "No entries in this stack"
+        )
+
+        self._handle.update_record_list("history_undo_items", self._build_history_rows(undo_items, kind="undo"))
+        self._handle.update_record_list("history_redo_items", self._build_history_rows(redo_items, kind="redo"))
+        self._dirty_model("history_undo_label",
+                          "history_redo_label",
+                          "history_summary_text",
+                          "history_transaction_label",
+                          "history_show_transaction",
+                          "history_empty_text",
+                          "history_has_undo",
+                          "history_has_redo")
+        self._request_redraw()
+        return True
+
+    def _build_history_rows(self, items, kind: str):
+        rows = []
+        for index, item in enumerate(items):
+            estimated_bytes = int(item.get("estimated_bytes", 0))
+            gpu_bytes = int(item.get("gpu_bytes", estimated_bytes))
+            if gpu_bytes < estimated_bytes:
+                size_meta = f"{_format_bytes(estimated_bytes)} · GPU {_format_bytes(gpu_bytes)}"
+            else:
+                size_meta = _format_bytes(estimated_bytes)
+            rows.append(
+                {
+                    "label": item.get("label", ""),
+                    "meta": f"{item.get('scope', 'general')} · {item.get('source', 'system')} · {size_meta}",
+                    "is_next": index == 0,
+                    "kind": kind,
+                    "steps": index + 1,
+                }
+            )
+        return rows
+
+    def _request_redraw(self):
+        request_redraw = getattr(getattr(lf, "ui", None), "request_redraw", None)
+        if callable(request_redraw):
+            request_redraw()
+
+    def _on_history_changed(self):
+        self._history_last_state_key = None
+        self._request_redraw()
+
+    def _on_history_undo(self, _handle=None, _ev=None, _args=None):
+        undo_api = getattr(lf, "undo", None)
+        can_undo = getattr(undo_api, "can_undo", None)
+        do_undo = getattr(undo_api, "undo", None)
+        if callable(can_undo) and callable(do_undo) and can_undo():
+            do_undo()
+            self._history_last_state_key = None
+
+    def _on_history_redo(self, _handle=None, _ev=None, _args=None):
+        undo_api = getattr(lf, "undo", None)
+        can_redo = getattr(undo_api, "can_redo", None)
+        do_redo = getattr(undo_api, "redo", None)
+        if callable(can_redo) and callable(do_redo) and can_redo():
+            do_redo()
+            self._history_last_state_key = None
+
+    def _on_history_jump_to(self, _handle=None, _ev=None, args=None):
+        undo_api = getattr(lf, "undo", None)
+        jump = getattr(undo_api, "jump", None)
+        if not args or len(args) < 2 or not callable(jump):
+            return
+        stack = str(args[0])
+        count = max(0, int(args[1]))
+        if count <= 0:
+            return
+        jump(stack, count)
+        self._history_last_state_key = None
+
+    def _on_switch_tab(self, _handle=None, _ev=None, args=None):
+        tab_name = str(args[0]) if args else SCENE_TAB_SCENE
+        self._set_active_tab(tab_name)
+
+    def _set_active_tab(self, tab_name: str):
+        next_tab = SCENE_TAB_HISTORY if str(tab_name).lower() == SCENE_TAB_HISTORY else SCENE_TAB_SCENE
+        if next_tab == self._active_tab:
+            return
+        self._active_tab = next_tab
+        if self._active_tab != SCENE_TAB_SCENE:
+            self._hide_context_menu()
+            self._rename_node = None
+            self._rename_buffer = ""
+        else:
+            self._last_render_key = None
+        self._dirty_model("active_tab", "show_scene_tab", "show_history_tab")
+        if self._active_tab == SCENE_TAB_HISTORY:
+            self._refresh_history(force=True)
+        self._request_redraw()
+
+    def _get_invert_masks(self):
+        get_invert_masks = getattr(getattr(lf, "ui", None), "get_invert_masks", None)
+        if not callable(get_invert_masks):
+            return False
+        try:
+            return bool(get_invert_masks())
+        except RuntimeError:
+            return False
 
     def _dirty_model(self, *fields):
         if not self._handle:
@@ -451,6 +697,9 @@ class ScenePanel(Panel):
         self._render_tree_window(force=True)
 
     def _on_keydown(self, event):
+        if self._active_tab != SCENE_TAB_SCENE:
+            return
+
         key = int(event.get_parameter("key_identifier", "0"))
 
         if key == KI_F2:

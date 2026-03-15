@@ -154,7 +154,7 @@ namespace lfs::vis::op {
         bool present = false;
     };
 
-    class SceneSnapshot : public UndoEntry {
+    class LFS_VIS_API SceneSnapshot : public UndoEntry {
     public:
         explicit SceneSnapshot(SceneManager& scene, std::string name = "Operation");
 
@@ -395,13 +395,13 @@ namespace lfs::vis::op {
         std::string training_model_node_name;
     };
 
-    struct SceneGraphStateSnapshot {
+    struct LFS_VIS_API SceneGraphStateSnapshot {
         std::vector<SceneGraphNodeSnapshot> roots;
         std::optional<std::vector<std::string>> selected_node_names;
         std::optional<SceneGraphContextSnapshot> context;
     };
 
-    struct SceneGraphNodeMetadataSnapshot {
+    struct LFS_VIS_API SceneGraphNodeMetadataSnapshot {
         std::string name;
         std::string parent_name;
         glm::mat4 local_transform{1.0f};
@@ -416,7 +416,7 @@ namespace lfs::vis::op {
         SceneGraphNodeMetadataSnapshot after;
     };
 
-    class SceneGraphMetadataEntry : public UndoEntry {
+    class LFS_VIS_API SceneGraphMetadataEntry : public UndoEntry {
     public:
         static std::vector<SceneGraphNodeMetadataSnapshot> captureNodes(const SceneManager& scene,
                                                                         const std::vector<std::string>& node_names);
@@ -442,7 +442,7 @@ namespace lfs::vis::op {
         std::chrono::steady_clock::time_point updated_at_;
     };
 
-    class SceneGraphPatchEntry : public UndoEntry {
+    class LFS_VIS_API SceneGraphPatchEntry : public UndoEntry {
     public:
         static SceneGraphStateSnapshot captureState(const SceneManager& scene,
                                                    const std::vector<std::string>& root_names,

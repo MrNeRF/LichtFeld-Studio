@@ -54,12 +54,6 @@ class EditMenu:
             menu_submenu("Redo Stack", redo_history_items),
             menu_separator(),
             menu_action(
-                "History",
-                lambda: lf.ui.set_panel_enabled("lfs.history", True),
-                shortcut="Ctrl+Alt+H",
-            ),
-            menu_separator(),
-            menu_action(
                 lf.ui.tr("menu.edit.input_settings"),
                 lambda: lf.ui.set_panel_enabled("lfs.input_settings", True),
             ),

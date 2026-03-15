@@ -28,12 +28,31 @@ def _install_lf_stub(monkeypatch):
         PanelOption=panel_option,
         tr=lambda key: key,
         get_current_language=lambda: "en",
+        get_invert_masks=lambda: False,
         is_ctrl_down=lambda: False,
+        request_redraw=lambda: None,
         is_shift_down=lambda: False,
     )
     lf_stub.get_ui_scale = lambda: 1.0
     lf_stub.get_scene = lambda: None
     lf_stub.get_selected_node_names = lambda: []
+    lf_stub.undo = SimpleNamespace(
+        stack=lambda: {
+            "undo": [],
+            "redo": [],
+            "total_bytes": 0,
+            "transaction_active": False,
+            "transaction_depth": 0,
+            "transaction_name": "",
+        },
+        can_undo=lambda: False,
+        can_redo=lambda: False,
+        undo=lambda: None,
+        redo=lambda: None,
+        jump=lambda stack, count: None,
+        subscribe=lambda callback: 0,
+        unsubscribe=lambda subscription_id: None,
+    )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
     return lf_stub
 
@@ -239,3 +258,97 @@ def test_scene_panel_move_to_submenu_builds_records(scene_panel_module):
             "is_active": False,
         },
     ]
+
+
+def test_scene_panel_history_tab_builds_embedded_rows(scene_panel_module, monkeypatch):
+    panel = scene_panel_module.ScenePanel()
+    panel._handle = _HandleStub()
+    redraw_requests = {"count": 0}
+    undo_state = {
+        "undo": [
+            {
+                "id": "scene_graph.patch",
+                "label": "Rename Node",
+                "source": "core",
+                "scope": "scene_graph",
+                "estimated_bytes": 4096,
+            }
+        ],
+        "redo": [],
+        "total_bytes": 4096,
+        "transaction_active": False,
+        "transaction_depth": 0,
+        "transaction_name": "",
+    }
+
+    monkeypatch.setattr(
+        scene_panel_module,
+        "lf",
+        SimpleNamespace(
+            ui=SimpleNamespace(
+                get_invert_masks=lambda: False,
+                request_redraw=lambda: redraw_requests.__setitem__("count", redraw_requests["count"] + 1),
+            ),
+            undo=SimpleNamespace(
+                stack=lambda: undo_state,
+                can_undo=lambda: True,
+                can_redo=lambda: False,
+                undo=lambda: None,
+                redo=lambda: None,
+                jump=lambda stack, count: None,
+            ),
+            get_ui_scale=lambda: 1.0,
+        ),
+    )
+
+    assert panel._refresh_history(force=True) is True
+    assert panel._history_undo_label == "Undo Rename Node"
+    assert panel._history_summary_text == "1 undo / 0 redo · 4.0 KB"
+    assert panel._handle.records["history_undo_items"] == [
+        {
+            "label": "Rename Node",
+            "meta": "scene_graph · core · 4.0 KB",
+            "is_next": True,
+            "kind": "undo",
+            "steps": 1,
+        }
+    ]
+    assert redraw_requests["count"] == 1
+
+
+def test_scene_panel_switching_to_history_tab_hides_context_menu(scene_panel_module, monkeypatch):
+    panel = scene_panel_module.ScenePanel()
+    panel._handle = _HandleStub()
+    panel._context_menu_visible = True
+    panel._context_menu_node = "bike"
+    panel._context_menu_left = "12px"
+    panel._context_menu_top = "8px"
+    redraw_requests = {"count": 0}
+
+    monkeypatch.setattr(
+        scene_panel_module,
+        "lf",
+        SimpleNamespace(
+            ui=SimpleNamespace(
+                request_redraw=lambda: redraw_requests.__setitem__("count", redraw_requests["count"] + 1),
+            ),
+            undo=SimpleNamespace(
+                stack=lambda: {
+                    "undo": [],
+                    "redo": [],
+                    "total_bytes": 0,
+                    "transaction_active": False,
+                    "transaction_depth": 0,
+                    "transaction_name": "",
+                },
+            ),
+        ),
+    )
+
+    panel._on_switch_tab(args=["history"])
+
+    assert panel._active_tab == scene_panel_module.SCENE_TAB_HISTORY
+    assert panel._context_menu_visible is False
+    assert panel._context_menu_node is None
+    assert "active_tab" in panel._handle.dirty_fields
+    assert redraw_requests["count"] >= 1

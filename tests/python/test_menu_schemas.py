@@ -100,12 +100,10 @@ def test_menu_helpers_and_builtin_schemas(monkeypatch):
     assert state["jump_calls"] == [("undo", 1)]
     assert edit_items[5]["type"] == "item"
     edit_items[5]["callback"]()
-    assert state["enabled_panels"] == [("lfs.history", True)]
-    assert edit_items[7]["type"] == "item"
-    edit_items[7]["callback"]()
-    assert state["enabled_panels"] == [("lfs.history", True), ("lfs.input_settings", True)]
-    assert edit_items[9]["type"] == "submenu"
-    assert edit_items[9]["items"][0]["type"] == "toggle"
+    assert state["enabled_panels"] == [("lfs.input_settings", True)]
+    assert all(item.get("label") != "History" for item in edit_items if item["type"] == "item")
+    assert edit_items[7]["type"] == "submenu"
+    assert edit_items[7]["items"][0]["type"] == "toggle"
 
     view_items = view_mod.ViewMenu().menu_items()
     assert view_items[0]["type"] == "submenu"
