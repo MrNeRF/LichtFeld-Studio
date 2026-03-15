@@ -126,6 +126,14 @@ namespace lfs::vis::cap {
         const glm::vec3& value,
         std::string_view undo_label = "transform.scale");
 
+    [[nodiscard]] LFS_VIS_API std::expected<void, std::string> writeGaussianField(
+        SceneManager& scene_manager,
+        RenderingManager* rendering_manager,
+        const std::string& node_name,
+        std::string_view field_name,
+        const std::vector<int>& indices,
+        const std::vector<float>& values);
+
     [[nodiscard]] LFS_VIS_API std::expected<core::NodeId, std::string> resolveCropBoxParentId(
         const SceneManager& scene_manager,
         const std::optional<std::string>& requested_node);

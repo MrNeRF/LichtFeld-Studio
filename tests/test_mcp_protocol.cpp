@@ -104,6 +104,44 @@ namespace lfs::mcp {
         EXPECT_NE(result["content"][0]["text"].get<std::string>().find("\"echo\": 42"), std::string::npos);
     }
 
+    TEST(McpProtocolTest, ToolCallIgnoresEmptyErrorStringForTransportErrors) {
+        static constexpr const char* tool_name = "test.empty_error_string";
+        ScopedToolRegistration cleanup(tool_name);
+
+        ToolRegistry::instance().register_tool(
+            McpTool{
+                .name = tool_name,
+                .description = "Empty error string should not mark transport failure",
+                .input_schema = {.type = "object", .properties = json::object(), .required = {}},
+                .metadata = McpToolMetadata{.category = "test", .kind = "query"}},
+            [](const json&) -> json {
+                return json{
+                    {"success", true},
+                    {"error", ""},
+                };
+            });
+
+        McpServer server;
+        const auto init_response = server.handle_request(JsonRpcRequest{
+            .id = int64_t{1},
+            .method = "initialize",
+            .params = json::object()});
+        ASSERT_TRUE(init_response.result.has_value());
+
+        const auto response = server.handle_request(JsonRpcRequest{
+            .id = int64_t{2},
+            .method = "tools/call",
+            .params = json{
+                {"name", tool_name},
+                {"arguments", json::object()},
+            }});
+
+        ASSERT_TRUE(response.result.has_value());
+        const auto& result = *response.result;
+        EXPECT_FALSE(result["isError"].get<bool>());
+        EXPECT_EQ(result["structuredContent"]["error"], "");
+    }
+
     TEST(McpProtocolTest, ResourceReadUsesMostSpecificPrefixHandler) {
         static constexpr std::string_view broad_prefix = "lichtfeld://test/";
         static constexpr std::string_view narrow_prefix = "lichtfeld://test/items/";

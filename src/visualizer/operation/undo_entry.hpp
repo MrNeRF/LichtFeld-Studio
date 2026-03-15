@@ -22,6 +22,7 @@
 #include <vector>
 
 namespace lfs::vis {
+    class RenderingManager;
     class SceneManager;
 } // namespace lfs::vis
 
@@ -242,8 +243,13 @@ namespace lfs::vis::op {
 
     class CropBoxUndoEntry : public UndoEntry {
     public:
-        CropBoxUndoEntry(SceneManager& scene, std::string node_name,
-                         lfs::core::CropBoxData before, glm::mat4 transform_before);
+        CropBoxUndoEntry(SceneManager& scene,
+                         RenderingManager* rendering_manager,
+                         std::string node_name,
+                         lfs::core::CropBoxData before,
+                         glm::mat4 transform_before,
+                         bool show_before,
+                         bool use_before);
 
         void undo() override;
         void redo() override;
@@ -257,17 +263,27 @@ namespace lfs::vis::op {
         void captureAfter();
 
         SceneManager& scene_;
+        RenderingManager* rendering_manager_ = nullptr;
         std::string node_name_;
         lfs::core::CropBoxData before_;
         lfs::core::CropBoxData after_;
         glm::mat4 transform_before_;
         glm::mat4 transform_after_;
+        bool show_before_ = false;
+        bool use_before_ = false;
+        bool show_after_ = false;
+        bool use_after_ = false;
     };
 
     class EllipsoidUndoEntry : public UndoEntry {
     public:
-        EllipsoidUndoEntry(SceneManager& scene, std::string node_name,
-                           lfs::core::EllipsoidData before, glm::mat4 transform_before);
+        EllipsoidUndoEntry(SceneManager& scene,
+                           RenderingManager* rendering_manager,
+                           std::string node_name,
+                           lfs::core::EllipsoidData before,
+                           glm::mat4 transform_before,
+                           bool show_before,
+                           bool use_before);
 
         void undo() override;
         void redo() override;
@@ -281,11 +297,16 @@ namespace lfs::vis::op {
         void captureAfter();
 
         SceneManager& scene_;
+        RenderingManager* rendering_manager_ = nullptr;
         std::string node_name_;
         lfs::core::EllipsoidData before_;
         lfs::core::EllipsoidData after_;
         glm::mat4 transform_before_;
         glm::mat4 transform_after_;
+        bool show_before_ = false;
+        bool use_before_ = false;
+        bool show_after_ = false;
+        bool use_after_ = false;
     };
 
     class PropertyChangeUndoEntry : public UndoEntry {
@@ -409,6 +430,7 @@ namespace lfs::vis::op {
         [[nodiscard]] std::string name() const override { return name_; }
         [[nodiscard]] UndoMetadata metadata() const override;
         [[nodiscard]] size_t estimatedBytes() const override;
+        bool tryMerge(const UndoEntry& incoming) override;
         [[nodiscard]] DirtyMask dirtyFlags() const override;
 
     private:
@@ -417,6 +439,7 @@ namespace lfs::vis::op {
         SceneManager& scene_;
         std::string name_;
         std::vector<SceneGraphNodeMetadataDiff> diffs_;
+        std::chrono::steady_clock::time_point updated_at_;
     };
 
     class SceneGraphPatchEntry : public UndoEntry {

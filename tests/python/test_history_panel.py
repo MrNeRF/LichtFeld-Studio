@@ -31,12 +31,14 @@ def _install_lf_stub(monkeypatch):
         "transaction_depth": 0,
         "transaction_name": "",
     }
+    redraw_requests = {"count": 0}
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
         PanelSpace=panel_space,
         PanelHeightMode=panel_height_mode,
         PanelOption=panel_option,
         tr=lambda key: key,
+        request_redraw=lambda: redraw_requests.__setitem__("count", redraw_requests["count"] + 1),
     )
     lf_stub.undo = SimpleNamespace(
         stack=lambda: undo_state,
@@ -49,7 +51,7 @@ def _install_lf_stub(monkeypatch):
         unsubscribe=lambda subscription_id: None,
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
-    return lf_stub, undo_state
+    return lf_stub, undo_state, redraw_requests
 
 
 @pytest.fixture
@@ -60,10 +62,10 @@ def history_panel_module(monkeypatch):
         sys.path.insert(0, str(source_python))
     sys.modules.pop("lfs_plugins.history_panel", None)
     sys.modules.pop("lfs_plugins", None)
-    lf_stub, undo_state = _install_lf_stub(monkeypatch)
+    lf_stub, undo_state, redraw_requests = _install_lf_stub(monkeypatch)
     module = import_module("lfs_plugins.history_panel")
     module.lf = lf_stub
-    return module, undo_state
+    return module, undo_state, redraw_requests
 
 
 class _HandleStub:
@@ -79,7 +81,7 @@ class _HandleStub:
 
 
 def test_history_panel_builds_rows_from_structured_stack(history_panel_module):
-    module, undo_state = history_panel_module
+    module, undo_state, redraw_requests = history_panel_module
     panel = module.HistoryPanel()
     panel._handle = _HandleStub()
 
@@ -134,10 +136,11 @@ def test_history_panel_builds_rows_from_structured_stack(history_panel_module):
             "steps": 1,
         }
     ]
+    assert redraw_requests["count"] == 1
 
 
 def test_history_panel_empty_state(history_panel_module):
-    module, _undo_state = history_panel_module
+    module, _undo_state, redraw_requests = history_panel_module
     panel = module.HistoryPanel()
     panel._handle = _HandleStub()
 
@@ -146,3 +149,79 @@ def test_history_panel_empty_state(history_panel_module):
     assert panel._empty_text == "Nothing recorded yet"
     assert panel._handle.records["undo_items"] == []
     assert panel._handle.records["redo_items"] == []
+    assert redraw_requests["count"] == 1
+
+
+def test_history_panel_on_update_polls_even_with_subscription(history_panel_module):
+    module, undo_state, redraw_requests = history_panel_module
+    panel = module.HistoryPanel()
+    panel._handle = _HandleStub()
+    panel._subscription_id = 1
+
+    assert panel._refresh(force=True) is True
+
+    undo_state.update(
+        {
+            "undo": [
+                {
+                    "id": "scene_graph.patch",
+                    "label": "Duplicate Node",
+                    "source": "core",
+                    "scope": "scene_graph",
+                    "estimated_bytes": 2048,
+                    "gpu_bytes": 0,
+                }
+            ],
+            "redo": [],
+            "total_bytes": 2048,
+            "total_cpu_bytes": 2048,
+            "total_gpu_bytes": 0,
+            "transaction_active": False,
+            "transaction_depth": 0,
+            "transaction_name": "",
+        }
+    )
+
+    assert panel.on_update(None) is True
+    assert panel._summary_text == "1 undo / 0 redo · 2.0 KB total · 0 B GPU"
+    assert redraw_requests["count"] == 2
+
+
+def test_history_panel_subscription_refresh_requests_redraw(history_panel_module):
+    module, undo_state, redraw_requests = history_panel_module
+    panel = module.HistoryPanel()
+    panel._handle = _HandleStub()
+
+    assert panel._refresh(force=True) is True
+
+    undo_state.update(
+        {
+            "undo": [
+                {
+                    "id": "history.transaction.translate",
+                    "label": "Translate",
+                    "source": "history",
+                    "scope": "grouped",
+                    "estimated_bytes": 136,
+                    "cpu_bytes": 136,
+                    "gpu_bytes": 0,
+                }
+            ],
+            "redo": [],
+            "total_bytes": 136,
+            "total_cpu_bytes": 136,
+            "total_gpu_bytes": 0,
+            "transaction_active": False,
+            "transaction_depth": 0,
+            "transaction_name": "",
+        }
+    )
+
+    panel._on_history_changed()
+
+    assert redraw_requests["count"] == 2
+    assert panel._last_state_key is None
+
+    assert panel.on_update(None) is True
+    assert panel._summary_text == "1 undo / 0 redo · 136 B total · 0 B GPU"
+    assert redraw_requests["count"] == 3

@@ -107,7 +107,11 @@ namespace lfs::mcp {
         json arguments = params.value("arguments", json::object());
 
         json result = ToolRegistry::instance().call_tool(tool_name, arguments);
-        const bool is_error = result.is_object() && result.contains("error");
+        bool is_error = false;
+        if (result.is_object() && result.contains("error")) {
+            const auto& error = result["error"];
+            is_error = !error.is_string() || !error.get_ref<const std::string&>().empty();
+        }
 
         json content = json::array();
         content.push_back(json{

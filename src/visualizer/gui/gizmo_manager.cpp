@@ -953,8 +953,13 @@ namespace lfs::vis::gui {
             auto* node = scene_manager->getScene().getMutableNode(cropbox_node_name_);
             if (node && node->cropbox) {
                 auto entry = std::make_unique<op::CropBoxUndoEntry>(
-                    *scene_manager, cropbox_node_name_,
-                    cropbox_data_before_drag_, cropbox_transform_before_drag_);
+                    *scene_manager,
+                    render_manager,
+                    cropbox_node_name_,
+                    cropbox_data_before_drag_,
+                    cropbox_transform_before_drag_,
+                    settings.show_crop_box,
+                    settings.use_crop_box);
                 if (entry->hasChanges()) {
                     op::undoHistory().push(std::move(entry));
 
@@ -1131,8 +1136,13 @@ namespace lfs::vis::gui {
             auto* node = scene_manager->getScene().getMutableNode(ellipsoid_node_name_);
             if (node && node->ellipsoid) {
                 auto entry = std::make_unique<op::EllipsoidUndoEntry>(
-                    *scene_manager, ellipsoid_node_name_,
-                    ellipsoid_data_before_drag_, ellipsoid_transform_before_drag_);
+                    *scene_manager,
+                    render_manager,
+                    ellipsoid_node_name_,
+                    ellipsoid_data_before_drag_,
+                    ellipsoid_transform_before_drag_,
+                    settings.show_ellipsoid,
+                    settings.use_ellipsoid);
                 if (entry->hasChanges()) {
                     op::undoHistory().push(std::move(entry));
 

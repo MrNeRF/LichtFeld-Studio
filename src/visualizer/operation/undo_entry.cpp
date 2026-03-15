@@ -7,8 +7,10 @@
 #include "core/logger.hpp"
 #include "core/scene.hpp"
 #include "python/python_runtime.hpp"
+#include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
 #include "undo_history.hpp"
+#include <array>
 #include <algorithm>
 #include <cuda_runtime.h>
 #include <limits>
@@ -1168,8 +1170,9 @@ namespace lfs::vis::op {
 
             const auto* after_tensor =
                 node->model->has_deleted_mask() ? &node->model->deleted() : nullptr;
+            const size_t model_size = static_cast<size_t>(node->model->size());
             const size_t total_size =
-                std::max({before.total_size, tensorNumel(before.tensor), tensorNumel(after_tensor), node->model->size()});
+                std::max({before.total_size, tensorNumel(before.tensor), tensorNumel(after_tensor), model_size});
 
             auto storage = buildTensorSwapStorage(
                 before.tensor,
@@ -1275,8 +1278,9 @@ namespace lfs::vis::op {
             const bool target_present = undo_direction ? storage.before_present : storage.after_present;
             const lfs::core::Tensor* current_deleted =
                 node->model->has_deleted_mask() ? &node->model->deleted() : nullptr;
+            const size_t model_size = static_cast<size_t>(node->model->size());
             const size_t total_size =
-                std::max({storage.total_size, node->model->size(), tensorNumel(current_deleted)});
+                std::max({storage.total_size, model_size, tensorNumel(current_deleted)});
             auto working_mask = materializeMaskTensor(
                 current_deleted, total_size, storage.device, lfs::core::DataType::Bool);
 
@@ -1485,12 +1489,20 @@ namespace lfs::vis::op {
         return DirtyFlag::SPLATS;
     }
 
-    CropBoxUndoEntry::CropBoxUndoEntry(SceneManager& scene, std::string node_name,
-                                       lfs::core::CropBoxData before, glm::mat4 transform_before)
+    CropBoxUndoEntry::CropBoxUndoEntry(SceneManager& scene,
+                                       RenderingManager* rendering_manager,
+                                       std::string node_name,
+                                       lfs::core::CropBoxData before,
+                                       glm::mat4 transform_before,
+                                       bool show_before,
+                                       bool use_before)
         : scene_(scene),
+          rendering_manager_(rendering_manager),
           node_name_(std::move(node_name)),
           before_(std::move(before)),
-          transform_before_(transform_before) {
+          transform_before_(transform_before),
+          show_before_(show_before),
+          use_before_(use_before) {
         captureAfter();
     }
 
@@ -1500,10 +1512,20 @@ namespace lfs::vis::op {
             LOG_WARN("CropBox node '{}' removed during undo capture", node_name_);
             after_ = before_;
             transform_after_ = transform_before_;
+            show_after_ = show_before_;
+            use_after_ = use_before_;
             return;
         }
         after_ = *node->cropbox;
         transform_after_ = scene_.getNodeTransform(node_name_);
+        if (rendering_manager_) {
+            const auto settings = rendering_manager_->getSettings();
+            show_after_ = settings.show_crop_box;
+            use_after_ = settings.use_crop_box;
+        } else {
+            show_after_ = show_before_;
+            use_after_ = use_before_;
+        }
     }
 
     void CropBoxUndoEntry::undo() {
@@ -1511,6 +1533,12 @@ namespace lfs::vis::op {
         if (node && node->cropbox) {
             *node->cropbox = before_;
             scene_.setNodeTransform(node_name_, transform_before_);
+        }
+        if (rendering_manager_) {
+            auto settings = rendering_manager_->getSettings();
+            settings.show_crop_box = show_before_;
+            settings.use_crop_box = use_before_;
+            rendering_manager_->updateSettings(settings);
         }
     }
 
@@ -1520,10 +1548,19 @@ namespace lfs::vis::op {
             *node->cropbox = after_;
             scene_.setNodeTransform(node_name_, transform_after_);
         }
+        if (rendering_manager_) {
+            auto settings = rendering_manager_->getSettings();
+            settings.show_crop_box = show_after_;
+            settings.use_crop_box = use_after_;
+            rendering_manager_->updateSettings(settings);
+        }
     }
 
     bool CropBoxUndoEntry::hasChanges() const {
-        return !cropBoxesEqual(before_, after_) || transform_before_ != transform_after_;
+        return !cropBoxesEqual(before_, after_) ||
+               transform_before_ != transform_after_ ||
+               show_before_ != show_after_ ||
+               use_before_ != use_after_;
     }
 
     UndoMetadata CropBoxUndoEntry::metadata() const {
@@ -1539,12 +1576,20 @@ namespace lfs::vis::op {
         return DirtyFlag::SPLATS | DirtyFlag::OVERLAY;
     }
 
-    EllipsoidUndoEntry::EllipsoidUndoEntry(SceneManager& scene, std::string node_name,
-                                           lfs::core::EllipsoidData before, glm::mat4 transform_before)
+    EllipsoidUndoEntry::EllipsoidUndoEntry(SceneManager& scene,
+                                           RenderingManager* rendering_manager,
+                                           std::string node_name,
+                                           lfs::core::EllipsoidData before,
+                                           glm::mat4 transform_before,
+                                           bool show_before,
+                                           bool use_before)
         : scene_(scene),
+          rendering_manager_(rendering_manager),
           node_name_(std::move(node_name)),
           before_(std::move(before)),
-          transform_before_(transform_before) {
+          transform_before_(transform_before),
+          show_before_(show_before),
+          use_before_(use_before) {
         captureAfter();
     }
 
@@ -1554,10 +1599,20 @@ namespace lfs::vis::op {
             LOG_WARN("Ellipsoid node '{}' removed during undo capture", node_name_);
             after_ = before_;
             transform_after_ = transform_before_;
+            show_after_ = show_before_;
+            use_after_ = use_before_;
             return;
         }
         after_ = *node->ellipsoid;
         transform_after_ = scene_.getNodeTransform(node_name_);
+        if (rendering_manager_) {
+            const auto settings = rendering_manager_->getSettings();
+            show_after_ = settings.show_ellipsoid;
+            use_after_ = settings.use_ellipsoid;
+        } else {
+            show_after_ = show_before_;
+            use_after_ = use_before_;
+        }
     }
 
     void EllipsoidUndoEntry::undo() {
@@ -1565,6 +1620,12 @@ namespace lfs::vis::op {
         if (node && node->ellipsoid) {
             *node->ellipsoid = before_;
             scene_.setNodeTransform(node_name_, transform_before_);
+        }
+        if (rendering_manager_) {
+            auto settings = rendering_manager_->getSettings();
+            settings.show_ellipsoid = show_before_;
+            settings.use_ellipsoid = use_before_;
+            rendering_manager_->updateSettings(settings);
         }
     }
 
@@ -1574,10 +1635,19 @@ namespace lfs::vis::op {
             *node->ellipsoid = after_;
             scene_.setNodeTransform(node_name_, transform_after_);
         }
+        if (rendering_manager_) {
+            auto settings = rendering_manager_->getSettings();
+            settings.show_ellipsoid = show_after_;
+            settings.use_ellipsoid = use_after_;
+            rendering_manager_->updateSettings(settings);
+        }
     }
 
     bool EllipsoidUndoEntry::hasChanges() const {
-        return !ellipsoidsEqual(before_, after_) || transform_before_ != transform_after_;
+        return !ellipsoidsEqual(before_, after_) ||
+               transform_before_ != transform_after_ ||
+               show_before_ != show_after_ ||
+               use_before_ != use_after_;
     }
 
     UndoMetadata EllipsoidUndoEntry::metadata() const {
@@ -1666,7 +1736,8 @@ namespace lfs::vis::op {
                                                      std::vector<SceneGraphNodeMetadataDiff> diffs)
         : scene_(scene),
           name_(std::move(name)),
-          diffs_(std::move(diffs)) {}
+          diffs_(std::move(diffs)),
+          updated_at_(std::chrono::steady_clock::now()) {}
 
     void SceneGraphMetadataEntry::apply(const bool use_after_state) {
         lfs::core::Scene::Transaction txn(scene_.getScene());
@@ -1737,6 +1808,39 @@ namespace lfs::vis::op {
             total += estimateMetadataBytes(diff.after);
         }
         return total;
+    }
+
+    bool SceneGraphMetadataEntry::tryMerge(const UndoEntry& incoming) {
+        const auto* next = dynamic_cast<const SceneGraphMetadataEntry*>(&incoming);
+        if (!next || next->name_ != name_ || next->updated_at_ < updated_at_) {
+            return false;
+        }
+
+        if ((next->updated_at_ - updated_at_) > PROPERTY_COALESCE_WINDOW) {
+            return false;
+        }
+
+        if (diffs_.size() != next->diffs_.size()) {
+            return false;
+        }
+
+        const auto merge_key = [](const SceneGraphNodeMetadataDiff& diff) {
+            std::array<std::string, 2> names{diff.before.name, diff.after.name};
+            std::sort(names.begin(), names.end());
+            return names;
+        };
+
+        for (size_t i = 0; i < diffs_.size(); ++i) {
+            if (merge_key(diffs_[i]) != merge_key(next->diffs_[i])) {
+                return false;
+            }
+        }
+
+        for (size_t i = 0; i < diffs_.size(); ++i) {
+            diffs_[i].after = next->diffs_[i].after;
+        }
+        updated_at_ = next->updated_at_;
+        return true;
     }
 
     UndoMetadata SceneGraphMetadataEntry::metadata() const {

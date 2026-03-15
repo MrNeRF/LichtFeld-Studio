@@ -29,7 +29,9 @@ class HistoryPanel(Panel):
     template = "rmlui/history_panel.rml"
     height_mode = lf.ui.PanelHeightMode.CONTENT
     size = (440, 0)
-    update_interval_ms = 5000
+    # Keep history surfacing responsive enough that subscription-triggered redraws
+    # land inside an update window and refresh the panel on the next frame.
+    update_interval_ms = 50
 
     def __init__(self):
         self._handle = None
@@ -73,8 +75,8 @@ class HistoryPanel(Panel):
 
     def on_update(self, doc):
         del doc
-        if self._subscription_id:
-            return False
+        # History subscriptions cover most edits, but a periodic poll keeps the panel
+        # honest when the UI misses a callback for residency-only changes.
         return self._refresh(force=False)
 
     def on_scene_changed(self, doc):
@@ -110,7 +112,14 @@ class HistoryPanel(Panel):
 
     def _on_history_changed(self):
         self._last_state_key = None
-        self._refresh(force=True)
+        # Undo observers may be notified off the UI thread; defer the actual
+        # Rml data-model mutation to on_update and only wake the render loop here.
+        self._request_redraw()
+
+    def _request_redraw(self):
+        request_redraw = getattr(getattr(lf, "ui", None), "request_redraw", None)
+        if callable(request_redraw):
+            request_redraw()
 
     def _refresh(self, force: bool) -> bool:
         if not self._handle:
@@ -181,6 +190,7 @@ class HistoryPanel(Panel):
         self._handle.dirty("empty_text")
         self._handle.dirty("has_undo")
         self._handle.dirty("has_redo")
+        self._request_redraw()
         return True
 
     def _build_rows(self, items, kind: str):

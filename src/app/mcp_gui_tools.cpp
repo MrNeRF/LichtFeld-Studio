@@ -3880,36 +3880,16 @@ namespace lfs::app {
                     auto* const node = scene.getMutableNode(*node_name);
                     if (!node || !node->model)
                         return json{{"error", "Gaussian node not found: " + *node_name}};
-
-                    auto* const field = resolve_gaussian_field(*node->model, field_name);
-                    if (!field)
-                        return json{{"error", "Unsupported gaussian field: " + field_name}};
-
-                    for (const int index : indices) {
-                        if (index < 0 || static_cast<size_t>(index) >= node->model->size())
-                            return json{{"error", "Gaussian index out of range: " + std::to_string(index)}};
+                    if (auto result = vis::cap::writeGaussianField(
+                            *scene_manager,
+                            rendering_manager,
+                            *node_name,
+                            field_name,
+                            indices,
+                            values);
+                        !result) {
+                        return json{{"error", result.error()}};
                     }
-
-                    const size_t row_width = product_of_tail_dims(*field);
-                    const size_t expected_values = row_width * indices.size();
-                    if (values.size() != expected_values) {
-                        return json{{"error", "Field slice expects " + std::to_string(expected_values) +
-                                                  " values but received " + std::to_string(values.size())}};
-                    }
-
-                    const auto& field_shape = field->shape();
-                    if (field_shape.rank() == 0)
-                        return json{{"error", "Gaussian tensor field has invalid rank"}};
-                    auto shape_dims = field_shape.dims();
-                    shape_dims[0] = indices.size();
-
-                    const auto index_tensor = core::Tensor::from_vector(indices, {indices.size()}, field->device());
-                    const auto src_tensor = core::Tensor::from_vector(values, core::TensorShape(shape_dims), field->device());
-                    field->index_copy_(0, index_tensor, src_tensor);
-
-                    scene.notifyMutation(core::Scene::MutationType::MODEL_CHANGED);
-                    if (rendering_manager)
-                        rendering_manager->markDirty(vis::DirtyFlag::SPLATS | vis::DirtyFlag::OVERLAY);
 
                     return json{
                         {"success", true},
