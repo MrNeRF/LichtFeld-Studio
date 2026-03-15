@@ -34,6 +34,7 @@ _PHASE_MILESTONES: List[Tuple[str, float]] = [
 ]
 _NUDGE_FRACTION = 0.08
 _PROGRESS_CEILING = 0.95
+_MAX_REPO_LABEL_CHARS = 30
 
 
 class CardOpPhase(Enum):
@@ -267,6 +268,8 @@ class PluginMarketplacePanel(Panel):
             repo_label = f"{entry.owner}/{entry.repo}"
         elif entry.repo:
             repo_label = entry.repo
+        if repo_label:
+            repo_label = self._truncate_text(repo_label, _MAX_REPO_LABEL_CHARS)
 
         desc = entry.description
         if not desc and plugin_name and self._discover_cache:

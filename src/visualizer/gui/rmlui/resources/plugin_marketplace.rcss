@@ -114,6 +114,9 @@
 
 .card-repo {
     display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .card-metrics {
