@@ -179,6 +179,7 @@ class ScenePanel(Panel):
         self._history_has_undo = False
         self._history_has_redo = False
         self._history_show_transaction = False
+        self._history_can_clear = False
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model(SCENE_MODEL_NAME)
@@ -216,9 +217,11 @@ class ScenePanel(Panel):
         model.bind_func("history_empty_text", lambda: self._history_empty_text)
         model.bind_func("history_has_undo", lambda: self._history_has_undo)
         model.bind_func("history_has_redo", lambda: self._history_has_redo)
+        model.bind_func("history_can_clear", lambda: self._history_can_clear)
         model.bind_event("switch_tab", self._on_switch_tab)
         model.bind_event("history_do_undo", self._on_history_undo)
         model.bind_event("history_do_redo", self._on_history_redo)
+        model.bind_event("history_clear", self._on_history_clear)
         model.bind_event("history_jump_to", self._on_history_jump_to)
         model.bind_record_list("visible_rows")
         model.bind_record_list("context_menu_entries")
@@ -265,6 +268,8 @@ class ScenePanel(Panel):
 
     def on_scene_changed(self, doc):
         del doc
+        self._history_last_state_key = None
+        self._refresh_history(force=True)
         mutation_flags = self._scene_mutation_flags()
         if mutation_flags:
             self._hide_context_menu()
@@ -387,8 +392,8 @@ class ScenePanel(Panel):
         self._history_last_state_key = state_key
         self._history_has_undo = bool(undo_items)
         self._history_has_redo = bool(redo_items)
-        self._history_undo_label = f"Undo {undo_items[0]['label']}" if undo_items else "Undo"
-        self._history_redo_label = f"Redo {redo_items[0]['label']}" if redo_items else "Redo"
+        self._history_undo_label = f"Undo: {undo_items[0]['label']}" if undo_items else "Undo"
+        self._history_redo_label = f"Redo: {redo_items[0]['label']}" if redo_items else "Redo"
         total_bytes = int(state.get("total_bytes", 0))
         total_gpu_bytes = int(state.get("total_gpu_bytes", total_bytes))
         if not undo_items and not redo_items:
@@ -405,6 +410,9 @@ class ScenePanel(Panel):
         transaction_name = state.get("transaction_name", "") or "Grouped changes"
         transaction_depth = int(state.get("transaction_depth", 0))
         self._history_show_transaction = bool(state.get("transaction_active", False))
+        self._history_can_clear = (
+            self._history_has_undo or self._history_has_redo or self._history_show_transaction
+        )
         self._history_transaction_label = (
             f"Transaction active: {transaction_name} (depth {transaction_depth})"
             if self._history_show_transaction
@@ -423,7 +431,8 @@ class ScenePanel(Panel):
                           "history_show_transaction",
                           "history_empty_text",
                           "history_has_undo",
-                          "history_has_redo")
+                          "history_has_redo",
+                          "history_can_clear")
         self._request_redraw()
         return True
 
@@ -436,10 +445,26 @@ class ScenePanel(Panel):
                 size_meta = f"{_format_bytes(estimated_bytes)} · GPU {_format_bytes(gpu_bytes)}"
             else:
                 size_meta = _format_bytes(estimated_bytes)
+            scope_text = str(item.get("scope", "general")).replace("_", " ")
+            source_text = str(item.get("source", "system"))
+            next_label = "NEXT UNDO" if kind == "undo" else "NEXT REDO"
             rows.append(
                 {
                     "label": item.get("label", ""),
-                    "meta": f"{item.get('scope', 'general')} · {item.get('source', 'system')} · {size_meta}",
+                    "title_line": f"● {item.get('label', '')}",
+                    "stack_line": (
+                        f"{next_label} · Top of stack"
+                        if index == 0
+                        else f"{scope_text} · {source_text}"
+                    ),
+                    "detail_line": (
+                        f"{scope_text} · {source_text} · Size: {size_meta}"
+                        if index == 0
+                        else f"Size: {size_meta}"
+                    ),
+                    "scope": scope_text,
+                    "source": source_text,
+                    "size": size_meta,
                     "is_next": index == 0,
                     "kind": kind,
                     "steps": index + 1,
@@ -470,6 +495,13 @@ class ScenePanel(Panel):
         do_redo = getattr(undo_api, "redo", None)
         if callable(can_redo) and callable(do_redo) and can_redo():
             do_redo()
+            self._history_last_state_key = None
+
+    def _on_history_clear(self, _handle=None, _ev=None, _args=None):
+        undo_api = getattr(lf, "undo", None)
+        clear = getattr(undo_api, "clear", None)
+        if callable(clear) and self._history_can_clear:
+            clear()
             self._history_last_state_key = None
 
     def _on_history_jump_to(self, _handle=None, _ev=None, args=None):

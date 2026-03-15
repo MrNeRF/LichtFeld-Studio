@@ -49,6 +49,7 @@ def _install_lf_stub(monkeypatch):
         can_redo=lambda: False,
         undo=lambda: None,
         redo=lambda: None,
+        clear=lambda: None,
         jump=lambda stack, count: None,
         subscribe=lambda callback: 0,
         unsubscribe=lambda subscription_id: None,
@@ -295,6 +296,7 @@ def test_scene_panel_history_tab_builds_embedded_rows(scene_panel_module, monkey
                 can_redo=lambda: False,
                 undo=lambda: None,
                 redo=lambda: None,
+                clear=lambda: None,
                 jump=lambda stack, count: None,
             ),
             get_ui_scale=lambda: 1.0,
@@ -302,17 +304,23 @@ def test_scene_panel_history_tab_builds_embedded_rows(scene_panel_module, monkey
     )
 
     assert panel._refresh_history(force=True) is True
-    assert panel._history_undo_label == "Undo Rename Node"
+    assert panel._history_undo_label == "Undo: Rename Node"
     assert panel._history_summary_text == "1 undo / 0 redo · 4.0 KB"
     assert panel._handle.records["history_undo_items"] == [
         {
             "label": "Rename Node",
-            "meta": "scene_graph · core · 4.0 KB",
+            "title_line": "● Rename Node",
+            "stack_line": "NEXT UNDO · Top of stack",
+            "detail_line": "scene graph · core · Size: 4.0 KB",
+            "scope": "scene graph",
+            "source": "core",
+            "size": "4.0 KB",
             "is_next": True,
             "kind": "undo",
             "steps": 1,
         }
     ]
+    assert panel._history_can_clear is True
     assert redraw_requests["count"] == 1
 
 
@@ -341,6 +349,7 @@ def test_scene_panel_switching_to_history_tab_hides_context_menu(scene_panel_mod
                     "transaction_depth": 0,
                     "transaction_name": "",
                 },
+                clear=lambda: None,
             ),
         ),
     )
@@ -352,3 +361,95 @@ def test_scene_panel_switching_to_history_tab_hides_context_menu(scene_panel_mod
     assert panel._context_menu_node is None
     assert "active_tab" in panel._handle.dirty_fields
     assert redraw_requests["count"] >= 1
+
+
+def test_scene_panel_history_clear_calls_undo_clear(scene_panel_module, monkeypatch):
+    panel = scene_panel_module.ScenePanel()
+    panel._handle = _HandleStub()
+    clear_calls = {"count": 0}
+    undo_state = {
+        "undo": [{"id": "scene_graph.patch", "label": "Delete Node"}],
+        "redo": [],
+        "total_bytes": 128,
+        "transaction_active": False,
+        "transaction_depth": 0,
+        "transaction_name": "",
+    }
+
+    monkeypatch.setattr(
+        scene_panel_module,
+        "lf",
+        SimpleNamespace(
+            ui=SimpleNamespace(
+                get_invert_masks=lambda: False,
+                request_redraw=lambda: None,
+            ),
+            undo=SimpleNamespace(
+                stack=lambda: undo_state,
+                can_undo=lambda: True,
+                can_redo=lambda: False,
+                undo=lambda: None,
+                redo=lambda: None,
+                clear=lambda: clear_calls.__setitem__("count", clear_calls["count"] + 1),
+                jump=lambda stack, count: None,
+            ),
+            get_ui_scale=lambda: 1.0,
+        ),
+    )
+
+    assert panel._refresh_history(force=True) is True
+
+    panel._on_history_clear()
+
+    assert clear_calls["count"] == 1
+    assert panel._history_last_state_key is None
+
+
+def test_scene_panel_scene_change_refreshes_cleared_history(scene_panel_module, monkeypatch):
+    panel = scene_panel_module.ScenePanel()
+    panel._handle = _HandleStub()
+    undo_state = {
+        "undo": [{"id": "scene_graph.patch", "label": "Delete Node"}],
+        "redo": [],
+        "total_bytes": 128,
+        "transaction_active": False,
+        "transaction_depth": 0,
+        "transaction_name": "",
+    }
+
+    monkeypatch.setattr(
+        scene_panel_module,
+        "lf",
+        SimpleNamespace(
+            ui=SimpleNamespace(
+                get_current_language=lambda: "en",
+                get_invert_masks=lambda: False,
+                request_redraw=lambda: None,
+            ),
+            undo=SimpleNamespace(
+                stack=lambda: undo_state,
+                can_undo=lambda: bool(undo_state["undo"]),
+                can_redo=lambda: False,
+                undo=lambda: None,
+                redo=lambda: None,
+                clear=lambda: None,
+                jump=lambda stack, count: None,
+            ),
+            get_ui_scale=lambda: 1.0,
+            get_selected_node_names=lambda: [],
+        ),
+    )
+    monkeypatch.setattr(panel, "_scene_mutation_flags", lambda: 0)
+    monkeypatch.setattr(panel, "_handle_scene_changed", lambda mutation_flags: True)
+
+    assert panel._refresh_history(force=True) is True
+
+    undo_state["undo"] = []
+    undo_state["redo"] = []
+    undo_state["total_bytes"] = 0
+
+    panel.on_scene_changed(None)
+
+    assert panel._history_summary_text == "No history yet"
+    assert panel._handle.records["history_undo_items"] == []
+    assert panel._handle.records["history_redo_items"] == []

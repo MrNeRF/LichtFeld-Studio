@@ -45,6 +45,7 @@ class HistoryPanel(Panel):
         self._has_undo = False
         self._has_redo = False
         self._show_transaction = False
+        self._can_clear = False
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("history_panel")
@@ -60,8 +61,10 @@ class HistoryPanel(Panel):
         model.bind_func("empty_text", lambda: self._empty_text)
         model.bind_func("has_undo", lambda: self._has_undo)
         model.bind_func("has_redo", lambda: self._has_redo)
+        model.bind_func("can_clear", lambda: self._can_clear)
         model.bind_event("do_undo", self._on_undo)
         model.bind_event("do_redo", self._on_redo)
+        model.bind_event("clear_history", self._on_clear)
         model.bind_event("jump_to", self._on_jump_to)
         model.bind_record_list("undo_items")
         model.bind_record_list("redo_items")
@@ -82,6 +85,7 @@ class HistoryPanel(Panel):
     def on_scene_changed(self, doc):
         del doc
         self._last_state_key = None
+        self._refresh(force=True)
 
     def on_unmount(self, doc):
         if self._subscription_id:
@@ -98,6 +102,11 @@ class HistoryPanel(Panel):
     def _on_redo(self, _handle=None, _ev=None, _args=None):
         if lf.undo.can_redo():
             lf.undo.redo()
+            self._last_state_key = None
+
+    def _on_clear(self, _handle=None, _ev=None, _args=None):
+        if self._can_clear:
+            lf.undo.clear()
             self._last_state_key = None
 
     def _on_jump_to(self, _handle=None, _ev=None, args=None):
@@ -155,8 +164,8 @@ class HistoryPanel(Panel):
         self._last_state_key = state_key
         self._has_undo = bool(undo_items)
         self._has_redo = bool(redo_items)
-        self._undo_label = f"Undo {undo_items[0]['label']}" if undo_items else "Undo"
-        self._redo_label = f"Redo {redo_items[0]['label']}" if redo_items else "Redo"
+        self._undo_label = f"Undo: {undo_items[0]['label']}" if undo_items else "Undo"
+        self._redo_label = f"Redo: {redo_items[0]['label']}" if redo_items else "Redo"
         total_bytes = int(state.get("total_bytes", 0))
         total_gpu_bytes = int(state.get("total_gpu_bytes", total_bytes))
         if not undo_items and not redo_items:
@@ -171,6 +180,7 @@ class HistoryPanel(Panel):
         transaction_name = state.get("transaction_name", "") or "Grouped changes"
         transaction_depth = int(state.get("transaction_depth", 0))
         self._show_transaction = bool(state.get("transaction_active", False))
+        self._can_clear = self._has_undo or self._has_redo or self._show_transaction
         self._transaction_label = (
             f"Transaction active: {transaction_name} (depth {transaction_depth})"
             if self._show_transaction
@@ -190,6 +200,7 @@ class HistoryPanel(Panel):
         self._handle.dirty("empty_text")
         self._handle.dirty("has_undo")
         self._handle.dirty("has_redo")
+        self._handle.dirty("can_clear")
         self._request_redraw()
         return True
 
@@ -202,10 +213,26 @@ class HistoryPanel(Panel):
                 size_meta = f"{_format_bytes(estimated_bytes)} · GPU {_format_bytes(gpu_bytes)}"
             else:
                 size_meta = _format_bytes(estimated_bytes)
+            scope_text = str(item.get("scope", "general")).replace("_", " ")
+            source_text = str(item.get("source", "system"))
+            next_label = "NEXT UNDO" if kind == "undo" else "NEXT REDO"
             rows.append(
                 {
                     "label": item.get("label", ""),
-                    "meta": f"{item.get('scope', 'general')} · {item.get('source', 'system')} · {size_meta}",
+                    "title_line": f"● {item.get('label', '')}",
+                    "stack_line": (
+                        f"{next_label} · Top of stack"
+                        if index == 0
+                        else f"{scope_text} · {source_text}"
+                    ),
+                    "detail_line": (
+                        f"{scope_text} · {source_text} · Size: {size_meta}"
+                        if index == 0
+                        else f"Size: {size_meta}"
+                    ),
+                    "scope": scope_text,
+                    "source": source_text,
+                    "size": size_meta,
                     "is_next": index == 0,
                     "kind": kind,
                     "steps": index + 1,

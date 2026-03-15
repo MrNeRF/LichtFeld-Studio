@@ -32,6 +32,7 @@ def _install_lf_stub(monkeypatch):
         "transaction_name": "",
     }
     redraw_requests = {"count": 0}
+    clear_calls = {"count": 0}
     lf_stub = ModuleType("lichtfeld")
     lf_stub.ui = SimpleNamespace(
         PanelSpace=panel_space,
@@ -46,12 +47,13 @@ def _install_lf_stub(monkeypatch):
         can_redo=lambda: bool(undo_state["redo"]),
         undo=lambda: None,
         redo=lambda: None,
+        clear=lambda: clear_calls.__setitem__("count", clear_calls["count"] + 1),
         jump=lambda stack, count: {"success": True, "changed": True, "steps_performed": count, "error": ""},
         subscribe=lambda callback: 1,
         unsubscribe=lambda subscription_id: None,
     )
     monkeypatch.setitem(sys.modules, "lichtfeld", lf_stub)
-    return lf_stub, undo_state, redraw_requests
+    return lf_stub, undo_state, redraw_requests, clear_calls
 
 
 @pytest.fixture
@@ -62,10 +64,10 @@ def history_panel_module(monkeypatch):
         sys.path.insert(0, str(source_python))
     sys.modules.pop("lfs_plugins.history_panel", None)
     sys.modules.pop("lfs_plugins", None)
-    lf_stub, undo_state, redraw_requests = _install_lf_stub(monkeypatch)
+    lf_stub, undo_state, redraw_requests, clear_calls = _install_lf_stub(monkeypatch)
     module = import_module("lfs_plugins.history_panel")
     module.lf = lf_stub
-    return module, undo_state, redraw_requests
+    return module, undo_state, redraw_requests, clear_calls
 
 
 class _HandleStub:
@@ -81,7 +83,7 @@ class _HandleStub:
 
 
 def test_history_panel_builds_rows_from_structured_stack(history_panel_module):
-    module, undo_state, redraw_requests = history_panel_module
+    module, undo_state, redraw_requests, _clear_calls = history_panel_module
     panel = module.HistoryPanel()
     panel._handle = _HandleStub()
 
@@ -114,14 +116,19 @@ def test_history_panel_builds_rows_from_structured_stack(history_panel_module):
 
     assert panel._refresh(force=True) is True
 
-    assert panel._undo_label == "Undo Rename Node"
-    assert panel._redo_label == "Redo Grow Selection"
+    assert panel._undo_label == "Undo: Rename Node"
+    assert panel._redo_label == "Redo: Grow Selection"
     assert panel._summary_text == "1 undo / 1 redo · 4.5 KB"
     assert panel._transaction_label == "Transaction active: Grouped Move (depth 2)"
     assert panel._handle.records["undo_items"] == [
         {
             "label": "Rename Node",
-            "meta": "scene_graph · core · 4.0 KB",
+            "title_line": "● Rename Node",
+            "stack_line": "NEXT UNDO · Top of stack",
+            "detail_line": "scene graph · core · Size: 4.0 KB",
+            "scope": "scene graph",
+            "source": "core",
+            "size": "4.0 KB",
             "is_next": True,
             "kind": "undo",
             "steps": 1,
@@ -130,30 +137,37 @@ def test_history_panel_builds_rows_from_structured_stack(history_panel_module):
     assert panel._handle.records["redo_items"] == [
         {
             "label": "Grow Selection",
-            "meta": "selection · core · 512 B",
+            "title_line": "● Grow Selection",
+            "stack_line": "NEXT REDO · Top of stack",
+            "detail_line": "selection · core · Size: 512 B",
+            "scope": "selection",
+            "source": "core",
+            "size": "512 B",
             "is_next": True,
             "kind": "redo",
             "steps": 1,
         }
     ]
+    assert panel._can_clear is True
     assert redraw_requests["count"] == 1
 
 
 def test_history_panel_empty_state(history_panel_module):
-    module, _undo_state, redraw_requests = history_panel_module
+    module, _undo_state, redraw_requests, _clear_calls = history_panel_module
     panel = module.HistoryPanel()
     panel._handle = _HandleStub()
 
     assert panel._refresh(force=True) is True
     assert panel._summary_text == "No history yet"
     assert panel._empty_text == "Nothing recorded yet"
+    assert panel._can_clear is False
     assert panel._handle.records["undo_items"] == []
     assert panel._handle.records["redo_items"] == []
     assert redraw_requests["count"] == 1
 
 
 def test_history_panel_on_update_polls_even_with_subscription(history_panel_module):
-    module, undo_state, redraw_requests = history_panel_module
+    module, undo_state, redraw_requests, _clear_calls = history_panel_module
     panel = module.HistoryPanel()
     panel._handle = _HandleStub()
     panel._subscription_id = 1
@@ -188,7 +202,7 @@ def test_history_panel_on_update_polls_even_with_subscription(history_panel_modu
 
 
 def test_history_panel_subscription_refresh_requests_redraw(history_panel_module):
-    module, undo_state, redraw_requests = history_panel_module
+    module, undo_state, redraw_requests, _clear_calls = history_panel_module
     panel = module.HistoryPanel()
     panel._handle = _HandleStub()
 
@@ -225,3 +239,37 @@ def test_history_panel_subscription_refresh_requests_redraw(history_panel_module
     assert panel.on_update(None) is True
     assert panel._summary_text == "1 undo / 0 redo · 136 B total · 0 B GPU"
     assert redraw_requests["count"] == 3
+
+
+def test_history_panel_clear_invokes_undo_clear(history_panel_module):
+    module, undo_state, _redraw_requests, clear_calls = history_panel_module
+    panel = module.HistoryPanel()
+    panel._handle = _HandleStub()
+
+    undo_state["undo"] = [{"id": "scene_graph.patch", "label": "Delete Node"}]
+    assert panel._refresh(force=True) is True
+
+    panel._on_clear()
+
+    assert clear_calls["count"] == 1
+    assert panel._last_state_key is None
+
+
+def test_history_panel_scene_change_forces_empty_refresh(history_panel_module):
+    module, undo_state, redraw_requests, _clear_calls = history_panel_module
+    panel = module.HistoryPanel()
+    panel._handle = _HandleStub()
+
+    undo_state["undo"] = [{"id": "scene_graph.patch", "label": "Delete Node"}]
+    assert panel._refresh(force=True) is True
+
+    undo_state["undo"] = []
+    undo_state["redo"] = []
+    undo_state["total_bytes"] = 0
+
+    panel.on_scene_changed(None)
+
+    assert panel._summary_text == "No history yet"
+    assert panel._handle.records["undo_items"] == []
+    assert panel._handle.records["redo_items"] == []
+    assert redraw_requests["count"] >= 2

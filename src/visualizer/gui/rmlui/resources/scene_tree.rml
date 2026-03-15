@@ -119,7 +119,12 @@
             <button class="btn btn--secondary history-action"
                     data-event-click="history_do_redo"
                     data-attrif-disabled="!history_has_redo">{{ history_redo_label }}</button>
+            <button class="btn btn--ghost history-action history-action--clear"
+                    data-event-click="history_clear"
+                    data-attrif-disabled="!history_can_clear">Clear History</button>
         </div>
+
+        <div class="history-note text-muted">Newest block is at the top. Click a block to jump there. New projects start clean.</div>
 
         <div class="separator"></div>
 
@@ -128,12 +133,18 @@
             <div class="history-list">
                 <span class="history-empty text-muted"
                       data-if="!history_has_undo">{{ history_empty_text }}</span>
-                <div class="history-row"
-                     data-for="item : history_undo_items"
-                     data-class-is-next="item.is_next"
-                     data-event-click="history_jump_to(item.kind, item.steps)">
-                    <span class="history-row__label text-default">{{ item.label }}</span>
-                    <span class="history-row__meta text-muted">{{ item.meta }}</span>
+                <div class="history-stack-item"
+                     style="display:block; width:100%;"
+                     data-for="item : history_undo_items">
+                    <button type="button"
+                            class="btn btn--ghost history-row"
+                            style="display:block; width:100%;"
+                            data-class-is-next="item.is_next"
+                            data-event-click="history_jump_to(item.kind, item.steps)">
+                        <span class="history-row__line history-row__line--primary text-default">{{ item.title_line }}</span><br />
+                        <span class="history-row__line history-row__line--stack text-muted">{{ item.stack_line }}</span><br />
+                        <span class="history-row__line history-row__line--secondary text-muted">{{ item.detail_line }}</span>
+                    </button>
                 </div>
             </div>
         </div>
@@ -145,12 +156,18 @@
             <div class="history-list">
                 <span class="history-empty text-muted"
                       data-if="!history_has_redo">{{ history_empty_text }}</span>
-                <div class="history-row history-row--redo"
-                     data-for="item : history_redo_items"
-                     data-class-is-next="item.is_next"
-                     data-event-click="history_jump_to(item.kind, item.steps)">
-                    <span class="history-row__label text-default">{{ item.label }}</span>
-                    <span class="history-row__meta text-muted">{{ item.meta }}</span>
+                <div class="history-stack-item"
+                     style="display:block; width:100%;"
+                     data-for="item : history_redo_items">
+                    <button type="button"
+                            class="btn btn--ghost history-row history-row--redo"
+                            style="display:block; width:100%;"
+                            data-class-is-next="item.is_next"
+                            data-event-click="history_jump_to(item.kind, item.steps)">
+                        <span class="history-row__line history-row__line--primary text-default">{{ item.title_line }}</span><br />
+                        <span class="history-row__line history-row__line--stack text-muted">{{ item.stack_line }}</span><br />
+                        <span class="history-row__line history-row__line--secondary text-muted">{{ item.detail_line }}</span>
+                    </button>
                 </div>
             </div>
         </div>

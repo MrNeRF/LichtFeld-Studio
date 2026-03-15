@@ -12,6 +12,22 @@
 #include <stdexcept>
 
 namespace lfs::vis {
+    namespace {
+        std::filesystem::path displayParentPath(const std::filesystem::path& path) {
+            const auto parent = path.parent_path();
+            if (!parent.empty()) {
+                return parent;
+            }
+
+            std::error_code ec;
+            const auto absolute = std::filesystem::absolute(path, ec);
+            if (!ec) {
+                return absolute.parent_path();
+            }
+
+            return {};
+        }
+    }
 
     DataLoadingService::DataLoadingService(SceneManager* scene_manager)
         : scene_manager_(scene_manager) {
@@ -130,7 +146,7 @@ namespace lfs::vis {
 
             LOG_INFO("Successfully loaded PLY: {} (from: {})",
                      lfs::core::path_to_utf8(path.filename()),
-                     lfs::core::path_to_utf8(path.parent_path()));
+                     lfs::core::path_to_utf8(displayParentPath(path)));
 
             return {};
         } catch (const std::exception& e) {
@@ -151,7 +167,7 @@ namespace lfs::vis {
 
             LOG_INFO("Successfully loaded SOG: {} (from: {})",
                      lfs::core::path_to_utf8(path.filename()),
-                     lfs::core::path_to_utf8(path.parent_path()));
+                     lfs::core::path_to_utf8(displayParentPath(path)));
 
             return {};
         } catch (const std::exception& e) {

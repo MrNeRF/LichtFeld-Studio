@@ -27,12 +27,26 @@
 
 .history-actions {
     display: flex;
+    flex-wrap: wrap;
     gap: 6dp;
 }
 
 .history-action {
     flex: 1;
     text-align: center;
+    min-height: 24dp;
+}
+
+.history-action--clear {
+    flex: 0 0 auto;
+    min-width: 84dp;
+}
+
+.history-note {
+    display: block;
+    margin-top: -2dp;
+    margin-bottom: 2dp;
+    font-size: 9dp;
 }
 
 .history-section {
@@ -48,44 +62,78 @@
 }
 
 .history-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4dp;
+    display: block;
 }
 
-.history-row {
-    display: flex;
-    flex-direction: column;
-    gap: 1dp;
-    padding: 6dp 8dp;
-    border-width: 1dp;
+.history-stack-item {
+    display: block;
+    width: 100%;
+    margin-bottom: 6dp;
+}
+
+.btn.history-row {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 8dp 10dp 9dp;
+    border-width: 1dp 1dp 1dp 4dp;
     border-radius: 7dp;
-    border-color: rgba(255, 255, 255, 24);
-    background-color: rgba(255, 255, 255, 10);
+    border-color: rgba(255, 184, 92, 84) rgba(255, 184, 92, 84) rgba(255, 184, 92, 84)
+        rgba(255, 184, 92, 170);
+    background-color: rgba(43, 46, 57, 245);
     cursor: pointer;
+    text-align: left;
+    line-height: 1.25;
 }
 
 .history-row:hover {
-    border-color: rgba(255, 255, 255, 52);
-    background-color: rgba(255, 255, 255, 16);
+    border-color: rgba(255, 184, 92, 150) rgba(255, 184, 92, 150) rgba(255, 184, 92, 150)
+        rgba(255, 184, 92, 220);
+    background-color: rgba(52, 55, 68, 248);
 }
 
 .history-row.is-next {
-    border-color: rgba(255, 184, 92, 120);
-    background-color: rgba(255, 184, 92, 18);
+    border-color: rgba(255, 184, 92, 220) rgba(255, 184, 92, 220) rgba(255, 184, 92, 220)
+        rgba(255, 184, 92, 255);
+    background-color: rgba(83, 62, 24, 242);
+}
+
+.history-row--redo {
+    border-color: rgba(123, 211, 137, 90) rgba(123, 211, 137, 90) rgba(123, 211, 137, 90)
+        rgba(123, 211, 137, 176);
+}
+
+.history-row--redo:hover {
+    border-color: rgba(123, 211, 137, 150) rgba(123, 211, 137, 150) rgba(123, 211, 137, 150)
+        rgba(123, 211, 137, 220);
 }
 
 .history-row--redo.is-next {
-    border-color: rgba(123, 211, 137, 110);
-    background-color: rgba(123, 211, 137, 16);
+    border-color: rgba(123, 211, 137, 220) rgba(123, 211, 137, 220) rgba(123, 211, 137, 220)
+        rgba(123, 211, 137, 255);
+    background-color: rgba(30, 72, 39, 242);
 }
 
-.history-row__label {
-    font-size: 10dp;
+.history-row__line {
+    display: block;
+    width: auto;
 }
 
-.history-row__meta {
+.history-row__line--primary {
+    margin-bottom: 2dp;
+    font-size: 10.5dp;
+    font-weight: bold;
+}
+
+.history-row__line--stack {
+    font-size: 8.75dp;
+    line-height: 1.2;
+}
+
+.history-row__line--secondary {
     font-size: 9dp;
+    line-height: 1.3;
 }
 
 .history-empty {

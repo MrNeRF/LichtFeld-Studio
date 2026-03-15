@@ -468,7 +468,10 @@ namespace lfs::vis {
                     }
                 }
 
-                updateCropBoxToFitScene(true);
+                if (splat_for_cropbox &&
+                    scene_.getCropBoxForSplat(splat_for_cropbox->id) != core::NULL_NODE) {
+                    updateCropBoxToFitScene(true);
+                }
                 selectNode(name);
 
                 // Check for companion PPISP file
