@@ -239,6 +239,7 @@
     "value.not_set": "(not set)",
     "options.strategy.mcmc": "MCMC",
     "options.strategy.adc": "ADC",
+    "options.strategy.igs_plus": "igs+",
     "options.tile.full": "1 (Full)",
     "options.tile.half": "2 (Half)",
     "options.tile.quarter": "4 (Quarter)",
@@ -563,6 +564,9 @@
     "parameters_unavailable": "Parameters not available",
     "no_dataset_loaded": "No dataset loaded",
     "iters_per_sec": "iters/sec",
+    "color_red_prefix": "R:",
+    "color_green_prefix": "G:",
+    "color_blue_prefix": "B:",
     "sparsity": "Sparsity Settings",
     "pruning_growing": "Pruning/Growing"
   },

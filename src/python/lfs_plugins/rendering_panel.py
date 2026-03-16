@@ -171,14 +171,23 @@ class RenderingPanel(Panel):
         self._doc = None
         self._picker_click_handled = False
         self._last_swatch_colors = {}
+        self._last_panel_label = ""
         self._scrub_fields = ScrubFieldController(
             SCRUB_FIELD_DEFS,
             self._get_scrub_value,
             self._set_scrub_value,
         )
 
+    def _sync_panel_label(self):
+        label = tr("window.rendering")
+        if not label or label == self._last_panel_label:
+            return
+        if lf.ui.set_panel_label(self.id, label):
+            self._last_panel_label = label
+
     def on_mount(self, doc):
         self._doc = doc
+        self._sync_panel_label()
         self._popup_el = doc.get_element_by_id("color-picker-popup")
         if self._popup_el:
             self._popup_el.add_event_listener("click", self._on_popup_click)
@@ -279,8 +288,10 @@ class RenderingPanel(Panel):
                          lambda h, e, a: lf.ui.toggle_system_console())
 
         self._handle = model.get_handle()
+        self._sync_panel_label()
 
     def on_update(self, doc):
+        self._sync_panel_label()
         s = lf.get_render_settings()
         if not s:
             return False

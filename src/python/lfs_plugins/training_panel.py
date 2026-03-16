@@ -133,6 +133,30 @@ LOCALE_KEYS = {
     "remove": "common.remove",
     "bg_browse": "training_params.bg_image_browse",
     "bg_clear": "training_params.bg_image_clear",
+    "auto": "common.auto",
+    "strategy_mcmc": "training.options.strategy.mcmc",
+    "strategy_adc": "training.options.strategy.adc",
+    "strategy_igs_plus": "training.options.strategy.igs_plus",
+    "tile_full": "training.options.tile.full",
+    "tile_half": "training.options.tile.half",
+    "tile_quarter": "training.options.tile.quarter",
+    "mask_none": "training.options.mask.none",
+    "mask_segment": "training.options.mask.segment",
+    "mask_ignore": "training.options.mask.ignore",
+    "mask_alpha_consistent": "training.options.mask.alpha_consistent",
+    "bg_option_color": "training.options.bg.color",
+    "bg_option_modulation": "training.options.bg.modulation",
+    "bg_option_image": "training.options.bg.image",
+    "bg_option_random": "training.options.bg.random",
+    "bg_color_red_prefix": "training_panel.color_red_prefix",
+    "bg_color_green_prefix": "training_panel.color_green_prefix",
+    "bg_color_blue_prefix": "training_panel.color_blue_prefix",
+}
+
+STRATEGY_LABEL_KEYS = {
+    "mcmc": "training.options.strategy.mcmc",
+    "adc": "training.options.strategy.adc",
+    "igs+": "training.options.strategy.igs_plus",
 }
 
 PARAM_BOOL_PROPS = [
@@ -305,6 +329,7 @@ class TrainingPanel(Panel):
         self._loss_tick_max = ""
         self._loss_tick_mid = ""
         self._loss_tick_min = ""
+        self._last_panel_label = ""
         self._scrub_fields = ScrubFieldController(
             SCRUB_FIELD_DEFS,
             self._get_scrub_value,
@@ -332,6 +357,14 @@ class TrainingPanel(Panel):
         self._bind_display(model, p, d)
         self._bind_events(model)
         self._handle = model.get_handle()
+        self._sync_panel_label()
+
+    def _sync_panel_label(self):
+        label = tr("window.training")
+        if not label or label == self._last_panel_label:
+            return
+        if lf.ui.set_panel_label(self.id, label):
+            self._last_panel_label = label
 
     def _bind_labels(self, model):
         for label_id, key in LOCALE_KEYS.items():
@@ -627,9 +660,9 @@ class TrainingPanel(Panel):
         def _bg():
             return getattr(p(), "bg_color", (0, 0, 0)) if p() and p().has_params() else (0, 0, 0)
 
-        model.bind_func("bg_color_r", lambda: f"R:{int(_bg()[0]*255):>3d}")
-        model.bind_func("bg_color_g", lambda: f"G:{int(_bg()[1]*255):>3d}")
-        model.bind_func("bg_color_b", lambda: f"B:{int(_bg()[2]*255):>3d}")
+        model.bind_func("bg_color_r", lambda: f"{tr('training_panel.color_red_prefix')}{int(_bg()[0]*255):>3d}")
+        model.bind_func("bg_color_g", lambda: f"{tr('training_panel.color_green_prefix')}{int(_bg()[1]*255):>3d}")
+        model.bind_func("bg_color_b", lambda: f"{tr('training_panel.color_blue_prefix')}{int(_bg()[2]*255):>3d}")
         model.bind("bg_color_hex",
                     lambda: _color_to_hex(_bg()),
                     lambda v: self._set_bg_color_hex(v))
@@ -691,7 +724,9 @@ class TrainingPanel(Panel):
 
     def _bind_display(self, model, p, d):
         model.bind_func("opt_strategy_display",
-                         lambda: p().strategy.upper() if p() and p().has_params() else "")
+                         lambda: tr(STRATEGY_LABEL_KEYS.get(p().strategy, "")) if p() and p().has_params()
+                                 and p().strategy in STRATEGY_LABEL_KEYS else
+                                 (p().strategy if p() and p().has_params() else ""))
 
         model.bind_func("dataset_path_display",
                          lambda: os.path.basename(d().data_path) if d() and d().has_params() and d().data_path
@@ -716,6 +751,7 @@ class TrainingPanel(Panel):
 
     def on_mount(self, doc):
         self._doc = doc
+        self._sync_panel_label()
         self._popup_el = doc.get_element_by_id("color-picker-popup")
         if self._popup_el:
             self._popup_el.add_event_listener("click", self._on_popup_click)
@@ -733,6 +769,7 @@ class TrainingPanel(Panel):
     def on_update(self, doc):
         if not self._handle:
             return False
+        self._sync_panel_label()
 
         dirty = False
         state = AppState.trainer_state.value

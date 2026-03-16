@@ -63,9 +63,9 @@
       <div class="setting-row" data-tooltip="training.tooltip.strategy">
         <span class="prop-label">{{label_strategy}}</span>
         <select data-value="strategy">
-          <option value="mcmc">MCMC</option>
-          <option value="adc">ADC</option>
-          <option value="igs+">igs+</option>
+          <option value="mcmc">{{label_strategy_mcmc}}</option>
+          <option value="adc">{{label_strategy_adc}}</option>
+          <option value="igs+">{{label_strategy_igs_plus}}</option>
         </select>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.iterations">
@@ -92,9 +92,9 @@
       <div class="setting-row" data-tooltip="training.tooltip.tile_mode">
         <span class="prop-label">{{label_tile_mode}}</span>
         <select data-value="tile_mode_str">
-          <option value="1">Full</option>
-          <option value="2">Half</option>
-          <option value="4">Quarter</option>
+          <option value="1">{{label_tile_full}}</option>
+          <option value="2">{{label_tile_half}}</option>
+          <option value="4">{{label_tile_quarter}}</option>
         </select>
       </div>
       <div class="setting-row" data-tooltip="training.tooltip.steps_scaler">
@@ -114,10 +114,10 @@
       <div class="setting-row" data-tooltip="training.tooltip.mask_mode">
         <span class="prop-label">{{label_mask_mode}}</span>
         <select data-value="mask_mode_str">
-          <option value="0">None</option>
-          <option value="1">Segment</option>
-          <option value="2">Ignore</option>
-          <option value="3">Alpha Consistent</option>
+          <option value="0">{{label_mask_none}}</option>
+          <option value="1">{{label_mask_segment}}</option>
+          <option value="2">{{label_mask_ignore}}</option>
+          <option value="3">{{label_mask_alpha_consistent}}</option>
         </select>
       </div>
       <div data-if="dep_mask_mode">
@@ -183,10 +183,10 @@
       <div class="setting-row" data-tooltip="training.tooltip.bg_modulation">
         <span class="prop-label">{{label_bg_mode}}</span>
         <select data-value="bg_mode_str">
-          <option value="0">Color</option>
-          <option value="1">Modulation</option>
-          <option value="2">Image</option>
-          <option value="3">Random</option>
+          <option value="0">{{label_bg_option_color}}</option>
+          <option value="1">{{label_bg_option_modulation}}</option>
+          <option value="2">{{label_bg_option_image}}</option>
+          <option value="3">{{label_bg_option_random}}</option>
         </select>
       </div>
       <div class="setting-row" data-if="dep_bg_color">
@@ -237,7 +237,7 @@
           <div class="setting-row" data-tooltip="training.tooltip.resize_factor">
             <span class="prop-label">{{label_resize_factor}}</span>
             <select data-value="resize_factor_str">
-              <option value="-1">Auto</option>
+              <option value="-1">{{label_auto}}</option>
               <option value="1">1</option>
               <option value="2">2</option>
               <option value="4">4</option>
