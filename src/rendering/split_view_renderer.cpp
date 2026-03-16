@@ -320,7 +320,6 @@ namespace lfs::rendering {
                 request.panels[0].presentation.end_position,
                 panel_outputs[0].texcoord_scale,
                 panel_outputs[1].texcoord_scale,
-                request.presentation.divider_color, composite_w,
                 flip_left, flip_right);
             !result) {
             LOG_ERROR("Failed to composite split view: {}", result.error());
@@ -345,12 +344,8 @@ namespace lfs::rendering {
         const float split_position,
         const glm::vec2& left_texcoord_scale,
         const glm::vec2& right_texcoord_scale,
-        const glm::vec4& divider_color,
-        const int viewport_width,
         const bool flip_left_y,
         const bool flip_right_y) {
-
-        constexpr float DIVIDER_WIDTH_PX = 2.0f;
 
         glDisable(GL_DEPTH_TEST);
         glEnable(GL_BLEND);
@@ -371,14 +366,8 @@ namespace lfs::rendering {
         if (auto result = split_shader_.set("splitPosition", split_position); !result)
             LOG_TRACE("Uniform 'splitPosition' not found in shader: {}", result.error());
 
-        if (auto result = split_shader_.set("showDivider", true); !result)
+        if (auto result = split_shader_.set("showDivider", false); !result)
             LOG_TRACE("Uniform 'showDivider' not found in shader: {}", result.error());
-
-        if (auto result = split_shader_.set("dividerColor", divider_color); !result)
-            LOG_TRACE("Uniform 'dividerColor' not found in shader: {}", result.error());
-
-        if (auto result = split_shader_.set("dividerWidth", DIVIDER_WIDTH_PX / static_cast<float>(viewport_width)); !result)
-            LOG_TRACE("Uniform 'dividerWidth' not found in shader: {}", result.error());
 
         if (auto result = split_shader_.set("leftTexcoordScale", left_texcoord_scale); !result)
             LOG_TRACE("Uniform 'leftTexcoordScale' not found in shader: {}", result.error());

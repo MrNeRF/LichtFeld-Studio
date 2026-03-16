@@ -59,8 +59,6 @@ namespace lfs::rendering {
             float split_position,
             const glm::vec2& left_texcoord_scale,
             const glm::vec2& right_texcoord_scale,
-            const glm::vec4& divider_color,
-            int viewport_width,
             bool flip_left_y,
             bool flip_right_y);
 

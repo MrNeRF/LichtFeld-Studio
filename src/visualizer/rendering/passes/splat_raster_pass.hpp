@@ -16,6 +16,7 @@ namespace lfs::vis {
         [[nodiscard]] const char* name() const override { return "SplatRasterPass"; }
         [[nodiscard]] DirtyMask sensitivity() const override {
             return DirtyFlag::SPLATS | DirtyFlag::SELECTION | DirtyFlag::CAMERA |
+                   DirtyFlag::SPLIT_VIEW |
                    DirtyFlag::VIEWPORT | DirtyFlag::BACKGROUND | DirtyFlag::PPISP;
         }
 

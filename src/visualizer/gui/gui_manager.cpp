@@ -1601,6 +1601,33 @@ namespace lfs::vis::gui {
                 }
             }
         }
+
+        auto* const rendering = viewer_ ? viewer_->getRenderingManager() : nullptr;
+        if (!rendering || viewport_layout_.size.x <= 0.0f || viewport_layout_.size.y <= 0.0f) {
+            return;
+        }
+
+        const auto& settings = rendering->getSettings();
+        if (settings.split_view_mode == SplitViewMode::Disabled) {
+            return;
+        }
+
+        auto* const draw_list = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
+        const float divider_x = viewport_layout_.pos.x + settings.split_position * viewport_layout_.size.x;
+        constexpr float divider_width = 3.0f;
+        const ImU32 divider_color = IM_COL32(255, 217, 0, 255);
+
+        draw_list->PushClipRect(
+            ImVec2(viewport_layout_.pos.x, viewport_layout_.pos.y),
+            ImVec2(viewport_layout_.pos.x + viewport_layout_.size.x,
+                   viewport_layout_.pos.y + viewport_layout_.size.y),
+            true);
+        draw_list->AddRectFilled(
+            ImVec2(std::round(divider_x - divider_width * 0.5f), viewport_layout_.pos.y),
+            ImVec2(std::round(divider_x + divider_width * 0.5f),
+                   viewport_layout_.pos.y + viewport_layout_.size.y),
+            divider_color);
+        draw_list->PopClipRect();
     }
 
     void GuiManager::updateInputOverrides(const PanelInputState& input,

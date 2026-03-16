@@ -5,6 +5,9 @@
 #include "core/event_bus.hpp"
 #include "core/events.hpp"
 #include "visualizer/rendering/rendering_manager.hpp"
+#include "visualizer/rendering/passes/mesh_pass.hpp"
+#include "visualizer/rendering/passes/point_cloud_pass.hpp"
+#include "visualizer/rendering/passes/splat_raster_pass.hpp"
 #include "visualizer/rendering/render_pass.hpp"
 #include "visualizer/rendering/split_view_service.hpp"
 #include "visualizer/rendering/viewport_artifact_service.hpp"
@@ -127,6 +130,26 @@ namespace lfs::vis {
         const auto repeated_change = service.handleModelChange(0x1234, artifacts);
         EXPECT_FALSE(repeated_change.changed);
         EXPECT_EQ(artifacts.artifactGeneration(), generation_after_first_change);
+    }
+
+    TEST(ViewportFrameLifecycleServiceTest, MissingViewportOutputForcesFreshRedraw) {
+        ViewportFrameLifecycleService service;
+
+        EXPECT_EQ(
+            service.requiredDirtyMask(false, true, SplitViewMode::Disabled),
+            DirtyFlag::ALL);
+        EXPECT_EQ(
+            service.requiredDirtyMask(false, false, SplitViewMode::PLYComparison),
+            DirtyFlag::ALL | DirtyFlag::SPLIT_VIEW);
+    }
+
+    TEST(RenderPassSensitivityTest, SplitViewToggleInvalidatesBaseViewportContent) {
+        SplatRasterPass splat_pass;
+        PointCloudPass point_cloud_pass;
+
+        EXPECT_NE(splat_pass.sensitivity() & DirtyFlag::SPLIT_VIEW, 0u);
+        EXPECT_NE(point_cloud_pass.sensitivity() & DirtyFlag::SPLIT_VIEW, 0u);
+        EXPECT_NE(MeshPass::MESH_GEOMETRY_MASK & DirtyFlag::SPLIT_VIEW, 0u);
     }
 
     TEST_F(RenderingManagerEventsTest, SceneLoadedDisablesGtComparisonAndEmitsEvent) {

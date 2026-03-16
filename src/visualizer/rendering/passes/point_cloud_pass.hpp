@@ -17,7 +17,7 @@ namespace lfs::vis {
 
         [[nodiscard]] const char* name() const override { return "PointCloudPass"; }
         [[nodiscard]] DirtyMask sensitivity() const override {
-            return DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::VIEWPORT;
+            return DirtyFlag::SPLATS | DirtyFlag::CAMERA | DirtyFlag::SPLIT_VIEW | DirtyFlag::VIEWPORT;
         }
 
         [[nodiscard]] bool shouldExecute(DirtyMask frame_dirty, const FrameContext& ctx) const override;

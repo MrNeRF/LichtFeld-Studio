@@ -84,9 +84,7 @@ def get_screen_positions() -> lichtfeld.Tensor | None:
     """Get screen positions tensor [N, 2]"""
 
 def set_depth_filter(enabled: bool, depth_far: float = 100.0, frustum_half_width: float = 50.0, depth_near: float = 0.0) -> None:
-    """
-    Set selection depth filter in camera space.
-    """
+    """Set selection depth filter in camera space."""
 
 def set_depth_filter_range(enabled: bool, depth_near: float = 0.0, depth_far: float = 100.0, frustum_half_width: float = 50.0) -> None:
     """

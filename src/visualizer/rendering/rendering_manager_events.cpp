@@ -33,7 +33,11 @@ namespace lfs::vis {
 
     void RenderingManager::handleToggleSplitView() {
         std::lock_guard<std::mutex> lock(settings_mutex_);
+        const bool was_enabled = settings_.split_view_mode != SplitViewMode::Disabled;
         const bool enabled = split_view_service_.togglePLYComparison(settings_);
+        if (was_enabled && !enabled) {
+            viewport_artifact_service_.clearViewportOutput();
+        }
         LOG_INFO("Split view: {}", enabled ? "PLY comparison mode" : "disabled");
         markDirty(DirtyFlag::SPLIT_VIEW);
     }
@@ -41,12 +45,18 @@ namespace lfs::vis {
     void RenderingManager::handleToggleGTComparison() {
         bool is_now_enabled = false;
         std::optional<bool> restore_equirectangular;
+        bool should_clear_viewport_output = false;
 
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
+            const bool was_enabled = settings_.split_view_mode != SplitViewMode::Disabled;
             const auto toggle_result = split_view_service_.toggleGTComparison(settings_);
             is_now_enabled = toggle_result.enabled;
             restore_equirectangular = toggle_result.restore_equirectangular;
+            should_clear_viewport_output = was_enabled && !is_now_enabled;
+            if (should_clear_viewport_output) {
+                viewport_artifact_service_.clearViewportOutput();
+            }
             markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::SPLATS);
         }
 
@@ -129,7 +139,11 @@ namespace lfs::vis {
         camera_interaction_service_.clearHoveredCamera();
 
         const bool had_gt_comparison = settings_.split_view_mode == SplitViewMode::GTComparison;
+        const bool had_split_view = settings_.split_view_mode != SplitViewMode::Disabled;
         split_view_service_.handleSceneLoaded(settings_);
+        if (had_split_view && settings_.split_view_mode == SplitViewMode::Disabled) {
+            viewport_artifact_service_.clearViewportOutput();
+        }
         if (had_gt_comparison) {
             LOG_INFO("Scene loaded, disabling GT comparison (camera selection reset)");
             ui::GTComparisonModeChanged{.enabled = false}.emit();
@@ -172,6 +186,7 @@ namespace lfs::vis {
         std::lock_guard<std::mutex> lock(settings_mutex_);
         if (split_view_service_.handlePLYRemoved(settings_, services().sceneOrNull())) {
             LOG_DEBUG("PLY removed, disabling split view (not enough PLYs)");
+            viewport_artifact_service_.clearViewportOutput();
         }
 
         markDirty(DirtyFlag::SPLATS | DirtyFlag::MESH | DirtyFlag::OVERLAY | DirtyFlag::SPLIT_VIEW);
