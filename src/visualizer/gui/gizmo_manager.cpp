@@ -41,14 +41,14 @@ namespace lfs::vis::gui {
     constexpr float GIZMO_AXIS_LIMIT = 0.0001f;
 
     namespace {
-        [[nodiscard]] lfs::rendering::SelectionMode toRenderingSelectionMode(const SelectionSubMode mode) {
+        [[nodiscard]] lfs::vis::SelectionPreviewMode toSelectionPreviewMode(const SelectionSubMode mode) {
             switch (mode) {
-            case SelectionSubMode::Rectangle: return lfs::rendering::SelectionMode::Rectangle;
-            case SelectionSubMode::Polygon: return lfs::rendering::SelectionMode::Polygon;
-            case SelectionSubMode::Lasso: return lfs::rendering::SelectionMode::Lasso;
-            case SelectionSubMode::Rings: return lfs::rendering::SelectionMode::Rings;
+            case SelectionSubMode::Rectangle: return lfs::vis::SelectionPreviewMode::Rectangle;
+            case SelectionSubMode::Polygon: return lfs::vis::SelectionPreviewMode::Polygon;
+            case SelectionSubMode::Lasso: return lfs::vis::SelectionPreviewMode::Lasso;
+            case SelectionSubMode::Rings: return lfs::vis::SelectionPreviewMode::Rings;
             case SelectionSubMode::Centers:
-            default: return lfs::rendering::SelectionMode::Centers;
+            default: return lfs::vis::SelectionPreviewMode::Centers;
             }
         }
     } // namespace
@@ -310,7 +310,7 @@ namespace lfs::vis::gui {
 
             if (is_selection_mode) {
                 if (auto* const rm = ctx.viewer->getRenderingManager()) {
-                    rm->setSelectionMode(toRenderingSelectionMode(selection_mode_));
+                    rm->setSelectionPreviewMode(toSelectionPreviewMode(selection_mode_));
 
                     if (selection_mode_ != previous_selection_mode_) {
                         if (selection_tool)
@@ -1333,7 +1333,7 @@ namespace lfs::vis::gui {
         selection_mode_ = mode;
 
         if (auto* rm = viewer_->getRenderingManager()) {
-            rm->setSelectionMode(toRenderingSelectionMode(mode));
+            rm->setSelectionPreviewMode(toSelectionPreviewMode(mode));
         }
     }
 

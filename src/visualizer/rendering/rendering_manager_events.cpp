@@ -6,7 +6,6 @@
 #include "core/events.hpp"
 #include "core/logger.hpp"
 #include "core/services.hpp"
-#include "passes/point_cloud_pass.hpp"
 
 namespace lfs::vis {
 
@@ -34,7 +33,7 @@ namespace lfs::vis {
 
     void RenderingManager::handleToggleSplitView() {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        const bool enabled = split_view_state_.togglePLYComparison(settings_);
+        const bool enabled = split_view_service_.togglePLYComparison(settings_);
         LOG_INFO("Split view: {}", enabled ? "PLY comparison mode" : "disabled");
         markDirty(DirtyFlag::SPLIT_VIEW);
     }
@@ -45,7 +44,7 @@ namespace lfs::vis {
 
         {
             std::lock_guard<std::mutex> lock(settings_mutex_);
-            const auto toggle_result = split_view_state_.toggleGTComparison(settings_);
+            const auto toggle_result = split_view_service_.toggleGTComparison(settings_);
             is_now_enabled = toggle_result.enabled;
             restore_equirectangular = toggle_result.restore_equirectangular;
             markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::SPLATS);
@@ -107,8 +106,8 @@ namespace lfs::vis {
     void RenderingManager::handleWindowResized() {
         LOG_DEBUG("Window resized, clearing render cache");
         markDirty(DirtyFlag::VIEWPORT | DirtyFlag::CAMERA);
-        viewport_artifacts_.clearViewportOutput();
-        frame_lifecycle_state_.resetViewportSize();
+        viewport_artifact_service_.clearViewportOutput();
+        frame_lifecycle_service_.resetViewportSize();
         gt_texture_cache_.clear();
     }
 
@@ -126,34 +125,37 @@ namespace lfs::vis {
         LOG_DEBUG("Scene loaded, marking render dirty");
         markDirty();
         gt_texture_cache_.clear();
-        camera_interaction_state_.current_camera_id = -1;
+        camera_interaction_service_.clearCurrentCamera();
+        camera_interaction_service_.clearHoveredCamera();
 
         const bool had_gt_comparison = settings_.split_view_mode == SplitViewMode::GTComparison;
-        split_view_state_.handleSceneLoaded(settings_);
+        split_view_service_.handleSceneLoaded(settings_);
         if (had_gt_comparison) {
             LOG_INFO("Scene loaded, disabling GT comparison (camera selection reset)");
+            ui::GTComparisonModeChanged{.enabled = false}.emit();
         }
     }
 
     void RenderingManager::handleSceneChanged() {
-        if (point_cloud_pass_) {
-            point_cloud_pass_->resetCache();
-        }
+        pass_graph_.resetPointCloudCache();
         markDirty();
     }
 
     void RenderingManager::handleSceneCleared() {
-        viewport_artifacts_.clearViewportOutput();
-        if (point_cloud_pass_) {
-            point_cloud_pass_->resetCache();
-        }
+        viewport_artifact_service_.clearViewportOutput();
+        pass_graph_.resetPointCloudCache();
         gt_texture_cache_.clear();
-        split_view_state_.handleSceneCleared();
+        const bool had_gt_comparison = settings_.split_view_mode == SplitViewMode::GTComparison;
+        split_view_service_.handleSceneCleared(settings_);
         if (engine_) {
             engine_->clearFrustumCache();
         }
-        camera_interaction_state_.current_camera_id = -1;
-        frame_lifecycle_state_.resetModelTracking();
+        camera_interaction_service_.clearCurrentCamera();
+        camera_interaction_service_.clearHoveredCamera();
+        frame_lifecycle_service_.resetModelTracking();
+        if (had_gt_comparison) {
+            ui::GTComparisonModeChanged{.enabled = false}.emit();
+        }
         markDirty();
     }
 
@@ -168,7 +170,7 @@ namespace lfs::vis {
 
     void RenderingManager::handlePLYRemoved() {
         std::lock_guard<std::mutex> lock(settings_mutex_);
-        if (split_view_state_.handlePLYRemoved(settings_, services().sceneOrNull())) {
+        if (split_view_service_.handlePLYRemoved(settings_, services().sceneOrNull())) {
             LOG_DEBUG("PLY removed, disabling split view (not enough PLYs)");
         }
 
@@ -193,7 +195,7 @@ namespace lfs::vis {
         settings_.voxel_size = event.voxel_size;
         LOG_DEBUG("Point cloud mode: {}, voxel size: {}",
                   event.enabled ? "enabled" : "disabled", event.voxel_size);
-        viewport_artifacts_.clearViewportOutput();
+        viewport_artifact_service_.clearViewportOutput();
         markDirty(DirtyFlag::SPLATS);
     }
 

@@ -5,11 +5,18 @@
 #pragma once
 
 #include "core/export.hpp"
+#include "camera_interaction_service.hpp"
 #include "dirty_flags.hpp"
 #include "framerate_controller.hpp"
 #include "internal/viewport.hpp"
 #include "gt_texture_cache.hpp"
-#include "rendering_manager_state.hpp"
+#include "render_pass_graph.hpp"
+#include "render_animation_state.hpp"
+#include "split_view_service.hpp"
+#include "viewport_artifact_service.hpp"
+#include "viewport_frame_lifecycle_service.hpp"
+#include "viewport_interaction_context.hpp"
+#include "viewport_overlay_service.hpp"
 #include "rendering/cuda_gl_interop.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering_types.hpp"
@@ -35,10 +42,7 @@ namespace lfs::core::events::ui {
 }
 
 namespace lfs::vis {
-    class RenderPass;
     class SceneManager;
-    class SplatRasterPass;
-    class PointCloudPass;
 
     class LFS_VIS_API RenderingManager {
     public:
@@ -46,7 +50,6 @@ namespace lfs::vis {
             const Viewport& viewport;
             const RenderSettings& settings;
             const ViewportRegion* viewport_region = nullptr;
-            bool has_focus = false;
             SceneManager* scene_manager = nullptr;
         };
 
@@ -63,7 +66,7 @@ namespace lfs::vis {
         }
 
         // Main render function
-        void renderFrame(const RenderContext& context, SceneManager* scene_manager);
+        void renderFrame(const RenderContext& context);
 
         // Render preview to external texture (for PiP preview)
         bool renderPreviewFrame(SceneManager* scene_manager,
@@ -123,10 +126,10 @@ namespace lfs::vis {
 
         // Current camera tracking for GT comparison
         void setCurrentCameraId(int cam_id) {
-            camera_interaction_state_.current_camera_id = cam_id;
+            camera_interaction_service_.setCurrentCameraId(cam_id);
             markDirty(DirtyFlag::SPLIT_VIEW | DirtyFlag::PPISP);
         }
-        int getCurrentCameraId() const { return camera_interaction_state_.current_camera_id; }
+        int getCurrentCameraId() const { return camera_interaction_service_.currentCameraId(); }
 
         // FPS monitoring
         float getCurrentFPS() const { return framerate_controller_.getCurrentFPS(); }
@@ -137,38 +140,39 @@ namespace lfs::vis {
 
         // Camera frustum picking
         int pickCameraFrustum(const glm::vec2& mouse_pos);
-        void setHoveredCameraId(int cam_id) { camera_interaction_state_.hovered_camera_id = cam_id; }
-        int getHoveredCameraId() const { return camera_interaction_state_.hovered_camera_id; }
 
         // Depth buffer access for tools (returns camera-space depth at pixel, or -1 if invalid)
         float getDepthAtPixel(int x, int y) const;
-        glm::ivec2 getRenderedSize() const { return viewport_artifacts_.rendered_size; }
+        glm::ivec2 getRenderedSize() const { return viewport_artifact_service_.renderedSize(); }
         std::shared_ptr<lfs::core::Tensor> getViewportImageIfAvailable() const;
         std::shared_ptr<lfs::core::Tensor> captureViewportImage();
-        [[nodiscard]] uint64_t getViewportArtifactGeneration() const { return viewport_artifacts_.artifact_generation; }
+        [[nodiscard]] uint64_t getViewportArtifactGeneration() const {
+            return viewport_artifact_service_.artifactGeneration();
+        }
 
-        void setBrushState(bool active, float x, float y, float radius, bool add_mode = true,
-                           lfs::core::Tensor* selection_tensor = nullptr,
-                           bool saturation_mode = false, float saturation_amount = 0.0f);
-        void clearBrushState();
-        [[nodiscard]] bool isBrushActive() const { return interaction_state_.brush.active; }
-        void getBrushState(float& x, float& y, float& radius, bool& add_mode) const {
-            x = interaction_state_.brush.x;
-            y = interaction_state_.brush.y;
-            radius = interaction_state_.brush.radius;
-            add_mode = interaction_state_.brush.add_mode;
+        void setCursorPreviewState(bool active, float x, float y, float radius, bool add_mode = true,
+                                   lfs::core::Tensor* selection_tensor = nullptr,
+                                   bool saturation_mode = false, float saturation_amount = 0.0f);
+        void clearCursorPreviewState();
+        [[nodiscard]] bool isCursorPreviewActive() const { return viewport_overlay_service_.isCursorPreviewActive(); }
+        void getCursorPreviewState(float& x, float& y, float& radius, bool& add_mode) const {
+            const auto& cursor = viewport_overlay_service_.cursorPreview();
+            x = cursor.x;
+            y = cursor.y;
+            radius = cursor.radius;
+            add_mode = cursor.add_mode;
         }
 
         // Rectangle preview
         void setRectPreview(float x0, float y0, float x1, float y1, bool add_mode = true);
         void clearRectPreview();
-        [[nodiscard]] bool isRectPreviewActive() const { return interaction_state_.rect.active; }
+        [[nodiscard]] bool isRectPreviewActive() const { return viewport_overlay_service_.isRectPreviewActive(); }
         void getRectPreview(float& x0, float& y0, float& x1, float& y1, bool& add_mode) const {
-            x0 = interaction_state_.rect.x0;
-            y0 = interaction_state_.rect.y0;
-            x1 = interaction_state_.rect.x1;
-            y1 = interaction_state_.rect.y1;
-            add_mode = interaction_state_.rect.add_mode;
+            x0 = viewport_overlay_service_.rectX0();
+            y0 = viewport_overlay_service_.rectY0();
+            x1 = viewport_overlay_service_.rectX1();
+            y1 = viewport_overlay_service_.rectY1();
+            add_mode = viewport_overlay_service_.rectAddMode();
         }
 
         // Polygon preview (render-space points, same coordinate system as screen_positions output)
@@ -177,35 +181,47 @@ namespace lfs::vis {
         void setPolygonPreviewWorldSpace(const std::vector<glm::vec3>& world_points, bool closed,
                                          bool add_mode = true);
         void clearPolygonPreview();
-        [[nodiscard]] bool isPolygonPreviewActive() const { return interaction_state_.polygon.active; }
-        [[nodiscard]] const std::vector<std::pair<float, float>>& getPolygonPoints() const { return interaction_state_.polygon.points; }
-        [[nodiscard]] const std::vector<glm::vec3>& getPolygonWorldPoints() const { return interaction_state_.polygon.world_points; }
-        [[nodiscard]] bool isPolygonClosed() const { return interaction_state_.polygon.closed; }
-        [[nodiscard]] bool isPolygonAddMode() const { return interaction_state_.polygon.add_mode; }
-        [[nodiscard]] bool isPolygonPreviewWorldSpace() const { return interaction_state_.polygon.world_space; }
+        [[nodiscard]] bool isPolygonPreviewActive() const { return viewport_overlay_service_.isPolygonPreviewActive(); }
+        [[nodiscard]] const std::vector<std::pair<float, float>>& getPolygonPoints() const {
+            return viewport_overlay_service_.polygonPoints();
+        }
+        [[nodiscard]] const std::vector<glm::vec3>& getPolygonWorldPoints() const {
+            return viewport_overlay_service_.polygonWorldPoints();
+        }
+        [[nodiscard]] bool isPolygonClosed() const { return viewport_overlay_service_.polygonClosed(); }
+        [[nodiscard]] bool isPolygonAddMode() const { return viewport_overlay_service_.polygonAddMode(); }
+        [[nodiscard]] bool isPolygonPreviewWorldSpace() const {
+            return viewport_overlay_service_.polygonWorldSpace();
+        }
 
         // Lasso preview
         void setLassoPreview(const std::vector<std::pair<float, float>>& points, bool add_mode = true);
         void clearLassoPreview();
-        [[nodiscard]] bool isLassoPreviewActive() const { return interaction_state_.lasso.active; }
-        [[nodiscard]] const std::vector<std::pair<float, float>>& getLassoPoints() const { return interaction_state_.lasso.points; }
-        [[nodiscard]] bool isLassoAddMode() const { return interaction_state_.lasso.add_mode; }
+        [[nodiscard]] bool isLassoPreviewActive() const { return viewport_overlay_service_.isLassoPreviewActive(); }
+        [[nodiscard]] const std::vector<std::pair<float, float>>& getLassoPoints() const {
+            return viewport_overlay_service_.lassoPoints();
+        }
+        [[nodiscard]] bool isLassoAddMode() const { return viewport_overlay_service_.lassoAddMode(); }
 
         // Preview selection
         void setPreviewSelection(lfs::core::Tensor* preview, bool add_mode = true) {
-            interaction_state_.setPreviewSelection(preview, add_mode);
+            viewport_overlay_service_.setPreviewSelection(preview, add_mode);
             markDirty(DirtyFlag::SELECTION);
         }
         void clearPreviewSelection() {
-            interaction_state_.clearPreviewSelection();
+            viewport_overlay_service_.clearPreviewSelection();
             markDirty(DirtyFlag::SELECTION);
         }
         void clearSelectionPreviews();
 
-        // Selection mode for brush tool
-        void setSelectionMode(lfs::rendering::SelectionMode mode) { interaction_state_.setSelectionMode(mode); }
-        [[nodiscard]] lfs::rendering::SelectionMode getSelectionMode() const { return interaction_state_.getSelectionMode(); }
-        [[nodiscard]] int getHoveredGaussianId() const { return interaction_state_.hovered_gaussian_id; }
+        // Selection preview mode for viewport interaction overlays
+        void setSelectionPreviewMode(SelectionPreviewMode mode) {
+            viewport_overlay_service_.setSelectionPreviewMode(mode);
+        }
+        [[nodiscard]] SelectionPreviewMode getSelectionPreviewMode() const {
+            return viewport_overlay_service_.selectionPreviewMode();
+        }
+        [[nodiscard]] int getHoveredGaussianId() const { return viewport_overlay_service_.hoveredGaussianId(); }
 
         // Sync selection group colors to GPU constant memory
         void syncSelectionGroupColor(int group_id, const glm::vec3& color);
@@ -213,24 +229,22 @@ namespace lfs::vis {
         // Gizmo state for wireframe sync during manipulation
         void setCropboxGizmoState(bool active, const glm::vec3& min, const glm::vec3& max,
                                   const glm::mat4& world_transform) {
-            gizmo_state_.setCropbox(active, min, max, world_transform);
+            viewport_overlay_service_.setCropbox(active, min, max, world_transform);
         }
         void setEllipsoidGizmoState(bool active, const glm::vec3& radii,
                                     const glm::mat4& world_transform) {
-            gizmo_state_.setEllipsoid(active, radii, world_transform);
+            viewport_overlay_service_.setEllipsoid(active, radii, world_transform);
         }
-        void setCropboxGizmoActive(bool active) { gizmo_state_.cropbox_active = active; }
-        void setEllipsoidGizmoActive(bool active) { gizmo_state_.ellipsoid_active = active; }
+        void setCropboxGizmoActive(bool active) { viewport_overlay_service_.setCropboxActive(active); }
+        void setEllipsoidGizmoActive(bool active) { viewport_overlay_service_.setEllipsoidActive(active); }
 
         void setViewportResizeActive(bool active);
         [[nodiscard]] bool isViewportResizeDeferring() const {
-            return frame_lifecycle_state_.isResizeDeferring();
+            return frame_lifecycle_service_.isResizeDeferring();
         }
-        bool consumeResizeCompleted() { return frame_lifecycle_state_.consumeResizeCompleted(); }
+        bool consumeResizeCompleted() { return frame_lifecycle_service_.consumeResizeCompleted(); }
 
     private:
-        void doFullRender(const RenderContext& context, SceneManager* scene_manager,
-                          const lfs::core::SplatData* model);
         void setupEventHandlers();
         void handleToggleSplitView();
         void handleToggleGTComparison();
@@ -251,9 +265,7 @@ namespace lfs::vis {
 
         // Core components
         std::unique_ptr<lfs::rendering::RenderingEngine> engine_;
-        std::vector<std::unique_ptr<RenderPass>> passes_;
-        SplatRasterPass* splat_raster_pass_ = nullptr;
-        PointCloudPass* point_cloud_pass_ = nullptr;
+        RenderPassGraph pass_graph_;
         mutable FramerateController framerate_controller_;
 
         // GT texture cache
@@ -262,12 +274,12 @@ namespace lfs::vis {
         // Granular dirty tracking
         std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};
 
-        AnimationState animation_state_;
-        ViewportArtifactState viewport_artifacts_;
+        RenderAnimationState animation_state_;
+        ViewportArtifactService viewport_artifact_service_;
 
-        CameraInteractionState camera_interaction_state_;
-        SplitViewState split_view_state_;
-        ViewportFrameLifecycleState frame_lifecycle_state_;
+        CameraInteractionService camera_interaction_service_;
+        SplitViewService split_view_service_;
+        ViewportFrameLifecycleService frame_lifecycle_service_;
 
         // Settings
         RenderSettings settings_;
@@ -276,14 +288,12 @@ namespace lfs::vis {
         bool initialized_ = false;
         glm::ivec2 initial_viewport_size_{1280, 720}; // Default fallback
 
-        ViewportInteractionContextState viewport_interaction_context_;
+        ViewportInteractionContext viewport_interaction_context_;
 
         // Debug tracking
         uint64_t render_count_ = 0;
 
-        InteractionPreviewState interaction_state_;
-        RenderGizmoState gizmo_state_;
-        GpuDepthReadbackState gpu_depth_readback_state_;
+        ViewportOverlayService viewport_overlay_service_;
     };
 
 } // namespace lfs::vis

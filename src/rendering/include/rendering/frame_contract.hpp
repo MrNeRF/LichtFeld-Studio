@@ -9,9 +9,7 @@
 
 namespace lfs::rendering {
 
-    // New renderer-facing frame contract for the refactor.
-    // Prefer these types for new work instead of extending the legacy
-    // request/result compatibility layer in src/rendering.
+    // Renderer-facing frame contract for the refactor.
 
     struct FrameView {
         glm::mat3 rotation{1.0f};

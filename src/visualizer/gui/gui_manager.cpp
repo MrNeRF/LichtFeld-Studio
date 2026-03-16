@@ -1343,11 +1343,11 @@ namespace lfs::vis::gui {
                               viewport_layout_.pos.y + y * render_to_screen_y);
             };
 
-            if (rm && rm->isBrushActive()) {
+            if (rm && rm->isCursorPreviewActive()) {
                 const auto& t = theme();
                 float bx, by, br;
                 bool add_mode;
-                rm->getBrushState(bx, by, br, add_mode);
+                rm->getCursorPreviewState(bx, by, br, add_mode);
 
                 const ImVec2 screen_pos = render_to_screen(bx, by);
                 const float screen_radius = br * render_to_screen_x;

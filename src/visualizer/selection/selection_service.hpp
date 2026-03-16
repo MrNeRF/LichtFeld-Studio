@@ -155,7 +155,6 @@ namespace lfs::vis {
                                                                           const SelectionFilterState& filters);
         [[nodiscard]] std::optional<int> renderHoveredGaussianIdForCurrentViewport(float x, float y,
                                                                                    const SelectionFilterState& filters);
-        [[nodiscard]] bool ensureHoveredDepthBuffersAllocated();
         [[nodiscard]] bool buildSelectionMaskForInteractiveSession(core::Tensor& selection_out,
                                                                    bool include_polygon_cursor = false);
         [[nodiscard]] bool buildBrushSelection(const std::vector<glm::vec2>& points, float radius,
@@ -192,8 +191,6 @@ namespace lfs::vis {
         core::Tensor locked_groups_device_mask_;
         std::array<core::Tensor, 2> selection_output_buffers_;
         size_t selection_output_buffer_index_ = 0;
-        unsigned long long* hovered_depth_id_device_ = nullptr;
-        unsigned long long* hovered_depth_id_host_ = nullptr;
         std::shared_ptr<core::Tensor> testing_screen_positions_;
         std::unordered_map<int, std::shared_ptr<core::Tensor>> testing_camera_screen_positions_;
         std::optional<ViewportInfo> testing_viewport_;

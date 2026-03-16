@@ -5,6 +5,7 @@
 #include "gs_rasterizer_tensor.hpp"
 #include "core/logger.hpp"
 #include "rasterization_api_tensor.h"
+#include <algorithm>
 
 namespace lfs::rendering {
 
@@ -12,21 +13,21 @@ namespace lfs::rendering {
         const lfs::core::Camera& viewpoint_camera,
         const lfs::core::SplatData& gaussian_model,
         const Tensor& bg_color,
+        const int sh_degree_override,
         bool show_rings,
         float ring_width,
         const Tensor* model_transforms,
         const Tensor* transform_indices,
         const Tensor* selection_mask,
         Tensor* screen_positions_out,
-        bool brush_active,
-        float brush_x,
-        float brush_y,
-        float brush_radius,
-        bool brush_add_mode,
-        Tensor* brush_selection_out,
-        bool brush_saturation_mode,
-        float brush_saturation_amount,
-        bool selection_mode_rings,
+        bool cursor_active,
+        float cursor_x,
+        float cursor_y,
+        float cursor_radius,
+        bool preview_selection_add_mode,
+        Tensor* preview_selection_out,
+        bool cursor_saturation_preview,
+        float cursor_saturation_amount,
         bool show_center_markers,
         const Tensor* crop_box_transform,
         const Tensor* crop_box_min,
@@ -39,17 +40,17 @@ namespace lfs::rendering {
         bool ellipsoid_inverse,
         bool ellipsoid_desaturate,
         int ellipsoid_parent_node_index,
-        const Tensor* depth_filter_transform,
-        const Tensor* depth_filter_min,
-        const Tensor* depth_filter_max,
+        const Tensor* view_volume_transform,
+        const Tensor* view_volume_min,
+        const Tensor* view_volume_max,
         const Tensor* deleted_mask,
         unsigned long long* hovered_depth_id,
-        int highlight_gaussian_id,
+        int focused_gaussian_id,
         float far_plane,
-        const std::vector<bool>& selected_node_mask,
-        bool desaturate_unselected,
+        const std::vector<bool>& emphasized_node_mask,
+        bool dim_non_emphasized,
         const std::vector<bool>& node_visibility_mask,
-        float selection_flash_intensity,
+        float emphasis_flash_intensity,
         bool orthographic,
         float ortho_scale,
         bool mip_filter) {
@@ -60,7 +61,9 @@ namespace lfs::rendering {
         const float cx = viewpoint_camera.center_x();
         const float cy = viewpoint_camera.center_y();
 
-        const int sh_degree = gaussian_model.get_active_sh_degree();
+        const int sh_degree = sh_degree_override >= 0
+                                  ? std::min(sh_degree_override, gaussian_model.get_max_sh_degree())
+                                  : gaussian_model.get_active_sh_degree();
         const int active_sh_bases = (sh_degree + 1) * (sh_degree + 1);
 
         constexpr float NEAR_PLANE = 0.01f;
@@ -132,15 +135,14 @@ namespace lfs::rendering {
             transform_indices,
             selection_mask,
             screen_positions_out,
-            brush_active,
-            brush_x,
-            brush_y,
-            brush_radius,
-            brush_add_mode,
-            brush_selection_out,
-            brush_saturation_mode,
-            brush_saturation_amount,
-            selection_mode_rings,
+            cursor_active,
+            cursor_x,
+            cursor_y,
+            cursor_radius,
+            preview_selection_add_mode,
+            preview_selection_out,
+            cursor_saturation_preview,
+            cursor_saturation_amount,
             show_center_markers,
             crop_box_transform,
             crop_box_min,
@@ -153,16 +155,16 @@ namespace lfs::rendering {
             ellipsoid_inverse,
             ellipsoid_desaturate,
             ellipsoid_parent_node_index,
-            depth_filter_transform,
-            depth_filter_min,
-            depth_filter_max,
+            view_volume_transform,
+            view_volume_min,
+            view_volume_max,
             actual_deleted_mask,
             hovered_depth_id,
-            highlight_gaussian_id,
-            selected_node_mask,
-            desaturate_unselected,
+            focused_gaussian_id,
+            emphasized_node_mask,
+            dim_non_emphasized,
             node_visibility_mask,
-            selection_flash_intensity,
+            emphasis_flash_intensity,
             orthographic,
             ortho_scale,
             mip_filter);
@@ -184,6 +186,7 @@ namespace lfs::rendering {
         const lfs::core::Camera& camera,
         const lfs::core::SplatData& model,
         const Tensor& bg_color,
+        const int sh_degree_override,
         const float scaling_modifier,
         const GutCameraModel camera_model,
         const Tensor* model_transforms,
@@ -192,7 +195,9 @@ namespace lfs::rendering {
 
         const int width = camera.camera_width();
         const int height = camera.camera_height();
-        const int sh_degree = model.get_active_sh_degree();
+        const int sh_degree = sh_degree_override >= 0
+                                  ? std::min(sh_degree_override, model.get_max_sh_degree())
+                                  : model.get_active_sh_degree();
 
         const auto& w2c = camera.world_view_transform();
 

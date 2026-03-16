@@ -300,7 +300,7 @@ namespace lfs::rendering {
         const glm::vec3& view_position,
         const glm::mat4& scene_transform,
         const std::unordered_set<int>& disabled_uids,
-        const std::unordered_set<int>& selected_uids) {
+        const std::unordered_set<int>& emphasized_uids) {
 
         const bool needs_regeneration =
             cached_instances_.size() != cameras.size() ||
@@ -309,7 +309,7 @@ namespace lfs::rendering {
             last_eval_color_ != eval_color ||
             last_scene_transform_ != scene_transform ||
             last_disabled_uids_ != disabled_uids ||
-            last_selected_uids_ != selected_uids;
+            last_emphasized_uids_ != emphasized_uids;
 
         if (!needs_regeneration && !cached_instances_.empty()) {
             updateInstanceVisibility(view_position);
@@ -384,8 +384,8 @@ namespace lfs::rendering {
             if (is_disabled)
                 alpha *= 0.4f;
 
-            const bool is_selected = selected_uids.count(cam->uid()) > 0;
-            cached_instances_.push_back({model, color, alpha, 0, is_validation ? 1u : 0u, is_equirect ? 1u : 0u, is_disabled ? 1u : 0u, is_selected ? 1u : 0u});
+            const bool is_emphasized = emphasized_uids.count(cam->uid()) > 0;
+            cached_instances_.push_back({model, color, alpha, 0, is_validation ? 1u : 0u, is_equirect ? 1u : 0u, is_disabled ? 1u : 0u, is_emphasized ? 1u : 0u});
             camera_ids_.push_back(cam->uid());
         }
 
@@ -395,7 +395,7 @@ namespace lfs::rendering {
         last_view_position_ = view_position;
         last_scene_transform_ = scene_transform;
         last_disabled_uids_ = disabled_uids;
-        last_selected_uids_ = selected_uids;
+        last_emphasized_uids_ = emphasized_uids;
     }
 
     void CameraFrustumRenderer::updateInstanceVisibility(const glm::vec3& view_position) {
@@ -433,7 +433,7 @@ namespace lfs::rendering {
         const glm::mat4& scene_transform,
         const bool equirectangular_view,
         const std::unordered_set<int>& disabled_uids,
-        const std::unordered_set<int>& selected_uids) {
+        const std::unordered_set<int>& emphasized_uids) {
 
         if (!initialized_ || cameras.empty())
             return {};
@@ -441,7 +441,7 @@ namespace lfs::rendering {
         uploadReadyThumbnails();
 
         const glm::vec3 view_position = glm::vec3(glm::inverse(view)[3]);
-        prepareInstances(cameras, scale, train_color, eval_color, false, view_position, scene_transform, disabled_uids, selected_uids);
+        prepareInstances(cameras, scale, train_color, eval_color, false, view_position, scene_transform, disabled_uids, emphasized_uids);
 
         if (cached_instances_.empty())
             return {};
@@ -513,7 +513,7 @@ namespace lfs::rendering {
 
             glEnableVertexAttribArray(11);
             glVertexAttribIPointer(11, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
-                                   reinterpret_cast<void*>(offsetof(InstanceData, is_selected)));
+                                   reinterpret_cast<void*>(offsetof(InstanceData, is_emphasized)));
             glVertexAttribDivisor(11, 1);
         };
 
@@ -532,16 +532,16 @@ namespace lfs::rendering {
 
         const glm::mat4 view_proj = projection * view;
 
-        const auto findHighlightIndex = [this](const std::vector<int>& indices) -> int {
+        const auto findFocusedIndex = [this](const std::vector<int>& indices) -> int {
             for (size_t i = 0; i < indices.size(); ++i) {
-                if (indices[i] == highlighted_camera_)
+                if (indices[i] == focused_camera_)
                     return static_cast<int>(i);
             }
             return -1;
         };
 
-        const int frustum_highlight = findHighlightIndex(frustum_indices);
-        const int sphere_highlight = findHighlightIndex(sphere_indices);
+        const int frustum_focus = findFocusedIndex(frustum_indices);
+        const int sphere_focus = findFocusedIndex(sphere_indices);
 
         if (show_images_) {
             for (size_t i = 0; i < frustum_instances.size() && i < frustum_cameras.size(); ++i)
@@ -570,7 +570,7 @@ namespace lfs::rendering {
             shader->set("cameraTextures", 0);
 
             if (!frustum_instances.empty()) {
-                shader->set("highlightIndex", frustum_highlight);
+                shader->set("focusIndex", frustum_focus);
                 VAOBinder vao_bind(vao_);
                 setupInstanceAttributes(frustum_instances);
                 BufferBinder<GL_ELEMENT_ARRAY_BUFFER> face_bind(face_ebo_);
@@ -580,7 +580,7 @@ namespace lfs::rendering {
             }
 
             if (!sphere_instances.empty()) {
-                shader->set("highlightIndex", sphere_highlight);
+                shader->set("focusIndex", sphere_focus);
                 VAOBinder vao_bind(sphere_vao_);
                 setupInstanceAttributes(sphere_instances);
                 BufferBinder<GL_ELEMENT_ARRAY_BUFFER> face_bind(sphere_face_ebo_);
@@ -607,7 +607,7 @@ namespace lfs::rendering {
             glLineWidth(WIREFRAME_WIDTH);
 
             if (!frustum_instances.empty()) {
-                shader->set("highlightIndex", frustum_highlight);
+                shader->set("focusIndex", frustum_focus);
                 VAOBinder vao_bind(vao_);
                 setupInstanceAttributes(frustum_instances);
                 BufferBinder<GL_ELEMENT_ARRAY_BUFFER> edge_bind(edge_ebo_);
@@ -617,7 +617,7 @@ namespace lfs::rendering {
             }
 
             if (!sphere_instances.empty()) {
-                shader->set("highlightIndex", sphere_highlight);
+                shader->set("focusIndex", sphere_focus);
                 VAOBinder vao_bind(sphere_vao_);
                 setupInstanceAttributes(sphere_instances);
                 BufferBinder<GL_ELEMENT_ARRAY_BUFFER> edge_bind(sphere_edge_ebo_);
@@ -737,7 +737,7 @@ namespace lfs::rendering {
 
             glEnableVertexAttribArray(11);
             glVertexAttribIPointer(11, 1, GL_UNSIGNED_INT, sizeof(InstanceData),
-                                   reinterpret_cast<void*>(offsetof(InstanceData, is_selected)));
+                                   reinterpret_cast<void*>(offsetof(InstanceData, is_emphasized)));
             glVertexAttribDivisor(11, 1);
         };
 

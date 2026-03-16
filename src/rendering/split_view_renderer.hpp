@@ -10,6 +10,8 @@
 #include "rendering/rendering.hpp"
 #include "rendering_pipeline.hpp"
 #include "shader_manager.hpp"
+#include "screen_renderer.hpp"
+#include <array>
 #include <memory>
 #include <optional>
 
@@ -25,29 +27,32 @@ namespace lfs::rendering {
         Result<SplitViewFrameResult> renderGpuFrame(
             const SplitViewRequest& request,
             RenderTargetPool& render_target_pool,
-            RenderingPipeline& pipeline,
-            ScreenQuadRenderer& screen_renderer,
-            ManagedShader& quad_shader);
+            RenderingEngine& engine);
 
     private:
         struct SplitViewTargets {
-            std::shared_ptr<FrameBuffer> left;
-            std::shared_ptr<FrameBuffer> right;
             std::shared_ptr<FrameBuffer> composite;
         };
 
+        struct PanelRenderOutput {
+            GLuint texture_id = 0;
+            glm::vec2 texcoord_scale{1.0f, 1.0f};
+            std::optional<FrameMetadata> metadata;
+            bool flip_y = false;
+        };
+
         ManagedShader split_shader_;
-        ManagedShader panel_shader_;
-        ManagedShader texture_blit_shader_;
 
         VAO quad_vao_;
         VBO quad_vbo_;
+        std::array<std::unique_ptr<ScreenQuadRenderer>, 2> panel_upload_renderers_;
 
         bool initialized_ = false;
 
         Result<SplitViewTargets> acquireTargets(RenderTargetPool& render_target_pool,
                                                 const glm::ivec2& size);
         Result<void> setupQuad();
+        Result<ScreenQuadRenderer*> ensurePanelUploadRenderer(size_t panel_index);
         Result<void> compositeSplitView(
             GLuint left_texture,
             GLuint right_texture,
@@ -59,15 +64,11 @@ namespace lfs::rendering {
             bool flip_left_y,
             bool flip_right_y);
 
-        Result<std::optional<RenderingPipeline::RenderResult>> renderPanelContent(
-            FrameBuffer& framebuffer,
+        Result<PanelRenderOutput> renderPanelContent(
+            size_t panel_index,
             const SplitViewPanel& panel,
-            const SplitViewRequest& request,
-            RenderingPipeline& pipeline,
-            ScreenQuadRenderer& screen_renderer,
-            ManagedShader& quad_shader);
-
-        Result<void> blitTextureToFramebuffer(GLuint texture_id);
+            const glm::ivec2& output_size,
+            RenderingEngine& engine);
     };
 
 } // namespace lfs::rendering

@@ -39,7 +39,7 @@ namespace lfs::rendering {
      * @param model_transforms Array of 4x4 transforms [num_transforms, 4, 4]
      * @param transform_indices Per-Gaussian transform index [N]
      * @param selection_mask Per-Gaussian selection mask [N] (uint8, 1=selected/yellow)
-     * @param screen_positions_out Optional output: screen positions [N, 2] for brush tool
+     * @param screen_positions_out Optional output: screen positions [N, 2] for interactive overlays
      *
      * @return Tuple of (rendered_image [3, H, W], alpha_map [1, H, W], depth_map [1, H, W])
      */
@@ -68,15 +68,14 @@ namespace lfs::rendering {
         const Tensor* transform_indices = nullptr,
         const Tensor* selection_mask = nullptr,
         Tensor* screen_positions_out = nullptr,
-        bool brush_active = false,
-        float brush_x = 0.0f,
-        float brush_y = 0.0f,
-        float brush_radius = 0.0f,
-        bool brush_add_mode = true,
-        Tensor* brush_selection_out = nullptr,
-        bool brush_saturation_mode = false,
-        float brush_saturation_amount = 0.0f,
-        bool selection_mode_rings = false,
+        bool cursor_active = false,
+        float cursor_x = 0.0f,
+        float cursor_y = 0.0f,
+        float cursor_radius = 0.0f,
+        bool preview_selection_add_mode = true,
+        Tensor* preview_selection_out = nullptr,
+        bool cursor_saturation_preview = false,
+        float cursor_saturation_amount = 0.0f,
         bool show_center_markers = false,
         const Tensor* crop_box_transform = nullptr,
         const Tensor* crop_box_min = nullptr,
@@ -89,16 +88,16 @@ namespace lfs::rendering {
         bool ellipsoid_inverse = false,
         bool ellipsoid_desaturate = false,
         int ellipsoid_parent_node_index = -1,
-        const Tensor* depth_filter_transform = nullptr,
-        const Tensor* depth_filter_min = nullptr,
-        const Tensor* depth_filter_max = nullptr,
+        const Tensor* view_volume_transform = nullptr,
+        const Tensor* view_volume_min = nullptr,
+        const Tensor* view_volume_max = nullptr,
         const Tensor* deleted_mask = nullptr,
         unsigned long long* hovered_depth_id = nullptr,
-        int highlight_gaussian_id = -1,
-        const std::vector<bool>& selected_node_mask = {},
-        bool desaturate_unselected = false,
+        int focused_gaussian_id = -1,
+        const std::vector<bool>& emphasized_node_mask = {},
+        bool dim_non_emphasized = false,
         const std::vector<bool>& node_visibility_mask = {},
-        float selection_flash_intensity = 0.0f,
+        float emphasis_flash_intensity = 0.0f,
         bool orthographic = false,
         float ortho_scale = 1.0f,
         bool mip_filter = false);

@@ -202,21 +202,21 @@ namespace lfs::mcp {
                     camera,
                     model,
                     bg,
+                    -1,      // sh_degree_override
                     false,   // show_rings
                     0.01f,   // ring_width
                     nullptr, // model_transforms
                     nullptr, // transform_indices
                     nullptr, // selection_mask
                     nullptr, // screen_positions_out
-                    true,    // brush_active
+                    true,    // cursor_active
                     x,
                     y,
-                    0.0f,    // brush_radius
-                    true,    // brush_add_mode
-                    nullptr, // brush_selection_out
-                    false,   // brush_saturation_mode
-                    0.0f,    // brush_saturation_amount
-                    true,    // selection_mode_rings
+                    0.0f,    // cursor_radius
+                    true,    // preview_selection_add_mode
+                    nullptr, // preview_selection_out
+                    false,   // cursor_saturation_preview
+                    0.0f,    // cursor_saturation_amount
                     false,   // show_center_markers
                     nullptr, // crop_box_transform
                     nullptr, // crop_box_min
@@ -305,6 +305,7 @@ namespace lfs::mcp {
                     *camera,
                     *model,
                     bg,
+                    -1,      // sh_degree_override
                     false,   // show_rings
                     0.01f,   // ring_width
                     nullptr, // model_transforms

@@ -31,7 +31,7 @@ namespace lfs::vis {
             const auto mesh_viewport = ctx.makeViewportData();
 
             const float flash_intensity = ctx.selection_flash_intensity;
-            const bool any_selected = std::any_of(
+            const bool any_emphasized = std::any_of(
                                           scene_state.meshes.begin(), scene_state.meshes.end(),
                                           [](const auto& vm) { return vm.is_selected; }) ||
                                       (!scene_state.selected_node_mask.empty() &&
@@ -49,8 +49,8 @@ namespace lfs::vis {
                 .backface_culling = ctx.settings.mesh_backface_culling,
                 .shadow_enabled = ctx.settings.mesh_shadow_enabled,
                 .shadow_map_resolution = ctx.settings.mesh_shadow_resolution,
-                .desaturate_unselected = ctx.settings.desaturate_unselected && any_selected,
-                .selection_flash_intensity = flash_intensity,
+                .dim_non_emphasized = ctx.settings.desaturate_unselected && any_emphasized,
+                .flash_intensity = flash_intensity,
                 .background_color = ctx.settings.background_color};
 
             glEnable(GL_DEPTH_TEST);
@@ -59,7 +59,7 @@ namespace lfs::vis {
             engine.resetMeshFrameState();
             for (const auto& vm : scene_state.meshes) {
                 auto per_mesh_opts = mesh_opts;
-                per_mesh_opts.is_selected = vm.is_selected;
+                per_mesh_opts.is_emphasized = vm.is_selected;
                 const auto result = engine.renderMesh(
                     *vm.mesh, mesh_viewport, vm.transform, per_mesh_opts, res.splats_presented);
                 if (!result)

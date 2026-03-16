@@ -240,6 +240,7 @@ set(TEST_FILES
     # test_property_system.cpp  # Disabled: needs API update after merge
     test_scene_validity.cpp
     test_selection_rasterization_ops.cpp
+    test_rendering_refactor_services.cpp
     test_viewport.cpp
     test_selection_service_interactions.cpp
     test_undo_history.cpp

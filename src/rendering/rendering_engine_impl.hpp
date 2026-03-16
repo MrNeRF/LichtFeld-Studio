@@ -32,13 +32,29 @@ namespace lfs::rendering {
         void shutdown() override;
         bool isInitialized() const override;
 
-        Result<ViewportFrameResult> renderGaussiansViewportFrame(
+        Result<GaussianGpuFrameResult> renderGaussiansGpuFrame(
             const lfs::core::SplatData& splat_data,
             const ViewportRenderRequest& request) override;
+
+        Result<GaussianImageResult> renderGaussiansImage(
+            const lfs::core::SplatData& splat_data,
+            const ViewportRenderRequest& request) override;
+
+        Result<std::optional<int>> queryHoveredGaussianId(
+            const lfs::core::SplatData& splat_data,
+            const HoveredGaussianQueryRequest& request) override;
 
         Result<std::shared_ptr<lfs::core::Tensor>> renderGaussianScreenPositions(
             const lfs::core::SplatData& splat_data,
             const ScreenPositionRenderRequest& request) override;
+
+        Result<GpuFrame> renderPointCloudGpuFrame(
+            const lfs::core::SplatData& splat_data,
+            const PointCloudRenderRequest& request) override;
+
+        Result<PointCloudImageResult> renderPointCloudImage(
+            const lfs::core::SplatData& splat_data,
+            const PointCloudRenderRequest& request) override;
 
         Result<GpuFrame> renderPointCloudGpuFrame(
             const lfs::core::PointCloud& point_cloud,
@@ -120,38 +136,26 @@ namespace lfs::rendering {
 
         void setViewportGizmoHover(int axis) override;
 
-        Result<void> renderCameraFrustumsWithHighlight(
+        Result<void> renderCameraFrustums(
             const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
-            const ViewportData& viewport,
-            float scale,
-            const glm::vec3& train_color,
-            const glm::vec3& eval_color,
-            int highlight_index,
-            const glm::mat4& scene_transform = glm::mat4(1.0f),
-            bool equirectangular_view = false,
-            const std::unordered_set<int>& disabled_uids = {},
-            const std::unordered_set<int>& selected_uids = {}) override;
+            const CameraFrustumRenderRequest& request) override;
 
         Result<int> pickCameraFrustum(
             const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
-            const glm::vec2& mouse_pos,
-            const glm::vec2& viewport_pos,
-            const glm::vec2& viewport_size,
-            const ViewportData& viewport,
-            float scale,
-            const glm::mat4& scene_transform = glm::mat4(1.0f)) override;
+            const CameraFrustumPickRequest& request) override;
 
         void clearFrustumCache() override;
 
     private:
-        struct GaussianRenderOutput {
-            std::shared_ptr<lfs::core::Tensor> image;
-            FrameMetadata metadata;
-        };
-
-        Result<GaussianRenderOutput> renderGaussiansInternal(
+        Result<RenderingPipeline::ImageRenderResult> renderGaussiansRasterResult(
             const lfs::core::SplatData& splat_data,
             const ViewportRenderRequest& request);
+        [[nodiscard]] static FrameMetadata makeFrameMetadata(const RenderingPipeline::ImageRenderResult& result);
+        Result<GpuFrame> uploadRenderResultToGpuFrame(
+            const RenderingPipeline::ImageRenderResult& result,
+            const glm::ivec2& viewport_size);
+        void invalidatePresentUploadCache();
+        [[nodiscard]] bool ensureHoveredDepthQueryBuffersAllocated();
         Result<void> initializeShaders();
         Result<void> ensureRenderResultUploaded(
             const std::shared_ptr<const Tensor>& image,
@@ -189,6 +193,8 @@ namespace lfs::rendering {
         float last_presented_far_plane_ = 0.0f;
         bool last_presented_orthographic_ = false;
         bool has_present_upload_cache_ = false;
+        unsigned long long* hovered_depth_id_device_ = nullptr;
+        unsigned long long* hovered_depth_id_host_ = nullptr;
 
 #ifdef CUDA_GL_INTEROP_ENABLED
         std::unique_ptr<CudaGLInteropTexture> gpu_frame_readback_interop_;

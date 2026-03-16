@@ -12,7 +12,7 @@
 #include "gl_resources.hpp"
 #include "point_cloud_renderer.hpp"
 #include "rendering/render_constants.hpp"
-#include "rendering/rendering.hpp" // For SelectionMode
+#include "rendering/rendering.hpp"
 #include "render_target_pool.hpp"
 #include "screen_renderer.hpp"
 #include <glm/glm.hpp>
@@ -42,7 +42,6 @@ namespace lfs::rendering {
             RenderMode render_mode = RenderMode::RGB;
             const lfs::geometry::BoundingBox* crop_box = nullptr;
             glm::vec3 background_color = glm::vec3(0.0f, 0.0f, 0.0f);
-            bool point_cloud_mode = false;
             float voxel_size = 0.01f;
             bool gut = false;
             bool equirectangular = false;
@@ -54,15 +53,14 @@ namespace lfs::rendering {
             std::shared_ptr<lfs::core::Tensor> transform_indices; // Per-Gaussian index [N], nullable
             // Selection mask for highlighting selected Gaussians
             std::shared_ptr<lfs::core::Tensor> selection_mask;
-            bool brush_active = false;
-            float brush_x = 0.0f;
-            float brush_y = 0.0f;
-            float brush_radius = 0.0f;
-            bool brush_add_mode = true;
-            lfs::core::Tensor* brush_selection_tensor = nullptr;
-            bool brush_saturation_mode = false;
-            float brush_saturation_amount = 0.0f;
-            bool selection_mode_rings = false; // Ring mode hover detection
+            bool cursor_active = false;
+            float cursor_x = 0.0f;
+            float cursor_y = 0.0f;
+            float cursor_radius = 0.0f;
+            bool preview_selection_add_mode = true;
+            lfs::core::Tensor* preview_selection_tensor = nullptr;
+            bool cursor_saturation_preview = false;
+            float cursor_saturation_amount = 0.0f;
             // Crop box filtering (scoped to parent node if >= 0)
             const Tensor* crop_box_transform = nullptr;
             const Tensor* crop_box_min = nullptr;
@@ -76,19 +74,19 @@ namespace lfs::rendering {
             bool ellipsoid_inverse = false;
             bool ellipsoid_desaturate = false;
             int ellipsoid_parent_node_index = -1;
-            // Depth filter (Selection tool - separate from crop box, always desaturates outside)
-            const Tensor* depth_filter_transform = nullptr;
-            const Tensor* depth_filter_min = nullptr;
-            const Tensor* depth_filter_max = nullptr;
+            // View-volume filter (desaturate only, no culling)
+            const Tensor* view_volume_transform = nullptr;
+            const Tensor* view_volume_min = nullptr;
+            const Tensor* view_volume_max = nullptr;
             const Tensor* deleted_mask = nullptr; // Soft deletion mask [N], true = skip
-            // Ring mode hover output
+            // Hover query output
             unsigned long long* hovered_depth_id = nullptr;
-            int highlight_gaussian_id = -1;
+            int focused_gaussian_id = -1;
             float far_plane = DEFAULT_FAR_PLANE;
-            std::vector<bool> selected_node_mask;
+            std::vector<bool> emphasized_node_mask;
             std::vector<bool> node_visibility_mask; // Per-node visibility for culling (consolidated models)
-            bool desaturate_unselected = false;
-            float selection_flash_intensity = 0.0f;
+            bool dim_non_emphasized = false;
+            float emphasis_flash_intensity = 0.0f;
             bool orthographic = false;
             float ortho_scale = DEFAULT_ORTHO_SCALE;
             PointCloudCropParams point_cloud_crop_params;
@@ -100,7 +98,7 @@ namespace lfs::rendering {
             }
         };
 
-        struct RenderResult {
+        struct ImageRenderResult {
             Tensor image;
             Tensor depth;
             bool valid = false;
@@ -115,30 +113,35 @@ namespace lfs::rendering {
         RenderingPipeline();
         ~RenderingPipeline();
 
-        // Main render function - now returns Result
-        Result<RenderResult> render(const lfs::core::SplatData& model, const RasterRequest& request);
+        Result<ImageRenderResult> renderGaussianImage(const lfs::core::SplatData& model, const RasterRequest& request);
+        Result<ImageRenderResult> renderPointCloudImage(const lfs::core::SplatData& model, const RasterRequest& request);
         Result<Tensor> renderScreenPositions(const lfs::core::SplatData& model, const RasterRequest& request);
         void setRenderTargetPool(RenderTargetPool* pool) { render_target_pool_ = pool; }
         void resetResources();
 
-        // Static upload function
-        static Result<void> uploadToScreen(const RenderResult& result,
+        // Static upload function for image-backed raster results
+        static Result<void> uploadToScreen(const ImageRenderResult& result,
                                            ScreenQuadRenderer& renderer,
                                            const glm::ivec2& viewport_size);
 
+        Result<GpuFrame> renderPointCloudGpuFrame(const lfs::core::SplatData& model, const RasterRequest& request);
         Result<GpuFrame> renderRawPointCloudGpuFrame(const lfs::core::PointCloud& point_cloud, const RasterRequest& request);
 
     private:
-        // Apply depth params from RenderResult to ScreenQuadRenderer
-        static void applyDepthParams(const RenderResult& result,
+        // Apply depth params from image-backed raster results to ScreenQuadRenderer
+        static void applyDepthParams(const ImageRenderResult& result,
                                      ScreenQuadRenderer& renderer,
                                      const glm::ivec2& viewport_size);
         Result<lfs::core::Camera> createCamera(const RasterRequest& request);
-        Result<RenderResult> renderGaussians(const lfs::core::SplatData& model,
-                                             const RasterRequest& request,
-                                             Tensor* screen_positions_out);
+        Result<ImageRenderResult> renderGaussianImageResult(const lfs::core::SplatData& model,
+                                                            const RasterRequest& request,
+                                                            Tensor* screen_positions_out);
         glm::vec2 computeFov(float vfov_rad, int width, int height);
-        Result<RenderResult> renderPointCloud(const lfs::core::SplatData& model, const RasterRequest& request);
+        Result<ImageRenderResult> renderPointCloudImageResult(const lfs::core::SplatData& model,
+                                                              const RasterRequest& request);
+        Result<void> ensurePointCloudRendererInitialized();
+        Result<void> preparePointCloudRenderTarget(const RasterRequest& request);
+        Result<ImageRenderResult> readPersistentPointCloudImage(const RasterRequest& request);
 
         // Ensure persistent FBO is sized correctly (avoids recreation every frame)
         void ensureFBOSize(int width, int height);

@@ -544,7 +544,7 @@ namespace lfs::python {
         const auto bg = core::Tensor::zeros({3}, core::Device::CUDA, core::DataType::Float32);
 
         core::Tensor screen_positions;
-        rendering::rasterize_tensor(*camera, *model, bg, false, DEFAULT_SCALE_THRESHOLD, nullptr, nullptr, nullptr,
+        rendering::rasterize_tensor(*camera, *model, bg, -1, false, DEFAULT_SCALE_THRESHOLD, nullptr, nullptr, nullptr,
                                     &screen_positions);
 
         return PyTensor(std::move(screen_positions), true);

@@ -19,11 +19,9 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
-#include <cuda_runtime.h>
 #include <glm/geometric.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/trigonometric.hpp>
-#include <limits>
 
 namespace lfs::vis {
 
@@ -240,16 +238,7 @@ namespace lfs::vis {
         assert(rendering_manager_);
     }
 
-    SelectionService::~SelectionService() {
-        if (hovered_depth_id_device_) {
-            cudaFree(hovered_depth_id_device_);
-            hovered_depth_id_device_ = nullptr;
-        }
-        if (hovered_depth_id_host_) {
-            cudaFreeHost(hovered_depth_id_host_);
-            hovered_depth_id_host_ = nullptr;
-        }
-    }
+    SelectionService::~SelectionService() = default;
 
     SelectionResult SelectionService::selectBrush(float x, float y, float radius, SelectionMode mode,
                                                   int camera_index) {
@@ -756,7 +745,7 @@ namespace lfs::vis {
         rendering_manager_->clearLassoPreview();
         rendering_manager_->clearPreviewSelection();
         if (session.shape != SelectionShape::Brush && session.shape != SelectionShape::Rings) {
-            rendering_manager_->clearBrushState();
+            rendering_manager_->clearCursorPreviewState();
         }
 
         const bool add_mode = (session.mode != SelectionMode::Remove);
@@ -764,7 +753,7 @@ namespace lfs::vis {
         case SelectionShape::Brush: {
             const auto render_cursor = screenToRender(session.cursor_pos, *info);
             const float radius = session.brush_radius * (static_cast<float>(info->render_width) / info->width);
-            rendering_manager_->setBrushState(true, render_cursor.x, render_cursor.y, radius, add_mode, nullptr);
+            rendering_manager_->setCursorPreviewState(true, render_cursor.x, render_cursor.y, radius, add_mode, nullptr);
             break;
         }
         case SelectionShape::Rectangle: {
@@ -792,7 +781,7 @@ namespace lfs::vis {
             break;
         case SelectionShape::Rings: {
             const auto render_cursor = screenToRender(session.cursor_pos, *info);
-            rendering_manager_->setBrushState(true, render_cursor.x, render_cursor.y, 0.0f, add_mode, nullptr);
+            rendering_manager_->setCursorPreviewState(true, render_cursor.x, render_cursor.y, 0.0f, add_mode, nullptr);
             break;
         }
         }
@@ -897,9 +886,10 @@ namespace lfs::vis {
         rendering::ScreenPositionRenderRequest request{
             .frame_view = frameViewFromViewport(viewport, settings.background_color),
             .equirectangular = settings.equirectangular,
-            .model_transforms = &scene_state.model_transforms,
-            .transform_indices = scene_state.transform_indices,
-            .node_visibility_mask = scene_state.node_visibility_mask,
+            .scene =
+                {.model_transforms = &scene_state.model_transforms,
+                 .transform_indices = scene_state.transform_indices,
+                 .node_visibility_mask = scene_state.node_visibility_mask},
         };
 
         auto screen_positions = engine->renderGaussianScreenPositions(*scene_state.combined_model, request);
@@ -940,9 +930,10 @@ namespace lfs::vis {
                 settings.background_color,
                 settings.depth_clip_enabled ? settings.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE),
             .equirectangular = settings.equirectangular,
-            .model_transforms = &scene_state.model_transforms,
-            .transform_indices = scene_state.transform_indices,
-            .node_visibility_mask = scene_state.node_visibility_mask,
+            .scene =
+                {.model_transforms = &scene_state.model_transforms,
+                 .transform_indices = scene_state.transform_indices,
+                 .node_visibility_mask = scene_state.node_visibility_mask},
         };
 
         auto screen_positions = engine->renderGaussianScreenPositions(*scene_state.combined_model, request);
@@ -1006,28 +997,6 @@ namespace lfs::vis {
             filters);
     }
 
-    bool SelectionService::ensureHoveredDepthBuffersAllocated() {
-        if (!hovered_depth_id_device_) {
-            if (cudaMalloc(&hovered_depth_id_device_, sizeof(unsigned long long)) != cudaSuccess) {
-                LOG_WARN("SelectionService: failed to allocate hovered depth device buffer");
-                hovered_depth_id_device_ = nullptr;
-                return false;
-            }
-        }
-
-        if (!hovered_depth_id_host_) {
-            if (cudaMallocHost(&hovered_depth_id_host_, sizeof(unsigned long long)) != cudaSuccess) {
-                LOG_WARN("SelectionService: failed to allocate hovered depth host buffer");
-                cudaFree(hovered_depth_id_device_);
-                hovered_depth_id_device_ = nullptr;
-                hovered_depth_id_host_ = nullptr;
-                return false;
-            }
-        }
-
-        return true;
-    }
-
     std::optional<int> SelectionService::renderHoveredGaussianId(const rendering::ViewportData& viewport,
                                                                  const glm::vec2 cursor_pos,
                                                                  const SelectionFilterState& filters) {
@@ -1039,9 +1008,6 @@ namespace lfs::vis {
         if (!engine || !engine->isInitialized()) {
             return std::nullopt;
         }
-        if (!ensureHoveredDepthBuffersAllocated()) {
-            return std::nullopt;
-        }
 
         auto scene_state = scene_manager_->buildRenderState();
         if (!scene_state.combined_model || scene_state.combined_model->size() == 0) {
@@ -1049,33 +1015,22 @@ namespace lfs::vis {
         }
 
         const auto settings = rendering_manager_->getSettings();
-        rendering::ViewportRenderRequest request{
+        rendering::HoveredGaussianQueryRequest request{
             .frame_view = frameViewFromViewport(
                 viewport,
                 settings.background_color,
                 settings.depth_clip_enabled ? settings.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE),
             .scaling_modifier = settings.scaling_modifier,
-            .antialiasing = settings.antialiasing,
             .mip_filter = settings.mip_filter,
             .sh_degree = scene_state.combined_model->get_active_sh_degree(),
-            .show_rings = false,
-            .ring_width = 0.0f,
-            .show_center_markers = false,
-            .model_transforms = &scene_state.model_transforms,
-            .transform_indices = scene_state.transform_indices,
-            .selection_mask = nullptr,
-            .brush =
-                {.active = true,
-                 .cursor = cursor_pos,
-                 .radius = 0.0f,
-                 .add_mode = true,
-                 .selection_mode_rings = true},
-            .crop_box = std::nullopt,
-            .ellipsoid = std::nullopt,
-            .depth_filter = std::nullopt,
-            .selected_node_mask = {},
-            .node_visibility_mask = scene_state.node_visibility_mask,
-            .hovered_depth_id = hovered_depth_id_device_,
+            .gut = settings.gut,
+            .equirectangular = settings.equirectangular,
+            .scene =
+                {.model_transforms = &scene_state.model_transforms,
+                 .transform_indices = scene_state.transform_indices,
+                 .node_visibility_mask = scene_state.node_visibility_mask},
+            .filters = {},
+            .cursor = cursor_pos,
         };
 
         if (filters.crop_filter) {
@@ -1083,59 +1038,45 @@ namespace lfs::vis {
             const auto& cropboxes = scene.getVisibleCropBoxes();
             if (const auto* const cb = findRenderableByNodeId(cropboxes, scene_manager_->getActiveSelectionCropBoxId());
                 cb && cb->data) {
-                request.crop_box = rendering::BoundingBox{
-                    .min = cb->data->min,
-                    .max = cb->data->max,
-                    .transform = glm::inverse(cb->world_transform),
-                };
-                request.crop_inverse = cb->data->inverse;
-                request.crop_parent_node_index = scene.getVisibleNodeIndex(cb->parent_splat_id);
+                request.filters.crop_region = rendering::GaussianScopedBoxFilter{
+                    .bounds =
+                        {.min = cb->data->min,
+                         .max = cb->data->max,
+                         .transform = glm::inverse(cb->world_transform)},
+                    .inverse = cb->data->inverse,
+                    .parent_node_index = scene.getVisibleNodeIndex(cb->parent_splat_id)};
             }
 
             const auto& ellipsoids = scene.getVisibleEllipsoids();
             if (const auto* const el = findRenderableByNodeId(ellipsoids, scene_manager_->getActiveSelectionEllipsoidId());
                 el && el->data) {
-                request.ellipsoid = rendering::Ellipsoid{
-                    .radii = el->data->radii,
-                    .transform = glm::inverse(el->world_transform),
-                };
-                request.ellipsoid_inverse = el->data->inverse;
-                request.ellipsoid_parent_node_index = scene.getVisibleNodeIndex(el->parent_splat_id);
+                request.filters.ellipsoid_region = rendering::GaussianScopedEllipsoidFilter{
+                    .bounds =
+                        {.radii = el->data->radii,
+                         .transform = glm::inverse(el->world_transform)},
+                    .inverse = el->data->inverse,
+                    .parent_node_index = scene.getVisibleNodeIndex(el->parent_splat_id)};
             }
         }
 
         if (filters.depth_filter && settings.depth_filter_enabled) {
-            request.depth_filter = rendering::BoundingBox{
+            request.filters.view_volume = rendering::BoundingBox{
                 .min = settings.depth_filter_min,
                 .max = settings.depth_filter_max,
                 .transform = settings.depth_filter_transform.inv().toMat4(),
             };
         }
 
-        constexpr auto NO_HOVERED_RESULT = std::numeric_limits<unsigned long long>::max();
-        if (cudaMemset(hovered_depth_id_device_, 0xFF, sizeof(unsigned long long)) != cudaSuccess) {
-            LOG_WARN("SelectionService: failed to reset hovered depth buffer");
+        auto hovered_result = engine->queryHoveredGaussianId(*scene_state.combined_model, request);
+        if (!hovered_result) {
+            LOG_WARN("SelectionService: failed to render hovered gaussian id: {}", hovered_result.error());
+            return std::nullopt;
+        }
+        if (!*hovered_result) {
             return std::nullopt;
         }
 
-        auto viewport_frame = engine->renderGaussiansViewportFrame(*scene_state.combined_model, request);
-        if (!viewport_frame) {
-            LOG_WARN("SelectionService: failed to render hovered gaussian id: {}", viewport_frame.error());
-            return std::nullopt;
-        }
-
-        if (cudaMemcpy(hovered_depth_id_host_, hovered_depth_id_device_,
-                       sizeof(unsigned long long), cudaMemcpyDeviceToHost) != cudaSuccess) {
-            LOG_WARN("SelectionService: failed to read back hovered gaussian id");
-            return std::nullopt;
-        }
-
-        const unsigned long long packed = *hovered_depth_id_host_;
-        if (packed == NO_HOVERED_RESULT) {
-            return std::nullopt;
-        }
-
-        const int hovered_id = static_cast<int>(packed & 0xFFFFFFFFu);
+        const int hovered_id = **hovered_result;
         if (hovered_id < 0 ||
             static_cast<size_t>(hovered_id) >= scene_manager_->getScene().getTotalGaussianCount()) {
             return std::nullopt;

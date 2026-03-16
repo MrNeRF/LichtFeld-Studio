@@ -14,7 +14,16 @@ namespace lfs::vis {
     [[nodiscard]] lfs::rendering::ViewportRenderRequest buildViewportRenderRequest(
         const FrameContext& ctx, glm::ivec2 render_size);
 
+    [[nodiscard]] lfs::rendering::HoveredGaussianQueryRequest buildHoveredGaussianQueryRequest(
+        const FrameContext& ctx, glm::ivec2 render_size);
+
+    [[nodiscard]] lfs::rendering::SplitViewGaussianPanelRenderState buildSplitViewGaussianPanelRenderState(
+        const FrameContext& ctx, glm::ivec2 render_size);
+
+    [[nodiscard]] lfs::rendering::SplitViewPointCloudPanelRenderState buildSplitViewPointCloudPanelRenderState(
+        const FrameContext& ctx, glm::ivec2 render_size);
+
     [[nodiscard]] lfs::rendering::PointCloudRenderRequest buildPointCloudRenderRequest(
-        const FrameContext& ctx, const std::vector<glm::mat4>& model_transforms);
+        const FrameContext& ctx, glm::ivec2 render_size, const std::vector<glm::mat4>& model_transforms);
 
 } // namespace lfs::vis

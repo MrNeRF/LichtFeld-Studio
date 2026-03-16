@@ -38,14 +38,6 @@ namespace lfs::rendering {
     // Keep editor workflow semantics constrained to the explicit renderer
     // request types below and prefer frame_contract.hpp for new abstractions.
 
-    enum class SelectionMode {
-        Centers,
-        Rectangle,
-        Polygon,
-        Lasso,
-        Rings
-    };
-
     // Public types
     struct ViewportData {
         glm::mat3 rotation;
@@ -73,15 +65,64 @@ namespace lfs::rendering {
         glm::mat4 transform{1.0f};
     };
 
-    struct BrushRenderState {
-        bool active = false;
+    struct GaussianSceneState {
+        const std::vector<glm::mat4>* model_transforms = nullptr;
+        std::shared_ptr<lfs::core::Tensor> transform_indices;
+        std::vector<bool> node_visibility_mask;
+    };
+
+    struct GaussianScopedBoxFilter {
+        BoundingBox bounds;
+        bool inverse = false;
+        bool desaturate = false;
+        int parent_node_index = -1;
+    };
+
+    struct GaussianScopedEllipsoidFilter {
+        Ellipsoid bounds;
+        bool inverse = false;
+        bool desaturate = false;
+        int parent_node_index = -1;
+    };
+
+    struct GaussianFilterState {
+        std::optional<GaussianScopedBoxFilter> crop_region;
+        std::optional<GaussianScopedEllipsoidFilter> ellipsoid_region;
+        std::optional<BoundingBox> view_volume;
+    };
+
+    struct GaussianMarkerOverlayState {
+        bool show_rings = false;
+        float ring_width = 0.002f;
+        bool show_center_markers = false;
+    };
+
+    struct GaussianTransientMaskOverlayState {
+        lfs::core::Tensor* mask = nullptr;
+        bool additive = true;
+    };
+
+    struct GaussianCursorOverlayState {
+        bool enabled = false;
         glm::vec2 cursor{0.0f, 0.0f};
         float radius = 0.0f;
-        bool add_mode = true;
-        lfs::core::Tensor* selection_tensor = nullptr;
-        bool saturation_mode = false;
+        bool saturation_preview = false;
         float saturation_amount = 0.0f;
-        bool selection_mode_rings = false;
+    };
+
+    struct GaussianEmphasisOverlayState {
+        std::shared_ptr<lfs::core::Tensor> mask;
+        GaussianTransientMaskOverlayState transient_mask;
+        std::vector<bool> emphasized_node_mask;
+        bool dim_non_emphasized = false;
+        float flash_intensity = 0.0f;
+        int focused_gaussian_id = -1;
+    };
+
+    struct GaussianOverlayState {
+        GaussianMarkerOverlayState markers;
+        GaussianCursorOverlayState cursor;
+        GaussianEmphasisOverlayState emphasis;
     };
 
     struct ViewportRenderRequest {
@@ -90,51 +131,53 @@ namespace lfs::rendering {
         bool antialiasing = false;
         bool mip_filter = false;
         int sh_degree = 3;
-        bool point_cloud_mode = false;
-        float voxel_size = 0.01f;
         bool gut = false;
         bool equirectangular = false;
-        bool show_rings = false;
-        float ring_width = 0.002f;
-        bool show_center_markers = false;
-        const std::vector<glm::mat4>* model_transforms = nullptr;
-        std::shared_ptr<lfs::core::Tensor> transform_indices;
-        std::shared_ptr<lfs::core::Tensor> selection_mask;
-        BrushRenderState brush;
-        std::optional<BoundingBox> crop_box;
-        bool crop_inverse = false;
-        bool crop_desaturate = false;
-        int crop_parent_node_index = -1;
-        std::optional<Ellipsoid> ellipsoid;
-        bool ellipsoid_inverse = false;
-        bool ellipsoid_desaturate = false;
-        int ellipsoid_parent_node_index = -1;
-        std::optional<BoundingBox> depth_filter;
-        std::vector<bool> selected_node_mask;
-        std::vector<bool> node_visibility_mask;
-        bool desaturate_unselected = false;
-        float selection_flash_intensity = 0.0f;
-        unsigned long long* hovered_depth_id = nullptr;
-        int highlight_gaussian_id = -1;
+        GaussianSceneState scene;
+        GaussianFilterState filters;
+        GaussianOverlayState overlay;
+    };
+
+    struct HoveredGaussianQueryRequest {
+        FrameView frame_view;
+        float scaling_modifier = 1.0f;
+        bool mip_filter = false;
+        int sh_degree = 3;
+        bool gut = false;
+        bool equirectangular = false;
+        GaussianSceneState scene;
+        GaussianFilterState filters;
+        glm::vec2 cursor{0.0f, 0.0f};
     };
 
     struct ScreenPositionRenderRequest {
         FrameView frame_view;
         bool equirectangular = false;
+        GaussianSceneState scene;
+    };
+
+    struct PointCloudSceneState {
         const std::vector<glm::mat4>* model_transforms = nullptr;
         std::shared_ptr<lfs::core::Tensor> transform_indices;
-        std::vector<bool> node_visibility_mask;
+    };
+
+    struct PointCloudFilterState {
+        std::optional<BoundingBox> crop_box;
+        bool crop_inverse = false;
+        bool crop_desaturate = false;
+    };
+
+    struct PointCloudRenderState {
+        float scaling_modifier = 1.0f;
+        float voxel_size = 0.01f;
+        bool equirectangular = false;
     };
 
     struct PointCloudRenderRequest {
         FrameView frame_view;
-        float scaling_modifier = 1.0f;
-        float voxel_size = 0.01f;
-        bool equirectangular = false;
-        const std::vector<glm::mat4>* model_transforms = nullptr;
-        std::optional<BoundingBox> crop_box;
-        bool crop_inverse = false;
-        bool crop_desaturate = false;
+        PointCloudRenderState render;
+        PointCloudSceneState scene;
+        PointCloudFilterState filters;
     };
 
     struct FrameMetadata {
@@ -150,8 +193,17 @@ namespace lfs::rendering {
         float split_position = -1.0f; // For split view: normalized split position (-1 = not split view)
     };
 
-    struct ViewportFrameResult {
+    struct GaussianGpuFrameResult {
         GpuFrame frame;
+        FrameMetadata metadata;
+    };
+
+    struct GaussianImageResult {
+        std::shared_ptr<lfs::core::Tensor> image;
+        FrameMetadata metadata;
+    };
+
+    struct PointCloudImageResult {
         std::shared_ptr<lfs::core::Tensor> image;
         FrameMetadata metadata;
     };
@@ -168,54 +220,60 @@ namespace lfs::rendering {
         CachedRender // Previously rendered frame
     };
 
-    struct SplitViewPanel {
-        PanelContentType content_type = PanelContentType::Model3D;
-
-        // For Model3D
-        const lfs::core::SplatData* model = nullptr;
-        glm::mat4 model_transform{1.0f};
-
-        // For Image2D or CachedRender
-        unsigned int texture_id = 0;
-
-        // Common fields
-        std::string label;
-        float start_position; // 0.0 to 1.0
-        float end_position;   // 0.0 to 1.0
-    };
-
-    struct SplitViewRequest {
-        std::vector<SplitViewPanel> panels;
-        ViewportData viewport;
-
-        // Common render settings
+    struct SplitViewGaussianPanelRenderState {
+        FrameView frame_view;
         float scaling_modifier = 1.0f;
         bool antialiasing = false;
         bool mip_filter = false;
         int sh_degree = 3;
-        glm::vec3 background_color{0.0f, 0.0f, 0.0f};
-        std::optional<BoundingBox> crop_box;
-        bool point_cloud_mode = false;
-        float voxel_size = 0.01f;
         bool gut = false;
         bool equirectangular = false;
-        bool show_rings = false;
-        float ring_width = 0.002f;
+        GaussianFilterState filters;
+        GaussianOverlayState overlay;
+    };
 
-        // UI settings
-        bool show_dividers = true;
+    struct SplitViewPointCloudPanelRenderState {
+        FrameView frame_view;
+        PointCloudRenderState render;
+        PointCloudFilterState filters;
+    };
+
+    struct SplitViewPanelContent {
+        PanelContentType type = PanelContentType::Model3D;
+        const lfs::core::SplatData* model = nullptr;
+        glm::mat4 model_transform{1.0f};
+        std::optional<SplitViewGaussianPanelRenderState> gaussian_render;
+        std::optional<SplitViewPointCloudPanelRenderState> point_cloud_render;
+        unsigned int texture_id = 0;
+    };
+
+    struct SplitViewPanelPresentation {
+        float start_position = 0.0f;
+        float end_position = 1.0f;
+        glm::vec2 texcoord_scale{1.0f, 1.0f};
+        std::optional<bool> flip_y;
+    };
+
+    struct SplitViewPanel {
+        SplitViewPanelContent content;
+        SplitViewPanelPresentation presentation;
+    };
+
+    struct SplitViewCompositeState {
+        glm::ivec2 output_size{0, 0};
+        glm::vec3 background_color{0.0f, 0.0f, 0.0f};
+    };
+
+    struct SplitViewPresentationState {
         glm::vec4 divider_color{1.0f, 0.85f, 0.0f, 1.0f};
-        bool show_labels = true;
-
-        // Texcoord scale for over-allocated textures
-        glm::vec2 left_texcoord_scale{1.0f, 1.0f};
-        glm::vec2 right_texcoord_scale{1.0f, 1.0f};
-
-        std::optional<bool> flip_left_y;
-        std::optional<bool> flip_right_y;
-
         bool letterbox = false;
         glm::ivec2 content_size{0, 0};
+    };
+
+    struct SplitViewRequest {
+        std::array<SplitViewPanel, 2> panels;
+        SplitViewCompositeState composite;
+        SplitViewPresentationState presentation;
     };
 
     enum class GridPlane {
@@ -276,10 +334,31 @@ namespace lfs::rendering {
         bool backface_culling = true;
         bool shadow_enabled = false;
         int shadow_map_resolution = 2048;
-        bool is_selected = false;
-        bool desaturate_unselected = false;
-        float selection_flash_intensity = 0.0f;
+        bool is_emphasized = false;
+        bool dim_non_emphasized = false;
+        float flash_intensity = 0.0f;
         glm::vec3 background_color{0.0f};
+    };
+
+    struct CameraFrustumRenderRequest {
+        ViewportData viewport;
+        float scale = 0.1f;
+        glm::vec3 train_color{0.0f, 1.0f, 0.0f};
+        glm::vec3 eval_color{1.0f, 0.0f, 0.0f};
+        int focused_index = -1;
+        glm::mat4 scene_transform{1.0f};
+        bool equirectangular_view = false;
+        std::unordered_set<int> disabled_uids;
+        std::unordered_set<int> emphasized_uids;
+    };
+
+    struct CameraFrustumPickRequest {
+        glm::vec2 mouse_pos{0.0f, 0.0f};
+        glm::vec2 viewport_pos{0.0f, 0.0f};
+        glm::vec2 viewport_size{0.0f, 0.0f};
+        ViewportData viewport;
+        float scale = 0.1f;
+        glm::mat4 scene_transform{1.0f};
     };
 
     // Main rendering engine
@@ -294,13 +373,29 @@ namespace lfs::rendering {
         virtual void shutdown() = 0;
         virtual bool isInitialized() const = 0;
 
-        virtual Result<ViewportFrameResult> renderGaussiansViewportFrame(
+        virtual Result<GaussianGpuFrameResult> renderGaussiansGpuFrame(
             const lfs::core::SplatData& splat_data,
             const ViewportRenderRequest& request) = 0;
+
+        virtual Result<GaussianImageResult> renderGaussiansImage(
+            const lfs::core::SplatData& splat_data,
+            const ViewportRenderRequest& request) = 0;
+
+        virtual Result<std::optional<int>> queryHoveredGaussianId(
+            const lfs::core::SplatData& splat_data,
+            const HoveredGaussianQueryRequest& request) = 0;
 
         virtual Result<std::shared_ptr<lfs::core::Tensor>> renderGaussianScreenPositions(
             const lfs::core::SplatData& splat_data,
             const ScreenPositionRenderRequest& request) = 0;
+
+        virtual Result<GpuFrame> renderPointCloudGpuFrame(
+            const lfs::core::SplatData& splat_data,
+            const PointCloudRenderRequest& request) = 0;
+
+        virtual Result<PointCloudImageResult> renderPointCloudImage(
+            const lfs::core::SplatData& splat_data,
+            const PointCloudRenderRequest& request) = 0;
 
         virtual Result<GpuFrame> renderPointCloudGpuFrame(
             const lfs::core::PointCloud& point_cloud,
@@ -389,28 +484,15 @@ namespace lfs::rendering {
         // Get camera rotation matrix to view along axis
         [[nodiscard]] static glm::mat3 getAxisViewRotation(int axis, bool negative = false);
 
-        // Camera frustum rendering with highlighting
-        virtual Result<void> renderCameraFrustumsWithHighlight(
+        // Camera frustum rendering with focus/emphasis state
+        virtual Result<void> renderCameraFrustums(
             const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
-            const ViewportData& viewport,
-            float scale = 0.1f,
-            const glm::vec3& train_color = glm::vec3(0.0f, 1.0f, 0.0f),
-            const glm::vec3& eval_color = glm::vec3(1.0f, 0.0f, 0.0f),
-            int highlight_index = -1,
-            const glm::mat4& scene_transform = glm::mat4(1.0f),
-            bool equirectangular_view = false,
-            const std::unordered_set<int>& disabled_uids = {},
-            const std::unordered_set<int>& selected_uids = {}) = 0;
+            const CameraFrustumRenderRequest& request) = 0;
 
         // Camera frustum picking
         virtual Result<int> pickCameraFrustum(
             const std::vector<std::shared_ptr<const lfs::core::Camera>>& cameras,
-            const glm::vec2& mouse_pos,
-            const glm::vec2& viewport_pos,
-            const glm::vec2& viewport_size,
-            const ViewportData& viewport,
-            float scale = 0.1f,
-            const glm::mat4& scene_transform = glm::mat4(1.0f)) = 0;
+            const CameraFrustumPickRequest& request) = 0;
 
         virtual void clearFrustumCache() = 0;
     };

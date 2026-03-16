@@ -243,7 +243,7 @@ namespace lfs::vis::op {
         const float scaled_radius = brush_radius_ * scale_x;
         const bool add_mode = (action_ == BrushAction::Add);
 
-        rm->setBrushState(true, image_x, image_y, scaled_radius, add_mode, &cumulative_selection_);
+        rm->setCursorPreviewState(true, image_x, image_y, scaled_radius, add_mode, &cumulative_selection_);
     }
 
     void BrushStrokeOperator::updateSaturationAtPoint(double x, double y, OperatorContext& ctx) {
@@ -312,7 +312,7 @@ namespace lfs::vis::op {
             nullptr);
 
         rm->markDirty(DirtyFlag::SPLATS);
-        rm->setBrushState(true, image_x, image_y, scaled_radius, true, nullptr, true, saturation_amount_);
+        rm->setCursorPreviewState(true, image_x, image_y, scaled_radius, true, nullptr, true, saturation_amount_);
     }
 
     void BrushStrokeOperator::finalizeSelectionStroke(OperatorContext& ctx) {
@@ -365,7 +365,7 @@ namespace lfs::vis::op {
 
     void BrushStrokeOperator::clearBrushState() {
         if (auto* rm = services().renderingOrNull()) {
-            rm->clearBrushState();
+            rm->clearCursorPreviewState();
             rm->markDirty(DirtyFlag::SELECTION);
         }
     }

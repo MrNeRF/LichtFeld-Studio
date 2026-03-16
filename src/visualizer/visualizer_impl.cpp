@@ -893,9 +893,8 @@ namespace lfs::vis {
                 .viewport = viewport_,
                 .settings = rendering_manager_->getSettings(),
                 .viewport_region = nullptr,
-                .has_focus = false,
                 .scene_manager = scene_manager_.get()};
-            rendering_manager_->renderFrame(ctx, scene_manager_.get());
+            rendering_manager_->renderFrame(ctx);
             window_manager_->swapBuffers();
         }
 
@@ -1067,7 +1066,6 @@ namespace lfs::vis {
             .viewport = viewport_,
             .settings = rendering_manager_->getSettings(),
             .viewport_region = has_viewport_region ? &viewport_region : nullptr,
-            .has_focus = gui_manager_ && gui_manager_->isViewportFocused(),
             .scene_manager = scene_manager_.get()};
 
         if (gui_manager_) {
@@ -1075,7 +1073,7 @@ namespace lfs::vis {
             rendering_manager_->setEllipsoidGizmoActive(gui_manager_->gizmo().isEllipsoidGizmoActive());
         }
 
-        rendering_manager_->renderFrame(context, scene_manager_.get());
+        rendering_manager_->renderFrame(context);
 
         gui_manager_->render();
 

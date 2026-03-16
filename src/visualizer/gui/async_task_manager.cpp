@@ -654,21 +654,16 @@ namespace lfs::vis::gui {
                         .antialiasing = true,
                         .sh_degree = render_settings.sh_degree,
                         .equirectangular = render_settings.equirectangular,
-                        .transform_indices = nullptr,
-                        .selection_mask = nullptr,
-                        .brush = {},
-                        .crop_box = std::nullopt,
-                        .ellipsoid = std::nullopt,
-                        .depth_filter = std::nullopt,
-                        .selected_node_mask = {},
-                        .node_visibility_mask = {}};
+                        .scene = {},
+                        .filters = {},
+                        .overlay = {}};
 
-                    auto viewport_frame = engine->renderGaussiansViewportFrame(*splat_ptr, request);
-                    if (!viewport_frame.has_value() ||
-                        !viewport_frame->image ||
-                        !viewport_frame->image->is_valid()) {
+                    auto image_result = engine->renderGaussiansImage(*splat_ptr, request);
+                    if (!image_result.has_value() ||
+                        !image_result->image ||
+                        !image_result->image->is_valid()) {
                         LOG_ERROR("Failed to render frame {}{}", frame,
-                                  viewport_frame ? "" : std::format(": {}", viewport_frame.error()));
+                                  image_result ? "" : std::format(": {}", image_result.error()));
                         {
                             std::lock_guard lock(video_export_state_.mutex);
                             video_export_state_.error = std::format("Failed to render frame {}", frame + 1);
@@ -677,13 +672,13 @@ namespace lfs::vis::gui {
                         break;
                     }
 
-                    auto image_hwc = viewport_frame->image->permute({1, 2, 0}).contiguous();
+                    auto image_hwc = image_result->image->permute({1, 2, 0}).contiguous();
 
                     if (frame == 0) {
                         LOG_INFO("Video export: CHW shape=[{},{},{}] -> HWC shape=[{},{},{}]",
-                                 viewport_frame->image->shape()[0],
-                                 viewport_frame->image->shape()[1],
-                                 viewport_frame->image->shape()[2],
+                                 image_result->image->shape()[0],
+                                 image_result->image->shape()[1],
+                                 image_result->image->shape()[2],
                                  image_hwc.shape()[0], image_hwc.shape()[1], image_hwc.shape()[2]);
                     }
 

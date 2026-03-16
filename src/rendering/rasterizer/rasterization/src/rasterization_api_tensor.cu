@@ -167,15 +167,14 @@ namespace lfs::rendering {
         const Tensor* transform_indices,
         const Tensor* selection_mask,
         Tensor* screen_positions_out,
-        bool brush_active,
-        float brush_x,
-        float brush_y,
-        float brush_radius,
-        bool brush_add_mode,
-        Tensor* brush_selection_out,
-        bool brush_saturation_mode,
-        float brush_saturation_amount,
-        bool selection_mode_rings,
+        bool cursor_active,
+        float cursor_x,
+        float cursor_y,
+        float cursor_radius,
+        bool preview_selection_add_mode,
+        Tensor* preview_selection_out,
+        bool cursor_saturation_preview,
+        float cursor_saturation_amount,
         bool show_center_markers,
         const Tensor* crop_box_transform,
         const Tensor* crop_box_min,
@@ -188,16 +187,16 @@ namespace lfs::rendering {
         bool ellipsoid_inverse,
         bool ellipsoid_desaturate,
         int ellipsoid_parent_node_index,
-        const Tensor* depth_filter_transform,
-        const Tensor* depth_filter_min,
-        const Tensor* depth_filter_max,
+        const Tensor* view_volume_transform,
+        const Tensor* view_volume_min,
+        const Tensor* view_volume_max,
         const Tensor* deleted_mask,
         unsigned long long* hovered_depth_id,
-        int highlight_gaussian_id,
-        const std::vector<bool>& selected_node_mask,
-        bool desaturate_unselected,
+        int focused_gaussian_id,
+        const std::vector<bool>& emphasized_node_mask,
+        bool dim_non_emphasized,
         const std::vector<bool>& node_visibility_mask,
-        float selection_flash_intensity,
+        float emphasis_flash_intensity,
         bool orthographic,
         float ortho_scale,
         bool mip_filter) {
@@ -261,9 +260,9 @@ namespace lfs::rendering {
             screen_positions_ptr = reinterpret_cast<float2*>(screen_positions_out->ptr<float>());
         }
 
-        // Preview selection tensor (used by rectangle/lasso/polygon modes regardless of brush_active)
-        bool* const brush_selection_ptr = (brush_selection_out && brush_selection_out->is_valid())
-                                              ? brush_selection_out->ptr<bool>()
+        // Preview-selection tensor (used by rectangle/lasso/polygon modes regardless of cursor state)
+        bool* const preview_selection_ptr = (preview_selection_out && preview_selection_out->is_valid())
+                                              ? preview_selection_out->ptr<bool>()
                                               : nullptr;
 
         // Prepare crop box parameters
@@ -294,20 +293,20 @@ namespace lfs::rendering {
             ellipsoid_radii_ptr = reinterpret_cast<const float3*>(ellipsoid_radii_contig.ptr<float>());
         }
 
-        // Prepare depth filter parameters (Selection tool - separate from crop box)
-        const float* depth_filter_transform_ptr = nullptr;
-        const float3* depth_filter_min_ptr = nullptr;
-        const float3* depth_filter_max_ptr = nullptr;
-        Tensor depth_filter_transform_contig, depth_filter_min_contig, depth_filter_max_contig;
-        if (depth_filter_transform != nullptr && depth_filter_transform->is_valid() &&
-            depth_filter_min != nullptr && depth_filter_min->is_valid() &&
-            depth_filter_max != nullptr && depth_filter_max->is_valid()) {
-            depth_filter_transform_contig = depth_filter_transform->is_contiguous() ? *depth_filter_transform : depth_filter_transform->contiguous();
-            depth_filter_min_contig = depth_filter_min->is_contiguous() ? *depth_filter_min : depth_filter_min->contiguous();
-            depth_filter_max_contig = depth_filter_max->is_contiguous() ? *depth_filter_max : depth_filter_max->contiguous();
-            depth_filter_transform_ptr = depth_filter_transform_contig.ptr<float>();
-            depth_filter_min_ptr = reinterpret_cast<const float3*>(depth_filter_min_contig.ptr<float>());
-            depth_filter_max_ptr = reinterpret_cast<const float3*>(depth_filter_max_contig.ptr<float>());
+        // Prepare view-volume filter parameters
+        const float* view_volume_transform_ptr = nullptr;
+        const float3* view_volume_min_ptr = nullptr;
+        const float3* view_volume_max_ptr = nullptr;
+        Tensor view_volume_transform_contig, view_volume_min_contig, view_volume_max_contig;
+        if (view_volume_transform != nullptr && view_volume_transform->is_valid() &&
+            view_volume_min != nullptr && view_volume_min->is_valid() &&
+            view_volume_max != nullptr && view_volume_max->is_valid()) {
+            view_volume_transform_contig = view_volume_transform->is_contiguous() ? *view_volume_transform : view_volume_transform->contiguous();
+            view_volume_min_contig = view_volume_min->is_contiguous() ? *view_volume_min : view_volume_min->contiguous();
+            view_volume_max_contig = view_volume_max->is_contiguous() ? *view_volume_max : view_volume_max->contiguous();
+            view_volume_transform_ptr = view_volume_transform_contig.ptr<float>();
+            view_volume_min_ptr = reinterpret_cast<const float3*>(view_volume_min_contig.ptr<float>());
+            view_volume_max_ptr = reinterpret_cast<const float3*>(view_volume_max_contig.ptr<float>());
         }
 
         // Prepare deleted mask pointer
@@ -318,20 +317,20 @@ namespace lfs::rendering {
             deleted_mask_ptr = deleted_mask_contig.ptr<bool>();
         }
 
-        // Selected node mask (small, typically < 20 nodes)
-        const bool* selected_node_mask_ptr = nullptr;
-        Tensor selected_node_mask_tensor;
-        const int num_selected_nodes = static_cast<int>(selected_node_mask.size());
+        // Emphasized node mask (small, typically < 20 nodes)
+        const bool* emphasized_node_mask_ptr = nullptr;
+        Tensor emphasized_node_mask_tensor;
+        const int num_selected_nodes = static_cast<int>(emphasized_node_mask.size());
         if (num_selected_nodes > 0) {
             // vector<bool> is not contiguous, convert to uint8_t
             std::vector<uint8_t> mask_data(num_selected_nodes);
-            std::transform(selected_node_mask.begin(), selected_node_mask.end(),
+            std::transform(emphasized_node_mask.begin(), emphasized_node_mask.end(),
                            mask_data.begin(), [](bool b) { return b ? 1 : 0; });
-            selected_node_mask_tensor = Tensor::from_blob(
-                                            mask_data.data(), {static_cast<size_t>(num_selected_nodes)},
-                                            lfs::core::Device::CPU, lfs::core::DataType::UInt8)
-                                            .cuda();
-            selected_node_mask_ptr = reinterpret_cast<const bool*>(selected_node_mask_tensor.ptr<uint8_t>());
+            emphasized_node_mask_tensor = Tensor::from_blob(
+                                              mask_data.data(), {static_cast<size_t>(num_selected_nodes)},
+                                              lfs::core::Device::CPU, lfs::core::DataType::UInt8)
+                                              .cuda();
+            emphasized_node_mask_ptr = reinterpret_cast<const bool*>(emphasized_node_mask_tensor.ptr<uint8_t>());
         }
 
         const GpuBoolMask visibility_mask(node_visibility_mask);
@@ -377,15 +376,14 @@ namespace lfs::rendering {
             num_transforms,
             selection_mask_ptr,
             screen_positions_ptr,
-            brush_active,
-            brush_x,
-            brush_y,
-            brush_radius,
-            brush_add_mode,
-            brush_selection_ptr,
-            brush_saturation_mode,
-            brush_saturation_amount,
-            selection_mode_rings,
+            cursor_active,
+            cursor_x,
+            cursor_y,
+            cursor_radius,
+            preview_selection_add_mode,
+            preview_selection_ptr,
+            cursor_saturation_preview,
+            cursor_saturation_amount,
             show_center_markers,
             crop_box_transform_ptr,
             crop_box_min_ptr,
@@ -398,18 +396,18 @@ namespace lfs::rendering {
             ellipsoid_inverse,
             ellipsoid_desaturate,
             ellipsoid_parent_node_index,
-            depth_filter_transform_ptr,
-            depth_filter_min_ptr,
-            depth_filter_max_ptr,
+            view_volume_transform_ptr,
+            view_volume_min_ptr,
+            view_volume_max_ptr,
             deleted_mask_ptr,
             hovered_depth_id,
-            highlight_gaussian_id,
-            selected_node_mask_ptr,
+            focused_gaussian_id,
+            emphasized_node_mask_ptr,
             num_selected_nodes,
-            desaturate_unselected,
+            dim_non_emphasized,
             visibility_mask.ptr,
             visibility_mask.count,
-            selection_flash_intensity,
+            emphasis_flash_intensity,
             orthographic,
             ortho_scale,
             mip_filter,

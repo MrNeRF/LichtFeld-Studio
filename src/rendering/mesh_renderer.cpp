@@ -467,9 +467,9 @@ namespace lfs::rendering {
             pbr_shader_->set_uniform("u_ambient", opts.ambient);
             pbr_shader_->set_uniform("u_has_vertex_colors", static_cast<int>(mesh.has_colors()));
 
-            pbr_shader_->set_uniform("u_is_selected", static_cast<int>(opts.is_selected));
-            pbr_shader_->set_uniform("u_desaturate_unselected", static_cast<int>(opts.desaturate_unselected));
-            pbr_shader_->set_uniform("u_selection_flash_intensity", opts.selection_flash_intensity);
+            pbr_shader_->set_uniform("u_is_emphasized", static_cast<int>(opts.is_emphasized));
+            pbr_shader_->set_uniform("u_dim_non_emphasized", static_cast<int>(opts.dim_non_emphasized));
+            pbr_shader_->set_uniform("u_flash_intensity", opts.flash_intensity);
 
             const bool shadow_active = opts.shadow_enabled && shadow_fbo_.get() && shadow_depth_texture_.get();
             pbr_shader_->set_uniform("u_shadow_enabled", static_cast<int>(shadow_active));

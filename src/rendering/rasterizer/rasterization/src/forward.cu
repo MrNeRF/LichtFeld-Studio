@@ -316,15 +316,14 @@ void lfs::rendering::forward(
     const int num_transforms,
     const uint8_t* selection_mask,
     float2* screen_positions_out,
-    bool brush_active,
-    float brush_x,
-    float brush_y,
-    float brush_radius,
-    bool brush_add_mode,
-    bool* brush_selection_out,
-    bool brush_saturation_mode,
-    float brush_saturation_amount,
-    bool selection_mode_rings,
+    bool cursor_active,
+    float cursor_x,
+    float cursor_y,
+    float cursor_radius,
+    bool preview_selection_add_mode,
+    bool* preview_selection_out,
+    bool cursor_saturation_preview,
+    float cursor_saturation_amount,
     bool show_center_markers,
     const float* crop_box_transform,
     const float3* crop_box_min,
@@ -337,18 +336,18 @@ void lfs::rendering::forward(
     bool ellipsoid_inverse,
     bool ellipsoid_desaturate,
     int ellipsoid_parent_node_index,
-    const float* depth_filter_transform,
-    const float3* depth_filter_min,
-    const float3* depth_filter_max,
+    const float* view_volume_transform,
+    const float3* view_volume_min,
+    const float3* view_volume_max,
     const bool* deleted_mask,
     unsigned long long* hovered_depth_id,
-    int highlight_gaussian_id,
-    const bool* selected_node_mask,
+    int focused_gaussian_id,
+    const bool* emphasized_node_mask,
     int num_selected_nodes,
-    bool desaturate_unselected,
+    bool dim_non_emphasized,
     const bool* node_visibility_mask,
     int num_visibility_nodes,
-    float selection_flash_intensity,
+    float emphasis_flash_intensity,
     bool orthographic,
     float ortho_scale,
     bool mip_filter,
@@ -432,15 +431,14 @@ void lfs::rendering::forward(
         transform_indices,
         num_transforms,
         selection_mask,
-        brush_active,
-        brush_x,
-        brush_y,
-        brush_radius * brush_radius, // Pass squared radius for efficient comparison
-        brush_add_mode,
-        brush_selection_out,
-        brush_saturation_mode,
-        brush_saturation_amount,
-        selection_mode_rings,
+        cursor_active,
+        cursor_x,
+        cursor_y,
+        cursor_radius * cursor_radius, // Pass squared radius for efficient comparison
+        preview_selection_add_mode,
+        preview_selection_out,
+        cursor_saturation_preview,
+        cursor_saturation_amount,
         crop_box_transform,
         crop_box_min,
         crop_box_max,
@@ -452,15 +450,15 @@ void lfs::rendering::forward(
         ellipsoid_inverse,
         ellipsoid_desaturate,
         ellipsoid_parent_node_index,
-        depth_filter_transform,
-        depth_filter_min,
-        depth_filter_max,
+        view_volume_transform,
+        view_volume_min,
+        view_volume_max,
         deleted_mask,
-        highlight_gaussian_id,
+        focused_gaussian_id,
         hovered_depth_id,
-        selected_node_mask,
+        emphasized_node_mask,
         num_selected_nodes,
-        desaturate_unselected,
+        dim_non_emphasized,
         node_visibility_mask,
         num_visibility_nodes,
         orthographic,
@@ -468,7 +466,7 @@ void lfs::rendering::forward(
         mip_filter);
     CHECK_CUDA(config::debug, "preprocess")
 
-    // Copy screen positions if requested (for brush tool selection)
+    // Copy screen positions if requested (for interactive overlay queries)
     // Note: When visibility filtering is active, screen positions are written directly
     // in the kernel using global_idx, so this copy is only needed without filtering
     if (screen_positions_out != nullptr && visible_indices == nullptr) {
@@ -477,8 +475,8 @@ void lfs::rendering::forward(
 
         // In desaturate mode, invalidate screen positions for outside gaussians
         // Check crop box desaturate, ellipsoid desaturate, and depth filter
-        const bool has_depth_filter = (depth_filter_transform != nullptr);
-        if (crop_desaturate || ellipsoid_desaturate || has_depth_filter) {
+        const bool has_view_volume = (view_volume_transform != nullptr);
+        if (crop_desaturate || ellipsoid_desaturate || has_view_volume) {
             constexpr int BLOCK = 256;
             const int grid_size = (n_primitives + BLOCK - 1) / BLOCK;
             invalidate_outside_crop_kernel<<<grid_size, BLOCK>>>(
@@ -572,9 +570,9 @@ void lfs::rendering::forward(
         show_rings,
         ring_width,
         show_center_markers,
-        selection_flash_intensity,
+        emphasis_flash_intensity,
         transform_indices,
-        selected_node_mask,
+        emphasized_node_mask,
         num_selected_nodes);
     CHECK_CUDA(config::debug, "blend")
 }

@@ -126,11 +126,11 @@ namespace lfs::vis {
             auto cameras = ctx.scene_manager->getScene().getVisibleCameras();
 
             if (!cameras.empty()) {
-                int highlight_index = -1;
+                int focused_index = -1;
                 if (ctx.hovered_camera_id >= 0) {
                     for (size_t i = 0; i < cameras.size(); ++i) {
                         if (cameras[i]->uid() == ctx.hovered_camera_id) {
-                            highlight_index = static_cast<int>(i);
+                            focused_index = static_cast<int>(i);
                             break;
                         }
                     }
@@ -142,28 +142,30 @@ namespace lfs::vis {
                     scene_transform = visible_transforms[0];
                 }
 
-                LOG_TRACE("Rendering {} camera frustums with scale {}, highlighted index: {} (ID: {})",
-                          cameras.size(), settings.camera_frustum_scale, highlight_index, ctx.hovered_camera_id);
+                LOG_TRACE("Rendering {} camera frustums with scale {}, focused index: {} (ID: {})",
+                          cameras.size(), settings.camera_frustum_scale, focused_index, ctx.hovered_camera_id);
 
                 auto disabled_uids = ctx.scene_manager->getScene().getTrainingDisabledCameraUids();
 
-                std::unordered_set<int> selected_uids;
+                std::unordered_set<int> emphasized_uids;
                 for (const auto& name : ctx.scene_manager->getSelectedNodeNames()) {
                     const auto* node = ctx.scene_manager->getScene().getNode(name);
                     if (node && node->type == core::NodeType::CAMERA && node->camera_uid >= 0)
-                        selected_uids.insert(node->camera_uid);
+                        emphasized_uids.insert(node->camera_uid);
                 }
 
-                auto frustum_result = engine.renderCameraFrustumsWithHighlight(
-                    cameras, viewport,
-                    settings.camera_frustum_scale,
-                    settings.train_camera_color,
-                    settings.eval_camera_color,
-                    highlight_index,
-                    scene_transform,
-                    settings.equirectangular,
-                    disabled_uids,
-                    selected_uids);
+                const lfs::rendering::CameraFrustumRenderRequest request{
+                    .viewport = viewport,
+                    .scale = settings.camera_frustum_scale,
+                    .train_color = settings.train_camera_color,
+                    .eval_color = settings.eval_camera_color,
+                    .focused_index = focused_index,
+                    .scene_transform = scene_transform,
+                    .equirectangular_view = settings.equirectangular,
+                    .disabled_uids = std::move(disabled_uids),
+                    .emphasized_uids = std::move(emphasized_uids)};
+
+                auto frustum_result = engine.renderCameraFrustums(cameras, request);
 
                 if (!frustum_result) {
                     LOG_ERROR("Failed to render camera frustums: {}", frustum_result.error());

@@ -262,14 +262,14 @@ namespace lfs::python {
                 if (!rm)
                     return;
                 core::Tensor* stroke = ss ? ss->getStrokeSelection() : nullptr;
-                rm->setBrushState(true, x, y, radius, add_mode, stroke);
+                rm->setCursorPreviewState(true, x, y, radius, add_mode, stroke);
             },
             nb::arg("x"), nb::arg("y"), nb::arg("radius"), nb::arg("add_mode") = true, "Draw brush circle overlay at (x, y)");
 
         sel.def(
             "clear_brush_state", []() {
                 if (auto* rm = get_rm()) {
-                    rm->clearBrushState();
+                    rm->clearCursorPreviewState();
                 }
             },
             "Clear brush circle overlay");
@@ -326,7 +326,7 @@ namespace lfs::python {
             "Clear lasso selection preview");
 
         // ─────────────────────────────────────────────────────────────────────
-        // SCREEN POSITIONS OUTPUT
+        // SCREEN POSITIONS
         // ─────────────────────────────────────────────────────────────────────
 
         sel.def(
@@ -361,7 +361,7 @@ namespace lfs::python {
                 configure_depth_filter(settings, enabled, depth_near, depth_far, frustum_half_width);
                 rm->updateSettings(settings);
             },
-            nb::arg("enabled"), nb::arg("depth_far") = 100.0f, nb::arg("frustum_half_width") = 50.0f, nb::arg("depth_near") = 0.0f, "Set selection depth filter in camera space. The first three positional arguments remain backward-compatible.");
+            nb::arg("enabled"), nb::arg("depth_far") = 100.0f, nb::arg("frustum_half_width") = 50.0f, nb::arg("depth_near") = 0.0f, "Set selection depth filter in camera space.");
 
         sel.def(
             "set_depth_filter_range", [](bool enabled, float depth_near, float depth_far, float frustum_half_width) {

@@ -9,7 +9,7 @@ namespace lfs::vis {
 
     namespace {
 
-        void applyViewportCropBox(lfs::rendering::ViewportRenderRequest& request, const FrameContext& ctx) {
+        void applyGaussianCropBox(lfs::rendering::GaussianFilterState& filters, const FrameContext& ctx) {
             if (!ctx.scene_manager || !(ctx.settings.use_crop_box || ctx.settings.show_crop_box)) {
                 return;
             }
@@ -24,18 +24,18 @@ namespace lfs::vis {
             }
 
             const auto& cb = cropboxes[idx];
-            request.crop_box = lfs::rendering::BoundingBox{
-                .min = cb.data->min,
-                .max = cb.data->max,
-                .transform = glm::inverse(cb.world_transform)};
-            request.crop_inverse = cb.data->inverse;
-            request.crop_desaturate =
-                ctx.settings.show_crop_box && !ctx.settings.use_crop_box && ctx.settings.desaturate_cropping;
-            request.crop_parent_node_index =
-                ctx.scene_manager->getScene().getVisibleNodeIndex(cb.parent_splat_id);
+            filters.crop_region = lfs::rendering::GaussianScopedBoxFilter{
+                .bounds =
+                    {.min = cb.data->min,
+                     .max = cb.data->max,
+                     .transform = glm::inverse(cb.world_transform)},
+                .inverse = cb.data->inverse,
+                .desaturate =
+                    ctx.settings.show_crop_box && !ctx.settings.use_crop_box && ctx.settings.desaturate_cropping,
+                .parent_node_index = ctx.scene_manager->getScene().getVisibleNodeIndex(cb.parent_splat_id)};
         }
 
-        void applyPointCloudCropBox(lfs::rendering::PointCloudRenderRequest& request, const FrameContext& ctx) {
+        void applyPointCloudCropBox(lfs::rendering::PointCloudFilterState& filters, const FrameContext& ctx) {
             if (!ctx.scene_manager || !(ctx.settings.use_crop_box || ctx.settings.show_crop_box)) {
                 return;
             }
@@ -50,16 +50,16 @@ namespace lfs::vis {
             }
 
             const auto& cb = cropboxes[idx];
-            request.crop_box = lfs::rendering::BoundingBox{
+            filters.crop_box = lfs::rendering::BoundingBox{
                 .min = cb.data->min,
                 .max = cb.data->max,
                 .transform = glm::inverse(cb.world_transform)};
-            request.crop_inverse = cb.data->inverse;
-            request.crop_desaturate =
+            filters.crop_inverse = cb.data->inverse;
+            filters.crop_desaturate =
                 ctx.settings.show_crop_box && !ctx.settings.use_crop_box && ctx.settings.desaturate_cropping;
         }
 
-        void applyViewportEllipsoid(lfs::rendering::ViewportRenderRequest& request, const FrameContext& ctx) {
+        void applyGaussianEllipsoid(lfs::rendering::GaussianFilterState& filters, const FrameContext& ctx) {
             if (!ctx.scene_manager || !(ctx.settings.use_ellipsoid || ctx.settings.show_ellipsoid)) {
                 return;
             }
@@ -74,24 +74,25 @@ namespace lfs::vis {
                 if (selected_ellipsoid_id != core::NULL_NODE && el.node_id != selected_ellipsoid_id) {
                     continue;
                 }
-                request.ellipsoid = lfs::rendering::Ellipsoid{
-                    .radii = el.data->radii,
-                    .transform = glm::inverse(el.world_transform)};
-                request.ellipsoid_inverse = el.data->inverse;
-                request.ellipsoid_desaturate = ctx.settings.show_ellipsoid &&
-                                               !ctx.settings.use_ellipsoid &&
-                                               ctx.settings.desaturate_cropping;
-                request.ellipsoid_parent_node_index = scene.getVisibleNodeIndex(el.parent_splat_id);
+                filters.ellipsoid_region = lfs::rendering::GaussianScopedEllipsoidFilter{
+                    .bounds =
+                        {.radii = el.data->radii,
+                         .transform = glm::inverse(el.world_transform)},
+                    .inverse = el.data->inverse,
+                    .desaturate = ctx.settings.show_ellipsoid &&
+                                   !ctx.settings.use_ellipsoid &&
+                                   ctx.settings.desaturate_cropping,
+                    .parent_node_index = scene.getVisibleNodeIndex(el.parent_splat_id)};
                 return;
             }
         }
 
-        void applyViewportDepthFilter(lfs::rendering::ViewportRenderRequest& request, const FrameContext& ctx) {
+        void applyGaussianViewVolume(lfs::rendering::GaussianFilterState& filters, const FrameContext& ctx) {
             if (!ctx.settings.depth_filter_enabled) {
                 return;
             }
 
-            request.depth_filter = lfs::rendering::BoundingBox{
+            filters.view_volume = lfs::rendering::BoundingBox{
                 .min = ctx.settings.depth_filter_min,
                 .max = ctx.settings.depth_filter_max,
                 .transform = ctx.settings.depth_filter_transform.inv().toMat4()};
@@ -110,61 +111,121 @@ namespace lfs::vis {
             .antialiasing = ctx.settings.antialiasing,
             .mip_filter = ctx.settings.mip_filter,
             .sh_degree = ctx.settings.sh_degree,
-            .point_cloud_mode = ctx.settings.point_cloud_mode,
-            .voxel_size = ctx.settings.voxel_size,
             .gut = ctx.settings.gut,
             .equirectangular = ctx.settings.equirectangular,
-            .show_rings = ctx.settings.show_rings,
-            .ring_width = ctx.settings.ring_width,
-            .show_center_markers = ctx.settings.show_center_markers,
-            .model_transforms = &ctx.scene_state.model_transforms,
-            .transform_indices = ctx.scene_state.transform_indices,
-            .selection_mask = ctx.scene_state.selection_mask,
-            .brush =
-                {.active = ctx.brush.active,
-                 .cursor = {ctx.brush.x, ctx.brush.y},
-                 .radius = ctx.brush.radius,
-                 .add_mode = ctx.brush.add_mode,
-                 .selection_tensor = ctx.brush.preview_selection ? ctx.brush.preview_selection
-                                                                 : ctx.brush.selection_tensor,
-                 .saturation_mode = ctx.brush.saturation_mode,
-                 .saturation_amount = ctx.brush.saturation_amount,
-                 .selection_mode_rings =
-                     (ctx.brush.selection_mode == lfs::rendering::SelectionMode::Rings)},
-            .crop_box = std::nullopt,
-            .ellipsoid = std::nullopt,
-            .depth_filter = std::nullopt,
-            .selected_node_mask = (ctx.settings.desaturate_unselected ||
-                                   ctx.selection_flash_intensity > 0.0f)
-                                      ? ctx.scene_state.selected_node_mask
-                                      : std::vector<bool>{},
-            .node_visibility_mask = ctx.scene_state.node_visibility_mask,
-            .desaturate_unselected = ctx.settings.desaturate_unselected,
-            .selection_flash_intensity = ctx.selection_flash_intensity,
-            .hovered_depth_id = nullptr,
-            .highlight_gaussian_id = (ctx.brush.selection_mode == lfs::rendering::SelectionMode::Rings)
-                                         ? ctx.hovered_gaussian_id
-                                         : -1};
+            .scene =
+                {.model_transforms = &ctx.scene_state.model_transforms,
+                 .transform_indices = ctx.scene_state.transform_indices,
+                 .node_visibility_mask = ctx.scene_state.node_visibility_mask},
+            .filters = {},
+            .overlay =
+                {.markers =
+                     {.show_rings = ctx.settings.show_rings,
+                      .ring_width = ctx.settings.ring_width,
+                      .show_center_markers = ctx.settings.show_center_markers},
+                 .cursor =
+                     {.enabled = ctx.cursor_preview.active,
+                      .cursor = {ctx.cursor_preview.x, ctx.cursor_preview.y},
+                      .radius = ctx.cursor_preview.radius,
+                      .saturation_preview = ctx.cursor_preview.saturation_mode,
+                      .saturation_amount = ctx.cursor_preview.saturation_amount},
+                 .emphasis =
+                     {.mask = ctx.scene_state.selection_mask,
+                      .transient_mask =
+                          {.mask = ctx.cursor_preview.preview_selection ? ctx.cursor_preview.preview_selection
+                                                                        : ctx.cursor_preview.selection_tensor,
+                           .additive = ctx.cursor_preview.add_mode},
+                      .emphasized_node_mask = (ctx.settings.desaturate_unselected ||
+                                               ctx.selection_flash_intensity > 0.0f)
+                                                  ? ctx.scene_state.selected_node_mask
+                                                  : std::vector<bool>{},
+                      .dim_non_emphasized = ctx.settings.desaturate_unselected,
+                      .flash_intensity = ctx.selection_flash_intensity,
+                      .focused_gaussian_id =
+                          (ctx.cursor_preview.selection_mode == SelectionPreviewMode::Rings)
+                              ? ctx.hovered_gaussian_id
+                              : -1}}};
 
-        applyViewportCropBox(request, ctx);
-        applyViewportEllipsoid(request, ctx);
-        applyViewportDepthFilter(request, ctx);
+        applyGaussianCropBox(request.filters, ctx);
+        applyGaussianEllipsoid(request.filters, ctx);
+        applyGaussianViewVolume(request.filters, ctx);
         return request;
     }
 
+    lfs::rendering::HoveredGaussianQueryRequest buildHoveredGaussianQueryRequest(
+        const FrameContext& ctx, const glm::ivec2 render_size) {
+        auto frame_view = ctx.makeFrameView();
+        frame_view.size = render_size;
+
+        lfs::rendering::HoveredGaussianQueryRequest request{
+            .frame_view = frame_view,
+            .scaling_modifier = ctx.settings.scaling_modifier,
+            .mip_filter = ctx.settings.mip_filter,
+            .sh_degree = ctx.settings.sh_degree,
+            .gut = ctx.settings.gut,
+            .equirectangular = ctx.settings.equirectangular,
+            .scene =
+                {.model_transforms = &ctx.scene_state.model_transforms,
+                 .transform_indices = ctx.scene_state.transform_indices,
+                 .node_visibility_mask = ctx.scene_state.node_visibility_mask},
+            .filters = {},
+            .cursor = {ctx.cursor_preview.x, ctx.cursor_preview.y},
+        };
+
+        applyGaussianCropBox(request.filters, ctx);
+        applyGaussianEllipsoid(request.filters, ctx);
+        applyGaussianViewVolume(request.filters, ctx);
+        return request;
+    }
+
+    lfs::rendering::SplitViewGaussianPanelRenderState buildSplitViewGaussianPanelRenderState(
+        const FrameContext& ctx, const glm::ivec2 render_size) {
+        const auto request = buildViewportRenderRequest(ctx, render_size);
+        return lfs::rendering::SplitViewGaussianPanelRenderState{
+            .frame_view = request.frame_view,
+            .scaling_modifier = request.scaling_modifier,
+            .antialiasing = request.antialiasing,
+            .mip_filter = request.mip_filter,
+            .sh_degree = request.sh_degree,
+            .gut = request.gut,
+            .equirectangular = request.equirectangular,
+            .filters = request.filters,
+            .overlay = request.overlay};
+    }
+
+    lfs::rendering::SplitViewPointCloudPanelRenderState buildSplitViewPointCloudPanelRenderState(
+        const FrameContext& ctx, const glm::ivec2 render_size) {
+        auto frame_view = ctx.makeFrameView();
+        frame_view.size = render_size;
+
+        lfs::rendering::SplitViewPointCloudPanelRenderState state{
+            .frame_view = frame_view,
+            .render =
+                {.scaling_modifier = ctx.settings.scaling_modifier,
+                 .voxel_size = ctx.settings.voxel_size,
+                 .equirectangular = ctx.settings.equirectangular},
+            .filters = {}};
+        applyPointCloudCropBox(state.filters, ctx);
+        return state;
+    }
+
     lfs::rendering::PointCloudRenderRequest buildPointCloudRenderRequest(
-        const FrameContext& ctx, const std::vector<glm::mat4>& model_transforms) {
-        const auto frame_view = ctx.makeFrameView();
+        const FrameContext& ctx, const glm::ivec2 render_size, const std::vector<glm::mat4>& model_transforms) {
+        auto frame_view = ctx.makeFrameView();
+        frame_view.size = render_size;
 
         lfs::rendering::PointCloudRenderRequest request{
             .frame_view = frame_view,
-            .scaling_modifier = ctx.settings.scaling_modifier,
-            .voxel_size = ctx.settings.voxel_size,
-            .equirectangular = ctx.settings.equirectangular,
-            .model_transforms = &model_transforms,
-            .crop_box = std::nullopt};
+            .render =
+                {.scaling_modifier = ctx.settings.scaling_modifier,
+                 .voxel_size = ctx.settings.voxel_size,
+                 .equirectangular = ctx.settings.equirectangular},
+            .scene =
+                {.model_transforms = &model_transforms,
+                 .transform_indices = ctx.scene_state.transform_indices},
+            .filters = {}};
 
-        applyPointCloudCropBox(request, ctx);
+        applyPointCloudCropBox(request.filters, ctx);
         return request;
     }
 

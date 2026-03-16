@@ -1,0 +1,242 @@
+/* SPDX-FileCopyrightText: 2025 LichtFeld Studio Authors
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#include "viewport_artifact_service.hpp"
+#include "core/cuda_debug.hpp"
+#include "rendering/rendering.hpp"
+#include <cuda_runtime.h>
+#include <glad/glad.h>
+#include <limits>
+
+namespace lfs::vis {
+
+    namespace {
+
+        [[nodiscard]] float linearizeDepthSample(const float depth_sample,
+                                                 const float near_plane,
+                                                 const float far_plane,
+                                                 const bool orthographic,
+                                                 const bool depth_is_ndc) {
+            if (!depth_is_ndc) {
+                return depth_sample < 1e9f ? depth_sample : -1.0f;
+            }
+
+            constexpr float DEPTH_BG_THRESHOLD = 0.9999f;
+            if (depth_sample >= DEPTH_BG_THRESHOLD) {
+                return -1.0f;
+            }
+
+            if (orthographic) {
+                return near_plane + depth_sample * (far_plane - near_plane);
+            }
+
+            const float z_ndc = depth_sample * 2.0f - 1.0f;
+            const float A = (far_plane + near_plane) / (far_plane - near_plane);
+            const float B = (2.0f * far_plane * near_plane) / (far_plane - near_plane);
+            return B / (A - z_ndc);
+        }
+
+    } // namespace
+
+    ViewportArtifactService::~ViewportArtifactService() {
+        if (depth_readback_fbo_ != 0) {
+            glDeleteFramebuffers(1, &depth_readback_fbo_);
+        }
+    }
+
+    bool ViewportArtifactService::hasGpuFrame() const {
+        return gpu_frame_ && gpu_frame_->valid();
+    }
+
+    bool ViewportArtifactService::hasViewportOutput() const {
+        return hasGpuFrame();
+    }
+
+    bool ViewportArtifactService::hasOutputArtifacts() const {
+        return (metadata_.depth && metadata_.depth->is_valid()) ||
+               (metadata_.depth_right && metadata_.depth_right->is_valid()) ||
+               hasGpuFrame() ||
+               rendered_size_.x > 0 ||
+               rendered_size_.y > 0;
+    }
+
+    std::shared_ptr<lfs::core::Tensor> ViewportArtifactService::getCapturedImageIfCurrent() const {
+        if (captured_image_ && captured_artifact_generation_ == artifact_generation_) {
+            return captured_image_;
+        }
+        return {};
+    }
+
+    void ViewportArtifactService::invalidateCapture() {
+        captured_image_.reset();
+        captured_artifact_generation_ = 0;
+        ++artifact_generation_;
+        if (artifact_generation_ == 0) {
+            artifact_generation_ = 1;
+        }
+    }
+
+    void ViewportArtifactService::clearViewportOutput() {
+        metadata_ = {};
+        gpu_frame_.reset();
+        rendered_size_ = {0, 0};
+        invalidateCapture();
+    }
+
+    void ViewportArtifactService::updateFromFrameResources(const FrameResources& resources,
+                                                           const bool viewport_output_updated) {
+        metadata_ = resources.cached_metadata;
+        gpu_frame_ = resources.cached_gpu_frame;
+        rendered_size_ = resources.cached_result_size;
+        if (viewport_output_updated) {
+            invalidateCapture();
+        }
+    }
+
+    void ViewportArtifactService::storeCapturedImage(std::shared_ptr<lfs::core::Tensor> image) {
+        captured_image_ = std::move(image);
+        captured_artifact_generation_ = artifact_generation_;
+    }
+
+    float ViewportArtifactService::sampleLinearDepthAt(
+        const int x,
+        const int y,
+        const glm::ivec2& fallback_viewport_size,
+        const lfs::rendering::RenderingEngine* const engine) const {
+        int viewport_width = rendered_size_.x;
+        int viewport_height = rendered_size_.y;
+        if (viewport_width <= 0 || viewport_height <= 0) {
+            viewport_width = fallback_viewport_size.x;
+            viewport_height = fallback_viewport_size.y;
+            if (viewport_width <= 0 || viewport_height <= 0) {
+                return -1.0f;
+            }
+        }
+
+        float splat_depth = -1.0f;
+
+        const float active_near_plane =
+            (gpu_frame_ && gpu_frame_->valid()) ? gpu_frame_->near_plane
+                                                : (metadata_.valid ? metadata_.near_plane
+                                                                   : lfs::rendering::DEFAULT_NEAR_PLANE);
+        const float active_far_plane =
+            (gpu_frame_ && gpu_frame_->valid()) ? gpu_frame_->far_plane
+                                                : (metadata_.valid ? metadata_.far_plane
+                                                                   : lfs::rendering::DEFAULT_FAR_PLANE);
+        const bool active_orthographic =
+            (gpu_frame_ && gpu_frame_->valid()) ? gpu_frame_->orthographic
+                                                : metadata_.orthographic;
+
+        if (metadata_.valid) {
+            const lfs::core::Tensor* depth_ptr = nullptr;
+
+            if (metadata_.split_position > 0.0f &&
+                metadata_.depth && metadata_.depth->is_valid()) {
+                const float normalized_x = static_cast<float>(x) / static_cast<float>(viewport_width);
+
+                if (normalized_x >= metadata_.split_position &&
+                    metadata_.depth_right && metadata_.depth_right->is_valid()) {
+                    depth_ptr = metadata_.depth_right.get();
+                } else {
+                    depth_ptr = metadata_.depth.get();
+                }
+            } else if (metadata_.depth && metadata_.depth->is_valid()) {
+                depth_ptr = metadata_.depth.get();
+            }
+
+            if (depth_ptr && depth_ptr->ndim() == 3) {
+                const int depth_height = static_cast<int>(depth_ptr->size(1));
+                const int depth_width = static_cast<int>(depth_ptr->size(2));
+
+                int scaled_x = x;
+                int scaled_y = y;
+                if (depth_width != viewport_width || depth_height != viewport_height) {
+                    scaled_x = static_cast<int>(static_cast<float>(x) * depth_width / viewport_width);
+                    scaled_y = static_cast<int>(static_cast<float>(y) * depth_height / viewport_height);
+                }
+
+                if (scaled_x >= 0 && scaled_x < depth_width && scaled_y >= 0 && scaled_y < depth_height) {
+                    float d;
+                    const float* gpu_ptr = depth_ptr->ptr<float>() + scaled_y * depth_width + scaled_x;
+                    CHECK_CUDA(cudaMemcpy(&d, gpu_ptr, sizeof(float), cudaMemcpyDeviceToHost));
+                    splat_depth = linearizeDepthSample(
+                        d, active_near_plane, active_far_plane, active_orthographic, metadata_.depth_is_ndc);
+                }
+            }
+        }
+
+        if (splat_depth <= 0.0f && gpu_frame_ && gpu_frame_->valid() && gpu_frame_->depth.valid()) {
+            splat_depth = readLinearDepth(*gpu_frame_, x, y, viewport_height);
+        }
+
+        float mesh_depth = -1.0f;
+        if (engine && engine->hasMeshRender()) {
+            const GLuint mesh_fbo = engine->getMeshFramebuffer();
+            if (mesh_fbo != 0 && x >= 0 && x < viewport_width && y >= 0 && y < viewport_height) {
+                float ndc_depth = 1.0f;
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, mesh_fbo);
+                glReadPixels(x, viewport_height - 1 - y, 1, 1,
+                             GL_DEPTH_COMPONENT, GL_FLOAT, &ndc_depth);
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+
+                constexpr float DEPTH_BG_THRESHOLD = 0.9999f;
+                if (ndc_depth < DEPTH_BG_THRESHOLD) {
+                    mesh_depth = linearizeDepthSample(
+                        ndc_depth, active_near_plane, active_far_plane, active_orthographic, true);
+                }
+            }
+        }
+
+        if (splat_depth > 0.0f && mesh_depth > 0.0f) {
+            return std::min(splat_depth, mesh_depth);
+        }
+        if (splat_depth > 0.0f) {
+            return splat_depth;
+        }
+        if (mesh_depth > 0.0f) {
+            return mesh_depth;
+        }
+        return -1.0f;
+    }
+
+    float ViewportArtifactService::readLinearDepth(const lfs::rendering::GpuFrame& frame,
+                                                   const int x,
+                                                   const int y,
+                                                   const int viewport_height) const {
+        if (!frame.valid() || !frame.depth.valid() || x < 0 || y < 0 || y >= viewport_height) {
+            return -1.0f;
+        }
+
+        if (depth_readback_fbo_ == 0) {
+            glGenFramebuffers(1, &depth_readback_fbo_);
+        }
+        if (depth_readback_fbo_ == 0) {
+            return -1.0f;
+        }
+
+        GLint saved_fbo = 0;
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &saved_fbo);
+
+        glBindFramebuffer(GL_FRAMEBUFFER, depth_readback_fbo_);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, frame.depth.id, 0);
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+
+        float linear_depth = -1.0f;
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+            float raw_depth = frame.depth_is_ndc ? 1.0f : std::numeric_limits<float>::infinity();
+            glReadPixels(x, viewport_height - 1 - y, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &raw_depth);
+            linear_depth = linearizeDepthSample(
+                raw_depth,
+                frame.near_plane,
+                frame.far_plane,
+                frame.orthographic,
+                frame.depth_is_ndc);
+        }
+
+        glBindFramebuffer(GL_FRAMEBUFFER, saved_fbo);
+        return linear_depth;
+    }
+
+} // namespace lfs::vis

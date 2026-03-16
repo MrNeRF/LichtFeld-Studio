@@ -12,7 +12,6 @@ namespace lfs::vis {
     class SplatRasterPass final : public RenderPass {
     public:
         SplatRasterPass() = default;
-        ~SplatRasterPass() override;
 
         [[nodiscard]] const char* name() const override { return "SplatRasterPass"; }
         [[nodiscard]] DirtyMask sensitivity() const override {
@@ -29,14 +28,6 @@ namespace lfs::vis {
     private:
         void renderToTexture(lfs::rendering::RenderingEngine& engine,
                              const FrameContext& ctx, FrameResources& res);
-
-        unsigned long long* d_hovered_depth_id_ = nullptr;
-
-        // Async hover readback (1-frame latency)
-        unsigned long long* h_hovered_depth_id_ = nullptr;
-        unsigned long long last_hovered_result_ = 0xFFFFFFFFFFFFFFFFULL;
-        cudaEvent_t readback_event_ = nullptr;
-        bool readback_pending_ = false;
     };
 
 } // namespace lfs::vis

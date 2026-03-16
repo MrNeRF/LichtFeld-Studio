@@ -20,6 +20,14 @@ namespace lfs::vis {
         GTComparison
     };
 
+    enum class SelectionPreviewMode {
+        Centers,
+        Rectangle,
+        Polygon,
+        Lasso,
+        Rings
+    };
+
     struct PPISPOverrides {
         // Exposure (Section 4.1)
         float exposure_offset = 0.0f; // EV stops (-3 to +3)

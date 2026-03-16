@@ -23,7 +23,7 @@ namespace lfs::vis {
 
     class SceneManager;
 
-    struct BrushState {
+    struct CursorPreviewState {
         bool active = false;
         float x = 0, y = 0, radius = 0;
         bool add_mode = true;
@@ -31,7 +31,7 @@ namespace lfs::vis {
         lfs::core::Tensor* preview_selection = nullptr;
         bool saturation_mode = false;
         float saturation_amount = 0;
-        lfs::rendering::SelectionMode selection_mode{};
+        SelectionPreviewMode selection_mode{};
     };
 
     struct GizmoState {
@@ -56,7 +56,7 @@ namespace lfs::vis {
         glm::ivec2 viewport_pos;
         DirtyMask frame_dirty = 0;
 
-        BrushState brush;
+        CursorPreviewState cursor_preview;
         GizmoState gizmo;
         int hovered_camera_id = -1;
         int current_camera_id = -1;

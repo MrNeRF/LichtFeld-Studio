@@ -30,9 +30,9 @@ uniform bool u_shadow_enabled;
 uniform sampler2DShadow u_shadow_map;
 uniform mat4 u_light_vp;
 
-uniform bool u_is_selected;
-uniform bool u_desaturate_unselected;
-uniform float u_selection_flash_intensity;
+uniform bool u_is_emphasized;
+uniform bool u_dim_non_emphasized;
+uniform float u_flash_intensity;
 
 layout(location = 0) out vec4 frag_color;
 
@@ -136,13 +136,13 @@ void main() {
     color = color / (color + vec3(1.0));
     color = pow(color, vec3(1.0 / 2.2));
 
-    if (u_desaturate_unselected && !u_is_selected) {
+    if (u_dim_non_emphasized && !u_is_emphasized) {
         float luma = dot(color, vec3(0.2126, 0.7152, 0.0722));
         color = mix(color, vec3(luma), 0.6);
     }
-    if (u_is_selected && u_selection_flash_intensity > 0.0) {
+    if (u_is_emphasized && u_flash_intensity > 0.0) {
         vec3 flash_color = vec3(1.0, 0.95, 0.6);
-        color = mix(color, flash_color, u_selection_flash_intensity * 0.5);
+        color = mix(color, flash_color, u_flash_intensity * 0.5);
     }
 
     frag_color = vec4(color, albedo.a);

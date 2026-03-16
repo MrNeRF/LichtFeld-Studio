@@ -239,10 +239,10 @@ namespace lfs::vis::tools {
             return;
         }
 
-        auto selection_mode = lfs::rendering::SelectionMode::Centers;
+        auto selection_mode = lfs::vis::SelectionPreviewMode::Centers;
         const auto* const rm = tool_context_->getRenderingManager();
         if (rm) {
-            selection_mode = rm->getSelectionMode();
+            selection_mode = rm->getSelectionPreviewMode();
         }
 
         ImDrawList* const draw_list = ImGui::GetForegroundDrawList();
@@ -269,7 +269,7 @@ namespace lfs::vis::tools {
 
         static char label_buf[32];
         float text_offset = 15.0f;
-        if (selection_mode == lfs::rendering::SelectionMode::Centers) {
+        if (selection_mode == lfs::vis::SelectionPreviewMode::Centers) {
             draw_list->AddCircle(mouse_pos, brush_radius_, t.selection_border_u32(), 32, 2.0f);
             draw_list->AddCircleFilled(mouse_pos, 3.0f, t.selection_border_u32());
             snprintf(label_buf, sizeof(label_buf), "SEL%s", op_suffix);
@@ -283,10 +283,10 @@ namespace lfs::vis::tools {
 
             const char* mode_name = "";
             switch (selection_mode) {
-            case lfs::rendering::SelectionMode::Rings: mode_name = "RING"; break;
-            case lfs::rendering::SelectionMode::Rectangle: mode_name = "RECT"; break;
-            case lfs::rendering::SelectionMode::Polygon: mode_name = "POLY"; break;
-            case lfs::rendering::SelectionMode::Lasso: mode_name = "LASSO"; break;
+            case lfs::vis::SelectionPreviewMode::Rings: mode_name = "RING"; break;
+            case lfs::vis::SelectionPreviewMode::Rectangle: mode_name = "RECT"; break;
+            case lfs::vis::SelectionPreviewMode::Polygon: mode_name = "POLY"; break;
+            case lfs::vis::SelectionPreviewMode::Lasso: mode_name = "LASSO"; break;
             default: break;
             }
             snprintf(label_buf, sizeof(label_buf), "%s%s", mode_name, op_suffix);
