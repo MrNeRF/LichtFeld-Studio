@@ -56,12 +56,12 @@ namespace lfs::vis::gui {
         inline const float* computeSnapPtr(float* buf, ImGuizmo::OPERATION op) {
             if (!ImGui::GetIO().KeyCtrl)
                 return nullptr;
-            if (op == ImGuizmo::ROTATE)
+            if (op & ImGuizmo::ROTATE)
                 buf[0] = ROTATION_SNAP_DEGREES;
             else if (op & ImGuizmo::TRANSLATE)
                 buf[0] = buf[1] = buf[2] = TRANSLATE_SNAP_UNITS;
             else if (op & ImGuizmo::SCALE)
-                buf[0] = SCALE_SNAP_RATIO;
+                buf[0] = buf[1] = buf[2] = SCALE_SNAP_RATIO;
             return buf;
         }
     } // namespace
