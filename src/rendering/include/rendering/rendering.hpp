@@ -34,8 +34,9 @@ namespace lfs::rendering {
     template <typename T>
     using Result = std::expected<T, std::string>;
 
-    // Legacy render boundary.
-    // Do not add new editor workflow semantics here during the refactor.
+    // Public renderer-facing boundary.
+    // Keep editor workflow semantics constrained to explicit compatibility
+    // request types while the internal legacy layer is retired.
     // New renderer-facing work should prefer frame_contract.hpp.
 
     enum class SelectionMode {
@@ -73,14 +74,23 @@ namespace lfs::rendering {
         glm::mat4 transform{1.0f};
     };
 
-    struct RenderRequest {
-        ViewportData viewport;
+    struct BrushRenderState {
+        bool active = false;
+        glm::vec2 cursor{0.0f, 0.0f};
+        float radius = 0.0f;
+        bool add_mode = true;
+        lfs::core::Tensor* selection_tensor = nullptr;
+        bool saturation_mode = false;
+        float saturation_amount = 0.0f;
+        bool selection_mode_rings = false;
+    };
+
+    struct ViewportRenderRequest {
+        FrameView frame_view;
         float scaling_modifier = 1.0f;
         bool antialiasing = false;
         bool mip_filter = false;
         int sh_degree = 3;
-        glm::vec3 background_color{0.0f, 0.0f, 0.0f};
-        std::optional<BoundingBox> crop_box;
         bool point_cloud_mode = false;
         float voxel_size = 0.01f;
         bool gut = false;
@@ -88,47 +98,40 @@ namespace lfs::rendering {
         bool show_rings = false;
         float ring_width = 0.002f;
         bool show_center_markers = false;
-        // Per-node transforms: array of 4x4 matrices and per-Gaussian indices
-        const std::vector<glm::mat4>* model_transforms = nullptr; // Array of transforms, one per node
-        std::shared_ptr<lfs::core::Tensor> transform_indices;     // Per-Gaussian index [N], nullable
-        // Selection mask for highlighting selected Gaussians
-        std::shared_ptr<lfs::core::Tensor> selection_mask; // Per-Gaussian uint8 [N], nullable (1 = selected, 0 = not)
-        // Request screen positions output for brush tool
+        const std::vector<glm::mat4>* model_transforms = nullptr;
+        std::shared_ptr<lfs::core::Tensor> transform_indices;
+        std::shared_ptr<lfs::core::Tensor> selection_mask;
         bool output_screen_positions = false;
-        // Brush selection (computed in preprocess for coordinate consistency)
-        bool brush_active = false;  // Whether brush selection is active this frame
-        float brush_x = 0.0f;       // Brush center X in screen coords
-        float brush_y = 0.0f;       // Brush center Y in screen coords
-        float brush_radius = 0.0f;  // Brush radius in pixels
-        bool brush_add_mode = true; // true = add to selection, false = remove from selection
-        lfs::core::Tensor* brush_selection_tensor = nullptr;
-        bool brush_saturation_mode = false;
-        float brush_saturation_amount = 0.0f;
-        bool selection_mode_rings = false;
+        BrushRenderState brush;
+        std::optional<BoundingBox> crop_box;
         bool crop_inverse = false;
         bool crop_desaturate = false;
         int crop_parent_node_index = -1;
-        // Ellipsoid crop (data comes from scene graph EllipsoidData)
         std::optional<Ellipsoid> ellipsoid;
         bool ellipsoid_inverse = false;
         bool ellipsoid_desaturate = false;
         int ellipsoid_parent_node_index = -1;
-        // Depth filter for selection tool (separate from crop box, always desaturates outside)
         std::optional<BoundingBox> depth_filter;
-        // Per-node selection mask: true = selected. Empty = no selection effects.
         std::vector<bool> selected_node_mask;
-        std::vector<bool> node_visibility_mask; // Per-node visibility for culling (consolidated models)
+        std::vector<bool> node_visibility_mask;
         bool desaturate_unselected = false;
         float selection_flash_intensity = 0.0f;
         unsigned long long* hovered_depth_id = nullptr;
         int highlight_gaussian_id = -1;
-        float far_plane = DEFAULT_FAR_PLANE;
-        bool orthographic = false;  // Use orthographic projection instead of perspective
-        float ortho_scale = 100.0f; // Pixels per world unit for orthographic projection
     };
 
-    struct RenderResult {
-        std::shared_ptr<lfs::core::Tensor> image;
+    struct PointCloudRenderRequest {
+        FrameView frame_view;
+        float scaling_modifier = 1.0f;
+        float voxel_size = 0.01f;
+        bool equirectangular = false;
+        const std::vector<glm::mat4>* model_transforms = nullptr;
+        std::optional<BoundingBox> crop_box;
+        bool crop_inverse = false;
+        bool crop_desaturate = false;
+    };
+
+    struct FrameMetadata {
         std::shared_ptr<lfs::core::Tensor> depth;
         std::shared_ptr<lfs::core::Tensor> depth_right;      // For split view: depth from right panel
         std::shared_ptr<lfs::core::Tensor> screen_positions; // Optional: screen positions [N, 2] for brush tool
@@ -142,9 +145,57 @@ namespace lfs::rendering {
         float split_position = -1.0f; // For split view: normalized split position (-1 = not split view)
     };
 
+    struct ViewportFrameResult {
+        GpuFrame frame;
+        std::shared_ptr<lfs::core::Tensor> image;
+        FrameMetadata metadata;
+    };
+
     struct SplitViewFrameResult {
         GpuFrame frame;
-        RenderResult metadata;
+        FrameMetadata metadata;
+    };
+
+    struct GaussianImageRequest {
+        FrameView frame_view;
+        float scaling_modifier = 1.0f;
+        bool antialiasing = false;
+        bool mip_filter = false;
+        int sh_degree = 3;
+        bool equirectangular = false;
+    };
+
+    struct GaussianScreenPositionRequest {
+        FrameView frame_view;
+        float scaling_modifier = 1.0f;
+        bool antialiasing = false;
+        bool mip_filter = false;
+        int sh_degree = 3;
+        bool equirectangular = false;
+        const std::vector<glm::mat4>* model_transforms = nullptr;
+        std::shared_ptr<lfs::core::Tensor> transform_indices;
+        std::vector<bool> node_visibility_mask;
+    };
+
+    struct GaussianPickingRequest {
+        FrameView frame_view;
+        float scaling_modifier = 1.0f;
+        bool antialiasing = false;
+        bool mip_filter = false;
+        int sh_degree = 3;
+        bool equirectangular = false;
+        const std::vector<glm::mat4>* model_transforms = nullptr;
+        std::shared_ptr<lfs::core::Tensor> transform_indices;
+        std::vector<bool> node_visibility_mask;
+        std::optional<BoundingBox> crop_box;
+        bool crop_inverse = false;
+        int crop_parent_node_index = -1;
+        std::optional<Ellipsoid> ellipsoid;
+        bool ellipsoid_inverse = false;
+        int ellipsoid_parent_node_index = -1;
+        std::optional<BoundingBox> depth_filter;
+        glm::vec2 cursor_pos{0.0f, 0.0f};
+        unsigned long long* hovered_depth_id = nullptr;
     };
 
     // Split view support
@@ -280,23 +331,27 @@ namespace lfs::rendering {
         virtual void shutdown() = 0;
         virtual bool isInitialized() const = 0;
 
-        // Core rendering with error handling
-        virtual Result<RenderResult> renderGaussians(
+        // Explicit Gaussian outputs. These are compatibility surfaces for export,
+        // workflow, and selection paths that still require tensor/metadata outputs.
+        virtual Result<std::shared_ptr<lfs::core::Tensor>> renderGaussianImage(
             const lfs::core::SplatData& splat_data,
-            const RenderRequest& request) = 0;
+            const GaussianImageRequest& request) = 0;
 
-        // Point cloud rendering (for pre-training visualization)
-        virtual Result<RenderResult> renderPointCloud(
-            const lfs::core::PointCloud& point_cloud,
-            const RenderRequest& request) = 0;
+        virtual Result<std::shared_ptr<lfs::core::Tensor>> renderGaussianScreenPositions(
+            const lfs::core::SplatData& splat_data,
+            const GaussianScreenPositionRequest& request) = 0;
+
+        virtual Result<void> renderGaussianPickingPass(
+            const lfs::core::SplatData& splat_data,
+            const GaussianPickingRequest& request) = 0;
+
+        virtual Result<ViewportFrameResult> renderGaussiansViewportFrame(
+            const lfs::core::SplatData& splat_data,
+            const ViewportRenderRequest& request) = 0;
 
         virtual Result<GpuFrame> renderPointCloudGpuFrame(
             const lfs::core::PointCloud& point_cloud,
-            const RenderRequest& request) = 0;
-
-        // Split view rendering
-        virtual Result<RenderResult> renderSplitView(
-            const SplitViewRequest& request) = 0;
+            const PointCloudRenderRequest& request) = 0;
 
         virtual Result<SplitViewFrameResult> renderSplitViewGpuFrame(
             const SplitViewRequest& request) = 0;
@@ -314,12 +369,9 @@ namespace lfs::rendering {
         virtual bool hasMeshRender() const = 0;
         virtual void resetMeshFrameState() = 0;
 
-        virtual Result<void> compositeMeshAndSplat(
-            const RenderResult& splat_result,
-            const glm::ivec2& viewport_size) = 0;
-
         virtual Result<GpuFrame> materializeGpuFrame(
-            const RenderResult& result,
+            const std::shared_ptr<lfs::core::Tensor>& image,
+            const FrameMetadata& metadata,
             const glm::ivec2& viewport_size) = 0;
 
         virtual Result<std::shared_ptr<lfs::core::Tensor>> readbackGpuFrameColor(
@@ -330,12 +382,6 @@ namespace lfs::rendering {
             const glm::ivec2& viewport_size) = 0;
 
         virtual Result<void> presentMeshOnly() = 0;
-
-        // Present to screen
-        virtual Result<void> presentToScreen(
-            const RenderResult& result,
-            const glm::ivec2& viewport_pos,
-            const glm::ivec2& viewport_size) = 0;
 
         virtual Result<void> presentGpuFrame(
             const GpuFrame& frame,

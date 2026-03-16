@@ -126,7 +126,7 @@ namespace lfs::vis {
             render_size = res.gt_context->dimensions;
         }
 
-        auto request = buildLegacyGaussianRenderRequest(ctx, render_size);
+        auto request = buildViewportRenderRequest(ctx, render_size);
 
         const bool need_hovered_output = (ctx.brush.selection_mode == lfs::rendering::SelectionMode::Rings) && ctx.brush.active;
         if (need_hovered_output) {
@@ -154,9 +154,11 @@ namespace lfs::vis {
 
         auto render_lock = acquireRenderLock(ctx);
 
-        auto render_result = engine.renderGaussians(*ctx.model, request);
+        auto viewport_frame = engine.renderGaussiansViewportFrame(*ctx.model, request);
 
-        if (render_result && render_result->image && settings.apply_appearance_correction) {
+        bool needs_gpu_frame_refresh = false;
+
+        if (viewport_frame && viewport_frame->image && settings.apply_appearance_correction) {
             bool applied = false;
 
             if (const auto* tm = ctx.scene_manager ? ctx.scene_manager->getTrainerManager() : nullptr) {
@@ -172,9 +174,10 @@ namespace lfs::vis {
                     }
                     const bool use_controller = (settings.ppisp_mode == RenderSettings::PPISPMode::AUTO);
                     auto corrected = trainer->applyPPISPForViewport(
-                        *render_result->image, ctx.current_camera_id, trainer_overrides, use_controller);
-                    render_result->image = std::make_shared<lfs::core::Tensor>(std::move(corrected));
+                        *viewport_frame->image, ctx.current_camera_id, trainer_overrides, use_controller);
+                    viewport_frame->image = std::make_shared<lfs::core::Tensor>(std::move(corrected));
                     applied = true;
+                    needs_gpu_frame_refresh = true;
                 }
             }
 
@@ -185,9 +188,10 @@ namespace lfs::vis {
                                                 : PPISPOverrides{};
                     const bool use_controller = (settings.ppisp_mode == RenderSettings::PPISPMode::AUTO);
                     auto corrected = applyStandaloneAppearance(
-                        *render_result->image, *ctx.scene_manager, ctx.current_camera_id, overrides, use_controller);
+                        *viewport_frame->image, *ctx.scene_manager, ctx.current_camera_id, overrides, use_controller);
                     if (corrected.is_valid()) {
-                        render_result->image = std::make_shared<lfs::core::Tensor>(std::move(corrected));
+                        viewport_frame->image = std::make_shared<lfs::core::Tensor>(std::move(corrected));
+                        needs_gpu_frame_refresh = true;
                     }
                 }
             }
@@ -195,9 +199,23 @@ namespace lfs::vis {
 
         render_lock.reset();
 
-        if (render_result) {
-            res.cached_result = *render_result;
-            res.cached_gpu_frame.reset();
+        if (viewport_frame) {
+            if (needs_gpu_frame_refresh) {
+                auto refreshed_gpu_frame = engine.materializeGpuFrame(
+                    viewport_frame->image, viewport_frame->metadata, render_size);
+                if (!refreshed_gpu_frame) {
+                    LOG_ERROR("Failed to refresh gaussian GPU frame after appearance correction: {}",
+                              refreshed_gpu_frame.error());
+                    res.cached_metadata = {};
+                    res.cached_gpu_frame.reset();
+                    res.cached_result_size = {0, 0};
+                    return;
+                }
+                viewport_frame->frame = *refreshed_gpu_frame;
+            }
+
+            res.cached_metadata = makeCachedRenderMetadata(viewport_frame->metadata);
+            res.cached_gpu_frame = viewport_frame->frame;
 
             if (need_hovered_output) {
                 // Start async readback — result available next frame
@@ -215,16 +233,9 @@ namespace lfs::vis {
             }
 
             res.cached_result_size = render_size;
-            const auto gpu_frame_result = engine.materializeGpuFrame(res.cached_result, render_size);
-            res.render_texture_valid = gpu_frame_result.has_value();
-            if (gpu_frame_result) {
-                res.cached_gpu_frame = *gpu_frame_result;
-            } else {
-                LOG_ERROR("Failed to materialize gaussian GPU frame: {}", gpu_frame_result.error());
-            }
         } else {
-            LOG_ERROR("Failed to render gaussians: {}", render_result.error());
-            res.render_texture_valid = false;
+            LOG_ERROR("Failed to render gaussians: {}", viewport_frame.error());
+            res.cached_metadata = {};
             res.cached_gpu_frame.reset();
             res.cached_result_size = {0, 0};
         }

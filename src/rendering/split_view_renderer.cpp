@@ -11,11 +11,11 @@
 namespace lfs::rendering {
 
     namespace {
-        [[nodiscard]] RenderResult buildSplitViewMetadata(
+        [[nodiscard]] FrameMetadata buildSplitViewMetadata(
             std::optional<RenderingPipeline::RenderResult>& left_render_result,
             std::optional<RenderingPipeline::RenderResult>& right_render_result,
             const float split_position) {
-            RenderResult result{
+            FrameMetadata result{
                 .depth = (left_render_result && left_render_result->depth.is_valid())
                              ? std::make_shared<lfs::core::Tensor>(std::move(left_render_result->depth))
                              : nullptr,
@@ -266,21 +266,6 @@ namespace lfs::rendering {
 
         framebuffer.unbind();
         return std::nullopt;
-    }
-
-    Result<RenderResult> SplitViewRenderer::render(
-        const SplitViewRequest& request,
-        RenderTargetPool& render_target_pool,
-        RenderingPipeline& pipeline,
-        ScreenQuadRenderer& screen_renderer,
-        ManagedShader& quad_shader) {
-
-        auto frame_result = renderGpuFrame(request, render_target_pool, pipeline, screen_renderer, quad_shader);
-        if (!frame_result) {
-            return std::unexpected(frame_result.error());
-        }
-
-        return std::move(frame_result->metadata);
     }
 
     Result<SplitViewFrameResult> SplitViewRenderer::renderGpuFrame(

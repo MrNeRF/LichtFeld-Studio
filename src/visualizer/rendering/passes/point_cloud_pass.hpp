@@ -34,7 +34,7 @@ namespace lfs::vis {
                              FrameResources& res,
                              const lfs::core::PointCloud& point_cloud,
                              const std::vector<glm::mat4>& pc_transforms,
-                             const lfs::rendering::RenderRequest& request,
+                             const lfs::rendering::PointCloudRenderRequest& request,
                              glm::ivec2 render_size);
 
         std::unique_ptr<lfs::core::PointCloud> cached_filtered_point_cloud_;

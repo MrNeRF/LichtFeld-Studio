@@ -32,20 +32,25 @@ namespace lfs::rendering {
         void shutdown() override;
         bool isInitialized() const override;
 
-        Result<RenderResult> renderGaussians(
+        Result<std::shared_ptr<lfs::core::Tensor>> renderGaussianImage(
             const lfs::core::SplatData& splat_data,
-            const RenderRequest& request) override;
+            const GaussianImageRequest& request) override;
 
-        Result<RenderResult> renderPointCloud(
-            const lfs::core::PointCloud& point_cloud,
-            const RenderRequest& request) override;
+        Result<std::shared_ptr<lfs::core::Tensor>> renderGaussianScreenPositions(
+            const lfs::core::SplatData& splat_data,
+            const GaussianScreenPositionRequest& request) override;
+
+        Result<void> renderGaussianPickingPass(
+            const lfs::core::SplatData& splat_data,
+            const GaussianPickingRequest& request) override;
+
+        Result<ViewportFrameResult> renderGaussiansViewportFrame(
+            const lfs::core::SplatData& splat_data,
+            const ViewportRenderRequest& request) override;
 
         Result<GpuFrame> renderPointCloudGpuFrame(
             const lfs::core::PointCloud& point_cloud,
-            const RenderRequest& request) override;
-
-        Result<RenderResult> renderSplitView(
-            const SplitViewRequest& request) override;
+            const PointCloudRenderRequest& request) override;
 
         Result<SplitViewFrameResult> renderSplitViewGpuFrame(
             const SplitViewRequest& request) override;
@@ -63,12 +68,9 @@ namespace lfs::rendering {
         bool hasMeshRender() const override;
         void resetMeshFrameState() override { mesh_rendered_this_frame_ = false; }
 
-        Result<void> compositeMeshAndSplat(
-            const RenderResult& splat_result,
-            const glm::ivec2& viewport_size) override;
-
         Result<GpuFrame> materializeGpuFrame(
-            const RenderResult& result,
+            const std::shared_ptr<lfs::core::Tensor>& image,
+            const FrameMetadata& metadata,
             const glm::ivec2& viewport_size) override;
 
         Result<std::shared_ptr<lfs::core::Tensor>> readbackGpuFrameColor(
@@ -79,11 +81,6 @@ namespace lfs::rendering {
             const glm::ivec2& viewport_size) override;
 
         Result<void> presentMeshOnly() override;
-
-        Result<void> presentToScreen(
-            const RenderResult& result,
-            const glm::ivec2& viewport_pos,
-            const glm::ivec2& viewport_size) override;
 
         Result<void> presentGpuFrame(
             const GpuFrame& frame,
@@ -155,9 +152,18 @@ namespace lfs::rendering {
         void clearFrustumCache() override;
 
     private:
+        struct GaussianRenderOutput {
+            std::shared_ptr<lfs::core::Tensor> image;
+            FrameMetadata metadata;
+        };
+
+        Result<GaussianRenderOutput> renderGaussiansInternal(
+            const lfs::core::SplatData& splat_data,
+            const ViewportRenderRequest& request);
         Result<void> initializeShaders();
         Result<void> ensureRenderResultUploaded(
-            const RenderResult& result,
+            const std::shared_ptr<const Tensor>& image,
+            const FrameMetadata& metadata,
             const glm::ivec2& viewport_size);
         glm::mat4 createProjectionMatrix(const ViewportData& viewport) const;
         glm::mat4 createViewMatrix(const ViewportData& viewport) const;
@@ -197,7 +203,7 @@ namespace lfs::rendering {
         unsigned int gpu_frame_readback_source_ = 0;
         glm::ivec2 gpu_frame_readback_size_{0, 0};
 #endif
-        unsigned int gpu_frame_readback_fbo_ = 0;
+        FBO gpu_frame_readback_fbo_;
     };
 
 } // namespace lfs::rendering

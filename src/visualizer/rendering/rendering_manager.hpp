@@ -9,6 +9,7 @@
 #include "framerate_controller.hpp"
 #include "internal/viewport.hpp"
 #include "io/nvcodec_image_loader.hpp"
+#include "render_pass.hpp"
 #include "rendering/cuda_gl_interop.hpp"
 #include "rendering/rendering.hpp"
 #include "rendering_types.hpp"
@@ -216,7 +217,6 @@ namespace lfs::vis {
 
         // Depth buffer access for tools (returns camera-space depth at pixel, or -1 if invalid)
         float getDepthAtPixel(int x, int y) const;
-        const lfs::rendering::RenderResult& getCachedResult() const { return cached_result_; }
         glm::ivec2 getRenderedSize() const { return cached_result_size_; }
         std::shared_ptr<lfs::core::Tensor> getViewportImageIfAvailable() const;
         std::shared_ptr<lfs::core::Tensor> captureViewportImage();
@@ -224,7 +224,7 @@ namespace lfs::vis {
         // Screen positions output for brush tool
         void setOutputScreenPositions(bool enable) { output_screen_positions_ = enable; }
         bool getOutputScreenPositions() const { return output_screen_positions_; }
-        std::shared_ptr<lfs::core::Tensor> getScreenPositions() const { return cached_result_.screen_positions; }
+        std::shared_ptr<lfs::core::Tensor> getScreenPositions() const { return cached_metadata_.screen_positions; }
 
         // Brush selection on GPU - mouse_x/y in image coords (not window coords!)
         void brushSelect(float mouse_x, float mouse_y, float radius, lfs::core::Tensor& selection_out);
@@ -351,14 +351,12 @@ namespace lfs::vis {
         // GT texture cache
         GTTextureCache gt_texture_cache_;
 
-        std::atomic<bool> render_texture_valid_{false};
-
         // Granular dirty tracking
         std::atomic<uint32_t> dirty_mask_{DirtyFlag::ALL};
 
         std::atomic<bool> pivot_animation_active_{false};
         std::atomic<int64_t> pivot_animation_end_ns_{0};
-        lfs::rendering::RenderResult cached_result_;
+        CachedRenderMetadata cached_metadata_;
         std::optional<lfs::rendering::GpuFrame> cached_gpu_frame_;
 
         // Selection flash animation
@@ -437,7 +435,7 @@ namespace lfs::vis {
 
         // Viewport state
         glm::ivec2 last_viewport_size_{0, 0}; // Last requested viewport size
-        glm::ivec2 cached_result_size_{0, 0}; // Size at which cached_result_ was actually rendered
+        glm::ivec2 cached_result_size_{0, 0}; // Size at which the cached viewport metadata/frame was rendered
         std::shared_ptr<lfs::core::Tensor> captured_viewport_image_;
         uint64_t viewport_capture_generation_ = 1;
         uint64_t captured_viewport_generation_ = 0;

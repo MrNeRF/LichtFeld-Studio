@@ -1013,7 +1013,7 @@ class ViewportRender:
 
 def get_viewport_render() -> ViewportRender | None:
     """
-    Get the current viewport render if a CPU-visible image is already available (does not force GPU readback)
+    Get the most recently captured CPU-visible viewport render if available (does not force GPU readback)
     """
 
 def capture_viewport() -> ViewportRender | None:

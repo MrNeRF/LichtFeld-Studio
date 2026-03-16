@@ -53,6 +53,16 @@ namespace lfs::rendering {
         cleanupPBO();
     }
 
+    void RenderingPipeline::resetResources() {
+#ifdef CUDA_GL_INTEROP_ENABLED
+        fbo_interop_texture_.reset();
+        fbo_interop_last_width_ = 0;
+        fbo_interop_last_height_ = 0;
+#endif
+        cleanupFBO();
+        cleanupPBO();
+    }
+
     Result<RenderingPipeline::RenderResult> RenderingPipeline::render(
         const lfs::core::SplatData& model,
         const RenderRequest& request) {
@@ -353,7 +363,7 @@ namespace lfs::rendering {
         // OPTIMIZATION: Use persistent FBO (avoids expensive glGenFramebuffers/glDeleteFramebuffers)
         // This saves ~3-5ms per frame by reusing the same FBO across renders
         ensureFBOSize(request.viewport_size.x, request.viewport_size.y);
-        if (persistent_fbo_ == 0) {
+        if (!persistent_render_target_) {
             LOG_ERROR("Failed to setup persistent framebuffer");
             return std::unexpected("Failed to setup persistent framebuffer");
         }
@@ -387,14 +397,14 @@ namespace lfs::rendering {
             const bool dims_mismatch = fbo_interop_texture_ &&
                                        (fbo_interop_texture_->getWidth() != persistent_fbo_width_ ||
                                         fbo_interop_texture_->getHeight() != persistent_fbo_height_);
-            const bool should_init = persistent_color_texture_ != 0 &&
+            const bool should_init = persistent_render_target_ &&
                                      (!fbo_interop_texture_ || fbo_changed || dims_mismatch);
 
             if (should_init) {
                 fbo_interop_texture_.reset();
                 fbo_interop_texture_.emplace();
                 if (auto init_result = fbo_interop_texture_->initForReading(
-                        persistent_color_texture_, persistent_fbo_width_, persistent_fbo_height_);
+                        persistent_render_target_->colorTexture(), persistent_fbo_width_, persistent_fbo_height_);
                     !init_result) {
                     LOG_TRACE("FBO interop init failed: {}", init_result.error());
                     fbo_interop_texture_.reset();
@@ -408,7 +418,7 @@ namespace lfs::rendering {
                 if (auto read_result = fbo_interop_texture_->readToTensor(image_hwc, width, height); read_result) {
                     result.image = image_hwc.permute({2, 0, 1}).contiguous();
                     result.valid = true;
-                    result.external_depth_texture = persistent_depth_texture_;
+                    result.external_depth_texture = persistent_render_target_->depthTexture();
                     result.depth_is_ndc = true;
                 } else {
                     LOG_TRACE("FBO interop read failed: {}", read_result.error());
@@ -459,7 +469,7 @@ namespace lfs::rendering {
                 LOG_TIMER_TRACE("permute and cuda upload");
                 result.image = image_cpu.permute({2, 0, 1}).cuda();
             }
-            result.external_depth_texture = persistent_depth_texture_;
+            result.external_depth_texture = persistent_render_target_->depthTexture();
             result.depth_is_ndc = true;
             result.valid = true;
         }
@@ -468,117 +478,6 @@ namespace lfs::rendering {
         result.far_plane = request.far_plane;
 
         LOG_TRACE("Point cloud rendering completed");
-        return result;
-    }
-
-    Result<RenderingPipeline::RenderResult> RenderingPipeline::renderRawPointCloud(
-        const lfs::core::PointCloud& point_cloud,
-        const RenderRequest& request) {
-
-        LOG_TIMER_TRACE("RenderingPipeline::renderRawPointCloud");
-
-        auto gpu_frame = renderRawPointCloudGpuFrame(point_cloud, request);
-        if (!gpu_frame) {
-            return std::unexpected(gpu_frame.error());
-        }
-
-        if (persistent_fbo_ == 0) {
-            LOG_ERROR("Persistent framebuffer missing after point cloud render");
-            return std::unexpected("Persistent framebuffer missing after point cloud render");
-        }
-
-        GLFramebufferGuard framebuffer_guard(persistent_fbo_);
-
-        const int width = request.viewport_size.x;
-        const int height = request.viewport_size.y;
-        RenderResult result;
-
-#ifdef CUDA_GL_INTEROP_ENABLED
-        if (use_fbo_interop_) {
-            LOG_TIMER_TRACE("CUDA-GL FBO interop readback");
-
-            const bool fbo_changed = fbo_interop_last_width_ != persistent_fbo_width_ ||
-                                     fbo_interop_last_height_ != persistent_fbo_height_;
-            const bool dims_mismatch = fbo_interop_texture_ &&
-                                       (fbo_interop_texture_->getWidth() != persistent_fbo_width_ ||
-                                        fbo_interop_texture_->getHeight() != persistent_fbo_height_);
-            const bool should_init = persistent_color_texture_ != 0 &&
-                                     (!fbo_interop_texture_ || fbo_changed || dims_mismatch);
-
-            if (should_init) {
-                fbo_interop_texture_.reset();
-                fbo_interop_texture_.emplace();
-                if (auto init_result = fbo_interop_texture_->initForReading(
-                        persistent_color_texture_, persistent_fbo_width_, persistent_fbo_height_);
-                    !init_result) {
-                    LOG_TRACE("FBO interop init failed: {}", init_result.error());
-                    fbo_interop_texture_.reset();
-                }
-                fbo_interop_last_width_ = persistent_fbo_width_;
-                fbo_interop_last_height_ = persistent_fbo_height_;
-            }
-
-            if (use_fbo_interop_ && fbo_interop_texture_) {
-                Tensor image_hwc;
-                if (auto read_result = fbo_interop_texture_->readToTensor(image_hwc, width, height); read_result) {
-                    result.image = image_hwc.permute({2, 0, 1}).contiguous();
-                    result.valid = true;
-                    result.external_depth_texture = persistent_depth_texture_;
-                    result.depth_is_ndc = true;
-                } else {
-                    LOG_TRACE("FBO interop read failed: {}", read_result.error());
-                    fbo_interop_texture_.reset();
-                    result.valid = false;
-                }
-            }
-        }
-
-        // Fallback to PBO path if interop failed
-        if (!result.valid)
-#endif
-        {
-            LOG_TIMER_TRACE("PBO fallback readback");
-
-            ensurePBOSize(width, height);
-
-            int current_pbo = pbo_index_;
-            int next_pbo = 1 - pbo_index_;
-
-            std::vector<float> pixels(width * height * 3);
-            {
-                glBindBuffer(GL_PIXEL_PACK_BUFFER, pbo_[current_pbo]);
-                glReadPixels(0, 0, width, height, GL_RGB, GL_FLOAT, nullptr);
-
-                void* mapped_data = glMapBuffer(GL_PIXEL_PACK_BUFFER, GL_READ_ONLY);
-                if (mapped_data) {
-                    std::memcpy(pixels.data(), mapped_data, width * height * 3 * sizeof(float));
-                    glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-                } else {
-                    LOG_ERROR("Failed to map PBO for readback");
-                    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-                    return std::unexpected("Failed to map PBO for readback");
-                }
-
-                glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-            }
-
-            pbo_index_ = next_pbo;
-
-            const auto image_cpu = Tensor::from_vector(pixels, {static_cast<size_t>(height), static_cast<size_t>(width), 3},
-                                                       lfs::core::Device::CPU);
-            {
-                LOG_TIMER_TRACE("permute and cuda upload");
-                result.image = image_cpu.permute({2, 0, 1}).cuda();
-            }
-            result.external_depth_texture = persistent_depth_texture_;
-            result.depth_is_ndc = true;
-            result.valid = true;
-        }
-
-        result.near_plane = gpu_frame->near_plane;
-        result.far_plane = gpu_frame->far_plane;
-        result.orthographic = gpu_frame->orthographic;
-        LOG_TRACE("Raw point cloud rendering completed");
         return result;
     }
 
@@ -632,7 +531,7 @@ namespace lfs::rendering {
         projection[1][1] *= -1.0f;
 
         ensureFBOSize(request.viewport_size.x, request.viewport_size.y);
-        if (persistent_fbo_ == 0) {
+        if (!persistent_render_target_) {
             LOG_ERROR("Failed to setup persistent framebuffer");
             return std::unexpected("Failed to setup persistent framebuffer");
         }
@@ -651,8 +550,8 @@ namespace lfs::rendering {
         }
 
         return buildPersistentGpuFrame(
-            persistent_color_texture_,
-            persistent_depth_texture_,
+            persistent_render_target_->colorTexture(),
+            persistent_render_target_->depthTexture(),
             {persistent_fbo_width_, persistent_fbo_height_},
             request.viewport_size,
             request.far_plane,
@@ -833,54 +732,38 @@ namespace lfs::rendering {
         const int alloc_width = ((width + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT;
         const int alloc_height = ((height + GPU_ALIGNMENT - 1) / GPU_ALIGNMENT) * GPU_ALIGNMENT;
 
-        if (persistent_fbo_ != 0 && alloc_width == persistent_fbo_width_ && alloc_height == persistent_fbo_height_) {
-            glBindFramebuffer(GL_FRAMEBUFFER, persistent_fbo_);
+        if (persistent_render_target_ &&
+            alloc_width == persistent_fbo_width_ && alloc_height == persistent_fbo_height_) {
+            glBindFramebuffer(GL_FRAMEBUFFER, persistent_render_target_->framebuffer());
             return;
         }
 
         LOG_DEBUG("FBO resize: {}x{} -> {}x{}", persistent_fbo_width_, persistent_fbo_height_, alloc_width, alloc_height);
 
-        if (persistent_fbo_ != 0) {
+        if (render_target_pool_) {
+            auto target = render_target_pool_->acquireHighPrecision(
+                "rendering_pipeline.point_cloud", {alloc_width, alloc_height});
+            if (!target) {
+                LOG_ERROR("Failed to acquire high-precision render target: {}", target.error());
+                cleanupFBO();
+                return;
+            }
+            persistent_render_target_ = *target;
+        } else {
+            if (!persistent_render_target_) {
+                persistent_render_target_ = std::make_shared<HighPrecisionRenderTarget>();
+            }
+            if (auto result = persistent_render_target_->ensureSize({alloc_width, alloc_height}); !result) {
+                LOG_ERROR("Failed to resize persistent render target: {}", result.error());
+                cleanupFBO();
+                return;
+            }
+        }
+
 #ifdef CUDA_GL_INTEROP_ENABLED
-            fbo_interop_texture_.reset();
+        fbo_interop_texture_.reset();
 #endif
-            cleanupFBO();
-        }
-
-        // Create new FBO
-        glGenFramebuffers(1, &persistent_fbo_);
-        if (persistent_fbo_ == 0) {
-            LOG_ERROR("Failed to create persistent framebuffer");
-            return;
-        }
-        glBindFramebuffer(GL_FRAMEBUFFER, persistent_fbo_);
-
-        glGenTextures(1, &persistent_color_texture_);
-        glBindTexture(GL_TEXTURE_2D, persistent_color_texture_);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, alloc_width, alloc_height, 0, GL_RGB, GL_FLOAT, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                               persistent_color_texture_, 0);
-
-        glGenTextures(1, &persistent_depth_texture_);
-        glBindTexture(GL_TEXTURE_2D, persistent_depth_texture_);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F, alloc_width, alloc_height,
-                     0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
-                               persistent_depth_texture_, 0);
-
-        const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-        if (status != GL_FRAMEBUFFER_COMPLETE) {
-            LOG_ERROR("FBO incomplete: 0x{:x}", status);
-            cleanupFBO();
-            return;
-        }
-
-        glBindTexture(GL_TEXTURE_2D, 0);
-        glFinish();
+        glBindFramebuffer(GL_FRAMEBUFFER, persistent_render_target_->framebuffer());
 
         persistent_fbo_width_ = alloc_width;
         persistent_fbo_height_ = alloc_height;
@@ -889,18 +772,7 @@ namespace lfs::rendering {
     }
 
     void RenderingPipeline::cleanupFBO() {
-        if (persistent_fbo_ != 0) {
-            glDeleteFramebuffers(1, &persistent_fbo_);
-            persistent_fbo_ = 0;
-        }
-        if (persistent_color_texture_ != 0) {
-            glDeleteTextures(1, &persistent_color_texture_);
-            persistent_color_texture_ = 0;
-        }
-        if (persistent_depth_texture_ != 0) {
-            glDeleteTextures(1, &persistent_depth_texture_);
-            persistent_depth_texture_ = 0;
-        }
+        persistent_render_target_.reset();
         persistent_fbo_width_ = 0;
         persistent_fbo_height_ = 0;
     }

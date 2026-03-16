@@ -36,13 +36,13 @@ namespace lfs::vis {
         render_lock.reset();
 
         if (result) {
-            res.cached_result = result->metadata;
+            res.cached_metadata = makeCachedRenderMetadata(result->metadata);
             res.cached_gpu_frame = result->frame;
             res.cached_result_size = ctx.render_size;
             res.split_view_executed = true;
         } else {
             LOG_ERROR("Failed to render split view: {}", result.error());
-            res.cached_result = {};
+            res.cached_metadata = {};
             res.cached_gpu_frame.reset();
             res.cached_result_size = {0, 0};
         }
@@ -69,7 +69,7 @@ namespace lfs::vis {
         }
 
         if (settings.split_view_mode == SplitViewMode::GTComparison) {
-            if (!res.gt_context || !res.gt_context->valid() || !res.render_texture_valid ||
+            if (!res.gt_context || !res.gt_context->valid() ||
                 !res.cached_gpu_frame || !res.cached_gpu_frame->valid())
                 return std::nullopt;
 

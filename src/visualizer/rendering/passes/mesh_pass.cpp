@@ -71,13 +71,15 @@ namespace lfs::vis {
             glViewport(ctx.viewport_pos.x, ctx.viewport_pos.y, ctx.render_size.x, ctx.render_size.y);
 
             if (res.splats_presented) {
-                auto composite_result =
-                    (res.cached_gpu_frame && res.cached_gpu_frame->valid() &&
-                     res.cached_gpu_frame->depth.valid())
-                        ? engine.compositeMeshAndGpuFrame(*res.cached_gpu_frame, ctx.render_size)
-                        : engine.compositeMeshAndSplat(res.cached_result, ctx.render_size);
-                if (!composite_result)
+                if (!res.cached_gpu_frame || !res.cached_gpu_frame->valid() || !res.cached_gpu_frame->depth.valid()) {
+                    LOG_ERROR("Cannot composite mesh without a depth-bearing GPU frame");
+                    return;
+                }
+
+                auto composite_result = engine.compositeMeshAndGpuFrame(*res.cached_gpu_frame, ctx.render_size);
+                if (!composite_result) {
                     LOG_ERROR("Failed to composite: {}", composite_result.error());
+                }
             } else {
                 glClearColor(ctx.settings.background_color.r, ctx.settings.background_color.g,
                              ctx.settings.background_color.b, 1.0f);

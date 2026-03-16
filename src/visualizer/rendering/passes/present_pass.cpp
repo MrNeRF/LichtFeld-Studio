@@ -12,15 +12,12 @@ namespace lfs::vis {
                               const FrameContext& ctx,
                               FrameResources& res) {
         const bool has_gpu_frame = res.cached_gpu_frame && res.cached_gpu_frame->valid();
-        const bool has_legacy_result = res.cached_result.image &&
-                                       res.cached_result_size.x > 0 &&
-                                       res.cached_result_size.y > 0;
 
         if (res.split_view_executed && !has_gpu_frame) {
             return;
         }
 
-        if (!has_gpu_frame && !has_legacy_result) {
+        if (!has_gpu_frame) {
             return;
         }
 
@@ -32,13 +29,9 @@ namespace lfs::vis {
                      ctx.settings.background_color.b, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        auto present_result = has_gpu_frame
-                                  ? engine.presentGpuFrame(*res.cached_gpu_frame,
-                                                           ctx.viewport_pos,
-                                                           res.cached_result_size)
-                                  : engine.presentToScreen(res.cached_result,
-                                                           ctx.viewport_pos,
-                                                           res.cached_result_size);
+        auto present_result = engine.presentGpuFrame(*res.cached_gpu_frame,
+                                                     ctx.viewport_pos,
+                                                     res.cached_result_size);
         if (present_result) {
             res.splats_presented = true;
         } else {

@@ -5,6 +5,7 @@
 #pragma once
 
 #include "gl_resources.hpp"
+#include "render_target_pool.hpp"
 #include "rendering/rendering.hpp"
 #include "shader_manager.hpp"
 #include <glm/glm.hpp>
@@ -32,12 +33,14 @@ namespace lfs::rendering {
                             bool use_fbo = false,
                             bool clear_fbo = true);
 
-        GLuint getColorTexture() const { return color_texture_.get(); }
-        GLuint getDepthTexture() const { return depth_texture_.get(); }
-        GLuint getFramebuffer() const { return fbo_.get(); }
+        void setRenderTargetPool(RenderTargetPool* pool) { render_target_pool_ = pool; }
+
+        GLuint getColorTexture() const { return render_target_ ? render_target_->colorTexture() : 0; }
+        GLuint getDepthTexture() const { return render_target_ ? render_target_->depthTexture() : 0; }
+        GLuint getFramebuffer() const { return render_target_ ? render_target_->framebuffer() : 0; }
         GLuint getShadowDepthTexture() const { return shadow_depth_texture_.get(); }
-        int getWidth() const { return fbo_width_; }
-        int getHeight() const { return fbo_height_; }
+        int getWidth() const { return render_target_ ? render_target_->width() : 0; }
+        int getHeight() const { return render_target_ ? render_target_->height() : 0; }
 
         void resize(int width, int height);
         void blitToScreen(const glm::ivec2& dst_pos, const glm::ivec2& dst_size);
@@ -61,9 +64,7 @@ namespace lfs::rendering {
         VBO vbo_colors_;
         EBO ebo_;
 
-        FBO fbo_;
-        Texture color_texture_;
-        Texture depth_texture_;
+        std::shared_ptr<DisplayRenderTarget> render_target_;
 
         FBO shadow_fbo_;
         Texture shadow_depth_texture_;
@@ -77,8 +78,7 @@ namespace lfs::rendering {
         std::unordered_map<size_t, GLMaterialTextures> material_textures_;
         uint32_t uploaded_texture_generation_ = 0;
 
-        int fbo_width_ = 0;
-        int fbo_height_ = 0;
+        RenderTargetPool* render_target_pool_ = nullptr;
         int64_t uploaded_vertex_count_ = 0;
         int64_t uploaded_face_count_ = 0;
         uint32_t uploaded_generation_ = 0;

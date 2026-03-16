@@ -9,9 +9,11 @@
 #include "core/splat_data.hpp"
 #include "core/tensor.hpp"
 #include "geometry/bounding_box.hpp"
+#include "gl_resources.hpp"
 #include "point_cloud_renderer.hpp"
 #include "rendering/render_constants.hpp"
 #include "rendering/rendering.hpp" // For SelectionMode
+#include "render_target_pool.hpp"
 #include "screen_renderer.hpp"
 #include <glm/glm.hpp>
 #include <optional>
@@ -117,14 +119,14 @@ namespace lfs::rendering {
 
         // Main render function - now returns Result
         Result<RenderResult> render(const lfs::core::SplatData& model, const RenderRequest& request);
+        void setRenderTargetPool(RenderTargetPool* pool) { render_target_pool_ = pool; }
+        void resetResources();
 
         // Static upload function
         static Result<void> uploadToScreen(const RenderResult& result,
                                            ScreenQuadRenderer& renderer,
                                            const glm::ivec2& viewport_size);
 
-        // Render raw point cloud (for pre-training visualization)
-        Result<RenderResult> renderRawPointCloud(const lfs::core::PointCloud& point_cloud, const RenderRequest& request);
         Result<GpuFrame> renderRawPointCloudGpuFrame(const lfs::core::PointCloud& point_cloud, const RenderRequest& request);
 
     private:
@@ -149,9 +151,7 @@ namespace lfs::rendering {
 
         // Persistent framebuffer objects (reused across frames)
         // Avoids expensive glGenFramebuffers/glDeleteFramebuffers every render
-        GLuint persistent_fbo_ = 0;
-        GLuint persistent_color_texture_ = 0;
-        GLuint persistent_depth_texture_ = 0;
+        std::shared_ptr<HighPrecisionRenderTarget> persistent_render_target_;
         int persistent_fbo_width_ = 0;
         int persistent_fbo_height_ = 0;
 
@@ -171,6 +171,7 @@ namespace lfs::rendering {
         int fbo_interop_last_width_ = 0;  // Track FBO size when interop was initialized
         int fbo_interop_last_height_ = 0; // to detect when we need to reinitialize
 #endif
+        RenderTargetPool* render_target_pool_ = nullptr;
     };
 
 } // namespace lfs::rendering

@@ -643,20 +643,22 @@ namespace lfs::vis::gui {
 
                     const auto& cam_state = frame_states[frame];
 
-                    rendering::RenderRequest request;
-                    request.viewport.rotation = glm::mat3_cast(cam_state.rotation);
-                    request.viewport.translation = cam_state.position;
-                    request.viewport.size = {width, height};
-                    request.viewport.focal_length_mm = cam_state.focal_length_mm;
-                    request.background_color = render_settings.background_color;
-                    request.sh_degree = render_settings.sh_degree;
-                    request.scaling_modifier = render_settings.scaling_modifier;
-                    request.antialiasing = true;
-                    request.equirectangular = render_settings.equirectangular;
+                    rendering::GaussianImageRequest request{
+                        .frame_view =
+                            {.rotation = glm::mat3_cast(cam_state.rotation),
+                             .translation = cam_state.position,
+                             .size = {width, height},
+                             .focal_length_mm = cam_state.focal_length_mm,
+                             .background_color = render_settings.background_color},
+                        .scaling_modifier = render_settings.scaling_modifier,
+                        .antialiasing = true,
+                        .sh_degree = render_settings.sh_degree,
+                        .equirectangular = render_settings.equirectangular};
 
-                    auto render_result = engine->renderGaussians(*splat_ptr, request);
-                    if (!render_result.has_value() || !render_result->valid || !render_result->image) {
-                        LOG_ERROR("Failed to render frame {}", frame);
+                    auto render_image = engine->renderGaussianImage(*splat_ptr, request);
+                    if (!render_image.has_value() || !(*render_image) || !(*render_image)->is_valid()) {
+                        LOG_ERROR("Failed to render frame {}{}", frame,
+                                  render_image ? "" : std::format(": {}", render_image.error()));
                         {
                             std::lock_guard lock(video_export_state_.mutex);
                             video_export_state_.error = std::format("Failed to render frame {}", frame + 1);
@@ -665,11 +667,11 @@ namespace lfs::vis::gui {
                         break;
                     }
 
-                    auto image_hwc = render_result->image->permute({1, 2, 0}).contiguous();
+                    auto image_hwc = (*render_image)->permute({1, 2, 0}).contiguous();
 
                     if (frame == 0) {
                         LOG_INFO("Video export: CHW shape=[{},{},{}] -> HWC shape=[{},{},{}]",
-                                 render_result->image->shape()[0], render_result->image->shape()[1], render_result->image->shape()[2],
+                                 (*render_image)->shape()[0], (*render_image)->shape()[1], (*render_image)->shape()[2],
                                  image_hwc.shape()[0], image_hwc.shape()[1], image_hwc.shape()[2]);
                     }
 

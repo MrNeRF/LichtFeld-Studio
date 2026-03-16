@@ -22,13 +22,6 @@ namespace lfs::rendering {
 
         Result<void> initialize();
 
-        Result<RenderResult> render(
-            const SplitViewRequest& request,
-            RenderTargetPool& render_target_pool,
-            RenderingPipeline& pipeline,
-            ScreenQuadRenderer& screen_renderer,
-            ManagedShader& quad_shader);
-
         Result<SplitViewFrameResult> renderGpuFrame(
             const SplitViewRequest& request,
             RenderTargetPool& render_target_pool,

@@ -15,7 +15,7 @@
 namespace lfs::rendering {
 
     namespace {
-        [[nodiscard]] PointCloudCropParams makePointCloudCropParams(const RenderRequest& request) {
+        [[nodiscard]] PointCloudCropParams makePointCloudCropParams(const PointCloudRenderRequest& request) {
             PointCloudCropParams crop_params;
             if (request.crop_box.has_value()) {
                 crop_params.enabled = true;
@@ -28,19 +28,20 @@ namespace lfs::rendering {
             return crop_params;
         }
 
-        [[nodiscard]] RenderingPipeline::RenderRequest makePointCloudPipelineRequest(const RenderRequest& request) {
+        [[nodiscard]] RenderingPipeline::RenderRequest makePointCloudPipelineRequest(
+            const PointCloudRenderRequest& request) {
             return RenderingPipeline::RenderRequest{
-                .view_rotation = request.viewport.rotation,
-                .view_translation = request.viewport.translation,
-                .viewport_size = request.viewport.size,
-                .focal_length_mm = request.viewport.focal_length_mm,
+                .view_rotation = request.frame_view.rotation,
+                .view_translation = request.frame_view.translation,
+                .viewport_size = request.frame_view.size,
+                .focal_length_mm = request.frame_view.focal_length_mm,
                 .scaling_modifier = request.scaling_modifier,
                 .antialiasing = false,
                 .mip_filter = false,
                 .sh_degree = 0,
                 .render_mode = RenderMode::RGB,
                 .crop_box = nullptr,
-                .background_color = request.background_color,
+                .background_color = request.frame_view.background_color,
                 .point_cloud_mode = true,
                 .voxel_size = request.voxel_size,
                 .gut = false,
@@ -63,11 +64,66 @@ namespace lfs::rendering {
                 .selection_mode_rings = false,
                 .hovered_depth_id = nullptr,
                 .highlight_gaussian_id = -1,
-                .far_plane = request.far_plane,
+                .far_plane = request.frame_view.far_plane,
                 .selected_node_mask = {},
-                .orthographic = request.viewport.orthographic,
-                .ortho_scale = request.viewport.ortho_scale,
+                .orthographic = request.frame_view.orthographic,
+                .ortho_scale = request.frame_view.ortho_scale,
                 .point_cloud_crop_params = makePointCloudCropParams(request)};
+        }
+
+        [[nodiscard]] ViewportRenderRequest makeViewportRenderRequest(const GaussianImageRequest& request) {
+            return ViewportRenderRequest{
+                .frame_view = request.frame_view,
+                .scaling_modifier = request.scaling_modifier,
+                .antialiasing = request.antialiasing,
+                .mip_filter = request.mip_filter,
+                .sh_degree = request.sh_degree,
+                .equirectangular = request.equirectangular};
+        }
+
+        [[nodiscard]] ViewportRenderRequest makeViewportRenderRequest(
+            const GaussianScreenPositionRequest& request) {
+            return ViewportRenderRequest{
+                .frame_view = request.frame_view,
+                .scaling_modifier = request.scaling_modifier,
+                .antialiasing = request.antialiasing,
+                .mip_filter = request.mip_filter,
+                .sh_degree = request.sh_degree,
+                .equirectangular = request.equirectangular,
+                .model_transforms = request.model_transforms,
+                .transform_indices = request.transform_indices,
+                .output_screen_positions = true,
+                .node_visibility_mask = request.node_visibility_mask};
+        }
+
+        [[nodiscard]] ViewportRenderRequest makeViewportRenderRequest(const GaussianPickingRequest& request) {
+            return ViewportRenderRequest{
+                .frame_view = request.frame_view,
+                .scaling_modifier = request.scaling_modifier,
+                .antialiasing = request.antialiasing,
+                .mip_filter = request.mip_filter,
+                .sh_degree = request.sh_degree,
+                .equirectangular = request.equirectangular,
+                .show_rings = false,
+                .ring_width = 0.0f,
+                .show_center_markers = false,
+                .model_transforms = request.model_transforms,
+                .transform_indices = request.transform_indices,
+                .brush =
+                    {.active = true,
+                     .cursor = request.cursor_pos,
+                     .radius = 0.0f,
+                     .add_mode = true,
+                     .selection_mode_rings = true},
+                .crop_box = request.crop_box,
+                .crop_inverse = request.crop_inverse,
+                .crop_parent_node_index = request.crop_parent_node_index,
+                .ellipsoid = request.ellipsoid,
+                .ellipsoid_inverse = request.ellipsoid_inverse,
+                .ellipsoid_parent_node_index = request.ellipsoid_parent_node_index,
+                .depth_filter = request.depth_filter,
+                .node_visibility_mask = request.node_visibility_mask,
+                .hovered_depth_id = request.hovered_depth_id};
         }
     } // namespace
 
@@ -89,6 +145,8 @@ namespace lfs::rendering {
 
         LOG_INFO("Initializing rendering engine...");
 
+        pipeline_.setRenderTargetPool(&render_target_pool_);
+        mesh_renderer_.setRenderTargetPool(&render_target_pool_);
         screen_renderer_ = std::make_shared<ScreenQuadRenderer>(getPreferredFrameBufferMode());
 
         split_view_renderer_ = std::make_unique<SplitViewRenderer>();
@@ -186,10 +244,8 @@ namespace lfs::rendering {
         gpu_frame_readback_source_ = 0;
         gpu_frame_readback_size_ = {0, 0};
 #endif
-        if (gpu_frame_readback_fbo_ != 0) {
-            glDeleteFramebuffers(1, &gpu_frame_readback_fbo_);
-            gpu_frame_readback_fbo_ = 0;
-        }
+        gpu_frame_readback_fbo_ = FBO();
+        pipeline_.resetResources();
         render_target_pool_.clear();
         screen_renderer_.reset();
         split_view_renderer_.reset();
@@ -213,35 +269,36 @@ namespace lfs::rendering {
         return {};
     }
 
-    Result<RenderResult> RenderingEngineImpl::renderGaussians(
+    Result<RenderingEngineImpl::GaussianRenderOutput> RenderingEngineImpl::renderGaussiansInternal(
         const lfs::core::SplatData& splat_data,
-        const RenderRequest& request) {
+        const ViewportRenderRequest& request) {
 
         if (!isInitialized()) {
             LOG_ERROR("Rendering engine not initialized");
             return std::unexpected("Rendering engine not initialized");
         }
 
-        if (request.viewport.size.x <= 0 || request.viewport.size.y <= 0 ||
-            request.viewport.size.x > MAX_VIEWPORT_SIZE || request.viewport.size.y > MAX_VIEWPORT_SIZE) {
-            LOG_ERROR("Invalid viewport dimensions: {}x{}", request.viewport.size.x, request.viewport.size.y);
+        if (request.frame_view.size.x <= 0 || request.frame_view.size.y <= 0 ||
+            request.frame_view.size.x > MAX_VIEWPORT_SIZE || request.frame_view.size.y > MAX_VIEWPORT_SIZE) {
+            LOG_ERROR("Invalid viewport dimensions: {}x{}", request.frame_view.size.x, request.frame_view.size.y);
             return std::unexpected("Invalid viewport dimensions");
         }
 
-        LOG_TRACE("Rendering gaussians with viewport {}x{}", request.viewport.size.x, request.viewport.size.y);
+        LOG_TRACE("Rendering gaussians with viewport {}x{}",
+                  request.frame_view.size.x, request.frame_view.size.y);
 
         RenderingPipeline::RenderRequest pipeline_req{
-            .view_rotation = request.viewport.rotation,
-            .view_translation = request.viewport.translation,
-            .viewport_size = request.viewport.size,
-            .focal_length_mm = request.viewport.focal_length_mm,
+            .view_rotation = request.frame_view.rotation,
+            .view_translation = request.frame_view.translation,
+            .viewport_size = request.frame_view.size,
+            .focal_length_mm = request.frame_view.focal_length_mm,
             .scaling_modifier = request.scaling_modifier,
             .antialiasing = request.antialiasing,
             .mip_filter = request.mip_filter,
             .sh_degree = request.sh_degree,
             .render_mode = RenderMode::RGB,
             .crop_box = nullptr,
-            .background_color = request.background_color,
+            .background_color = request.frame_view.background_color,
             .point_cloud_mode = request.point_cloud_mode,
             .voxel_size = request.voxel_size,
             .gut = request.gut,
@@ -253,24 +310,24 @@ namespace lfs::rendering {
             .transform_indices = request.transform_indices,
             .selection_mask = request.selection_mask,
             .output_screen_positions = request.output_screen_positions,
-            .brush_active = request.brush_active,
-            .brush_x = request.brush_x,
-            .brush_y = request.brush_y,
-            .brush_radius = request.brush_radius,
-            .brush_add_mode = request.brush_add_mode,
-            .brush_selection_tensor = request.brush_selection_tensor,
-            .brush_saturation_mode = request.brush_saturation_mode,
-            .brush_saturation_amount = request.brush_saturation_amount,
-            .selection_mode_rings = request.selection_mode_rings,
+            .brush_active = request.brush.active,
+            .brush_x = request.brush.cursor.x,
+            .brush_y = request.brush.cursor.y,
+            .brush_radius = request.brush.radius,
+            .brush_add_mode = request.brush.add_mode,
+            .brush_selection_tensor = request.brush.selection_tensor,
+            .brush_saturation_mode = request.brush.saturation_mode,
+            .brush_saturation_amount = request.brush.saturation_amount,
+            .selection_mode_rings = request.brush.selection_mode_rings,
             .hovered_depth_id = request.hovered_depth_id,
             .highlight_gaussian_id = request.highlight_gaussian_id,
-            .far_plane = request.far_plane,
+            .far_plane = request.frame_view.far_plane,
             .selected_node_mask = request.selected_node_mask,
             .node_visibility_mask = request.node_visibility_mask,
             .desaturate_unselected = request.desaturate_unselected,
             .selection_flash_intensity = request.selection_flash_intensity,
-            .orthographic = request.orthographic,
-            .ortho_scale = request.ortho_scale};
+            .orthographic = request.frame_view.orthographic,
+            .ortho_scale = request.frame_view.ortho_scale};
 
         std::unique_ptr<lfs::geometry::BoundingBox> temp_crop_box;
         Tensor crop_box_transform_tensor, crop_box_min_tensor, crop_box_max_tensor;
@@ -356,79 +413,102 @@ namespace lfs::rendering {
             return std::unexpected(pipeline_result.error());
         }
 
-        RenderResult result{
+        GaussianRenderOutput result{
             .image = std::make_shared<Tensor>(pipeline_result->image),
-            .depth = std::make_shared<Tensor>(pipeline_result->depth),
-            .screen_positions = pipeline_result->screen_positions.is_valid()
-                                    ? std::make_shared<Tensor>(pipeline_result->screen_positions)
-                                    : nullptr,
-            .valid = true,
-            .depth_is_ndc = pipeline_result->depth_is_ndc,
-            .external_depth_texture = pipeline_result->external_depth_texture,
-            .near_plane = pipeline_result->near_plane,
-            .far_plane = pipeline_result->far_plane,
-            .orthographic = pipeline_result->orthographic};
+            .metadata =
+                {.depth = std::make_shared<Tensor>(pipeline_result->depth),
+                 .screen_positions = pipeline_result->screen_positions.is_valid()
+                                         ? std::make_shared<Tensor>(pipeline_result->screen_positions)
+                                         : nullptr,
+                 .valid = true,
+                 .depth_is_ndc = pipeline_result->depth_is_ndc,
+                 .external_depth_texture = pipeline_result->external_depth_texture,
+                 .near_plane = pipeline_result->near_plane,
+                 .far_plane = pipeline_result->far_plane,
+                 .orthographic = pipeline_result->orthographic}};
 
         return result;
     }
 
-    Result<RenderResult> RenderingEngineImpl::renderPointCloud(
-        const lfs::core::PointCloud& point_cloud,
-        const RenderRequest& request) {
+    Result<std::shared_ptr<Tensor>> RenderingEngineImpl::renderGaussianImage(
+        const lfs::core::SplatData& splat_data,
+        const GaussianImageRequest& request) {
 
-        if (!isInitialized()) {
-            LOG_ERROR("Rendering engine not initialized");
-            return std::unexpected("Rendering engine not initialized");
+        auto render_result = renderGaussiansInternal(splat_data, makeViewportRenderRequest(request));
+        if (!render_result) {
+            return std::unexpected(render_result.error());
+        }
+        if (!render_result->image || !render_result->image->is_valid()) {
+            return std::unexpected("Gaussian image render produced no image");
+        }
+        return render_result->image;
+    }
+
+    Result<std::shared_ptr<Tensor>> RenderingEngineImpl::renderGaussianScreenPositions(
+        const lfs::core::SplatData& splat_data,
+        const GaussianScreenPositionRequest& request) {
+
+        auto render_result = renderGaussiansInternal(splat_data, makeViewportRenderRequest(request));
+        if (!render_result) {
+            return std::unexpected(render_result.error());
+        }
+        if (!render_result->metadata.screen_positions || !render_result->metadata.screen_positions->is_valid()) {
+            return std::unexpected("Gaussian screen-position render produced no screen positions");
+        }
+        return render_result->metadata.screen_positions;
+    }
+
+    Result<void> RenderingEngineImpl::renderGaussianPickingPass(
+        const lfs::core::SplatData& splat_data,
+        const GaussianPickingRequest& request) {
+
+        if (!request.hovered_depth_id) {
+            return std::unexpected("Gaussian picking pass requires hovered_depth_id output");
+        }
+        auto render_result = renderGaussiansInternal(splat_data, makeViewportRenderRequest(request));
+        if (!render_result) {
+            return std::unexpected(render_result.error());
+        }
+        return {};
+    }
+
+    Result<ViewportFrameResult> RenderingEngineImpl::renderGaussiansViewportFrame(
+        const lfs::core::SplatData& splat_data,
+        const ViewportRenderRequest& request) {
+
+        auto render_result = renderGaussiansInternal(splat_data, request);
+        if (!render_result) {
+            return std::unexpected(render_result.error());
         }
 
-        if (request.viewport.size.x <= 0 || request.viewport.size.y <= 0 ||
-            request.viewport.size.x > MAX_VIEWPORT_SIZE || request.viewport.size.y > MAX_VIEWPORT_SIZE) {
-            LOG_ERROR("Invalid viewport dimensions: {}x{}", request.viewport.size.x, request.viewport.size.y);
-            return std::unexpected("Invalid viewport dimensions");
+        auto gpu_frame = materializeGpuFrame(render_result->image, render_result->metadata, request.frame_view.size);
+        if (!gpu_frame) {
+            return std::unexpected(gpu_frame.error());
         }
 
-        LOG_TRACE("Rendering point cloud with viewport {}x{}", request.viewport.size.x, request.viewport.size.y);
-
-        auto pipeline_req = makePointCloudPipelineRequest(request);
-
-        auto pipeline_result = pipeline_.renderRawPointCloud(point_cloud, pipeline_req);
-
-        if (!pipeline_result) {
-            LOG_ERROR("Pipeline render failed: {}", pipeline_result.error());
-            return std::unexpected(pipeline_result.error());
-        }
-
-        RenderResult result{
-            .image = std::make_shared<Tensor>(pipeline_result->image),
-            .depth = std::make_shared<Tensor>(pipeline_result->depth),
-            .screen_positions = nullptr,
-            .valid = true,
-            .depth_is_ndc = pipeline_result->depth_is_ndc,
-            .external_depth_texture = pipeline_result->external_depth_texture,
-            .near_plane = pipeline_result->near_plane,
-            .far_plane = pipeline_result->far_plane,
-            .orthographic = pipeline_result->orthographic};
-
-        return result;
+        return ViewportFrameResult{
+            .frame = *gpu_frame,
+            .image = std::move(render_result->image),
+            .metadata = std::move(render_result->metadata)};
     }
 
     Result<GpuFrame> RenderingEngineImpl::renderPointCloudGpuFrame(
         const lfs::core::PointCloud& point_cloud,
-        const RenderRequest& request) {
+        const PointCloudRenderRequest& request) {
 
         if (!isInitialized()) {
             LOG_ERROR("Rendering engine not initialized");
             return std::unexpected("Rendering engine not initialized");
         }
 
-        if (request.viewport.size.x <= 0 || request.viewport.size.y <= 0 ||
-            request.viewport.size.x > MAX_VIEWPORT_SIZE || request.viewport.size.y > MAX_VIEWPORT_SIZE) {
-            LOG_ERROR("Invalid viewport dimensions: {}x{}", request.viewport.size.x, request.viewport.size.y);
+        if (request.frame_view.size.x <= 0 || request.frame_view.size.y <= 0 ||
+            request.frame_view.size.x > MAX_VIEWPORT_SIZE || request.frame_view.size.y > MAX_VIEWPORT_SIZE) {
+            LOG_ERROR("Invalid viewport dimensions: {}x{}", request.frame_view.size.x, request.frame_view.size.y);
             return std::unexpected("Invalid viewport dimensions");
         }
 
         LOG_TRACE("Rendering point cloud GPU frame with viewport {}x{}",
-                  request.viewport.size.x, request.viewport.size.y);
+                  request.frame_view.size.x, request.frame_view.size.y);
 
         auto pipeline_req = makePointCloudPipelineRequest(request);
         auto pipeline_result = pipeline_.renderRawPointCloudGpuFrame(point_cloud, pipeline_req);
@@ -438,24 +518,6 @@ namespace lfs::rendering {
         }
 
         return *pipeline_result;
-    }
-
-    Result<RenderResult> RenderingEngineImpl::renderSplitView(
-        const SplitViewRequest& request) {
-
-        if (!isInitialized()) {
-            LOG_ERROR("Rendering engine not initialized");
-            return std::unexpected("Rendering engine not initialized");
-        }
-
-        if (!split_view_renderer_) {
-            LOG_ERROR("Split view renderer not initialized");
-            return std::unexpected("Split view renderer not initialized");
-        }
-
-        LOG_TRACE("Rendering split view with {} panels", request.panels.size());
-
-        return split_view_renderer_->render(request, render_target_pool_, pipeline_, *screen_renderer_, quad_shader_);
     }
 
     Result<SplitViewFrameResult> RenderingEngineImpl::renderSplitViewGpuFrame(
@@ -477,35 +539,9 @@ namespace lfs::rendering {
             request, render_target_pool_, pipeline_, *screen_renderer_, quad_shader_);
     }
 
-    Result<void> RenderingEngineImpl::presentToScreen(
-        const RenderResult& result,
-        const glm::ivec2& viewport_pos,
-        const glm::ivec2& viewport_size) {
-        LOG_TIMER_TRACE("RenderingEngineImpl::presentToScreen");
-
-        if (!isInitialized()) {
-            LOG_ERROR("Rendering engine not initialized");
-            return std::unexpected("Rendering engine not initialized");
-        }
-
-        if (!result.image) {
-            LOG_ERROR("Invalid render result - image is null");
-            return std::unexpected("Invalid render result");
-        }
-
-        LOG_TRACE("Presenting to screen at ({}, {}) size {}x{}",
-                  viewport_pos.x, viewport_pos.y, viewport_size.x, viewport_size.y);
-
-        if (auto upload_result = ensureRenderResultUploaded(result, viewport_size); !upload_result) {
-            LOG_ERROR("Failed to upload to screen: {}", upload_result.error());
-            return upload_result;
-        }
-
-        return screen_renderer_->render(quad_shader_);
-    }
-
     Result<GpuFrame> RenderingEngineImpl::materializeGpuFrame(
-        const RenderResult& result,
+        const std::shared_ptr<Tensor>& image,
+        const FrameMetadata& metadata,
         const glm::ivec2& viewport_size) {
         LOG_TIMER_TRACE("RenderingEngineImpl::materializeGpuFrame");
 
@@ -514,21 +550,21 @@ namespace lfs::rendering {
             return std::unexpected("Rendering engine not initialized");
         }
 
-        if (!result.image) {
-            LOG_ERROR("Invalid render result - image is null");
-            return std::unexpected("Invalid render result");
+        if (!image) {
+            LOG_ERROR("Invalid frame payload - image is null");
+            return std::unexpected("Invalid frame payload");
         }
 
-        if (auto upload_result = ensureRenderResultUploaded(result, viewport_size); !upload_result) {
+        if (auto upload_result = ensureRenderResultUploaded(image, metadata, viewport_size); !upload_result) {
             LOG_ERROR("Failed to materialize GPU frame: {}", upload_result.error());
             return std::unexpected(upload_result.error());
         }
 
         const glm::vec2 texcoord_scale = screen_renderer_->getTexcoordScale();
         const GLuint uploaded_depth_texture =
-            result.external_depth_texture != 0
-                ? result.external_depth_texture
-                : (result.depth ? screen_renderer_->getUploadedDepthTexture() : 0);
+            metadata.external_depth_texture != 0
+                ? metadata.external_depth_texture
+                : (metadata.depth ? screen_renderer_->getUploadedDepthTexture() : 0);
 
         return GpuFrame{
             .color = {.id = screen_renderer_->getUploadedColorTexture(),
@@ -537,10 +573,10 @@ namespace lfs::rendering {
             .depth = {.id = uploaded_depth_texture,
                       .size = viewport_size,
                       .texcoord_scale = texcoord_scale},
-            .depth_is_ndc = result.depth_is_ndc,
-            .near_plane = result.near_plane,
-            .far_plane = result.far_plane,
-            .orthographic = result.orthographic};
+            .depth_is_ndc = metadata.depth_is_ndc,
+            .near_plane = metadata.near_plane,
+            .far_plane = metadata.far_plane,
+            .orthographic = metadata.orthographic};
     }
 
     Result<std::shared_ptr<Tensor>> RenderingEngineImpl::readbackGpuFrameColor(
@@ -596,17 +632,19 @@ namespace lfs::rendering {
         }
 #endif
 
-        if (gpu_frame_readback_fbo_ == 0) {
-            glGenFramebuffers(1, &gpu_frame_readback_fbo_);
+        if (!gpu_frame_readback_fbo_) {
+            GLuint fbo_id = 0;
+            glGenFramebuffers(1, &fbo_id);
+            gpu_frame_readback_fbo_ = FBO(fbo_id);
         }
-        if (gpu_frame_readback_fbo_ == 0) {
+        if (!gpu_frame_readback_fbo_) {
             LOG_ERROR("Failed to allocate viewport readback framebuffer");
             return std::unexpected("Failed to allocate viewport readback framebuffer");
         }
 
         GLFramebufferGuard framebuffer_guard;
 
-        glBindFramebuffer(GL_FRAMEBUFFER, gpu_frame_readback_fbo_);
+        glBindFramebuffer(GL_FRAMEBUFFER, gpu_frame_readback_fbo_.get());
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, frame.color.id, 0);
         glReadBuffer(GL_COLOR_ATTACHMENT0);
 
@@ -668,18 +706,20 @@ namespace lfs::rendering {
     }
 
     Result<void> RenderingEngineImpl::ensureRenderResultUploaded(
-        const RenderResult& result,
+        const std::shared_ptr<const Tensor>& image,
+        const FrameMetadata& metadata,
         const glm::ivec2& viewport_size) {
-        // Pointer-identity cache: renderGaussians() creates a new shared_ptr per frame,
-        // so distinct renders always have distinct pointers. Same pointer == same content.
-        const bool same_image_ptr = (last_presented_image_.get() == result.image.get());
-        const bool same_depth_ptr = (!result.depth && !last_presented_depth_) ||
-                                    (result.depth && last_presented_depth_.get() == result.depth.get());
-        const bool same_depth_tex = (last_presented_external_depth_texture_ == result.external_depth_texture);
-        const bool same_depth_mode = (last_presented_depth_is_ndc_ == result.depth_is_ndc);
-        const bool same_near = (last_presented_near_plane_ == result.near_plane);
-        const bool same_far = (last_presented_far_plane_ == result.far_plane);
-        const bool same_projection = (last_presented_orthographic_ == result.orthographic);
+        // Pointer-identity cache: explicit tensor-producing gaussian entry points create
+        // a new shared_ptr per render, so distinct renders always have distinct pointers.
+        // Same pointer == same content.
+        const bool same_image_ptr = (last_presented_image_.get() == image.get());
+        const bool same_depth_ptr = (!metadata.depth && !last_presented_depth_) ||
+                                    (metadata.depth && last_presented_depth_.get() == metadata.depth.get());
+        const bool same_depth_tex = (last_presented_external_depth_texture_ == metadata.external_depth_texture);
+        const bool same_depth_mode = (last_presented_depth_is_ndc_ == metadata.depth_is_ndc);
+        const bool same_near = (last_presented_near_plane_ == metadata.near_plane);
+        const bool same_far = (last_presented_far_plane_ == metadata.far_plane);
+        const bool same_projection = (last_presented_orthographic_ == metadata.orthographic);
 
         const bool needs_upload = !has_present_upload_cache_ ||
                                   !same_image_ptr ||
@@ -696,14 +736,14 @@ namespace lfs::rendering {
         }
 
         RenderingPipeline::RenderResult internal_result;
-        internal_result.image = *result.image;
-        internal_result.depth = result.depth ? *result.depth : Tensor();
+        internal_result.image = *image;
+        internal_result.depth = metadata.depth ? *metadata.depth : Tensor();
         internal_result.valid = true;
-        internal_result.depth_is_ndc = result.depth_is_ndc;
-        internal_result.external_depth_texture = result.external_depth_texture;
-        internal_result.near_plane = result.near_plane;
-        internal_result.far_plane = result.far_plane;
-        internal_result.orthographic = result.orthographic;
+        internal_result.depth_is_ndc = metadata.depth_is_ndc;
+        internal_result.external_depth_texture = metadata.external_depth_texture;
+        internal_result.near_plane = metadata.near_plane;
+        internal_result.far_plane = metadata.far_plane;
+        internal_result.orthographic = metadata.orthographic;
 
         if (auto upload_result = RenderingPipeline::uploadToScreen(internal_result, *screen_renderer_, viewport_size);
             !upload_result) {
@@ -711,13 +751,13 @@ namespace lfs::rendering {
             return upload_result;
         }
 
-        last_presented_image_ = result.image;
-        last_presented_depth_ = result.depth;
-        last_presented_external_depth_texture_ = result.external_depth_texture;
-        last_presented_depth_is_ndc_ = result.depth_is_ndc;
-        last_presented_near_plane_ = result.near_plane;
-        last_presented_far_plane_ = result.far_plane;
-        last_presented_orthographic_ = result.orthographic;
+        last_presented_image_ = image;
+        last_presented_depth_ = metadata.depth;
+        last_presented_external_depth_texture_ = metadata.external_depth_texture;
+        last_presented_depth_is_ndc_ = metadata.depth_is_ndc;
+        last_presented_near_plane_ = metadata.near_plane;
+        last_presented_far_plane_ = metadata.far_plane;
+        last_presented_orthographic_ = metadata.orthographic;
         has_present_upload_cache_ = true;
         return {};
     }
@@ -972,35 +1012,6 @@ namespace lfs::rendering {
 
     bool RenderingEngineImpl::hasMeshRender() const {
         return mesh_rendered_this_frame_ && mesh_renderer_.isInitialized();
-    }
-
-    Result<void> RenderingEngineImpl::compositeMeshAndSplat(
-        const RenderResult& splat_result,
-        const glm::ivec2& viewport_size) {
-
-        if (!depth_compositor_.isInitialized())
-            return std::unexpected("Depth compositor not initialized");
-
-        if (!mesh_rendered_this_frame_)
-            return {};
-
-        const GLuint splat_color = screen_renderer_->getUploadedColorTexture();
-        const GLuint splat_depth = screen_renderer_->getUploadedDepthTexture();
-
-        if (splat_color == 0 || splat_depth == 0)
-            return {};
-
-        const glm::vec2 splat_tc_scale = screen_renderer_->getTexcoordScale();
-
-        return depth_compositor_.composite(
-            splat_color, splat_depth,
-            mesh_renderer_.getColorTexture(),
-            mesh_renderer_.getDepthTexture(),
-            splat_result.near_plane,
-            splat_result.far_plane,
-            true,
-            splat_tc_scale,
-            splat_result.depth_is_ndc);
     }
 
     Result<void> RenderingEngineImpl::compositeMeshAndGpuFrame(

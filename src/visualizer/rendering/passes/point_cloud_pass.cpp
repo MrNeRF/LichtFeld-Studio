@@ -109,7 +109,7 @@ namespace lfs::vis {
             point_cloud_transform = scene_state.model_transforms[0];
         }
         const std::vector<glm::mat4> pc_transforms = {point_cloud_transform};
-        const auto pc_request = buildLegacyPointCloudRenderRequest(ctx, pc_transforms);
+        const auto pc_request = buildPointCloudRenderRequest(ctx, pc_transforms);
 
         if (ctx.settings.split_view_mode == SplitViewMode::GTComparison &&
             res.gt_context && res.gt_context->valid()) {
@@ -127,22 +127,20 @@ namespace lfs::vis {
                                          FrameResources& res,
                                          const lfs::core::PointCloud& point_cloud,
                                          const std::vector<glm::mat4>& pc_transforms,
-                                         const lfs::rendering::RenderRequest& request,
+                                         const lfs::rendering::PointCloudRenderRequest& request,
                                          const glm::ivec2 render_size) {
         auto request_for_texture = request;
-        request_for_texture.viewport.size = render_size;
+        request_for_texture.frame_view.size = render_size;
         request_for_texture.model_transforms = &pc_transforms;
 
         auto gpu_frame_result = engine.renderPointCloudGpuFrame(point_cloud, request_for_texture);
         if (gpu_frame_result) {
-            res.cached_result = {};
+            res.cached_metadata = {};
             res.cached_gpu_frame = *gpu_frame_result;
             res.cached_result_size = render_size;
-            res.render_texture_valid = res.cached_gpu_frame->valid();
         } else {
             LOG_ERROR("Failed to render point cloud GPU frame: {}", gpu_frame_result.error());
-            res.cached_result = {};
-            res.render_texture_valid = false;
+            res.cached_metadata = {};
             res.cached_gpu_frame.reset();
             res.cached_result_size = {0, 0};
         }

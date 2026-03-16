@@ -204,6 +204,21 @@ namespace lfs::vis {
             };
         }
 
+        [[nodiscard]] rendering::FrameView frameViewFromViewport(const rendering::ViewportData& viewport,
+                                                                 const glm::vec3& background_color,
+                                                                 const float far_plane = rendering::DEFAULT_FAR_PLANE) {
+            return rendering::FrameView{
+                .rotation = viewport.rotation,
+                .translation = viewport.translation,
+                .size = viewport.size,
+                .focal_length_mm = viewport.focal_length_mm,
+                .far_plane = far_plane,
+                .orthographic = viewport.orthographic,
+                .ortho_scale = viewport.ortho_scale,
+                .background_color = background_color,
+            };
+        }
+
         template <typename RenderableT>
         [[nodiscard]] const RenderableT* findRenderableByNodeId(const std::vector<RenderableT>& items,
                                                                 const core::NodeId node_id) {
@@ -853,40 +868,26 @@ namespace lfs::vis {
         }
 
         const auto settings = rendering_manager_->getSettings();
-        rendering::RenderRequest request{
-            .viewport = viewportDataFromCamera(*cameras[camera_index]),
+        const auto viewport = viewportDataFromCamera(*cameras[camera_index]);
+        rendering::GaussianScreenPositionRequest request{
+            .frame_view = frameViewFromViewport(viewport, settings.background_color),
             .scaling_modifier = settings.scaling_modifier,
             .antialiasing = settings.antialiasing,
             .mip_filter = settings.mip_filter,
             .sh_degree = scene_state.combined_model->get_active_sh_degree(),
-            .background_color = settings.background_color,
-            .crop_box = std::nullopt,
-            .show_rings = false,
-            .ring_width = settings.ring_width,
-            .show_center_markers = false,
             .model_transforms = &scene_state.model_transforms,
             .transform_indices = scene_state.transform_indices,
-            .selection_mask = nullptr,
-            .output_screen_positions = true,
-            .ellipsoid = std::nullopt,
-            .depth_filter = std::nullopt,
-            .selected_node_mask = {},
             .node_visibility_mask = scene_state.node_visibility_mask,
         };
 
-        auto render_result = engine->renderGaussians(*scene_state.combined_model, request);
-        if (!render_result) {
+        auto screen_positions = engine->renderGaussianScreenPositions(*scene_state.combined_model, request);
+        if (!screen_positions) {
             LOG_WARN("SelectionService: failed to render screen positions for camera {}: {}",
-                     camera_index, render_result.error());
+                     camera_index, screen_positions.error());
             return nullptr;
         }
 
-        if (!render_result->screen_positions || !render_result->screen_positions->is_valid()) {
-            LOG_WARN("SelectionService: no screen positions produced for camera {}", camera_index);
-            return nullptr;
-        }
-
-        return render_result->screen_positions;
+        return *screen_positions;
     }
 
     std::optional<int> SelectionService::resolveCommandHoveredGaussianId(const float x, const float y,
@@ -983,41 +984,23 @@ namespace lfs::vis {
         }
 
         const auto settings = rendering_manager_->getSettings();
-        rendering::RenderRequest request{
-            .viewport = viewport,
+        rendering::GaussianPickingRequest request{
+            .frame_view = frameViewFromViewport(
+                viewport,
+                settings.background_color,
+                settings.depth_clip_enabled ? settings.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE),
             .scaling_modifier = settings.scaling_modifier,
             .antialiasing = settings.antialiasing,
             .mip_filter = settings.mip_filter,
             .sh_degree = scene_state.combined_model->get_active_sh_degree(),
-            .background_color = settings.background_color,
-            .crop_box = std::nullopt,
-            .show_rings = false,
-            .ring_width = settings.ring_width,
-            .show_center_markers = false,
             .model_transforms = &scene_state.model_transforms,
             .transform_indices = scene_state.transform_indices,
-            .selection_mask = nullptr,
-            .output_screen_positions = false,
-            .brush_active = true,
-            .brush_x = cursor_pos.x,
-            .brush_y = cursor_pos.y,
-            .brush_radius = 0.0f,
-            .brush_add_mode = true,
-            .brush_selection_tensor = nullptr,
-            .brush_saturation_mode = false,
-            .brush_saturation_amount = 0.0f,
-            .selection_mode_rings = true,
+            .node_visibility_mask = scene_state.node_visibility_mask,
+            .crop_box = std::nullopt,
             .ellipsoid = std::nullopt,
             .depth_filter = std::nullopt,
-            .selected_node_mask = {},
-            .node_visibility_mask = scene_state.node_visibility_mask,
-            .desaturate_unselected = false,
-            .selection_flash_intensity = 0.0f,
+            .cursor_pos = cursor_pos,
             .hovered_depth_id = hovered_depth_id_device_,
-            .highlight_gaussian_id = -1,
-            .far_plane = settings.depth_clip_enabled ? settings.depth_clip_far : lfs::rendering::DEFAULT_FAR_PLANE,
-            .orthographic = viewport.orthographic,
-            .ortho_scale = viewport.ortho_scale,
         };
 
         if (filters.crop_filter) {
@@ -1060,9 +1043,9 @@ namespace lfs::vis {
             return std::nullopt;
         }
 
-        auto render_result = engine->renderGaussians(*scene_state.combined_model, request);
-        if (!render_result) {
-            LOG_WARN("SelectionService: failed to render hovered gaussian id: {}", render_result.error());
+        auto picking_result = engine->renderGaussianPickingPass(*scene_state.combined_model, request);
+        if (!picking_result) {
+            LOG_WARN("SelectionService: failed to render hovered gaussian id: {}", picking_result.error());
             return std::nullopt;
         }
 

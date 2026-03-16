@@ -8,13 +8,13 @@
 
 namespace lfs::vis {
 
-    // Centralized compatibility adapter for the frozen RenderRequest API.
-    // New visualizer-side work should build FrameView/GpuFrame contracts first
-    // and only translate to RenderRequest here while legacy entry points remain.
-    [[nodiscard]] lfs::rendering::RenderRequest buildLegacyGaussianRenderRequest(
+    // Centralized request builders for the public renderer boundary.
+    // Visualizer-side code should prefer building FrameView/GpuFrame contracts first
+    // and only translate to renderer request types here.
+    [[nodiscard]] lfs::rendering::ViewportRenderRequest buildViewportRenderRequest(
         const FrameContext& ctx, glm::ivec2 render_size);
 
-    [[nodiscard]] lfs::rendering::RenderRequest buildLegacyPointCloudRenderRequest(
+    [[nodiscard]] lfs::rendering::PointCloudRenderRequest buildPointCloudRenderRequest(
         const FrameContext& ctx, const std::vector<glm::mat4>& model_transforms);
 
 } // namespace lfs::vis

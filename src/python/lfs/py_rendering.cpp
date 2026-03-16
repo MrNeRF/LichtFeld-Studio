@@ -626,7 +626,7 @@ namespace lfs::python {
             .def_ro("screen_positions", &PyViewportRender::screen_positions);
 
         m.def("get_viewport_render", &get_viewport_render,
-              "Get the current viewport render if a CPU-visible image is already available (does not force GPU readback)");
+              "Get the most recently captured CPU-visible viewport render if available (does not force GPU readback)");
 
         m.def("capture_viewport", &capture_viewport,
               "Capture viewport render explicitly (may read back from GPU; clones data, safe to use from background threads)");

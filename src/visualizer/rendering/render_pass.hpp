@@ -88,12 +88,37 @@ namespace lfs::vis {
         }
     };
 
+    struct CachedRenderMetadata {
+        std::shared_ptr<lfs::core::Tensor> depth;
+        std::shared_ptr<lfs::core::Tensor> depth_right;
+        std::shared_ptr<lfs::core::Tensor> screen_positions;
+        bool valid = false;
+        bool depth_is_ndc = false;
+        float near_plane = lfs::rendering::DEFAULT_NEAR_PLANE;
+        float far_plane = lfs::rendering::DEFAULT_FAR_PLANE;
+        bool orthographic = false;
+        float split_position = -1.0f;
+    };
+
+    [[nodiscard]] inline CachedRenderMetadata makeCachedRenderMetadata(const lfs::rendering::FrameMetadata& result) {
+        return {
+            .depth = result.depth,
+            .depth_right = result.depth_right,
+            .screen_positions = result.screen_positions,
+            .valid = result.valid,
+            .depth_is_ndc = result.depth_is_ndc,
+            .near_plane = result.near_plane,
+            .far_plane = result.far_plane,
+            .orthographic = result.orthographic,
+            .split_position = result.split_position};
+    }
+
     // Pass execution order (defined in RenderingManager constructor):
     //   [pre] SplatRasterPass — GT comparison pre-render (before loop, at GT dimensions)
     //   [0]   SplitViewPass   — Side-by-side views (blocks scene raster passes if active)
     //   [1]   SplatRasterPass — Render splats to offscreen FBO
     //   [2]   PointCloudPass  — Pre-training point cloud (mutually exclusive with splats)
-    //   [3]   PresentPass     — Present cached GPU frame or legacy render result
+    //   [3]   PresentPass     — Present cached GPU frame
     //   [4]   MeshPass        — Render meshes, composite with splats
     //   [5]   OverlayPass     — Grid, crop boxes, frustums, pivot, axes
     //
@@ -102,10 +127,9 @@ namespace lfs::vis {
     //   splats_presented    — Set by PresentPass/PointCloudPass. Tells MeshPass to composite.
     //   splat_pre_rendered  — Set by GT pre-render. Skips SplatRasterPass in the loop.
     struct FrameResources {
-        lfs::rendering::RenderResult cached_result;
+        CachedRenderMetadata cached_metadata;
         std::optional<lfs::rendering::GpuFrame> cached_gpu_frame;
         glm::ivec2 cached_result_size{0};
-        bool render_texture_valid = false;
         bool splats_presented = false;
         bool split_view_executed = false;
         bool splat_pre_rendered = false;
