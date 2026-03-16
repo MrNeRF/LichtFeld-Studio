@@ -572,6 +572,18 @@ progress fill {
     color: #f5f7ff;
 }
 
+.section-header.text-accent,
+.section-header.text-accent:hover,
+.section-header.text-accent.is-expanded {
+    color: #89b4fa;
+}
+
+.section-header .section-arrow.text-accent,
+.section-header:hover .section-arrow.text-accent,
+.section-header.is-expanded .section-arrow.text-accent {
+    color: #89b4fa;
+}
+
 .section-arrow.is-expanded {
     transform: rotate(90deg);
 }

@@ -6,9 +6,9 @@
 <body template="docked-panel" data-model="rendering">
 
   <!-- Viewport -->
-  <div class="section-header" id="hdr-viewport" data-event-click="toggle_section('viewport')">
-    <span class="section-arrow is-expanded" id="arrow-viewport">&#x25B6;</span>
-    <span>{{label_hdr_viewport}}</span>
+  <div class="section-header text-accent" id="hdr-viewport" data-event-click="toggle_section('viewport')">
+    <span class="section-arrow text-accent is-expanded" id="arrow-viewport">&#x25B6;</span>
+    <span class="text-accent">{{label_hdr_viewport}}</span>
   </div>
   <div class="section-content" id="sec-viewport">
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.background">
@@ -99,9 +99,9 @@
   </div>
 
   <!-- Camera and Projection -->
-  <div class="section-header" id="hdr-camera" data-event-click="toggle_section('camera')">
-    <span class="section-arrow is-expanded" id="arrow-camera">&#x25B6;</span>
-    <span>{{label_hdr_camera}}</span>
+  <div class="section-header text-accent" id="hdr-camera" data-event-click="toggle_section('camera')">
+    <span class="section-arrow text-accent is-expanded" id="arrow-camera">&#x25B6;</span>
+    <span class="text-accent">{{label_hdr_camera}}</span>
   </div>
   <div class="section-content" id="sec-camera">
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.focal_length">
@@ -149,9 +149,9 @@
   </div>
 
   <!-- Selection and Overlays -->
-  <div class="section-header" id="hdr-selection" data-event-click="toggle_section('selection')">
-    <span class="section-arrow" id="arrow-selection">&#x25B6;</span>
-    <span>{{label_hdr_selection}}</span>
+  <div class="section-header text-accent" id="hdr-selection" data-event-click="toggle_section('selection')">
+    <span class="section-arrow text-accent" id="arrow-selection">&#x25B6;</span>
+    <span class="text-accent">{{label_hdr_selection}}</span>
   </div>
   <div class="section-content collapsed" id="sec-selection">
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.desaturate_unselected">
@@ -200,9 +200,9 @@
   </div>
 
   <!-- Mesh -->
-  <div class="section-header" id="hdr-mesh" data-event-click="toggle_section('mesh')">
-    <span class="section-arrow" id="arrow-mesh">&#x25B6;</span>
-    <span>{{label_hdr_mesh}}</span>
+  <div class="section-header text-accent" id="hdr-mesh" data-event-click="toggle_section('mesh')">
+    <span class="section-arrow text-accent" id="arrow-mesh">&#x25B6;</span>
+    <span class="text-accent">{{label_hdr_mesh}}</span>
   </div>
   <div class="section-content collapsed" id="sec-mesh">
     <div class="setting-row setting-row--aligned">
@@ -272,9 +272,9 @@
   </div>
 
   <!-- Post Processing -->
-  <div class="section-header" id="hdr-post-process" data-event-click="toggle_section('post_process')">
-    <span class="section-arrow" id="arrow-post-process">&#x25B6;</span>
-    <span>{{label_hdr_post_process}}</span>
+  <div class="section-header text-accent" id="hdr-post-process" data-event-click="toggle_section('post_process')">
+    <span class="section-arrow text-accent" id="arrow-post-process">&#x25B6;</span>
+    <span class="text-accent">{{label_hdr_post_process}}</span>
   </div>
   <div class="section-content collapsed" id="sec-post-process">
     <div class="setting-row setting-row--aligned" data-tooltip="tooltip.appearance_correction">
@@ -344,9 +344,9 @@
           </div>
         </div>
 
-        <div class="section-header" id="hdr-ppisp-crf" data-event-click="toggle_section('ppisp_crf')">
-          <span class="section-arrow" id="arrow-ppisp-crf">&#x25B6;</span>
-          <span>{{label_ppisp_crf}}</span>
+        <div class="section-header text-accent" id="hdr-ppisp-crf" data-event-click="toggle_section('ppisp_crf')">
+          <span class="section-arrow text-accent" id="arrow-ppisp-crf">&#x25B6;</span>
+          <span class="text-accent">{{label_ppisp_crf}}</span>
         </div>
         <div class="section-content collapsed" id="sec-ppisp-crf">
           <crf-curve

@@ -9,6 +9,12 @@ import lichtfeld as lf
 from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 
+
+def tr(key):
+    result = lf.ui.tr(key)
+    return result if result else key
+
+
 SENSOR_HALF_HEIGHT_MM = 12.0
 
 BOOL_PROPS = [
