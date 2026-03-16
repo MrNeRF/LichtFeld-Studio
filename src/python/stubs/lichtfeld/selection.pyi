@@ -77,9 +77,6 @@ def draw_lasso_preview(points: Sequence[tuple[float, float]], add_mode: bool = T
 def clear_lasso_preview() -> None:
     """Clear lasso selection preview"""
 
-def set_output_screen_positions(enable: bool) -> None:
-    """Enable/disable screen positions output during rendering"""
-
 def has_screen_positions() -> bool:
     """Check if screen positions are available"""
 

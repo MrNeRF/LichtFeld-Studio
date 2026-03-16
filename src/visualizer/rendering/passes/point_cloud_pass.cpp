@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "point_cloud_pass.hpp"
-#include "../legacy_render_request_adapter.hpp"
+#include "../viewport_request_builder.hpp"
 #include "core/logger.hpp"
 #include "core/point_cloud.hpp"
 #include "core/splat_data.hpp"

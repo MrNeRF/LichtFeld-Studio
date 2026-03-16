@@ -187,7 +187,7 @@ namespace lfs::rendering {
                 return std::unexpected("Model3D panel has no model");
             }
 
-            RenderingPipeline::RenderRequest base_req{
+            RenderingPipeline::RasterRequest base_req{
                 .view_rotation = request.viewport.rotation,
                 .view_translation = request.viewport.translation,
                 .viewport_size = render_size,

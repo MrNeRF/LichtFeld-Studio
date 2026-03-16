@@ -147,14 +147,14 @@ namespace lfs::python {
 
         sel.def(
             "brush_select", [](float x, float y, float radius) {
-                auto* rm = get_rm();
                 auto* ss = get_ss();
-                if (!rm || !ss)
+                if (!ss)
                     return;
+                auto screen_pos = ss->getScreenPositions();
                 auto* stroke = ss->getStrokeSelection();
-                if (!stroke || !stroke->is_valid())
+                if (!screen_pos || !stroke || !stroke->is_valid())
                     return;
-                rm->brushSelect(x, y, radius, *stroke);
+                rendering::brush_select_tensor(*screen_pos, x, y, radius, *stroke);
             },
             nb::arg("x"), nb::arg("y"), nb::arg("radius"), "Brush select at (x, y) with given radius. Accumulates into stroke selection.");
 
@@ -330,15 +330,6 @@ namespace lfs::python {
         // ─────────────────────────────────────────────────────────────────────
 
         sel.def(
-            "set_output_screen_positions", [](bool enable) {
-                if (auto* rm = get_rm()) {
-                    rm->setOutputScreenPositions(enable);
-                    rm->markDirty(vis::DirtyFlag::SELECTION);
-                }
-            },
-            nb::arg("enable"), "Enable/disable screen positions output during rendering");
-
-        sel.def(
             "has_screen_positions", []() -> bool {
                 auto* ss = get_ss();
                 return ss && ss->hasScreenPositions();
@@ -424,14 +415,10 @@ namespace lfs::python {
 
         sel.def(
             "apply_crop_filter", []() {
-                auto* rm = get_rm();
                 auto* ss = get_ss();
-                if (!rm || !ss)
+                if (!ss)
                     return;
-                auto* stroke = ss->getStrokeSelection();
-                if (stroke && stroke->is_valid()) {
-                    rm->applyCropFilter(*stroke);
-                }
+                ss->applyCropFilterToStroke();
             },
             "Apply crop box filter to current stroke selection");
 

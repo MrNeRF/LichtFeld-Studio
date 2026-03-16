@@ -2,7 +2,7 @@
  *
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-#include "legacy_render_request_adapter.hpp"
+#include "viewport_request_builder.hpp"
 #include "scene/scene_manager.hpp"
 
 namespace lfs::vis {
@@ -120,7 +120,6 @@ namespace lfs::vis {
             .model_transforms = &ctx.scene_state.model_transforms,
             .transform_indices = ctx.scene_state.transform_indices,
             .selection_mask = ctx.scene_state.selection_mask,
-            .output_screen_positions = ctx.brush.output_screen_positions,
             .brush =
                 {.active = ctx.brush.active,
                  .cursor = {ctx.brush.x, ctx.brush.y},

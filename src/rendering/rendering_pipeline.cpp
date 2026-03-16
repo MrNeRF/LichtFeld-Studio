@@ -65,7 +65,7 @@ namespace lfs::rendering {
 
     Result<RenderingPipeline::RenderResult> RenderingPipeline::render(
         const lfs::core::SplatData& model,
-        const RenderRequest& request) {
+        const RasterRequest& request) {
 
         LOG_TIMER_TRACE("RenderingPipeline::render");
 
@@ -81,6 +81,31 @@ namespace lfs::rendering {
             LOG_TRACE("Using point cloud rendering mode");
             return renderPointCloud(model, request);
         }
+
+        return renderGaussians(model, request, nullptr);
+    }
+
+    Result<Tensor> RenderingPipeline::renderScreenPositions(
+        const lfs::core::SplatData& model,
+        const RasterRequest& request) {
+
+        LOG_TIMER_TRACE("RenderingPipeline::renderScreenPositions");
+
+        Tensor screen_positions;
+        auto render_result = renderGaussians(model, request, &screen_positions);
+        if (!render_result) {
+            return std::unexpected(render_result.error());
+        }
+        if (!screen_positions.is_valid()) {
+            return std::unexpected("Screen-position render returned no screen positions");
+        }
+        return screen_positions;
+    }
+
+    Result<RenderingPipeline::RenderResult> RenderingPipeline::renderGaussians(
+        const lfs::core::SplatData& model,
+        const RasterRequest& request,
+        Tensor* const screen_positions_out) {
 
         // Regular gaussian splatting rendering
         LOG_TRACE("Using gaussian splatting rendering mode");
@@ -187,12 +212,11 @@ namespace lfs::rendering {
                 } else {
                     LOG_TRACE("Using TENSOR_NATIVE backend (sh_degree temporarily changed from {} to {})",
                               original_sh_degree, request.sh_degree);
-                    Tensor screen_positions;
                     auto [image, depth] = rasterize_tensor(cam, const_cast<lfs::core::SplatData&>(model), background_,
                                                            request.show_rings, request.ring_width,
                                                            model_transforms_tensor.get(), transform_indices_ptr,
                                                            selection_mask_ptr,
-                                                           request.output_screen_positions ? &screen_positions : nullptr,
+                                                           screen_positions_out,
                                                            request.brush_active, request.brush_x, request.brush_y, request.brush_radius,
                                                            request.brush_add_mode, request.brush_selection_tensor,
                                                            request.brush_saturation_mode, request.brush_saturation_amount,
@@ -216,9 +240,6 @@ namespace lfs::rendering {
                                                            request.mip_filter);
                     result.image = std::move(image);
                     result.depth = std::move(depth);
-                    if (request.output_screen_positions) {
-                        result.screen_positions = std::move(screen_positions);
-                    }
                 }
 
                 result.valid = true;
@@ -247,12 +268,11 @@ namespace lfs::rendering {
             }
 
             // Use libtorch-free tensor-based rasterizer
-            Tensor screen_positions;
             auto [image, depth] = rasterize_tensor(cam, mutable_model, background_,
                                                    request.show_rings, request.ring_width,
                                                    model_transforms_tensor.get(), transform_indices_ptr,
                                                    selection_mask_ptr,
-                                                   request.output_screen_positions ? &screen_positions : nullptr,
+                                                   screen_positions_out,
                                                    request.brush_active, request.brush_x, request.brush_y, request.brush_radius,
                                                    request.brush_add_mode, request.brush_selection_tensor,
                                                    request.brush_saturation_mode, request.brush_saturation_amount,
@@ -276,9 +296,6 @@ namespace lfs::rendering {
                                                    request.mip_filter);
             result.image = std::move(image);
             result.depth = std::move(depth);
-            if (request.output_screen_positions) {
-                result.screen_positions = std::move(screen_positions);
-            }
             result.valid = true;
             result.orthographic = request.orthographic;
             result.far_plane = request.far_plane;
@@ -294,7 +311,7 @@ namespace lfs::rendering {
 
     Result<RenderingPipeline::RenderResult> RenderingPipeline::renderPointCloud(
         const lfs::core::SplatData& model,
-        const RenderRequest& request) {
+        const RasterRequest& request) {
 
         LOG_TIMER_TRACE("RenderingPipeline::renderPointCloud");
 
@@ -483,7 +500,7 @@ namespace lfs::rendering {
 
     Result<GpuFrame> RenderingPipeline::renderRawPointCloudGpuFrame(
         const lfs::core::PointCloud& point_cloud,
-        const RenderRequest& request) {
+        const RasterRequest& request) {
 
         LOG_TIMER_TRACE("RenderingPipeline::renderRawPointCloudGpuFrame");
 
@@ -670,7 +687,7 @@ namespace lfs::rendering {
         return {};
     }
 
-    Result<lfs::core::Camera> RenderingPipeline::createCamera(const RenderRequest& request) {
+    Result<lfs::core::Camera> RenderingPipeline::createCamera(const RasterRequest& request) {
         LOG_TIMER_TRACE("RenderingPipeline::createCamera");
 
         // Convert view matrix to camera matrix

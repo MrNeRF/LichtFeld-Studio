@@ -30,7 +30,7 @@ namespace lfs::rendering {
 
     class RenderingPipeline {
     public:
-        struct RenderRequest {
+        struct RasterRequest {
             glm::mat3 view_rotation;
             glm::vec3 view_translation;
             glm::ivec2 viewport_size;
@@ -54,7 +54,6 @@ namespace lfs::rendering {
             std::shared_ptr<lfs::core::Tensor> transform_indices; // Per-Gaussian index [N], nullable
             // Selection mask for highlighting selected Gaussians
             std::shared_ptr<lfs::core::Tensor> selection_mask;
-            bool output_screen_positions = false;
             bool brush_active = false;
             float brush_x = 0.0f;
             float brush_y = 0.0f;
@@ -104,7 +103,6 @@ namespace lfs::rendering {
         struct RenderResult {
             Tensor image;
             Tensor depth;
-            Tensor screen_positions; // Optional: screen positions [N, 2] for brush tool
             bool valid = false;
             bool depth_is_ndc = false;         // True if depth is already NDC (0-1), e.g., from OpenGL
             GLuint external_depth_texture = 0; // If set, use this OpenGL texture directly (zero-copy)
@@ -118,7 +116,8 @@ namespace lfs::rendering {
         ~RenderingPipeline();
 
         // Main render function - now returns Result
-        Result<RenderResult> render(const lfs::core::SplatData& model, const RenderRequest& request);
+        Result<RenderResult> render(const lfs::core::SplatData& model, const RasterRequest& request);
+        Result<Tensor> renderScreenPositions(const lfs::core::SplatData& model, const RasterRequest& request);
         void setRenderTargetPool(RenderTargetPool* pool) { render_target_pool_ = pool; }
         void resetResources();
 
@@ -127,16 +126,19 @@ namespace lfs::rendering {
                                            ScreenQuadRenderer& renderer,
                                            const glm::ivec2& viewport_size);
 
-        Result<GpuFrame> renderRawPointCloudGpuFrame(const lfs::core::PointCloud& point_cloud, const RenderRequest& request);
+        Result<GpuFrame> renderRawPointCloudGpuFrame(const lfs::core::PointCloud& point_cloud, const RasterRequest& request);
 
     private:
         // Apply depth params from RenderResult to ScreenQuadRenderer
         static void applyDepthParams(const RenderResult& result,
                                      ScreenQuadRenderer& renderer,
                                      const glm::ivec2& viewport_size);
-        Result<lfs::core::Camera> createCamera(const RenderRequest& request);
+        Result<lfs::core::Camera> createCamera(const RasterRequest& request);
+        Result<RenderResult> renderGaussians(const lfs::core::SplatData& model,
+                                             const RasterRequest& request,
+                                             Tensor* screen_positions_out);
         glm::vec2 computeFov(float vfov_rad, int width, int height);
-        Result<RenderResult> renderPointCloud(const lfs::core::SplatData& model, const RenderRequest& request);
+        Result<RenderResult> renderPointCloud(const lfs::core::SplatData& model, const RasterRequest& request);
 
         // Ensure persistent FBO is sized correctly (avoids recreation every frame)
         void ensureFBOSize(int width, int height);

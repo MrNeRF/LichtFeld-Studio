@@ -567,9 +567,6 @@ namespace lfs::vis {
             return;
 
         view_context_bridge_initialized_ = true;
-        if (rendering_manager_) {
-            rendering_manager_->setOutputScreenPositions(true);
-        }
 
         vis::set_view_callback([this]() -> std::optional<vis::ViewInfo> {
             if (!rendering_manager_)
@@ -619,7 +616,15 @@ namespace lfs::vis {
         });
         callback_cleanup_.add([] { vis::set_set_fov_callback(nullptr); });
 
-        vis::set_viewport_render_callback([this]() -> std::optional<vis::ViewportRender> {
+        const auto get_screen_positions = [this]() -> std::shared_ptr<lfs::core::Tensor> {
+            if (!scene_manager_) {
+                return nullptr;
+            }
+            auto* const selection_service = scene_manager_->getSelectionService();
+            return selection_service ? selection_service->getScreenPositions() : nullptr;
+        };
+
+        vis::set_viewport_render_callback([this, get_screen_positions]() -> std::optional<vis::ViewportRender> {
             if (!rendering_manager_)
                 return std::nullopt;
 
@@ -627,11 +632,11 @@ namespace lfs::vis {
             if (!image)
                 return std::nullopt;
 
-            return vis::ViewportRender{std::move(image), rendering_manager_->getScreenPositions()};
+            return vis::ViewportRender{std::move(image), get_screen_positions()};
         });
         callback_cleanup_.add([] { vis::set_viewport_render_callback(nullptr); });
 
-        vis::set_capture_viewport_render_callback([this]() -> std::optional<vis::ViewportRender> {
+        vis::set_capture_viewport_render_callback([this, get_screen_positions]() -> std::optional<vis::ViewportRender> {
             if (!rendering_manager_)
                 return std::nullopt;
 
@@ -639,7 +644,7 @@ namespace lfs::vis {
             if (!image)
                 return std::nullopt;
 
-            return vis::ViewportRender{std::move(image), rendering_manager_->getScreenPositions()};
+            return vis::ViewportRender{std::move(image), get_screen_positions()};
         });
         callback_cleanup_.add([] { vis::set_capture_viewport_render_callback(nullptr); });
 

@@ -86,6 +86,7 @@ namespace lfs::vis {
 
         void beginStroke();
         [[nodiscard]] core::Tensor* getStrokeSelection();
+        void applyCropFilterToStroke();
         [[nodiscard]] SelectionResult finalizeStroke(SelectionMode mode, const std::vector<bool>& node_mask = {});
         void cancelStroke();
 
@@ -144,6 +145,7 @@ namespace lfs::vis {
         [[nodiscard]] std::optional<ViewportInfo> resolveViewportInfo() const;
         [[nodiscard]] std::shared_ptr<core::Tensor> resolveCommandScreenPositions(int camera_index) const;
         [[nodiscard]] std::shared_ptr<core::Tensor> renderScreenPositionsForCamera(int camera_index) const;
+        [[nodiscard]] std::shared_ptr<core::Tensor> renderScreenPositionsForCurrentViewport() const;
         [[nodiscard]] std::optional<int> resolveCommandHoveredGaussianId(float x, float y, int camera_index,
                                                                          const SelectionFilterState& filters);
         [[nodiscard]] std::optional<int> renderHoveredGaussianId(const rendering::ViewportData& viewport,
@@ -174,6 +176,8 @@ namespace lfs::vis {
         [[nodiscard]] bool shouldClosePolygonPreview() const;
         void applyFilters(core::Tensor& selection, const SelectionFilterState& filters,
                           const std::vector<bool>& node_mask) const;
+        void applyCropFilter(core::Tensor& selection) const;
+        void applyDepthFilter(core::Tensor& selection) const;
         void clearInteractivePreviewState();
         [[nodiscard]] std::vector<bool> effectiveNodeMask(bool restrict_to_selected_nodes) const;
         [[nodiscard]] SelectionFilterState defaultFilterState() const;
@@ -194,6 +198,8 @@ namespace lfs::vis {
         std::unordered_map<int, std::shared_ptr<core::Tensor>> testing_camera_screen_positions_;
         std::optional<ViewportInfo> testing_viewport_;
         std::optional<int> testing_hovered_gaussian_id_;
+        mutable std::shared_ptr<core::Tensor> viewport_screen_positions_;
+        mutable uint64_t viewport_screen_positions_generation_ = 0;
         mutable std::vector<float> polygon_vertex_host_buffer_;
         mutable core::Tensor polygon_vertex_device_buffer_;
 

@@ -32,21 +32,13 @@ namespace lfs::rendering {
         void shutdown() override;
         bool isInitialized() const override;
 
-        Result<std::shared_ptr<lfs::core::Tensor>> renderGaussianImage(
-            const lfs::core::SplatData& splat_data,
-            const GaussianImageRequest& request) override;
-
-        Result<std::shared_ptr<lfs::core::Tensor>> renderGaussianScreenPositions(
-            const lfs::core::SplatData& splat_data,
-            const GaussianScreenPositionRequest& request) override;
-
-        Result<void> renderGaussianPickingPass(
-            const lfs::core::SplatData& splat_data,
-            const GaussianPickingRequest& request) override;
-
         Result<ViewportFrameResult> renderGaussiansViewportFrame(
             const lfs::core::SplatData& splat_data,
             const ViewportRenderRequest& request) override;
+
+        Result<std::shared_ptr<lfs::core::Tensor>> renderGaussianScreenPositions(
+            const lfs::core::SplatData& splat_data,
+            const ScreenPositionRenderRequest& request) override;
 
         Result<GpuFrame> renderPointCloudGpuFrame(
             const lfs::core::PointCloud& point_cloud,

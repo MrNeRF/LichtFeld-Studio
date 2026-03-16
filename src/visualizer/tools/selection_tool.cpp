@@ -81,12 +81,6 @@ namespace lfs::vis::tools {
             }
         }
 
-        auto* const rm = tool_context_->getRenderingManager();
-        if (!rm) {
-            return;
-        }
-
-        rm->setOutputScreenPositions(enabled);
         if (enabled) {
             applySelectionFilterSettings(*tool_context_);
         } else {

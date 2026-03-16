@@ -10,8 +10,10 @@
 #include "operation/undo_entry.hpp"
 #include "operation/undo_history.hpp"
 #include "operator/operator_registry.hpp"
+#include "rendering/cuda_kernels.hpp"
 #include "rendering/rendering_manager.hpp"
 #include "scene/scene_manager.hpp"
+#include "selection/selection_service.hpp"
 #include "visualizer_impl.hpp"
 
 namespace lfs::vis::op {
@@ -247,7 +249,8 @@ namespace lfs::vis::op {
     void BrushStrokeOperator::updateSaturationAtPoint(double x, double y, OperatorContext& ctx) {
         auto* rm = services().renderingOrNull();
         auto* gm = services().guiOrNull();
-        if (!rm || !gm || !gm->getViewer()) {
+        auto* selection_service = ctx.scene().getSelectionService();
+        if (!rm || !gm || !gm->getViewer() || !selection_service) {
             return;
         }
 
@@ -288,7 +291,27 @@ namespace lfs::vis::op {
         // Reshape SH0 from [N, 1, 3] to [N, 3] for the kernel
         auto sh0_reshaped = sh0.reshape({static_cast<int>(sh0.size(0)), 3});
 
-        rm->adjustSaturation(image_x, image_y, scaled_radius, saturation_amount_, sh0_reshaped);
+        const auto screen_positions = selection_service->getScreenPositions();
+        if (!screen_positions || !screen_positions->is_valid()) {
+            return;
+        }
+
+        const int num_gaussians = static_cast<int>(screen_positions->size(0));
+        if (num_gaussians == 0) {
+            return;
+        }
+
+        lfs::launchAdjustSaturation(
+            sh0_reshaped.ptr<float>(),
+            screen_positions->ptr<float>(),
+            image_x,
+            image_y,
+            scaled_radius,
+            saturation_amount_,
+            num_gaussians,
+            nullptr);
+
+        rm->markDirty(DirtyFlag::SPLATS);
         rm->setBrushState(true, image_x, image_y, scaled_radius, true, nullptr, true, saturation_amount_);
     }
 

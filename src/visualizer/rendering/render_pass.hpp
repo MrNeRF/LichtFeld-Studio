@@ -32,7 +32,6 @@ namespace lfs::vis {
         bool saturation_mode = false;
         float saturation_amount = 0;
         lfs::rendering::SelectionMode selection_mode{};
-        bool output_screen_positions = false;
     };
 
     struct GizmoState {
@@ -91,7 +90,6 @@ namespace lfs::vis {
     struct CachedRenderMetadata {
         std::shared_ptr<lfs::core::Tensor> depth;
         std::shared_ptr<lfs::core::Tensor> depth_right;
-        std::shared_ptr<lfs::core::Tensor> screen_positions;
         bool valid = false;
         bool depth_is_ndc = false;
         float near_plane = lfs::rendering::DEFAULT_NEAR_PLANE;
@@ -104,7 +102,6 @@ namespace lfs::vis {
         return {
             .depth = result.depth,
             .depth_right = result.depth_right,
-            .screen_positions = result.screen_positions,
             .valid = result.valid,
             .depth_is_ndc = result.depth_is_ndc,
             .near_plane = result.near_plane,

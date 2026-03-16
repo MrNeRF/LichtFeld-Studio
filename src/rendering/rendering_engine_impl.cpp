@@ -28,9 +28,9 @@ namespace lfs::rendering {
             return crop_params;
         }
 
-        [[nodiscard]] RenderingPipeline::RenderRequest makePointCloudPipelineRequest(
+        [[nodiscard]] RenderingPipeline::RasterRequest makePointCloudPipelineRequest(
             const PointCloudRenderRequest& request) {
-            return RenderingPipeline::RenderRequest{
+            return RenderingPipeline::RasterRequest{
                 .view_rotation = request.frame_view.rotation,
                 .view_translation = request.frame_view.translation,
                 .viewport_size = request.frame_view.size,
@@ -52,7 +52,6 @@ namespace lfs::rendering {
                 .model_transforms = request.model_transforms ? *request.model_transforms : std::vector<glm::mat4>{},
                 .transform_indices = nullptr,
                 .selection_mask = nullptr,
-                .output_screen_positions = false,
                 .brush_active = false,
                 .brush_x = 0.0f,
                 .brush_y = 0.0f,
@@ -71,60 +70,6 @@ namespace lfs::rendering {
                 .point_cloud_crop_params = makePointCloudCropParams(request)};
         }
 
-        [[nodiscard]] ViewportRenderRequest makeViewportRenderRequest(const GaussianImageRequest& request) {
-            return ViewportRenderRequest{
-                .frame_view = request.frame_view,
-                .scaling_modifier = request.scaling_modifier,
-                .antialiasing = request.antialiasing,
-                .mip_filter = request.mip_filter,
-                .sh_degree = request.sh_degree,
-                .equirectangular = request.equirectangular};
-        }
-
-        [[nodiscard]] ViewportRenderRequest makeViewportRenderRequest(
-            const GaussianScreenPositionRequest& request) {
-            return ViewportRenderRequest{
-                .frame_view = request.frame_view,
-                .scaling_modifier = request.scaling_modifier,
-                .antialiasing = request.antialiasing,
-                .mip_filter = request.mip_filter,
-                .sh_degree = request.sh_degree,
-                .equirectangular = request.equirectangular,
-                .model_transforms = request.model_transforms,
-                .transform_indices = request.transform_indices,
-                .output_screen_positions = true,
-                .node_visibility_mask = request.node_visibility_mask};
-        }
-
-        [[nodiscard]] ViewportRenderRequest makeViewportRenderRequest(const GaussianPickingRequest& request) {
-            return ViewportRenderRequest{
-                .frame_view = request.frame_view,
-                .scaling_modifier = request.scaling_modifier,
-                .antialiasing = request.antialiasing,
-                .mip_filter = request.mip_filter,
-                .sh_degree = request.sh_degree,
-                .equirectangular = request.equirectangular,
-                .show_rings = false,
-                .ring_width = 0.0f,
-                .show_center_markers = false,
-                .model_transforms = request.model_transforms,
-                .transform_indices = request.transform_indices,
-                .brush =
-                    {.active = true,
-                     .cursor = request.cursor_pos,
-                     .radius = 0.0f,
-                     .add_mode = true,
-                     .selection_mode_rings = true},
-                .crop_box = request.crop_box,
-                .crop_inverse = request.crop_inverse,
-                .crop_parent_node_index = request.crop_parent_node_index,
-                .ellipsoid = request.ellipsoid,
-                .ellipsoid_inverse = request.ellipsoid_inverse,
-                .ellipsoid_parent_node_index = request.ellipsoid_parent_node_index,
-                .depth_filter = request.depth_filter,
-                .node_visibility_mask = request.node_visibility_mask,
-                .hovered_depth_id = request.hovered_depth_id};
-        }
     } // namespace
 
     RenderingEngineImpl::RenderingEngineImpl() {
@@ -287,7 +232,7 @@ namespace lfs::rendering {
         LOG_TRACE("Rendering gaussians with viewport {}x{}",
                   request.frame_view.size.x, request.frame_view.size.y);
 
-        RenderingPipeline::RenderRequest pipeline_req{
+        RenderingPipeline::RasterRequest pipeline_req{
             .view_rotation = request.frame_view.rotation,
             .view_translation = request.frame_view.translation,
             .viewport_size = request.frame_view.size,
@@ -309,7 +254,6 @@ namespace lfs::rendering {
             .model_transforms = request.model_transforms ? *request.model_transforms : std::vector<glm::mat4>{},
             .transform_indices = request.transform_indices,
             .selection_mask = request.selection_mask,
-            .output_screen_positions = request.output_screen_positions,
             .brush_active = request.brush.active,
             .brush_x = request.brush.cursor.x,
             .brush_y = request.brush.cursor.y,
@@ -417,9 +361,6 @@ namespace lfs::rendering {
             .image = std::make_shared<Tensor>(pipeline_result->image),
             .metadata =
                 {.depth = std::make_shared<Tensor>(pipeline_result->depth),
-                 .screen_positions = pipeline_result->screen_positions.is_valid()
-                                         ? std::make_shared<Tensor>(pipeline_result->screen_positions)
-                                         : nullptr,
                  .valid = true,
                  .depth_is_ndc = pipeline_result->depth_is_ndc,
                  .external_depth_texture = pipeline_result->external_depth_texture,
@@ -428,48 +369,6 @@ namespace lfs::rendering {
                  .orthographic = pipeline_result->orthographic}};
 
         return result;
-    }
-
-    Result<std::shared_ptr<Tensor>> RenderingEngineImpl::renderGaussianImage(
-        const lfs::core::SplatData& splat_data,
-        const GaussianImageRequest& request) {
-
-        auto render_result = renderGaussiansInternal(splat_data, makeViewportRenderRequest(request));
-        if (!render_result) {
-            return std::unexpected(render_result.error());
-        }
-        if (!render_result->image || !render_result->image->is_valid()) {
-            return std::unexpected("Gaussian image render produced no image");
-        }
-        return render_result->image;
-    }
-
-    Result<std::shared_ptr<Tensor>> RenderingEngineImpl::renderGaussianScreenPositions(
-        const lfs::core::SplatData& splat_data,
-        const GaussianScreenPositionRequest& request) {
-
-        auto render_result = renderGaussiansInternal(splat_data, makeViewportRenderRequest(request));
-        if (!render_result) {
-            return std::unexpected(render_result.error());
-        }
-        if (!render_result->metadata.screen_positions || !render_result->metadata.screen_positions->is_valid()) {
-            return std::unexpected("Gaussian screen-position render produced no screen positions");
-        }
-        return render_result->metadata.screen_positions;
-    }
-
-    Result<void> RenderingEngineImpl::renderGaussianPickingPass(
-        const lfs::core::SplatData& splat_data,
-        const GaussianPickingRequest& request) {
-
-        if (!request.hovered_depth_id) {
-            return std::unexpected("Gaussian picking pass requires hovered_depth_id output");
-        }
-        auto render_result = renderGaussiansInternal(splat_data, makeViewportRenderRequest(request));
-        if (!render_result) {
-            return std::unexpected(render_result.error());
-        }
-        return {};
     }
 
     Result<ViewportFrameResult> RenderingEngineImpl::renderGaussiansViewportFrame(
@@ -490,6 +389,69 @@ namespace lfs::rendering {
             .frame = *gpu_frame,
             .image = std::move(render_result->image),
             .metadata = std::move(render_result->metadata)};
+    }
+
+    Result<std::shared_ptr<lfs::core::Tensor>> RenderingEngineImpl::renderGaussianScreenPositions(
+        const lfs::core::SplatData& splat_data,
+        const ScreenPositionRenderRequest& request) {
+
+        if (!isInitialized()) {
+            LOG_ERROR("Rendering engine not initialized");
+            return std::unexpected("Rendering engine not initialized");
+        }
+
+        if (request.frame_view.size.x <= 0 || request.frame_view.size.y <= 0 ||
+            request.frame_view.size.x > MAX_VIEWPORT_SIZE || request.frame_view.size.y > MAX_VIEWPORT_SIZE) {
+            LOG_ERROR("Invalid viewport dimensions: {}x{}", request.frame_view.size.x, request.frame_view.size.y);
+            return std::unexpected("Invalid viewport dimensions");
+        }
+
+        RenderingPipeline::RasterRequest pipeline_req{
+            .view_rotation = request.frame_view.rotation,
+            .view_translation = request.frame_view.translation,
+            .viewport_size = request.frame_view.size,
+            .focal_length_mm = request.frame_view.focal_length_mm,
+            .scaling_modifier = 1.0f,
+            .antialiasing = false,
+            .mip_filter = false,
+            .sh_degree = 0,
+            .render_mode = RenderMode::RGB,
+            .crop_box = nullptr,
+            .background_color = request.frame_view.background_color,
+            .point_cloud_mode = false,
+            .voxel_size = 0.01f,
+            .gut = false,
+            .equirectangular = request.equirectangular,
+            .show_rings = false,
+            .ring_width = 0.0f,
+            .show_center_markers = false,
+            .model_transforms = request.model_transforms ? *request.model_transforms : std::vector<glm::mat4>{},
+            .transform_indices = request.transform_indices,
+            .selection_mask = nullptr,
+            .brush_active = false,
+            .brush_x = 0.0f,
+            .brush_y = 0.0f,
+            .brush_radius = 0.0f,
+            .brush_add_mode = true,
+            .brush_selection_tensor = nullptr,
+            .brush_saturation_mode = false,
+            .brush_saturation_amount = 0.0f,
+            .selection_mode_rings = false,
+            .hovered_depth_id = nullptr,
+            .highlight_gaussian_id = -1,
+            .far_plane = request.frame_view.far_plane,
+            .selected_node_mask = {},
+            .node_visibility_mask = request.node_visibility_mask,
+            .orthographic = request.frame_view.orthographic,
+            .ortho_scale = request.frame_view.ortho_scale};
+
+        auto screen_positions = pipeline_.renderScreenPositions(splat_data, pipeline_req);
+        if (!screen_positions) {
+            LOG_ERROR("Screen-position render failed: {}", screen_positions.error());
+            return std::unexpected(screen_positions.error());
+        }
+
+        return std::make_shared<Tensor>(std::move(*screen_positions));
     }
 
     Result<GpuFrame> RenderingEngineImpl::renderPointCloudGpuFrame(

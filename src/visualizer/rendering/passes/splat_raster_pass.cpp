@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "splat_raster_pass.hpp"
-#include "../legacy_render_request_adapter.hpp"
+#include "../viewport_request_builder.hpp"
 #include "core/cuda_debug.hpp"
 #include "core/logger.hpp"
 #include "core/splat_data.hpp"
