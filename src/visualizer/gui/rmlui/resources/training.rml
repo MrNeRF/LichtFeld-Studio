@@ -120,7 +120,7 @@
           <option value="3">Alpha Consistent</option>
         </select>
       </div>
-      <div class="indent" data-if="dep_mask_mode">
+      <div data-if="dep_mask_mode">
         <div class="setting-row" data-tooltip="training.tooltip.invert_masks">
           <span class="prop-label">{{label_invert_masks}}</span>
           <input type="checkbox" data-checked="invert_masks" />
@@ -150,12 +150,12 @@
         <span class="prop-label">{{label_ppisp}}</span>
         <input type="checkbox" data-checked="ppisp" />
       </div>
-      <div class="indent" data-if="dep_ppisp">
+      <div data-if="dep_ppisp">
         <div class="setting-row" data-tooltip="training.tooltip.ppisp_controller">
           <span class="prop-label">{{label_ppisp_controller}}</span>
           <input type="checkbox" data-checked="ppisp_use_controller" />
         </div>
-        <div class="indent" data-if="dep_ppisp_controller">
+        <div data-if="dep_ppisp_controller">
           <div class="setting-row">
             <span class="prop-label">{{label_ppisp_auto}}</span>
             <input type="checkbox" data-checked="ppisp_auto_step" />
@@ -197,12 +197,13 @@
         <div class="color-swatch" id="swatch-bg_color" data-event-click="color_click('bg_color')"></div>
         <input type="text" class="color-hex" data-value="bg_color_hex" />
       </div>
-      <div class="indent" data-if="dep_bg_image">
+      <div data-if="dep_bg_image">
         <div class="setting-row">
           <span class="prop-label">{{label_bg_image}}</span>
           <span class="text-disabled">{{bg_image_path_display}}</span>
         </div>
         <div class="setting-row">
+          <span class="prop-label">&#160;</span>
           <button class="btn btn--secondary" data-event-click="action('browse_bg')">{{label_bg_browse}}</button>
           <button class="btn btn--secondary" data-if="has_bg_clear" data-event-click="action('clear_bg')">{{label_bg_clear}}</button>
         </div>
@@ -449,7 +450,7 @@
             <span class="prop-label">{{label_random_init}}</span>
             <input type="checkbox" data-checked="random" />
           </div>
-          <div class="indent" data-if="dep_random">
+          <div data-if="dep_random">
             <div class="setting-row" data-tooltip="training.tooltip.num_points">
               <span class="prop-label">{{label_init_num_pts}}</span>
               <input type="text" class="number-input" data-value="init_num_pts_str" />

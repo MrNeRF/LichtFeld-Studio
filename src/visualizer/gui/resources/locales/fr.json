@@ -990,6 +990,15 @@
     "keyframe_preview": "Aperçu Keyframe {}"
   },
   "rendering_panel": {
+    "section_viewport": "Vue",
+    "section_viewport_desc": "Arriere-plan, echelle et reperes de navigation pour la vue.",
+    "section_camera": "Camera et projection",
+    "section_camera_desc": "Reglages d'objectif, de projection et d'ombrage pour la vue camera active.",
+    "section_selection": "Selection et superpositions",
+    "section_selection_desc": "Visibilite de la selection et couleurs de surbrillance pour le retour d'edition.",
+    "section_mesh_desc": "Reglages de fil de fer, d'eclairage, de culling et d'ombres pour l'affichage du maillage.",
+    "section_post_process": "Post-traitement",
+    "section_post_process_desc": "Reglages de correction d'apparence, d'exposition, de vignettage et de tonalite.",
     "fov_format": "FOV : {hfov:.1f}° H / {vfov:.1f}° V"
   },
   "scripts_panel": {

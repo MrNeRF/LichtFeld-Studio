@@ -940,6 +940,15 @@
     "dismiss": "Dismiss"
   },
   "rendering_panel": {
+    "section_viewport": "Viewport",
+    "section_viewport_desc": "Background, scale, and navigation guides for the viewport.",
+    "section_camera": "Camera & Projection",
+    "section_camera_desc": "Lens, projection, and shading controls for the active camera view.",
+    "section_selection": "Selection & Overlays",
+    "section_selection_desc": "Selection visibility and highlight colors for editing feedback.",
+    "section_mesh_desc": "Wireframe, lighting, culling, and shadow settings for mesh display.",
+    "section_post_process": "Post Processing",
+    "section_post_process_desc": "Appearance correction, exposure, vignette, and tone mapping controls.",
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V"
   },
   "scripts_panel": {

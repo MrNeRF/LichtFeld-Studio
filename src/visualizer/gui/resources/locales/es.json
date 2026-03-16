@@ -990,6 +990,15 @@
     "keyframe_preview": "Vista previa Keyframe {}"
   },
   "rendering_panel": {
+    "section_viewport": "Vista",
+    "section_viewport_desc": "Fondo, escala y guias de navegacion para la vista.",
+    "section_camera": "Camara y proyeccion",
+    "section_camera_desc": "Controles de lente, proyeccion y sombreado para la vista de camara activa.",
+    "section_selection": "Seleccion y superposiciones",
+    "section_selection_desc": "Visibilidad de la seleccion y colores de resaltado para la edicion.",
+    "section_mesh_desc": "Configuracion de wireframe, iluminacion, descarte y sombras para la visualizacion de la malla.",
+    "section_post_process": "Posprocesado",
+    "section_post_process_desc": "Controles de correccion, exposicion, viñeta y mapeo tonal.",
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V"
   },
   "scripts_panel": {

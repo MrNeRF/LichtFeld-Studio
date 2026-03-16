@@ -990,6 +990,15 @@
     "keyframe_preview": "키프레임 {} 미리보기"
   },
   "rendering_panel": {
+    "section_viewport": "뷰포트",
+    "section_viewport_desc": "뷰포트의 배경, 스케일, 탐색 가이드를 설정합니다.",
+    "section_camera": "카메라 및 투영",
+    "section_camera_desc": "활성 카메라 뷰의 렌즈, 투영, 셰이딩을 조정합니다.",
+    "section_selection": "선택 및 오버레이",
+    "section_selection_desc": "편집 피드백을 위한 선택 표시와 강조 색상을 조정합니다.",
+    "section_mesh_desc": "메시 표시를 위한 와이어프레임, 조명, 컬링, 그림자 설정입니다.",
+    "section_post_process": "후처리",
+    "section_post_process_desc": "외형 보정, 노출, 비네트, 톤 매핑을 조정합니다.",
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V"
   },
   "scripts_panel": {

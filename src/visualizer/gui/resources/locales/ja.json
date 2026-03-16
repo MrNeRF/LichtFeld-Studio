@@ -990,6 +990,15 @@
     "keyframe_preview": "キーフレーム {} プレビュー"
   },
   "rendering_panel": {
+    "section_viewport": "ビューポート",
+    "section_viewport_desc": "ビューポートの背景、スケール、ナビゲーションガイドを設定します。",
+    "section_camera": "カメラと投影",
+    "section_camera_desc": "アクティブなカメラビューのレンズ、投影、シェーディングを調整します。",
+    "section_selection": "選択とオーバーレイ",
+    "section_selection_desc": "編集時の選択表示とハイライト色を調整します。",
+    "section_mesh_desc": "メッシュ表示用のワイヤーフレーム、ライティング、カリング、シャドウ設定です。",
+    "section_post_process": "ポストプロセス",
+    "section_post_process_desc": "外観補正、露出、ビネット、トーンマッピングを調整します。",
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V"
   },
   "scripts_panel": {

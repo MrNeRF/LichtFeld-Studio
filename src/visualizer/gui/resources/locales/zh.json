@@ -990,6 +990,15 @@
     "keyframe_preview": "关键帧 {} 预览"
   },
   "rendering_panel": {
+    "section_viewport": "视口",
+    "section_viewport_desc": "用于视口的背景、缩放和导航辅助设置。",
+    "section_camera": "相机与投影",
+    "section_camera_desc": "用于当前相机视图的镜头、投影和着色控制。",
+    "section_selection": "选择与叠加",
+    "section_selection_desc": "用于编辑反馈的选择可见性和高亮颜色。",
+    "section_mesh_desc": "用于网格显示的线框、光照、剔除和阴影设置。",
+    "section_post_process": "后期处理",
+    "section_post_process_desc": "用于外观校正、曝光、暗角和色调映射的控制。",
     "fov_format": "FOV：{hfov:.1f}° H / {vfov:.1f}° V"
   },
   "scripts_panel": {

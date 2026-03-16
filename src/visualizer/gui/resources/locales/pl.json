@@ -990,6 +990,15 @@
     "keyframe_preview": "Podgląd klatki kluczowej {}"
   },
   "rendering_panel": {
+    "section_viewport": "Widok",
+    "section_viewport_desc": "Tlo, skala i prowadnice nawigacyjne dla widoku.",
+    "section_camera": "Kamera i projekcja",
+    "section_camera_desc": "Sterowanie obiektywem, projekcja i cieniowaniem dla aktywnego widoku kamery.",
+    "section_selection": "Zaznaczenie i nakladki",
+    "section_selection_desc": "Widocznosc zaznaczenia i kolory podswietlenia dla pracy edycyjnej.",
+    "section_mesh_desc": "Ustawienia siatki drutowej, oswietlenia, cullingu i cieni dla wyswietlania mesha.",
+    "section_post_process": "Postprocessing",
+    "section_post_process_desc": "Sterowanie korekcja wygladu, ekspozycja, winieta i mapowaniem tonalnym.",
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V"
   },
   "scripts_panel": {

@@ -990,6 +990,15 @@
     "keyframe_preview": "Keyframe {} Vorschau"
   },
   "rendering_panel": {
+    "section_viewport": "Ansicht",
+    "section_viewport_desc": "Hintergrund, Skalierung und Navigationshilfen fuer die Ansicht.",
+    "section_camera": "Kamera & Projektion",
+    "section_camera_desc": "Objektiv-, Projektions- und Schattierungssteuerung fuer die aktive Kamerasicht.",
+    "section_selection": "Auswahl & Overlays",
+    "section_selection_desc": "Auswahl-Sichtbarkeit und Hervorhebungsfarben fuer das Bearbeitungsfeedback.",
+    "section_mesh_desc": "Drahtgitter-, Beleuchtungs-, Culling- und Schatteneinstellungen fuer die Mesh-Anzeige.",
+    "section_post_process": "Nachbearbeitung",
+    "section_post_process_desc": "Steuerung fuer Korrektur, Belichtung, Vignette und Tonemapping.",
     "fov_format": "Sichtfeld: {hfov:.1f}° H / {vfov:.1f}° V"
   },
   "scripts_panel": {

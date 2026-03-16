@@ -990,6 +990,15 @@
     "keyframe_preview": "Anteprima Keyframe {}"
   },
   "rendering_panel": {
+    "section_viewport": "Viewport",
+    "section_viewport_desc": "Sfondo, scala e guide di navigazione per il viewport.",
+    "section_camera": "Camera e proiezione",
+    "section_camera_desc": "Controlli di lente, proiezione e shading per la vista camera attiva.",
+    "section_selection": "Selezione e overlay",
+    "section_selection_desc": "Visibilita della selezione e colori di evidenziazione per il feedback di modifica.",
+    "section_mesh_desc": "Impostazioni di wireframe, illuminazione, culling e ombre per la visualizzazione della mesh.",
+    "section_post_process": "Post-elaborazione",
+    "section_post_process_desc": "Controlli per correzione, esposizione, vignettatura e tone mapping.",
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V"
   },
   "scripts_panel": {

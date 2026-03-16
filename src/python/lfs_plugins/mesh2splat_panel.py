@@ -9,7 +9,14 @@ from typing import Iterable
 import lichtfeld as lf
 
 from . import rml_widgets
+from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
+
+
+SCRUB_FIELD_DEFS = {
+    "gaussian_scale": ScrubFieldSpec(0.1, 2.0, 0.01, "%.2f"),
+    "quality": ScrubFieldSpec(0.0, 1.0, 0.01, "%.2f"),
+}
 
 
 class Mesh2SplatPanel(Panel):
@@ -40,6 +47,11 @@ class Mesh2SplatPanel(Panel):
         self._last_progress_stage = ""
         self._last_active = False
         self._error_text = ""
+        self._scrub_fields = ScrubFieldController(
+            SCRUB_FIELD_DEFS,
+            self._get_scrub_value,
+            self._set_scrub_value,
+        )
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("mesh2splat")
@@ -80,17 +92,10 @@ class Mesh2SplatPanel(Panel):
         if resolution_list:
             resolution_list.add_event_listener("click", self._on_resolution_click)
 
-        gaussian_slider = doc.get_element_by_id("gaussian-scale-slider")
-        if gaussian_slider:
-            gaussian_slider.add_event_listener("change", self._on_parameter_commit)
-
-        quality_slider = doc.get_element_by_id("quality-slider")
-        if quality_slider:
-            quality_slider.add_event_listener("change", self._on_parameter_commit)
-
         self._last_mesh_key = None
         self._refresh_scene_state(force=True)
         self._sync_conversion_state(force=True)
+        self._scrub_fields.mount(doc)
 
     def on_update(self, doc):
         del doc
@@ -102,7 +107,13 @@ class Mesh2SplatPanel(Panel):
         if self._sync_conversion_state(force=False):
             dirty = True
 
+        dirty |= self._scrub_fields.sync_all()
         return dirty
+
+    def on_unmount(self, doc):
+        doc.remove_data_model("mesh2splat")
+        self._handle = None
+        self._scrub_fields.unmount()
 
     def on_scene_changed(self, doc):
         del doc
@@ -241,6 +252,18 @@ class Mesh2SplatPanel(Panel):
             return
         self._quality = next_value
         self._dirty_model("quality", "quality_text", "effective_resolution")
+
+    def _get_scrub_value(self, prop):
+        if prop == "gaussian_scale":
+            return self._gaussian_scale
+        return self._quality
+
+    def _set_scrub_value(self, prop, value):
+        if prop == "gaussian_scale":
+            self._set_gaussian_scale(value)
+        elif prop == "quality":
+            self._set_quality(value)
+        self._request_reconvert_if_needed()
 
     def _progress_pct(self) -> str:
         try:

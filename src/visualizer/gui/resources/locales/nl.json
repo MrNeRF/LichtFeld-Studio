@@ -990,6 +990,15 @@
     "keyframe_preview": "Keyframe {} voorbeeld"
   },
   "rendering_panel": {
+    "section_viewport": "Viewport",
+    "section_viewport_desc": "Achtergrond, schaal en navigatiehulpen voor de viewport.",
+    "section_camera": "Camera en projectie",
+    "section_camera_desc": "Lens-, projectie- en schaduwinstellingen voor de actieve cameraview.",
+    "section_selection": "Selectie en overlays",
+    "section_selection_desc": "Selectiezichtbaarheid en markeringskleuren voor bewerkingsfeedback.",
+    "section_mesh_desc": "Instellingen voor draadmodel, belichting, culling en schaduwen voor de meshweergave.",
+    "section_post_process": "Nabewerking",
+    "section_post_process_desc": "Bediening voor correctie, belichting, vignet en tonemapping.",
     "fov_format": "FOV: {hfov:.1f}° H / {vfov:.1f}° V"
   },
   "scripts_panel": {

@@ -8,6 +8,7 @@ import time
 
 import lichtfeld as lf
 
+from .scrub_fields import ScrubFieldController, ScrubFieldSpec
 from .types import Panel
 from .ui.state import AppState
 
@@ -222,6 +223,12 @@ def _parse_num(val_str, dtype):
 
 SLIDER_PROPS = ["lambda_dssim", "init_opacity", "prune_ratio"]
 
+SCRUB_FIELD_DEFS = {
+    "lambda_dssim": ScrubFieldSpec(0.0, 1.0, 0.01, "%.3f"),
+    "init_opacity": ScrubFieldSpec(0.01, 1.0, 0.01, "%.3f"),
+    "prune_ratio": ScrubFieldSpec(0.0, 1.0, 0.01, "%.3f"),
+}
+
 DIRECT_SET_PROPS = {
     "iterations", "max_cap", "means_lr", "shs_lr",
     "opacity_lr", "scaling_lr", "rotation_lr", "ppisp_controller_lr",
@@ -298,6 +305,11 @@ class TrainingPanel(Panel):
         self._loss_tick_max = ""
         self._loss_tick_mid = ""
         self._loss_tick_min = ""
+        self._scrub_fields = ScrubFieldController(
+            SCRUB_FIELD_DEFS,
+            self._get_scrub_value,
+            self._set_scrub_value,
+        )
 
     def on_bind_model(self, ctx):
         model = ctx.create_data_model("training")
@@ -715,6 +727,7 @@ class TrainingPanel(Panel):
             el.add_event_listener("change", self._on_number_input_change)
             el.add_event_listener("blur", self._on_number_input_blur)
         self._loss_graph_el = doc.get_element_by_id("loss-graph-el")
+        self._scrub_fields.mount(doc)
         self._sync_section_states()
 
     def on_update(self, doc):
@@ -767,6 +780,7 @@ class TrainingPanel(Panel):
         dirty |= self._update_save_steps(doc)
         dirty |= self._update_color_swatch(doc)
         dirty |= self._update_loss_graph()
+        dirty |= self._scrub_fields.sync_all()
         return dirty
 
     def _update_progress(self):
@@ -824,6 +838,7 @@ class TrainingPanel(Panel):
         doc.remove_data_model("training")
         self._handle = None
         self._doc = None
+        self._scrub_fields.unmount()
 
     def _update_loss_graph(self):
         if not self._loss_graph_el:
@@ -1048,8 +1063,20 @@ class TrainingPanel(Panel):
             return
         try:
             params.set(prop, float(val))
+            if self._handle:
+                self._handle.dirty(prop)
         except (ValueError, TypeError):
             pass
+
+    def _get_scrub_value(self, prop):
+        params = lf.optimization_params()
+        if not params or not params.has_params():
+            spec = SCRUB_FIELD_DEFS[prop]
+            return spec.min_value
+        return float(getattr(params, prop, 0.0))
+
+    def _set_scrub_value(self, prop, value):
+        self._set_slider_prop(prop, value)
 
     def _set_bg_color_hex(self, hex_val):
         params = lf.optimization_params()

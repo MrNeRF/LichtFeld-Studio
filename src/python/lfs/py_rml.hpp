@@ -118,6 +118,10 @@ namespace lfs::python {
         float scroll_height();
         float client_width();
         float client_height();
+        float absolute_left();
+        float absolute_top();
+        float absolute_width();
+        float absolute_height();
         float offset_top();
         float offset_height();
         void scroll_into_view(bool align_top = true);
