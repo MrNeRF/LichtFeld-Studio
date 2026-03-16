@@ -954,6 +954,7 @@
     "button.install": "Zainstaluj",
     "button.github": "GitHub",
     "local_install": "Instalacja lokalna",
+    "install_as_git_checkout": "Zainstaluj jako checkout Git",
     "confirm_uninstall_title": "Potwierdz odinstalowanie wtyczki",
     "confirm_uninstall_message": "Czy na pewno chcesz odinstalować \"{name}\"?",
     "confirm_uninstall_yes": "Tak",

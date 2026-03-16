@@ -231,7 +231,8 @@
     padding: 2dp 4dp;
 }
 
-.card-startup-row {
+.card-startup-row,
+.card-git-row {
     display: flex;
     align-items: center;
     margin-top: 4dp;

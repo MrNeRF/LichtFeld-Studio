@@ -3,6 +3,7 @@
 """Unified plugin marketplace floating panel."""
 
 from html import escape
+import shutil
 import threading
 import time
 from dataclasses import dataclass, field
@@ -79,6 +80,8 @@ class PluginMarketplacePanel(Panel):
         self._manual_url = ""
         self._install_filter_idx = 0
         self._sort_idx = 2
+        self._git_available = shutil.which("git") is not None
+        self._git_checkout_selected: Dict[str, bool] = {}
 
         self._card_ops: Dict[str, CardOpState] = {}
         self._lock = threading.RLock()
@@ -349,6 +352,14 @@ class PluginMarketplacePanel(Panel):
             "github_url": entry.github_url or "",
             "plugin_name": plugin_name or "",
             "show_install": (not buttons_busy) and not is_installed and not is_local_only and not entry.error,
+            "show_git_checkout": (
+                self._git_available
+                and (not buttons_busy)
+                and not is_installed
+                and not is_local_only
+                and not entry.error
+            ),
+            "git_checkout_selected": self._git_checkout_selected.get(card_id, False),
             "show_load": (not buttons_busy) and is_installed and plugin_state != PluginState.ACTIVE,
             "show_unload": (not buttons_busy) and is_installed and plugin_state == PluginState.ACTIVE,
             "show_reload": (not buttons_busy) and is_remote_installed and plugin_state == PluginState.ACTIVE,
@@ -486,6 +497,17 @@ class PluginMarketplacePanel(Panel):
                 '</label></div>'
             )
 
+        git_checked = ' checked="checked"' if record.get("git_checkout_selected") else ""
+        git_row = ""
+        if record.get("show_git_checkout"):
+            git_row = (
+                '<div class="card-git-row"><label>'
+                f'<input type="checkbox"{git_checked} data-action="git-checkout" '
+                f'data-card-id="{esc("card_id")}" />'
+                f'<span class="card-startup-label text-disabled">{escape(tr("plugin_marketplace.install_as_git_checkout"))}</span>'
+                '</label></div>'
+            )
+
         buttons: List[str] = []
         if record.get("show_install"):
             buttons.append(
@@ -577,6 +599,7 @@ class PluginMarketplacePanel(Panel):
             f'<span class="status-text status-success hidden" id="feedback-{esc("card_id")}-success"></span>'
             f'<span class="status-text status-error hidden" id="feedback-{esc("card_id")}-error"></span>'
             '</div>'
+            f'{git_row}'
             f'{startup_row}'
             f'<div class="card-buttons" id="btns-{esc("card_id")}">{"".join(buttons)}</div>'
             '</div>'
@@ -797,11 +820,12 @@ class PluginMarketplacePanel(Panel):
         if target is None:
             return
 
-        action, _card_id, plugin_name = self._find_card_action(target)
-        if action != "startup" or not plugin_name:
+        action, card_id, plugin_name = self._find_card_action(target)
+        if action == "startup" and plugin_name:
+            self._set_startup_preference(target, plugin_name)
             return
-
-        self._set_startup_preference(target, plugin_name)
+        if action == "git-checkout" and card_id:
+            self._set_git_checkout_preference(target, card_id)
 
     def _find_card_action(self, element):
         while element is not None:
@@ -839,6 +863,18 @@ class PluginMarketplacePanel(Panel):
 
         prefs.set("load_on_startup", checked)
         self._entries_dirty = True
+
+    def _set_git_checkout_preference(self, element, card_id: str):
+        cb_el = self._find_element_with_attr(element, "type", "checkbox")
+        checked = cb_el.has_attribute("checked") if cb_el else False
+        if self._git_checkout_selected.get(card_id, False) == checked:
+            return
+        self._git_checkout_selected[card_id] = checked
+
+    def _selected_install_transport(self, card_id: str) -> str:
+        if self._git_available and self._git_checkout_selected.get(card_id, False):
+            return "git"
+        return "archive"
 
     def _request_uninstall_confirmation(self, name, card_id, ev):
         import lichtfeld as lf
@@ -1004,12 +1040,17 @@ class PluginMarketplacePanel(Panel):
         import lichtfeld as lf
 
         tr = lf.ui.tr
+        transport = self._selected_install_transport(card_id)
 
         def do_install(on_progress):
             if entry.registry_id:
-                name = mgr.install_from_registry(entry.registry_id, on_progress=on_progress)
+                name = mgr.install_from_registry(
+                    entry.registry_id,
+                    on_progress=on_progress,
+                    transport=transport,
+                )
             else:
-                name = mgr.install(entry.source_url, on_progress=on_progress)
+                name = mgr.install(entry.source_url, on_progress=on_progress, transport=transport)
             if mgr.get_state(name) == PluginState.ERROR:
                 err = mgr.get_error(name) or tr("plugin_manager.status.load_failed")
                 raise RuntimeError(err)
@@ -1178,7 +1219,7 @@ class PluginMarketplacePanel(Panel):
             if any(k in known_keys for k in plugin_keys):
                 continue
 
-            remote_url = self._git_remote_url(plugin.path)
+            remote_url = self._remote_source_url(plugin.path)
             if remote_url:
                 norm_remote = self._normalize_url(remote_url)
                 if norm_remote in catalog_urls:
@@ -1205,6 +1246,18 @@ class PluginMarketplacePanel(Panel):
             known_keys.update(plugin_keys)
 
         return merged
+
+    @staticmethod
+    def _remote_source_url(plugin_path: Path) -> str:
+        from .installer import read_plugin_source_metadata
+
+        source_info = read_plugin_source_metadata(plugin_path)
+        if source_info:
+            if source_info.github_url:
+                return source_info.github_url
+            if source_info.origin:
+                return source_info.origin
+        return PluginMarketplacePanel._git_remote_url(plugin_path)
 
     @staticmethod
     def _git_remote_url(plugin_path: Path) -> str:

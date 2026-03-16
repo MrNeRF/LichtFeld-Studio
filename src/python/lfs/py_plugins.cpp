@@ -86,10 +86,12 @@ namespace lfs::python {
 
         plugins.def(
             "install",
-            [](const std::string& url, const bool auto_load) {
-                return nb::cast<std::string>(get_plugin_manager().attr("install")(url, nb::none(), auto_load));
+            [](const std::string& url, const bool auto_load, const std::string& transport) {
+                return nb::cast<std::string>(
+                    get_plugin_manager().attr("install")(url, nb::none(), auto_load, transport));
             },
-            nb::arg("url"), nb::arg("auto_load") = true, "Install from GitHub URL");
+            nb::arg("url"), nb::arg("auto_load") = true, nb::arg("transport") = "archive",
+            "Install from GitHub URL");
 
         plugins.def(
             "update", [](const std::string& name) { return nb::cast<bool>(get_plugin_manager().attr("update")(name)); },
@@ -106,12 +108,15 @@ namespace lfs::python {
 
         plugins.def(
             "install_from_registry",
-            [](const std::string& plugin_id, const std::string& version, const bool auto_load) {
+            [](const std::string& plugin_id, const std::string& version, const bool auto_load,
+               const std::string& transport) {
                 nb::object ver = version.empty() ? nb::none() : nb::cast(version);
                 return nb::cast<std::string>(
-                    get_plugin_manager().attr("install_from_registry")(plugin_id, ver, nb::none(), auto_load));
+                    get_plugin_manager().attr("install_from_registry")(
+                        plugin_id, ver, nb::none(), auto_load, transport));
             },
             nb::arg("plugin_id"), nb::arg("version") = "", nb::arg("auto_load") = true,
+            nb::arg("transport") = "archive",
             "Install plugin from registry");
 
         plugins.def(

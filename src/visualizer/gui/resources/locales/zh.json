@@ -951,6 +951,7 @@
     "button.install": "安装",
     "button.github": "GitHub",
     "local_install": "本地安装",
+    "install_as_git_checkout": "作为 Git 检出安装",
     "confirm_uninstall_title": "确认卸载插件",
     "confirm_uninstall_message": "确定要卸载“{name}”吗？",
     "confirm_uninstall_yes": "是",

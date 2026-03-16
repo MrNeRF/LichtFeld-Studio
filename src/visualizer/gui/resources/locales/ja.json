@@ -954,6 +954,7 @@
     "button.install": "インストール",
     "button.github": "GitHub",
     "local_install": "ローカルインストール",
+    "install_as_git_checkout": "Git チェックアウトとしてインストール",
     "confirm_uninstall_title": "プラグインのアンインストールを確認",
     "confirm_uninstall_message": "「{name}」を本当にアンインストールしますか？",
     "confirm_uninstall_yes": "はい",

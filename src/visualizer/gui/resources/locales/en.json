@@ -1031,6 +1031,7 @@
     "button.install": "Install",
     "button.github": "GitHub",
     "local_install": "Local Installation",
+    "install_as_git_checkout": "Install as git checkout",
     "confirm_uninstall_title": "Confirm Plugin Uninstall",
     "confirm_uninstall_message": "Are you sure you want to uninstall \"{name}\"?",
     "confirm_uninstall_yes": "Yes",

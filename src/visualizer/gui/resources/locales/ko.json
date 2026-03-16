@@ -954,6 +954,7 @@
     "button.install": "설치",
     "button.github": "GitHub",
     "local_install": "로컬 설치",
+    "install_as_git_checkout": "Git 체크아웃으로 설치",
     "confirm_uninstall_title": "플러그인 제거 확인",
     "confirm_uninstall_message": "\"{name}\" 플러그인을 정말 제거하시겠습니까?",
     "confirm_uninstall_yes": "예",

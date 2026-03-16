@@ -954,6 +954,7 @@
     "button.install": "Installer",
     "button.github": "GitHub",
     "local_install": "Installation locale",
+    "install_as_git_checkout": "Installer comme checkout Git",
     "confirm_uninstall_title": "Confirmer la désinstallation du plugin",
     "confirm_uninstall_message": "Voulez-vous vraiment désinstaller \"{name}\" ?",
     "confirm_uninstall_yes": "Oui",

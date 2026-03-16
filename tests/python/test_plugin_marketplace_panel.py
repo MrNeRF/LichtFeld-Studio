@@ -72,6 +72,7 @@ class _ElementStub:
         self.text = ""
         self.classes = {}
         self.attributes = {}
+        self._parent = None
 
     def set_text(self, value):
         self.text = value
@@ -84,6 +85,15 @@ class _ElementStub:
 
     def remove_attribute(self, name):
         self.attributes.pop(name, None)
+
+    def get_attribute(self, name, default=""):
+        return self.attributes.get(name, default)
+
+    def has_attribute(self, name):
+        return name in self.attributes
+
+    def parent(self):
+        return self._parent
 
 
 class _DocStub:
@@ -169,3 +179,61 @@ def test_plugin_marketplace_confirm_message_sets_plain_text(plugin_marketplace_m
     assert panel._pending_uninstall_card_id == "sample-card"
     assert message_el.text == "Remove Sample Plugin?"
     assert overlay_el.classes["hidden"] is False
+
+
+def test_plugin_marketplace_renders_git_checkbox_when_available(plugin_marketplace_module):
+    module, state = plugin_marketplace_module
+    state.translations["plugin_marketplace.install_as_git_checkout"] = "Install as git checkout"
+
+    panel = module.PluginMarketplacePanel()
+    panel._git_available = True
+
+    markup = panel._build_card_markup({
+        "card_id": "sample-card",
+        "name": "Sample Plugin",
+        "show_install": True,
+        "show_git_checkout": True,
+        "git_checkout_selected": True,
+    })
+
+    assert 'data-action="git-checkout"' in markup
+    assert 'checked="checked"' in markup
+    assert "Install as git checkout" in markup
+
+
+def test_plugin_marketplace_install_uses_git_transport_when_selected(plugin_marketplace_module):
+    module, _state = plugin_marketplace_module
+
+    panel = module.PluginMarketplacePanel()
+    panel._git_available = True
+    panel._git_checkout_selected["sample-card"] = True
+    panel._run_async = lambda _card_id, operation, _success, _error: operation(lambda _msg: None)
+
+    calls = {}
+
+    class _ManagerStub:
+        def install(self, url, on_progress=None, transport="archive"):
+            calls["url"] = url
+            calls["transport"] = transport
+            return "sample_plugin"
+
+        def get_state(self, name):
+            assert name == "sample_plugin"
+            return module.PluginState.ACTIVE
+
+        def get_error(self, _name):
+            return ""
+
+    entry = module.MarketplacePluginEntry(
+        source_url="https://github.com/owner/repo",
+        github_url="https://github.com/owner/repo",
+        owner="owner",
+        repo="repo",
+        name="Sample Plugin",
+        description="",
+    )
+
+    panel._install_plugin_from_marketplace(_ManagerStub(), entry, "sample-card")
+
+    assert calls["url"] == "https://github.com/owner/repo"
+    assert calls["transport"] == "git"
